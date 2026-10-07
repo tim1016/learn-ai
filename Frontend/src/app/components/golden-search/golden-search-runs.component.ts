@@ -99,8 +99,8 @@ export class GoldenSearchRunsComponent {
   /** The read for the controls now set failed, so the page last read answers other controls: its rows are not shown. */
   protected readonly mismatched = computed(() => this.listError() !== null && this.shown()?.query !== this.query());
 
-  /** Each read curve by run; null for a run that kept none. Curves never change once recorded. */
-  private readonly cache = signal<ReadonlyMap<string, RunCurve | null>>(new Map());
+  /** Each read curve by run, with the session closes of its read; null for a run that kept none. Curves never change once recorded. */
+  private readonly cache = signal<ReadonlyMap<string, { readonly sessions: readonly number[]; readonly curve: RunCurve } | null>>(new Map());
   private readonly curves = resource({
     // Nothing ticked reads nothing.
     params: () => (this.ticked().length === 0 ? undefined : { studyId: this.studyId(), keys: this.ticked().map((run) => run.evaluation_key) }),
@@ -109,7 +109,7 @@ export class GoldenSearchRunsComponent {
       const missing = params.keys.filter((key) => !held.has(key));
       if (missing.length === 0) return;
       const read = await this.service.runCurves(params.studyId, missing);
-      this.cache.update((cache) => new Map([...cache, ...read.curves.map((curve) => [curve.evaluation_key, curve] as const), ...read.not_recorded.map((key) => [key, null] as const)]));
+      this.cache.update((cache) => new Map([...cache, ...read.curves.map((curve) => [curve.evaluation_key, { sessions: read.sessions_ms, curve }] as const), ...read.not_recorded.map((key) => [key, null] as const)]));
     },
   });
   protected readonly curvesError = computed(() => {
@@ -120,8 +120,8 @@ export class GoldenSearchRunsComponent {
   private readonly lines = computed<RunLine[]>(() => {
     const cache = this.cache();
     return this.ticked().flatMap((run) => {
-      const curve = cache.get(run.evaluation_key);
-      return curve === undefined || curve === null ? [] : [{ key: run.evaluation_key, label: run.label, settings: run.params_sentence, curve }];
+      const held = cache.get(run.evaluation_key);
+      return held === undefined || held === null ? [] : [{ key: run.evaluation_key, label: run.label, settings: run.params_sentence, ...held }];
     });
   });
   /** Read on its own, so a study poll that changes nothing else does not rebuild the chart. */

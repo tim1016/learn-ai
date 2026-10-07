@@ -12,6 +12,11 @@ The two series are the ones a candidate's detail read draws
 (``views.run_detail``), from the same functions. A run recorded before runs kept their curve has
 none: it reads as not recorded, never as a flat line.
 
+A read sends its session closes once (``sessions_ms``: every close any of
+its curves scored, in order). A curve's values run from ``first_session``,
+an index into that list, to the run's last session; a session inside that
+span the run did not score is null.
+
 A run belongs to the group of the step that first asked for it; a point a
 later step asks for again is answered from that first run:
   search, pair_audit, recent   the evaluation's own step
@@ -157,13 +162,10 @@ def run_view(
     parts.extend(names)
     return {
         "evaluation_key": record.evaluation_key,
-        "group": group,
-        "fold_index": record.fold_index,
         "label": " · ".join(parts),
         "params_sentence": params_sentence(declaration, record.point),
         "window_start_ms": record.window_start_ms,
         "window_end_ms": record.window_end_ms,
-        "scenario": record.scenario,
         "status": record.status,
         "total_trades": record.total_trades,
         "total_return_pct": _metric(record, "total_return_pct"),
@@ -231,26 +233,48 @@ def runs_page(
     }
 
 
-def curve_view(evaluation_key: str, daily: Sequence[tuple[int, float]], capital: float) -> dict[str, Any]:
-    """One run's stored equity as its cumulative return and its fall from peak at each session close."""
-    try:
-        falls: list[float] | None = [value for _, value in drawdown_series(daily)]
-    except ValueError:
-        # The run's peak equity never rose above 0, so a fall from it has no meaning.
-        falls = None
-    return {
-        "evaluation_key": evaluation_key,
-        "close_ms": [ms for ms, _ in daily],
-        "cumulative_return": [value for _, value in cumulative_return_series(daily, capital)],
-        "drawdown": falls,
-        "deepest_drawdown": min(falls) if falls else None,
-    }
+def _along(at: Sequence[int], values: Sequence[float]) -> list[float | None]:
+    """``values`` laid from the first of the session indexes ``at`` to the last, null where the run has none."""
+    if not at:
+        return []
+    first = min(at)
+    line: list[float | None] = [None] * (max(at) - first + 1)
+    for index, value in zip(at, values, strict=True):
+        line[index - first] = value
+    return line
+
+
+def session_curves(stored: Mapping[str, Sequence[tuple[int, float]]], capital: float) -> tuple[list[int], dict[str, dict[str, Any]]]:
+    """The runs' curves against one list of session closes: the list, and each run's curve by its key.
+
+    A curve is the run's cumulative return and its fall from peak from its
+    first session to its last, null at a session between them it did not score.
+    """
+    sessions = sorted({ms for daily in stored.values() for ms, _ in daily})
+    position = {ms: index for index, ms in enumerate(sessions)}
+    curves: dict[str, dict[str, Any]] = {}
+    for key, daily in stored.items():
+        try:
+            falls: list[float] | None = [value for _, value in drawdown_series(daily)]
+        except ValueError:
+            # The run's peak equity never rose above 0, so a fall from it has no meaning.
+            falls = None
+        at = [position[ms] for ms, _ in daily]
+        curves[key] = {
+            "first_session": min(at, default=0),
+            "cumulative_return": _along(at, [value for _, value in cumulative_return_series(daily, capital)]),
+            "drawdown": None if falls is None else _along(at, falls),
+            "deepest_drawdown": min(falls) if falls else None,
+        }
+    return sessions, curves
 
 
 def curves_view(evaluation_keys: Sequence[str], stored: Mapping[str, Sequence[tuple[int, float]]], capital: float) -> dict[str, Any]:
     """The curves of the named runs, in the order asked, and the runs among them that kept none."""
+    sessions, curves = session_curves({key: stored[key] for key in evaluation_keys if key in stored}, capital)
     return {
-        "curves": [curve_view(key, stored[key], capital) for key in evaluation_keys if key in stored],
+        "sessions_ms": sessions,
+        "curves": [{"evaluation_key": key, **curves[key]} for key in evaluation_keys if key in curves],
         "not_recorded": [key for key in evaluation_keys if key not in stored],
     }
 
@@ -433,18 +457,19 @@ def curve_set_lines(
 
 def curve_set_view(row: StudyRow, chosen: ChosenLines, stored: Mapping[str, Sequence[tuple[int, float]]], *, declaration: SearchDeclaration) -> dict[str, Any]:
     """A step's set as the chart reads it: each line's role, label, settings and curve."""
-    capital = float(row.protocol["execution"]["initial_cash"])
+    drawn = [line for line in chosen.lines if line.record.evaluation_key in stored]
+    sessions, curves = session_curves({line.record.evaluation_key: stored[line.record.evaluation_key] for line in drawn}, float(row.protocol["execution"]["initial_cash"]))
     return {
+        "sessions_ms": sessions,
         "lines": [
             {
                 "role": line.role,
                 "label": line.label,
                 "current_settings": line.incumbent,
                 "params_sentence": params_sentence(declaration, line.record.point),
-                "curve": curve_view(line.record.evaluation_key, stored[line.record.evaluation_key], capital),
+                "curve": {"evaluation_key": line.record.evaluation_key, **curves[line.record.evaluation_key]},
             }
-            for line in chosen.lines
-            if line.record.evaluation_key in stored
+            for line in drawn
         ],
         "left_out": chosen.left_out,
         "not_recorded": chosen.not_recorded,

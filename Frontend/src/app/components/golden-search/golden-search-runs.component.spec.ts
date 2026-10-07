@@ -2,11 +2,12 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/ang
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
+import { etMidnightMs } from '../../shared/date/et-midnight';
 import { GoldenSearchRunsComponent } from './golden-search-runs.component';
 import { GoldenSearchService } from './golden-search.service';
 import type { RunCurves, RunsPage, RunsQuery, StudyDetail } from './golden-search.types';
 import { fakeCharts } from './testing/fake-charts';
-import { runCurves, runsPage, studyDetail, studyRun } from './testing/fixtures';
+import { runCurve, runCurves, runsPage, studyDetail, studyRun } from './testing/fixtures';
 
 async function renderRuns(
   study: StudyDetail = studyDetail('awaiting_candidate'),
@@ -47,7 +48,12 @@ describe('GoldenSearchRunsComponent', () => {
   });
 
   it('draws the runs you tick together, reads each curve once, and clears', async () => {
-    const { service, charts } = await renderRuns();
+    // The fold's curve comes back from its own read, against that read's sessions and not from their start.
+    // Its last session is one the search's run scored too, under another index in that run's read.
+    const foldSessions = ['2025-06-30', '2025-07-01', '2025-08-01', '2025-12-31'].map((day) => etMidnightMs(day));
+    const { service, charts } = await renderRuns(undefined, undefined, async (keys) =>
+      keys[0] === 'run-fold' ? { sessions_ms: foldSessions, curves: [{ ...runCurve('run-fold'), first_session: 1 }], not_recorded: [] } : runCurves(keys),
+    );
     expect(screen.getByText('Tick runs in the list below to draw them here.')).not.toBeNull();
 
     fireEvent.click(screen.getByRole('checkbox', { name: /^Draw All-period search · All-period fit, Gap \$0\.15/ }));
@@ -63,9 +69,13 @@ describe('GoldenSearchRunsComponent', () => {
     const tooltip = charts.charts.at(-1)?.options.at(-1)?.tooltip;
     const formatter = !Array.isArray(tooltip) && typeof tooltip?.formatter === 'function' ? tooltip.formatter : null;
     // The library hands a hover far more than the index this one reads.
-    const hover: unknown = formatter === null ? null : Reflect.apply(formatter, undefined, [[{ dataIndex: 0 }]]);
-    expect(hover).toContain('All-period search · All-period fit · Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars');
-    expect(hover).toContain('Fold 1 test · Fold winner · Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars');
+    const hoverAt = (dataIndex: number): unknown => (formatter === null ? null : Reflect.apply(formatter, undefined, [[{ dataIndex }]]));
+    // The axis is 2024-01-02, 2024-06-03, 2025-07-01, 2025-08-01, 2025-12-31: the last is the one session both runs scored.
+    expect(hoverAt(4)).toContain('All-period search · All-period fit · Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars');
+    expect(hoverAt(4)).toContain('Fold 1 test · Fold winner · Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars');
+    // A session only one of them scored lists that run alone.
+    expect(hoverAt(2)).toContain('Fold 1 test · Fold winner');
+    expect(hoverAt(2)).not.toContain('All-period search · All-period fit');
     // The table names each drawn run by what asked for it and by its settings, with the server's deepest fall.
     const panel = screen.getByRole('region', { name: 'Run equity curves' });
     fireEvent.click(within(panel).getByRole('button', { name: 'Show as table' }));
@@ -73,7 +83,7 @@ describe('GoldenSearchRunsComponent', () => {
     expect(cells).toEqual([
       ['Run', 'Settings', 'First session', 'Last session', 'Ended at', 'Deepest fall'],
       ['All-period search · All-period fit', 'Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars', '2024-01-02', '2025-12-31', '+8.7%', '-2.2%'],
-      ['Fold 1 test · Fold winner', 'Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars', '2024-01-02', '2025-12-31', '+8.7%', '-2.2%'],
+      ['Fold 1 test · Fold winner', 'Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars', '2025-07-01', '2025-12-31', '+8.7%', '-2.2%'],
     ]);
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
     expect(screen.getByText('Tick runs in the list below to draw them here.')).not.toBeNull();

@@ -404,7 +404,7 @@ async def test_a_study_runs_from_lock_to_an_approved_golden_configuration_over_h
     keys = [run["evaluation_key"] for run in final.json()["rows"]]
     curves = await client.get(f"{BASE}/studies/{study['id']}/runs/curves", params=[("key", keys[0]), ("key", "no-such-run")])
     assert curves.status_code == 200, curves.text
-    assert len(curves.json()["curves"][0]["close_ms"]) == len(curves.json()["curves"][0]["cumulative_return"]) > 0
+    assert len(curves.json()["sessions_ms"]) == len(curves.json()["curves"][0]["cumulative_return"]) > 0
     assert curves.json()["not_recorded"] == ["no-such-run"]
     drawn = await client.get(f"{BASE}/studies/{study['id']}/charts/run-curves", params={"set": "fold_tests"})
     assert drawn.status_code == 200, drawn.text

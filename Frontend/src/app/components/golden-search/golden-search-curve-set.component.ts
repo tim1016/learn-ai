@@ -104,7 +104,7 @@ export class GoldenSearchCurveSetComponent {
   protected readonly spec = computed(
     () => {
       const set = this.set();
-      return set === null || set.lines.length === 0 ? null : stepCurvesSpec(set.lines, this.ceiling(), this.accent());
+      return set === null || set.lines.length === 0 ? null : stepCurvesSpec(set.sessions_ms, set.lines, this.ceiling(), this.accent());
     },
     { equal: sameChart },
   );

@@ -1153,13 +1153,10 @@ class GoldenSearchRun(_Wire):
     """One engine run of a study, under the step that first asked for it (#2930)."""
 
     evaluation_key: str
-    group: RunGroup
-    fold_index: int | None
     label: str = Field(description="What asked for the run, its cost scenario when stressed, and the names the study gives its settings.")
     params_sentence: str = Field(description="The run's settings in words; with the label it tells any two runs of a study apart.")
     window_start_ms: InstantMs
     window_end_ms: InstantMs
-    scenario: str
     status: Literal["pending", "completed", "failed"]
     total_trades: int | None
     total_return_pct: float | None
@@ -1180,18 +1177,23 @@ class GoldenSearchRunsPage(_Wire):
 
 
 class GoldenSearchRunCurve(_Wire):
-    """One run's daily curve, as parallel lists over its session closes."""
+    """One run's daily curve against the read's ``sessions_ms``: its values from ``first_session`` to its last session."""
 
     evaluation_key: str
-    close_ms: list[InstantMs]
-    cumulative_return: list[float] = Field(description="Equity over the study's starting capital, less 1, at each session close.")
-    drawdown: list[float] | None = Field(description="Equity over its running peak, less 1; null when the peak never rose above 0.")
+    first_session: int = Field(ge=0, description="The index in sessions_ms of the run's first session close.")
+    cumulative_return: list[float | None] = Field(
+        description="Equity over the study's starting capital, less 1, at each session close from first_session on; null at a session the run did not score."
+    )
+    drawdown: list[float | None] | None = Field(
+        description="Equity over its running peak, less 1, against the same sessions; null as a whole when the peak never rose above 0."
+    )
     deepest_drawdown: float | None = Field(
         description="The lowest value of drawdown, at a session close; the engine's bar-by-bar worst fall can be deeper. Null without a drawdown."
     )
 
 
 class GoldenSearchRunCurves(_Wire):
+    sessions_ms: list[InstantMs] = Field(description="Every session close any returned curve scored, in order, sent once.")
     curves: list[GoldenSearchRunCurve]
     not_recorded: list[str] = Field(description="The runs asked for that kept no daily equity; never drawn as a flat line.")
 
@@ -1207,6 +1209,7 @@ class GoldenSearchCurveLine(_Wire):
 
 
 class GoldenSearchCurveSet(_Wire):
+    sessions_ms: list[InstantMs] = Field(description="Every session close any line of the set scored, in order, sent once.")
     lines: list[GoldenSearchCurveLine]
     left_out: int = Field(description="Other scored points with a curve that this read did not return, past its cap; named lines are never left out.")
     not_recorded: int = Field(description="Completed runs of the set that kept no daily equity.")
