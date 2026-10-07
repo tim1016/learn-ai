@@ -22,6 +22,7 @@ from fractions import Fraction
 from functools import cache
 from types import MappingProxyType
 
+from app.options.deadlines import CloseTerms
 from app.options.entry import LegGapOverLimit, PreparedEntry, prepare_entry
 from app.options.named_structures import NamedStructure
 from app.options.preview import StructureFigures, structure_figures
@@ -137,6 +138,10 @@ def _the_two_answers(
         cost_limit_percent=cost_limit,
         fee_provision=lambda _structure, _markets, _size: fees,
         model_is_known=True,
+        # The moment the scene's contracts were picked, hours before any entry cutoff: the Clerk asks that
+        # after the entry is prepared, and no entry here is too late.
+        at_ms=_scene().selection_ms,
+        close_terms=CloseTerms(),
     )
     return entry, shown
 

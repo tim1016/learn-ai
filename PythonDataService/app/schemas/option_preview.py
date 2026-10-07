@@ -505,8 +505,9 @@ class OptionStructurePreview(BaseModel):
     decay: OptionPreviewDecay | None
     # Every reason an entry on these picks and quotes would be refused, in the order an entry asks: picks
     # that are not the structure built, each leg quoted wider than the gap limit, money that cannot be set
-    # aside, a round-trip cost over its limit. Empty: none of them. An entry is also held to the budget, to
-    # the account and to the quotes of its own moment, which are not asked here.
+    # aside, a round-trip cost over its limit, a moment too close to the close the position would owe today.
+    # Empty: none of them. An entry is also held to the budget, to the account and to the quotes of its own
+    # moment, which are not asked here.
     entry_refusals: list[OptionPreviewEntryRefusal]
     # Whether an entry on these quotes would be skipped, in a sentence. None without figures.
     entry_sentence: str | None

@@ -50,6 +50,7 @@ from app.broker.alpaca.clerk.active_authority import (
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot, ReconciliationCut
 from app.broker.alpaca.clerk.option_effects import OptionPlanRefused
+from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryOutcomeWaitRefused
 from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseLost
 from app.broker.alpaca.clerk.sqlite.scheduled_end import SCHEDULED_END_REASON, ScheduledEnd
 from app.broker.v2panel.action_policy import (
@@ -2377,6 +2378,19 @@ class BotTaskRegistry:
                 },
             )
             await self._terminal.finalize_crash(binding, exc, reason_code=exc.reason.value)
+        except EntryOutcomeWaitRefused as exc:
+            # The Clerk refused the wait for what an option entry came to, and the runner settles
+            # nothing by itself (ADR 0076 decision 19): the run ends under the refusal's own code.
+            logger.error(
+                "Bot run ended: the Clerk refused the wait for what its option entry came to",
+                extra={
+                    "action": "bot_entry_outcome_wait_refused",
+                    "strategy_instance_id": sid,
+                    "reason_code": exc.reason_code,
+                    "error": exc.explanation,
+                },
+            )
+            await self._terminal.finalize_crash(binding, exc, reason_code=exc.reason_code)
         except Exception as exc:
             # Supervision boundary: every crash becomes typed durable evidence
             # plus a logged traceback — deliberately not re-raised, so the

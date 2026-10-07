@@ -24,11 +24,13 @@ from fractions import Fraction
 from app.options.american import ONE_DAY_MS
 from app.options.at_expiry import PriceRange
 from app.options.contract import OptionContract
+from app.options.deadlines import CloseKind
 from app.options.decay import NEAR_EX_DATE_MS, DecayNotEstimated
 from app.options.lean import ABOUT_FLAT_BELOW_DELTA, LeanDirection
-from app.options.preview import FEE_RATE_NOT_PINNED, NotAsBuilt, PickedLeg, StructureFigures
+from app.options.preview import FEE_RATE_NOT_PINNED, NotAsBuilt, PickedLeg, StructureFigures, TooLateToEnter
 from app.options.quotes import HeldQuote
 from app.options.requirement import StructureMoneyRefusal
+from app.options.resolver import ResolverRefusal
 from app.schemas.option_preview import (
     OptionContractView,
     OptionPreviewAtExpiry,
@@ -47,6 +49,7 @@ from app.schemas.option_preview import (
 )
 from app.services.option_model_inputs import ModelInputsRead
 from app.services.option_preview_words import (
+    age_in_words,
     delta_status_sentence,
     dollars,
     in_the_builders_words,
@@ -374,6 +377,24 @@ def decay_view(
     )
 
 
+def _too_late_sentence(late: TooLateToEnter) -> str:
+    """Why an entry made now would open nothing: the close it could not be seen through before, in words.
+
+    The close is said by how long before the session's close it comes, which
+    is the owner's own term. No time of day is said: a half day's close is
+    not a full day's.
+    """
+    when = f"{age_in_words(late.close_lead_ms)} before" if late.close_lead_ms else "as"
+    closed = {
+        CloseKind.SOLD_LEG: f"A position with a sold leg is closed {when} every session closes.",
+        CloseKind.EXPIRY_DAY: f"A contract here expires today, and its position is closed {when} the session closes.",
+    }[late.owed]
+    return (
+        f"{closed} An entry made now could not be seen through before that: its wait for a fill, the time to "
+        "prove a cancel and a margin would not all end in time. Nothing would be opened."
+    )
+
+
 def entry_refusal_views(
     figures: StructureFigures, order: Sequence[str], *, gap_limit_percent: Decimal, cost_sentence: str | None
 ) -> list[OptionPreviewEntryRefusal]:
@@ -390,6 +411,8 @@ def entry_refusal_views(
             )
         elif refusal.reason == StructureMoneyRefusal.COST_OVER_LIMIT and cost_sentence is not None:
             said = cost_sentence
+        elif refusal.reason == ResolverRefusal.PAST_ENTRY_CUTOFF and figures.too_late_to_enter is not None:
+            said = _too_late_sentence(figures.too_late_to_enter)
         else:
             said = sentence(in_the_builders_words(refusal.detail, order))
         told.append(OptionPreviewEntryRefusal(reason_code=refusal.reason, leg_ids=list(refusal.leg_ids), sentence=said))

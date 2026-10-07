@@ -25,7 +25,10 @@ inputs not known, the search not done. Only a resolution carries figures.
 would be refused come from the one function an entry is prepared by
 (``app.options.entry.entry_figures``), held to the owner's own gap limit and
 cost limit. The contracts are picked under the entry cutoff the owner's own
-entry wait and expiry-day close make.
+entry wait and expiry-day close make. The Clerk refuses an entry too close to
+the close its position would owe that day, and a position with a sold leg
+owes one every session. That is asked too, of the moment the quotes were
+read, and is one more of the entry's refusals: flagged, never red.
 
 **Its figures are good for a minute, counted from the read.** They are a
 reading of one moment: the second read of the supervisor, which comes after
@@ -772,7 +775,8 @@ class _Asked:
         request, name = self.request, plan.structure
         broken = figures.not_as_built
         if broken is None and figures.entry_refusals:
-            # A leg quoted too wide, or a cost over its limit: flagged, not red, and never said to be enterable.
+            # A leg quoted too wide, a cost over its limit, or a moment past the entry cutoff: flagged, not red,
+            # and never said to be enterable.
             comes_to = "every leg comes to a contract" if name is None else f"it resolves to {with_its_article(name)}"
             resolves = f"Right now {comes_to}, but an entry would be skipped. The reasons are listed with the entry."
         elif broken is None:
@@ -985,6 +989,11 @@ async def preview_option_structure(
             return asked.without_figures(plan, unknown, inputs)
         # No rule here picks by delta, so the picks do not depend on the model. Nothing it says is shown.
         model = inputs.unverified_model()
+    # The close terms a bot deployed with these two times would carry. The request sets no other, so the
+    # sold-leg close lead, the cancel allowance and the margin are the ones a Deploy starts from.
+    close_terms = close_terms_with(
+        entry_wait_seconds=request.entry_wait_seconds, expiry_close_lead_minutes=request.expiry_close_lead_minutes
+    )
     found = await searches.search(
         key,
         SearchAsk(
@@ -993,13 +1002,9 @@ async def preview_option_structure(
             underlying=UnderlyingObservation(pricing_bar_close=reading.money, quote=reading.underlying_quote),
             feed=reading.feed,
             model=model,
-            # The entry cutoff a bot deployed with these two times would be held to.
+            # The entry cutoff a bot deployed with these two times would be held to on a contract's expiry day.
             limits=ResolverLimits(
-                max_quote_age_ms=DECISION_DATA_MAX_AGE_MS,
-                entry_cutoff_lead_ms=close_terms_with(
-                    entry_wait_seconds=request.entry_wait_seconds,
-                    expiry_close_lead_minutes=request.expiry_close_lead_minutes,
-                ).entry_cutoff_lead_ms,
+                max_quote_age_ms=DECISION_DATA_MAX_AGE_MS, entry_cutoff_lead_ms=close_terms.entry_cutoff_lead_ms
             ),
             decision_bar_close_ms=reading.now,
             selection_ms=reading.now,
@@ -1023,6 +1028,10 @@ async def preview_option_structure(
         cost_limit_percent=request.cost_limit_percent,
         fee_provision=partial(_fee_provision, today),
         model_is_known=inputs.dividends is not None,
+        # The Clerk refuses an entry too close to the close its position would owe today, a sold leg's
+        # included. Asked here of the moment these quotes were read (ADR 0076 decision 17).
+        at_ms=reading.now,
+        close_terms=close_terms,
         daily_decay=decays,
     )
     return asked.resolved(plan, reading, figures, inputs)

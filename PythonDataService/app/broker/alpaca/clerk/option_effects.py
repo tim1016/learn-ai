@@ -72,9 +72,10 @@ class OptionEffectRefusal(StrEnum):
     # This Clerk reads its market status from a shared source and makes no IBKR pass of its own,
     # so no option contract is ever quoted on it. Refused when the run starts, not at every entry.
     NO_OPTION_QUOTES_HERE = "OPTION_CLERK_HAS_NO_OPTION_QUOTES"
-    # The bot's entry wait, with the time its runner keeps to prove a cancel, is longer than the runner
-    # waits for what an entry came to. No entry could be cancelled and proven ended in time. Refused
-    # when the run starts, not at every entry.
+    # The bot's entry wait, with the time its runner keeps to prove a cancel and for the Clerk's read
+    # of the listing, leaves nothing of the runner's wait for what an entry came to. No entry could be
+    # taken and still be cancelled and proven ended in time. Refused when the run starts, not at every
+    # entry.
     ENTRY_WAIT_OVER_OUTCOME_WAIT = "OPTION_ENTRY_WAIT_OVER_OUTCOME_WAIT"
     # The bot was started with no order terms sealed with it. They are fixed at Deploy for the bot's
     # life, and nothing a decision says supplies them. Refused when the run starts.

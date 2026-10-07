@@ -20,7 +20,7 @@ working in (``contracts_to_watch``). That lasts as long as the run. A run is
 refused as it starts, by name, when its window can need more quote lines
 than the Clerk may open, when the Clerk reads its market status from a
 shared source and so has no option quotes of its own, or when its entry wait
-is longer than its runner can see an entry through.
+leaves no moment at which its runner could see an entry through.
 
 **An ENTER** is resolved here and judged by the Clerk. After the runner's
 own screens, in order:
@@ -45,8 +45,9 @@ Clerk answers an ENTER once its order is sent. The runner then asks what the
 entry came to and waits for the answer, no longer than
 ``ENTRY_OUTCOME_WAIT_MS`` after the decision bar closed. An entry is taken
 only while its order can still be cancelled and proven ended inside that
-wait (``CANCEL_PROOF_ROOM_MS``). ``EntryCameTo`` is the answer in the words
-the runner logs and the Dry Run's journal writes.
+wait (``CANCEL_PROOF_ROOM_MS``). What an entry came to is said in the words
+of ``app.options.entry_came_to``, which the runner logs and the Dry Run's
+journal writes.
 
 **A refusal at any step is one answer**: a reason code and a sentence. The
 runner writes it as the decision's one ``blocked`` receipt and discards the
@@ -85,6 +86,7 @@ from app.broker.alpaca.clerk.option_effects import (
     OptionPlanRefused,
 )
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryStanding
+from app.broker.alpaca.clerk.sqlite.runtime import CONTRACT_REFERENCE_READ_BOUND_MS
 from app.broker.ibkr.market_subscription import DECISION_DATA_MAX_AGE_MS
 from app.broker.ibkr.option_quotes import WatchRequest
 from app.marketdata.feed import ContinuityPolicy, MarketDataBar, MarketDataFeed
@@ -141,26 +143,41 @@ ENTRY_OUTCOME_WAIT_MS: Final = 50_000
 # gives no answer for a limit already past and records none, so the runner would have to settle the
 # strategy by itself, and a later Start, which replays the entry from the Clerk's record or else
 # from its books, could then differ from the live run (#2913). So the limit is never asked nearer
-# than this. It is a little over the Clerk's own pause between two reads of its books (200 ms): the
-# Clerk looks once more, judges what is still unproven, and records its answer. It is short because
-# the runner has by then been away from its bar stream for longer than it meant to be.
+# than this. It is a little over the Clerk's own pause between two reads of its books (200 ms). The
+# Clerk looks again until its limit is reached, which at this wait is twice: 200 ms on the limit is
+# still ahead, and 400 ms on it judges what is still unproven and records its answer. It is short
+# because the runner has by then been away from its bar stream for longer than it meant to be.
+#
+# The runner works the limit out from its own clock, and the Clerk reads the clock again as it
+# first looks. A process held for longer than this between the two has asked with a limit already
+# past: the Clerk refuses it, and the run ends under the refusal's own code with nothing settled.
+# The order is not left behind: the Clerk cancels what has not filled, as for any run that ended.
 ENTRY_OUTCOME_SHORTEST_WAIT_MS: Final = 250
 
 # How long the runner keeps, after an entry's own wait for a fill, for the cancel of what did not
 # fill to be asked for and proven by a lookup of the order.
 #
-# An entry is taken only when "now + its entry wait + this" is no later than the end of the wait for
-# its outcome. Taken later, its order could still be resting when the runner stops waiting, and the
-# strategy would be settled as entered on an order that might never fill.
+# An entry is taken only while the runner's clock is no later than a last moment after its decision
+# bar closed (``OptionRun._latest_take_ms``). That moment is the wait for its outcome less three
+# things: the bot's entry wait, these seven seconds, and the three seconds the Clerk's read of the
+# broker's listing may take (``CONTRACT_REFERENCE_READ_BOUND_MS``), which comes after the runner
+# last looks at the clock. Taken later, its order could still be resting when the runner stops
+# waiting, and the strategy would be settled as entered on an order that might never fill.
 #
-# Seven seconds is the most the terms a Deploy starts from leave. A decision is on time for twenty
-# seconds from its bar's close, the Clerk's read of the broker's listing can add three, and the entry
-# then waits twenty: 50 - (20 + 3 + 20) = 7. "Now" is the runner's clock, before that listing read,
-# so under those terms an entry may be taken up to 50 - 20 - 7 = 23 seconds after its bar closed, and
-# the lateness gate refuses a decision more than twenty seconds late first. No entry is refused for
-# this under those terms. Under other terms an entry taken at the last moment this allows has four
-# seconds left once the listing is read. How fast Alpaca shows a cancelled option order as ended has
-# not been seen on an account.
+# Under the terms a Deploy starts from an entry waits twenty seconds, so the last moment is
+# 50 - 20 - 7 - 3 = 20 seconds after the bar closed. A decision is on time for those same twenty
+# seconds, and the lateness gate is asked first. So under those terms a late entry is refused as
+# late, and this refusal is reached only when the clock passes the twentieth second between the two
+# looks. Under a thirty-second entry wait the last moment is 50 - 30 - 7 - 3 = 10 seconds after the
+# close.
+#
+# One thing is still not counted. The Clerk sets the cancel's time when it takes the entry, and an
+# entry that first waits for a newer account reading is judged again from the top (#2623). What
+# bounds that is the entry's own quotes, which the Clerk uses for five seconds and no longer
+# (``QUOTE_MAX_AGE_MS``). So the Clerk can take an entry up to five seconds after the runner looked,
+# two more than the three counted, and an entry taken at the last moment allowed then has five
+# seconds left to prove its cancel, not seven. How fast Alpaca shows a cancelled option order as
+# ended has not been seen on an account.
 #
 # This is not the owner's cancel allowance (``CloseTerms.cancel_allowance_ms``): that one keeps an
 # entry clear of its contract's close deadline, and is far longer.
@@ -417,24 +434,37 @@ class OptionRun:
             )
 
     def _require_the_entry_wait_fits(self) -> None:
-        """Refuse a bot whose entry wait can never be seen through. With the time kept to prove a cancel it
-        is longer than the runner waits for what an entry came to, so every entry of such a bot would be
+        """Refuse a bot whose entry wait can never be seen through. It leaves no moment after a bar's close
+        at which an entry could still be taken (``_latest_take_ms``), so every entry of such a bot would be
         refused as taken too late."""
-        if self._latest_take_ms() < 0:
-            wait_s = self._terms.close.entry_wait_ms / 1000
+        latest_take_ms = self._latest_take_ms()
+        if latest_take_ms <= 0:
+            wait_ms = self._terms.close.entry_wait_ms
             raise OptionPlanRefused(
                 OptionEffectRefusal.ENTRY_WAIT_OVER_OUTCOME_WAIT,
-                f"This bot's entries wait up to {wait_s:g} seconds for a fill, and its runner keeps "
-                f"{CANCEL_PROOF_ROOM_MS / 1000:g} more to prove that what did not fill was cancelled. The runner "
-                f"waits {ENTRY_OUTCOME_WAIT_MS / 1000:g} seconds in all for what an entry came to, so no entry "
-                "could be cancelled and proven ended in time, and every entry would be refused. Deploy this bot "
-                f"with an entry wait of {(ENTRY_OUTCOME_WAIT_MS - CANCEL_PROOF_ROOM_MS) / 1000:g} seconds or less.",
+                f"This bot's entries wait up to {wait_ms / 1000:g} seconds for a fill. Its runner waits "
+                f"{ENTRY_OUTCOME_WAIT_MS / 1000:g} seconds in all for what an entry came to. Of those it keeps "
+                f"{CANCEL_PROOF_ROOM_MS / 1000:g} to prove that what did not fill was cancelled, and "
+                f"{CONTRACT_REFERENCE_READ_BOUND_MS / 1000:g} for the account Clerk's read of the contract's "
+                "listing. That leaves no moment at which an entry could be taken, so every entry would be "
+                f"refused. Deploy this bot with an entry wait under {(wait_ms + latest_take_ms) / 1000:g} seconds.",
             )
 
     def _latest_take_ms(self) -> int:
-        """How long after its decision bar closed an entry may still be taken. Later, its order could not
-        be cancelled and proven ended before the runner stops waiting. Under zero when no entry can be."""
-        return ENTRY_OUTCOME_WAIT_MS - self._terms.close.entry_wait_ms - CANCEL_PROOF_ROOM_MS
+        """How long after its decision bar closed an entry may still be taken: the one sum both checks use.
+
+        The wait for an entry's outcome, less the bot's entry wait, the time
+        kept to prove a cancel, and the Clerk's read of the broker's listing,
+        which comes after the runner last looks at the clock. Later than
+        this, the order could not be cancelled and proven ended before the
+        runner stops waiting. Zero or under when no entry can be taken.
+        """
+        return (
+            ENTRY_OUTCOME_WAIT_MS
+            - self._terms.close.entry_wait_ms
+            - CANCEL_PROOF_ROOM_MS
+            - CONTRACT_REFERENCE_READ_BOUND_MS
+        )
 
     # ---- what is watched --------------------------------------------------------
 
@@ -714,23 +744,24 @@ class OptionRun:
         """Why an entry decided on the bar that closed at ``decision_bar_close_ms`` is not taken now, or
         ``None`` when it may be.
 
-        Taken now, its order waits the bot's entry wait for a fill, and the
-        cancel of what did not fill must then be asked for and proven. When
-        that would end after the runner stops waiting for what the entry came
-        to, the strategy would be settled as entered on an order still
-        resting. So the entry is refused as taken too late: nothing is sent
-        and nothing is set aside.
+        Taken now, the Clerk first reads the broker's listing, the order then
+        waits the bot's entry wait for a fill, and the cancel of what did not
+        fill must then be asked for and proven. When that could end after the
+        runner stops waiting for what the entry came to, the strategy would
+        be settled as entered on an order still resting. So the entry is
+        refused as taken too late: nothing is sent and nothing is set aside.
         """
         taken_after_ms = self._market.clock() - decision_bar_close_ms
         if taken_after_ms <= self._latest_take_ms():
             return None
         return _blocked(
             OptionEntryRefusal.TAKEN_TOO_LATE,
-            f"This entry would be taken {taken_after_ms / 1000:.1f} seconds after its bar closed. Its order waits "
-            f"up to {self._terms.close.entry_wait_ms / 1000:g} seconds for a fill, and the bot keeps "
-            f"{CANCEL_PROOF_ROOM_MS / 1000:g} more to prove that what did not fill was cancelled. That would end "
-            f"after the {ENTRY_OUTCOME_WAIT_MS / 1000:g} seconds the bot waits for what an entry came to, so the "
-            "order could still be resting when the bot had to count itself in or out",
+            f"This entry would be taken {taken_after_ms / 1000:.1f} seconds after its bar closed. The account "
+            f"Clerk's read of the contract's listing may take {CONTRACT_REFERENCE_READ_BOUND_MS / 1000:g} seconds, "
+            f"the order then waits up to {self._terms.close.entry_wait_ms / 1000:g} seconds for a fill, and the "
+            f"bot keeps {CANCEL_PROOF_ROOM_MS / 1000:g} more to prove that what did not fill was cancelled. That "
+            f"could end after the {ENTRY_OUTCOME_WAIT_MS / 1000:g} seconds the bot waits for what an entry came "
+            "to, so the order could still be resting when the bot had to count itself in or out",
         )
 
     # ---- an EXIT ----------------------------------------------------------------
@@ -766,7 +797,6 @@ __all__ = [
     "ENTRY_OUTCOME_SHORTEST_WAIT_MS",
     "ENTRY_OUTCOME_WAIT_MS",
     "IBKR_LISTING",
-    "EntryCameTo",
     "ModelInputsReader",
     "OptionEntryBlocked",
     "OptionEntryRefusal",

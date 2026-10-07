@@ -1724,8 +1724,13 @@ async def _settle_option_entry(
     answer the runner made up could not be replayed. The send itself can
     outlast the wait. The limit asked for is then a moment from now and not
     one already past (``ENTRY_OUTCOME_SHORTEST_WAIT_MS``), so the Clerk
-    still looks once more, judges, and records its answer. A wait the Clerk
-    refuses all the same is raised, and ends the run.
+    still looks again until that limit, judges, and records its answer. A
+    wait the Clerk refuses all the same is raised, and ends the run.
+
+    The limit is also never further from now than the wait itself. A clock
+    set back while the send was out would otherwise put the bar's close,
+    and so the limit, that much further ahead, and keep the runner from its
+    stream for as long.
     """
     from app.services.bot_option_run import (
         ENTRY_OUTCOME_SHORTEST_WAIT_MS,
@@ -1733,8 +1738,10 @@ async def _settle_option_entry(
         entry_came_to,
     )
 
+    now_ms = now_ms_utc()
     until_ms = max(
-        evaluation.decision_bar_close_ms + ENTRY_OUTCOME_WAIT_MS, now_ms_utc() + ENTRY_OUTCOME_SHORTEST_WAIT_MS
+        min(evaluation.decision_bar_close_ms + ENTRY_OUTCOME_WAIT_MS, now_ms + ENTRY_OUTCOME_WAIT_MS),
+        now_ms + ENTRY_OUTCOME_SHORTEST_WAIT_MS,
     )
     settled = await clerk.await_entry_outcome(
         strategy_instance_id=binding.strategy_instance_id,
@@ -1845,18 +1852,20 @@ async def _option_decision_facts(
         too_late = options.too_late_to_see_through(evaluation.decision_bar_close_ms)
         if too_late is None:
             return {"option_entry": found}
-        found = too_late
+        blocked, not_sent = too_late, "Bot entry not sent: taken this late, its order could not be seen through"
+    else:
+        blocked, not_sent = found, "Bot entry not sent: its option contracts could not be resolved"
     _discard_evaluation(evaluation)
     _append_decision_receipt(
         decision_receipts,
         binding=binding,
         evaluation=evaluation,
         outcome="blocked",
-        reason_code=found.reason_code,
-        refusal_reason=found.why,
+        reason_code=blocked.reason_code,
+        refusal_reason=blocked.why,
     )
     logger.warning(
-        "Bot entry not sent: its option contracts could not be resolved, or it could not be seen through",
+        not_sent,
         extra={
             "action": "bot_option_entry_blocked",
             "strategy_instance_id": binding.strategy_instance_id,
@@ -1864,7 +1873,7 @@ async def _option_decision_facts(
             "strategy_key": binding.strategy_key,
             "symbol": binding.symbol,
             "underlying": options.underlying,
-            "reason_code": found.reason_code,
+            "reason_code": blocked.reason_code,
             "evaluation_id": evaluation.evaluation_id,
             "decision_bar_close_ms": evaluation.decision_bar_close_ms,
         },
