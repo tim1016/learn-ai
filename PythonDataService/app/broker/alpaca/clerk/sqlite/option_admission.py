@@ -72,6 +72,7 @@ from app.broker.contract.options import SingleOptionOrderRequest, opening_order
 from app.options.deadlines import CloseTerms, entry_cutoff_on, past_last_session
 from app.options.entry import prepare_entry
 from app.options.exact import whole_units
+from app.options.order_terms import MAX_ENTRY_WAIT_MS, MAX_ORDER_TERM_MS, MIN_ENTRY_WAIT_MS
 from app.options.quotes import quote_fault
 from app.options.requirement import StructureMoneyRefused
 from app.options.structure import ResolvedStructure
@@ -90,13 +91,9 @@ _CENT = Decimal("0.01")
 # The terms an entry accepted before entries kept their own is held to (#2913).
 ENTRY_CLOSE_TERMS = CloseTerms()
 
-# What the owner's order terms may be, asked where the Clerk takes them (ADR 0076).
-# An entry wait: a second at least, since a wait of nothing cancels the order as it is sent;
-# five minutes at most, since the quotes it was priced from are seconds old.
-MIN_ENTRY_WAIT_MS = 1_000
-MAX_ENTRY_WAIT_MS = 5 * 60_000
-# Every other term: no longer than a whole regular session, which nothing could be counted back from.
-MAX_ORDER_TERM_MS = 390 * 60_000
+# What the owner's order terms may be is asked here, where the Clerk takes them (ADR 0076). The bounds are
+# the Clerk's own safety limits, and are stated once, beside the narrower ranges an owner is offered
+# (``app.options.order_terms``): ``MIN_ENTRY_WAIT_MS``, ``MAX_ENTRY_WAIT_MS`` and ``MAX_ORDER_TERM_MS``.
 
 
 @dataclass(frozen=True, slots=True)
