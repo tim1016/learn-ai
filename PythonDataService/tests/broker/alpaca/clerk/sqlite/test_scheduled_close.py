@@ -213,6 +213,28 @@ async def test_a_contract_that_expires_another_day_owes_no_close_today(paper: Pa
     assert _closes_sent(paper) == [] and scheduled_close_state(paper.repo, "a") == ()
 
 
+async def test_a_contract_whose_expiry_date_has_no_session_owes_no_close_and_is_told_as_missed_when_its_last_session_ends(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    """A listed contract should carry no such date. What the Clerk says of one that does is a known gap, held here."""
+    thanksgiving, the_day_before = date(2026, 11, 26), date(2026, 11, 25)
+    expires_on_a_holiday = OptionContract.of(root="SPY", expiry_date=thanksgiving, right="call", strike=585)
+    paper.account.listed[expires_on_a_holiday.occ_symbol] = documented_option_listing(expires_on_a_holiday)
+    receipt = await paper.enter("a", evidence=paper.evidence(picked={LEG: expires_on_a_holiday}))
+    [order_ref] = receipt.child_order_refs
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-buy")
+    its_last_close = et_minute_of_day_ms(the_day_before, 16 * 60)
+
+    _until(paper, its_last_close - 60_000)
+    in_its_last_session = await paper.round()
+    _until(paper, its_last_close)
+    once_it_ended = await paper.round()
+
+    # Nothing is owed in its last session, which is not its expiry date. From that session's close it is missed.
+    assert in_its_last_session.closes == ScheduledCloseRound() and _closes_sent(paper) == []
+    assert once_it_ended.closes.missed == (("a", expires_on_a_holiday.occ_symbol),) and _notice(paper) is not None
+
+
 async def test_a_second_round_and_a_pass_never_close_twice(paper: PaperOptions) -> None:  # noqa: F811
     await _holds_one_call(paper)
     _until(paper, DUE)

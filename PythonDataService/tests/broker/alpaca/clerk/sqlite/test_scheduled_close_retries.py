@@ -180,6 +180,28 @@ async def test_the_watchdog_carries_the_rule_as_one_fact_of_its_scan(paper: Pape
     assert during.ready_at_ms - during.episode["observed_at_ms"] == SCHEDULED_CLOSE_RETRY_AFTER_MS
 
 
+async def test_three_ordinary_tries_that_failed_before_the_close_do_not_make_the_clerk_give_up_under_its_rule(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    """The bot's own exit fails six and a half minutes before the close is due, and is sent again three times."""
+    await _holds_one_call(paper)
+    _until(paper, DUE - 6 * 60_000 - 30_000)
+    paper.venue.option_submit_error = REFUSED
+    await paper.exit("a")
+    await _passes(paper, 26)
+    assert paper.clock() == DUE
+    # The exit and its three ordinary tries, two minutes apart. The count is full, and nothing is given up yet.
+    assert [sent - DUE for sent in _sent_at(paper)] == [-390_000, -270_000, -150_000, -30_000, 0]
+    assert open_exit_stuck(paper.repo, "a") is None
+
+    await _passes(paper, 20)
+
+    # The close was taken at its time, and from then on its own rule holds: a try every thirty seconds.
+    since_the_close = [sent - DUE for sent in _sent_at(paper) if sent >= DUE]
+    assert since_the_close == [SCHEDULED_CLOSE_RETRY_AFTER_MS * again for again in range(11)]
+    assert open_exit_stuck(paper.repo, "a") is None
+
+
 # ── what was tried under the rule is not counted against the bot ─────────
 
 
@@ -285,6 +307,35 @@ async def test_after_a_session_of_refused_closes_the_close_is_sent_again_at_the_
     await _the_close_fills(paper)
     await paper.round()
     assert paper.held() == {} and _notice(paper) is None
+
+
+async def test_time_failed_under_the_rule_is_not_carried_into_the_next_session(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    """After the first refusal Alpaca's account shows no such position, so every pass refuses to send again."""
+    await _holds_one_call(paper)
+    _its_leg_is_sold(paper, monkeypatch)
+    _until(paper, DAY_ONE_DUE)
+    paper.venue.option_submit_error = REFUSED
+    await paper.round()
+
+    async def no_positions() -> list[object]:
+        return []
+
+    monkeypatch.setattr(paper.account, "list_positions", no_positions)
+    while paper.clock() + PASS_MS < DAY_ONE_CLOSE:
+        paper.wait(PASS_MS)
+        await paper.pass_()
+    # Nine minutes of passes that each failed, with nothing sent after the first try. The bot is not given up.
+    assert len(_sent_at(paper)) == 1 and open_exit_stuck(paper.repo, "a") is None
+
+    _until(paper, DAY_TWO_OPEN + 1_000)
+    await paper.pass_()
+    paper.wait(PASS_MS)
+    await paper.pass_()
+
+    # The next morning's first failures start the ordinary clock from nothing.
+    assert len(_sent_at(paper)) == 1 and open_exit_stuck(paper.repo, "a") is None
 
 
 async def test_a_new_session_counts_its_tries_from_zero_and_owes_a_close_of_its_own(

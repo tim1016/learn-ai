@@ -106,6 +106,8 @@ async def test_a_dry_run_store_opened_to_operate_has_its_keeper_running(tmp_path
         keeper = runtime.deadline_keeper
         assert isinstance(keeper, DeadlineKeeper)
         assert keeper._task is not None and not keeper._task.done()
+        # The nudge its facade sends is the one this keeper sleeps on.
+        assert runtime.clerk._entry_deadline_nudge is keeper._nudge
     finally:
         await runtime.close()
 

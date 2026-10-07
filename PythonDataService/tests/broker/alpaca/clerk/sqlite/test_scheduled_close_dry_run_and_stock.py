@@ -35,6 +35,7 @@ from app.broker.alpaca.clerk.sqlite.scheduled_close import (
     CloseStanding,
     HeldContracts,
     ScheduledCloseRound,
+    _accept_while_still_owed,
     drive_scheduled_closes,
     held_contracts,
     scheduled_close_state,
@@ -198,18 +199,18 @@ async def test_a_running_dry_runs_failed_close_is_taken_again_thirty_seconds_apa
 
     # The keeper looks every five seconds. It takes the close again thirty seconds after the last try, no sooner.
     taken_again_at: list[int] = []
-    wakes: list[int] = []
     for _ in range(11):
         dry_run.wait(5_000)
-        looked = await keeper.tick()
-        wakes.append(looked.wake_in_ms)
-        if looked.closes.taken:
+        if (await keeper.tick()).closes.taken:
             taken_again_at.append(dry_run.clock() - DUE)
     assert taken_again_at == [30_000] and dry_run.held() == {SYMBOL: 1.0}
-    # It sleeps no longer than to the next try: five seconds before one, it is told to wake in five.
-    assert wakes[4] == 5_000 and max(wakes) == IDLE_WAKE_MS
 
-    dry_run.wait(5_000)
+    # Two seconds before the next try it takes nothing, and sleeps exactly to it.
+    dry_run.wait(3_000)
+    just_before = await keeper.tick()
+    assert just_before.closes.taken == () and just_before.wake_in_ms == 2_000
+
+    dry_run.wait(2_000)
     _hand_over(dry_run, "2.10", "2.16")
     sold = await keeper.tick()
 
@@ -241,6 +242,25 @@ async def test_a_dry_runs_failed_close_is_tried_no_sooner_than_thirty_seconds_af
     # Counted from the bot's newest exit, whoever made it: two tries are never closer than the wait.
     assert thirty_after_the_close.closes.taken == () and orders_then == orders_made
     assert len(thirty_after_the_bots_exit.closes.taken) == 1 and dry_run.orders() == orders_made + 1
+
+
+async def test_a_failed_close_read_as_ready_is_not_taken_again_once_the_bot_has_made_a_newer_exit(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """Asked again in the run that takes it: what was read a moment ago is not what decides."""
+    await dry_run.enter(dry_run.evidence())
+    _until(dry_run, DUE)
+    _hand_over(dry_run, "0", "0.05")
+    await _keeper(dry_run).tick()
+    dry_run.wait(30_000)
+    [ready] = held_contracts(dry_run.repo, dry_run.clock()).held
+    assert ready.to_be_taken_again(dry_run.clock())
+    await dry_run.exit()
+    orders_made = dry_run.orders()
+
+    taken = _accept_while_still_owed(dry_run.repo, ready)
+
+    assert taken is None and dry_run.orders() == orders_made
 
 
 async def test_a_dry_runs_failed_close_is_not_taken_again_once_its_session_has_ended(
