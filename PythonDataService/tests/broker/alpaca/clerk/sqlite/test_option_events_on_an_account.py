@@ -455,3 +455,23 @@ async def test_a_pass_that_sees_a_contracts_position_differ_reads_at_once_and_no
     await paper.pass_()
 
     assert len(paper.account.option_events.reads) == 2 and paper.held() == {}
+
+
+async def test_a_fault_in_the_option_step_does_not_fail_the_pass_and_the_position_still_shows_as_drift(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+) -> None:
+    """The pass is what every bot's custody rests on. It reaches its verdict whatever the option step did."""
+    await _holding_one_call(paper)
+    _on_saturday(paper)
+    paper.account.settled.add(SYMBOL)
+    paper.account.option_events.rows = [_expiry_row()]
+
+    def breaks(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("a fault in the booking of option events")
+
+    monkeypatch.setattr(option_events, "book_option_events", breaks)
+
+    result = await paper.pass_()
+
+    assert result.verdict == "position_drift" and result.drifted_symbols == (SYMBOL,)
+    assert paper.held() == {SYMBOL: 1.0}

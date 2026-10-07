@@ -496,3 +496,123 @@ async def test_a_hold_that_ends_only_by_proof_cannot_be_acknowledged_away(tmp_pa
         )
     finally:
         repo.close()
+
+
+# ── what a hold is not raised for, and what a read asks for ─────────────────
+
+
+async def test_a_walk_cut_short_proves_nothing_even_when_the_pass_hands_over_the_brokers_positions(
+    tmp_path: Path,
+) -> None:
+    """The pass knows the broker holds none of the expired contract. The row may still be in what was not read."""
+    repo = _one_bot(tmp_path)
+    later(repo, 2 * 86_400_000)
+    account = _FakeReadPort()
+    account.option_events.cut_short = True
+    try:
+        later(repo, option_events.OPTION_EVENT_POLL_RETRY_MS)
+        await poll(repo, account, broker_positions=[])
+
+        assert option_holds(repo).keys() == {("bot-a", "OPTION_EVENTS_NOT_READ")}
+    finally:
+        repo.close()
+
+
+async def test_a_share_trade_of_another_day_is_not_taken_for_an_exercises_own(tmp_path: Path) -> None:
+    repo = _one_bot(tmp_path)
+    account = _FakeReadPort()
+    try:
+        await _read(repo, account, _exercise(date="2023-07-21"), _share_trade(100, date="2023-07-20"))
+
+        assert held(repo, "bot-a") == {"AAPL": 100.0}
+        assert {reason for _bot, reason in option_holds(repo)} == {
+            "OPTION_SHARES_HELD", "OPTION_SHARE_TRADE_MISSING", "OPTION_SHARE_TRADE_UNPAIRED",
+        }
+    finally:
+        repo.close()
+
+
+async def test_a_bot_that_closed_an_older_lot_of_its_own_before_the_row_was_read_is_told_nothing_of_it(
+    tmp_path: Path,
+) -> None:
+    """Inside one bot's books it does not matter which of its lots an event took: nothing is in doubt."""
+    repo = books_at(tmp_path, date(2023, 6, 29), {"bot-a": "AAPL"})
+    holds_option(repo, "bot-a", CALL, contracts=-1, price=3.07)
+    holds_option(repo, "bot-a", CALL, contracts=-1, price=2.80)
+    later(repo, 4 * 86_400_000)
+    holds_option(repo, "bot-a", CALL, contracts=1, price=1.20)
+    account = _FakeReadPort()
+    try:
+        await _read(repo, account, _assignment(date="2023-06-30"), _share_trade(-100, date="2023-06-30"))
+
+        assert held(repo, "bot-a") == {"AAPL": -100.0}
+        assert option_holds(repo).keys() == {("bot-a", "OPTION_SHARES_HELD")}
+    finally:
+        repo.close()
+
+
+async def test_a_position_the_owner_wrote_off_is_not_closed_a_second_time_by_a_row_that_comes_later(
+    tmp_path: Path,
+) -> None:
+    """The broker held none of the expired contract and no row came, so the owner wrote the position off.
+    The row comes afterwards. The bot's lot is offered to it no more: nothing is booked, and it is held by name."""
+    from app.broker.alpaca.clerk.sqlite.facts import AttributedResidueDischargedFacts
+    from app.broker.alpaca.clerk.sqlite.models import TransitionInput
+
+    repo = _one_bot(tmp_path)
+    repo.append_transition(TransitionInput(
+        strategy_instance_id="bot-a", transition_kind="ATTRIBUTED_RESIDUE_DISCHARGED", custody_owner="ACCOUNT_CLERK",
+        execution_authority="ACCOUNT_CLERK", operation_state="succeeded", clerk_observed_at_ms=repo.clock(),
+        summary_code="ATTRIBUTED_RESIDUE_DISCHARGED",
+        facts_json=AttributedResidueDischargedFacts(
+            symbol=CALL, discharged_qty=1.0, broker_qty=0.0, account_attributed_qty=1.0,
+            broker_observed_at_ms=repo.clock(), uncertainty_ids=[], operator_reason="expired, no row",
+        ).to_facts_json(),
+    ))
+    assert held(repo, "bot-a") == {}
+    holds_option(repo, "bot-b", OTHER_CALL, contracts=1)
+    account = _FakeReadPort()
+    try:
+        await _read(repo, account, _expiry())
+
+        assert bookings(repo) == [] and held(repo, "bot-a") == {}
+        assert option_holds(repo).keys() == {(None, "OPTION_EVENT_CONTRACT_NOT_HELD")}
+    finally:
+        repo.close()
+
+
+async def test_a_read_starts_on_the_date_of_the_first_fill_in_a_contract_still_held_however_long_ago(
+    tmp_path: Path,
+) -> None:
+    from app.utils.session_anchors import et_midnight_ms
+
+    repo = _one_bot(tmp_path)
+    later(repo, 9 * 86_400_000)
+    account = _FakeReadPort()
+    try:
+        await _read(repo, account)
+
+        assert account.option_events.reads == [et_midnight_ms(THE_DAY_BEFORE)]
+    finally:
+        repo.close()
+
+
+async def test_a_read_goes_back_to_the_oldest_row_an_open_hold_names(tmp_path: Path) -> None:
+    """The contract the bot holds was bought today. The row it is held for is dated weeks before."""
+    from app.utils.session_anchors import et_midnight_ms
+
+    repo = _one_bot(tmp_path)
+    account = _FakeReadPort()
+    try:
+        await _read(repo, account, _expiry(symbol=OTHER_CALL, date="2023-07-21"))
+        assert (None, "OPTION_EVENT_CONTRACT_NOT_HELD") in option_holds(repo)
+        later(repo, 30 * 86_400_000)
+        holds_option(repo, "bot-b", "AAPL230915C00150000", contracts=1)
+        holds_option(repo, "bot-a", CALL, contracts=-1)
+
+        await _read(repo, account, _expiry(symbol=OTHER_CALL, date="2023-07-21"))
+
+        assert account.option_events.reads[-1] == et_midnight_ms(date(2023, 7, 21))
+        assert (None, "OPTION_EVENT_CONTRACT_NOT_HELD") in option_holds(repo)
+    finally:
+        repo.close()

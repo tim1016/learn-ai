@@ -52,7 +52,10 @@ from app.broker.alpaca.clerk.sqlite.models import (
 from app.broker.alpaca.clerk.sqlite.off_loop import to_thread
 from app.broker.alpaca.clerk.sqlite.open_replacement import has_ready_replacement
 from app.broker.alpaca.clerk.sqlite.option_event_books import outside_order_reduces_a_bots_contract
-from app.broker.alpaca.clerk.sqlite.option_events import book_option_events, poll_option_events
+from app.broker.alpaca.clerk.sqlite.option_events import (
+    book_outside_option_orders_in_a_pass,
+    poll_option_events_in_a_pass,
+)
 from app.broker.alpaca.clerk.sqlite.option_order_evidence import (
     asked_of_a_real_option_order,
     look_up_by_client_order_id,
@@ -1327,10 +1330,10 @@ async def _reconcile_account_serialized(
     # final look at the broker (ADR 0076 decision 22). A contract whose
     # position this pass's snapshot shows differing from the books is read
     # for at once. On books with no option contract one empty table is read,
-    # the broker is not asked and nothing is written.
-    await poll_option_events(
-        repo, read=read, off_loop=intake.off_loop, broker_positions=broker_positions,
-        act_on_the_books_between_reads=True,
+    # the broker is not asked and nothing is written. A fault in this step
+    # is logged and the pass goes on.
+    await poll_option_events_in_a_pass(
+        repo, read=read, off_loop=intake.off_loop, broker_positions=broker_positions
     )
 
     # A Dry Run never ends holding (owner decision 2026-09-29): on a ``sim:``
@@ -1448,7 +1451,7 @@ def _finalize_reconciliation_verdict(
     plan = _contain_unfoldable_orders(repo, plan)
     # An order just observed in an option contract a bot holds is held against that bot in
     # this same pass, from the books' own record of it (ADR 0076 decision 22).
-    book_option_events(repo, None)
+    book_outside_option_orders_in_a_pass(repo)
     _sync_unexplained_order_hold(repo, plan.unexplained_orders)
     _sync_position_drift(
         repo,

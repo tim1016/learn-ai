@@ -100,7 +100,7 @@ from app.broker.alpaca.clerk.sqlite.option_event_folds import (
     OptionPositionEndedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.order_projection import ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteError, ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     OPTION_EVENT_AFTER_A_LOT_CLOSED_REASON_CODE,
@@ -145,6 +145,7 @@ from app.options.event_allocation import (
     HeldOptionLot,
     LotAllocation,
     OptionEventKind,
+    OptionEventRefusal,
     OptionEventRefused,
     expected_share_trade,
 )
@@ -281,6 +282,9 @@ _DEFAULT_NEXT_STEP = "Compare this bot's positions with the broker's, then ackno
 if set(_HOLD_COPY) != set(OPTION_EVENT_HOLD_REASON_CODES):
     # A hold with no words of its own could not be raised at all.
     raise RuntimeError("every option-event hold needs its own words")
+if not {refusal.value for refusal in OptionEventRefusal} <= set(OPTION_EVENT_HOLD_REASON_CODES):
+    # A refusal with no hold of its own would be found and then dropped without a word.
+    raise RuntimeError("every refusal of the allocation rule needs a hold under its own code")
 
 
 @dataclass(frozen=True, slots=True)
@@ -404,7 +408,7 @@ class _BotBook:
     lots: tuple[HeldOptionLot, ...]
     # The order whose fill opened each lot, by the lot's sequence.
     opened_by: Mapping[int, str]
-    # When a lot open before was closed by an order, with the dates it was open between.
+    # Each lot an order closed: when it was opened, when it was closed, and the side it was held on.
     closed: tuple[tuple[int, int, str], ...]
 
 
@@ -431,13 +435,16 @@ def _bot_book(conn: sqlite3.Connection, sid: str, contract: OptionContract, reco
     fifo = compute_fifo_pnl(records)
     open_lots = [lot for lot in fifo.open_lots if lot.symbol == symbol]
     signed = sum(int(lot.exact_qty) * (1 if lot.side is OrderSide.BUY else -1) for lot in open_lots)
+    # A lot an event closed was closed by no order: only a close by an order can come between an
+    # event and the reading of its row.
     sides_at: dict[int, set[OrderSide]] = {}
     for record in records:
-        sides_at.setdefault(record.filled_at_ms, set()).add(record.side)
+        if not record.event_key.startswith(OPTION_EVENT_CLOSE_EXECUTION_PREFIX):
+            sides_at.setdefault(record.filled_at_ms, set()).add(record.side)
     closed = tuple(
-        (lot.opened_at_ms, lot.closed_at_ms, _SOLD if OrderSide.BUY in sides_at.get(lot.closed_at_ms, ()) else _BOUGHT)
+        (lot.opened_at_ms, lot.closed_at_ms, _SOLD if OrderSide.BUY in sides_at[lot.closed_at_ms] else _BOUGHT)
         for lot in fifo.closed_lots
-        if lot.symbol == symbol
+        if lot.symbol == symbol and lot.closed_at_ms in sides_at
     )
     if signed != reads.position(conn, sid, symbol):
         return _BotBook(sid=sid, lots=(), opened_by={}, closed=closed)
@@ -912,6 +919,17 @@ def _book_events(
             notes = first.notes or []
             share_trade_note = first.share_trade
             booked_as_of_ms = first.booked_as_of_ms
+            # What the record says this event took from outside the books is gone for the events after it.
+            taken_outside = sum(
+                row["option_quantity_change"] for row in allocation_rows if row["owner"] == OUTSIDE_THE_BOOKS
+            )
+            if taken_outside:
+                try:
+                    whole = _outside_lot(conn, contract)
+                except _OutsideHoldingUnknown:
+                    whole = None
+                if whole is not None:
+                    outside_left[symbol] = outside_left.get(symbol, whole.quantity) + taken_outside
         else:
             terms = contract_terms(conn, symbol)
             try:
@@ -937,9 +955,10 @@ def _book_events(
                 continue
             taken_by_bot = [lot for lot in allocation.lots if lot.owner != OUTSIDE_THE_BOOKS]
             owners = sorted({lot.owner for lot in taken_by_bot})
-            outside_left[symbol] = outside_left.get(symbol, 0) + sum(
-                lot.option_quantity_change for lot in allocation.lots if lot.owner == OUTSIDE_THE_BOOKS
-            )
+            if outside is not None:
+                outside_left[symbol] += sum(
+                    lot.option_quantity_change for lot in allocation.lots if lot.owner == OUTSIDE_THE_BOOKS
+                )
             if event.kind is not OptionEventKind.EXPIRED:
                 elsewhere = [
                     sid for sid in owners if (reads.strategy_instance(conn, sid) or {}).get("symbol", "").upper() != contract.root
@@ -1446,6 +1465,48 @@ async def poll_option_events(
         return OptionEventPoll(read=True, round=done)
 
 
+async def poll_option_events_in_a_pass(
+    repo: ClerkSqliteRepository,
+    *,
+    read: BrokerReadPort,
+    off_loop: OffLoop,
+    broker_positions: Sequence[BrokerPosition],
+) -> None:
+    """The reconciliation pass's step: read and book option events, and never fail the pass doing it.
+
+    The pass is what every bot's custody rests on, a stock bot's included.
+    A fault in this step is logged with its stack and the pass goes on to
+    its verdict: a position the step did not book still shows as drift
+    there, and holds new entries. An error of the store itself is the
+    pass's own to meet and is raised.
+    """
+    try:
+        await poll_option_events(
+            repo, read=read, off_loop=off_loop, broker_positions=broker_positions,
+            act_on_the_books_between_reads=True,
+        )
+    except ClerkSqliteError:
+        raise
+    except Exception:
+        logger.exception(
+            "reading and booking option events failed; the pass goes on to its verdict",
+            extra={"action": "option_events_step_failed", "account_id": repo.account_id},
+        )
+
+
+def book_outside_option_orders_in_a_pass(repo: ClerkSqliteRepository) -> None:
+    """Act on the books' record of outside orders inside a pass's verdict, and never fail the verdict doing it."""
+    try:
+        book_option_events(repo, None)
+    except ClerkSqliteError:
+        raise
+    except Exception:
+        logger.exception(
+            "acting on outside orders in option contracts failed; the pass goes on to its verdict",
+            extra={"action": "option_outside_orders_step_failed", "account_id": repo.account_id},
+        )
+
+
 def _a_held_contract_is_past_its_last_session(repo: ClerkSqliteRepository) -> bool:
     now_ms = repo.clock()
     with repo.write_fence() as conn:
@@ -1466,6 +1527,7 @@ __all__ = [
     "OptionEventRound",
     "acknowledge_option_event_hold",
     "book_option_events",
+    "book_outside_option_orders_in_a_pass",
     "books_record_no_contract",
     "held_option_positions",
     "option_event_window_start_ms",
@@ -1473,4 +1535,5 @@ __all__ = [
     "option_work_on_the_books",
     "outside_order_reduces_a_bots_contract",
     "poll_option_events",
+    "poll_option_events_in_a_pass",
 ]

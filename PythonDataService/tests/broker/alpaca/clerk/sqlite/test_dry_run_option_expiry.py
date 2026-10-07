@@ -215,3 +215,18 @@ async def test_the_shares_an_exercise_left_are_sold_when_the_run_ends_as_a_dry_r
     assert dry_run.held() == {}
     assert dry_run.realized_pnl() == Decimal("331")
     assert await _page_notices(dry_run) == {}
+
+
+async def test_what_a_simulation_settled_is_on_the_books_as_a_simulated_execution(dry_run: _DryRun) -> None:  # noqa: F811
+    """A Dry Run's fills are never recorded as a real account's evidence, and a settlement's are no exception."""
+    await dry_run.enter(dry_run.evidence())
+    _keeps_spy(dry_run, "590.25")
+    _wait_until(dry_run, SATURDAY_NOON)
+
+    await dry_run.clerk.reconcile_once()
+
+    with dry_run.repo.write_fence() as conn:
+        sources = {
+            row[0] for row in conn.execute("SELECT evidence_source FROM fills WHERE fill_id LIKE 'option-event:%'")
+        }
+    assert sources == {"simulated_execution"}

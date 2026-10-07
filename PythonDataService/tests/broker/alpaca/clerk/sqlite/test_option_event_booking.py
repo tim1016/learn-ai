@@ -251,6 +251,12 @@ async def test_the_bot_that_sold_first_is_assigned_whichever_row_is_read_first(
         assert {row["strategy_instance_id"]: row["summary_code"] for row in bookings(repo)} == {
             "first": "OPTION_ASSIGNED", "second": "OPTION_EXPIRED",
         }
+        # The other bot's lot was ended by the expiry, not closed by an order of its own: nothing is said
+        # of a lot closed before the row was read, whichever row was booked first.
+        assert ("first", "OPTION_EVENT_AFTER_A_LOT_CLOSED") not in option_holds(repo)
+        assert {reason for bot, reason in option_holds(repo) if bot == "first"} <= {
+            "OPTION_SHARES_HELD", "OPTION_SHARE_TRADE_MISSING",
+        }
     finally:
         repo.close()
 
@@ -378,6 +384,46 @@ async def test_a_bots_lot_and_an_outside_holding_of_one_contract_are_taken_oldes
         repo.close()
 
 
+async def test_what_an_event_took_from_outside_the_books_is_not_offered_to_the_event_read_after_it(
+    tmp_path: Path,
+) -> None:
+    """The owner bought one call by hand, then the bot bought two. Two are exercised: the owner's and one of
+    the bot's. A read later, one more is exercised. It can only be the bot's last: the owner's is gone."""
+    from tests.broker.alpaca.clerk.sqlite.conftest import _broker_order_fixture, observe_external_order
+
+    repo = books_at(tmp_path, date(2023, 7, 20), {"bot-a": "AAPL"})
+    # The books know the contract before the owner's order is seen: the bot traded it and is flat.
+    holds_option(repo, "bot-a", AAPL_CALL, contracts=1)
+    holds_option(repo, "bot-a", AAPL_CALL, contracts=-1)
+    observe_external_order(
+        repo,
+        order=_broker_order_fixture(
+            "by-hand-3", order_id="alpaca-by-hand-3", symbol=AAPL_CALL, status="filled", side="buy", quantity=1,
+            filled_quantity=1, filled_avg_price=1.5,
+        ),
+    )
+    later(repo, 1_000)
+    holds_option(repo, "bot-a", AAPL_CALL, contracts=2)
+    account = _FakeReadPort()
+    first = [
+        documented_option_activity("trading_api", "option_exercise", id="exc-1", qty="-2"),
+        documented_option_activity("trading_api", "option_exercise", 1, id="trd-1", price="150"),
+    ]
+    second = [
+        documented_option_activity("trading_api", "option_exercise", id="exc-2", qty="-1"),
+        documented_option_activity("trading_api", "option_exercise", 1, id="trd-2", qty="100", price="150", net_amount="-15000"),
+    ]
+    try:
+        book_option_events(repo, await _read_rows(repo, account, first))
+        assert held(repo, "bot-a") == {AAPL_CALL: 1.0, "AAPL": 100.0}
+
+        book_option_events(repo, await _read_rows(repo, account, [*first, *second]))
+
+        assert held(repo, "bot-a") == {"AAPL": 200.0}
+    finally:
+        repo.close()
+
+
 async def test_a_rebuild_from_the_mirror_books_every_event_again_as_it_was(
     tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
@@ -440,6 +486,11 @@ async def test_a_booked_event_is_a_finished_piece_of_work_no_pass_looks_up_at_th
                 "ON e.effect_operation_id = o.effect_operation_id WHERE e.kind = 'RECONCILE' ORDER BY o.order_ref"
             ).fetchall()
             kinds = {row[0] for row in conn.execute("SELECT DISTINCT transition_kind FROM custody_transitions")}
+            read_from = {
+                row[0] for row in conn.execute("SELECT evidence_source FROM fills WHERE fill_id LIKE 'option-event:%'")
+            }
+        # On a real account an event's fills are evidence read from the broker's activities.
+        assert read_from == {"activity_recovery"}
         # The order that closes the lot, and the order the shares came on, which stands where an entry's would.
         assert sorted(tuple(row) for row in event_orders) == [
             ("ENTRY", "filled", "RECONCILE", "succeeded"), ("OTHER", "filled", "RECONCILE", "succeeded"),
