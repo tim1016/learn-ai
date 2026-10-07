@@ -1,5 +1,6 @@
 import { Injectable, signal } from '@angular/core';
 
+import { examScored } from '../golden-search-decision';
 import type { EvidenceTab } from '../golden-search-evidence-tabs.component';
 import { STUDY_STEPS, stepProgress, type StudyStep } from '../golden-search-steps';
 import type { StudyDetail } from '../golden-search.types';
@@ -35,7 +36,7 @@ export const REVIEW_TOUR: readonly ReviewStop[] = [
 export function reviewStops(study: StudyDetail): ReviewStop[] {
   return REVIEW_TOUR.filter((stop) => {
     if (stop.step === 'search') return study.results.search !== null && (stop.chart !== 'search-path' || study.protocol.method === 'zoom');
-    if (stop.step === 'decision') return (study.results.exam?.outcome ?? null) !== null;
+    if (stop.step === 'decision') return examScored(study.results.exam);
     return stepProgress(stop.step, study.state) !== 'upcoming';
   });
 }

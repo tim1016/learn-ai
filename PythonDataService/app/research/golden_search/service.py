@@ -9,8 +9,8 @@
   ``dispatch``.
 * :func:`bind_dispatch` / :func:`run_stage` — the jobs boundary binds a job
   to the authorized stage once, then runs it on a worker thread.
-* :func:`detail` / :func:`summaries` / :func:`candidate` / :func:`evaluations`
-  / :func:`hide` — reads and the soft delete.
+* :func:`detail` / :func:`summaries` / :func:`candidate` / :func:`runs` /
+  :func:`run_curves` / :func:`hide` — reads and the soft delete.
 """
 
 from __future__ import annotations
@@ -42,10 +42,10 @@ from app.research.golden_search.actions import (
 from app.research.golden_search.activity import DEFAULT_EXPECTED_TRADES_PER_YEAR, TradeFloors
 from app.research.golden_search.declarations import declaration_for, point_hash, unavailable_reason
 from app.research.golden_search.exposure_rules import EXPOSURE_EXPLANATIONS, claim_for, exposure_state
+from app.research.golden_search.final_test import fit_for, fits_to_test, recorded_fits
 from app.research.golden_search.fold_charts import fold_charts
 from app.research.golden_search.guidance import params_sentence, research_weakness
 from app.research.golden_search.models import (
-    CANDIDATE_KEYS,
     COMMANDS,
     RETAIN_KINDS,
     RUNNING_STATES,
@@ -73,6 +73,7 @@ from app.research.golden_search.planning import (
     study_id_for,
     study_range_at,
 )
+from app.research.golden_search.procedure_history import FoldWindow
 from app.research.golden_search.protocol import (
     DEFAULT_IMPORTANCE,
     IMPORTANCE_HIGH,
@@ -80,6 +81,7 @@ from app.research.golden_search.protocol import (
     GoldenSearchProtocol,
     IncumbentRef,
 )
+from app.research.golden_search.run_curves import MAX_CURVES, RunGroup, RunSort, curves_view, runs_page
 from app.research.golden_search.search_charts import procedure_windows, search_charts
 from app.research.golden_search.stages import ApprovalBinding, StageOutcome, execute_stage, stage_refusal, stage_total
 from app.research.golden_search.views import candidate_detail, study_detail, study_summary
@@ -503,8 +505,8 @@ async def detail(
 
 
 async def _exposure_preview(row: StudyRow) -> dict[str, Any] | None:
-    """What opening the final test would record, while a candidate is being chosen; the exam records its own state."""
-    if row.exam_locked or row.state not in ("awaiting_candidate", "candidate_locked"):
+    """What opening the final test would record, while the candidates are compared; the exam records its own state."""
+    if row.exam_locked or row.state != "awaiting_candidate":
         return None
     protocol = row.protocol
     return await exposure_view(row.symbol, protocol["final_start_ms"], protocol["final_end_ms"], exclude_study_id=row.id)
@@ -550,9 +552,10 @@ async def candidate(study_id: str, candidate_key: str) -> dict[str, Any]:
         window_end_ms=protocol["development_end_ms"],
     )
     exam_record = None
-    exam = row.results.get("exam") or {}
-    examined = {exam.get("candidate_point_hash"), point_hash(row.strategy_key, protocol["incumbent"]["params"])}
-    if exam.get("outcome") is not None and stored["point_hash"] in examined:
+    exam = row.results.get("exam")
+    fits = [] if exam is None else recorded_fits(exam)
+    examined = {fit["point_hash"] for fit in fits} | {point_hash(row.strategy_key, protocol["incumbent"]["params"])}
+    if fits and all(fit["outcome"] is not None for fit in fits) and stored["point_hash"] in examined:
         exam_record = await with_connection(
             repo.find_detail_evaluation,
             row.id,
@@ -628,13 +631,44 @@ async def test_over_time_charts(study_id: str) -> dict[str, Any]:
     return fold_charts(await get_row(study_id))
 
 
-async def evaluations(study_id: str, *, stage: str | None = None, fold_index: int | None = None, page: int = 1, page_size: int = 50) -> dict[str, Any]:
-    await get_row(study_id)
-    try:
-        result = await with_connection(repo.list_evaluations, study_id, stage=stage, fold_index=fold_index, page=page, page_size=page_size)
-    except ValueError as exc:
-        raise GoldenSearchRefusal(str(exc), code="PAGE_INVALID") from exc
-    return result.as_dict()
+async def runs(
+    study_id: str,
+    *,
+    group: RunGroup | None = None,
+    fold_index: int | None = None,
+    sort: RunSort = "recorded",
+    descending: bool = False,
+    page: int = 1,
+    page_size: int = 100,
+) -> dict[str, Any]:
+    """Every run of the study, by what asked for it: one sorted page, beside each group's counts (#2930)."""
+    row = await get_row(study_id)
+    declaration = declaration_for(row.strategy_key)
+    if declaration is None:
+        raise GoldenSearchRefusal(f"{row.strategy_key} no longer declares its search knobs, so its runs cannot be described.", code="STRATEGY_UNAVAILABLE", kind="unavailable")
+    records = await with_connection(repo.list_runs, study_id)
+    return runs_page(
+        row,
+        records,
+        folds=[FoldWindow(**fold) for fold in row.receipt["folds"]],
+        declaration=declaration,
+        group=group,
+        fold_index=fold_index,
+        sort=sort,
+        descending=descending,
+        page=page,
+        page_size=page_size,
+    )
+
+
+async def run_curves(study_id: str, evaluation_keys: Sequence[str]) -> dict[str, Any]:
+    """The named runs' daily curves, and which of them kept none (#2930)."""
+    row = await get_row(study_id)
+    keys = list(dict.fromkeys(evaluation_keys))
+    if not 1 <= len(keys) <= MAX_CURVES:
+        raise GoldenSearchRefusal(f"Name between 1 and {MAX_CURVES} runs.", code="RUNS_QUERY_INVALID", field="key")
+    stored = await with_connection(repo.evaluation_curves, study_id, keys)
+    return curves_view(keys, stored, float(row.protocol["execution"]["initial_cash"]))
 
 
 async def hide(study_id: str, *, liveness: Liveness = job_is_live) -> None:
@@ -767,8 +801,6 @@ async def _apply(conn: Any, row: StudyRow, command: str, body: Mapping[str, Any]
         changes, token = authorize(stage)
         changes["run_to_compare"] = command == "run_research"
         return CommandOutcome(study=await repo.update_study(conn, row.id, changes=changes), dispatch=_dispatch(row.id, token))
-    if command == "select_candidate":
-        return await _select_candidate(conn, row, body)
     if command == "open_exam":
         return await _open_exam(conn, row, body)
     if command == "approve":
@@ -804,80 +836,76 @@ async def _request_cancel(job_id: str) -> None:
         ) from exc
 
 
-def _evidence_candidate(row: StudyRow, key: str) -> Mapping[str, Any] | None:
-    return next((item for item in (row.results.get("evidence") or {}).get("candidates", []) if item["key"] == key), None)
-
-
-async def _select_candidate(conn: Any, row: StudyRow, body: Mapping[str, Any]) -> CommandOutcome:
-    key = body.get("candidate_key")
-    if key not in CANDIDATE_KEYS:
-        raise GoldenSearchRefusal(f"Choose one of {', '.join(CANDIDATE_KEYS)}.", code="PAYLOAD_INVALID", field="candidate_key")
-    chosen = _evidence_candidate(row, str(key))
-    if chosen is None:
-        raise GoldenSearchRefusal(f"This study has no {key} candidate.", code="CANDIDATE_UNAVAILABLE", field="candidate_key")
-    incumbent = _evidence_candidate(row, "incumbent")
-    if key == "incumbent" or (incumbent is not None and chosen["point_hash"] == incumbent["point_hash"]):
-        raise GoldenSearchRefusal(
-            "Use Keep current settings to finish without consuming the test.", code="INCUMBENT_NOT_EXAMINABLE", field="candidate_key"
-        )
-    await repo.insert_trial(conn, row.id, stage="candidate", kind="pick", payload={"candidate_key": key, "point_hash": chosen["point_hash"]})
-    updated = await repo.update_study(conn, row.id, changes={"candidate_key": key, "state": "candidate_locked"})
-    return CommandOutcome(study=updated, dispatch=None)
-
-
 async def _open_exam(conn: Any, row: StudyRow, body: Mapping[str, Any]) -> CommandOutcome:
     if body.get("acknowledge_final_test") is not True:
         raise GoldenSearchRefusal(
-            "Confirm that opening the final test consumes it for this candidate.",
+            "Confirm that opening the final test consumes it for this study.",
             code="ACKNOWLEDGEMENT_REQUIRED",
             field="acknowledge_final_test",
         )
-    chosen = _evidence_candidate(row, str(row.candidate_key))
-    assert chosen is not None  # candidate_locked implies a chosen evidence candidate
+    fits = fits_to_test(row.results["evidence"]["candidates"])
+    assert fits  # open_exam is refused while no fit differs from the current settings
     protocol = row.protocol
     start, end = int(protocol["final_start_ms"]), int(protocol["final_end_ms"])
     await repo.lock_exposure(conn, row.symbol)
     overlaps = await repo.exposure_overlaps(conn, symbol=row.symbol, start_ms=start, end_ms=end, exclude_study_id=row.id)
     state = exposure_state(ledger_overlaps=overlaps.ledger, outside_activity_overlaps=overlaps.outside)
     claim = claim_for(state)
-    await repo.insert_exposure(
-        conn,
-        symbol=row.symbol,
-        start_ms=start,
-        end_ms=end,
-        study_id=row.id,
-        strategy_key=row.strategy_key,
-        kind="reserved",
-        state_at_reservation=state,
-        claim=claim,
-        candidate_point_hash=chosen["point_hash"],
-        payload={
-            "candidate_key": row.candidate_key,
-            "candidate_point": chosen["point"],
-            "protocol_hash": row.protocol_hash,
-            "ledger_overlaps": overlaps.ledger,
-            "outside_activity_overlaps": overlaps.outside,
-        },
-    )
-    await repo.insert_trial(conn, row.id, stage="exam", kind="exam_open", payload={"candidate_key": row.candidate_key, "state": state, "claim": claim})
+    tested = [fit["key"] for fit in fits]
+    # One reservation per fit, so each row names the settings it is about; the ledger counts the study once.
+    for fit in fits:
+        await repo.insert_exposure(
+            conn,
+            symbol=row.symbol,
+            start_ms=start,
+            end_ms=end,
+            study_id=row.id,
+            strategy_key=row.strategy_key,
+            kind="reserved",
+            state_at_reservation=state,
+            claim=claim,
+            candidate_point_hash=fit["point_hash"],
+            payload={
+                "candidate_key": fit["key"],
+                "same_as": fit["same_as"],
+                "candidate_point": fit["point"],
+                "fits_tested": tested,
+                "protocol_hash": row.protocol_hash,
+                "ledger_overlaps": overlaps.ledger,
+                "outside_activity_overlaps": overlaps.outside,
+            },
+        )
+    await repo.insert_trial(conn, row.id, stage="exam", kind="exam_open", payload={"fits": tested, "state": state, "claim": claim})
     changes, token = authorize("exam")
     exam = {
-        "candidate_key": row.candidate_key,
-        "candidate_point": dict(chosen["point"]),
-        "candidate_point_hash": chosen["point_hash"],
         "window": {"start_ms": start, "end_ms": end},
         "claim": claim,
         "exposure_state": state,
         "ledger_overlaps": overlaps.ledger,
         "outside_activity_overlaps": overlaps.outside,
-        "outcome": None,
-        "checks": [],
-        "retention": None,
-        "candidate_metrics": None,
+        "fits": fits,
         "incumbent_metrics": None,
     }
     updated = await repo.update_study(conn, row.id, changes={**changes, "exam_locked": True}, results_patch={"exam": exam})
     return CommandOutcome(study=updated, dispatch=_dispatch(row.id, token))
+
+
+def _fit_to_approve(row: StudyRow, body: Mapping[str, Any]) -> dict[str, Any]:
+    """The tested fit the approval names; a retry after a technical failure must name the fit it started with."""
+    key = body.get("candidate_key")
+    chosen = fit_for(row.results["exam"], key) if isinstance(key, str) else None
+    if chosen is None:
+        tested = ", ".join(fit["key"] for fit in recorded_fits(row.results["exam"]))
+        raise GoldenSearchRefusal(f"Name the fit to approve: one of {tested}.", code="PAYLOAD_INVALID", field="candidate_key")
+    started = fit_for(row.results["exam"], row.candidate_key)
+    if row.state == "qualification_failed" and (started is None or started["point_hash"] != chosen["point_hash"]):
+        raise GoldenSearchRefusal(
+            "This study's approval was started for another fit; retry that one, or keep the current settings.",
+            code="FIT_ALREADY_CHOSEN",
+            kind="conflict",
+            field="candidate_key",
+        )
+    return chosen
 
 
 async def _approve(conn: Any, row: StudyRow, body: Mapping[str, Any]) -> CommandOutcome:
@@ -900,7 +928,8 @@ async def _approve(conn: Any, row: StudyRow, body: Mapping[str, Any]) -> Command
             field="expected_default_qualification_id",
         )
     exam = row.results["exam"]
-    weakness = research_weakness(exam["outcome"], exam["claim"], exam["exposure_state"])
+    chosen = _fit_to_approve(row, body)
+    weakness = research_weakness(chosen["outcome"], exam["claim"], exam["exposure_state"])
     if weakness and not weak_ack:
         raise GoldenSearchRefusal(
             "This evidence is weak (" + ", ".join(weakness) + "); approving needs your explicit acceptance of it.",
@@ -920,9 +949,11 @@ async def _approve(conn: Any, row: StudyRow, body: Mapping[str, Any]) -> Command
         # A retried approval reuses the proof and saved run it already built for this exact candidate.
         "checkpoint": previous.get("checkpoint") if previous.get("kind") == "approve" else None,
     }
+    if row.candidate_key is None:
+        await repo.insert_trial(conn, row.id, stage="candidate", kind="pick", payload={"candidate_key": chosen["key"], "point_hash": chosen["point_hash"]})
     await repo.insert_trial(conn, row.id, stage="qualification", kind="approval", payload={"event": "intent", "weakness": weakness, "override": bool(weakness)})
     changes, token = authorize("qualification")
-    updated = await repo.update_study(conn, row.id, changes=changes, decision=decision)
+    updated = await repo.update_study(conn, row.id, changes={**changes, "candidate_key": chosen["key"]}, decision=decision)
     return CommandOutcome(study=updated, dispatch=_dispatch(row.id, token))
 
 

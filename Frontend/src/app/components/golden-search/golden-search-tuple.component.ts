@@ -21,23 +21,19 @@ import type { EvidenceCandidate, Point, StrategyCapability, StudyDetail } from '
 export class GoldenSearchTupleComponent {
   readonly study = input.required<StudyDetail>();
   readonly capability = input<StrategyCapability | null>(null);
-  /** The examined candidate's evidence (settings sentence), when recorded. */
+  /** The evidence (settings sentence) of the fit the page is about, when recorded. */
   readonly candidate = input<EvidenceCandidate | null>(null);
+  /** That fit's exact point as the final test ran it. */
+  readonly point = input.required<Point>();
   /** The frozen incumbent's evidence: what approval replaces. */
   readonly incumbent = input<EvidenceCandidate | null>(null);
 
   protected readonly approved = computed(() => this.study().state === 'approved');
   protected readonly qualificationId = computed(() => this.study().results.qualification?.qualification_id ?? this.study().qualification_id);
   protected readonly programVersion = computed(() => this.study().results.qualification?.deploy?.program_version ?? this.study().receipt.program_version);
-  /** The approved parameters once published; before that, the examined candidate's point. */
-  private readonly point = computed<Point | null>(() => {
-    const study = this.study();
-    return study.results.qualification?.deploy?.parameters ?? study.results.exam?.candidate_point ?? this.candidate()?.point ?? null;
-  });
-  protected readonly entries = computed(() => {
-    const point = this.point();
-    return point === null ? [] : fullPointEntries(point, this.capability());
-  });
+  /** The approved parameters once published; before that, the tested fit's point. */
+  private readonly shown = computed<Point>(() => this.study().results.qualification?.deploy?.parameters ?? this.point());
+  protected readonly entries = computed(() => fullPointEntries(this.shown(), this.capability()));
   protected readonly fixedChips = computed(() => {
     const sentence = this.candidate()?.fixed_sentence.trim() ?? '';
     const fixed = (this.capability()?.fixed ?? []).map((control) => `${control.label} ${control.value}`);

@@ -7,15 +7,15 @@ import { equityChartSpec, type EquityPeriod } from './golden-search-equity-chart
 import type { CandidateKey, CumulativeReturnPoint, DrawdownPoint, FinalMeasure, MonthlyResult } from './golden-search.types';
 
 /**
- * The Final decision charts (#2821): each measure on the development period
- * beside the final test, for the candidate and the current settings (V33),
- * their returns and falls from peak through the final test (V34), and the final test month by
- * month (V36). Every value is the server's; the final test is the one
- * out-of-sample look, so a run that failed or did not record shows nothing,
- * never zero.
+ * The Final decision charts (#2821, #2930): each measure on the development
+ * period beside the final test, for every fit that ran and the current
+ * settings (V33), their returns and falls from peak through the final test
+ * (V34), and the final test month by month (V36). Every value is the
+ * server's; the final test is the one out-of-sample look, so a run that
+ * failed or did not record shows nothing, never zero.
  */
 
-/** One run of the final test: the candidate or the current settings. */
+/** One run of the final test: a fit, or the current settings. */
 export interface FinalRun {
   readonly key: CandidateKey;
   readonly label: string;
@@ -27,8 +27,10 @@ export interface FinalRun {
 
 const FINAL = 'The final test: one look at data no step chose on.';
 const ONE_DECIMAL = new Intl.NumberFormat('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-/** One measure's block: its two bars, its value axis beneath, and room above for the next block's name. */
-const ROW = 88;
+/** One measure's block: a pair of bars for each run, its value axis beneath, and room above for the next block's name. */
+function rowHeight(runs: number): number {
+  return 48 + 20 * Math.max(2, runs);
+}
 
 
 function measureText(measure: FinalMeasure, value: number | null): string {
@@ -78,19 +80,20 @@ export function finalComparisonSpec(runs: readonly FinalRun[]): ChartSpec {
   };
 }
 
-/** The comparison's height: a row per measure. */
-export function comparisonHeight(count: number): number {
-  return 32 + ROW * Math.max(1, count);
+/** The comparison's height: a block per measure, each as tall as its runs need. */
+export function comparisonHeight(measures: number, runs: number): number {
+  return 32 + rowHeight(runs) * Math.max(1, measures);
 }
 
 function comparisonOption(runs: readonly FinalRun[], theme: ChartTheme): ChartOption {
   const measures = runs[0]?.comparison ?? [];
+  const row = rowHeight(runs.length);
   const periods = [
     { key: 'development', name: 'Development', color: theme.development },
     { key: 'final', name: 'Final test', color: theme.candidates.all_period },
   ] as const;
   return {
-    grid: measures.map((_, i) => ({ left: 130, right: 64, top: 24 + i * ROW, height: ROW - 48 })),
+    grid: measures.map((_, i) => ({ left: 130, right: 64, top: 24 + i * row, height: row - 48 })),
     tooltip: {
       ...tooltipFrame(theme),
       trigger: 'item',
@@ -150,13 +153,13 @@ function comparisonOption(runs: readonly FinalRun[], theme: ChartTheme): ChartOp
 // ---------------------------------------------------------------- V34 final-year equity
 
 /** The final test on the shared equity chart: each run's return through it, and its fall from its own peak beneath. */
-export const FINAL_EQUITY: EquityPeriod = { label: 'Final-test cumulative return and fall from peak', judged: 'The final test judges the candidate’s bar-by-bar fall', note: FINAL };
+export const FINAL_EQUITY: EquityPeriod = { label: 'Final-test cumulative return and fall from peak', judged: 'The final test judges each fit’s bar-by-bar fall', note: FINAL };
 
-/** Each run's cumulative return and fall from peak through the final test, against the worst-fall limit the final test is judged by. */
-export function finalEquitySpec(runs: readonly FinalRun[], ceiling: number): ChartSpec {
+/** Each run's cumulative return and fall from peak through the final test, against the worst-fall limit the final test is judged by; `featured` is the fit the page is about. */
+export function finalEquitySpec(runs: readonly FinalRun[], featured: CandidateKey, ceiling: number): ChartSpec {
   return equityChartSpec(
     runs.map((run) => ({ key: run.key, label: run.label, returns: run.returns, falls: run.falls })),
-    runs[0]?.key ?? 'incumbent',
+    runs.some((run) => run.key === featured) ? featured : (runs[0]?.key ?? 'incumbent'),
     ceiling,
     FINAL_EQUITY,
   );

@@ -10,7 +10,7 @@ back from the cache, which makes the replay identical and free.
 Leakage rules the runners enforce, beside the evaluator's capability: every
 fold searches its own training window from the original ranges and the
 protocol seed (never from the all-period winner); the exam scores only the
-locked candidate and the frozen incumbent; nothing before the exam may
+fits its record names and the frozen incumbent; nothing before the exam may
 read the final interval.
 """
 
@@ -27,7 +27,7 @@ from app.jobs.progress import JobCancelled
 from app.research.golden_search import repository as repo
 from app.research.golden_search.actions import authorize
 from app.research.golden_search.activity import TradeFloors
-from app.research.golden_search.budget import EXAM_EVALUATIONS, PROOF_EVALUATIONS
+from app.research.golden_search.budget import PROOF_EVALUATIONS
 from app.research.golden_search.concentration import concentration
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, point_hash
 from app.research.golden_search.evaluator import (
@@ -47,6 +47,7 @@ from app.research.golden_search.evidence import (
     recommendation,
 )
 from app.research.golden_search.exam_rules import judge_exam
+from app.research.golden_search.final_test import fit_for, pick_of, recorded_fits
 from app.research.golden_search.grid_procedure import neighbor_probes, pair_grid, run_grid
 from app.research.golden_search.guidance import research_weakness
 from app.research.golden_search.models import STAGE_ESTIMATES, STAGE_STATES, StageName, StudyRow
@@ -72,8 +73,7 @@ from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
-#: Development stages may never touch the exam and proof reservations; the exam may not touch the proof's.
-GENERAL_RESERVE = EXAM_EVALUATIONS + PROOF_EVALUATIONS
+#: The exam may not touch the proof's reservation.
 EXAM_RESERVE = PROOF_EVALUATIONS
 NO_ELIGIBLE_CANDIDATE = "No setting met your rules in this fold's training window."
 FOLD_BUDGET_REACHED = "The evaluation budget ran out before this fold finished."
@@ -199,6 +199,11 @@ def stage_total(row: StudyRow, stage: StageName) -> int:
     return sum(bounds.get(name, 0) for name in STAGE_ESTIMATES[stage])
 
 
+def general_reserve(row: StudyRow) -> int:
+    """The runs the lock set aside for the exam and the proof; development stages may never touch them."""
+    return int(row.receipt["estimate"]["reserved_for_exam_and_proof"])
+
+
 # ── Procedures ───────────────────────────────────────────────────────────
 
 
@@ -300,7 +305,7 @@ def _pair_maps(ctx: StageContext, evaluator: StudyEvaluator, center: Mapping[str
 
 def run_search(ctx: StageContext) -> str:
     evaluator = ctx.evaluator(
-        allowed=ctx.development, limit=ctx.row.budget_cap - GENERAL_RESERVE, total=stage_total(ctx.row, "search")
+        allowed=ctx.development, limit=ctx.row.budget_cap - general_reserve(ctx.row), total=stage_total(ctx.row, "search")
     )
     ctx.on_phase("search")
     result, counts = run_procedure(ctx, evaluator, window=ctx.development, step="search")
@@ -512,7 +517,7 @@ def _evidence(ctx: StageContext, evaluator: StudyEvaluator, verdict: Verdict) ->
 def run_validation(ctx: StageContext) -> str:
     evaluator = ctx.evaluator(
         allowed=ctx.development,
-        limit=ctx.row.budget_cap - GENERAL_RESERVE,
+        limit=ctx.row.budget_cap - general_reserve(ctx.row),
         total=stage_total(ctx.row, "validation"),
     )
     ctx.on_phase("validation")
@@ -533,29 +538,56 @@ def _development_metrics(ctx: StageContext, point_digest: str) -> Metrics | None
 
 
 def run_exam(ctx: StageContext) -> tuple[str, dict[str, Any]]:
-    """Score the locked candidate and the frozen incumbent once on the final interval, and judge."""
+    """Score every fit the exam names and the frozen incumbent once on the final interval, and judge each fit."""
     exam = dict(ctx.results["exam"])
+    fits = recorded_fits(exam)
     evaluator = ctx.evaluator(allowed=ctx.final, limit=ctx.row.budget_cap - EXAM_RESERVE, total=stage_total(ctx.row, "exam"))
     ctx.on_phase("exam")
-    (candidate,) = evaluator.evaluate([exam["candidate_point"]], window=ctx.final, stage="exam", detail=True)
+    scored = evaluator.evaluate([fit["point"] for fit in fits], window=ctx.final, stage="exam", detail=True)
     (incumbent,) = evaluator.evaluate([ctx.protocol.incumbent.params], window=ctx.final, stage="exam", detail=True)
-    development = _development_metrics(ctx, exam["candidate_point_hash"])
-    judgement = judge_exam(
-        candidate,
-        incumbent,
-        policy=ctx.protocol.policy,
-        exam_min_trades=ctx.floors.at(ctx.final, final=True),
-        development_objective=None if development is None else objective_value(development, ctx.protocol.policy),
-        frequency_policy=ctx.floors.frequency_based,
-    )
-    exam.update(
-        outcome=judgement.outcome,
-        checks=[check.as_dict() for check in judgement.checks],
-        retention=judgement.retention,
-        candidate_metrics=candidate.as_dict(),
-        incumbent_metrics=incumbent.as_dict(),
-    )
+    for fit, candidate in zip(fits, scored, strict=True):
+        development = _development_metrics(ctx, fit["point_hash"])
+        judgement = judge_exam(
+            candidate,
+            incumbent,
+            policy=ctx.protocol.policy,
+            exam_min_trades=ctx.floors.at(ctx.final, final=True),
+            development_objective=None if development is None else objective_value(development, ctx.protocol.policy),
+            frequency_policy=ctx.floors.frequency_based,
+        )
+        fit.update(
+            outcome=judgement.outcome,
+            checks=[check.as_dict() for check in judgement.checks],
+            retention=judgement.retention,
+            metrics=candidate.as_dict(),
+        )
+    exam.update(fits=fits, incumbent_metrics=incumbent.as_dict())
     return "awaiting_review", exam
+
+
+def _exam_exposures(ctx: StageContext, exam: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Each fit's outcome as its exposure-ledger row."""
+    return [
+        {
+            "symbol": ctx.row.symbol,
+            "start_ms": ctx.protocol.final_start_ms,
+            "end_ms": ctx.protocol.final_end_ms,
+            "strategy_key": ctx.row.strategy_key,
+            "state_at_reservation": exam["exposure_state"],
+            "claim": exam["claim"],
+            "candidate_point_hash": fit["point_hash"],
+            "payload": {
+                "candidate_key": fit["key"],
+                "same_as": fit["same_as"],
+                "outcome": fit["outcome"],
+                "checks": fit["checks"],
+                "candidate_metrics": fit["metrics"],
+                "incumbent_metrics": exam["incumbent_metrics"],
+                "protocol_hash": ctx.row.protocol_hash,
+            },
+        }
+        for fit in exam["fits"]
+    ]
 
 
 # ── Qualification ────────────────────────────────────────────────────────
@@ -570,13 +602,15 @@ def run_qualification(ctx: StageContext, binding: ApprovalBinding, blob_store: A
     """Hand the exact candidate to the approval workflow; returns (state, qualification result, failure reason)."""
     decision = ctx.row.decision or {}
     exam = ctx.results["exam"]
+    chosen = fit_for(exam, ctx.row.candidate_key)
+    assert chosen is not None  # the approval command records the fit it names before it authorizes this stage
     evaluator = ctx.evaluator(allowed=ctx.final, limit=ctx.row.budget_cap, total=stage_total(ctx.row, "qualification"))
-    weakness = research_weakness(exam["outcome"], exam["claim"], exam["exposure_state"])
+    weakness = research_weakness(chosen["outcome"], exam["claim"], exam["exposure_state"])
     request = binding.request_type(
         study_id=ctx.row.id,
         strategy_key=ctx.row.strategy_key,
         symbol=ctx.row.symbol,
-        candidate_point=dict(exam["candidate_point"]),
+        candidate_point=dict(chosen["point"]),
         proof_window=ProofWindow(
             start_ms=ctx.protocol.final_start_ms,
             end_ms=ctx.protocol.final_end_ms,
@@ -586,8 +620,11 @@ def run_qualification(ctx: StageContext, binding: ApprovalBinding, blob_store: A
         roots=tuple(ctx.roots),
         execution=ctx.protocol.execution,
         research={
-            "exam_outcome": exam["outcome"],
-            "checks": list(exam["checks"]),
+            "exam_outcome": chosen["outcome"],
+            "checks": list(chosen["checks"]),
+            "candidate_key": chosen["key"],
+            "fits_tested": len(recorded_fits(exam)),
+            "pick": pick_of(exam),
             "claim": exam["claim"],
             "exposure_state": exam["exposure_state"],
             "validation_verdict_label": _validation_label(ctx.results),
@@ -782,22 +819,6 @@ def _run(ctx: StageContext, stage: StageName, *, approval: ApprovalBinding | Non
         return state, None
     if stage == "exam":
         state, exam = run_exam(ctx)
-        exposure = {
-            "symbol": ctx.row.symbol,
-            "start_ms": ctx.protocol.final_start_ms,
-            "end_ms": ctx.protocol.final_end_ms,
-            "strategy_key": ctx.row.strategy_key,
-            "state_at_reservation": exam["exposure_state"],
-            "claim": exam["claim"],
-            "candidate_point_hash": exam["candidate_point_hash"],
-            "payload": {
-                "outcome": exam["outcome"],
-                "checks": exam["checks"],
-                "candidate_metrics": exam["candidate_metrics"],
-                "incumbent_metrics": exam["incumbent_metrics"],
-                "protocol_hash": ctx.row.protocol_hash,
-            },
-        }
         run_sync(
             with_connection(
                 repo.finish_exam,
@@ -805,7 +826,7 @@ def _run(ctx: StageContext, stage: StageName, *, approval: ApprovalBinding | Non
                 ctx.attempt,
                 changes={**finished, "state": state, "incomplete": False},
                 results_patch={"exam": exam},
-                exposure=exposure,
+                exposures=_exam_exposures(ctx, exam),
             )
         )
         return state, None

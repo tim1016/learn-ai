@@ -9,13 +9,14 @@ import type {
   CandidateKey,
   CreateStudyRequest,
   DefaultsLayout,
-  EvaluationPage,
-  EvaluationQuery,
   GoldenSearchDefaults,
   GoldenSearchPreflight,
   PlanCharts,
   ProtocolRequest,
   QualificationDeployOffer,
+  RunCurves,
+  RunsPage,
+  RunsQuery,
   StrategyCapability,
   StudyCommandRequest,
   StudyDetail,
@@ -149,11 +150,18 @@ export class GoldenSearchService {
     }
   }
 
-  async evaluations(id: string, query: EvaluationQuery): Promise<EvaluationPage> {
-    let params = new HttpParams({ fromObject: { page: String(query.page), page_size: String(query.page_size) } });
-    if (query.stage) params = params.set('stage', query.stage);
-    if (query.fold_index !== undefined) params = params.set('fold_index', String(query.fold_index));
-    return firstValueFrom(this.http.get<EvaluationPage>(`${this.base}/studies/${encodeURIComponent(id)}/evaluations`, { params }));
+  /** Every run of the study under the step that first asked for it: one sorted page, beside each group's counts. */
+  async runs(id: string, query: RunsQuery): Promise<RunsPage> {
+    let params = new HttpParams({ fromObject: { sort: query.sort, descending: String(query.descending), page: String(query.page), page_size: String(query.page_size) } });
+    if (query.group !== null) params = params.set('group', query.group);
+    if (query.fold_index !== null) params = params.set('fold_index', String(query.fold_index));
+    return firstValueFrom(this.http.get<RunsPage>(`${this.base}/studies/${encodeURIComponent(id)}/runs`, { params }));
+  }
+
+  /** The named runs' daily curves; a run that kept none comes back under `not_recorded`. */
+  async runCurves(id: string, keys: readonly string[]): Promise<RunCurves> {
+    const params = new HttpParams({ fromObject: { key: [...keys] } });
+    return firstValueFrom(this.http.get<RunCurves>(`${this.base}/studies/${encodeURIComponent(id)}/runs/curves`, { params }));
   }
 
   /** The Plan step's charts for a locked study. */

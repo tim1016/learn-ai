@@ -127,27 +127,27 @@ describe('GoldenSearchCompareStepComponent', () => {
     expect(summary.textContent).not.toContain('Development activity');
   });
 
-  it('picking a candidate changes the selection, its guidance, and what Review final-test lock sends', async () => {
-    const { commands } = await renderStep();
+  it('picking a candidate changes what the page shows and sends nothing: the final test runs every fit', async () => {
+    const { commands, steps } = await renderStep();
 
     fireEvent.click(screen.getByRole('button', { name: /recent fit/i }));
 
     expect(candidateCard(/recent fit/i).className).toContain('selected');
     expect(screen.getByRole('heading', { name: 'The extra return comes with a warning' })).not.toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Review final-test lock' }));
-    expect(commands).toEqual([{ command: 'select_candidate', payload: { candidate_key: 'recent' } }]);
+    expect(commands).toEqual([]);
+    expect(steps).toEqual(['decision']);
   });
 
-  it('the incumbent cannot open the final test: the action is disabled and says to keep the current settings instead', async () => {
-    const { commands } = await renderStep();
-
-    fireEvent.click(screen.getByRole('button', { name: /current settings frozen incumbent/i }));
+  it('a final test the server will not open stays closed and says why', async () => {
+    const reason = 'Every fit returned the current settings, so there is nothing to test. Use Keep current settings to finish.';
+    const { steps } = await renderStep(studyDetail('awaiting_candidate', { permitted_actions: ['retain', 'revise', 'close'], action_refusals: { open_exam: reason } }));
 
     const review = screen.getByRole('button', { name: 'Review final-test lock' }) as HTMLButtonElement;
     expect(review.disabled).toBe(true);
-    expect(screen.getByText(/the incumbent is not a new candidate\. use “keep current settings” to finish without consuming the test\./i)).not.toBeNull();
-    expect(screen.getByRole('heading', { name: 'No change can be the best decision' })).not.toBeNull();
-    expect(commands).toEqual([]);
+    expect(screen.getByText(reason)).not.toBeNull();
+    fireEvent.click(review);
+    expect(steps).toEqual([]);
   });
 
   it('folds candidates that are the same settings into one row, and a fit equal to the incumbent becomes the incumbent', async () => {
@@ -170,46 +170,13 @@ describe('GoldenSearchCompareStepComponent', () => {
     expect(folded[1].textContent).toContain('Current settings');
     expect(folded[1].textContent).toContain('same settings as All-period fit');
     expect(screen.getByRole('button', { name: /^current settings/i }).getAttribute('aria-pressed')).toBe('true');
-    expect((screen.getByRole('button', { name: 'Review final-test lock' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('a candidate already locked goes straight to its final-test lock without sending the pick again', async () => {
-    const { commands, steps } = await renderStep(studyDetail('candidate_locked'));
-
-    fireEvent.click(screen.getByRole('button', { name: 'Review final-test lock' }));
-
-    expect(commands).toEqual([]);
-    expect(steps).toEqual(['decision']);
-  });
-
-  it('a locked pick folded into another row still goes to its lock, never re-sending a different pick', async () => {
-    const study = studyDetail('candidate_locked', {
-      candidate_key: 'recent',
-      results: {
-        ...studyDetail('candidate_locked').results,
-        evidence: evidenceView({
-          candidates: [
-            evidenceCandidate('all_period', { same_as: ['recent'] }),
-            evidenceCandidate('recent', { same_as: ['all_period'] }),
-            evidenceCandidate('incumbent'),
-          ],
-        }),
-      },
-    });
-    const { commands, steps } = await renderStep(study);
-
-    expect(screen.getByRole('button', { name: /^all-period fit/i }).getAttribute('aria-pressed')).toBe('true');
-    fireEvent.click(screen.getByRole('button', { name: 'Review final-test lock' }));
-
-    expect(commands).toEqual([]);
-    expect(steps).toEqual(['decision']);
-  });
-
-  it('after the final test opened, the pick is fixed and the note says its result is recorded separately', async () => {
+  it('after the final test opened, either candidate can still be looked at and the note says the results are recorded separately', async () => {
     const { steps } = await renderStep(studyDetail('awaiting_review'));
 
-    expect((screen.getByRole('button', { name: /recent fit/i }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText(/final test is recorded separately\. its development results remain in-sample/i)).not.toBeNull();
+    expect((screen.getByRole('button', { name: /recent fit/i }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByText(/each fit’s final test is recorded separately\. these development results remain in-sample/i)).not.toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Review final decision' }));
     expect(steps).toEqual(['decision']);
   });

@@ -35,6 +35,7 @@ from app.research.golden_search.protocol import (
     SelectionPolicy,
     ZoomSettings,
 )
+from app.research.golden_search.run_curves import RunGroup, RunSort
 from app.research.golden_search.zoom import StopReason
 from app.research.sweep.identity import TreeState
 from app.research.sweep.ranking import RankingMeasure
@@ -998,7 +999,6 @@ class GoldenSearchEvidenceCandidate(_Wire):
     flags: list[GoldenSearchFinding]
     params_sentence: str
     fixed_sentence: str
-    exam_eligible: bool
 
 
 class GoldenSearchRecommendation(_Wire):
@@ -1018,8 +1018,19 @@ class GoldenSearchEvidenceScope(_Wire):
     costs: GoldenSearchCosts
 
 
+class GoldenSearchFitToTest(_Wire):
+    """One set of fitted settings the final test runs, under the candidates that chose it."""
+
+    key: CandidateKey
+    same_as: list[CandidateKey]
+    label: str
+
+
 class GoldenSearchEvidenceView(_Wire):
     candidates: list[GoldenSearchEvidenceCandidate]
+    fits_to_test: list[GoldenSearchFitToTest] = Field(
+        description="What opening the final test will run beside the current settings; empty when every fit returned them."
+    )
     pair_maps: list[GoldenSearchPairMap]
     recommendation: GoldenSearchRecommendation
     scope: GoldenSearchEvidenceScope
@@ -1033,20 +1044,31 @@ class GoldenSearchExamCheck(_Wire):
     detail: str
 
 
-class GoldenSearchExamView(_Wire):
-    candidate_key: CandidateKey
-    candidate_point: dict[str, Any]
-    window: GoldenSearchWindow
-    claim: Claim
-    exposure_state: ExposureState
+class GoldenSearchExamFit(_Wire):
+    """One fit that sat the final test, judged on its own under the frozen rules."""
+
+    key: CandidateKey
+    same_as: list[CandidateKey] = Field(description="Other fits that chose exactly these settings and so share this result.")
+    label: str
+    point: dict[str, Any]
     outcome: ExamOutcome | None
     checks: list[GoldenSearchExamCheck]
     retention: float | None = Field(description="Descriptive only, never a check.")
-    candidate_metrics: GoldenSearchMetrics | None
-    incumbent_metrics: GoldenSearchMetrics | None
+    metrics: GoldenSearchMetrics | None
     weakness: list[GoldenSearchFinding] = Field(
-        description="What approving needs the owner to acknowledge as weak; empty when the evidence meets the rules."
+        description="What approving this fit needs the owner to acknowledge as weak; empty when its evidence meets the rules."
     )
+
+
+class GoldenSearchExamView(_Wire):
+    window: GoldenSearchWindow
+    claim: Claim
+    exposure_state: ExposureState
+    fits: list[GoldenSearchExamFit] = Field(description="Every fit that ran on the final interval; one for a final test recorded with a locked candidate.")
+    incumbent_metrics: GoldenSearchMetrics | None
+    pick: Literal["before_test", "after_test"] = Field(description="Whether the owner named the fit before the test opened or after its outcomes.")
+    chosen_key: CandidateKey | None = Field(description="The fit the owner named; null until an approval names one.")
+    selection_note: str | None = Field(description="What the record says about a pick made with two final-test results in view; null otherwise.")
 
 
 class GoldenSearchDeployHandoff(_Wire):
@@ -1112,42 +1134,66 @@ class GoldenSearchStudyDetail(GoldenSearchStudySummary):
     exam_locked: bool
     scope: GoldenSearchScope
     exposure_preview: GoldenSearchExposure | None = Field(
-        description="What opening the final test would record, while a candidate is chosen; null otherwise."
+        description="What opening the final test would record, while the candidates are compared; null otherwise."
     )
 
 
 # Reads beside the study.
 
 
-class GoldenSearchEvaluationRow(_Wire):
+class GoldenSearchRunGroup(_Wire):
+    key: RunGroup
+    label: str
+    runs: int
+    completed: int = Field(description="How many of the group's runs finished with a result.")
+    with_curve: int = Field(description="How many kept their daily equity.")
+
+
+class GoldenSearchRun(_Wire):
+    """One engine run of a study, under the step that first asked for it (#2930)."""
+
     evaluation_key: str
-    point_hash: str
-    point: dict[str, Any]
+    group: RunGroup
+    fold_index: int | None
+    label: str = Field(description="What asked for the run, its cost scenario when stressed, and the names the study gives its settings.")
+    params_sentence: str = Field(description="The run's settings in words; with the label it tells any two runs of a study apart.")
     window_start_ms: InstantMs
     window_end_ms: InstantMs
     scenario: str
-    detail: bool
-    stage: str
-    fold_index: int | None
     status: Literal["pending", "completed", "failed"]
-    attempt: int
-    retries: int
     total_trades: int | None
-    net_profit: float | None
     total_return_pct: float | None
     sharpe_ratio: float | None
     max_drawdown_pct: float | None
-    win_rate: float | None
     error: str | None
-    created_at_ms: InstantMs
-    completed_at_ms: InstantMs | None
+    has_curve: bool
 
 
-class GoldenSearchEvaluationPage(_Wire):
-    total: int
+class GoldenSearchRunsPage(_Wire):
+    total: int = Field(description="Runs matching the group and fold asked for.")
     page: int
     page_size: int
-    rows: list[GoldenSearchEvaluationRow]
+    sort: RunSort = Field(description="The order of the rows: as recorded, or by a measure.")
+    folds: int = Field(description="How many walk-forward folds the plan froze; fold runs can be listed one fold at a time.")
+    groups: list[GoldenSearchRunGroup] = Field(description="Every group the study has runs in, whatever the filter.")
+    rows: list[GoldenSearchRun]
+
+
+class GoldenSearchRunCurve(_Wire):
+    """One run's daily curve, as parallel lists over its session closes."""
+
+    evaluation_key: str
+    close_ms: list[InstantMs]
+    cumulative_return: list[float] = Field(description="Equity over the study's starting capital, less 1, at each session close.")
+    drawdown: list[float] | None = Field(description="Equity over its running peak, less 1; null when the peak never rose above 0.")
+    deepest_drawdown: float | None = Field(
+        description="The lowest value of drawdown, at a session close; the engine's bar-by-bar worst fall can be deeper. Null without a drawdown."
+    )
+
+
+class GoldenSearchRunCurves(_Wire):
+    curves: list[GoldenSearchRunCurve]
+    not_recorded: list[str] = Field(description="The runs asked for that kept no daily equity; never drawn as a flat line.")
 
 
 class GoldenSearchCumulativeReturnPoint(_Wire):

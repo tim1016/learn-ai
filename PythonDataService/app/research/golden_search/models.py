@@ -19,7 +19,6 @@ StudyState = Literal[
     "awaiting_validation",
     "validation_running",
     "awaiting_candidate",
-    "candidate_locked",
     "exam_running",
     "awaiting_review",
     "qualification_pending",
@@ -31,7 +30,7 @@ StudyState = Literal[
 StageName = Literal["search", "validation", "exam", "qualification"]
 FenceStatus = Literal["idle", "queued", "running", "completed", "failed", "cancelled"]
 CommandName = Literal[
-    "continue", "run_research", "select_candidate", "open_exam", "approve", "retain", "close", "cancel", "finish", "revise"
+    "continue", "run_research", "open_exam", "approve", "retain", "close", "cancel", "finish", "revise"
 ]
 CandidateKey = Literal["incumbent", "all_period", "recent"]
 RetainKind = Literal["keep_current", "wait_for_fresh_data", "retain_exploration"]
@@ -39,10 +38,9 @@ RetainKind = Literal["keep_current", "wait_for_fresh_data", "retain_exploration"
 RefusalKind = Literal["invalid", "conflict", "not_found", "unavailable"]
 
 COMMANDS: tuple[CommandName, ...] = (
-    "continue", "run_research", "select_candidate", "open_exam", "approve", "retain", "close", "cancel", "finish", "revise"
+    "continue", "run_research", "open_exam", "approve", "retain", "close", "cancel", "finish", "revise"
 )
 RETAIN_KINDS: tuple[RetainKind, ...] = ("keep_current", "wait_for_fresh_data", "retain_exploration")
-CANDIDATE_KEYS: tuple[CandidateKey, ...] = ("incumbent", "all_period", "recent")
 
 #: The state a stage runs in, by stage; a stage run owns a worker while its study is in this state.
 STAGE_STATES: dict[StageName, StudyState] = {
@@ -192,43 +190,8 @@ class EvaluationRecord:
     detail_json: dict[str, Any] | None
     created_at_ms: int
     completed_at_ms: int | None
-
-    def as_dict(self) -> dict[str, Any]:
-        """The evaluations page row (``detail_json`` is read through the candidate view, not here)."""
-        return {
-            "evaluation_key": self.evaluation_key,
-            "point_hash": self.point_hash,
-            "point": dict(self.point),
-            "window_start_ms": self.window_start_ms,
-            "window_end_ms": self.window_end_ms,
-            "scenario": self.scenario,
-            "detail": self.detail,
-            "stage": self.stage,
-            "fold_index": self.fold_index,
-            "status": self.status,
-            "attempt": self.attempt,
-            "retries": self.retries,
-            "total_trades": self.total_trades,
-            "net_profit": self.net_profit,
-            "total_return_pct": self.total_return_pct,
-            "sharpe_ratio": self.sharpe_ratio,
-            "max_drawdown_pct": self.max_drawdown_pct,
-            "win_rate": self.win_rate,
-            "error": self.error,
-            "created_at_ms": self.created_at_ms,
-            "completed_at_ms": self.completed_at_ms,
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class EvaluationPage:
-    total: int
-    page: int
-    page_size: int
-    rows: tuple[EvaluationRecord, ...]
-
-    def as_dict(self) -> dict[str, Any]:
-        return {"total": self.total, "page": self.page, "page_size": self.page_size, "rows": [row.as_dict() for row in self.rows]}
+    # Whether the run's daily equity was kept (#2930); a run recorded before it was has none.
+    has_curve: bool = False
 
 
 def require_mapping(value: object, what: str) -> Mapping[str, Any]:

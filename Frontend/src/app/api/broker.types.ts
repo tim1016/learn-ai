@@ -5244,15 +5244,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/research/golden-search/studies/{study_id}/evaluations": {
+    "/api/research/golden-search/studies/{study_id}/runs": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** List Evaluations */
-        get: operations["list_evaluations_api_research_golden_search_studies__study_id__evaluations_get"];
+        /**
+         * List Runs
+         * @description Every run of the study, grouped by what asked for it (#2930).
+         */
+        get: operations["list_runs_api_research_golden_search_studies__study_id__runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-search/studies/{study_id}/runs/curves": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Run Curves
+         * @description The named runs' daily curves: cumulative return and fall from peak at each session close (#2930).
+         */
+        get: operations["get_run_curves_api_research_golden_search_studies__study_id__runs_curves_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -12097,6 +12120,11 @@ export interface components {
             data_policy?: components["schemas"]["_EngineDataPolicyModel"] | null;
             /** Equity Curve */
             equity_curve?: Record<string, never>[];
+            /**
+             * Equity Day Ends
+             * @description The last equity sample of each America/New_York date the run scored, oldest first, as {timestamp (int64 ms UTC), equity}. Filled on every run, a summary_only run included.
+             */
+            equity_day_ends?: Record<string, never>[];
             /** Error */
             error?: string | null;
             evaluation_window?: components["schemas"]["EngineEvaluationWindowResponse"] | null;
@@ -13556,6 +13584,11 @@ export interface components {
              * @default false
              */
             research_override?: boolean;
+            /**
+             * Selection Note
+             * @description Set when the approved fit was chosen with two final-test results in view (#2930); null otherwise.
+             */
+            selection_note?: string | null;
             /** Validation Verdict Label */
             validation_verdict_label?: string | null;
             /** Weakness */
@@ -13810,7 +13843,7 @@ export interface components {
              * Command
              * @enum {string}
              */
-            command: "continue" | "run_research" | "select_candidate" | "open_exam" | "approve" | "retain" | "close" | "cancel" | "finish" | "revise";
+            command: "continue" | "run_research" | "open_exam" | "approve" | "retain" | "close" | "cancel" | "finish" | "revise";
             /** Expectedrevision */
             expectedRevision: number;
             /** Idempotencykey */
@@ -14255,65 +14288,6 @@ export interface components {
             /** Total Max */
             total_max: number;
         };
-        /** GoldenSearchEvaluationPage */
-        GoldenSearchEvaluationPage: {
-            /** Page */
-            page: number;
-            /** Page Size */
-            page_size: number;
-            /** Rows */
-            rows: components["schemas"]["GoldenSearchEvaluationRow"][];
-            /** Total */
-            total: number;
-        };
-        /** GoldenSearchEvaluationRow */
-        GoldenSearchEvaluationRow: {
-            /** Attempt */
-            attempt: number;
-            /** Completed At Ms */
-            completed_at_ms: number | null;
-            /** Created At Ms */
-            created_at_ms: number;
-            /** Detail */
-            detail: boolean;
-            /** Error */
-            error: string | null;
-            /** Evaluation Key */
-            evaluation_key: string;
-            /** Fold Index */
-            fold_index: number | null;
-            /** Max Drawdown Pct */
-            max_drawdown_pct: number | null;
-            /** Net Profit */
-            net_profit: number | null;
-            /** Point */
-            point: Record<string, never>;
-            /** Point Hash */
-            point_hash: string;
-            /** Retries */
-            retries: number;
-            /** Scenario */
-            scenario: string;
-            /** Sharpe Ratio */
-            sharpe_ratio: number | null;
-            /** Stage */
-            stage: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "pending" | "completed" | "failed";
-            /** Total Return Pct */
-            total_return_pct: number | null;
-            /** Total Trades */
-            total_trades: number | null;
-            /** Win Rate */
-            win_rate: number | null;
-            /** Window End Ms */
-            window_end_ms: number;
-            /** Window Start Ms */
-            window_start_ms: number;
-        };
         /** GoldenSearchEvidenceCandidate */
         GoldenSearchEvidenceCandidate: {
             /** Concentration */
@@ -14323,8 +14297,6 @@ export interface components {
             edge_hits: string[];
             /** Eligible */
             eligible: boolean;
-            /** Exam Eligible */
-            exam_eligible: boolean;
             /** Fixed Sentence */
             fixed_sentence: string;
             /** Flags */
@@ -14369,6 +14341,11 @@ export interface components {
         GoldenSearchEvidenceView: {
             /** Candidates */
             candidates: components["schemas"]["GoldenSearchEvidenceCandidate"][];
+            /**
+             * Fits To Test
+             * @description What opening the final test will run beside the current settings; empty when every fit returned them.
+             */
+            fits_to_test: components["schemas"]["GoldenSearchFitToTest"][];
             /** Incomplete */
             incomplete: boolean;
             /** Pair Maps */
@@ -14390,18 +14367,48 @@ export interface components {
              */
             status: "pass" | "fail" | "not_available";
         };
+        /**
+         * GoldenSearchExamFit
+         * @description One fit that sat the final test, judged on its own under the frozen rules.
+         */
+        GoldenSearchExamFit: {
+            /** Checks */
+            checks: components["schemas"]["GoldenSearchExamCheck"][];
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "incumbent" | "all_period" | "recent";
+            /** Label */
+            label: string;
+            metrics: components["schemas"]["GoldenSearchMetrics"] | null;
+            /** Outcome */
+            outcome: ("meets_rules" | "does_not_meet_rules" | "not_enough_evidence" | "could_not_evaluate") | null;
+            /** Point */
+            point: Record<string, never>;
+            /**
+             * Retention
+             * @description Descriptive only, never a check.
+             */
+            retention: number | null;
+            /**
+             * Same As
+             * @description Other fits that chose exactly these settings and so share this result.
+             */
+            same_as: ("incumbent" | "all_period" | "recent")[];
+            /**
+             * Weakness
+             * @description What approving this fit needs the owner to acknowledge as weak; empty when its evidence meets the rules.
+             */
+            weakness: components["schemas"]["GoldenSearchFinding"][];
+        };
         /** GoldenSearchExamView */
         GoldenSearchExamView: {
             /**
-             * Candidate Key
-             * @enum {string}
+             * Chosen Key
+             * @description The fit the owner named; null until an approval names one.
              */
-            candidate_key: "incumbent" | "all_period" | "recent";
-            candidate_metrics: components["schemas"]["GoldenSearchMetrics"] | null;
-            /** Candidate Point */
-            candidate_point: Record<string, never>;
-            /** Checks */
-            checks: components["schemas"]["GoldenSearchExamCheck"][];
+            chosen_key: ("incumbent" | "all_period" | "recent") | null;
             /**
              * Claim
              * @enum {string}
@@ -14412,19 +14419,23 @@ export interface components {
              * @enum {string}
              */
             exposure_state: "not_opened" | "previously_used" | "history_unknown";
+            /**
+             * Fits
+             * @description Every fit that ran on the final interval; one for a final test recorded with a locked candidate.
+             */
+            fits: components["schemas"]["GoldenSearchExamFit"][];
             incumbent_metrics: components["schemas"]["GoldenSearchMetrics"] | null;
-            /** Outcome */
-            outcome: ("meets_rules" | "does_not_meet_rules" | "not_enough_evidence" | "could_not_evaluate") | null;
             /**
-             * Retention
-             * @description Descriptive only, never a check.
+             * Pick
+             * @description Whether the owner named the fit before the test opened or after its outcomes.
+             * @enum {string}
              */
-            retention: number | null;
+            pick: "before_test" | "after_test";
             /**
-             * Weakness
-             * @description What approving needs the owner to acknowledge as weak; empty when the evidence meets the rules.
+             * Selection Note
+             * @description What the record says about a pick made with two final-test results in view; null otherwise.
              */
-            weakness: components["schemas"]["GoldenSearchFinding"][];
+            selection_note: string | null;
             window: components["schemas"]["GoldenSearchWindow"];
         };
         /** GoldenSearchExecution */
@@ -14511,6 +14522,21 @@ export interface components {
             code: string;
             /** Text */
             text: string;
+        };
+        /**
+         * GoldenSearchFitToTest
+         * @description One set of fitted settings the final test runs, under the candidates that chose it.
+         */
+        GoldenSearchFitToTest: {
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "incumbent" | "all_period" | "recent";
+            /** Label */
+            label: string;
+            /** Same As */
+            same_as: ("incumbent" | "all_period" | "recent")[];
         };
         /** GoldenSearchFixedControl */
         GoldenSearchFixedControl: {
@@ -15526,6 +15552,89 @@ export interface components {
             /** Trades */
             trades: number;
         };
+        /**
+         * GoldenSearchRun
+         * @description One engine run of a study, under the step that first asked for it (#2930).
+         */
+        GoldenSearchRun: {
+            /** Error */
+            error: string | null;
+            /** Evaluation Key */
+            evaluation_key: string;
+            /** Fold Index */
+            fold_index: number | null;
+            /**
+             * Group
+             * @enum {string}
+             */
+            group: "search" | "pair_audit" | "recent" | "fold_training" | "fold_test" | "candidate" | "neighbor" | "stress" | "final";
+            /** Has Curve */
+            has_curve: boolean;
+            /**
+             * Label
+             * @description What asked for the run, its cost scenario when stressed, and the names the study gives its settings.
+             */
+            label: string;
+            /** Max Drawdown Pct */
+            max_drawdown_pct: number | null;
+            /**
+             * Params Sentence
+             * @description The run's settings in words; with the label it tells any two runs of a study apart.
+             */
+            params_sentence: string;
+            /** Scenario */
+            scenario: string;
+            /** Sharpe Ratio */
+            sharpe_ratio: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "completed" | "failed";
+            /** Total Return Pct */
+            total_return_pct: number | null;
+            /** Total Trades */
+            total_trades: number | null;
+            /** Window End Ms */
+            window_end_ms: number;
+            /** Window Start Ms */
+            window_start_ms: number;
+        };
+        /**
+         * GoldenSearchRunCurve
+         * @description One run's daily curve, as parallel lists over its session closes.
+         */
+        GoldenSearchRunCurve: {
+            /** Close Ms */
+            close_ms: number[];
+            /**
+             * Cumulative Return
+             * @description Equity over the study's starting capital, less 1, at each session close.
+             */
+            cumulative_return: number[];
+            /**
+             * Deepest Drawdown
+             * @description The lowest value of drawdown, at a session close; the engine's bar-by-bar worst fall can be deeper. Null without a drawdown.
+             */
+            deepest_drawdown: number | null;
+            /**
+             * Drawdown
+             * @description Equity over its running peak, less 1; null when the peak never rose above 0.
+             */
+            drawdown: number[] | null;
+            /** Evaluation Key */
+            evaluation_key: string;
+        };
+        /** GoldenSearchRunCurves */
+        GoldenSearchRunCurves: {
+            /** Curves */
+            curves: components["schemas"]["GoldenSearchRunCurve"][];
+            /**
+             * Not Recorded
+             * @description The runs asked for that kept no daily equity; never drawn as a flat line.
+             */
+            not_recorded: string[];
+        };
         /** GoldenSearchRunDetail */
         GoldenSearchRunDetail: {
             /**
@@ -15551,6 +15660,28 @@ export interface components {
             trade_charts: (components["schemas"]["GoldenSearchTradeChartsMeasured"] | components["schemas"]["GoldenSearchTradeChartsMissing"]) | null;
             window: components["schemas"]["GoldenSearchWindow"];
         };
+        /** GoldenSearchRunGroup */
+        GoldenSearchRunGroup: {
+            /**
+             * Completed
+             * @description How many of the group's runs finished with a result.
+             */
+            completed: number;
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "search" | "pair_audit" | "recent" | "fold_training" | "fold_test" | "candidate" | "neighbor" | "stress" | "final";
+            /** Label */
+            label: string;
+            /** Runs */
+            runs: number;
+            /**
+             * With Curve
+             * @description How many kept their daily equity.
+             */
+            with_curve: number;
+        };
         /** GoldenSearchRunUp */
         GoldenSearchRunUp: {
             /** Data Start Ms */
@@ -15559,6 +15690,36 @@ export interface components {
             required_samples: number;
             /** Run Up Sessions */
             run_up_sessions: number;
+        };
+        /** GoldenSearchRunsPage */
+        GoldenSearchRunsPage: {
+            /**
+             * Folds
+             * @description How many walk-forward folds the plan froze; fold runs can be listed one fold at a time.
+             */
+            folds: number;
+            /**
+             * Groups
+             * @description Every group the study has runs in, whatever the filter.
+             */
+            groups: components["schemas"]["GoldenSearchRunGroup"][];
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+            /** Rows */
+            rows: components["schemas"]["GoldenSearchRun"][];
+            /**
+             * Sort
+             * @description The order of the rows: as recorded, or by a measure.
+             * @enum {string}
+             */
+            sort: "recorded" | "total_return_pct" | "sharpe_ratio" | "max_drawdown_pct" | "total_trades";
+            /**
+             * Total
+             * @description Runs matching the group and fold asked for.
+             */
+            total: number;
         };
         /** GoldenSearchScope */
         GoldenSearchScope: {
@@ -15814,7 +15975,7 @@ export interface components {
             exam_outcome: ("meets_rules" | "does_not_meet_rules" | "not_enough_evidence" | "could_not_evaluate") | null;
             /** Exposure Claim */
             exposure_claim: ("confirmatory" | "exploratory") | null;
-            /** @description What opening the final test would record, while a candidate is chosen; null otherwise. */
+            /** @description What opening the final test would record, while the candidates are compared; null otherwise. */
             exposure_preview: components["schemas"]["GoldenSearchExposure"] | null;
             /** Failure Reason */
             failure_reason: string | null;
@@ -15835,7 +15996,7 @@ export interface components {
             /** Parent Study Id */
             parent_study_id: string | null;
             /** Permitted Actions */
-            permitted_actions: ("continue" | "run_research" | "select_candidate" | "open_exam" | "approve" | "retain" | "close" | "cancel" | "finish" | "revise")[];
+            permitted_actions: ("continue" | "run_research" | "open_exam" | "approve" | "retain" | "close" | "cancel" | "finish" | "revise")[];
             /**
              * Presented Status
              * @enum {string}
@@ -15861,7 +16022,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "locked" | "search_running" | "awaiting_validation" | "validation_running" | "awaiting_candidate" | "candidate_locked" | "exam_running" | "awaiting_review" | "qualification_pending" | "approved" | "qualification_failed" | "retained" | "closed";
+            state: "locked" | "search_running" | "awaiting_validation" | "validation_running" | "awaiting_candidate" | "exam_running" | "awaiting_review" | "qualification_pending" | "approved" | "qualification_failed" | "retained" | "closed";
             /** Strategy Key */
             strategy_key: string;
             /** Symbol */
@@ -15920,7 +16081,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "locked" | "search_running" | "awaiting_validation" | "validation_running" | "awaiting_candidate" | "candidate_locked" | "exam_running" | "awaiting_review" | "qualification_pending" | "approved" | "qualification_failed" | "retained" | "closed";
+            state: "locked" | "search_running" | "awaiting_validation" | "validation_running" | "awaiting_candidate" | "exam_running" | "awaiting_review" | "qualification_pending" | "approved" | "qualification_failed" | "retained" | "closed";
             /** Strategy Key */
             strategy_key: string;
             /** Symbol */
@@ -35344,12 +35505,15 @@ export interface operations {
             };
         };
     };
-    list_evaluations_api_research_golden_search_studies__study_id__evaluations_get: {
+    list_runs_api_research_golden_search_studies__study_id__runs_get: {
         parameters: {
             query?: {
-                /** @description The step that asked for the evaluation, e.g. search or validation. */
-                stage?: string | null;
+                /** @description What asked for the runs. */
+                group?: ("search" | "pair_audit" | "recent" | "fold_training" | "fold_test" | "candidate" | "neighbor" | "stress" | "final") | null;
                 fold_index?: number | null;
+                /** @description The order: as recorded, or by a measure. */
+                sort?: "recorded" | "total_return_pct" | "sharpe_ratio" | "max_drawdown_pct" | "total_trades";
+                descending?: boolean;
                 page?: number;
                 page_size?: number;
             };
@@ -35369,7 +35533,79 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GoldenSearchEvaluationPage"];
+                    "application/json": components["schemas"]["GoldenSearchRunsPage"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+        };
+    };
+    get_run_curves_api_research_golden_search_studies__study_id__runs_curves_get: {
+        parameters: {
+            query: {
+                /** @description The evaluation key of each run to draw. */
+                key: string[];
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                study_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRunCurves"];
                 };
             };
             /** @description Bad Request */

@@ -4,7 +4,7 @@
       @let picked = row.key === selected();
       <li class="card" [class.selected]="picked" [attr.data-key]="row.key">
         <div class="top">
-          <button type="button" class="pick" [attr.aria-pressed]="picked" [disabled]="fixed()" (click)="pick.emit(row.key)">
+          <button type="button" class="pick" [attr.aria-pressed]="picked" (click)="pick.emit(row.key)">
             <span class="radio" aria-hidden="true"></span>
             <span class="name">
               <strong>{{ row.candidate.label }}</strong>

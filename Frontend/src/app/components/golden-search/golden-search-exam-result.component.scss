@@ -11,6 +11,9 @@ tr.selected { background: var(--accent-soft); }
 .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 small { display: block; color: var(--text-secondary); font-size: var(--fs-xs); }
 .bad { color: var(--bear); }
+.muted { color: var(--text-secondary); }
+.choice { display: inline-flex; align-items: center; gap: var(--space-2); cursor: pointer; }
+.choice input { accent-color: var(--accent); }
 .caption { color: var(--text-secondary); font-size: var(--fs-xs); }
 .proof { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
 .evidence { display: grid; gap: var(--space-1); align-content: start; padding: var(--space-3) var(--space-4); background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: var(--radius-sm); }

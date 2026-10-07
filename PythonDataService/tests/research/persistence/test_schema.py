@@ -31,6 +31,8 @@ APPLIED_VERSION_DIGESTS: dict[int, str] = {
     11: "f7c290d147980eb7",
     12: "82be8428a0c3936a",
     13: "d55e48c00bddb801",
+    14: "c640fe2ce26a70e1",
+    15: "740c3fb259daa2fd",
 }
 
 
@@ -216,3 +218,69 @@ async def test_version_5_nulls_every_recency_study_reference(scratch_db: asyncpg
 
     assert await scratch_db.fetchval('SELECT count(*) FROM "RecencyRuns" WHERE "StudyId" IS NOT NULL') == 0
     assert await scratch_db.fetchval("SELECT to_regclass('research_backtest_runs')") is not None
+
+
+async def test_version_14_returns_a_study_waiting_with_a_locked_candidate_to_compare(scratch_db: asyncpg.Connection) -> None:
+    """Both fits sit the final test (#2930), so the state a pick used to leave a study in is gone."""
+    await ensure_schema(scratch_db)
+    # Stage a database that recorded version 13: its state rule still admits the locked-candidate state.
+    await scratch_db.execute("ALTER TABLE research_golden_search_studies DROP CONSTRAINT ck_research_golden_search_studies_state")
+    await scratch_db.execute(
+        """
+        ALTER TABLE research_golden_search_studies ADD CONSTRAINT ck_research_golden_search_studies_state
+            CHECK (state IN ('candidate_locked', 'awaiting_candidate', 'awaiting_review'))
+        """
+    )
+    await scratch_db.execute("DELETE FROM research_schema_migrations WHERE version = 14")
+    for study_id, state, key in (("locked-pick", "candidate_locked", "recent"), ("reviewed", "awaiting_review", "all_period")):
+        await scratch_db.execute(
+            """
+            INSERT INTO research_golden_search_studies (
+                id, strategy_key, symbol, state, created_at_ms, updated_at_ms, protocol_json, protocol_hash,
+                receipt_json, candidate_key, budget_cap
+            ) VALUES ($1, 'ema_crossover_signal', 'SPY', $2, 1, 1, '{}'::jsonb, 'h', '{}'::jsonb, $3, 5000)
+            """,
+            study_id,
+            state,
+            key,
+        )
+
+    await ensure_schema(scratch_db)
+
+    rows = await scratch_db.fetch("SELECT id, state, candidate_key FROM research_golden_search_studies ORDER BY id")
+    # The pick made before the test is void; a study already past its final test keeps the candidate it tested.
+    assert [tuple(row) for row in rows] == [("locked-pick", "awaiting_candidate", None), ("reviewed", "awaiting_review", "all_period")]
+    with pytest.raises(asyncpg.CheckViolationError):
+        await scratch_db.execute("UPDATE research_golden_search_studies SET state = 'candidate_locked' WHERE id = 'reviewed'")
+
+
+async def test_version_15_leaves_recorded_evaluations_without_a_curve_and_keeps_the_two_arrays_the_same_length(scratch_db: asyncpg.Connection) -> None:
+    """Every run keeps its daily equity from here on (#2930); a run recorded before has none, and is not given one."""
+    await ensure_schema(scratch_db)
+    await scratch_db.execute("ALTER TABLE research_golden_search_evaluations DROP CONSTRAINT ck_research_golden_search_evaluations_equity_arrays")
+    await scratch_db.execute("ALTER TABLE research_golden_search_evaluations DROP COLUMN equity_close_ms, DROP COLUMN equity_values")
+    await scratch_db.execute("DELETE FROM research_schema_migrations WHERE version = 15")
+    await scratch_db.execute(
+        """
+        INSERT INTO research_golden_search_studies (
+            id, strategy_key, symbol, state, created_at_ms, updated_at_ms, protocol_json, protocol_hash, receipt_json, budget_cap
+        ) VALUES ('s1', 'ema_crossover_signal', 'SPY', 'awaiting_candidate', 1, 1, '{}'::jsonb, 'h', '{}'::jsonb, 5000)
+        """
+    )
+    await scratch_db.execute(
+        """
+        INSERT INTO research_golden_search_evaluations (
+            study_id, evaluation_key, point_hash, point_json, window_start_ms, window_end_ms, stage, status, attempt, created_at_ms
+        ) VALUES ('s1', 'old-run', 'p', '{}'::jsonb, 1, 2, 'search', 'completed', 1, 1)
+        """
+    )
+
+    await ensure_schema(scratch_db)
+
+    old = await scratch_db.fetchrow("SELECT equity_close_ms, equity_values FROM research_golden_search_evaluations WHERE evaluation_key = 'old-run'")
+    assert (old["equity_close_ms"], old["equity_values"]) == (None, None)
+    await scratch_db.execute("UPDATE research_golden_search_evaluations SET equity_close_ms = '{1,2}', equity_values = '{10.0,11.0}' WHERE evaluation_key = 'old-run'")
+    for close_ms, values in (("'{1,2}'", "'{10.0}'"), ("'{1}'", "NULL"), ("NULL", "'{10.0}'")):
+        with pytest.raises(asyncpg.CheckViolationError):
+            await scratch_db.execute(f"UPDATE research_golden_search_evaluations SET equity_close_ms = {close_ms}, equity_values = {values} WHERE evaluation_key = 'old-run'")
+
