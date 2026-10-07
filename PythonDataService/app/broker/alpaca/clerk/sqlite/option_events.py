@@ -40,9 +40,21 @@ from it and never matches the event to lots a second time.
 
 **Which lots are offered.** Every bot's open lots of the contract, read from
 its own FIFO, each with the ledger sequence of the fill that opened it, and
-one lot for outside orders the books recorded in that contract. A bot whose
-lots and whose attributed position disagree (the owner wrote the position
-off) is offered none.
+one lot for outside orders the books recorded in that contract. Those are
+the lots on the books, and the canonical rule chooses among them.
+
+**A position that left the books at the owner's word.** The owner wrote it
+off, which closed no lot, or ended it at their word after expiry, which
+closed the lot at nothing. A row of the broker's that comes later still
+counts those contracts. So what the lots on the books cannot meet of a row
+is set against them: the row's count is met, every lot still on the books
+is booked, and nothing is booked for the contracts that had left. An
+expiry moves nothing more for them and holds nobody. An exercise or an
+assignment holds that bot by name: its shares are real and on no bot's
+books. The lots on the books always come first, so a lot that never was at
+the broker takes no row from one that is. A bot whose lots and position
+disagree in any other way is offered no lot, and is held by name when a
+row comes for its contract.
 
 **An event in a contract the books never recorded holds nobody.** No bot can
 hold such a contract: it is the owner's own trade in the same account. The
@@ -72,21 +84,14 @@ the order releases it only while it has filled nothing. A fill not yet
 booked stands in the way again, and a fill that cannot be booked is held
 for by name, whatever was reviewed before it.
 
-**A row read after the owner wrote its position off** closes nothing: the
-write-off closed no lot and the bot is offered none. An expiry's row then
-confirms the write-off and holds nobody. An exercise's or an assignment's
-row holds that bot by name for the shares on no bot's books. That holds
-only while the bot holds none of the contract now. One that bought it again
-is held by name: its lots no longer add up to what it holds.
-
 **The owner's ending.** A contract past its last session that nothing will
 ever settle is ended at the owner's word (``option_owner_ending``):
 :func:`end_option_at_the_owners_word` makes one poll, now, and hands the
 batch function the request with the read. What the read and the simulation
 brought is booked first, so a settlement that has come takes the ending's
 place. A real account's events are then still read for some days, back to
-that contract's expiry date, and a late row for it is treated as a row read
-after a write-off is.
+that contract's expiry date, and a late row counts the ended contracts as
+a position that left the books at the owner's word.
 """
 
 from __future__ import annotations
@@ -211,6 +216,7 @@ from app.options.event_allocation import (
     OptionEventKind,
     OptionEventRefusal,
     OptionEventRefused,
+    allocate_option_event,
     expected_share_trade,
 )
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
@@ -227,6 +233,9 @@ MAX_OPTION_EVENT_PAGES = 50
 
 # The owner of the lot that stands for outside orders in a contract. It is no bot and no custody subject.
 OUTSIDE_THE_BOOKS = "outside-the-books"
+# How a booking's record names a lot of a position that left a bot's books at the owner's word,
+# before the bot's name. It is no bot's lot now: nothing is booked for what an event takes of it.
+LEFT_THE_BOOKS_PREFIX = "left-the-books:"
 _ACK_OPERATOR_REF_PREFIX = "operator:"
 _BOUGHT, _SOLD = "bought", "sold"
 _ENDINGS: dict[OptionEventKind, OptionEnding] = {
@@ -504,11 +513,15 @@ class _BotBook:
     """One bot's books in one contract."""
 
     sid: str
+    # The lots that make up the position the bot holds now.
     lots: tuple[HeldOptionLot, ...]
     # The order whose fill opened each lot, by the lot's sequence.
     opened_by: Mapping[int, str]
     # Each lot an order closed: when it was opened, when it was closed, and the side it was held on.
     closed: tuple[tuple[int, int, str], ...]
+    # The lots of a position the owner wrote off. They stay open in the fills and are on the
+    # books no more: no lot of the bot's, and still contracts a row of the broker's may count.
+    written_off: tuple[HeldOptionLot, ...] = ()
 
 
 def _bots_that_traded(conn: sqlite3.Connection, symbol: str) -> list[str]:
@@ -526,9 +539,18 @@ def _bot_book(conn: sqlite3.Connection, sid: str, contract: OptionContract, reco
     """One bot's open lots of ``contract``, each named by the ledger sequence of the fill that opened it.
 
     The lots are FIFO's own (``fifo_pnl.compute_fifo_pnl``); nothing here
-    matches a fill to a lot again. A bot whose lots do not add up to its
-    attributed position is offered none: its position was written off, and
-    closing a lot for it would take the position past nothing.
+    matches a fill to a lot again.
+
+    **A position the owner wrote off** left the books and closed no lot, so
+    the fills hold more than the position does. When the difference is
+    exactly what was written off, the oldest lots are those contracts: a
+    write-off takes what was held then, and whatever the bot bought since
+    is newer. They are set apart as ``written_off``, and the rest are the
+    lots of what the bot holds now. Closing a written-off lot for the bot
+    would take its position past nothing, so none of them is ever its lot.
+
+    A bot whose lots and position disagree in any other way is offered no
+    lot at all: which lots are its own is not known.
     """
     symbol = contract.occ_symbol
     fifo = compute_fifo_pnl(records)
@@ -545,26 +567,41 @@ def _bot_book(conn: sqlite3.Connection, sid: str, contract: OptionContract, reco
         for lot in fifo.closed_lots
         if lot.symbol == symbol and lot.closed_at_ms in sides_at
     )
-    if signed != reads.position(conn, sid, symbol):
-        return _BotBook(sid=sid, lots=(), opened_by={}, closed=closed)
+    nothing_known = _BotBook(sid=sid, lots=(), opened_by={}, closed=closed)
+    held_now = int(reads.position(conn, sid, symbol))
+    # What the fills hold beyond the position: the contracts of a write-off, or books that disagree.
+    beyond = signed - held_now
+    if beyond and (
+        beyond != written_off_contracts(conn, sid, symbol)
+        or any((lot.side is OrderSide.BUY) != (beyond > 0) for lot in open_lots)
+        or held_now * beyond < 0
+    ):
+        return nothing_known
     lots: list[HeldOptionLot] = []
+    written_off: list[HeldOptionLot] = []
     opened_by: dict[int, str] = {}
     in_order = iter(records)
+    still_written_off = abs(beyond)
     for lot in open_lots:
         opening = next(
             (fill for fill in in_order if fill.side is lot.side and fill.filled_at_ms == lot.opened_at_ms), None
         )
         if opening is None:
-            return _BotBook(sid=sid, lots=(), opened_by={}, closed=closed)
+            return nothing_known
+        sign = 1 if lot.side is OrderSide.BUY else -1
         quantity = int(lot.exact_qty)
-        lots.append(
-            HeldOptionLot(
-                owner=sid, contract=contract, quantity=quantity if lot.side is OrderSide.BUY else -quantity,
-                opened_at_ms=lot.opened_at_ms, sequence=opening.ledger_sequence,
-            )
-        )
+        gone = min(quantity, still_written_off)
+        still_written_off -= gone
+        for part, into in ((gone, written_off), (quantity - gone, lots)):
+            if part:
+                into.append(
+                    HeldOptionLot(
+                        owner=sid, contract=contract, quantity=sign * part, opened_at_ms=lot.opened_at_ms,
+                        sequence=opening.ledger_sequence,
+                    )
+                )
         opened_by[opening.ledger_sequence] = opening.order_ref
-    return _BotBook(sid=sid, lots=tuple(lots), opened_by=opened_by, closed=closed)
+    return _BotBook(sid=sid, lots=tuple(lots), opened_by=opened_by, closed=closed, written_off=tuple(written_off))
 
 
 def _bot_books(conn: sqlite3.Connection, account_id: str, contract: OptionContract) -> dict[str, _BotBook]:
@@ -603,6 +640,133 @@ def _outside_lot(
     return HeldOptionLot(
         owner=OUTSIDE_THE_BOOKS, contract=contract, quantity=held, opened_at_ms=opened_at_ms, sequence=sequence
     )
+
+
+def _lots_that_left_the_books(
+    conn: sqlite3.Connection, books: Mapping[str, _BotBook], symbol: str
+) -> list[HeldOptionLot]:
+    """The lots of every position in ``symbol`` that left a bot's books at the owner's word, each under its bot.
+
+    Two ways a position leaves the books with no order and no event: the
+    owner wrote it off, which closed no lot, or ended it at their word once
+    it had expired, which closed the lot at nothing. Either way the broker
+    knows nothing of it, and a row of the broker's that comes later still
+    counts those contracts.
+    """
+    gone = [lot for book in books.values() for lot in book.written_off]
+    for sid, ended in owner_ended(conn, symbol).items():
+        gone += [
+            # Only a bought contract is ended at the owner's word.
+            HeldOptionLot(
+                owner=sid, contract=OptionContract.from_occ_symbol(symbol), quantity=row["contracts"],
+                opened_at_ms=row["opened_at_ms"], sequence=row["sequence"],
+            )
+            for row in ended.allocation
+            if row["owner"] == sid
+        ]
+    return gone
+
+
+def _less_what_was_taken(
+    lots: Sequence[HeldOptionLot], taken: Sequence[tuple[str, int, int]]
+) -> list[HeldOptionLot]:
+    """``lots`` without the contracts events took of them, each named as (bot, the lot's sequence, contracts).
+
+    Taken from the lot of that name while it is still there. A record made
+    earlier may name a lot the fills have closed since: its contracts are
+    then taken from that bot's other lots, in the order given. So a
+    position that left the books is never counted for two rows.
+    """
+    counts = [abs(lot.quantity) for lot in lots]
+    owed: dict[str, int] = {}
+    for owner, sequence, contracts in taken:
+        for index, lot in enumerate(lots):
+            if (lot.owner, lot.sequence) == (owner, sequence):
+                found = min(counts[index], contracts)
+                counts[index] -= found
+                contracts -= found
+        if contracts:
+            owed[owner] = owed.get(owner, 0) + contracts
+    for index, lot in enumerate(lots):
+        found = min(counts[index], owed.get(lot.owner, 0))
+        if found:
+            counts[index] -= found
+            owed[lot.owner] -= found
+    return [
+        replace(lot, quantity=count if lot.quantity > 0 else -count)
+        for lot, count in zip(lots, counts, strict=True)
+        if count
+    ]
+
+
+def _is_a_bots(owner: str) -> bool:
+    """Whether a lot in a booking's record is one a bot held on its books when the event was matched."""
+    return owner != OUTSIDE_THE_BOOKS and not owner.startswith(LEFT_THE_BOOKS_PREFIX)
+
+
+@dataclass(frozen=True, slots=True)
+class _Matched:
+    """One event matched to lots: what it takes of the lots on the books, and of positions that left them."""
+
+    # The lots on the books it takes, a bot's or an outside holding's, as the canonical rule chose them.
+    on_the_books: tuple[LotAllocation, ...]
+    # What it takes of each lot that left the books at the owner's word, with the contracts taken.
+    left_the_books: tuple[tuple[HeldOptionLot, int], ...] = ()
+
+
+def _match(
+    event: BrokerOptionEventActivity, *, multiplier: int, lots: Sequence[HeldOptionLot],
+    left_the_books: Sequence[HeldOptionLot],
+) -> _Matched:
+    """Match one event to the lots on the books and, for what they cannot meet, to positions that left them.
+
+    The lots on the books come first, chosen by the canonical rule
+    (``app.options.event_allocation``): booking them is what leaves the
+    books equal to the broker's position. Only the contracts they cannot
+    meet are set against a position that left the books at the owner's
+    word, on the side the event ends. So one bot's write-off never stops
+    another bot's lot from being booked, and a lot that never was at the
+    broker never takes a row from a lot that is.
+
+    Raises the rule's own refusal when even those do not meet the row.
+    """
+    try:
+        return _Matched(on_the_books=allocation_of(event, multiplier=multiplier, lots=lots).lots)
+    except OptionEventRefused as refused:
+        short = {
+            OptionEventRefusal.CONTRACT_NOT_HELD: event.contracts,
+            OptionEventRefusal.WRONG_SIDE: event.contracts,
+            OptionEventRefusal.MORE_CONTRACTS_THAN_HELD: refused.unmatched_contracts,
+        }.get(refused.reason)
+        if short is None:
+            raise
+        expired = event.kind is OptionEventKind.EXPIRED
+        event_date = et_date_at_ms(event.activity_date_ms)
+        open_then = [lot for lot in left_the_books if et_date_at_ms(lot.opened_at_ms) <= event_date]
+        ends_bought = event.position_change < 0
+        on_side = [lot for lot in open_then if (lot.quantity > 0) == ends_bought]
+        if expired and not on_side:
+            # An expiry's sign for a sold position is an inference: held on one side only, it means that side.
+            on_side = open_then
+        # In the rule's own order: an exercise or an assignment the oldest first, an expiry the newest.
+        on_side.sort(key=lambda lot: (lot.opened_at_ms, lot.sequence, lot.owner), reverse=expired)
+        if sum(abs(lot.quantity) for lot in on_side) < short:
+            raise
+        on_the_books: tuple[LotAllocation, ...] = ()
+        if short < event.contracts:
+            met = event.contracts - short
+            on_the_books = allocate_option_event(
+                kind=event.kind, contract=event.contract, position_change=-met if ends_bought else met,
+                event_date_ms=event.activity_date_ms, multiplier=multiplier, lots=lots,
+            ).lots
+        taken: list[tuple[HeldOptionLot, int]] = []
+        for lot in on_side:
+            if not short:
+                break
+            take = min(abs(lot.quantity), short)
+            short -= take
+            taken.append((lot, take))
+        return _Matched(on_the_books=on_the_books, left_the_books=tuple(taken))
 
 
 # ── Holds ────────────────────────────────────────────────────────────────────
@@ -919,47 +1083,15 @@ def _bots_a_row_names(conn: sqlite3.Connection, symbol: str | None) -> list[str]
     return _holders(conn, symbol.upper()) or _holders_under(conn, symbol.upper())
 
 
-def _bots_that_wrote_it_off(
-    conn: sqlite3.Connection, books: Mapping[str, _BotBook], event: BrokerOptionEventActivity
-) -> tuple[str, ...]:
-    """The bots whose position in the event's contract left the books at the owner's word and accounts for the whole event, or none.
-
-    An exercise ends a bought position and an assignment a sold one. An
-    expiry ends either. A write-off took the position off the books and
-    closed no lot, and an owner's ending closed the lot at nothing. Either
-    way the event has no lot to take: booking it would count the same
-    contracts a second time.
-
-    Such a bot explains a row only while it holds none of the contract now.
-    One that wrote a position off and then bought the contract again holds
-    lots the row may be about, and explains nothing.
-    """
-    symbol = event.contract.occ_symbol
-    sides = {OptionEventKind.EXERCISED: (_BOUGHT,), OptionEventKind.ASSIGNED: (_SOLD,)}.get(event.kind, (_BOUGHT, _SOLD))
-    gone: dict[str, int] = {}
-    for sid in books:
-        if reads.position(conn, sid, symbol):
-            continue
-        contracts = written_off_contracts(conn, sid, symbol)
-        if contracts and (_BOUGHT if contracts > 0 else _SOLD) in sides:
-            gone[sid] = abs(contracts)
-    if _BOUGHT in sides:
-        # Only a bought contract is ended at the owner's word.
-        for sid, ended in owner_ended(conn, symbol).items():
-            if not reads.position(conn, sid, symbol):
-                gone[sid] = gone.get(sid, 0) + ended.contracts
-    return tuple(sorted(gone)) if sum(gone.values()) >= abs(event.position_change) else ()
-
-
 def _bots_whose_lots_cannot_be_offered(
     conn: sqlite3.Connection, books: Mapping[str, _BotBook], symbol: str
 ) -> dict[str, tuple[int, int]]:
     """Each bot that holds the contract now and is offered no lot, with what it holds and what it wrote off.
 
-    A bot's lots are offered only while they add up to its position. After
-    a write-off they do not: the write-off closed no lot. So a bot that
-    wrote a position off and holds the contract again is offered none, and
-    a row for it cannot be matched to its lots.
+    A bot's lots are offered while they add up to its position, or exceed
+    it by exactly what the owner wrote off (``_bot_book``). When they do
+    neither, which lots are the bot's own is not known: it is offered
+    none, and a row for it cannot be matched to its lots.
     """
     return {
         sid: (int(held_now), written_off_contracts(conn, sid, symbol))
@@ -1047,6 +1179,19 @@ def _book_events(
     booked: list[tuple[str, OptionPositionEndedFacts]] = []
     # What outside orders hold of each contract, less what this run's events have taken of it.
     outside_left: dict[str, int] = {}
+    # The lots of each contract that left the books at the owner's word, less what this run's events took of them.
+    left_the_books: dict[str, list[HeldOptionLot]] = {}
+
+    def still_left(contract: OptionContract, books: Mapping[str, _BotBook] | None = None) -> list[HeldOptionLot]:
+        if contract.occ_symbol not in left_the_books:
+            left_the_books[contract.occ_symbol] = _lots_that_left_the_books(
+                conn, _bot_books(conn, account_id, contract) if books is None else books, contract.occ_symbol
+            )
+        return left_the_books[contract.occ_symbol]
+
+    def take_of_what_left(contract: OptionContract, taken: Sequence[tuple[str, int, int]]) -> None:
+        left_the_books[contract.occ_symbol] = _less_what_was_taken(still_left(contract), taken)
+
     for event in in_allocation_order(executed):
         contract, symbol = event.contract, event.contract.occ_symbol
         ref = f"option-activity:{event.activity_id}"
@@ -1060,7 +1205,7 @@ def _book_events(
         recorded = bookings(conn, key)
         if recorded:
             first = next(iter(recorded.values()))
-            owners = sorted({row["owner"] for row in first.allocation if row["owner"] != OUTSIDE_THE_BOOKS})
+            owners = sorted({row["owner"] for row in first.allocation if _is_a_bots(row["owner"])})
             if (first.ended_by, first.contract_symbol, first.position_change, first.event_date_ms) != (
                 ending.value, symbol, event.position_change, event.activity_date_ms
             ):
@@ -1085,6 +1230,14 @@ def _book_events(
                     whole = None
                 if whole is not None:
                     outside_left[symbol] = outside_left.get(symbol, whole.quantity) + taken_outside
+            # So is what it took of a position that had left the books at the owner's word.
+            taken_of_what_left = [
+                (row["owner"].removeprefix(LEFT_THE_BOOKS_PREFIX), row["sequence"], row["contracts"])
+                for row in allocation_rows
+                if row["owner"].startswith(LEFT_THE_BOOKS_PREFIX)
+            ]
+            if taken_of_what_left:
+                take_of_what_left(contract, taken_of_what_left)
         else:
             terms = contract_terms(conn, symbol)
             try:
@@ -1112,7 +1265,10 @@ def _book_events(
             if outside is not None:
                 lots.append(outside)
             try:
-                allocation = allocation_of(event, multiplier=100 if terms is None else terms.multiplier, lots=lots)
+                matched = _match(
+                    event, multiplier=100 if terms is None else terms.multiplier, lots=lots,
+                    left_the_books=[] if terms is None else still_left(contract, books),
+                )
             except OptionEventRefused as refused:
                 if terms is None:
                     # No bot can hold a contract the books never recorded: this is the owner's own
@@ -1127,50 +1283,32 @@ def _book_events(
                         },
                     )
                     continue
-                wrote_off = (
-                    _bots_that_wrote_it_off(conn, books, event)
+                unmatched = (
+                    _bots_whose_lots_cannot_be_offered(conn, books, symbol)
                     if refused.reason is OptionEventRefusal.CONTRACT_NOT_HELD
-                    else ()
+                    else {}
                 )
-                if wrote_off and event.kind is OptionEventKind.EXPIRED:
-                    # The owner took the position off the books before the row came, by a write-off
-                    # or by ending it at their word. The row moves nothing more, so nothing is
-                    # booked and nobody is held.
-                    logger.info(
-                        "an option expiry was read for a position that left the books at the owner's word; nothing is booked",
-                        extra={
-                            "action": "option_event_already_written_off", "account_id": account_id,
-                            "symbol": symbol, "activity_id": event.activity_id, "bots": list(wrote_off),
-                        },
-                    )
-                elif wrote_off:
+                # The rule was offered no lot, and a bot holds the contract: its lots and its
+                # position disagree. Each such bot is held by name, with what is true of it.
+                for sid, (held_now, written_off) in unmatched.items():
                     hold(
-                        OPTION_EVENT_CONTRACT_NOT_HELD_REASON_CODE, wrote_off,
-                        f"The position in {symbol} left the books at the owner's word before this row was read. "
-                        f"The row says it was {event.kind.value}: the shares and the cash that moved are on no "
-                        "bot's books.",
+                        OPTION_EVENT_CONTRACT_NOT_HELD_REASON_CODE, [sid],
+                        f"{sid} holds {held_now:+d} of {symbol} and wrote off {written_off:+d} of it earlier, and its "
+                        f"lots add up to neither, so this row, {event.kind.value} {event.position_change:+d}, "
+                        "cannot be matched to them. Nothing was booked.",
                     )
-                elif (
-                    refused.reason is OptionEventRefusal.CONTRACT_NOT_HELD
-                    and (unmatched := _bots_whose_lots_cannot_be_offered(conn, books, symbol))
-                ):
-                    # The rule was offered no lot, and a bot holds the contract: its lots and its
-                    # position disagree. Each such bot is held by name, with what is true of it.
-                    for sid, (held_now, written_off) in unmatched.items():
-                        hold(
-                            OPTION_EVENT_CONTRACT_NOT_HELD_REASON_CODE, [sid],
-                            f"{sid} holds {held_now:+d} of {symbol} and wrote off {written_off:+d} of it earlier, so "
-                            f"its lots do not add up to what it holds and this row, {event.kind.value} "
-                            f"{event.position_change:+d}, cannot be matched to them. Nothing was booked.",
-                        )
-                else:
+                if not unmatched:
                     hold(refused.reason.value, _holders(conn, symbol), str(refused))
                 continue
-            taken_by_bot = [lot for lot in allocation.lots if lot.owner != OUTSIDE_THE_BOOKS]
+            taken_by_bot = [lot for lot in matched.on_the_books if lot.owner != OUTSIDE_THE_BOOKS]
             owners = sorted({lot.owner for lot in taken_by_bot})
             if outside is not None:
                 outside_left[symbol] += sum(
-                    lot.option_quantity_change for lot in allocation.lots if lot.owner == OUTSIDE_THE_BOOKS
+                    lot.option_quantity_change for lot in matched.on_the_books if lot.owner == OUTSIDE_THE_BOOKS
+                )
+            if matched.left_the_books:
+                take_of_what_left(
+                    contract, [(lot.owner, lot.sequence, contracts) for lot, contracts in matched.left_the_books]
                 )
             if event.kind is not OptionEventKind.EXPIRED:
                 elsewhere = [
@@ -1183,8 +1321,8 @@ def _book_events(
                     )
                     continue
             notes = []
-            held = _BOUGHT if any(lot.option_quantity_change < 0 for lot in allocation.lots) else _SOLD
-            if event.kind is OptionEventKind.EXPIRED and held != _signed_side(event.position_change):
+            held = _BOUGHT if any(lot.option_quantity_change < 0 for lot in matched.on_the_books) else _SOLD
+            if matched.on_the_books and event.kind is OptionEventKind.EXPIRED and held != _signed_side(event.position_change):
                 notes.append({
                     "code": OPTION_EXPIRY_SIGNED_FOR_OTHER_SIDE_REASON_CODE,
                     "detail": f"The expiry of {symbol} reads {event.position_change:+d}, and the lots it closed were {held}.",
@@ -1216,13 +1354,45 @@ def _book_events(
                     "agrees": trade is not None and not differences,
                     "differences": list(differences),
                 }
-            allocation_rows = _allocation_rows(allocation.lots)
+            allocation_rows = _allocation_rows(matched.on_the_books)
             booked_as_of_ms = max(
                 [last_session_close_ms(event_date) - 1, *(lot.opened_at_ms for lot in taken_by_bot)]
             )
             opened_by = {sequence: order_ref for book in books.values() for sequence, order_ref in book.opened_by.items()}
             for row in allocation_rows:
                 row["opened_by"] = opened_by.get(row["sequence"]) if row["owner"] != OUTSIDE_THE_BOOKS else None
+            # What the row counts of a position that left the books at the owner's word closes no
+            # lot: the write-off took it off the books, or the owner's ending closed it at nothing.
+            gone_by_bot: dict[str, int] = {}
+            for lot, contracts in matched.left_the_books:
+                gone_by_bot[lot.owner] = gone_by_bot.get(lot.owner, 0) + contracts
+                allocation_rows.append({
+                    "owner": f"{LEFT_THE_BOOKS_PREFIX}{lot.owner}", "sequence": lot.sequence,
+                    "opened_at_ms": lot.opened_at_ms, "contracts": contracts, "option_quantity_change": 0,
+                    "share_quantity_change": 0, "cash_change_cents": 0, "opened_by": None,
+                })
+            if gone_by_bot and event.kind is OptionEventKind.EXPIRED:
+                # An expiry moves nothing more for them: nothing is booked and nobody is held.
+                logger.info(
+                    "an option expiry counts a position that left the books at the owner's word; nothing is booked for it",
+                    extra={
+                        "action": "option_event_already_written_off", "account_id": account_id,
+                        "symbol": symbol, "activity_id": event.activity_id, "bots": sorted(gone_by_bot),
+                    },
+                )
+            elif gone_by_bot:
+                # An exercise or an assignment moved shares and cash, and they are real.
+                notes += [
+                    {
+                        "code": OPTION_EVENT_CONTRACT_NOT_HELD_REASON_CODE, "bot": sid,
+                        "detail": (
+                            f"{contracts} of {symbol} left {sid}'s books at the owner's word before this row was "
+                            f"read. The row says they were {event.kind.value}: the shares and the cash that "
+                            "moved are on no bot's books."
+                        ),
+                    }
+                    for sid, contracts in sorted(gone_by_bot.items())
+                ]
 
         # Book each bot the record names and the books do not yet show. The record, never a second matching.
         multiplier = multiplier_of.get(symbol)

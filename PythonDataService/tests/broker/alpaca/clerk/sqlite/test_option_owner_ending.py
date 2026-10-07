@@ -599,6 +599,36 @@ async def test_an_exercise_read_after_an_ending_books_nothing_and_holds_that_bot
     assert not any(bot in (None, "b") for bot, _reason in holds)
 
 
+async def test_a_record_for_both_bots_that_comes_after_one_was_ended_books_the_other_bots_expiry(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    """Two bots held the call. The owner ended bot a's at their word. The record that comes late is for both.
+
+    Bot b's lot is still on the books and the expiry closes it: $194.00
+    lost, and the account agrees once more. Bot a's is closed already and
+    nothing is booked for it a second time.
+    """
+    resting = {sid: await paper.resting(sid) for sid in ("a", "b")}
+    for sid, order_ref in resting.items():
+        await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id=f"x-{sid}-buy")
+    _at(paper, SATURDAY_NOON)
+    paper.account.settled.add(SYMBOL)
+    await paper.pass_()
+    _at(paper, MONDAY_CLOSE)
+    await _press(paper.clerk, "a")
+    paper.account.option_events.rows = [_expiry_row(qty="-2")]
+
+    paper.wait(option_events.OPTION_EVENT_POLL_RETRY_MS)
+    result = await paper.pass_()
+
+    assert [(row["strategy_instance_id"], row["summary_code"]) for row in bookings(paper.repo)] == [
+        ("a", "OPTION_ENDED_BY_OWNER"), ("b", "OPTION_EXPIRED")
+    ]
+    assert paper.held("a") == {} and paper.held("b") == {}
+    assert fifo(paper.repo, "b").exact_realized_pnl == Decimal("-194")
+    assert option_holds(paper.repo) == {} and result.verdict == "clean"
+
+
 # ── the batch function's own refusals, on the books ──────────────────────
 
 CALL = "AAPL230721C00150000"
