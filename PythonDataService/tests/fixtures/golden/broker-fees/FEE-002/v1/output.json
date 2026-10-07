@@ -1,0 +1,132 @@
+{
+  "fills": {
+    "buy_2_at_1_50": {
+      "sec": "0",
+      "taf": "0",
+      "cat": "0.000600",
+      "orf": "0.030",
+      "occ": "0.050"
+    },
+    "sell_2_at_2_10": {
+      "sec": "0.008652000",
+      "taf": "0",
+      "cat": "0.000600",
+      "orf": "0.030",
+      "occ": "0.050"
+    },
+    "sell_10_of_a_ten_share_contract": {
+      "sec": "0.001133000",
+      "taf": "0",
+      "cat": "0.000300",
+      "orf": "0.150",
+      "occ": "0.250"
+    },
+    "spread_bought_leg": {
+      "sec": "0",
+      "taf": "0",
+      "cat": "0.000300",
+      "orf": "0.015",
+      "occ": "0.025"
+    },
+    "spread_sold_leg": {
+      "sec": "0.004532000",
+      "taf": "0",
+      "cat": "0.000300",
+      "orf": "0.015",
+      "occ": "0.025"
+    },
+    "sell_2_at_2_10_last_day_before_taf_pause": {
+      "sec": "0.008652000",
+      "taf": "0.00658",
+      "cat": "0.000600",
+      "orf": "0.030",
+      "occ": "0.050"
+    },
+    "sell_2_at_2_10_first_day_of_taf_pause": {
+      "sec": "0.008652000",
+      "taf": "0",
+      "cat": "0.000600",
+      "orf": "0.030",
+      "occ": "0.050"
+    },
+    "sell_2_at_2_10_taf_resumed": {
+      "sec": "0.008652000",
+      "taf": "0.00658",
+      "cat": "0.000600",
+      "orf": "0.030",
+      "occ": "0.050"
+    },
+    "buy_5_last_day_of_old_orf": {
+      "sec": "0",
+      "taf": "0",
+      "cat": null,
+      "orf": "0.11475",
+      "occ": "0.125"
+    },
+    "buy_5_first_day_of_new_orf": {
+      "sec": "0",
+      "taf": "0",
+      "cat": "0.001500",
+      "orf": "0.075",
+      "occ": "0.125"
+    },
+    "sell_1_before_sec_fee_resumed": {
+      "sec": "0.00",
+      "taf": "0.00329",
+      "cat": null,
+      "orf": "0.02375",
+      "occ": "0.025"
+    },
+    "sell_1_after_sec_fee_resumed": {
+      "sec": "0.010300000",
+      "taf": "0.00329",
+      "cat": null,
+      "orf": "0.02375",
+      "occ": "0.025"
+    },
+    "buy_1_before_alpaca_rows": {
+      "sec": "0",
+      "taf": "0",
+      "cat": null,
+      "orf": null,
+      "occ": null
+    },
+    "sell_1_before_alpaca_rows": {
+      "sec": "0.00",
+      "taf": "0.00329",
+      "cat": null,
+      "orf": null,
+      "occ": null
+    }
+  },
+  "sessions": {
+    "three_fills_on_2026_10_05": {
+      "sec": "0.01",
+      "taf": "0.00",
+      "cat": "0.01",
+      "orf": "0.21",
+      "occ": "0.35",
+      "total": "0.58"
+    },
+    "one_sale_last_day_before_taf_pause": {
+      "sec": "0.01",
+      "taf": "0.01",
+      "cat": "0.01",
+      "orf": "0.03",
+      "occ": "0.05",
+      "total": "0.11"
+    },
+    "one_sale_first_day_of_taf_pause": {
+      "sec": "0.01",
+      "taf": "0.00",
+      "cat": "0.01",
+      "orf": "0.03",
+      "occ": "0.05",
+      "total": "0.10"
+    }
+  },
+  "provision_cents": {
+    "one_bull_call_spread": 10,
+    "two_contracts_bought": 9
+  }
+}
