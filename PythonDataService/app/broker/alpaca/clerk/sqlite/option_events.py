@@ -91,7 +91,9 @@ the books' record of the order where every reduction is admitted
 (``uncertainty.decide_capability``), not of a hold. The owner's review of
 the order releases it only while it has filled nothing. A fill not yet
 booked stands in the way again, and a fill that cannot be booked is held
-for by name, whatever was reviewed before it.
+for by name, whatever was reviewed before it. Such a fill is never booked:
+its hold says so, and that the contract can be ended at the owner's word
+once it has expired. That ending's record names the order.
 
 **The owner's ending.** A contract past its last session that nothing will
 ever settle is ended at the owner's word (``option_owner_ending``):
@@ -186,6 +188,7 @@ from app.broker.alpaca.clerk.sqlite.option_event_folds import (
     OPTION_ENDING_SUMMARY_CODES,
     OPTION_EVENT_SHARES_EXECUTION_PREFIX,
     OPTION_POSITION_ENDED,
+    OWNER_WORD_OUTSIDE_ORDERS_NOT_BOOKED,
     OWNER_WORD_ROWS_BOOKED,
     OWNER_WORD_ROWS_NOT_BOOKED,
     REFUSALS_AN_ENDING_MAY_NAME,
@@ -2060,18 +2063,21 @@ def _book_outside_orders(
         reduces = _BOUGHT if order.side == "SELL" else _SOLD
 
         def hold(
-            detail: str, *, _unsettled: UnsettledOutsideOrder = unsettled, _ref: str = ref, _symbol: str = symbol,
+            detail: str, *, next_step: str = _FILL_NEVER_BOOKED_NEXT_STEP,
+            _unsettled: UnsettledOutsideOrder = unsettled, _ref: str = ref, _symbol: str = symbol,
         ) -> None:
             # The owner's review releases an order that has filled nothing, and nothing else: a
             # fill that is not booked is held for by name whatever was reviewed before it.
+            # ``next_step`` is what the owner does about it. A fill that will not be booked is not
+            # waited for: nothing books it, and the order's review does not release it.
             if not _unsettled.released_by_review:
                 holds.add(
                     OPTION_ORDER_NOT_OURS_REASON_CODE, _unsettled.against, ref=_ref, symbol=_symbol, date_ms=None,
-                    detail=detail,
+                    detail=detail, next_step=next_step,
                 )
 
         if unsettled.filled is None or not unsettled.ended:
-            hold(unsettled.sentence)
+            hold(unsettled.sentence, next_step=_ORDER_WORKING_NEXT_STEP)
             continue
         filled = unsettled.filled
         if order.filled_avg_price is None or order.filled_avg_price <= 0:
@@ -2276,14 +2282,46 @@ _NO_RECORD_CAME = (
 )
 
 
-def _why_no_settlement(set_aside: Sequence[_RowSetAside]) -> str:
+def _outside_orders_not_booked(
+    conn: sqlite3.Connection, holds: _Holds, sid: str, symbol: str
+) -> list[dict[str, str]]:
+    """Each order the Clerk did not place that stands unbooked against one bot in one contract, as an ending names it.
+
+    Its reference and what is known of it: the order, what it filled, why
+    that was not booked, and the price it states when it states one. The
+    words are the ones this run's hold for the order carries. An order the
+    books have settled is not among them: one booked against a bot as a
+    sale, and one that ended having filled nothing.
+    """
+    found = {
+        item.ref: item.detail
+        for (bot, reason_code), items in holds.items().items()
+        if bot == sid and reason_code == OPTION_ORDER_NOT_OURS_REASON_CODE
+        for item in items
+    }
+    named = []
+    for order in outside_orders_in(conn, symbol):
+        unsettled = unsettled_outside_order(conn, order)
+        if unsettled is None or sid not in unsettled.against:
+            continue
+        ref = outside_order_hold_ref(order.broker_order_id)
+        detail = found.get(ref, unsettled.sentence)
+        if unsettled.filled and order.filled_avg_price is not None and order.filled_avg_price > 0:
+            detail += f" The order states a price of {plain(Decimal(str(order.filled_avg_price)))} a share."
+        named.append({"ref": ref, "detail": detail})
+    return named
+
+
+def _why_no_settlement(set_aside: Sequence[_RowSetAside], outside: Sequence[Mapping[str, str]] = ()) -> str:
     """Why no settlement could be made, in the ending's own record.
 
     No row came. Or the rows that came end nothing of what was still held:
     one was refused, or one was booked and counted fewer contracts than
-    the books held. Each is said of the rows it is true of.
+    the books held. Each is said of the rows it is true of. ``outside`` is
+    each order the Clerk did not place that stands unbooked in the
+    contract: the record names it, and says where what it sold for is.
     """
-    if not set_aside:
+    if not set_aside and not outside:
         return _NO_RECORD_CAME
     said = []
     for booked, lead in (
@@ -2293,6 +2331,14 @@ def _why_no_settlement(set_aside: Sequence[_RowSetAside]) -> str:
         rows = [row for row in set_aside if row.booked is booked]
         if rows:
             said += [lead, *(f"Activity {row.activity_id}: {row.detail}" for row in rows)]
+    if outside:
+        said += [
+            "An order the Clerk did not place stands in this contract on these books, and was not booked against "
+            "this bot.",
+            *(one["detail"] for one in outside),
+            "Whatever such an order sold the contract for is in the account's cash and on no bot's books: what "
+            "this bot paid for the contract is booked as its loss in full.",
+        ]
     return (
         f"{' '.join(said)} A whole read of the account's option events, made after the close of the session that "
         "follows the contract's last, has no other record of it, and the broker holds none of it."
@@ -2324,6 +2370,7 @@ def _end_at_the_owners_word(
     *,
     booked: Sequence[tuple[str, OptionPositionEndedFacts]],
     rows_aside: Mapping[str, _RowSetAside],
+    holds: _Holds,
 ) -> tuple[OwnerEndingOutcome, tuple[str, OptionPositionEndedFacts] | None]:
     """End one bot's expired contract at the owner's word, if this read left it on the books with nothing to book it from.
 
@@ -2338,6 +2385,15 @@ def _end_at_the_owners_word(
     (``_RowSetAside``): refused by name, or booked whole. Such a row of the
     contract's settles nothing of what is still held and never will, so
     the ending goes ahead beside it and its record names it.
+
+    **An order the Clerk did not place** that sold the contract and that
+    the books recorded and could not book does not stand in the way
+    either: it filled more than the bots hold, or states no price, and
+    nothing will ever book it. After expiry the ending is the only exit
+    that state has. The amount is unchanged: what the contract cost is
+    booked as the loss. The record names the order with what this run's
+    hold says of it (``holds``), and says that what it sold for is in the
+    account's cash and on no bot's books.
 
     The outcome, and the new record when this call booked one.
     """
@@ -2377,6 +2433,7 @@ def _end_at_the_owners_word(
         }
         for lot in book.lots
     ]
+    outside = _outside_orders_not_booked(conn, holds, sid, symbol)
     try:
         record = _append_booking(
             repo, sid=sid, run_id=_run_of(conn, allocation[0]["opened_by"]), key=owner_ending_key(symbol),
@@ -2390,15 +2447,16 @@ def _end_at_the_owners_word(
             owner_word={
                 "operator": request.operator.strip(), "reason": (request.reason or "").strip() or None,
                 "said_at_ms": now_ms,
-                "why_no_settlement": _why_no_settlement(set_aside),
+                "why_no_settlement": _why_no_settlement(set_aside, outside),
                 # Each left out when it names none: the record of an ending no row came for is what it always was.
                 **{
-                    key: rows
-                    for key, rows in (
+                    key: named
+                    for key, named in (
                         (OWNER_WORD_ROWS_NOT_BOOKED, _rows_an_ending_names(set_aside, booked=False)),
                         (OWNER_WORD_ROWS_BOOKED, _rows_an_ending_names(set_aside, booked=True)),
+                        (OWNER_WORD_OUTSIDE_ORDERS_NOT_BOOKED, outside),
                     )
-                    if rows
+                    if named
                 },
             },
         )
@@ -2473,15 +2531,21 @@ def book_option_events(
             booked += _book_events(repo, conn, read, holds, simulated=simulated, rows_aside=rows_aside)
             if owner_ending is not None:
                 owner_outcome, ended = _end_at_the_owners_word(
-                    repo, conn, read, settled, owner_ending, booked=booked, rows_aside=rows_aside
+                    repo, conn, read, settled, owner_ending, booked=booked, rows_aside=rows_aside, holds=holds
                 )
                 if ended is not None:
                     booked.append(ended)
                     # The ended bot holds the contract no more: what this run found for it about
-                    # the rows its ending names was found before the ending, and is its no longer.
+                    # the rows and the outside orders its ending names was found before the ending,
+                    # and is its no longer.
+                    word = ended[1].owner_word or {}
                     holds.forget(
                         ended[0],
-                        [row["ref"] for row in (ended[1].owner_word or {}).get(OWNER_WORD_ROWS_NOT_BOOKED, ())],
+                        [
+                            named["ref"]
+                            for key in (OWNER_WORD_ROWS_NOT_BOOKED, OWNER_WORD_OUTSIDE_ORDERS_NOT_BOOKED)
+                            for named in word.get(key, ())
+                        ],
                     )
             if not whole:
                 # After the bookings: a bot this round has just emptied is waiting for nothing more.

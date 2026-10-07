@@ -444,6 +444,13 @@ _A_BOOKED_ROW = {
 }
 
 
+# An order the Clerk did not place that sold the contract and could not be booked, as an owner's ending names it.
+_AN_OUTSIDE_ORDER = {
+    "ref": "outside-order:by-hand-1",
+    "detail": "Order by-hand-1 to sell 5 of AAPL230721C00150000 filled 5, more than the bots' lots hold. It was not booked.",
+}
+
+
 def _beside(rows: Any) -> dict[str, Any]:
     """An owner's ending whose word names ``rows`` as the broker's rows that could not be booked."""
     return {**_ENDED_BY_OWNER, "owner_word": {**_THE_OWNERS_WORD, "rows_not_booked": rows}}
@@ -564,6 +571,20 @@ async def test_an_owners_ending_closes_the_lot_at_nothing_so_what_it_cost_is_the
             _LAST_SESSION_CLOSE, "a simulated account has no broker",
             id="a simulation's ending that names a row a broker's booking came from",
         ),
+        pytest.param(
+            _naming("outside_orders_not_booked", []), _LAST_SESSION_CLOSE, "names at least one",
+            id="a list of outside orders that names none",
+        ),
+        pytest.param(
+            _naming("outside_orders_not_booked", [{**_AN_OUTSIDE_ORDER, "detail": ""}]), _LAST_SESSION_CLOSE,
+            "what is known of it", id="an outside order with nothing said of it",
+        ),
+        pytest.param(
+            {**_naming("outside_orders_not_booked", [_AN_OUTSIDE_ORDER]), "simulated": True,
+             "simulation": _an_owner_endings_record()},
+            _LAST_SESSION_CLOSE, "a simulated account has no broker",
+            id="a simulation's ending that names an outside order",
+        ),
     ],
 )
 async def test_the_fold_refuses_an_owners_ending_that_is_not_whole_and_writes_nothing(
@@ -594,19 +615,22 @@ async def test_an_owners_ending_made_beside_rows_the_rule_refused_is_booked_with
         repo.close()
 
 
-async def test_an_owners_ending_made_beside_a_row_that_was_booked_is_booked_with_that_row_on_its_record(
+async def test_an_owners_ending_made_beside_a_booked_row_and_an_outside_order_is_booked_with_both_on_its_record(
     tmp_path: Path,
 ) -> None:
-    """The control for the refusals of a list of booked rows above: one thing differs from each, and this is booked."""
+    """The control for the refusals above of a list of booked rows and of a list of outside orders: one thing
+    differs from each, and this is booked."""
     repo, facts = await _booked_expiry(tmp_path)
     try:
+        word = {**_THE_OWNERS_WORD, "rows_booked": [_A_BOOKED_ROW], "outside_orders_not_booked": [_AN_OUTSIDE_ORDER]}
         repo.append_transition(
-            _as_for_bot_b(facts, observed_at_ms=_LAST_SESSION_CLOSE, **_naming("rows_booked", [_A_BOOKED_ROW]))
+            _as_for_bot_b(facts, observed_at_ms=_LAST_SESSION_CLOSE, **{**_ENDED_BY_OWNER, "owner_word": word})
         )
 
         assert held(repo, "bot-b") == {} and fifo(repo, "bot-b").exact_realized_pnl == Decimal("-388")
         [ended] = [json.loads(row["facts_json"]) for row in bookings(repo) if row["strategy_instance_id"] == "bot-b"]
         assert ended["owner_word"]["rows_booked"] == [_A_BOOKED_ROW]
+        assert ended["owner_word"]["outside_orders_not_booked"] == [_AN_OUTSIDE_ORDER]
     finally:
         repo.close()
 

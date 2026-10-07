@@ -57,6 +57,14 @@ record names could not be booked for. While one does, the expired
 contract's notice says so, and the ending is not offered
 (``owner_ending_not_possible_ref``): the press could only be refused.
 
+**An order the Clerk did not place that sold the contract** and that the
+books recorded and could not book does not stand in the way either. It
+filled more contracts than the bots hold, or states no price, and nothing
+will ever book it: after expiry the ending is the one exit that state has.
+What the contract cost is still booked as the loss in full. The record
+names the order, what it filled and the price it states, and says that
+what it sold for is in the account's cash and on no bot's books.
+
 **A row that comes afterwards** on a real account is still read for
 ``OWNER_ENDING_LATE_ROW_DAYS`` days. An expiry's row books nothing: the lot
 is closed. An exercise's or an assignment's row holds that bot by name: the

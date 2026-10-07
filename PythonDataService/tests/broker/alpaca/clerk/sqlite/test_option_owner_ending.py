@@ -25,6 +25,7 @@ import pytest
 from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
 from app.broker.alpaca.clerk.simulated_option_settlement import OwnersWord
 from app.broker.alpaca.clerk.sqlite import option_events
+from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.off_loop import run_inline
 from app.broker.alpaca.clerk.sqlite.option_event_books import recorded_option_endings
 from app.broker.alpaca.clerk.sqlite.option_events import OwnerEndingRefused, poll_option_events
@@ -91,7 +92,7 @@ from tests.broker.alpaca.clerk.sqlite.test_option_entry_and_exit import (  # noq
     _open,
     dry_run,
 )
-from tests.broker.alpaca.clerk.sqlite.test_option_events_on_an_account import _expiry_row, _holding_one_call
+from tests.broker.alpaca.clerk.sqlite.test_option_events_on_an_account import _expiry_row, _holding_one_call, _outside
 
 END = "end_expired_option"
 MINUTE = 60_000
@@ -1520,3 +1521,77 @@ async def test_what_the_page_offers_of_an_expired_contract_does_not_fail_when_pr
             assert held(repo, "bot-a")[symbol] > 0
     finally:
         repo.close()
+
+
+# ── an order the Clerk did not place sold the contract, and the books could not book it ──
+#
+# It filled more contracts than the bots hold, or states no price for its fill. Nothing will ever book it.
+# Before expiry that state has no way out. Afterwards the owner's ending is its one exit: what the contract
+# cost is booked as the loss in full, and the record names the order and says where what it sold for is.
+
+
+@pytest.mark.parametrize(
+    ("sale", "said_of_it"),
+    [
+        pytest.param(
+            {"quantity": 2, "filled": 2, "price": 0.40}, ("filled 2", "more than the bots' lots hold", "0.4 a share"),
+            id="it sold more contracts than the bots hold",
+        ),
+        pytest.param(
+            {"quantity": 1, "filled": 1, "price": None}, ("filled 1", "states no price"), id="it states no price for its fill"
+        ),
+    ],
+)
+async def test_the_owner_ends_a_contract_an_outside_order_sold_and_the_books_could_not_book_and_the_record_names_the_order(
+    paper: PaperOptions, sale: dict[str, Any], said_of_it: tuple[str, ...]  # noqa: F811
+) -> None:
+    """One call bought at $1.94. An order the Clerk did not place sells the contract, and its fill cannot be booked.
+
+    While that order worked, the notice said to wait for it. Once it has
+    ended with a fill nothing will book, the notice says so, and that the
+    contract can be ended at the owner's word once it has expired. After
+    Monday's close the ending is offered and goes ahead: -$194.00, the
+    whole of what the call cost. The record names the order, what it
+    filled and the price it states, and says that what it sold for is in
+    the account's cash and on no bot's books. It never says no record came.
+    """
+    await _holding_one_call(paper, "a")
+    await paper.pass_()
+    observe_external_order(paper.repo, order=_outside("alpaca-sells-1", status="new", symbol=SYMBOL, quantity=sale["quantity"]))
+    await paper.pass_()
+    while_it_worked = option_holds(paper.repo)[("a", "OPTION_ORDER_NOT_OURS")]["next_step"]
+    observe_external_order(paper.repo, order=_outside("alpaca-sells-1", status="filled", symbol=SYMBOL, **sale))
+    paper.account.settled.add(SYMBOL)
+    await paper.pass_()
+    assert bookings(paper.repo) == []
+    once_it_filled = option_holds(paper.repo)[("a", "OPTION_ORDER_NOT_OURS")]["next_step"]
+    assert END_EXPIRED_OPTION_LABEL in once_it_filled and END_EXPIRED_OPTION_LABEL not in while_it_worked
+    assert "Nothing will book this fill" in once_it_filled
+
+    _at(paper, max(paper.clock(), SATURDAY_NOON))
+    await paper.pass_()
+    _at(paper, MONDAY_CLOSE)
+    await paper.pass_()
+    shown = await _offered(paper.clerk, "a")
+    assert shown.available
+
+    ended = await _press(paper.clerk, "a", shown=shown)
+
+    assert ended.applied and paper.held() == {}
+    assert fifo(paper.repo, "a").exact_realized_pnl == Decimal("-194") and fifo(paper.repo, "a").open_lots == []
+    [booked] = bookings(paper.repo)
+    assert booked["summary_code"] == "OPTION_ENDED_BY_OWNER"
+    word = json.loads(booked["facts_json"])["owner_word"]
+    [order] = word["outside_orders_not_booked"]
+    assert order["ref"] == "outside-order:alpaca-sells-1"
+    for said in said_of_it:
+        assert said in order["detail"]
+    why = word["why_no_settlement"]
+    assert "alpaca-sells-1" in why and "no record of how" not in why
+    assert "in the account's cash and on no bot's books" in why
+    served = _served(paper.repo)[-1]
+    assert served.no_settlement_reason == why
+    assert "did not place" in served.headline and "alpaca-sells-1" not in served.headline
+    # The ended bot is held for nothing more, the order included, and the account agrees once more.
+    assert option_holds(paper.repo) == {}
+    assert (await paper.pass_()).verdict == "clean"
