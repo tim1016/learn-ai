@@ -26,7 +26,6 @@ from app.options.named_structures import NamedStructure
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteFault, QuoteSide, quote_fault
 from app.options.requirement import LegQuote, natural_net_price
 from app.options.resolver import (
-    DEFAULT_COHERENCE_WINDOW_MS,
     Chain,
     ContractsNotResolved,
     DividendOn,
@@ -56,9 +55,7 @@ _NOVEMBER = date(2026, 11, 20)
 _EXPIRIES = (_TUESDAY, _WEDNESDAY, _FRIDAY, _NEXT_FRIDAY, _NOVEMBER)
 # A small tree keeps the tests quick; the model's own accuracy is the pricer's tests' business.
 _MODEL = ModelInputs(rate=0.045, rate_source="test", dividends=(), dividends_source="test: none", tree_steps=101)
-_LIMITS = ResolverLimits(
-    max_quote_age_ms=5_000, coherence_window_ms=DEFAULT_COHERENCE_WINDOW_MS, entry_cutoff_lead_ms=60 * 60_000
-)
+_LIMITS = ResolverLimits(max_quote_age_ms=5_000, entry_cutoff_lead_ms=60 * 60_000)
 # How far the underlying's live quote has moved from the decision bar's close.
 _SINCE_THE_BAR_CLOSED = Decimal("0.11")
 
@@ -320,6 +317,11 @@ def test_a_dividend_before_expiry_reaches_the_model() -> None:
         pytest.param({"selector": "same_day"}, _TUESDAY, id="the decision's own date"),
         pytest.param({"selector": "min_dte", "days": 1}, _WEDNESDAY, id="at least a day out"),
         pytest.param({"selector": "min_dte", "days": 4}, _NEXT_FRIDAY, id="at least four days out, past this Friday's three"),
+        pytest.param(
+            {"selector": "min_dte", "days": 9},
+            _NEXT_FRIDAY,
+            id="days are the calendar's: next Friday is ten of them away and eight sessions",
+        ),
         pytest.param({"selector": "nearest_weekly"}, _FRIDAY, id="the week's last session"),
         pytest.param(
             {"selector": "absolute", "expiration_ms": option_expiry_anchor_ms(_NOVEMBER)}, _NOVEMBER, id="one named date"
@@ -365,7 +367,27 @@ def test_an_expiry_the_chain_does_not_list_is_refused_as_that(expiry: dict) -> N
     refused = _scene(expiries=(date(2026, 10, 2), _FRIDAY, _NEXT_FRIDAY)).refusal(_one("call", _AT_THE_MONEY, expiry=expiry))
 
     assert (refused.reason, refused.leg_ids) == (ResolverRefusal.EXPIRY_NOT_LISTED, ("only",))
-    assert refused.evidence.legs[0].expiry_ms is None
+    (leg,) = refused.evidence.legs
+    assert (leg.expiry_ms, leg.listed_strikes_thousandths, leg.candidates) == (None, (), ())
+    # What the rule chose from: the expiry gone by is not among them.
+    assert leg.listed_expiries_ms == (option_expiry_anchor_ms(_FRIDAY), option_expiry_anchor_ms(_NEXT_FRIDAY))
+
+
+def test_an_expiry_listed_on_a_day_with_no_session_is_refused_as_that() -> None:
+    """Good Friday 2026 is April 3rd. A chain that lists an expiry on it disagrees with the calendar."""
+    good_friday = date(2026, 4, 3)
+    scene = _scene(day=date(2026, 3, 30), expiries=(date(2026, 4, 10),))
+    on_no_session = Listing(_contract("call", 585, good_friday), multiplier=100, shares_delivered=100, exercise="american")
+    scene = replace(scene, chain=replace(scene.chain, listings=(*scene.chain.listings, on_no_session)))
+
+    refused = scene.refusal(_one("call", {"selector": "delta", "target": 0.3}, expiry={"selector": "min_dte", "days": 1}))
+
+    assert (refused.reason, refused.leg_ids) == (ResolverRefusal.EXPIRY_NOT_A_SESSION, ("only",))
+    assert (refused.evidence.legs[0].expiry_ms, refused.evidence.legs[0].candidates) == (option_expiry_anchor_ms(good_friday), ())
+    # The week's last session is the Thursday, which lists nothing, so the nearest weekly is the next week's.
+    assert scene.resolve(_one("call", _AT_THE_MONEY, expiry={"selector": "nearest_weekly"})).picked["only"].expiry_date == date(
+        2026, 4, 10
+    )
 
 
 @pytest.mark.parametrize(
@@ -389,6 +411,8 @@ def test_nothing_expiring_today_is_offered_after_the_entry_cutoff(
     else:
         refused = scene.refusal(today)
         assert (refused.reason, refused.leg_ids) == (ResolverRefusal.PAST_ENTRY_CUTOFF, ("only",))
+        # The expiry the rule came to is kept, though no strike was searched for.
+        assert (refused.evidence.legs[0].expiry_ms, refused.evidence.legs[0].candidates) == (option_expiry_anchor_ms(day), ())
     # The cutoff is each contract's own: one expiring another day is still offered.
     assert scene.resolve(later).picked["only"].expiry_date == date(2026, 12, 18)
 
@@ -427,6 +451,14 @@ def test_a_percent_rule_between_two_strikes_takes_the_one_nearer_the_money_then_
 
     assert below.picked["only"] == _contract("call", 599)
     assert at_the_price.picked["only"] == _contract("call", 587)
+
+
+def test_a_percent_is_the_decimal_it_was_written_as() -> None:
+    """A tenth of a percent above 500 is 500.50 exactly: 500 and 501 are as near, and 500 is nearer the money.
+    The float nearest 0.1 is a hair above it, which would put the target nearer 501."""
+    scene = _scene(money="500.00", listed=range(480, 521), watched=range(490, 511))
+
+    assert scene.resolve(_one("call", {"selector": "percent", "percent": 0.1})).picked["only"] == _contract("call", 500)
 
 
 @pytest.mark.parametrize(
@@ -584,6 +616,12 @@ _FRESH = _NOW - 400
             QuoteFault.OLD_GENERATION,
             id="several faults at once: the first asked",
         ),
+        pytest.param(
+            _quote("1.03", None, _NOW - 9_000, data_type=QuoteDataType.DELAYED),
+            True,
+            QuoteFault.ONE_SIDED,
+            id="whether it has arrived is asked before what it says",
+        ),
     ],
 )
 def test_a_quote_is_usable_or_fails_as_one_thing(quote: HeldQuote, needs_a_bid: bool, fault: QuoteFault | None) -> None:
@@ -591,26 +629,46 @@ def test_a_quote_is_usable_or_fails_as_one_thing(quote: HeldQuote, needs_a_bid: 
 
 
 @pytest.mark.parametrize(
-    ("changed", "fault"),
+    ("changed", "reason", "fault", "stands_as"),
     [
-        pytest.param({"ask": None}, QuoteFault.ONE_SIDED, id="one-sided"),
-        pytest.param({"bid": QuoteSide(Decimal("9.99"), 0)}, QuoteFault.CROSSED, id="crossed"),
-        pytest.param({"data_type": QuoteDataType.DELAYED}, QuoteFault.NOT_LIVE, id="delayed"),
-        pytest.param({"generation": _GENERATION - 1}, QuoteFault.OLD_GENERATION, id="an older generation"),
+        pytest.param(
+            {"bid": Decimal("9.99")}, ResolverRefusal.NO_USABLE_QUOTE, QuoteFault.CROSSED, PassedOver.QUOTE_FAULT, id="crossed"
+        ),
+        pytest.param(
+            {"data_type": QuoteDataType.DELAYED},
+            ResolverRefusal.NO_USABLE_QUOTE,
+            QuoteFault.NOT_LIVE,
+            PassedOver.QUOTE_FAULT,
+            id="delayed",
+        ),
+        pytest.param(
+            {"ask": None}, ResolverRefusal.SEARCH_INCOMPLETE, QuoteFault.ONE_SIDED, PassedOver.QUOTE_NOT_ARRIVED, id="one side yet"
+        ),
+        pytest.param(
+            {"generation": _GENERATION - 1},
+            ResolverRefusal.SEARCH_INCOMPLETE,
+            QuoteFault.OLD_GENERATION,
+            PassedOver.QUOTE_NOT_ARRIVED,
+            id="not quoted since the reconnect",
+        ),
     ],
 )
-def test_a_rule_naming_one_contract_whose_quote_is_faulty_is_refused_with_the_fault(changed: dict, fault: QuoteFault) -> None:
+def test_a_rule_naming_one_contract_is_refused_with_what_is_wrong_with_its_quote(
+    changed: dict, reason: ResolverRefusal, fault: QuoteFault, stands_as: PassedOver
+) -> None:
+    """A quote that fails a test is no usable quote. One that has not arrived whole leaves the search incomplete."""
     scene = _scene()
     contract = _contract("call", 585)
     quote = scene.quote_of(contract)
     if "bid" in changed:
-        changed = {"bid": QuoteSide(changed["bid"].price, quote.bid.received_ms)}
+        changed = {"bid": QuoteSide(changed["bid"], quote.bid.received_ms)}
 
     refused = scene.holding(contract, replace(quote, **changed)).refusal(_one("call", _AT_THE_MONEY))
 
-    assert (refused.reason, refused.fault, refused.leg_ids) == (ResolverRefusal.NO_USABLE_QUOTE, fault, ("only",))
+    assert (refused.reason, refused.fault, refused.leg_ids) == (reason, fault, ("only",))
+    assert refused.contract == contract
     (candidate,) = [c for c in refused.evidence.legs[0].candidates if c.contract == contract]
-    assert (candidate.fault, candidate.passed_over) == (fault, PassedOver.QUOTE_FAULT)
+    assert (candidate.fault, candidate.passed_over) == (fault, stands_as)
 
 
 def test_a_stale_quote_is_refused_as_stale() -> None:
@@ -644,12 +702,12 @@ def test_a_leg_to_be_sold_needs_a_bid_and_a_leg_to_be_bought_does_not() -> None:
 
 
 def test_a_nearest_rule_passes_over_a_faulty_quote_for_the_next_nearest_within_its_tolerance() -> None:
-    """2% above the price is 596.70. With 597's quote one-sided, 596 is the nearest usable, 0.70 away."""
+    """2% above the price is 596.70. With 597's quote stale, 596 is the nearest usable, 0.70 away."""
     scene = _scene()
     nearest = _contract("call", 597)
-    one_sided = scene.holding(nearest, replace(scene.quote_of(nearest), bid=None))
+    stale = scene.holding(nearest, _quote("0.10", "0.12", scene.selection_ms - 5_001))
 
-    resolution = one_sided.resolve(_one("call", {"selector": "percent", "percent": 2.0}))
+    resolution = stale.resolve(_one("call", {"selector": "percent", "percent": 2.0}))
 
     assert resolution.picked["only"] == _contract("call", 596)
     passed = {c.contract.strike: c.passed_over for c in resolution.evidence.legs[0].candidates}
@@ -665,11 +723,12 @@ def test_a_nearest_rule_whose_every_strike_in_tolerance_has_a_faulty_quote_is_re
     scene = _scene()
     for strike in range(594, 600):
         contract = _contract("call", strike)
-        scene = scene.holding(contract, replace(scene.quote_of(contract), ask=None))
+        scene = scene.holding(contract, replace(scene.quote_of(contract), data_type=QuoteDataType.FROZEN))
 
     refused = scene.refusal(_one("call", {"selector": "percent", "percent": 2.0}))
 
-    assert (refused.reason, refused.fault) == (ResolverRefusal.NO_USABLE_QUOTE, QuoteFault.ONE_SIDED)
+    assert (refused.reason, refused.fault) == (ResolverRefusal.NO_USABLE_QUOTE, QuoteFault.NOT_LIVE)
+    assert refused.contract == _contract("call", 597)
     assert "SPY261009C00597000" in str(refused) and "the 5 others" in str(refused)
 
 
@@ -702,13 +761,117 @@ def test_contracts_on_another_root_are_not_the_plans() -> None:
         pytest.param(
             "put", {"selector": "delta", "target": 0.98, "tolerance_delta": 0.2}, 601, id="a deep put delta past the window's top"
         ),
+        pytest.param(
+            "call",
+            {"selector": "delta", "target": 0.02, "tolerance_delta": 0.001},
+            601,
+            id="a call delta past the window's top, with nothing in the window within its tolerance",
+        ),
+        pytest.param(
+            "put",
+            {"selector": "delta", "target": 0.02, "tolerance_delta": 0.001},
+            569,
+            id="a put delta past the window's bottom, with nothing in the window within its tolerance",
+        ),
     ],
 )
 def test_a_target_outside_the_watched_window_is_search_incomplete(right: str, strike: dict, unsearched: int) -> None:
     refused = _scene().refusal(_one(right, strike))
 
     assert (refused.reason, refused.leg_ids) == (ResolverRefusal.SEARCH_INCOMPLETE, ("only",))
+    assert refused.contract == _contract(right, unsearched)
     assert _contract(right, unsearched).occ_symbol in str(refused)
+
+
+def test_the_money_outside_the_watched_window_is_search_incomplete() -> None:
+    """The bar closed at 605, a listed strike nobody is watching. The money is not the nearest watched strike."""
+    refused = _scene(money="605.00").refusal(_one("call", _AT_THE_MONEY))
+
+    assert (refused.reason, refused.contract) == (ResolverRefusal.SEARCH_INCOMPLETE, _contract("call", 605))
+
+
+def test_a_delta_past_the_last_listed_strike_is_nothing_close_enough(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every listed strike is watched and the 600 call, the last, has 0.12. Nothing is left unsearched."""
+    _deltas(monkeypatch, {599.0: 0.15, 600.0: 0.12})
+    whole_chain_watched = _scene(listed=range(570, 601))
+
+    refused = whole_chain_watched.refusal(_one("call", {"selector": "delta", "target": 0.02, "tolerance_delta": 0.05}))
+
+    assert (refused.reason, refused.fault, refused.contract) == (ResolverRefusal.NOTHING_CLOSE_ENOUGH, None, None)
+
+
+def test_a_delta_rule_with_no_quote_arrived_for_any_contract_is_search_incomplete() -> None:
+    """Nothing is known of any call: that is a window not yet filled, not a chain of faulty quotes."""
+    refused = _scene(watched=range(0)).refusal(_one("call", {"selector": "delta", "target": 0.3}))
+
+    assert (refused.reason, refused.fault) == (ResolverRefusal.SEARCH_INCOMPLETE, None)
+
+
+def test_a_strike_rule_with_nothing_listed_near_its_target_is_nothing_close_enough_whatever_is_watched() -> None:
+    """9% above the price is 637.65, and the chain's last strike is 610. No quote could change that."""
+    nothing_watched = _scene(watched=range(0))
+
+    refused = nothing_watched.refusal(_one("call", {"selector": "percent", "percent": 9.0}))
+
+    assert refused.reason is ResolverRefusal.NOTHING_CLOSE_ENOUGH
+
+
+@pytest.mark.parametrize(
+    ("beyond", "tolerance", "reason", "fault", "turns_on"),
+    [
+        pytest.param("no quote", 0.05, ResolverRefusal.SEARCH_INCOMPLETE, None, 595, id="within tolerance, an unwatched strike beyond"),
+        pytest.param("no quote", 0.01, ResolverRefusal.SEARCH_INCOMPLETE, None, 595, id="outside it, an unwatched strike beyond"),
+        pytest.param("one side", 0.05, ResolverRefusal.SEARCH_INCOMPLETE, QuoteFault.ONE_SIDED, 595, id="one not arrived beyond"),
+        pytest.param("usable", 0.01, ResolverRefusal.NO_USABLE_QUOTE, QuoteFault.STALE, 594, id="outside it, a usable strike beyond"),
+        pytest.param("not listed", 0.01, ResolverRefusal.NO_USABLE_QUOTE, QuoteFault.STALE, 594, id="outside it, the chain ends"),
+    ],
+)
+def test_a_delta_rule_looks_past_a_faulty_quote_toward_its_target(
+    monkeypatch: pytest.MonkeyPatch, beyond: str, tolerance: float, reason: ResolverRefusal, fault: QuoteFault | None, turns_on: int
+) -> None:
+    """The 593 call has 0.25 and the target is 0.20. The 594 call's quote is stale, so it is passed over, and
+    what lies beyond it decides: a contract nothing is known of could have been the pick."""
+    _deltas(monkeypatch, {592.0: 0.30, 593.0: 0.25, 595.0: 0.15})
+    scene = _scene(listed=range(560, 595 if beyond == "not listed" else 611))
+    scene = scene.holding(_contract("call", 594), _quote("0.40", "0.42", scene.selection_ms - 5_001))
+    next_one = _contract("call", 595)
+    if beyond == "no quote":
+        scene = scene.holding(next_one, None)
+    elif beyond == "one side":
+        scene = scene.holding(next_one, replace(scene.quote_of(next_one), bid=None))
+
+    refused = scene.refusal(_one("call", {"selector": "delta", "target": 0.20, "tolerance_delta": tolerance}))
+
+    assert (refused.reason, refused.fault, refused.contract) == (reason, fault, _contract("call", turns_on))
+
+
+@pytest.mark.parametrize("beyond", ["usable", "not listed"])
+def test_a_delta_rule_keeps_its_pick_when_nothing_unknown_lies_past_the_faulty_quote(
+    monkeypatch: pytest.MonkeyPatch, beyond: str
+) -> None:
+    """As above with the 593 call inside the tolerance: past the stale 594 is a usable 595 beyond the target,
+    or the end of the chain. Either way nothing could have been nearer."""
+    _deltas(monkeypatch, {592.0: 0.30, 593.0: 0.25, 595.0: 0.15})
+    scene = _scene(listed=range(560, 595 if beyond == "not listed" else 611))
+    scene = scene.holding(_contract("call", 594), _quote("0.40", "0.42", scene.selection_ms - 5_001))
+
+    resolution = scene.resolve(_one("call", {"selector": "delta", "target": 0.20, "tolerance_delta": 0.05}))
+
+    assert resolution.picked["only"] == _contract("call", 593)
+    passed = {c.contract.strike: c.passed_over for c in resolution.evidence.legs[0].candidates}
+    assert (passed[Decimal(593)], passed[Decimal(594)]) == (None, PassedOver.QUOTE_FAULT)
+
+
+def test_a_put_delta_rule_looks_past_a_faulty_quote_down_the_ladder(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A put's delta shrinks as the strike falls: from the 577 put at 0.25 a target of 0.20 lies below it."""
+    _deltas(monkeypatch, {578.0: -0.30, 577.0: -0.25})
+    scene = _scene()
+    scene = scene.holding(_contract("put", 576), _quote("0.40", "0.42", scene.selection_ms - 5_001))
+    scene = scene.holding(_contract("put", 575), None)
+
+    refused = scene.refusal(_one("put", {"selector": "delta", "target": 0.20}))
+
+    assert (refused.reason, refused.contract) == (ResolverRefusal.SEARCH_INCOMPLETE, _contract("put", 575))
 
 
 def test_a_delta_at_the_windows_edge_is_search_incomplete_even_inside_its_tolerance(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -725,30 +888,50 @@ def test_a_delta_at_the_windows_edge_is_search_incomplete_even_inside_its_tolera
     assert _scene(listed=range(560, 601)).resolve(_one("call", rule)).picked["only"] == _contract("call", 600)
 
 
-def test_a_watched_contract_with_no_quote_yet_stops_the_search() -> None:
+@pytest.mark.parametrize(
+    ("arrived", "fault"),
+    [
+        pytest.param("nothing", None, id="no quote yet"),
+        pytest.param("one side", QuoteFault.ONE_SIDED, id="its ask and not its bid"),
+        pytest.param("neither side", QuoteFault.ONE_SIDED, id="a quote with neither side in it"),
+        pytest.param("before the reconnect", QuoteFault.OLD_GENERATION, id="only a quote from before the reconnect"),
+    ],
+)
+def test_a_watched_contract_whose_quote_has_not_arrived_stops_the_search(arrived: str, fault: QuoteFault | None) -> None:
+    """2% above the price is 596.70, and 597 is the nearest. Nothing is known of it yet, so 596 is not picked
+    in its place as it would be were 597's quote faulty."""
     scene = _scene()
     just_added = _contract("call", 597)
+    quote = scene.quote_of(just_added)
+    held = {
+        "nothing": None,
+        "one side": replace(quote, bid=None),
+        "neither side": replace(quote, bid=None, ask=None),
+        "before the reconnect": replace(quote, generation=_GENERATION - 1),
+    }[arrived]
 
-    refused = scene.holding(just_added, None).refusal(_one("call", {"selector": "percent", "percent": 2.0}))
+    refused = scene.holding(just_added, held).refusal(_one("call", {"selector": "percent", "percent": 2.0}))
 
-    assert refused.reason is ResolverRefusal.SEARCH_INCOMPLETE
+    assert (refused.reason, refused.fault, refused.contract) == (ResolverRefusal.SEARCH_INCOMPLETE, fault, just_added)
+    assert just_added.occ_symbol in str(refused)
     (candidate,) = [c for c in refused.evidence.legs[0].candidates if c.contract == just_added]
-    assert candidate.passed_over is PassedOver.NO_QUOTE_HELD
+    assert (candidate.passed_over, candidate.fault) == (PassedOver.QUOTE_NOT_ARRIVED, fault)
 
 
 def test_nothing_close_enough_needs_usable_quotes_on_both_sides_of_a_delta_target(monkeypatch: pytest.MonkeyPatch) -> None:
     """Between 584 at 0.56 and 585 at 0.44 nothing is within 0.05 of 0.50. With 585's quote faulty the
-    search is not over: the reason is the quote, not the chain."""
-    _deltas(monkeypatch, {584.0: 0.56, 585.0: 0.44})
+    reason is the quote, not the chain."""
+    _deltas(monkeypatch, {584.0: 0.56, 585.0: 0.44, 586.0: 0.30})
     rule = {"selector": "delta", "target": 0.5, "tolerance_delta": 0.05}
     scene = _scene()
     next_strike = _contract("call", 585)
+    crossed = replace(scene.quote_of(next_strike), bid=QuoteSide(Decimal("99"), scene.selection_ms - 400))
 
     bracketed = scene.refusal(_one("call", rule))
-    faulty = scene.holding(next_strike, replace(scene.quote_of(next_strike), ask=None)).refusal(_one("call", rule))
+    faulty = scene.holding(next_strike, crossed).refusal(_one("call", rule))
 
-    assert (bracketed.reason, bracketed.fault) == (ResolverRefusal.NOTHING_CLOSE_ENOUGH, None)
-    assert (faulty.reason, faulty.fault) == (ResolverRefusal.NO_USABLE_QUOTE, QuoteFault.ONE_SIDED)
+    assert (bracketed.reason, bracketed.fault, bracketed.contract) == (ResolverRefusal.NOTHING_CLOSE_ENOUGH, None, None)
+    assert (faulty.reason, faulty.fault, faulty.contract) == (ResolverRefusal.NO_USABLE_QUOTE, QuoteFault.CROSSED, next_strike)
 
 
 def test_a_contract_the_model_cannot_solve_is_unusable_for_a_delta_rule_and_usable_for_the_others(
@@ -863,6 +1046,51 @@ def test_one_side_of_one_quote_received_long_before_the_rest_is_enough_to_refuse
     assert refused.reason is ResolverRefusal.OBSERVATIONS_APART
 
 
+def test_two_legs_too_far_apart_are_refused_though_each_is_within_the_window_of_the_underlying() -> None:
+    """The bought leg's quote came 1,100 ms before the underlying's and the sold leg's 1,100 ms after it."""
+    scene = _scene()
+    bought, sold = _contract("call", 585), _contract("call", 590)
+    at_the_underlying = scene.selection_ms - 1_500
+    scene = replace(scene, underlying=replace(scene.underlying, quote=_received(scene.underlying.quote, at_the_underlying)))
+
+    def with_legs_received(before_ms: int, after_ms: int) -> _Scene:
+        return scene.holding(bought, _received(scene.quote_of(bought), at_the_underlying - before_ms)).holding(
+            sold, _received(scene.quote_of(sold), at_the_underlying + after_ms)
+        )
+
+    refused = with_legs_received(1_100, 1_100).refusal(_spread())
+
+    assert (refused.reason, refused.leg_ids) == (ResolverRefusal.OBSERVATIONS_APART, ("long_call", "short_call"))
+    assert with_legs_received(1_000, 1_000).resolve(_spread()).picked["short_call"] == sold
+
+
+def test_an_ask_received_long_before_the_rest_is_enough_to_refuse() -> None:
+    scene = _scene()
+    contract = _contract("call", 585)
+    quote = scene.quote_of(contract)
+    old_ask = replace(quote, ask=QuoteSide(quote.ask.price, scene.selection_ms - 3_000))
+
+    refused = scene.holding(contract, old_ask).refusal(_one("call", _AT_THE_MONEY))
+
+    assert refused.reason is ResolverRefusal.OBSERVATIONS_APART
+
+
+@pytest.mark.parametrize("close", ["NaN", "0", "-585.00", "Infinity"])
+def test_a_bar_close_that_is_no_price_is_the_callers_mistake_not_a_refusal(close: str) -> None:
+    scene = _scene()
+
+    with pytest.raises(ValueError, match="a price above zero"):
+        replace(scene, underlying=replace(scene.underlying, pricing_bar_close=Decimal(close))).resolve(_one("call", _AT_THE_MONEY))
+
+
+def test_a_selection_cannot_come_before_the_close_of_the_bar_it_was_decided_on() -> None:
+    scene = _scene()
+
+    with pytest.raises(ValueError, match="before the close of the bar"):
+        replace(scene, decision_bar_close_ms=scene.selection_ms + 1).resolve(_one("call", _AT_THE_MONEY))
+    assert replace(scene, decision_bar_close_ms=scene.selection_ms).resolve(_one("call", _AT_THE_MONEY)).picked
+
+
 # ---- From a plan to a checked structure ------------------------------------
 
 
@@ -907,6 +1135,49 @@ def test_the_evidence_holds_what_the_pick_was_made_from() -> None:
     assert [c.passed_over for c in leg.candidates].count(None) == 1
 
 
+def test_the_evidence_holds_the_ladder_a_count_along_the_strikes_was_made_on() -> None:
+    """A 585.50 call is listed and nobody watches it. Two strikes up from the money at 585 is 586, not 587, and
+    only the chain's own list says why."""
+    scene = _scene()
+    between = Listing(_contract("call", "585.5"), multiplier=100, shares_delivered=100, exercise="american")
+    not_standard = Listing(_contract("call", "586.5"), multiplier=10, shares_delivered=100, exercise="american")
+    scene = replace(scene, chain=replace(scene.chain, listings=(*scene.chain.listings, between, not_standard)))
+
+    resolution = scene.resolve(_one("call", {"selector": "atm_offset", "offset": 2}))
+
+    (leg,) = resolution.evidence.legs
+    assert resolution.picked["only"] == _contract("call", 586)
+    assert leg.listed_strikes_thousandths == tuple(sorted([*range(560_000, 611_000, 1_000), 585_500]))
+    assert leg.listed_expiries_ms == tuple(option_expiry_anchor_ms(day) for day in _EXPIRIES)
+    # The candidates are the watched ones only: the 585.50 is on the ladder and not among them.
+    assert Decimal("585.5") not in {c.contract.strike for c in leg.candidates}
+
+
+def test_a_leg_that_asks_for_no_delta_is_not_told_the_model_could_not_solve_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The first leg picks by delta, so the model is asked about every call, and cannot solve the 585. The
+    second leg names the 590: to it the 585 is one more contract that was not the pick."""
+    _deltas(monkeypatch, {584.0: 0.52, 585.0: AmericanIvStatus.BELOW_EXERCISE_VALUE, 590.0: 0.30})
+    plan = _plan(
+        _leg("by_delta", "call", {"selector": "delta", "target": 0.5}),
+        _leg("named", "call", {"selector": "absolute", "strike": 590.0}, position="short"),
+    )
+
+    by_delta, named = _scene().resolve(plan).evidence.legs
+
+    def unsolved(leg: resolver.LegEvidence) -> resolver.Candidate:
+        (candidate,) = [c for c in leg.candidates if c.contract == _contract("call", 585)]
+        return candidate
+
+    assert (unsolved(by_delta).passed_over, unsolved(by_delta).priced.status) == (
+        PassedOver.NOT_SOLVED,
+        AmericanIvStatus.BELOW_EXERCISE_VALUE,
+    )
+    assert (unsolved(named).passed_over, unsolved(named).priced) == (PassedOver.NOT_THE_NEAREST, None)
+    # The pick is priced whichever rule picked it.
+    (picked,) = [c for c in named.candidates if c.passed_over is None]
+    assert (picked.contract, picked.priced.delta) == (_contract("call", 590), 0.30)
+
+
 def test_a_plan_with_no_option_leg_has_nothing_to_resolve() -> None:
     stock = ActionPlan.model_validate(
         {
@@ -931,8 +1202,7 @@ def _spread() -> ActionPlan:
 def _recheck(scene: _Scene, resolution: resolver.Resolution, later_ms: int) -> resolver.Recheck:
     return recheck(
         resolution,
-        _spread(),
-        chain=scene.chain,
+        watched=scene.chain.watched,
         underlying=scene.underlying,
         feed=scene.feed,
         limits=scene.limits,
@@ -954,25 +1224,111 @@ def test_a_recheck_passes_while_the_picked_quotes_still_stand_and_keeps_what_it_
     assert seen.underlying_quote == scene.underlying.quote
 
 
-def test_a_recheck_refuses_once_a_picked_quote_has_aged_past_the_limit() -> None:
+def _received(quote: HeldQuote, received_ms: int, **changes: object) -> HeldQuote:
+    """The same prices, both sides received again at ``received_ms``."""
+    return replace(
+        quote, bid=QuoteSide(quote.bid.price, received_ms), ask=QuoteSide(quote.ask.price, received_ms), **changes
+    )
+
+
+def _ticked_again(scene: _Scene, received_ms: int, *, but: tuple[OptionContract, ...] = (), **changes: object) -> _Scene:
+    """The scene with the underlying's quote and every option's received again at ``received_ms``, but for ``but``."""
+    watched = {
+        symbol: held
+        if symbol in {contract.occ_symbol for contract in but}
+        else replace(held, quote=_received(held.quote, received_ms, **changes))
+        for symbol, held in scene.chain.watched.items()
+    }
+    return replace(
+        scene,
+        chain=replace(scene.chain, watched=watched),
+        underlying=replace(scene.underlying, quote=_received(scene.underlying.quote, received_ms, **changes)),
+    )
+
+
+def test_a_recheck_refuses_a_picked_leg_whose_quote_has_aged_past_the_limit_and_names_the_leg() -> None:
+    """Everything else ticked again a moment before the recheck; the sold leg's quote is as it was at the selection."""
+    scene = _scene()
+    resolution = scene.resolve(_spread())
+    sold = _contract("call", 590)
+
+    def recheck_at(later_ms: int) -> resolver.Recheck:
+        return _recheck(_ticked_again(scene, scene.selection_ms + later_ms - 300, but=(sold,)), resolution, later_ms)
+
+    with pytest.raises(ContractsNotResolved) as refused:
+        recheck_at(4_601)
+
+    # The sold leg's quote was received 400 ms before the selection: 5,001 ms before this recheck.
+    assert (refused.value.reason, refused.value.fault) == (ResolverRefusal.NO_USABLE_QUOTE, QuoteFault.STALE)
+    assert (refused.value.leg_ids, refused.value.contract) == (("short_call",), sold)
+    assert refused.value.recheck.recheck_ms == scene.selection_ms + 4_601
+    assert refused.value.evidence is resolution.evidence
+    # A moment sooner it is as old as the limit and no older, and still within the window of the rest.
+    with pytest.raises(ContractsNotResolved) as apart:
+        recheck_at(4_600)
+    assert apart.value.reason is ResolverRefusal.OBSERVATIONS_APART
+
+
+def test_a_recheck_refuses_once_the_underlyings_quote_has_aged_past_the_limit() -> None:
     scene = _scene()
     resolution = scene.resolve(_spread())
 
     with pytest.raises(ContractsNotResolved) as refused:
         _recheck(scene, resolution, 4_601)
 
-    # Every quote here was received 400 ms before the selection; the underlying's is asked first.
     assert (refused.value.reason, refused.value.fault) == (ResolverRefusal.UNDERLYING_QUOTE_UNUSABLE, QuoteFault.STALE)
-    assert refused.value.recheck.recheck_ms == scene.selection_ms + 4_601
-    assert refused.value.evidence is resolution.evidence
+    assert (refused.value.leg_ids, refused.value.contract) == ((), None)
+
+
+def test_a_recheck_asks_a_bid_of_a_leg_to_be_sold_and_not_of_one_to_be_bought() -> None:
+    scene = _scene()
+    resolution = scene.resolve(_spread())
+    bought, sold = _contract("call", 585), _contract("call", 590)
+
+    def without_a_bid(contract: OptionContract) -> _Scene:
+        quote = scene.quote_of(contract)
+        return scene.holding(contract, replace(quote, bid=QuoteSide(Decimal(0), quote.bid.received_ms)))
+
+    assert resolution.sold == {"short_call"}
+    assert _recheck(without_a_bid(bought), resolution, 1_500).quotes["long_call"].bid.price == 0
+    with pytest.raises(ContractsNotResolved) as refused:
+        _recheck(without_a_bid(sold), resolution, 1_500)
+    assert (refused.value.reason, refused.value.fault, refused.value.leg_ids) == (
+        ResolverRefusal.NO_USABLE_QUOTE,
+        QuoteFault.BID_NOT_ABOVE_ZERO,
+        ("short_call",),
+    )
+
+
+def test_a_recheck_refuses_a_reconnect_since_the_selection_though_every_quote_has_arrived_again() -> None:
+    """ADR 0067: a generation change between the selection and the recheck is refused even when the new
+    generation is already healthy. Every quote here is fresh, live, and of the new generation."""
+    scene = _scene()
+    resolution = scene.resolve(_spread())
+    reconnected = replace(
+        _ticked_again(scene, scene.selection_ms + 1_400, generation=_GENERATION + 1),
+        feed=FeedState(generation=_GENERATION + 1, unhealthy=None),
+    )
+
+    with pytest.raises(ContractsNotResolved) as refused:
+        _recheck(reconnected, resolution, 1_500)
+
+    assert (refused.value.reason, refused.value.fault, refused.value.leg_ids) == (ResolverRefusal.FEED_RECONNECTED, None, ())
+    # The same quotes on the generation the picks were made in pass.
+    assert _recheck(_ticked_again(scene, scene.selection_ms + 1_400), resolution, 1_500).recheck_ms == scene.selection_ms + 1_500
 
 
 @pytest.mark.parametrize(
     ("change", "reason", "fault"),
     [
-        pytest.param("lost its bid", ResolverRefusal.NO_USABLE_QUOTE, QuoteFault.BID_NOT_ABOVE_ZERO, id="the sold leg has no bid now"),
-        pytest.param("not held", ResolverRefusal.SEARCH_INCOMPLETE, None, id="the sold leg's quote is no longer held"),
-        pytest.param("reconnected", ResolverRefusal.UNDERLYING_QUOTE_UNUSABLE, QuoteFault.OLD_GENERATION, id="a reconnect since"),
+        pytest.param("not held", ResolverRefusal.NO_USABLE_QUOTE, None, id="the sold leg's quote is no longer held"),
+        pytest.param("one side", ResolverRefusal.NO_USABLE_QUOTE, QuoteFault.ONE_SIDED, id="the sold leg has lost its ask"),
+        pytest.param(
+            "another generation",
+            ResolverRefusal.NO_USABLE_QUOTE,
+            QuoteFault.OLD_GENERATION,
+            id="the sold leg's quote is of a generation the feed is not in",
+        ),
         pytest.param("unhealthy", ResolverRefusal.FEED_UNHEALTHY, None, id="the feed went unhealthy"),
         pytest.param("apart", ResolverRefusal.OBSERVATIONS_APART, None, id="one leg ticked and the rest did not"),
     ],
@@ -985,18 +1341,11 @@ def test_a_recheck_refuses_when_the_picks_no_longer_stand(
     sold = _contract("call", 590)
     quote = scene.quote_of(sold)
     later = {
-        "lost its bid": lambda: scene.holding(sold, replace(quote, bid=QuoteSide(Decimal(0), quote.bid.received_ms))),
         "not held": lambda: scene.holding(sold, None),
-        "reconnected": lambda: replace(scene, feed=FeedState(generation=_GENERATION + 1, unhealthy=None)),
+        "one side": lambda: scene.holding(sold, replace(quote, ask=None)),
+        "another generation": lambda: scene.holding(sold, replace(quote, generation=_GENERATION + 1)),
         "unhealthy": lambda: replace(scene, feed=FeedState(generation=_GENERATION, unhealthy="data farm down")),
-        "apart": lambda: scene.holding(
-            sold,
-            replace(
-                quote,
-                bid=QuoteSide(quote.bid.price, scene.selection_ms + 1_900),
-                ask=QuoteSide(quote.ask.price, scene.selection_ms + 1_900),
-            ),
-        ),
+        "apart": lambda: scene.holding(sold, _received(quote, scene.selection_ms + 1_900)),
     }[change]()
 
     with pytest.raises(ContractsNotResolved) as refused:
@@ -1004,3 +1353,12 @@ def test_a_recheck_refuses_when_the_picks_no_longer_stand(
 
     assert (refused.value.reason, refused.value.fault) == (reason, fault)
     assert refused.value.recheck is not None
+
+
+def test_a_recheck_cannot_come_before_the_selection_it_rechecks() -> None:
+    scene = _scene()
+    resolution = scene.resolve(_spread())
+
+    with pytest.raises(ValueError, match="before the selection"):
+        _recheck(scene, resolution, -1)
+    assert _recheck(scene, resolution, 0).recheck_ms == scene.selection_ms

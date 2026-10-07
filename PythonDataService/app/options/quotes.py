@@ -7,6 +7,10 @@ callback delivered it, so each side has its own age.
 A quote is usable when every test here passes. The tests are asked in one
 order and the first that fails is the quote's fault, so a quote is refused as
 one thing: an old generation's quote is not also called stale.
+
+The first two tests ask whether a whole quote has arrived since the last
+reconnect. One that has not is ``NOT_YET_ARRIVED``: there is nothing wrong
+with its market, and nothing is known of it yet.
 """
 
 from __future__ import annotations
@@ -49,10 +53,10 @@ class QuoteFault(StrEnum):
 
     # It arrived before the last reconnect.
     OLD_GENERATION = "QUOTE_OLD_GENERATION"
+    # A side has not arrived.
+    ONE_SIDED = "QUOTE_ONE_SIDED"
     # It is delayed or frozen data.
     NOT_LIVE = "QUOTE_NOT_LIVE"
-    # Only a bid, or only an ask, has arrived.
-    ONE_SIDED = "QUOTE_ONE_SIDED"
     # A side is not a number, or is below zero.
     NOT_A_PRICE = "QUOTE_NOT_A_PRICE"
     # The ask is zero: nothing is offered.
@@ -63,6 +67,10 @@ class QuoteFault(StrEnum):
     CROSSED = "QUOTE_CROSSED"
     # A side is older than the limit, or was received after the moment it is used at.
     STALE = "QUOTE_STALE"
+
+
+# The faults of a quote that has not arrived whole in the current generation.
+NOT_YET_ARRIVED = frozenset({QuoteFault.OLD_GENERATION, QuoteFault.ONE_SIDED})
 
 
 def quote_fault(
@@ -76,10 +84,10 @@ def quote_fault(
     """
     if quote.generation != generation:
         return QuoteFault.OLD_GENERATION
-    if quote.data_type is not QuoteDataType.LIVE:
-        return QuoteFault.NOT_LIVE
     if quote.bid is None or quote.ask is None:
         return QuoteFault.ONE_SIDED
+    if quote.data_type is not QuoteDataType.LIVE:
+        return QuoteFault.NOT_LIVE
     bid, ask = quote.bid.price, quote.ask.price
     if not (bid.is_finite() and ask.is_finite()) or bid < 0 or ask < 0:
         return QuoteFault.NOT_A_PRICE
