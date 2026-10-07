@@ -86,6 +86,11 @@ from app.broker.alpaca.clerk.sqlite.manual_ticket_folds import (
     rederive_manual_ticket_state_for_order,
     sync_manual_ticket_effect_state,
 )
+from app.broker.alpaca.clerk.sqlite.option_event_folds import (
+    OPTION_POSITION_ENDED,
+    OptionEventBookWrites,
+    fold_option_position_ended,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import normalized_hold_reason_code
 from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
     account_hold_envelope,
@@ -1710,3 +1715,20 @@ DEFAULT_FOLD_REGISTRY.register("ENTRY_TERMINAL_CONFIRMED", lambda _conn, _payloa
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_REQUESTED", lambda _conn, _payload: None)
 
 DEFAULT_FOLD_REGISTRY.register("EXIT_MARKET_HOLD", lambda _conn, _payload: None)
+
+
+def _fold_option_position_ended(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """An option position ended with no order of the bot's (ADR 0076 decision 22): its lot closes, its shares arrive."""
+    fold_option_position_ended(
+        conn,
+        payload,
+        books=OptionEventBookWrites(
+            insert_command=_insert_command_row,
+            insert_receipt=_insert_receipt_row,
+            move_position=_apply_attributed_position_delta,
+            this_sequence=_this_transition_sequence,
+        ),
+    )
+
+
+DEFAULT_FOLD_REGISTRY.register(OPTION_POSITION_ENDED, _fold_option_position_ended)

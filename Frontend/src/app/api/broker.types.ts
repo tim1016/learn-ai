@@ -199,6 +199,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/option-event-holds/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Acknowledge Bot Option Event Hold
+         * @description Acknowledge one bot's option-event notice, once the books agree with the broker (#2913).
+         */
+        post: operations["acknowledge_bot_option_event_hold_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__option_event_holds_acknowledge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/recovery-actions/check": {
         parameters: {
             query?: never;
@@ -268,6 +288,26 @@ export interface paths {
         get: operations["get_bot_snapshot_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__snapshot_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/option-event-holds/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Acknowledge Account Option Event Hold
+         * @description Acknowledge one option-event notice of the account's own, once the books agree with the broker (#2913).
+         */
+        post: operations["acknowledge_account_option_event_hold_api_alpaca_clerk_sqlite_accounts__account_id__option_event_holds_acknowledge_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2451,6 +2491,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/option-event-holds/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Custody Bot Option Event Hold Ack
+         * @description Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/option-event-holds/acknowledge (custody_command).
+         */
+        post: operations["fleet_custody_bot_option_event_hold_ack_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__option_event_holds_acknowledge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/recovery-actions/check": {
         parameters: {
             query?: never;
@@ -2505,6 +2565,26 @@ export interface paths {
          * @description Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/runs/stop (custody_command).
          */
         post: operations["fleet_custody_runs_stop_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__runs_stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/option-event-holds/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Custody Option Event Hold Ack
+         * @description Fleet-routed POST /accounts/{account_id}/custody/option-event-holds/acknowledge (custody_command).
+         */
+        post: operations["fleet_custody_option_event_hold_ack_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_option_event_holds_acknowledge_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8455,6 +8535,8 @@ export interface components {
          * @description One run of a bot. ``run_id`` is the run's own identity.
          */
         BotHistoryRun: {
+            /** Option Endings */
+            option_endings?: components["schemas"]["OptionEndingView"][] | null;
             orders: components["schemas"]["BotHistoryOrders"];
             outcome: components["schemas"]["BotHistoryOutcome"] | null;
             /** Run Id */
@@ -8555,7 +8637,7 @@ export interface components {
             /** Open Pnl Usd */
             open_pnl_usd: string | null;
             /** Primary Action */
-            primary_action: ("archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline") | null;
+            primary_action: ("archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline") | null;
             program_build: components["schemas"]["ProgramBuildAdmissionFact"];
             rail: components["schemas"]["TransactionRail"];
             /** Readiness Blocked Count */
@@ -10331,6 +10413,7 @@ export interface components {
             native_execution_id?: string | null;
             /** Native Order Id */
             native_order_id?: string | null;
+            option_event?: components["schemas"]["OptionEndingView"] | null;
             /** Order Id */
             order_id?: number | null;
             order_instruction?: components["schemas"]["ClerkOrderInstruction"];
@@ -10402,6 +10485,7 @@ export interface components {
             native_execution_id?: string | null;
             /** Native Order Id */
             native_order_id?: string | null;
+            option_event?: components["schemas"]["OptionEndingView"] | null;
             /** Order Id */
             order_id?: number | null;
             order_instruction?: components["schemas"]["ClerkOrderInstruction"];
@@ -20103,6 +20187,110 @@ export interface components {
             underlying: string;
         };
         /**
+         * OptionEndingContract
+         * @description The contract, as every option view serves one: for the shared renderer, which writes its name.
+         */
+        OptionEndingContract: {
+            /**
+             * Expiry Ms
+             * Format: int64
+             */
+            expiry_ms: number;
+            /** Occ Symbol */
+            occ_symbol: string;
+            /**
+             * Right
+             * @enum {string}
+             */
+            right: "call" | "put";
+            /** Strike */
+            strike: string;
+            /** Underlying */
+            underlying: string;
+        };
+        /**
+         * OptionEndingSettlementPrice
+         * @description The underlying's price a simulation settled a contract from, and when that price is from.
+         */
+        OptionEndingSettlementPrice: {
+            /**
+             * Bar Ended At Ms
+             * Format: int64
+             */
+            bar_ended_at_ms: number;
+            /** Before Close Ms */
+            before_close_ms: number;
+            /**
+             * Last Session Close Ms
+             * Format: int64
+             */
+            last_session_close_ms: number;
+            /** Price */
+            price: string;
+            /** Price Usd */
+            price_usd: string;
+            /** Underlying */
+            underlying: string;
+        };
+        /**
+         * OptionEndingView
+         * @description One option position that ended with no order of the bot's.
+         */
+        OptionEndingView: {
+            /** Close Cash Cents */
+            close_cash_cents?: number | null;
+            /** Close Cash Usd */
+            close_cash_usd?: string | null;
+            /** Close Price */
+            close_price?: string | null;
+            /** Close Price Usd */
+            close_price_usd?: string | null;
+            contract: components["schemas"]["OptionEndingContract"];
+            /** Contracts */
+            contracts: number;
+            /** Ended By Operator */
+            ended_by_operator?: string | null;
+            /**
+             * Ended On Ms
+             * Format: int64
+             */
+            ended_on_ms: number;
+            /** Headline */
+            headline: string;
+            /**
+             * Held
+             * @enum {string}
+             */
+            held: "bought" | "sold";
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "expired" | "exercised" | "assigned" | "sold_outside" | "settled_in_cash" | "ended_by_owner";
+            /** No Settlement Reason */
+            no_settlement_reason?: string | null;
+            /**
+             * Recorded At Ms
+             * Format: int64
+             */
+            recorded_at_ms: number;
+            settled_from?: components["schemas"]["OptionEndingSettlementPrice"] | null;
+            /** Share Cash Cents */
+            share_cash_cents?: number | null;
+            /** Share Cash Usd */
+            share_cash_usd?: string | null;
+            /** Share Price */
+            share_price?: string | null;
+            /** Share Price Usd */
+            share_price_usd?: string | null;
+            /** Share Symbol */
+            share_symbol?: string | null;
+            /** Shares */
+            shares?: number | null;
+            /** Simulated */
+            simulated: boolean;
+        };
+        /**
          * OptionEntryLeg
          * @description Option ``ActionEntity`` — Slice 1C.
          *
@@ -20132,6 +20320,47 @@ export interface components {
             right: "call" | "put";
             /** Strike */
             strike: components["schemas"]["AtmStrike"] | components["schemas"]["AtmOffsetStrike"] | components["schemas"]["AbsoluteStrike"] | components["schemas"]["DeltaStrike"] | components["schemas"]["LegDistanceStrike"] | components["schemas"]["PercentStrike"];
+        };
+        /**
+         * OptionEventHoldAcknowledgementRequest
+         * @description The owner has looked at one option-event notice, exactly as they read it.
+         *
+         *     Who acknowledges is never a request field: the route records the
+         *     installation's configured operator identity.
+         */
+        OptionEventHoldAcknowledgementRequest: {
+            /** Item Refs */
+            item_refs: string[];
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /**
+             * Reason Code
+             * @enum {string}
+             */
+            reason_code: "OPTION_EVENTS_NOT_READ" | "OPTION_EVENT_UNREADABLE" | "OPTION_EVENT_NOT_EXECUTED" | "OPTION_EVENT_CONTRACT_NOT_HELD" | "OPTION_EVENT_WRONG_SIDE" | "OPTION_EVENT_HELD_ON_BOTH_SIDES" | "OPTION_EVENT_MORE_CONTRACTS_THAN_HELD" | "OPTION_EVENT_CASH_NOT_WHOLE_CENTS" | "OPTION_EVENT_ROW_CHANGED" | "OPTION_EVENT_SHARES_IN_ANOTHER_SYMBOL" | "OPTION_SHARE_TRADE_MISSING" | "OPTION_SHARE_TRADE_UNPAIRED" | "OPTION_SHARE_TRADE_DISAGREES" | "OPTION_EXPIRY_SIGNED_FOR_OTHER_SIDE" | "OPTION_EVENT_AFTER_A_LOT_CLOSED" | "OPTION_EXPIRED_NOT_SETTLED" | "OPTION_SHARES_HELD" | "OPTION_ORDER_NOT_OURS";
+            /** Uncertainty Id */
+            uncertainty_id: string;
+        };
+        /**
+         * OptionEventHoldAcknowledgementResponse
+         * @description The books' record of one acknowledged option-event notice.
+         */
+        OptionEventHoldAcknowledgementResponse: {
+            /** Item Refs */
+            item_refs: string[];
+            /** Operator */
+            operator: string;
+            /**
+             * Reason Code
+             * @enum {string}
+             */
+            reason_code: "OPTION_EVENTS_NOT_READ" | "OPTION_EVENT_UNREADABLE" | "OPTION_EVENT_NOT_EXECUTED" | "OPTION_EVENT_CONTRACT_NOT_HELD" | "OPTION_EVENT_WRONG_SIDE" | "OPTION_EVENT_HELD_ON_BOTH_SIDES" | "OPTION_EVENT_MORE_CONTRACTS_THAN_HELD" | "OPTION_EVENT_CASH_NOT_WHOLE_CENTS" | "OPTION_EVENT_ROW_CHANGED" | "OPTION_EVENT_SHARES_IN_ANOTHER_SYMBOL" | "OPTION_SHARE_TRADE_MISSING" | "OPTION_SHARE_TRADE_UNPAIRED" | "OPTION_SHARE_TRADE_DISAGREES" | "OPTION_EXPIRY_SIGNED_FOR_OTHER_SIDE" | "OPTION_EVENT_AFTER_A_LOT_CLOSED" | "OPTION_EXPIRED_NOT_SETTLED" | "OPTION_SHARES_HELD" | "OPTION_ORDER_NOT_OURS";
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Sequence */
+            sequence: number;
+            /** Strategy Instance Id */
+            strategy_instance_id: string | null;
         };
         /**
          * OptionExpiryRule
@@ -21092,7 +21321,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             /** Blockers */
             blockers: components["schemas"]["OperatorBlocker"][];
             /** Concurrency Token */
@@ -21131,7 +21360,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             /** Message */
             message: string;
             /**
@@ -21160,7 +21389,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             attestation?: components["schemas"]["UnknownOrderAttestationRequest"] | null;
             /** Concurrency Token */
             concurrency_token: string;
@@ -21184,7 +21413,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             /** Applied */
             applied: boolean;
             /** Concurrency Token */
@@ -21240,7 +21469,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "stop_bot_decisions" | "cancel_verified_working_orders" | "execute_safe_flatten" | "reconcile_now" | "discharge_attributed_residue" | "settle_unknown_exit_order";
+            action_id: "stop_bot_decisions" | "cancel_verified_working_orders" | "execute_safe_flatten" | "reconcile_now" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order";
             attestation?: components["schemas"]["UnknownOrderAttestationRequest"] | null;
             /** Concurrency Token */
             concurrency_token: string;
@@ -22110,7 +22339,7 @@ export interface components {
              * Operation
              * @enum {string}
              */
-            operation: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
+            operation: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             /** Ready */
             ready: boolean;
             /**
@@ -22504,7 +22733,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             attestation?: components["schemas"]["UnknownOrderAttestationRequest"] | null;
             /**
              * Band Override
@@ -22532,7 +22761,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             attestation?: components["schemas"]["UnknownOrderAttestationRequest"] | null;
             /** Concurrency Token */
             concurrency_token: string;
@@ -22548,7 +22777,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             /** Applied */
             applied: boolean;
             command: components["schemas"]["CommandResponse"] | null;
@@ -22572,7 +22801,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             /** Available */
             available: boolean;
             /** Concurrency Token */
@@ -25558,7 +25787,7 @@ export interface components {
          * TimelineTransitionKind
          * @enum {string}
          */
-        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "ACCOUNT_RISK_LIMITS_APPLIED" | "ATTRIBUTED_RESIDUE_DISCHARGED" | "BUDGET_AUTHORITY_CUTOVER" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "DEPLOY_COMMITTED" | "DEPLOY_LAUNCHED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_BUYING_POWER_COMPARED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_SETTLED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_COVERAGE_CHAIN_TOTAL_PROVEN" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_MARKET_HOLD" | "EXIT_NOT_FLAT" | "EXIT_RECOVERY_EVALUATED" | "EXIT_REDUCING_ORDER_CREATED" | "EXIT_TERMS_SEALED" | "EXIT_TERMS_UPGRADE_COMPLETED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "FEE_EVIDENCE_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_REPLACED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_OUTCOME_ATTESTED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "SIMULATION_SESSION_BASELINE" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
+        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "ACCOUNT_RISK_LIMITS_APPLIED" | "ATTRIBUTED_RESIDUE_DISCHARGED" | "BUDGET_AUTHORITY_CUTOVER" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "DEPLOY_COMMITTED" | "DEPLOY_LAUNCHED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_BUYING_POWER_COMPARED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_SETTLED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_COVERAGE_CHAIN_TOTAL_PROVEN" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_MARKET_HOLD" | "EXIT_NOT_FLAT" | "EXIT_RECOVERY_EVALUATED" | "EXIT_REDUCING_ORDER_CREATED" | "EXIT_TERMS_SEALED" | "EXIT_TERMS_UPGRADE_COMPLETED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "FEE_EVIDENCE_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_REPLACED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "OPTION_POSITION_ENDED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_OUTCOME_ATTESTED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "SIMULATION_SESSION_BASELINE" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
         /** TimingCellResponse */
         TimingCellResponse: {
             /** Average Return */
@@ -27242,6 +27471,65 @@ export interface operations {
             };
         };
     };
+    acknowledge_bot_option_event_hold_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__option_event_holds_acknowledge_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                strategy_instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OptionEventHoldAcknowledgementRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionEventHoldAcknowledgementResponse"];
+                };
+            };
+            /** @description The selected SQLite authority or bot is unavailable. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The notice was not acknowledged; the detail says why, and nothing was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description The SQLite authority or Alpaca is temporarily unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     check_bot_recovery_action_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__recovery_actions_check_post: {
         parameters: {
             query?: never;
@@ -27387,6 +27675,64 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    acknowledge_account_option_event_hold_api_alpaca_clerk_sqlite_accounts__account_id__option_event_holds_acknowledge_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OptionEventHoldAcknowledgementRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionEventHoldAcknowledgementResponse"];
+                };
+            };
+            /** @description The selected SQLite authority or bot is unavailable. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The notice was not acknowledged; the detail says why, and nothing was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description The SQLite authority or Alpaca is temporarily unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -31685,6 +32031,46 @@ export interface operations {
             };
         };
     };
+    fleet_custody_bot_option_event_hold_ack_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__option_event_holds_acknowledge_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     fleet_custody_bot_recovery_check_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__recovery_actions_check_post: {
         parameters: {
             query?: never;
@@ -31776,6 +32162,45 @@ export interface operations {
                 clerk_id: string;
                 account_id: string;
                 sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_option_event_hold_ack_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_option_event_holds_acknowledge_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
             };
             cookie?: never;
         };

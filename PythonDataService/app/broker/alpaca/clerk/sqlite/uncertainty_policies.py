@@ -28,6 +28,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     FAILED_ENTER_FILLED_REASON_CODE,
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
     OPTION_BUYING_POWER_UNDER_RESERVED_REASON_CODE,
+    OPTION_EVENT_HOLD_REASON_CODES,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
@@ -42,6 +43,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExitStuckCause,
     FailedEnterFilledCause,
     LossHoldCause,
+    OptionEventHoldCause,
     PositionDriftCause,
     ScheduledCloseMissedCause,
     StreamHealthHoldCause,
@@ -475,12 +477,50 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         # lane is not quiet under it. It cannot wedge a flat lane: the pass a
         # draining lane still runs ends it once the bot holds nothing.
         blocks_lane_quiet=True,
-        # An expired contract the broker has since taken off its books is a
-        # residue no order can close. The write-off's own proof still asks
-        # the broker, so a contract the broker holds is never written off.
+        # A contract that still trades and that the broker has since taken
+        # off its books is a residue the owner may write off. The
+        # write-off's own proof still asks the broker, so a contract the
+        # broker holds is never written off. An expired contract is never
+        # offered it, whatever notice stands (ADR 0076 decision 22).
         residue_discharge="strands",
     ),
 }
+
+
+def _option_event_hold_cause_is_valid(value: Any) -> bool:
+    try:
+        OptionEventHoldCause.from_mapping(value)
+    except ValueError:
+        return False
+    return True
+
+
+# ADR 0076 decision 22: what the reading and booking of option events holds a
+# bot for. One policy for the whole family. Raised for a bot it is that bot's
+# alone; raised with none it is the account's. It blocks entries and admits
+# reductions and the Flatten: a bot left holding shares by an exercise must be
+# able to sell them. It ends when a whole read no longer has its cause, or by
+# the owner's acknowledgement, never on a timer.
+_OPTION_EVENT_HOLD_POLICY = ReasonPolicy(
+    scope="CUSTODY_SUBJECT",
+    blocks_new_exposure=True,
+    allows_reduction=True,
+    admits_safe_flatten=True,
+    cause_is_valid=_option_event_hold_cause_is_valid,
+    age=CauseCleared(),
+    # Does not block lane quiet (#2344): what a bot holds is still proven by
+    # the broker-flat and attributed-flat reads, and the owner's
+    # acknowledgement is refused while draining, so blocking could wedge a
+    # flat lane.
+    blocks_lane_quiet=False,
+    # The owner's write-off of a position in a contract that still trades may
+    # go on beside one of these holds. A row that arrives afterwards finds no
+    # lot and is held by name; it cannot close a lot twice. The write-off is
+    # never offered for an expired contract, whatever holds stand (ADR 0076
+    # decision 22): its way out is the owner's ending, which closes the lot.
+    residue_discharge="admits",
+)
+_REASON_POLICIES.update(dict.fromkeys(OPTION_EVENT_HOLD_REASON_CODES, _OPTION_EVENT_HOLD_POLICY))
 
 
 def reason_policy(reason_code: str) -> ReasonPolicy | None:

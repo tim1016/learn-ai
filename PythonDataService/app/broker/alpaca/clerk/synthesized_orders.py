@@ -19,6 +19,13 @@ the order as it was asked, and the quote, model and age its fill was priced
 with (ADR 0076). It is left out of a record that has none, so a ledger with
 no option order still reads on a build from before the field existed.
 
+A contract a simulation still holds after its last session is settled by the
+simulation itself (ADR 0076 decision 22). The one record of that settlement
+carries a ``SynthesizedOptionSettlement`` (``simulated_option_settlement``):
+the rule, the underlying's price it read, the bar that price is the close of
+and every figure worked out from it. It too is left out of a record that has
+none.
+
 Math Provenance Contract
 ------------------------
 Formula: for each symbol, the projected position is an average-cost fold of
@@ -45,6 +52,7 @@ from typing import Literal, NamedTuple, TypeGuard
 from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
 
 from app.broker.alpaca.clerk.option_effects import RecordedQuote
+from app.broker.alpaca.clerk.simulated_option_settlement import SynthesizedOptionSettlement
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
@@ -171,12 +179,14 @@ class SynthesizedOrderRecord(BaseModel):
     leg: BrokerOrderLeg | None = None
     anchor: SynthesizedAnchor | None = None
     option: SynthesizedOptionFill | None = None
+    settlement: SynthesizedOptionSettlement | None = None
 
     @model_serializer(mode="wrap")
     def _leave_out_an_absent_option_fill(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
         data: dict[str, object] = handler(self)
-        if data.get("option") is None:
-            data.pop("option", None)
+        for absent in ("option", "settlement"):
+            if data.get(absent) is None:
+                data.pop(absent, None)
         return data
 
 
@@ -466,6 +476,7 @@ class SynthesizedOrderLedger:
         leg: BrokerOrderLeg | None = None,
         anchor: SynthesizedAnchor | None = None,
         option: SynthesizedOptionFill | None = None,
+        settlement: SynthesizedOptionSettlement | None = None,
     ) -> SynthesizedOrderRecord:
         """Append inside :meth:`transaction`; ``records`` is that transaction's read."""
         if not getattr(self._transaction, "held", False):
@@ -478,7 +489,9 @@ class SynthesizedOrderLedger:
         # write. Refresh the WAL's sequence cache while holding the
         # cross-process transaction lock so it cannot reuse a sequence.
         self._orders.reset_seq(next_seq)
-        record = SynthesizedOrderRecord(seq=next_seq, order=order, leg=leg, anchor=anchor, option=option)
+        record = SynthesizedOrderRecord(
+            seq=next_seq, order=order, leg=leg, anchor=anchor, option=option, settlement=settlement
+        )
         self._orders.append(record)
         records.append(record)
         return record

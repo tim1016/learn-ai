@@ -38,6 +38,7 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerPosition
+from app.broker.contract.option_events import BrokerOptionEventEvidence, BrokerOptionEventResume
 from app.broker.contract.options import BrokerOptionAccountSnapshot, BrokerOptionContract
 from app.options.contract import OptionContract
 from app.options.deadlines import CloseTerms
@@ -47,6 +48,7 @@ from app.services import market_liveness
 from tests._helpers.market_quotes import publish_quotes
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     NOON,
+    ScriptedOptionEvents,
     _FakeTradePort,
     _TestClock,
     documented_option_listing,
@@ -82,12 +84,24 @@ class PaperAccountRead(_Account):
         self.buying_power: Decimal | None = Decimal(100_000)
         self.option_account_reads = 0
 
+        # The account's option events, as a test scripts them: none, read whole, until it does.
+        self.option_events = ScriptedOptionEvents()
+        # Contracts Alpaca has taken off the account (expired, exercised, assigned or sold by it),
+        # shares it holds that no order here bought, and open orders the Clerk did not place.
+        self.settled: set[str] = set()
+        self.shares: dict[str, float] = {}
+        self.outside_orders: list[BrokerOrder] = []
+
     async def get_option_account(self) -> BrokerOptionAccountSnapshot:
         self.option_account_reads += 1
         return BrokerOptionAccountSnapshot(
             broker="alpaca", account_id="PA-OPTIONS", account_mode="paper", options_buying_power=self.buying_power,
             options_approved_level=3, options_trading_level=3, observed_at_ms=NOON,
         )
+    async def read_option_event_activities(
+        self, *, after_ms: int, resume: BrokerOptionEventResume | None = None
+    ) -> BrokerOptionEventEvidence:
+        return await self.option_events.read_option_event_activities(after_ms=after_ms, resume=resume)
 
     async def get_option_contract(self, contract: OptionContract) -> BrokerOptionContract | None:
         self.listing_reads.append(contract.occ_symbol)
@@ -101,16 +115,18 @@ class PaperAccountRead(_Account):
             alpaca_adapter.from_alpaca_order(payload)
             for payload in self._venue.option_orders.values()
             if payload["status"] in _WORKING
-        ]
+        ] + [order for order in self.outside_orders if order.status in _WORKING]
 
     async def list_positions(self) -> list[BrokerPosition]:
         held: dict[str, float] = {}
         for payload in self._venue.option_orders.values():
             signed = float(payload["filled_qty"]) * (1 if payload["side"] == "buy" else -1)
             held[payload["symbol"]] = held.get(payload["symbol"], 0.0) + signed
+        held = {symbol: quantity for symbol, quantity in held.items() if symbol not in self.settled} | self.shares
         return [
             BrokerPosition(
-                broker="alpaca", symbol=symbol, asset_id=None, asset_class="us_option", quantity=abs(quantity),
+                broker="alpaca", symbol=symbol, asset_id=None,
+                asset_class="us_equity" if symbol in self.shares else "us_option", quantity=abs(quantity),
                 side="long" if quantity > 0 else "short", average_entry_price=1.94, market_value=194.0 * abs(quantity),
                 cost_basis=194.0 * abs(quantity), current_price=1.94, unrealized_pl=0.0, unrealized_plpc=0.0,
                 observed_at_ms=NOON,

@@ -151,6 +151,7 @@ from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, run_inline
 from app.broker.alpaca.clerk.sqlite.open_replacement import replacement_ready
 from app.broker.alpaca.clerk.sqlite.option_entry import order_contract
+from app.broker.alpaca.clerk.sqlite.option_event_books import outside_order_in_the_way
 from app.broker.alpaca.clerk.sqlite.order_projection import OrderProjectionReadError
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
@@ -171,6 +172,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     raise_uncertainty,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    OPTION_ORDER_NOT_OURS_REASON_CODE,
     ExitNotFlatCause,
     ExitStuckCause,
 )
@@ -665,6 +667,22 @@ def _accept_admissible_redrive(
             action="OWN_EXIT_WORKING", reason_code="OWN_EXIT_WORKING",
             message="An EXIT for this strategy is already working.",
             facts={}, outcome="hold",
+        )
+    with repo.write_fence() as conn:
+        outside = outside_order_in_the_way(conn, strategy_instance_id=strategy_instance_id, symbol=symbol)
+    if outside is not None:
+        # An order the Clerk did not place is in the bot's option contract, working or filled and not
+        # yet booked (ADR 0076 decision 22). The bot's own order waits for it to be settled. That is a
+        # wait and no failure: it spends none of the time after which an exit is told as stuck.
+        return _RedriveRefused(
+            action="exit_redrive_waits_for_outside_order", reason_code=OPTION_ORDER_NOT_OURS_REASON_CODE,
+            message="deferred a stuck-EXIT re-drive: an order the Clerk did not place is in the bot's contract",
+            facts={"broker_order_id": outside.order.broker_order_id, "strategy_attributed_qty": remaining},
+            outcome="hold",
+            explanation=(
+                f"{outside.sentence} The Clerk did not place it, and it is in a contract this bot holds. The bot's "
+                "own order waits until it is settled."
+            ),
         )
     if scheduled_close is not None and repo.closing:
         # A closing Clerk takes no scheduled close, and sends none again (ADR 0076). The next start does.

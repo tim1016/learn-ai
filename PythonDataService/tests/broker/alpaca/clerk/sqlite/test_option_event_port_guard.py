@@ -3,12 +3,19 @@
 ``test_intake_fence.py`` proves every async port method has a guard method.
 This proves what this one does: refuses before the broker is touched while
 intake is fenced, and passes the call through unchanged otherwise.
+
+So does a simulation's settlement of its own expired contracts, which is a
+step of the trade port and of no read (#2913).
 """
 
 from __future__ import annotations
 
 import pytest
 
+from app.broker.alpaca.clerk.simulated_option_settlement import (
+    SimulatedOptionSettlements,
+    option_settlement_simulation,
+)
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import BrokerCallUnderIntakeError, guard_broker_ports
 from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock
 from app.broker.contract.option_events import BrokerOptionEventResume
@@ -54,3 +61,43 @@ async def test_an_option_event_read_made_outside_the_fence_reaches_the_broker_un
     assert await read.read_option_event_activities(after_ms=_AFTER_MS, resume=resume) == "the option events"
     # The cursor and the time it travels with reach the broker as one value, as they were given.
     assert broker.reached == [(_AFTER_MS, resume)]
+
+
+class _Simulation(_EventBroker):
+    """A trade port that settles its own expired contracts, as a Dry Run's does."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.settled_for: list[int] = []
+
+    def settle_expired_options(self, *, after_ms: int) -> SimulatedOptionSettlements:
+        self.settled_for.append(after_ms)
+        return SimulatedOptionSettlements(not_settled={"SPY260918C00585000": "no price"})
+
+
+async def test_the_settlement_step_reaches_a_simulation_through_the_guarded_trade_port_and_no_other_port() -> None:
+    """A real account's broker ends its own positions. Its trade port has no such step and is asked for none."""
+    simulation, vendor = _Simulation(), _EventBroker()
+    _read, simulated_trade = guard_broker_ports(read=simulation, trade=simulation, intake=ReentrantAsyncLock())
+    _read, vendor_trade = guard_broker_ports(read=vendor, trade=vendor, intake=ReentrantAsyncLock())
+
+    settled = option_settlement_simulation(simulated_trade).settle_expired_options(after_ms=_AFTER_MS)
+
+    assert settled is not None and dict(settled.not_settled) == {"SPY260918C00585000": "no price"}
+    assert simulation.settled_for == [_AFTER_MS]
+    assert option_settlement_simulation(vendor_trade).settle_expired_options(after_ms=_AFTER_MS) is None
+    # A port that declares no such step is no simulation at all.
+    assert option_settlement_simulation(vendor) is None
+
+
+async def test_the_settlement_step_is_refused_while_intake_is_fenced_and_settles_nothing() -> None:
+    """The step writes the simulation's own ledger, as a broker acts on its own side. Never under the fence."""
+    fence = ReentrantAsyncLock()
+    simulation = _Simulation()
+    _read, trade = guard_broker_ports(read=simulation, trade=simulation, intake=fence)
+
+    async with fence:
+        with pytest.raises(BrokerCallUnderIntakeError, match="settle_expired_options"):
+            trade.settle_expired_options(after_ms=_AFTER_MS)
+
+    assert simulation.settled_for == []

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import sqlite3
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 from app.broker.alpaca.clerk.account_authority import (
@@ -25,6 +26,8 @@ from app.broker.alpaca.clerk.sqlite.external_orders import (
     unfoldable_broker_order_is_unreviewed,
 )
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot, ExternalOrderResource
+from app.broker.alpaca.clerk.sqlite.option_event_books import RecordedOptionEnding
+from app.broker.alpaca.clerk.sqlite.option_event_folds import OPTION_EVENT_EFFECT_KIND
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     OperationPage,
     ProjectedOperation,
@@ -52,6 +55,7 @@ from app.schemas.clerk_transaction_projection import (
     TransactionOrigin,
 )
 from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
+from app.services.option_ending_views import option_ending_view
 
 _EXTERNAL_TRANSACTION_PREFIX = "external-order:"
 _ALL_HISTORY_CURSOR_KIND = "sqlite-account-history-v1"
@@ -180,8 +184,11 @@ def _origin_filtered_operation_page(
                 for order in _economic_orders(operation)
             )
         )
+        endings = _option_endings(reader, page.operations)
         for operation in page.operations:
-            row = _summary_row(operation, account_id=account_id, execution_summaries=summaries)
+            row = _summary_row(
+                operation, account_id=account_id, execution_summaries=summaries, option_endings=endings
+            )
             if row.transaction_origin == origin and _in_history_window(
                 row.recorded_at_ms,
                 from_ms=from_ms,
@@ -228,6 +235,7 @@ def sqlite_transaction_detail(
         executions = economic_reader.effective_order_executions(
             tuple(order.order_ref for order in _economic_orders(operation))
         )
+        endings = _option_endings(reader, (operation,))
     except EconomicProjectionError as exc:
         raise ClerkTransactionProjectionUnavailable(
             "SQLite execution economics are unavailable for transaction detail."
@@ -240,6 +248,7 @@ def sqlite_transaction_detail(
         timeline,
         account_id=account_id,
         executions=executions,
+        option_endings=endings,
     )
 
 
@@ -403,6 +412,7 @@ def _all_transaction_history(
                 for order in _economic_orders(operation)
             )
         )
+        endings = _option_endings(reader, operations)
     except EconomicProjectionError as exc:
         raise ClerkTransactionProjectionUnavailable(
             "SQLite execution economics are unavailable for transaction history."
@@ -426,6 +436,7 @@ def _all_transaction_history(
                     operation,
                     account_id=account_id,
                     execution_summaries=summaries,
+                    option_endings=endings,
                 )
             )
             continue
@@ -808,11 +819,27 @@ def _in_history_window(
     )
 
 
+def _option_event_operations(operations: Iterable[ProjectedOperation]) -> tuple[str, ...]:
+    """The operations that may record an option position ended with no order of the bot's."""
+    return tuple(
+        operation.effect_operation_id for operation in operations if operation.kind == OPTION_EVENT_EFFECT_KIND
+    )
+
+
+def _option_endings(
+    reader: SqliteClerkProjectionReader, operations: Iterable[ProjectedOperation]
+) -> Mapping[str, RecordedOptionEnding]:
+    """What each of ``operations`` recorded as an option position ended. Nothing is read when none could have."""
+    event_operations = _option_event_operations(operations)
+    return reader.option_endings(event_operations) if event_operations else {}
+
+
 def _summary_row(
     operation: ProjectedOperation,
     *,
     account_id: str,
     execution_summaries: dict[str, tuple[ExecutionRow, ...]] | None = None,
+    option_endings: Mapping[str, RecordedOptionEnding] | None = None,
 ) -> ClerkTransactionSummaryRow:
     economic_orders = _economic_orders(operation)
     order = (economic_orders or operation.orders)[0] if operation.orders else None
@@ -822,6 +849,7 @@ def _summary_row(
         for execution in (execution_summaries or {}).get(projected_order.order_ref, ())
     )
     execution = executions[0] if len(executions) == 1 else None
+    ending = (option_endings or {}).get(operation.effect_operation_id)
     return ClerkTransactionSummaryRow(
         transaction_id=operation.effect_operation_id,
         broker="alpaca",
@@ -856,6 +884,7 @@ def _summary_row(
         execution_quantity=(execution.quantity if execution is not None else None),
         execution_price=(execution.price if execution is not None else None),
         event_count=operation.transition_count,
+        option_event=None if ending is None else option_ending_view(ending),
     )
 
 
@@ -865,6 +894,7 @@ def _detail_row(
     *,
     account_id: str,
     executions: tuple[ExecutionRow, ...],
+    option_endings: Mapping[str, RecordedOptionEnding] | None = None,
 ) -> ClerkTransactionRow:
     economic_orders = _economic_orders(operation)
     economic_order_refs = {order.order_ref for order in economic_orders}
@@ -874,6 +904,7 @@ def _detail_row(
     summary = _summary_row(
         operation,
         account_id=account_id,
+        option_endings=option_endings,
         execution_summaries={
             order.order_ref: tuple(
                 execution

@@ -42,6 +42,12 @@ from app.broker.alpaca.clerk.sqlite.envelope_reservations import (
     entry_cash_claims,
 )
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
+from app.broker.alpaca.clerk.sqlite.option_event_books import option_ending_that_left_shares
+from app.broker.alpaca.clerk.sqlite.option_event_folds import (
+    OPTION_EVENT_EFFECT_KIND,
+    OPTION_EVENT_SHARES_EXECUTION_PREFIX,
+    OptionPositionEndedFacts,
+)
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
     ORDER_OPEN_SQL,
@@ -427,8 +433,49 @@ def query_only_snapshot(db_path: Path) -> Iterator[sqlite3.Connection]:
 _COMMITMENTS = "SELECT b.*, r.state AS run_state FROM deployment_budgets b JOIN runs r ON r.run_id=b.run_id"
 
 
+def _why_short(conn: sqlite3.Connection, sid: str, fills: Sequence[FillRecord], short: Sequence[OpenLot]) -> str:
+    """Why a long-only budget cannot be worked out for a bot that is short, in words that are true of it.
+
+    A sold call that was assigned, or a bought put that was exercised, sells
+    shares at the strike. A bot that held none is then short, and the books
+    say how: the short is explained, not unexplained (ADR 0076 decision 22).
+    The words name the bot, the event, and what the owner does. The rule
+    itself is unchanged: while a bot is short no budget is worked out for
+    the account.
+    """
+    sold_by: dict[str, OptionPositionEndedFacts] = {}
+    for lot in short:
+        opening = next(
+            (
+                fill for fill in fills
+                if fill.side is lot.side and fill.symbol == lot.symbol and fill.filled_at_ms == lot.opened_at_ms
+                and fill.event_key.startswith(OPTION_EVENT_SHARES_EXECUTION_PREFIX)
+            ),
+            None,
+        )
+        ended = None if opening is None else option_ending_that_left_shares(conn, opening.order_ref)
+        if ended is None or ended.shares is None:
+            return "Unexplained short exposure prevents a long-only deployment budget."
+        sold_by[ended.idempotency_key] = ended
+    by_symbol: dict[str, Decimal] = {}
+    for lot in short:
+        by_symbol[lot.symbol] = by_symbol.get(lot.symbol, ZERO) + lot.exact_qty
+    events = "; ".join(
+        f"{ended.contracts} of {ended.contract_symbol} {'was' if ended.contracts == 1 else 'were'} {ended.ended_by}, "
+        f"which sold {abs(ended.shares['quantity'])} {ended.shares['symbol']} at {ended.shares['price']} a share"
+        for ended in sold_by.values()
+        if ended.shares is not None
+    )
+    return (
+        f"Bot {sid} is short {holdings_text(by_symbol)}: {events}, and it held too few shares to deliver. A "
+        "long-only budget cannot be worked out while a bot is short, so no bot of this account takes a new entry "
+        f"until the short is covered. Stop bot {sid}, then Flatten it: that buys the shares back."
+    )
+
+
 def _deployment_budget(
-    commitment: sqlite3.Row, *, records: Sequence[FillRecord], claims: Sequence[EntryCashClaim], fees: BudgetFees,
+    conn: sqlite3.Connection, commitment: sqlite3.Row, *, records: Sequence[FillRecord],
+    claims: Sequence[EntryCashClaim], fees: BudgetFees,
 ) -> DeploymentBudget:
     """One commitment over its own FIFO, entry claims and attributed fees.
 
@@ -437,9 +484,11 @@ def _deployment_budget(
     """
     sid = commitment["strategy_instance_id"]
     subject_id = bot_subject_id(sid)
-    fifo = compute_fifo_pnl([fill for fill in records if fill.sid == subject_id])
-    if any(lot.side != OrderSide.BUY for lot in fifo.open_lots):
-        raise BudgetUnavailable("Unexplained short exposure prevents a long-only deployment budget.")
+    fills = [fill for fill in records if fill.sid == subject_id]
+    fifo = compute_fifo_pnl(fills)
+    short = [lot for lot in fifo.open_lots if lot.side != OrderSide.BUY]
+    if short:
+        raise BudgetUnavailable(_why_short(conn, sid, fills, short))
     return deployment_budget(
         strategy_instance_id=sid, committed_cents=commitment["committed_cents"],
         active=commitment["run_state"] == "ACTIVE" and commitment["released_at_ms"] is None,
@@ -485,7 +534,7 @@ def value_release(conn: sqlite3.Connection, *, run_id: str, fees: BudgetFees) ->
     # The unfilled remainder does not depend on which fills cash has seen.
     claims = [claim for claim in entry_cash_claims(conn, seen_before_ms=0) if claim.strategy_instance_id == sid]
     with money_context():
-        return release_at_stop(_deployment_budget(commitment, records=records, claims=claims, fees=fees))
+        return release_at_stop(_deployment_budget(conn, commitment, records=records, claims=claims, fees=fees))
 
 
 def _project(
@@ -512,13 +561,21 @@ def _project(
     # until it ends -- by the one rule ``entry_cash_claims`` reads -- and its
     # last fills are inside observed cash.
     unpriced_legacy = conn.execute(
-        "SELECT 1 FROM orders o JOIN effect_operations e ON e.effect_operation_id=o.effect_operation_id "
+        "SELECT e.kind FROM orders o JOIN effect_operations e ON e.effect_operation_id=o.effect_operation_id "
         "LEFT JOIN envelope_reservations r ON r.effect_operation_id=o.effect_operation_id "
         "WHERE o.role='ENTRY' AND r.effect_operation_id IS NULL AND "
         f"({ORDER_OPEN_SQL} "
-        "OR EXISTS (SELECT 1 FROM fills f WHERE f.order_ref=o.order_ref AND f.recorded_at_ms>=?)) LIMIT 1",
+        "OR EXISTS (SELECT 1 FROM fills f WHERE f.order_ref=o.order_ref AND f.recorded_at_ms>=?))",
         (seen_before_ms,),
-    ).fetchone()
+    ).fetchall()
+    if unpriced_legacy and all(row[0] == OPTION_EVENT_EFFECT_KIND for row in unpriced_legacy):
+        # The shares an exercise or an assignment left (ADR 0076 decision 22). They were never
+        # ordered, so nothing was set aside for them, and nothing about them is left to resolve:
+        # the budget is whole again once the account's cash has been read after the booking.
+        raise BudgetUnavailable(
+            "Shares from an option exercise or assignment were booked after the account's cash was last read. "
+            "The budget is worked out again at the next reading of the account. Nothing needs doing."
+        )
     if unpriced_legacy:
         raise BudgetUnavailable("An earlier order has no retained cash estimate. Resolve its order evidence and wait for fresh cash.")
     account_id = conn.execute("SELECT account_id FROM control_meta WHERE id=1").fetchone()[0]
@@ -541,7 +598,9 @@ def _project(
                 manual_claim += fill.exact_notional
                 if fill.fee is not None:
                     manual_claim += normalize_money(fill.fee)
-        budgets = [_deployment_budget(commitment, records=records, claims=claims, fees=fees) for commitment in commitments]
+        budgets = [
+            _deployment_budget(conn, commitment, records=records, claims=claims, fees=fees) for commitment in commitments
+        ]
         budget = account_budget(
             cash=cash, deployments=budgets,
             order_claims=external_claim + manual_claim + sum((claim.unfilled_cost + claim.unseen_fill_cost + claim.unfilled_fee for claim in claims), ZERO),

@@ -486,7 +486,8 @@ async def select_synthetic_clerk_runtime(
         )
         # A scheduled close is an EXIT, driven with the facade's one pricing seam (ADR 0076).
         deadline_keeper = DeadlineKeeper(
-            repo=repository, trade=guarded_trade, intake=intake, pricing=facade.recovery_pricing, nudge=keeper_nudge,
+            repo=repository, trade=guarded_trade, read=guarded_read, intake=intake, pricing=facade.recovery_pricing,
+            nudge=keeper_nudge,
         )
         sweep = ReconciliationSweep(
             repo=repository,

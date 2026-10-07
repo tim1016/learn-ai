@@ -107,6 +107,11 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
         "Entry compared with Alpaca",
         "The Clerk recorded how Alpaca's option buying power moved across this entry, beside what the bot set aside.",
     ),
+    "OPTION_POSITION_ENDED": (
+        "Option position ended",
+        "An option position ended with no order of the bot's: it expired, was exercised or assigned, or was "
+        "sold by an order the Clerk did not place. The Clerk booked it for the bot that held the contract.",
+    ),
     "ORDER_CANCEL_REQUESTED": (
         "Order cancellation requested",
         "The Account Clerk recorded the exact cancellation target before broker contact.",
