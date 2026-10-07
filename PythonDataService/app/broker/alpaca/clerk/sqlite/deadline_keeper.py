@@ -180,16 +180,16 @@ class DeadlineKeeper:
             try:
                 wake_in_ms = (await self.tick()).wake_in_ms
             except Exception:
-                if being_cancelled():
-                    # The stop landed inside a broker call and came out as this error. Stop.
-                    raise asyncio.CancelledError from None
                 # A failed round must not end the task: the next round reads the
-                # same books and acts on whatever is still due.
-                logger.exception(
-                    "the deadline keeper's round failed",
-                    extra={"action": "deadline_keeper_round_failed", "account_id": self._repo.account_id},
-                )
+                # same books and acts on whatever is still due. A stop that came
+                # out of a broker call as this error is no failure, and ends below.
+                if not being_cancelled():
+                    logger.exception(
+                        "the deadline keeper's round failed",
+                        extra={"action": "deadline_keeper_round_failed", "account_id": self._repo.account_id},
+                    )
             if being_cancelled():
+                # However the round ended, a keeper that is being stopped stops.
                 raise asyncio.CancelledError
             rounds += 1
             await self._rest(wake_in_ms / 1000, self._nudged)

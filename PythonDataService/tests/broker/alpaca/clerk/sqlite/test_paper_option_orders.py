@@ -339,7 +339,7 @@ def test_one_option_orders_answer_becomes_the_order_evidence_the_books_take() ->
     assert evidence_of_the_order_asked(answer, asked=asked) == evidence
     for another in (
         replace(asked, contracts=3), replace(asked, limit_price=Decimal("10.01")),
-        replace(asked, order_type="market", limit_price=None),
+        replace(asked, order_type="market"), replace(asked, order_type="market", limit_price=None),
     ):
         with pytest.raises(BrokerEvidenceUnavailable):
             evidence_of_the_order_asked(answer, asked=another)
@@ -755,8 +755,12 @@ async def test_a_wait_asked_to_run_longer_than_a_day_is_refused_by_name(paper: P
     await paper.resting(decision="d-1")
 
     with pytest.raises(EntryOutcomeWaitRefused) as refused:
-        await paper.clerk.await_entry_outcome(
-            strategy_instance_id="a", decision_id="d-1", until_ms=paper.clock() + MAX_ENTRY_OUTCOME_WAIT_MS + 1
+        # Under a limit of its own: a wait that was taken after all would never end on this test's clock.
+        await asyncio.wait_for(
+            paper.clerk.await_entry_outcome(
+                strategy_instance_id="a", decision_id="d-1", until_ms=paper.clock() + MAX_ENTRY_OUTCOME_WAIT_MS + 1
+            ),
+            timeout=2,
         )
 
     assert refused.value.reason_code == ENTRY_OUTCOME_LIMIT_TOO_FAR

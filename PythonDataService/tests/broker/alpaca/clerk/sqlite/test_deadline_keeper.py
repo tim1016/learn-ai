@@ -152,6 +152,26 @@ async def test_two_bots_on_one_account_one_at_its_deadline_while_the_other_enter
 # ── the task itself ──────────────────────────────────────────────────────
 
 
+async def _stopped_within_two_seconds(keeper: DeadlineKeeper) -> bool:
+    """Whether ``stop()`` returned by itself and the keeper's task ended cancelled.
+
+    Watched from outside, never through ``asyncio.wait_for``: a timeout
+    there cancels the ``stop()`` it wraps, which passes the cancel on to the
+    keeper's task, and a keeper that had not stopped would then look as if
+    it had.
+    """
+    task = keeper._task
+    assert task is not None
+    stopping = asyncio.create_task(keeper.stop())
+    try:
+        returned, _still_waiting = await asyncio.wait({stopping}, timeout=2)
+        return returned == {stopping} and task.cancelled()
+    finally:
+        stopping.cancel()
+        task.cancel()
+        await asyncio.gather(stopping, task, return_exceptions=True)
+
+
 async def test_accepting_an_entry_wakes_a_sleeping_keeper(paper: PaperOptions) -> None:  # noqa: F811
     woken: list[bool] = []
 
@@ -222,12 +242,8 @@ async def test_a_keeper_stopped_in_the_moment_it_wakes_still_stops(paper: PaperO
     await asyncio.sleep(0.01)
     keeper.nudge()
 
-    task = keeper._task
-    assert task is not None
-
-    await asyncio.wait_for(keeper.stop(), timeout=2)
-
-    assert keeper._task is None and task.cancelled()
+    assert await _stopped_within_two_seconds(keeper)
+    assert keeper._task is None
 
 
 async def test_a_stop_that_lands_inside_alpacas_cancel_while_the_claim_cannot_be_renewed_still_stops(
@@ -245,14 +261,10 @@ async def test_a_stop_that_lands_inside_alpacas_cancel_while_the_claim_cannot_be
     paper.venue.cancel = cancel_that_never_answers  # type: ignore[method-assign]
     keeper = DeadlineKeeper(repo=paper.repo, trade=paper.venue, off_loop=run_inline)
     keeper.start()
-    task = keeper._task
-    assert task is not None
     await asyncio.wait_for(inside_the_cancel.wait(), timeout=2)
     monkeypatch.setattr(paper.repo, "renew_operation_claim", lambda **_claim: False)
 
-    await asyncio.wait_for(keeper.stop(), timeout=2)
-
-    assert task.cancelled()
+    assert await _stopped_within_two_seconds(keeper)
     assert paper.cancel_requests(order_ref) != []
 
 
@@ -270,13 +282,9 @@ async def test_a_stop_that_comes_out_of_a_round_as_any_other_error_still_stops(p
     monkeypatch.setattr(deadline_keeper, "cancel_resting_entries", round_that_turns_a_stop_into_an_error)
     keeper = DeadlineKeeper(repo=paper.repo, trade=paper.venue, off_loop=run_inline)
     keeper.start()
-    task = keeper._task
-    assert task is not None
     await asyncio.wait_for(inside_the_round.wait(), timeout=2)
 
-    await asyncio.wait_for(keeper.stop(), timeout=2)
-
-    assert task.cancelled()
+    assert await _stopped_within_two_seconds(keeper)
 
 
 async def test_one_entrys_cancel_that_is_stopped_ends_as_stopped_and_is_not_read_as_a_held_claim(
