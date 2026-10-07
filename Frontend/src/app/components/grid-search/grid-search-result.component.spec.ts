@@ -1,14 +1,16 @@
 import { provideRouter } from '@angular/router';
-import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import { GridSearchResultComponent } from './grid-search-result.component';
 import { RESEARCH_DEFAULT_FILL_MODE } from '../../models/fill-mode';
 import { formatReceiptLabel } from '../../shared/pipes/receipt-label.pipe';
 import { JobsService } from '../../services/jobs.service';
+import { etMidnightMs } from '../../shared/date/et-midnight';
+import { fakeCharts } from '../golden-search/testing/fake-charts';
 import { GridSearchService } from './grid-search.service';
 import { gridSearchDetail as detail } from './testing/fixtures';
-import type { CellPageQuery, GridSearchCell, GridSearchCellPage } from './grid-search.types';
+import type { CellPageQuery, GridSearchCell, GridSearchCellCurves, GridSearchCellPage } from './grid-search.types';
 
 function cell(overrides: Partial<GridSearchCell> = {}): GridSearchCell {
   return {
@@ -26,6 +28,7 @@ function cell(overrides: Partial<GridSearchCell> = {}): GridSearchCell {
     error: null,
     exploratory: false,
     completed_at_ms: 1704172600000,
+    has_curve: true,
     is_leader: false,
     eligible: true,
     ...overrides,
@@ -33,14 +36,47 @@ function cell(overrides: Partial<GridSearchCell> = {}): GridSearchCell {
 }
 
 function page(cells: GridSearchCell[], overrides: Partial<GridSearchCellPage> = {}): GridSearchCellPage {
-  return { total: cells.length, page: 1, page_size: 25, sort_by: 'sharpe_ratio', direction: 'desc', cells, ...overrides };
+  return { total: cells.length, page: 1, page_size: 25, sort_by: 'sharpe_ratio', direction: 'desc', without_curve: 0, cells, ...overrides };
+}
+
+/** Each asked cell's curve over two sessions, ending 5% up after a 1% dip from its start. */
+function curves(hashes: readonly string[]): GridSearchCellCurves {
+  return {
+    sessions_ms: [etMidnightMs('2024-01-02'), etMidnightMs('2024-01-03')],
+    curves: hashes.map((params_hash) => ({ params_hash, first_session: 0, cumulative_return: [-0.01, 0.05], drawdown: [-0.01, 0], deepest_drawdown: -0.01 })),
+    not_recorded: [],
+  };
 }
 
 async function renderResult(service: Partial<GridSearchService>) {
   return render(GridSearchResultComponent, {
     inputs: { searchId: 'abc', pollMs: 0 },
-    providers: [provideRouter([]), { provide: JobsService, useValue: { cancelJob: vi.fn(async () => undefined) } }, { provide: GridSearchService, useValue: { get: vi.fn(async (_id: string) => detail()), cells: vi.fn(async (_id: string, _query: CellPageQuery) => page([cell()])), delete: vi.fn(async (_id: string) => undefined), finish: vi.fn(async () => 'job-2'), ...service } }],
+    providers: [
+      provideRouter([]),
+      ...fakeCharts().providers,
+      { provide: JobsService, useValue: { cancelJob: vi.fn(async () => undefined) } },
+      {
+        provide: GridSearchService,
+        useValue: {
+          get: vi.fn(async (_id: string) => detail()),
+          cells: vi.fn(async (_id: string, _query: CellPageQuery) => page([cell()])),
+          cellCurves: vi.fn(async (_id: string, hashes: readonly string[]) => curves(hashes)),
+          delete: vi.fn(async (_id: string) => undefined),
+          finish: vi.fn(async () => 'job-2'),
+          ...service,
+        },
+      },
+    ],
   });
+}
+
+/** The leader (h2, the fixture detail's leader) above one other cell. */
+function leaderAndAnother(): GridSearchCell[] {
+  return [cell({ params_hash: 'h2', params: { short_window: 5, long_window: 30 }, is_leader: true, sharpe_ratio: 1.9 }), cell()];
+}
+
+function drawnChart(): HTMLElement {
+  return within(screen.getByRole('region', { name: 'Equity curves' })).getByRole('img');
 }
 
 describe('GridSearchResultComponent', () => {
@@ -74,6 +110,80 @@ describe('GridSearchResultComponent', () => {
     expect(screen.getByText(/short_window=5, long_window=30/)).not.toBeNull();
     const sortedHeader = screen.getByRole('columnheader', { name: /sharpe/i });
     expect(sortedHeader.getAttribute('aria-sort')).toBe('descending');
+  });
+
+  it('draws the leader when the search opens, adds the cells you tick, reads each curve once, and clears', async () => {
+    const cellCurves = vi.fn(async (_id: string, hashes: readonly string[]) => curves(hashes));
+    await renderResult({ cells: vi.fn(async () => page(leaderAndAnother())), cellCurves });
+
+    await waitFor(() => expect(drawnChart().getAttribute('aria-label')).toContain('1 cell drawn'));
+    expect((screen.getByRole('checkbox', { name: 'Draw short_window=5, long_window=30' }) as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Draw short_window=10, long_window=30' }));
+    await waitFor(() => expect(drawnChart().getAttribute('aria-label')).toContain('2 cells drawn'));
+    // The tick asks only for the curve the page does not hold yet.
+    expect(cellCurves.mock.calls).toEqual([['abc', ['h2']], ['abc', ['h1']]]);
+    expect(screen.getByText('2 of at most 200 drawn')).not.toBeNull();
+    // The table names the leader; a plain cell is named by its settings alone.
+    const panel = screen.getByRole('region', { name: 'Equity curves' });
+    fireEvent.click(within(panel).getByRole('button', { name: 'Show as table' }));
+    const rows = within(panel).getAllByRole('row').map((row) => [...row.querySelectorAll('th, td')].map((item) => item.textContent?.trim()));
+    expect(rows).toEqual([
+      ['Cell', 'Settings', 'First session', 'Last session', 'Ended at', 'Deepest fall'],
+      ['Leader', 'short_window=5, long_window=30', '2024-01-02', '2024-01-03', '+5.0%', '-1.0%'],
+      ['—', 'short_window=10, long_window=30', '2024-01-02', '2024-01-03', '+5.0%', '-1.0%'],
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(screen.getByText('Tick cells in the table below to draw them here.')).not.toBeNull();
+    // Clearing is the owner's choice: the leader does not come back on the next read.
+    expect((screen.getByRole('checkbox', { name: 'Draw short_window=5, long_window=30' }) as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('draws every cell on the page that has a curve at one click', async () => {
+    const cellCurves = vi.fn(async (_id: string, hashes: readonly string[]) => curves(hashes));
+    await renderResult({ cells: vi.fn(async () => page([...leaderAndAnother(), cell({ params_hash: 'h3', params: { short_window: 20, long_window: 30 }, has_curve: false })])), cellCurves });
+    await waitFor(() => expect(drawnChart().getAttribute('aria-label')).toContain('1 cell drawn'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Draw every cell on this page' }));
+
+    await waitFor(() => expect(drawnChart().getAttribute('aria-label')).toContain('2 cells drawn'));
+    expect(cellCurves.mock.lastCall).toEqual(['abc', ['h1']]);
+    expect((screen.getByRole('button', { name: 'Draw every cell on this page' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('lists a cell recorded before cells kept their curve, says so, and never draws it', async () => {
+    const cellCurves = vi.fn(async (_id: string, hashes: readonly string[]) => curves(hashes));
+    const old = leaderAndAnother().map((item) => ({ ...item, has_curve: false }));
+    await renderResult({ cells: vi.fn(async () => page(old, { without_curve: 2 })), cellCurves });
+
+    expect(await screen.findByText('Completed cells with no curve recorded: 2. They are listed with their numbers and cannot be drawn.')).not.toBeNull();
+    expect(screen.getAllByText('Curve not recorded')).toHaveLength(2);
+    expect((screen.getAllByRole('checkbox') as HTMLInputElement[]).map((box) => box.disabled)).toEqual([true, true]);
+    // The leader has no curve, so nothing is drawn and nothing is asked for.
+    expect(screen.getByText('Tick cells in the table below to draw them here.')).not.toBeNull();
+    expect(cellCurves).not.toHaveBeenCalled();
+  });
+
+  it('says a ticked cell kept no curve when the server names it so, and never draws it flat', async () => {
+    const cellCurves = vi.fn(async (_id: string, hashes: readonly string[]): Promise<GridSearchCellCurves> => ({ sessions_ms: [], curves: [], not_recorded: [...hashes] }));
+    await renderResult({ cells: vi.fn(async () => page(leaderAndAnother())), cellCurves });
+
+    expect(await screen.findByText('Curve not recorded for this cell.')).not.toBeNull();
+    expect(within(screen.getByRole('region', { name: 'Equity curves' })).queryByRole('img')).toBeNull();
+  });
+
+  it('offers the curve read again when it fails', async () => {
+    const cellCurves = vi.fn(async (): Promise<GridSearchCellCurves> => {
+      throw new Error('offline');
+    });
+    await renderResult({ cells: vi.fn(async () => page(leaderAndAnother())), cellCurves });
+    expect((await screen.findByRole('alert')).textContent).toContain('The curves could not be loaded.');
+
+    cellCurves.mockImplementation(async () => curves(['h2']));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    await waitFor(() => expect(drawnChart().getAttribute('aria-label')).toContain('1 cell drawn'));
   });
 
   it('re-fetches from the server when a column is sorted', async () => {

@@ -33,6 +33,7 @@ APPLIED_VERSION_DIGESTS: dict[int, str] = {
     13: "d55e48c00bddb801",
     14: "c640fe2ce26a70e1",
     15: "740c3fb259daa2fd",
+    16: "3daafaddfe68c5ad",
 }
 
 
@@ -284,3 +285,32 @@ async def test_version_15_leaves_recorded_evaluations_without_a_curve_and_keeps_
         with pytest.raises(asyncpg.CheckViolationError):
             await scratch_db.execute(f"UPDATE research_golden_search_evaluations SET equity_close_ms = {close_ms}, equity_values = {values} WHERE evaluation_key = 'old-run'")
 
+
+async def test_version_16_leaves_recorded_cells_without_a_curve_and_keeps_the_two_arrays_the_same_length(scratch_db: asyncpg.Connection) -> None:
+    """Every Grid Search cell keeps its daily equity from here on (#2935); a cell recorded before has none, and is not given one."""
+    await ensure_schema(scratch_db)
+    await scratch_db.execute("ALTER TABLE research_grid_search_cells DROP CONSTRAINT ck_research_grid_search_cells_equity_arrays")
+    await scratch_db.execute("ALTER TABLE research_grid_search_cells DROP COLUMN equity_close_ms, DROP COLUMN equity_values")
+    await scratch_db.execute("DELETE FROM research_schema_migrations WHERE version = 16")
+    await scratch_db.execute(
+        """
+        INSERT INTO research_grid_searches (
+            id, owner_kind, strategy_key, symbol, status, attempt, created_at_ms, updated_at_ms, request_json, receipt_json, expected_cells
+        ) VALUES ('g1', 'user', 'sma_crossover', 'SPY', 'completed', 1, 1, 1, '{}'::jsonb, '{}'::jsonb, 1)
+        """
+    )
+    await scratch_db.execute(
+        """
+        INSERT INTO research_grid_search_cells (search_id, params_hash, params_json, status, attempt, completed_at_ms)
+        VALUES ('g1', 'old-cell', '{}'::jsonb, 'completed', 1, 1)
+        """
+    )
+
+    await ensure_schema(scratch_db)
+
+    old = await scratch_db.fetchrow("SELECT equity_close_ms, equity_values FROM research_grid_search_cells WHERE params_hash = 'old-cell'")
+    assert (old["equity_close_ms"], old["equity_values"]) == (None, None)
+    await scratch_db.execute("UPDATE research_grid_search_cells SET equity_close_ms = '{1,2}', equity_values = '{10.0,11.0}' WHERE params_hash = 'old-cell'")
+    for close_ms, values in (("'{1,2}'", "'{10.0}'"), ("'{1}'", "NULL"), ("NULL", "'{10.0}'")):
+        with pytest.raises(asyncpg.CheckViolationError):
+            await scratch_db.execute(f"UPDATE research_grid_search_cells SET equity_close_ms = {close_ms}, equity_values = {values} WHERE params_hash = 'old-cell'")

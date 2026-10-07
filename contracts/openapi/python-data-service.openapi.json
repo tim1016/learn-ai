@@ -24164,10 +24164,9 @@
       },
       "GoldenSearchRunCurve": {
         "additionalProperties": false,
-        "description": "One run's daily curve against the read's ``sessions_ms``: its values from ``first_session`` to its last session.",
         "properties": {
           "cumulative_return": {
-            "description": "Equity over the study's starting capital, less 1, at each session close from first_session on; null at a session the run did not score.",
+            "description": "Equity over the run's starting capital, less 1, at each session close from first_session on; null at a session the run did not score.",
             "items": {
               "anyOf": [
                 {
@@ -24227,11 +24226,11 @@
           }
         },
         "required": [
-          "evaluation_key",
           "first_session",
           "cumulative_return",
           "drawdown",
-          "deepest_drawdown"
+          "deepest_drawdown",
+          "evaluation_key"
         ],
         "title": "GoldenSearchRunCurve",
         "type": "object"
@@ -26934,6 +26933,116 @@
         "title": "GreeksSnapshot",
         "type": "object"
       },
+      "GridSearchCellCurve": {
+        "additionalProperties": false,
+        "properties": {
+          "cumulative_return": {
+            "description": "Equity over the run's starting capital, less 1, at each session close from first_session on; null at a session the run did not score.",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Cumulative Return",
+            "type": "array"
+          },
+          "deepest_drawdown": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The lowest value of drawdown, at a session close; the engine's bar-by-bar worst fall can be deeper. Null without a drawdown.",
+            "title": "Deepest Drawdown"
+          },
+          "drawdown": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Equity over its running peak, less 1, against the same sessions; null as a whole when the peak never rose above 0.",
+            "title": "Drawdown"
+          },
+          "first_session": {
+            "description": "The index in sessions_ms of the run's first session close.",
+            "minimum": 0.0,
+            "title": "First Session",
+            "type": "integer"
+          },
+          "params_hash": {
+            "title": "Params Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "first_session",
+          "cumulative_return",
+          "drawdown",
+          "deepest_drawdown",
+          "params_hash"
+        ],
+        "title": "GridSearchCellCurve",
+        "type": "object"
+      },
+      "GridSearchCellCurvesResponse": {
+        "description": "The named cells' daily curves on the search's starting capital (#2935).",
+        "properties": {
+          "curves": {
+            "items": {
+              "$ref": "#/components/schemas/GridSearchCellCurve"
+            },
+            "title": "Curves",
+            "type": "array"
+          },
+          "not_recorded": {
+            "description": "The cells asked for that kept no daily equity; never drawn as a flat line.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Not Recorded",
+            "type": "array"
+          },
+          "sessions_ms": {
+            "description": "Every session close any returned curve scored, in order, sent once.",
+            "items": {
+              "maximum": 253402300799999.0,
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "title": "Sessions Ms",
+            "type": "array"
+          }
+        },
+        "required": [
+          "sessions_ms",
+          "curves",
+          "not_recorded"
+        ],
+        "title": "GridSearchCellCurvesResponse",
+        "type": "object"
+      },
       "GridSearchCellPageResponse": {
         "properties": {
           "cells": {
@@ -26966,6 +27075,11 @@
           "total": {
             "title": "Total",
             "type": "integer"
+          },
+          "without_curve": {
+            "description": "Completed cells of the whole search that kept no daily equity; they are listed and cannot be drawn.",
+            "title": "Without Curve",
+            "type": "integer"
           }
         },
         "required": [
@@ -26974,6 +27088,7 @@
           "page_size",
           "sort_by",
           "direction",
+          "without_curve",
           "cells"
         ],
         "title": "GridSearchCellPageResponse",
@@ -27017,6 +27132,11 @@
           },
           "exploratory": {
             "title": "Exploratory",
+            "type": "boolean"
+          },
+          "has_curve": {
+            "description": "The cell kept its daily equity; false for a failed cell and for one recorded before cells kept it.",
+            "title": "Has Curve",
             "type": "boolean"
           },
           "is_leader": {
@@ -27114,6 +27234,7 @@
           "error",
           "exploratory",
           "completed_at_ms",
+          "has_curve",
           "is_leader",
           "eligible"
         ],
@@ -70009,6 +70130,64 @@
           }
         },
         "summary": "List Grid Search Cells",
+        "tags": [
+          "research-grid-search"
+        ]
+      }
+    },
+    "/api/research/grid-search/{search_id}/cells/curves": {
+      "get": {
+        "description": "The named cells' daily curves: cumulative return and fall from peak at each session close (#2935).",
+        "operationId": "get_grid_search_cell_curves_api_research_grid_search__search_id__cells_curves_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "search_id",
+            "required": true,
+            "schema": {
+              "title": "Search Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The params hash of each cell to draw.",
+            "in": "query",
+            "name": "params_hash",
+            "required": true,
+            "schema": {
+              "description": "The params hash of each cell to draw.",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 200,
+              "title": "Params Hash",
+              "type": "array"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GridSearchCellCurvesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Grid Search Cell Curves",
         "tags": [
           "research-grid-search"
         ]

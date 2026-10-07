@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 import asyncpg
 import pytest
@@ -156,6 +157,26 @@ async def test_rewriting_a_cell_overwrites_rather_than_appends(conn: asyncpg.Con
     assert [(cell.params_hash, cell.sharpe_ratio) for cell in cells] == [("a", 3.0), ("b", None)]
     assert row is not None and (row.completed_cells, row.failed_cells) == (1, 1)
     assert await repo.existing_params_hashes(conn, sid) == {"a", "b"}
+
+
+async def test_a_cell_keeps_its_daily_equity_and_a_rewrite_replaces_it(conn: asyncpg.Connection, unique: str) -> None:
+    sid = f"s-{unique}"
+    await repo.create_search(conn, _new_search(sid, symbol=unique))
+    attempt = await repo.claim_attempt(conn, sid, job_id=None)
+    curve = [(1_736_197_200_000, 100_500.0), (1_736_283_600_000, 99_990.0)]
+    await repo.write_cells(conn, sid, attempt, [replace(_cell("a"), daily_equity=curve), _cell("kept-none"), _cell("failed", status="failed", sharpe=None)])
+
+    page = await repo.list_cells(conn, sid, sort_by="params_hash", direction="asc")
+
+    assert {cell.params_hash: cell.has_curve for cell in page.cells} == {"a": True, "failed": False, "kept-none": False}
+    # A failed cell never had a curve to keep: only the completed cell without one is counted.
+    assert page.without_curve == 1
+    assert {cell.params_hash: cell.has_curve for cell in await repo.list_all_cells(conn, sid)} == {"a": True, "failed": False, "kept-none": False}
+    assert await repo.cell_curves(conn, sid, ["a", "kept-none", "no-such-cell"]) == {"a": curve}
+
+    await repo.write_cells(conn, sid, attempt, [replace(_cell("a"), daily_equity=curve[:1])])
+
+    assert await repo.cell_curves(conn, sid, ["a"]) == {"a": curve[:1]}
 
 
 async def test_a_completed_search_is_immutable_to_claims_and_writes(conn: asyncpg.Connection, unique: str) -> None:

@@ -20,6 +20,7 @@ from app.research.grid_search.models import GridSearchSpec
 from app.research.sweep.grid import LowHighStepRange, ParamRange, ValueListRange
 from app.research.sweep.ranking import RankingMeasure
 from app.schemas.engine_backtest import COMMISSION_PER_ORDER_DESCRIPTION
+from app.schemas.session_curves import SessionCurve, SessionsMs
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 SYMBOL_PATTERN = r"^[A-Z][A-Z0-9.\-]{0,11}$"
@@ -186,6 +187,7 @@ class GridSearchCellResponse(BaseModel):
     error: str | None
     exploratory: bool
     completed_at_ms: int
+    has_curve: bool = Field(description="The cell kept its daily equity; false for a failed cell and for one recorded before cells kept it.")
     is_leader: bool
     eligible: bool
 
@@ -196,4 +198,17 @@ class GridSearchCellPageResponse(BaseModel):
     page_size: int
     sort_by: str
     direction: Literal["asc", "desc"]
+    without_curve: int = Field(description="Completed cells of the whole search that kept no daily equity; they are listed and cannot be drawn.")
     cells: list[GridSearchCellResponse]
+
+
+class GridSearchCellCurve(SessionCurve):
+    params_hash: str
+
+
+class GridSearchCellCurvesResponse(BaseModel):
+    """The named cells' daily curves on the search's starting capital (#2935)."""
+
+    sessions_ms: SessionsMs = Field(description="Every session close any returned curve scored, in order, sent once.")
+    curves: list[GridSearchCellCurve]
+    not_recorded: list[str] = Field(description="The cells asked for that kept no daily equity; never drawn as a flat line.")

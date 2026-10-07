@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic_core import PydanticUndefinedType
 
 logger = logging.getLogger(__name__)
 
@@ -16,9 +17,10 @@ async def request_validation_exception_handler(
     request: Request,
     exc: RequestValidationError,
 ) -> JSONResponse:
-    """Return a JSON-safe 422 even when rejected input is NaN/Infinity."""
+    """Return a JSON-safe 422 even when rejected input is NaN/Infinity or was never sent."""
     del request
-    content = jsonable_encoder({"detail": exc.errors()})
+    # A required list parameter that was not sent is reported with pydantic's "undefined" as its input, which has no JSON form.
+    content = jsonable_encoder({"detail": exc.errors()}, custom_encoder={PydanticUndefinedType: lambda _: None})
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content=_replace_non_finite(content),

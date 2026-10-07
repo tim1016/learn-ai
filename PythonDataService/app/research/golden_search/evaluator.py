@@ -30,7 +30,7 @@ Formula:
   * daily curve — every completed run keeps ``(session close ms, equity)``
     for each session it scored: the engine's last equity sample of each ET
     date (``equity_day_ends``, filled on a summary run too), anchored by
-    ``evidence.daily_equity``. It is the series a detail run's
+    ``sweep.daily_equity`` in Grid Search's engine projection. It is the series a detail run's
     ``daily_equity`` holds. A run whose day ends cannot be anchored keeps
     its metrics and no curve.
 Reference: PRD https://github.com/tim1016/learn-ai/issues/2696 "Small
@@ -58,12 +58,12 @@ from app.jobs.progress import JobCancelled
 from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.golden_search import repository as repo
 from app.research.golden_search.declarations import point_hash as hash_point
-from app.research.golden_search.evidence import daily_equity
 from app.research.golden_search.protocol import BASE_SCENARIO, ExecutionAssumptions, StressScenario, canonical_json
 from app.research.golden_search.selection import Metrics
 from app.research.golden_search.zoom import BudgetExhausted, RetryAllowanceExhausted
 from app.research.grid_search.service import window_dates
 from app.research.persistence.db import run_sync, with_connection
+from app.research.sweep.daily_equity import daily_equity
 from app.research.sweep.grid import RunSpec
 from app.schemas.engine_backtest import EngineBacktestRequest, EngineBacktestResponse
 from app.utils.session_anchors import et_date_at_ms
@@ -176,7 +176,7 @@ class EvaluationResult:
     # Bounded detail: ``initial_cash``, daily equity points and the trade list.
     detail: dict[str, Any] | None = None
     # ``(session close ms, equity)`` per session, for every completed run whose day ends could be anchored.
-    curve: list[tuple[int, float]] | None = None
+    curve: Sequence[tuple[int, float]] | None = None
 
 
 ExecuteBacktest = Callable[[EvaluationRequest], EvaluationResult]
@@ -254,7 +254,7 @@ def detail_payload(response: EngineBacktestResponse, initial_cash: float) -> dic
 
 
 def project_response(request: EvaluationRequest, response: EngineBacktestResponse, *, strategy_key: str, initial_cash: float) -> EvaluationResult:
-    """Grid Search's statistics mapping (``engine_adapter.cell_from_response``), plus the detail payload when asked."""
+    """Grid Search's statistics mapping and daily curve (``engine_adapter.cell_from_response``), plus the detail payload when asked."""
     # The adapter imports the engine service; only a real projection needs it.
     from app.research.grid_search.engine_adapter import cell_from_response
 
@@ -271,20 +271,7 @@ def project_response(request: EvaluationRequest, response: EngineBacktestRespons
         error=cell.error,
     )
     detail = detail_payload(response, initial_cash) if request.detail and metrics.status == "completed" else None
-    return EvaluationResult(metrics=metrics, detail=detail, curve=daily_curve(response) if metrics.status == "completed" else None)
-
-
-def daily_curve(response: EngineBacktestResponse) -> list[tuple[int, float]] | None:
-    """The run's equity at each session close, or ``None`` when the engine kept no day ends or they cannot be anchored to sessions.
-
-    The curve only draws the run; its metrics stand without it, so a day end
-    the calendar refuses loses the curve and never the result.
-    """
-    try:
-        return daily_equity(response.equity_day_ends) or None
-    except ValueError:
-        logger.warning("golden search run kept no daily curve", extra={"action": "golden_search_curve_unanchored"}, exc_info=True)
-        return None
+    return EvaluationResult(metrics=metrics, detail=detail, curve=cell.daily_equity)
 
 
 def engine_executor(

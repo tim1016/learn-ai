@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
@@ -49,8 +49,8 @@ class NewSearch:
 
 
 @dataclass(frozen=True)
-class CellResult:
-    """One completed or failed cell, as the runner hands it to persistence."""
+class CellSummary:
+    """One cell's settings and summary numbers: what a search ranks and lists."""
 
     params_hash: str
     params: dict[str, Any]
@@ -67,10 +67,23 @@ class CellResult:
 
 
 @dataclass(frozen=True, kw_only=True)
-class CellRow(CellResult):
+class CellResult(CellSummary):
+    """One completed or failed cell, as the runner hands it to persistence."""
+
+    #: The run's ``(session close ms, equity)`` at each session it scored (#2935); none for a failed cell or a
+    #: run whose day ends could not be anchored to sessions.
+    daily_equity: Sequence[tuple[int, float]] | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class CellRow(CellSummary):
+    """A recorded cell as a reader gets it; its daily equity is read apart (``repository.cell_curves``)."""
+
     search_id: str
     attempt: int
     completed_at_ms: int
+    #: False for a failed cell and for one recorded before cells kept their daily equity.
+    has_curve: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -105,6 +118,8 @@ class CellPage:
     page: int
     page_size: int
     cells: list[CellRow]
+    #: Completed cells of the whole search that kept no daily equity: recorded before cells kept one.
+    without_curve: int = 0
 
 
 # ── Spec ─────────────────────────────────────────────────────────────────

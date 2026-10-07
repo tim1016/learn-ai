@@ -105,6 +105,8 @@ export interface GridSearchCell {
   error: string | null;
   exploratory: boolean;
   completed_at_ms: number;
+  /** The cell kept its daily equity; false for a failed cell and for one recorded before cells kept it. */
+  has_curve: boolean;
   is_leader: boolean;
   eligible: boolean;
 }
@@ -122,7 +124,27 @@ export interface CellPageQuery {
 
 export interface GridSearchCellPage extends CellPageQuery {
   total: number;
+  /** Completed cells of the whole search that kept no daily equity. */
+  without_curve: number;
   cells: GridSearchCell[];
+}
+
+/** One cell's daily curve: its values from `first_session` on along its read's `sessions_ms`, null at a session it did not score. */
+export interface GridSearchCellCurve {
+  params_hash: string;
+  first_session: number;
+  cumulative_return: (number | null)[];
+  /** Null as a whole when the cell's peak equity never rose above 0. */
+  drawdown: (number | null)[] | null;
+  deepest_drawdown: number | null;
+}
+
+export interface GridSearchCellCurves {
+  /** Every session close any returned curve scored, in order. */
+  sessions_ms: number[];
+  curves: GridSearchCellCurve[];
+  /** The cells asked for that kept no daily equity. */
+  not_recorded: string[];
 }
 
 export interface GridSearchHistoryFilters {

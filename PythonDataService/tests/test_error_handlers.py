@@ -6,6 +6,7 @@ import json
 
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
+from pydantic_core import PydanticUndefined
 
 from app.utils.error_handlers import (
     catalog_schema_not_ready_exception_handler,
@@ -38,6 +39,16 @@ async def test_polygon_exception_handler_returns_500_json_response() -> None:
         "error": "boom",
         "detail": "An error occurred while processing your request",
     }
+
+
+async def test_a_required_list_parameter_that_was_not_sent_is_a_422_not_a_500() -> None:
+    """FastAPI reports a list query parameter that was not sent with pydantic's "undefined" as its input."""
+    exc = RequestValidationError([{"type": "list_type", "loc": ("query", "params_hash"), "msg": "Input should be a valid list", "input": PydanticUndefined}])
+
+    response = await request_validation_exception_handler(_make_request(), exc)
+
+    assert response.status_code == 422
+    assert json.loads(response.body)["detail"] == [{"type": "list_type", "loc": ["query", "params_hash"], "msg": "Input should be a valid list", "input": None}]
 
 
 async def test_catalog_schema_not_ready_handler_returns_a_typed_503_not_a_500() -> None:

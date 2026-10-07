@@ -6,7 +6,10 @@ suppressed, reads bound to the receipted data snapshot, and the response
 held to its summary: ``summary_only`` keeps the statistics and trade list
 byte-identical while the per-bar artifacts a cell discards are never built
 (#1941 — a minute-resolution cell held ~480 MB of response copies and
-retained bars to read six numbers). Kept apart from
+retained bars to read six numbers). A completed run also keeps its daily
+equity (#2935): the engine's last equity sample of each ET date
+(``equity_day_ends``, filled on a summary run too), anchored at that date's
+session close by ``sweep.daily_equity``. Kept apart from
 ``service.py`` so the orchestration layer (which the Walk-Forward runner
 also drives) never imports the HTTP router; the router and the job entry
 inject :func:`default_execute_cell`, and tests inject a fake.
@@ -19,13 +22,17 @@ Validated against: tests/research/grid_search/test_service.py (request
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 from app.research.grid_search.models import CellResult, SearchRow
 from app.research.grid_search.service import GridSearchSpec, window_dates
+from app.research.sweep.daily_equity import daily_equity
 from app.research.sweep.grid import RunSpec
 from app.schemas.engine_backtest import EngineBacktestRequest, EngineBacktestResponse
 from app.services.engine_backtest_service import execute_engine_backtest
+
+logger = logging.getLogger(__name__)
 
 
 def engine_request(row: SearchRow, spec: GridSearchSpec, candidate: RunSpec) -> EngineBacktestRequest:
@@ -49,8 +56,21 @@ def engine_request(row: SearchRow, spec: GridSearchSpec, candidate: RunSpec) -> 
     )
 
 
+def daily_curve(response: EngineBacktestResponse) -> list[tuple[int, float]] | None:
+    """The run's equity at each session close, or ``None`` when the engine kept no day ends or they cannot be anchored to sessions.
+
+    The curve only draws the run; its numbers stand without it, so a day end
+    the calendar refuses loses the curve and never the result.
+    """
+    try:
+        return daily_equity(response.equity_day_ends) or None
+    except ValueError:
+        logger.warning("engine run kept no daily curve", extra={"action": "run_curve_unanchored"}, exc_info=True)
+        return None
+
+
 def cell_from_response(candidate: RunSpec, response: EngineBacktestResponse) -> CellResult:
-    """Project one engine response onto the summary row a search keeps."""
+    """Project one engine response onto the summary row a search keeps, with the run's daily equity."""
     if not response.success:
         return CellResult(params_hash=candidate.params_hash, params=dict(candidate.params), status="failed", error=response.error or "engine failed")
     stats = response.statistics or {}
@@ -65,6 +85,7 @@ def cell_from_response(candidate: RunSpec, response: EngineBacktestResponse) -> 
         max_drawdown_pct=stats.get("max_drawdown_pct"),
         win_rate=stats.get("win_rate"),
         bars_consumed=response.bars_consumed,
+        daily_equity=daily_curve(response),
     )
 
 

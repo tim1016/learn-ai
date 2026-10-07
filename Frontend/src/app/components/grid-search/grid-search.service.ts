@@ -7,6 +7,7 @@ import { JobsService } from '../../services/jobs.service';
 import type { StrategyInfo } from '../strategy-lab/strategy-lab.models';
 import type {
   CellPageQuery,
+  GridSearchCellCurves,
   GridSearchCellPage,
   GridSearchDetail,
   GridSearchHistoryFilters,
@@ -99,6 +100,12 @@ export class GridSearchService {
       fromObject: { sort_by: query.sort_by, direction: query.direction, page: String(query.page), page_size: String(query.page_size), pin_leader: String(query.pin_leader ?? false) },
     });
     return firstValueFrom(this.http.get<GridSearchCellPage>(`${this.base}/${encodeURIComponent(id)}/cells`, { params }));
+  }
+
+  /** The named cells' daily curves, and which of them kept none. */
+  async cellCurves(id: string, paramsHashes: readonly string[]): Promise<GridSearchCellCurves> {
+    const params = paramsHashes.reduce((query, hash) => query.append('params_hash', hash), new HttpParams());
+    return firstValueFrom(this.http.get<GridSearchCellCurves>(`${this.base}/${encodeURIComponent(id)}/cells/curves`, { params }));
   }
 
   async delete(id: string): Promise<void> {

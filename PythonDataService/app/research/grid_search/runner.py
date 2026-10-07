@@ -15,7 +15,7 @@ Validated against: tests/research/grid_search/test_runner.py.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from app.research.grid_search.models import CellResult
 from app.research.sweep.execution import run_each
@@ -28,7 +28,6 @@ class GridRunSummary:
     executed_cells: int
     completed_cells: int
     failed_cells: int
-    results: list[CellResult] = field(default_factory=list)
 
 
 def run_grid(
@@ -46,10 +45,12 @@ def run_grid(
 
     ``skip_params_hashes`` is how Finish re-runs only the missing cells: a
     cell with a row is simply not run again. Progress counts skipped cells
-    as done so the bar reflects the whole search, not the remainder.
+    as done so the bar reflects the whole search, not the remainder. A cell is
+    counted and let go once persisted: each carries its daily equity, and a
+    full search of them is not held in memory.
     """
     done = len(skip_params_hashes)
-    results: list[CellResult] = []
+    executed = completed = 0
     on_progress(done, expected_cells)
 
     def _failed(spec: RunSpec, exc: Exception) -> CellResult:
@@ -68,12 +69,7 @@ def run_grid(
         done += 1
         on_progress(done, expected_cells)
         persist(result)
-        results.append(result)
+        executed += 1
+        completed += result.status == "completed"
 
-    return GridRunSummary(
-        expected_cells=expected_cells,
-        executed_cells=len(results),
-        completed_cells=sum(1 for r in results if r.status == "completed"),
-        failed_cells=sum(1 for r in results if r.status == "failed"),
-        results=results,
-    )
+    return GridRunSummary(expected_cells=expected_cells, executed_cells=executed, completed_cells=completed, failed_cells=executed - completed)
