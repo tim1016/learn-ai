@@ -2260,12 +2260,13 @@ async def poll_option_events(
         return OptionEventPoll(read=False)
     differs = False
     if not due and may_read and broker_positions is not None:
-        # A pass's own snapshot shows a recorded contract's position differing from the books.
+        # A pass's own snapshot shows a recorded contract's position differing from the books: that
+        # asks for a read, as ``asked_for`` does, and so at most one a minute.
         differs = await off_loop(lambda: option_position_differs(repo, broker_positions))
-        due = differs and _due(state, now_ms, asked_for=True)
-    # From here to the lock nothing is awaited. While the books were being asked another caller may
-    # have begun this same read, or finished it: then it is theirs, and this one neither waits
-    # behind their walk nor reads again after it.
+        due = differs
+    # From here to the lock nothing is awaited, and the cadence is asked once more. While the books
+    # were being asked another caller may have begun this same read, or finished it: then it is
+    # theirs, and this one neither waits behind their walk nor reads again after it.
     if due and not forced and (state.lock.locked() or not _due(state, repo.clock(), asked_for=asked_for or differs)):
         due = False
     if not due:

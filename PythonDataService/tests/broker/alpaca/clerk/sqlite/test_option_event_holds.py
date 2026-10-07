@@ -819,6 +819,24 @@ async def test_an_acknowledgement_is_refused_unless_a_pass_shows_the_books_agree
         repo.close()
 
 
+async def test_a_notice_that_names_a_contract_is_not_acknowledged_while_that_contracts_underlying_differs(
+    tmp_path: Path,
+) -> None:
+    """The row names an MSFT contract and no bot. An exercise would have moved MSFT shares, and MSFT differs."""
+    repo = _one_bot(tmp_path)
+    account = _FakeReadPort()
+    try:
+        await _read(repo, account, _expiry(symbol="MSFT230721C00300000", qty="-0.5"))
+
+        with pytest.raises(OptionEventHoldNotAcknowledged) as refused:
+            acknowledge(repo, None, "OPTION_EVENT_UNREADABLE", verdict="position_drift", drifted_symbols=("MSFT",))
+
+        assert refused.value.symbols == ("MSFT",)
+        assert (None, "OPTION_EVENT_UNREADABLE") in option_holds(repo)
+    finally:
+        repo.close()
+
+
 async def test_a_difference_in_a_symbol_the_hold_does_not_name_does_not_stop_its_acknowledgement(tmp_path: Path) -> None:
     """The owner holds some MSFT by hand, as they always could. The notice is about an AAPL contract."""
     repo = _one_bot(tmp_path)
