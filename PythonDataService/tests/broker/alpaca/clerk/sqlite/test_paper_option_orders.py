@@ -9,6 +9,7 @@ what these tests show is what the Clerk does with the documented shapes.
 from __future__ import annotations
 
 import asyncio
+import shutil
 from decimal import Decimal
 
 import pytest
@@ -17,14 +18,17 @@ from app.broker.alpaca import adapter as alpaca_adapter
 from app.broker.alpaca.clerk.models import EffectOperationReceipt, EffectOperationState
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.contract_terms import ContractTerms
-from app.broker.alpaca.clerk.sqlite.entry_outcome import EntrySettlement, EntryStanding
-from app.broker.alpaca.clerk.sqlite.option_entry import order_contract
+from app.broker.alpaca.clerk.sqlite.database_verification import verify_database
+from app.broker.alpaca.clerk.sqlite.entry_outcome import EntrySettlement, EntryStanding, SettledEntry, entry_outcome
+from app.broker.alpaca.clerk.sqlite.facts import EntrySettledFacts
+from app.broker.alpaca.clerk.sqlite.option_entry import option_entry_of_order, order_contract
 from app.broker.alpaca.clerk.sqlite.option_order_evidence import (
     AskedOptionOrder,
     asked_option_order,
     evidence_of_the_order_asked,
     option_order_evidence,
 )
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.errors import BrokerEvidenceUnavailable, BrokerUnavailable
 from app.broker.contract.models import OrderSide, OrderType
 from app.broker.contract.options import OptionPositionIntent, SingleOptionOrderRequest
@@ -367,8 +371,12 @@ async def test_an_entry_still_unproven_at_the_callers_limit_is_settled_as_entere
 
 async def test_a_wait_that_ends_because_the_run_stopped_is_answered_and_not_recorded(paper: PaperOptions) -> None:  # noqa: F811
     await paper.resting(decision="d-1")
+    pauses = 0
 
     async def the_owner_stops_the_bot(_seconds: float) -> None:
+        nonlocal pauses
+        pauses += 1
+        assert pauses == 1, "the wait went on after the run had stopped"
         submit_stop_run(paper.repo, account_id=paper.repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a")
 
     paper.clerk._outcome_pause = the_owner_stops_the_bot
@@ -393,6 +401,38 @@ async def test_a_proven_outcome_is_recorded_even_after_the_run_stopped(paper: Pa
     assert (settled.settlement, settled.standing, settled.recorded) == (
         EntrySettlement.ENTERED, EntryStanding.FILLED, True,
     )
+
+
+async def test_books_rebuilt_from_their_mirror_hold_the_entrys_deadline_and_its_settlement(
+    paper: PaperOptions, tmp_path_factory: pytest.TempPathFactory  # noqa: F811
+) -> None:
+    order_ref = await paper.resting(decision="d-1")
+    paper.wait(WAIT_MS)
+    await paper.round()
+    settled = await paper.clerk.await_entry_outcome(strategy_instance_id="a", decision_id="d-1", until_ms=paper.clock())
+    kept = option_entry_of_order(paper.repo, order_ref)
+    replay_root = tmp_path_factory.mktemp("replay")
+    shutil.copytree(paper.artifacts_root, replay_root, dirs_exist_ok=True, ignore=shutil.ignore_patterns("clerk.db*"))
+
+    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(
+        account_id=paper.repo.account_id, artifacts_root=replay_root, clock=paper.clock
+    )
+
+    try:
+        assert kept is not None and kept.cancel_at_ms is not None
+        assert option_entry_of_order(rebuilt, order_ref) == kept
+        assert entry_outcome(rebuilt, order_ref).standing is EntryStanding.UNFILLED
+        order = rebuilt.order(order_ref)
+        recorded = rebuilt.first_effect_transition(
+            effect_operation_id=order.effect_operation_id, transition_kind="ENTRY_SETTLED"
+        )
+        assert recorded is not None
+        assert SettledEntry.of(
+            EntrySettledFacts.from_facts_json(recorded["facts_json"]), order_ref=order_ref, recorded=True
+        ) == settled
+        verify_database(rebuilt.db_path, expected_account_id=paper.repo.account_id)
+    finally:
+        rebuilt.close()
 
 
 async def test_a_refused_decision_has_no_entry_to_wait_for(paper: PaperOptions) -> None:  # noqa: F811

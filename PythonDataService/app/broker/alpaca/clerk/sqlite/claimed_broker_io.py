@@ -143,8 +143,10 @@ class ClaimedBrokerIO:
     ) -> bool:
         """Bind a simulated option close to the newest quote kept for its contract, under the operation lease.
 
-        Only a simulation prices a close from a quote it was handed; any
-        other port refuses, so such a close never reaches a real broker.
+        Only a simulation prices a close from a quote it was handed, and
+        any other port answers that it bound none. A real account's close is
+        a market order the broker fills: its caller sends it with no quote
+        and never asks this.
         """
         self._renew()
         bind = getattr(self.trade, "bind_option_close_quotes", None)
