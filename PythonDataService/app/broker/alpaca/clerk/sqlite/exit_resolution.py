@@ -405,8 +405,8 @@ OPTION_CONTRACT_EXPIRED = OptionEffectRefusal.CONTRACT_EXPIRED.value
 _EXPIRED_CONTRACT_HEADLINE = "An option contract expired while the bot still held it"
 
 _EXPIRED_CONTRACT_NEXT_STEP = (
-    "No order can close an expired contract, so there is nothing to send. The position stays on "
-    "this bot's books until expired contracts are settled, which is not built yet."
+    "No order can close an expired contract, so there is nothing to send. The Clerk books the "
+    "contract's end by itself once it is known, and the position leaves this bot's books then."
 )
 
 _EXPIRED_CONTRACT_OPERATOR_IMPACT = (
@@ -428,10 +428,9 @@ def expired_option_close(symbol: str, now_ms: int) -> LegRefusal | None:
     kept quote states, so nothing is priced from one. Any other symbol, and
     a contract still trading, is ``None``.
 
-    The position stays on the books. Settling an expired contract at its
-    exercise value is not built, for a Dry Run or for a real account, whose
-    broker settles it on its own side where these books do not yet read it;
-    the words say so of either.
+    The position stays on the books until its end is booked (ADR 0076
+    decision 22): from the broker's own activity on a real account, from the
+    simulation's settlement on a Dry Run. The words are true of either.
     """
     contract_symbol = symbol.upper()
     if not is_option_contract_symbol(contract_symbol):
@@ -443,8 +442,8 @@ def expired_option_close(symbol: str, now_ms: int) -> LegRefusal | None:
         reason_code=OPTION_CONTRACT_EXPIRED,
         explanation=(
             f"{contract_symbol} expired on {expiry.isoformat()}. Its last session is over, or ends within "
-            "seconds, so no order can close it and none was sent. The position is still on the books: an "
-            "expired contract is not yet settled here at its exercise value."
+            "seconds, so no order can close it and none was sent. The position is still on the books "
+            "until the contract's end is settled there."
         ),
         next_step=_EXPIRED_CONTRACT_NEXT_STEP,
     )

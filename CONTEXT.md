@@ -1675,7 +1675,17 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
 - **Natural price from an older quote** — how a simulated close is priced when its exit decision had no usable quote: from the newest quote kept, with that quote's age.
 - **Last session (of a contract)** — the last regular session a contract trades in: the one on its expiry date, to that session's close, a half day's included. After it the contract has expired: nothing is bought or sold in it.
   _Avoid_: expiry (that names the date), close deadline (when the bot closes, earlier).
-- **Expired contract (held)** — a position in a contract past its last session. No order can close it. It stays on the books under a notice until expired contracts are settled, which is not built.
+- **Expired contract (held)** — a position in a contract past its last session. No order can close it. It stays on the books under a notice until it is settled: by the broker's activity on a real account, by the simulation's own settlement on a Dry Run.
+- **Option event** — what ends an option position with no order of the bot's: an assignment, an exercise, an expiry, or a sale by an order the Clerk did not place.
+- **Booking (of an option event)** — the one record, `OPTION_POSITION_ENDED`, that closes a bot's lots for an event and, for an exercise or an assignment, books its shares at the strike. Taken once, by the activity's id.
+- **Option ending** — how a booked position ended, as a screen is told: expired, exercised, assigned or sold outside.
+  _Avoid_: outcome (that is how a run ended).
+- **Sold outside** — a contract a bot held was sold, or bought back, by an order the Clerk did not place. It may be the broker's own sale or the owner's by hand; nothing on the order says which.
+- **Option-event hold** — one of the family of holds the reading and booking of option events raises. For the bot it names, or the account when it names none. It blocks entries and admits reductions and the Flatten.
+- **Acknowledgement (of an option-event hold)** — the owner saying a held row has been looked at. The hold ends and that row is not held for again. No screen offers it yet.
+- **Outside holding** — what orders the Clerk did not place hold of a contract, as far as the books recorded those orders. Offered to an event as one lot of its own.
+- **Shares held (from an option event)** — the shares an exercise or an assignment left on a bot's books. The bot does not trade them; the owner flattens them.
+- **Simulated settlement** — a Dry Run's simulation settling a contract it holds past its last session: exercised when in the money by a cent or more at the underlying's last kept price of that session, otherwise expired. A simulation's rule, never a broker's.
 - **Resting entry** — an option entry as it stands at Alpaca: a limit order that has been sent and has not ended. Its bot holds only what has filled.
 - **Entry wait** — how long a resting entry waits for its fill before the Clerk cancels what is left. Set by the owner, 20 seconds unless set, and never less than one second or more than five minutes. Counted from the Clerk's admission of the entry, and stored with it as the time to cancel at.
 - **Order terms** — what an owner fixes for an option bot's orders: the entry wait, the time allowed to prove a cancel, a margin, and how long before a close a position is closed. They come with each entry and are kept with it.

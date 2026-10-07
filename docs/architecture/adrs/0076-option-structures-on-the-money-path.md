@@ -254,7 +254,7 @@ Three things end an option position with no order of ours: a sold option is assi
 - **Shares and cash come from the contract's terms.** An exercised call or an assigned put buys multiplier × contracts shares at the strike; an exercised put or an assigned call sells them. The cash is strike × multiplier × contracts, in whole cents. Cash that is not whole cents is refused by name and never rounded: the event's total first, before any lot is looked at, and then any lot's part of a whole total that is not whole itself. Alpaca reports the same trade as an activity of its own (`OPTRD`), on the underlying's symbol. That row is evidence the books' figures are checked against, not their source: where it differs from the contract's terms, the difference is named.
 - **Shares sold are sold whether or not they were held.** A call assigned to a bot with no shares leaves that bot short the stock, and its books show the short position.
 
-Nothing in the Clerk calls any of this yet. No account has been assigned, has exercised or has let an option expire under this code: every shape is Alpaca's published documentation, read 2026-10-06.
+The Clerk calls it from decision 22. No account has been assigned, has exercised or has let an option expire under this code: every shape is Alpaca's published documentation, read 2026-10-06.
 
 ### 15. The Clerk takes one bought option, and works its entry out from facts
 
@@ -334,10 +334,10 @@ From those facts the Clerk asks, in order. The first "no" refuses the entry with
 
 - A close of such a contract is refused under `OPTION_CONTRACT_EXPIRED` before anything is priced: a deciding program's EXIT, an ended run's close, the Clerk's retry, the Flatten, and an EXIT held since before the expiry. It is judged where the order would arrive, as the session is, so a close too late to arrive is refused and never held for an open that will not come.
 - Two fences. The Clerk's is asked first. The simulation's own refuses to bind a quote to such a close and refuses an order in such a contract.
-- The position stays on the books. The notice names the contract, says it expired, and says an expired contract is not yet settled here at its exercise value: true of a Dry Run, and of a Paper account, whose broker settles it on its own side where these books do not yet read it. The Clerk then holds: it makes no EXIT and spends no retry on a contract that can never trade again, and it never gives up on it either.
+- The position stays on the books. The notice names the contract, says it expired, and says it stays on the books until it is settled (decision 22): by the broker's own activity on a Paper account, by the simulation's settlement on a Dry Run. The Clerk then holds: it makes no EXIT and spends no retry on a contract that can never trade again, and it never gives up on it either.
 - **That is so whichever road led there.** A close can fail before the expiry: a worthless contract has no bid. Its notices were then written while a retry or a flatten could still close it, and a stopped bot makes no later EXIT that would correct them. So the Clerk's first pass after the expiry rewrites the bot's open `EXIT_NOT_FLAT` and `EXIT_STUCK` notices once, in the same words, and later passes write nothing. The bot's page does not wait for that pass, because a Dry Run's Clerk makes none on a timer: from the moment of expiry it reads each of those notices in the expired words, and the expired hold over "stuck".
-- **The owner's write-off does not clear it on a Dry Run, and is not offered.** The write-off clears only a position the broker does not hold, and the simulation is this account's broker and holds the contract too. It reads as unavailable for that reason from the moment of expiry, whether or not Reconcile now was pressed: never as available and then refused. Neither the notice nor the write-off sends the owner to a flatten. Settling an expired contract comes with the expiry and assignment work.
-- **Known gap: a Dry Run that still holds a contract after its last session.** It cannot be flattened, written off or resumed. Its account reading stays unavailable, and says that the contract expired and is not settled yet. Its budget keeps the position at cost, and the expiry's result is never booked. The owner can stop the bot and deploy others, each on its own simulated account. This lasts until a simulation settles an expired contract, which comes with the reading of option events: expiry, exercise and assignment.
+- **The owner's write-off does not clear it on a Dry Run, and is not offered.** The write-off clears only a position the broker does not hold, and the simulation is this account's broker and holds the contract too. It reads as unavailable for that reason from the moment of expiry, whether or not Reconcile now was pressed: never as available and then refused. Neither the notice nor the write-off sends the owner to a flatten. An expired contract is settled by decision 22.
+- **What is left of that gap: a Dry Run whose simulation kept no price of the underlying from the contract's last session.** It settles nothing (decision 22). The contract cannot be flattened, written off or resumed, the account's reading stays unavailable, and the bot is held under a notice that says no such price was kept. It lasts until one is kept. The owner can stop the bot and deploy others, each on its own simulated account.
 
 **The deadlines an option position is held to.** Each is counted back from a session close the calendar gives, so a half day's are a half day's.
 
@@ -402,6 +402,94 @@ An option entry is a limit order that waits at Alpaca. Nothing waited before: ev
 
 **Nothing here has been sent to Alpaca.** The shapes are its published documents. Whether an option order's frames reach the stream in a shape the Clerk reads, how long a cancel takes to show as ended, whether Alpaca echoes a limit price as it was sent, and how and when Alpaca posts option fees are still to be seen on an account.
 
+### 22. The Clerk reads, books and holds on what ends an option position without an order of its own
+
+Decision 14 says how an activity is read and which lots it takes. Nothing called it. This decision is the Clerk's side: when it reads, how it books, and what it holds a bot for.
+
+**Reading**
+
+- **One poll, two callers.** The deadline keeper runs it as one more step of its round, and the reconciliation pass runs it before its final look at the broker. The poll starts no pass and takes no account-wide gate. It reads Alpaca with no lock held; the Clerk's guarded ports refuse a broker call made under the intake lock.
+- **When.** Every five minutes while nothing is wrong. Every minute while a read was not whole or a hold of this decision stands. At once after a restart, because the cadence is kept in memory. At once, and at most once a minute, when a pass's own snapshot shows a recorded contract's position differing from the books.
+- **The window** starts on the date of the first fill in any contract a bot still holds, or the date of the oldest row an open hold names, whichever is earlier. Earlier than needed is safe: a row already booked is skipped by its id.
+- **The walk is followed to its end,** up to fifty reads. A walk cut short, a walk longer than that, or a read that fails is not whole. Nothing is concluded from it, no hold is ended by it, and the bots that hold options are held until a whole read.
+- **A stock-only account is never read.** The worklist starts at `option_contracts`. On books that never recorded a contract that table is empty: no other row is read, Alpaca is not asked, and nothing is written. A stock scenario's books are byte for byte what they were.
+- **A Live Shadow reads nothing from Alpaca here.** Its read port answers none, whole, as decision 14 left it.
+
+**Booking**
+
+- **One batch function** (`book_option_events`). It runs inside the repository's write fence from its first read of the books to its last append, so no fill lands between a decision and its record.
+- **An event is one transition for each bot that lost contracts:** `OPTION_POSITION_ENDED`, with the summary `OPTION_EXPIRED`, `OPTION_EXERCISED`, `OPTION_ASSIGNED` or `OPTION_SOLD_OUTSIDE`. Its fold writes everything in one transaction: the lot closes at a price of zero, and for an exercise or an assignment the shares arrive at the strike. One transition and never two, so the option cannot leave the books without the shares and cash it became.
+- **The rows are the ones every reader of money already reads.** A command, an effect, orders and fills. So FIFO, the budget, cash and the day's P&L count an event as they count any fill, and no table is added: the schema stays at version 23. The effect's kind is `RECONCILE`, which the schema had kept and nothing used, and it is written already ended, so no worklist of open work lists it.
+- **The fold works the money out again.** It takes the shares and the cash from `expected_share_trade`, the canonical rule, and refuses a fact that states anything else. It refuses to close more than the bot holds on that side.
+- **Taken once, by its id.** The command's key is a hash of the broker and the activity's id, with the bot. The same id with other figures is a conflict, held by name; the first booking stands. A share trade's id is never a key in that space.
+- **Two bots, and a stop between them.** Each bot's record carries the whole allocation. A run that finds one record finishes the bots it names and the books do not yet show, from the record. It never matches the event to lots a second time.
+- **The lots offered** are every bot's own FIFO lots of the contract, each with the ledger sequence of the fill that opened it, and one lot for outside orders the books recorded in that contract. A bot whose lots and whose attributed position disagree, because the owner wrote the position off, is offered none. Inside one bot's books the lots close first in, first out, as every close does; every one closes at zero, so which of a bot's own lots closed changes no total.
+- **When it happened, for FIFO and for the day's P&L:** one millisecond before the close of the last session on or before the row's date, and never before the newest lot it takes. An expiry falls inside its own session's P&L.
+- **A share trade is evidence, never the source.** Each exercise or assignment is paired with a share trade of its date and underlying: first with one that meets the contract's terms exactly, then with what is left. The books' figures are the contract's terms either way.
+- **The shares can be sold by every existing reduction.** No ENTER bought them, and every reduction of a bot's symbol is keyed on an entry order in it. So the order the shares arrive on has the role `ENTRY`. It was never at the broker: an EXIT neither cancels it nor looks it up. The owner's Flatten, an ended run's close and the Clerk's own retry then sell those shares as they sell any others. The bot itself never trades them.
+- **Fees.** The close of a lot by an event is no trade: no fee is predicted for it and no fee row is shared onto it. The share trade is a fill in shares and is priced by the stock fee model, as an estimate until Alpaca posts the day's fees. Whether Alpaca charges anything for an exercise or an assignment is not known.
+
+**Holds**
+
+One family of reason codes. Each is raised for the bot it can be tied to and account-wide otherwise. Each blocks entries and admits reductions and the Flatten.
+
+| Code | Raised when |
+|---|---|
+| `OPTION_EVENTS_NOT_READ` | a read failed or was not whole |
+| `OPTION_EVENT_UNREADABLE` | a row could not be read whole (a corporate action and a cash deliverable among them) |
+| `OPTION_EVENT_NOT_EXECUTED` | a row is marked corrected or cancelled |
+| `OPTION_EVENT_CONTRACT_NOT_HELD`, `_WRONG_SIDE`, `_HELD_ON_BOTH_SIDES`, `_MORE_CONTRACTS_THAN_HELD`, `_CASH_NOT_WHOLE_CENTS` | the rule refused, under the rule's own code |
+| `OPTION_EVENT_ROW_CHANGED` | an id already booked now reads other figures |
+| `OPTION_EVENT_SHARES_IN_ANOTHER_SYMBOL` | the contract's root is not the symbol the bot is registered under (a share-class ticker); nothing is booked |
+| `OPTION_SHARE_TRADE_MISSING`, `_UNPAIRED`, `_DISAGREES` | the broker's own share trade is absent, belongs to no event read, or differs from the contract's terms |
+| `OPTION_EXPIRY_SIGNED_FOR_OTHER_SIDE` | an expiry closed the only side held against the sign of its row; it is booked, and the owner is told |
+| `OPTION_EVENT_AFTER_A_LOT_CLOSED` | another bot closed a lot of the contract after the event's date and before its row was read |
+| `OPTION_EXPIRED_NOT_SETTLED` | a contract past its last session is still on the books and the broker's position differs, or a simulation could not settle it |
+| `OPTION_SHARES_HELD` | an event left the bot holding shares; it ends when the bot holds none |
+| `OPTION_ORDER_NOT_OURS` | an order the Clerk did not place is in a contract the bot holds |
+
+- **A hold ends by proof or by the owner.** It stands while a whole read still has its cause and ends when a whole read no longer has it. The owner's acknowledgement ends it too, and the same row is not held for again; a new row is. `OPTION_SHARES_HELD` and `OPTION_EVENTS_NOT_READ` end only by proof. No hold ends on a timer. **No route calls the acknowledgement yet.**
+- **A hold does not block lane quiet,** and the owner's write-off may proceed beside it. A row that arrives after a write-off finds no lot and is held by name; it cannot close a lot twice.
+
+**A lot closed between an event's date and the day its row is read**
+
+Paper publishes an activity the day after. In between, the bot whose lot the rule would take may close it. The Clerk books the event on the lots open when the row is read, so the books equal the broker's position. Which bot bore it cannot be known: the broker names no lot. The bot it was booked to is held under `OPTION_EVENT_AFTER_A_LOT_CLOSED`, naming the other. While the row is still unread the pass's account-wide drift hold stands as before, and that hold's own proof refuses a close of a contract the broker no longer holds.
+
+**After a contract's expiry date**
+
+A lot still open on a contract past its last session is set against the broker's position, once a whole read has booked what it could. Where they differ, the bot is held under `OPTION_EXPIRED_NOT_SETTLED`. That covers a row yet to come, and a contract held bought by one bot and sold by another, which nets to nothing at the broker and may never get a row. The Clerk closes nothing by itself in either case.
+
+**A sale Alpaca makes itself**
+
+It arrives as an order the Clerk did not place. Before, any such order put the whole account on a hold that refuses reductions, the bot's own close included.
+
+- **An outside order in a recorded contract that a bot holds, on the side that reduces it, is held against that bot** (`OPTION_ORDER_NOT_OURS`) and is left off the account-wide hold. The bot may still close its own position.
+- **Once the order has ended with a fill, the fill is booked against the oldest lots,** as `OPTION_SOLD_OUTSIDE`, at the broker's average price, once, by the order's id.
+- **It is not booked** while another outside order may hold the same contract, when it filled more than the bots hold, or when it states no fill or no price. The hold then says which.
+- Nothing on such an order says whether Alpaca placed it or the owner did by hand. Both are recorded the same way.
+- An outside order in a contract no bot holds, or on the side that adds to a position, is handled as it always was.
+
+**A Dry Run's expired contract**
+
+- **The simulation settles its own position.** It has no broker to do it. When it is asked for the account's option events it applies the rule Alpaca states: exercised when in the money by a cent or more, otherwise expired.
+- **The price** is the close of the last bar the simulation kept for the underlying that ended inside the contract's last session. It is not an official closing price.
+- **It writes the settlement to its own order ledger first,** so its positions show it, and then reports it as an activity. The same batch function books it. The books' record says it is a simulation's rule, with the price, the bar and the bar's time.
+- **With no such bar it settles nothing.** The contract stays held and the hold says why.
+- An exercised call leaves the Dry Run holding shares. They are sold when its run ends, as a Dry Run sells whatever a run left.
+
+**What the screens are handed**
+
+History's run and Activity's row each carry how an option position ended: a closed set (`expired`, `exercised`, `assigned`, `sold_outside`) and one sentence, written by the server. Both keys are left off the wire when absent.
+
+**Known, and not closed here**
+
+- A bot left short the stock, by an exercised put today and by an assigned call once sold legs are taken, makes the long-only budget unavailable for the whole account until the short is covered. That is the budget's existing rule for any short lot.
+- Two bots holding opposite sides of one contract past its expiry are held by name. The owner's write-off refuses each of them, because it writes off only what restores agreement with the broker one bot at a time.
+- An outside holding of a contract is known only from the outside orders the books recorded. One opened before custody began is not known.
+- Option corporate actions and cash deliverables are listed as unreadable and held for. They are not read.
+
+**Nothing here has been seen on an account.** How Alpaca's own sale near expiry appears, when Paper and Live publish these activities, what links a share trade to its event, and whether real rows carry the fields the documents show are all still to be seen.
+
 ## Where it lives
 
 `PythonDataService/app/options/`: `contract.py` (decision 1), `structure.py` (a resolved structure: one underlying, each contract in one leg, as one order carries it), `requirement.py` (decisions 2 to 5), `exact.py` (the one exact decimal conversion they share), `american.py` (decision 6), `named_structures.py`, `structure_check.py` and `structure_catalogue.py` (decision 7), `quotes.py` and `resolver.py` (decision 8), `watch.py` (decision 9: the window, and who holds a line). The IBKR side of decision 9 is `PythonDataService/app/broker/ibkr/option_chain.py` (the listing) and `option_quotes.py` (the lines), driven by `market_liveness.py`. Golden fixture `OSM-001` pins the requirement, premium, commitment, loss estimate and round-trip cost against Alpaca's two documented examples and hand-derived cases, in exact cents. Fixtures `AM-001` to `AM-003` pin the American price, delta and implied volatility against QuantLib.
@@ -416,7 +504,9 @@ An option entry is a limit order that waits at Alpaca. Nothing waited before: ev
 
 `PythonDataService/app/broker/alpaca/clerk/sqlite/` (decision 19). `entry_outcome.py` is what an entry came to, the settlement rule, and the answer for anyone asking after the fact. `reads.py` holds the one predicate for an entry order that must be cancelled, and the worklist read. `resting_entries.py` is the step that cancels what is due, `deadline_keeper.py` the task, and `reconcile.py` calls the same step. `option_order_evidence.py` turns a broker's answer about an option order into the order evidence the books take, holds it to the order asked for, and chooses the reader for every exact lookup. `claimed_broker_io.py`, `reconcile.py` and `unknown_order_attestation.py` look up through it. `uncertainty.py` refuses a second entry beside a working one. `order_evidence.py` withholds a fill the books cannot hold, for `trade_evidence.py` and the pass. `runtime.py` holds `await_entry_outcome` and the contract-reference question, and `option_admission.py` the terms' bounds. `app/broker/alpaca/broker.py` holds the Live fence. `app/services/alpaca_fee_attribution.py` shares a real account's fee rows among a day's fills.
 
-Custody reads the contract tables on every read of fills, and tells a contract's symbol by decision 1's spelling. One order path writes the tables: an entry in one bought option on a Dry Run or a Paper account, and the orders that close it (decisions 15, 16 and 19). No bot reaches it yet: the runner hands the Clerk no option entry, so the path is called by tests alone. On a Paper account the Clerk sends an option order to Alpaca, looks it up, cancels it, and asks the contract reference before an entry. Nothing in the Clerk reads the account's option fields or matches an option event to lots.
+`PythonDataService/app/broker/alpaca/clerk/sqlite/` (decision 22). `option_events.py` is the poll and the one batch function, with the acknowledgement. `option_event_folds.py` holds the facts and the fold of `OPTION_POSITION_ENDED`. `option_event_books.py` holds the plain reads a fold may ask: what is held, what is booked under a key, whether an outside order is a bot's, and what was recorded as ended. `deadline_keeper.py` and `reconcile.py` call the poll. `uncertainty_causes.py` and `uncertainty_policies.py` hold the family of holds. `external_order_folds.py` and `reconcile.py` leave a bot's outside order off the account-wide hold. `fee_evidence.py` leaves the close of a lot by an event out of the fee population. `order_evidence.py` and `exit_resolution.py` let an EXIT reduce the shares an event left. `clerk/synthetic_broker.py` settles a simulation's expired contracts and `synthesized_orders.py` holds the settlement's record. `app/schemas/option_endings.py` and `app/services/option_ending_views.py` are what History and Activity are handed.
+
+Custody reads the contract tables on every read of fills, and tells a contract's symbol by decision 1's spelling. One order path writes the tables: an entry in one bought option on a Dry Run or a Paper account, and the orders that close it (decisions 15, 16 and 19). No bot reaches it yet: the runner hands the Clerk no option entry, so the path is called by tests alone. On a Paper account the Clerk sends an option order to Alpaca, looks it up, cancels it, and asks the contract reference before an entry. It reads the account's option events and books them (decision 22). Nothing in the Clerk reads the account's option fields.
 
 ## Alternatives considered
 
@@ -437,10 +527,19 @@ Custody reads the contract tables on every read of fills, and tells a contract's
 - **Let an expiry take lots on either side, oldest first.** Rejected, after it was built. With a contract held on both sides it took the row's count from the oldest lot whatever its side, and moved the books the opposite way to the row. And an expiry matched before its assignment took the oldest lots, so the assignment fell on the bot that sold last.
 - **Leave which bot is assigned to the order the rows are matched in.** Rejected: an order can be kept only among the rows of one read, and a row can arrive a poll after the one it belongs with. With an expiry taking the newest lots, an expiry and its assignment or exercise give the same answer in either order. Two assignments of different dates still do not: when a lot was opened between their dates and the later-dated one is matched first, the earlier is refused for want of contracts. Nothing wrong is booked, and the caller holds.
 - **Refuse an expiry whose sign is not the side held.** Not done: every expiry the pages show is signed negative, so the sign of a sold one is an inference, and refusing on it would hold every sold option's expiry if the inference is wrong. The sign is kept on the record and is given to the rule.
-- **Close every lot on both sides when an expiry's count equals their net.** Not done: when the two sides net to nothing Alpaca has no position to expire and may report no row at all, so a contract held on both sides cannot be settled from the activity alone. It has to be settled against the broker's position once the contract has expired, which is for the Clerk's fold.
+- **Close every lot on both sides when an expiry's count equals their net.** Not done: when the two sides net to nothing Alpaca has no position to expire and may report no row at all, so a contract held on both sides cannot be settled from the activity alone. The Clerk sets such a contract against the broker's position once it has expired and holds both bots by name (decision 22). It does not close the lots itself: with no row it cannot know whether they ended worth something.
 - **A new transition kind for an option entry.** Rejected: many readers key on `ENTER_ACCEPTED` and `EXIT_REDUCING_ORDER_CREATED` and on the order's symbol and quantity in them: the order projection, the exact-lookup worklists, the flat proof, the run-end close, the failed-entry fence. A new kind is silently skipped by every reader that is missed. The same kind with the option's own values is read correctly by all of them, and the places that would build a stock leg from it fail loudly.
 - **Let the caller hand over the commitment, or the limit price.** Rejected: the Clerk would then set aside a figure it had not worked out.
 - **Leave a posted fee row of an option day unowned until its attribution was built.** Rejected, after it was built: an unowned charge leaves the account's fees unresolved, which stops new entries for every bot on the account, stock bots included, and no command settles it. Sharing the row by each fill's own model can charge the wrong bot a few cents; it cannot stop the account.
+- **Book the shares as a second transition.** Rejected: a second transition is a second commit, and a stop between the two would leave the option gone and the shares never booked. One transition's fold writes both.
+- **A new table for option event bookings.** Rejected: every reader of money reads `fills` through `orders`, and each would have to be taught the new table. A reader that was missed would count a bot's money wrongly. The existing rows are counted correctly by all of them, and a stock store's bytes do not move.
+- **Record an expiry's close as a fill at the last bid.** Rejected as in decision 16: nothing traded. The lot closes at zero and the premium is realised in it.
+- **Hold the whole account for every option hold.** Rejected: one bot's unreadable row would stop every other bot's entries. A hold is account-wide only where its cause names no bot.
+- **End a hold after some days.** Rejected: ADR 0048 gives a hold no clock. A hold ends by proof or by the owner.
+- **Close both lots of a contract held on both sides once it has expired with no row.** Not done: with no row the Clerk cannot know whether the contract ended in the money, so it cannot say what each bot is owed. Both bots are held by name.
+- **Let the simulation settle from the last price it kept on any day.** Rejected: that is not the contract's last price. With no price from the last session nothing is settled.
+- **Keep the account-wide hold for an outside order in a bot's contract.** Rejected: that hold refuses reductions, so the bot could not close its own position beside the broker's sale.
+- **Make the shares reducible by teaching each reduction about a new order role.** Rejected, after it was tried: the entry role is read in a dozen places. The shares' order takes the entry role, and the EXIT's two proofs that look an entry up at the broker leave it out.
 - **Wait for the fill inside the call that sends the entry.** Rejected: it would hold the one path stock bots share open for the whole wait, and put the wait behind a lock other bots need.
 - **A second, hand-kept worklist for the deadline keeper.** Rejected, after it was built: it asked that the ENTER had not ended, the stopped-run step it copied did not, and an entry voided as never sent whose order later showed was cancelled by nobody. One predicate is read by both.
 - **Read the keeper's worklist from the custody log.** Rejected, after it was built: every round and every pass scanned the whole log under the store's write lock, on stock-only accounts too.

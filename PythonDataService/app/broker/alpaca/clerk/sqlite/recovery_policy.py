@@ -1095,9 +1095,9 @@ def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
 
     A Dry Run holding an expired option contract is never offered it (ADR
     0076): its simulation is the account's broker and holds the contract
-    too, so the executor would refuse. Nothing can be done about that
-    position until a simulation settles an expired contract, and the step
-    says so.
+    too, so the executor would refuse. The position leaves the books when
+    the simulation settles the contract (ADR 0076 decision 22), and the step
+    says nothing can be sent meanwhile.
     """
     positions = _relevant_positions(ctx)
     relevant = _relevant_uncertainties(ctx)

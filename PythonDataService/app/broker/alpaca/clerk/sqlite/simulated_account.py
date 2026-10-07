@@ -21,9 +21,10 @@ can stand for minutes, so it is the hand-over that must be fresh, not the
 bid's own receipt. With none, the reading is unavailable, as it is for shares
 with no fresh bar. A bid of zero is a mark: nothing is bid for the contract.
 
-A contract past its last session is quoted by no feed again, and settling
-it at its exercise value is not built. A Dry Run that still holds one has no
-reading until it is, and the reading says that, not to wait for a feed. That
+A contract past its last session is quoted by no feed again. The simulation
+settles it when the Clerk next reads the account's option events (ADR 0076
+decision 22). Until it has, a Dry Run that still holds one has no reading,
+and the reading says that, not to wait for a feed. That
 holds from the last session's close itself: a bid handed over seconds before
 it marks nothing after it, and a reading taken before it is good no longer
 than the contract trades.
@@ -195,9 +196,9 @@ class SimulatedAccountProjection:
         if past_last_session(expiry, at_ms):
             # No feed quotes it again, so waiting brings nothing (ADR 0076).
             raise SimulationEvidenceUnavailable(
-                f"The option contract {symbol} expired on {expiry.isoformat()}. This simulation does not "
-                "settle an expired contract yet, so it has no value to read the position at, and this "
-                "account's reading stays unavailable until it does."
+                f"The option contract {symbol} expired on {expiry.isoformat()}. It is not settled yet, so "
+                "there is no value to read the position at, and this account's reading stays unavailable "
+                "until it is."
             )
         try:
             kept = self._kept_option_quotes().last_stated(symbol, at_or_before_ms=at_ms, with_side="bid")
