@@ -3,7 +3,7 @@ import { ChangeDetectionStrategy, Component, computed, input, output } from '@an
 import { DateFieldComponent } from '../../../../shared/date-picker';
 import { etIsoDate } from '../../../../shared/date/et-midnight';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
-import { onExpiryRule, onStrikeRule, type LegRow, type OptionRules } from './option-structure';
+import { onExpiryRule, onStrikeRule, problemLines, rowProblems, type LegRow, type OptionRules } from './option-structure';
 
 let nextDateId = 0;
 
@@ -28,8 +28,9 @@ function typed(event: Event): number | null {
  * tolerances are the catalogue's.
  *
  * A number is taken when its box is left or Enter is pressed, so a
- * half-typed one is never read. An empty box is an unfinished row, which the
- * builder neither previews nor uses.
+ * half-typed one is never read. A box that is empty, or holds what its rule
+ * cannot take, leaves the row unfinished: the builder neither previews nor
+ * uses it, and the row says under its boxes what each one still needs.
  */
 @Component({
   selector: 'app-option-leg-row',
@@ -50,7 +51,9 @@ export class OptionLegRowComponent {
   readonly rowChange = output<LegRow>();
   readonly remove = output();
 
-  protected readonly dateId = `option-leg-date-${nextDateId++}`;
+  private readonly id = nextDateId++;
+  protected readonly dateId = `option-leg-date-${this.id}`;
+  protected readonly problemsId = `option-leg-problems-${this.id}`;
   /**
    * Today in New York, where an expiry date lives: the first day the calendar
    * offers. A date that has passed can still be typed, and the server says why
@@ -64,6 +67,12 @@ export class OptionLegRowComponent {
   protected readonly expiryRule = computed(
     () => this.rules().expiry_rules.find((rule) => rule.selector === this.row().expiry.selector) ?? null,
   );
+  /** What each box still needs before this row is a leg, in words: a red outline is never the only sign. */
+  protected readonly problems = computed(() => rowProblems(this.row(), this.rows(), this.rules()));
+  /** A fixed date's problem is the date field's to say, under its own box. */
+  protected readonly dateProblem = computed(() => (this.row().expiry.selector === 'absolute' ? this.problems().expiry ?? null : null));
+  protected readonly problemLines = computed(() =>
+    problemLines(this.dateProblem() === null ? this.problems() : { ...this.problems(), expiry: undefined }));
   /** The other legs, by their numbers. */
   protected readonly others = computed(() =>
     this.rows()

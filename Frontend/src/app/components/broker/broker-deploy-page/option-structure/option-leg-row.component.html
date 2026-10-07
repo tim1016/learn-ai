@@ -15,7 +15,8 @@
   <input
     type="number" inputmode="numeric" min="1" step="1"
     [attr.aria-label]="name() + ' quantity'"
-    [value]="row().qty_ratio ?? ''" [attr.aria-invalid]="row().qty_ratio === null"
+    [value]="row().qty_ratio ?? ''"
+    [attr.aria-invalid]="problems().quantity !== undefined" [attr.aria-describedby]="problems().quantity ? problemsId : null"
     (change)="setQuantity($event)"
   />
 </span>
@@ -32,13 +33,18 @@
       <input
         type="number" step="any"
         [attr.aria-label]="name() + ' ' + rule.label + ', ' + rule.value.unit_label"
-        [value]="row().strike.value ?? ''" [attr.aria-invalid]="row().strike.value === null"
+        [value]="row().strike.value ?? ''"
+        [attr.aria-invalid]="problems().strike !== undefined" [attr.aria-describedby]="problems().strike ? problemsId : null"
         (change)="setStrikeValue($event)"
       />
       <span aria-hidden="true">{{ rule.value.unit_label }}</span>
     </span>
     @if (rule.selector === 'leg_distance') {
-      <select [attr.aria-label]="name() + ' measured from'" [attr.aria-invalid]="row().strike.from_leg === null" (change)="setFromLeg($event)">
+      <select
+        [attr.aria-label]="name() + ' measured from'"
+        [attr.aria-invalid]="problems().from !== undefined" [attr.aria-describedby]="problems().from ? problemsId : null"
+        (change)="setFromLeg($event)"
+      >
         @for (other of others(); track other.leg_id) {
           <option [value]="other.leg_id" [selected]="other.leg_id === row().strike.from_leg">from leg {{ other.number }}</option>
         }
@@ -54,7 +60,8 @@
       <input
         type="number" step="any" min="0"
         [attr.aria-label]="name() + ' within, ' + within.unit_label"
-        [value]="row().strike.tolerance ?? ''" [attr.aria-invalid]="row().strike.tolerance === null"
+        [value]="row().strike.tolerance ?? ''"
+        [attr.aria-invalid]="problems().within !== undefined" [attr.aria-describedby]="problems().within ? problemsId : null"
         (change)="setTolerance($event)"
       />
       <span aria-hidden="true">{{ within.unit_label }}</span>
@@ -73,7 +80,8 @@
         <input
           type="number" inputmode="numeric" min="1" step="1"
           [attr.aria-label]="name() + ' expiry, ' + box.unit_label"
-          [value]="row().expiry.days ?? ''" [attr.aria-invalid]="row().expiry.days === null"
+          [value]="row().expiry.days ?? ''"
+          [attr.aria-invalid]="problems().expiry !== undefined" [attr.aria-describedby]="problems().expiry ? problemsId : null"
           (change)="setDays($event)"
         />
         <span aria-hidden="true">{{ box.unit_label }}</span>
@@ -86,7 +94,7 @@
   <span role="cell" data-label="Expiry date" class="leg-row__date">
     <label class="sr-only" [for]="dateId">{{ name() }} expiry date</label>
     <app-date-field
-      #date [inputId]="dateId" appearance="filled" calendar="inline" [pickFrom]="today"
+      #date [inputId]="dateId" appearance="filled" calendar="inline" [pickFrom]="today" [hostProblem]="dateProblem()"
       [value]="row().expiry.date" (valueChange)="setDate($event)" (keydown.escape)="keepEscape($event, date)"
     />
   </span>
@@ -96,3 +104,9 @@
     <i class="pi pi-times" aria-hidden="true"></i>
   </button>
 </span>
+@if (problemLines().length > 0) {
+  <!-- The screen's own words for what a box still needs, under the boxes they are about. -->
+  <span role="cell" class="leg-row__problems" [id]="problemsId">
+    @for (line of problemLines(); track line) { <span>{{ line }}</span> }
+  </span>
+}

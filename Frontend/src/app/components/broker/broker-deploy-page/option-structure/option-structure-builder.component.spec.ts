@@ -219,6 +219,62 @@ describe('OptionStructureBuilderComponent', () => {
     expect(from.getAttribute('aria-invalid')).toBe('false');
   });
 
+  it('says under an unfinished row what each box still needs, in the catalogue’s labels and units', async () => {
+    await renderBuilder();
+    const [, first, second] = screen.getAllByRole('row');
+    /** What the row says under its boxes; empty for a finished row. */
+    const said = (row: HTMLElement): string[] =>
+      Array.from(row.querySelectorAll('.leg-row__problems > span')).map((line) => line.textContent?.trim() ?? '');
+    const type = (name: string, value: string): void => { fireEvent.change(box(name), { target: { value } }); };
+    expect(said(first)).toEqual([]);
+
+    // A quantity of nothing, or of half a contract, is shown and refused in words.
+    for (const quantity of ['0', '1.5', '']) {
+      type('Leg 1 quantity', quantity);
+      expect(said(first)).toEqual(['Quantity needs a whole number of 1 or more.']);
+    }
+    const quantity = box('Leg 1 quantity');
+    expect(quantity.getAttribute('aria-invalid')).toBe('true');
+    expect(document.getElementById(quantity.getAttribute('aria-describedby') ?? '')?.textContent).toContain('Quantity needs');
+    type('Leg 1 quantity', '2');
+    expect(said(first)).toEqual([]);
+    expect(quantity.getAttribute('aria-invalid')).toBe('false');
+    expect(quantity.hasAttribute('aria-describedby')).toBe(false);
+
+    type('Leg 1 Delta target, delta', '');
+    type('Leg 1 within, delta', '');
+    expect(said(first)).toEqual(['Delta target needs a number, in delta.', 'Within needs a number, in delta.']);
+
+    // A rule the server counts in whole steps takes a whole number.
+    await userEvent.selectOptions(screen.getByLabelText('Leg 1 which strike'), 'Steps from the money');
+    expect(said(first)).toEqual(['Steps from the money needs a whole number of strikes.']);
+    type('Leg 1 Steps from the money, strikes', '1.5');
+    expect(said(first)).toEqual(['Steps from the money needs a whole number of strikes.']);
+    expect(box('Leg 1 Steps from the money, strikes').getAttribute('aria-invalid')).toBe('true');
+    type('Leg 1 Steps from the money, strikes', '2');
+    expect(said(first)).toEqual([]);
+
+    await userEvent.selectOptions(screen.getByLabelText('Leg 1 expiry'), 'At least N days out');
+    expect(said(first)).toEqual(['At least N days out needs a whole number of days.']);
+    type('Leg 1 expiry, days', '2.5');
+    expect(said(first)).toEqual(['At least N days out needs a whole number of days.']);
+    type('Leg 1 expiry, days', '7');
+    expect(said(first)).toEqual([]);
+
+    // A fixed date with no date is said by the date field itself, once.
+    await userEvent.selectOptions(screen.getByLabelText('Leg 1 expiry'), 'Fixed date');
+    expect(within(first).getByRole('alert').textContent).toContain('Fixed date needs a date.');
+    expect(said(first)).toEqual([]);
+    expect(box('Leg 1 expiry date').getAttribute('aria-invalid')).toBe('true');
+    type('Leg 1 expiry date', '2026-10-09');
+    await vi.waitFor(() => expect(within(first).queryByRole('alert')).toBeNull());
+
+    // The second leg measures from the first; once that is gone it says so.
+    expect(said(second)).toEqual([]);
+    await userEvent.click(screen.getByRole('button', { name: 'Remove leg 1' }));
+    expect(said(screen.getAllByRole('row')[1])).toEqual(['Distance from another leg needs the leg it is measured from.']);
+  });
+
   it('neither previews nor uses a structure while a row is unfinished', async () => {
     const { service, use } = await renderBuilder();
     await vi.waitFor(() => expect(service.previewOptionStructure).toHaveBeenCalledTimes(1));

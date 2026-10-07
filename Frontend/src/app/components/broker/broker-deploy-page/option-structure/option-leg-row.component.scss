@@ -69,6 +69,14 @@ select[aria-invalid='true'] { box-shadow: 0 0 0 1px var(--bear); }
   }
 }
 
+// What the leg's boxes still need, in words, on a line under them.
+.leg-row__problems {
+  grid-column: 2 / -1;
+  color: var(--bear);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
 // Kept at the end of the leg's first line, whatever sits under it.
 .leg-row__end {
   grid-row: 1;
@@ -113,4 +121,5 @@ select[aria-invalid='true'] { box-shadow: 0 0 0 1px var(--bear); }
   }
 
   .leg-row__end { grid-row: auto; grid-column: auto; }
+  .leg-row__problems { grid-column: 1 / -1; }
 }

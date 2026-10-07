@@ -167,29 +167,78 @@ function isWholeCount(value: number | null): value is number {
   return value !== null && Number.isInteger(value) && value >= 1;
 }
 
-/** A number in a unit the server counts in whole steps is a whole number. */
-function fitsItsUnit(value: number | null, unit: string | undefined): boolean {
-  return value === null || (unit !== 'strikes' && unit !== 'days') || Number.isInteger(value);
+/** A rule's number box as the catalogue describes it: its unit, and the server's word for that unit. */
+type RuleBox = Pick<OptionStrikeRule['value'], 'unit' | 'unit_label'>;
+
+/**
+ * What a rule's number box still needs, under the catalogue's label for the
+ * rule and in its word for the unit, or nothing when the box holds its
+ * number. A unit the server counts in whole steps takes a whole number.
+ */
+function numberNeeded(value: number | null, label: string, box: RuleBox | null | undefined): string | undefined {
+  const whole = box?.unit === 'strikes' || box?.unit === 'days';
+  if (value !== null && (!whole || Number.isInteger(value))) return undefined;
+  if (!box) return `${label} needs a number.`;
+  return whole ? `${label} needs a whole number of ${box.unit_label}.` : `${label} needs a number, in ${box.unit_label}.`;
 }
 
 /**
- * Every row as a leg, or `null` while a row is unfinished: a box that is
- * empty, a count that is no whole number, or a distance measured from a leg
- * that is not there. What a finished leg's numbers may be is the server's
- * to judge.
+ * What a row's boxes still need before the row is a leg, each in the
+ * screen's own words: form chrome, never one of the server's sentences. A
+ * box that needs nothing has no entry.
+ */
+export interface RowProblems {
+  readonly quantity?: string;
+  /** The strike rule's own number. */
+  readonly strike?: string;
+  /** The leg a distance is measured from. */
+  readonly from?: string;
+  /** The builder's "Within". */
+  readonly within?: string;
+  /** The expiry rule's days or date. */
+  readonly expiry?: string;
+}
+
+/**
+ * What `row` still needs before it is a leg: a box that is empty, a count
+ * that is no whole number, or a distance measured from a leg that is not
+ * there. What a finished leg's numbers may be is the server's to judge.
+ */
+export function rowProblems(row: LegRow, rows: readonly LegRow[], rules: OptionRules): RowProblems {
+  const { strike, expiry } = row;
+  const strikeRule = rules.strike_rules.find((offered) => offered.selector === strike.selector);
+  const expiryRule = rules.expiry_rules.find((offered) => offered.selector === expiry.selector);
+  const strikeLabel = strikeRule?.label ?? formatReceiptLabel(strike.selector);
+  const expiryLabel = expiryRule?.label ?? formatReceiptLabel(expiry.selector);
+  const measuredFromALeg = rows.some((other) => other.leg_id === strike.from_leg && other.leg_id !== row.leg_id);
+  const problems: { -readonly [Box in keyof RowProblems]: RowProblems[Box] } = {};
+  if (!isWholeCount(row.qty_ratio)) problems.quantity = 'Quantity needs a whole number of 1 or more.';
+  if (strike.selector !== 'atm') problems.strike = numberNeeded(strike.value, strikeLabel, strikeRule?.value);
+  if (strike.selector === 'leg_distance' && !measuredFromALeg) problems.from = `${strikeLabel} needs the leg it is measured from.`;
+  if (strikeRule?.tolerance) problems.within = numberNeeded(strike.tolerance, 'Within', strikeRule.tolerance);
+  if (expiry.selector === 'min_dte') problems.expiry = numberNeeded(expiry.days, expiryLabel, expiryRule?.value);
+  if (expiry.selector === 'absolute' && expiry.date === '') problems.expiry = `${expiryLabel} needs a date.`;
+  return problems;
+}
+
+/** The problems of a row as lines to read, in the order of its boxes. */
+export function problemLines(problems: RowProblems): string[] {
+  return [problems.quantity, problems.strike, problems.from, problems.within, problems.expiry]
+    .filter((line): line is string => line !== undefined);
+}
+
+/**
+ * Every row as a leg, or `null` while a row is unfinished: one that
+ * {@link rowProblems} still finds something to say about.
  */
 export function legsOf(rows: readonly LegRow[], rules: OptionRules): OptionLegRules[] | null {
   const legs: OptionLegRules[] = [];
   for (const row of rows) {
     const strike = strikeOf(row.strike);
     const expiry = expiryOf(row.expiry);
-    const strikeRule = rules.strike_rules.find((offered) => offered.selector === row.strike.selector);
-    const expiryRule = rules.expiry_rules.find((offered) => offered.selector === row.expiry.selector);
+    if (problemLines(rowProblems(row, rows, rules)).length > 0) return null;
+    // A row with nothing left to say holds all three; the checks are for the compiler.
     if (!isWholeCount(row.qty_ratio) || strike === null || expiry === null) return null;
-    if (strikeRule?.tolerance && row.strike.tolerance === null) return null;
-    if (!fitsItsUnit(row.strike.value, strikeRule?.value.unit) || !fitsItsUnit(row.expiry.days, expiryRule?.value?.unit)) return null;
-    if (strike.selector === 'leg_distance'
-      && !rows.some((other) => other.leg_id === strike.leg_id && other.leg_id !== row.leg_id)) return null;
     legs.push({ leg_id: row.leg_id, position: row.position, right: row.right, qty_ratio: row.qty_ratio, strike, expiry });
   }
   return legs;
