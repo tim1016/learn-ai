@@ -1,0 +1,91 @@
+<span role="rowheader" class="leg-row__number">{{ number() }}</span>
+<span role="cell" data-label="Side">
+  <select [attr.aria-label]="name() + ' side'" (change)="setPosition($event)">
+    <option value="long" [selected]="row().position === 'long'">Buy</option>
+    <option value="short" [selected]="row().position === 'short'">Sell</option>
+  </select>
+</span>
+<span role="cell" data-label="Type">
+  <select [attr.aria-label]="name() + ' type'" (change)="setRight($event)">
+    <option value="call" [selected]="row().right === 'call'">Call</option>
+    <option value="put" [selected]="row().right === 'put'">Put</option>
+  </select>
+</span>
+<span role="cell" data-label="Qty">
+  <input
+    type="number" inputmode="numeric" min="1" step="1"
+    [attr.aria-label]="name() + ' quantity'"
+    [value]="row().qty_ratio ?? ''" [attr.aria-invalid]="row().qty_ratio === null"
+    (change)="setQuantity($event)"
+  />
+</span>
+<span role="cell" data-label="Which strike" class="leg-row__rule">
+  <select [attr.aria-label]="name() + ' which strike'" (change)="setStrikeRule($event)">
+    @for (rule of rules().strike_rules; track rule.selector) {
+      <option [value]="rule.selector" [selected]="rule.selector === row().strike.selector">{{ rule.label }}</option>
+    }
+    <!-- A rule the catalogue does not offer is shown as what it is, never as the first one listed. -->
+    @if (strikeRule() === null) { <option [selected]="true" disabled>{{ row().strike.selector | receiptLabel }}</option> }
+  </select>
+  @if (strikeRule(); as rule) {
+    <span class="leg-row__unit">
+      <input
+        type="number" step="any"
+        [attr.aria-label]="name() + ' ' + rule.label + ', ' + rule.value.unit_label"
+        [value]="row().strike.value ?? ''" [attr.aria-invalid]="row().strike.value === null"
+        (change)="setStrikeValue($event)"
+      />
+      <span aria-hidden="true">{{ rule.value.unit_label }}</span>
+    </span>
+    @if (rule.selector === 'leg_distance') {
+      <select [attr.aria-label]="name() + ' measured from'" [attr.aria-invalid]="row().strike.from_leg === null" (change)="setFromLeg($event)">
+        @for (other of others(); track other.leg_id) {
+          <option [value]="other.leg_id" [selected]="other.leg_id === row().strike.from_leg">from leg {{ other.number }}</option>
+        }
+        <!-- Measured from no leg yet: shown as empty, never as the first leg listed. -->
+        @if (row().strike.from_leg === null) { <option value="" [selected]="true" disabled></option> }
+      </select>
+    }
+  }
+</span>
+<span role="cell" data-label="Within">
+  @if (strikeRule()?.tolerance; as within) {
+    <span class="leg-row__unit">
+      <input
+        type="number" step="any" min="0"
+        [attr.aria-label]="name() + ' within, ' + within.unit_label"
+        [value]="row().strike.tolerance ?? ''" [attr.aria-invalid]="row().strike.tolerance === null"
+        (change)="setTolerance($event)"
+      />
+      <span aria-hidden="true">{{ within.unit_label }}</span>
+    </span>
+  }
+</span>
+<span role="cell" data-label="Expiry" class="leg-row__rule">
+  <select [attr.aria-label]="name() + ' expiry'" (change)="setExpiryRule($event)">
+    @for (rule of rules().expiry_rules; track rule.selector) {
+      <option [value]="rule.selector" [selected]="rule.selector === row().expiry.selector">{{ rule.label }}</option>
+    }
+  </select>
+  @if (expiryRule()?.value; as box) {
+    @if (box.unit === 'date') {
+      <label class="sr-only" [for]="dateId">{{ name() }} expiry date</label>
+      <app-date-field [inputId]="dateId" appearance="filled" [value]="row().expiry.date" (valueChange)="setDate($event)" />
+    } @else {
+      <span class="leg-row__unit">
+        <input
+          type="number" inputmode="numeric" min="1" step="1"
+          [attr.aria-label]="name() + ' expiry, ' + box.unit_label"
+          [value]="row().expiry.days ?? ''" [attr.aria-invalid]="row().expiry.days === null"
+          (change)="setDays($event)"
+        />
+        <span aria-hidden="true">{{ box.unit_label }}</span>
+      </span>
+    }
+  }
+</span>
+<span role="cell">
+  <button type="button" class="leg-row__remove" [attr.aria-label]="'Remove leg ' + number()" (click)="remove.emit()">
+    <i class="pi pi-times" aria-hidden="true"></i>
+  </button>
+</span>

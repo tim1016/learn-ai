@@ -1,0 +1,10 @@
+@if (halves(); as told) {
+  @for (half of told; track $index) {
+    <p>
+      <span class="option-verdict__mark" role="img" [attr.aria-label]="half.spoken">{{ half.mark }}</span>
+      <span>{{ half.sentence }}</span>
+    </p>
+  }
+} @else {
+  <p>Not known yet.</p>
+}

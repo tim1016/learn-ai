@@ -1,0 +1,59 @@
+<section class="picks" [attr.aria-labelledby]="titleId">
+  <header class="picks__head">
+    <h3 [id]="titleId">{{ heading() }}</h3>
+    <button type="button" class="picks__refresh" [disabled]="asking()" (click)="refresh.emit()">Refresh</button>
+  </header>
+
+  @if (failure(); as why) {
+    <p class="picks__notice" role="alert">{{ why }}</p>
+  } @else if (resolved(); as told) {
+    <p class="picks__read">
+      IBKR quotes read <app-timestamp-display [value]="told.quotes_read_ms" mode="local" granularity="time" />
+      @if (oldestAge() !== null) { <span>· oldest {{ oldestAge() }} s old</span> }
+    </p>
+    <ul class="picks__legs">
+      @for (picked of legs(); track picked.leg.leg_id) {
+        <li>
+          <p class="picks__contract">
+            <strong>{{ picked.side }} {{ picked.leg.ratio }}</strong>
+            <app-option-contract [contract]="picked.leg.contract" />
+          </p>
+          @if (!compact()) {
+            <dl>
+              <div><dt>Bid</dt><dd>{{ picked.leg.quote.bid }}</dd></div>
+              <div><dt>Ask</dt><dd>{{ picked.leg.quote.ask }}</dd></div>
+              <div><dt>Age</dt><dd>{{ picked.age }} s</dd></div>
+            </dl>
+            <!-- Our delta and IBKR's on one line, to be read against each other. -->
+            <dl>
+              <div><dt>Our delta</dt><dd>{{ picked.ours ?? (picked.leg.delta_status | receiptLabel) }}</dd></div>
+              <div><dt>IBKR delta</dt><dd>{{ picked.ibkr ?? '—' }}</dd></div>
+            </dl>
+          }
+        </li>
+      }
+    </ul>
+    @if (!compact()) {
+      @if (told.the_money_sentence; as counted) { <p class="picks__note">{{ counted }}</p> }
+      @if (told.watched; as watched) {
+        <dl class="picks__watched">
+          <dt>Watched strikes</dt>
+          @for (range of watched.ranges; track $index) {
+            <dd>
+              {{ range.right === 'call' ? 'Calls' : 'Puts' }},
+              <app-timestamp-display [value]="range.expiry_ms" mode="date-et" granularity="short-date" />:
+              {{ range.lowest_strike }} to {{ range.highest_strike }}
+            </dd>
+          }
+        </dl>
+      }
+    }
+    <app-option-preview-figures [preview]="told" [compact]="compact()" />
+  } @else if (preview(); as told) {
+    <p class="picks__notice" role="status">{{ told.notice }}</p>
+  } @else if (asking()) {
+    <p class="picks__notice" role="status">Reading the preview…</p>
+  }
+
+  @if (preview(); as told) { <p class="picks__note">{{ told.preview_sentence }}</p> }
+</section>

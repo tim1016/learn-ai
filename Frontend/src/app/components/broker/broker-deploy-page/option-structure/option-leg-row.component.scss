@@ -1,0 +1,87 @@
+@use '../../../../styles/filled-controls' as *;
+@use '../../../../styles/visually-hidden' as *;
+
+// The builder sets the columns once (`--leg-columns`), for its heading row
+// and for every leg, so the cells line up without a `<table>`.
+:host {
+  display: grid;
+  grid-template-columns: var(--leg-columns);
+  gap: var(--space-2);
+  align-items: start;
+  min-width: 0;
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--border-light);
+  --field-fill: var(--bg-elevated);
+}
+
+.sr-only { @include visually-hidden; }
+
+[role='cell'] {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.leg-row__number {
+  align-self: center;
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+select { @include filled-select; }
+
+input[type='number'] {
+  @include filled-field;
+  appearance: textfield;
+
+  &::-webkit-inner-spin-button,
+  &::-webkit-outer-spin-button { margin: 0; appearance: none; }
+}
+
+select[aria-invalid='true'] { box-shadow: 0 0 0 1px var(--bear); }
+
+// A number with its unit beside it, in the server's word for the unit.
+.leg-row__unit {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+
+  > span {
+    flex: 0 0 auto;
+    color: var(--text-subtle);
+    font-size: var(--fs-xs);
+  }
+}
+
+.leg-row__remove {
+  display: grid;
+  width: 2rem;
+  height: 2.5rem;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-subtle);
+  cursor: pointer;
+
+  &:hover { background: var(--bg-hover); color: var(--text-primary); }
+  &:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+}
+
+// Stacked, each leg is a block of its own and every box says what it holds.
+@media (max-width: 60rem) {
+  :host {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: var(--space-3) 0;
+  }
+
+  [role='cell'][data-label]::before {
+    content: attr(data-label);
+    @include field-label;
+  }
+
+  .leg-row__number::before { content: 'Leg '; }
+  .leg-row__rule { grid-column: 1 / -1; }
+}

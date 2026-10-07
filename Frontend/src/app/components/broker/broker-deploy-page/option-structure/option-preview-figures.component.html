@@ -1,0 +1,48 @@
+@if (preview().lean; as lean) {
+  <p class="figures__lean">{{ lean.sentence }}</p>
+} @else if (preview().lean_unknown_sentence; as unknown) {
+  <p class="figures__lean">{{ unknown }}</p>
+}
+
+@if (preview().at_expiry; as expiry) {
+  <div class="figures__expiry">
+    <p class="figures__assumed">{{ expiry.assumptions_sentence }}</p>
+    @if (expiry.loss_sentence; as loss) { <p>{{ loss }}</p> }
+    @if (expiry.gain_sentence; as gain) { <p>{{ gain }}</p> }
+    @if (!compact() && expiry.break_even_sentence) { <p>{{ expiry.break_even_sentence }}</p> }
+    <p class="figures__caution">{{ expiry.warning_sentence }}</p>
+  </div>
+}
+
+@if (money(); as told) {
+  <dl class="figures__money">
+    <div>
+      <dt>Premium</dt>
+      <dd>
+        @if (compact()) {
+          {{ told.price }} {{ told.premiumIs }} <span class="figures__each">· {{ told.premiumEach }} a structure</span>
+        } @else {
+          {{ told.premium }} {{ told.premiumIs }}
+          @if (told.structures > 1) { <span class="figures__each">· {{ told.premiumEach }} a structure</span> }
+        }
+      </dd>
+    </div>
+    @if (!compact()) {
+      @if (told.structures > 1) { <div><dt>Structures</dt><dd>{{ told.structures }}</dd></div> }
+      <div><dt>Alpaca’s requirement</dt><dd>{{ told.requirement }}</dd></div>
+      <div><dt>Fees (estimate)</dt><dd>{{ told.fees }}</dd></div>
+      <div><dt>Set aside, with fees</dt><dd>{{ told.setAside }}</dd></div>
+      <div [class.figures__over]="told.overLimit">
+        <dt>Open and close at once</dt>
+        <dd>
+          @if (told.overLimit) { <span class="figures__flag" aria-hidden="true">!</span> }
+          {{ told.roundTrip }} · {{ told.roundTripPercent }}%
+        </dd>
+      </div>
+    }
+  </dl>
+  @if (!compact() || told.overLimit) {
+    <p class="figures__note" [class.figures__over]="told.overLimit">{{ told.costSentence }}</p>
+  }
+  @if (!compact()) { <p class="figures__note">{{ told.feesSentence }}</p> }
+}

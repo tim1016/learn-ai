@@ -1,0 +1,75 @@
+<div class="builder">
+  <nav class="builder__start" [attr.aria-labelledby]="startTitleId">
+    <h3 [id]="startTitleId">Start from</h3>
+    @for (group of catalogue().groups; track group.label) {
+      <div class="builder__group">
+        <h4>{{ group.label }}</h4>
+        <ul>
+          @for (start of group.structures; track start.structure) {
+            <li>
+              <button type="button" [attr.aria-pressed]="named() === start.structure" (click)="startFrom(start)">{{ start.label }}</button>
+            </li>
+          }
+        </ul>
+      </div>
+    }
+    <div class="builder__group">
+      <h4>Your own</h4>
+      <ul>
+        <li><button type="button" [attr.aria-pressed]="named() === null" (click)="startCustom()">{{ catalogue().custom_label }}</button></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- Named for what it holds: the structure's own name is also the name of Deploy's summary behind the drawer. -->
+  <section class="builder__legs" aria-label="Legs">
+    <h3 #title [id]="legsTitleId" tabindex="-1">{{ heading() }}</h3>
+    <p class="builder__description">{{ description() }}</p>
+
+    <div class="builder__table" role="table" [attr.aria-labelledby]="legsTitleId">
+      <div class="builder__columns" role="row">
+        <span role="columnheader">#</span>
+        <span role="columnheader">Side</span>
+        <span role="columnheader">Type</span>
+        <span role="columnheader">Qty</span>
+        <span role="columnheader">Which strike</span>
+        <span role="columnheader">Within</span>
+        <span role="columnheader">Expiry</span>
+        <span role="columnheader"><span class="sr-only">Remove</span></span>
+      </div>
+      @for (row of rows(); track row.leg_id; let index = $index) {
+        <app-option-leg-row
+          [row]="row"
+          [number]="index + 1"
+          [rows]="rows()"
+          [rules]="catalogue()"
+          [class.builder__row--flagged]="flagged().has(row.leg_id)"
+          [attr.aria-describedby]="flagged().has(row.leg_id) ? verdictId : null"
+          (rowChange)="setRow(row.leg_id, $event)"
+          (remove)="removeRow(row.leg_id)"
+        />
+      }
+    </div>
+
+    <p class="builder__add">
+      <button type="button" [disabled]="!canAdd()" (click)="addLeg()">Add a leg</button>
+      <span>Up to {{ catalogue().max_legs }} legs.</span>
+    </p>
+
+    <app-option-verdict [id]="verdictId" [verdict]="verdict()" />
+
+    <div class="builder__actions">
+      <button type="button" (click)="cancelled.emit()">Cancel</button>
+      <button type="button" class="builder__use" [disabled]="!canUse()" (click)="useIt()">Use this structure</button>
+    </div>
+  </section>
+
+  <app-option-preview-panel
+    class="builder__picks"
+    heading="What this picks right now"
+    [preview]="preview.answer()"
+    [asking]="preview.asking()"
+    [failure]="preview.failure()"
+    (refresh)="preview.refresh()"
+  />
+</div>
