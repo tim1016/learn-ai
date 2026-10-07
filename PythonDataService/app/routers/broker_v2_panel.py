@@ -20,11 +20,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator
-from typing import Literal, NoReturn
+from collections.abc import AsyncIterator, Callable, Coroutine
+from typing import Any, Literal, NoReturn
 
-from fastapi import APIRouter, HTTPException, Path, Query
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException, Path, Query, Request, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
@@ -368,11 +370,34 @@ async def get_option_structure_catalogue(broker: str, account_id: str) -> Option
         _raise_alpaca_deploy_error(error)
 
 
-@router.post(
-    "/{broker}/accounts/{account_id}/bots/option-structure-preview",
-    response_model=OptionStructurePreview,
-    summary="Deploy: what an option structure's rules would pick right now, and what it would cost (#2913)",
-)
+class _ANumberOutOfRangeIsAnswered(APIRoute):
+    """The preview's route. A request refused only for numbers outside their ranges is answered in words,
+    as a structure that cannot be deployed, where a 422 gives a page nothing to show (#2913). Any other
+    malformed request is refused as it always was."""
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        handle = super().get_route_handler()
+
+        async def answered(request: Request) -> Response:
+            try:
+                return await handle(request)
+            except RequestValidationError as refused:
+                broker, account_id = request.path_params.get("broker"), request.path_params.get("account_id")
+                if broker != "alpaca" or not isinstance(account_id, str):
+                    raise
+                try:
+                    said = await option_structure_panel.option_structure_out_of_range(
+                        broker, account_id, refused.body, refused.errors()
+                    )
+                except panel_errors.PanelDataError as error:
+                    _raise_alpaca_deploy_error(error)
+                if said is None:
+                    raise
+                return JSONResponse(said.model_dump(mode="json"))
+
+        return answered
+
+
 async def preview_option_structure_scoped(
     broker: str, account_id: str, request: OptionStructurePreviewRequest
 ) -> OptionStructurePreview:
@@ -383,6 +408,16 @@ async def preview_option_structure_scoped(
         return await option_structure_panel.option_structure_preview(broker, account_id, request)
     except panel_errors.PanelDataError as error:
         _raise_alpaca_deploy_error(error)
+
+
+router.add_api_route(
+    "/{broker}/accounts/{account_id}/bots/option-structure-preview",
+    preview_option_structure_scoped,
+    methods=["POST"],
+    response_model=OptionStructurePreview,
+    summary="Deploy: what an option structure's rules would pick right now, and what it would cost (#2913)",
+    route_class_override=_ANumberOutOfRangeIsAnswered,
+)
 
 
 @router.post(

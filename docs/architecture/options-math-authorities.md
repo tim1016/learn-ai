@@ -32,6 +32,7 @@ American option: any stock or ETF option a bot picks, prices or holds
     → app/options/american.american_value (price and delta)
       app/options/american.american_implied_volatility (volatility and the delta at it)
       app/options/american.american_daily_decay (daily time decay of a stock or ETF option: its price 24 hours on, less its price now)
+      app/options/decay.structure_daily_decay (a structure's: each leg's own, signed by its side, summed)
       A Leisen-Reimer tree with cash dividends in escrow; time to expiry to the
       millisecond. QuantLib is its reference, in fixtures only, never at runtime.
       quantlib_pricer.price_option is NOT an American pricer: it puts its
