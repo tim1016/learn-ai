@@ -752,8 +752,9 @@ async def _judge(
     The money review goes on, so that its list is whole (``every_blocker``
     true). It reads the structure preview unless no plan stands or this
     Clerk has no option quotes of its own, and it asks Alpaca about a real
-    account unless the account's mode is not open: a Live Shadow's and a
-    switched-off Live account's review asks Alpaca nothing. What needs a
+    account unless the account's mode is not open. A Live Shadow's review
+    asks the live account about option approval, buying power and listing;
+    a switched-off Live account's review asks Alpaca nothing. What needs a
     price or a pick (option buying power, Alpaca's listing, a red verdict)
     is found only once the preview has resolved.
     """
