@@ -1657,6 +1657,16 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
 - **Option fees** — the five fees Alpaca passes through on a stock or ETF option trade: the SEC fee and the TAF on sales; the ORF, the OCC clearing fee and the CAT fee on both sides. Alpaca charges no commission on these.
   _Avoid_: commission.
 - **Option fee provision** — what an option entry sets aside for its own fees, in whole cents: its fills settled as a day of their own. An estimate; the fee activities Alpaca posts are the truth.
+- **Option entry evidence** — what a runner hands the Clerk with an option ENTER: for each leg the contract picked, its listed multiplier and the quote read just before; the quotes' generation; the bot's two limits. Facts, never a price or a commitment.
+- **Leg gap limit** — the widest bid-ask gap the owner allows any one leg at an entry, as a percent of that leg's mid. Starts at 8.
+- **Order line** — an option order as the books write it beside a stock leg: the contract's symbol, the side, contracts, the limit a share. The exact order is kept with it.
+- **Quotes kept** — the option quotes a Dry Run's Clerk was handed, kept so a later close or mark can be priced from them. Cut back as they grow to what a later reader can still ask for.
+- **Hand-over** — the runner passing the Clerk the newest quote it holds for a contract. It says "this is still the newest", which a quiet contract's old receipt time cannot.
+- **Natural price from an older quote** — how a simulated close is priced when its exit decision had no usable quote: from the newest quote kept, with that quote's age.
+- **Last session (of a contract)** — the last regular session a contract trades in: the one on its expiry date, to that session's close, a half day's included. After it the contract has expired: nothing is bought or sold in it.
+  _Avoid_: expiry (that names the date), close deadline (when the bot closes, earlier).
+- **Expired contract (held)** — a position in a contract past its last session. No order can close it. It stays on the books under a notice until expired contracts are settled, which is not built.
+- **Entry wait** — how long a resting entry waits for its fill before it is cancelled. Starts at 20 seconds.
 
 ## Market-data readiness (resolved 2026-09-22)
 
