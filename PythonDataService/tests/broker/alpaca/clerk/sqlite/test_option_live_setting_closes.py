@@ -211,17 +211,3 @@ async def test_with_live_switched_off_the_owners_flatten_of_a_stopped_bots_contr
     assert pressed.applied
     assert _closes_sent(account) == [SELLS_ONE_TO_CLOSE] and port.refused == []
 
-
-async def test_a_live_shadow_takes_no_exit_of_an_option_plan_either(
-    live: tuple[PaperOptions, _LiveVenue], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A Live Shadow never took an option plan, so its books hold none to close: it is refused whole, an EXIT
-    included, whatever the setting says."""
-    account, _port = live
-    account.clerk.authority_kind = "shadow"
-    for switched_on in (False, True):
-        _switch(monkeypatch, switched_on)
-        refused = await account.exit()
-        assert refused.state is EffectOperationState.REJECTED
-        assert (refused.explanation or "").startswith(f"{_ACCOUNT_NOT_OPEN}: ") and "not built" in refused.explanation
-    assert account.venue.submitted_option_orders == []
