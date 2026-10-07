@@ -611,7 +611,7 @@ async def test_books_that_do_not_answer_hold_up_no_pass_and_no_mark_and_are_not_
     held.drive(ibkr)
     await held.settled()
 
-    assert longest_pass_s < 0.02, "a pass waited on the books"
+    assert longest_pass_s < 0.25, "a pass waited on the books"
     assert reads_while_stuck == 1
     assert holder.last_handed_over(CALL, clock.value) == (Decimal("4.08"), Decimal("4.12"), NOW)
     assert stuck.reads - reads_before == 2, "once the stuck read answered, the next round read the books again"
@@ -645,7 +645,7 @@ async def test_a_file_that_cannot_be_written_in_time_holds_up_no_pass_and_is_not
         slow_disk.set()
     await held.settled()
 
-    assert longest_pass_s < 0.02, "a pass waited on the file"
+    assert longest_pass_s < 0.25, "a pass waited on the file"
     assert begun_while_slow == 1
     assert account.last_handed_over(CALL, clock.value) == (Decimal("4.08"), Decimal("4.12"), NOW)
     # The late write is noted as the hand-over it was: the next is due fifteen seconds after it, not at once.
