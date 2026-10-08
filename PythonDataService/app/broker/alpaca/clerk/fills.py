@@ -89,6 +89,12 @@ class FillRecord:
     # (ADR 0076 decision 13): ``quantity`` is then contracts and ``fill_price`` the premium
     # per share. ``None`` for shares, which is every fill of a stock.
     multiplier: int | None = None
+    # True when a residue discharge already counted this fill's position credit
+    # (#2854): it stays on the record and is never credited again. In the FIFO
+    # walk it is the one fill that may close a lot a write-off set apart
+    # (#2975). SQLite sets it from the fill's own transition; the neutral
+    # default credits every fill.
+    credit_withheld: bool = False
 
     @property
     def exact_notional(self) -> Decimal:

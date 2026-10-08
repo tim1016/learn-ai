@@ -10,11 +10,13 @@ in-line so a quant reviewer can audit without running the code.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from decimal import Decimal
 from fractions import Fraction
 from pathlib import Path
 
 from app.broker.alpaca.clerk.fifo_pnl import (
+    LotWriteOff,
     compute_fifo_pnl,
     realized_pnl_today,
 )
@@ -40,6 +42,8 @@ def _fill(
     fee: float | None = None,
     symbol: str = "SPY",
     event_key: str | None = None,
+    multiplier: int | None = None,
+    credit_withheld: bool = False,
 ) -> FillRecord:
     key = event_key or f"exec:{ts_ms}"
     return FillRecord(
@@ -54,6 +58,8 @@ def _fill(
         fill_price=price,
         filled_at_ms=ts_ms,
         fee=fee,
+        multiplier=multiplier,
+        credit_withheld=credit_withheld,
     )
 
 
@@ -616,3 +622,190 @@ def test_golden_fixture_incomplete_marks() -> None:
     assert result.marks_complete is False
     assert len(result.closed_lots) == scenario_out["closed_lots_count"]
     assert len(result.open_lots) == scenario_out["open_lots_count"]
+
+
+# ── Written-off lots (#2975) ──────────────────────────────────────────────────
+#
+# A residue discharge takes a bot's attributed position off the books and
+# closes no lot. Supplied to the walk as one LotWriteOff each, the oldest
+# lots of that owner and symbol are set apart: no later fill of the bot's
+# closes them, they realise nothing, and they are not open exposure. The one
+# fill that may close them is one whose credit a discharge withheld (#2854).
+# Every scenario below is the re-reviewer's measured case from #2975,
+# derived by hand.
+
+
+def _write_off(
+    *,
+    qty: str,
+    ts_ms: int,
+    sequence: int = 1,
+    symbol: str = "SPY",
+) -> LotWriteOff:
+    return LotWriteOff(
+        symbol=symbol,
+        exact_qty=Decimal(qty),
+        written_off_at_ms=ts_ms,
+        ledger_sequence=sequence,
+        sid=_SID,
+    )
+
+
+def test_a_written_off_lots_expiry_closes_the_new_lot_not_the_written_off_one() -> None:
+    """#2975 case 1, in contracts: BUY 1 @ $1.94, write-off, BUY 1 @ $3.00, expire at zero.
+
+    The written-off lot realises nothing, ever. The expiry closes the lot
+    that expired -- the $3.00 one -- for -$300.00, not the written-off one's
+    -$194.00, and no lot stays wrongly open behind it.
+    """
+    fills = [
+        _fill(side=OrderSide.BUY, qty=1, price=1.94, ts_ms=1000, multiplier=100),
+        _fill(side=OrderSide.BUY, qty=1, price=3.00, ts_ms=3000, multiplier=100),
+        _fill(side=OrderSide.SELL, qty=1, price=0.0, ts_ms=4000, multiplier=100),
+    ]
+    write_offs = [_write_off(qty="1", ts_ms=2000)]
+    result = compute_fifo_pnl(fills, write_offs=write_offs)
+
+    assert _close(result.realized_pnl, -300.0), f"expected -300.0; got {result.realized_pnl}"
+    assert len(result.closed_lots) == 1
+    assert _close(result.closed_lots[0].entry_price, 3.00), "the lot that expired cost $3.00"
+    assert result.open_lots == [], "the expiry closed the held lot"
+    assert len(result.written_off_lots) == 1
+    assert _close(result.written_off_lots[0].cost, 1.94)
+
+
+def test_a_re_entrys_part_sale_after_a_write_off_closes_only_the_new_lots() -> None:
+    """#2975 case 2, in contracts: BUY 1 @ $1.94, write-off, BUY 2 @ $3.00, SELL 1 @ $2.00, exercise 1 at zero.
+
+    The sale realises -$100.00 (one $3.00 lot), not +$6.00 (the written-off
+    lot); the exercise brings the running total to -$400.00, not -$294.00.
+    Before the write-off rule these were the booked figures the issue names.
+    """
+    fills = [
+        _fill(side=OrderSide.BUY, qty=1, price=1.94, ts_ms=1000, multiplier=100),
+        _fill(side=OrderSide.BUY, qty=2, price=3.00, ts_ms=3000, multiplier=100),
+        _fill(side=OrderSide.SELL, qty=1, price=2.00, ts_ms=4000, multiplier=100),
+        _fill(side=OrderSide.SELL, qty=1, price=0.0, ts_ms=5000, multiplier=100),
+    ]
+    write_offs = [_write_off(qty="1", ts_ms=2000)]
+    result = compute_fifo_pnl(fills, write_offs=write_offs)
+
+    assert len(result.closed_lots) == 2
+    assert _close(result.closed_lots[0].realized_pnl, -100.0), "the sale closes a $3.00 lot"
+    assert _close(result.closed_lots[1].realized_pnl, -300.0), "the exercise closes the other"
+    assert _close(result.realized_pnl, -400.0), f"expected -400.0; got {result.realized_pnl}"
+
+
+def test_a_written_off_lot_is_no_open_exposure_and_demands_no_mark() -> None:
+    """BUY 10 @ $10, write-off 10: flat for valuation, though the lot stays in the fills.
+
+    marks_complete is True and open P&L exactly 0 without any mark: the
+    written-off lot is not exposure (#2975).
+    """
+    fills = [_fill(side=OrderSide.BUY, qty=10, price=10.0, ts_ms=1000)]
+    result = compute_fifo_pnl(fills, write_offs=[_write_off(qty="10", ts_ms=2000)])
+
+    assert result.open_lots == []
+    assert result.marks_complete is True
+    assert result.open_pnl == 0.0
+    assert len(result.written_off_lots) == 1
+    assert _close(result.written_off_lots[0].qty, 10.0)
+
+
+def test_a_withheld_fill_closes_the_written_off_lot_at_its_price() -> None:
+    """BUY 10 @ $100, write-off, the unseen SELL 10 @ $102 arrives with its credit withheld (#2854).
+
+    The discharge stood in for exactly that execution, so it is the one fill
+    that closes the written-off lot: realised (102 - 100) x 10 = +$20.00.
+    """
+    fills = [
+        _fill(side=OrderSide.BUY, qty=10, price=100.0, ts_ms=1000),
+        _fill(side=OrderSide.SELL, qty=10, price=102.0, ts_ms=3000, credit_withheld=True),
+    ]
+    result = compute_fifo_pnl(fills, write_offs=[_write_off(qty="10", ts_ms=2000)])
+
+    assert _close(result.realized_pnl, 20.0), f"expected +20.0; got {result.realized_pnl}"
+    assert result.open_lots == []
+    assert result.written_off_lots == [], "the withheld fill closed the written-off lot"
+
+
+def test_a_write_off_of_a_short_position_sets_its_lots_apart() -> None:
+    """SELL 5 @ $50 short, write-off -5, SELL 5 @ $40 short, BUY 5 @ $45 closes the new lot.
+
+    The cover realises (40 - 45) x 5 = -$25.00 -- the new short lot -- and
+    the written-off short lot realises nothing.
+    """
+    fills = [
+        _fill(side=OrderSide.SELL, qty=5, price=50.0, ts_ms=1000),
+        _fill(side=OrderSide.SELL, qty=5, price=40.0, ts_ms=3000),
+        _fill(side=OrderSide.BUY, qty=5, price=45.0, ts_ms=4000),
+    ]
+    result = compute_fifo_pnl(fills, write_offs=[_write_off(qty="-5", ts_ms=2000)])
+
+    assert _close(result.realized_pnl, -25.0), f"expected -25.0; got {result.realized_pnl}"
+    assert len(result.written_off_lots) == 1
+    assert _close(result.written_off_lots[0].cost, 50.0)
+
+
+def test_a_write_off_takes_the_oldest_lots_whatever_was_bought_since() -> None:
+    """BUY 10 @ $10, BUY 10 @ $12, write-off 10, SELL 10 @ $11.
+
+    The write-off takes what was held then -- the $10 lot, the oldest -- so
+    the sale closes the $12 lot: (11 - 12) x 10 = -$10.00.
+    """
+    fills = [
+        _fill(side=OrderSide.BUY, qty=10, price=10.0, ts_ms=1000),
+        _fill(side=OrderSide.BUY, qty=10, price=12.0, ts_ms=2000),
+        _fill(side=OrderSide.SELL, qty=10, price=11.0, ts_ms=4000),
+    ]
+    result = compute_fifo_pnl(fills, write_offs=[_write_off(qty="10", ts_ms=3000)])
+
+    assert _close(result.realized_pnl, -10.0), f"expected -10.0; got {result.realized_pnl}"
+    assert _close(result.closed_lots[0].entry_price, 12.0)
+    assert _close(result.written_off_lots[0].cost, 10.0)
+
+
+def test_a_write_off_that_parts_a_lot_splits_it_oldest_side_written_off() -> None:
+    """BUY 10 @ $10, BUY 10 @ $12, write-off 15: 10@$10 and 5@$12 set apart, 5@$12 closable.
+
+    A following SELL 5 @ $11 closes the remaining $12 part: (11 - 12) x 5 = -$5.00.
+    """
+    fills = [
+        _fill(side=OrderSide.BUY, qty=10, price=10.0, ts_ms=1000),
+        _fill(side=OrderSide.BUY, qty=10, price=12.0, ts_ms=2000),
+        _fill(side=OrderSide.SELL, qty=5, price=11.0, ts_ms=4000),
+    ]
+    result = compute_fifo_pnl(fills, write_offs=[_write_off(qty="15", ts_ms=3000)])
+
+    assert _close(result.realized_pnl, -5.0), f"expected -5.0; got {result.realized_pnl}"
+    assert _close(result.written_off_lots[0].cost, 10.0)
+    assert _close(result.written_off_lots[0].qty, 10.0)
+    assert _close(result.written_off_lots[1].cost, 12.0)
+    assert _close(result.written_off_lots[1].qty, 5.0)
+    assert result.open_lots == []
+
+
+def test_a_write_off_of_another_bot_sets_aside_nothing_of_this_one() -> None:
+    """BUY 10 @ $10 with BUY 10 @ $20 beside it by another bot, write-off only that one, SELL 10 @ $11.
+
+    The write-off names its own owner's lots, so this bot's sale still closes
+    its own $10 lot: +$10.00. The other bot's $20 lot stays its own.
+    """
+    other = replace(
+        _fill(side=OrderSide.BUY, qty=10, price=20.0, ts_ms=1500),
+        sid="other-bot",
+    )
+    fills = [
+        _fill(side=OrderSide.BUY, qty=10, price=10.0, ts_ms=1000),
+        other,
+        _fill(side=OrderSide.SELL, qty=10, price=11.0, ts_ms=4000),
+    ]
+    result = compute_fifo_pnl(
+        fills,
+        write_offs=[replace(_write_off(qty="10", ts_ms=3000), sid="other-bot")],
+    )
+
+    assert _close(result.realized_pnl, 10.0), f"expected +10.0; got {result.realized_pnl}"
+    assert len(result.written_off_lots) == 1, "the write-off set apart its own bot's lot"
+    assert _close(result.written_off_lots[0].cost, 20.0)
+    assert result.open_lots == []

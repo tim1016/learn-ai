@@ -1099,3 +1099,78 @@ async def test_a_late_fill_credited_before_the_rule_rebuilds_as_it_was_recorded(
 
     assert repo.position(SID, "SPY") == -10
     _a_rebuild_holds_the_same_record(repo, clock, tmp_path, tmp_path_factory)
+
+
+# ── The books read the write-off as their own arithmetic (#2975) ─────────────
+
+
+async def test_the_books_read_again_right_after_a_write_off(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """The write-off is part of the books' arithmetic, not a disagreement inside them.
+
+    Before #2975 the bot's P&L read only while its executions added up to the
+    position it is attributed, so a written-off bot read as unavailable until
+    a late fill happened to rebalance the fills. The discharge now counts in
+    that proof, and its lot -- still open in the fills -- is set apart: it
+    realises nothing, is no exposure, and demands no mark. The entry stays on
+    the record.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _Alpaca(repo, clock, submits=("arrives_unanswered",))
+    _facade, _closing = await _a_lost_closing_order_is_written_off(repo, alpaca)
+
+    money = _the_bots_money(repo)
+
+    assert money.exposure == {}
+    assert money.marks_complete is True, "a written-off lot is no exposure and demands no mark"
+    assert money.open_pnl == 0.0
+    assert [(fill.side.value, fill.quantity, fill.fill_price) for fill in money.recent_fills] == [
+        ("buy", 10.0, 100.0)
+    ]
+
+
+async def test_a_re_entry_after_a_write_off_closes_only_its_own_lot(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """#2975, end to end: the bot's next position in the asset is not the written-off lot's cost.
+
+    After the write-off the bot runs again and buys 10; stopped, its Flatten
+    fails as the first did and its sale arrives. The sale closes the lot that
+    ended -- the one it bought after the write-off -- and the written-off lot
+    realises nothing, so the books read: before #2975 the same ledger's
+    executions no longer added up to its attributed position and the P&L was
+    unavailable, or the sale booked the written-off lot's cost.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _Alpaca(repo, clock, submits=("arrives_unanswered", "arrives_unanswered"))
+    facade, _written_off = await _a_lost_closing_order_is_written_off(repo, alpaca)
+    assert _the_bots_money(repo).exposure == {}
+
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=A_LATER_RUN_ID)
+    await safe_flatten._held_position(
+        repo, decision_id="enter-2", lifecycle_run_id=A_LATER_RUN_ID, execution_id="exec-2"
+    )
+    assert repo.position(SID, "SPY") == 10
+    submit_stop_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+        lifecycle_run_id=A_LATER_RUN_ID, operator_reason="operator_stop",
+    )
+    alpaca.holds = 10.0
+    _walk_clock_to(repo, repo.clock() + 5_000)
+    assert (await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")).verdict == "clean"
+    later = await _its_flatten_fails_after_its_own_order_fills_unseen(repo, alpaca, facade, _context_of(repo, SID))
+    stream = _the_stream(repo, facade)
+
+    await _its_fill_arrives_on_the_stream(stream, later)
+    assert repo.position(SID, "SPY") == 0
+
+    money = _the_bots_money(repo)
+    assert money.exposure == {}
+    assert money.marks_complete is True
+    in_order = sorted(money.recent_fills, key=lambda fill: fill.filled_at_ms)
+    assert [(fill.side.value, fill.quantity) for fill in in_order] == [
+        ("buy", 10.0),  # the written-off position's entry, still on the record
+        ("buy", 10.0),  # the re-entry
+        ("sell", 10.0),  # the re-entry's close: the lot that ended
+    ]

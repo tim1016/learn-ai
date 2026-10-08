@@ -37,20 +37,23 @@ from pathlib import Path
 
 from app.broker.alpaca.clerk.fifo_pnl import (
     ClosedLot,
+    LotWriteOff,
     _Lot,
     apply_fill_to_lots,
+    apply_write_off_to_lots,
     compute_fifo_pnl,
     compute_open_pnl,
+    merged_fifo_events,
     realized_pnl_for_window,
 )
 from app.broker.alpaca.clerk.fills import FillRecord
-from app.broker.alpaca.clerk.money import ZERO, money_context
+from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money
 from app.broker.alpaca.clerk.sqlite.contract_terms import (
     ORDER_CONTRACT_JOINS_SQL,
     ORDER_CONTRACT_MULTIPLIER_SQL,
     ORDER_CONTRACT_SYMBOL_SQL,
 )
-from app.broker.alpaca.clerk.sqlite.custody_subjects import BOT_SUBJECT_PREFIX
+from app.broker.alpaca.clerk.sqlite.custody_subjects import BOT_SUBJECT_PREFIX, bot_subject_id
 from app.broker.alpaca.clerk.sqlite.decision_receipts import MAX_DECISION_RECEIPTS_PER_STRATEGY
 from app.broker.alpaca.clerk.sqlite.economic_projection_models import (
     AccountPnlAttribution,
@@ -70,7 +73,7 @@ from app.broker.alpaca.clerk.sqlite.economic_projection_models import (
     SessionEconomicProjection,
 )
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot
-from app.broker.alpaca.clerk.sqlite.reads import filled_outside_order_ids
+from app.broker.alpaca.clerk.sqlite.reads import FILL_CREDIT_WITHHELD_BY_DISCHARGE, filled_outside_order_ids
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PARAMS,
@@ -163,7 +166,9 @@ class _CachedFifo:
     """Incremental SQLite-to-canonical FIFO mirror for one bot.
 
     Formula: apply each newly effective fill through
-    ``fifo_pnl.apply_fill_to_lots``.  The canonical FIFO file owns every
+    ``fifo_pnl.apply_fill_to_lots`` and each newly recorded write-off
+    through ``fifo_pnl.apply_write_off_to_lots``, both at their ledger
+    place in one merged stream.  The canonical FIFO file owns every
     numerical operation; this cache only retains its mutable inputs between
     equal or append-only SQLite revisions.  A correction or historical insert
     invalidates the prefix and rebuilds from authoritative effective rows.
@@ -177,6 +182,7 @@ class _CachedFifo:
     """
 
     records: tuple[FillRecord, ...] = ()
+    write_offs: tuple[LotWriteOff, ...] = ()
     lots: dict[str, deque[_Lot]] = field(default_factory=dict)
     closed_lots: list[ClosedLot] = field(default_factory=list)
     fee_total: float | None = 0.0
@@ -185,12 +191,20 @@ class _CachedFifo:
     def project(
         self,
         records: tuple[FillRecord, ...],
+        write_offs: tuple[LotWriteOff, ...] = (),
     ) -> tuple[list[ClosedLot], dict[str, deque[_Lot]], FeeFidelity]:
-        if not _is_prefix(self.records, records):
+        applied = self._merged(self.records, self.write_offs)
+        current = self._merged(records, write_offs)
+        if not _is_prefix(applied, current):
             self._forget()
+            applied = ()
 
         try:
-            for record in records[len(self.records) :]:
+            for event in current[len(applied) :]:
+                if isinstance(event, LotWriteOff):
+                    apply_write_off_to_lots(self.lots, event)
+                    continue
+                record = event
                 apply_fill_to_lots(self.lots, record, self.closed_lots)
                 if record.fee is None:
                     self.fee_missing = True
@@ -205,18 +219,27 @@ class _CachedFifo:
             raise
 
         self.records = records
+        self.write_offs = write_offs
         fee_fidelity: FeeFidelity = "not_reported" if self.fee_missing else "reported"
         return self.closed_lots, self.lots, fee_fidelity
 
+    @staticmethod
+    def _merged(
+        records: tuple[FillRecord, ...], write_offs: tuple[LotWriteOff, ...]
+    ) -> tuple[FillRecord | LotWriteOff, ...]:
+        """Fills and write-offs as one stream, by the canonical rule (#2975)."""
+        return merged_fifo_events(records, write_offs)
+
     def _forget(self) -> None:
         self.records = ()
+        self.write_offs = ()
         self.lots = {}
         self.closed_lots = []
         self.fee_total = 0.0
         self.fee_missing = False
 
 
-def _is_prefix(prefix: tuple[FillRecord, ...], values: tuple[FillRecord, ...]) -> bool:
+def _is_prefix(prefix: Sequence[FillRecord | LotWriteOff], values: Sequence[FillRecord | LotWriteOff]) -> bool:
     return len(prefix) <= len(values) and values[: len(prefix)] == prefix
 
 
@@ -490,15 +513,29 @@ class SqliteEconomicProjectionReader:
         window_records = tuple(
             record for record in records if from_ms <= record.filled_at_ms <= to_ms
         )
+        all_write_offs = written_off_lot_events(self._conn, subject_identity=True)
+        # Each write-off applies to the books as they stood from its own
+        # moment on (#2975), so each window cut takes the write-offs recorded
+        # before it, exactly as it takes the fills before it.
+        write_offs_before_start = tuple(
+            event for events in all_write_offs.values() for event in events
+            if event.written_off_at_ms < from_ms
+        )
+        write_offs_before_end = tuple(
+            event for events in all_write_offs.values() for event in events
+            if event.written_off_at_ms <= to_ms
+        )
         start_marks_by_symbol = dict(start_marks or {})
         marks_by_symbol = dict(marks or {})
         start_fifo_result = compute_fifo_pnl(
             start_records,
             mark_prices={symbol: mark.price for symbol, mark in start_marks_by_symbol.items()},
+            write_offs=write_offs_before_start,
         )
         fifo_result = compute_fifo_pnl(
             end_records,
             mark_prices={symbol: mark.price for symbol, mark in marks_by_symbol.items()},
+            write_offs=write_offs_before_end,
         )
         window_lots = tuple(lot for lot in fifo_result.closed_lots if from_ms <= lot.closed_at_ms <= to_ms)
         with money_context():
@@ -694,13 +731,16 @@ class SqliteEconomicProjectionReader:
         )
         decision_activity_at_ms = self._decision_activity_at_ms(strategy_instance_id)
         exposure = self._exposure(strategy_instance_id)
-        _assert_effective_fills_match_positions(records, exposure)
+        write_offs = written_off_lot_events(
+            self._conn, strategy_instance_ids=(strategy_instance_id,)
+        ).get(strategy_instance_id, ())
+        _assert_effective_fills_match_positions(records, exposure, write_offs)
         coverage = self._execution_coverage(strategy_instance_id, all_rows)
         # The reader's lock covers the incremental cache too: two callers
         # cannot interleave an append-only cache update after observing
         # different SQLite revisions.
         cache = self._fifo_cache.setdefault(strategy_instance_id, _CachedFifo())
-        closed_lots, lots, fee_fidelity = cache.project(records)
+        closed_lots, lots, fee_fidelity = cache.project(records, write_offs)
         marks_by_symbol = dict(marks or {})
         open_result = compute_open_pnl(
             lots,
@@ -856,6 +896,9 @@ class SqliteEconomicProjectionReader:
                 limit=None,
             ):
                 rows_by_strategy[str(row["strategy_instance_id"])].append(row)
+            write_offs_by_strategy = written_off_lot_events(
+                self._conn, strategy_instance_ids=active_ids
+            )
             result: dict[str, EconomicSnapshot] = {}
             for strategy_instance_id in unique_ids:
                 if strategy_instance_id not in existing:
@@ -868,10 +911,11 @@ class SqliteEconomicProjectionReader:
                     )
                 )
                 exposure = self._exposure(strategy_instance_id)
-                _assert_effective_fills_match_positions(records, exposure)
+                write_offs = write_offs_by_strategy.get(strategy_instance_id, ())
+                _assert_effective_fills_match_positions(records, exposure, write_offs)
                 coverage = self._execution_coverage(strategy_instance_id, all_rows)
                 cache = self._fifo_cache.setdefault(strategy_instance_id, _CachedFifo())
-                closed_lots, lots, fee_fidelity = cache.project(records)
+                closed_lots, lots, fee_fidelity = cache.project(records, write_offs)
                 marks = dict((marks_by_strategy or {}).get(strategy_instance_id, {}))
                 open_result = compute_open_pnl(
                     lots,
@@ -1200,12 +1244,16 @@ def effective_fill_rows(
                             f.source_event_at_ms, f.recorded_at_ms) AS economic_filled_at_ms,
                    COALESCE(roots.root_transition_sequence,
                             f.recorded_transition_sequence) AS economic_ledger_sequence,
-                   COALESCE(f.execution_id, f.fill_id) AS execution_sort_key
+                   COALESCE(f.execution_id, f.fill_id) AS execution_sort_key,
+                   CASE WHEN withheld.summary_code = '{FILL_CREDIT_WITHHELD_BY_DISCHARGE}'
+                        THEN 1 ELSE 0 END AS credit_withheld
             FROM fills f
             JOIN orders o ON o.order_ref = f.order_ref
             JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id
             LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id
             {_FILL_CONTRACT_JOINS_SQL}
+            LEFT JOIN custody_transitions withheld
+                ON withheld.sequence = f.recorded_transition_sequence
             LEFT JOIN custody_transitions manual_acceptance
                 ON manual_acceptance.sequence = (
                     SELECT MIN(acceptance.sequence)
@@ -1286,6 +1334,84 @@ def _to_fill_record(
         native_order_id=row["broker_order_id"],
         recorded_at_ms=int(row["root_recorded_at_ms"]),
         multiplier=row["contract_multiplier"],
+        credit_withheld=bool(row["credit_withheld"]),
+    )
+
+
+def written_off_lot_events(
+    conn: sqlite3.Connection,
+    *,
+    strategy_instance_ids: Sequence[str] | None = None,
+    subject_identity: bool = False,
+) -> dict[str, tuple[LotWriteOff, ...]]:
+    """Every recorded residue discharge as a FIFO write-off event, by bot (#2975).
+
+    Read from the discharge transitions themselves, so a write-off recorded
+    before this reader existed is set apart as surely as a new one -- the
+    lots it left open are in ``fills`` either way. Each event carries the
+    owner key exactly as the companion fills' ``sid`` fields state it:
+    ``subject_identity`` selects the custody subject form for the account-wide
+    readers, the plain strategy id for the per-bot ones.
+    """
+    where = "d.strategy_instance_id IS NOT NULL"
+    params: list[object] = []
+    if strategy_instance_ids is not None:
+        if not strategy_instance_ids:
+            return {}
+        where += f" AND d.strategy_instance_id IN ({_placeholders(strategy_instance_ids)})"
+        params.extend(strategy_instance_ids)
+    rows = conn.execute(
+        "SELECT d.strategy_instance_id AS sid, d.sequence, d.recorded_at_ms, "
+        "UPPER(json_extract(d.facts_json, '$.symbol')) AS symbol, "
+        "json_extract(d.facts_json, '$.discharged_qty') AS discharged_qty "
+        f"FROM custody_transitions d WHERE d.transition_kind = 'ATTRIBUTED_RESIDUE_DISCHARGED' AND {where} "
+        "ORDER BY d.sequence",
+        params,
+    ).fetchall()
+    by_sid: dict[str, list[LotWriteOff]] = {}
+    for row in rows:
+        discharged_qty = row["discharged_qty"]
+        if discharged_qty is None:
+            # A discharge without its typed quantity cannot name the lots it
+            # wrote off; the fills-vs-positions proof fails closed instead.
+            continue
+        sid = row["sid"]
+        if subject_identity:
+            sid = bot_subject_id(sid)
+        by_sid.setdefault(sid, []).append(
+            LotWriteOff(
+                symbol=row["symbol"],
+                exact_qty=normalize_money(discharged_qty),
+                written_off_at_ms=int(row["recorded_at_ms"]),
+                ledger_sequence=int(row["sequence"]),
+                sid=sid,
+            )
+        )
+    return {sid: tuple(events) for sid, events in by_sid.items()}
+
+
+def all_written_off_lot_events(
+    conn: sqlite3.Connection,
+    *,
+    strategy_instance_ids: Sequence[str] | None = None,
+    subject_identity: bool = True,
+    by_ms: int | None = None,
+) -> tuple[LotWriteOff, ...]:
+    """Every recorded write-off as one flat stream of FIFO events, cut at ``by_ms`` (#2975).
+
+    The account-wide readers -- the budget and the simulated account's
+    equity -- walk every subject's fills together, so they take every
+    subject's write-offs together, each from its own ledger place.
+    ``by_ms`` keeps only those recorded at or before it, for a valuation of
+    the books as they stood then, exactly as such a reader cuts its fills.
+    """
+    return tuple(
+        event
+        for events in written_off_lot_events(
+            conn, strategy_instance_ids=strategy_instance_ids, subject_identity=subject_identity
+        ).values()
+        for event in events
+        if by_ms is None or event.written_off_at_ms <= by_ms
     )
 
 
@@ -1374,6 +1500,7 @@ def _required_ledger_sequence(
 def _assert_effective_fills_match_positions(
     records: Sequence[FillRecord],
     exposure: Mapping[str, float],
+    write_offs: Sequence[LotWriteOff] = (),
 ) -> None:
     """Fail closed if the two SQLite economic folds disagree.
 
@@ -1381,11 +1508,21 @@ def _assert_effective_fills_match_positions(
     FIFO input.  A snapshot that combines them after corruption or a bad
     replay would be internally inconsistent, so it is explicitly unavailable
     rather than reporting a made-up zero or consulting a legacy authority.
+
+    The two folds keep one arithmetic: every credited fill moves both, a
+    withheld fill (#2854) moves neither, and a discharge (#2381, #2975)
+    zeroes the position while its lots stay open in the fills.  So the proof
+    is ``Σ credited fill deltas − Σ discharged quantities == attributed``,
+    per symbol; a fill a discharge withheld counts on neither side of it.
     """
     folded: dict[str, float] = {}
     for record in records:
+        if record.credit_withheld:
+            continue
         sign = 1.0 if record.side is OrderSide.BUY else -1.0
         folded[record.symbol] = folded.get(record.symbol, 0.0) + sign * record.quantity
+    for write_off in write_offs:
+        folded[write_off.symbol] = folded.get(write_off.symbol, 0.0) - float(write_off.exact_qty)
     symbols = {*folded, *exposure}
     mismatches = {
         symbol: (folded.get(symbol, 0.0), float(exposure.get(symbol, 0.0)))
