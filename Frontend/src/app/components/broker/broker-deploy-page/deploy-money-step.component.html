@@ -25,7 +25,10 @@
       @if (!dryRun()) {
         <div><dt>Free to deploy</dt><dd>{{ view.unreserved_usd | authoredUsd }}</dd></div>
       }
-      <div><dt>Minimum for one position</dt><dd>{{ view.minimum_budget_usd | authoredUsd }}</dd></div>
+      <!-- An option bot's minimum is its review's own set-aside row, under the server's label for it. -->
+      @if (!optionReview()) {
+        <div><dt>Minimum for one position</dt><dd>{{ view.minimum_budget_usd | authoredUsd }}</dd></div>
+      }
       @if (view.estimated_price_usd) {
         <div><dt>Estimated entry price</dt><dd>{{ view.estimated_price_usd | authoredUsd }}</dd></div>
       }
@@ -36,6 +39,10 @@
     } @else {
       <p class="money-step__refusal" role="alert">{{ view.detail }}</p>
     }
+  }
+
+  @if (optionReview(); as review) {
+    <app-deploy-option-money-review [review]="review" [stateSaid]="factsView()?.state === 'awaiting_price'" />
   }
 
   <div class="money-step__amount">
@@ -98,6 +105,6 @@
     @if (readyFacts()?.observed_at_ms; as observedAt) {
       <span>Money observed <app-timestamp-display [value]="observedAt" mode="local" /></span>
     }
-    <button type="button" [disabled]="body() === null || disabled() || facts.isLoading()" (click)="refresh()">Refresh money</button>
+    <button type="button" [disabled]="body() === null || disabled() || facts.isLoading()" (click)="refreshByOwner()">Refresh money</button>
   </div>
 </div>

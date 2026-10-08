@@ -1,0 +1,57 @@
+:host {
+  display: inline-flex;
+  // In a narrow column the revealed code drops under the name.
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.35em;
+  min-width: 0;
+}
+
+// The name and its control stay on one line together.
+.option-contract__head {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35em;
+  white-space: nowrap;
+}
+
+// The underlying and the rest of the name read as one name.
+.option-contract__name {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35em;
+}
+
+.option-contract__reveal {
+  padding: 0 0.15em;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--text-subtle, currentColor);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+
+  .pi {
+    font-size: 0.75em;
+  }
+
+  &:hover,
+  &[aria-expanded='true'] {
+    color: var(--text-primary, currentColor);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--accent, currentColor);
+    outline-offset: 2px;
+  }
+}
+
+.option-contract__code {
+  color: var(--text-secondary, currentColor);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85em;
+  white-space: nowrap;
+  // One click on the code selects all of it, to copy into the broker's search.
+  user-select: all;
+}

@@ -1,0 +1,47 @@
+@use '../../../styles/eyebrow-heading' as *;
+@use '../../../styles/filled-controls' as *;
+@use '../../../styles/popover-panel' as *;
+
+:host { display: block; min-width: 0; }
+
+.order-terms {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+
+  legend {
+    @include eyebrow-heading;
+    margin-bottom: var(--space-2);
+    padding: 0;
+  }
+
+  p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: var(--fs-xs);
+  }
+}
+
+.order-terms__help-open {
+  @include info-tip;
+  margin-left: var(--space-1);
+  vertical-align: middle;
+  text-transform: none;
+}
+
+.order-terms__notes {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.order-terms__help {
+  @include popover-panel(32rem);
+
+  dl { display: grid; gap: var(--space-2); margin: 0; }
+  dt { color: var(--text-primary); font-size: var(--fs-sm); font-weight: 600; }
+  dd { display: grid; gap: var(--space-1); margin: 0; }
+  dd p { margin: 0; color: var(--text-secondary); font-size: var(--fs-sm); line-height: 1.5; }
+}

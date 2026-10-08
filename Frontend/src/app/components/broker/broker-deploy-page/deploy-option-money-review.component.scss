@@ -1,0 +1,66 @@
+:host { display: block; min-width: 0; }
+
+.option-money {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+
+  p, dl, ul { margin: 0; }
+  ul { padding: 0; list-style: none; }
+}
+
+.option-money__state,
+.option-money__said,
+.option-money__read {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.option-money__picks {
+  display: grid;
+  gap: var(--space-1);
+
+  li { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); font-size: var(--fs-sm); }
+}
+
+// The rows in the server's order, on the sunken ground the money bar sits on.
+.option-money__rows {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--bg-sunken);
+
+  div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 var(--space-2); align-items: baseline; }
+  dt { color: var(--text-primary); font-size: var(--fs-xs); }
+  dd { display: contents; }
+}
+
+// A part of what is set aside stands under the set-aside row.
+.option-money__part dt { padding-left: var(--space-3); color: var(--text-secondary); }
+
+.option-money__amount {
+  justify-self: end;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+// A row's note: a word beside a premium (paid, received), a sentence under an estimate.
+.option-money__note {
+  grid-column: 1 / -1;
+  justify-self: end;
+  color: var(--text-subtle);
+  font-size: var(--fs-xxs);
+  line-height: 1.4;
+  text-align: right;
+}
+
+.option-money__notes {
+  display: grid;
+  gap: var(--space-1);
+
+  li { color: var(--text-secondary); font-size: var(--fs-xs); line-height: 1.45; }
+  strong { color: var(--text-primary); }
+}

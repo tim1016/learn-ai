@@ -71,6 +71,8 @@ export class DeployConfirmStepComponent {
   /** The external account number; `null` for Dry Run, whose cash is its own. */
   readonly accountNumber = input<string | null>(null);
   readonly exits = input.required<string>();
+  /** What the row of `exits` is called: an option bot has order terms where a share bot has exit terms (#2913). */
+  readonly exitsLabel = input('Exits');
   /** The previewed budget, as the backend authored it. */
   readonly budgetUsd = input<string | null>(null);
   readonly lossLimit = input<string | null>(null);

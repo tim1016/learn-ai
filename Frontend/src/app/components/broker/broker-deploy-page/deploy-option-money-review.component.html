@@ -1,0 +1,52 @@
+@let told = review();
+<section class="option-money" aria-label="One entry of this structure">
+  @if (!stateSaid()) {
+    <!-- A state of the preview that carries no figures, in the server's sentence for it. -->
+    @if (told.preview_sentence; as said) { <p class="option-money__state" role="status">{{ said }}</p> }
+  }
+
+  @if ((told.picks ?? []).length > 0) {
+    <ul class="option-money__picks" aria-label="Right now this picks">
+      @for (pick of told.picks; track pick.number) {
+        <li>
+          <strong>{{ pick.side_label }} {{ pick.ratio }}</strong>
+          <app-option-contract [contract]="pick.contract" />
+        </li>
+      }
+    </ul>
+  }
+
+  @if ((told.money_rows ?? []).length > 0) {
+    <dl class="option-money__rows">
+      @for (row of told.money_rows; track row.key) {
+        <div [class.option-money__part]="row.part_of_set_aside">
+          <dt>{{ row.label }}</dt>
+          <dd>
+            @if (row.amount_usd; as dollars) { <span class="option-money__amount">{{ dollars }}</span> }
+            @if (row.note; as note) { <span class="option-money__note">{{ note }}</span> }
+          </dd>
+        </div>
+      }
+    </dl>
+    <p class="option-money__said">{{ told.money_sentence }}</p>
+  }
+
+  @if (told.entry_sentence; as entry) { <p class="option-money__said">{{ entry }}</p> }
+
+  @if (told.quotes_read_ms; as read) {
+    <p class="option-money__read">
+      IBKR quotes read <app-timestamp-display [value]="read" mode="local" granularity="time" />
+      @if (told.figures_good_until_ms; as until) {
+        <span>· figures good until <app-timestamp-display [value]="until" mode="local" granularity="time" /></span>
+      }
+    </p>
+  }
+
+  @if ((told.notes ?? []).length > 0) {
+    <ul class="option-money__notes" aria-label="Read before deploying">
+      @for (note of told.notes; track note.code) {
+        <li><strong>{{ note.headline }}</strong> {{ note.detail }}</li>
+      }
+    </ul>
+  }
+</section>

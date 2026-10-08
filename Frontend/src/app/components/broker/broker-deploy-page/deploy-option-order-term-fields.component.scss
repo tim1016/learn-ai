@@ -1,0 +1,50 @@
+@use '../../../styles/filled-controls' as *;
+@use '../../../styles/visually-hidden' as *;
+
+:host { display: block; min-width: 0; }
+
+.sr-only { @include visually-hidden; }
+
+.term-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.term-fields__field {
+  display: grid;
+  align-content: end;
+  gap: var(--space-1);
+  min-width: 0;
+
+  label { @include field-label; }
+
+  // Why the box cannot be sent as it stands, in words: an outline is never the only sign.
+  em { color: var(--bear); font-size: var(--fs-xs); font-style: normal; }
+  // The server's reason for the range, under the refusal it explains.
+  .term-fields__reason { display: block; color: var(--text-secondary); }
+}
+
+// A number with its unit beside it, in the server's word for the unit.
+.term-fields__unit {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+
+  input {
+    @include filled-field;
+    flex: 0 0 4.5rem;
+    width: 4.5rem;
+    appearance: textfield;
+
+    &::-webkit-inner-spin-button,
+    &::-webkit-outer-spin-button { margin: 0; appearance: none; }
+  }
+
+  > span {
+    min-width: 0;
+    color: var(--text-subtle);
+    font-size: var(--fs-xs);
+  }
+}

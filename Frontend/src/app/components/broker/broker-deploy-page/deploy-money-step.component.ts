@@ -27,12 +27,24 @@ import {
   type DeploymentBudgetPreview,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { canonicalJson } from './deploy-draft.store';
+import { DeployOptionMoneyReviewComponent } from './deploy-option-money-review.component';
+import { ASK_AGAIN_LIMIT, askAgainWhileShown } from './option-structure/ask-again';
 
 /** One previewed dollar amount the backend accepted for these exact settings:
  * the `review_token` and `confirmation_text` consent binds to. */
 export interface MoneyReview {
   readonly context: string;
   readonly amount: string;
+  readonly preview: DeploymentBudgetPreview;
+}
+
+/**
+ * The backend's latest answer about the money of the settings on screen,
+ * whatever its state: refused, waiting for a price, or ready. For an option
+ * bot it carries the option review, which Confirm and How read as well.
+ */
+export interface BudgetAnswer {
+  readonly context: string;
   readonly preview: DeploymentBudgetPreview;
 }
 
@@ -71,11 +83,16 @@ const AMOUNT_PATTERN = /^(?=.*[1-9])\d+(\.\d{1,2})?$/;
  * compares money. A refused amount shows the backend's own sentence, with
  * its exact amounts. Dry Run has no account bar: its simulated starting cash
  * is its own, never the account's.
+ *
+ * A bot that trades an option structure (#2913) has no top of book: the
+ * backend reviews one entry of it beside the budget, and that review is
+ * shown under the facts, in its words. While it names a wait it is asked
+ * again by itself, as the structure preview is.
  */
 @Component({
   selector: 'app-deploy-money-step',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AuthoredUsdPipe, FormField, MoneyBarComponent, TimestampDisplayComponent, TooltipModule],
+  imports: [AuthoredUsdPipe, DeployOptionMoneyReviewComponent, FormField, MoneyBarComponent, TimestampDisplayComponent, TooltipModule],
   templateUrl: './deploy-money-step.component.html',
   styleUrl: './deploy-money-step.component.scss',
 })
@@ -91,6 +108,8 @@ export class DeployMoneyStepComponent {
   readonly amount = model('');
   /** The accepted review for the amount on screen, or `null`. */
   readonly reviewed = output<MoneyReview | null>();
+  /** The latest answer about these settings' money, whatever its state, or `null` before one. */
+  readonly answered = output<BudgetAnswer | null>();
 
   private readonly service = inject(BrokerV2PanelService);
   private readonly settleMs = inject(DEPLOY_TYPING_SETTLE_MS);
@@ -179,15 +198,29 @@ export class DeployMoneyStepComponent {
 
   private readonly priceRechecks = linkedSignal({ source: this.context, computation: () => 0 });
 
+  /** The latest answer for the settings on screen: the amount's once it has answered for the amount typed, else the facts'. */
+  private readonly answer = computed<BudgetAnswer | null>(() => {
+    const context = this.context();
+    const preview = this.amountView() ?? this.factsView();
+    return context === null || preview === null ? null : { context, preview };
+  });
+  /** The backend's review of one entry of an option structure; `null` for a bot that trades shares. */
+  protected readonly optionReview = computed(() => this.answer()?.preview.option_review ?? null);
+  /** The asks this step has made by itself for the option review of these settings. */
+  private readonly optionRechecks = linkedSignal({ source: this.context, computation: () => 0 });
+
   constructor() {
     effect(() => this.reviewed.emit(this.ready()));
+    effect(() => this.answered.emit(this.answer()));
     effect((onCleanup) => {
       const amount = this.amount();
       const timer = setTimeout(() => this.settledAmount.set(amount), this.settleMs);
       onCleanup(() => clearTimeout(timer));
     });
     effect((onCleanup) => {
-      if (this.factsView()?.state !== 'awaiting_price' || this.facts.isLoading()) return;
+      const view = this.factsView();
+      // An option review names its own wait, and is asked again below.
+      if (view?.state !== 'awaiting_price' || view.option_review || this.facts.isLoading()) return;
       if (untracked(this.priceRechecks) >= PRICE_RECHECK_LIMIT) return;
       const timer = setTimeout(() => {
         this.priceRechecks.update((count) => count + 1);
@@ -195,6 +228,24 @@ export class DeployMoneyStepComponent {
       }, PRICE_RECHECK_DELAY_MS);
       onCleanup(() => clearTimeout(timer));
     });
+    // An option review whose preview has not come to a price, or is still
+    // arriving beside a blocker, names the wait before it is worth asking
+    // again. Every ask holds IBKR quote lines for a minute, so the asks are
+    // bounded and never made while the page is hidden.
+    askAgainWhileShown({
+      wait: () => (this.facts.isLoading() || this.amountPreview.isLoading() ? null : this.optionReview()?.ask_again_in_ms ?? null),
+      spent: () => this.optionRechecks() >= ASK_AGAIN_LIMIT,
+      ask: () => {
+        this.optionRechecks.update((count) => count + 1);
+        this.refresh();
+      },
+    });
+  }
+
+  /** The owner's own Refresh money: it also lets the step ask an option review again by itself. */
+  protected refreshByOwner(): void {
+    this.optionRechecks.set(0);
+    this.refresh();
   }
 
   protected choose(amount: string): void {
@@ -202,7 +253,8 @@ export class DeployMoneyStepComponent {
     this.settledAmount.set(amount);
   }
 
-  protected refresh(): void {
+  /** Reads the money again. The host asks for it after a Deploy the backend refused for the option review. */
+  refresh(): void {
     this.facts.reload();
     if (this.amountPreview.error() !== undefined) this.amountPreview.reload();
   }

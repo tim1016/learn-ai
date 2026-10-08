@@ -1,7 +1,9 @@
 export type TimestampDisplayMode = 'local' | 'et' | 'date-et';
 /** `minute` is `HH:MM` — for a value that lives on a minute boundary (a
- * decision bar's close), where seconds would only add noise. */
-export type TimestampGranularity = 'date' | 'time' | 'minute' | 'datetime' | 'chart';
+ * decision bar's close), where seconds would only add noise.
+ * `short-date` is `Oct 9 '26` — a date as a trader says it, the year always
+ * there (an option expiry, #2915). */
+export type TimestampGranularity = 'date' | 'short-date' | 'time' | 'minute' | 'datetime' | 'chart';
 
 export interface TimestampDisplayOptions {
   mode?: TimestampDisplayMode;
@@ -40,6 +42,13 @@ const CHART_PARTS_OPTIONS: Intl.DateTimeFormatOptions = {
   minute: '2-digit',
   second: '2-digit',
   hourCycle: 'h23',
+};
+// Spoken-date shape (an option expiry, #2915): short month name, a day with
+// no leading zero, and a two-digit year.
+const SHORT_DATE_PARTS_OPTIONS: Intl.DateTimeFormatOptions = {
+  year: '2-digit',
+  month: 'short',
+  day: 'numeric',
 };
 
 function isFiniteMs(value: number | null | undefined): value is number {
@@ -85,6 +94,10 @@ function joinChartParts(parts: Partial<Record<Intl.DateTimeFormatPartTypes, stri
   return `${parts.month} ${parts.day}, ${parts.hour}:${parts.minute}:${parts.second}`;
 }
 
+function joinShortDateParts(parts: Partial<Record<Intl.DateTimeFormatPartTypes, string>>): string {
+  return `${parts.month} ${parts.day} '${parts.year}`;
+}
+
 export function formatTimestampDisplay(
   value: number | null | undefined,
   options: TimestampDisplayOptions = {},
@@ -93,12 +106,17 @@ export function formatTimestampDisplay(
   if (!isFiniteMs(value)) return fallback;
 
   const mode = options.mode ?? 'local';
-  const granularity: TimestampGranularity = mode === 'date-et'
+  const requested = options.granularity ?? 'datetime';
+  // `date-et` shows a date and nothing else: it keeps the short date when
+  // that is asked for, and turns every other shape into the plain date.
+  const granularity: TimestampGranularity = mode === 'date-et' && requested !== 'short-date'
     ? 'date'
-    : (options.granularity ?? 'datetime');
+    : requested;
   const timeZone = mode === 'local' ? options.localTimeZone : ET_ZONE;
   const text = granularity === 'chart'
     ? joinChartParts(formatParts(value, CHART_PARTS_OPTIONS, timeZone))
-    : joinParts(getParts(value, timeZone), granularity);
+    : granularity === 'short-date'
+      ? joinShortDateParts(formatParts(value, SHORT_DATE_PARTS_OPTIONS, timeZone))
+      : joinParts(getParts(value, timeZone), granularity);
   return mode === 'et' ? `${text} ET` : text;
 }

@@ -222,3 +222,14 @@
 
   strong { color: var(--text-primary); font-size: var(--fs-sm); font-weight: var(--fw-semi); }
 }
+
+// An option bot's own lines in How, in the server's words: when a structure
+// with a sold leg is closed, and where the exit terms every bot is sealed
+// with come from.
+.deploy-option-end,
+.deploy-option-needs-exit-terms {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}

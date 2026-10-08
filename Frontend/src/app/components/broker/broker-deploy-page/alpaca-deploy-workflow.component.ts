@@ -87,8 +87,11 @@ import {
   DEPLOY_TYPING_SETTLE_MS,
   DeployMoneyStepComponent,
   budgetReviewContext,
+  type BudgetAnswer,
   type MoneyReview,
 } from './deploy-money-step.component';
+import { DeployOptionOrderTermsComponent } from './deploy-option-order-terms.component';
+import { DeployOptionStructureComponent } from './deploy-option-structure.component';
 import { DeployParametersSectionComponent } from './deploy-parameters-section.component';
 import { DeployPaperAccessComponent } from './deploy-paper-access.component';
 import { DeployEvidenceOverrideComponent } from './deploy-evidence-override.component';
@@ -97,6 +100,24 @@ import { DeployTradedAssetComponent } from './deploy-traded-asset.component';
 import { DeployEndSectionComponent } from './deploy-end-section.component';
 import { DeployStepComponent, type DeployStepStatus } from './deploy-step.component';
 import { DEPLOY_WORLDS } from './deploy-world';
+import {
+  freshTradesOptions,
+  tradedOptions,
+  tradedStock,
+  tradesListeningTo,
+  tradesOfPrefill,
+  tradesOnTheWire,
+  tradesOptions,
+  tradesStock,
+} from './deploy-trades';
+import {
+  optionsMissing,
+  orderTermsInWords,
+  orderTermsSet,
+  startingOrderTerms,
+  type DeployOptionSettings,
+  type OptionOrderTerms,
+} from './option-structure/option-structure';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
 import { mediaQuerySignal } from '../../../shared/media-query';
@@ -156,6 +177,19 @@ function settlesSubmission(error: unknown): boolean {
 const REFUSAL_OUTCOMES: Readonly<Record<string, DeployError['outcome']>> = {
   deploy_bot_name_unavailable: 'blocked',
 };
+
+/**
+ * A refusal the backend words as a 409 `conflict` and that is no account
+ * change. Every gate of an option Deploy is one (#2913): a blocker, a mode
+ * that takes no option bot, a structure with no price. Their codes all begin
+ * `OPTION_`, so one rule retypes them and Confirm never titles "Waiting to
+ * price this structure" as a changed account.
+ */
+function refusalOutcome(reasonCode: string | null | undefined): DeployError['outcome'] | undefined {
+  const code = reasonCode ?? '';
+  return REFUSAL_OUTCOMES[code] ?? (code.startsWith(OPTION_GATE_PREFIX) ? 'blocked' : undefined);
+}
+const OPTION_GATE_PREFIX = 'OPTION_';
 
 /** The code the backend refuses a bot's end with (`bot_end_panel.BOT_END_REFUSED`), at its check or at Deploy. */
 const BOT_END_REFUSED = 'BOT_END_REFUSED';
@@ -224,10 +258,18 @@ function listeningTo(ticket: AlpacaDeployTicket, symbol: string): AlpacaDeployTi
   return {
     ...ticket,
     symbol,
-    tradedSymbol: ticket.tradedSymbol === symbol ? null : ticket.tradedSymbol,
+    trades: tradesListeningTo(ticket.trades, symbol),
     tradedAcknowledged: false,
     tradedReason: '',
   };
+}
+
+/** `next`, with its size started over when it no longer counts what
+ * `previous` counted: a size typed in shares is never carried into
+ * structures, nor back. */
+function sizedInItsOwnUnit(previous: AlpacaDeployTicket, next: AlpacaDeployTicket): AlpacaDeployTicket {
+  if ((previous.trades.kind === 'options') === (next.trades.kind === 'options')) return next;
+  return { ...next, sizingPreset: EMPTY_DEPLOY_SETTINGS.sizingPreset, quantity: EMPTY_DEPLOY_SETTINGS.quantity };
 }
 
 type ExitTermSettings = Pick<DeployTicketSettings, 'exitAllowanceBps' | 'bandMultiple' | 'spreadCapBps'>;
@@ -249,7 +291,7 @@ function settingsOf(ticket: AlpacaDeployTicket): DeployTicketSettings {
     spreadCapBps: ticket.spreadCapBps,
     strategyKey: ticket.strategyKey,
     symbol: ticket.symbol,
-    tradedSymbol: ticket.tradedSymbol,
+    trades: ticket.trades,
     sizingPreset: ticket.sizingPreset,
     quantity: ticket.quantity,
     executionMode: ticket.executionMode,
@@ -339,6 +381,8 @@ type EndCheckAnswer =
     DeployExecutionSectionComponent,
     DeployLaunchReceiptComponent,
     DeployMoneyStepComponent,
+    DeployOptionOrderTermsComponent,
+    DeployOptionStructureComponent,
     DeployPaperAccessComponent,
     DeployParametersSectionComponent,
     DeployStepComponent,
@@ -397,6 +441,7 @@ export class AlpacaDeployWorkflowComponent {
 
   private readonly receiptPanel = viewChild(DeployLaunchReceiptComponent);
   private readonly confirmStep = viewChild(DeployConfirmStepComponent);
+  private readonly moneyStep = viewChild(DeployMoneyStepComponent);
 
   /**
    * The symbol the readiness fetch is scoped to, or null for the
@@ -493,6 +538,12 @@ export class AlpacaDeployWorkflowComponent {
   });
 
   protected readonly ticket = signal<AlpacaDeployTicket>(ticketOf(EMPTY_DEPLOY_SETTINGS));
+  /** The other stock or ETF the bot trades; `null` when it trades the signal's own shares, or options. */
+  protected readonly tradedSymbol = computed(() => tradedStock(this.ticket().trades));
+  /** The option structure the bot trades and its order terms (#2913); `null` for a bot that trades shares. */
+  protected readonly options = computed(() => tradedOptions(this.ticket().trades), {
+    equal: (left, right) => canonicalJson(left) === canonicalJson(right),
+  });
   /** The owner's typed dollar amount (Money). Kept in the draft; its review
    * and any typed consent never are. */
   protected readonly amount = signal('');
@@ -548,8 +599,8 @@ export class AlpacaDeployWorkflowComponent {
     required(ticket.strategyKey, { message: 'Choose a deployment strategy.' });
     required(ticket.symbol, { message: 'Enter the strategy signal symbol.' });
     pattern(ticket.symbol, SYMBOL_RE, { message: 'Enter a valid stock symbol.' });
-    min(ticket.quantity, 1, { message: 'Quantity must be at least one whole share.' });
-    max(ticket.quantity, 100, { message: 'Quantity cannot exceed 100 shares.' });
+    min(ticket.quantity, 1, { message: () => `Quantity must be at least one whole ${this.sizingUnit()}.` });
+    max(ticket.quantity, 100, { message: () => `Quantity cannot exceed 100 ${this.sizingUnit()}s.` });
     validate(ticket.quantity, ({ value }) =>
       Number.isInteger(value())
         ? undefined
@@ -653,7 +704,8 @@ export class AlpacaDeployWorkflowComponent {
    */
   protected readonly pickedTradedAsset = resource({
     params: () => {
-      const { symbol, tradedSymbol } = this.ticket();
+      const { symbol } = this.ticket();
+      const tradedSymbol = this.tradedSymbol();
       const account = this.accountId().trim();
       return tradedSymbol !== null && SYMBOL_RE.test(symbol) && SYMBOL_RE.test(tradedSymbol) && account !== ''
         ? { account, symbol, tradedSymbol }
@@ -666,8 +718,30 @@ export class AlpacaDeployWorkflowComponent {
     this.pickedTradedAsset.hasValue() ? this.pickedTradedAsset.value() ?? null : null);
   /** Why the picked asset cannot be traded, in the backend's words. */
   protected readonly tradedRefusal = computed(() => this.pickedTradedAssetView()?.refusal ?? null);
+  /**
+   * What the backend says of options on the chosen underlying, read the
+   * moment Options is chosen and before any money is reviewed: the warning
+   * that the strategy was never tested trading them. Keyed on the two
+   * symbols alone, so no other change to the form reads it again.
+   */
+  private readonly optionsWarningAsk = computed(() => {
+    const { symbol } = this.ticket();
+    const underlying = this.options()?.underlying ?? null;
+    const account = this.accountId().trim();
+    return underlying !== null && SYMBOL_RE.test(symbol) && SYMBOL_RE.test(underlying) && account !== ''
+      ? { account, symbol, underlying }
+      : undefined;
+  }, { equal: (left, right) => canonicalJson(left) === canonicalJson(right) });
+  private readonly optionsWarningRead = resource({
+    params: () => this.optionsWarningAsk(),
+    loader: ({ params }) =>
+      this.panelService.getDeployOptionsWarning(this.deployTarget(params.account), params.symbol, params.underlying),
+  });
+  private readonly optionsWarning = computed(() =>
+    this.optionsWarningRead.hasValue() ? this.optionsWarningRead.value()?.warning ?? null : null);
   /** The warning the What step shows: the picked asset's own, or the reviewed settings' once Money has them. */
-  protected readonly tradedWarningAtWhat = computed(() => this.pickedTradedAssetView()?.warning ?? this.tradedWarning());
+  protected readonly tradedWarningAtWhat = computed(() =>
+    this.pickedTradedAssetView()?.warning ?? this.optionsWarning() ?? this.tradedWarning());
 
   /** The backend asks for the acknowledgement by giving the sentence to tick:
    * a Paper, Live Shadow or Live bot gets one, a Dry Run does not. */
@@ -686,6 +760,39 @@ export class AlpacaDeployWorkflowComponent {
       ? null
       : 'Give at least 10 characters explaining why this risk is accepted.';
   });
+
+  // ── A bot that trades an option structure (#2913) ─────────────────────────
+
+  /** The account whose option bot is being built, or nothing for a bot that
+   * trades shares. A value of its own, so that no other change to the form
+   * reads the catalogue again. */
+  private readonly optionsAccount = computed(() => {
+    const account = this.accountId().trim();
+    return this.options() !== null && account !== '' ? account : undefined;
+  });
+
+  /**
+   * What the structure builder offers on this account, read once the owner
+   * chooses Options and never for a bot that trades shares: the named
+   * structures, the rules a leg may be given, and the order terms a Deploy
+   * starts from.
+   */
+  protected readonly optionCatalogue = resource({
+    params: () => this.optionsAccount(),
+    loader: ({ params }) => this.panelService.getOptionStructures(this.deployTarget(params)),
+  });
+  protected readonly optionCatalogueView = computed(() =>
+    this.optionCatalogue.hasValue() ? this.optionCatalogue.value() : null);
+  protected readonly optionCatalogueFailure = computed(() => {
+    const error = this.optionCatalogue.error();
+    return error === undefined ? null : extractServerMessage(error, 'The option structures could not be read.');
+  });
+
+  /** What position size counts: whole structures for an option bot, whole shares otherwise. */
+  protected readonly sizingUnit = computed(() => (this.options() === null ? 'share' : 'structure'));
+  /** How many units the bot opens at an entry. */
+  protected readonly entrySize = computed(() =>
+    this.ticket().sizingPreset === 'safe_canary' ? 1 : this.ticket().quantity);
 
   // Backend-authored reason this account's own broker option — Paper, Shadow
   // or Live (slice 7) — is unreachable for the selected strategy (#1702).
@@ -716,17 +823,39 @@ export class AlpacaDeployWorkflowComponent {
   });
 
   protected readonly quantityLabel = computed(() => {
-    const quantity = this.ticket().sizingPreset === 'safe_canary' ? 1 : this.ticket().quantity;
-    return `${quantity} ${quantity === 1 ? 'share' : 'shares'}`;
+    const quantity = this.entrySize();
+    return `${quantity} ${this.sizingUnit()}${quantity === 1 ? '' : 's'}`;
   });
 
   /** Confirm's "Trades" line: the backend's own once Money has reviewed these
-   * settings; until then, the symbol and size on screen. */
-  protected readonly tradesSummary = computed(() =>
-    this.currentMoneyReview()?.preview.trades_summary
-    ?? `${this.ticket().symbol || 'No symbol yet'} · ${this.quantityLabel()}`);
+   * settings; until then, the symbol and size on screen. An option bot's
+   * line is the backend's from its first answer about these settings'
+   * money, reviewed amount or not; before that, the underlying and the size. */
+  protected readonly tradesSummary = computed(() => {
+    const { symbol } = this.ticket();
+    const options = this.options();
+    if (options !== null) {
+      return this.currentBudgetAnswer()?.trades_summary ?? `Options on ${options.underlying || 'no symbol yet'} · ${this.quantityLabel()}`;
+    }
+    return this.currentMoneyReview()?.preview.trades_summary
+      ?? `${symbol || 'No symbol yet'} · ${this.quantityLabel()}`;
+  });
+
+  /** The catalogue's order terms, whose ranges say what a term may be; `null` until it has been read. */
+  private readonly offeredOrderTerms = computed(() => this.optionCatalogueView()?.order_terms ?? null);
+
+  /** The option order terms on one line, in the catalogue's labels and units. */
+  private readonly orderTermsSummary = computed(() => {
+    const terms = this.options()?.order_terms ?? null;
+    const offered = this.offeredOrderTerms();
+    return offered !== null && orderTermsSet(terms, offered) ? orderTermsInWords(terms, offered) : 'Order terms not set';
+  });
+
+  /** Confirm's Orders row for an option bot: the backend's own line once it has reviewed these settings. */
+  protected readonly ordersSummary = computed(() => this.optionReview()?.orders_summary ?? this.orderTermsSummary());
 
   protected readonly exitsSummary = computed(() => {
+    if (this.options() !== null) return this.orderTermsSummary();
     const terms = this.exitTerms();
     return terms === null
       ? 'Exit terms not set'
@@ -837,6 +966,9 @@ export class AlpacaDeployWorkflowComponent {
   private readonly whatMissing = computed<string | null>(() => {
     if (this.selectedStrategy() === null) return 'Choose a strategy';
     if (this.ticketForm.symbol().invalid()) return 'Needs a valid symbol';
+    const options = this.options();
+    const structure = options === null ? null : optionsMissing(options);
+    if (structure !== null) return structure;
     if (this.invalidParameterFields().size > 0) return 'Check its settings';
     if (this.permissionPending()) return 'Needs permission';
     return null;
@@ -855,6 +987,11 @@ export class AlpacaDeployWorkflowComponent {
       return 'Can’t trade there';
     }
     if (ticket.sizingPreset === 'custom' && this.ticketForm.quantity().invalid()) return 'Needs a valid size';
+    // An option bot has its own order terms in place of the stock exit terms.
+    // Exit terms are still sealed with it, as with every bot, though How has
+    // no box for them: they come from the account's defaults for new bots.
+    const options = this.options();
+    if (options !== null && !orderTermsSet(options.order_terms, this.offeredOrderTerms())) return 'Needs order terms';
     if (this.exitTerms() === null) return 'Needs exit terms';
     return this.endMissing();
   });
@@ -1009,8 +1146,22 @@ export class AlpacaDeployWorkflowComponent {
           : 'Choose where this bot trades in How.',
       };
     }
+    const options = this.options();
+    if (options !== null && !orderTermsSet(options.order_terms, this.offeredOrderTerms())) {
+      return { canSubmit: false, guidance: 'Set this bot’s four option order terms in How.' };
+    }
     if (this.exitTerms() === null) {
-      return { canSubmit: false, guidance: 'Set this bot’s exit allowance, band multiple and spread cap in How.' };
+      return {
+        canSubmit: false,
+        guidance: options === null
+          ? 'Set this bot’s exit allowance, band multiple and spread cap in How.'
+          : 'Set this account’s defaults for new bots in Settings: every bot is sealed with exit terms.',
+      };
+    }
+    // What the backend's review of the option structure says stops this Deploy, with its fix.
+    const stopped = this.optionReview()?.blockers?.at(0);
+    if (stopped !== undefined) {
+      return { canSubmit: false, guidance: stopped.fix ?? stopped.headline };
     }
     if (this.endMissing() !== null) {
       return { canSubmit: false, guidance: 'Fix this bot’s end in How.' };
@@ -1120,6 +1271,21 @@ export class AlpacaDeployWorkflowComponent {
       .map((check) => ({ id: check.gate_id, label: check.label, headline: check.headline, fix: check.recovery }));
   });
 
+  /**
+   * What stops a Deploy of the option structure on screen (#2913), from the
+   * backend's review of it beside the budget: ordinary entries of the same
+   * "Can't deploy yet" list, after the account's own checks, each with its
+   * fix when the backend gave one.
+   */
+  private readonly optionBlockers = computed<readonly DeployBlocker[]>(() =>
+    (this.optionReview()?.blockers ?? []).map((blocker) => ({
+      id: blocker.gate_id, label: blocker.label, headline: blocker.headline, fix: blocker.fix,
+    })));
+  protected readonly allBlockers = computed<readonly DeployBlocker[]>(() => {
+    const option = this.optionBlockers();
+    return option.length === 0 ? this.blockers() : [...this.blockers(), ...option];
+  });
+
   protected readonly budgetTarget = computed(() => this.deployTarget(this.accountId().trim()), {
     equal: (left, right) => canonicalJson(left) === canonicalJson(right),
   });
@@ -1132,6 +1298,9 @@ export class AlpacaDeployWorkflowComponent {
     const mode = this.ticket().executionMode;
     if (strategy === null || mode === null || this.exitTerms() === null
       || this.ticketForm.symbol().invalid() || this.ticketForm.quantity().invalid() || this.invalidParameterFields().size > 0) return null;
+    // An option bot's request names its structure and all four order terms;
+    // until they can be sent there is nothing for Money to review.
+    if (tradesOnTheWire(this.ticket().trades, this.offeredOrderTerms()) === null) return null;
     return this.deployBody(this.ticket(), strategy, mode);
   }, { equal: (left, right) => canonicalJson(left) === canonicalJson(right) });
 
@@ -1143,6 +1312,24 @@ export class AlpacaDeployWorkflowComponent {
       ? review : null;
   });
   private readonly reviewToken = computed(() => this.currentMoneyReview()?.preview.review_token ?? null);
+
+  /** The Money step's latest answer about these exact settings, whatever its state. */
+  protected readonly budgetAnswer = signal<BudgetAnswer | null>(null);
+  private readonly currentBudgetAnswer = computed(() => {
+    const answer = this.budgetAnswer();
+    const body = this.budgetBody();
+    return answer !== null && body !== null && answer.context === budgetReviewContext(this.budgetTarget(), body)
+      ? answer.preview : null;
+  });
+  /** The backend's review of one entry of the option structure on screen; `null` for a bot that trades shares. */
+  protected readonly optionReview = computed(() => this.currentBudgetAnswer()?.option_review ?? null);
+  /** The server's words for a size option, counted in structures; `null` for shares, whose own the view carries. */
+  protected readonly structureSizeExplanations = computed(() => {
+    const review = this.optionReview();
+    return review === null
+      ? null
+      : { safe_canary: review.one_structure_explanation, custom: review.custom_structures_explanation };
+  });
 
   private readonly validBudget = computed<DeploymentBudgetInput | null>(() => {
     const review = this.currentMoneyReview();
@@ -1394,6 +1581,14 @@ export class AlpacaDeployWorkflowComponent {
       ));
     });
 
+    // An option bot's order terms start from the catalogue's own (#2913),
+    // once, as the exit terms start from the account's defaults.
+    effect(() => {
+      const offered = this.optionCatalogueView();
+      if (offered === null || this.options()?.order_terms !== null) return;
+      untracked(() => this.setOptionOrderTerms(startingOrderTerms(offered.order_terms)));
+    });
+
     // A step the owner is working in stays open until they press Done: a
     // step that folded the moment it became complete would take the control
     // they were using away from under the keyboard.
@@ -1523,8 +1718,9 @@ export class AlpacaDeployWorkflowComponent {
         ...EMPTY_DEPLOY_SETTINGS,
         strategyKey: prefill.strategy_key,
         symbol: prefill.symbol.trim().toUpperCase(),
-        // What the earlier bot traded comes back; what its owner accepted never does.
-        tradedSymbol: prefill.traded_symbol?.trim().toUpperCase() || null,
+        // What the earlier bot traded comes back, an option structure with
+        // its legs and sealed order terms; what its owner accepted never does.
+        trades: tradesOfPrefill(prefill),
         sizingPreset: prefill.sizing.preset ?? 'safe_canary',
         quantity: prefill.sizing.quantity ?? 1,
         parameters: { ...prefill.parameters },
@@ -1663,7 +1859,50 @@ export class AlpacaDeployWorkflowComponent {
   protected setTradedSymbol(value: string | null): void {
     this.clearAdmission();
     this.tradedReasonTouched.set(false);
-    this.ticket.update((current) => ({ ...current, tradedSymbol: value, tradedAcknowledged: false, tradedReason: '' }));
+    this.ticket.update((current) => sizedInItsOwnUnit(current, {
+      ...current,
+      // A bot trades one thing: picking a stock leaves Options. Going back
+      // to the signal's own shares from a picked stock leaves Options as
+      // they were, which the radio group never asks for.
+      trades: value === null && current.trades.kind === 'options' ? current.trades : tradesStock(value),
+      tradedAcknowledged: false,
+      tradedReason: '',
+    }));
+  }
+
+  /** The owner chose Options, on the symbol the bot listens to until they
+   * pick another underlying; or left them, which clears everything set
+   * under them (#2913). Either way the size is counted in another unit, and
+   * starts over. */
+  protected setOptionsChosen(chosen: boolean): void {
+    this.clearAdmission();
+    this.tradedReasonTouched.set(false);
+    this.ticket.update((current) => {
+      const options = current.trades.kind === 'options';
+      if (chosen === options) return current;
+      return sizedInItsOwnUnit(current, {
+        ...current,
+        trades: chosen ? freshTradesOptions(current.symbol) : tradesStock(null),
+        tradedAcknowledged: false,
+        tradedReason: '',
+      });
+    });
+  }
+
+  /** The underlying or the structure changed. What the owner accepted was said of the old one. */
+  protected setOptions(options: DeployOptionSettings): void {
+    this.clearAdmission();
+    this.tradedReasonTouched.set(false);
+    this.ticket.update((current) => (current.trades.kind === 'options'
+      ? { ...current, trades: tradesOptions(options), tradedAcknowledged: false, tradedReason: '' }
+      : current));
+  }
+
+  protected setOptionOrderTerms(terms: OptionOrderTerms): void {
+    this.clearAdmission();
+    this.ticket.update((current) => (current.trades.kind === 'options'
+      ? { ...current, trades: { ...current.trades, order_terms: terms } }
+      : current));
   }
 
   protected setTradedAcknowledged(checked: boolean): void {
@@ -1868,7 +2107,12 @@ export class AlpacaDeployWorkflowComponent {
       if (settled) this.releaseSubmission();
       // The end was refused — a default end that passed while the page stood
       // open — so How checks it again, shows the refusal, and offers the default.
-      if (deriveActionRejection(error, 'Deploy refused.').reasonCode === BOT_END_REFUSED) this.endPreview.reload();
+      const refusedFor = deriveActionRejection(error, 'Deploy refused.').reasonCode;
+      if (refusedFor === BOT_END_REFUSED) this.endPreview.reload();
+      // Refused for the option structure: a blocker, or no price at the click.
+      // Money reads its review again, so the list and the rows on screen are
+      // the ones that stopped it.
+      if (refusedFor?.startsWith(OPTION_GATE_PREFIX)) this.moneyStep()?.refresh();
       if (error instanceof HttpErrorResponse && error.status === 409
         && ['clerk_binding_generation_conflict', 'clerk_routing_epoch_conflict'].includes(error.error?.detail?.reason ?? error.error?.detail?.reason_code)) {
         this.frozenCommand.set(null);
@@ -2015,9 +2259,12 @@ export class AlpacaDeployWorkflowComponent {
     }
     // What the bot trades is a setting the money review prices and consent
     // binds, so it rides every request. Naming the symbol it listens to is
-    // naming nothing: the backend reads the two as one choice.
-    if (ticket.tradedSymbol) body.traded_symbol = ticket.tradedSymbol;
-    return body;
+    // naming nothing: the backend reads the two as one choice. A bot in
+    // shares sends what it always sent; an option bot sends its structure
+    // and four order terms in `trades` (#2913).
+    const trades = tradesOnTheWire(ticket.trades, this.offeredOrderTerms());
+    if (trades === null) throw new Error('Option order terms are required before deployment.');
+    return { ...body, ...trades };
   }
 
   /**
@@ -2151,7 +2398,7 @@ export class AlpacaDeployWorkflowComponent {
       if (detail?.message) {
         const outcome = unsettled
           ? 'unknown'
-          : REFUSAL_OUTCOMES[detail.reason_code ?? ''] ?? detail.outcome ?? (error.status === 409 ? 'conflict' : 'blocked');
+          : refusalOutcome(detail.reason_code) ?? detail.outcome ?? (error.status === 409 ? 'conflict' : 'blocked');
         return {
           outcome,
           title: this.errorTitle(outcome),
