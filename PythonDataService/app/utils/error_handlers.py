@@ -12,19 +12,70 @@ from pydantic_core import PydanticUndefinedType
 
 logger = logging.getLogger(__name__)
 
+# What the 422 handler echoes of the refused input is bounded by depth
+# (#2969): a body nested deeper than the interpreter's recursion limit
+# crashes ``jsonable_encoder`` mid-walk, turning the 422 the handler exists
+# to give into a 500 on the very input it is reporting.
+_ECHO_DEPTH_LIMIT = 20
+_ECHO_TRUNCATED = "<truncated>"
+
 
 async def request_validation_exception_handler(
     request: Request,
     exc: RequestValidationError,
 ) -> JSONResponse:
-    """Return a JSON-safe 422 even when rejected input is NaN/Infinity or was never sent."""
+    """Return a JSON-safe 422 even when rejected input is NaN/Infinity, was never sent, or is nested past the echo bound."""
     del request
     # A required list parameter that was not sent is reported with pydantic's "undefined" as its input, which has no JSON form.
-    content = jsonable_encoder({"detail": exc.errors()}, custom_encoder={PydanticUndefinedType: lambda _: None})
+    # The bound runs before the encoder: the encoder is what deep input
+    # takes down, so it must never see the unbounded value (#2969).
+    content = jsonable_encoder(
+        _bound_echo_depth({"detail": exc.errors()}),
+        custom_encoder={PydanticUndefinedType: lambda _: None},
+    )
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content=_replace_non_finite(content),
     )
+
+
+def _bound_echo_depth(value: Any) -> Any:
+    """Copy ``value`` with containers past :data:`_ECHO_DEPTH_LIMIT` replaced by a marker.
+
+    The walk keeps its own stack instead of recursing: input nested past the
+    recursion limit is exactly what this bound exists for, so a recursive
+    walk would crash on it the same way the encoder does (#2969).
+    """
+    if not isinstance(value, (dict, list)):
+        return value
+    bounded: Any = {} if isinstance(value, dict) else []
+    pending: list[tuple[dict[str, Any] | list[Any], dict[str, Any] | list[Any], int]] = [
+        (value, bounded, 0)
+    ]
+    while pending:
+        source, target, depth = pending.pop()
+        if isinstance(source, dict):
+            for key, item in source.items():
+                if not isinstance(item, (dict, list)):
+                    target[key] = item
+                    continue
+                if depth >= _ECHO_DEPTH_LIMIT:
+                    target[key] = _ECHO_TRUNCATED
+                    continue
+                child: Any = {} if isinstance(item, dict) else []
+                target[key] = child
+                pending.append((item, child, depth + 1))
+        else:
+            for item in source:
+                if not isinstance(item, (dict, list)):
+                    target.append(item)
+                elif depth >= _ECHO_DEPTH_LIMIT:
+                    target.append(_ECHO_TRUNCATED)
+                else:
+                    child = {} if isinstance(item, dict) else []
+                    target.append(child)
+                    pending.append((item, child, depth + 1))
+    return bounded
 
 
 def _replace_non_finite(value: Any) -> Any:
