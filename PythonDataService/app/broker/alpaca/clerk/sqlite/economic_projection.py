@@ -494,6 +494,10 @@ class SqliteEconomicProjectionReader:
             # A manual chain's member first seen as foreign is the leg's,
             # whose fills are already in ``all_rows`` (#2787).
             external_fill_exists = bool(filled_outside_order_ids(self._conn))
+            # Read on the same transaction as the fills and the meta, so a
+            # discharge committing between them cannot fold a new-revision
+            # write-off into an old-revision snapshot.
+            all_write_offs = written_off_lot_events(self._conn, subject_identity=True)
 
         records = tuple(
             sorted(
@@ -513,7 +517,6 @@ class SqliteEconomicProjectionReader:
         window_records = tuple(
             record for record in records if from_ms <= record.filled_at_ms <= to_ms
         )
-        all_write_offs = written_off_lot_events(self._conn, subject_identity=True)
         # Each write-off applies to the books as they stood from its own
         # moment on (#2975), so each window cut takes the write-offs recorded
         # before it, exactly as it takes the fills before it.

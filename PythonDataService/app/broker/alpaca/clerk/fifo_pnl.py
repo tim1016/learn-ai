@@ -27,12 +27,14 @@ Formula:
     Written-off lots (#2975): a residue discharge takes a bot's attributed
         position off the books and closes no lot.  Supplied to the walk as one
         :class:`LotWriteOff` each, the oldest lots of that owner and symbol
-        are set apart: no later fill of the bot's closes them, they realise
-        nothing, and they are not open exposure.  The one fill that may close
-        a set-apart lot is one whose credit a discharge withheld (#2854) --
-        the discharge stood in for exactly that execution.  A write-off itself
-        books no P&L: the loss or gain of a close is the cost of the lot that
-        ended.
+        are set apart: no later fill of the bot's closes them and they realise
+        nothing.  The one fill that may close a set-apart lot is one whose
+        credit a discharge withheld (#2854) -- the discharge stood in for
+        exactly that execution.  A write-off itself books no P&L: the loss or
+        gain of a close is the cost of the lot that ended.  For valuation a
+        set-apart lot stays an open lot, marked ``written_off`` (ADR 0076
+        decision 22): the budget carries its premium as a position, and
+        equity marks it as any open lot.
     Fees: rendered only when the broker reports them; ``None`` = "not reported",
         never $0.00.  The engine propagates ``None`` through — callers display
         the string "Fees not reported" when the field is None.
@@ -185,6 +187,10 @@ class OpenLot:
     side: OrderSide
     # Set when ``exact_qty`` is option contracts and ``exact_cost`` a premium per share.
     multiplier: int | None = None
+    # True when a write-off set this lot apart (#2975): it closes for no fill
+    # of the bot's and realises nothing, but it stays an open lot for
+    # valuation, as ADR 0076 decision 22 records.
+    written_off: bool = False
 
     @property
     def exact_cost_basis(self) -> Decimal:
@@ -244,9 +250,10 @@ class PnLResult:
         Remaining open lots (FIFO remainder).  Feeds the open-P&L valuation.
 
     ``written_off_lots``:
-        Lots a write-off set apart (#2975).  They realise nothing, close for
-        no later fill of the bot's, and are no exposure, so they are absent
-        from ``open_lots`` and never demand a mark.
+        Lots a write-off set apart (#2975).  They realise nothing and close
+        for no later fill of the bot's, but stay open lots for valuation;
+        this is the same population as ``open_lots`` flagged ``written_off``,
+        kept for the readers that ask for them by name.
     """
 
     exact_realized_pnl: Decimal = ZERO
@@ -407,13 +414,23 @@ def apply_write_off_to_lots(
     and symbol -- up to the discharged quantity -- are the contracts it wrote
     off: a write-off takes what was held then, and whatever the bot bought
     since is newer. They are marked ``written_off`` in place, splitting a lot
-    the discharge only partly covers. A discharged quantity beyond the lots
-    on hand marks what is there and no more: the reader's fills-vs-positions
-    proof fails closed on books that disagree.
+    the discharge only partly covers.
+
+    In an account-wide walk one owner's sale may already have consumed
+    another owner's older lot (the cross-owner close the mixed queue allows),
+    so the owner's own tagged lots can fall short of the discharged quantity.
+    What remains is then taken from the symbol's oldest same-side lots
+    whoever holds them: the quantity is what the account's fold consumes, and
+    it must leave the closable books however the closes were attributed. A
+    one-owner walk never reaches that step -- its queue is the owner's own,
+    and the discharge proved it covered the then-open position.
+
+    A discharged quantity beyond the lots on hand marks what is there and no
+    more: the reader's fills-vs-positions proof fails closed on books that
+    disagree.
 
     Formula: lot.written_off' = true for the oldest min(|discharged_qty|,
-      open lots of the owner in the symbol) lots whose side matches the
-      discharge's sign.
+      open same-side lots) lots of the symbol, the owner's own taken first.
     Reference: none external; ADR 0076 decision 22 and #2975 for the
       written-off rule, #2854 for the withheld credit that may still close
       these lots.
@@ -433,27 +450,40 @@ def apply_write_off_to_lots(
         if lot.written_off or lot.side is not side or lot.strategy_instance_id != write_off.sid:
             index += 1
             continue
-        if lot.qty <= remaining + _ZERO_ABS_TOL:
-            lot.written_off = True
-            remaining -= lot.qty
+        remaining = _take_as_written_off(queue, index, remaining)
+    index = 0
+    while remaining > _ZERO_ABS_TOL and index < len(queue):
+        lot = queue[index]
+        if lot.written_off or lot.side is not side:
             index += 1
-        else:
-            # The discharge covers only part of this lot: its oldest part is
-            # written off, the rest stays closable behind it.
-            queue.insert(
-                index + 1,
-                _Lot(
-                    qty=lot.qty - remaining,
-                    cost=lot.cost,
-                    opened_at_ms=lot.opened_at_ms,
-                    side=lot.side,
-                    strategy_instance_id=lot.strategy_instance_id,
-                    multiplier=lot.multiplier,
-                ),
-            )
-            lot.qty = remaining
-            lot.written_off = True
-            remaining = ZERO
+            continue
+        remaining = _take_as_written_off(queue, index, remaining)
+
+
+def _take_as_written_off(queue: deque[_Lot], index: int, quantity: Decimal) -> Decimal:
+    """Mark up to ``quantity`` of ``queue[index]`` written off; return what is left.
+
+    A lot the quantity only partly covers is split: its oldest part is
+    written off, the rest stays closable behind it.
+    """
+    lot = queue[index]
+    if lot.qty <= quantity + _ZERO_ABS_TOL:
+        lot.written_off = True
+        return quantity - lot.qty
+    queue.insert(
+        index + 1,
+        _Lot(
+            qty=lot.qty - quantity,
+            cost=lot.cost,
+            opened_at_ms=lot.opened_at_ms,
+            side=lot.side,
+            strategy_instance_id=lot.strategy_instance_id,
+            multiplier=lot.multiplier,
+        ),
+    )
+    lot.qty = quantity
+    lot.written_off = True
+    return ZERO
 
 
 def _counted_as(multiplier: int | None) -> str:
@@ -469,8 +499,9 @@ def compute_open_pnl(
 
     Formula: open_pnl = Σ (mark - cost) × signed remaining lot quantity, the
       quantity taken by its multiplier for a lot of option contracts.
-      Written-off lots are no exposure and no valuation (#2975): they are
-      skipped, and a symbol whose only lots are written off demands no mark.
+      Written-off lots stay open lots and are valued with the rest (#2975,
+      ADR 0076 decision 22): the budget carries their premium and equity
+      marks them, though they close for no fill of the bot's.
     Reference: Kieso, Weygandt & Warfield, *Intermediate Accounting* (17e),
       Chapter 8; same FIFO inventory model as this module.
     Canonical implementation: this file.
@@ -491,7 +522,7 @@ def compute_open_pnl(
         mark = mark_prices.get(symbol)
         exact_mark = None if mark is None else normalize_money(mark)
         for lot in queue:
-            if lot.qty <= _ZERO_ABS_TOL or lot.written_off:
+            if lot.qty <= _ZERO_ABS_TOL:
                 continue
             symbols_with_open_lots.add(symbol)
             open_lots.append(
@@ -502,6 +533,7 @@ def compute_open_pnl(
                     opened_at_ms=lot.opened_at_ms,
                     side=lot.side,
                     multiplier=lot.multiplier,
+                    written_off=lot.written_off,
                 )
             )
             if exact_mark is not None:
@@ -659,6 +691,7 @@ def compute_fifo_pnl(
             opened_at_ms=lot.opened_at_ms,
             side=lot.side,
             multiplier=lot.multiplier,
+            written_off=True,
         )
         for symbol, queue in lots.items()
         for lot in queue

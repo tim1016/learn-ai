@@ -1113,8 +1113,9 @@ async def test_the_books_read_again_right_after_a_write_off(
     position it is attributed, so a written-off bot read as unavailable until
     a late fill happened to rebalance the fills. The discharge now counts in
     that proof, and its lot -- still open in the fills -- is set apart: it
-    realises nothing, is no exposure, and demands no mark. The entry stays on
-    the record.
+    realises nothing and closes for no later fill, while staying an open lot
+    for valuation as before (ADR 0076 decision 22). The entry stays on the
+    record.
     """
     repo, clock = crashed_with_exposure
     alpaca = _Alpaca(repo, clock, submits=("arrives_unanswered",))
@@ -1123,8 +1124,9 @@ async def test_the_books_read_again_right_after_a_write_off(
     money = _the_bots_money(repo)
 
     assert money.exposure == {}
-    assert money.marks_complete is True, "a written-off lot is no exposure and demands no mark"
-    assert money.open_pnl == 0.0
+    assert money.realized_pnl_today == 0.0, "the write-off realised nothing"
+    assert money.marks_complete is False, "the written-off lot is still an open lot, unmarked here"
+    assert money.exact_open_pnl is None
     assert [(fill.side.value, fill.quantity, fill.fill_price) for fill in money.recent_fills] == [
         ("buy", 10.0, 100.0)
     ]
@@ -1167,7 +1169,7 @@ async def test_a_re_entry_after_a_write_off_closes_only_its_own_lot(
 
     money = _the_bots_money(repo)
     assert money.exposure == {}
-    assert money.marks_complete is True
+    assert money.marks_complete is False, "the written-off lot is still an open lot, unmarked here"
     in_order = sorted(money.recent_fills, key=lambda fill: fill.filled_at_ms)
     assert [(fill.side.value, fill.quantity) for fill in in_order] == [
         ("buy", 10.0),  # the written-off position's entry, still on the record

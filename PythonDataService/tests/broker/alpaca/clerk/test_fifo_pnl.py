@@ -669,7 +669,11 @@ def test_a_written_off_lots_expiry_closes_the_new_lot_not_the_written_off_one() 
     assert _close(result.realized_pnl, -300.0), f"expected -300.0; got {result.realized_pnl}"
     assert len(result.closed_lots) == 1
     assert _close(result.closed_lots[0].entry_price, 3.00), "the lot that expired cost $3.00"
-    assert result.open_lots == [], "the expiry closed the held lot"
+    # The written-off lot stays an open lot for valuation (ADR 0076 decision 22),
+    # flagged as written off; the expiry closed the held lot.
+    assert len(result.open_lots) == 1
+    assert result.open_lots[0].written_off is True
+    assert _close(result.open_lots[0].cost, 1.94)
     assert len(result.written_off_lots) == 1
     assert _close(result.written_off_lots[0].cost, 1.94)
 
@@ -696,20 +700,27 @@ def test_a_re_entrys_part_sale_after_a_write_off_closes_only_the_new_lots() -> N
     assert _close(result.realized_pnl, -400.0), f"expected -400.0; got {result.realized_pnl}"
 
 
-def test_a_written_off_lot_is_no_open_exposure_and_demands_no_mark() -> None:
-    """BUY 10 @ $10, write-off 10: flat for valuation, though the lot stays in the fills.
+def test_a_written_off_lot_stays_an_open_lot_for_valuation_and_realises_nothing() -> None:
+    """BUY 10 @ $10, write-off 10: the lot stays on the books for valuation, realising nothing.
 
-    marks_complete is True and open P&L exactly 0 without any mark: the
-    written-off lot is not exposure (#2975).
+    ADR 0076 decision 22: the budget carries the written-off premium as a
+    position for good, and equity marks the lot as any open lot. Without a
+    mark the valuation is honestly incomplete; with one it is exact.
     """
     fills = [_fill(side=OrderSide.BUY, qty=10, price=10.0, ts_ms=1000)]
     result = compute_fifo_pnl(fills, write_offs=[_write_off(qty="10", ts_ms=2000)])
 
-    assert result.open_lots == []
-    assert result.marks_complete is True
-    assert result.open_pnl == 0.0
-    assert len(result.written_off_lots) == 1
-    assert _close(result.written_off_lots[0].qty, 10.0)
+    assert _close(result.realized_pnl, 0.0)
+    assert len(result.open_lots) == 1
+    assert result.open_lots[0].written_off is True
+    assert result.marks_complete is False, "an open lot without a mark is honestly incomplete"
+    assert result.open_pnl is None
+
+    marked = compute_fifo_pnl(fills, mark_prices={"SPY": 4.0}, write_offs=[_write_off(qty="10", ts_ms=2000)])
+    assert marked.marks_complete is True
+    assert _close(marked.open_pnl, -60.0), "10 x (4 - 10), the written-off premium marked"
+    assert len(marked.written_off_lots) == 1
+    assert _close(marked.written_off_lots[0].qty, 10.0)
 
 
 def test_a_withheld_fill_closes_the_written_off_lot_at_its_price() -> None:
@@ -782,7 +793,7 @@ def test_a_write_off_that_parts_a_lot_splits_it_oldest_side_written_off() -> Non
     assert _close(result.written_off_lots[0].qty, 10.0)
     assert _close(result.written_off_lots[1].cost, 12.0)
     assert _close(result.written_off_lots[1].qty, 5.0)
-    assert result.open_lots == []
+    assert [lot.written_off for lot in result.open_lots] == [True, True]
 
 
 def test_a_write_off_of_another_bot_sets_aside_nothing_of_this_one() -> None:
@@ -808,4 +819,34 @@ def test_a_write_off_of_another_bot_sets_aside_nothing_of_this_one() -> None:
     assert _close(result.realized_pnl, 10.0), f"expected +10.0; got {result.realized_pnl}"
     assert len(result.written_off_lots) == 1, "the write-off set apart its own bot's lot"
     assert _close(result.written_off_lots[0].cost, 20.0)
-    assert result.open_lots == []
+    assert [lot.written_off for lot in result.open_lots] == [True]
+
+
+def test_an_account_wide_write_off_takes_the_quantity_after_a_cross_owner_close() -> None:
+    """A mixed walk after one bot's sale consumed the written-off bot's older lot.
+
+    Bot A buys 10 @ $10, bot B buys 10 @ $20, B's SELL 10 closes A's older
+    lot (the cross-owner close a mixed queue allows), then A's +10 is
+    discharged. A's own tagged lots are gone, so the write-off takes its
+    quantity from the symbol's oldest same-side lot -- B's -- and A's later
+    round trip closes only its own new lot: +$5.00.
+    """
+    other_buy = replace(_fill(side=OrderSide.BUY, qty=10, price=20.0, ts_ms=1500), sid="other-bot")
+    other_sell = replace(_fill(side=OrderSide.SELL, qty=10, price=21.0, ts_ms=2500), sid="other-bot")
+    fills = [
+        _fill(side=OrderSide.BUY, qty=10, price=10.0, ts_ms=1000),
+        other_buy,
+        other_sell,
+        _fill(side=OrderSide.BUY, qty=5, price=30.0, ts_ms=4000),
+        _fill(side=OrderSide.SELL, qty=5, price=31.0, ts_ms=5000),
+    ]
+    result = compute_fifo_pnl(fills, write_offs=[_write_off(qty="10", ts_ms=3000)])
+
+    # B's cross-owner close realized against A's older lot, +$110; A's own
+    # round trip realized +$5. The discharge removed its quantity from the
+    # closable books (B's remaining lot is set apart), so no later close can
+    # take it.
+    assert _close(result.realized_pnl, 115.0), f"expected +115.0; got {result.realized_pnl}"
+    assert len(result.written_off_lots) == 1, "the discharge took the oldest remaining lot"
+    assert _close(result.written_off_lots[0].cost, 20.0)
+    assert [lot.written_off for lot in result.open_lots] == [True]

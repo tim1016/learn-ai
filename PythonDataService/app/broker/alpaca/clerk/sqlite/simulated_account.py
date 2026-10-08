@@ -374,7 +374,7 @@ class SimulatedAccountProjection:
             if not fees.known:
                 raise SimulationEvidenceUnavailable("Simulated execution or modelled fee evidence is incomplete: " + "; ".join(fees.unresolved))
             marks, _, valid_until = self._marks(records, at_ms=now_ms)
-            fifo = compute_fifo_pnl(records, mark_prices=marks, write_offs=self._write_off_events())
+            fifo = compute_fifo_pnl(records, mark_prices=marks, write_offs=self._write_off_events(by_ms=now_ms))
             open_pnl = fifo.exact_open_pnl
             if open_pnl is None:
                 raise SimulationEvidenceUnavailable("Simulated open P&L cannot be valued from current price evidence.")
