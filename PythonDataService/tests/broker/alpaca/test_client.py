@@ -400,6 +400,34 @@ async def test_get_order_by_broker_order_id_returns_raw_payload() -> None:
     assert payload == {"id": order_id, "client_order_id": "alpaca-generated", "status": "new"}
 
 
+async def test_an_order_read_answered_200_with_an_empty_body_is_unknown_not_absent() -> None:
+    """#2954: alpaca-py hands a 2xx with an empty or ``null`` body back as ``None``.
+
+    That is an answer which could not be read, never Alpaca saying the order
+    is absent -- as a 5xx is, it must stay ``BrokerUnavailable`` so a submit
+    whose outcome is unknown is not folded into "never reached the broker".
+    """
+    fake = _FakeAlpaca()
+    fake.get_order_by_client_id = lambda client_id: None  # type: ignore[method-assign]
+    fake.get_order_by_id = lambda order_id: None  # type: ignore[method-assign]
+
+    with pytest.raises(BrokerUnavailable, match="could not be read"):
+        await _client(fake).get_order_by_client_order_id("manual/inkant/v1:abc")
+    with pytest.raises(BrokerUnavailable, match="could not be read"):
+        await _client(fake).get_order_by_broker_order_id("00000000-0000-0000-0000-00000000000b")
+
+
+async def test_an_empty_200_inside_the_visibility_window_is_still_unknown_not_absent() -> None:
+    """The window's 404 rule must not leak onto the empty body: absent it may not say, either way."""
+    fake = _FakeAlpaca()
+    fake.get_order_by_client_id = lambda client_id: None  # type: ignore[method-assign]
+    client = _client(fake)
+    client.hold_submission_uncertain("manual/inkant/v1:abc")
+
+    with pytest.raises(BrokerUnavailable, match="could not be read"):
+        await client.get_order_by_client_order_id("manual/inkant/v1:abc")
+
+
 @pytest.mark.parametrize(("status", "expected"), [(404, None), (503, BrokerUnavailable)])
 async def test_get_order_by_broker_order_id_404_is_absent_and_5xx_stays_uncertain(
     make_api_error: ApiErrorFactory, status: int, expected: type[Exception] | None,
