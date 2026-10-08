@@ -1881,3 +1881,68 @@ async def test_a_bar_handed_over_a_moment_before_this_machines_clock_says_it_clo
     assert (search.decision_bar_close_ms, search.selection_ms) == (ENTER_MS, ENTER_MS)
     assert floor.entry_as_the_clerk_kept_it().rechecked_at_ms == ENTER_MS
     assert floor.fills() == [(CALL, "buy", 1.0, 4.12, 100, Decimal("412.00"))]
+
+
+@pytest.mark.parametrize(("bid", "open_pnl"), [("4.08", "-4.00"), ("0.00", "-412.00")])
+async def test_option_bot_panel_reads_its_quote_fill_receipt_and_multiplier_marks(
+    floor: Floor, monkeypatch: pytest.MonkeyPatch, bid: str, open_pnl: str,
+) -> None:
+    from app.services.bot_runner import BotTaskRegistry
+    from app.services.broker_v2_panel import panel_data_source
+
+    registry = BotTaskRegistry(floor.tmp_path, feed_resolver=lambda: None, now_ms=floor.clock, boot_recovery_required=False)
+    registry._bindings.record_launch(floor.binding, launch_reason="deploy")
+    observed = []
+
+    async def look(held: Floor) -> None:
+        await held.bar_arrives(ENTER_MS + MINUTE + DELIVERY_MS)
+        kept = held.kept_quotes()
+        stated = kept.stated_mark(CALL, at_or_before_ms=held.clock())
+        assert stated is not None
+        # This panel boundary reads a retained whole quote, including a bid of zero.
+        quote = stated.quote.model_copy(update={"bid": Decimal(bid)})
+        kept.keep(CALL, quote.held, kept_at_ms=held.clock())
+        panel, _, _ = await panel_data_source._get_panel_with_entries_from_authority(
+            "alpaca", ACCOUNT, SID, resolved=ACCOUNT, captured_now_ms=held.clock(),
+            registry=registry, binding=held.binding, facade=held.clerk,
+        )
+        observed.append(panel)
+        monkeypatch.setattr(held.clerk, "synthesized_option_fills", lambda: {})
+        unknown, _, _ = await panel_data_source._get_panel_with_entries_from_authority(
+            "alpaca", ACCOUNT, SID, resolved=ACCOUNT, captured_now_ms=held.clock(),
+            registry=registry, binding=held.binding, facade=held.clerk,
+        )
+        observed.append(unknown)
+        stale, _, _ = await panel_data_source._get_panel_with_entries_from_authority(
+            "alpaca", ACCOUNT, SID, resolved=ACCOUNT, captured_now_ms=held.clock() + 80_001,
+            registry=registry, binding=held.binding, facade=held.clerk,
+        )
+        observed.append(stale)
+
+    await floor.run([Step(green(FIRST_GREEN_MS)), Step(green(ENTER_MS)), Step(red(ENTER_MS + MINUTE), before=look)])
+    priced, unknown, stale = observed
+    assert priced.open_pnl_usd == open_pnl  # (bid - paid ask 4.12) * 100 shares per contract.
+    [fill] = priced.run_fills
+    assert (fill.symbol, fill.simulated.kind, fill.simulated.caution) == (CALL, "natural_price", False)
+    assert "ask" in fill.simulated.sentence
+    assert [fill.simulated.kind for fill in unknown.run_fills] == ["unknown"]
+    assert stale.open_pnl_usd is None
+    assert len(stale.run_fills) == 1
+
+
+async def test_option_fill_explanation_records_an_older_sell_quote_and_refuses_a_mismatch(floor: Floor) -> None:
+    from app.broker.alpaca.clerk.fills import FillRecord
+    from app.broker.contract.models import OrderSide
+    from app.options.simulated_fill import SimulatedFillModel
+    from app.services.broker_v2_panel.bot_page_projection import option_fill_view
+
+    await floor.run(_round_trip())
+    receipt = next(value for value in floor.clerk.synthesized_option_fills().values() if value.request.side is OrderSide.SELL)
+    older = receipt.model_copy(update={"fill_model": SimulatedFillModel.NATURAL_PRICE_OLDER_QUOTE, "quote_age_ms": 60_000})
+    fill = FillRecord(account_id=ACCOUNT, sid=SID, intent_id="exit", order_ref="exit", event_key="exit",
+        symbol=CALL, side=OrderSide.SELL, quantity=1, fill_price=float(receipt.fill_price),
+        filled_at_ms=receipt.filled_at_ms, fee=None, multiplier=100)
+    view = option_fill_view(older, fill)
+    assert (view.kind, view.caution, view.price_age_ms) == ("natural_price_older_quote", True, 60_000)
+    assert "bid" in view.sentence and "older" in view.label
+    assert option_fill_view(older.model_copy(update={"fill_price": Decimal("999")}), fill).kind == "unknown"

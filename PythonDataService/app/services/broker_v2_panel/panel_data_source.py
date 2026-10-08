@@ -46,7 +46,7 @@ from app.broker.alpaca.clerk.sqlite.scheduled_end import (
     end_sale_waits_for_operator_words,
     end_sales_waiting_for_operator,
 )
-from app.broker.alpaca.clerk.synthesized_orders import SynthesizedAnchor
+from app.broker.alpaca.clerk.synthesized_orders import SynthesizedAnchor, SynthesizedOptionFill
 from app.broker.ibkr.config import live_artifacts_root
 from app.broker.v2panel.action_policy import sealed_account_archive_action
 from app.engine.live.identity import INSTANCE_ID_PATTERN
@@ -678,6 +678,23 @@ def _simulated_fill_anchors(facade: SqliteAlpacaClerkFacade, sid: str) -> Mappin
         return {}
 
 
+def _simulated_option_fills(facade: SqliteAlpacaClerkFacade, sid: str) -> Mapping[str, SynthesizedOptionFill]:
+    if not facade.binds_decision_bar:
+        return {}
+    try:
+        return facade.synthesized_option_fills()
+    except (RuntimeError, OSError, ValueError) as error:
+        logger.warning(
+            "Bot page: simulated option receipts cannot be read",
+            extra={
+                "action": "bot_page_simulated_option_fills_unreadable",
+                "strategy_instance_id": sid,
+                "error_type": type(error).__name__,
+            },
+        )
+        return {}
+
+
 def _with_bot_page(
     panel: BotPanelView,
     evidence: SqlitePanelEvidence,
@@ -713,7 +730,7 @@ def _with_bot_page(
                 execution_coverage_complete=evidence.economics.snapshot.execution_coverage == "complete",
                 now_ms=now_ms,
             ),
-            "run_fills": run_fill_views(run_fills, _simulated_fill_anchors(facade, sid)),
+            "run_fills": run_fill_views(run_fills, _simulated_fill_anchors(facade, sid), _simulated_option_fills(facade, sid)),
         }
     )
 

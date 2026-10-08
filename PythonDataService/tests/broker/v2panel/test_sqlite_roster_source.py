@@ -824,7 +824,8 @@ async def test_panel_evidence_retries_status_revision_race_with_verified_zero_ec
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = _Repository()
-    facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository)
+    facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository,
+        simulated_marks=lambda **_kwargs: None)
     snapshot = replace(
         _economic_rollup_map("paper-account", ["active-spy"])["active-spy"],
         session_open_ms=None,
@@ -859,6 +860,7 @@ async def test_panel_evidence_retries_status_revision_race_with_verified_zero_ec
             strategy_instance_id: str,
             *,
             session_window: SessionWindow | None,
+            marks=None,
             run: RunScope | None = None,
         ) -> SessionEconomicProjection:
             assert strategy_instance_id == "active-spy"
@@ -1272,7 +1274,8 @@ async def test_panel_evidence_raises_bot_not_found_for_an_absent_projection(
     a SQLite authority that was already healthy.
     """
     repository = _Repository()
-    facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository)
+    facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository,
+        simulated_marks=lambda **_kwargs: None)
 
     class _CustodyReader:
         @classmethod
@@ -1295,6 +1298,7 @@ async def test_panel_evidence_raises_bot_not_found_for_an_absent_projection(
             _strategy_instance_id: str,
             *,
             session_window: SessionWindow | None,
+            marks=None,
             run: RunScope | None = None,
         ) -> None:
             return None

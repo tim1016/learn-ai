@@ -75,10 +75,10 @@ def test_establish_session_baseline_persists_once_and_is_idempotent(tmp_path: Pa
         repo.close()
 
 
-def _deploy(repo: ClerkSqliteRepository, projection: SimulatedAccountProjection, *, sid: str = DAY_PNL_SID, cents: int = 100_000, reference: int | Decimal = 1000) -> LiveEnvelopeGate:
+def _deploy(repo: ClerkSqliteRepository, projection: SimulatedAccountProjection, *, sid: str = DAY_PNL_SID, cents: int = 100_000, reference: int | Decimal = 1000, symbol: str = "SPY") -> LiveEnvelopeGate:
     if repo.budget_authority_version() < 2:
         commit_budget_authority_cutover(repo, actor="owner", reviewed_token="fresh-simulation", stop_receipt="no-old-runs")
-    repo.register_strategy_instance(strategy_instance_id=sid, symbol="SPY", config_hash=f"seal-{sid}", exit_terms=TERMS)
+    repo.register_strategy_instance(strategy_instance_id=sid, symbol=symbol, config_hash=f"seal-{sid}", exit_terms=TERMS)
     policy = repo.account_risk_policy()
     observation = projection.observe(reference_cash=reference, observed_at_ms=repo.clock(), now_ms=repo.clock())
     gate = LiveEnvelopeGate(values=None, custody_is_simulated=True)
@@ -543,3 +543,51 @@ def test_private_dry_run_cash_is_only_for_a_private_dry_run(shadow: ShadowContex
     repo, _, clock = shadow
     with pytest.raises(ValueError, match="private Dry Run"):
         private_dry_run_cash(repo, now_ms=clock())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("other_mark", ["missing", "stale"])
+async def test_shadow_panel_marks_only_its_bot_when_another_bots_evidence_is_unavailable(
+    shadow: ShadowContext, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, other_mark: str,
+) -> None:
+    from types import SimpleNamespace
+
+    from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+    from app.services.broker_v2_panel import sqlite_panel_source
+    from tests.broker.alpaca.clerk.sqlite import conftest as fill_scene
+
+    repo, projection, clock = shadow
+    accepted = _enter(repo, _deploy(repo, projection, cents=40_000), quantity=1)
+    _fill(repo, accepted, key="healthy-buy", side="BUY", quantity=1, price=100)
+    _mark(tmp_path, shadow_evidence_account_id_for_strategy(DAY_PNL_SID), at_ms=clock(), price=101)
+    other_sid = "other-bot"
+    other_gate = _deploy(repo, projection, sid=other_sid, cents=40_000, symbol="IWM")
+    other = accept_enter(repo, account_id=repo.account_id, strategy_instance_id=other_sid, decision_id="other-buy",
+        lifecycle_run_id=f"run-{other_sid}", leg=BrokerOrderLeg(symbol="IWM", side="buy", quantity=1),
+        reference_price=100, envelope=other_gate)
+    with monkeypatch.context() as scene:
+        scene.setattr(fill_scene, "DAY_PNL_SID", other_sid)
+        scene.setattr(fill_scene, "DAY_PNL_SYMBOL", "IWM")
+        _fill(repo, other, key="other-buy", side="BUY", quantity=1, price=100)
+    if other_mark == "stale":
+        bars = SourceBarLedger(artifacts_root=tmp_path, account_id=shadow_evidence_account_id_for_strategy(other_sid))
+        try:
+            at = clock() - 80_001
+            bars.append(MarketDataBar(feed_id="ibkr", symbol="IWM", start_ms=at-60_000, end_ms=at,
+                open=Decimal(99), high=Decimal(99), low=Decimal(99), close=Decimal(99), volume=100,
+                fetched_at_ms=at, session_phase="RTH"), run_id="other-marks")
+        finally:
+            bars.close()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=_Read(), trade=SimpleNamespace(),
+        authority_kind="shadow", account_mode="live", simulation=projection)
+    monkeypatch.setattr(sqlite_panel_source, "_bound_bot_status", lambda *_args, **_kwargs: SimpleNamespace())
+    panel = await sqlite_panel_source.read_sqlite_panel_evidence("alpaca", repo.account_id, DAY_PNL_SID,
+        now_ms=clock(), facade=facade)
+    assert panel is not None
+    assert panel.economics.snapshot.exact_open_pnl == Decimal(1)
+    other_panel = await sqlite_panel_source.read_sqlite_panel_evidence("alpaca", repo.account_id, other_sid,
+        now_ms=clock(), facade=facade)
+    assert other_panel is not None and other_panel.economics.snapshot.exact_open_pnl is None
+    # The account-wide admission/risk reading still refuses incomplete valuation.
+    with pytest.raises(SimulationEvidenceUnavailable, match="Fresh simulated price evidence for IWM"):
+        projection.observe(reference_cash=1000, observed_at_ms=clock(), now_ms=clock())

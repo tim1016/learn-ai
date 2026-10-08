@@ -726,3 +726,46 @@ async def test_a_running_dry_run_is_stopped_at_its_end_and_sold_at_the_last_pric
         "The bot has stopped, and its simulation sold what it held at the last price it saw."
     )
     assert crashed_dry_run.alpaca.calls == []
+
+
+@pytest.mark.parametrize("run_ending", ["running"])
+async def test_running_dry_run_panel_uses_fresh_equity_marks_and_withdraws_stale_prices(crashed_dry_run: _World, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(panel_data_source, "now_ms_utc", crashed_dry_run.clock)
+    runtime = get_clerk_runtime(SIM_ACCOUNT)
+    assert runtime is not None
+    # The retained entry bar is now stale: no quote is substituted for its close.
+    assert (await _panel()).open_pnl_usd is None
+    now = crashed_dry_run.clock()
+    bars = SourceBarLedger(artifacts_root=crashed_dry_run.artifacts_root, account_id=SIM_ACCOUNT)
+    try:
+        bars.append(MarketDataBar(
+            feed_id="ibkr", symbol="SPY", start_ms=now - 60_000, end_ms=now,
+            open=Decimal("601.25"), high=Decimal("601.25"), low=Decimal("601.25"),
+            close=Decimal("601.25"), volume=100, fetched_at_ms=now, session_phase="RTH",
+        ), run_id="run-1")
+    finally:
+        bars.close()
+    from dataclasses import replace
+
+    assert runtime.clerk is not None
+    original = runtime.clerk.simulated_marks
+    reads = 0
+
+    def torn_once(*, strategy_instance_id: str, now_ms: int):
+        nonlocal reads
+        reads += 1
+        result = original(strategy_instance_id=strategy_instance_id, now_ms=now_ms)
+        assert result is not None
+        meta, marks = result
+        return (replace(meta, control_revision=meta.control_revision - 1), marks) if reads == 1 else result
+
+    monkeypatch.setattr(runtime.clerk, "simulated_marks", torn_once)
+    panel = await _panel()
+    assert reads == 2
+    assert panel.open_pnl_usd == "1.25"
+    assert [fill.simulated.kind for fill in panel.run_fills if fill.simulated] == ["bar_close"]
+    # Valuing the page does not grant a reduction or alter reconciliation evidence.
+    assert not _action(panel, "prepare_safe_flatten").enabled
+    _walk_clock_to(runtime.sqlite_repository, now + 80_001)
+    assert (await _panel()).open_pnl_usd is None
+    assert crashed_dry_run.alpaca.calls == []

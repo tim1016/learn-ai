@@ -448,6 +448,8 @@ async def compose_repository_runtime(
         # simulated projection values its own custody with retained marks.
         # Built before the facade, which asks it for a reading when an ENTER
         # waits on executions newer than the last one (#2623).
+        simulation = (SimulatedAccountProjection(repo=repository, artifacts_root=artifacts_root, initial_cash=simulation_initial_cash)
+            if repository.account_id.startswith(("sim:", "shadow:")) else None)
         envelope_sync = (
             None
             if live_envelope is None
@@ -460,8 +462,7 @@ async def compose_repository_runtime(
                 ),
                 envelope=live_envelope,
                 custody_read=guarded_read,
-                simulation=(SimulatedAccountProjection(repo=repository, artifacts_root=artifacts_root, initial_cash=simulation_initial_cash)
-                    if repository.account_id.startswith(("sim:", "shadow:")) else None),
+                simulation=simulation,
             )
         )
         # ADR 0076: an account that takes an option plan has a keeper. A Paper
@@ -483,6 +484,7 @@ async def compose_repository_runtime(
             account_mode=account_mode,
             program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
             live_envelope=live_envelope,
+            simulation=simulation,
             entry_reading=None if envelope_sync is None else envelope_sync.read_for_entry,
             entry_deadline_nudge=keeper_nudge,
         )

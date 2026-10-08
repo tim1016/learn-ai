@@ -97,6 +97,7 @@ from app.broker.alpaca.clerk.sqlite.contract_terms import (
     is_option_contract_symbol,
 )
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
+from app.broker.alpaca.clerk.sqlite.economic_projection_models import MarketMark
 from app.broker.alpaca.clerk.sqlite.enter import (
     MARKET_CLOSED,
     MARKET_LIVENESS_BLOCKED,
@@ -235,6 +236,7 @@ from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
     SafeFlattenResult,
     execute_safe_flatten_plan,
 )
+from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import FAILED_ENTER_FILLED_REASON_CODE
 from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import (
@@ -575,6 +577,7 @@ class SqliteAlpacaClerkFacade:
         quote_source: QuoteSource | None = None,
         entry_reading: EntryReading | None = None,
         entry_deadline_nudge: Callable[[], None] | None = None,
+        simulation: SimulatedAccountProjection | None = None,
     ) -> None:
         if authority_kind == "synthetic":
             require_synthetic_account_id(repo.account_id)
@@ -596,6 +599,7 @@ class SqliteAlpacaClerkFacade:
                     "a live sqlite authority requires a risk envelope"
                 )
         self._repo = repo
+        self._simulation = simulation
         self._intake = intake or ReentrantAsyncLock()
         self._read, self._trade = guard_broker_ports(read=read, trade=trade, intake=self._intake)
         self._stream_health = stream_health
@@ -691,6 +695,10 @@ class SqliteAlpacaClerkFacade:
     def account_mode(self) -> Literal["paper", "live"]:
         """The environment every custody answer names (ADR 0054), learned at activation."""
         return self._account_mode
+
+    def simulated_marks(self, *, strategy_instance_id: str, now_ms: int) -> tuple[ControlMetaSnapshot, dict[str, MarketMark]] | None:
+        """The composed simulator's custody-fenced marks; absent on real accounts."""
+        return None if self._simulation is None else self._simulation.current_marks(strategy_instance_id=strategy_instance_id, now_ms=now_ms)
 
     def synthesized_fill_anchors(self) -> Mapping[str, SynthesizedAnchor]:
         """How this authority priced the fills no venue made, by order ref (#2912).
