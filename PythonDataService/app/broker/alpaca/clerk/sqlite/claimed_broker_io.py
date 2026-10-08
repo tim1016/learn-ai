@@ -6,8 +6,12 @@ answer it gives is held to the contract, the side and the contracts the
 books asked for before it becomes the order evidence the folds take
 (``option_order_evidence``). An answer that cannot be read, or is about
 something else, raises a ``BrokerError`` that is not a refusal: the outcome
-stays unknown. A simulation's own record of the order is read as it always
-was, by the lookup of its ledger.
+stays unknown. A simulation's own record of an order of one contract is read
+as it always was, by the lookup of its ledger.
+
+One order of several legs is sent once, under its parent's client order id,
+and is looked up through the option port on every port, a simulation's
+included: a parent names no symbol, so no stock reader can state it.
 """
 
 from __future__ import annotations
@@ -22,11 +26,14 @@ from app.broker.alpaca.clerk.sqlite.account_open_work import (
     read_open_orders_then_positions,
 )
 from app.broker.alpaca.clerk.sqlite.option_order_evidence import (
+    AskedMultiLegOrder,
     AskedOptionOrder,
+    MultiLegOrderEvidence,
     asked_of_a_real_option_order,
     evidence_of_the_order_asked,
     look_up_by_broker_order_id,
     look_up_by_client_order_id,
+    with_the_simulations_own_leg_records,
 )
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain, trade_port_folds_simulated_evidence
 from app.broker.alpaca.clerk.sqlite.repository import (
@@ -37,7 +44,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 )
 from app.broker.contract.errors import BrokerError, BrokerEvidenceUnavailable
 from app.broker.contract.models import BrokerActivityEvidence, BrokerOrder, BrokerOrderLeg
-from app.broker.contract.options import SingleOptionOrderRequest
+from app.broker.contract.options import MultiLegOptionOrderRequest, OptionOrderRequest, SingleOptionOrderRequest
 from app.broker.contract.ports import BrokerActivityEvidencePort, BrokerReadPort, BrokerTradePort
 from app.options.quotes import HeldQuote
 
@@ -71,14 +78,18 @@ class ClaimedBrokerIO:
         except ExecutionLeaseLost as lost:
             raise ExecutionLeaseLostAfterBrokerIO(str(lost), account_id=lost.account_id) from lost
 
-    async def submit(self, leg: BrokerOrderLeg | SingleOptionOrderRequest, *, client_order_id: str) -> BrokerOrder:
-        """Send one instruction once: a leg in shares, or one option order (ADR 0076).
+    async def submit(self, leg: BrokerOrderLeg | OptionOrderRequest, *, client_order_id: str) -> BrokerOrder:
+        """Send one instruction once: a leg in shares, or one option order, of one contract or of several legs (ADR 0076).
 
-        Either answer comes back as the order evidence every fold takes.
+        Each answer comes back as the order evidence every fold takes. An
+        order of several legs comes back as a ``MultiLegOrderEvidence``: the
+        parent's state, with each leg's evidence under it.
         """
         self._renew()
         try:
-            if isinstance(leg, SingleOptionOrderRequest):
+            if isinstance(leg, MultiLegOptionOrderRequest):
+                observed = await self._submit_multi_leg_order(leg, client_order_id=client_order_id)
+            elif isinstance(leg, SingleOptionOrderRequest):
                 observed = await self._submit_option_order(leg, client_order_id=client_order_id)
             else:
                 observed = await self.trade.submit(leg, client_order_id=client_order_id)
@@ -123,6 +134,36 @@ class ClaimedBrokerIO:
                 "The simulation answered an option order it holds no record of.", broker=self.trade.broker_id
             )
         return recorded
+
+    async def _submit_multi_leg_order(self, order: MultiLegOptionOrderRequest, *, client_order_id: str) -> BrokerOrder:
+        """Send one order of several legs once, under the parent's client order id, and return its answer as evidence.
+
+        The answer is evidence only when it is about the order sent: the
+        parent's units and each leg's contract and side. A leg's own
+        quantity is not held to its ratio times the units (ADR 0076 decision
+        10). An answer about something else raises as evidence that is
+        unavailable: an unknown outcome, settled by the exact lookup, never
+        a refusal, because the broker may hold the order.
+
+        A simulation executes inside the call, every leg or none. Each
+        leg's evidence is then the simulation's own record of that leg, read
+        by the leg's client order id, so it carries the simulation's
+        execution identity.
+        """
+        answer = await self.trade.submit_option_order(order, client_order_id=client_order_id)
+        evidence = evidence_of_the_order_asked(
+            answer,
+            asked=AskedMultiLegOrder(
+                units=order.quantity,
+                legs=tuple((leg.contract.occ_symbol, leg.side.value) for leg in order.legs),
+                order_type=order.order_type.value,
+                net_limit_price=order.net_limit_price,
+            ),
+        )
+        assert isinstance(evidence, MultiLegOrderEvidence)
+        if trade_port_folds_simulated_evidence(self.trade):
+            return await with_the_simulations_own_leg_records(self.trade, evidence)
+        return evidence
 
     def bind_option_close_quotes(
         self,

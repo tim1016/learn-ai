@@ -37,6 +37,7 @@ from app.broker.alpaca.clerk.sqlite.option_entry import OptionExitFacts, option_
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     entry_never_accepted_durably,
     entry_order_symbol,
+    entry_order_symbols,
 )
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
@@ -138,7 +139,7 @@ def newest_reducible_entry(
     entries = [
         order
         for order in repo.entry_orders_for_strategy(strategy_instance_id)
-        if entry_order_symbol(repo, order.order_ref).upper() == symbol.upper()
+        if symbol.upper() in (held.upper() for held in entry_order_symbols(repo, order.order_ref))
     ]
     if not entries:
         return None
@@ -170,7 +171,7 @@ def _exit_cancellable_entries(
     return [
         candidate
         for candidate in repo.entry_orders_for_strategy(strategy_instance_id)
-        if entry_order_symbol(repo, candidate.order_ref) == symbol
+        if symbol in entry_order_symbols(repo, candidate.order_ref)
         and (
             candidate.order_ref == target_order_ref
             or not entry_never_accepted_durably(repo, candidate)

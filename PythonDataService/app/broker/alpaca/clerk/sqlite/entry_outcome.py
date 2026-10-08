@@ -46,12 +46,18 @@ from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.facts import EntrySettledFacts
-from app.broker.alpaca.clerk.sqlite.option_entry import OptionEntryFacts, option_entry_of_order
+from app.broker.alpaca.clerk.sqlite.option_entry import (
+    MultiLegOptionEntryFacts,
+    OptionEntryFacts,
+    option_entry_of_order,
+)
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
     UNFILLED_TERMINAL_STATES,
+    order_has_broker_evidence,
 )
 from app.broker.alpaca.clerk.sqlite.reads import FAILED_EFFECT_STATES
+from app.options.whole_units import LegContracts, whole_units
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -168,6 +174,8 @@ def entry_outcome(repo: ClerkSqliteRepository, entry_order_ref: str) -> EntryOut
             raise ValueError(f"{entry_order_ref!r} is not an entry in an option contract")
         effect = repo.effect_operation(order.effect_operation_id)
         assert effect is not None
+        if isinstance(entry, MultiLegOptionEntryFacts):
+            return _multi_leg_entry_outcome(repo, entry_order_ref, entry)
         filled, _cost = repo.effective_fill_totals_for_order(entry_order_ref)
         fills_short = repo.order_fills_short_of_broker_cumulative(entry_order_ref)
         cancel_request = repo.last_order_transition(
@@ -192,6 +200,56 @@ def entry_outcome(repo: ClerkSqliteRepository, entry_order_ref: str) -> EntryOut
         cancel_at_ms=entry.cancel_at_ms,
         cancel_requested_at_ms=None if cancel_request is None else cancel_request["recorded_at_ms"],
         proven_at_ms=max(order.updated_at_ms, effect.updated_at_ms) if standing in PROVEN_STANDINGS else None,
+    )
+
+
+def _multi_leg_entry_outcome(
+    repo: ClerkSqliteRepository, parent_ref: str, entry: MultiLegOptionEntryFacts
+) -> EntryOutcome:
+    """Count whole units from every leg, requiring each broker count's recorded coverage."""
+    parent = repo.order(parent_ref)
+    assert parent is not None
+    effect = repo.effect_operation(parent.effect_operation_id)
+    assert effect is not None
+    legs = repo.order_legs(parent_ref)
+    counts = {
+        leg.symbol: int(repo.effective_fill_totals_for_order(leg.order_ref)[0] + FILL_QTY_EPSILON)
+        for leg in legs
+    }
+    whole = whole_units(tuple(LegContracts(leg.leg_id, leg.ratio, counts[leg.symbol]) for leg in legs))
+    short = repo.order_fills_short_of_broker_cumulative(parent_ref) or any(
+        repo.order_fills_short_of_broker_cumulative(leg.order_ref) for leg in legs
+    )
+    overfilled = any(counts[leg.symbol] > leg.contracts for leg in legs)
+    state = (parent.broker_state or "").lower()
+    cancel = repo.last_order_transition(order_ref=parent_ref, transition_kind="ORDER_CANCEL_REQUESTED")
+    if short or overfilled or effect.state == "unknown":
+        standing = EntryStanding.OUTCOME_UNKNOWN
+    elif all(counts[leg.symbol] == leg.contracts for leg in legs):
+        standing = EntryStanding.FILLED
+    elif effect.state in FAILED_EFFECT_STATES and not state:
+        standing = (
+            EntryStanding.OUTCOME_UNKNOWN
+            if order_has_broker_evidence(repo._conn, parent_ref) else EntryStanding.NOT_SENT
+        )
+    elif state in UNFILLED_TERMINAL_STATES:
+        standing = EntryStanding.PART_FILLED if any(counts.values()) else EntryStanding.UNFILLED
+    elif state in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES:
+        standing = EntryStanding.OUTCOME_UNKNOWN
+    elif cancel is not None or state == "pending_cancel":
+        standing = EntryStanding.CANCELLATION_REQUESTED
+    else:
+        standing = EntryStanding.WORKING
+    last_changed = max(
+        parent.updated_at_ms, effect.updated_at_ms,
+        *(repo.order(leg.order_ref).updated_at_ms for leg in legs),
+    )
+    return EntryOutcome(
+        standing=standing, order_refs=(parent_ref, *(leg.order_ref for leg in legs)),
+        units_asked=entry.units, units_filled=whole.units, contracts_filled=counts,
+        legs_out_of_step=not whole.in_step, cancel_at_ms=entry.cancel_at_ms,
+        cancel_requested_at_ms=None if cancel is None else cancel["recorded_at_ms"],
+        proven_at_ms=last_changed if standing in PROVEN_STANDINGS else None,
     )
 
 

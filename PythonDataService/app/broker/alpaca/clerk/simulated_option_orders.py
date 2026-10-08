@@ -33,8 +33,9 @@ under the contract's own symbol and the world's own execution identity
 (``sim-execution:`` / ``shadow-execution:``), so the stock lookups, the open
 orders and the positions of the port all show it.
 
-An order of several legs is not taken by either world. Each port refuses it
-by name before it reaches this module.
+The Dry Run also fills an opening order of several legs through the
+canonical multi-leg fill model. Every leg commits together. Live Shadow
+refuses that order before it reaches this module (ADR 0076).
 """
 
 from __future__ import annotations
@@ -51,6 +52,12 @@ from app.broker.alpaca.clerk.kept_option_quotes import (
     KeptOptionQuotesUnavailable,
 )
 from app.broker.alpaca.clerk.option_effects import RecordedQuote
+from app.broker.alpaca.clerk.simulated_multi_leg_orders import (
+    BoundLegQuote,
+    filled_multi_leg_order,
+    legs_recorded,
+    multi_leg_order_view,
+)
 from app.broker.alpaca.clerk.synthesized_orders import (
     SynthesizedBarBindingError,
     SynthesizedOptionFill,
@@ -58,10 +65,11 @@ from app.broker.alpaca.clerk.synthesized_orders import (
     SynthesizedOrderRecord,
     project_positions,
 )
-from app.broker.contract.errors import BrokerOrderRejected
+from app.broker.contract.errors import BrokerEvidenceUnavailable, BrokerOrderRejected
 from app.broker.contract.models import BrokerOrder, OrderSide
 from app.broker.contract.options import (
     BrokerOptionOrder,
+    MultiLegOptionOrderRequest,
     OptionPositionIntent,
     SingleOptionOrderRequest,
 )
@@ -135,6 +143,7 @@ class SimulatedOptionOrders:
         self._broker_id = broker_id
         self._id_prefix = id_prefix
         self._bound_option_quotes: dict[str, _BoundOptionQuote] = {}
+        self._bound_leg_quotes: dict[str, dict[str, _BoundOptionQuote]] = {}
         self._option_binding_lock = threading.Lock()
 
     def fills(self) -> Mapping[str, SynthesizedOptionFill]:
@@ -156,6 +165,7 @@ class SimulatedOptionOrders:
             self._bound_option_quotes[client_order_id] = _BoundOptionQuote(
                 symbol, RecordedQuote.of(quote), None, quote.generation, multiplier
             )
+            self._bound_leg_quotes.setdefault(client_order_id, {})[symbol] = self._bound_option_quotes[client_order_id]
 
     def bind_close_quotes(
         self,
@@ -190,6 +200,7 @@ class SimulatedOptionOrders:
             self._bound_option_quotes[client_order_id] = _BoundOptionQuote(
                 symbol, newest.quote, newest.ref, usable_generation, None
             )
+            self._bound_leg_quotes.setdefault(client_order_id, {})[symbol] = self._bound_option_quotes[client_order_id]
         return True
 
     def _closing_quote(self, symbol: str, *, side: Literal["buy", "sell"]) -> KeptOptionQuote | None:
@@ -351,7 +362,56 @@ class SimulatedOptionOrders:
 
     def _consume_option_binding(self, client_order_id: str) -> _BoundOptionQuote | None:
         with self._option_binding_lock:
+            self._bound_leg_quotes.pop(client_order_id, None)
             return self._bound_option_quotes.pop(client_order_id, None)
+
+    def submit_multi(self, order: MultiLegOptionOrderRequest, *, client_order_id: str) -> BrokerOptionOrder:
+        """Fill every opening leg together, or none, retaining one record per leg."""
+        with self._ledger.transaction() as records:
+            with self._option_binding_lock:
+                self._bound_option_quotes.pop(client_order_id, None)
+                bound = self._bound_leg_quotes.pop(client_order_id, {})
+            if self._ledger.find_record(records, client_order_id) is not None:
+                raise BrokerOrderRejected(
+                    "That client order id already names an order of one leg in this simulation.", broker=self._broker_id
+                )
+            at_ms = self._clock()
+            already = legs_recorded(self._ledger.latest_records_from(records), client_order_id)
+            if already:
+                return self._multi_leg_view(already, client_order_id, observed_at_ms=at_ms)
+            legs = filled_multi_leg_order(
+                order, client_order_id=client_order_id,
+                bound={
+                    symbol: BoundLegQuote(quoted.quote, quoted.quote_ref, quoted.multiplier)
+                    for symbol, quoted in bound.items()
+                },
+                at_ms=at_ms, broker_id=self._broker_id,
+                shape_leg_order=lambda request, leg_client_order_id, fill_price, order_type: _option_order_evidence(
+                    request, client_order_id=leg_client_order_id, broker_id=self._broker_id,
+                    id_prefix=self._id_prefix, at_ms=at_ms, fill_price=fill_price,
+                ).model_copy(update={"order_type": order_type}),
+            )
+            appended = self._ledger.append_option_legs_locked(records, legs)
+            return self._multi_leg_view(appended, client_order_id, observed_at_ms=at_ms)
+
+    def _multi_leg_view(
+        self, legs: Sequence[SynthesizedOrderRecord], client_order_id: str, *, observed_at_ms: int
+    ) -> BrokerOptionOrder:
+        if len(legs) < 2:
+            raise BrokerEvidenceUnavailable(
+                "The simulation's ledger holds a part of an option order of several legs.", broker=self._broker_id,
+                detail=f"Order {client_order_id!r} has {len(legs)} of its legs on record.",
+            )
+        return multi_leg_order_view(
+            legs, parent_client_order_id=client_order_id,
+            parent_order_id=f"{self._id_prefix}-order:{client_order_id}",
+            broker_id=self._broker_id, observed_at_ms=observed_at_ms,
+        )
+
+    def multi_leg_sent_as(self, client_order_id: str) -> BrokerOptionOrder | None:
+        """Read the parent's answer from its retained leg records."""
+        legs = legs_recorded(self._ledger.latest_records(), client_order_id)
+        return self._multi_leg_view(legs, client_order_id, observed_at_ms=self._clock()) if legs else None
 
     def order_where(self, matches: Callable[[SynthesizedOrderRecord], bool]) -> BrokerOptionOrder | None:
         """The option order this world holds that ``matches``, or None: it holds no such option order."""

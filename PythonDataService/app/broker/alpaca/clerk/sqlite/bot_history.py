@@ -90,6 +90,7 @@ from app.broker.alpaca.clerk.sqlite.facts import UncertaintyRaisedFacts
 from app.broker.alpaca.clerk.sqlite.models import BotConfigResource
 from app.broker.alpaca.clerk.sqlite.option_event_books import RecordedOptionEnding, recorded_option_endings
 from app.broker.alpaca.clerk.sqlite.option_event_folds import OPTION_EVENT_EFFECT_KIND
+from app.broker.alpaca.clerk.sqlite.option_order_legs import NOT_A_LEG_SQL
 from app.broker.alpaca.clerk.sqlite.runtime import decision_id_from_durable
 from app.broker.alpaca.clerk.sqlite.schema import SCHEMA_VERSION, migrate_schema
 from app.broker.alpaca.clerk.sqlite.timeline_query import uncertainty_sequence
@@ -226,7 +227,8 @@ def project_custody_history(
     orders_by_bot: dict[str, OrderCounts] = {}
     orders_by_run: dict[str, OrderCounts] = {}
     for row in conn.execute(
-        "SELECT o.order_ref, o.effect_operation_id, o.broker_state, e.strategy_instance_id, e.run_id, e.kind "
+        "SELECT o.order_ref, o.effect_operation_id, o.broker_state, e.strategy_instance_id, e.run_id, e.kind, "
+        f"{NOT_A_LEG_SQL} AS sent_as_an_order "
         "FROM orders o JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
         "WHERE e.strategy_instance_id IS NOT NULL"
     ):
@@ -236,6 +238,10 @@ def project_custody_history(
             filled_order_effects[str(row["order_ref"])] = str(row["effect_operation_id"])
         if row["kind"] == OPTION_EVENT_EFFECT_KIND:
             # The booking of an option position that ended with no order of the bot's. Nobody sent it.
+            continue
+        if not row["sent_as_an_order"]:
+            # A leg of an option order of several legs (ADR 0076). Its fills are counted with every
+            # fill; the order that was sent is its parent, counted once.
             continue
         orders_by_bot[sid] = orders_by_bot.get(sid, OrderCounts()).plus(state)
         if run_id is not None:

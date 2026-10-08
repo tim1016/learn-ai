@@ -34,9 +34,10 @@ from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     SCHEMA_V13_STATEMENTS,
     UNCERTAINTY_SUBJECT_COMPATIBILITY_DDL,
 )
+from app.broker.alpaca.clerk.sqlite.option_order_legs import SCHEMA_V24_DDL, SCHEMA_V24_STATEMENTS
 from app.broker.alpaca.clerk.sqlite.simulated_execution_schema import SCHEMA_V14_STATEMENTS
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -738,6 +739,8 @@ SCHEMA_DDL = (
     + SCHEMA_V22_DDL
     + "\n"
     + SCHEMA_V23_DDL
+    + "\n"
+    + SCHEMA_V24_DDL
 ).rstrip("\n")
 
 
@@ -781,6 +784,9 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     # v22 -> v23: the two empty tables that say which option contract an order
     # trades and what it multiplies by (#2913); same statements as the fresh block.
     22: SCHEMA_V23_STATEMENTS,
+    # v23 -> v24: the one empty table that keeps the legs of an option order of
+    # several legs (#2913); same statements as the fresh block.
+    23: SCHEMA_V24_STATEMENTS,
 }
 
 

@@ -30,7 +30,7 @@ import math
 import sqlite3
 import threading
 from collections import deque
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -752,13 +752,18 @@ class SqliteEconomicProjectionReader:
         if run is None:
             return SessionEconomicProjection(snapshot=snapshot, session_fills=session_fills)
         run_orders = self._run_order_states(strategy_instance_id, run)
+        # A leg of an option order of several legs is no order of its own (ADR 0076): its fills are
+        # the run's, and the order that was sent is its parent.
+        legs = self._legs_among(run_orders)
         return SessionEconomicProjection(
             snapshot=snapshot,
             session_fills=session_fills,
             run_fills=tuple(record for record in records if record.order_ref in run_orders),
             run_activity=RunActivity(
                 *self._run_decisions(strategy_instance_id, since_ms=run.started_at_ms),
-                orders_sent=sum(state is not None for state in run_orders.values()),
+                orders_sent=sum(
+                    state is not None for order_ref, state in run_orders.items() if order_ref not in legs
+                ),
             ),
         )
 
@@ -778,6 +783,14 @@ class SqliteEconomicProjectionReader:
             (strategy_instance_id, run.lifecycle_run_id),
         )
         return {str(row["order_ref"]): row["broker_state"] for row in rows}
+
+    def _legs_among(self, order_refs: Collection[str]) -> frozenset[str]:
+        """Which of ``order_refs`` are the rows of legs of an option order of several legs."""
+        if not order_refs:
+            return frozenset()
+        return frozenset(
+            str(row[0]) for row in self._conn.execute("SELECT order_ref FROM option_order_legs")
+        ) & frozenset(order_refs)
 
     def _run_decisions(self, strategy_instance_id: str, *, since_ms: int) -> tuple[int, bool]:
         """The decisions the bot recorded since ``since_ms``, and whether that count is a floor.

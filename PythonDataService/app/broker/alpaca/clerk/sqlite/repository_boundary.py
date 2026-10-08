@@ -107,6 +107,13 @@ EXTERNAL_REPOSITORY_WRITER_CENSUS = (
     ),
     ExternalRepositoryWriter(
         path="app/broker/alpaca/clerk/trade_evidence.py",
+        owner="SqliteTradeUpdateEvidenceSink.record_lifecycle_event",
+        call="reconcile_account",
+        classification=RepositoryWriterClassification.FACADE_WORKFLOW,
+        rationale="An early option leg first recovers its parent's identity outside the intake lock.",
+    ),
+    ExternalRepositoryWriter(
+        path="app/broker/alpaca/clerk/trade_evidence.py",
         owner="SqliteTradeUpdateEvidenceSink.reconcile_gap",
         call="reconcile_account",
         classification=RepositoryWriterClassification.FACADE_WORKFLOW,

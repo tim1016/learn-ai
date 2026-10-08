@@ -80,6 +80,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     OrderResource,
     TransitionInput,
 )
+from app.broker.alpaca.clerk.sqlite.option_order_legs import leg_by_broker_id
 from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent
@@ -197,6 +198,13 @@ def _resolve(repo: ClerkSqliteRepository, order: BrokerOrder) -> CapturedOrder |
             and repo.manual_chain_order_ref(row.broker_order_id) == row.order_ref
         )
         return CapturedOrder(row=row, standing="former" if former else "head")
+    if observed_id:
+        with repo.write_fence() as conn:
+            leg_ref = leg_by_broker_id(conn, observed_id)
+        if leg_ref is not None:
+            row = repo.order(leg_ref)
+            assert row is not None
+            return CapturedOrder(row=row, standing="head")
     member_ref = repo.manual_chain_order_ref(observed_id) if observed_id else None
     if member_ref is not None:
         row = repo.order(member_ref)

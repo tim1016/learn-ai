@@ -26,15 +26,16 @@ recorded as that, and the entry goes on. An account whose bots trade shares
 makes no reading and writes no record. A simulation makes none either: it
 has no broker figure to read.
 
-Formula: premium paid = sum over the entry order's fills in effect of
-  contracts * price a share * the contract's multiplier, exact, and used
-  only when it is whole cents. The comparison itself is
+Formula: premium paid = sum over the parent and child orders' effective
+  fills of contracts * price a share * multiplier * side sign (BUY +1,
+  SELL -1), exact, and used only when it is whole cents. The comparison is
   ``app.options.buying_power_check`` and nothing is computed twice.
 Reference: #2913, "Comparing with Alpaca"; ADR 0076 decision 26.
 Canonical implementation: ``app/options/buying_power_check.py`` (the rows),
   ``app/broker/alpaca/clerk/money.py`` (``notional``); this file for which
   pair of readings may be compared.
-Validated against: tests/broker/alpaca/clerk/sqlite/test_entry_buying_power.py.
+Validated against: tests/broker/alpaca/clerk/sqlite/test_entry_buying_power.py
+  and tests/broker/alpaca/clerk/sqlite/test_multi_leg_evidence.py.
 """
 
 from __future__ import annotations
@@ -61,7 +62,8 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     UncertaintyResolvedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
-from app.broker.alpaca.clerk.sqlite.option_entry import OptionEntryFacts, option_entry_of_order
+from app.broker.alpaca.clerk.sqlite.option_entry import OptionEntry, option_entry_of_order
+from app.broker.alpaca.clerk.sqlite.option_order_legs import multi_leg_entry_refs
 from app.broker.alpaca.clerk.sqlite.reads import CANCELLABLE_ENTRY_BROKER_STATES
 from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -452,9 +454,15 @@ class EntryBuyingPowerWatch:
                 "AND t.transition_kind = ?) ORDER BY o.submitted_at_ms ASC, o.order_ref ASC",
                 (COMPARED_KIND,),
             ).fetchall()
+            order_refs = [row["order_ref"] for row in rows]
+            order_refs.extend(
+                parent_ref for parent_ref in multi_leg_entry_refs(self._repo._conn)
+                if self._repo.first_effect_transition(
+                    effect_operation_id=self._repo.order(parent_ref).effect_operation_id, transition_kind=COMPARED_KIND,
+                ) is None
+            )
         recorded: list[str] = []
-        for row in rows:
-            order_ref = row["order_ref"]
+        for order_ref in order_refs:
             if order_ref in self._watched or option_entry_of_order(self._repo, order_ref) is None:
                 continue
             left = _Watched(order_ref=order_ref, first=None, sent_at_ms=None, transfers_from_ms=0)
@@ -541,13 +549,14 @@ class EntryBuyingPowerWatch:
 
 
 def _failed_comparison(
-    watched: _Watched, entry: OptionEntryFacts, outcome: EntryOutcome, *, now_ms: int
+    watched: _Watched, entry: OptionEntry, outcome: EntryOutcome, *, now_ms: int
 ) -> EntryBuyingPowerComparedFacts:
     """Keep an entry and its readings when its arithmetic failed; no computed figure is used or invented."""
     first, second = watched.first, watched.second
     return EntryBuyingPowerComparedFacts(
         result=BuyingPowerCheckResult.UNKNOWN.value, reason_code=NotComparedReason.COMPARISON_FAILED.value,
-        contracts_asked=entry.order.quantity, contracts_filled=outcome.contracts_filled.get(entry.contract_terms.symbol, 0),
+        contracts_asked=sum(entry.units * leg.ratio for leg in entry.legs),
+        contracts_filled=sum(outcome.contracts_filled.values()),
         commitment_cents=entry.money.entry_commitment_cents, set_aside_for_filled_cents=None,
         premium_paid_cents=None, cost_of_filled_cents=None,
         first_began_ms=None if first is None else first.began_ms,
@@ -567,7 +576,7 @@ def _compare(
     account_id: str,
     strategy_instance_id: str | None,
     watched: _Watched,
-    entry: OptionEntryFacts,
+    entry: OptionEntry,
     outcome: EntryOutcome,
     effect_operation_id: str,
     broker_order_id: str | None,
@@ -577,15 +586,17 @@ def _compare(
 ) -> EntryBuyingPowerComparedFacts:
     """What one entry's comparison comes to at ``now_ms``, as its record. Reads the books; writes nothing."""
     first, second = watched.first, watched.second
-    contracts_asked = entry.order.quantity
-    contracts_filled = outcome.contracts_filled.get(entry.contract_terms.symbol, 0)
+    contracts_asked = sum(entry.units * leg.ratio for leg in entry.legs)
+    contracts_filled = sum(outcome.contracts_filled.values())
     first_cents = None if first is None or first.buying_power is None else whole_cents(first.buying_power)
     second_cents = None if second is None or second.buying_power is None else whole_cents(second.buying_power)
     fall_cents = None if first_cents is None or second_cents is None else first_cents - second_cents
     premium_cents = _premium_paid_cents(
         conn, account_id=account_id, strategy_instance_id=strategy_instance_id, order_ref=watched.order_ref
     )
-    filled_within_what_was_asked = 0 <= contracts_filled <= contracts_asked and outcome.units_filled <= entry.units
+    filled_within_what_was_asked = (
+        not outcome.legs_out_of_step and 0 <= contracts_filled <= contracts_asked and outcome.units_filled <= entry.units
+    )
     set_aside_cents = (
         set_aside_for_filled_cents(
             commitment_cents=entry.money.entry_commitment_cents, contracts_asked=contracts_asked,
@@ -711,12 +722,16 @@ def _premium_paid_cents(
         conn, account_id=account_id,
         strategy_instance_ids=None if strategy_instance_id is None else (strategy_instance_id,),
     )
+    order_refs = {order_ref} | {
+        row[0] for row in conn.execute("SELECT order_ref FROM option_order_legs WHERE parent_order_ref = ?", (order_ref,))
+    }
     with money_context():
         paid = sum(
             (
                 notional(record.quantity, record.fill_price, multiplier=record.multiplier)
+                * (1 if record.side.upper() == "BUY" else -1)
                 for record in records
-                if record.order_ref == order_ref and record.multiplier is not None
+                if record.order_ref in order_refs and record.multiplier is not None
             ),
             Decimal(0),
         )
@@ -743,18 +758,24 @@ def _another_order_moved(
     about_another = conn.execute(
         "SELECT 1 FROM custody_transitions WHERE sequence > ? AND transition_kind != ? AND ("
         "(effect_operation_id IS NOT NULL AND effect_operation_id != ?) "
-        "OR (order_ref IS NOT NULL AND order_ref != ?) "
-        "OR (broker_order_id IS NOT NULL AND broker_order_id != ?)) LIMIT 1",
-        (after_sequence, COMPARED_KIND, effect_operation_id, order_ref, broker_order_id or ""),
+        "OR (order_ref IS NOT NULL AND order_ref != ? AND NOT EXISTS ("
+        "SELECT 1 FROM option_order_legs own_leg WHERE own_leg.parent_order_ref = ? "
+        "AND own_leg.order_ref = custody_transitions.order_ref)) "
+        "OR (broker_order_id IS NOT NULL AND broker_order_id != ? AND NOT EXISTS ("
+        "SELECT 1 FROM option_order_legs own_leg JOIN orders child ON child.order_ref = own_leg.order_ref "
+        "WHERE own_leg.parent_order_ref = ? AND child.broker_order_id = custody_transitions.broker_order_id))) LIMIT 1",
+        (after_sequence, COMPARED_KIND, effect_operation_id, order_ref, order_ref, broker_order_id or "", order_ref),
     ).fetchone()
     if about_another is not None:
         return True
     working = sorted(CANCELLABLE_ENTRY_BROKER_STATES)
     still_working = conn.execute(
         "SELECT 1 FROM orders o JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
-        f"WHERE o.order_ref != ? AND (LOWER(o.broker_state) IN ({', '.join('?' for _ in working)}) "
+        "WHERE o.order_ref != ? AND NOT EXISTS (SELECT 1 FROM option_order_legs own_leg "
+        "WHERE own_leg.parent_order_ref = ? AND own_leg.order_ref = o.order_ref) "
+        f"AND (LOWER(o.broker_state) IN ({', '.join('?' for _ in working)}) "
         "OR (o.broker_state IS NULL AND e.state NOT IN ('succeeded', 'failed', 'rejected'))) LIMIT 1",
-        (order_ref, *working),
+        (order_ref, order_ref, *working),
     ).fetchone()
     return still_working is not None
 

@@ -989,7 +989,7 @@ def test_a_write_off_not_offered_for_want_of_a_notice_names_every_notice_that_wo
 
     allowing = [code for code, policy in _REASON_POLICIES.items() if policy.residue_discharge == "strands"]
     assert action.unavailable_reason_code == "NO_STRANDED_EXIT_EPISODE" and action.unavailable_reason is not None
-    assert len(allowing) == 3 and all(code in action.unavailable_reason for code in allowing)
+    assert len(allowing) == 4 and all(code in action.unavailable_reason for code in allowing)
 
 
 def test_residue_discharge_token_rejects_a_changed_residue() -> None:

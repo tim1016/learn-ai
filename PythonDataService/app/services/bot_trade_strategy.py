@@ -27,7 +27,7 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     DecisionOutcome,
     SqliteDecisionReceipts,
 )
-from app.broker.alpaca.clerk.sqlite.entry_outcome import EntrySettlement, SettledEntry
+from app.broker.alpaca.clerk.sqlite.entry_outcome import EntrySettlement, EntryStanding, SettledEntry
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.config import settings
 from app.engine.data.trade_bar import TradeBar
@@ -1921,7 +1921,10 @@ def _journal_option_fill(
     fills = clerk.option_fills_of_decision(binding.strategy_instance_id, evaluation.evaluation_id)
     # Only an ENTER comes with an answer about its entry.
     came_to = None if settled is None else entry_came_to(settled.standing)
-    if settled is not None and bool(fills) != bool(settled.units_filled):
+    if settled is not None and (
+        (settled.units_filled and not fills)
+        or (fills and not settled.units_filled and settled.standing is not EntryStanding.PART_FILLED)
+    ):
         raise RuntimeError(
             f"The Clerk says this option entry filled {settled.units_filled} of {settled.units_asked}, and "
             f"has {len(fills)} fill(s) of it on record."

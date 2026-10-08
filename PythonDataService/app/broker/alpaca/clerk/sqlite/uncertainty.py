@@ -43,6 +43,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
     OPTION_BUYING_POWER_UNDER_RESERVED_REASON_CODE,
     OPTION_EVENT_HOLD_REASON_CODES,
+    OPTION_LEGS_OUT_OF_STEP_REASON_CODE,
     OPTION_ORDER_NOT_OURS_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
@@ -1029,6 +1030,7 @@ _REDUCTION_PROOFS: dict[str, ReductionProof] = {
     EXIT_STUCK_REASON_CODE: _exit_stuck_proof,
     FAILED_ENTER_FILLED_REASON_CODE: _failed_enter_filled_proof,
     SCHEDULED_CLOSE_MISSED_REASON_CODE: _scheduled_close_missed_proof,
+    OPTION_LEGS_OUT_OF_STEP_REASON_CODE: _scheduled_close_missed_proof,
     # #2460: the price conflict doubts the cost of executions whose quantity
     # both sides agree on, so it has nothing per-symbol to prove before a
     # reduction -- a position stays reduceable while its basis is disputed.

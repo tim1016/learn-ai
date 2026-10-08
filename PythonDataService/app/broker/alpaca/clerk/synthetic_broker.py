@@ -144,7 +144,7 @@ SYNTHETIC_CAPABILITIES = BrokerCapabilities(
     # The simulation fills an option order of one leg from a quote handed to it. One of several
     # legs it does not take (#2913).
     supports_option_orders=True,
-    supports_multi_leg_option_orders=False,
+    supports_multi_leg_option_orders=True,
     data_feed="retained_source_bars",
     bars_may_gap=False,
     max_stream_symbols=0,
@@ -620,12 +620,11 @@ class SyntheticBroker(UnsupportedOptionOrderRefusal):
     async def submit_option_order(
         self, order: OptionOrderRequest, *, client_order_id: str
     ) -> BrokerOptionOrder:
-        """Fill an option order of one leg from the quote bound to it, or end it unfilled.
+        """Fill an option order from its bound quotes, or end it unfilled.
 
-        The simulation takes an option order of one leg, so it answers this
-        and the two lookups itself. What it still does not take, an order of
-        several legs or any order when it has no ledger to record a fill in,
-        it refuses in the words every simulated port refuses option orders
+        The simulation takes one-leg orders and multi-leg opening orders,
+        and answers both lookups itself. An order with no ledger to record a fill in
+        is refused in the words every simulated port refuses option orders
         in (``UnsupportedOptionOrderRefusal``).
 
         The order's record is one more in the same ledger. Its ``order`` is
@@ -633,21 +632,26 @@ class SyntheticBroker(UnsupportedOptionOrderRefusal):
         contract's own symbol, so the stock lookups, the open orders and the
         positions all show it.
         """
-        if isinstance(order, MultiLegOptionOrderRequest):
-            raise self._option_orders_not_taken("takes no option orders of several legs")
         if self._options is None:
             raise self._option_orders_not_taken("takes no option orders without its order ledger")
+        if isinstance(order, MultiLegOptionOrderRequest):
+            return self._options.submit_multi(order, client_order_id=client_order_id)
         return self._options.submit(order, client_order_id=client_order_id)
 
     async def get_option_order_by_client_order_id(self, client_order_id: str) -> BrokerOptionOrder | None:
         if self._options is None:
             return None
-        return self._options.order_where(lambda record: record.order.client_order_id == client_order_id)
+        return self._options.order_where(
+            lambda record: record.order.client_order_id == client_order_id
+        ) or self._options.multi_leg_sent_as(client_order_id)
 
     async def get_option_order_by_broker_order_id(self, order_id: str) -> BrokerOptionOrder | None:
         if self._options is None:
             return None
-        return self._options.order_where(lambda record: record.order.order_id == order_id)
+        one_leg = self._options.order_where(lambda record: record.order.order_id == order_id)
+        if one_leg is not None or not order_id.startswith("sim-order:"):
+            return one_leg
+        return self._options.multi_leg_sent_as(order_id.removeprefix("sim-order:"))
 
     def _latest_orders(self) -> list[BrokerOrder]:
         return [] if self._ledger is None else self._ledger.latest_orders()

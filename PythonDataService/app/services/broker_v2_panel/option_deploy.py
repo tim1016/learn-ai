@@ -15,7 +15,7 @@ verdict and Deploy's cannot differ.
 by its place:
 
 - the structure is one the account Clerk does not take yet. The Clerk's own
-  rule is asked (``the_one_bought_option_leg``), so the two cannot differ;
+  rule is asked (``option_plan_taken``), so the two cannot differ;
 - the account's mode. A Dry Run, Live Shadow and Paper account are open.
   A Live account is refused while
   ``ALPACA_LIVE_OPTION_BOTS_ENABLED`` is off, which it is unless a
@@ -67,7 +67,7 @@ from typing import Final
 from app.broker.alpaca.clerk.option_effects import (
     OptionEffectRefusal,
     OptionPlanRefused,
-    the_one_bought_option_leg,
+    option_plan_taken,
 )
 from app.broker.alpaca.live_option_bots import SETTING as LIVE_SETTING
 from app.broker.alpaca.live_option_bots import live_option_bots_enabled
@@ -223,7 +223,7 @@ def plan_blocker(refused: PlanRefusal) -> OptionDeployBlocker:
 def structure_not_taken(request: AlpacaPaperDeployRequest, plan: ActionPlan) -> OptionDeployBlocker | None:
     """Why the account Clerk does not take this structure yet, or ``None`` when it does: the Clerk's own rule."""
     try:
-        the_one_bought_option_leg(plan)
+        option_plan_taken(plan, real_account=request.execution_mode in ("paper", "live"))
     except OptionPlanRefused as refused:
         return OptionDeployBlocker(
             gate_id=refused.reason.value,

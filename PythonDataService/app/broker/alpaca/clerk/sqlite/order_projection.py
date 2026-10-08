@@ -5,6 +5,11 @@ requested leg lives in the original SQLite custody fact so mirror rebuild can
 reproduce it without extending the hash-participating transition shape. This
 module reads that single provenance fact plus current effective fill leaves;
 it never contacts a broker or reads the legacy journal.
+
+One option order of several legs is a parent row and a row for each leg
+(``option_order_legs``, ADR 0076). The parent's line is marked and names no
+symbol and no side, so no read here can take it for an order in a real
+symbol. A leg's line is its own contract, side and contracts.
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ import sqlite3
 from collections.abc import Collection, Sequence
 from dataclasses import asdict, dataclass
 
+from app.broker.alpaca.clerk.sqlite.option_order_legs import MULTI_LEG_ORDER_CLASS
 from app.broker.alpaca.clerk.sqlite.projection_models import ProjectedOrder
 from app.broker.contract.models import BrokerPosition, OrderSide
 
@@ -54,25 +60,42 @@ def sql_string_list(values: Collection[str]) -> str:
     return ",".join(f"'{value}'" for value in sorted(values))
 
 
+# Broker contact belongs to the parent and every leg: identity,
+# acknowledgement, or fill on any of them prevents an absence proof.
+ORDER_HAS_BROKER_EVIDENCE_SQL = (
+    "(o.broker_order_id IS NOT NULL "
+    "OR EXISTS (SELECT 1 FROM fills witnessed_fill WHERE witnessed_fill.order_ref = o.order_ref) "
+    "OR EXISTS (SELECT 1 FROM custody_transitions witnessed_ack WHERE witnessed_ack.order_ref = o.order_ref "
+    "AND witnessed_ack.transition_kind = 'ORDER_SUBMIT_ACKED') "
+    "OR EXISTS (SELECT 1 FROM option_order_legs witnessed_leg "
+    "JOIN orders witnessed_order ON witnessed_order.order_ref = witnessed_leg.order_ref "
+    "WHERE witnessed_leg.parent_order_ref = o.order_ref AND (witnessed_order.broker_order_id IS NOT NULL "
+    "OR EXISTS (SELECT 1 FROM fills leg_fill WHERE leg_fill.order_ref = witnessed_order.order_ref) "
+    "OR EXISTS (SELECT 1 FROM custody_transitions leg_ack WHERE leg_ack.order_ref = witnessed_order.order_ref "
+    "AND leg_ack.transition_kind = 'ORDER_SUBMIT_ACKED'))))"
+)
+
 # An order that can never fill further, over ``orders o`` joined to its
-# ``effect_operations e``: the broker ended it, or its effect is terminal while
-# nothing says the broker ever knew it -- no broker identity (set only by an
-# acknowledgement) and no fill (a fill can be recorded before its order's
-# acknowledgement). A refused, failed or proven-absent order is the common
-# case (#2553); an ``unknown`` effect is not terminal. Never NULL, so it
-# composes under NOT. The one definition every "has this order ended?" read
-# composes; the same three facts ``order_evidence.order_never_reached_broker``
-# reads.
+# ``effect_operations e``: the broker ended it, or its effect is terminal
+# with no broker contact. Refused, failed and proven-absent orders share
+# this definition (#2553); an unknown effect is not terminal. Never NULL.
 ORDER_ENDED_SQL = (
     f"(LOWER(COALESCE(o.broker_state, '')) IN ({sql_string_list(ENDED_BROKER_STATES)}) "
-    "OR (e.state IN ('failed','rejected') AND o.broker_order_id IS NULL "
-    "AND NOT EXISTS (SELECT 1 FROM fills ended_fill WHERE ended_fill.order_ref = o.order_ref)))"
+    f"OR (e.state IN ('failed','rejected') AND NOT {ORDER_HAS_BROKER_EVIDENCE_SQL}))"
 )
 
 # An order that may still fill: neither filled nor ended (:data:`ORDER_ENDED_SQL`).
 # One still being sent, or whose outcome is unknown, is open -- it may be
 # working at the broker.
 ORDER_OPEN_SQL = f"(LOWER(COALESCE(o.broker_state, '')) <> 'filled' AND NOT {ORDER_ENDED_SQL})"
+
+
+def order_has_broker_evidence(conn: sqlite3.Connection, order_ref: str) -> bool:
+    """A parent or any child has broker identity, acknowledgement or fills (ADR 0076)."""
+    row = conn.execute(
+        f"SELECT {ORDER_HAS_BROKER_EVIDENCE_SQL} FROM orders o WHERE o.order_ref = ?", (order_ref,),
+    ).fetchone()
+    return row is not None and bool(row[0])
 
 
 def signed_broker_position_quantity(position: BrokerPosition) -> float:
@@ -99,6 +122,11 @@ class ProjectedOrderDetails:
     filled_quantity: float
 
 
+# An order's line as it is read back: symbol, side, quantity, order type, limit, time in force.
+# The symbol and the side are None only for the parent of an option order of several legs.
+_OrderLine = tuple[str | None, str | None, float, str | None, float | None, str | None]
+
+
 def read_order_details(
     conn: sqlite3.Connection,
     order_refs: Sequence[str],
@@ -121,10 +149,7 @@ def read_order_details(
         "ORDER BY sequence ASC",
         unique_refs,
     ).fetchall()
-    legs: dict[
-        str,
-        tuple[str, str, float, str | None, float | None, str | None],
-    ] = {}
+    legs: dict[str, _OrderLine] = {}
     for row in fact_rows:
         candidate = _order_leg_from_facts(
             order_ref=row["order_ref"],
@@ -136,6 +161,9 @@ def read_order_details(
             raise OrderProjectionReadError(
                 f"SQLite order {row['order_ref']!r} has contradictory immutable leg facts"
             )
+    unanswered = tuple(order_ref for order_ref in unique_refs if order_ref not in legs)
+    if unanswered:
+        legs.update(_lines_of_legs(conn, unanswered))
     fill_rows = conn.execute(
         "SELECT f.order_ref, SUM(f.qty) AS filled_quantity FROM fills f "
         f"WHERE f.order_ref IN ({placeholders}) AND NOT EXISTS ("
@@ -274,23 +302,83 @@ def _projected_orders(
     return tuple(projected)
 
 
+def _lines_of_legs(conn: sqlite3.Connection, order_refs: Sequence[str]) -> dict[str, _OrderLine]:
+    """The order line of each leg of an option order of several legs among ``order_refs`` (ADR 0076).
+
+    A leg's row has no creation fact of its own: its parent's creates it.
+    Its line is read from the books' own record of the leg: its contract,
+    its side, the contracts asked of it and its parent's kind of order. It
+    states no limit: the limit is the parent's, a net price for the whole
+    structure. So every reader of open orders sees each leg working in its
+    own contract. Asked only for the orders no creation fact answered, so
+    books that never took such an order make no read here.
+    """
+    placeholders = ",".join("?" for _ in order_refs)
+    rows = conn.execute(
+        "SELECT leg.order_ref, leg.symbol, leg.side, leg.contracts, parent_fact.transition_kind, "
+        "parent_fact.facts_json FROM option_order_legs leg "
+        "JOIN custody_transitions parent_fact ON parent_fact.order_ref = leg.parent_order_ref "
+        "AND parent_fact.transition_kind IN ('ENTER_ACCEPTED', 'EXIT_REDUCING_ORDER_CREATED') "
+        f"WHERE leg.order_ref IN ({placeholders}) ORDER BY parent_fact.sequence ASC",
+        tuple(order_refs),
+    ).fetchall()
+    lines: dict[str, _OrderLine] = {}
+    for row in rows:
+        _symbol, _side, _units, order_type, _limit, time_in_force = _order_leg_from_facts(
+            order_ref=row["order_ref"], transition_kind=row["transition_kind"], facts_json=row["facts_json"]
+        )
+        lines.setdefault(
+            row["order_ref"],
+            (row["symbol"], row["side"], float(row["contracts"]), order_type, None, time_in_force),
+        )
+    return lines
+
+
+def _multi_leg_parent_line(*, order_ref: str, raw_leg: dict[str, object]) -> _OrderLine:
+    """A parent's own order line, read back: no symbol, no side, whole structures, no limit.
+
+    Held to exactly that. A marked line that names a symbol, a side or a
+    limit is not a parent's, and is refused rather than read as an order in
+    that symbol.
+    """
+    quantity, order_type, time_in_force = raw_leg.get("quantity"), raw_leg.get("order_type"), raw_leg.get("time_in_force")
+    if (
+        raw_leg.get("symbol") is not None
+        or raw_leg.get("side") is not None
+        or raw_leg.get("limit_price") is not None
+        or isinstance(quantity, bool)
+        or not isinstance(quantity, (int, float))
+        or not math.isfinite(quantity)
+        or quantity <= 0
+        or not float(quantity).is_integer()
+        or not isinstance(order_type, str)
+        or order_type.lower() not in {"market", "limit"}
+        or (time_in_force is not None and (not isinstance(time_in_force, str) or time_in_force.lower() != "day"))
+    ):
+        raise OrderProjectionReadError(f"SQLite order {order_ref!r} has invalid immutable multi-leg order values")
+    return (None, None, float(quantity), order_type.lower(), None, "day")
+
+
 def _order_leg_from_facts(
     *,
     order_ref: str,
     transition_kind: str,
     facts_json: str,
-) -> tuple[str, str, float, str | None, float | None, str | None]:
+) -> _OrderLine:
     try:
         facts = json.loads(facts_json)
         is_reducing_exit = transition_kind == "EXIT_REDUCING_ORDER_CREATED"
         raw_leg = facts if is_reducing_exit else facts["leg"]
+        if raw_leg.get("order_class") == MULTI_LEG_ORDER_CLASS:
+            # One order of several legs (ADR 0076): the parent names no symbol and no side of its own.
+            return _multi_leg_parent_line(order_ref=order_ref, raw_leg=raw_leg)
         symbol = raw_leg["symbol"]
         side = raw_leg["side"]
         quantity = raw_leg["quantity"]
         order_type = None if is_reducing_exit else raw_leg["order_type"]
         limit_price = None if is_reducing_exit else raw_leg.get("limit_price")
         time_in_force = None if is_reducing_exit else raw_leg["time_in_force"]
-    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+    except (KeyError, TypeError, AttributeError, json.JSONDecodeError) as exc:
         raise OrderProjectionReadError(
             f"SQLite order {order_ref!r} has malformed {transition_kind} facts"
         ) from exc

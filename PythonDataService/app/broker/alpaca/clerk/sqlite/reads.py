@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from typing import NamedTuple
 
 from app.broker.alpaca.clerk.sqlite.contract_terms import (
@@ -35,6 +35,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     ManualOrderTicketResource,
     OrderResource,
 )
+from app.broker.alpaca.clerk.sqlite.option_order_legs import MULTI_LEG_PARENT_SQL, NOT_A_LEG_SQL
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
     sql_string_list,
@@ -642,11 +643,16 @@ def order(conn: sqlite3.Connection, order_ref: str) -> OrderResource | None:
 
 
 def order_for_effect_operation(conn: sqlite3.Connection, effect_operation_id: str) -> OrderResource | None:
-    """The order originally created by a single-order effect (ENTER)."""
+    """The order originally created by a single-order effect (ENTER).
+
+    For an entry of several legs that is the parent: the one order that was
+    sent. Its legs' rows are under the same effect and are never answered
+    here (ADR 0076).
+    """
     row = conn.execute(
         "SELECT order_ref, effect_operation_id, client_order_id, broker_order_id, role, "
-        "broker_state, submitted_at_ms, updated_at_ms FROM orders "
-        "WHERE effect_operation_id = ?",
+        "broker_state, submitted_at_ms, updated_at_ms FROM orders o "
+        f"WHERE effect_operation_id = ? AND {NOT_A_LEG_SQL}",
         (effect_operation_id,),
     ).fetchone()
     return OrderResource(**dict(row)) if row is not None else None
@@ -773,12 +779,16 @@ def terminal_entry_orders_with_fills(
     rows = conn.execute(
         "SELECT o.order_ref, e.strategy_instance_id FROM orders o "
         "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
-        "WHERE o.role = 'ENTRY' AND e.kind = 'ENTER' AND e.state IN ('failed', 'rejected') "
+        "WHERE (o.role = 'ENTRY' OR EXISTS (SELECT 1 FROM option_order_legs leg "
+        "JOIN orders parent ON parent.order_ref = leg.parent_order_ref "
+        "WHERE leg.order_ref = o.order_ref AND parent.role = 'ENTRY')) "
+        "AND e.kind = 'ENTER' AND e.state IN ('failed', 'rejected') "
         "AND e.strategy_instance_id IS NOT NULL "
-        "AND (? IS NULL OR o.order_ref = ?) "
+        "AND (? IS NULL OR o.order_ref = ? OR EXISTS (SELECT 1 FROM option_order_legs leg "
+        "WHERE leg.order_ref = o.order_ref AND leg.parent_order_ref = ?)) "
         "AND EXISTS (SELECT 1 FROM fills f WHERE f.order_ref = o.order_ref) "
         "ORDER BY o.order_ref ASC",
-        (order_ref, order_ref),
+        (order_ref, order_ref, order_ref),
     ).fetchall()
     return [(row["order_ref"], row["strategy_instance_id"]) for row in rows]
 
@@ -1079,7 +1089,9 @@ def _failed_operation_orders_unproven_at_broker(
         f"{also}"
         "AND (o.broker_state IS NULL OR LOWER(o.broker_state) NOT IN "
         f"({_TERMINAL_BROKER_STATES_SQL})) "
-        f"AND UPPER(json_extract(t.facts_json, ?)) IN ({symbol_marks}) "
+        f"AND (UPPER(json_extract(t.facts_json, ?)) IN ({symbol_marks}) "
+        "OR EXISTS (SELECT 1 FROM option_order_legs leg WHERE leg.parent_order_ref = o.order_ref "
+        f"AND UPPER(leg.symbol) IN ({symbol_marks}))) "
         f"{exclude_clause}"
         ") WHERE last_lookup_ms IS NULL OR last_lookup_ms <= ? "
         "ORDER BY last_lookup_ms IS NOT NULL, last_lookup_ms ASC, "
@@ -1091,6 +1103,7 @@ def _failed_operation_orders_unproven_at_broker(
             *also_params,
             symbol_path,
             *sorted(symbols),
+            *sorted(symbols),
             *excluded,
             rested_since_ms,
             limit,
@@ -1101,7 +1114,7 @@ def _failed_operation_orders_unproven_at_broker(
 
 def all_order_refs(conn: sqlite3.Connection) -> frozenset[str]:
     """Every immutable broker identity captured by this authority."""
-    rows = conn.execute("SELECT order_ref FROM orders").fetchall()
+    rows = conn.execute(f"SELECT o.order_ref FROM orders o WHERE {NOT_A_LEG_SQL}").fetchall()
     return frozenset(row["order_ref"] for row in rows)
 
 
@@ -1234,20 +1247,44 @@ _ENTRY_ACCEPTANCE_TIME = "CAST(json_extract(accepted.facts_json, '$.option.{name
 # keeps SQLite to the written order): books that never traded an option answer
 # from an empty table, and books that did read one acceptance for each bound
 # order, by its index. The custody log itself is never scanned.
-OPTION_ENTRIES_WITH_A_DEADLINE_SQL = (
-    f"SELECT {_ENTRY_ORDER_COLUMNS}, {_ENTRY_ACCEPTANCE_TIME.format(name='cancel_at_ms')} AS cancel_at_ms, "
-    f"{_ENTRY_ACCEPTANCE_TIME.format(name='admitted_at_ms')} AS admitted_at_ms "
-    "FROM order_contracts bound "
-    "CROSS JOIN orders o ON o.order_ref = bound.order_ref "
-    "CROSS JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
-    "CROSS JOIN custody_transitions accepted ON accepted.order_ref = o.order_ref "
-    "AND accepted.transition_kind = 'ENTER_ACCEPTED' "
-    f"WHERE {_STRATEGY_ENTRY_NO_EXIT_OWNS} "
-    f"AND ({_ENTRY_SHOWN_WORKING} OR (o.broker_state IS NULL "
-    f"AND e.state IN ({', '.join('?' for _ in NONTERMINAL_EFFECT_STATES)}))) "
-    f"AND {_ENTRY_ACCEPTANCE_TIME.format(name='cancel_at_ms')} IS NOT NULL "
-    "ORDER BY cancel_at_ms ASC, o.order_ref ASC"
+# The orders an option entry's deadline is read from: the ones the books bind to one contract, and,
+# for an entry of several legs (ADR 0076), the parents the books keep legs for. A parent is the one
+# order that was sent, so it is what is listed and cancelled. A leg's row is never listed by either:
+# its role is not ENTRY.
+_ONE_CONTRACT_ORDERS = "order_contracts bound CROSS JOIN orders o ON o.order_ref = bound.order_ref"
+_MULTI_LEG_PARENT_ORDERS = (
+    "(SELECT DISTINCT parent_order_ref FROM option_order_legs) parent "
+    "CROSS JOIN orders o ON o.order_ref = parent.parent_order_ref"
 )
+
+
+def _books_keep_legs(conn: sqlite3.Connection) -> bool:
+    """Whether these books ever took an option order of several legs: one probe of a table that is then empty.
+
+    Asked before a read of the parents, so books that never took one pay a
+    few steps for it and not a second query.
+    """
+    return conn.execute("SELECT 1 FROM option_order_legs LIMIT 1").fetchone() is not None
+
+
+def _entries_with_a_deadline_sql(orders: str) -> str:
+    return (
+        f"SELECT {_ENTRY_ORDER_COLUMNS}, {_ENTRY_ACCEPTANCE_TIME.format(name='cancel_at_ms')} AS cancel_at_ms, "
+        f"{_ENTRY_ACCEPTANCE_TIME.format(name='admitted_at_ms')} AS admitted_at_ms "
+        f"FROM {orders} "
+        "CROSS JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+        "CROSS JOIN custody_transitions accepted ON accepted.order_ref = o.order_ref "
+        "AND accepted.transition_kind = 'ENTER_ACCEPTED' "
+        f"WHERE {_STRATEGY_ENTRY_NO_EXIT_OWNS} "
+        f"AND ({_ENTRY_SHOWN_WORKING} OR (o.broker_state IS NULL "
+        f"AND e.state IN ({', '.join('?' for _ in NONTERMINAL_EFFECT_STATES)}))) "
+        f"AND {_ENTRY_ACCEPTANCE_TIME.format(name='cancel_at_ms')} IS NOT NULL "
+        "ORDER BY cancel_at_ms ASC, o.order_ref ASC"
+    )
+
+
+OPTION_ENTRIES_WITH_A_DEADLINE_SQL = _entries_with_a_deadline_sql(_ONE_CONTRACT_ORDERS)
+MULTI_LEG_ENTRIES_WITH_A_DEADLINE_SQL = _entries_with_a_deadline_sql(_MULTI_LEG_PARENT_ORDERS)
 OPTION_ENTRIES_WITH_A_DEADLINE_PARAMS = (*sorted(CANCELLABLE_ENTRY_BROKER_STATES), *sorted(NONTERMINAL_EFFECT_STATES))
 
 
@@ -1267,14 +1304,20 @@ def option_entries_with_a_deadline(conn: sqlite3.Connection) -> list[EntryDeadli
     or, past the grace, proves it never arrived.
     """
     rows = conn.execute(OPTION_ENTRIES_WITH_A_DEADLINE_SQL, OPTION_ENTRIES_WITH_A_DEADLINE_PARAMS).fetchall()
-    return [
-        EntryDeadline(
-            order=OrderResource(**{name: row[name] for name in _ORDER_FIELDS}),
-            cancel_at_ms=row["cancel_at_ms"],
-            admitted_at_ms=row["admitted_at_ms"],
-        )
-        for row in rows
-    ]
+    if _books_keep_legs(conn):
+        # An entry of several legs: its parent, by the same rule.
+        rows += conn.execute(MULTI_LEG_ENTRIES_WITH_A_DEADLINE_SQL, OPTION_ENTRIES_WITH_A_DEADLINE_PARAMS).fetchall()
+    return sorted(
+        (
+            EntryDeadline(
+                order=OrderResource(**{name: row[name] for name in _ORDER_FIELDS}),
+                cancel_at_ms=row["cancel_at_ms"],
+                admitted_at_ms=row["admitted_at_ms"],
+            )
+            for row in rows
+        ),
+        key=lambda listed: (listed.cancel_at_ms, listed.order.order_ref),
+    )
 
 
 def working_option_entry_for_strategy(conn: sqlite3.Connection, strategy_instance_id: str) -> OrderResource | None:
@@ -1285,15 +1328,28 @@ def working_option_entry_for_strategy(conn: sqlite3.Connection, strategy_instanc
     books bind to a contract, so a strategy that trades shares is answered
     from an empty table and its orders are never asked about.
     """
-    row = conn.execute(
-        f"SELECT {_ENTRY_ORDER_COLUMNS} FROM order_contracts bound "
-        "CROSS JOIN orders o ON o.order_ref = bound.order_ref "
+    params = (strategy_instance_id, *sorted(CANCELLABLE_ENTRY_BROKER_STATES))
+    where = (
         "CROSS JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
         f"WHERE o.role = 'ENTRY' AND e.strategy_instance_id = ? AND {_ENTRY_SHOWN_WORKING} "
-        "ORDER BY o.updated_at_ms ASC, o.order_ref ASC LIMIT 1",
-        (strategy_instance_id, *sorted(CANCELLABLE_ENTRY_BROKER_STATES)),
+        "ORDER BY o.updated_at_ms ASC, o.order_ref ASC LIMIT 1"
+    )
+    row = conn.execute(
+        f"SELECT {_ENTRY_ORDER_COLUMNS} FROM {_ONE_CONTRACT_ORDERS} {where}",
+        params,
     ).fetchone()
-    return OrderResource(**dict(row)) if row is not None else None
+    # An entry of several legs is bound to no contract: its parent is found from its legs (ADR 0076).
+    parent = (
+        conn.execute(f"SELECT {_ENTRY_ORDER_COLUMNS} FROM {_MULTI_LEG_PARENT_ORDERS} {where}", params).fetchone()
+        if _books_keep_legs(conn)
+        else None
+    )
+    found = min(
+        (candidate for candidate in (row, parent) if candidate is not None),
+        key=lambda candidate: (candidate["updated_at_ms"], candidate["order_ref"]),
+        default=None,
+    )
+    return OrderResource(**dict(found)) if found is not None else None
 
 
 class HeldOptionContract(NamedTuple):
@@ -1446,6 +1502,12 @@ def reconcilable_effect_operations(
     account activity until they cover it (#2686). It is named here by kind,
     like an EXIT and a CANCEL, because a manual order has no
     ``operation_order_links`` row to read a broker state through.
+
+    One order of several legs (ADR 0076) is listed through its parent, the
+    one order that was sent. No fill ever lands on a parent, so a filled
+    parent is not held to "filled, with a fill on the books": each of its
+    legs is (:data:`_A_LEG_NOT_PROVEN_SQL`). A leg's own row is never
+    listed: it has no link, and nothing is asked of a broker about it.
     """
     subject_clause = "AND e.subject_id = ? " if subject_id is not None else ""
     params: tuple[object, ...] = (subject_id,) if subject_id is not None else ()
@@ -1463,10 +1525,11 @@ def reconcilable_effect_operations(
         f"({_TERMINAL_BROKER_STATES_SQL}) "
         "OR (lower(o.broker_state) = 'filled' AND NOT EXISTS ("
         "SELECT 1 FROM fills f WHERE f.order_ref = o.order_ref "
-        f"AND {_EFFECTIVE_FILL_PREDICATE})) "
-        f"OR {_fills_short_of_broker_cumulative_sql('o.order_ref')}) "
+        f"AND {_EFFECTIVE_FILL_PREDICATE}) AND NOT {MULTI_LEG_PARENT_SQL}) "
+        f"OR {_fills_short_of_broker_cumulative_sql('o.order_ref')} "
+        f"OR {_A_LEG_NOT_PROVEN_SQL}) "
         "ORDER BY e.created_at_ms ASC",
-        (*params, FILL_QTY_EPSILON),
+        (*params, FILL_QTY_EPSILON, FILL_QTY_EPSILON),
     ).fetchall()
     return [EffectOperationResource(**dict(row)) for row in rows]
 
@@ -1649,16 +1712,40 @@ def _fills_short_of_broker_cumulative_sql(order_ref_sql: str) -> str:
     """SQL predicate: the governing acknowledgement's cumulative exceeds the effective fills.
 
     ``NULL`` (never short) when the governing acknowledgement reported no
-    fill. ``order_ref_sql`` appears twice; binds :data:`FILL_QTY_EPSILON`
+    fill. A multi-leg parent's cumulative counts whole structures: every
+    leg must cover that count at its captured ratio. This comparison does
+    not invent a parent execution. ``order_ref_sql`` appears twice; binds :data:`FILL_QTY_EPSILON`
     last. The fill sum is covered by ``ix_fills_order_ref`` and the
     effective-fill predicate by ``ix_fills_superseded_execution_ref``
     (schema v15).
     """
     return (
         "((" + _governing_acknowledgement_sql(order_ref_sql, _REPORTED_FILLED_QUANTITY_SQL) + ") - "
-        "(SELECT COALESCE(SUM(f.qty), 0) FROM fills f WHERE f.order_ref = " + order_ref_sql + " "
-        "AND " + _EFFECTIVE_FILL_PREDICATE + ") >= ?)"
+        "(SELECT CASE WHEN EXISTS (SELECT 1 FROM option_order_legs leg "
+        "WHERE leg.parent_order_ref = covered_order.order_ref) THEN "
+        "(SELECT MIN((SELECT COALESCE(SUM(f.qty), 0) FROM fills f WHERE f.order_ref = leg.order_ref "
+        "AND " + _EFFECTIVE_FILL_PREDICATE + ") / leg.ratio) FROM option_order_legs leg "
+        "WHERE leg.parent_order_ref = covered_order.order_ref) ELSE "
+        "(SELECT COALESCE(SUM(f.qty), 0) FROM fills f WHERE f.order_ref = covered_order.order_ref "
+        "AND " + _EFFECTIVE_FILL_PREDICATE + ") END FROM orders covered_order "
+        "WHERE covered_order.order_ref = " + order_ref_sql + ") >= ?)"
     )
+
+
+# Whether a leg of the order of several legs ``o`` still wants fresh evidence (ADR 0076). The parent
+# of such an order has no fill of its own: its fills are on its legs' rows. So "filled, and the
+# books hold no fill" is asked of each leg, by the rule a single order is held to: a leg the broker
+# has not ended, a leg it says filled whose fill the books do not hold, or a leg whose fills fall
+# short of the broker's own count. False for every order with no legs. Binds
+# :data:`FILL_QTY_EPSILON` last.
+_A_LEG_NOT_PROVEN_SQL = (
+    "EXISTS (SELECT 1 FROM option_order_legs leg JOIN orders leg_o ON leg_o.order_ref = leg.order_ref "
+    "WHERE leg.parent_order_ref = o.order_ref AND ("
+    f"leg_o.broker_state IS NULL OR lower(leg_o.broker_state) NOT IN ({_TERMINAL_BROKER_STATES_SQL}) "
+    "OR (lower(leg_o.broker_state) = 'filled' AND NOT EXISTS ("
+    f"SELECT 1 FROM fills f WHERE f.order_ref = leg_o.order_ref AND {_EFFECTIVE_FILL_PREDICATE})) "
+    f"OR {_fills_short_of_broker_cumulative_sql('leg_o.order_ref')}))"
+)
 
 
 def latest_reported_filled_quantity(conn: sqlite3.Connection, order_ref: str) -> float | None:
@@ -1767,6 +1854,29 @@ def attributed_positions_by_subject(conn: sqlite3.Connection) -> dict[tuple[str,
     """
     rows = conn.execute("SELECT subject_id, symbol, attributed_qty FROM positions").fetchall()
     return {(row["subject_id"], row["symbol"]): row["attributed_qty"] for row in rows}
+
+
+def option_contracts_held_by_others(
+    conn: sqlite3.Connection, *, strategy_instance_id: str, symbols: Sequence[str]
+) -> list[tuple[str, str | None, float]]:
+    """What the account holds, outside one bot, in the option contracts ``symbols``: (symbol, holder, signed quantity).
+
+    Every holding that is not zero of every other custody subject: another
+    bot's, or the owner's own orders (the holder is then ``None``). What an
+    option entry is held against before it is taken, so no leg opens a
+    position that would cancel another's at the broker (ADR 0076). One read,
+    by the contracts asked about.
+    """
+    if not symbols:
+        return []
+    rows = conn.execute(
+        "SELECT UPPER(symbol) AS symbol, strategy_instance_id, attributed_qty FROM positions "
+        f"WHERE UPPER(symbol) IN ({', '.join('?' for _ in symbols)}) AND attributed_qty != 0 "
+        "AND (strategy_instance_id IS NULL OR strategy_instance_id != ?) "
+        "ORDER BY symbol, subject_id",
+        (*(symbol.upper() for symbol in symbols), strategy_instance_id),
+    ).fetchall()
+    return [(row["symbol"], row["strategy_instance_id"], row["attributed_qty"]) for row in rows]
 
 
 def attributed_positions_for_strategy(conn: sqlite3.Connection, strategy_instance_id: str) -> dict[str, float]:

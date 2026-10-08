@@ -15,7 +15,7 @@ import pytest
 from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
 from app.broker.alpaca.clerk.synthesized_orders import SynthesizedOrderRecord
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
-from app.broker.contract.errors import BrokerOptionsNotSupported, BrokerOrderRejected, BrokerUnavailable
+from app.broker.contract.errors import BrokerOrderRejected, BrokerUnavailable
 from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType
 from app.broker.contract.options import (
     MultiLegOptionOrderRequest,
@@ -269,7 +269,7 @@ async def test_the_same_order_sent_again_is_answered_from_its_record_and_filled_
     assert [position.quantity for position in await simulation.list_positions()] == [1.0]
 
 
-async def test_an_order_of_several_legs_is_not_taken(simulation: SyntheticBroker) -> None:
+async def test_an_order_of_several_legs_with_no_quotes_fills_nothing(simulation: SyntheticBroker) -> None:
     spread = MultiLegOptionOrderRequest(
         legs=(
             OptionLegRequest(contract=CALL, side=OrderSide.BUY, intent=OptionPositionIntent.OPEN, ratio=1),
@@ -278,7 +278,7 @@ async def test_an_order_of_several_legs_is_not_taken(simulation: SyntheticBroker
         quantity=1, order_type=OrderType.LIMIT, net_limit_price=Decimal("1.94"),
     )
 
-    with pytest.raises(BrokerOptionsNotSupported, match="several legs"):
+    with pytest.raises(BrokerOrderRejected, match="no quote"):
         await simulation.submit_option_order(spread, client_order_id="ref-1")
 
     assert await simulation.list_orders() == []

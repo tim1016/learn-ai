@@ -111,7 +111,7 @@ def resolved_structure(plan: ActionPlan, picked: Mapping[str, OptionContract]) -
             for leg in legs
         )
     )
-    _require_sold_legs_covered(structure)
+    require_sold_legs_covered(structure)
     return structure
 
 
@@ -128,7 +128,7 @@ def _require_one_leg_a_contract(picked: Mapping[str, OptionContract]) -> None:
             )
 
 
-def _require_sold_legs_covered(structure: ResolvedStructure) -> None:
+def require_sold_legs_covered(structure: ResolvedStructure) -> None:
     """Every sold contract has a bought contract of its kind, one for one, that does not expire before it."""
     for right in ("call", "put"):
         bought = _legs(structure, "long", right)

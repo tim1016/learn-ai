@@ -149,8 +149,8 @@ def require_option_envelope_admission(
     repo: ClerkSqliteRepository,
     *,
     envelope: LiveEnvelopeGate,
-    contracts: int,
-    limit_price: Decimal,
+    reserved_quantity: int,
+    reference_price: Decimal,
     commitment_cents: int,
     fee_provision_cents: int,
     now_ms: int,
@@ -160,22 +160,34 @@ def require_option_envelope_admission(
 
     ``commitment_cents`` is the entry commitment the Clerk worked out itself
     (``app.options.entry.prepare_entry``): the requirement, the premium at
-    the limit price, and ``fee_provision_cents``. The reservation keeps
-    ``contracts`` and the premium a share, ``limit_price``; its claim is
-    counted with the contract's own multiplier, read through the order
-    (``envelope_reservations.entry_cash_claims``). For a bought option, whose
-    requirement is zero, that claim plus the provision is the commitment.
+    the limit price, and ``fee_provision_cents``. What is admitted is that
+    commitment, whatever the entry is.
+
+    What the reservation keeps is ``reserved_quantity`` and
+    ``reference_price``, which mean one of two things (``enter._reserved``):
+
+    - one contract's order: contracts, and the premium a share at the limit.
+      Its claim is counted with the contract's own multiplier, read through
+      the order. For a bought option, whose requirement is zero, that claim
+      plus the provision is the commitment.
+    - one order of several legs: whole structures, and the dollars one
+      structure sets aside before fees, requirement plus premium at the
+      limit. Its claim is counted with no multiplier. Units times that
+      figure, plus the provision, is the commitment.
+
+    Either way the claim before a fill plus the provision is the commitment
+    that was admitted (``envelope_reservations.entry_cash_claims``).
     """
     observation = _budgeted_account_reading(repo, envelope=envelope, now_ms=now_ms)
     _decision, exact_price = _admitted_by_the_budget(
-        repo, observation, price=limit_price,
+        repo, observation, price=reference_price,
         required=lambda projection: option_entry_decision(
             projection, strategy_instance_id=strategy_instance_id,
             commitment_cents=commitment_cents, fee_provision_cents=fee_provision_cents,
         ),
     )
     return EnvelopeReservation(
-        quantity=float(contracts), reference_price=float(limit_price),
+        quantity=float(reserved_quantity), reference_price=float(reference_price),
         exact_reference_price=exact_price, fee_provision_cents=fee_provision_cents,
     )
 

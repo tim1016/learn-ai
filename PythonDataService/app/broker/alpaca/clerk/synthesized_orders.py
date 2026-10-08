@@ -42,7 +42,7 @@ buy/reduce/add/flip parity fixture (``atol=0``, ``rtol=0``).
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from decimal import Decimal
 from pathlib import Path
@@ -495,6 +495,33 @@ class SynthesizedOrderLedger:
         self._orders.append(record)
         records.append(record)
         return record
+
+
+    def append_option_legs_locked(
+        self,
+        records: list[SynthesizedOrderRecord],
+        legs: Sequence[tuple[BrokerOrder, SynthesizedOptionFill]],
+    ) -> tuple[SynthesizedOrderRecord, ...]:
+        """Append the legs of one option order of several legs inside :meth:`transaction`, in one write.
+
+        Each leg is a record of its own (ADR 0076). They are written
+        together by an atomic replacement, so a crash leaves the old ledger
+        or every leg of this order. A simulation never fills one leg.
+        """
+        if not getattr(self._transaction, "held", False):
+            raise SynthesizedLedgerTransactionError(
+                "A synthesized order append must run inside the ledger's transaction(); "
+                "outside it the records list is a stale read and the sequence is unowned."
+            )
+        next_seq = records[-1].seq + 1 if records else 1
+        self._orders.reset_seq(next_seq)
+        appended = tuple(
+            SynthesizedOrderRecord(seq=next_seq + offset, order=order, option=option)
+            for offset, (order, option) in enumerate(legs)
+        )
+        self._orders.replace_all([*records, *appended])
+        records.extend(appended)
+        return appended
 
 
 def project_positions(orders: list[BrokerOrder]) -> dict[str, tuple[float, float]]:

@@ -450,12 +450,19 @@ def _effective_fills(
         quantities: dict[str, Decimal] = defaultdict(Decimal)
         for record in records:
             quantities[record.order_ref] += normalize_money(record.quantity)
+        # The parent of an option order of several legs is filled when its legs are, and no fill
+        # ever lands on it (ADR 0076): its executions are its legs', and each leg's row is held to
+        # this rule itself. So a filled parent with no fill of its own is no missing execution.
+        filled_through_their_legs = {
+            row[0] for row in conn.execute("SELECT DISTINCT parent_order_ref FROM option_order_legs")
+        }
         for order in conn.execute("SELECT order_ref, broker_state FROM orders"):
             acknowledgement = governing_acknowledgement(conn, order["order_ref"])
             reported = None if acknowledgement is None else acknowledgement[1]
             if (
                 (order["broker_state"] or "").lower() == "filled"
                 and order["order_ref"] not in witnessed_refs
+                and order["order_ref"] not in filled_through_their_legs
             ) or (reported is not None and normalize_money(reported) > quantities[order["order_ref"]]):
                 complete = False
     orders = {row[0] for row in conn.execute("SELECT broker_order_id FROM orders WHERE broker_order_id IS NOT NULL")}

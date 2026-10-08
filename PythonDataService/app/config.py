@@ -287,6 +287,15 @@ class Settings(BaseSettings):
     # limit. A starting value, to be set from how late the second stream's
     # minute actually arrives; a change applies to runs that start afterwards.
     PRICING_BAR_WAIT_MS: int = Field(default=5_000, ge=0, le=20_000)
+    # Whether a Paper or a Live account takes a bot whose option structure has
+    # several legs (ADR 0076). Off: the account Clerk refuses such a plan by
+    # name and says a Dry Run takes it, because no order of several legs from
+    # this system has been checked against Alpaca: how it reports each leg is
+    # not yet a recording. Turn it on only after one such Paper order has been
+    # checked there. A Dry Run and a Live Shadow never read it, and a bot of
+    # one bought call or put never does either. The one reader is
+    # ``app.broker.alpaca.multi_leg_option_orders``.
+    ALPACA_MULTI_LEG_OPTION_ORDERS_ENABLED: bool = False
     # The comparison of an option entry with Alpaca's option buying power (ADR
     # 0076 decision 26). Off: both readings, the fall and what was set aside are
     # recorded for every option entry on a real account, each comparison reads

@@ -314,7 +314,7 @@ class EntryBuyingPowerComparedFacts:
     # What the entry set aside when it was accepted, and its share for the contracts that filled.
     commitment_cents: int
     set_aside_for_filled_cents: int | None
-    # From the executions on the books; and with the broker's requirement for what filled added.
+    # From the executions: positive paid, negative received; then the requirement for what filled added.
     premium_paid_cents: int | None
     cost_of_filled_cents: int | None
     first_began_ms: int | None
@@ -341,7 +341,7 @@ class EntryBuyingPowerComparedFacts:
             if type(value) is not int or value < 0:
                 raise ValueError(f"{name} is a whole number, zero or more; got {value!r}")
         for name in (
-            "set_aside_for_filled_cents", "premium_paid_cents", "cost_of_filled_cents", "first_began_ms",
+            "set_aside_for_filled_cents", "cost_of_filled_cents", "first_began_ms",
             "first_ended_ms", "sent_at_ms", "second_began_ms", "second_ended_ms",
         ):
             value = getattr(self, name)
@@ -349,6 +349,8 @@ class EntryBuyingPowerComparedFacts:
                 raise ValueError(f"{name} is a whole number, zero or more, or absent; got {value!r}")
         if self.fall_cents is not None and type(self.fall_cents) is not int:
             raise ValueError(f"fall_cents is whole cents or absent; got {self.fall_cents!r}")
+        if self.premium_paid_cents is not None and type(self.premium_paid_cents) is not int:
+            raise ValueError(f"premium_paid_cents is signed whole cents or absent; got {self.premium_paid_cents!r}")
         if type(self.holds) is not bool:
             raise ValueError("holds is true or false")
 
@@ -1147,6 +1149,10 @@ class OrderSubmitAckedFacts:
     much of the order has filled. Recording it lets a terminal order whose
     recorded fills fall short of it stay reconcilable until the lost slice is
     re-derived (``reads.order_fills_short_of_broker_cumulative``).
+
+    For a multi-leg parent the reported quantity is whole structures;
+    each leg's executions must cover it at its captured ratio (ADR 0076).
+    It is evidence only, never a parent fill.
 
     Omitted when absent (hash-chained schema evolution): every
     acknowledgement written before #2305, and every one reporting no fill,
