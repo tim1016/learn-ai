@@ -26,6 +26,7 @@ import pytest
 
 from app.data_lake import catalog_client
 
+
 class _StubPool:
     """The slice of asyncpg.Pool close_pool touches: an awaitable close()."""
 
