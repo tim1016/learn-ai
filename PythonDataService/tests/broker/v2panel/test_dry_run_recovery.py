@@ -751,10 +751,10 @@ async def test_running_dry_run_panel_uses_fresh_equity_marks_and_withdraws_stale
     original = runtime.clerk.simulated_marks
     reads = 0
 
-    def torn_once(*, now_ms: int):
+    def torn_once(*, strategy_instance_id: str, now_ms: int):
         nonlocal reads
         reads += 1
-        result = original(now_ms=now_ms)
+        result = original(strategy_instance_id=strategy_instance_id, now_ms=now_ms)
         assert result is not None
         meta, marks = result
         return (replace(meta, control_revision=meta.control_revision - 1), marks) if reads == 1 else result

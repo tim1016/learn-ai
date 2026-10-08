@@ -430,7 +430,7 @@ async def read_sqlite_panel_evidence(
 
     def read_once() -> SqlitePanelEvidence | None:
         for _attempt in _spaced_attempts():
-            simulated_marks = facade.simulated_marks(now_ms=now_ms)
+            simulated_marks = facade.simulated_marks(strategy_instance_id=strategy_instance_id, now_ms=now_ms)
             custody_reader = SqliteClerkProjectionReader.from_facade(facade)
             economic_reader = SqliteEconomicProjectionReader.from_repository(facade.repository)
             try:

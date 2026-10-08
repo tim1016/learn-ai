@@ -696,9 +696,9 @@ class SqliteAlpacaClerkFacade:
         """The environment every custody answer names (ADR 0054), learned at activation."""
         return self._account_mode
 
-    def simulated_marks(self, *, now_ms: int) -> tuple[ControlMetaSnapshot, dict[str, MarketMark]] | None:
+    def simulated_marks(self, *, strategy_instance_id: str, now_ms: int) -> tuple[ControlMetaSnapshot, dict[str, MarketMark]] | None:
         """The composed simulator's custody-fenced marks; absent on real accounts."""
-        return None if self._simulation is None else self._simulation.current_marks(now_ms=now_ms)
+        return None if self._simulation is None else self._simulation.current_marks(strategy_instance_id=strategy_instance_id, now_ms=now_ms)
 
     def synthesized_fill_anchors(self) -> Mapping[str, SynthesizedAnchor]:
         """How this authority priced the fills no venue made, by order ref (#2912).

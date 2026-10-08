@@ -228,9 +228,9 @@ class SimulatedAccountProjection:
         """
         return all_written_off_lot_events(self.repo._conn, by_ms=by_ms)
 
-    def _marks(self, records: tuple[FillRecord, ...], *, at_ms: int, exact_close: bool = False) -> tuple[dict[str, MarketMark], tuple[str, ...], int | None]:
+    def _marks(self, records: tuple[FillRecord, ...], *, at_ms: int, exact_close: bool = False, write_offs: tuple[LotWriteOff, ...] | None = None) -> tuple[dict[str, MarketMark], tuple[str, ...], int | None]:
         open_lots = compute_fifo_pnl(
-            records, write_offs=self._write_off_events(by_ms=at_ms)
+            records, write_offs=self._write_off_events(by_ms=at_ms) if write_offs is None else write_offs
         ).open_lots
         open_symbols = {lot.symbol for lot in open_lots}
         # A symbol holds one multiplier, so its lots are all shares or all contracts.
@@ -292,16 +292,21 @@ class SimulatedAccountProjection:
         return marks, tuple(refs), valid_until
 
     @money_context()
-    def current_marks(self, *, now_ms: int) -> tuple[ControlMetaSnapshot, dict[str, MarketMark]]:
-        """Read-only fresh marks from the account's own books, fenced to their revision."""
+    def current_marks(self, *, strategy_instance_id: str, now_ms: int) -> tuple[ControlMetaSnapshot, dict[str, MarketMark]]:
+        """Read-only fresh marks for one bot's custody, fenced to its account revision."""
         self._read_kept_option_quotes_ahead()
         with self.repo._write_lock:
             meta = self.repo.control_meta_snapshot()
-            records = effective_fill_records(self.repo._conn, account_id=self.repo.account_id)
+            records = effective_fill_records(
+                self.repo._conn, account_id=self.repo.account_id, strategy_instance_ids=(strategy_instance_id,),
+            )
             try:
                 if any(fill.filled_at_ms > now_ms for fill in records):
                     raise SimulationEvidenceUnavailable("Simulated executions are ahead of the panel observation.")
-                marks, _, _ = self._marks(records, at_ms=now_ms)
+                write_offs = all_written_off_lot_events(
+                    self.repo._conn, strategy_instance_ids=(strategy_instance_id,), by_ms=now_ms,
+                )
+                marks, _, _ = self._marks(records, at_ms=now_ms, write_offs=write_offs)
             except SimulationEvidenceUnavailable as exc:
                 logger.info(
                     "Simulated panel marks unavailable",
