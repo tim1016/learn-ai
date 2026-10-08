@@ -108,6 +108,7 @@ export class DeployMoneyStepComponent {
   readonly amount = model('');
   /** The accepted review for the amount on screen, or `null`. */
   readonly reviewed = output<MoneyReview | null>();
+  readonly refreshRequested = output<undefined>();
   /** The latest answer about these settings' money, whatever its state, or `null` before one. */
   readonly answered = output<BudgetAnswer | null>();
 
@@ -245,6 +246,7 @@ export class DeployMoneyStepComponent {
   /** The owner's own Refresh money: it also lets the step ask an option review again by itself. */
   protected refreshByOwner(): void {
     this.optionRechecks.set(0);
+    this.refreshRequested.emit(undefined);
     this.refresh();
   }
 

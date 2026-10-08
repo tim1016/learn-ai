@@ -8276,6 +8276,11 @@ export interface components {
          * @description Deploy again: the sealed settings of one earlier bot, never its money or consent.
          */
         BotDeployPrefill: {
+            /**
+             * Dry Run
+             * @default false
+             */
+            dry_run?: boolean;
             exit_terms?: components["schemas"]["ExitTermsInput"] | null;
             /** Parameters */
             parameters: {

@@ -177,7 +177,7 @@
             (carryoverAllowedChange)="setCarryover($event)"
           />
           @if (options(); as chosen) {
-            <!-- In place of the stock exit terms, never beside them. -->
+            <!-- Options retain their own execution terms. -->
             <app-deploy-option-order-terms
               [terms]="chosen.order_terms"
               [defaults]="optionCatalogueView()?.order_terms ?? null"
@@ -185,12 +185,8 @@
               [failure]="optionCatalogueFailure()"
               (termsChange)="setOptionOrderTerms($event)"
             />
-            @if (!view.default_exit_terms && ticketForm.exitAllowanceBps().invalid()) {
-              <!-- Every bot is sealed with exit terms. An option bot's come from the account's defaults: How has no box for them. -->
-              <p class="deploy-option-needs-exit-terms" role="alert">This account has no defaults for new bots, and every bot is sealed with exit terms.
-                <a [routerLink]="settingsRoute()">Set defaults for new bots in Settings</a></p>
-            }
-          } @else {
+          }
+          @if (!options() || !view.default_exit_terms) {
             <fieldset class="deploy-exit-terms" aria-labelledby="deploy-exit-terms-title">
               <!-- The steps' "i" sits on the legend's row, not a row of its own: How must fit one screen. -->
               <legend><span id="deploy-exit-terms-title">Exit terms · fixed for this bot’s life</span>
@@ -254,6 +250,7 @@
             [(amount)]="amount"
             (reviewed)="moneyReview.set($event)"
             (answered)="budgetAnswer.set($event)"
+            (refreshRequested)="reload()"
           />
         </app-deploy-step>
       </li>

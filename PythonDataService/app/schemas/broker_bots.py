@@ -325,6 +325,7 @@ class BotDeployPrefill(BaseModel):
     source_strategy_instance_id: str
     strategy_key: str
     symbol: str
+    dry_run: bool = False
     # What the earlier bot traded, when that was not ``symbol`` (#2912).
     traded_symbol: str | None = None
     # The option structure the earlier bot traded, with its order terms

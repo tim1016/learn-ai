@@ -1324,6 +1324,28 @@ function contractSubmissionKeyPatterns(): string[] {
   return found;
 }
 
+describe('Deploy checks refresh', () => {
+  it('refreshes stale market-data eligibility with money without losing the draft', async () => {
+    const unavailable = { ...DEPLOY_VIEW, dry_run_eligibility: { ...DEPLOY_VIEW.dry_run_eligibility, eligible: false,
+      headline: 'Market data is unhealthy.', next_action: 'Wait for healthy data.' } };
+    const service = mockService(unavailable);
+    await renderWorkflow(service);
+    await openStep('How');
+    fireEvent.click(within(stepRegion('How')).getByRole('radio', { name: /^Dry Run/ }));
+    await chooseMoney('1234.00');
+    expect(deployButton().disabled).toBe(true);
+    service.getDeployView.mockResolvedValue(DEPLOY_VIEW);
+    const calls = service.getDeployView.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh money' }));
+    await vi.waitFor(() => expect(service.getDeployView.mock.calls.length).toBeGreaterThan(calls));
+    await vi.waitFor(() => expect(deployButton().disabled).toBe(false));
+    expect((screen.getByLabelText(/\(USD\)$/) as HTMLInputElement).value).toBe('1234.00');
+    await openStep('How');
+    expect(within(stepRegion('How')).getByRole<HTMLInputElement>('radio', { name: /^Dry Run/ }).checked).toBe(true);
+    expect(screen.getByText(/^Deployment Validation on SPY/)).toBeTruthy();
+  });
+});
+
 describe('AlpacaDeployWorkflowComponent — Deploy again', () => {
   const PREFILL: BotDeployPrefill = {
     source_strategy_instance_id: 'spy-ema-20260925-1402',
@@ -1389,6 +1411,16 @@ describe('AlpacaDeployWorkflowComponent — Deploy again', () => {
 
     const receipt = await screen.findByRole('status', { name: RECEIPT.message });
     expect(within(receipt).getByText('Replaces').nextElementSibling?.textContent).toBe('spy-ema-20260925-1402');
+  });
+
+  it('keeps a simulated source in Dry Run while asking for fresh money', async () => {
+    const service = mockService();
+    service.getDeployPrefill.mockResolvedValue({ ...PREFILL, dry_run: true });
+    await renderWithQuery(service, { from: PREFILL.source_strategy_instance_id });
+    await screen.findByText(/Prefilled from/);
+    await openStep('How');
+    await vi.waitFor(() => expect(within(stepRegion('How')).getByRole<HTMLInputElement>('radio', { name: /^Dry Run/ }).checked).toBe(true));
+    expect((screen.getByLabelText(/\(USD\)$/) as HTMLInputElement).value).toBe('');
   });
 
   it('Clear drops the prefill: the earlier bot is no longer named and the form starts fresh', async () => {

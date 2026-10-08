@@ -633,7 +633,7 @@ describe('AlpacaDeployWorkflowComponent — a bot that trades options (#2913)', 
     expect(within(how).getByRole('button', { name: `About Custom structures: ${OPTION_REVIEW_PRICED.custom_structures_explanation}` })).toBeTruthy();
   });
 
-  it('says so, and reviews nothing, on an account with no exit terms to seal an option bot with', async () => {
+  it('lets an option bot seal its required exit terms without switching its traded asset', async () => {
     const service = mockService();
     service.getDeployView.mockResolvedValue({ ...DEPLOY_VIEW, default_exit_terms: null });
     await renderWorkflow(service);
@@ -642,10 +642,15 @@ describe('AlpacaDeployWorkflowComponent — a bot that trades options (#2913)', 
     await settle();
 
     const how = step('How');
-    expect(within(how).getByRole('alert').textContent).toContain('every bot is sealed with exit terms');
+    const allowance = within(how).getByRole('spinbutton', { name: 'Exit allowance (bps)' });
+    fireEvent.input(allowance, { target: { value: '100' } });
+    fireEvent.input(within(how).getByRole('spinbutton', { name: 'Band multiple' }), { target: { value: '2' } });
+    fireEvent.input(within(how).getByRole('spinbutton', { name: 'Spread cap (bps)' }), { target: { value: '50' } });
+    await settle();
+    await vi.waitFor(() => expect(service.previewBudget.mock.calls.some(([, body]) =>
+      body.trades && body.exit_terms?.exit_allowance_bps === 100)).toBe(true));
     expect(within(how).getByRole('link', { name: 'Set defaults for new bots in Settings' })).toBeTruthy();
-    expect(service.previewBudget.mock.calls.filter(([, body]) => (body as DeployBotBody).trades)).toEqual([]);
-    expect(deployButton().disabled).toBe(true);
+    expect(within(step('What')).getByRole<HTMLInputElement>('radio', { name: 'Options' }).checked).toBe(true);
   });
 
   it('fills the form from an earlier option bot on Deploy again: its legs, its sealed terms and its size', async () => {

@@ -988,8 +988,8 @@ export class AlpacaDeployWorkflowComponent {
     }
     if (ticket.sizingPreset === 'custom' && this.ticketForm.quantity().invalid()) return 'Needs a valid size';
     // An option bot has its own order terms in place of the stock exit terms.
-    // Exit terms are still sealed with it, as with every bot, though How has
-    // no box for them: they come from the account's defaults for new bots.
+    // The custody exit seal remains required; How offers it explicitly when
+    // this account has no defaults for new bots.
     const options = this.options();
     if (options !== null && !orderTermsSet(options.order_terms, this.offeredOrderTerms())) return 'Needs order terms';
     if (this.exitTerms() === null) return 'Needs exit terms';
@@ -1155,7 +1155,7 @@ export class AlpacaDeployWorkflowComponent {
         canSubmit: false,
         guidance: options === null
           ? 'Set this bot’s exit allowance, band multiple and spread cap in How.'
-          : 'Set this account’s defaults for new bots in Settings: every bot is sealed with exit terms.',
+          : 'Set this bot’s exit terms in How; this account has no defaults for new bots.',
       };
     }
     // What the backend's review of the option structure says stops this Deploy, with its fix.
@@ -1716,6 +1716,7 @@ export class AlpacaDeployWorkflowComponent {
     this.restoreDraft(this.freshDraft(
       {
         ...EMPTY_DEPLOY_SETTINGS,
+        executionMode: prefill.dry_run ? 'dry_run' : null,
         strategyKey: prefill.strategy_key,
         symbol: prefill.symbol.trim().toUpperCase(),
         // What the earlier bot traded comes back, an option structure with

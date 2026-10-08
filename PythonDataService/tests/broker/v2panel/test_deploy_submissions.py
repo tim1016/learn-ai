@@ -819,6 +819,7 @@ async def test_deploy_again_prefill_returns_the_sealed_settings_and_never_money(
     assert found.status_code == 200
     assert found.json() == {
         "source_strategy_instance_id": LEGACY_IDS[1],
+        "dry_run": False,
         "strategy_key": "ema_crossover_signal",
         "symbol": "SPY",
         # The earlier bot traded the symbol it listened to.
@@ -900,3 +901,12 @@ async def test_deploy_again_prefill_is_accepted_by_preview_and_deploy_with_the_s
     for call in (previews[-1], prefill_app.registry.deploy_calls[-1]):
         assert call["strategy_params"] == source.strategy_params
         assert call["strategy_param_origins"] == source.strategy_param_origins
+
+
+async def test_deploy_again_preserves_dry_run_semantics(prefill_app) -> None:
+    source = _sealed_source("deployment_validation", LEGACY_IDS[1], {}).model_copy(update={"mode": "dry_run"})
+    prefill_app.sources[source.strategy_instance_id] = source
+    async with _client(prefill_app.app) as client:
+        found = await client.get(f"{_BOTS}/{source.strategy_instance_id}/deploy-prefill")
+    assert found.status_code == 200
+    assert found.json()["dry_run"] is True

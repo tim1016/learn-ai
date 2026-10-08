@@ -4519,6 +4519,11 @@
         "additionalProperties": false,
         "description": "Deploy again: the sealed settings of one earlier bot, never its money or consent.",
         "properties": {
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
           "exit_terms": {
             "anyOf": [
               {
