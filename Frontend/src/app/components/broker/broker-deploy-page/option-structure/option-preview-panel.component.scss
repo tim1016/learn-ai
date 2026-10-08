@@ -1,0 +1,98 @@
+@use '../../../../styles/eyebrow-heading' as *;
+@use '../../../../styles/filled-controls' as *;
+
+:host { display: block; min-width: 0; }
+
+.picks {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+
+  p { margin: 0; line-height: 1.45; }
+}
+
+.picks__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+
+  h3 {
+    @include eyebrow-heading;
+    margin: 0;
+  }
+}
+
+// Refresh, with the page's own note that it has stopped asking beside it.
+.picks__again {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 0 var(--space-2);
+  min-width: 0;
+}
+
+.picks__stopped {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.picks__refresh { @include link-button; }
+
+.picks__read,
+.picks__note {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.picks__notice {
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+}
+
+// One block a leg, so the quotes and both deltas fit a narrow column.
+.picks__legs {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  font-size: var(--fs-sm);
+  list-style: none;
+
+  li { display: grid; gap: 0.2rem; min-width: 0; }
+
+  dl {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.15rem var(--space-3);
+    margin: 0;
+    font-variant-numeric: tabular-nums;
+
+    > div { display: flex; gap: 0.35rem; align-items: baseline; }
+  }
+
+  dt { color: var(--text-subtle); font-size: var(--fs-xs); }
+  dd { margin: 0; color: var(--text-primary); }
+}
+
+.picks__contract {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
+  align-items: baseline;
+
+  // Buy and sell as words, never as a colour alone.
+  strong { font-weight: var(--fw-semi); }
+}
+
+.picks__watched {
+  display: grid;
+  gap: 0.15rem;
+  margin: 0;
+  font-size: var(--fs-xs);
+
+  dt { color: var(--text-subtle); }
+  dd { margin: 0; color: var(--text-secondary); }
+}

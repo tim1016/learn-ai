@@ -1,0 +1,19 @@
+<span class="option-contract__head">
+  <span class="option-contract__name">
+    <app-asset-identity [symbol]="contract().underlying" size="xs" [logo]="false" [showTitle]="false" />&ngsp;<span>{{ terms() }}</span>
+  </span>
+  <button
+    type="button"
+    class="option-contract__reveal"
+    [attr.aria-expanded]="codeShown()"
+    [attr.aria-controls]="codeShown() ? codeId : null"
+    [attr.aria-label]="revealLabel()"
+    [attr.title]="revealLabel()"
+    (click)="codeShown.set(!codeShown())"
+  >
+    <i class="pi pi-hashtag" aria-hidden="true"></i>
+  </button>
+</span>
+@if (codeShown()) {
+  <code class="option-contract__code" [id]="codeId">{{ contract().occ_symbol }}</code>
+}

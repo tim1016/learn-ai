@@ -1,0 +1,54 @@
+:host {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--fs-sm);
+}
+
+p { margin: 0; line-height: 1.45; }
+
+.figures__lean { color: var(--text-primary); }
+
+.figures__expiry {
+  display: grid;
+  gap: 0.15rem;
+  color: var(--text-primary);
+}
+
+.figures__assumed,
+.figures__caution,
+.figures__note {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.figures__money {
+  display: grid;
+  gap: 0.15rem;
+  margin: 0;
+
+  > div {
+    display: flex;
+    gap: var(--space-3);
+    align-items: baseline;
+    justify-content: space-between;
+  }
+
+  dt { color: var(--text-secondary); }
+
+  dd {
+    margin: 0;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+}
+
+.figures__each { color: var(--text-secondary); }
+
+// Over the owner's limit: the flag and the server's sentence say so, not the colour alone.
+.figures__over,
+.figures__over dt,
+.figures__over dd { color: var(--warn); }
+
+.figures__flag { font-weight: var(--fw-semi); }

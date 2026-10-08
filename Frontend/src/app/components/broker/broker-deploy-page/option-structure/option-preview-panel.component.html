@@ -1,0 +1,75 @@
+<section class="picks" [attr.aria-labelledby]="titleId">
+  <header class="picks__head">
+    <h3 [id]="titleId">{{ heading() }}</h3>
+    <span class="picks__again">
+      <!-- The page's own words, beside its own control: never one of the server's states. Always there, so a reader hears it arrive. -->
+      <span class="picks__stopped" role="status" [id]="stoppedId">@if (stopped()) { Stopped asking. Refresh asks again. }</span>
+      <button
+        type="button" class="picks__refresh" [disabled]="asking() || notAsked() !== null"
+        [attr.aria-describedby]="stopped() ? stoppedId : notAsked() !== null ? notAskedId : null" (click)="refresh.emit()"
+      >Refresh</button>
+    </span>
+  </header>
+
+  @if (notAsked(); as why) {
+    <!-- Nothing was asked, so there is no answer and no state: the page says why, in its own words. -->
+    <p class="picks__notice" role="status" [id]="notAskedId">{{ why }}</p>
+  } @else if (failure(); as why) {
+    <p class="picks__notice" role="alert">{{ why }}</p>
+  } @else if (preview(); as told) {
+    @if (resolved() === null) { <p class="picks__notice" role="status">{{ told.notice }}</p> }
+    <!-- With figures or without: when the quotes behind the answer were read, and how far the search reached. -->
+    @if (told.watched !== null) {
+      <p class="picks__read">
+        Read <app-timestamp-display [value]="told.quotes_read_ms" mode="local" granularity="time" />
+        @if (told.quotes_read_sentence; as read) { <span>· {{ read }}</span> }
+      </p>
+    }
+    @if (resolved(); as figures) {
+      <ul class="picks__legs">
+        @for (picked of legs(); track picked.leg.leg_id) {
+          <li>
+            <p class="picks__contract">
+              <strong>{{ picked.side }} {{ picked.leg.ratio }}</strong>
+              <app-option-contract [contract]="picked.leg.contract" />
+            </p>
+            @if (!compact()) {
+              <dl>
+                <div><dt>Bid</dt><dd>{{ picked.leg.quote.bid }}</dd></div>
+                <div><dt>Ask</dt><dd>{{ picked.leg.quote.ask }}</dd></div>
+                <div><dt>Age</dt><dd>{{ picked.age }} s</dd></div>
+              </dl>
+              <!-- Our delta and IBKR's on one line, to be read against each other. -->
+              <dl>
+                <div><dt>Our delta</dt><dd>{{ picked.ours ?? picked.leg.delta_status_sentence }}</dd></div>
+                <div><dt>IBKR delta</dt><dd>{{ picked.ibkr ?? '—' }}</dd></div>
+              </dl>
+              @if (picked.leg.over_gap_limit) { <p class="picks__flag">{{ picked.leg.gap_sentence }}</p> }
+            }
+          </li>
+        }
+      </ul>
+      <!-- Whether an entry would be taken right now is its own sentence, beside the verdict's. -->
+      @if (figures.entry_sentence; as entry) { <p class="picks__note">{{ entry }}</p> }
+      @if (!compact()) {
+        @if (told.the_money_sentence; as counted) { <p class="picks__note">{{ counted }}</p> }
+      }
+    }
+    @if (!compact()) {
+      @if (told.watched; as watched) {
+        <dl class="picks__watched">
+          <dt>Watched strikes</dt>
+          @for (range of watched.ranges; track $index) { <dd>{{ range.sentence }}</dd> }
+          <dd>{{ watched.sentence }}</dd>
+        </dl>
+      }
+    }
+    @if (resolved(); as figures) { <app-option-preview-figures [preview]="figures" [compact]="compact()" /> }
+  } @else if (asking()) {
+    <p class="picks__notice" role="status">Reading the preview…</p>
+  }
+
+  @if (notAsked() === null) {
+    @if (preview(); as told) { <p class="picks__note">{{ told.preview_sentence }}</p> }
+  }
+</section>

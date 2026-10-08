@@ -22,6 +22,10 @@
           <input type="radio" name="traded-asset-choice" [checked]="choice() === 'stock'" (change)="choose('stock')" />
           <span>Another stock or ETF</span>
         </label>
+        <label>
+          <input type="radio" name="traded-asset-choice" [checked]="choice() === 'options'" (change)="choose('options')" />
+          <span>Options</span>
+        </label>
       </div>
 
       @if (choice() === 'stock') {
@@ -33,6 +37,10 @@
           (symbolChange)="pick($event)"
         />
         @if (refusal(); as why) { <em role="alert">{{ why }}</em> }
+      } @else if (choice() === 'options') {
+        <ng-content />
+      }
+      @if (choice() !== 'same') {
         @if (warning(); as told) {
           <div class="traded-asset__warning" role="note">
             <span aria-hidden="true">!</span>

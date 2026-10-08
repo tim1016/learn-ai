@@ -1,0 +1,43 @@
+<fieldset class="order-terms" aria-labelledby="deploy-option-order-terms-title">
+  <!-- The "i" sits on the legend's row, as the exit terms' does: How must fit one screen. -->
+  <legend><span id="deploy-option-order-terms-title">Option order terms · fixed for this bot’s life</span>
+    @if (read()) {
+      <button type="button" class="order-terms__help-open" popovertarget="deploy-option-order-terms-help" aria-label="What each order term does">i</button>
+    }</legend>
+  @if (read(); as held) {
+    <app-deploy-option-order-term-fields [terms]="held.terms" [defaults]="held.defaults" (termsChange)="termsChange.emit($event)" />
+    @if (notes(); as told) {
+      <!-- The server's sentences for how every option bot's orders go. -->
+      <div class="order-terms__notes">
+        <p>{{ told.alpaca_sentence }}</p>
+        <p>{{ told.entries_sentence }}</p>
+        <p>{{ told.exits_sentence }}</p>
+        <p>{{ told.hours_sentence }}</p>
+      </div>
+    }
+    <!-- Over the page, never in the column: opening it never makes How taller. -->
+    <div id="deploy-option-order-terms-help" class="order-terms__help" popover role="dialog" aria-labelledby="deploy-option-order-terms-help-title">
+      <header>
+        <h3 id="deploy-option-order-terms-help-title">What each order term does</h3>
+        <button type="button" popovertarget="deploy-option-order-terms-help" popovertargetaction="hide">Close</button>
+      </header>
+      <dl>
+        @for (term of help(); track term.name) {
+          <div>
+            <dt>{{ term.label }}</dt>
+            <dd>
+              <p>{{ term.help }}</p>
+              <p>It takes {{ term.range }}.</p>
+              @if (term.rangeReason; as reason) { <p>{{ reason }}</p> }
+            </dd>
+          </div>
+        }
+      </dl>
+    </div>
+  } @else if (failure(); as why) {
+    <!-- The What step says this as an alert, beside its retry. Here it stands where the boxes would. -->
+    <p>{{ why }}</p>
+  } @else {
+    <p role="status">Reading the option order terms…</p>
+  }
+</fieldset>

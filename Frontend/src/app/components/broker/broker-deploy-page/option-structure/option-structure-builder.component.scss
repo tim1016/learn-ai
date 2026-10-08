@@ -1,0 +1,170 @@
+@use '../../../../styles/eyebrow-heading' as *;
+@use '../../../../styles/filled-controls' as *;
+@use '../../../../styles/visually-hidden' as *;
+
+:host { display: block; min-width: 0; }
+
+.sr-only { @include visually-hidden; }
+
+// Where a structure starts from, its legs, and what they pick: side by side
+// where there is room, stacked in that order where there is not.
+.builder {
+  display: grid;
+  grid-template-columns: 10.5rem minmax(0, 1fr) 21rem;
+  gap: var(--space-5);
+  align-items: start;
+  color: var(--text-primary);
+}
+
+.builder__start {
+  display: grid;
+  gap: var(--space-1);
+
+  h3 {
+    @include eyebrow-heading;
+    margin: 0 0 var(--space-1);
+  }
+
+  .builder__group { display: grid; gap: var(--space-1); }
+
+  h4 {
+    margin: var(--space-2) 0 0;
+    color: var(--text-subtle);
+    font-size: var(--fs-xxs);
+    font-weight: var(--fw-semi);
+    letter-spacing: var(--ls-caps);
+    text-transform: uppercase;
+  }
+
+  ul {
+    display: grid;
+    gap: 0.15rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  button {
+    width: 100%;
+    padding: 0.35rem 0.6rem;
+    border: 0;
+    border-left: 3px solid transparent;
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: var(--fs-sm);
+    text-align: left;
+    cursor: pointer;
+
+    &:hover { background: var(--bg-hover); color: var(--text-primary); }
+    &:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    // The one the legs still are: a bar and a weight, not a colour alone.
+    &[aria-pressed='true'] {
+      border-left-color: var(--accent);
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+      font-weight: var(--fw-semi);
+    }
+  }
+}
+
+.builder__legs {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+
+  h3 {
+    margin: 0;
+    font-size: var(--fs-md);
+
+    &:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+  }
+}
+
+.builder__description {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.builder__table {
+  --leg-columns: 1.25rem 5rem 5rem 4.25rem minmax(10.5rem, 2fr) minmax(6.5rem, 1fr) minmax(9.5rem, 1.5fr) 2rem;
+
+  display: grid;
+  min-width: 0;
+  // Should the columns ever not fit, the table scrolls and never slides under the preview.
+  overflow-x: auto;
+}
+
+.builder__columns {
+  display: grid;
+  grid-template-columns: var(--leg-columns);
+  gap: var(--space-2);
+  padding-bottom: var(--space-1);
+
+  [role='columnheader'] {
+    color: var(--text-subtle);
+    font-size: var(--fs-xxs);
+    font-weight: var(--fw-semi);
+  }
+}
+
+// A leg the server's verdict points at. The verdict's own sentence names it.
+.builder__row--flagged { box-shadow: inset 3px 0 0 var(--bear); }
+
+.builder__add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  align-items: center;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+
+  button { @include soft-button; }
+}
+
+.builder__actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+
+  button { @include soft-button; }
+
+  .builder__use {
+    background: var(--accent);
+    color: var(--text-on-accent);
+    font-weight: var(--fw-semi);
+
+    &:hover:not(:disabled) { background: var(--accent-hover); }
+    &:disabled { background: var(--bg-elevated); color: var(--text-muted); }
+  }
+}
+
+.builder__picks {
+  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+}
+
+// The three columns need the drawer's full width. Narrower, they stack in
+// their order, and the names to start from run across the top.
+@media (max-width: 88rem) {
+  .builder { grid-template-columns: minmax(0, 1fr); }
+
+  .builder__start {
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+    column-gap: var(--space-4);
+
+    h3 { grid-column: 1 / -1; }
+    .builder__group { align-content: start; }
+  }
+}
+
+// Each leg labels its own boxes once the columns are gone.
+@media (max-width: 60rem) {
+  .builder__columns { @include visually-hidden; }
+}

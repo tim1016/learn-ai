@@ -1,0 +1,59 @@
+@if (preview().lean; as lean) {
+  <p class="figures__lean">{{ lean.sentence }}</p>
+} @else if (preview().lean_unknown_sentence; as unknown) {
+  <p class="figures__lean">{{ unknown }}</p>
+}
+
+@if (preview().at_expiry; as expiry) {
+  <div class="figures__expiry">
+    <p class="figures__assumed">{{ expiry.assumptions_sentence }}</p>
+    @if (expiry.loss_sentence; as loss) { <p>{{ loss }}</p> }
+    @if (expiry.gain_sentence; as gain) { <p>{{ gain }}</p> }
+    @if (!compact() && expiry.break_even_sentence) { <p>{{ expiry.break_even_sentence }}</p> }
+    <p class="figures__caution">{{ expiry.warning_sentence }}</p>
+  </div>
+}
+
+@if (!compact()) {
+  @if (preview().decay; as decay) {
+    <div class="figures__expiry">
+      <p>{{ decay.sentence }}</p>
+      <p class="figures__assumed">{{ decay.assumptions_sentence }}</p>
+      @if (decay.warning_sentence; as warning) { <p class="figures__caution">{{ warning }}</p> }
+      @if (decay.near_ex_date_sentence; as near) { <p class="figures__caution">{{ near }}</p> }
+    </div>
+  }
+}
+
+@if (money(); as told) {
+  <dl class="figures__money">
+    <div>
+      <dt>Premium</dt>
+      <dd>
+        @if (compact()) {
+          {{ told.net_price_usd }} {{ told.premium_is_label }} <span class="figures__each">· {{ told.premium_per_structure_usd }} a structure</span>
+        } @else {
+          {{ told.premium_usd }} {{ told.premium_is_label }}
+          @if (told.structures > 1) { <span class="figures__each">· {{ told.premium_per_structure_usd }} a structure</span> }
+        }
+      </dd>
+    </div>
+    @if (!compact()) {
+      @if (told.structures > 1) { <div><dt>Structures</dt><dd>{{ told.structures }}</dd></div> }
+      <div><dt>Alpaca’s requirement</dt><dd>{{ told.broker_requirement_usd }}</dd></div>
+      <div><dt>Fees (estimate)</dt><dd>{{ told.fee_estimate_usd }}</dd></div>
+      <div><dt>Set aside, with fees</dt><dd>{{ told.entry_commitment_usd }}</dd></div>
+      <div [class.figures__over]="told.over_cost_limit">
+        <dt>Open and close at once</dt>
+        <dd>
+          @if (told.over_cost_limit) { <span class="figures__flag" aria-hidden="true">!</span> }
+          {{ told.round_trip_cost_usd }} · {{ told.round_trip_cost_percent }}%
+        </dd>
+      </div>
+    }
+  </dl>
+  @if (!compact() || told.over_cost_limit) {
+    <p class="figures__note" [class.figures__over]="told.over_cost_limit">{{ told.cost_sentence }}</p>
+  }
+  @if (!compact()) { <p class="figures__note">{{ told.fees_sentence }}</p> }
+}

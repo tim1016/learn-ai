@@ -1,0 +1,110 @@
+<span role="rowheader" class="leg-row__number">{{ number() }}</span>
+<span role="cell" data-label="Side">
+  <select [attr.aria-label]="name() + ' side'" (change)="setPosition($event)">
+    <option value="long" [selected]="row().position === 'long'">Buy</option>
+    <option value="short" [selected]="row().position === 'short'">Sell</option>
+  </select>
+</span>
+<span role="cell" data-label="Type">
+  <select [attr.aria-label]="name() + ' type'" (change)="setRight($event)">
+    <option value="call" [selected]="row().right === 'call'">Call</option>
+    <option value="put" [selected]="row().right === 'put'">Put</option>
+  </select>
+</span>
+<span role="cell" data-label="Qty">
+  <input
+    type="number" inputmode="numeric" min="1" step="1"
+    [attr.aria-label]="name() + ' quantity'"
+    [value]="row().qty_ratio ?? ''"
+    [attr.aria-invalid]="problems().quantity !== undefined" [attr.aria-describedby]="problems().quantity ? lineId('quantity') : null"
+    (change)="setQuantity($event)"
+  />
+</span>
+<span role="cell" data-label="Which strike" class="leg-row__rule">
+  <select [attr.aria-label]="name() + ' which strike'" (change)="setStrikeRule($event)">
+    @for (rule of rules().strike_rules; track rule.selector) {
+      <option [value]="rule.selector" [selected]="rule.selector === row().strike.selector">{{ rule.label }}</option>
+    }
+    <!-- A rule the catalogue does not offer is shown as what it is, never as the first one listed. -->
+    @if (strikeRule() === null) { <option [selected]="true" disabled>{{ row().strike.selector | receiptLabel }}</option> }
+  </select>
+  @if (strikeRule(); as rule) {
+    <span class="leg-row__unit">
+      <input
+        type="number" step="any"
+        [attr.aria-label]="name() + ' ' + rule.label + ', ' + rule.value.unit_label"
+        [value]="row().strike.value ?? ''"
+        [attr.aria-invalid]="problems().strike !== undefined" [attr.aria-describedby]="problems().strike ? lineId('strike') : null"
+        (change)="setStrikeValue($event)"
+      />
+      <span aria-hidden="true">{{ rule.value.unit_label }}</span>
+    </span>
+    @if (rule.measured_from) {
+      <select
+        [attr.aria-label]="name() + ' measured from'"
+        [attr.aria-invalid]="problems().from !== undefined" [attr.aria-describedby]="problems().from ? lineId('from') : null"
+        (change)="setFromLeg($event)"
+      >
+        @for (other of others(); track other.leg_id) {
+          <option [value]="other.leg_id" [selected]="other.leg_id === row().strike.from_leg">from leg {{ other.number }}</option>
+        }
+        <!-- Measured from no leg yet: shown as empty, never as the first leg listed. -->
+        @if (row().strike.from_leg === null) { <option value="" [selected]="true" disabled></option> }
+      </select>
+    }
+  }
+</span>
+<span role="cell" data-label="Within">
+  @if (strikeRule()?.tolerance; as within) {
+    <span class="leg-row__unit">
+      <input
+        type="number" step="any" min="0"
+        [attr.aria-label]="name() + ' within, ' + within.unit_label"
+        [value]="row().strike.tolerance ?? ''"
+        [attr.aria-invalid]="problems().within !== undefined" [attr.aria-describedby]="problems().within ? lineId('within') : null"
+        (change)="setTolerance($event)"
+      />
+      <span aria-hidden="true">{{ within.unit_label }}</span>
+    </span>
+  }
+</span>
+<span role="cell" data-label="Expiry" class="leg-row__rule">
+  <select [attr.aria-label]="name() + ' expiry'" (change)="setExpiryRule($event)">
+    @for (rule of rules().expiry_rules; track rule.selector) {
+      <option [value]="rule.selector" [selected]="rule.selector === row().expiry.selector">{{ rule.label }}</option>
+    }
+  </select>
+  @if (expiryRule()?.value; as box) {
+    @if (box.unit !== 'date') {
+      <span class="leg-row__unit">
+        <input
+          type="number" inputmode="numeric" min="1" step="1"
+          [attr.aria-label]="name() + ' expiry, ' + box.unit_label"
+          [value]="row().expiry.days ?? ''"
+          [attr.aria-invalid]="problems().expiry !== undefined" [attr.aria-describedby]="problems().expiry ? lineId('expiry') : null"
+          (change)="setDays($event)"
+        />
+        <span aria-hidden="true">{{ box.unit_label }}</span>
+      </span>
+    }
+  }
+</span>
+@if (expiryRule()?.value?.unit === 'date') {
+  <!-- On a line of its own, where its calendar has room to open in place: the builder holds the keyboard inside it, and a calendar floating over the page would open outside. -->
+  <span role="cell" data-label="Expiry date" class="leg-row__date">
+    <label class="sr-only" [for]="dateId">{{ name() }} expiry date</label>
+    <app-date-field
+      [inputId]="dateId" appearance="filled" calendar="inline" [pickFrom]="today" [hostProblem]="dateProblem()"
+      [value]="row().expiry.date" (valueChange)="setDate($event)"
+    />
+  </span>
+}
+<span role="cell" class="leg-row__end">
+  <button type="button" class="leg-row__remove" [attr.aria-label]="'Remove leg ' + number()" (click)="remove.emit()">
+    <i class="pi pi-times" aria-hidden="true"></i>
+  </button>
+</span>
+<!-- The screen's own words for what a box still needs, under the boxes they are about. Always there, so a reader hears a line arrive; each line is tied to its own box. -->
+<span role="cell" class="leg-row__problems" [class.leg-row__problems--none]="problemLines().length === 0" aria-live="polite" [id]="problemsId">
+  @for (line of problemLines(); track line.box) { <span [id]="lineId(line.box)">{{ line.text }}</span> }
+</span>
