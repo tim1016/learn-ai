@@ -24,6 +24,17 @@ Formula:
         A fill without one is shares and the arithmetic is unchanged.  A
         symbol holds one multiplier: a fill that disagrees with its symbol's
         open lots is refused.
+    Written-off lots (#2975): a residue discharge takes a bot's attributed
+        position off the books and closes no lot.  Supplied to the walk as one
+        :class:`LotWriteOff` each, the oldest lots of that owner and symbol
+        are set apart: no later fill of the bot's closes them and they realise
+        nothing.  The one fill that may close a set-apart lot is one whose
+        credit a discharge withheld (#2854) -- the discharge stood in for
+        exactly that execution.  A write-off itself books no P&L: the loss or
+        gain of a close is the cost of the lot that ended.  For valuation a
+        set-apart lot stays an open lot, marked ``written_off`` (ADR 0076
+        decision 22): the budget carries its premium as a position, and
+        equity marks it as any open lot.
     Fees: rendered only when the broker reports them; ``None`` = "not reported",
         never $0.00.  The engine propagates ``None`` through — callers display
         the string "Fees not reported" when the field is None.
@@ -105,6 +116,33 @@ class _Lot:
     strategy_instance_id: str
     # The contract's multiplier when the lot is option contracts; None for shares.
     multiplier: int | None = None
+    # Set apart by a write-off (#2975): never closed by the bot's own later
+    # fills, never realised, never open exposure. Closable only by a fill
+    # whose credit a discharge withheld (#2854).
+    written_off: bool = False
+
+
+@dataclass(frozen=True)
+class LotWriteOff:
+    """One operator write-off of a bot's attributed position (#2975).
+
+    Carries a residue discharge into the FIFO walk, at the ledger place the
+    discharge recorded. The discharge takes the whole attributed position of
+    one owner in one symbol, so its quantity is the whole then-open position
+    and the walk sets the oldest lots of that owner and symbol apart, up to
+    that quantity, whatever filled after.
+
+    All timestamps are ``int64 ms UTC``; ``exact_qty`` is signed exactly as
+    the discharge recorded it (positive: a long position was written off).
+    ``sid`` is the owner key exactly as the walked fills' ``sid`` fields state
+    it, so an account-wide walk and a one-bot walk match their own records.
+    """
+
+    symbol: str
+    exact_qty: Decimal          # signed, as the discharge recorded it (exact)
+    written_off_at_ms: int      # int64 ms UTC
+    ledger_sequence: int
+    sid: str = ""
 
 
 def _shares(qty: Decimal, multiplier: int | None) -> Decimal:
@@ -149,6 +187,10 @@ class OpenLot:
     side: OrderSide
     # Set when ``exact_qty`` is option contracts and ``exact_cost`` a premium per share.
     multiplier: int | None = None
+    # True when a write-off set this lot apart (#2975): it closes for no fill
+    # of the bot's and realises nothing, but it stays an open lot for
+    # valuation, as ADR 0076 decision 22 records.
+    written_off: bool = False
 
     @property
     def exact_cost_basis(self) -> Decimal:
@@ -206,6 +248,12 @@ class PnLResult:
 
     ``open_lots``:
         Remaining open lots (FIFO remainder).  Feeds the open-P&L valuation.
+
+    ``written_off_lots``:
+        Lots a write-off set apart (#2975).  They realise nothing and close
+        for no later fill of the bot's, but stay open lots for valuation;
+        this is the same population as ``open_lots`` flagged ``written_off``,
+        kept for the readers that ask for them by name.
     """
 
     exact_realized_pnl: Decimal = ZERO
@@ -214,6 +262,7 @@ class PnLResult:
     fee_total: float | None = None
     closed_lots: list[ClosedLot] = field(default_factory=list)
     open_lots: list[OpenLot] = field(default_factory=list)
+    written_off_lots: list[OpenLot] = field(default_factory=list)
 
     @property
     def realized_pnl(self) -> float:
@@ -277,6 +326,12 @@ def apply_fill_to_lots(
     queue = lots.setdefault(sym, deque())
     remaining = qty
 
+    def closable(lot: _Lot) -> bool:
+        # A written-off lot closes for no fill of the bot's own, except the
+        # one fill whose credit a discharge withheld: the execution the
+        # write-off stood in for (#2854, #2975).
+        return fill.credit_withheld or not lot.written_off
+
     if queue and queue[0].multiplier != multiplier:
         # One symbol is one instrument. Lots of contracts and of shares, or of
         # two multipliers, under one symbol cannot be closed against each other.
@@ -285,7 +340,8 @@ def apply_fill_to_lots(
             f"but its open lots count {_counted_as(queue[0].multiplier)}."
         )
 
-    if not queue:
+    head = next((lot for lot in queue if closable(lot)), None)
+    if head is None or head.side == fill.side:
         queue.append(
             _Lot(
                 qty=remaining,
@@ -298,8 +354,42 @@ def apply_fill_to_lots(
         )
         remaining = ZERO
     else:
-        top_lot = queue[0]
-        if fill.side == top_lot.side:
+        index = 0
+        while remaining > _ZERO_ABS_TOL and index < len(queue):
+            lot = queue[index]
+            if not closable(lot):
+                index += 1
+                continue
+            if lot.side == fill.side:
+                break
+            close_qty = min(remaining, lot.qty)
+            if lot.side is OrderSide.BUY:
+                r_pnl = (price - lot.cost) * _shares(close_qty, multiplier)
+            else:
+                r_pnl = (lot.cost - price) * _shares(close_qty, multiplier)
+            closed_out.append(
+                ClosedLot(
+                    symbol=sym,
+                    qty=float(close_qty),
+                    entry_price=float(lot.cost),
+                    exit_price=float(price),
+                    opened_at_ms=lot.opened_at_ms,
+                    closed_at_ms=ts,
+                    exact_realized_pnl=r_pnl,
+                    fee=fill.fee,
+                    entry_strategy_instance_id=lot.strategy_instance_id,
+                    exit_strategy_instance_id=fill.sid,
+                    multiplier=multiplier,
+                )
+            )
+            remaining -= close_qty
+            lot.qty -= close_qty
+            if abs(lot.qty) <= _ZERO_ABS_TOL:
+                del queue[index]
+            else:
+                index += 1
+
+        if remaining > _ZERO_ABS_TOL:
             queue.append(
                 _Lot(
                     qty=remaining,
@@ -310,46 +400,90 @@ def apply_fill_to_lots(
                     multiplier=multiplier,
                 )
             )
-            remaining = ZERO
-        else:
-            while remaining > _ZERO_ABS_TOL and queue and queue[0].side != fill.side:
-                lot = queue[0]
-                close_qty = min(remaining, lot.qty)
-                if lot.side is OrderSide.BUY:
-                    r_pnl = (price - lot.cost) * _shares(close_qty, multiplier)
-                else:
-                    r_pnl = (lot.cost - price) * _shares(close_qty, multiplier)
-                closed_out.append(
-                    ClosedLot(
-                        symbol=sym,
-                        qty=float(close_qty),
-                        entry_price=float(lot.cost),
-                        exit_price=float(price),
-                        opened_at_ms=lot.opened_at_ms,
-                        closed_at_ms=ts,
-                        exact_realized_pnl=r_pnl,
-                        fee=fill.fee,
-                        entry_strategy_instance_id=lot.strategy_instance_id,
-                        exit_strategy_instance_id=fill.sid,
-                        multiplier=multiplier,
-                    )
-                )
-                remaining -= close_qty
-                lot.qty -= close_qty
-                if abs(lot.qty) <= _ZERO_ABS_TOL:
-                    queue.popleft()
 
-            if remaining > _ZERO_ABS_TOL:
-                queue.append(
-                    _Lot(
-                        qty=remaining,
-                        cost=price,
-                        opened_at_ms=ts,
-                        side=fill.side,
-                        strategy_instance_id=fill.sid,
-                        multiplier=multiplier,
-                    )
-                )
+
+@money_context()
+def apply_write_off_to_lots(
+    lots: dict[str, deque[_Lot]],
+    write_off: LotWriteOff,
+) -> None:
+    """Set a write-off's lots apart in the FIFO queues in-place (#2975).
+
+    A residue discharge takes one owner's whole attributed position in one
+    symbol off the books and closes no lot, so the oldest lots of that owner
+    and symbol -- up to the discharged quantity -- are the contracts it wrote
+    off: a write-off takes what was held then, and whatever the bot bought
+    since is newer. They are marked ``written_off`` in place, splitting a lot
+    the discharge only partly covers.
+
+    In an account-wide walk one owner's sale may already have consumed
+    another owner's older lot (the cross-owner close the mixed queue allows),
+    so the owner's own tagged lots can fall short of the discharged quantity.
+    What remains is then taken from the symbol's oldest same-side lots
+    whoever holds them: the quantity is what the account's fold consumes, and
+    it must leave the closable books however the closes were attributed. A
+    one-owner walk never reaches that step -- its queue is the owner's own,
+    and the discharge proved it covered the then-open position.
+
+    A discharged quantity beyond the lots on hand marks what is there and no
+    more: the reader's fills-vs-positions proof fails closed on books that
+    disagree.
+
+    Formula: lot.written_off' = true for the oldest min(|discharged_qty|,
+      open same-side lots) lots of the symbol, the owner's own taken first.
+    Reference: none external; ADR 0076 decision 22 and #2975 for the
+      written-off rule, #2854 for the withheld credit that may still close
+      these lots.
+    Canonical implementation: this file.
+    Validated against:
+        PythonDataService/tests/broker/alpaca/clerk/test_fifo_pnl.py
+        (the write-off cases).
+    """
+    queue = lots.get(write_off.symbol)
+    if not queue:
+        return
+    side = OrderSide.BUY if write_off.exact_qty > 0 else OrderSide.SELL
+    remaining = abs(write_off.exact_qty)
+    index = 0
+    while remaining > _ZERO_ABS_TOL and index < len(queue):
+        lot = queue[index]
+        if lot.written_off or lot.side is not side or lot.strategy_instance_id != write_off.sid:
+            index += 1
+            continue
+        remaining = _take_as_written_off(queue, index, remaining)
+    index = 0
+    while remaining > _ZERO_ABS_TOL and index < len(queue):
+        lot = queue[index]
+        if lot.written_off or lot.side is not side:
+            index += 1
+            continue
+        remaining = _take_as_written_off(queue, index, remaining)
+
+
+def _take_as_written_off(queue: deque[_Lot], index: int, quantity: Decimal) -> Decimal:
+    """Mark up to ``quantity`` of ``queue[index]`` written off; return what is left.
+
+    A lot the quantity only partly covers is split: its oldest part is
+    written off, the rest stays closable behind it.
+    """
+    lot = queue[index]
+    if lot.qty <= quantity + _ZERO_ABS_TOL:
+        lot.written_off = True
+        return quantity - lot.qty
+    queue.insert(
+        index + 1,
+        _Lot(
+            qty=lot.qty - quantity,
+            cost=lot.cost,
+            opened_at_ms=lot.opened_at_ms,
+            side=lot.side,
+            strategy_instance_id=lot.strategy_instance_id,
+            multiplier=lot.multiplier,
+        ),
+    )
+    lot.qty = quantity
+    lot.written_off = True
+    return ZERO
 
 
 def _counted_as(multiplier: int | None) -> str:
@@ -365,12 +499,15 @@ def compute_open_pnl(
 
     Formula: open_pnl = Σ (mark - cost) × signed remaining lot quantity, the
       quantity taken by its multiplier for a lot of option contracts.
+      Written-off lots stay open lots and are valued with the rest (#2975,
+      ADR 0076 decision 22): the budget carries their premium and equity
+      marks them, though they close for no fill of the bot's.
     Reference: Kieso, Weygandt & Warfield, *Intermediate Accounting* (17e),
       Chapter 8; same FIFO inventory model as this module.
     Canonical implementation: this file.
     Validated against:
-      PythonDataService/tests/broker/alpaca/clerk/test_fifo_pnl.py;
-      PythonDataService/tests/broker/alpaca/clerk/sqlite/test_economic_projection.py.
+        PythonDataService/tests/broker/alpaca/clerk/test_fifo_pnl.py;
+        PythonDataService/tests/broker/alpaca/clerk/sqlite/test_economic_projection.py.
 
     ``exact_value`` is ``None`` until every symbol with an open lot has a
     mark.  Flat state is complete and has a value of exactly ``0``.  Each mark
@@ -396,6 +533,7 @@ def compute_open_pnl(
                     opened_at_ms=lot.opened_at_ms,
                     side=lot.side,
                     multiplier=lot.multiplier,
+                    written_off=lot.written_off,
                 )
             )
             if exact_mark is not None:
@@ -450,11 +588,33 @@ def realized_pnl_for_window(
     ))
 
 
+def merged_fifo_events(
+    fills: Iterable[FillRecord],
+    write_offs: Iterable[LotWriteOff],
+) -> tuple[FillRecord | LotWriteOff, ...]:
+    """Fills and write-offs as one stream, each at its ledger place (#2975).
+
+    A fill stands at ``(filled_at_ms, ledger_sequence)``, a write-off at
+    ``(written_off_at_ms, ledger_sequence)``. The ledger's sequences are
+    unique, so the two never tie; if one ever did, the fill comes first.
+    Both the batch fold and the SQLite incremental cache order their stream
+    by this one rule, so an incremental answer and a full rebuild close the
+    same lots.
+    """
+    events: list[tuple[tuple[int, int], int, FillRecord | LotWriteOff]] = []
+    for fill in fills:
+        events.append(((fill.filled_at_ms, fill.ledger_sequence), 0, fill))
+    for write_off in write_offs:
+        events.append(((write_off.written_off_at_ms, write_off.ledger_sequence), 1, write_off))
+    return tuple(event for _, _, event in sorted(events, key=lambda event: event[:2]))
+
+
 @money_context()
 def compute_fifo_pnl(
     fills: Iterable[FillRecord],
     *,
     mark_prices: Mapping[str, float | Decimal] | None = None,
+    write_offs: Iterable[LotWriteOff] = (),
 ) -> PnLResult:
     """Compute FIFO realized and open P&L over attributed bot fills.
 
@@ -477,6 +637,12 @@ def compute_fifo_pnl(
         unless ALL open-lot symbols appear in this mapping.  A partial mark
         set never produces a partial sum — it remains ``None`` when any
         symbol is uncovered.
+    write_offs:
+        Residue discharges as :class:`LotWriteOff` events (#2975), each
+        applied at its own ledger place: the fill stream and the write-off
+        stream are walked as one, ordered by ``(event ms, ledger sequence)``.
+        Default ``()`` folds fills exactly as before the write-off rule
+        existed.
 
     Notes
     -----
@@ -495,7 +661,14 @@ def compute_fifo_pnl(
     result = PnLResult()
     any_fee_missing = False
 
-    for fill in fills:
+    # One walk over fills and write-offs together, each at its ledger place:
+    # a write-off sets apart what was held when it was recorded, and every
+    # fill after it closes only what was bought since (#2975).
+    for event in merged_fifo_events(fills, write_offs):
+        if not isinstance(event, FillRecord):
+            apply_write_off_to_lots(lots, event)
+            continue
+        fill = event
         # Fee tracking
         if fill.fee is None:
             any_fee_missing = True
@@ -510,6 +683,21 @@ def compute_fifo_pnl(
     if any_fee_missing:
         result.fee_total = None
 
+    result.written_off_lots = [
+        OpenLot(
+            symbol=symbol,
+            exact_qty=lot.qty,
+            exact_cost=lot.cost,
+            opened_at_ms=lot.opened_at_ms,
+            side=lot.side,
+            multiplier=lot.multiplier,
+            written_off=True,
+        )
+        for symbol, queue in lots.items()
+        for lot in queue
+        if lot.written_off and lot.qty > _ZERO_ABS_TOL
+    ]
+
     open_result = compute_open_pnl(lots, mark_prices or {})
     result.open_lots = list(open_result.open_lots)
     result.exact_open_pnl = open_result.exact_value
@@ -523,6 +711,7 @@ def realized_pnl_today(
     *,
     session_open_ms: int,
     session_close_ms: int,
+    write_offs: Iterable[LotWriteOff] = (),
 ) -> float:
     """Realized P&L for lots whose close fell within today's session window.
 
@@ -548,7 +737,7 @@ def realized_pnl_today(
     (no calendar I/O).  The caller derives it from
     ``trading_calendar.session_window_for_date``.
     """
-    result = compute_fifo_pnl(fills)  # run over complete history
+    result = compute_fifo_pnl(fills, write_offs=write_offs)  # run over complete history
     return realized_pnl_for_window(
         result.closed_lots,
         session_open_ms=session_open_ms,

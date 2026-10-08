@@ -32,11 +32,15 @@ from app.broker.alpaca.clerk.budgets import (
     account_budget,
     deployment_budget,
 )
-from app.broker.alpaca.clerk.fifo_pnl import OpenLot, compute_fifo_pnl
+from app.broker.alpaca.clerk.fifo_pnl import LotWriteOff, OpenLot, compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.money import ZERO, MoneyInputError, money_context, normalize_money
 from app.broker.alpaca.clerk.sqlite.custody_subjects import BOT_SUBJECT_PREFIX, bot_subject_id
-from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicProjectionError, effective_fill_records
+from app.broker.alpaca.clerk.sqlite.economic_projection import (
+    EconomicProjectionError,
+    all_written_off_lot_events,
+    effective_fill_records,
+)
 from app.broker.alpaca.clerk.sqlite.envelope_reservations import (
     EntryCashClaim,
     entry_cash_claims,
@@ -131,6 +135,10 @@ class _Projected:
     # reported fees) the cash observation has not seen yet; the rest is
     # pending entry orders.
     unseen_fills: Decimal
+    # Residue discharges as FIFO write-off events (#2975), in the custody
+    # subject form ``records`` carries, so a written-off stopped bot holds no
+    # phantom position cost and realizes none of its written-off lot.
+    write_offs: tuple[LotWriteOff, ...] = ()
 
 
 def project_account_budget(
@@ -176,7 +184,10 @@ def project_account_money(
         holdings = []
         for subject_id in sorted(subjects - {bot_subject_id(sid) for sid in budgeted}):
             sid = subject_id.removeprefix(BOT_SUBJECT_PREFIX) if subject_id.startswith(BOT_SUBJECT_PREFIX) else None
-            fifo = compute_fifo_pnl([fill for fill in projected.records if fill.sid == subject_id])
+            fifo = compute_fifo_pnl(
+                [fill for fill in projected.records if fill.sid == subject_id],
+                write_offs=[event for event in projected.write_offs if event.sid == subject_id],
+            )
             unvalued += _shorts(fifo.open_lots, holder="manual trades" if sid is None else f"stopped bot {sid}")
             holdings.append(Holding(
                 subject_id=subject_id, strategy_instance_id=sid,
@@ -298,11 +309,15 @@ def project_bot_results(
     """Each bot's whole-life result over this snapshot's effective fills (``bot_results_from_fills``)."""
     account_id = conn.execute("SELECT account_id FROM control_meta WHERE id=1").fetchone()[0]
     records = effective_fill_records(conn, account_id=account_id, strategy_instance_ids=strategy_instance_ids)
-    return bot_results_from_fills(records, fees=fees, strategy_instance_ids=strategy_instance_ids)
+    write_offs = all_written_off_lot_events(conn, strategy_instance_ids=strategy_instance_ids)
+    return bot_results_from_fills(
+        records, fees=fees, strategy_instance_ids=strategy_instance_ids, write_offs=write_offs
+    )
 
 
 def bot_results_from_fills(
     records: Sequence[FillRecord], *, fees: BudgetFees, strategy_instance_ids: Sequence[str],
+    write_offs: Sequence[LotWriteOff] = (),
 ) -> dict[str, BotResult]:
     """Each bot's whole-life result: what its balance gained over its budget.
 
@@ -312,7 +327,8 @@ def bot_results_from_fills(
 
     Formula: result = canonical FIFO gross realized P&L - the bot's attributed
       fees (``budgets.deployment_budget``'s balance - commitment); trade_count
-      = the bot's effective executions.
+      = the bot's effective executions. A lot a residue discharge wrote off
+      realizes nothing and is no position (#2975).
     Reference: https://github.com/tim1016/learn-ai/issues/2560 (Finished rows);
       money semantics are PRD #2540's, unchanged.
     Canonical implementation: this composition; FIFO stays ``fifo_pnl.py`` and
@@ -326,7 +342,9 @@ def bot_results_from_fills(
         for sid in strategy_instance_ids:
             subject_id = bot_subject_id(sid)
             fills = [fill for fill in records if fill.sid == subject_id]
-            realized = normalize_money(compute_fifo_pnl(fills).exact_realized_pnl)
+            realized = normalize_money(compute_fifo_pnl(
+                fills, write_offs=[event for event in write_offs if event.sid == subject_id]
+            ).exact_realized_pnl)
             results[sid] = BotResult(result=realized - fees.total_for(subject_id), trade_count=len(fills))
     return results
 
@@ -475,7 +493,7 @@ def _why_short(conn: sqlite3.Connection, sid: str, fills: Sequence[FillRecord], 
 
 def _deployment_budget(
     conn: sqlite3.Connection, commitment: sqlite3.Row, *, records: Sequence[FillRecord],
-    claims: Sequence[EntryCashClaim], fees: BudgetFees,
+    claims: Sequence[EntryCashClaim], fees: BudgetFees, write_offs: Sequence[LotWriteOff] = (),
 ) -> DeploymentBudget:
     """One commitment over its own FIFO, entry claims and attributed fees.
 
@@ -485,7 +503,7 @@ def _deployment_budget(
     sid = commitment["strategy_instance_id"]
     subject_id = bot_subject_id(sid)
     fills = [fill for fill in records if fill.sid == subject_id]
-    fifo = compute_fifo_pnl(fills)
+    fifo = compute_fifo_pnl(fills, write_offs=[event for event in write_offs if event.sid == subject_id])
     short = [lot for lot in fifo.open_lots if lot.side != OrderSide.BUY and lot.multiplier is None]
     if short:
         raise BudgetUnavailable(_why_short(conn, sid, fills, short))
@@ -587,6 +605,7 @@ def _project(
     commitments = conn.execute(_COMMITMENTS).fetchall()
     claims = entry_cash_claims(conn, seen_before_ms=seen_before_ms)
     records = effective_fill_records(conn, account_id=account_id)
+    write_offs = all_written_off_lot_events(conn)
     with money_context():
         external_claim = _external_cash_claim(conn, fees, seen_before_ms=seen_before_ms)
         # A terminal manual effect ends the working-order uncertainty, not
@@ -604,7 +623,8 @@ def _project(
                 if fill.fee is not None:
                     manual_claim += normalize_money(fill.fee)
         budgets = [
-            _deployment_budget(conn, commitment, records=records, claims=claims, fees=fees) for commitment in commitments
+            _deployment_budget(conn, commitment, records=records, claims=claims, fees=fees, write_offs=write_offs)
+            for commitment in commitments
         ]
         budget = account_budget(
             cash=cash, deployments=budgets,
@@ -614,4 +634,5 @@ def _project(
         return _Projected(
             budget=budget, records=records, claims=claims,
             unseen_fills=external_claim + manual_claim + sum((claim.unseen_fill_cost for claim in claims), ZERO),
+            write_offs=write_offs,
         )

@@ -46,7 +46,7 @@ from app.broker.alpaca.clerk.account_authority import (
     simulated_account_named,
 )
 from app.broker.alpaca.clerk.et_day import et_day_window_ms
-from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl
+from app.broker.alpaca.clerk.fifo_pnl import LotWriteOff, compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.kept_option_quotes import (
     KeptOptionQuote,
@@ -57,7 +57,10 @@ from app.broker.alpaca.clerk.live_envelope import AccountObservation
 from app.broker.alpaca.clerk.models import EpochMs
 from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money
 from app.broker.alpaca.clerk.sqlite.day_pnl import risk_fill_sequence
-from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
+from app.broker.alpaca.clerk.sqlite.economic_projection import (
+    all_written_off_lot_events,
+    effective_fill_records,
+)
 from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
@@ -215,8 +218,19 @@ class SimulatedAccountProjection:
             )
         return kept
 
+    def _write_off_events(self, *, by_ms: int | None = None) -> tuple[LotWriteOff, ...]:
+        """Recorded residue discharges as FIFO write-off events (#2975), cut at ``by_ms``.
+
+        A write-off applies to the books from its own moment on, so a
+        prior-session valuation takes only those recorded by its cutoff --
+        exactly as it takes only the fills recorded before it.
+        """
+        return all_written_off_lot_events(self.repo._conn, by_ms=by_ms)
+
     def _marks(self, records: tuple[FillRecord, ...], *, at_ms: int, exact_close: bool = False) -> tuple[dict[str, Decimal], tuple[str, ...], int | None]:
-        open_lots = compute_fifo_pnl(records).open_lots
+        open_lots = compute_fifo_pnl(
+            records, write_offs=self._write_off_events(by_ms=at_ms)
+        ).open_lots
         open_symbols = {lot.symbol for lot in open_lots}
         # A symbol holds one multiplier, so its lots are all shares or all contracts.
         contracts = {lot.symbol: lot.side is OrderSide.BUY for lot in open_lots if lot.multiplier is not None}
@@ -307,7 +321,7 @@ class SimulatedAccountProjection:
             cutoff = previous_completed_session_close_ms(session_start)
             prior = tuple(record for record in records if record.filled_at_ms <= cutoff)
             marks, refs, _ = self._marks(prior, at_ms=cutoff, exact_close=True)
-            fifo = compute_fifo_pnl(prior, mark_prices=marks)
+            fifo = compute_fifo_pnl(prior, mark_prices=marks, write_offs=self._write_off_events(by_ms=cutoff))
             fees = custody_fee_attribution(self.repo._conn, now_ms=now_ms, simulated_fill_cutoff_ms=cutoff)
             if not fees.known or fifo.exact_open_pnl is None:
                 raise SimulationEvidenceUnavailable("The prior simulation session cannot prove its equity baseline.")
@@ -360,7 +374,7 @@ class SimulatedAccountProjection:
             if not fees.known:
                 raise SimulationEvidenceUnavailable("Simulated execution or modelled fee evidence is incomplete: " + "; ".join(fees.unresolved))
             marks, _, valid_until = self._marks(records, at_ms=now_ms)
-            fifo = compute_fifo_pnl(records, mark_prices=marks)
+            fifo = compute_fifo_pnl(records, mark_prices=marks, write_offs=self._write_off_events(by_ms=now_ms))
             open_pnl = fifo.exact_open_pnl
             if open_pnl is None:
                 raise SimulationEvidenceUnavailable("Simulated open P&L cannot be valued from current price evidence.")
