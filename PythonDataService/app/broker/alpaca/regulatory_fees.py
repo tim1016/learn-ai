@@ -10,11 +10,15 @@ Formula:
 Reference:
     Alpaca Securities LLC, "Broker Fee Schedule", §"Pass-Through Regulatory and
     Exchange Fees — Equities"
-    (https://files.alpaca.markets/disclosures/library/BrokFeeSched.pdf, retrieved
-    2026-09-07); SEC Fee Rate Advisories 2024-2, 2025-2, 2026-2
+    (https://files.alpaca.markets/disclosures/library/BrokFeeSched.pdf,
+    retrieved 2026-09-07, revision of 2026-10-01 read 2026-10-08); SEC Fee
+    Rate Advisories 2024-2, 2025-2, 2026-2
     (https://www.sec.gov/rules-regulations/fee-rate-advisories/<year>-2); FINRA
     SR-FINRA-2024-019 fee-adjustment schedule
-    (https://www.finra.org/rules-guidance/rule-filings/sr-finra-2024-019/fee-adjustment-schedule).
+    (https://www.finra.org/rules-guidance/rule-filings/sr-finra-2024-019/fee-adjustment-schedule);
+    FINRA SR-FINRA-2026-020 (91 FR 60427 — the TAF steps delayed to
+    2029/2030/2031) and SR-FINRA-2026-021 (SEC Release 34-106409 — the TAF
+    paused 2026-10-01 through 2026-12-31, then the 2026 rate resumes).
 Canonical implementation: this file.
 Validated against:
     tests/broker/alpaca/test_regulatory_fees.py;
@@ -63,9 +67,18 @@ _SEC_PER_DOLLAR: tuple[tuple[date, Decimal], ...] = (
 _TAF_PER_SHARE_AND_CAP: tuple[tuple[date, TafRate], ...] = (
     (date(2024, 1, 1), TafRate(Decimal("0.000166"), Decimal("8.30"))),
     (date(2026, 1, 1), TafRate(Decimal("0.000195"), Decimal("9.79"))),
-    (date(2027, 1, 1), TafRate(Decimal("0.000232"), Decimal("11.61"))),
-    (date(2028, 1, 1), TafRate(Decimal("0.000240"), Decimal("12.05"))),
-    (date(2029, 1, 1), TafRate(Decimal("0.000249"), Decimal("12.50"))),
+    # SR-FINRA-2026-021 (SEC Release 34-106409, Exhibit 5A): the TAF is
+    # paused at zero — per share and per-trade cap — from 2026-10-01 through
+    # 2026-12-31. Alpaca's fee schedule revision of 2026-10-01 passes the
+    # pause through ("$0 per share"), so this zero is pinned, not unknown.
+    (date(2026, 10, 1), TafRate(Decimal("0"), Decimal("0"))),
+    # Exhibit 5B: the 2026 rate resumes 2027-01-01 and holds through 2028 —
+    # SR-FINRA-2026-020 (91 FR 60427, immediately effective) delayed the
+    # later steps by two years, so the step-ups land 2029/2030/2031.
+    (date(2027, 1, 1), TafRate(Decimal("0.000195"), Decimal("9.79"))),
+    (date(2029, 1, 1), TafRate(Decimal("0.000232"), Decimal("11.61"))),
+    (date(2030, 1, 1), TafRate(Decimal("0.000240"), Decimal("12.05"))),
+    (date(2031, 1, 1), TafRate(Decimal("0.000249"), Decimal("12.50"))),
 )
 _CAT_PER_SHARE: tuple[tuple[date, Decimal], ...] = (
     (date(2026, 9, 1), Decimal("0.000003")),  # Alpaca fee schedule, retrieved 2026-09-07

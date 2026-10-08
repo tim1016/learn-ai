@@ -10,7 +10,7 @@ from app.broker.alpaca.regulatory_fees import FillFees, fees_for_fill, settle_se
 from app.broker.contract.models import OrderSide
 from app.utils.session_anchors import et_date_at_ms
 
-FIXTURE_DIR = Path(__file__).parent / "golden" / "broker-fees" / "FEE-001" / "v1"
+FIXTURE_DIR = Path(__file__).parent / "golden" / "broker-fees" / "FEE-001" / "v2"
 
 
 def _load() -> tuple[dict, dict]:
