@@ -84,6 +84,12 @@ def fold_multi_leg_order_evidence(
             repo, effect_operation_id=effect_operation_id, order=evidence,
             order_ref=parent_ref, append_stale_ack=append_stale_ack,
         )
+        if repo.order_fills_short_of_broker_cumulative(parent_ref):
+            fold_uncertain(
+                repo, effect_operation_id=effect_operation_id, order_ref=parent_ref,
+                why="The broker counted whole structures whose executions are not yet recorded on every leg.",
+            )
+            return
         if not acknowledgement_only and not simulated_authority:
             fold_enter_unfilled_if_proven(
                 repo, effect_operation_id=effect_operation_id, order=evidence, order_ref=parent_ref,

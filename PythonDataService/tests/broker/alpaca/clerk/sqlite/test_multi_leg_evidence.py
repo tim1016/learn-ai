@@ -144,6 +144,39 @@ async def test_a_parent_ended_with_no_leg_filled_is_proven_unfilled(world) -> No
     assert books.effect_operation(accepted.effect_operation_id).state == "failed"
 
 
+@pytest.mark.parametrize("counts", [(0, 0), (1, 0)])
+async def test_a_canceled_parent_reporting_a_unit_keeps_custody_and_cash_until_each_leg_is_recorded(world, counts) -> None:
+    from decimal import Decimal
+
+    from app.broker.alpaca.clerk.sqlite.envelope_reservations import entry_cash_claims
+    from tests.broker.alpaca.clerk.sqlite.test_several_legs_admission import _reserve
+
+    books, _port = world
+    accepted, evidence = await _order(world)
+    assert _reserve(books, worked_entry(PAID_SPREAD, PAID_PICKS, units=2, now_ms=NOON)).order_ref == accepted.order_ref
+    delayed = _part(evidence, counts, state="canceled").model_copy(update={"units_filled": 1})
+    fold_order_evidence(books, effect_operation_id=accepted.effect_operation_id, order=delayed)
+
+    assert entry_outcome(books, accepted.order_ref).standing is EntryStanding.OUTCOME_UNKNOWN
+    assert books.effect_operation(accepted.effect_operation_id).state == "unknown"
+    assert books.order_fills_short_of_broker_cumulative(accepted.order_ref)
+    assert accepted.effect_operation_id in {item.effect_operation_id for item in books.reconcilable_effect_operations()}
+    with books.write_fence() as conn:
+        claim = next(item for item in entry_cash_claims(conn, seen_before_ms=NOON + 1) if item.order_ref == accepted.order_ref)
+    # Two units at $194 set aside each, plus the recorded 19-cent fee provision.
+    assert claim.unfilled_cost == Decimal("388.00") and claim.unfilled_fee == Decimal("0.19")
+    assert books.fills_for_order(accepted.order_ref) == []
+
+    fold_order_evidence(
+        books, effect_operation_id=accepted.effect_operation_id, order=_part(evidence, (1, 1), state="canceled"),
+    )
+    assert entry_outcome(books, accepted.order_ref).standing is EntryStanding.PART_FILLED
+    assert not books.order_fills_short_of_broker_cumulative(accepted.order_ref)
+    with books.write_fence() as conn:
+        claim = next(item for item in entry_cash_claims(conn, seen_before_ms=NOON + 1) if item.order_ref == accepted.order_ref)
+    assert claim.unfilled_cost == claim.unfilled_fee == Decimal("0")
+
+
 async def test_a_counted_leg_with_no_price_stays_unknown_then_recovers_on_a_readable_answer(world) -> None:
     books, _port = world
     accepted, evidence = await _order(world)
@@ -155,6 +188,29 @@ async def test_a_counted_leg_with_no_price_stays_unknown_then_recovers_on_a_read
     fold_order_evidence(books, effect_operation_id=accepted.effect_operation_id, order=final)
     assert entry_outcome(books, accepted.order_ref).standing is EntryStanding.PART_FILLED
     assert bot_is_under_legs_out_of_step(books, "bot-a")
+
+
+async def test_a_reported_whole_unit_needs_every_leg_at_its_captured_ratio(world) -> None:
+    from tests.broker.alpaca.clerk.sqlite.several_legs_fixtures import STRADDLE_PICKS, leg, plan
+
+    books, port = world
+    entry = worked_entry(plan(leg("long_call", ratio=2), leg("long_put", right="put")), STRADDLE_PICKS, units=2, now_ms=NOON)
+    accepted = accept_option_enter(
+        books, account_id=ACCOUNT_ID, strategy_instance_id="bot-a", decision_id="ratio", lifecycle_run_id=RUN_ID, entry=entry,
+    )
+    _bind(port, accepted.order_ref, entry)
+    evidence = multi_leg_order_evidence(await port.submit_option_order(entry.order, client_order_id=accepted.order_ref))
+    fold_order_evidence(
+        books, effect_operation_id=accepted.effect_operation_id, order=_part(evidence, (1, 1), state="canceled"),
+    )
+    assert books.order_fills_short_of_broker_cumulative(accepted.order_ref)
+    assert entry_outcome(books, accepted.order_ref).standing is EntryStanding.OUTCOME_UNKNOWN
+    fold_order_evidence(
+        books, effect_operation_id=accepted.effect_operation_id,
+        order=_part(evidence, (2, 1), state="canceled").model_copy(update={"units_filled": 1}),
+    )
+    assert not books.order_fills_short_of_broker_cumulative(accepted.order_ref)
+    assert entry_outcome(books, accepted.order_ref).standing is EntryStanding.PART_FILLED
 
 
 async def test_a_filled_parent_with_incomplete_leg_counts_is_not_a_proven_partial_fill(world) -> None:

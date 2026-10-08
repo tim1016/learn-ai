@@ -217,7 +217,9 @@ def _multi_leg_entry_outcome(
         for leg in legs
     }
     whole = whole_units(tuple(LegContracts(leg.leg_id, leg.ratio, counts[leg.symbol]) for leg in legs))
-    short = any(repo.order_fills_short_of_broker_cumulative(leg.order_ref) for leg in legs)
+    short = repo.order_fills_short_of_broker_cumulative(parent_ref) or any(
+        repo.order_fills_short_of_broker_cumulative(leg.order_ref) for leg in legs
+    )
     overfilled = any(counts[leg.symbol] > leg.contracts for leg in legs)
     state = (parent.broker_state or "").lower()
     cancel = repo.last_order_transition(order_ref=parent_ref, transition_kind="ORDER_CANCEL_REQUESTED")

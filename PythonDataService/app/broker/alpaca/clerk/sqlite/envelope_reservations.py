@@ -259,7 +259,7 @@ def _structure_claim(conn: sqlite3.Connection, reserved: sqlite3.Row, *, seen_be
       own direction, and rᵢ its ratio,
         units filled = max(0, minᵢ ⌊uᵢ / rᵢ⌋)        (``app.options.whole_units``)
         unfilled     = max(0, units asked − units filled) × set aside a unit,
-                       and zero once the parent has ended
+                       and zero once the parent has ended with every reported unit covered
         fee          = the whole provision while any unit is unfilled, else zero
         unseen       = Σ (qty × price × m + reported fee) over the legs' effective
                        BUY fills recorded at or after ``seen_before_ms``.
@@ -270,7 +270,8 @@ def _structure_claim(conn: sqlite3.Connection, reserved: sqlite3.Row, *, seen_be
     Canonical implementation: this function; ``app/options/whole_units.py``
       owns the units, ``clerk.money.notional`` a fill's product.
     Validated against: tests/broker/alpaca/clerk/sqlite/test_several_legs_admission.py,
-      each figure by hand.
+      each figure by hand; test_multi_leg_evidence.py keeps a canceled parent's
+      claim while its reported unit lacks recorded leg executions.
 
     A sold leg's fill is a sale: cash in. It is not claimed here below zero.
     It reaches the account's money where every sale the cash reading has not
@@ -314,7 +315,10 @@ def _structure_claim(conn: sqlite3.Connection, reserved: sqlite3.Row, *, seen_be
             )
         legs.append(LegContracts(leg_id=leg_id, ratio=ratios[leg_id], contracts=int(contracts)))
     units_asked = normalize_money(reserved["quantity"])
-    remaining_units = ZERO if reserved["ended"] else max(ZERO, units_asked - whole_units(legs).units)
+    from app.broker.alpaca.clerk.sqlite.reads import order_fills_short_of_broker_cumulative
+
+    ended = reserved["ended"] and not order_fills_short_of_broker_cumulative(conn, reserved["order_ref"])
+    remaining_units = ZERO if ended else max(ZERO, units_asked - whole_units(legs).units)
     fee_claim: Decimal | None = ZERO
     if remaining_units > ZERO:
         fee_claim = Decimal(reserved["fee_provision_cents"]) / 100 if reserved["provision_recorded"] else None

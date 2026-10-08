@@ -30,6 +30,40 @@ from tests.broker.alpaca.documented_examples import documented
 multi_paper = _multi_paper_fixture
 
 
+async def test_another_bots_unfilled_order_fences_an_opposite_leg_until_it_is_proven_not_sent(
+    multi_paper: SeveralLegsPaper, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.broker.alpaca.clerk.sqlite.several_legs_fixtures import PAID_PICKS, PAID_SPREAD, call, leg, plan, put
+
+    monkeypatch.setattr(option_effects, "SOLD_LEG_STRUCTURES_TAKEN", True)
+    repo = multi_paper.repo
+    pending = accept_option_enter(
+        repo, account_id=repo.account_id, strategy_instance_id="b", decision_id="resting-buy", lifecycle_run_id="run-b",
+        entry=worked_entry(
+            plan(leg("long_call"), leg("long_put", right="put")),
+            {"long_call": (call(590), "1.20", "1.24"), "long_put": (put(590), "1.16", "1.20")},
+            units=1, now_ms=multi_paper.clock(),
+        ),
+        envelope=_gate(cash=3000),
+    )
+    assert repo.attributed_positions_for_strategy("b") == {}
+    multi_paper.account.listed.update({
+        contract.occ_symbol: documented_option_listing(contract) for contract, *_ in PAID_PICKS.values()
+    })
+    refused = await multi_paper.enter(units=1, decision="opposite-refused", plan=PAID_SPREAD, picks=PAID_PICKS)
+    assert refused.state is EffectOperationState.REJECTED
+    assert "OPTION_CONTRACT_HELD_ON_THE_OTHER_SIDE" in refused.explanation
+    assert "outstanding order" in refused.explanation and call(590).occ_symbol in refused.explanation
+    assert multi_paper.venue.option_submit_calls == [] and repo.attributed_positions_for_strategy("a") == {}
+
+    fold_failed(
+        repo, effect_operation_id=pending.effect_operation_id, order_ref=pending.order_ref,
+        summary_code="REFUSED_BEFORE_SEND", reason="not sent", why="the other order never reached the broker",
+    )
+    taken = await multi_paper.enter(units=1, decision="opposite-now-clear", plan=PAID_SPREAD, picks=PAID_PICKS)
+    assert taken.state is EffectOperationState.SUBMITTED, taken.explanation
+
+
 async def test_the_entry_sends_one_parent_and_reads_every_listing_with_one_account_read(multi_paper: SeveralLegsPaper) -> None:
     receipt = await multi_paper.enter()
     assert receipt.state is EffectOperationState.SUBMITTED, receipt.explanation

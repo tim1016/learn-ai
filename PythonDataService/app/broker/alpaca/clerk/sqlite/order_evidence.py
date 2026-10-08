@@ -795,8 +795,12 @@ def fold_order_acknowledgement(
     assert effect is not None
     order_ref = _evidence_order_ref(order, order_ref)
     latest_ack = repo.last_order_transition(order_ref=order_ref, transition_kind="ORDER_SUBMIT_ACKED")
+    from app.broker.alpaca.clerk.sqlite.option_order_evidence import MultiLegOrderEvidence
+
+    # A parent's reported total is whole structures, never a parent execution (ADR 0076).
+    reported_quantity = order.units_filled if isinstance(order, MultiLegOrderEvidence) else order.filled_quantity
     reported_filled_quantity = (
-        order.filled_quantity if normalize_money(order.filled_quantity) > 0 else None
+        reported_quantity if normalize_money(reported_quantity) > 0 else None
     )
     # The broker's cumulative is recorded on the acknowledgement (#2305) and
     # the shortfall read keys on the latest one, so a snapshot reporting a

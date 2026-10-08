@@ -221,12 +221,13 @@ class TakenOptionPlan:
     underlying: str
 
 
-def option_plan_taken(action_plan: ActionPlan, *, real_account: bool) -> TakenOptionPlan:
+def option_plan_taken(action_plan: ActionPlan, *, real_account: bool, live_shadow: bool = False) -> TakenOptionPlan:
     """The option plan as the Clerk takes it; refuses every plan it does not take by what it is.
 
     The one rule, asked at registration, at the entry, at the contract
     reference and by the preview's verdict. ``real_account`` is True for a
     Paper and a Live account and False for a Dry Run and a Live Shadow.
+    A Live Shadow takes one leg, irrespective of the structure rollout.
     Only a real account, and only for a plan of several legs, reads the
     deployment's setting for orders of several legs. The gates are asked
     before the setting, so a structure no account takes yet is refused
@@ -267,6 +268,11 @@ def option_plan_taken(action_plan: ActionPlan, *, real_account: bool) -> TakenOp
                 "a structure; more of it is more structures.",
             )
         return TakenOptionPlan(legs=legs, underlying=underlyings[0])
+    if live_shadow:
+        raise OptionPlanRefused(
+            OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED,
+            "A Live Shadow takes one bought call or put. Its order book does not support an order of several legs.",
+        )
     if not BOUGHT_LEG_STRUCTURES_TAKEN:
         raise OptionPlanRefused(
             OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED,

@@ -1150,6 +1150,10 @@ class OrderSubmitAckedFacts:
     recorded fills fall short of it stay reconcilable until the lost slice is
     re-derived (``reads.order_fills_short_of_broker_cumulative``).
 
+    For a multi-leg parent the reported quantity is whole structures;
+    each leg's executions must cover it at its captured ratio (ADR 0076).
+    It is evidence only, never a parent fill.
+
     Omitted when absent (hash-chained schema evolution): every
     acknowledgement written before #2305, and every one reporting no fill,
     keeps the byte-identical ``{}``.

@@ -1712,15 +1712,23 @@ def _fills_short_of_broker_cumulative_sql(order_ref_sql: str) -> str:
     """SQL predicate: the governing acknowledgement's cumulative exceeds the effective fills.
 
     ``NULL`` (never short) when the governing acknowledgement reported no
-    fill. ``order_ref_sql`` appears twice; binds :data:`FILL_QTY_EPSILON`
+    fill. A multi-leg parent's cumulative counts whole structures: every
+    leg must cover that count at its captured ratio. This comparison does
+    not invent a parent execution. ``order_ref_sql`` appears twice; binds :data:`FILL_QTY_EPSILON`
     last. The fill sum is covered by ``ix_fills_order_ref`` and the
     effective-fill predicate by ``ix_fills_superseded_execution_ref``
     (schema v15).
     """
     return (
         "((" + _governing_acknowledgement_sql(order_ref_sql, _REPORTED_FILLED_QUANTITY_SQL) + ") - "
-        "(SELECT COALESCE(SUM(f.qty), 0) FROM fills f WHERE f.order_ref = " + order_ref_sql + " "
-        "AND " + _EFFECTIVE_FILL_PREDICATE + ") >= ?)"
+        "(SELECT CASE WHEN EXISTS (SELECT 1 FROM option_order_legs leg "
+        "WHERE leg.parent_order_ref = covered_order.order_ref) THEN "
+        "(SELECT MIN((SELECT COALESCE(SUM(f.qty), 0) FROM fills f WHERE f.order_ref = leg.order_ref "
+        "AND " + _EFFECTIVE_FILL_PREDICATE + ") / leg.ratio) FROM option_order_legs leg "
+        "WHERE leg.parent_order_ref = covered_order.order_ref) ELSE "
+        "(SELECT COALESCE(SUM(f.qty), 0) FROM fills f WHERE f.order_ref = covered_order.order_ref "
+        "AND " + _EFFECTIVE_FILL_PREDICATE + ") END FROM orders covered_order "
+        "WHERE covered_order.order_ref = " + order_ref_sql + ") >= ?)"
     )
 
 

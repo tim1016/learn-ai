@@ -298,7 +298,8 @@ def _leg_refusal(
 
 
 def work_out_option_entry(
-    action_plan: ActionPlan, *, evidence: OptionEntryEvidence | None, units: int, now_ms: int, real_account: bool = True
+    action_plan: ActionPlan, *, evidence: OptionEntryEvidence | None, units: int, now_ms: int, real_account: bool = True,
+    live_shadow: bool = False,
 ) -> OptionEntry | OptionEntryRefused:
     """The entry ``action_plan`` makes of the facts handed over, at the Clerk's clock ``now_ms``, or why it makes none.
 
@@ -307,7 +308,7 @@ def work_out_option_entry(
     several legs needs the deployment's setting for.
     """
     try:
-        taken = option_plan_taken(action_plan, real_account=real_account)
+        taken = option_plan_taken(action_plan, real_account=real_account, live_shadow=live_shadow)
     except OptionPlanRefused as exc:
         return OptionEntryRefused(exc.reason.value, exc.detail)
     if evidence is None:
@@ -385,21 +386,23 @@ def work_out_option_entry(
 
 @dataclass(frozen=True, slots=True)
 class HeldByAnother:
-    """One contract of an entry that the account already holds for someone else, and how."""
+    """Another subject's held position or working order in an entry's contract."""
 
     # The contract's OCC symbol.
     symbol: str
     # The other bot's id, or ``None`` for a holding no bot of the account has: the owner's own orders.
     strategy_instance_id: str | None
-    # Signed: bought above zero, sold below.
+    # Signed: bought above zero, sold below; requested quantity for a working order.
     quantity: float
+    # A still-working order's side, rather than an already recorded position.
+    working_order: bool = False
 
 
 def held_on_the_other_side(entry: OptionEntry, others: Sequence[HeldByAnother]) -> OptionEntryRefused | None:
     """Why ``entry`` would trade against what the account already holds for someone else, or ``None``.
 
-    ``others`` are the account's holdings, outside this bot, in the
-    entry's contracts (``reads.option_contracts_held_by_others``). A leg
+    ``others`` are the account's holdings and working orders, outside this bot, in the
+    entry's contracts. A leg
     that sells a contract another bot or the owner holds bought, or buys one
     they hold sold, is refused: at the broker the two are one position of
     nothing. No expiry and no assignment would then ever be reported for
@@ -413,6 +416,15 @@ def held_on_the_other_side(entry: OptionEntry, others: Sequence[HeldByAnother]) 
     if not against:
         return None
     first = against[0]
+    if first.working_order:
+        holder = "The owner's own orders include" if first.strategy_instance_id is None else f"Bot {first.strategy_instance_id} has"
+        would, pending = ("sell", "buy") if first.quantity > 0 else ("buy", "sell")
+        return OptionEntryRefused(
+            OptionEffectRefusal.CONTRACT_HELD_ON_THE_OTHER_SIDE.value,
+            f"This entry would {would} {first.symbol}. {holder} an outstanding order to {pending} that contract. "
+            "The two could fill on opposite sides and cancel at the broker, which the books could not keep apart. "
+            "Nothing was opened.",
+        )
     holder = "The owner's own orders hold" if first.strategy_instance_id is None else f"Bot {first.strategy_instance_id} holds"
     would, held_as = ("sell", "bought") if first.quantity > 0 else ("buy", "sold")
     return OptionEntryRefused(

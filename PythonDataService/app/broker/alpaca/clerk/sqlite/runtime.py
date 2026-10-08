@@ -1098,7 +1098,9 @@ class SqliteAlpacaClerkFacade:
         refusal = self._option_plan_account_refusal()
         if refusal is not None:
             raise OptionPlanRefused(OptionEffectRefusal.ACCOUNT_NOT_OPEN, refusal)
-        return option_plan_taken(action_plan, real_account=self._is_a_real_account).underlying
+        return option_plan_taken(
+            action_plan, real_account=self._is_a_real_account, live_shadow=self.authority_kind == "shadow",
+        ).underlying
 
     def require_option_plan_taken(self, action_plan: ActionPlan) -> None:
         """Raise the typed refusal of an option plan this account does not take (ADR 0076).
@@ -1203,7 +1205,9 @@ class SqliteAlpacaClerkFacade:
         if not self._asks_the_brokers_listing or option_entry is None:
             return None
         try:
-            taken = option_plan_taken(action_plan, real_account=self._is_a_real_account)
+            taken = option_plan_taken(
+                action_plan, real_account=self._is_a_real_account, live_shadow=self.authority_kind == "shadow",
+            )
         except OptionPlanRefused:
             return None
         picked = option_entry.picked
@@ -2011,6 +2015,7 @@ class SqliteAlpacaClerkFacade:
                 worked_out = work_out_option_entry(
                     action_plan, evidence=option_entry, units=quantity, now_ms=self._repo.clock(),
                     real_account=self._is_a_real_account,
+                    live_shadow=self.authority_kind == "shadow",
                 )
                 if isinstance(worked_out, OptionEntryRefused):
                     logger.info(
@@ -2029,19 +2034,29 @@ class SqliteAlpacaClerkFacade:
                         next_step=_ENTRY_NOT_RETRIED,
                     )
                 entry = worked_out
-                against_another = held_on_the_other_side(
-                    entry,
-                    [
-                        HeldByAnother(symbol, holder, held)
-                        for symbol, holder, held in self._repo.option_contracts_held_by_others(
-                            strategy_instance_id=strategy_instance_id,
-                            symbols=[terms.symbol for terms in entry.leg_terms],
-                        )
-                    ],
-                )
+                other_exposure = [
+                    HeldByAnother(symbol, holder, held)
+                    for symbol, holder, held in self._repo.option_contracts_held_by_others(
+                        strategy_instance_id=strategy_instance_id,
+                        symbols=[terms.symbol for terms in entry.leg_terms],
+                    )
+                ]
+                for leg in entry.legs:
+                    side = OrderSide.BUY if leg.position == "long" else OrderSide.SELL
+                    for pending in self._repo.open_opposite_side_orders(symbol=leg.contract.occ_symbol, side=side):
+                        owner = self._repo.order(pending.order_ref)
+                        assert owner is not None
+                        effect = self._repo.effect_operation(owner.effect_operation_id)
+                        assert effect is not None
+                        if effect.strategy_instance_id != strategy_instance_id:
+                            other_exposure.append(HeldByAnother(
+                                leg.contract.occ_symbol, effect.strategy_instance_id,
+                                (pending.quantity or 1) * (1 if pending.side == "buy" else -1), working_order=True,
+                            ))
+                against_another = held_on_the_other_side(entry, other_exposure)
                 if against_another is not None:
                     logger.info(
-                        "an option entry was refused: the account holds one of its contracts on the other side",
+                        "an option entry was refused: another subject holds or has ordered one of its contracts on the other side",
                         extra={
                             "action": "option_entry_refused",
                             "account_id": self._repo.account_id,
@@ -2055,7 +2070,9 @@ class SqliteAlpacaClerkFacade:
                         explanation=against_another.explanation,
                         next_step=_ENTRY_NOT_RETRIED,
                     )
-                underlying = option_plan_taken(action_plan, real_account=self._is_a_real_account).underlying
+                underlying = option_plan_taken(
+                    action_plan, real_account=self._is_a_real_account, live_shadow=self.authority_kind == "shadow",
+                ).underlying
                 if stream_health_refusal(self._stream_health, symbol=underlying) is not None:
                     return rejected(
                         reason_code=STREAM_HEALTH_REASON_CODE,
