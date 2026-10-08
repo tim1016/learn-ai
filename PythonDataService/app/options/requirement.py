@@ -5,6 +5,7 @@ Formula: with ``s_i`` = +1 for a bought leg and -1 for a sold one, ``r_i`` its
   structures opened:
   payoff(p)   = Σ s_i · r_i · (max(p - K_i, 0) for a call, max(K_i - p, 0) for a put)
   requirement = N · m · max(0, -min over p ≥ 0 of payoff(p))
+  portfolio requirement = Σ_underlying max_expiry(requirement for that expiry's holdings)
   premium     = N · m · net price,  net price = Σ s_i · r_i · price_i   (positive is paid)
   commitment  = requirement + premium + fee provision
   loss at expiry (estimate) = max(0, premium - N · m · min over p ≥ 0 of payoff(p))
@@ -13,7 +14,7 @@ Formula: with ``s_i`` = +1 for a bought leg and -1 for a sold one, ``r_i`` its
   strike, unless it still falls above the highest strike, where it has none.
 Reference: Alpaca, "Options Level 3 Trading", on maintenance margin and cost
   basis, https://docs.alpaca.markets/docs/options-level-3-trading (page dated
-  2025-09-24, read 2026-10-06): the requirement is the lowest point of the
+  2025-09-24, read 2026-10-06 and 2026-10-08): the requirement is the lowest point of the
   summed exercise payoffs, premiums left out, and an order costs that plus
   its net premium. The sign of a multi-leg price, positive for a debit, is
   from Alpaca's order reference (``POST /v2/orders``, ``limit_price``,
@@ -24,7 +25,9 @@ Reference: Alpaca, "Options Level 3 Trading", on maintenance margin and cost
 Canonical implementation: this file.
 Validated against: tests/fixtures/test_option_structure_money_fixture.py
   (golden fixture OSM-001: Alpaca's two documented examples and hand-derived
-  cases, bit-exact) and tests/options/test_requirement.py.
+  cases, bit-exact), tests/fixtures/test_option_portfolio_money_fixture.py
+  (OSM-002: independently bounded expiries and portfolios beyond four legs,
+  bit-exact), and tests/options/test_requirement.py.
 
 Every quantity is whole cents and no step here rounds. A strike is whole
 thousandths of a dollar and a price is an exact decimal; an amount that does
@@ -37,7 +40,8 @@ has a requirement of $500.00 and a commitment of $193.00.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -114,10 +118,10 @@ def _sign(leg: ResolvedLeg) -> int:
     return 1 if leg.position == "long" else -1
 
 
-def _payoff_thousandths(structure: ResolvedStructure, price_thousandths: int) -> int:
-    """One structure's exercise payoff per share at an underlying price, in thousandths of a dollar."""
+def _payoff_thousandths(legs: Sequence[ResolvedLeg], price_thousandths: int) -> int:
+    """The legs' exercise payoff per share at an underlying price, in thousandths of a dollar."""
     total = 0
-    for leg in structure.legs:
+    for leg in legs:
         strike = leg.contract.strike_thousandths
         exercise_value = price_thousandths - strike if leg.contract.right == "call" else strike - price_thousandths
         total += _sign(leg) * leg.ratio * max(exercise_value, 0)
@@ -133,30 +137,36 @@ def exercise_payoff_thousandths(structure: ResolvedStructure, price_thousandths:
     """
     if isinstance(price_thousandths, bool) or not isinstance(price_thousandths, int) or price_thousandths < 0:
         raise ValueError(f"an underlying price is whole thousandths of a dollar, zero or more; got {price_thousandths!r}")
-    return _payoff_thousandths(structure, price_thousandths)
+    return _payoff_thousandths(structure.legs, price_thousandths)
 
 
-def _lowest_payoff_thousandths(structure: ResolvedStructure) -> int:
-    """The lowest point of one structure's exercise payoff per share over every underlying price from zero up.
+def _lowest_legs_payoff_thousandths(legs: Sequence[ResolvedLeg]) -> int:
+    """The lowest exercise payoff of legs sharing an underlying and expiry, with no order-size limit.
 
     Read at zero, at every strike, and from the slope above the highest
     strike. The strikes alone are not enough: a put structure can be at its
     worst at zero, and a call structure can keep losing above its last strike.
     """
-    slope_above_every_strike = sum(_sign(leg) * leg.ratio for leg in structure.legs if leg.contract.right == "call")
+    slope_above_every_strike = sum(_sign(leg) * leg.ratio for leg in legs if leg.contract.right == "call")
     if slope_above_every_strike < 0:
         raise StructureMoneyRefused(
             StructureMoneyRefusal.LOSS_UNBOUNDED,
             "The structure sells more calls than it buys, so its loss grows without limit as the price rises.",
         )
+    turning_points = {0, *(leg.contract.strike_thousandths for leg in legs)}
+    return min(_payoff_thousandths(legs, price) for price in turning_points)
+
+
+def _lowest_payoff_thousandths(structure: ResolvedStructure) -> int:
+    """One entry's lowest payoff; sold entries must share an expiry (ADR 0076)."""
+    lowest = _lowest_legs_payoff_thousandths(structure.legs)
     if structure.has_sold_leg and not structure.has_one_expiry:
         raise StructureMoneyRefused(
             StructureMoneyRefusal.MIXED_EXPIRY_WITH_SOLD_LEG,
             "The structure's legs expire on different dates and one of them is sold; "
             "the broker's requirement for that is not known, so it cannot be set aside.",
         )
-    turning_points = {0, *(leg.contract.strike_thousandths for leg in structure.legs)}
-    return min(_payoff_thousandths(structure, price) for price in turning_points)
+    return lowest
 
 
 def _payoff_cents(per_share_thousandths: int, size: EntrySize) -> int:
@@ -190,6 +200,24 @@ def broker_requirement(structure: ResolvedStructure, size: EntrySize) -> int:
     legs only the answer is zero under either reading.
     """
     return _payoff_cents(max(0, -_lowest_payoff_thousandths(structure)), size)
+
+
+def portfolio_broker_requirement(legs: Sequence[ResolvedLeg], size: EntrySize) -> int:
+    """Held collateral in cents: largest expiry requirement per underlying, summed across underlyings.
+
+    Alpaca's published portfolio rule, distinct from the shape allowed in
+    one submitted order. Every expiry must be independently bounded: a long
+    call expiring later cannot hide an uncovered short call. All legs have
+    the recorded multiplier in ``size``; their ratios count held contracts.
+    """
+    by_expiry: dict[tuple[str, int], list[ResolvedLeg]] = defaultdict(list)
+    for leg in legs:
+        by_expiry[leg.contract.root, leg.contract.expiry_ms].append(leg)
+    by_underlying: dict[str, int] = {}
+    for (root, _expiry), held in by_expiry.items():
+        cents = _payoff_cents(max(0, -_lowest_legs_payoff_thousandths(held)), size)
+        by_underlying[root] = max(by_underlying.get(root, 0), cents)
+    return sum(by_underlying.values())
 
 
 def _markets(structure: ResolvedStructure, quotes: Mapping[str, LegQuote]) -> dict[str, LegQuote]:

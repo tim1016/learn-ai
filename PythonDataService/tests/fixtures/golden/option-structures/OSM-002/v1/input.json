@@ -1,0 +1,333 @@
+{
+  "cases": [
+    {
+      "case": "independently_bounded_expiries_take_the_maximum",
+      "legs": [
+        {
+          "leg_id": "SPY-261218-call-4-short",
+          "position": "short",
+          "right": "call",
+          "strike": "4",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "SPY"
+        },
+        {
+          "leg_id": "SPY-261218-call-9-long",
+          "position": "long",
+          "right": "call",
+          "strike": "9",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "SPY"
+        },
+        {
+          "leg_id": "SPY-270115-call-4-short",
+          "position": "short",
+          "right": "call",
+          "strike": "4",
+          "ratio": 2,
+          "expiry": "270115",
+          "root": "SPY"
+        },
+        {
+          "leg_id": "SPY-270115-call-14-long",
+          "position": "long",
+          "right": "call",
+          "strike": "14",
+          "ratio": 2,
+          "expiry": "270115",
+          "root": "SPY"
+        }
+      ]
+    },
+    {
+      "case": "six_calls_sum_three_credit_spreads",
+      "legs": [
+        {
+          "leg_id": "SPY-261218-call-4-short",
+          "position": "short",
+          "right": "call",
+          "strike": "4",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "SPY"
+        },
+        {
+          "leg_id": "SPY-261218-call-9-long",
+          "position": "long",
+          "right": "call",
+          "strike": "9",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "SPY"
+        },
+        {
+          "leg_id": "SPY-261218-call-10-short",
+          "position": "short",
+          "right": "call",
+          "strike": "10",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "SPY"
+        },
+        {
+          "leg_id": "SPY-261218-call-15-long",
+          "position": "long",
+          "right": "call",
+          "strike": "15",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "SPY"
+        },
+        {
+          "leg_id": "SPY-261218-call-16-short",
+          "position": "short",
+          "right": "call",
+          "strike": "16",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "SPY"
+        },
+        {
+          "leg_id": "SPY-261218-call-21-long",
+          "position": "long",
+          "right": "call",
+          "strike": "21",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "SPY"
+        }
+      ]
+    },
+    {
+      "case": "six_calls_allow_same_expiry_offsets",
+      "legs": [
+        {
+          "leg_id": "SPY-261218-call-1-long",
+          "position": "long",
+          "right": "call",
+          "strike": "1",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "SPY"
+        },
+        {
+          "leg_id": "SPY-261218-call-2-short",
+          "position": "short",
+          "right": "call",
+          "strike": "2",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "SPY"
+        },
+        {
+          "leg_id": "SPY-261218-call-9-short",
+          "position": "short",
+          "right": "call",
+          "strike": "9",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "SPY"
+        },
+        {
+          "leg_id": "SPY-261218-call-10-long",
+          "position": "long",
+          "right": "call",
+          "strike": "10",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "SPY"
+        },
+        {
+          "leg_id": "SPY-261218-call-11-long",
+          "position": "long",
+          "right": "call",
+          "strike": "11",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "SPY"
+        },
+        {
+          "leg_id": "SPY-261218-call-12-short",
+          "position": "short",
+          "right": "call",
+          "strike": "12",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "SPY"
+        }
+      ]
+    },
+    {
+      "case": "opposed_spreads_cannot_offset_across_expiries",
+      "legs": [
+        {
+          "leg_id": "SPY-261218-call-4-short",
+          "position": "short",
+          "right": "call",
+          "strike": "4",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "SPY"
+        },
+        {
+          "leg_id": "SPY-261218-call-9-long",
+          "position": "long",
+          "right": "call",
+          "strike": "9",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "SPY"
+        },
+        {
+          "leg_id": "SPY-270115-call-4-long",
+          "position": "long",
+          "right": "call",
+          "strike": "4",
+          "ratio": 1,
+          "expiry": "270115",
+          "root": "SPY"
+        },
+        {
+          "leg_id": "SPY-270115-call-9-short",
+          "position": "short",
+          "right": "call",
+          "strike": "9",
+          "ratio": 1,
+          "expiry": "270115",
+          "root": "SPY"
+        }
+      ]
+    },
+    {
+      "case": "independent_underlyings_add_requirements",
+      "legs": [
+        {
+          "leg_id": "SPY-261218-call-4-short",
+          "position": "short",
+          "right": "call",
+          "strike": "4",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "SPY"
+        },
+        {
+          "leg_id": "SPY-261218-call-9-long",
+          "position": "long",
+          "right": "call",
+          "strike": "9",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "SPY"
+        },
+        {
+          "leg_id": "QQQ-261218-call-4-short",
+          "position": "short",
+          "right": "call",
+          "strike": "4",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "QQQ"
+        },
+        {
+          "leg_id": "QQQ-261218-call-9-long",
+          "position": "long",
+          "right": "call",
+          "strike": "9",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "QQQ"
+        }
+      ]
+    },
+    {
+      "case": "later_call_does_not_cover_unbounded_earlier_call",
+      "legs": [
+        {
+          "leg_id": "SPY-261218-call-4-short",
+          "position": "short",
+          "right": "call",
+          "strike": "4",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "SPY"
+        },
+        {
+          "leg_id": "SPY-270115-call-9-long",
+          "position": "long",
+          "right": "call",
+          "strike": "9",
+          "ratio": 1,
+          "expiry": "270115",
+          "root": "SPY"
+        }
+      ]
+    },
+    {
+      "case": "residual_sold_calls_remain_unbounded",
+      "legs": [
+        {
+          "leg_id": "SPY-261218-call-4-short",
+          "position": "short",
+          "right": "call",
+          "strike": "4",
+          "ratio": 2,
+          "expiry": "261218",
+          "root": "SPY"
+        },
+        {
+          "leg_id": "SPY-261218-call-9-long",
+          "position": "long",
+          "right": "call",
+          "strike": "9",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "SPY"
+        }
+      ]
+    },
+    {
+      "case": "sold_put_is_at_its_worst_at_zero",
+      "legs": [
+        {
+          "leg_id": "SPY-261218-put-4-short",
+          "position": "short",
+          "right": "put",
+          "strike": "4",
+          "ratio": 2,
+          "expiry": "261218",
+          "root": "SPY"
+        }
+      ]
+    },
+    {
+      "case": "recorded_multiplier_scales_the_requirement",
+      "multiplier": 10,
+      "legs": [
+        {
+          "leg_id": "SPY-261218-call-4-short",
+          "position": "short",
+          "right": "call",
+          "strike": "4",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "SPY"
+        },
+        {
+          "leg_id": "SPY-261218-call-9-long",
+          "position": "long",
+          "right": "call",
+          "strike": "9",
+          "ratio": 1,
+          "expiry": "261218",
+          "root": "SPY"
+        }
+      ]
+    },
+    {
+      "case": "nothing_held",
+      "legs": []
+    }
+  ]
+}

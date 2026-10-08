@@ -154,7 +154,7 @@ async def test_the_registered_bot_can_enter_read_its_budget_and_close(tmp_path, 
 async def test_the_deadline_keeper_closes_a_stopped_credit_spread_as_one_order(tmp_path):
     from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
     from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
-    from app.broker.alpaca.clerk.sqlite.scheduled_close import held_contracts
+    from app.broker.alpaca.clerk.sqlite.scheduled_close import CloseStanding, held_contracts, scheduled_close_state
     from app.services import market_liveness
     from tests._helpers.market_quotes import publish_quotes
     from tests.broker.alpaca.clerk.sqlite.conftest import _TestClock
@@ -178,6 +178,11 @@ async def test_the_deadline_keeper_closes_a_stopped_credit_spread_as_one_order(t
         runtime = get_clerk_runtime(account.binding.sealed_account_id)
         await runtime.deadline_keeper.tick()
         assert account.held() == {}
+        states = scheduled_close_state(account.repo, SID)
+        assert {state.contract for state in states} == {pick[0].occ_symbol for pick in RECEIVED_PICKS.values()}
+        assert all(state.standing is CloseStanding.FLAT and state.held == 0 for state in states)
+        assert all(state.contract in state.sentence for state in states)
+        assert len({(state.due_ms, state.taken_at_ms) for state in states}) == 1
         assert account.repo._conn.execute("SELECT COUNT(*) FROM orders WHERE role='REDUCING'").fetchone()[0] == 1
         await runtime.deadline_keeper.tick()
         assert account.repo._conn.execute("SELECT COUNT(*) FROM orders WHERE role='REDUCING'").fetchone()[0] == 1

@@ -1,0 +1,44 @@
+{
+  "cases": [
+    {
+      "case": "independently_bounded_expiries_take_the_maximum",
+      "broker_requirement_cents": 200000
+    },
+    {
+      "case": "six_calls_sum_three_credit_spreads",
+      "broker_requirement_cents": 150000
+    },
+    {
+      "case": "six_calls_allow_same_expiry_offsets",
+      "broker_requirement_cents": 0
+    },
+    {
+      "case": "opposed_spreads_cannot_offset_across_expiries",
+      "broker_requirement_cents": 50000
+    },
+    {
+      "case": "independent_underlyings_add_requirements",
+      "broker_requirement_cents": 100000
+    },
+    {
+      "case": "later_call_does_not_cover_unbounded_earlier_call",
+      "refusal": "OPTION_STRUCTURE_LOSS_UNBOUNDED"
+    },
+    {
+      "case": "residual_sold_calls_remain_unbounded",
+      "refusal": "OPTION_STRUCTURE_LOSS_UNBOUNDED"
+    },
+    {
+      "case": "sold_put_is_at_its_worst_at_zero",
+      "broker_requirement_cents": 80000
+    },
+    {
+      "case": "recorded_multiplier_scales_the_requirement",
+      "broker_requirement_cents": 5000
+    },
+    {
+      "case": "nothing_held",
+      "broker_requirement_cents": 0
+    }
+  ]
+}
