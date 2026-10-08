@@ -769,10 +769,16 @@ async def test_deploy_again_of_an_option_bot_then_a_deploy_from_its_answer_seals
         other = await client.get(f"{_BOTS}/{on_another_underlying.strategy_instance_id}/deploy-prefill")
         assert found.status_code == 200 and other.status_code == 200, (found.text, other.text)
         prefill = found.json()
-        # Exactly what the prefill answered, as the form sends it back: nothing added but the mode and the key.
-        again = {name: prefill[name] for name in prefill if name != "source_strategy_instance_id" and prefill[name] is not None}
+        # The form copies settings and translates the simulation hint into the
+        # request's execution mode; prefill metadata is not a Deploy field.
+        again = {
+            name: prefill[name]
+            for name in ("strategy_key", "symbol", "traded_symbol", "trades", "sizing", "parameters", "exit_terms")
+            if prefill[name] is not None
+        }
         deployed = await client.post(_BOTS, json={
-            **again, "execution_mode": "dry_run", "submission_key": "deploy-again-0001",
+            **again, "execution_mode": "dry_run" if prefill["dry_run"] else "paper",
+            "submission_key": "deploy-again-0001",
             "replaces_strategy_instance_id": earlier.strategy_instance_id,
         })
 
