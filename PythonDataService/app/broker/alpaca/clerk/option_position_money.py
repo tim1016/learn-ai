@@ -5,7 +5,7 @@ Formula: signed basis = Σ sign(lot) × lot cost × contracts × multiplier;
   position commitment = signed basis + collateral. Cash reserves collateral
   separately, because selling an option brings cash in without releasing it.
 Reference: ADR 0076 decision 28; Alpaca's Options Level 3 maintenance rule,
-  pinned by ``app/options/requirement.py`` and its OSM-001 fixture.
+  pinned by ``app/options/requirement.py`` and its OSM-001/OSM-002 fixtures.
 Canonical implementation: this FIFO composition; ``fifo_pnl.py`` owns basis
   and ``app/options/requirement.py`` owns collateral.
 Validated against: tests/broker/alpaca/clerk/test_option_position_money.py

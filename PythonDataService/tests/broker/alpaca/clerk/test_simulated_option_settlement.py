@@ -24,7 +24,7 @@ from app.broker.alpaca.clerk.simulated_option_settlement import (
     plain,
 )
 from app.options.contract import OptionContract
-from app.options.requirement import _payoff_thousandths
+from app.options.requirement import exercise_payoff_thousandths
 from app.options.structure import ResolvedLeg, ResolvedStructure
 
 CALL = OptionContract.from_occ_symbol("SPY260918C00585000")
@@ -78,7 +78,7 @@ def test_the_value_worked_out_is_the_exercise_payoff_the_structure_money_uses(
 
     worth = exercise_value(contract, underlying_price=price, contracts=1, multiplier=100)
 
-    assert worth.worked_out * 1000 == _payoff_thousandths(bought, price_thousandths)
+    assert worth.worked_out * 1000 == exercise_payoff_thousandths(bought, price_thousandths)
 
 
 @pytest.mark.parametrize(
