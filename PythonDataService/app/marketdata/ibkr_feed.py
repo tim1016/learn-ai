@@ -489,10 +489,13 @@ class IbkrMarketDataFeed:
             historical = await fetch_historical_minute_bars(
                 self._client,
                 normalized_symbol,
-                duration=f"{lookback_days} D",
+                # IBKR counts calendar dates including today, rather than a
+                # trailing 24-hour window. Include its first date, then trim
+                # to the sealed window below so warmup never grows.
+                duration=f"{lookback_days + 1} D",
                 use_rth=use_rth,
                 # A long lookback takes IBKR longer to serve (#2841).
-                timeout_s=historical_bars_timeout_s(lookback_days),
+                timeout_s=historical_bars_timeout_s(lookback_days + 1),
             )
         except IBKRImpossibleBarError as exc:
             # A bar that cannot be real is corruption the retry cannot cure, so
@@ -548,6 +551,8 @@ class IbkrMarketDataFeed:
                     "dropped": len(bars) - len(closed),
                 },
             )
+        window_start_ms = warmup_window_start_ms(lookback_days, now_ms=requested_at_ms)
+        closed = [bar for bar in closed if bar.start_ms >= window_start_ms]
         try:
             require_warmup_coverage(closed, lookback_days=lookback_days, now_ms=requested_at_ms)
         except MarketDataFeedError as exc:

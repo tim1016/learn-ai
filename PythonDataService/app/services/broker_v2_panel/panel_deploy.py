@@ -724,6 +724,7 @@ async def deploy_prefill(broker: str, account_id: str, sid: str) -> BotDeployPre
         raise budget_deploy.budget_error(exc) from exc
     return BotDeployPrefill(
         source_strategy_instance_id=sid,
+        dry_run=binding.mode == "dry_run",
         strategy_key=binding.strategy_key,
         symbol=binding.symbol,
         traded_symbol=(

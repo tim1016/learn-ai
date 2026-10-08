@@ -686,7 +686,7 @@ async def test_recent_closed_bars_refuses_loudly_when_history_is_unavailable(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("lookback_days", "timeout_s"), [(5, 15.0), (18, 75.0)])
+@pytest.mark.parametrize(("lookback_days", "timeout_s"), [(1, 15.0), (5, 15.0), (10, 75.0), (18, 75.0), (20, 75.0)])
 async def test_recent_closed_bars_gives_a_long_lookback_longer_to_answer(
     monkeypatch: pytest.MonkeyPatch, lookback_days: int, timeout_s: float
 ) -> None:
@@ -708,6 +708,7 @@ async def test_recent_closed_bars_gives_a_long_lookback_longer_to_answer(
     await feed.recent_closed_bars("SPY", use_rth=False, lookback_days=lookback_days)
 
     assert asked["timeout_s"] == pytest.approx(timeout_s, abs=1e-9, rel=0)
+    assert asked["duration"] == f"{lookback_days + 1} D"
 
 
 # ---------------------------------------------------------------------------
@@ -918,3 +919,21 @@ async def test_warmup_history_with_an_impossible_bar_refuses_under_its_own_reaso
 
     assert refused.value.reason == "IMPOSSIBLE_SOURCE_BAR"
     assert refused.value.__cause__ is failure
+
+
+@pytest.mark.asyncio
+async def test_warmup_fetch_covers_trailing_day_across_ibkr_calendar_dates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """IBKR 1 D at Oct 8 morning holds only Oct 8; the sealed window owes Oct 7."""
+    now = 1_791_468_000_000  # 2026-10-08 14:00 UTC
+    previous = now - 86_400_000 + 60_000
+    before_window = previous - 120_000
+    today = now - 60_000
+    monkeypatch.setattr("app.marketdata.ibkr_feed.now_ms_utc", lambda: now)
+
+    async def history(*_args: Any, **kwargs: Any) -> list[SimpleNamespace]:
+        starts = [today] if kwargs["duration"] == "1 D" else [before_window, previous, today]
+        return [_make_ibkr_bar("SPY", start_ms=start) for start in starts]
+
+    monkeypatch.setattr("app.marketdata.ibkr_feed.fetch_historical_minute_bars", history)
+    bars = await IbkrMarketDataFeed(_fake_connected_client()).recent_closed_bars("SPY", lookback_days=1)
+    assert [bar.start_ms for bar in bars] == [previous, today]

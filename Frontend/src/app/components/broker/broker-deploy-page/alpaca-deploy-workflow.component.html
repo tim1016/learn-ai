@@ -177,7 +177,7 @@
             (carryoverAllowedChange)="setCarryover($event)"
           />
           @if (options(); as chosen) {
-            <!-- In place of the stock exit terms, never beside them. -->
+            <!-- Options retain their own execution terms. -->
             <app-deploy-option-order-terms
               [terms]="chosen.order_terms"
               [defaults]="optionCatalogueView()?.order_terms ?? null"
@@ -185,44 +185,38 @@
               [failure]="optionCatalogueFailure()"
               (termsChange)="setOptionOrderTerms($event)"
             />
-            @if (!view.default_exit_terms && ticketForm.exitAllowanceBps().invalid()) {
-              <!-- Every bot is sealed with exit terms. An option bot's come from the account's defaults: How has no box for them. -->
-              <p class="deploy-option-needs-exit-terms" role="alert">This account has no defaults for new bots, and every bot is sealed with exit terms.
+          }
+          <fieldset class="deploy-exit-terms" aria-labelledby="deploy-exit-terms-title">
+            <!-- The steps' "i" sits on the legend's row, not a row of its own: How must fit one screen. -->
+            <legend><span id="deploy-exit-terms-title">Exit terms · fixed for this bot’s life</span>
+              <button type="button" class="deploy-exit-terms__steps-open" popovertarget="deploy-exit-steps" aria-label="What each exit step does">i</button></legend>
+            <div class="deploy-exit-terms__fields">
+              <label>
+                <span>Exit allowance<span class="sr-only"> (bps)</span></span>
+                <span class="deploy-unit"><input type="number" step="any" [formField]="ticketForm.exitAllowanceBps" (blur)="refreshExitTerms()" /><span aria-hidden="true">bps</span></span>
+              </label>
+              <label>
+                <span>Band multiple</span>
+                <span class="deploy-unit"><input type="number" step="any" [formField]="ticketForm.bandMultiple" (blur)="refreshExitTerms()" /><span aria-hidden="true">×</span></span>
+              </label>
+              <label>
+                <span>Spread cap<span class="sr-only"> (bps)</span></span>
+                <span class="deploy-unit"><input type="number" step="any" [formField]="ticketForm.spreadCapBps" (blur)="refreshExitTerms()" /><span aria-hidden="true">bps</span></span>
+              </label>
+            </div>
+            @if (!view.default_exit_terms) {
+              <p>This account has no defaults for new bots, so these start empty.
                 <a [routerLink]="settingsRoute()">Set defaults for new bots in Settings</a></p>
             }
-          } @else {
-            <fieldset class="deploy-exit-terms" aria-labelledby="deploy-exit-terms-title">
-              <!-- The steps' "i" sits on the legend's row, not a row of its own: How must fit one screen. -->
-              <legend><span id="deploy-exit-terms-title">Exit terms · fixed for this bot’s life</span>
-                <button type="button" class="deploy-exit-terms__steps-open" popovertarget="deploy-exit-steps" aria-label="What each exit step does">i</button></legend>
-              <div class="deploy-exit-terms__fields">
-                <label>
-                  <span>Exit allowance<span class="sr-only"> (bps)</span></span>
-                  <span class="deploy-unit"><input type="number" step="any" [formField]="ticketForm.exitAllowanceBps" (blur)="refreshExitTerms()" /><span aria-hidden="true">bps</span></span>
-                </label>
-                <label>
-                  <span>Band multiple</span>
-                  <span class="deploy-unit"><input type="number" step="any" [formField]="ticketForm.bandMultiple" (blur)="refreshExitTerms()" /><span aria-hidden="true">×</span></span>
-                </label>
-                <label>
-                  <span>Spread cap<span class="sr-only"> (bps)</span></span>
-                  <span class="deploy-unit"><input type="number" step="any" [formField]="ticketForm.spreadCapBps" (blur)="refreshExitTerms()" /><span aria-hidden="true">bps</span></span>
-                </label>
-              </div>
-              @if (!view.default_exit_terms) {
-                <p>This account has no defaults for new bots, so these start empty.
-                  <a [routerLink]="settingsRoute()">Set defaults for new bots in Settings</a></p>
-              }
-            </fieldset>
-            <!-- Over the page, never in the column: opening it never makes How taller. -->
-            <div id="deploy-exit-steps" class="deploy-exit-steps" popover role="dialog" aria-labelledby="deploy-exit-steps-title">
-              <header>
-                <h3 id="deploy-exit-steps-title">What each exit step does</h3>
-                <button type="button" popovertarget="deploy-exit-steps" popovertargetaction="hide">Close</button>
-              </header>
-              <p>{{ view.exit_steps_summary }}</p>
-            </div>
-          }
+          </fieldset>
+          <!-- Over the page, never in the column: opening it never makes How taller. -->
+          <div id="deploy-exit-steps" class="deploy-exit-steps" popover role="dialog" aria-labelledby="deploy-exit-steps-title">
+            <header>
+              <h3 id="deploy-exit-steps-title">What each exit step does</h3>
+              <button type="button" popovertarget="deploy-exit-steps" popovertargetaction="hide">Close</button>
+            </header>
+            <p>{{ view.exit_steps_summary }}</p>
+          </div>
           @if (endFields(); as end) {
             <app-deploy-end-section
               [fields]="end"
@@ -254,6 +248,7 @@
             [(amount)]="amount"
             (reviewed)="moneyReview.set($event)"
             (answered)="budgetAnswer.set($event)"
+            (refreshRequested)="reload()"
           />
         </app-deploy-step>
       </li>
