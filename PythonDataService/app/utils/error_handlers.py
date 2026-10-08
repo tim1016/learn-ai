@@ -12,10 +12,12 @@ from pydantic_core import PydanticUndefinedType
 
 logger = logging.getLogger(__name__)
 
-# What the 422 handler echoes of the refused input is bounded by depth
-# (#2969): a body nested deeper than the interpreter's recursion limit
-# crashes ``jsonable_encoder`` mid-walk, turning the 422 the handler exists
-# to give into a 500 on the very input it is reporting.
+# What the 422 handler echoes back is bounded by container depth (#2969):
+# a body nested deeper than the interpreter's recursion limit crashes
+# ``jsonable_encoder`` mid-walk, turning the 422 the handler exists to give
+# into a 500 on the very input it is reporting. The limit counts from the
+# answer's root, so the refused input itself truncates a few levels short
+# of the full depth.
 _ECHO_DEPTH_LIMIT = 20
 _ECHO_TRUNCATED = "<truncated>"
 
@@ -39,43 +41,20 @@ async def request_validation_exception_handler(
     )
 
 
-def _bound_echo_depth(value: Any) -> Any:
-    """Copy ``value`` with containers past :data:`_ECHO_DEPTH_LIMIT` replaced by a marker.
+def _bound_echo_depth(value: Any, depth: int = 0) -> Any:
+    """Copy ``value`` with containers at :data:`_ECHO_DEPTH_LIMIT` or deeper replaced by a marker.
 
-    The walk keeps its own stack instead of recursing: input nested past the
-    recursion limit is exactly what this bound exists for, so a recursive
-    walk would crash on it the same way the encoder does (#2969).
+    Recursion here is safe because the bound is: on any input, however
+    deeply nested, the walk descends at most ``_ECHO_DEPTH_LIMIT`` levels —
+    unlike the unbounded walk the encoder does (#2969).
     """
     if not isinstance(value, (dict, list)):
         return value
-    bounded: Any = {} if isinstance(value, dict) else []
-    pending: list[tuple[dict[str, Any] | list[Any], dict[str, Any] | list[Any], int]] = [
-        (value, bounded, 0)
-    ]
-    while pending:
-        source, target, depth = pending.pop()
-        if isinstance(source, dict):
-            for key, item in source.items():
-                if not isinstance(item, (dict, list)):
-                    target[key] = item
-                    continue
-                if depth >= _ECHO_DEPTH_LIMIT:
-                    target[key] = _ECHO_TRUNCATED
-                    continue
-                child: Any = {} if isinstance(item, dict) else []
-                target[key] = child
-                pending.append((item, child, depth + 1))
-        else:
-            for item in source:
-                if not isinstance(item, (dict, list)):
-                    target.append(item)
-                elif depth >= _ECHO_DEPTH_LIMIT:
-                    target.append(_ECHO_TRUNCATED)
-                else:
-                    child = {} if isinstance(item, dict) else []
-                    target.append(child)
-                    pending.append((item, child, depth + 1))
-    return bounded
+    if depth >= _ECHO_DEPTH_LIMIT:
+        return _ECHO_TRUNCATED
+    if isinstance(value, dict):
+        return {key: _bound_echo_depth(item, depth + 1) for key, item in value.items()}
+    return [_bound_echo_depth(item, depth + 1) for item in value]
 
 
 def _replace_non_finite(value: Any) -> Any:
