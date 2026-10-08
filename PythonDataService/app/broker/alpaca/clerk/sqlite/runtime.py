@@ -1256,7 +1256,7 @@ class SqliteAlpacaClerkFacade:
 
     async def _listings_beside_the_first_reading(
         self, contracts: tuple[OptionContract, ...], *, entry: tuple[str, str]
-    ) -> tuple[BrokerOptionContract | None | BaseException, ...]:
+    ) -> tuple[BrokerOptionContract | BaseException | None, ...]:
         """Read all listings inside one bound, alongside one account reading (ADR 0076)."""
         reading = None if self._buying_power is None else self._buying_power.begin_first()
         try:
