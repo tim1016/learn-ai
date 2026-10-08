@@ -33,8 +33,9 @@ under the contract's own symbol and the world's own execution identity
 (``sim-execution:`` / ``shadow-execution:``), so the stock lookups, the open
 orders and the positions of the port all show it.
 
-An order of several legs is not taken by either world. Each port refuses it
-by name before it reaches this module.
+The Dry Run also fills an opening order of several legs through the
+canonical multi-leg fill model. Every leg commits together. Live Shadow
+refuses that order before it reaches this module (ADR 0076).
 """
 
 from __future__ import annotations

@@ -26,15 +26,16 @@ recorded as that, and the entry goes on. An account whose bots trade shares
 makes no reading and writes no record. A simulation makes none either: it
 has no broker figure to read.
 
-Formula: premium paid = sum over the entry order's fills in effect of
-  contracts * price a share * the contract's multiplier, exact, and used
-  only when it is whole cents. The comparison itself is
+Formula: premium paid = sum over the parent and child orders' effective
+  fills of contracts * price a share * multiplier * side sign (BUY +1,
+  SELL -1), exact, and used only when it is whole cents. The comparison is
   ``app.options.buying_power_check`` and nothing is computed twice.
 Reference: #2913, "Comparing with Alpaca"; ADR 0076 decision 26.
 Canonical implementation: ``app/options/buying_power_check.py`` (the rows),
   ``app/broker/alpaca/clerk/money.py`` (``notional``); this file for which
   pair of readings may be compared.
-Validated against: tests/broker/alpaca/clerk/sqlite/test_entry_buying_power.py.
+Validated against: tests/broker/alpaca/clerk/sqlite/test_entry_buying_power.py
+  and tests/broker/alpaca/clerk/sqlite/test_multi_leg_evidence.py.
 """
 
 from __future__ import annotations

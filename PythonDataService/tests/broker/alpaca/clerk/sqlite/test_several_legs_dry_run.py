@@ -53,16 +53,19 @@ async def test_every_contract_fills_under_one_parent_and_settles_one_whole_struc
     assert len(fills) == 2 and all(fill.quote_age_ms == 300 and fill.fill_model == "natural_price" for fill in fills)
 
 
-@pytest.mark.parametrize("name", list(NamedStructure))
-async def test_every_catalogue_structure_enters_and_counts_its_exact_leg_ratios(dry_run: _DryRun, name: NamedStructure) -> None:
-    plan = starting_plan(name, "SPY")
+def _catalogue_picks(name: NamedStructure) -> Mapping[str, Pick]:
     contracts, _shape_price = _AS_NAMED[name]
     bids = {"C580": "6.20", "C585": "3.10", "C590": "1.20", "C595": "0.50", "C600": "0.18",
             "P570": "0.18", "P575": "0.50", "P580": "1.20", "P585": "2.82", "P590": "5.50"}
-    picks = {
+    return {
         leg_id: (contract, bids[contracts[leg_id]], str(Decimal(bids[contracts[leg_id]]) + Decimal("0.01")))
         for leg_id, contract in _picked(**contracts).items()
     }
+
+
+@pytest.mark.parametrize("name", list(NamedStructure))
+async def test_every_catalogue_structure_enters_and_counts_its_exact_leg_ratios(dry_run: _DryRun, name: NamedStructure) -> None:
+    plan, picks = starting_plan(name, "SPY"), _catalogue_picks(name)
     receipt = await dry_run.enter(evidence(dry_run.clock(), picks), decision="catalogue-entry", plan=plan)
     assert receipt.state is EffectOperationState.SUBMITTED, receipt.explanation
     (parent,) = receipt.child_order_refs
@@ -78,6 +81,23 @@ async def test_every_catalogue_structure_enters_and_counts_its_exact_leg_ratios(
     assert {each.contract: each.quantity for each in fills} == {
         picks[leg.leg_id][0].occ_symbol: leg.qty_ratio for leg in plan.on_enter
     }
+    assert {each.contract: each.price for each in fills} == {
+        picks[leg.leg_id][0].occ_symbol: float(picks[leg.leg_id][2 if leg.position == "long" else 1])
+        for leg in plan.on_enter
+    }
     assert all(each.quote_age_ms == 300 and each.fill_model == "natural_price" for each in fills)
     if len(plan.on_enter) > 1:
         assert dry_run.repo.fills_for_order(parent) == []
+
+
+@pytest.mark.parametrize("name", list(NamedStructure))
+async def test_every_catalogue_structure_is_refused_whole_when_one_leg_has_no_quote(dry_run: _DryRun, name: NamedStructure) -> None:
+    plan, picks = starting_plan(name, "SPY"), _catalogue_picks(name)
+    missing = plan.on_enter[-1].leg_id
+    handed = evidence(dry_run.clock(), picks)
+    receipt = await dry_run.enter(
+        evidence(dry_run.clock(), picks, quotes={key: value for key, value in handed.quotes.items() if key != missing}),
+        decision="catalogue-refused", plan=plan,
+    )
+    assert receipt.state is EffectOperationState.REJECTED and missing in receipt.explanation
+    assert dry_run.held() == {} and dry_run.fills() == []

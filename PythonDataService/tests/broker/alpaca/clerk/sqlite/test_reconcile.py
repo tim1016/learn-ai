@@ -3923,7 +3923,7 @@ async def test_escalation_revalidates_the_episode_under_intake_instead_of_trusti
 
 
 async def test_absence_void_rechecks_broker_identity_before_folding(
-    repo: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch
+    repo: ClerkSqliteRepository,
 ) -> None:
     """A broker identity arriving after the prologue read blocks the void.
 
@@ -3934,22 +3934,28 @@ async def test_absence_void_rechecks_broker_identity_before_folding(
     """
     order_ref = await _make_uncertain_order(repo)
     repo.clock.advance(30_001)  # type: ignore[attr-defined]
-    inner_order = repo.order
-    reads = {"n": 0}
+    row = repo.order(order_ref)
+    assert row is not None
 
-    def identity_appears_after_the_prologue(order_ref_arg: str):
-        row = inner_order(order_ref_arg)
-        if row is not None and row.order_ref == order_ref and row.broker_order_id is None:
-            reads["n"] += 1
-            if reads["n"] >= 2:
-                return dataclasses.replace(row, broker_order_id="broker-late-identity")
-        return row
+    class AcknowledgedDuringLookup(_FakeTrade):
+        async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
+            from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_acknowledgement
 
-    monkeypatch.setattr(repo, "order", identity_appears_after_the_prologue)
-    await _reconcile_unknown_effect(repo, trade=_FakeTrade(lookup_absent=True))
-    assert reads["n"] >= 2  # the fold re-read the identity
-    effect = repo.effect_operation(inner_order(order_ref).effect_operation_id)  # type: ignore[union-attr]
-    assert effect is not None and effect.state == "unknown"  # not voided as absent
+            self.lookup_calls.append(client_order_id)
+            fold_order_acknowledgement(
+                repo, effect_operation_id=row.effect_operation_id,
+                order=_broker_order(client_order_id, order_id="broker-late-identity").model_copy(update={
+                    "updated_at_ms": repo.clock(), "observed_at_ms": repo.clock(),
+                }),
+            )
+            return None
+
+    trade = AcknowledgedDuringLookup()
+    await _reconcile_unknown_effect(repo, trade=trade)
+    assert trade.lookup_calls == [order_ref]
+    assert repo.order(order_ref).broker_order_id == "broker-late-identity"
+    effect = repo.effect_operation(row.effect_operation_id)
+    assert effect is not None and effect.state == "in_progress"
 
 
 @pytest.mark.parametrize("final_failure", [False, True])

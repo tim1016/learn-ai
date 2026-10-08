@@ -620,12 +620,11 @@ class SyntheticBroker(UnsupportedOptionOrderRefusal):
     async def submit_option_order(
         self, order: OptionOrderRequest, *, client_order_id: str
     ) -> BrokerOptionOrder:
-        """Fill an option order of one leg from the quote bound to it, or end it unfilled.
+        """Fill an option order from its bound quotes, or end it unfilled.
 
-        The simulation takes an option order of one leg, so it answers this
-        and the two lookups itself. What it still does not take, an order of
-        several legs or any order when it has no ledger to record a fill in,
-        it refuses in the words every simulated port refuses option orders
+        The simulation takes one-leg orders and multi-leg opening orders,
+        and answers both lookups itself. An order with no ledger to record a fill in
+        is refused in the words every simulated port refuses option orders
         in (``UnsupportedOptionOrderRefusal``).
 
         The order's record is one more in the same ledger. Its ``order`` is
