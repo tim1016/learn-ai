@@ -100,6 +100,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, ClassVar, Literal, NamedTuple, TypedDict
 
+from app.broker.alpaca.clerk.account_money import holdings_text
 from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal
 from app.broker.alpaca.clerk.program_leg import (
     LegRefusal,
@@ -157,14 +158,19 @@ from app.broker.alpaca.clerk.sqlite.off_loop import (
     run_inline,
 )
 from app.broker.alpaca.clerk.sqlite.open_replacement import OPEN_REPLACEMENT, replacement_due
-from app.broker.alpaca.clerk.sqlite.option_entry import option_entry_of_order, option_exit_facts, order_contract
+from app.broker.alpaca.clerk.sqlite.option_close import (
+    captured_positions,
+    close_held_options,
+    order_reductions,
+    recorded_option_close,
+)
+from app.broker.alpaca.clerk.sqlite.option_entry import MultiLegOptionEntryFacts, option_entry_of_order
 from app.broker.alpaca.clerk.sqlite.option_event_books import event_share_order_symbol
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     UNFILLED_TERMINAL_STATES,
     BrokerRefusal,
     broker_refusal,
     entry_never_accepted_durably,
-    entry_order_symbol,
     fold_entry_never_accepted,
     fold_failed,
     fold_order_evidence,
@@ -200,12 +206,11 @@ from app.broker.alpaca.clerk.sqlite.unknown_exit_orders import send_wait_from_ms
 from app.broker.alpaca.config import BROKER_ID
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
-from app.broker.contract.options import SingleOptionOrderRequest
+from app.broker.contract.options import OptionOrderRequest, SingleOptionOrderRequest
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.engine.live.order_identity import build_bot_order_namespace, build_order_ref
 from app.options.contract import OptionContract
 from app.options.deadlines import past_last_session
-from app.options.quotes import HeldQuote
 from app.schemas.market_liveness import MarketLivenessFact
 
 logger = logging.getLogger(__name__)
@@ -624,7 +629,7 @@ class _ClaimedState(NamedTuple):
     entries: list[OrderResource]
     reducing: OrderResource | None
     symbol: str
-    reducing_fills_short: bool
+    reducing_needs_evidence: bool
 
 
 def _read_exit_claim_state(
@@ -641,15 +646,18 @@ def _read_exit_claim_state(
         entries,
         reducing,
         _single_entry_symbol(repo, entries),
-        reducing is not None and repo.order_fills_short_of_broker_cumulative(reducing.order_ref),
+        reducing is not None and (
+            repo.order_fills_short_of_broker_cumulative(reducing.order_ref)
+            or repo.order_has_unproven_legs(reducing.order_ref)
+        ),
     )
 
 
 def _fold_attributed_flat_or_none(
     repo: ClerkSqliteRepository, effect_operation_id: str, state: _ClaimedState
 ) -> ExitSubmission | None:
-    remaining_qty = repo.position(state.effect.strategy_instance_id, state.symbol)
-    if state.reducing is None and not position_quantity_is_nonzero(remaining_qty):
+    held = captured_positions(repo, state.effect.strategy_instance_id, state.entries)
+    if state.reducing is None and not any(position_quantity_is_nonzero(qty) for qty in held.values()):
         _fold_attributed_flat(repo, effect_operation_id, _primary_entry_ref(repo, state.entries))
         return _snapshot(repo, effect_operation_id)
     return None
@@ -668,7 +676,9 @@ def _prepare_reduction(
     :data:`_TOUCH_NEEDED`, having written nothing, when the recorded leg
     must be re-priced and ``touch`` was not read yet.
     """
-    remaining_qty = repo.position(state.effect.strategy_instance_id, state.symbol)
+    positions = captured_positions(repo, state.effect.strategy_instance_id, state.entries)
+    remaining_qty = next((qty for qty in positions.values() if position_quantity_is_nonzero(qty)), 0)
+    symbol = next((symbol for symbol, qty in positions.items() if position_quantity_is_nonzero(qty)), state.symbol)
     order_ref = _primary_entry_ref(repo, state.entries)
     if not position_quantity_is_nonzero(remaining_qty):
         _fold_attributed_flat(repo, effect_operation_id, order_ref)
@@ -677,7 +687,7 @@ def _prepare_reduction(
         repo,
         effect_operation_id=effect_operation_id,
         order_ref=order_ref,
-        symbol=state.symbol,
+        symbol=symbol,
         remaining_qty=remaining_qty,
         touch=touch, liveness=liveness,
     )
@@ -685,12 +695,29 @@ def _prepare_reduction(
         return leg
     if leg is None:
         return _snapshot(repo, effect_operation_id)
+    multi = any(isinstance(option_entry_of_order(repo, entry.order_ref), MultiLegOptionEntryFacts) for entry in state.entries)
+    close = None
+    leg_ids = None
+    if multi:
+        for contract, qty in positions.items():
+            if not position_quantity_is_nonzero(qty):
+                continue
+            if _fold_expired_option_close(
+                repo, _accepted_facts(repo, effect_operation_id), effect_operation_id=effect_operation_id,
+                order_ref=order_ref, symbol=contract, remaining_qty=qty, now_ms=repo.clock(),
+            ):
+                return _snapshot(repo, effect_operation_id)
+            require_capability(
+                repo, capability=Capability.REDUCE, strategy_instance_id=state.effect.strategy_instance_id,
+                reduction_intent=ReductionIntent(symbol=contract, side="SELL" if qty > 0 else "BUY", quantity=abs(qty)),
+            )
+        close, leg_ids = close_held_options(repo, state.effect.strategy_instance_id, state.entries)
     require_capability(
         repo,
         capability=Capability.REDUCE,
         strategy_instance_id=state.effect.strategy_instance_id,
         reduction_intent=ReductionIntent(
-            symbol=state.symbol,
+            symbol=symbol,
             side="SELL" if remaining_qty > 0 else "BUY",
             quantity=abs(remaining_qty),
         ),
@@ -698,9 +725,11 @@ def _prepare_reduction(
     return _create_reducing_order(
         repo,
         effect_operation_id=effect_operation_id,
-        symbol=state.symbol,
+        symbol=symbol,
         quantity=remaining_qty,
         leg=leg,
+        option_order=close,
+        option_leg_ids=leg_ids,
     )
 
 
@@ -715,8 +744,17 @@ def _finalize_claimed_exit(
     assert refreshed is not None
     if not _is_terminal(refreshed.broker_state):
         return _snapshot(repo, effect_operation_id)
-    final_qty = repo.position(state.effect.strategy_instance_id, state.symbol)
-    if not position_quantity_is_nonzero(final_qty):
+    if repo.order_has_unproven_legs(refreshed.order_ref):
+        if state.effect.state != "unknown":
+            fold_uncertain(
+                repo, effect_operation_id=effect_operation_id, order_ref=refreshed.order_ref,
+                why="The parent ended while an option leg still needs terminal or execution evidence; retaining custody.",
+            )
+        return _snapshot(repo, effect_operation_id)
+    held = captured_positions(repo, state.effect.strategy_instance_id, state.entries)
+    final_qty = next((qty for qty in held.values() if position_quantity_is_nonzero(qty)), 0)
+    final_symbol = next((symbol for symbol, qty in held.items() if position_quantity_is_nonzero(qty)), state.symbol)
+    if not any(position_quantity_is_nonzero(qty) for qty in held.values()):
         _fold_attributed_flat(repo, effect_operation_id, _primary_entry_ref(repo, state.entries))
         return _snapshot(repo, effect_operation_id)
     # A synchronous submit response can truthfully say the reducing order
@@ -738,7 +776,8 @@ def _finalize_claimed_exit(
     # the latest acknowledgement, so after one successful exact lookup the
     # order is short only while the broker itself reports unrecorded fills.
     if (
-        not repo.fills_for_order(refreshed.order_ref)
+        not any(repo.fills_for_order(leg.order_ref) for leg in repo.order_legs(refreshed.order_ref))
+        and not repo.fills_for_order(refreshed.order_ref)
         and (refreshed.broker_state or "").lower() not in UNFILLED_TERMINAL_STATES
     ) or repo.order_fills_short_of_broker_cumulative(refreshed.order_ref):
         if state.effect.state != "unknown":
@@ -771,7 +810,7 @@ def _finalize_claimed_exit(
     else:
         headline = "A completed EXIT left attributed exposure"
         explanation = (
-            f"The reducing order became terminal while {final_qty:g} {state.symbol} "
+            f"The reducing order became terminal while {holdings_text({symbol: qty for symbol, qty in held.items() if qty})} "
             "remained attributed to this strategy."
         )
         next_step = "Run another EXIT or reconcile until attributed exposure is flat."
@@ -779,7 +818,7 @@ def _finalize_claimed_exit(
         repo,
         effect_operation_id=effect_operation_id,
         order_ref=refreshed.order_ref,
-        symbol=state.symbol,
+        symbol=final_symbol,
         attributed_qty=final_qty,
         summary_code="EXIT_NOT_FLAT",
         reason="The reducing order resolved without flattening the position.",
@@ -872,7 +911,7 @@ async def _resolve_claimed(
             read=read,
             run=run,
         )
-    elif not _is_terminal(reducing.broker_state) or state.reducing_fills_short:
+    elif not _is_terminal(reducing.broker_state) or state.reducing_needs_evidence:
         # A terminal reducing order whose recorded fills fall short of the
         # broker's cumulative lost a slice (#2305): refresh it by exact lookup
         # so the cumulative fold closes the gap before the outcome is judged.
@@ -1457,10 +1496,30 @@ def _created_leg_may_be_sent(
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
-    remaining_qty = repo.position(effect.strategy_instance_id, created.symbol)
+    entries = [order for order in repo.orders_for_effect_operation(effect_operation_id) if order.role == "ENTRY"]
+    held = captured_positions(repo, effect.strategy_instance_id, entries)
+    remaining_qty = next((qty for qty in held.values() if position_quantity_is_nonzero(qty)), 0)
     if not position_quantity_is_nonzero(remaining_qty):
         _fold_attributed_flat(repo, effect_operation_id, order_ref)
         return False
+    request = created.the_option_order
+    if request is not None:
+        for symbol, side, quantity in order_reductions(request):
+            confirmed = held.get(symbol, 0)
+            if confirmed != (quantity if side is OrderSide.SELL else -quantity):
+                refusal = BrokerRefusal(why=f"The confirmed holding of {symbol} changed after this close was created; no stale close was sent.")
+                reducing = repo.order(order_ref)
+                assert reducing is not None
+                if sent_to_broker:
+                    fold_uncertain(repo, effect_operation_id=effect_operation_id, order_ref=order_ref, why=refusal.why)
+                else:
+                    _fold_submit_refused(repo, effect_operation_id=effect_operation_id, reducing=reducing, refusal=refusal)
+                return False
+            if not sent_to_broker and _fold_expired_option_close(
+                repo, _accepted_facts(repo, effect_operation_id), effect_operation_id=effect_operation_id,
+                order_ref=order_ref, symbol=symbol, remaining_qty=confirmed, now_ms=repo.clock(),
+            ):
+                return False
     valid_until_ms = _created_leg_valid_until_ms(repo, effect_operation_id, created)
     now_ms = repo.clock()
     accepted = _accepted_facts(repo, effect_operation_id)
@@ -1986,10 +2045,12 @@ def _confirmed_quantity_still_holds(
 
 
 def _single_entry_symbol(repo: ClerkSqliteRepository, entries: list[OrderResource]) -> str:
-    symbols = {entry_order_symbol(repo, order.order_ref) for order in entries}
-    if len(symbols) != 1:
+    from app.broker.alpaca.clerk.sqlite.order_evidence import entry_order_symbols
+
+    symbols = tuple(dict.fromkeys(symbol for entry in entries for symbol in entry_order_symbols(repo, entry.order_ref)))
+    if len(symbols) != 1 and not all(option_entry_of_order(repo, order.order_ref) is not None for order in entries):
         raise AssertionError("one EXIT may only link entry orders for one symbol")
-    return next(iter(symbols))
+    return symbols[0]
 
 
 def _entries_the_broker_knows(repo: ClerkSqliteRepository, entries: list[OrderResource]) -> list[OrderResource]:
@@ -2008,7 +2069,10 @@ async def _prove_entry_set_terminal(
     run: OffLoop,
 ) -> bool:
     for entry in entries:
-        if reducing_exists and _is_terminal(entry.broker_state):
+        if reducing_exists and _is_terminal(entry.broker_state) and not await run(
+            lambda entry=entry: repo.order_has_unproven_legs(entry.order_ref)
+            or repo.order_fills_short_of_broker_cumulative(entry.order_ref)
+        ):
             continue
         if not await _cancel_and_prove_order(
             repo,
@@ -2095,7 +2159,7 @@ async def _cancel_and_prove_order(
         )
         refreshed = repo.order(order.order_ref)
         assert refreshed is not None
-        if not _is_terminal(refreshed.broker_state):
+        if not _is_terminal(refreshed.broker_state) or repo.order_has_unproven_legs(order.order_ref):
             if cancel_error is not None and not (
                 say_once and _cancel_already_uncertain(repo, order, looked_up=refreshed)
             ):
@@ -2271,7 +2335,11 @@ async def _refresh_terminal_entries(
             )
             current = repo.order(entry.order_ref)
             assert current is not None
-            return _is_terminal(current.broker_state)
+            return (
+                _is_terminal(current.broker_state)
+                and not repo.order_has_unproven_legs(current.order_ref)
+                and not repo.order_fills_short_of_broker_cumulative(current.order_ref)
+            )
 
         if not await run(_fold_refreshed_entry):
             return False
@@ -2318,6 +2386,8 @@ def _create_reducing_order(
     symbol: str,
     quantity: float,
     leg: _SendableLeg,
+    option_order: OptionOrderRequest | None = None,
+    option_leg_ids: tuple[str, ...] | None = None,
 ) -> OrderResource:
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
@@ -2341,6 +2411,8 @@ def _create_reducing_order(
         reference_bid=None if quote is None else quote.bid,
         reference_ask=None if quote is None else quote.ask,
         reference_quote_observed_at_ms=None if quote is None else quote.observed_at_ms,
+        option_order=None if option_order is None else option_order.model_dump(mode="json"),
+        option_leg_ids=None if option_leg_ids is None else list(option_leg_ids),
     )
     repo.append_transition(
         TransitionInput(
@@ -2583,19 +2655,21 @@ async def _submit_reducing_order(
             )
             return
         # The verdict is applied inside the one run that records the send.
-        uncovered = flatten_cover_refusal(
-            symbol=created.symbol,
-            side=OrderSide(created.side.lower()),
-            quantity=created.quantity,
-            observed=account,
+        reductions = (
+            order_reductions(created.the_option_order) if created.the_option_order is not None
+            else ((created.symbol, OrderSide(created.side.lower()), created.quantity),)
         )
+        uncovered = next((
+            refusal for symbol, side, quantity in reductions
+            if (refusal := flatten_cover_refusal(symbol=symbol, side=side, quantity=quantity, observed=account)) is not None
+        ), None)
     now_ms = repo.clock()
     liveness = pricing.read_liveness(created.symbol, now_ms)
 
-    def _prepare_submit() -> BrokerOrderLeg | SingleOptionOrderRequest | None:
+    def _prepare_submit() -> BrokerOrderLeg | OptionOrderRequest | None:
         facts = _reducing_order_facts(repo, reducing.order_ref)
         try:
-            option_close = _option_close(repo, effect_operation_id, reducing=reducing, created=facts)
+            option_close = recorded_option_close(repo, effect_operation_id, facts)
         except ValueError as exc:
             # The books do not hold what one closing order can close: nothing is sent.
             _fold_submit_refused(
@@ -2603,7 +2677,7 @@ async def _submit_reducing_order(
                 refusal=BrokerRefusal(why=f"The Clerk could not make the order that closes this option position: {exc}"),
             )
             return None
-        leg: BrokerOrderLeg | SingleOptionOrderRequest = (
+        leg: BrokerOrderLeg | OptionOrderRequest = (
             option_close.request
             if option_close is not None
             else BrokerOrderLeg(
@@ -2673,12 +2747,12 @@ async def _submit_reducing_order(
         elif option_close is not None:
             # A simulated close of an option contract is priced from a quote, never
             # a bar, whatever made the EXIT: the newest kept for the contract.
-            bound = broker.bind_option_close_quotes(
-                reducing.client_order_id,
-                symbol=facts.symbol,
-                side=option_close.request.side.value,
-                quotes=option_close.quotes,
-                usable_generation=option_close.usable_generation,
+            bound = all(
+                broker.bind_option_close_quotes(
+                    reducing.client_order_id, symbol=symbol, side=side.value,
+                    quotes=option_close.quotes.get(symbol, ()), usable_generation=option_close.usable_generation,
+                )
+                for symbol, side, quantity in order_reductions(option_close.request)
             )
             why = (
                 f"{OPTION_EXIT_UNPRICED}: the simulation would not price a close of {facts.symbol}. Nothing "
@@ -2748,59 +2822,6 @@ async def _submit_reducing_order(
             order=observed,
             trade=broker.trade,
         )
-    )
-
-
-class _OptionClose(NamedTuple):
-    """The close of a position in an option contract: its one order, and what it may be priced from."""
-
-    request: SingleOptionOrderRequest
-    # The quotes the Clerk itself holds for the contract: the exit decision's, then the entry's own.
-    quotes: tuple[HeldQuote, ...]
-    # The generation the exit decision read its quote in; None when it was handed none.
-    usable_generation: int | None
-
-
-def _option_close(
-    repo: ClerkSqliteRepository,
-    effect_operation_id: str,
-    *,
-    reducing: OrderResource,
-    created: ExitReducingOrderCreatedFacts,
-) -> _OptionClose | None:
-    """The closing order of a reduction in an option contract, or ``None`` for a reduction in shares (ADR 0076).
-
-    The contract is the one this EXIT's own entry opened, read from that
-    entry's acceptance: the plan's rules are never asked again. The order
-    closes exactly the contracts the reduction was created for, which is the
-    position confirmed at that moment. Raises ``ValueError`` when the books
-    hold something one closing order of that entry cannot close.
-    """
-    if order_contract(repo, reducing.order_ref) is None:
-        return None
-    entries = (
-        option_entry_of_order(repo, order.order_ref)
-        for order in reversed(repo.orders_for_effect_operation(effect_operation_id))
-        if order.role == "ENTRY"
-    )
-    entry = next(
-        (facts for facts in entries if facts is not None and facts.contract_terms.symbol == created.symbol.upper()),
-        None,
-    )
-    if entry is None:
-        raise ValueError(f"no entry of this EXIT's opened {created.symbol}")
-    request = entry.close_request(contracts=created.quantity)
-    if request.side.value != created.side.lower():
-        raise ValueError(
-            f"the books would {created.side.lower()} {created.symbol} to flatten it, but closing what the entry "
-            f"opened is a {request.side.value}"
-        )
-    decided = option_exit_facts(_accepted_facts(repo, effect_operation_id))
-    handed = None if decided is None else decided.quote_for(entry.contract_terms.symbol)
-    return _OptionClose(
-        request=request,
-        quotes=tuple(quote for quote in (handed, entry.the_leg.quote.held) if quote is not None),
-        usable_generation=None if handed is None or decided is None else decided.generation,
     )
 
 

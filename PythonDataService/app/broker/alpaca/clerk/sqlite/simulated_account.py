@@ -14,9 +14,9 @@ Validated against: tests/broker/alpaca/clerk/sqlite/test_simulated_account.py
   (exact ``Fraction`` oracle at a whole-cent boundary for equity and open P&L).
 
 An open option contract has no bars (ADR 0076). A Dry Run and a Live Shadow
-each mark one they bought at the bid of the quote last handed over as the
-newest held for it in that account (``kept_option_quotes``), which is what
-it could be sold for, and only while
+each mark bought lots at bid and sold lots at ask, from the quote last
+handed over as newest held for that account (``kept_option_quotes``),
+and only while
 that hand-over is no older than a share bar may be. A quiet contract's bid
 can stand for minutes, so it is the hand-over that must be fresh, not the
 bid's own receipt. With none, the reading is unavailable, as it is for shares
@@ -180,11 +180,11 @@ class SimulatedAccountProjection:
                 extra={"action": "kept_option_quotes_unreadable", "account_id": self.repo.account_id},
             )
 
-    def _option_mark(self, symbol: str, *, long: bool, at_ms: int) -> KeptOptionQuote:
+    def _option_mark(self, symbol: str, *, at_ms: int) -> KeptOptionQuote:
         """The quote an open option contract is marked from at ``at_ms``, or the reading is unavailable.
 
-        A contract the account bought is worth what it could be sold for: the
-        bid. The quote must have been handed over as the newest held no
+        Bought lots mark at bid and sold lots at ask (ADR 0076 decision 28).
+        The quote must have been handed over as the newest held no
         longer before ``at_ms`` than a share bar may close before it, which
         also holds a previous close's mark to that close. It must be whole:
         a quote with one side is never a mark, and is passed over
@@ -194,8 +194,6 @@ class SimulatedAccountProjection:
         was handed over and however lately: a bid from before the close is
         not what an expired contract is worth. That is asked first.
         """
-        if not long:
-            raise SimulationEvidenceUnavailable(f"A sold option position in {symbol} cannot be marked yet.")
         expiry = OptionContract.from_occ_symbol(symbol).expiry_date
         if past_last_session(expiry, at_ms):
             # No feed quotes it again, so waiting brings nothing (ADR 0076).
@@ -227,9 +225,10 @@ class SimulatedAccountProjection:
         valid_until: int | None = None
         for symbol in open_symbols:
             if symbol in contracts:
-                kept = self._option_mark(symbol, long=contracts[symbol], at_ms=at_ms)
-                assert kept.quote.bid is not None
-                marks[symbol] = normalize_money(kept.quote.bid)
+                kept = self._option_mark(symbol, at_ms=at_ms)
+                side = kept.quote.bid if contracts[symbol] else kept.quote.ask
+                assert side is not None
+                marks[symbol] = normalize_money(side)
                 refs.append(kept.ref)
                 # Good while its hand-over is fresh, and never into the contract's expiry.
                 expires = min(

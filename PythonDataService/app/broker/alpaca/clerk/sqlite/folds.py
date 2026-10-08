@@ -14,6 +14,7 @@ rather than growing an if/elif chain here or in the repository.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Callable
 from typing import Any
@@ -631,7 +632,27 @@ def _fold_exit_reducing_order_created(conn: sqlite3.Connection, payload: dict[st
         ),
     )
     reduced = ExitReducingOrderCreatedFacts.reduced_symbol(payload["facts_json"])
-    if reduced is not None and contract_terms(conn, reduced) is not None:
+    closing = (
+        ExitReducingOrderCreatedFacts.from_facts_json(payload["facts_json"])
+        if json.loads(payload["facts_json"]).get("option_order") is not None else None
+    )
+    request = None if closing is None else closing.the_option_order
+    from app.broker.contract.options import MultiLegOptionOrderRequest
+
+    if isinstance(request, MultiLegOptionOrderRequest):
+        from app.broker.alpaca.clerk.sqlite.option_order_legs import record_order_legs
+
+        assert closing is not None and closing.option_leg_ids is not None
+        terms = [contract_terms(conn, leg.contract.occ_symbol) for leg in request.legs]
+        if any(term is None for term in terms):
+            raise ValueError("a structure close names a contract the books never recorded")
+        record_order_legs(
+            conn, parent_order_ref=payload["order_ref"], effect_operation_id=payload["effect_operation_id"],
+            units=request.quantity,
+            legs=[(leg_id, leg, term) for leg_id, leg, term in zip(closing.option_leg_ids, request.legs, terms, strict=True)],
+            recorded_at_ms=payload["recorded_at_ms"],
+        )
+    elif reduced is not None and contract_terms(conn, reduced) is not None:
         bind_order_contract(conn, order_ref=payload["order_ref"], symbol=reduced)
     conn.execute(
         "INSERT INTO operation_order_links (effect_operation_id, order_ref, role, linked_at_ms) "

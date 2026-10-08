@@ -5,9 +5,10 @@ already read under one custody fence -- no FIFO, fee rule or balance here):
     C       observed cash
     U_buy   recorded buys (with their reported fees) that C does not show yet
     U_sell  recorded sale proceeds (net of their reported fees) C does not show yet
-    cash  = C - U_buy + U_sell        -- a traded share is never also counted
+    cash  = C - U_buy + U_sell - option collateral -- a traded share is never also counted
                                          as cash, or as missing cash
-    total = cash + sum(position cost) -- running bots, stopped bots, outside
+    total = cash + sum(position commitment) -- signed FIFO basis + option collateral;
+                                         running bots, stopped bots, outside
     running bot = position cost + pending entries + max(free, 0)
     stopped bot = position cost + pending entries  (its positive free was released
                                                     at Stop)
@@ -33,6 +34,9 @@ the shortfall, which ceils as every requirement does -- a segment is the sum
 of its part cents and ``total_cents`` the segment cents less the shortfall, so
 the drawn dollars always add up. Widths are basis points by the canonical
 largest-remainder rule (``money.apportion_units``).
+Signed option commitments can be credits. Their dollars remain signed in
+the parts and totals; a credit has zero visual width rather than a negative
+width. A stopped credit remains in the partition until its holding ends.
 
 A stopped bot's released money is what its Stop released, recorded with the
 Stop (#2555) and never re-derived: money that comes back after it -- a sale,
@@ -41,17 +45,23 @@ values it as the remainder of the balance, never rounded on its own: released
 = display(position cost + still claimed + max(free, 0)) - display(position
 cost) - display(still claimed), floored at 0 and 0 when it released nothing,
 so at the Stop released, in shares and still claimed add up to its balance's
-display cents exactly. A Stop that recorded no release (every Stop before
+display cents exactly. A net held credit contributes signed dollars to the
+partition but claims no positive money at Stop: recorded held cents floor
+at zero, while the release still records the actual free cash claim.
+A Stop that recorded no release (every Stop before
 #2555, or one whose money could not be valued then) is estimated by the same
 rule over its money now and flagged ``released_estimated``, never shown as the
 fact. ``bot_segment`` gives the bot page the very slice the account's bar draws.
 
 Reference: https://github.com/tim1016/learn-ai/issues/2560 ("One account-money
-  read (D12)"); money semantics are PRD #2540's, unchanged.
+  read (D12)"); money semantics are PRD #2540's; ADR 0076 decision 28 for
+  signed option commitments and retained collateral.
 Canonical implementation: this file composes ``budgets.AccountBudget``;
   ``budgets.py`` stays the money formula.
 Validated against: tests/broker/alpaca/clerk/test_account_money.py (worked
-  examples: exact Decimal identity, cents and basis-point conservation).
+  examples: exact Decimal identity, cents and basis-point conservation)
+  and tests/broker/alpaca/clerk/test_option_position_money.py (signed held
+  commitments, including after Stop).
 """
 
 from __future__ import annotations
@@ -125,6 +135,7 @@ class StoppedHolding:
     held_cents: int
     # The release is an estimate from its money now, not the Stop's record.
     released_estimated: bool = False
+    option_collateral: Decimal = ZERO
 
 
 def release_at_stop(item: DeploymentBudget) -> ReleaseAtStop:
@@ -141,7 +152,7 @@ def release_at_stop(item: DeploymentBudget) -> ReleaseAtStop:
         in_shares, in_orders = display_cents(item.position_cost), display_cents(item.pending_orders)
         balance = display_cents(item.position_cost + item.pending_orders + free)
     released = 0 if free == ZERO else max(0, balance - in_shares - in_orders)
-    return ReleaseAtStop(released_cents=released, held_cents=in_shares + in_orders)
+    return ReleaseAtStop(released_cents=released, held_cents=max(0, in_shares + in_orders))
 
 
 def stopped_holding(item: DeploymentBudget) -> StoppedHolding:
@@ -149,7 +160,7 @@ def stopped_holding(item: DeploymentBudget) -> StoppedHolding:
     release = item.release if item.release is not None else release_at_stop(item)
     return StoppedHolding(
         item.strategy_instance_id, item.position_cost, item.pending_orders, release.released_cents,
-        release.held_cents, released_estimated=item.release is None,
+        release.held_cents, released_estimated=item.release is None, option_collateral=item.option_collateral,
     )
 
 
@@ -178,7 +189,7 @@ class AccountMoney:
     def holds_positions(self) -> bool:
         """Whether any share is held anywhere on the account, valued or not."""
         return bool(self.unvalued) or self.outside > ZERO or any(
-            item.position_cost > ZERO for item in (*self.running, *self.stopped)
+            item.position_cost != ZERO or item.option_collateral > ZERO for item in (*self.running, *self.stopped)
         )
 
     @property
@@ -200,7 +211,7 @@ def account_money(
                            display_cents(item.position_cost) + display_cents(item.pending_orders))
             for item in holdings if item.strategy_instance_id is not None
         ]
-        cash = budget.cash - unseen_fills + unseen_sales
+        cash = budget.cash - unseen_fills + unseen_sales - budget.option_collateral
         held = sum((item.position_cost for item in budget.deployments), ZERO) + sum((item.position_cost for item in holdings), ZERO)
         return AccountMoney(
             budget=budget,
@@ -209,7 +220,7 @@ def account_money(
             running=tuple(sorted((item for item in budget.deployments if item.active), key=lambda item: item.strategy_instance_id)),
             # A stopped bot that is flat with nothing still claimed is finished.
             stopped=tuple(sorted(
-                (item for item in stopped if item.position_cost + item.still_claimed > ZERO),
+                (item for item in stopped if item.position_cost + item.still_claimed != ZERO or item.option_collateral > ZERO),
                 key=lambda item: item.strategy_instance_id,
             )),
             outside=sum((item.position_cost for item in holdings if item.strategy_instance_id is None), ZERO),
@@ -316,7 +327,7 @@ def bot_parts(item: DeploymentBudget) -> BarParts:
     in_shares = display_cents(item.position_cost)
     pending = display_cents(item.pending_orders)
     free = cents_spendable(item.cash_claim)
-    widths = share_bps({"in_shares": in_shares, "pending": pending, "free": free}, empty=None)
+    widths = share_bps({"in_shares": max(0, in_shares), "pending": pending, "free": free}, empty=None)
     return BarParts(in_shares, widths["in_shares"], pending, widths["pending"], free, widths["free"])
 
 
@@ -358,7 +369,7 @@ def bot_segment(money: AccountMoney, strategy_instance_id: str) -> BarSegment | 
         segment = _stopped_segment(stopped, money.palette)
     else:
         return None
-    return replace(segment, bps=share_bps({"slice": segment.cents}, empty=None)["slice"])
+    return replace(segment, bps=share_bps({"slice": max(0, segment.cents)}, empty=None)["slice"])
 
 
 def _palette_index(palette: Mapping[str, int], strategy_instance_id: str) -> int:
@@ -398,7 +409,7 @@ def money_bar(money: AccountMoney, *, new_cents: int | None = None) -> MoneyBar:
     segments.append(BarSegment(kind="free", strategy_instance_id=None, cents=free, bps=0))
     # Stable identity breaks width ties: a bot's name, or the kind itself.
     keys = [segment.kind if segment.strategy_instance_id is None else f"{segment.kind}:{segment.strategy_instance_id}" for segment in segments]
-    widths = share_bps(dict(zip(keys, (segment.cents for segment in segments), strict=True)), empty="free")
+    widths = share_bps(dict(zip(keys, (max(0, segment.cents) for segment in segments), strict=True)), empty="free")
     drawn = tuple(replace(segment, bps=widths[key]) for key, segment in zip(keys, segments, strict=True))
     shortfall = cents_required(max(ZERO, -unclaimed))
     return MoneyBar(

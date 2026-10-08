@@ -36,7 +36,6 @@ from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop
 from app.broker.alpaca.clerk.sqlite.option_entry import OptionExitFacts, option_entry_of_order
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     entry_never_accepted_durably,
-    entry_order_symbol,
     entry_order_symbols,
 )
 from app.broker.alpaca.clerk.sqlite.repository import (
@@ -238,7 +237,7 @@ def _accept_exit_capture(
             entry_order_ref=entry_order_ref,
         )
         run_id = resolve_run_id(target)
-        symbol = entry_order_symbol(repo, target.order_ref)
+        symbol = entry_order_symbols(repo, target.order_ref)[0]
         option_entry = option_entry_of_order(repo, target.order_ref)
         closes_an_option = option_entry is not None
         if closes_an_option and recorded is not None and recorded.shape != regular_session_shape(recorded.shape.side):
@@ -272,11 +271,11 @@ def _accept_exit_capture(
             entry_order_ref=entry_order_ref,
             entry_order_refs=entry_order_refs,
             regular_session_only=regular_session_only or closes_an_option,
-            option_contract=None if option_entry is None else option_entry.contract_terms.symbol,
+            option_contract=None if option_entry is None else option_entry.leg_terms[0].symbol,
             option_exit=(
                 None
                 if option_entry is None or option_exit is None
-                else OptionExitFacts.of(option_exit, closing=option_entry.contract_terms.symbol).to_facts()
+                else OptionExitFacts.of(option_exit, closing=tuple(leg.symbol for leg in option_entry.leg_terms)).to_facts()
             ),
             scheduled_close=None if scheduled_close is None else scheduled_close.to_mapping(),
         ).with_reducing_shape(

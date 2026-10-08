@@ -20,7 +20,7 @@ from app.broker.alpaca.clerk.shadow_broker import compose_shadow_ports
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
 from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock
 from app.broker.alpaca.clerk.synthetic_broker import SYNTHETIC_CAPABILITIES, SyntheticBroker
-from app.broker.contract.errors import BrokerOptionsNotSupported, BrokerUnavailable
+from app.broker.contract.errors import BrokerOptionsNotSupported, BrokerOrderRejected, BrokerUnavailable
 from app.broker.contract.models import OrderSide, OrderType
 from app.broker.contract.options import (
     MultiLegOptionOrderRequest,
@@ -83,16 +83,9 @@ def test_the_simulation_says_it_takes_single_and_multi_leg_option_orders() -> No
     assert SyntheticBroker(account_id="sim:options-1").capabilities() is SYNTHETIC_CAPABILITIES
 
 
-def test_a_shadow_world_says_it_takes_an_option_order_of_one_leg_and_none_of_several(tmp_path: Path) -> None:
-    """Its order book fills an order of one leg, so Alpaca's "yes" to several is not passed through as its own."""
+def test_a_shadow_world_takes_multi_leg_orders_and_preserves_the_live_brokers_capabilities(tmp_path: Path) -> None:
     ports = compose_shadow_ports(live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path)
-
-    shadow = ports.read.capabilities()
-
-    assert (shadow.supports_option_orders, shadow.supports_multi_leg_option_orders) == (True, False)
-    # Every other fact is still the live broker's own.
-    unchanged = {"supports_multi_leg_option_orders"}
-    assert shadow.model_dump(exclude=unchanged) == ALPACA_LIVE_CAPABILITIES.model_dump(exclude=unchanged)
+    assert ports.read.capabilities() == ALPACA_LIVE_CAPABILITIES
 
 
 @pytest.mark.parametrize(
@@ -124,10 +117,10 @@ async def test_the_simulation_refuses_an_option_order_definitively(
     assert broker.synthesized_fill_anchors() == {}
 
 
-async def test_a_shadow_order_book_refuses_an_option_order_of_several_legs_definitively(tmp_path: Path) -> None:
+async def test_a_shadow_order_book_refuses_an_unpriced_multi_leg_order_without_filling_any_leg(tmp_path: Path) -> None:
     ports = compose_shadow_ports(live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path)
 
-    with pytest.raises(BrokerOptionsNotSupported, match="takes no option orders of several legs") as refused:
+    with pytest.raises(BrokerOrderRejected, match="No leg of the order was filled") as refused:
         await ports.trade.submit_option_order(_CALL_SPREAD, client_order_id=_REF)
 
     assert not isinstance(refused.value, BrokerUnavailable)

@@ -1932,6 +1932,51 @@
       ]
     },
     {
+      "id": "OSM-002",
+      "name": "Held option portfolio collateral across expiries and beyond one order",
+      "category": "option-structures",
+      "canonical_module": "PythonDataService/app/options/requirement.py",
+      "canonical_callable": "portfolio_broker_requirement",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "hand-written figures checked by an independent exhaustive Fraction payoff scan per expiry",
+        "citation": "Alpaca, Options Level 3 Trading (https://docs.alpaca.markets/docs/options-level-3-trading), maintenance-margin steps 1\u20135, read 2026-10-08; ADR 0076 decision 28. See the fixture attribution."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": "Alpaca published portfolio margin rule",
+        "generated_by": "PythonDataService/scripts/fixture_generators/option_portfolio_money.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.0,
+        "rtol": 0.0,
+        "note": "Bit-exact whole cents, independent expiries and underlyings; no rounding."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.json": "862440aea4893fa3a115f9577fea5b86f8ef36ed73886093319d73af5f763e11",
+            "output.json": "75c620d91947474eba857be6c67c768439a1525ff665a1dfa6f296adbcae70da",
+            "attribution.md": "a22ab1ac49ec4389f5bab32c072ec3fca826160a43b96c513d284975ef833bae"
+          },
+          "file_sha256": {
+            "input.json": "f177feadc40f7b9f483dded07333fbacebb352f806315cd349de99dbfd279f9e",
+            "output.json": "b383a55198cd640dc2d742e25e8b39efceb8618da30167eb33c51a76d12ff519",
+            "attribution.md": "a22ab1ac49ec4389f5bab32c072ec3fca826160a43b96c513d284975ef833bae"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_option_portfolio_money_fixture.py::test_held_portfolio_matches_the_independent_margin_fixture"
+      ]
+    },
+    {
       "id": "OEV-001",
       "name": "Option events: the shares and cash an exercise, an assignment and an expiry create, against the share trades Alpaca documents",
       "category": "option-events",

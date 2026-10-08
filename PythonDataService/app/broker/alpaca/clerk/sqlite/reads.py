@@ -1748,6 +1748,15 @@ _A_LEG_NOT_PROVEN_SQL = (
 )
 
 
+def order_has_unproven_legs(conn: sqlite3.Connection, order_ref: str) -> bool:
+    """Whether any child still needs terminal or execution evidence, using the sweep's own proof."""
+    row = conn.execute(
+        "SELECT " + _A_LEG_NOT_PROVEN_SQL + " AS unproven FROM orders o WHERE o.order_ref = ?",
+        (FILL_QTY_EPSILON, order_ref),
+    ).fetchone()
+    return row is not None and bool(row["unproven"])
+
+
 def latest_reported_filled_quantity(conn: sqlite3.Connection, order_ref: str) -> float | None:
     """The cumulative filled quantity the order's latest acknowledgement reported, if any."""
     row = conn.execute(
@@ -1787,6 +1796,14 @@ def order_fills_short_of_broker_cumulative(conn: sqlite3.Connection, order_ref: 
     folds fills up to it, so after any successful lookup the order is short
     only if the broker itself still reports more than it has recorded.
     """
+    # A terminal parent can report zero whole structures while one child
+    # reports executions. Prove those contracts before ending its EXIT.
+    if conn.execute(
+        "SELECT 1 FROM option_order_legs child WHERE child.parent_order_ref = ? AND "
+        + _fills_short_of_broker_cumulative_sql("child.order_ref") + " LIMIT 1",
+        (order_ref, FILL_QTY_EPSILON),
+    ).fetchone() is not None:
+        return True
     row = conn.execute(
         "SELECT " + _fills_short_of_broker_cumulative_sql("?") + " AS short",
         (order_ref, order_ref, FILL_QTY_EPSILON),

@@ -37,6 +37,7 @@ from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 from app.broker.alpaca.clerk.sqlite.enter import accept_option_enter, submit_accepted_enter
 from app.broker.alpaca.clerk.sqlite.exit_recovery import latest_exit_recovery
 from app.broker.alpaca.clerk.sqlite.option_admission import work_out_option_entry
+from app.broker.alpaca.clerk.sqlite.option_close import recorded_option_close
 from app.broker.alpaca.clerk.sqlite.option_entry import OptionExitFacts
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedUncertainty,
@@ -1460,15 +1461,14 @@ async def _a_finished_exit(account: _DryRun) -> tuple[str, str]:
 async def test_the_close_of_an_exit_is_made_only_of_the_contract_its_own_entry_opened(dry_run: _DryRun) -> None:  # noqa: F811
     """A reduction recorded in another contract is not closed with this entry's: nothing is made of it."""
     effect_id, reducing_ref = await _a_finished_exit(dry_run)
-    reducing = dry_run.repo.order(reducing_ref)
     created = exit_resolution._reducing_order_facts(dry_run.repo, reducing_ref)
 
-    its_own = exit_resolution._option_close(dry_run.repo, effect_id, reducing=reducing, created=created)
+    its_own = recorded_option_close(dry_run.repo, effect_id, created=created)
     assert its_own is not None and its_own.request.contract.occ_symbol == SYMBOL
 
     with pytest.raises(ValueError, match=OTHER_CALL.occ_symbol):
-        exit_resolution._option_close(
-            dry_run.repo, effect_id, reducing=reducing, created=replace(created, symbol=OTHER_CALL.occ_symbol)
+        recorded_option_close(
+            dry_run.repo, effect_id, created=replace(created, symbol=OTHER_CALL.occ_symbol)
         )
 
 
@@ -1476,11 +1476,10 @@ async def test_a_reduction_that_would_buy_what_the_entry_bought_is_not_made_into
     """The entry bought the call, so closing it is a sale. Books that ask for a purchase to get flat are a
     short position nobody opened: the close is not made, and nothing opens the other side."""
     effect_id, reducing_ref = await _a_finished_exit(dry_run)
-    reducing = dry_run.repo.order(reducing_ref)
     created = exit_resolution._reducing_order_facts(dry_run.repo, reducing_ref)
 
     with pytest.raises(ValueError, match="sell"):
-        exit_resolution._option_close(dry_run.repo, effect_id, reducing=reducing, created=replace(created, side="BUY"))
+        recorded_option_close(dry_run.repo, effect_id, created=replace(created, side="BUY"))
 
 
 async def test_an_option_close_sent_before_to_a_real_broker_and_met_outside_the_session_is_past_its_session(

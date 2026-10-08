@@ -753,6 +753,11 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return reads.order_fills_short_of_broker_cumulative(self._conn, order_ref)
 
+    def order_has_unproven_legs(self: ClerkSqliteRepository, order_ref: str) -> bool:
+        """Whether a parent's children still need terminal or execution evidence."""
+        with self._write_lock:
+            return reads.order_has_unproven_legs(self._conn, order_ref)
+
     def uncertain_orders(self: ClerkSqliteRepository) -> list[OrderResource]:
         with self._write_lock:
             return reads.uncertain_orders(self._conn)

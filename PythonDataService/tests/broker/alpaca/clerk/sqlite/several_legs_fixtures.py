@@ -23,9 +23,6 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-import pytest
-
-from app.broker.alpaca.clerk import option_effects
 from app.broker.alpaca.clerk.option_effects import OptionEntryEvidence
 from app.broker.alpaca.clerk.sqlite.option_entry import MultiLegOptionEntryFacts
 from app.broker.alpaca.option_fees import entry_fee_provision_cents
@@ -113,13 +110,6 @@ RECEIVED_PICKS: Mapping[str, Pick] = {
 # Two bought legs: a straddle at 585. The call at $3.14 and the put at $2.86: $6.00 paid a share.
 STRADDLE = plan(leg("long_call"), leg("long_put", right="put"))
 STRADDLE_PICKS: Mapping[str, Pick] = {"long_call": (call(585), "3.10", "3.14"), "long_put": (put(585), "2.82", "2.86")}
-
-
-@pytest.fixture
-def several_legs_taken(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Both gates open, as they will be once every piece is built: a test of the entry opens them itself."""
-    monkeypatch.setattr(option_effects, "BOUGHT_LEG_STRUCTURES_TAKEN", True)
-    monkeypatch.setattr(option_effects, "SOLD_LEG_STRUCTURES_TAKEN", True)
 
 
 def worked_entry(

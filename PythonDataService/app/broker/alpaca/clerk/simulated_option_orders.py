@@ -66,7 +66,7 @@ from app.broker.alpaca.clerk.synthesized_orders import (
     project_positions,
 )
 from app.broker.contract.errors import BrokerEvidenceUnavailable, BrokerOrderRejected
-from app.broker.contract.models import BrokerOrder, OrderSide
+from app.broker.contract.models import BrokerOrder, OrderSide, OrderType
 from app.broker.contract.options import (
     BrokerOptionOrder,
     MultiLegOptionOrderRequest,
@@ -379,10 +379,23 @@ class SimulatedOptionOrders:
             already = legs_recorded(self._ledger.latest_records_from(records), client_order_id)
             if already:
                 return self._multi_leg_view(already, client_order_id, observed_at_ms=at_ms)
+            # Validate every reduction before the transaction writes any leg.
+            previous = self._ledger.latest_records_from(records)
+            multipliers = contract_multipliers(tuple(previous.values()))
+            for leg in order.legs:
+                if leg.intent is OptionPositionIntent.CLOSE:
+                    self._refuse_a_close_of_more_than_is_held(
+                        SingleOptionOrderRequest(
+                            contract=leg.contract, side=leg.side, intent=leg.intent,
+                            quantity=leg.ratio * order.quantity, order_type=OrderType.MARKET,
+                        ), [record.order for record in previous.values()],
+                    )
             legs = filled_multi_leg_order(
                 order, client_order_id=client_order_id,
                 bound={
-                    symbol: BoundLegQuote(quoted.quote, quoted.quote_ref, quoted.multiplier)
+                    symbol: BoundLegQuote(
+                        quoted.quote, quoted.quote_ref, quoted.multiplier or multipliers.get(symbol), quoted.usable_generation,
+                    )
                     for symbol, quoted in bound.items()
                 },
                 at_ms=at_ms, broker_id=self._broker_id,

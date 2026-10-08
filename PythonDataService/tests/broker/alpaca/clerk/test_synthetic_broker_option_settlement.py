@@ -565,11 +565,11 @@ async def test_a_contract_whose_closing_price_is_still_awaited_is_not_let_go_of_
     assert (again.not_settled, again.waiting) == ({}, {})
 
 
-async def test_a_sold_contract_is_settled_in_no_way_and_is_not_let_go_of_at_a_word(
+async def test_a_sold_contract_settles_in_cash_without_delivering_shares(
     simulation: SyntheticBroker, bars: SourceBarLedger, clock: list[int]
 ) -> None:
-    """A sold call that ends in the money would be assigned: shares would move. The simulation's rule is for
-    what it bought. It settles a sold contract in no way, says so, and no word of the owner's ends it."""
+    """A sold call pays its signed exercise value in cash under the simulation rule, without moving shares.
+    The owner's word does not replace a closing price that was retained."""
     await _sells_to_open(simulation, CALL, clock)
     assert await _held(simulation) == {CALL.occ_symbol: -1.0}
     _spy_bar(bars, close="590.25", end_ms=LAST_SESSION_CLOSE)
@@ -578,6 +578,10 @@ async def test_a_sold_contract_is_settled_in_no_way_and_is_not_let_go_of_at_a_wo
 
     settled = simulation.settle_expired_options(after_ms=WINDOW, at_the_owners_word={CALL.occ_symbol: word})
 
-    assert settled.settled == () and settled.waiting == {}
-    assert "only whole contracts it bought" in settled.not_settled[CALL.occ_symbol]
-    assert await _held(simulation) == {CALL.occ_symbol: -1.0}
+    [ended] = settled.settled
+    assert ended.record.position == "short"
+    assert ended.record.cash_cents == -52_500
+    assert ended.event.position_change == 1
+    assert ended.record.owner is None
+    assert settled.waiting == {} and settled.not_settled == {}
+    assert await _held(simulation) == {}

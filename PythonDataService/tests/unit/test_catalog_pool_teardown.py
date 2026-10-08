@@ -10,43 +10,46 @@ Postgres' default max_connections (100) once the golden-search suites (#2696)
 added ~150 live-DB tests.
 
 tests/conftest.py's autouse ``_close_catalog_pool_per_test`` fixture exists to
-make that structurally impossible to repeat. These tests prove the wiring with
-a stub pool injected into ``catalog_client._pools`` for the first test's loop:
-if the autouse fixture is removed or stops running teardown on the test's own
-loop, the stub is never closed and the second test fails. No POSTGRES_URL is
-needed, so this runs in every shard, not just the daily.
+make that structurally impossible to repeat. A stub pool is planted on the
+test's loop and checked by a module-scoped fixture after function teardown.
+The proof stays within one test and worker: it depends on neither test order
+nor process-global state. If the autouse fixture stops closing the pool on
+its own loop, the final check fails. No POSTGRES_URL is needed.
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from collections.abc import Iterator
+
+import pytest
 
 from app.data_lake import catalog_client
-
-_closed_pools: list[_StubPool] = []
 
 
 class _StubPool:
     """The slice of asyncpg.Pool close_pool touches: an awaitable close()."""
 
+    def __init__(self) -> None:
+        self.loop: asyncio.AbstractEventLoop | None = None
+        self.closed_on_loop: asyncio.AbstractEventLoop | None = None
+
     async def close(self) -> None:
-        _closed_pools.append(self)
+        self.closed_on_loop = asyncio.get_running_loop()
 
 
-async def test_a_pool_left_on_the_tests_loop_is_closed_by_teardown() -> None:
+@pytest.fixture(scope="module")
+def pool_checked_after_teardown() -> Iterator[_StubPool]:
+    """A longer-lived check runs after the per-test autouse fixture closes the pool (#2809)."""
+    stub = _StubPool()
+    yield stub
+    assert stub.loop is not None
+    assert stub.closed_on_loop is stub.loop, "the pool was not closed on its owning live loop"
+    assert all(pool is not stub for pool in catalog_client._pools.values()), "the closed pool is still registered"
+
+
+async def test_a_pool_left_on_the_tests_loop_is_closed_by_teardown(pool_checked_after_teardown: _StubPool) -> None:
     """Plant a pool on this test's loop, as service code does via init_pool."""
-    catalog_client._pools[asyncio.get_running_loop()] = _StubPool()
-
-
-def test_the_previous_tests_pool_was_closed_before_its_loop_died() -> None:
-    """The autouse teardown must have closed it on that loop (#2809).
-
-    Ordering is file order: the async test above ran first, planted a stub
-    pool on its loop, and finished. Without the fixture the stub would still
-    be open — exactly the leak that exhausted the daily run's Postgres.
-    """
-    assert len(_closed_pools) == 1, "the pool planted by the previous test was never closed"
-    stub: Any = _closed_pools[0]
-    remaining = [pool for pool in catalog_client._pools.values() if pool is stub]
-    assert remaining == [], "the closed pool is still registered for its (dead) loop"
+    stub = pool_checked_after_teardown
+    stub.loop = asyncio.get_running_loop()
+    catalog_client._pools[stub.loop] = stub

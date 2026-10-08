@@ -115,6 +115,7 @@ from app.broker.alpaca.clerk.sqlite.models import EffectOperationResource, ExitS
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, run_inline
 from app.broker.alpaca.clerk.sqlite.option_admission import ENTRY_CLOSE_TERMS
 from app.broker.alpaca.clerk.sqlite.option_entry import option_entry_of_order
+from app.broker.alpaca.clerk.sqlite.order_evidence import entry_order_symbols
 from app.broker.alpaca.clerk.sqlite.reads import FAILED_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
@@ -894,8 +895,7 @@ def scheduled_close_state(
     )
     if states or strategy_instance_id in read.holders:
         return states
-    finished = _the_close_that_left_it_flat(repo, strategy_instance_id, now)
-    return () if finished is None else (finished,)
+    return _the_closes_that_left_it_flat(repo, strategy_instance_id, now)
 
 
 def _first_acceptance(
@@ -1015,13 +1015,13 @@ def _standing_words(
     return f"The close of {held} was due at {due}. The Clerk sends it now."
 
 
-def _the_close_that_left_it_flat(
+def _the_closes_that_left_it_flat(
     repo: ClerkSqliteRepository, strategy_instance_id: str, now_ms: int
-) -> ScheduledCloseState | None:
-    """Today's scheduled close of a bot that now holds nothing, when it is what proved the bot flat."""
+) -> tuple[ScheduledCloseState, ...]:
+    """Every captured contract of today's successful scheduled close, recovered from durable entries."""
     newest = repo.last_strategy_transition(strategy_instance_id=strategy_instance_id, transition_kind="EXIT_ACCEPTED")
     if newest is None:
-        return None
+        return ()
     facts = ExitAcceptedFacts.from_facts_json(newest["facts_json"])
     scheduled = facts.the_scheduled_close
     effect = repo.effect_operation(newest["effect_operation_id"])
@@ -1032,16 +1032,20 @@ def _the_close_that_left_it_flat(
         or effect.state != "succeeded"
         or et_date_at_ms(scheduled.session_open_ms) != et_date_at_ms(now_ms)
     ):
-        return None
+        return ()
     own = _first_acceptance(
         repo, strategy_instance_id, session_open_ms=scheduled.session_open_ms, entry_order_ref=facts.entry_order_ref
     )
     taken_at_ms = (newest if own is None else own)["clerk_observed_at_ms"]
     late_by_ms = max(taken_at_ms - scheduled.due_ms, 0)
     lateness = f", {round(late_by_ms / 60_000)} minutes late" if late_by_ms > LATE_AFTER_MS else ""
-    return ScheduledCloseState(
+    contracts = sorted({
+        symbol for entry_ref in (facts.entry_order_ref, *facts.entry_order_refs)
+        for symbol in entry_order_symbols(repo, entry_ref)
+    })
+    return tuple(ScheduledCloseState(
         strategy_instance_id=strategy_instance_id,
-        contract=facts.option_contract,
+        contract=contract,
         held=0.0,
         standing=CloseStanding.FLAT,
         kind=CloseKind(scheduled.kind),
@@ -1052,9 +1056,9 @@ def _the_close_that_left_it_flat(
         left_to_owner=False,
         sentence=(
             f"The close was taken at {et_clock_words(taken_at_ms)} ET{lateness}. "
-            f"The bot holds none of {facts.option_contract}."
+            f"The bot holds none of {contract}."
         ),
-    )
+    ) for contract in contracts)
 
 
 __all__ = [

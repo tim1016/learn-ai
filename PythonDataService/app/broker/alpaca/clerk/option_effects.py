@@ -15,9 +15,8 @@ Neither carries a price, a commitment or a fee. Those are the Clerk's to
 compute (``app.options.entry.prepare_entry``, ``app.broker.alpaca.option_fees``).
 
 Which option plans the Clerk takes is one rule, ``option_plan_taken``. Today
-it takes a single bought call or put. A structure of two to four legs is
-taken once the pieces that close it and count its sold legs are built: each
-of the two gates below is opened by the piece that makes it true. A real
+it takes a single bought call or put and structures of two to four legs,
+including bounded structures with sold legs (ADR 0076 decision 28). A real
 account also needs the deployment's setting for orders of several legs
 (``app.broker.alpaca.multi_leg_option_orders``). Every other plan is refused
 by name here, before anything is written.
@@ -202,15 +201,6 @@ class OptionExitEvidence:
         return tuple(sorted(quoted for quoted in self.quotes if quoted != symbol))
 
 
-# Which structures of several legs the Clerk takes. Each is set True by the piece that makes it
-# true (ADR 0076). Read each time the rule is asked, never at import.
-#
-# A structure of two to four bought legs: taken once every close of it is built.
-BOUGHT_LEG_STRUCTURES_TAKEN: bool = False
-# A structure with a sold leg: taken once a sold leg's money and its option events are counted.
-SOLD_LEG_STRUCTURES_TAKEN: bool = False
-
-
 @dataclass(frozen=True, slots=True)
 class TakenOptionPlan:
     """An option plan the Clerk takes, and what its callers need of it."""
@@ -227,11 +217,8 @@ def option_plan_taken(action_plan: ActionPlan, *, real_account: bool, live_shado
     The one rule, asked at registration, at the entry, at the contract
     reference and by the preview's verdict. ``real_account`` is True for a
     Paper and a Live account and False for a Dry Run and a Live Shadow.
-    A Live Shadow takes one leg, irrespective of the structure rollout.
     Only a real account, and only for a plan of several legs, reads the
-    deployment's setting for orders of several legs. The gates are asked
-    before the setting, so a structure no account takes yet is refused
-    under one code on every account.
+    deployment's rollout setting. Simulations take every supported structure.
 
     Whether an account takes option plans at all is asked before this, by
     the account. Raises ``OptionPlanRefused``.
@@ -259,7 +246,7 @@ def option_plan_taken(action_plan: ActionPlan, *, real_account: bool, live_shado
             raise OptionPlanRefused(
                 OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED,
                 f"Leg {leg.leg_id!r} sells an option to open. The account Clerk takes one bought call or put for "
-                "now; a sold leg is not built yet.",
+                "a structure; a sold leg needs a bounded multi-leg structure.",
             )
         if leg.qty_ratio != 1:
             raise OptionPlanRefused(
@@ -268,24 +255,6 @@ def option_plan_taken(action_plan: ActionPlan, *, real_account: bool, live_shado
                 "a structure; more of it is more structures.",
             )
         return TakenOptionPlan(legs=legs, underlying=underlyings[0])
-    if not BOUGHT_LEG_STRUCTURES_TAKEN:
-        raise OptionPlanRefused(
-            OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED,
-            f"This plan opens {len(legs)} option legs. The account Clerk takes one bought call or put for now; "
-            "structures of several legs are not built yet.",
-        )
-    if sold and not SOLD_LEG_STRUCTURES_TAKEN:
-        raise OptionPlanRefused(
-            OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED,
-            f"Leg {sold[0].leg_id!r} sells an option to open. The account Clerk takes structures of bought legs "
-            "for now; a sold leg is not built yet.",
-        )
-    if live_shadow:
-        raise OptionPlanRefused(
-            OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED,
-            f"This plan opens {len(legs)} option legs. A Live Shadow takes one bought call or put. "
-            "Its order book does not support an order of several legs.",
-        )
     if real_account and not multi_leg_option_orders_enabled():
         raise OptionPlanRefused(
             OptionEffectRefusal.SEVERAL_LEGS_SETTING_OFF,
@@ -297,8 +266,6 @@ def option_plan_taken(action_plan: ActionPlan, *, real_account: bool, live_shado
 
 
 __all__ = [
-    "BOUGHT_LEG_STRUCTURES_TAKEN",
-    "SOLD_LEG_STRUCTURES_TAKEN",
     "STANDARD_CONTRACT_MULTIPLIER",
     "OptionEffectRefusal",
     "OptionEntryEvidence",

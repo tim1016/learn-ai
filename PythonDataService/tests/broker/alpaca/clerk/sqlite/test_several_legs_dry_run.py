@@ -19,14 +19,12 @@ from tests.broker.alpaca.clerk.sqlite.several_legs_fixtures import (
     STRADDLE_PICKS,
     Pick,
     evidence,
-    several_legs_taken,  # noqa: F401 -- pytest fixture
 )
 from tests.broker.alpaca.clerk.sqlite.test_option_entry_and_exit import SID, _DryRun
 from tests.broker.alpaca.clerk.sqlite.test_option_entry_and_exit import dry_run as _dry_run_fixture
 from tests.options.test_structure_check import _AS_NAMED, _picked
 
 dry_run = _dry_run_fixture
-pytestmark = pytest.mark.usefixtures("several_legs_taken")
 
 
 @pytest.mark.parametrize(("plan", "picks", "reference"), [

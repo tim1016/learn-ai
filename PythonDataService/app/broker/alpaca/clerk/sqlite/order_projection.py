@@ -369,6 +369,12 @@ def _order_leg_from_facts(
         facts = json.loads(facts_json)
         is_reducing_exit = transition_kind == "EXIT_REDUCING_ORDER_CREATED"
         raw_leg = facts if is_reducing_exit else facts["leg"]
+        if is_reducing_exit and isinstance(facts.get("option_order"), dict) and "legs" in facts["option_order"]:
+            from app.broker.alpaca.clerk.sqlite.option_order_legs import multi_leg_parent_line
+
+            raw_leg = multi_leg_parent_line(
+                units=facts["option_order"]["quantity"], order_type=facts["option_order"]["order_type"],
+            )
         if raw_leg.get("order_class") == MULTI_LEG_ORDER_CLASS:
             # One order of several legs (ADR 0076): the parent names no symbol and no side of its own.
             return _multi_leg_parent_line(order_ref=order_ref, raw_leg=raw_leg)
