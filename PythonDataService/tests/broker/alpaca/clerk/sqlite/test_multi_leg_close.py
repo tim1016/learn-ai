@@ -1,5 +1,6 @@
 """Structures close from durable custody, and sold legs retain exact money (#2913)."""
 
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -11,11 +12,15 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_re
 from app.broker.alpaca.clerk.sqlite.enter import accept_option_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import resolve_exit
+from app.broker.alpaca.clerk.sqlite.facts import ExitReducingOrderCreatedFacts
+from app.broker.alpaca.clerk.sqlite.option_close import OptionClose
 from app.broker.alpaca.clerk.sqlite.option_order_evidence import (
     multi_leg_order_evidence,
     with_the_simulations_own_leg_records,
 )
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_submission_response
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON
 from tests.broker.alpaca.clerk.sqlite.option_custody_fixtures import ACCOUNT_ID, RUN_ID
 from tests.broker.alpaca.clerk.sqlite.several_legs_fixtures import (
@@ -98,6 +103,49 @@ async def test_a_close_with_one_unpriced_leg_records_no_leg_fill(world):
     await resolve_exit(books, effect_operation_id=closing.effect_operation_id, trade=port, pricing=UNPRICEABLE_RECOVERY, read=None)
     assert books.effect_operation(closing.effect_operation_id).state == "failed"
     assert len(effective_fill_records(books._conn, account_id=ACCOUNT_ID)) == 2
+
+
+@pytest.mark.parametrize("kept_quote_usable", [True, False])
+async def test_a_missing_recorded_quote_collection_uses_the_kept_quote_or_refuses(
+    world: tuple[ClerkSqliteRepository, SyntheticBroker], monkeypatch: pytest.MonkeyPatch, kept_quote_usable: bool,
+) -> None:
+    from app.broker.alpaca.clerk.sqlite import exit_resolution
+    from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
+
+    books, port = world
+    accepted, entry = await opened(world, PAID_SPREAD, PAID_PICKS)
+    read_close = exit_resolution.recorded_option_close
+    if not kept_quote_usable:
+        port._options._kept_quotes.keep_all({
+            entry.legs[1].contract.occ_symbol: HeldQuote(
+                bid=QuoteSide(Decimal("1.2"), NOON), ask=None, data_type=QuoteDataType.LIVE, generation=4,
+            ),
+        }, kept_at_ms=NOON)
+
+    def without_quotes(repo: ClerkSqliteRepository, effect_id: str, facts: ExitReducingOrderCreatedFacts) -> OptionClose | None:
+        close = read_close(repo, effect_id, facts)
+        return None if close is None else replace(close, quotes={
+            symbol: quotes for symbol, quotes in close.quotes.items() if symbol != entry.legs[1].contract.occ_symbol
+        })
+
+    monkeypatch.setattr(exit_resolution, "recorded_option_close", without_quotes)
+    closing = accept_exit(
+        books, account_id=ACCOUNT_ID, strategy_instance_id="bot-a", decision_id="close",
+        entry_order_ref=accepted.order_ref, lifecycle_run_id=RUN_ID,
+    )
+    await resolve_exit(books, effect_operation_id=closing.effect_operation_id, trade=port, pricing=UNPRICEABLE_RECOVERY, read=None)
+    if kept_quote_usable:
+        assert books.effect_operation(closing.effect_operation_id).state == "succeeded"
+        assert not any(books.attributed_positions_for_strategy("bot-a").values())
+        assert len(effective_fill_records(books._conn, account_id=ACCOUNT_ID)) == 4
+        return
+    assert books.effect_operation(closing.effect_operation_id).state == "failed"
+    assert any("OPTION_EXIT_UNPRICED" in row["facts_json"] for row in books.custody_transitions())
+    assert len(effective_fill_records(books._conn, account_id=ACCOUNT_ID)) == 2
+    assert not any(
+        row["transition_kind"] == "ORDER_SUBMIT_REQUESTED" and row["effect_operation_id"] == closing.effect_operation_id
+        for row in books.custody_transitions()
+    )
 
 
 @pytest.mark.parametrize("plan,picks,cost,collateral", [

@@ -10,10 +10,11 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
+from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from httpx import ASGITransport
 from pydantic import TypeAdapter
@@ -39,12 +40,15 @@ from tests.options import test_resolver as scenes
 # A Clerk's option quotes on a stand-in Gateway, and a bull call spread to ask about.
 from tests.services.test_option_structure_preview import _BULL_CALL_SPREAD, _KNOWN, FRIDAY, Desk
 
+if TYPE_CHECKING:
+    from tests.broker.v2panel.conftest import _FakeDeployRegistry
+
 _BOTS = f"/api/brokers/alpaca/accounts/{ACCT}/bots"
 _PREVIEW = f"{_BOTS}/option-structure-preview"
 _SPREAD = _BULL_CALL_SPREAD.model_dump(mode="json")
 
 
-async def test_the_preview_route_takes_a_supported_structure(deploy_app) -> None:
+async def test_the_preview_route_takes_a_supported_structure(deploy_app: tuple[FastAPI, _FakeDeployRegistry]) -> None:
     app, _registry = deploy_app
     seen = (await _post(app, _SPREAD)).json()
     assert seen["verdict"]["can_be_deployed"] is True

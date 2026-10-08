@@ -2750,7 +2750,7 @@ async def _submit_reducing_order(
             bound = all(
                 broker.bind_option_close_quotes(
                     reducing.client_order_id, symbol=symbol, side=side.value,
-                    quotes=option_close.quotes[symbol], usable_generation=option_close.usable_generation,
+                    quotes=option_close.quotes.get(symbol, ()), usable_generation=option_close.usable_generation,
                 )
                 for symbol, side, quantity in order_reductions(option_close.request)
             )
