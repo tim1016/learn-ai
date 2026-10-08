@@ -60,25 +60,42 @@ def sql_string_list(values: Collection[str]) -> str:
     return ",".join(f"'{value}'" for value in sorted(values))
 
 
+# Broker contact belongs to the parent and every leg: identity,
+# acknowledgement, or fill on any of them prevents an absence proof.
+ORDER_HAS_BROKER_EVIDENCE_SQL = (
+    "(o.broker_order_id IS NOT NULL "
+    "OR EXISTS (SELECT 1 FROM fills witnessed_fill WHERE witnessed_fill.order_ref = o.order_ref) "
+    "OR EXISTS (SELECT 1 FROM custody_transitions witnessed_ack WHERE witnessed_ack.order_ref = o.order_ref "
+    "AND witnessed_ack.transition_kind = 'ORDER_SUBMIT_ACKED') "
+    "OR EXISTS (SELECT 1 FROM option_order_legs witnessed_leg "
+    "JOIN orders witnessed_order ON witnessed_order.order_ref = witnessed_leg.order_ref "
+    "WHERE witnessed_leg.parent_order_ref = o.order_ref AND (witnessed_order.broker_order_id IS NOT NULL "
+    "OR EXISTS (SELECT 1 FROM fills leg_fill WHERE leg_fill.order_ref = witnessed_order.order_ref) "
+    "OR EXISTS (SELECT 1 FROM custody_transitions leg_ack WHERE leg_ack.order_ref = witnessed_order.order_ref "
+    "AND leg_ack.transition_kind = 'ORDER_SUBMIT_ACKED'))))"
+)
+
 # An order that can never fill further, over ``orders o`` joined to its
-# ``effect_operations e``: the broker ended it, or its effect is terminal while
-# nothing says the broker ever knew it -- no broker identity (set only by an
-# acknowledgement) and no fill (a fill can be recorded before its order's
-# acknowledgement). A refused, failed or proven-absent order is the common
-# case (#2553); an ``unknown`` effect is not terminal. Never NULL, so it
-# composes under NOT. The one definition every "has this order ended?" read
-# composes; the same three facts ``order_evidence.order_never_reached_broker``
-# reads.
+# ``effect_operations e``: the broker ended it, or its effect is terminal
+# with no broker contact. Refused, failed and proven-absent orders share
+# this definition (#2553); an unknown effect is not terminal. Never NULL.
 ORDER_ENDED_SQL = (
     f"(LOWER(COALESCE(o.broker_state, '')) IN ({sql_string_list(ENDED_BROKER_STATES)}) "
-    "OR (e.state IN ('failed','rejected') AND o.broker_order_id IS NULL "
-    "AND NOT EXISTS (SELECT 1 FROM fills ended_fill WHERE ended_fill.order_ref = o.order_ref)))"
+    f"OR (e.state IN ('failed','rejected') AND NOT {ORDER_HAS_BROKER_EVIDENCE_SQL}))"
 )
 
 # An order that may still fill: neither filled nor ended (:data:`ORDER_ENDED_SQL`).
 # One still being sent, or whose outcome is unknown, is open -- it may be
 # working at the broker.
 ORDER_OPEN_SQL = f"(LOWER(COALESCE(o.broker_state, '')) <> 'filled' AND NOT {ORDER_ENDED_SQL})"
+
+
+def order_has_broker_evidence(conn: sqlite3.Connection, order_ref: str) -> bool:
+    """A parent or any child has broker identity, acknowledgement or fills (ADR 0076)."""
+    row = conn.execute(
+        f"SELECT {ORDER_HAS_BROKER_EVIDENCE_SQL} FROM orders o WHERE o.order_ref = ?", (order_ref,),
+    ).fetchone()
+    return row is not None and bool(row[0])
 
 
 def signed_broker_position_quantity(position: BrokerPosition) -> float:

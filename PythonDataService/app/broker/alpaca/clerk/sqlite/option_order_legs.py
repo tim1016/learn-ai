@@ -216,12 +216,27 @@ def leg_by_broker_id(conn: sqlite3.Connection, broker_order_id: str) -> str | No
 
 def parents_awaiting_leg_ids(conn: sqlite3.Connection, symbol: str) -> tuple[str, ...]:
     """Parents whose answer is still owed and could name an unrecognised contract order."""
+    from app.broker.alpaca.clerk.sqlite.order_projection import ORDER_HAS_BROKER_EVIDENCE_SQL
+
     rows = conn.execute(
         "SELECT DISTINCT leg.parent_order_ref FROM option_order_legs leg "
+        "JOIN orders o ON o.order_ref = leg.parent_order_ref "
+        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
         "WHERE leg.symbol = ? AND EXISTS (SELECT 1 FROM option_order_legs missing "
-        "JOIN orders o ON o.order_ref = missing.order_ref "
-        "WHERE missing.parent_order_ref = leg.parent_order_ref AND o.broker_order_id IS NULL) "
+        "JOIN orders child ON child.order_ref = missing.order_ref "
+        "WHERE missing.parent_order_ref = leg.parent_order_ref AND child.broker_order_id IS NULL) "
+        f"AND (e.state NOT IN ('failed','rejected') OR {ORDER_HAS_BROKER_EVIDENCE_SQL}) "
         "ORDER BY leg.parent_order_ref", (symbol.upper(),),
+    ).fetchall()
+    return tuple(row[0] for row in rows)
+
+
+def multi_leg_entry_refs(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """Multi-leg ENTRY parents only; ordinary trading history never enters this worklist."""
+    rows = conn.execute(
+        "SELECT DISTINCT leg.parent_order_ref FROM option_order_legs leg "
+        "CROSS JOIN orders o ON o.order_ref = leg.parent_order_ref WHERE o.role = 'ENTRY' "
+        "ORDER BY o.submitted_at_ms, leg.parent_order_ref",
     ).fetchall()
     return tuple(row[0] for row in rows)
 

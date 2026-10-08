@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 import pytest
@@ -22,11 +21,12 @@ from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerPosition
 from app.broker.contract.options import BrokerOptionOrder, MultiLegOptionOrderRequest, OptionOrderRequest
 from app.config import settings
+from app.schemas.action_plan import ActionPlan
 from app.services import market_liveness
 from tests._helpers.market_quotes import publish_quotes
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _FakeTradePort, _TestClock, documented_option_listing
 from tests.broker.alpaca.clerk.sqlite.resting_entry_harness import PaperAccountRead, PaperOptions, _compose
-from tests.broker.alpaca.clerk.sqlite.several_legs_fixtures import STRADDLE, STRADDLE_PICKS, evidence
+from tests.broker.alpaca.clerk.sqlite.several_legs_fixtures import STRADDLE, STRADDLE_PICKS, Pick, evidence
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS, _gate, _new_budget_repo
 from tests.broker.alpaca.documented_examples import documented
 
@@ -117,12 +117,15 @@ class SeveralLegsPaper(PaperOptions):
         self.repo = ClerkSqliteRepository.open(account_id=account_id, artifacts_root=self.artifacts_root, clock=self.clock)
         self.sync, self.keeper, self.clerk = _compose(self.repo, self.clock, self.venue, self.account)
 
-    async def enter(self, sid: str = "a", *, units: int = 2, decision: str | None = None, **_unused: Any) -> EffectOperationReceipt:
+    async def enter(
+        self, sid: str = "a", *, units: int = 2, decision: str | None = None,
+        plan: ActionPlan = STRADDLE, picks: Mapping[str, Pick] = STRADDLE_PICKS,
+    ) -> EffectOperationReceipt:
         self.decisions += 1
         return await self.clerk.execute_for_instance(
             strategy_instance_id=sid, run_id=f"run-{sid}", decision_id=decision or f"enter-{self.decisions}",
-            purpose=EffectPurpose.ENTER, action_plan=STRADDLE, quantity=units,
-            option_entry=evidence(self.clock(), STRADDLE_PICKS),
+            purpose=EffectPurpose.ENTER, action_plan=plan, quantity=units,
+            option_entry=evidence(self.clock(), picks),
         )
 
 

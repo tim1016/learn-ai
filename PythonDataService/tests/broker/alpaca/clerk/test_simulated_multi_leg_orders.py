@@ -33,7 +33,13 @@ from tests.broker.alpaca.clerk.sqlite.several_legs_fixtures import (
     STRADDLE,
     STRADDLE_PICKS,
     Pick,
+    call,
+    plan,
+    put,
     worked_entry,
+)
+from tests.broker.alpaca.clerk.sqlite.several_legs_fixtures import (
+    leg as plan_leg,
 )
 
 
@@ -126,3 +132,71 @@ async def test_a_net_limit_that_pays_less_or_receives_more_ends_every_leg_unfill
     assert (answer.status, answer.filled_quantity, answer.filled_avg_price) == ("canceled", 0, None)
     assert all(leg.filled_quantity == 0 for leg in answer.legs)
     assert await port.list_positions() == []
+
+
+@pytest.mark.parametrize("leg_count", [2, 3, 4])
+@pytest.mark.parametrize("phase", ["append_prefix", "before_commit", "after_commit"])
+async def test_a_disk_write_failure_keeps_none_or_all_legs_and_retry_recovers_the_whole_order(
+    world, tmp_path, monkeypatch, leg_count, phase,
+) -> None:
+    import builtins
+
+    from app.utils import atomic_file
+
+    _books, port = world
+    legs = (plan_leg("call"), plan_leg("put", right="put"), plan_leg("other_call"), plan_leg("other_put", right="put"))[:leg_count]
+    picks = {"call": (call(585), "3.10", "3.14"), "put": (put(585), "2.82", "2.86"),
+             "other_call": (call(590), "1.20", "1.24"), "other_put": (put(590), "1.16", "1.20")}
+    entry = worked_entry(plan(*legs), {item["leg_id"]: picks[item["leg_id"]] for item in legs}, units=2, now_ms=NOON)
+    _bind(port, "disk-failure", entry)
+    real_open = builtins.open
+    real_replace = atomic_file.os.replace
+
+    class FailedAppend:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self.handle.__exit__(*args)
+
+        def write(self, text):
+            self.handle.write("".join(text.splitlines(keepends=True)[:-1]))
+            self.handle.flush()
+            raise OSError("disk write stopped between legs")
+
+    def fails_between_lines(path, mode="r", *args, **kwargs):
+        handle = real_open(path, mode, *args, **kwargs)
+        return FailedAppend(handle) if Path(path) == port._ledger.path and mode == "a" else handle
+
+    def fails_at_commit(source, destination):
+        if phase == "after_commit":
+            real_replace(source, destination)
+        raise OSError("disk write stopped at commit")
+
+    with monkeypatch.context() as fault:
+        if phase == "append_prefix":
+            fault.setattr(builtins, "open", fails_between_lines)
+        else:
+            fault.setattr(atomic_file.os, "replace", fails_at_commit)
+        try:
+            await port.submit_option_order(entry.order, client_order_id="disk-failure")
+        except OSError as error:
+            assert "disk write stopped" in str(error)
+    bars = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:several-legs")
+    try:
+        restarted = SyntheticBroker(account_id="sim:several-legs", source_bars=bars, clock=lambda: NOON)
+        positions = await restarted.list_positions()
+        assert len(positions) in (0, leg_count)
+        if phase != "append_prefix":
+            assert len(positions) == (0 if phase == "before_commit" else leg_count)
+        looked_up = await restarted.get_option_order_by_client_order_id("disk-failure")
+        assert looked_up is None or len(looked_up.legs) == leg_count
+        _bind(restarted, "disk-failure", entry)
+        recovered = await restarted.submit_option_order(entry.order, client_order_id="disk-failure")
+        assert recovered.status == "filled" and len(recovered.legs) == leg_count
+        assert len(await restarted.list_positions()) == leg_count
+    finally:
+        bars.close()

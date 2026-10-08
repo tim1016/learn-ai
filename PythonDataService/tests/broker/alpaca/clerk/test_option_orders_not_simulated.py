@@ -77,9 +77,9 @@ def test_alpaca_says_it_takes_option_orders_of_one_leg_and_of_several() -> None:
         assert capabilities.supports_multi_leg_option_orders is True
 
 
-def test_the_simulation_says_it_takes_an_option_order_of_one_leg_and_none_of_several() -> None:
+def test_the_simulation_says_it_takes_single_and_multi_leg_option_orders() -> None:
     assert SYNTHETIC_CAPABILITIES.supports_option_orders is True
-    assert SYNTHETIC_CAPABILITIES.supports_multi_leg_option_orders is False
+    assert SYNTHETIC_CAPABILITIES.supports_multi_leg_option_orders is True
     assert SyntheticBroker(account_id="sim:options-1").capabilities() is SYNTHETIC_CAPABILITIES
 
 
@@ -98,7 +98,6 @@ def test_a_shadow_world_says_it_takes_an_option_order_of_one_leg_and_none_of_sev
 @pytest.mark.parametrize(
     ("order", "with_an_order_ledger"),
     [
-        pytest.param(_CALL_SPREAD, True, id="several legs: never taken"),
         pytest.param(_CALL_SPREAD, False, id="several legs, and no order ledger either"),
         pytest.param(_LONG_CALL, False, id="one leg, with no order ledger to record a fill in"),
     ],
@@ -106,8 +105,7 @@ def test_a_shadow_world_says_it_takes_an_option_order_of_one_leg_and_none_of_sev
 async def test_the_simulation_refuses_an_option_order_definitively(
     tmp_path: Path, order: OptionOrderRequest, with_an_order_ledger: bool
 ) -> None:
-    """An order of several legs it never takes. One of a single leg it takes only with an order ledger to
-    record the fill in; how it fills that one is ``test_synthetic_broker_option_orders.py``."""
+    """An option fill needs a ledger on which to retain its custody."""
     # A real order ledger, as a running simulation has: without one, "no orders" is all it could ever answer.
     account_id = "sim:options-1"
     broker = SyntheticBroker(

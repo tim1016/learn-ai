@@ -45,13 +45,13 @@ world = _world_fixture
 
 
 async def _order(
-    world: tuple[ClerkSqliteRepository, SyntheticBroker], *, received: bool = False, decision: str = "d1",
+    world: tuple[ClerkSqliteRepository, SyntheticBroker], *, received: bool = False, decision: str = "d1", sid: str = "bot-a",
 ) -> tuple[EnterSubmission, MultiLegOrderEvidence]:
     books, port = world
     plan, picks = (RECEIVED_SPREAD, RECEIVED_PICKS) if received else (PAID_SPREAD, PAID_PICKS)
     entry = worked_entry(plan, picks, units=2, now_ms=NOON)
     accepted = accept_option_enter(
-        books, account_id=ACCOUNT_ID, strategy_instance_id="bot-a", decision_id=decision, lifecycle_run_id=RUN_ID, entry=entry,
+        books, account_id=ACCOUNT_ID, strategy_instance_id=sid, decision_id=decision, lifecycle_run_id=RUN_ID, entry=entry,
     )
     assert accepted.order_ref is not None
     _bind(port, accepted.order_ref, entry)
@@ -179,6 +179,177 @@ async def test_a_late_fill_on_a_failed_parent_is_fenced_by_each_leg_it_actually_
     )
     assert notice is not None and all(leg.symbol in notice["explanation"] for leg in evidence.legs)
     assert not admit_new_exposure(books, strategy_instance_id="bot-a").allowed
+
+
+@pytest.mark.parametrize("filled", [False, True])
+async def test_a_known_child_prevents_every_parent_absence_proof(world, filled) -> None:
+    from app.broker.alpaca.clerk.sqlite.order_evidence import (
+        SUBMIT_ABSENCE_SUMMARY_CODE,
+        _fold_absence_if_past_grace,
+        entry_never_accepted_durably,
+        order_never_reached_broker,
+    )
+    from app.broker.alpaca.clerk.sqlite.order_projection import ORDER_ENDED_SQL
+    from tests.broker.alpaca.clerk.sqlite.conftest import _TestClock
+
+    books, _port = world
+    accepted, evidence = await _order(world)
+    child = books.order_legs(accepted.order_ref)[0]
+    observed = evidence.legs[0] if filled else evidence.legs[0].model_copy(update={
+        "filled_quantity": 0.0, "filled_avg_price": None, "status": "new",
+    })
+    fold_order_evidence(books, effect_operation_id=accepted.effect_operation_id, order=observed, order_ref=child.order_ref)
+    clock = books.clock
+    assert isinstance(clock, _TestClock)
+    for _ in range(31):
+        clock.advance(1_000)
+        books.renew_execution_lease()
+    assert not order_never_reached_broker(books, books.order(accepted.order_ref))
+    _fold_absence_if_past_grace(
+        books, effect_operation_id=accepted.effect_operation_id, order_ref=accepted.order_ref,
+        uncertain_since_ms=NOON,
+    )
+    assert books.effect_operation(accepted.effect_operation_id).state != "failed"
+    # A receipt left by an older process ceases to prove absence when a child contradicts it.
+    fold_failed(
+        books, effect_operation_id=accepted.effect_operation_id, order_ref=accepted.order_ref,
+        summary_code=SUBMIT_ABSENCE_SUMMARY_CODE, reason="absent", why="an older absence receipt",
+    )
+    assert not entry_never_accepted_durably(books, books.order(accepted.order_ref))
+    with books.write_fence() as conn:
+        ended = conn.execute(
+            "SELECT " + ORDER_ENDED_SQL + " FROM orders o JOIN effect_operations e "
+            "ON e.effect_operation_id=o.effect_operation_id WHERE o.order_ref=?", (accepted.order_ref,),
+        ).fetchone()[0]
+    assert not ended and books.position("bot-a", child.symbol) == (2 if filled else 0)
+    assert entry_outcome(books, accepted.order_ref).standing is EntryStanding.OUTCOME_UNKNOWN
+
+
+async def test_a_never_sent_parent_is_not_owed_leg_ids_but_a_known_child_is(world) -> None:
+    books, _port = world
+    accepted, evidence = await _order(world)
+    fold_failed(
+        books, effect_operation_id=accepted.effect_operation_id, order_ref=accepted.order_ref,
+        summary_code="ENTRY_QUOTE_STALE", reason="never sent", why="pre-contact quote refusal",
+    )
+    assert books.option_parents_awaiting_leg_ids(evidence.legs[0].symbol) == ()
+    child = books.order_legs(accepted.order_ref)[0]
+    fold_order_evidence(
+        books, effect_operation_id=accepted.effect_operation_id, order=evidence.legs[0], order_ref=child.order_ref,
+    )
+    assert books.option_parents_awaiting_leg_ids(evidence.legs[1].symbol) == (accepted.order_ref,)
+
+
+async def test_buying_power_counts_its_own_child_evidence_as_one_order_but_detects_another_bot(world) -> None:
+    from app.broker.alpaca.clerk.sqlite.entry_buying_power import _another_order_moved
+
+    books, _port = world
+    accepted, evidence = await _order(world)
+    with books.write_fence() as conn:
+        before_fill = conn.execute("SELECT COALESCE(MAX(sequence), 0) FROM custody_transitions").fetchone()[0]
+    fold_order_evidence(books, effect_operation_id=accepted.effect_operation_id, order=evidence)
+
+    def another_moved() -> bool:
+        with books.write_fence() as conn:
+            return _another_order_moved(
+                conn, order_ref=accepted.order_ref, effect_operation_id=accepted.effect_operation_id,
+                broker_order_id=evidence.order_id, after_sequence=before_fill,
+            )
+
+    assert not another_moved()
+    await _order(world, sid="bot-b", decision="other-bot-entry")
+    assert another_moved()
+
+
+def test_notice_recovery_on_books_without_option_parents_never_walks_stock_history(world, monkeypatch) -> None:
+    books, _port = world
+
+    def stock_history_walk(*_args, **_kwargs):
+        raise AssertionError("notice recovery walked unrelated stock history")
+
+    monkeypatch.setattr(books, "strategy_instances", stock_history_walk)
+    monkeypatch.setattr(books, "entry_orders_for_strategy", stock_history_walk)
+    refresh_legs_out_of_step_notices(books)
+    assert not bot_is_under_legs_out_of_step(books, "bot-a")
+
+
+async def test_an_overfilled_leg_in_a_canceled_parent_is_unknown(world) -> None:
+    books, _port = world
+    accepted, evidence = await _order(world)
+    fold_order_evidence(
+        books, effect_operation_id=accepted.effect_operation_id, order=_part(evidence, (3, 1), state="canceled"),
+    )
+    assert entry_outcome(books, accepted.order_ref).standing is EntryStanding.OUTCOME_UNKNOWN
+
+
+@pytest.mark.parametrize("received", [False, True])
+async def test_multi_leg_buying_power_records_completion_and_restart_even_with_judgment_off(world, received) -> None:
+    from app.broker.alpaca.clerk.sqlite.entry_buying_power import COMPARED_KIND, EntryBuyingPowerWatch
+    from app.broker.alpaca.clerk.sqlite.facts import EntryBuyingPowerComparedFacts
+    from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
+
+    books, _port = world
+    accepted, evidence = await _order(world, received=received)
+    fold_order_evidence(books, effect_operation_id=accepted.effect_operation_id, order=evidence)
+    watch = EntryBuyingPowerWatch(repo=books, read=object(), intake=ReentrantAsyncLock(), judged=lambda: False)
+    watch.sent(("bot-a", "d1"), order_ref=accepted.order_ref, sent_at_ms=NOON)
+    assert await watch.round(last_pass_at_ms=NOON, last_pass_clean=True) == (accepted.order_ref,)
+    facts = EntryBuyingPowerComparedFacts.from_facts_json(books.first_effect_transition(
+        effect_operation_id=accepted.effect_operation_id, transition_kind=COMPARED_KIND,
+    )["facts_json"])
+    assert (facts.result, facts.contracts_asked, facts.contracts_filled, facts.holds) == ("unknown", 4, 4, False)
+    # Two units: +$388 paid, or -$614 received. A $1,000 requirement makes the latter cost $386.
+    assert (facts.premium_paid_cents, facts.cost_of_filled_cents) == ((-61_400, 38_600) if received else (38_800, 38_800))
+    later, later_evidence = await _order(world, decision="d2", received=received, sid="bot-b")
+    fold_order_evidence(books, effect_operation_id=later.effect_operation_id, order=later_evidence)
+    restarted = EntryBuyingPowerWatch(repo=books, read=object(), intake=ReentrantAsyncLock(), judged=lambda: False)
+    assert await restarted.round(last_pass_at_ms=NOON, last_pass_clean=True) == (later.order_ref,)
+    recorded = EntryBuyingPowerComparedFacts.from_facts_json(books.first_effect_transition(
+        effect_operation_id=later.effect_operation_id, transition_kind=COMPARED_KIND,
+    )["facts_json"])
+    assert recorded.reason_code == "CLERK_RESTARTED" and not recorded.holds
+
+
+async def test_a_canceled_parent_waits_for_every_counted_execution_on_its_legs(world) -> None:
+    from dataclasses import replace
+
+    books, _port = world
+    accepted, evidence = await _order(world)
+    fold_order_submission_acknowledgement(
+        books, effect_operation_id=accepted.effect_operation_id, order=_part(evidence, (2, 2), state="canceled"),
+    )
+    for leg in books.order_legs(accepted.order_ref):
+        fill(
+            books, replace(accepted, order_ref=leg.order_ref), execution_id="one-" + leg.leg_id,
+            symbol=leg.symbol, side=leg.side.upper(), quantity=1, price=2.0,
+        )
+    assert entry_outcome(books, accepted.order_ref).standing is EntryStanding.OUTCOME_UNKNOWN
+
+
+async def test_a_failed_multi_leg_buying_power_comparison_still_records_one_unknown(world, monkeypatch) -> None:
+    from app.broker.alpaca.clerk.sqlite import entry_buying_power
+    from app.broker.alpaca.clerk.sqlite.facts import EntryBuyingPowerComparedFacts
+    from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
+
+    books, _port = world
+    accepted, evidence = await _order(world)
+    fold_order_evidence(books, effect_operation_id=accepted.effect_operation_id, order=evidence)
+    watch = entry_buying_power.EntryBuyingPowerWatch(
+        repo=books, read=object(), intake=ReentrantAsyncLock(), judged=lambda: False,
+    )
+    watch.sent(("bot-a", "d1"), order_ref=accepted.order_ref, sent_at_ms=NOON)
+
+    def fails(*_args, **_kwargs):
+        raise ValueError("comparison arithmetic unavailable")
+
+    monkeypatch.setattr(entry_buying_power, "_compare", fails)
+    assert await watch.round(last_pass_at_ms=NOON, last_pass_clean=True) == (accepted.order_ref,)
+    assert await watch.round(last_pass_at_ms=NOON, last_pass_clean=True) == ()
+    recorded = EntryBuyingPowerComparedFacts.from_facts_json(books.first_effect_transition(
+        effect_operation_id=accepted.effect_operation_id, transition_kind=entry_buying_power.COMPARED_KIND,
+    )["facts_json"])
+    assert recorded.reason_code == "COMPARISON_FAILED" and not recorded.holds
+
 
 
 async def test_an_answered_uneven_entry_does_not_hold_a_later_balanced_entry_in_the_same_contracts(world) -> None:

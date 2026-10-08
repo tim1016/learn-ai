@@ -54,6 +54,7 @@ from app.broker.alpaca.clerk.sqlite.option_entry import (
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
     UNFILLED_TERMINAL_STATES,
+    order_has_broker_evidence,
 )
 from app.broker.alpaca.clerk.sqlite.reads import FAILED_EFFECT_STATES
 from app.options.whole_units import LegContracts, whole_units
@@ -225,7 +226,10 @@ def _multi_leg_entry_outcome(
     elif all(counts[leg.symbol] == leg.contracts for leg in legs):
         standing = EntryStanding.FILLED
     elif effect.state in FAILED_EFFECT_STATES and not state:
-        standing = EntryStanding.OUTCOME_UNKNOWN if any(counts.values()) else EntryStanding.NOT_SENT
+        standing = (
+            EntryStanding.OUTCOME_UNKNOWN
+            if order_has_broker_evidence(repo._conn, parent_ref) else EntryStanding.NOT_SENT
+        )
     elif state in UNFILLED_TERMINAL_STATES:
         standing = EntryStanding.PART_FILLED if any(counts.values()) else EntryStanding.UNFILLED
     elif state in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES:

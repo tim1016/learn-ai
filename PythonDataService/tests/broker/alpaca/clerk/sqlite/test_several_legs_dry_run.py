@@ -7,6 +7,8 @@ import pytest
 
 from app.broker.alpaca.clerk.models import EffectOperationState
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryStanding
+from app.options.named_structures import NamedStructure
+from app.options.structure_catalogue import starting_plan
 from app.schemas.action_plan import ActionPlan
 from tests.broker.alpaca.clerk.sqlite.several_legs_fixtures import (
     PAID_PICKS,
@@ -21,6 +23,7 @@ from tests.broker.alpaca.clerk.sqlite.several_legs_fixtures import (
 )
 from tests.broker.alpaca.clerk.sqlite.test_option_entry_and_exit import SID, _DryRun
 from tests.broker.alpaca.clerk.sqlite.test_option_entry_and_exit import dry_run as _dry_run_fixture
+from tests.options.test_structure_check import _AS_NAMED, _picked
 
 dry_run = _dry_run_fixture
 pytestmark = pytest.mark.usefixtures("several_legs_taken")
@@ -48,3 +51,33 @@ async def test_every_contract_fills_under_one_parent_and_settles_one_whole_struc
     assert settled.standing is EntryStanding.FILLED and settled.units_filled == 1
     fills = dry_run.clerk.option_fills_of_decision(SID, "structure-entry")
     assert len(fills) == 2 and all(fill.quote_age_ms == 300 and fill.fill_model == "natural_price" for fill in fills)
+
+
+@pytest.mark.parametrize("name", list(NamedStructure))
+async def test_every_catalogue_structure_enters_and_counts_its_exact_leg_ratios(dry_run: _DryRun, name: NamedStructure) -> None:
+    plan = starting_plan(name, "SPY")
+    contracts, _shape_price = _AS_NAMED[name]
+    bids = {"C580": "6.20", "C585": "3.10", "C590": "1.20", "C595": "0.50", "C600": "0.18",
+            "P570": "0.18", "P575": "0.50", "P580": "1.20", "P585": "2.82", "P590": "5.50"}
+    picks = {
+        leg_id: (contract, bids[contracts[leg_id]], str(Decimal(bids[contracts[leg_id]]) + Decimal("0.01")))
+        for leg_id, contract in _picked(**contracts).items()
+    }
+    receipt = await dry_run.enter(evidence(dry_run.clock(), picks), decision="catalogue-entry", plan=plan)
+    assert receipt.state is EffectOperationState.SUBMITTED, receipt.explanation
+    (parent,) = receipt.child_order_refs
+    settled = await dry_run.clerk.await_entry_outcome(
+        strategy_instance_id=SID, decision_id="catalogue-entry", until_ms=dry_run.clock(),
+    )
+    assert settled.standing is EntryStanding.FILLED and settled.units_filled == 1
+    assert dry_run.held() == {
+        picks[leg.leg_id][0].occ_symbol: float(leg.qty_ratio) * (1 if leg.position == "long" else -1)
+        for leg in plan.on_enter
+    }
+    fills = dry_run.clerk.option_fills_of_decision(SID, "catalogue-entry")
+    assert {each.contract: each.quantity for each in fills} == {
+        picks[leg.leg_id][0].occ_symbol: leg.qty_ratio for leg in plan.on_enter
+    }
+    assert all(each.quote_age_ms == 300 and each.fill_model == "natural_price" for each in fills)
+    if len(plan.on_enter) > 1:
+        assert dry_run.repo.fills_for_order(parent) == []

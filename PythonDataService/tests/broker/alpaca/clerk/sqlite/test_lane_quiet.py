@@ -489,6 +489,7 @@ def test_every_registered_reason_declares_its_lane_quiet_answer() -> None:
         # #2913: an option position the Clerk meant to close is still open. It ends by itself, on
         # the pass a draining lane still runs, once the bot holds none of the contracts it names.
         "SCHEDULED_CLOSE_MISSED": True,
+        "OPTION_LEGS_OUT_OF_STEP": True,
         # #2913: doubts what an entry cost at the broker, never what the lane holds, and only the
         # owner's review ends it, which a draining lane refuses.
         "OPTION_BUYING_POWER_UNDER_RESERVED": False,

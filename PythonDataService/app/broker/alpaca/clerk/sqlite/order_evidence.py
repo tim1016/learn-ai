@@ -1513,16 +1513,11 @@ def order_never_reached_broker(repo: ClerkSqliteRepository, order: OrderResource
       the broker's own visibility window is never mistaken for one that never
       happened.
     """
-    if order.broker_order_id is not None:
-        return False
-    if repo.has_order_transition(order_ref=order.order_ref, transition_kind="ORDER_SUBMIT_ACKED"):
-        return False
-    if repo.fills_for_order(order.order_ref):
-        return False
-    if any(
-        repo.order(leg.order_ref).broker_order_id is not None or repo.fills_for_order(leg.order_ref)
-        for leg in repo.order_legs(order.order_ref)
-    ):
+    from app.broker.alpaca.clerk.sqlite.order_projection import order_has_broker_evidence
+
+    with repo._write_lock:
+        witnessed = order_has_broker_evidence(repo._conn, order.order_ref)
+    if witnessed:
         return False
     return repo.clock() - _uncertain_since_ms(repo, order.order_ref) >= submit_absence_grace_ms()
 
@@ -1536,7 +1531,11 @@ def entry_never_accepted_durably(repo: ClerkSqliteRepository, order: OrderResour
     the order to carry no broker identity — a failure mode that did produce a
     broker order id is a different, still-cancellable animal.
     """
-    if order.broker_order_id is not None:
+    from app.broker.alpaca.clerk.sqlite.order_projection import order_has_broker_evidence
+
+    with repo._write_lock:
+        witnessed = order_has_broker_evidence(repo._conn, order.order_ref)
+    if witnessed:
         return False
     if repo.has_order_transition(order_ref=order.order_ref, transition_kind="ENTRY_NEVER_ACCEPTED"):
         return True
@@ -1874,9 +1873,9 @@ def _fold_absence_if_past_grace(
     ``None`` and this fold, and voiding an order that reached the broker as
     definitively absent would be a false terminal record (#1993 review).
     """
-    order_row = repo.order(order_ref)
-    assert order_row is not None
-    if order_row.broker_order_id is not None:
+    from app.broker.alpaca.clerk.sqlite.order_projection import order_has_broker_evidence
+
+    if order_has_broker_evidence(repo._conn, order_ref):
         return
     grace_active = (repo.clock() - uncertain_since_ms) < submit_absence_grace_ms()
     if grace_active:

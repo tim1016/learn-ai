@@ -3,21 +3,29 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 
 import pytest
 
 from app.broker.alpaca import adapter
+from app.broker.alpaca.clerk import option_effects
 from app.broker.alpaca.clerk.models import EffectOperationState
+from app.broker.alpaca.clerk.sqlite.enter import accept_option_enter
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryStanding
 from app.broker.alpaca.clerk.sqlite.legs_out_of_step import bot_is_under_legs_out_of_step
 from app.broker.alpaca.clerk.sqlite.manual_order_replacement import resolve_captured_order
+from app.broker.alpaca.clerk.sqlite.order_evidence import fold_failed
 from app.broker.alpaca.clerk.sqlite.resting_entries import resting_entries
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
-from app.broker.contract.errors import BrokerUnavailable
+from app.broker.contract.errors import BrokerOrderRejected, BrokerUnavailable
 from app.broker.contract.models import BrokerOrderEvent
-from tests.broker.alpaca.clerk.sqlite.several_legs_fixtures import STRADDLE_PICKS
+from tests.broker.alpaca.clerk.sqlite.conftest import documented_option_listing
+from tests.broker.alpaca.clerk.sqlite.several_legs_fixtures import STRADDLE, STRADDLE_PICKS, worked_entry
 from tests.broker.alpaca.clerk.sqlite.several_legs_paper_harness import SeveralLegsPaper
 from tests.broker.alpaca.clerk.sqlite.several_legs_paper_harness import multi_paper as _multi_paper_fixture
+from tests.broker.alpaca.clerk.sqlite.test_budget_commands import _gate
+from tests.broker.alpaca.clerk.sqlite.test_several_legs_admission import IRON_CONDOR, IRON_CONDOR_PICKS
+from tests.broker.alpaca.documented_examples import documented
 
 multi_paper = _multi_paper_fixture
 
@@ -95,6 +103,58 @@ async def test_a_parent_answer_that_stays_unreadable_does_not_make_its_leg_forei
     result = await multi_paper.pass_()
     assert result.verdict == "stale" and multi_paper.repo.external_orders() == []
     assert multi_paper.outcome(parent).standing is EntryStanding.OUTCOME_UNKNOWN
+
+
+@pytest.mark.parametrize("refusal", ["pre-contact", "broker-rejected"])
+async def test_a_refused_historical_parent_does_not_swallow_an_unrelated_outside_order(
+    multi_paper: SeveralLegsPaper, refusal: str,
+) -> None:
+    if refusal == "broker-rejected":
+        multi_paper.venue.option_submit_error = BrokerOrderRejected("venue refused the structure", broker="alpaca")
+        receipt = await multi_paper.enter()
+        assert receipt.state is EffectOperationState.REJECTED
+    else:
+        accepted = accept_option_enter(
+            multi_paper.repo, account_id=multi_paper.repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a",
+            decision_id="refused-before-contact", entry=worked_entry(STRADDLE, STRADDLE_PICKS, units=2, now_ms=multi_paper.clock()),
+            envelope=_gate(cash=3000),
+        )
+        fold_failed(
+            multi_paper.repo, effect_operation_id=accepted.effect_operation_id, order_ref=accepted.order_ref,
+            summary_code="ENTRY_QUOTE_STALE", reason="refused", why="the quote became stale before contact",
+        )
+    foreign = deepcopy(documented("option_orders", "documented_responses.json")["MultilegOptionsOrderResponse"]["legs"][0])
+    foreign.update(
+        id="outside-order", client_order_id="outside-client", symbol=next(iter(STRADDLE_PICKS.values()))[0].occ_symbol,
+        status="new", filled_qty="0", filled_avg_price=None, filled_at=None, type="market", order_type="market",
+    )
+    multi_paper.account.outside_orders = [adapter.from_alpaca_order(foreign)]
+    result = await multi_paper.pass_()
+    assert result.verdict != "stale"
+    assert [row["broker_order_id"] for row in multi_paper.repo.external_orders()] == ["outside-order"]
+
+
+async def test_four_legs_share_one_send_and_the_deadline_cancels_and_recovers_only_the_parent(
+    multi_paper: SeveralLegsPaper, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(option_effects, "SOLD_LEG_STRUCTURES_TAKEN", True)
+    multi_paper.account.listed = {
+        contract.occ_symbol: documented_option_listing(contract) for contract, *_quotes in IRON_CONDOR_PICKS.values()
+    }
+    receipt = await multi_paper.enter(units=2, plan=IRON_CONDOR, picks=IRON_CONDOR_PICKS)
+    assert receipt.state is EffectOperationState.SUBMITTED, receipt.explanation
+    (parent,) = receipt.child_order_refs
+    assert multi_paper.venue.option_submit_calls == [parent]
+    assert len(multi_paper.account.listing_reads) == 4 and multi_paper.account.option_account_reads == 1
+    multi_paper.venue.legs_fill(parent, (1, 1, 1, 1))
+    await multi_paper.restart()
+    multi_paper.wait(21_000)
+    await multi_paper.round()
+    outcome = multi_paper.outcome(parent)
+    assert outcome.proven and outcome.standing is EntryStanding.PART_FILLED and outcome.units_filled == 1
+    assert not outcome.legs_out_of_step and len(outcome.contracts_filled) == 4
+    assert multi_paper.venue.cancel_calls == [multi_paper.venue.option_orders[parent]["id"]]
+    assert set(multi_paper.venue.option_lookup_calls) == {parent}
 
 
 @pytest.mark.parametrize("counts", [(1, 1), (1, 0)])

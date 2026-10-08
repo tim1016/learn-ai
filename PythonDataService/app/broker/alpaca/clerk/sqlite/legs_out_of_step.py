@@ -8,6 +8,7 @@ from app.broker.alpaca.clerk.sqlite.entry_outcome import entry_outcome
 from app.broker.alpaca.clerk.sqlite.facts import UncertaintyRaisedFacts, UncertaintyResolvedFacts
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.option_entry import held_of_entry
+from app.broker.alpaca.clerk.sqlite.option_order_legs import multi_leg_entry_refs
 from app.broker.alpaca.clerk.sqlite.reads import strategies_under_active_uncertainty
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty
@@ -117,7 +118,6 @@ def end_notices_of_flat_bots(repo: ClerkSqliteRepository) -> tuple[str, ...]:
 def refresh_legs_out_of_step_notices(repo: ClerkSqliteRepository) -> None:
     """Re-derive final-entry notices on each pass, recovering a crash after the fill's commit."""
     with repo.write_fence():
-        for instance in repo.strategy_instances():
-            for order in repo.entry_orders_for_strategy(instance["strategy_instance_id"]):
-                note_legs_out_of_step(repo, order.order_ref)
+        for parent_ref in multi_leg_entry_refs(repo._conn):
+            note_legs_out_of_step(repo, parent_ref)
         end_notices_of_flat_bots(repo)

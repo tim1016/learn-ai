@@ -505,9 +505,8 @@ class SynthesizedOrderLedger:
         """Append the legs of one option order of several legs inside :meth:`transaction`, in one write.
 
         Each leg is a record of its own (ADR 0076). They are written
-        together and synced once, so the ledger holds every leg of an order
-        or, short of a write torn by a crash, none: a simulation never
-        fills one leg.
+        together by an atomic replacement, so a crash leaves the old ledger
+        or every leg of this order. A simulation never fills one leg.
         """
         if not getattr(self._transaction, "held", False):
             raise SynthesizedLedgerTransactionError(
@@ -520,7 +519,7 @@ class SynthesizedOrderLedger:
             SynthesizedOrderRecord(seq=next_seq + offset, order=order, option=option)
             for offset, (order, option) in enumerate(legs)
         )
-        self._orders.append_many(appended)
+        self._orders.replace_all([*records, *appended])
         records.extend(appended)
         return appended
 
