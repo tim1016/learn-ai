@@ -486,16 +486,21 @@ def _deployment_budget(
     subject_id = bot_subject_id(sid)
     fills = [fill for fill in records if fill.sid == subject_id]
     fifo = compute_fifo_pnl(fills)
-    short = [lot for lot in fifo.open_lots if lot.side != OrderSide.BUY]
+    short = [lot for lot in fifo.open_lots if lot.side != OrderSide.BUY and lot.multiplier is None]
     if short:
         raise BudgetUnavailable(_why_short(conn, sid, fills, short))
+    from app.broker.alpaca.clerk.option_position_money import option_position_money
+
+    options = [lot for lot in fifo.open_lots if lot.multiplier is not None]
+    option_cost, collateral = option_position_money(options)
     return deployment_budget(
         strategy_instance_id=sid, committed_cents=commitment["committed_cents"],
         active=commitment["run_state"] == "ACTIVE" and commitment["released_at_ms"] is None,
         realized_gross=fifo.exact_realized_pnl, fees=fees.total_for(subject_id),
-        position_cost=sum((lot.exact_cost_basis for lot in fifo.open_lots), ZERO),
+        position_cost=option_cost + sum((lot.exact_cost_basis for lot in fifo.open_lots if lot.multiplier is None), ZERO),
         pending_orders=sum((claim.unfilled_cost + claim.unfilled_fee for claim in claims if claim.strategy_instance_id == sid), ZERO),
         release=_recorded_release(commitment),
+        option_collateral=collateral,
     )
 
 

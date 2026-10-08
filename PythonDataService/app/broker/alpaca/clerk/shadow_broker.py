@@ -28,7 +28,7 @@ spot. The quotes are the ones kept for this shadow account, in its own
 folder beside the book: an entry's as its order is sent, an exit
 decision's, and the marks the Clerk's keeping states of every contract the
 account's bots hold. They are the account's, not one bot's: one contract
-has one market. An order of several legs is refused by name.
+has one market. An order of several legs fills every leg atomically from its own quote.
 
 Settlement is driven by reads, not by a task: the sweep's periodic order and
 position reads are the clock. A resting order cancels only once one bucket
@@ -644,10 +644,8 @@ class _ShadowSettlementBars:
 class NoSubmitAlpacaTradePort(UnsupportedOptionOrderRefusal):
     """``BrokerTradePort`` that synthesizes every order and never reaches Alpaca (ADR 0059 D2).
 
-    It takes an option order of one leg, so it answers that and the two
-    option lookups itself, from the book's own. An order of several legs it
-    refuses in the words every simulated port refuses option orders in
-    (``UnsupportedOptionOrderRefusal``).
+    It fills option entries and closes, including multi-leg orders, from
+    the book's own quotes and answers both exact option lookups itself.
     """
 
     broker_id = SHADOW_BROKER_ID
@@ -737,16 +735,16 @@ class NoSubmitAlpacaTradePort(UnsupportedOptionOrderRefusal):
     async def submit_option_order(
         self, order: OptionOrderRequest, *, client_order_id: str
     ) -> BrokerOptionOrder:
-        """Fill an option order of one leg from the quote bound to it, or end it unfilled. Never a vendor call."""
+        """Fill an option order from every bound leg quote, atomically. Never a vendor call."""
         if isinstance(order, MultiLegOptionOrderRequest):
-            raise self._option_orders_not_taken("takes no option orders of several legs")
+            return self._options.submit_multi(order, client_order_id=client_order_id)
         return self._options.submit(order, client_order_id=client_order_id)
 
     async def get_option_order_by_client_order_id(self, client_order_id: str) -> BrokerOptionOrder | None:
-        return self._options.order_where(lambda record: record.order.client_order_id == client_order_id)
+        return self._options.order_where(lambda record: record.order.client_order_id == client_order_id) or self._options.multi_leg_sent_as(client_order_id)
 
     async def get_option_order_by_broker_order_id(self, order_id: str) -> BrokerOptionOrder | None:
-        return self._options.order_where(lambda record: record.order.order_id == order_id)
+        return self._options.order_where(lambda record: record.order.order_id == order_id) or self._options.multi_leg_sent_as(order_id.removeprefix("shadow-order:"))
 
 
 class ShadowAccountReadPort:
@@ -759,9 +757,7 @@ class ShadowAccountReadPort:
         self._book = book
 
     def capabilities(self) -> BrokerCapabilities:
-        # The live broker's own, less what the shadow order book does not do:
-        # it fills an option order of one leg and takes none of several (#2913).
-        return self._live.capabilities().revised(supports_multi_leg_option_orders=False)
+        return self._live.capabilities()
 
     async def get_account(self) -> BrokerAccountSnapshot:
         return await self._live.get_account()

@@ -387,7 +387,7 @@ async def test_a_simulations_cash_settlement_is_booked_as_a_sale_at_the_price_it
         ),
         pytest.param(
             {**_SETTLED_IN_CASH, "simulation": _a_simulations_record("155.25"), "held": "sold"},
-            "only contracts it bought", id="a cash settlement of a sold lot",
+            "names the side", id="a bought settlement filed against a sold lot",
         ),
         pytest.param(
             {**_SETTLED_IN_CASH, "simulation": _a_simulations_record("155.25", contracts=1, cash_cents=52_500)},

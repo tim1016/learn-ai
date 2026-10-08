@@ -458,11 +458,10 @@ async def test_an_entry_sent_after_the_regular_session_is_refused(dry_run: _DryR
         pytest.param(_plan(_option_leg("long_call"), _option_leg("long_put", right="put")), id="a straddle of two bought legs"),
     ],
 )
-async def test_a_plan_the_clerk_does_not_take_yet_is_refused_by_name(dry_run: _DryRun, plan: ActionPlan) -> None:
+async def test_a_structure_handed_quotes_for_only_one_leg_is_refused(dry_run: _DryRun, plan: ActionPlan) -> None:
     refused = await dry_run.enter(dry_run.evidence(), plan=plan)
 
-    await _refused(refused, "OPTION_STRUCTURE_NOT_SUPPORTED", dry_run)
-    assert "not built yet" in refused.explanation
+    await _refused(refused, "OPTION_ENTRY_EVIDENCE_INCOMPLETE", dry_run)
 
 
 async def test_the_books_and_the_simulated_broker_agree_on_what_the_bot_holds(dry_run: _DryRun) -> None:
@@ -988,7 +987,7 @@ async def test_a_live_account_refuses_to_register_a_bot_that_trades_options(
     assert one_account.repo.strategy_instance("options-on-live") is None
 
 
-async def test_a_dry_run_refuses_to_register_a_bot_whose_plan_it_does_not_take(tmp_path: Path) -> None:
+async def test_a_dry_run_registers_a_spread_bot(tmp_path: Path) -> None:
     market_liveness.reset_market_liveness_store_for_testing()
     spread = _plan(
         _option_leg("long_call"),
@@ -997,10 +996,7 @@ async def test_a_dry_run_refuses_to_register_a_bot_whose_plan_it_does_not_take(t
     try:
         account = await _open(tmp_path, _TestClock(NOON), _binding(spread))
 
-        with pytest.raises(OptionPlanRefused) as refused:
-            await account.clerk.register_strategy_run(account.binding)
-
-        assert refused.value.reason.value == "OPTION_STRUCTURE_NOT_SUPPORTED"
+        await account.clerk.register_strategy_run(account.binding)
     finally:
         await close_synthetic_clerk_runtimes()
         market_liveness.reset_market_liveness_store_for_testing()

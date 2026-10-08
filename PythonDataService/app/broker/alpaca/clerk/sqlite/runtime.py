@@ -2129,9 +2129,14 @@ class SqliteAlpacaClerkFacade:
                     symbol for symbol in opened
                     if position_quantity_is_nonzero(self._repo.position(strategy_instance_id, symbol))
                 ]
-                if len(held) > 1:
-                    # One EXIT closes one contract. Closing the newest and answering FLAT
-                    # would leave the others open behind a receipt that says nothing is.
+                closing = held[0] if held else (opened[0] if opened else None)
+                target = None if closing is None else newest_reducible_entry(self._repo, strategy_instance_id, closing)
+                from app.broker.alpaca.clerk.sqlite.option_entry import MultiLegOptionEntryFacts
+
+                entry = None if target is None else option_entry_of_order(self._repo, target.order_ref)
+                contracts = () if entry is None else tuple(terms.symbol for terms in entry.leg_terms)
+                if len(held) > 1 and (not isinstance(entry, MultiLegOptionEntryFacts) or set(held) - set(contracts)):
+                    # A receipt must cover every held contract. Disjoint one-leg entries have no recorded structure.
                     logger.error(
                         "an option bot holds several contracts; its EXIT was refused",
                         extra={
@@ -2150,11 +2155,7 @@ class SqliteAlpacaClerkFacade:
                         ),
                         next_step="Stop the bot and flatten each contract from its page.",
                     )
-                closing = held[0] if held else (opened[0] if opened else None)
-                target = None if closing is None else newest_reducible_entry(self._repo, strategy_instance_id, closing)
-                not_closed = (
-                    () if option_exit is None or closing is None else option_exit.for_other_contracts_than(closing)
-                )
+                not_closed = () if option_exit is None else tuple(sorted(set(option_exit.quotes) - set(contracts)))
                 if not_closed:
                     # A quote is taken only for the contract this EXIT closes. One of another
                     # contract could price nothing here, and is the caller's mistake to hear of.

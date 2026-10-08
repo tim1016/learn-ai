@@ -915,7 +915,13 @@ class ClerkSqliteRepository(
             (transition.effect_operation_id, order_ref, transition.effect_operation_id),
         ).fetchone()
         if linked is None:
-            raise ValueError("execution evidence effect does not own the exact order")
+            parent = self._conn.execute(
+                "SELECT 1 FROM option_order_legs leg JOIN operation_order_links link "
+                "ON link.order_ref=leg.parent_order_ref WHERE leg.order_ref=? AND link.effect_operation_id=?",
+                (order_ref, transition.effect_operation_id),
+            ).fetchone()
+            if parent is None:
+                raise ValueError("execution evidence effect does not own the exact order")
         return dict(owner)
 
     def _execution_coverage_quarantine_transition(

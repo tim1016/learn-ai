@@ -388,15 +388,14 @@ async def _stopped(app, registry, **changes: object) -> dict[str, Any]:
     return refusal
 
 
-async def test_a_structure_of_several_legs_is_refused_by_the_clerks_own_rule_until_it_is_built(
+async def test_a_multi_leg_deploy_waits_for_its_price_after_the_clerk_accepts_the_structure(
     deploy_app, floor: _Floor
 ) -> None:
     app, registry = deploy_app
 
     refusal = await _stopped(app, registry, trades=_SPREAD)
 
-    assert refusal["reason_code"] == "OPTION_STRUCTURE_NOT_SUPPORTED"
-    assert "2 option legs" in refusal["message"]
+    assert refusal["reason_code"] == option_deploy.NOT_PRICED
 
 
 async def test_a_sold_leg_is_refused_by_its_place_and_never_by_an_id_in_quotes(deploy_app, floor: _Floor) -> None:
@@ -918,7 +917,7 @@ async def test_the_admission_preview_holds_an_option_deploy_to_the_same_fences_a
     monkeypatch.setattr(option_deploy, "asyncio", SimpleNamespace(sleep=never))
 
     taken = await _post(app, "/admission", execution_mode="dry_run", trades=_ONE_CALL)
-    refused = _refusal(await _post(app, "/admission", execution_mode="dry_run", trades=_SPREAD))
+    spread = await _post(app, "/admission", execution_mode="dry_run", trades=_SPREAD)
 
     assert taken.status_code == 200, taken.text
-    assert refused["reason_code"] == "OPTION_STRUCTURE_NOT_SUPPORTED"
+    assert spread.status_code == 200, spread.text

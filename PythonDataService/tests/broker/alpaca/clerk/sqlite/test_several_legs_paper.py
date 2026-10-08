@@ -8,7 +8,6 @@ from copy import deepcopy
 import pytest
 
 from app.broker.alpaca import adapter
-from app.broker.alpaca.clerk import option_effects
 from app.broker.alpaca.clerk.models import EffectOperationState
 from app.broker.alpaca.clerk.sqlite.enter import accept_option_enter
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryStanding
@@ -35,7 +34,6 @@ async def test_another_bots_unfilled_order_fences_an_opposite_leg_until_it_is_pr
 ) -> None:
     from tests.broker.alpaca.clerk.sqlite.several_legs_fixtures import PAID_PICKS, PAID_SPREAD, call, leg, plan, put
 
-    monkeypatch.setattr(option_effects, "SOLD_LEG_STRUCTURES_TAKEN", True)
     repo = multi_paper.repo
     pending = accept_option_enter(
         repo, account_id=repo.account_id, strategy_instance_id="b", decision_id="resting-buy", lifecycle_run_id="run-b",
@@ -171,7 +169,6 @@ async def test_a_refused_historical_parent_does_not_swallow_an_unrelated_outside
 async def test_four_legs_share_one_send_and_the_deadline_cancels_and_recovers_only_the_parent(
     multi_paper: SeveralLegsPaper, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(option_effects, "SOLD_LEG_STRUCTURES_TAKEN", True)
     multi_paper.account.listed = {
         contract.occ_symbol: documented_option_listing(contract) for contract, *_quotes in IRON_CONDOR_PICKS.values()
     }

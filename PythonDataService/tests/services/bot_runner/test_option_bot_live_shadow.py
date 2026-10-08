@@ -24,7 +24,7 @@ from app.broker.alpaca.broker import AlpacaBroker
 from app.broker.alpaca.clerk.account_authority import shadow_evidence_account_id_for_strategy
 from app.broker.alpaca.clerk.held_option_quotes import KEEP_EVERY_MS, reset_held_option_quotes_for_testing
 from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
-from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal, OptionPlanRefused
+from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal
 from app.broker.alpaca.clerk.simulated_option_orders import SimulatedOptionOrders
 from app.broker.alpaca.clerk.sqlite import runtime as clerk_runtime
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntrySettlement, EntryStanding, recorded_settlement
@@ -476,17 +476,25 @@ async def test_at_the_end_the_owner_set_to_sell_a_shadows_run_is_stopped_and_its
 # ---- What a Shadow still refuses -----------------------------------------------------------------------
 
 
-async def test_a_plan_of_several_legs_is_refused_by_name_as_a_shadow_bot_is_registered(
-    on_a_shadow: Callable[..., ShadowFloor],
+async def test_a_shadow_bot_enters_and_closes_a_spread_as_two_parent_orders(
+    on_a_shadow: Callable[..., ShadowFloor], alpaca_is_never_sent_to: list[str],
 ) -> None:
-    floor = await on_a_shadow(plan=scenes._spread()).open(register=False)
+    from tests.broker.alpaca.clerk.sqlite.conftest import documented_option_listing
 
-    with pytest.raises(OptionPlanRefused) as refused:
-        await floor.clerk.register_strategy_run(floor.binding)
-
-    assert refused.value.reason is OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED
-    assert "2 option legs" in refused.value.detail
-    assert floor.repo.strategy_instance(floor.sid) is None
+    floor = await on_a_shadow(plan=scenes._spread()).open()
+    higher = scenes._contract("call", 590)
+    floor.live.listed[higher.occ_symbol] = documented_option_listing(higher)
+    floor.markets[590] = ("2.12", "2.16")
+    ran = await floor.run(_round_trip())
+    assert [outcome for outcome, _ in ran.outcomes()] == [
+        "no_action", "enter_intent", "no_action", "no_action", "exit_intent",
+    ]
+    assert {(symbol, side) for symbol, side, *_ in floor.fills()} == {
+        (CALL, "buy"), (CALL, "sell"), (higher.occ_symbol, "sell"), (higher.occ_symbol, "buy"),
+    }
+    assert floor.holds() == {}
+    assert floor.repo._conn.execute("SELECT COUNT(*) FROM orders WHERE role IN ('ENTRY', 'REDUCING')").fetchone()[0] == 2
+    assert floor.live.trade_calls == alpaca_is_never_sent_to == []
 
 
 # ---- After a restart -----------------------------------------------------------------------------------

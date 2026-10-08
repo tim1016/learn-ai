@@ -80,7 +80,7 @@ def _settlement_price(bar: RetainedSourceBar, *, close_ms: int) -> SettlementPri
     )
 
 
-def _sale_fee_cents(trade_date: date, *, contracts: int, price: Decimal, multiplier: int) -> int | None:
+def _sale_fee_cents(trade_date: date, *, contracts: int, price: Decimal, multiplier: int, side: OrderSide = OrderSide.SELL) -> int | None:
     """What the option fee model charges one simulated sale taken as a day of its own, or None when it cannot say.
 
     For the settlement's own record. The account's fees are worked out
@@ -98,7 +98,7 @@ def _sale_fee_cents(trade_date: date, *, contracts: int, price: Decimal, multipl
     try:
         return option_fee_provision_cents([
             fees_for_option_fill(
-                trade_date=trade_date, side=OrderSide.SELL, contracts=Decimal(contracts), premium=price,
+                trade_date=trade_date, side=side, contracts=Decimal(contracts), premium=price,
                 multiplier=multiplier,
             )
         ])
@@ -116,6 +116,7 @@ def _settlement_order(
     price: float,
     happened_at_ms: int,
     observed_at_ms: int,
+    side: str = "sell",
 ) -> BrokerOrder:
     """A settlement in the shape the ledger's position fold reads: a sale of the contracts, filled once, in full.
 
@@ -129,7 +130,7 @@ def _settlement_order(
         client_order_id=client_order_id,
         symbol=symbol,
         asset_class="us_option",
-        side="sell",
+        side=side,
         order_type="market",
         time_in_force="day",
         quantity=quantity,
@@ -211,7 +212,7 @@ class SimulatedOptionExpiry:
                     records, contract, held=quantity, multiplier=multipliers[symbol], at_ms=at_ms
                 )
                 word = (at_the_owners_word or {}).get(symbol)
-                if isinstance(unsettled, _NoPriceAtTheClose) and word is not None:
+                if isinstance(unsettled, _NoPriceAtTheClose) and word is not None and quantity > 0:
                     self._let_go_at_the_owners_word(
                         records, contract, contracts=int(quantity), multiplier=multipliers[symbol], at_ms=at_ms,
                         word=word, why=unsettled.why,
@@ -254,7 +255,7 @@ class SimulatedOptionExpiry:
             status=OptionActivityStatus.EXECUTED,
             activity_date_ms=et_midnight_ms(contract.expiry_date),
             contract=contract,
-            position_change=-settlement.contracts,
+            position_change=-settlement.contracts if settlement.position == "long" else settlement.contracts,
             net_amount=None if sold else Decimal(0),
             group_id=activity_id,
             created_at_ms=settlement.settled_at_ms,
@@ -319,27 +320,28 @@ class SimulatedOptionExpiry:
         """
         assert self._ledger is not None
         symbol = contract.occ_symbol
-        if held < 0 or not float(held).is_integer():
-            return "This simulation settles only whole contracts it bought."
+        if not float(held).is_integer():
+            return "This simulation settles only whole option contracts."
         if self._source_bars is None:
             return "This simulation keeps no prices of the underlying, so it cannot say what the contract was worth at the close."
         close_ms = last_session_close_ms(contract.expiry_date)
         price = self._price_at_the_close(contract, close_ms=close_ms, at_ms=at_ms)
         if not isinstance(price, SettlementPrice):
             return price
-        contracts = int(held)
+        contracts = abs(int(held))
         worth = exercise_value(
             contract, underlying_price=price.underlying_price, contracts=contracts, multiplier=multiplier
         )
         sold = worth.booked > 0
         settlement = SynthesizedOptionSettlement(
-            contract=contract,
+            contract=contract, position="long" if held > 0 else "short",
             outcome=SimulatedOutcome.SETTLED_IN_CASH if sold else SimulatedOutcome.EXPIRED,
             contracts=contracts, multiplier=multiplier, last_session_close_ms=close_ms, settled_at_ms=at_ms,
             rule=SIMULATED_SETTLEMENT_RULE, price=price, exercise_value=worth.worked_out, booked_price=worth.booked,
-            cash_cents=worth.cash_cents,
+            cash_cents=worth.cash_cents if held > 0 else -worth.cash_cents,
             fee_cents=_sale_fee_cents(
-                et_date_at_ms(close_ms - 1), contracts=contracts, price=worth.booked, multiplier=multiplier
+                et_date_at_ms(close_ms - 1), contracts=contracts, price=worth.booked, multiplier=multiplier,
+                side=OrderSide.SELL if held > 0 else OrderSide.BUY
             ) if sold else None,
         )
         self._ledger.append_locked(
@@ -347,6 +349,7 @@ class SimulatedOptionExpiry:
             order=_settlement_order(
                 self.broker_id, settlement_client_order_id(symbol), symbol=symbol, quantity=float(contracts),
                 price=float(worth.booked), happened_at_ms=close_ms, observed_at_ms=at_ms,
+                side="sell" if held > 0 else "buy",
             ),
             settlement=settlement,
         )

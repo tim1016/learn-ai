@@ -45,16 +45,6 @@ SPREAD = _plan(_leg("long_call"), _leg("short_call", position="short"))
 
 
 @pytest.fixture
-def bought_legs_taken(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(option_effects, "BOUGHT_LEG_STRUCTURES_TAKEN", True)
-
-
-@pytest.fixture
-def sold_legs_taken(monkeypatch: pytest.MonkeyPatch, bought_legs_taken: None) -> None:
-    monkeypatch.setattr(option_effects, "SOLD_LEG_STRUCTURES_TAKEN", True)
-
-
-@pytest.fixture
 def setting_on(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "ALPACA_MULTI_LEG_OPTION_ORDERS_ENABLED", True)
 
@@ -73,44 +63,22 @@ def test_one_bought_call_is_taken_on_every_account_and_answers_its_leg_and_its_u
     assert taken.underlying == "SPY"
 
 
-def test_both_gates_are_shut_until_the_pieces_that_open_them_are_built() -> None:
-    assert option_effects.BOUGHT_LEG_STRUCTURES_TAKEN is False
-    assert option_effects.SOLD_LEG_STRUCTURES_TAKEN is False
+def test_real_account_rollout_stays_off() -> None:
     assert settings.ALPACA_MULTI_LEG_OPTION_ORDERS_ENABLED is False
 
 
-@pytest.mark.parametrize("plan", [STRADDLE, SPREAD], ids=["two bought legs", "a sold leg"])
-@pytest.mark.parametrize("real_account", [True, False])
-def test_with_nothing_opened_a_plan_of_several_legs_is_refused_under_one_code_on_every_account(
-    plan: ActionPlan, real_account: bool
-) -> None:
-    assert _refusal(plan, real_account=real_account).reason is OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED
+@pytest.mark.parametrize("plan", [STRADDLE, SPREAD])
+def test_a_simulation_takes_bought_and_sold_leg_structures(plan: ActionPlan) -> None:
+    assert len(option_plan_taken(plan, real_account=False).legs) == 2
 
 
-def test_the_first_gate_opens_a_structure_of_bought_legs_and_keeps_a_sold_leg_refused(bought_legs_taken: None) -> None:
-    taken = option_plan_taken(STRADDLE, real_account=False)
-
-    assert [leg.leg_id for leg in taken.legs] == ["long_call", "long_put"]
-    assert taken.underlying == "SPY"
-    refused = _refusal(SPREAD, real_account=False)
-    assert refused.reason is OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED
-    assert "short_call" in refused.detail
-
-
-def test_the_second_gate_alone_opens_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(option_effects, "SOLD_LEG_STRUCTURES_TAKEN", True)
-
-    assert _refusal(SPREAD, real_account=False).reason is OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED
-    assert _refusal(STRADDLE, real_account=False).reason is OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED
-
-
-def test_both_gates_open_a_structure_with_a_sold_leg_in_the_plans_own_leg_order(sold_legs_taken: None) -> None:
+def test_a_structure_with_a_sold_leg_is_taken_in_the_plans_own_leg_order() -> None:
     taken = option_plan_taken(SPREAD, real_account=False)
 
     assert [(leg.leg_id, leg.position) for leg in taken.legs] == [("long_call", "long"), ("short_call", "short")]
 
 
-def test_a_real_account_refuses_several_legs_under_the_settings_own_code_while_it_is_off(sold_legs_taken: None) -> None:
+def test_a_real_account_refuses_several_legs_under_the_settings_own_code_while_it_is_off() -> None:
     refused = _refusal(SPREAD, real_account=True)
 
     assert refused.reason is OptionEffectRefusal.SEVERAL_LEGS_SETTING_OFF
@@ -119,16 +87,12 @@ def test_a_real_account_refuses_several_legs_under_the_settings_own_code_while_i
     assert "ALPACA_MULTI_LEG_OPTION_ORDERS_ENABLED" in refused.detail and "Dry Run" in refused.detail
 
 
-def test_a_real_account_takes_several_legs_once_its_setting_is_on(sold_legs_taken: None, setting_on: None) -> None:
+def test_a_real_account_takes_several_legs_once_its_setting_is_on(setting_on: None) -> None:
     assert len(option_plan_taken(SPREAD, real_account=True).legs) == 2
     assert len(option_plan_taken(STRADDLE, real_account=True).legs) == 2
 
 
-def test_the_setting_alone_opens_nothing_on_a_real_account(setting_on: None) -> None:
-    assert _refusal(STRADDLE, real_account=True).reason is OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED
-
-
-def test_a_dry_run_never_reads_the_setting(sold_legs_taken: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_dry_run_never_reads_the_setting(monkeypatch: pytest.MonkeyPatch) -> None:
     def never_asked() -> bool:
         pytest.fail("a simulation sends nothing, so it never asks the setting")
 
@@ -153,14 +117,14 @@ def test_a_dry_run_never_reads_the_setting(sold_legs_taken: None, monkeypatch: p
         ),
     ],
 )
-def test_what_no_gate_ever_opens_is_refused_by_what_it_is(sold_legs_taken: None, plan: ActionPlan, said: str) -> None:
+def test_unsupported_plans_is_refused_by_what_it_is(plan: ActionPlan, said: str) -> None:
     refused = _refusal(plan, real_account=False)
 
     assert refused.reason is OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED
     assert said in refused.detail
 
 
-def test_a_plan_in_shares_is_not_an_option_plan(sold_legs_taken: None) -> None:
+def test_a_plan_in_shares_is_not_an_option_plan() -> None:
     from app.services.bot_binding_repository import alpaca_v1_action_plan
 
     assert _refusal(alpaca_v1_action_plan("SPY"), real_account=False).reason is OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED

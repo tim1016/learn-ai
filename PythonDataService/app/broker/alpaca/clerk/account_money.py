@@ -5,9 +5,10 @@ already read under one custody fence -- no FIFO, fee rule or balance here):
     C       observed cash
     U_buy   recorded buys (with their reported fees) that C does not show yet
     U_sell  recorded sale proceeds (net of their reported fees) C does not show yet
-    cash  = C - U_buy + U_sell        -- a traded share is never also counted
+    cash  = C - U_buy + U_sell - option collateral -- a traded share is never also counted
                                          as cash, or as missing cash
-    total = cash + sum(position cost) -- running bots, stopped bots, outside
+    total = cash + sum(position commitment) -- signed FIFO basis + option collateral;
+                                         running bots, stopped bots, outside
     running bot = position cost + pending entries + max(free, 0)
     stopped bot = position cost + pending entries  (its positive free was released
                                                     at Stop)
@@ -200,7 +201,7 @@ def account_money(
                            display_cents(item.position_cost) + display_cents(item.pending_orders))
             for item in holdings if item.strategy_instance_id is not None
         ]
-        cash = budget.cash - unseen_fills + unseen_sales
+        cash = budget.cash - unseen_fills + unseen_sales - budget.option_collateral
         held = sum((item.position_cost for item in budget.deployments), ZERO) + sum((item.position_cost for item in holdings), ZERO)
         return AccountMoney(
             budget=budget,

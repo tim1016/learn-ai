@@ -104,10 +104,11 @@ def option_buying_power_checks(
     """The bot's option entries, newest first, each with its comparison, and the notice holding the bot if one is."""
     with repo.write_fence() as conn:
         rows = conn.execute(
-            "SELECT o.order_ref, o.effect_operation_id FROM order_contracts bound "
-            "CROSS JOIN orders o ON o.order_ref = bound.order_ref "
+            "SELECT o.order_ref, o.effect_operation_id FROM orders o "
             "CROSS JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
-            "WHERE o.role = 'ENTRY' AND e.strategy_instance_id = ? "
+            "WHERE o.role = 'ENTRY' AND e.strategy_instance_id = ? AND ("
+            "EXISTS (SELECT 1 FROM order_contracts bound WHERE bound.order_ref=o.order_ref) OR "
+            "EXISTS (SELECT 1 FROM option_order_legs leg WHERE leg.parent_order_ref=o.order_ref)) "
             "ORDER BY o.submitted_at_ms DESC, o.order_ref DESC LIMIT ?",
             (strategy_instance_id, CHECKS_SERVED),
         ).fetchall()
@@ -166,9 +167,9 @@ def _check(
     if recorded is None:
         reason = NotComparedReason.SIMULATION if simulation else NotComparedReason.NOT_COMPARED_YET
         return OptionBuyingPowerCheck(
-            order_ref=order_ref, contract=entry.contract_terms.symbol, result="unknown",
+            order_ref=order_ref, contract=", ".join(leg.symbol for leg in entry.leg_terms), result="unknown",
             result_label=RESULT_LABELS[BuyingPowerCheckResult.UNKNOWN], reason_code=reason.value,
-            sentence=REASON_SENTENCES[reason], contracts_asked=entry.order.quantity, contracts_filled=None,
+            sentence=REASON_SENTENCES[reason], contracts_asked=sum(entry.units * leg.ratio for leg in entry.legs), contracts_filled=None,
             set_aside=set_aside, set_aside_for_filled=None, premium_paid=None, first_reading=None,
             second_reading=None, sent_at_ms=None, fall=None, compared_at_ms=None, holds=False,
         )
@@ -176,7 +177,7 @@ def _check(
     result = BuyingPowerCheckResult(facts.result)
     return OptionBuyingPowerCheck(
         order_ref=order_ref,
-        contract=entry.contract_terms.symbol,
+        contract=", ".join(leg.symbol for leg in entry.leg_terms),
         result=facts.result,
         result_label=RESULT_LABELS[result],
         reason_code=facts.reason_code,

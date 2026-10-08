@@ -91,6 +91,19 @@ def _unknown_identities(episode: dict) -> frozenset[tuple[str, str]]:
     return frozenset((identity.effect_operation_id, identity.order_ref) for identity in cause.identities)
 
 
+def exit_captures_several_contracts(conn: sqlite3.Connection, effect_operation_id: str) -> bool:
+    """An operator's one-contract proof cannot settle an EXIT that captured multiple contracts."""
+    rows = conn.execute(
+        "SELECT DISTINCT COALESCE(bound.symbol, leg.symbol) AS symbol FROM operation_order_links link "
+        "JOIN orders entry ON entry.order_ref = link.order_ref AND entry.role = 'ENTRY' "
+        "LEFT JOIN order_contracts bound ON bound.order_ref = entry.order_ref "
+        "LEFT JOIN option_order_legs leg ON leg.parent_order_ref = entry.order_ref "
+        "WHERE link.effect_operation_id = ? AND COALESCE(bound.symbol, leg.symbol) IS NOT NULL LIMIT 2",
+        (effect_operation_id,),
+    ).fetchall()
+    return len(rows) > 1
+
+
 def read_unknown_exit_orders(
     conn: sqlite3.Connection, strategy_instance_id: str
 ) -> tuple[ProjectedUnknownExitOrder, ...]:
@@ -101,7 +114,9 @@ def read_unknown_exit_orders(
     broker order id, no acknowledgement and no recorded fill -- what
     ``order_evidence.order_never_reached_broker`` asks of an order before it
     reads absence as an answer. An order the broker has acknowledged or
-    filled is the Clerk's own to fold, and an entry is never here.
+    filled is the Clerk's own to fold, and an entry is never here. Multi-leg
+    closes retain automatic exact lookups; this single-contract operator
+    attestation is not offered for their parents (ADR 0076 decision 28).
     """
     episode = reads.active_uncertainty(
         conn,
@@ -116,13 +131,14 @@ def read_unknown_exit_orders(
         "SELECT o.order_ref, o.effect_operation_id FROM orders o "
         "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
         "WHERE e.kind = 'EXIT' AND e.state = 'unknown' AND e.strategy_instance_id = ? "
-        "AND o.role = 'REDUCING' AND o.broker_order_id IS NULL ORDER BY o.order_ref",
+        "AND o.role = 'REDUCING' AND o.broker_order_id IS NULL AND NOT EXISTS ("
+        "SELECT 1 FROM option_order_legs leg WHERE leg.parent_order_ref = o.order_ref) ORDER BY o.order_ref",
         (strategy_instance_id,),
     ).fetchall()
     orders: list[ProjectedUnknownExitOrder] = []
     for candidate in candidates:
         order_ref, effect_operation_id = candidate["order_ref"], candidate["effect_operation_id"]
-        if (effect_operation_id, order_ref) not in identities:
+        if (effect_operation_id, order_ref) not in identities or exit_captures_several_contracts(conn, effect_operation_id):
             continue
         created = _one(conn, order_ref, "EXIT_REDUCING_ORDER_CREATED", "ASC")
         first_send = _one(conn, order_ref, "ORDER_SUBMIT_REQUESTED", "ASC")
@@ -166,4 +182,4 @@ def read_unknown_exit_orders(
     return tuple(orders)
 
 
-__all__ = ["read_unknown_exit_orders", "send_wait_from_ms"]
+__all__ = ["exit_captures_several_contracts", "read_unknown_exit_orders", "send_wait_from_ms"]

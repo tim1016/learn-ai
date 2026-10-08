@@ -48,11 +48,8 @@ from tests.broker.alpaca.clerk.sqlite.several_legs_fixtures import (
     leg,
     plan,
     put,
-    several_legs_taken,  # noqa: F401 -- pytest fixture, used by name
     worked_entry,
 )
-
-pytestmark = pytest.mark.usefixtures("several_legs_taken")
 
 IRON_CONDOR = plan(
     leg("short_put", position="short", right="put"),
@@ -233,21 +230,6 @@ def test_a_real_account_is_refused_under_the_settings_code_while_the_setting_is_
 
     assert isinstance(refused, OptionEntryRefused)
     assert refused.reason_code == "OPTION_SEVERAL_LEGS_SETTING_OFF"
-
-
-def test_with_the_gates_shut_a_plan_of_several_legs_is_refused_at_the_entry_as_at_registration(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.broker.alpaca.clerk import option_effects
-
-    monkeypatch.setattr(option_effects, "BOUGHT_LEG_STRUCTURES_TAKEN", False)
-
-    refused = _refused(STRADDLE, STRADDLE_PICKS)
-    with pytest.raises(option_effects.OptionPlanRefused) as at_registration:
-        option_effects.option_plan_taken(STRADDLE, real_account=False)
-
-    assert refused.reason_code == at_registration.value.reason.value == "OPTION_STRUCTURE_NOT_SUPPORTED"
-    assert refused.explanation == at_registration.value.detail
 
 
 # ── a contract the account holds on the other side ────────────────────────

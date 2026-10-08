@@ -44,6 +44,7 @@ from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExecutionCoverageConflictCause,
 )
+from app.broker.contract.options import OptionOrderRequest
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.program_leg import LegShape
@@ -468,6 +469,8 @@ _REDUCING_ORDER_DEFAULTS: Mapping[str, Any] = {
     "reference_bid": None,
     "reference_ask": None,
     "reference_quote_observed_at_ms": None,
+    "option_order": None,
+    "option_leg_ids": None,
 }
 # ``reducing_side`` is what makes an accepted shape *present*: the four
 # fields above are all at their defaults for a regular-session leg, so the
@@ -732,6 +735,32 @@ class ExitReducingOrderCreatedFacts:
     reference_bid: float | None = None
     reference_ask: float | None = None
     reference_quote_observed_at_ms: int | None = None
+    # A structure close's exact request, including a lone residual leg. Absent on older/single-leg facts.
+    option_order: dict[str, Any] | None = None
+    option_leg_ids: list[str] | None = None
+
+    @property
+    def the_option_order(self) -> OptionOrderRequest | None:
+        from app.broker.contract.options import (
+            MultiLegOptionOrderRequest,
+            OptionPositionIntent,
+            SingleOptionOrderRequest,
+        )
+
+        if self.option_order is None:
+            return None
+        kind = MultiLegOptionOrderRequest if "legs" in self.option_order else SingleOptionOrderRequest
+        request = kind.model_validate_json(canonicalize(self.option_order))
+        legs = request.legs if isinstance(request, MultiLegOptionOrderRequest) else (request,)
+        if any(leg.intent is not OptionPositionIntent.CLOSE for leg in legs):
+            raise ValueError("an EXIT's option request closes every leg and opens none")
+        if self.option_leg_ids is None or len(self.option_leg_ids) != len(legs) or len(set(self.option_leg_ids)) != len(legs):
+            raise ValueError("an EXIT's option request names each of its recorded legs once")
+        first = legs[0]
+        quantity = request.quantity * (first.ratio if isinstance(request, MultiLegOptionOrderRequest) else 1)
+        if (self.symbol, self.side.lower(), self.quantity) != (first.contract.occ_symbol, first.side.value, quantity):
+            raise ValueError("an EXIT's representative order line matches its first option leg")
+        return request
 
     def to_facts_json(self) -> str:
         return canonicalize(_omit_defaults(asdict(self), _REDUCING_ORDER_DEFAULTS))

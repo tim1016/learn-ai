@@ -51,7 +51,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, Protocol, Self, runtime_checkable
+from typing import Any, Literal, Protocol, Self, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -206,8 +206,9 @@ class SynthesizedOptionSettlement(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     contract: OptionContract
+    position: Literal["long", "short"] = "long"
     outcome: SimulatedOutcome
-    # Contracts settled: one or more. A simulation settles only what it bought.
+    # Contracts settled: one or more. The side is recorded separately from the absolute contracts.
     contracts: int = Field(ge=1, strict=True)
     multiplier: int = Field(ge=1, strict=True)
     # When the contract stopped trading, and when the simulation settled it.
@@ -222,7 +223,7 @@ class SynthesizedOptionSettlement(BaseModel):
     exercise_value: Decimal | None = None
     booked_price: Decimal
     # What the settlement paid the account, in whole cents: the booked price for every contract settled.
-    cash_cents: int = Field(ge=0, strict=True)
+    cash_cents: int = Field(strict=True)
     # What the option fee model charges this sale taken as a day of its own, in whole cents. None when
     # nothing was sold, or when a fee rate is not pinned for the day.
     fee_cents: int | None = Field(default=None, ge=0, strict=True)
@@ -233,6 +234,8 @@ class SynthesizedOptionSettlement(BaseModel):
     @model_validator(mode="after")
     def _figures_that_are_one_settlement(self) -> Self:
         if self.outcome is SimulatedOutcome.ENDED_BY_OWNER:
+            if self.position != "long":
+                raise ValueError("the owner's unpriced ending cannot write off a sold option")
             if self.owner is None or not (self.why_no_settlement or "").strip():
                 raise ValueError("a contract ended at the owner's word names who said so and why nothing settled it")
             if self.price is not None or self.exercise_value is not None:
@@ -249,7 +252,7 @@ class SynthesizedOptionSettlement(BaseModel):
             multiplier=self.multiplier,
         )
         if (self.exercise_value, self.booked_price, self.cash_cents) != (
-            worked_out.worked_out, worked_out.booked, worked_out.cash_cents
+            worked_out.worked_out, worked_out.booked, worked_out.cash_cents * (1 if self.position == "long" else -1)
         ):
             raise ValueError(
                 f"the settlement of {self.contract.occ_symbol} states {self.exercise_value} a share, booked at "
@@ -291,6 +294,7 @@ class SynthesizedOptionSettlement(BaseModel):
                 "fee_cents": None,
             }
         return {
+            **({"position": self.position} if self.position == "short" else {}),
             "rule": self.rule,
             "outcome": self.outcome.value,
             "underlying": self.contract.root,
@@ -324,6 +328,9 @@ def check_settlement_note(
     the booking's close price to that.
     """
     stated = {key: note.get(key) for key in ("outcome", "underlying_price", "booked_price", "cash_cents", "contracts")}
+    position = note.get("position", "long")
+    if position not in ("long", "short") or (position == "short" and outcome == SimulatedOutcome.ENDED_BY_OWNER.value):
+        raise ValueError("a simulation's settlement states its held side and cannot write off a sold option")
     if outcome == SimulatedOutcome.ENDED_BY_OWNER.value:
         # No price was read, so there is no value to work out again: only that nothing was paid.
         if (stated["outcome"], stated["booked_price"], stated["cash_cents"]) != (outcome, "0", 0) or close_price != 0:
@@ -350,7 +357,7 @@ def check_settlement_note(
     if (
         stated["outcome"] != outcome
         or booked_price != worked_out.booked
-        or stated["cash_cents"] != worked_out.cash_cents
+        or stated["cash_cents"] != worked_out.cash_cents * (1 if position == "long" else -1)
         or close_price != worked_out.booked
     ):
         raise ValueError(
@@ -365,7 +372,7 @@ class SimulatedSettlement:
     """One contract a simulation settled, as the Clerk books it."""
 
     # The settlement in the shape an option event travels in, so the one rule that chooses lots chooses these.
-    # It is an expiry there, whatever its outcome: it ends a bought position and moves no shares.
+    # It is an expiry there, whatever its outcome: it ends an option position and moves no shares.
     event: BrokerOptionEventActivity
     # The simulation's own record of the settlement: its rule, the price it read and every figure from it.
     record: SynthesizedOptionSettlement
@@ -379,7 +386,7 @@ class SimulatedOptionSettlements:
     settled: tuple[SimulatedSettlement, ...] = ()
     # Each contract still held past its last session that the step cannot settle, with why. The
     # simulation lets go of one at the owner's word only when the why is that it kept no price of
-    # the close. For any other why (a sold or part contract, no store of bars) it does not let go.
+    # the close. For any other why (a part contract, no store of bars) it does not let go.
     not_settled: Mapping[str, str] = field(default_factory=dict)
     # Each contract still held whose closing bar the step is waiting for, with the instant the wait ends.
     waiting: Mapping[str, int] = field(default_factory=dict)

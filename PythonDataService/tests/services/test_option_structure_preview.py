@@ -19,7 +19,6 @@ import httpx
 import numpy as np
 import pytest
 
-from app.broker.alpaca.clerk import option_effects
 from app.broker.alpaca.clerk.sqlite.option_admission import entry_past_cutoff
 from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
 from app.broker.ibkr.market_subscription import DECISION_DATA_MAX_AGE_MS
@@ -281,8 +280,8 @@ async def test_a_bull_call_spread_previews_with_its_contracts_its_money_and_what
     _close(seen.lean.about_flat_below_shares_per_structure, 100 * ABOUT_FLAT_BELOW_DELTA)
 
     verdict = seen.verdict
-    assert (verdict.can_be_deployed, verdict.resolves_as_built, verdict.red, verdict.leg_ids) == (False, True, False, [])
-    assert verdict.deploy_reason_code == "OPTION_STRUCTURE_NOT_SUPPORTED"
+    assert (verdict.can_be_deployed, verdict.resolves_as_built, verdict.red, verdict.leg_ids) == (True, True, False, [])
+    assert verdict.deploy_reason_code is None
     assert "a bull call spread" in verdict.resolves_sentence
     # Two strikes either side of 585 for the bought call and of 590 for the sold one: 583 to 592, ten lines.
     (calls,) = seen.watched.ranges
@@ -1466,7 +1465,7 @@ async def test_rules_that_land_on_another_shape_than_the_one_named_are_a_red_ver
     seen = await desk.quoted(upside_down)
 
     assert seen.state == "resolved"
-    assert (seen.verdict.can_be_deployed, seen.verdict.resolves_as_built, seen.verdict.red) == (False, False, True)
+    assert (seen.verdict.can_be_deployed, seen.verdict.resolves_as_built, seen.verdict.red) == (True, False, True)
     assert seen.verdict.resolves_reason_code == "OPTION_STRUCTURE_STRIKES_NOT_AS_NAMED"
     assert sorted(seen.verdict.leg_ids) == ["long_call", "short_call"]
     # What it came to is still shown, so the owner can see why.
@@ -1511,22 +1510,17 @@ async def test_a_process_with_no_ibkr_source_says_so_and_asks_for_nothing(monkey
     assert (seen.state, seen.reason_code, seen.ask_again_in_ms) == ("no_quote_source", "OPTION_PREVIEW_NO_QUOTE_SOURCE", None)
     assert _shows_no_figure(seen) and watch.requests() == ()
     # Whether it can be deployed at all does not wait for quotes.
-    assert (seen.verdict.can_be_deployed, seen.verdict.resolves_as_built, seen.verdict.red) == (False, None, False)
+    assert (seen.verdict.can_be_deployed, seen.verdict.resolves_as_built, seen.verdict.red) == (True, None, False)
 
 
-@pytest.mark.parametrize("taken", [False, True])
-async def test_the_preview_uses_the_clerks_structure_gate_before_any_quote_arrives(
-    monkeypatch: pytest.MonkeyPatch, taken: bool,
-) -> None:
-    monkeypatch.setattr(option_effects, "BOUGHT_LEG_STRUCTURES_TAKEN", taken)
-    monkeypatch.setattr(option_effects, "SOLD_LEG_STRUCTURES_TAKEN", taken)
+async def test_the_preview_takes_a_supported_structure_before_any_quote_arrives() -> None:
     seen = await preview_option_structure(
         _BULL_CALL_SPREAD, quotes=None, watch=OptionWatchList(), model_inputs=lambda *_: _KNOWN,
         searches=searches_in_this_process(), strikes_each_side=2,
     )
-    assert seen.verdict.can_be_deployed is taken
-    assert seen.verdict.deploy_reason_code == (None if taken else "OPTION_STRUCTURE_NOT_SUPPORTED")
-    assert ("Paper and Live" in seen.verdict.deploy_sentence) is taken
+    assert seen.verdict.can_be_deployed is True
+    assert seen.verdict.deploy_reason_code is None
+    assert "Paper and Live" in seen.verdict.deploy_sentence
 
 
 async def test_a_feed_that_is_not_up_is_named_and_the_window_stays_asked_for(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2086,7 +2080,7 @@ async def test_a_second_ask_while_the_search_runs_starts_no_second_search_and_is
     assert (second.state, second.reason_code) == ("search_not_done", "OPTION_SEARCH_ALREADY_RUNNING")
     assert _shows_no_figure(second) and second.ask_again_in_ms is not None
     # Not a refusal of the structure: the verdict's second half is not known, and nothing is red.
-    assert (second.verdict.can_be_deployed, second.verdict.resolves_as_built, second.verdict.red) == (False, None, False)
+    assert (second.verdict.can_be_deployed, second.verdict.resolves_as_built, second.verdict.red) == (True, None, False)
     assert second.watched.lines_held == 10
     assert begun == 1 == len(worker.searches)
     assert answered.state == "resolved"
@@ -2165,7 +2159,7 @@ async def test_a_search_that_could_not_be_run_is_said_plainly_and_is_no_refusal_
     assert (seen.state, seen.reason_code) == ("search_not_done", "OPTION_SEARCH_WORKER_FAILED")
     # Nothing is running that asking again in a second would find.
     assert _shows_no_figure(seen) and seen.ask_again_in_ms is None
-    assert (seen.verdict.can_be_deployed, seen.verdict.resolves_as_built, seen.verdict.red) == (False, None, False)
+    assert (seen.verdict.can_be_deployed, seen.verdict.resolves_as_built, seen.verdict.red) == (True, None, False)
     assert seen.verdict.resolves_reason_code is None
 
 

@@ -38,32 +38,21 @@ SID = "spy-bot"
 RUN_ID = "run-1"
 
 
-async def test_shadow_refuses_a_multi_leg_plan_before_registration_and_entry_even_when_rollout_is_open(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+async def test_shadow_registers_a_multi_leg_plan_without_a_real_account_rollout_setting(
+    tmp_path: Path,
 ) -> None:
-    from app.broker.alpaca.clerk import option_effects
     from tests.broker.alpaca.clerk.sqlite.several_legs_fixtures import STRADDLE
 
-    monkeypatch.setattr(option_effects, "BOUGHT_LEG_STRUCTURES_TAKEN", True)
-    monkeypatch.setattr(option_effects, "SOLD_LEG_STRUCTURES_TAKEN", True)
     ports = compose_shadow_ports(live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path)
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
     facade = SqliteAlpacaClerkFacade(
         repo=repo, read=ports.read, trade=ports.trade, authority_kind="shadow", account_mode="live",
         program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
     )
-    binding = _binding(use_rth=True).model_copy(update={"sealed_account_id": ACCOUNT_ID})
+    binding = _binding(use_rth=True).model_copy(update={"sealed_account_id": ACCOUNT_ID, "action_plan": STRADDLE})
     try:
-        with pytest.raises(option_effects.OptionPlanRefused, match="Live Shadow"):
-            await facade.register_strategy_run(binding.model_copy(update={"action_plan": STRADDLE}))
-        assert repo.strategy_instances() == []
         await facade.register_strategy_run(binding)
-        refused = await facade.execute_for_instance(
-            strategy_instance_id=SID, run_id=RUN_ID, decision_id="multi-leg-refused", purpose=EffectPurpose.ENTER,
-            action_plan=STRADDLE, quantity=1,
-        )
-        assert refused.state is EffectOperationState.REJECTED and "Live Shadow" in refused.explanation
-        assert refused.child_order_refs == () and repo.get_command(f"cmd:{SID}:multi-leg-refused") is None
+        assert repo.strategy_instance(SID) is not None
         assert await ports.read.list_orders() == []
     finally:
         repo.close()

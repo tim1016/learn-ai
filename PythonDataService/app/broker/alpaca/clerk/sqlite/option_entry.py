@@ -469,14 +469,15 @@ class OptionExitFacts(BaseModel):
     read_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
     @classmethod
-    def of(cls, evidence: OptionExitEvidence, *, closing: str) -> OptionExitFacts:
+    def of(cls, evidence: OptionExitEvidence, *, closing: str | tuple[str, ...]) -> OptionExitFacts:
         """What an EXIT of the contract ``closing`` keeps of the quotes handed with it.
 
         A quote of any other contract is the caller's mistake: it could
         never price this close, and kept under this EXIT it would look as
         though it had been read for it.
         """
-        others = evidence.for_other_contracts_than(closing)
+        symbols = (closing,) if isinstance(closing, str) else closing
+        others = tuple(sorted(set(evidence.quotes) - set(symbols)))
         if others:
             raise ValueError(
                 f"this EXIT closes {closing}; a quote was handed for {', '.join(others)}, which it does not close"

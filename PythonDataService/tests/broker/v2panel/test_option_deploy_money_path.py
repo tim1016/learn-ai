@@ -197,7 +197,7 @@ async def test_a_budgeted_click_with_no_price_is_refused_under_the_same_name(
 @pytest.mark.parametrize(
     ("what", "gate"),
     [
-        ("a spread", "OPTION_STRUCTURE_NOT_SUPPORTED"),
+        ("a spread", "OPTION_SEVERAL_LEGS_SETTING_OFF"),
         ("live with the setting off", option_deploy.LIVE_SWITCHED_OFF),
         ("a short line budget", "OPTION_WINDOW_OVER_LINE_BUDGET"),
     ],
@@ -209,7 +209,7 @@ async def test_with_quotes_up_a_review_that_something_stops_never_says_the_quote
     await _quotes_up(app, floor, execution_mode="dry_run", trades=_ONE_CALL)
     body: dict[str, Any] = {"execution_mode": "dry_run", "trades": _ONE_CALL}
     if what == "a spread":
-        body["trades"] = _SPREAD
+        body.update(trades=_SPREAD, execution_mode="paper")
     elif what == "live with the setting off":
         _serve(monkeypatch, _live_view)
         books.account_authority_kind = "real_live"
@@ -224,7 +224,7 @@ async def test_with_quotes_up_a_review_that_something_stops_never_says_the_quote
     assert said["preview_state"] != "no_quote_source" and said["preview_reason_code"] != _NO_QUOTE_SOURCE
     assert "no IBKR quote source" not in json.dumps(review)
     assert review["state"] == "unavailable" and review["review_token"] is None
-    assert floor.alpaca.asked == [], "a Dry Run, a Live Shadow and a switched-off Live review ask Alpaca nothing"
+    assert floor.alpaca.asked == (["account"] if what == "a spread" else [])
 
 
 @pytest.mark.parametrize(
@@ -278,12 +278,12 @@ async def test_the_review_lists_everything_that_stops_a_deploy_and_the_click_is_
     refusal = _refused(await _post(app, "", execution_mode="paper", trades=_SPREAD, traded_asset_acknowledgement=_ACCEPTANCE))
 
     assert _gates(review)[:3] == [
-        "OPTION_STRUCTURE_NOT_SUPPORTED", "OPTION_WINDOW_OVER_LINE_BUDGET", option_deploy.APPROVAL_TOO_LOW,
+        "OPTION_SEVERAL_LEGS_SETTING_OFF", "OPTION_WINDOW_OVER_LINE_BUDGET", option_deploy.APPROVAL_TOO_LOW,
     ]
     assert "spreads level (3)" in review["option_review"]["blockers"][2]["headline"]
     assert review["detail"] == review["option_review"]["blockers"][0]["headline"], "the budget says the first"
     assert asked_by_the_review[0] == "account"
-    assert refusal["reason_code"] == "OPTION_STRUCTURE_NOT_SUPPORTED" and registry.deploy_calls == []
+    assert refusal["reason_code"] == "OPTION_SEVERAL_LEGS_SETTING_OFF" and registry.deploy_calls == []
     assert floor.alpaca.asked[asked_before + len(asked_by_the_review):] == [], "a click that is stopped asks nobody"
 
 

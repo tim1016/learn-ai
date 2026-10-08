@@ -12,7 +12,6 @@ from uuid import NAMESPACE_URL, uuid5
 import pytest
 
 from app.broker.alpaca import adapter
-from app.broker.alpaca.clerk import option_effects
 from app.broker.alpaca.clerk.models import EffectOperationReceipt, EffectPurpose
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
@@ -131,7 +130,6 @@ class SeveralLegsPaper(PaperOptions):
 
 @pytest.fixture
 async def multi_paper(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[SeveralLegsPaper]:
-    monkeypatch.setattr(option_effects, "BOUGHT_LEG_STRUCTURES_TAKEN", True)
     monkeypatch.setattr(settings, "ALPACA_MULTI_LEG_OPTION_ORDERS_ENABLED", True)
     market_liveness.reset_market_liveness_store_for_testing()
     publish_quotes(NOON, SPY=585.0)

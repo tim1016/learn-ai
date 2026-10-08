@@ -1,9 +1,10 @@
 """One derived deployment-budget and account-claims calculation (#2545).
 
 Formula: balance = commitment + canonical FIFO gross realized P&L - fees;
-free = balance - open FIFO cost - unfilled orders (including provisions);
+free = balance - signed open FIFO basis - option collateral - unfilled orders (including provisions);
 available = observed cash - sum(active max(free, 0)) - all order-overlap
-claims - fees not already reflected in cash or an order-overlap claim.
+claims - fees not already reflected in cash or an order-overlap claim
+- option collateral (ADR 0076 decision 28).
 A stopped deployment's release is the Stop's recorded fact (#2555), read back
 as ``DeploymentBudget.release``; it is never re-derived from later money.
 Reference: https://github.com/tim1016/learn-ai/issues/2540, Money contract.
@@ -70,6 +71,7 @@ class DeploymentBudget:
     # that recorded none (every Stop before #2555, or one that could not be
     # valued at that instant).
     release: ReleaseAtStop | None = None
+    option_collateral: Decimal = ZERO
 
     @property
     def spendable_cents(self) -> int:
@@ -84,6 +86,7 @@ class AccountBudget:
     fee_claims: Decimal
     available: Decimal
     deployments: tuple[DeploymentBudget, ...]
+    option_collateral: Decimal = ZERO
 
     @property
     def unreserved_cents(self) -> int:
@@ -94,6 +97,7 @@ def deployment_budget(
     *, strategy_instance_id: str, committed_cents: int, active: bool,
     realized_gross: object, fees: Decimal, position_cost: Decimal, pending_orders: Decimal,
     release: ReleaseAtStop | None = None,
+    option_collateral: Decimal = ZERO,
 ) -> DeploymentBudget:
     """Project the immutable commitment over canonical custody facts."""
     with money_context():
@@ -106,6 +110,7 @@ def deployment_budget(
             position_cost=position_cost, pending_orders=pending_orders,
             balance=balance, free=free, cash_claim=max(ZERO, free) if active else ZERO,
             release=release,
+            option_collateral=option_collateral,
         )
 
 
@@ -117,11 +122,13 @@ def account_budget(
     with money_context():
         observed = normalize_money(cash)
         active_free = sum((budget.cash_claim for budget in deployments), ZERO)
+        collateral = sum((budget.option_collateral for budget in deployments), ZERO)
         return AccountBudget(
             cash=observed, active_free_claims=active_free,
             order_claims=order_claims, fee_claims=fee_claims,
-            available=observed - active_free - order_claims - fee_claims,
+            available=observed - active_free - order_claims - fee_claims - collateral,
             deployments=tuple(deployments),
+            option_collateral=collateral,
         )
 
 

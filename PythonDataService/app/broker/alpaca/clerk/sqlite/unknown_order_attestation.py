@@ -633,6 +633,16 @@ def _require_settleable(
     a send Alpaca answered with an order that names no client order id: the
     Clerk has no id to read that order by.
     """
+    from app.broker.alpaca.clerk.sqlite.unknown_exit_orders import exit_captures_several_contracts
+
+    with repo.write_fence() as conn:
+        several = exit_captures_several_contracts(conn, presented.effect_operation_id)
+    if several or repo.order_legs(presented.order_ref):
+        raise UnknownOrderSettlementRefused(
+            "MULTI_LEG_ATTESTATION_NOT_SUPPORTED",
+            "This EXIT captures several option contracts. Operator attestation cannot prove the whole EXIT yet; "
+            "the Clerk retains custody and continues its exact option lookups. Nothing was changed.",
+        )
     current = next(
         (
             order

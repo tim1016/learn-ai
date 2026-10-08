@@ -33,8 +33,9 @@ under it, as a broker answers. Its units are what the legs' contracts share:
 an order's ratios share no divisor above one, so the greatest common divisor
 of the legs' contracts is the units.
 
-A closing order of several legs is not filled here yet. It is refused by
-name; the piece that closes a structure adds that branch.
+A closing order reverses the held sides and uses each contract's newest
+usable quote: sell a bought leg at its bid and buy a sold leg at its ask.
+All legs are validated before writing any fill.
 
 Formula: net price filled = Σ sᵢ · rᵢ · priceᵢ, with sᵢ = +1 for a leg
   bought and −1 for a leg sold and rᵢ its ratio: the same signed sum the
@@ -69,8 +70,9 @@ from app.broker.contract.options import (
 )
 from app.options.deadlines import past_last_session
 from app.options.exact import exact_sum
-from app.options.simulated_fill import SimulatedLegFill, simulated_entry_fills
+from app.options.simulated_fill import SimulatedLegFill, simulated_entry_fills, simulated_exit_fills
 from app.options.structure import MAX_OPTION_LEGS, ResolvedLeg, ResolvedStructure
+from app.services.market_liveness import QUOTE_MAX_AGE_MS
 
 
 class BoundLegQuote(NamedTuple):
@@ -81,6 +83,7 @@ class BoundLegQuote(NamedTuple):
     quote_ref: str | None
     # The shares one contract's price stands for, as the Clerk's books record it. None for a close.
     multiplier: int | None
+    usable_generation: int | None = None
 
 
 # Shapes one leg's own order as the Clerk folds every simulated order: the port's, so each world
@@ -121,10 +124,9 @@ def filled_multi_leg_order(
     be priced. Nothing is then recorded of any leg.
     """
     intents = {leg.intent for leg in order.legs}
-    if intents != {OptionPositionIntent.OPEN}:
+    if len(intents) != 1:
         raise BrokerOrderRejected(
-            "The simulation fills an opening order of several legs. An order of several legs that closes is not "
-            "one it fills yet, and it invents no fill.",
+            "An order must open every leg or close every leg. No leg was filled.",
             broker=broker_id,
         )
     for leg in order.legs:
@@ -155,16 +157,22 @@ def filled_multi_leg_order(
             ResolvedLeg(
                 leg_id=leg.contract.occ_symbol,
                 contract=leg.contract,
-                position="long" if leg.side is OrderSide.BUY else "short",
+                position="long" if (leg.side is OrderSide.BUY) == (leg.intent is OptionPositionIntent.OPEN) else "short",
                 ratio=leg.ratio,
             )
             for leg in order.legs
         )
     )
     try:
-        fills = simulated_entry_fills(
-            structure, {symbol: quoted.quote.held for symbol, quoted in bound.items()}, units=order.quantity, at_ms=at_ms
-        )
+        quotes = {symbol: quoted.quote.held for symbol, quoted in bound.items()}
+        if intents == {OptionPositionIntent.OPEN}:
+            fills = simulated_entry_fills(structure, quotes, units=order.quantity, at_ms=at_ms)
+        else:
+            generations = {quoted.usable_generation for quoted in bound.values()}
+            fills = simulated_exit_fills(
+                structure, quotes, units=order.quantity, at_ms=at_ms,
+                generation=next(iter(generations)) if len(generations) == 1 else None, max_age_ms=QUOTE_MAX_AGE_MS,
+            )
     except ValueError as exc:
         raise BrokerOrderRejected(
             f"The quotes handed over cannot fill this order: {exc}. No leg of the order was filled.", broker=broker_id

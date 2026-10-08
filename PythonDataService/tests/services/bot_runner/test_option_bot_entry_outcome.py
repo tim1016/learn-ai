@@ -76,7 +76,6 @@ from app.services.market_liveness import QUOTE_MAX_AGE_MS
 from app.services.source_bar_ledger import SourceBarLedger
 from app.utils import timestamps
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
-from tests.options import test_resolver as scenes
 
 from ._option_floor import (
     CALL_585,
@@ -1420,19 +1419,14 @@ class _NothingToStream:
             "LIVE-OPTIONS", "sqlite", one_call, OptionEffectRefusal.ACCOUNT_NOT_OPEN, "A Live account",
             id="a Live account, any option plan",
         ),
-        pytest.param(
-            "shadow:LIVE-OPTIONS", "shadow", scenes._spread, OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED,
-            "2 option legs", id="a Live Shadow, a plan of several legs",
-        ),
     ],
 )
 async def test_the_runner_raises_the_clerks_own_refusal_of_an_option_plan_before_anything_is_asked_for(
     paper: PaperFloor, tmp_path: Path, account_id: str, authority_kind: Any, plan: Callable[[], Any],
     reason: OptionEffectRefusal, named: str,
 ) -> None:
-    """A Live account takes no option bot. A Live Shadow takes what a Dry Run takes, one bought option, and
-    no plan of several legs. The runner asks the account's Clerk, and its refusal comes out by name before
-    a stream is opened or a quote line asked for."""
+    """A Live account with the rollout setting off takes no option bot. The runner asks the account's
+    Clerk before opening a stream or asking for quote lines."""
     repo = ClerkSqliteRepository.initialize(account_id=account_id, artifacts_root=tmp_path / "live")
     clerk = SqliteAlpacaClerkFacade(
         repo=repo, read=paper.account, trade=paper.venue, account_mode="live", authority_kind=authority_kind,

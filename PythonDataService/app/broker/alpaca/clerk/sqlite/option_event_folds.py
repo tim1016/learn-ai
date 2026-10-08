@@ -293,8 +293,9 @@ def _require_a_simulations_record(
         raise ValueError(
             f"a simulation ends a contract by expiry, in cash or at the owner's word, never as {ended_by.value}"
         )
-    if facts.held != _BOUGHT:
-        raise ValueError("a simulation settles only contracts it bought")
+    expected = "long" if facts.held == _BOUGHT else "short"
+    if facts.simulation.get("position", "long") != expected:
+        raise ValueError("a simulation settlement names the side its booked lots held")
     check_settlement_note(
         facts.simulation, contract, multiplier=facts.multiplier, outcome=ended_by.value, close_price=close_price
     )
