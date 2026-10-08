@@ -61,9 +61,10 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import (
     all_written_off_lot_events,
     effective_fill_records,
 )
+from app.broker.alpaca.clerk.sqlite.economic_projection_models import MarketMark
 from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
-from app.broker.alpaca.clerk.sqlite.models import TransitionInput
+from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot, TransitionInput
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import OrderSide
 from app.lean_sidecar.trading_calendar import previous_completed_session_close_ms
@@ -227,14 +228,14 @@ class SimulatedAccountProjection:
         """
         return all_written_off_lot_events(self.repo._conn, by_ms=by_ms)
 
-    def _marks(self, records: tuple[FillRecord, ...], *, at_ms: int, exact_close: bool = False) -> tuple[dict[str, Decimal], tuple[str, ...], int | None]:
+    def _marks(self, records: tuple[FillRecord, ...], *, at_ms: int, exact_close: bool = False) -> tuple[dict[str, MarketMark], tuple[str, ...], int | None]:
         open_lots = compute_fifo_pnl(
             records, write_offs=self._write_off_events(by_ms=at_ms)
         ).open_lots
         open_symbols = {lot.symbol for lot in open_lots}
         # A symbol holds one multiplier, so its lots are all shares or all contracts.
         contracts = {lot.symbol: lot.side is OrderSide.BUY for lot in open_lots if lot.multiplier is not None}
-        marks: dict[str, Decimal] = {}
+        marks: dict[str, MarketMark] = {}
         refs: list[str] = []
         valid_until: int | None = None
         for symbol in open_symbols:
@@ -242,7 +243,7 @@ class SimulatedAccountProjection:
                 kept = self._option_mark(symbol, at_ms=at_ms)
                 side = kept.quote.bid if contracts[symbol] else kept.quote.ask
                 assert side is not None
-                marks[symbol] = normalize_money(side)
+                marks[symbol] = MarketMark(price=normalize_money(side), observed_at_ms=kept.kept_at_ms)
                 refs.append(kept.ref)
                 # Good while its hand-over is fresh, and never into the contract's expiry.
                 expires = min(
@@ -284,11 +285,30 @@ class SimulatedAccountProjection:
             price = normalize_money(latest[0].close)
             if price <= ZERO:
                 raise SimulationEvidenceUnavailable(f"Simulated price evidence for {symbol} is not positive.")
-            marks[symbol] = price
+            marks[symbol] = MarketMark(price=price, observed_at_ms=latest_at)
             refs.append(latest[0].bar_ref)
             expires = latest_at + SOURCE_BAR_MS + DELIVERY_ALLOWANCE_MS
             valid_until = expires if valid_until is None else min(valid_until, expires)
         return marks, tuple(refs), valid_until
+
+    @money_context()
+    def current_marks(self, *, now_ms: int) -> tuple[ControlMetaSnapshot, dict[str, MarketMark]]:
+        """Read-only fresh marks from the account's own books, fenced to their revision."""
+        self._read_kept_option_quotes_ahead()
+        with self.repo._write_lock:
+            meta = self.repo.control_meta_snapshot()
+            records = effective_fill_records(self.repo._conn, account_id=self.repo.account_id)
+            try:
+                if any(fill.filled_at_ms > now_ms for fill in records):
+                    raise SimulationEvidenceUnavailable("Simulated executions are ahead of the panel observation.")
+                marks, _, _ = self._marks(records, at_ms=now_ms)
+            except SimulationEvidenceUnavailable as exc:
+                logger.info(
+                    "Simulated panel marks unavailable",
+                    extra={"action": "simulation_panel_marks_unavailable", "account_id": self.repo.account_id, "reason": str(exc)},
+                )
+                return meta, {}
+            return meta, marks
 
     def _baseline(self, records: tuple[FillRecord, ...], *, capital: Decimal, now_ms: int, persist: bool) -> SimulationBaseline:
         session_start, _ = et_day_window_ms(now_ms)
@@ -321,7 +341,7 @@ class SimulatedAccountProjection:
             cutoff = previous_completed_session_close_ms(session_start)
             prior = tuple(record for record in records if record.filled_at_ms <= cutoff)
             marks, refs, _ = self._marks(prior, at_ms=cutoff, exact_close=True)
-            fifo = compute_fifo_pnl(prior, mark_prices=marks, write_offs=self._write_off_events(by_ms=cutoff))
+            fifo = compute_fifo_pnl(prior, mark_prices={symbol: mark.price for symbol, mark in marks.items()}, write_offs=self._write_off_events(by_ms=cutoff))
             fees = custody_fee_attribution(self.repo._conn, now_ms=now_ms, simulated_fill_cutoff_ms=cutoff)
             if not fees.known or fifo.exact_open_pnl is None:
                 raise SimulationEvidenceUnavailable("The prior simulation session cannot prove its equity baseline.")
@@ -374,7 +394,7 @@ class SimulatedAccountProjection:
             if not fees.known:
                 raise SimulationEvidenceUnavailable("Simulated execution or modelled fee evidence is incomplete: " + "; ".join(fees.unresolved))
             marks, _, valid_until = self._marks(records, at_ms=now_ms)
-            fifo = compute_fifo_pnl(records, mark_prices=marks, write_offs=self._write_off_events(by_ms=now_ms))
+            fifo = compute_fifo_pnl(records, mark_prices={symbol: mark.price for symbol, mark in marks.items()}, write_offs=self._write_off_events(by_ms=now_ms))
             open_pnl = fifo.exact_open_pnl
             if open_pnl is None:
                 raise SimulationEvidenceUnavailable("Simulated open P&L cannot be valued from current price evidence.")

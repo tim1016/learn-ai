@@ -430,6 +430,7 @@ async def read_sqlite_panel_evidence(
 
     def read_once() -> SqlitePanelEvidence | None:
         for _attempt in _spaced_attempts():
+            simulated_marks = facade.simulated_marks(now_ms=now_ms)
             custody_reader = SqliteClerkProjectionReader.from_facade(facade)
             economic_reader = SqliteEconomicProjectionReader.from_repository(facade.repository)
             try:
@@ -439,6 +440,7 @@ async def read_sqlite_panel_evidence(
                 economics = economic_reader.bot_session_economic_projection(
                     strategy_instance_id,
                     session_window=session_window,
+                    marks=None if simulated_marks is None else simulated_marks[1],
                     run=run,
                 )
             finally:
@@ -447,6 +449,10 @@ async def read_sqlite_panel_evidence(
             if projection is None or economics is None:
                 raise SqlitePanelBotNotFound.for_bot(strategy_instance_id)
             snapshot = economics.snapshot
+            if simulated_marks is not None:
+                meta, _ = simulated_marks
+                if (meta.account_id, meta.authority_generation, meta.control_revision) != (snapshot.account_id, snapshot.authority_generation, snapshot.control_revision):
+                    continue
             if (
                 projection.account_id == snapshot.account_id
                 and projection.authority_generation == snapshot.authority_generation

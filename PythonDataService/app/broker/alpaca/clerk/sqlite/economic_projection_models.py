@@ -30,14 +30,14 @@ class MarketMark:
     presented without the provenance timestamp that describes its freshness.
     """
 
-    price: float
+    price: float | Decimal
     observed_at_ms: int
 
     def __post_init__(self) -> None:
         if (
             isinstance(self.price, bool)
-            or not isinstance(self.price, (int, float))
-            or not math.isfinite(self.price)
+            or not isinstance(self.price, (int, float, Decimal))
+            or not (self.price.is_finite() if isinstance(self.price, Decimal) else math.isfinite(self.price))
         ):
             raise ValueError("mark price must be finite")
         if (

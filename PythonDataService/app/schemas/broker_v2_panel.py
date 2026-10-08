@@ -1117,8 +1117,10 @@ class SimulatedFillView(BaseModel):
     # ``limit_touch`` is a resting limit a later minute reached.
     # ``live_quote`` is the live IBKR bid or ask, for a recovery exit.
     # ``run_end_close`` is the last price the run saw, at a run-end close.
+    # ``natural_price`` is an option entry/exit at the recorded ask/bid.
+    # ``natural_price_older_quote`` is an option exit at an older retained quote.
     # ``unknown`` is a simulated fill with no readable record of its pricing.
-    kind: Literal["bar_close", "older_bar_close", "limit_touch", "live_quote", "run_end_close", "unknown"]
+    kind: Literal["bar_close", "older_bar_close", "limit_touch", "live_quote", "run_end_close", "natural_price", "natural_price_older_quote", "unknown"]
     label: str
     sentence: str
     # How long before the fill its price was made, when that is known and

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 
 from app.broker.alpaca.clerk.account_money import quantity_text
 from app.broker.alpaca.clerk.fills import FillRecord
@@ -30,8 +31,9 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     SETTLE_UNKNOWN_EXIT_ORDER_LABEL,
     settle_unavailable_words,
 )
-from app.broker.alpaca.clerk.synthesized_orders import SynthesizedAnchor
+from app.broker.alpaca.clerk.synthesized_orders import SynthesizedAnchor, SynthesizedOptionFill
 from app.broker.contract.models import OrderSide
+from app.options.simulated_fill import SimulatedFillModel
 from app.schemas.action_plan import order_symbol
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.schemas.bot_page import (
@@ -757,13 +759,38 @@ def simulated_fill_view(anchor: SynthesizedAnchor, fill: FillRecord) -> Simulate
     )
 
 
+def option_fill_view(receipt: SynthesizedOptionFill, fill: FillRecord) -> SimulatedFillView:
+    """Explain the actual option execution receipt, never infer its rule from its price."""
+    model = receipt.fill_model
+    if (
+        model not in (SimulatedFillModel.NATURAL_PRICE, SimulatedFillModel.NATURAL_PRICE_OLDER_QUOTE)
+        or receipt.fill_price is None
+        or receipt.filled_at_ms != fill.filled_at_ms
+        or receipt.request.contract.occ_symbol != fill.symbol
+        or receipt.request.side != fill.side
+        or receipt.fill_price != Decimal(str(fill.fill_price))
+    ):
+        return _UNRECORDED_SIMULATED_FILL
+    older = model is SimulatedFillModel.NATURAL_PRICE_OLDER_QUOTE
+    side = "ask" if fill.side is OrderSide.BUY else "bid"
+    return SimulatedFillView(
+        kind=model.value,
+        label="Simulated · older option quote" if older else "Simulated · option quote",
+        sentence=f"Simulated at the recorded option {side}." + (" An older quote priced this exit." if older else ""),
+        price_age_ms=receipt.quote_age_ms,
+        caution=older,
+    )
+
+
 def run_fill_views(
-    run_fills: Sequence[FillRecord], anchors: Mapping[str, SynthesizedAnchor] | None
+    run_fills: Sequence[FillRecord], anchors: Mapping[str, SynthesizedAnchor] | None,
+    option_fills: Mapping[str, SynthesizedOptionFill] | None = None,
 ) -> list[RunFillView]:
     """The run's newest fills as the page lists them, each simulated one saying how it was priced (#2912).
 
     ``anchors`` is a no-submit authority's record of how it priced each
-    order, by order ref. Every fill of such an authority is simulated, so
+    order, by order ref; ``option_fills`` carries its recorded option pricing.
+    Every fill of such an authority is simulated, so
     one with no record there says its pricing is not on record instead of
     passing for a fill Alpaca made. ``None`` is an authority whose fills
     Alpaca makes: none of them is simulated.
@@ -773,7 +800,13 @@ def run_fill_views(
         simulated: SimulatedFillView | None = None
         if anchors is not None:
             anchor = anchors.get(fill.order_ref)
-            simulated = _UNRECORDED_SIMULATED_FILL if anchor is None else simulated_fill_view(anchor, fill)
+            receipt = None if option_fills is None else option_fills.get(fill.order_ref)
+            if receipt is not None:
+                simulated = option_fill_view(receipt, fill)
+            elif anchor is not None:
+                simulated = simulated_fill_view(anchor, fill)
+            else:
+                simulated = _UNRECORDED_SIMULATED_FILL
         views.append(RunFillView(**fill_to_marker(fill).model_dump(), simulated=simulated))
     return views
 

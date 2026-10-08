@@ -24410,7 +24410,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "bar_close" | "older_bar_close" | "limit_touch" | "live_quote" | "run_end_close" | "unknown";
+            kind: "bar_close" | "older_bar_close" | "limit_touch" | "live_quote" | "run_end_close" | "natural_price" | "natural_price_older_quote" | "unknown";
             /** Label */
             label: string;
             /** Price Age Ms */
