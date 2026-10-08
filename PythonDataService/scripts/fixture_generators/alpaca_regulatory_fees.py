@@ -4,6 +4,11 @@ The oracle is hand-computed decimal arithmetic over the published rates. It
 never imports the canonical implementation. Run from ``PythonDataService/``:
 
     .venv/bin/python -m scripts.fixture_generators.alpaca_regulatory_fees
+
+Version 2 adds the TAF pause straddle (SR-FINRA-2026-021) and re-dates the
+later ladder (SR-FINRA-2026-020); v1, the schedule pinned 2026-09-07, stays
+on disk untouched. Regenerate only when a cited source changes, and say
+which in the commit.
 """
 
 from __future__ import annotations
@@ -19,13 +24,41 @@ from app.lean_sidecar.trading_calendar import session_open_ms_utc
 
 FIXTURE_ID = "FEE-001"
 ROOT = Path(__file__).resolve().parents[2]
-FIXTURE_DIR = ROOT / "tests" / "fixtures" / "golden" / "broker-fees" / FIXTURE_ID / "v1"
+FIXTURE_DIR = ROOT / "tests" / "fixtures" / "golden" / "broker-fees" / FIXTURE_ID / "v2"
 MANIFEST_PATH = ROOT / "tests" / "fixtures" / "golden" / "manifest.json"
 
 # Published rates in force on each case date.
 # ``None`` = not pinned for that date; the oracle emits null and the model must too.
 _RATES: dict[date, dict[str, Decimal | None]] = {
     date(2026, 9, 8): {
+        "sec": Decimal("0.0000206"),
+        "taf": Decimal("0.000195"),
+        "taf_cap": Decimal("9.79"),
+        "cat": Decimal("0.000003"),
+    },
+    # The pause eve: the 2026 rate still in force (SR-FINRA-2026-021, Exhibit 5A).
+    date(2026, 9, 30): {
+        "sec": Decimal("0.0000206"),
+        "taf": Decimal("0.000195"),
+        "taf_cap": Decimal("9.79"),
+        "cat": Decimal("0.000003"),
+    },
+    # SR-FINRA-2026-021: TAF paused at zero — per share and cap — through 2026-12-31.
+    date(2026, 10, 1): {
+        "sec": Decimal("0.0000206"),
+        "taf": Decimal("0"),
+        "taf_cap": Decimal("0"),
+        "cat": Decimal("0.000003"),
+    },
+    date(2026, 12, 31): {
+        "sec": Decimal("0.0000206"),
+        "taf": Decimal("0"),
+        "taf_cap": Decimal("0"),
+        "cat": Decimal("0.000003"),
+    },
+    # Exhibit 5B: the 2026 rate resumes 2027-01-01 and holds through 2028
+    # (SR-FINRA-2026-020 delayed the later steps to 2029/2030/2031).
+    date(2027, 1, 4): {
         "sec": Decimal("0.0000206"),
         "taf": Decimal("0.000195"),
         "taf_cap": Decimal("9.79"),
@@ -49,6 +82,11 @@ _CASES: tuple[tuple[str, date, str, str, str], ...] = (
     ("sell_at_taf_cap_boundary", date(2026, 9, 8), "sell", "50205", "1.00"),
     ("sell_just_over_taf_cap", date(2026, 9, 8), "sell", "50206", "1.00"),
     ("fractional_buy", date(2026, 9, 8), "buy", "0.5", "400.00"),
+    # One 100-share sale straddling the pause (#2951).
+    ("sell_pause_eve_2026_09_30", date(2026, 9, 30), "sell", "100", "250.00"),
+    ("sell_pause_first_day_2026_10_01", date(2026, 10, 1), "sell", "100", "250.00"),
+    ("sell_pause_last_day_2026_12_31", date(2026, 12, 31), "sell", "100", "250.00"),
+    ("sell_taf_resumes_2027_01_04", date(2027, 1, 4), "sell", "100", "250.00"),
     ("sell_sec_zero_regime_2025", date(2025, 6, 2), "sell", "100", "250.00"),
     ("sell_sec_2780_regime_2024", date(2024, 6, 3), "sell", "1000", "50.00"),
     ("sell_before_sec_pin_2024", date(2024, 3, 1), "sell", "10", "100.00"),
@@ -140,20 +178,32 @@ def main() -> None:
     attribution_path.write_text(
         "# FEE-001 — Alpaca equity regulatory pass-through fees\n\n"
         "## Source\n\n"
-        "Rates are the published pass-through schedule pinned on 2026-09-07: Alpaca "
-        "Securities \"Broker Fee Schedule\" §\"Pass-Through Regulatory and Exchange Fees — "
-        "Equities\" (https://files.alpaca.markets/disclosures/library/BrokFeeSched.pdf), SEC "
-        "Fee Rate Advisories 2024-2 / 2025-2 / 2026-2, and the FINRA SR-FINRA-2024-019 TAF "
-        "fee-adjustment schedule. Row-by-row citations: docs/references/alpaca-regulatory-fees.md.\n\n"
+        "v2 re-pins the TAF rows on 2026-10-08 from FINRA SR-FINRA-2026-021 (SEC Release "
+        "34-106409, Exhibits 5A and 5B — https://www.sec.gov/files/rules/sro/finra/2026/34-106409-ex5.pdf: "
+        "paused at $0.00 per share and $0.00 per trade from 2026-10-01 through 2026-12-31, "
+        "the 2026 rate resuming 2027-01-01) and FINRA SR-FINRA-2026-020 (91 FR 60427, "
+        "immediately effective — https://www.finra.org/sites/default/files/2026-09/SR-FINRA-2026-020-91-FR-60427.pdf: "
+        "2027 and 2028 \"no change\", the step-ups landing 2029/2030/2031). Alpaca's "
+        "schedule revision of 2026-10-01 passes the pause through: \"FINRA Trading Activity "
+        "Fees (TAF), when sells only, $0 per share\" "
+        "(https://files.alpaca.markets/disclosures/library/BrokFeeSched.pdf). Every other "
+        "rate is the published pass-through schedule pinned on 2026-09-07 (Alpaca, SEC Fee "
+        "Rate Advisories 2024-2 / 2025-2 / 2026-2, FINRA SR-FINRA-2024-019). Row-by-row "
+        "citations: docs/references/alpaca-regulatory-fees.md.\n\n"
         "## Independent numerical oracle\n\n"
         "`reference_kind=hand_computed`. Expected values are exact decimal arithmetic over the "
         "literal rates in this generator, computed without importing "
         "`app.broker.alpaca.regulatory_fees`. Sells: `sec = qty × price × r_sec`, "
         "`taf = min(qty × r_taf, cap)`, `cat = qty × r_cat`; buys owe only CAT. A component "
-        "with no pinned rate on the case date is `null`, never zero.\n\n"
+        "with no pinned rate on the case date is `null`, never zero. The pause's `0` is a "
+        "pinned zero (Exhibit 5A deletes the rate to `$0.00`, and Alpaca prints `$0`), not "
+        "an unknown.\n\n"
         "## Cases\n\n"
         "- Six 2026-09-08 fills (SEC $20.60/M, TAF $0.000195 cap $9.79, CAT $0.000003) including "
         "the TAF cap boundary: 50,205 shares → `9.789975` (under the cap), 50,206 → `9.79` (capped).\n"
+        "- **The pause straddled** (#2951): the same 100-share sale on 2026-09-30 (taf "
+        "`0.0195`), on 2026-10-01 and 2026-12-31 (taf `0`, the pause's first and last "
+        "days), and on 2027-01-04 (taf `0.0195` again, Exhibit 5B's resumption).\n"
         "- `sell_sec_zero_regime_2025` (2025-06-02): SEC `0` is a pinned zero; CAT unpinned → null.\n"
         "- `sell_sec_2780_regime_2024` (2024-06-03): SEC $27.80/M → `1.39` on $50,000.\n"
         "- `sell_before_sec_pin_2024` (2024-03-01): SEC unpinned → null; TAF pinned at 2024 rates.\n"
@@ -173,7 +223,7 @@ def main() -> None:
     )
 
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-    manifest["fixtures"] = [item for item in manifest["fixtures"] if item["id"] != FIXTURE_ID]
+    entry = next(item for item in manifest["fixtures"] if item["id"] == FIXTURE_ID)
     content_hashes: dict[str, str] = {}
     file_hashes: dict[str, str] = {}
     for path in (input_path, output_path):
@@ -181,42 +231,19 @@ def main() -> None:
         content_hashes[path.name] = content_hash
         file_hashes[path.name] = file_hash
     file_hashes[attribution_path.name] = hashlib.sha256(attribution_path.read_bytes()).hexdigest()
-    manifest["fixtures"].append(
-        {
-            "id": FIXTURE_ID,
-            "name": "Alpaca equity regulatory pass-through fees",
-            "category": "broker-fees",
-            "canonical_module": "PythonDataService/app/broker/alpaca/regulatory_fees.py",
-            "canonical_callable": "fees_for_fill",
-            "reference": {
-                "kind": "hand_computed",
-                "oracle": "exact decimal arithmetic over the published SEC/TAF/CAT rates without importing canonical code",
-                "citation": "Alpaca Broker Fee Schedule (retrieved 2026-09-07), SEC fee-rate advisories 2024-2/2025-2/2026-2, FINRA SR-FINRA-2024-019; see docs/references/alpaca-regulatory-fees.md.",
-            },
-            "market_input": {
-                "source": "synthetic",
-                "vendor": None,
-                "generated_by": "PythonDataService/scripts/fixture_generators/alpaca_regulatory_fees.py",
-            },
-            "units": None,
-            "tolerance": {
-                "atol": 0.0,
-                "rtol": 0.0,
-                "note": "Exact Decimal oracle and exact Decimal model; compared for Decimal equality.",
-            },
-            "active_version": 1,
-            "versions": {
-                "1": {
-                    "input": "input.json",
-                    "output": "output.json",
-                    "attribution": "attribution.md",
-                    "content_sha256": content_hashes,
-                    "file_sha256": file_hashes,
-                }
-            },
-            "status": "active",
-        }
+    entry["reference"]["citation"] = (
+        "Alpaca Broker Fee Schedule (retrieved 2026-09-07; TAF revision of 2026-10-01 read "
+        "2026-10-08), SEC fee-rate advisories 2024-2/2025-2/2026-2, FINRA SR-FINRA-2024-019, "
+        "SR-FINRA-2026-020 and SR-FINRA-2026-021; see docs/references/alpaca-regulatory-fees.md."
     )
+    entry["versions"]["2"] = {
+        "input": "input.json",
+        "output": "output.json",
+        "attribution": "attribution.md",
+        "content_sha256": content_hashes,
+        "file_sha256": file_hashes,
+    }
+    entry["active_version"] = 2
     _write_json(MANIFEST_PATH, manifest)
 
 

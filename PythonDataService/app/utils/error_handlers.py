@@ -12,19 +12,49 @@ from pydantic_core import PydanticUndefinedType
 
 logger = logging.getLogger(__name__)
 
+# What the 422 handler echoes back is bounded by container depth (#2969):
+# a body nested deeper than the interpreter's recursion limit crashes
+# ``jsonable_encoder`` mid-walk, turning the 422 the handler exists to give
+# into a 500 on the very input it is reporting. The limit counts from the
+# answer's root, so the refused input itself truncates a few levels short
+# of the full depth.
+_ECHO_DEPTH_LIMIT = 20
+_ECHO_TRUNCATED = "<truncated>"
+
 
 async def request_validation_exception_handler(
     request: Request,
     exc: RequestValidationError,
 ) -> JSONResponse:
-    """Return a JSON-safe 422 even when rejected input is NaN/Infinity or was never sent."""
+    """Return a JSON-safe 422 even when rejected input is NaN/Infinity, was never sent, or is nested past the echo bound."""
     del request
     # A required list parameter that was not sent is reported with pydantic's "undefined" as its input, which has no JSON form.
-    content = jsonable_encoder({"detail": exc.errors()}, custom_encoder={PydanticUndefinedType: lambda _: None})
+    # The bound runs before the encoder: the encoder is what deep input
+    # takes down, so it must never see the unbounded value (#2969).
+    content = jsonable_encoder(
+        _bound_echo_depth({"detail": exc.errors()}),
+        custom_encoder={PydanticUndefinedType: lambda _: None},
+    )
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content=_replace_non_finite(content),
     )
+
+
+def _bound_echo_depth(value: Any, depth: int = 0) -> Any:
+    """Copy ``value`` with containers at :data:`_ECHO_DEPTH_LIMIT` or deeper replaced by a marker.
+
+    Recursion here is safe because the bound is: on any input, however
+    deeply nested, the walk descends at most ``_ECHO_DEPTH_LIMIT`` levels —
+    unlike the unbounded walk the encoder does (#2969).
+    """
+    if not isinstance(value, (dict, list)):
+        return value
+    if depth >= _ECHO_DEPTH_LIMIT:
+        return _ECHO_TRUNCATED
+    if isinstance(value, dict):
+        return {key: _bound_echo_depth(item, depth + 1) for key, item in value.items()}
+    return [_bound_echo_depth(item, depth + 1) for item in value]
 
 
 def _replace_non_finite(value: Any) -> Any:

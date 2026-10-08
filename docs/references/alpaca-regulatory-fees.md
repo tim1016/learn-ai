@@ -16,7 +16,7 @@ observation exists yet (shadow, backtest parity).
   raises `RateNotPinnedError`. Buys owe no SEC or TAF on any date, so those are `0`
   for buys regardless of pinning.
 
-## Rate table (pinned 2026-09-07)
+## Rate table (pinned 2026-09-07; TAF re-pinned 2026-10-08)
 
 | Component | Effective from | Rate | Source |
 |---|---|---|---|
@@ -25,9 +25,11 @@ observation exists yet (shadow, backtest parity).
 | SEC §31 | 2026-04-04 | $20.60 per $1M (`0.0000206`) | SEC Fee Rate Advisory 2026-2, 2026-02-27 — https://www.sec.gov/rules-regulations/fee-rate-advisories/2026-2 |
 | FINRA TAF (sells, per share, per-trade cap) | 2024-01-01 | `0.000166` / share, cap `8.30` | FINRA SR-FINRA-2024-019 fee-adjustment schedule — https://www.finra.org/rules-guidance/rule-filings/sr-finra-2024-019/fee-adjustment-schedule |
 | FINRA TAF | 2026-01-01 | `0.000195` / share, cap `9.79` (binds at 50,206+ shares) | same; stated verbatim by Alpaca's schedule |
-| FINRA TAF | 2027-01-01 | `0.000232` / share, cap `11.61` | same |
-| FINRA TAF | 2028-01-01 | `0.000240` / share, cap `12.05` | same |
-| FINRA TAF | 2029-01-01 | `0.000249` / share, cap `12.50` | same |
+| FINRA TAF | 2026-10-01 | `0` / share, cap `0`, through 2026-12-31 (paused) | FINRA SR-FINRA-2026-021, SEC Release 34-106409 Exhibit 5A — https://www.sec.gov/files/rules/sro/finra/2026/34-106409-ex5.pdf; Alpaca's schedule revision of 2026-10-01 prints "$0 per share" |
+| FINRA TAF | 2027-01-01 | `0.000195` / share, cap `9.79`, through 2028 (resumption) | SR-FINRA-2026-021 Exhibit 5B (same URL); SR-FINRA-2026-020 confirms 2027 and 2028 are "no change" |
+| FINRA TAF | 2029-01-01 | `0.000232` / share, cap `11.61` | FINRA SR-FINRA-2026-020 (91 FR 60427, immediately effective) — https://www.finra.org/sites/default/files/2026-09/SR-FINRA-2026-020-91-FR-60427.pdf; the SR-FINRA-2024-019 steps delayed two years |
+| FINRA TAF | 2030-01-01 | `0.000240` / share, cap `12.05` | same |
+| FINRA TAF | 2031-01-01 | `0.000249` / share, cap `12.50` | same |
 | FINRA CAT (both sides, per executed-equivalent share) | 2026-09-01 | `0.000003` / share | Alpaca Securities "Broker Fee Schedule", §"Pass-Through Regulatory and Exchange Fees — Equities" — https://files.alpaca.markets/disclosures/library/BrokFeeSched.pdf (retrieved 2026-09-07; the schedule is dated 2026-09-01) |
 
 Unpinned windows (the model returns `None` there): SEC before 2024-05-22 (the FY2023 $8.00/M
@@ -86,7 +88,8 @@ The observed side is compared against the model through the asymmetric band abov
 
 - `PythonDataService/tests/broker/alpaca/test_regulatory_fees.py` — regime boundaries,
   sides, the TAF cap boundary (50,205 vs 50,206 shares), unpinned handling, settlement.
-- Golden `FEE-001` (`PythonDataService/tests/fixtures/golden/broker-fees/FEE-001/v1/`),
+- Golden `FEE-001` (`PythonDataService/tests/fixtures/golden/broker-fees/FEE-001/v2/`,
+  the active version; v1 records the schedule pinned 2026-09-07),
   `reference_kind=hand_computed`, `atol=0, rtol=0`, asserted by
   `PythonDataService/tests/fixtures/test_alpaca_regulatory_fees_fixture.py`.
 - No observed-fee fixture exists yet: the paper account has produced no `FEE` activity in

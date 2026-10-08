@@ -42,15 +42,32 @@ def test_rates_for_sec_regime_boundaries(trade_date: date, sec_per_dollar: Decim
         (date(2024, 1, 1), D("0.000166"), D("8.30")),
         (date(2025, 12, 31), D("0.000166"), D("8.30")),
         (date(2026, 1, 1), D("0.000195"), D("9.79")),
-        (date(2027, 1, 1), D("0.000232"), D("11.61")),
-        (date(2028, 1, 1), D("0.000240"), D("12.05")),
-        (date(2029, 1, 1), D("0.000249"), D("12.50")),
+        (date(2026, 9, 30), D("0.000195"), D("9.79")),  # last day before the pause
+        # SR-FINRA-2026-021: paused at zero, per share and cap, through 2026-12-31
+        (date(2026, 10, 1), D("0"), D("0")),
+        (date(2026, 12, 31), D("0"), D("0")),
+        # Exhibit 5B: the 2026 rate resumes 2027-01-01, holds through 2028
+        (date(2027, 1, 1), D("0.000195"), D("9.79")),
+        (date(2028, 12, 31), D("0.000195"), D("9.79")),
+        # SR-FINRA-2026-020: the step-ups delayed two years, 2029/2030/2031
+        (date(2029, 1, 1), D("0.000232"), D("11.61")),
+        (date(2030, 1, 1), D("0.000240"), D("12.05")),
+        (date(2031, 1, 1), D("0.000249"), D("12.50")),
     ],
 )
 def test_rates_for_taf_annual_schedule(trade_date: date, per_share: Decimal | None, cap: Decimal | None) -> None:
     rates = rates_for(trade_date)
     assert rates.taf_per_share == per_share
     assert rates.taf_cap_per_trade == cap
+
+
+def test_sell_during_taf_pause_accrues_a_pinned_zero() -> None:
+    """#2951: from 2026-10-01 the TAF is paused at a pinned zero, not the 2026 rate."""
+    fees = fees_for_fill(trade_date=date(2026, 10, 1), side=OrderSide.SELL, quantity=D("100"), fill_price=D("250.00"))
+
+    assert fees.taf == D("0")
+    assert fees.unpinned == ()
+    assert settle_session([fees]).taf == D("0.00")
 
 
 @pytest.mark.parametrize(

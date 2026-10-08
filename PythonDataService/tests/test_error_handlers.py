@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from pydantic_core import PydanticUndefined
 
 from app.utils.error_handlers import (
+    _ECHO_DEPTH_LIMIT,
+    _ECHO_TRUNCATED,
     catalog_schema_not_ready_exception_handler,
     polygon_exception_handler,
     request_validation_exception_handler,
@@ -98,3 +101,43 @@ async def test_request_validation_handler_serializes_nested_non_finite_inputs() 
     detail = json.loads(response.body)["detail"][0]
     assert detail["input"]["nested"] == "nan"
     assert detail["ctx"]["input"] == ["inf"]
+
+
+async def test_request_validation_handler_binds_the_echo_of_deeply_nested_input() -> None:
+    """#2969: input nested past the recursion limit is truncated, not walked to a crash."""
+    deep: Any = 1
+    for _ in range(2000):
+        deep = {"a": deep}
+    exc = RequestValidationError(
+        [{"type": "missing", "loc": ("body", "method"), "msg": "Field required", "input": deep}]
+    )
+
+    response = await request_validation_exception_handler(_make_request(), exc)
+
+    assert response.status_code == 422
+    echoed: Any = json.loads(response.body)["detail"][0]["input"]
+    steps = 0
+    while isinstance(echoed, dict):
+        steps += 1
+        echoed = echoed["a"]
+    assert echoed == _ECHO_TRUNCATED
+    assert steps <= _ECHO_DEPTH_LIMIT + 1
+
+
+async def test_a_route_posted_a_deeply_nested_json_body_answers_422_not_500() -> None:
+    """#2969 done-when: the nested body posted to one route gets the 422 it is due."""
+    import httpx
+
+    from app.main import app
+
+    body = '{"a":' * 2000 + "1" + "}" * 2000
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/research/strategy-runs/baselines",
+            content=body,
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert response.status_code == 422
+    assert isinstance(json.loads(response.content)["detail"], list)
