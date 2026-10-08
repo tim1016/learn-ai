@@ -41,7 +41,7 @@ import { BULL_CALL_SPREAD_LEGS, OPTION_CATALOGUE, resolvedPreview } from './opti
 /**
  * Deploy's Options branch (#2913, #2915): the third choice of "What it
  * trades", the structure's summary in What, the option order terms that
- * stand where the stock exit terms stood in How, and the Deploy of an option
+ * stand beside the custody exit seal in How, and the Deploy of an option
  * bot: what it sends, the server's money review, blockers, acceptance and
  * refusals, and Deploy again. Split from the workflow spec, as its end and
  * symbol-scope specs are, for its size.
@@ -242,7 +242,7 @@ describe('AlpacaDeployWorkflowComponent — a bot that trades options (#2913)', 
     });
   });
 
-  it('puts the option order terms where the stock exit terms were, and sizes in whole structures', async () => {
+  it('offers separate option order terms and the custody exit seal, sized in whole structures', async () => {
     await renderWorkflow();
     const how = step('How');
     expect(within(how).getByRole('group', { name: /^Exit terms/ })).toBeTruthy();
@@ -250,7 +250,7 @@ describe('AlpacaDeployWorkflowComponent — a bot that trades options (#2913)', 
 
     await tradeOptions();
 
-    expect(within(how).queryByRole('group', { name: /^Exit terms/ })).toBeNull();
+    expect(within(how).getByRole('group', { name: /^Exit terms/ })).toBeTruthy();
     const terms = await within(how).findByRole('group', { name: 'Option order terms · fixed for this bot’s life' });
     await vi.waitFor(() => expect(termValues(terms)).toEqual(['8', '20', '10', '45']));
     expect(within(how).getByRole('radio', { name: 'One structure' })).toBeTruthy();
@@ -635,7 +635,9 @@ describe('AlpacaDeployWorkflowComponent — a bot that trades options (#2913)', 
 
   it('lets an option bot seal its required exit terms without switching its traded asset', async () => {
     const service = mockService();
-    service.getDeployView.mockResolvedValue({ ...DEPLOY_VIEW, default_exit_terms: null });
+    service.getDeployView.mockImplementation(async (_target, _symbol, terms) => ({
+      ...DEPLOY_VIEW, default_exit_terms: terms ?? null,
+    }));
     await renderWorkflow(service);
     await tradeOptions();
     await useBullCallSpread();
@@ -650,6 +652,13 @@ describe('AlpacaDeployWorkflowComponent — a bot that trades options (#2913)', 
     await vi.waitFor(() => expect(service.previewBudget.mock.calls.some(([, body]) =>
       body.trades && body.exit_terms?.exit_allowance_bps === 100)).toBe(true));
     expect(within(how).getByRole('link', { name: 'Set defaults for new bots in Settings' })).toBeTruthy();
+    fireEvent.blur(allowance);
+    await vi.waitFor(() => expect(service.getDeployView.mock.calls.at(-1)?.[2]).toMatchObject({ exit_allowance_bps: 100 }));
+    await settle();
+    const editableAllowance = within(how).getByRole<HTMLInputElement>('spinbutton', { name: 'Exit allowance (bps)' });
+    fireEvent.input(editableAllowance, { target: { value: '75' } });
+    await settle();
+    await vi.waitFor(() => expect(service.previewBudget.mock.calls.at(-1)?.[1].exit_terms?.exit_allowance_bps).toBe(75));
     expect(within(step('What')).getByRole<HTMLInputElement>('radio', { name: 'Options' }).checked).toBe(true);
   });
 

@@ -495,7 +495,7 @@ class IbkrMarketDataFeed:
                 duration=f"{lookback_days + 1} D",
                 use_rth=use_rth,
                 # A long lookback takes IBKR longer to serve (#2841).
-                timeout_s=historical_bars_timeout_s(lookback_days),
+                timeout_s=historical_bars_timeout_s(lookback_days + 1),
             )
         except IBKRImpossibleBarError as exc:
             # A bar that cannot be real is corruption the retry cannot cure, so
