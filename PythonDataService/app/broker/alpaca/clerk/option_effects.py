@@ -268,11 +268,6 @@ def option_plan_taken(action_plan: ActionPlan, *, real_account: bool, live_shado
                 "a structure; more of it is more structures.",
             )
         return TakenOptionPlan(legs=legs, underlying=underlyings[0])
-    if live_shadow:
-        raise OptionPlanRefused(
-            OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED,
-            "A Live Shadow takes one bought call or put. Its order book does not support an order of several legs.",
-        )
     if not BOUGHT_LEG_STRUCTURES_TAKEN:
         raise OptionPlanRefused(
             OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED,
@@ -284,6 +279,12 @@ def option_plan_taken(action_plan: ActionPlan, *, real_account: bool, live_shado
             OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED,
             f"Leg {sold[0].leg_id!r} sells an option to open. The account Clerk takes structures of bought legs "
             "for now; a sold leg is not built yet.",
+        )
+    if live_shadow:
+        raise OptionPlanRefused(
+            OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED,
+            f"This plan opens {len(legs)} option legs. A Live Shadow takes one bought call or put. "
+            "Its order book does not support an order of several legs.",
         )
     if real_account and not multi_leg_option_orders_enabled():
         raise OptionPlanRefused(
