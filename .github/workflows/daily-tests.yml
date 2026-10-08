@@ -65,7 +65,13 @@ jobs:
   python-full:
     name: Python Full Suite
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # The serial suite measured 35-61 min for the same tests across
+    # 2026-10-06..08 (GitHub runner variance; the suite stays serial because
+    # slow tests share one PostgreSQL), plus ~5 min of migration and pip
+    # setup. A 60-minute cap cancelled the 2026-10-08 run at 92% with no
+    # failed test recorded, so the budget must clear the slowest observed
+    # day, not the median one.
+    timeout-minutes: 90
     services:
       postgres:
         image: postgres:16
