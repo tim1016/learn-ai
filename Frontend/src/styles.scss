@@ -1,5 +1,6 @@
 @use './app/styles/tokens';
 @use './app/styles/eyebrow-heading' as *;
+@use './app/styles/bot-manual-print';
 
 // Plain CSS pass-through. The url(...) form sidesteps Sass's @import
 // rule (deprecated in Dart Sass 3.0) — Sass treats this as a literal

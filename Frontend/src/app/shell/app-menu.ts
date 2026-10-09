@@ -101,6 +101,7 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     title: 'Documentation',
     icon: 'pi pi-book',
     items: [
+      { title: 'Bot Business Logic Manual', route: '/docs/bot-business-manual' },
       { title: 'Architecture Manual', route: '/docs/architecture-manual' },
       { title: 'Strategy Docs', route: '/strategy-docs' },
       { title: 'Indicator Reference', route: '/data-lab-docs' },

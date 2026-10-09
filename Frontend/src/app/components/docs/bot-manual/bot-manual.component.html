@@ -1,0 +1,40 @@
+<section class="manual" aria-labelledby="manual-title">
+  <div class="manual-toolbar">
+    <a routerLink="/brokers/alpaca">Alpaca accounts</a>
+    <div>
+      <p id="print-help">Choose “Save as PDF” in the print window. All chapters are included.</p>
+      <button type="button" (click)="print()" [disabled]="!canPrint()" aria-describedby="print-help">
+        <i class="pi pi-print" aria-hidden="true"></i> Print / Save PDF
+      </button>
+    </div>
+  </div>
+
+  <header class="manual-cover">
+    <p class="manual-brand">Botasur / Operator handbook</p>
+    <h1 id="manual-title">How our trading bots work</h1>
+    <p class="manual-subtitle">The business logic behind stock and options bots, explained one decision at a time.</p>
+    <ol class="manual-flow" aria-label="From market information to an actual holding">
+      <li><strong>Observe</strong><span>IBKR supplies market data</span></li>
+      <li><strong>Decide</strong><span>The strategy reads its rules</span></li>
+      <li><strong>Check</strong><span>The Clerk checks the order</span></li>
+      <li><strong>Confirm</strong><span>Fills establish what is held</span></li>
+    </ol>
+    <p class="manual-edition">Implementation edition: October 8, 2026. Examples use made-up prices.</p>
+  </header>
+
+  <div class="manual-layout">
+    <nav class="manual-contents" aria-label="Manual chapters">
+      <h2>Inside this manual</h2>
+      <ol>
+        @for (chapter of chapters; track chapter.id) {
+          <li><a routerLink="/docs/bot-business-manual" [fragment]="chapter.id"
+            [attr.aria-current]="fragment() === chapter.id ? 'location' : null">{{ chapter.label }}</a></li>
+        }
+      </ol>
+      <p>Read straight through, or jump to the rule you need. The printed version includes every chapter.</p>
+    </nav>
+    <article class="manual-body" aria-label="Trading bot business logic manual">
+      <app-markdown-viewer src="/assets/docs/bot-business-manual.md" [scrollTo]="fragment()" />
+    </article>
+  </div>
+</section>
