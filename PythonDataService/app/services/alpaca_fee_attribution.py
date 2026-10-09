@@ -68,7 +68,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import date
 from decimal import Decimal, Inexact, localcontext
 from typing import Any, Literal
 
@@ -89,6 +88,7 @@ from app.broker.alpaca.regulatory_fees import (
     settle_session,
 )
 from app.broker.contract.models import BrokerActivity, OrderSide
+from app.utils.session_anchors import et_date_at_ms
 
 ZERO = Decimal("0")
 CENT = Decimal("0.01")
@@ -228,7 +228,7 @@ class FeeAttribution:
 
 def attribute_simulated_option_fees(
     *,
-    trade_date: date,
+    trade_date_ms: int,
     fills: Sequence[FeeFill],
     population_complete: bool,
     session_ended: bool,
@@ -268,7 +268,7 @@ def attribute_simulated_option_fees(
         )
         return FeeAttribution((), ZERO, tuple(unresolved), None, None)
     return attribute_session_fees(
-        trade_date=trade_date, fills=fills, charges=(), population_complete=population_complete,
+        trade_date_ms=trade_date_ms, fills=fills, charges=(), population_complete=population_complete,
         activities_complete=True, simulated=True, session_ended=session_ended, settlement_at_ms=settlement_at_ms,
     )
 
@@ -357,28 +357,29 @@ def _day_charge[S](priced: Sequence[Any], settle: Callable[[Sequence[Any]], S]) 
         return None
 
 
-def _modelled_stock_fills(trade_date: date, fills: Sequence[FeeFill]) -> _ModelledFills:
+def _modelled_stock_fills(trade_date_ms: int, fills: Sequence[FeeFill]) -> _ModelledFills:
     priced = [
-        fees_for_fill(trade_date=trade_date, side=fill.side, quantity=fill.quantity, fill_price=fill.price)
+        fees_for_fill(trade_date_ms=trade_date_ms, side=fill.side, quantity=fill.quantity, fill_price=fill.price)
         for fill in fills
     ]
     return _ModelledFills(
-        fills, priced, COMPONENTS, _day_charge(priced, settle_session), f"model:{trade_date}",
+        fills, priced, COMPONENTS, _day_charge(priced, settle_session), f"model:{et_date_at_ms(trade_date_ms)}",
         "Fee rates are not pinned for this day. Review the fee model before deploying.",
     )
 
 
-def _modelled_option_fills(trade_date: date, fills: Sequence[FeeFill]) -> _ModelledFills:
+def _modelled_option_fills(trade_date_ms: int, fills: Sequence[FeeFill]) -> _ModelledFills:
     """Raises ``ValueError`` for a fill the option fee model refuses to price."""
     priced = [
         fees_for_option_fill(
-            trade_date=trade_date, side=fill.side, contracts=fill.quantity, premium=fill.price,
+            trade_date_ms=trade_date_ms, side=fill.side, contracts=fill.quantity, premium=fill.price,
             multiplier=fill.multiplier,
         )
         for fill in fills
     ]
     return _ModelledFills(
-        fills, priced, OPTION_COMPONENTS, _day_charge(priced, settle_option_session), f"model:{trade_date}:option",
+        fills, priced, OPTION_COMPONENTS, _day_charge(priced, settle_option_session),
+        f"model:{et_date_at_ms(trade_date_ms)}:option",
         "Option fee rates are not pinned for this day. Review the option fee model before deploying.",
     )
 
@@ -456,7 +457,7 @@ def _charge_scope(charge: FeeCharge, fills: Sequence[FeeFill]) -> list[FeeFill]:
 @money_context()
 def attribute_session_fees(
     *,
-    trade_date: date,
+    trade_date_ms: int,
     fills: Sequence[FeeFill],
     charges: Sequence[FeeCharge],
     population_complete: bool,
@@ -491,15 +492,15 @@ def attribute_session_fees(
     unattributed_charges: list[UnattributedCharge] = []
     stock_fills = [fill for fill in fills if fill.multiplier is None]
     option_fills = [fill for fill in fills if fill.multiplier is not None]
-    modelled = [_modelled_stock_fills(trade_date, stock_fills)]
+    modelled = [_modelled_stock_fills(trade_date_ms, stock_fills)]
     if option_fills:
         try:
-            modelled.append(_modelled_option_fills(trade_date, option_fills))
+            modelled.append(_modelled_option_fills(trade_date_ms, option_fills))
         except ValueError as exc:
             # No row can be weighed against a fill its model cannot price: the
             # day is read as one whose fills are not all known, and says why.
             unshared = attribute_session_fees(
-                trade_date=trade_date, fills=stock_fills, charges=charges, population_complete=False,
+                trade_date_ms=trade_date_ms, fills=stock_fills, charges=charges, population_complete=False,
                 activities_complete=activities_complete, simulated=simulated, session_ended=session_ended,
                 settlement_at_ms=settlement_at_ms,
             )

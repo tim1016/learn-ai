@@ -34,7 +34,6 @@ from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
 from app.options.requirement import EntrySize, LegQuote
 from app.options.structure_check import resolved_structure
 from app.schemas.action_plan import ActionPlan
-from app.utils.session_anchors import et_date_at_ms
 
 GENERATION = 4
 EXPIRY = date(2026, 9, 18)
@@ -123,7 +122,7 @@ def worked_entry(
         for leg_id, held in handed.quotes.items()
     }
     fees = entry_fee_provision_cents(
-        structure, markets, EntrySize(multiplier=100, units=units), trade_date=et_date_at_ms(now_ms)
+        structure, markets, EntrySize(multiplier=100, units=units), trade_date_ms=now_ms
     )
     prepared = prepare_entry(
         action_plan, picked=handed.picked, multipliers=handed.multipliers, quotes=handed.quotes, units=units,

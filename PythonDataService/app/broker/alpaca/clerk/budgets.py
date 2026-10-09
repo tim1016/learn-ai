@@ -29,7 +29,6 @@ from app.broker.alpaca.clerk.money import (
 )
 from app.broker.alpaca.regulatory_fees import fees_for_fill, settle_session
 from app.broker.contract.models import OrderSide
-from app.utils.session_anchors import et_date_at_ms
 
 
 class BudgetUnavailable(ValueError):
@@ -143,7 +142,7 @@ def entry_requirement(*, quantity: object, price: object, at_ms: int) -> tuple[D
     with money_context():
         cost = notional(quantity, price)
         prediction = fees_for_fill(
-            trade_date=et_date_at_ms(at_ms), side=OrderSide.BUY,
+            trade_date_ms=at_ms, side=OrderSide.BUY,
             quantity=normalize_money(quantity), fill_price=normalize_money(price),
         )
         # Canonical component settlement intentionally rounds at its cents

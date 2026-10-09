@@ -31,9 +31,12 @@ from decimal import Decimal
 
 from app.broker.contract.models import OrderSide
 from app.services.alpaca_fee_attribution import FeeAttribution, FeeCharge, FeeFill, attribute_session_fees
+from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 
 D = Decimal
-DAY = date(2026, 9, 8)
+DAY = et_midnight_ms(date(2026, 9, 8))
+# The label the attribution prints for that day's modelled figures.
+DAY_TEXT = et_date_at_ms(DAY).isoformat()
 # When the Clerk read the day's fee rows.
 READ = 100
 
@@ -59,7 +62,7 @@ BOT_B = [_contracts("b-buy", "bot:b", OrderSide.BUY, 1, "1.94")]
 def _the_day(fills: list[FeeFill], rows: list[FeeCharge] | None = None, **changes: object) -> FeeAttribution:
     """A real account's day, read after it ended with every fill and every activity known."""
     return attribute_session_fees(**{
-        "trade_date": DAY, "fills": fills, "charges": rows or [], "population_complete": True,
+        "trade_date_ms": DAY, "fills": fills, "charges": rows or [], "population_complete": True,
         "activities_complete": True, "session_ended": True, "settlement_at_ms": 7, **changes,
     })
 
@@ -87,11 +90,11 @@ def test_before_any_fee_row_each_fill_is_charged_its_own_models_estimate() -> No
 
     assert estimate.known
     assert _charged(estimate, "estimated") == {
-        (f"model:{DAY}:sec", "bot:s"): D("0.11"), (f"model:{DAY}:taf", "bot:s"): D("0.02"),
-        (f"model:{DAY}:cat", "bot:s"): D("0.01"),
-        (f"model:{DAY}:option:sec", "bot:a"): D("0.05"), (f"model:{DAY}:option:taf", "bot:a"): D("0.04"),
-        (f"model:{DAY}:option:cat", "bot:a"): D("0.01"), (f"model:{DAY}:option:orf", "bot:a"): D("0.30"),
-        (f"model:{DAY}:option:occ", "bot:a"): D("0.50"),
+        (f"model:{DAY_TEXT}:sec", "bot:s"): D("0.11"), (f"model:{DAY_TEXT}:taf", "bot:s"): D("0.02"),
+        (f"model:{DAY_TEXT}:cat", "bot:s"): D("0.01"),
+        (f"model:{DAY_TEXT}:option:sec", "bot:a"): D("0.05"), (f"model:{DAY_TEXT}:option:taf", "bot:a"): D("0.04"),
+        (f"model:{DAY_TEXT}:option:cat", "bot:a"): D("0.01"), (f"model:{DAY_TEXT}:option:orf", "bot:a"): D("0.30"),
+        (f"model:{DAY_TEXT}:option:occ", "bot:a"): D("0.50"),
     }
     assert {share.state for share in estimate.shares} == {"estimated"}
     assert (estimate.predicted_total, estimate.observed_total) == (D("1.04"), None)
@@ -161,11 +164,11 @@ def test_a_row_of_a_type_only_the_option_model_predicts_falls_on_the_option_fill
     assert shared.known
     assert _charged(shared, "observed") == {("orf-row", "bot:a"): D("0.30"), ("orf-row", "bot:b"): D("0.02")}
     assert _charged(shared, "estimated") == {
-        (f"model:{DAY}:sec", "bot:s"): D("0.11"), (f"model:{DAY}:taf", "bot:s"): D("0.02"),
-        (f"model:{DAY}:cat", "bot:s"): D("0.01"),
-        (f"model:{DAY}:option:sec", "bot:a"): D("0.05"), (f"model:{DAY}:option:taf", "bot:a"): D("0.04"),
-        (f"model:{DAY}:option:cat", "bot:a"): D("0.01"),
-        (f"model:{DAY}:option:occ", "bot:a"): D("0.50"), (f"model:{DAY}:option:occ", "bot:b"): D("0.03"),
+        (f"model:{DAY_TEXT}:sec", "bot:s"): D("0.11"), (f"model:{DAY_TEXT}:taf", "bot:s"): D("0.02"),
+        (f"model:{DAY_TEXT}:cat", "bot:s"): D("0.01"),
+        (f"model:{DAY_TEXT}:option:sec", "bot:a"): D("0.05"), (f"model:{DAY_TEXT}:option:taf", "bot:a"): D("0.04"),
+        (f"model:{DAY_TEXT}:option:cat", "bot:a"): D("0.01"),
+        (f"model:{DAY_TEXT}:option:occ", "bot:a"): D("0.50"), (f"model:{DAY_TEXT}:option:occ", "bot:b"): D("0.03"),
     }
 
 
@@ -272,7 +275,7 @@ def test_an_option_fill_its_model_cannot_price_shares_no_row_and_reads_unresolve
 
 def test_a_day_before_the_option_rates_are_pinned_shares_no_row_and_is_never_free() -> None:
     early = attribute_session_fees(
-        trade_date=date(2026, 1, 15), fills=BOT_B, charges=[_row("fee-of-the-day", "0.06")],
+        trade_date_ms=et_midnight_ms(date(2026, 1, 15)), fills=BOT_B, charges=[_row("fee-of-the-day", "0.06")],
         population_complete=True, activities_complete=True, session_ended=True, settlement_at_ms=7,
     )
 

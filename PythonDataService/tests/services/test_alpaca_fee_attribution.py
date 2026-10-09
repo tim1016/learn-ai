@@ -16,9 +16,10 @@ from app.services.alpaca_fee_attribution import (
     attribute_session_fees,
     collapse_deliveries,
 )
+from app.utils.session_anchors import et_midnight_ms
 
 D = Decimal
-DAY = date(2026, 9, 8)
+DAY = et_midnight_ms(date(2026, 9, 8))
 
 
 def _fill(subject: str, *, side=OrderSide.SELL, quantity="1", price="1", fee=None) -> FeeFill:
@@ -36,7 +37,7 @@ def _fill(subject: str, *, side=OrderSide.SELL, quantity="1", price="1", fee=Non
 
 def _attribute(fills=(), charges=(), **kwargs):
     return attribute_session_fees(
-        trade_date=DAY,
+        trade_date_ms=DAY,
         fills=fills,
         charges=charges,
         population_complete=kwargs.pop("population_complete", True),

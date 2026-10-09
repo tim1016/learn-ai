@@ -13,7 +13,6 @@ from app.broker.alpaca.option_fees import (
     settle_option_session,
 )
 from app.broker.contract.models import OrderSide
-from app.utils.session_anchors import et_date_at_ms
 
 FIXTURE_DIR = Path(__file__).parent / "golden" / "broker-fees" / "FEE-002" / "v1"
 _TYPES = ("sec", "taf", "cat", "orf", "occ")
@@ -31,7 +30,7 @@ def _decimal_or_none(value: str | None) -> Decimal | None:
 
 def _price(case: dict) -> OptionFillFees:
     return fees_for_option_fill(
-        trade_date=et_date_at_ms(case["trade_date_ms"]),
+        trade_date_ms=case["trade_date_ms"],
         side=OrderSide(case["side"]),
         contracts=Decimal(case["contracts"]),
         premium=Decimal(case["premium"]),

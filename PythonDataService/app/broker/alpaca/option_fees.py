@@ -69,6 +69,7 @@ from app.broker.alpaca.regulatory_fees import (
 )
 from app.broker.alpaca.regulatory_fees import rates_for as stock_rates_for
 from app.broker.contract.models import OrderSide
+from app.utils.session_anchors import et_midnight_ms
 
 if TYPE_CHECKING:
     from app.options.requirement import EntrySize, LegQuote
@@ -80,27 +81,28 @@ _COMPONENTS: tuple[OptionFeeComponent, ...] = ("sec", "taf", "cat", "orf", "occ"
 _CENT = Decimal("0.01")
 _ZERO = Decimal("0")
 
-# Each table is ascending by effective date; the latest row on or before the trade date is in
-# force. A trade date before a table's first row has NO pinned rate for that fee type.
-_TAF_PER_CONTRACT: tuple[tuple[date, Decimal], ...] = (
-    (date(2026, 1, 1), Decimal("0.00329")),  # SR-FINRA-2026-020, the 2026 column
-    (date(2026, 10, 1), Decimal("0")),  # SR-FINRA-2026-021: paused through 2026-12-31
-    (date(2027, 1, 1), Decimal("0.00329")),  # SR-FINRA-2026-021, Exhibit 5B: resumes, through 2028
-    (date(2029, 1, 1), Decimal("0.00390")),  # SR-FINRA-2026-020
-    (date(2030, 1, 1), Decimal("0.00404")),
-    (date(2031, 1, 1), Decimal("0.00420")),
+# Each table is ascending by effective date, keyed by that date's ET-midnight anchor
+# (int64 ms UTC, ADR 0022); the latest row on or before the trade date is in force. A
+# trade date before a table's first row has NO pinned rate for that fee type.
+_TAF_PER_CONTRACT: tuple[tuple[int, Decimal], ...] = (
+    (et_midnight_ms(date(2026, 1, 1)), Decimal("0.00329")),  # SR-FINRA-2026-020, the 2026 column
+    (et_midnight_ms(date(2026, 10, 1)), Decimal("0")),  # SR-FINRA-2026-021: paused through 2026-12-31
+    (et_midnight_ms(date(2027, 1, 1)), Decimal("0.00329")),  # SR-FINRA-2026-021, Exhibit 5B: resumes, through 2028
+    (et_midnight_ms(date(2029, 1, 1)), Decimal("0.00390")),  # SR-FINRA-2026-020
+    (et_midnight_ms(date(2030, 1, 1)), Decimal("0.00404")),
+    (et_midnight_ms(date(2031, 1, 1)), Decimal("0.00420")),
 )
 # Dated by the Alpaca schedule revision that first printed the figure.
-_ORF_PER_CONTRACT: tuple[tuple[date, Decimal], ...] = (
-    (date(2026, 2, 12), Decimal("0.02375")),
-    (date(2026, 4, 9), Decimal("0.02295")),
-    (date(2026, 7, 1), Decimal("0.015")),
+_ORF_PER_CONTRACT: tuple[tuple[int, Decimal], ...] = (
+    (et_midnight_ms(date(2026, 2, 12)), Decimal("0.02375")),
+    (et_midnight_ms(date(2026, 4, 9)), Decimal("0.02295")),
+    (et_midnight_ms(date(2026, 7, 1)), Decimal("0.015")),
 )
-_OCC_PER_CONTRACT: tuple[tuple[date, Decimal], ...] = (
-    (date(2026, 2, 12), Decimal("0.025")),  # printed "(no cap)" in that revision
+_OCC_PER_CONTRACT: tuple[tuple[int, Decimal], ...] = (
+    (et_midnight_ms(date(2026, 2, 12)), Decimal("0.025")),  # printed "(no cap)" in that revision
 )
-_CAT_PER_EQUIVALENT_SHARE: tuple[tuple[date, Decimal], ...] = (
-    (date(2026, 7, 1), Decimal("0.000003")),  # the first revision to list CAT under Options
+_CAT_PER_EQUIVALENT_SHARE: tuple[tuple[int, Decimal], ...] = (
+    (et_midnight_ms(date(2026, 7, 1)), Decimal("0.000003")),  # the first revision to list CAT under Options
 )
 
 
@@ -152,23 +154,23 @@ class OptionSessionFees:
             return self.sec + self.taf + self.cat + self.orf + self.occ
 
 
-def option_rates_for(trade_date: date) -> OptionRates:
-    """Resolve the five pass-through rates in force on ``trade_date``.
+def option_rates_for(trade_date_ms: int) -> OptionRates:
+    """Resolve the five pass-through rates in force on ``trade_date_ms``'s New York date.
 
     The SEC rate is the one statute's, so it is the stock model's table.
     """
     return OptionRates(
-        sec_per_dollar=stock_rates_for(trade_date).sec_per_dollar,
-        taf_per_contract=in_force(_TAF_PER_CONTRACT, trade_date),
-        cat_per_equivalent_share=in_force(_CAT_PER_EQUIVALENT_SHARE, trade_date),
-        orf_per_contract=in_force(_ORF_PER_CONTRACT, trade_date),
-        occ_per_contract=in_force(_OCC_PER_CONTRACT, trade_date),
+        sec_per_dollar=stock_rates_for(trade_date_ms).sec_per_dollar,
+        taf_per_contract=in_force(_TAF_PER_CONTRACT, trade_date_ms),
+        cat_per_equivalent_share=in_force(_CAT_PER_EQUIVALENT_SHARE, trade_date_ms),
+        orf_per_contract=in_force(_ORF_PER_CONTRACT, trade_date_ms),
+        occ_per_contract=in_force(_OCC_PER_CONTRACT, trade_date_ms),
     )
 
 
 def fees_for_option_fill(
     *,
-    trade_date: date,
+    trade_date_ms: int,
     side: OrderSide,
     contracts: Decimal,
     premium: Decimal,
@@ -176,10 +178,12 @@ def fees_for_option_fill(
 ) -> OptionFillFees:
     """Accrue one option fill's fees at full precision; rounding happens at settlement.
 
-    ``premium`` is dollars per share and ``multiplier`` the contract's own
-    recorded multiplier; it is never assumed. A count or a premium that is
-    not a finite number, or is of a size the Clerk's exact money arithmetic
-    does not hold, is refused as any other bad fill is.
+    ``trade_date_ms`` is the fill's execution instant (int64 ms UTC): the
+    New York trade date is derived inside the rate lookup. ``premium`` is
+    dollars per share and ``multiplier`` the contract's own recorded
+    multiplier; it is never assumed. A count or a premium that is not a
+    finite number, or is of a size the Clerk's exact money arithmetic does
+    not hold, is refused as any other bad fill is.
     """
     refused = ValueError(
         f"an option fill is a whole number of contracts at a price above zero, both finite and of a "
@@ -197,7 +201,7 @@ def fees_for_option_fill(
         shares_per_contract = contract_multiplier(multiplier)
     except MoneyInputError as exc:
         raise ValueError(f"an option fill needs its contract's multiplier; got {multiplier!r}") from exc
-    rates = option_rates_for(trade_date)
+    rates = option_rates_for(trade_date_ms)
 
     def per_contract(rate: Decimal | None) -> Decimal | None:
         return None if rate is None else contracts * rate
@@ -248,19 +252,21 @@ def option_fee_provision_cents(fills: Sequence[OptionFillFees]) -> int:
 
 
 def entry_fee_provision_cents(
-    structure: ResolvedStructure, markets: Mapping[str, LegQuote], size: EntrySize, *, trade_date: date
+    structure: ResolvedStructure, markets: Mapping[str, LegQuote], size: EntrySize, *, trade_date_ms: int
 ) -> int:
-    """What an entry on ``structure`` sets aside for its own fees on ``trade_date``, in whole cents.
+    """What an entry on ``structure`` sets aside for its own fees on ``trade_date_ms``, in whole cents.
 
-    Each leg is one fill at the price it is entered at: a bought leg at its
-    ask and a sold leg at its bid, of structures × ratio contracts. Raises
+    ``trade_date_ms`` is the entry's own instant (int64 ms UTC); the New
+    York trade date is derived inside the rate lookup. Each leg is one fill
+    at the price it is entered at: a bought leg at its ask and a sold leg
+    at its bid, of structures × ratio contracts. Raises
     ``OptionRateNotPinnedError`` when a fee type has no rate pinned for that
     date: a provision with an unknown in it is not a number.
     """
     return option_fee_provision_cents(
         [
             fees_for_option_fill(
-                trade_date=trade_date,
+                trade_date_ms=trade_date_ms,
                 side=OrderSide.BUY if leg.position == "long" else OrderSide.SELL,
                 contracts=Decimal(size.units * leg.ratio),
                 premium=markets[leg.leg_id].ask if leg.position == "long" else markets[leg.leg_id].bid,

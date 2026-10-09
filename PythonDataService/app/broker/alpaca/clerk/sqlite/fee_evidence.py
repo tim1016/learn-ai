@@ -730,7 +730,7 @@ def custody_fee_attribution(
         # fills by the option model as a population of their own.
         option_fills = [fill for fill in grouped[day] if fill.multiplier is not None] if simulated else []
         result = attribute_session_fees(
-            trade_date=day,
+            trade_date_ms=et_midnight_ms(day),
             fills=[fill for fill in grouped[day] if fill.multiplier is None] if simulated else grouped[day],
             charges=fees,
             population_complete=population_complete and day not in conflicting,
@@ -742,7 +742,7 @@ def custody_fee_attribution(
         results = [result]
         if option_fills:
             results.append(attribute_simulated_option_fees(
-                trade_date=day,
+                trade_date_ms=et_midnight_ms(day),
                 fills=option_fills,
                 population_complete=population_complete and day not in conflicting,
                 session_ended=day < et_date_at_ms(now_ms),

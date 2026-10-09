@@ -8,7 +8,6 @@ from pathlib import Path
 
 from app.broker.alpaca.regulatory_fees import FillFees, fees_for_fill, settle_session
 from app.broker.contract.models import OrderSide
-from app.utils.session_anchors import et_date_at_ms
 
 FIXTURE_DIR = Path(__file__).parent / "golden" / "broker-fees" / "FEE-001" / "v2"
 
@@ -25,7 +24,7 @@ def _decimal_or_none(value: str | None) -> Decimal | None:
 
 def _price(case: dict) -> FillFees:
     return fees_for_fill(
-        trade_date=et_date_at_ms(case["trade_date_ms"]),
+        trade_date_ms=case["trade_date_ms"],
         side=OrderSide(case["side"]),
         quantity=Decimal(case["quantity"]),
         fill_price=Decimal(case["fill_price"]),

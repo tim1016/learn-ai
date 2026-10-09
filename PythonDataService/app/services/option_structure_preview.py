@@ -326,11 +326,11 @@ def _no_line_words(reason: str, use: LineUse) -> tuple[str, str]:
 
 
 def _fee_provision(
-    trade_date: date, structure: ResolvedStructure, markets: Mapping[str, LegQuote], size: EntrySize
+    trade_date_ms: int, structure: ResolvedStructure, markets: Mapping[str, LegQuote], size: EntrySize
 ) -> int | None:
-    """What the entry sets aside for its own fees on ``trade_date``. None when a rate is not pinned for that date."""
+    """What the entry sets aside for its own fees on ``trade_date_ms``. None when a rate is not pinned for that date."""
     try:
-        return entry_fee_provision_cents(structure, markets, size, trade_date=trade_date)
+        return entry_fee_provision_cents(structure, markets, size, trade_date_ms=trade_date_ms)
     except OptionRateNotPinnedError:
         return None
 
@@ -1047,7 +1047,6 @@ async def preview_option_structure(
         return asked.without_figures(plan, _search_not_done(found, reading), inputs)
     if isinstance(found, ContractsNotResolved):
         return asked.without_figures(plan, _not_resolved(found, reading), inputs)
-    today = reading.today
     decays = None
     if isinstance(found, ResolutionWithDecay):
         found, decays = found.resolution, found.daily_decay
@@ -1057,7 +1056,7 @@ async def preview_option_structure(
         units=request.structures,
         leg_gap_limit_percent=request.gap_limit_percent,
         cost_limit_percent=request.cost_limit_percent,
-        fee_provision=partial(_fee_provision, today),
+        fee_provision=partial(_fee_provision, reading.now),
         model_is_known=inputs.dividends is not None,
         # The Clerk refuses an entry too close to the close its position would owe today, a sold leg's
         # included. Asked here of the moment these quotes were read (ADR 0076 decision 17).
