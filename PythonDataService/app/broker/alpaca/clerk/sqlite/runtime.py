@@ -35,6 +35,7 @@ from app.broker.alpaca.clerk.live_arming import latest_arming
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_UNOBSERVED, LiveEnvelopeGate
 from app.broker.alpaca.clerk.models import (
+    CLERK_CUSTODY_BROKER_UNREACHABLE,
     AccountFreezeState,
     ChannelHealth,
     ClerkCustodySnapshot,
@@ -3166,6 +3167,23 @@ class SqliteAlpacaClerkFacade:
             working = self._working_order_refs_for_proof(strategy_instance_id)
             unresolved = self._unresolved_order_refs(strategy_instance_id)
             trusted = proof.reconciliation_verdict == "clean"
+            # A stale pass that could not read the broker is a different
+            # answer from one that read it and could not prove it: nothing
+            # observed contradicts the account, so the recovery the snapshot
+            # offers is a recheck, not an operator reconciliation (#2901).
+            # ``stale_cause`` is in-process and set only when the read
+            # itself failed, which is exactly that distinction.
+            broker_unreachable = not trusted and result.stale_cause is not None
+            if trusted:
+                reason_code, next_step = "CLERK_CUSTODY_PROVEN", None
+            elif broker_unreachable:
+                reason_code = CLERK_CUSTODY_BROKER_UNREACHABLE
+                next_step = "Check again when the connection to Alpaca recovers."
+            else:
+                reason_code, next_step = (
+                    "CLERK_CUSTODY_UNPROVABLE",
+                    "Reconcile the SQLite Account Clerk before starting new exposure.",
+                )
             return ClerkCustodySnapshot(
                 broker=self.broker_id,
                 account_id=self.account_id,
@@ -3190,11 +3208,11 @@ class SqliteAlpacaClerkFacade:
                 unresolved_effects=_count_fact(len(unresolved), trusted=trusted),
                 hold=_hold_state(self._repo, strategy_instance_id),
                 freeze=proof.freeze,
-                reason_code=("CLERK_CUSTODY_PROVEN" if trusted else "CLERK_CUSTODY_UNPROVABLE"),
+                reason_code=reason_code,
                 evidence_refs=(
                     f"alpaca-clerk-sqlite:{self.account_id}:{meta.authority_generation}:{meta.control_revision}",
                 ),
-                next_step=(None if trusted else "Reconcile the SQLite Account Clerk before starting new exposure."),
+                next_step=next_step,
                 observed_at_ms=self._repo.clock(),
             )
 

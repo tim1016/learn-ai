@@ -106,6 +106,10 @@ export type DeployReadinessCheck = components['schemas']['AlpacaPaperDeployReadi
 export type DeployExecutionMode = components['schemas']['AlpacaPaperExecutionMode'];
 export type DeploySizingOption = components['schemas']['AlpacaPaperSizingOption'];
 export type RunAdmissionDecision = components['schemas']['RunAdmissionDecision'];
+/** The Start check's custody answer when its Alpaca read failed (#2901): the
+ * backend's typed signal that a recheck may recover — never inferred from
+ * message text or a missing freeze. */
+export const CLERK_CUSTODY_BROKER_UNREACHABLE = 'CLERK_CUSTODY_BROKER_UNREACHABLE';
 // Pydantic emits -Input/-Output variants for the plan (its nested evidence
 // model carries a defaulted field); the two are byte-identical, so one alias
 // serves both the plan response and the confirm request body.

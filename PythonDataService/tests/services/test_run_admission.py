@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.models import (
+    CLERK_CUSTODY_BROKER_UNREACHABLE,
     AccountFreezeState,
     ClerkCustodySnapshot,
     CustodyCountFact,
@@ -422,6 +423,31 @@ def test_dry_run_admitted_despite_unreconciled_custody_trade_still_denied() -> N
     assert dry_run.allowed is True
     assert trade.allowed is False
     assert trade.reason_code == "CLERK_CUSTODY_UNPROVABLE"
+
+
+def test_a_failed_broker_read_refuses_in_plain_language_and_offers_a_recheck() -> None:
+    """#2901: a stale pass whose Alpaca read failed is not a custody
+    disagreement. The refusal says what happened in a trader's words, claims
+    only what a refusal proves (nothing started, nothing sent), and its
+    recovery step is a recheck — not an instruction to reconcile SQLite."""
+    clerk = _clerk(reconciliation_state="stale", reconciliation_fresh=False).model_copy(
+        update={
+            "reason_code": CLERK_CUSTODY_BROKER_UNREACHABLE,
+            "next_step": "Check again when the connection to Alpaca recovers.",
+        }
+    )
+
+    start = evaluate_run_admission(_bot(mode="trade"), clerk, evaluated_at_ms=_NOW)
+
+    assert start.allowed is False
+    assert start.reason_code == CLERK_CUSTODY_BROKER_UNREACHABLE
+    assert start.explanation == (
+        "Alpaca could not be reached to check this account's orders, "
+        "so the Clerk cannot prove reconciled custody. Your bot has not started."
+    )
+    # The recovery words are the Clerk snapshot's own (forwarded, with a
+    # fallback), so the policy and the authority cannot drift apart.
+    assert start.next_step == "Check again when the connection to Alpaca recovers."
 
 
 def test_dry_run_admitted_despite_clerk_freeze_trade_still_denied() -> None:

@@ -274,6 +274,8 @@
             [submitError]="confirmError()"
             [canCheckStatus]="canCheckStatus()"
             [checkingStatus]="checkingStatus()"
+            [canRecheckAdmission]="canRecheckAdmission()"
+            [recheckingAdmission]="recheckingAdmission()"
             [confirmationText]="review?.confirmation_text ?? null"
             [(consent)]="liveConsent"
             [canSubmit]="canSubmit()"
@@ -281,6 +283,7 @@
             [guidance]="submitGuidance()"
             (deploy)="submit()"
             (checkStatus)="checkSubmission()"
+            (recheckAdmission)="recheckAdmission()"
           >
             @if (overrideRequired() && selectedStrategy(); as strategy) {
               <app-deploy-evidence-override

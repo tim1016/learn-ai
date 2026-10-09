@@ -490,6 +490,14 @@ class CustodyExposureFact(BaseModel):
         return self
 
 
+# The custody answer when the pass that could not prove custody failed to
+# READ the broker at all (#2901): no observation contradicts the account, so
+# the recovery is a recheck, not an operator reconciliation. The generic
+# unprovable code below cannot say that, and a client must never infer it
+# from message text.
+CLERK_CUSTODY_BROKER_UNREACHABLE = "CLERK_CUSTODY_BROKER_UNREACHABLE"
+
+
 class ClerkCustodySnapshot(BaseModel):
     """Clerk-authored account and instance custody answer for control policy."""
 

@@ -12,7 +12,11 @@ import { FormField, form, readonly as readOnly } from '@angular/forms/signals';
 
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
-import type { DeployReadinessCheck, RunAdmissionDecision } from '../v2-panel/lib/broker-v2-panel.service';
+import {
+  CLERK_CUSTODY_BROKER_UNREACHABLE,
+  type DeployReadinessCheck,
+  type RunAdmissionDecision,
+} from '../v2-panel/lib/broker-v2-panel.service';
 import { DeployReadinessSectionComponent } from './deploy-readiness-section.component';
 import { DeployStartAdmissionComponent } from './deploy-start-admission.component';
 import { DEPLOY_WORLDS, type DeployWorld } from './deploy-world';
@@ -35,6 +39,7 @@ export interface DeployBlocker {
   readonly headline: string;
   readonly fix: string | null;
 }
+
 
 /**
  * Deploy step 4, Confirm (PRD #2560 D8).
@@ -85,6 +90,10 @@ export class DeployConfirmStepComponent {
   /** The last Deploy's outcome is not known: offer to read what it recorded. */
   readonly canCheckStatus = input(false);
   readonly checkingStatus = input(false);
+  /** The Start check refused only because Alpaca could not be read (#2901):
+   * offer to run it again for the exact ticket on screen. */
+  readonly canRecheckAdmission = input(false);
+  readonly recheckingAdmission = input(false);
   /** Live's phrase to type, exactly as the backend authored it. */
   readonly confirmationText = input<string | null>(null);
   readonly consent = model('');
@@ -94,6 +103,7 @@ export class DeployConfirmStepComponent {
 
   readonly deploy = output();
   readonly checkStatus = output();
+  readonly recheckAdmission = output();
 
   protected readonly consentField = form(this.consent, (consent) => {
     readOnly(consent, () => this.submitting());
@@ -112,15 +122,29 @@ export class DeployConfirmStepComponent {
     const decision = this.admissionDecision();
     return decision?.allowed === false ? decision : null;
   });
+  /** The refusal block's title: the outage the backend proved, when it did. */
+  protected readonly refusalTitle = computed(() => {
+    const decision = this.blockedDecision();
+    if (decision !== null && decision.reason_code === CLERK_CUSTODY_BROKER_UNREACHABLE) {
+      return "Couldn't check your Alpaca account";
+    }
+    return this.submitError()?.title ?? 'Start refused';
+  });
   protected readonly blockerCount = computed(() => {
     const count = this.blockers().length;
     return count === 1 ? '1 thing' : `${count} things`;
   });
 
   private readonly refusal = viewChild<ElementRef<HTMLElement>>('refusal');
+  private readonly deployButton = viewChild<ElementRef<HTMLButtonElement>>('deployCommand');
 
   /** Moves the keyboard to the refusal after a Deploy the backend declined. */
   focusRefusal(): void {
     this.refusal()?.nativeElement.focus();
+  }
+
+  /** Moves the keyboard to Deploy when a recheck cleared its refusal (#2901). */
+  focusDeploy(): void {
+    this.deployButton()?.nativeElement.focus();
   }
 }

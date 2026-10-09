@@ -2241,6 +2241,115 @@ describe('AlpacaDeployWorkflowComponent — Start checks and the lane fence', ()
     expect(service.deployBudgetBot).not.toHaveBeenCalled();
   });
 
+  // #2901: a Start refusal the backend typed as a failed Alpaca read is an
+  // outage to recheck, not a custody problem to reconcile.
+  const unreachableRefusal: RunAdmissionDecision = {
+    ...ADMISSION,
+    allowed: false,
+    reason_code: 'CLERK_CUSTODY_BROKER_UNREACHABLE',
+    explanation: 'Alpaca could not be reached to check this account\'s orders, so the Clerk cannot prove reconciled custody. Your bot has not started.',
+    next_step: 'Check again when the Alpaca connection recovers.',
+  };
+
+  it('explains a proven Alpaca-read outage and offers Check again, deploying nothing', async () => {
+    const service = mockService();
+    service.previewStartAdmission.mockResolvedValue(unreachableRefusal);
+    await renderWorkflow(service);
+    await chooseMoney();
+    fireEvent.click(deployButton());
+
+    const refusal = await screen.findByRole('alert', { name: "Couldn't check your Alpaca account" });
+    expect(within(refusal).getByText(unreachableRefusal.explanation)).toBeTruthy();
+    expect(within(refusal).getByText('Next: Check again when the Alpaca connection recovers.')).toBeTruthy();
+    expect(within(refusal).getByRole('button', { name: 'Check again' })).toBeTruthy();
+    expect(deployButton().disabled).toBe(true);
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
+  });
+
+  it('clears the refusal on a Check again that admits, refreshing readiness without deploying', async () => {
+    const service = mockService();
+    service.previewStartAdmission
+      .mockResolvedValueOnce(unreachableRefusal)
+      .mockResolvedValue(ADMISSION);
+    await renderWorkflow(service);
+    await chooseMoney();
+    fireEvent.click(deployButton());
+    const refusal = await screen.findByRole('alert', { name: "Couldn't check your Alpaca account" });
+    const viewsBefore = service.getDeployView.mock.calls.length;
+
+    fireEvent.click(within(refusal).getByRole('button', { name: 'Check again' }));
+
+    await vi.waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(deployButton().disabled).toBe(false);
+    expect(service.getDeployView.mock.calls.length).toBeGreaterThan(viewsBefore);
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
+    expect(service.previewStartAdmission).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears a stale Check-not-answered notice when a later recheck admits', async () => {
+    // The MAJOR sequence: a recheck that went unanswered leaves a notice,
+    // and a later recheck that admits must remove it with the refusal —
+    // not leave an alert contradicting the fresh admitted state.
+    const service = mockService();
+    service.previewStartAdmission
+      .mockResolvedValueOnce(unreachableRefusal)
+      .mockRejectedValueOnce(new HttpErrorResponse({ status: 503, error: { detail: { code: 503 } } }))
+      .mockResolvedValue(ADMISSION);
+    await renderWorkflow(service);
+    await chooseMoney();
+    fireEvent.click(deployButton());
+    const refusal = await screen.findByRole('alert', { name: "Couldn't check your Alpaca account" });
+
+    fireEvent.click(within(refusal).getByRole('button', { name: 'Check again' }));
+    await screen.findByText('Checking the Alpaca account again did not answer.');
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+
+    await vi.waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(screen.queryByText('Checking the Alpaca account again did not answer.')).toBeNull();
+    expect(deployButton().disabled).toBe(false);
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
+  });
+
+  it('keeps the refusal actionable when the outage persists across a recheck', async () => {
+    const service = mockService();
+    service.previewStartAdmission.mockResolvedValue(unreachableRefusal);
+    await renderWorkflow(service);
+    await chooseMoney();
+    fireEvent.click(deployButton());
+    const refusal = await screen.findByRole('alert', { name: "Couldn't check your Alpaca account" });
+
+    fireEvent.click(within(refusal).getByRole('button', { name: 'Check again' }));
+
+    const stillRefused = await screen.findByRole('alert', { name: "Couldn't check your Alpaca account" });
+    expect(within(stillRefused).getByRole('button', { name: 'Check again' })).toBeTruthy();
+    expect(deployButton().disabled).toBe(true);
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
+  });
+
+  it('says the recheck went unanswered without inventing an Alpaca answer', async () => {
+    const service = mockService();
+    service.previewStartAdmission
+      .mockResolvedValueOnce(unreachableRefusal)
+      .mockRejectedValue(new HttpErrorResponse({ status: 503, error: { detail: { code: 503 } } }));
+    await renderWorkflow(service);
+    await chooseMoney();
+    fireEvent.click(deployButton());
+    const refusal = await screen.findByRole('alert', { name: "Couldn't check your Alpaca account" });
+
+    fireEvent.click(within(refusal).getByRole('button', { name: 'Check again' }));
+
+    // The outage stays the headline; the notice says only that the recheck
+    // itself went unanswered — never that Alpaca or the account was found
+    // anything — and the refused decision below it is still the last word.
+    const unanswered = await screen.findByRole('alert', { name: "Couldn't check your Alpaca account" });
+    expect(within(unanswered).getByText('Checking the Alpaca account again did not answer.')).toBeTruthy();
+    expect(within(unanswered).getByText('Next: Try Check again in a moment.')).toBeTruthy();
+    expect(within(unanswered).getByText(unreachableRefusal.explanation)).toBeTruthy();
+    expect(within(unanswered).getByRole('button', { name: 'Check again' })).toBeTruthy();
+    expect(deployButton().disabled).toBe(true);
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
+  });
+
   it('removes an obsolete Start decision when the settings change', async () => {
     const service = mockService();
     service.previewStartAdmission.mockResolvedValue({ ...ADMISSION, allowed: false });
