@@ -7,6 +7,11 @@ Formula:
     FINRA CAT (both sides)    cat = quantity × r_cat(d)   (NMS equity: 1 share = 1 EES)
     Session settlement        each component summed over the ET trade date and
                               rounded UP to the cent; total = sec + taf + cat
+Anchor contract           the trade date is one ET-anchored int64 ms UTC instant
+                              (ADR 0022): the fill's own execution time, or the
+                              ET-midnight anchor of the trade date for a
+                              whole-day operation; the New York date is worked
+                              out inside the lookup, never carried by the caller
 Reference:
     Alpaca Securities LLC, "Broker Fee Schedule", §"Pass-Through Regulatory and
     Exchange Fees — Equities"
@@ -41,6 +46,7 @@ from decimal import ROUND_CEILING, Decimal
 from typing import Literal, NamedTuple
 
 from app.broker.contract.models import OrderSide
+from app.utils.session_anchors import et_midnight_ms
 
 FeeComponent = Literal["sec", "taf", "cat"]
 
@@ -56,32 +62,33 @@ class TafRate(NamedTuple):
     cap_per_trade: Decimal
 
 
-# Each table is ascending by effective date; the latest row on or before the
-# trade date is in force. A trade date before a table's first row has NO pinned
-# rate for that component.
-_SEC_PER_DOLLAR: tuple[tuple[date, Decimal], ...] = (
-    (date(2024, 5, 22), Decimal("0.0000278")),  # $27.80 per $1M — SEC advisory 2024-2
-    (date(2025, 5, 14), Decimal("0")),  # $0.00 per $1M — SEC advisory 2025-2
-    (date(2026, 4, 4), Decimal("0.0000206")),  # $20.60 per $1M — SEC advisory 2026-2
+# Each table is ascending by effective date, keyed by that date's ET-midnight
+# anchor (int64 ms UTC, ADR 0022); the latest row on or before the trade date
+# is in force. A trade date before a table's first row has NO pinned rate for
+# that component.
+_SEC_PER_DOLLAR: tuple[tuple[int, Decimal], ...] = (
+    (et_midnight_ms(date(2024, 5, 22)), Decimal("0.0000278")),  # $27.80 per $1M — SEC advisory 2024-2
+    (et_midnight_ms(date(2025, 5, 14)), Decimal("0")),  # $0.00 per $1M — SEC advisory 2025-2
+    (et_midnight_ms(date(2026, 4, 4)), Decimal("0.0000206")),  # $20.60 per $1M — SEC advisory 2026-2
 )
-_TAF_PER_SHARE_AND_CAP: tuple[tuple[date, TafRate], ...] = (
-    (date(2024, 1, 1), TafRate(Decimal("0.000166"), Decimal("8.30"))),
-    (date(2026, 1, 1), TafRate(Decimal("0.000195"), Decimal("9.79"))),
+_TAF_PER_SHARE_AND_CAP: tuple[tuple[int, TafRate], ...] = (
+    (et_midnight_ms(date(2024, 1, 1)), TafRate(Decimal("0.000166"), Decimal("8.30"))),
+    (et_midnight_ms(date(2026, 1, 1)), TafRate(Decimal("0.000195"), Decimal("9.79"))),
     # SR-FINRA-2026-021 (SEC Release 34-106409, Exhibit 5A): the TAF is
     # paused at zero — per share and per-trade cap — from 2026-10-01 through
     # 2026-12-31. Alpaca's fee schedule revision of 2026-10-01 passes the
     # pause through ("$0 per share"), so this zero is pinned, not unknown.
-    (date(2026, 10, 1), TafRate(Decimal("0"), Decimal("0"))),
+    (et_midnight_ms(date(2026, 10, 1)), TafRate(Decimal("0"), Decimal("0"))),
     # Exhibit 5B: the 2026 rate resumes 2027-01-01 and holds through 2028 —
     # SR-FINRA-2026-020 (91 FR 60427, immediately effective) delayed the
     # later steps by two years, so the step-ups land 2029/2030/2031.
-    (date(2027, 1, 1), TafRate(Decimal("0.000195"), Decimal("9.79"))),
-    (date(2029, 1, 1), TafRate(Decimal("0.000232"), Decimal("11.61"))),
-    (date(2030, 1, 1), TafRate(Decimal("0.000240"), Decimal("12.05"))),
-    (date(2031, 1, 1), TafRate(Decimal("0.000249"), Decimal("12.50"))),
+    (et_midnight_ms(date(2027, 1, 1)), TafRate(Decimal("0.000195"), Decimal("9.79"))),
+    (et_midnight_ms(date(2029, 1, 1)), TafRate(Decimal("0.000232"), Decimal("11.61"))),
+    (et_midnight_ms(date(2030, 1, 1)), TafRate(Decimal("0.000240"), Decimal("12.05"))),
+    (et_midnight_ms(date(2031, 1, 1)), TafRate(Decimal("0.000249"), Decimal("12.50"))),
 )
-_CAT_PER_SHARE: tuple[tuple[date, Decimal], ...] = (
-    (date(2026, 9, 1), Decimal("0.000003")),  # Alpaca fee schedule, retrieved 2026-09-07
+_CAT_PER_SHARE: tuple[tuple[int, Decimal], ...] = (
+    (et_midnight_ms(date(2026, 9, 1)), Decimal("0.000003")),  # Alpaca fee schedule, retrieved 2026-09-07
 )
 
 
@@ -135,11 +142,16 @@ class SessionFees:
         return self.sec + self.taf + self.cat
 
 
-def in_force[R](table: Sequence[tuple[date, R]], trade_date: date) -> R | None:
-    """Value of the latest row effective on or before ``trade_date``, else ``None``."""
+def in_force[R](table: Sequence[tuple[int, R]], trade_date_ms: int) -> R | None:
+    """Value of the latest row effective on or before ``trade_date_ms``, else ``None``.
+
+    Rows are keyed by their effective date's ET-midnight anchor, so any
+    instant of an ET trade date selects exactly that date's row: the anchor
+    of a later date is strictly greater than every instant of this one.
+    """
     latest: R | None = None
-    for effective_from, value in table:
-        if effective_from <= trade_date:
+    for effective_from_ms, value in table:
+        if effective_from_ms <= trade_date_ms:
             latest = value
     return latest
 
@@ -149,30 +161,34 @@ def unpinned_components[C: str](fees: object, components: Sequence[C]) -> tuple[
     return tuple(name for name in components if getattr(fees, name) is None)
 
 
-def rates_for(trade_date: date) -> RegulatoryRates:
-    """Resolve the three pass-through rates in force on ``trade_date``."""
-    taf = in_force(_TAF_PER_SHARE_AND_CAP, trade_date)
+def rates_for(trade_date_ms: int) -> RegulatoryRates:
+    """Resolve the three pass-through rates in force on ``trade_date_ms``'s New York date."""
+    taf = in_force(_TAF_PER_SHARE_AND_CAP, trade_date_ms)
     return RegulatoryRates(
-        sec_per_dollar=in_force(_SEC_PER_DOLLAR, trade_date),
+        sec_per_dollar=in_force(_SEC_PER_DOLLAR, trade_date_ms),
         taf_per_share=None if taf is None else taf.per_share,
         taf_cap_per_trade=None if taf is None else taf.cap_per_trade,
-        cat_per_share=in_force(_CAT_PER_SHARE, trade_date),
+        cat_per_share=in_force(_CAT_PER_SHARE, trade_date_ms),
     )
 
 
 def fees_for_fill(
     *,
-    trade_date: date,
+    trade_date_ms: int,
     side: OrderSide,
     quantity: Decimal,
     fill_price: Decimal,
 ) -> FillFees:
-    """Accrue one fill's fees at full precision; rounding happens at settlement."""
+    """Accrue one fill's fees at full precision; rounding happens at settlement.
+
+    ``trade_date_ms`` is the fill's execution instant (int64 ms UTC): the
+    New York trade date is derived inside the rate lookup.
+    """
     if quantity <= 0 or fill_price <= 0:
         raise ValueError(
             f"fill quantity and price must be positive; got quantity={quantity} fill_price={fill_price}"
         )
-    rates = rates_for(trade_date)
+    rates = rates_for(trade_date_ms)
     cat = None if rates.cat_per_share is None else quantity * rates.cat_per_share
     if side != OrderSide.SELL:
         return FillFees(sec=_ZERO, taf=_ZERO, cat=cat)

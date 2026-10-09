@@ -25,13 +25,14 @@ from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
 from app.options.requirement import EntrySize, LegQuote
 from app.options.structure import ResolvedLeg, ResolvedStructure
 from app.schemas.action_plan import ActionPlan
+from app.utils.session_anchors import et_midnight_ms
 
-_TODAY = date(2026, 10, 5)
+_TODAY = et_midnight_ms(date(2026, 10, 5))
 
 
-def _fees(side: OrderSide, *, contracts: str = "2", premium: str = "2.10", multiplier: int = 100, on: date = _TODAY):
+def _fees(side: OrderSide, *, contracts: str = "2", premium: str = "2.10", multiplier: int = 100, on: int = _TODAY):
     return fees_for_option_fill(
-        trade_date=on, side=side, contracts=Decimal(contracts), premium=Decimal(premium), multiplier=multiplier
+        trade_date_ms=on, side=side, contracts=Decimal(contracts), premium=Decimal(premium), multiplier=multiplier
     )
 
 
@@ -46,7 +47,7 @@ def test_a_sale_owes_the_sec_fee_on_its_whole_premium_not_on_its_price() -> None
     """Selling 2 at $2.10 is $420.00 of premium: 420 × 0.0000206 = $0.008652, not 4.20 × 0.0000206."""
     assert _fees(OrderSide.SELL).sec == Decimal("0.008652")
     # The stock model would charge the same numbers as 2 shares at $2.10.
-    as_shares = fees_for_fill(trade_date=_TODAY, side=OrderSide.SELL, quantity=Decimal(2), fill_price=Decimal("2.10"))
+    as_shares = fees_for_fill(trade_date_ms=_TODAY, side=OrderSide.SELL, quantity=Decimal(2), fill_price=Decimal("2.10"))
     assert as_shares.sec == Decimal("0.00008652")
 
 
@@ -134,41 +135,41 @@ def test_a_premium_with_more_digits_than_the_callers_context_keeps_still_settles
 
 
 def test_the_taf_is_paused_for_the_last_quarter_of_2026_and_resumes() -> None:
-    def taf(on: date) -> Decimal | None:
+    def taf(on: int) -> Decimal | None:
         return option_rates_for(on).taf_per_contract
 
-    assert taf(date(2026, 9, 30)) == Decimal("0.00329")
-    assert taf(date(2026, 10, 1)) == Decimal(0)
-    assert taf(date(2026, 12, 31)) == Decimal(0)
-    assert taf(date(2027, 1, 1)) == Decimal("0.00329")
-    assert taf(date(2028, 12, 31)) == Decimal("0.00329")
-    assert taf(date(2029, 1, 1)) == Decimal("0.00390")
+    assert taf(et_midnight_ms(date(2026, 9, 30))) == Decimal("0.00329")
+    assert taf(et_midnight_ms(date(2026, 10, 1))) == Decimal(0)
+    assert taf(et_midnight_ms(date(2026, 12, 31))) == Decimal(0)
+    assert taf(et_midnight_ms(date(2027, 1, 1))) == Decimal("0.00329")
+    assert taf(et_midnight_ms(date(2028, 12, 31))) == Decimal("0.00329")
+    assert taf(et_midnight_ms(date(2029, 1, 1))) == Decimal("0.00390")
     # SR-FINRA-2026-020 (91 FR 60427), the 2030 column.
-    assert taf(date(2029, 12, 31)) == Decimal("0.00390")
-    assert taf(date(2030, 1, 1)) == Decimal("0.00404")
-    assert taf(date(2030, 12, 31)) == Decimal("0.00404")
-    assert taf(date(2031, 6, 1)) == Decimal("0.00420")
+    assert taf(et_midnight_ms(date(2029, 12, 31))) == Decimal("0.00390")
+    assert taf(et_midnight_ms(date(2030, 1, 1))) == Decimal("0.00404")
+    assert taf(et_midnight_ms(date(2030, 12, 31))) == Decimal("0.00404")
+    assert taf(et_midnight_ms(date(2031, 6, 1))) == Decimal("0.00420")
 
 
 def test_the_orf_follows_alpacas_schedule_revisions() -> None:
-    def orf(on: date) -> Decimal | None:
+    def orf(on: int) -> Decimal | None:
         return option_rates_for(on).orf_per_contract
 
-    assert orf(date(2026, 2, 11)) is None
-    assert orf(date(2026, 2, 12)) == Decimal("0.02375")
-    assert orf(date(2026, 4, 9)) == Decimal("0.02295")
-    assert orf(date(2026, 6, 30)) == Decimal("0.02295")
-    assert orf(date(2026, 7, 1)) == Decimal("0.015")
+    assert orf(et_midnight_ms(date(2026, 2, 11))) is None
+    assert orf(et_midnight_ms(date(2026, 2, 12))) == Decimal("0.02375")
+    assert orf(et_midnight_ms(date(2026, 4, 9))) == Decimal("0.02295")
+    assert orf(et_midnight_ms(date(2026, 6, 30))) == Decimal("0.02295")
+    assert orf(et_midnight_ms(date(2026, 7, 1))) == Decimal("0.015")
 
 
 def test_the_sec_rate_is_the_stock_models_one_table() -> None:
-    for on in (date(2024, 3, 1), date(2025, 6, 2), date(2026, 4, 3), date(2026, 4, 4), _TODAY):
+    for on in (et_midnight_ms(date(2024, 3, 1)), et_midnight_ms(date(2025, 6, 2)), et_midnight_ms(date(2026, 4, 3)), et_midnight_ms(date(2026, 4, 4)), _TODAY):
         assert option_rates_for(on).sec_per_dollar == rates_for(on).sec_per_dollar
 
 
 def test_a_rate_that_is_not_pinned_is_unknown_and_a_day_holding_one_does_not_settle() -> None:
     """2026-01-15: Alpaca's ORF, OCC and CAT figures have no date this early."""
-    fees = _fees(OrderSide.SELL, on=date(2026, 1, 15))
+    fees = _fees(OrderSide.SELL, on=et_midnight_ms(date(2026, 1, 15)))
     assert (fees.orf, fees.occ, fees.cat) == (None, None, None)
     assert fees.unpinned == ("cat", "orf", "occ")
     assert fees.taf == Decimal("0.00658")
@@ -185,13 +186,13 @@ def test_a_sale_before_the_taf_ladder_starts_owes_an_unknown_taf_not_a_free_one(
     Its SEC fee is a pinned zero that day (advisory 2025-2), so only the TAF
     and Alpaca's three undated figures are unknown.
     """
-    last_day_without = _fees(OrderSide.SELL, on=date(2025, 12, 31))
+    last_day_without = _fees(OrderSide.SELL, on=et_midnight_ms(date(2025, 12, 31)))
     assert last_day_without.taf is None
     assert last_day_without.sec == Decimal(0)
     assert last_day_without.unpinned == ("taf", "cat", "orf", "occ")
-    assert _fees(OrderSide.SELL, on=date(2026, 1, 1)).taf == Decimal("0.00658")
+    assert _fees(OrderSide.SELL, on=et_midnight_ms(date(2026, 1, 1))).taf == Decimal("0.00658")
     # A purchase owes no TAF on any date, pinned or not.
-    assert _fees(OrderSide.BUY, on=date(2025, 12, 31)).taf == Decimal(0)
+    assert _fees(OrderSide.BUY, on=et_midnight_ms(date(2025, 12, 31))).taf == Decimal(0)
 
 
 def test_a_sale_before_the_first_pinned_sec_rate_owes_an_unknown_sec_fee_not_a_free_one() -> None:
@@ -199,12 +200,12 @@ def test_a_sale_before_the_first_pinned_sec_rate_owes_an_unknown_sec_fee_not_a_f
 
     On the day: 2 × 2.10 × 100 = $420.00 of premium × 0.0000278 = $0.011676.
     """
-    day_before = _fees(OrderSide.SELL, on=date(2024, 5, 21))
+    day_before = _fees(OrderSide.SELL, on=et_midnight_ms(date(2024, 5, 21)))
     assert day_before.sec is None
     assert "sec" in day_before.unpinned
-    assert _fees(OrderSide.SELL, on=date(2024, 5, 22)).sec == Decimal("0.011676")
+    assert _fees(OrderSide.SELL, on=et_midnight_ms(date(2024, 5, 22))).sec == Decimal("0.011676")
     # A purchase owes no SEC fee on any date, pinned or not.
-    assert _fees(OrderSide.BUY, on=date(2024, 5, 21)).sec == Decimal(0)
+    assert _fees(OrderSide.BUY, on=et_midnight_ms(date(2024, 5, 21))).sec == Decimal(0)
     with pytest.raises(OptionRateNotPinnedError) as refused:
         settle_option_session([day_before])
     assert refused.value.components == ("sec", "taf", "cat", "orf", "occ")
@@ -213,7 +214,7 @@ def test_a_sale_before_the_first_pinned_sec_rate_owes_an_unknown_sec_fee_not_a_f
 def test_an_unpinned_option_rate_is_refused_wherever_an_unpinned_stock_rate_is() -> None:
     """One kind of error: a reader that takes an unpinned stock rate as an unknown takes an option's the same way."""
     with pytest.raises(RateNotPinnedError) as refused:
-        settle_option_session([_fees(OrderSide.BUY, on=date(2026, 1, 15))])
+        settle_option_session([_fees(OrderSide.BUY, on=et_midnight_ms(date(2026, 1, 15)))])
     assert refused.value.components == ("cat", "orf", "occ")
 
 
@@ -244,7 +245,7 @@ def test_an_entrys_provision_is_its_own_fills_settled_alone_in_whole_cents() -> 
 # ---- An entry's provision, from the structure it enters -------------------------------------------------
 
 _FRIDAY = date(2026, 10, 9)
-_TUESDAY = date(2026, 10, 6)
+_TUESDAY = et_midnight_ms(date(2026, 10, 6))
 
 
 def _structure(*legs: tuple[str, str, int, int]) -> ResolvedStructure:
@@ -273,8 +274,8 @@ def test_a_spreads_provision_is_each_leg_filled_at_the_price_it_is_entered_at() 
     """One 585 call bought at its ask and one 590 sold at its bid of 2.18, on 2026-10-06. The SEC fee on the
     $218.00 sold is 0.45 of a cent, which rounds up to 1. CAT on 200 shares is 0.06 of a cent: 1. ORF is
     2 x 1.5 = 3 and OCC 2 x 2.5 = 5. The TAF is paused. Ten cents."""
-    one = entry_fee_provision_cents(_SPREAD, _SPREADS_MARKETS, EntrySize(multiplier=100, units=1), trade_date=_TUESDAY)
-    three = entry_fee_provision_cents(_SPREAD, _SPREADS_MARKETS, EntrySize(multiplier=100, units=3), trade_date=_TUESDAY)
+    one = entry_fee_provision_cents(_SPREAD, _SPREADS_MARKETS, EntrySize(multiplier=100, units=1), trade_date_ms=_TUESDAY)
+    three = entry_fee_provision_cents(_SPREAD, _SPREADS_MARKETS, EntrySize(multiplier=100, units=3), trade_date_ms=_TUESDAY)
 
     assert one == 10
     # Six contracts: SEC on the $654.00 sold is 1.35 cents, 2; CAT on 600 shares 0.18, 1; ORF 9; OCC 15.
@@ -302,8 +303,8 @@ def test_a_leg_of_two_contracts_a_structure_is_charged_as_two_contracts() -> Non
         "upper": LegQuote(bid=Decimal("2.26"), ask=Decimal("2.30")),
     }
 
-    one = entry_fee_provision_cents(butterfly, markets, EntrySize(multiplier=100, units=1), trade_date=_TUESDAY)
-    two = entry_fee_provision_cents(butterfly, markets, EntrySize(multiplier=100, units=2), trade_date=_TUESDAY)
+    one = entry_fee_provision_cents(butterfly, markets, EntrySize(multiplier=100, units=1), trade_date_ms=_TUESDAY)
+    two = entry_fee_provision_cents(butterfly, markets, EntrySize(multiplier=100, units=2), trade_date_ms=_TUESDAY)
 
     assert (one, two) == (19, 37)
 
@@ -317,12 +318,12 @@ def test_the_sold_leg_is_charged_on_its_bid_and_not_on_its_ask() -> None:
         "bought": LegQuote(bid=Decimal("1.89"), ask=Decimal("1.93")),
     }
 
-    assert entry_fee_provision_cents(sold_first, markets, EntrySize(multiplier=100, units=1), trade_date=_TUESDAY) == 10
+    assert entry_fee_provision_cents(sold_first, markets, EntrySize(multiplier=100, units=1), trade_date_ms=_TUESDAY) == 10
 
 
 def test_a_provision_for_a_day_with_no_pinned_rate_is_refused_and_is_never_nothing() -> None:
     with pytest.raises(OptionRateNotPinnedError):
-        entry_fee_provision_cents(_SPREAD, _SPREADS_MARKETS, EntrySize(multiplier=100, units=1), trade_date=date(2019, 1, 2))
+        entry_fee_provision_cents(_SPREAD, _SPREADS_MARKETS, EntrySize(multiplier=100, units=1), trade_date_ms=et_midnight_ms(date(2019, 1, 2)))
 
 
 @pytest.mark.parametrize(("units", "ask"), [(1, "1.94"), (2, "0.07"), (5, "12.40")])
@@ -348,6 +349,6 @@ def test_the_account_clerk_sets_aside_the_same_provision_for_the_one_bought_opti
     assert isinstance(admitted, OptionEntryFacts)
     bought = _structure(("long_call", "long", 585, 1))
     assert admitted.money.fee_provision_cents == entry_fee_provision_cents(
-        bought, {"long_call": LegQuote(bid=bid, ask=Decimal(ask))}, EntrySize(multiplier=100, units=units), trade_date=_TUESDAY
+        bought, {"long_call": LegQuote(bid=bid, ask=Decimal(ask))}, EntrySize(multiplier=100, units=units), trade_date_ms=_TUESDAY
     )
 

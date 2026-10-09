@@ -12,8 +12,9 @@ from decimal import Decimal
 
 from app.broker.contract.models import OrderSide
 from app.services.alpaca_fee_attribution import FeeFill, attribute_simulated_option_fees
+from app.utils.session_anchors import et_midnight_ms
 
-_DAY = date(2026, 9, 8)
+_DAY = et_midnight_ms(date(2026, 9, 8))
 
 
 def _fill(fill_id: str, subject: str, side: OrderSide, contracts: int, premium: str) -> FeeFill:
@@ -25,7 +26,7 @@ def _fill(fill_id: str, subject: str, side: OrderSide, contracts: int, premium: 
 
 def _charged(fills: list[FeeFill], *, session_ended: bool = False) -> dict[tuple[str, str], Decimal]:
     result = attribute_simulated_option_fees(
-        trade_date=_DAY, fills=fills, population_complete=True, session_ended=session_ended, settlement_at_ms=7,
+        trade_date_ms=_DAY, fills=fills, population_complete=True, session_ended=session_ended, settlement_at_ms=7,
     )
     assert result.known, result.unresolved
     return {(share.subject_id, share.charge_id.rsplit(":", 1)[-1]): share.amount for share in result.shares}
@@ -69,10 +70,10 @@ def test_a_day_still_open_is_an_estimate_and_a_day_over_is_settled() -> None:
     fills = [_fill("buy", "bot:a", OrderSide.BUY, 1, "1.94")]
 
     open_day = attribute_simulated_option_fees(
-        trade_date=_DAY, fills=fills, population_complete=True, session_ended=False, settlement_at_ms=7
+        trade_date_ms=_DAY, fills=fills, population_complete=True, session_ended=False, settlement_at_ms=7
     )
     closed_day = attribute_simulated_option_fees(
-        trade_date=_DAY, fills=fills, population_complete=True, session_ended=True, settlement_at_ms=7
+        trade_date_ms=_DAY, fills=fills, population_complete=True, session_ended=True, settlement_at_ms=7
     )
 
     assert {share.state for share in open_day.shares} == {"estimated"}
@@ -82,7 +83,7 @@ def test_a_day_still_open_is_an_estimate_and_a_day_over_is_settled() -> None:
 
 def test_a_day_before_any_option_rate_is_pinned_is_unresolved_never_free() -> None:
     result = attribute_simulated_option_fees(
-        trade_date=date(2025, 6, 2), fills=[_fill("buy", "bot:a", OrderSide.BUY, 1, "1.94")],
+        trade_date_ms=et_midnight_ms(date(2025, 6, 2)), fills=[_fill("buy", "bot:a", OrderSide.BUY, 1, "1.94")],
         population_complete=True, session_ended=True, settlement_at_ms=7,
     )
 
@@ -91,7 +92,7 @@ def test_a_day_before_any_option_rate_is_pinned_is_unresolved_never_free() -> No
 
 def test_a_day_whose_fills_are_not_all_known_charges_no_bot_and_says_so() -> None:
     result = attribute_simulated_option_fees(
-        trade_date=_DAY, fills=[_fill("buy", "bot:a", OrderSide.BUY, 1, "1.94")],
+        trade_date_ms=_DAY, fills=[_fill("buy", "bot:a", OrderSide.BUY, 1, "1.94")],
         population_complete=False, session_ended=True, settlement_at_ms=7,
     )
 
@@ -105,7 +106,7 @@ def test_an_option_fill_with_no_multiplier_is_refused_and_never_priced_as_shares
     )
 
     result = attribute_simulated_option_fees(
-        trade_date=_DAY, fills=[_fill("buy", "bot:a", OrderSide.BUY, 1, "1.94"), no_multiplier],
+        trade_date_ms=_DAY, fills=[_fill("buy", "bot:a", OrderSide.BUY, 1, "1.94"), no_multiplier],
         population_complete=True, session_ended=True, settlement_at_ms=7,
     )
 
@@ -115,7 +116,7 @@ def test_an_option_fill_with_no_multiplier_is_refused_and_never_priced_as_shares
 
 def test_no_option_fills_is_no_charge() -> None:
     result = attribute_simulated_option_fees(
-        trade_date=_DAY, fills=[], population_complete=True, session_ended=True, settlement_at_ms=7
+        trade_date_ms=_DAY, fills=[], population_complete=True, session_ended=True, settlement_at_ms=7
     )
 
     assert result.known and result.shares == () and result.predicted_total == 0

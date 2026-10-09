@@ -21,6 +21,7 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_acknowledge
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerActivity, BrokerOrder, BrokerOrderLeg, OrderSide
 from app.services.alpaca_fee_attribution import FeeFill
+from app.utils.session_anchors import et_midnight_ms
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _accept_day_pnl_enter
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import _deploy, _gate, _new_budget_repo
 from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
@@ -505,7 +506,9 @@ def test_a_reservation_claims_its_recorded_fee_provision_after_a_fee_model_chang
         assert repo.account_budget(cash=1000, seen_before_ms=NOON).deployments[0].pending_orders == pending
 
         # A later model: CAT a full cent a share. The recorded provision stands.
-        monkeypatch.setattr(regulatory_fees, "_CAT_PER_SHARE", ((date(2026, 9, 1), Decimal("0.01")),))
+        monkeypatch.setattr(
+            regulatory_fees, "_CAT_PER_SHARE", ((et_midnight_ms(date(2026, 9, 1)), Decimal("0.01")),)
+        )
 
         assert repo.account_budget(cash=1000, seen_before_ms=NOON).deployments[0].pending_orders == pending
     finally:

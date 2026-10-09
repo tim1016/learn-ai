@@ -15,55 +15,67 @@ from app.broker.alpaca.regulatory_fees import (
     settle_session,
 )
 from app.broker.contract.models import OrderSide
+from app.utils.session_anchors import et_midnight_ms
 
 D = Decimal
-TRADE_DATE_2026 = date(2026, 9, 8)
+TRADE_DATE_2026 = et_midnight_ms(date(2026, 9, 8))
 
 
 @pytest.mark.parametrize(
-    ("trade_date", "sec_per_dollar"),
+    ("trade_date_ms", "sec_per_dollar"),
     [
-        (date(2024, 5, 21), None),  # before the first pinned SEC row
-        (date(2024, 5, 22), D("0.0000278")),  # SEC advisory 2024-2
-        (date(2025, 5, 13), D("0.0000278")),
-        (date(2025, 5, 14), D("0")),  # SEC advisory 2025-2: $0.00 per million
-        (date(2026, 4, 3), D("0")),
-        (date(2026, 4, 4), D("0.0000206")),  # SEC advisory 2026-2
+        (et_midnight_ms(date(2024, 5, 21)), None),  # before the first pinned SEC row
+        (et_midnight_ms(date(2024, 5, 22)), D("0.0000278")),  # SEC advisory 2024-2
+        (et_midnight_ms(date(2025, 5, 13)), D("0.0000278")),
+        (et_midnight_ms(date(2025, 5, 14)), D("0")),  # SEC advisory 2025-2: $0.00 per million
+        (et_midnight_ms(date(2026, 4, 3)), D("0")),
+        (et_midnight_ms(date(2026, 4, 4)), D("0.0000206")),  # SEC advisory 2026-2
     ],
 )
-def test_rates_for_sec_regime_boundaries(trade_date: date, sec_per_dollar: Decimal | None) -> None:
-    assert rates_for(trade_date).sec_per_dollar == sec_per_dollar
+def test_rates_for_sec_regime_boundaries(trade_date_ms: int, sec_per_dollar: Decimal | None) -> None:
+    assert rates_for(trade_date_ms).sec_per_dollar == sec_per_dollar
 
 
 @pytest.mark.parametrize(
-    ("trade_date", "per_share", "cap"),
+    ("trade_date_ms", "per_share", "cap"),
     [
-        (date(2023, 12, 31), None, None),  # before the first pinned TAF row
-        (date(2024, 1, 1), D("0.000166"), D("8.30")),
-        (date(2025, 12, 31), D("0.000166"), D("8.30")),
-        (date(2026, 1, 1), D("0.000195"), D("9.79")),
-        (date(2026, 9, 30), D("0.000195"), D("9.79")),  # last day before the pause
+        (et_midnight_ms(date(2023, 12, 31)), None, None),  # before the first pinned TAF row
+        (et_midnight_ms(date(2024, 1, 1)), D("0.000166"), D("8.30")),
+        (et_midnight_ms(date(2025, 12, 31)), D("0.000166"), D("8.30")),
+        (et_midnight_ms(date(2026, 1, 1)), D("0.000195"), D("9.79")),
+        (et_midnight_ms(date(2026, 9, 30)), D("0.000195"), D("9.79")),  # last day before the pause
         # SR-FINRA-2026-021: paused at zero, per share and cap, through 2026-12-31
-        (date(2026, 10, 1), D("0"), D("0")),
-        (date(2026, 12, 31), D("0"), D("0")),
+        (et_midnight_ms(date(2026, 10, 1)), D("0"), D("0")),
+        (et_midnight_ms(date(2026, 12, 31)), D("0"), D("0")),
         # Exhibit 5B: the 2026 rate resumes 2027-01-01, holds through 2028
-        (date(2027, 1, 1), D("0.000195"), D("9.79")),
-        (date(2028, 12, 31), D("0.000195"), D("9.79")),
+        (et_midnight_ms(date(2027, 1, 1)), D("0.000195"), D("9.79")),
+        (et_midnight_ms(date(2028, 12, 31)), D("0.000195"), D("9.79")),
         # SR-FINRA-2026-020: the step-ups delayed two years, 2029/2030/2031
-        (date(2029, 1, 1), D("0.000232"), D("11.61")),
-        (date(2030, 1, 1), D("0.000240"), D("12.05")),
-        (date(2031, 1, 1), D("0.000249"), D("12.50")),
+        (et_midnight_ms(date(2029, 1, 1)), D("0.000232"), D("11.61")),
+        (et_midnight_ms(date(2030, 1, 1)), D("0.000240"), D("12.05")),
+        (et_midnight_ms(date(2031, 1, 1)), D("0.000249"), D("12.50")),
     ],
 )
-def test_rates_for_taf_annual_schedule(trade_date: date, per_share: Decimal | None, cap: Decimal | None) -> None:
-    rates = rates_for(trade_date)
+def test_rates_for_taf_annual_schedule(trade_date_ms: int, per_share: Decimal | None, cap: Decimal | None) -> None:
+    rates = rates_for(trade_date_ms)
     assert rates.taf_per_share == per_share
     assert rates.taf_cap_per_trade == cap
 
 
+def test_any_instant_of_an_et_trade_date_selects_that_dates_row() -> None:
+    """#2958: the tables key on ET-midnight anchors, so an anchor-keyed row is
+    in force from the day's first millisecond (a 00:00 ET fill) through its
+    last — the property premarket execution and the last-millisecond
+    settlement seams rest on."""
+    pause = et_midnight_ms(date(2026, 10, 1))
+
+    assert rates_for(pause).taf_per_share == D("0")  # the pause's first ms
+    assert rates_for(pause - 1).taf_per_share == D("0.000195")  # the day before, its last ms
+
+
 def test_sell_during_taf_pause_accrues_a_pinned_zero() -> None:
     """#2951: from 2026-10-01 the TAF is paused at a pinned zero, not the 2026 rate."""
-    fees = fees_for_fill(trade_date=date(2026, 10, 1), side=OrderSide.SELL, quantity=D("100"), fill_price=D("250.00"))
+    fees = fees_for_fill(trade_date_ms=et_midnight_ms(date(2026, 10, 1)), side=OrderSide.SELL, quantity=D("100"), fill_price=D("250.00"))
 
     assert fees.taf == D("0")
     assert fees.unpinned == ()
@@ -71,22 +83,22 @@ def test_sell_during_taf_pause_accrues_a_pinned_zero() -> None:
 
 
 @pytest.mark.parametrize(
-    ("trade_date", "cat_per_share"),
-    [(date(2026, 8, 31), None), (date(2026, 9, 1), D("0.000003"))],
+    ("trade_date_ms", "cat_per_share"),
+    [(et_midnight_ms(date(2026, 8, 31)), None), (et_midnight_ms(date(2026, 9, 1)), D("0.000003"))],
 )
-def test_rates_for_cat_pinned_from_publication(trade_date: date, cat_per_share: Decimal | None) -> None:
-    assert rates_for(trade_date).cat_per_share == cat_per_share
+def test_rates_for_cat_pinned_from_publication(trade_date_ms: int, cat_per_share: Decimal | None) -> None:
+    assert rates_for(trade_date_ms).cat_per_share == cat_per_share
 
 
 def test_sell_accrues_all_three_components_unrounded() -> None:
-    fees = fees_for_fill(trade_date=TRADE_DATE_2026, side=OrderSide.SELL, quantity=D("100"), fill_price=D("250.00"))
+    fees = fees_for_fill(trade_date_ms=TRADE_DATE_2026, side=OrderSide.SELL, quantity=D("100"), fill_price=D("250.00"))
 
     assert fees == FillFees(sec=D("0.515"), taf=D("0.0195"), cat=D("0.0003"))
     assert fees.unpinned == ()
 
 
 def test_buy_owes_only_cat() -> None:
-    fees = fees_for_fill(trade_date=TRADE_DATE_2026, side=OrderSide.BUY, quantity=D("100"), fill_price=D("250.00"))
+    fees = fees_for_fill(trade_date_ms=TRADE_DATE_2026, side=OrderSide.BUY, quantity=D("100"), fill_price=D("250.00"))
 
     assert fees == FillFees(sec=D("0"), taf=D("0"), cat=D("0.0003"))
 
@@ -100,19 +112,19 @@ def test_buy_owes_only_cat() -> None:
     ],
 )
 def test_taf_cap_binds_above_boundary(quantity: Decimal, expected_taf: Decimal) -> None:
-    fees = fees_for_fill(trade_date=TRADE_DATE_2026, side=OrderSide.SELL, quantity=quantity, fill_price=D("1.00"))
+    fees = fees_for_fill(trade_date_ms=TRADE_DATE_2026, side=OrderSide.SELL, quantity=quantity, fill_price=D("1.00"))
 
     assert fees.taf == expected_taf
 
 
 def test_fractional_share_accrues_proportionally() -> None:
-    fees = fees_for_fill(trade_date=TRADE_DATE_2026, side=OrderSide.BUY, quantity=D("0.5"), fill_price=D("400.00"))
+    fees = fees_for_fill(trade_date_ms=TRADE_DATE_2026, side=OrderSide.BUY, quantity=D("0.5"), fill_price=D("400.00"))
 
     assert fees.cat == D("0.0000015")
 
 
 def test_unpinned_component_is_none_not_zero() -> None:
-    fees = fees_for_fill(trade_date=date(2025, 6, 2), side=OrderSide.SELL, quantity=D("100"), fill_price=D("250.00"))
+    fees = fees_for_fill(trade_date_ms=et_midnight_ms(date(2025, 6, 2)), side=OrderSide.SELL, quantity=D("100"), fill_price=D("250.00"))
 
     assert fees.sec == D("0")  # the $0.00 regime is a pinned zero
     assert fees.taf == D("0.0166")
@@ -121,13 +133,13 @@ def test_unpinned_component_is_none_not_zero() -> None:
 
 
 def test_buy_before_sec_pin_still_owes_zero_sec_and_taf() -> None:
-    fees = fees_for_fill(trade_date=date(2024, 3, 1), side=OrderSide.BUY, quantity=D("10"), fill_price=D("100.00"))
+    fees = fees_for_fill(trade_date_ms=et_midnight_ms(date(2024, 3, 1)), side=OrderSide.BUY, quantity=D("10"), fill_price=D("100.00"))
 
     assert (fees.sec, fees.taf, fees.cat) == (D("0"), D("0"), None)
 
 
 def test_sell_before_sec_pin_has_unpinned_sec() -> None:
-    fees = fees_for_fill(trade_date=date(2024, 3, 1), side=OrderSide.SELL, quantity=D("10"), fill_price=D("100.00"))
+    fees = fees_for_fill(trade_date_ms=et_midnight_ms(date(2024, 3, 1)), side=OrderSide.SELL, quantity=D("10"), fill_price=D("100.00"))
 
     assert fees.sec is None
     assert fees.taf == D("0.00166")
@@ -137,23 +149,23 @@ def test_sell_before_sec_pin_has_unpinned_sec() -> None:
 @pytest.mark.parametrize("quantity", [D("0"), D("-1")])
 def test_non_positive_quantity_is_refused(quantity: Decimal) -> None:
     with pytest.raises(ValueError, match="positive"):
-        fees_for_fill(trade_date=TRADE_DATE_2026, side=OrderSide.SELL, quantity=quantity, fill_price=D("1"))
+        fees_for_fill(trade_date_ms=TRADE_DATE_2026, side=OrderSide.SELL, quantity=quantity, fill_price=D("1"))
 
 
 @pytest.mark.parametrize("fill_price", [D("0"), D("-1")])
 def test_non_positive_fill_price_is_refused(fill_price: Decimal) -> None:
     with pytest.raises(ValueError, match="positive"):
-        fees_for_fill(trade_date=TRADE_DATE_2026, side=OrderSide.SELL, quantity=D("1"), fill_price=fill_price)
+        fees_for_fill(trade_date_ms=TRADE_DATE_2026, side=OrderSide.SELL, quantity=D("1"), fill_price=fill_price)
 
 
 def test_settle_session_rounds_each_component_up_to_the_cent() -> None:
     fills = [
-        fees_for_fill(trade_date=TRADE_DATE_2026, side=OrderSide.SELL, quantity=D("100"), fill_price=D("250.00")),
-        fees_for_fill(trade_date=TRADE_DATE_2026, side=OrderSide.BUY, quantity=D("100"), fill_price=D("250.00")),
-        fees_for_fill(trade_date=TRADE_DATE_2026, side=OrderSide.SELL, quantity=D("60000"), fill_price=D("10.00")),
-        fees_for_fill(trade_date=TRADE_DATE_2026, side=OrderSide.SELL, quantity=D("50205"), fill_price=D("1.00")),
-        fees_for_fill(trade_date=TRADE_DATE_2026, side=OrderSide.SELL, quantity=D("50206"), fill_price=D("1.00")),
-        fees_for_fill(trade_date=TRADE_DATE_2026, side=OrderSide.BUY, quantity=D("0.5"), fill_price=D("400.00")),
+        fees_for_fill(trade_date_ms=TRADE_DATE_2026, side=OrderSide.SELL, quantity=D("100"), fill_price=D("250.00")),
+        fees_for_fill(trade_date_ms=TRADE_DATE_2026, side=OrderSide.BUY, quantity=D("100"), fill_price=D("250.00")),
+        fees_for_fill(trade_date_ms=TRADE_DATE_2026, side=OrderSide.SELL, quantity=D("60000"), fill_price=D("10.00")),
+        fees_for_fill(trade_date_ms=TRADE_DATE_2026, side=OrderSide.SELL, quantity=D("50205"), fill_price=D("1.00")),
+        fees_for_fill(trade_date_ms=TRADE_DATE_2026, side=OrderSide.SELL, quantity=D("50206"), fill_price=D("1.00")),
+        fees_for_fill(trade_date_ms=TRADE_DATE_2026, side=OrderSide.BUY, quantity=D("0.5"), fill_price=D("400.00")),
     ]
 
     settled = settle_session(fills)
@@ -178,7 +190,7 @@ def test_settle_session_of_nothing_is_zero() -> None:
 
 
 def test_settle_session_refuses_an_unpinned_component() -> None:
-    fills = [fees_for_fill(trade_date=date(2025, 6, 2), side=OrderSide.SELL, quantity=D("1"), fill_price=D("1"))]
+    fills = [fees_for_fill(trade_date_ms=et_midnight_ms(date(2025, 6, 2)), side=OrderSide.SELL, quantity=D("1"), fill_price=D("1"))]
 
     with pytest.raises(RateNotPinnedError) as excinfo:
         settle_session(fills)
@@ -188,7 +200,7 @@ def test_settle_session_refuses_an_unpinned_component() -> None:
 
 def test_unpinned_components_are_reported_in_canonical_order() -> None:
     """sec, taf, cat — the schedule's order, not the alphabet's."""
-    fills = [fees_for_fill(trade_date=date(2024, 3, 1), side=OrderSide.SELL, quantity=D("1"), fill_price=D("1"))]
+    fills = [fees_for_fill(trade_date_ms=et_midnight_ms(date(2024, 3, 1)), side=OrderSide.SELL, quantity=D("1"), fill_price=D("1"))]
 
     with pytest.raises(RateNotPinnedError) as excinfo:
         settle_session(fills)

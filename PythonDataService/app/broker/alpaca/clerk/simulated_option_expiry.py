@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from datetime import date
 from decimal import Decimal
 from typing import NamedTuple, Protocol
 
@@ -80,7 +79,7 @@ def _settlement_price(bar: RetainedSourceBar, *, close_ms: int) -> SettlementPri
     )
 
 
-def _sale_fee_cents(trade_date: date, *, contracts: int, price: Decimal, multiplier: int, side: OrderSide = OrderSide.SELL) -> int | None:
+def _sale_fee_cents(trade_date_ms: int, *, contracts: int, price: Decimal, multiplier: int, side: OrderSide = OrderSide.SELL) -> int | None:
     """What the option fee model charges one simulated sale taken as a day of its own, or None when it cannot say.
 
     For the settlement's own record. The account's fees are worked out
@@ -98,7 +97,7 @@ def _sale_fee_cents(trade_date: date, *, contracts: int, price: Decimal, multipl
     try:
         return option_fee_provision_cents([
             fees_for_option_fill(
-                trade_date=trade_date, side=side, contracts=Decimal(contracts), premium=price,
+                trade_date_ms=trade_date_ms, side=side, contracts=Decimal(contracts), premium=price,
                 multiplier=multiplier,
             )
         ])
@@ -340,7 +339,7 @@ class SimulatedOptionExpiry:
             rule=SIMULATED_SETTLEMENT_RULE, price=price, exercise_value=worth.worked_out, booked_price=worth.booked,
             cash_cents=worth.cash_cents if held > 0 else -worth.cash_cents,
             fee_cents=_sale_fee_cents(
-                et_date_at_ms(close_ms - 1), contracts=contracts, price=worth.booked, multiplier=multiplier,
+                close_ms - 1, contracts=contracts, price=worth.booked, multiplier=multiplier,
                 side=OrderSide.SELL if held > 0 else OrderSide.BUY
             ) if sold else None,
         )

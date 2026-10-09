@@ -19,7 +19,7 @@ v2 re-pins the TAF rows on 2026-10-08 from FINRA SR-FINRA-2026-021 (SEC Release 
 
 ## Timestamps
 
-`trade_date_ms` is the ET session-open anchor of the trade date (`session_open_ms_utc`), `int64 ms UTC`; the model derives the ET date with `et_date_at_ms`.
+`trade_date_ms` is the ET session-open anchor of the trade date (`session_open_ms_utc`), `int64 ms UTC`; the model resolves the New York trade date inside its rate lookup (#2958).
 
 ## Tolerance
 

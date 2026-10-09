@@ -342,7 +342,7 @@ def work_out_option_entry(
             structure,
             markets,
             EntrySize(multiplier=STANDARD_CONTRACT_MULTIPLIER, units=units),
-            trade_date=et_date_at_ms(now_ms),
+            trade_date_ms=now_ms,
         )
     except StructureRefused as exc:
         return OptionEntryRefused(exc.reason.value, str(exc))
