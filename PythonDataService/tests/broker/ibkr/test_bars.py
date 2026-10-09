@@ -563,6 +563,27 @@ async def test_raw_stream_invalidates_a_bounded_stalled_subscription(
 
 
 @pytest.mark.asyncio
+async def test_queued_print_survives_a_consumer_paused_past_the_stall_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow order send can pause this reader while IBKR keeps appending bars."""
+    client = _FakeClient()
+    client.ib.bars = [_bar(0, "100", "101", "99", "100.5", 10)]
+    monkeypatch.setattr(bars_mod, "_stall_timer_armed", lambda _use_rth, _last_source_ms: True)
+    stream = stream_raw_5s_bars(client, "SPY", stall_timeout_s=0.01)
+
+    first = await stream.__anext__()
+    assert first.close == Decimal("100.5")
+    client.ib.bars.append(_bar(5, "100.5", "102", "100", "101.5", 20))
+    await asyncio.sleep(0.05)
+
+    next_bar = await stream.__anext__()
+    assert next_bar.close == Decimal("101.5")
+    assert client.ib.realtime_bar_cancel_count == 0
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
 async def test_minute_stream_one_print_then_silence_invalidates_without_a_closed_bar(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
