@@ -452,7 +452,7 @@ async def select_synthetic_clerk_runtime(
         # whether a runner is alive or not (ADR 0076). Reading them writes nothing.
         option_books = get_held_option_quotes().follow(
             account_id,
-            books=repository.option_contracts_to_watch,
+            books=repository.option_contracts_requiring_quotes,
             kept=KeptOptionQuotes.of_account(artifacts_root=artifacts_root, account_id=account_id),
         )
         intake = ReentrantAsyncLock()

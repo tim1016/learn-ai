@@ -661,7 +661,7 @@ def _simulated_fill_anchors(facade: SqliteAlpacaClerkFacade, sid: str) -> Mappin
     fills themselves are the Clerk's and still show; each then says its
     pricing is not on record, and the page does not fail.
     """
-    if not facade.binds_decision_bar:
+    if not facade.simulates_fills:
         return None
     try:
         return facade.synthesized_fill_anchors()
@@ -679,7 +679,7 @@ def _simulated_fill_anchors(facade: SqliteAlpacaClerkFacade, sid: str) -> Mappin
 
 
 def _simulated_option_fills(facade: SqliteAlpacaClerkFacade, sid: str) -> Mapping[str, SynthesizedOptionFill]:
-    if not facade.binds_decision_bar:
+    if not facade.simulates_fills:
         return {}
     try:
         return facade.synthesized_option_fills()

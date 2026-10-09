@@ -98,7 +98,7 @@ async def test_a_live_shadows_books_are_followed_for_the_option_contracts_its_bo
     assert runtime.option_books is not None
     assert followed.books is not None and followed.kept.path.parent.name == SHADOW_ACCT
     # Its own runs name none: a line asked for by the keeping is not asked for twice.
-    assert runtime.clerk.option_contracts_to_watch() == ()
+    assert runtime.clerk.option_contracts_for_run_quotes() == ()
 
     await runtime.close()
 

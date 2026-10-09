@@ -180,7 +180,7 @@ async def run(tmp_path: Path) -> AsyncIterator[Any]:
         synthesized: bool = False,
     ) -> _Ran:
         # A Live Shadow's Clerk fills its own orders, and says so.
-        clerk.binds_decision_bar = synthesized
+        clerk.simulates_fills = synthesized
         feed = _ScriptedFeed(script)
         started = time.monotonic()
         await bot_trade_strategy.run_trade_bot(

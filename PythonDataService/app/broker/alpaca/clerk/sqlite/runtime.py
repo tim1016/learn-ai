@@ -705,7 +705,7 @@ class SqliteAlpacaClerkFacade:
 
         Read-model seam for the bot page. A Paper or Live authority's fills
         come from Alpaca, so it has none: an empty answer says "nothing on
-        record" only where ``binds_decision_bar`` is true.
+        record" only where ``simulates_fills`` is true.
         """
         return self._trade.synthesized_fill_anchors()
 
@@ -802,11 +802,11 @@ class SqliteAlpacaClerkFacade:
         return policy_with_exit_terms(self.program_leg_policy, self._exit_terms.get(sid))
 
     @property
-    def binds_decision_bar(self) -> bool:
-        """Whether every effect on this authority must carry its decision bar.
+    def simulates_fills(self) -> bool:
+        """Whether this authority fills its own orders from retained bars.
 
-        True for the two synthesized-custody worlds (``sim:`` and ``shadow:``),
-        whose fills are priced from retained evidence rather than a vendor.
+        True for the two synthesized-custody worlds (``sim:`` and ``shadow:``).
+        Every effect there must carry its decision bar to price the fill.
         """
         return self.authority_kind in _BAR_BOUND_AUTHORITIES
 
@@ -1330,7 +1330,7 @@ class SqliteAlpacaClerkFacade:
             how_simulated=self._trade.synthesized_option_fills(),
         )
 
-    def option_contracts_to_watch(self) -> tuple[str, ...]:
+    def option_contracts_for_run_quotes(self) -> tuple[str, ...]:
         """The option contracts a bot's run on this account must ask to have quoted, by OCC symbol (ADR 0076).
 
         One a bot holds, or one an order is working in: the books' own
@@ -1343,7 +1343,7 @@ class SqliteAlpacaClerkFacade:
         """
         if self.authority_kind in _OPTION_PLAN_SIMULATIONS:
             return ()
-        return self._repo.option_contracts_to_watch()
+        return self._repo.option_contracts_requiring_quotes()
 
     def option_entry_of_decision(self, strategy_instance_id: str, decision_id: str) -> EntryOnTheBooks | None:
         """Where the option entry one decision made stands on the books now, or ``None`` when it made none (ADR 0076).
@@ -2511,7 +2511,7 @@ class SqliteAlpacaClerkFacade:
                     explanation=dropped,
                     next_step=_ENTRY_NOT_RETRIED,
                 )
-            if self.binds_decision_bar and retained_source_bar is None:
+            if self.simulates_fills and retained_source_bar is None:
                 return rejected(
                     reason_code="SIMULATED_SOURCE_BAR_UNPROVEN",
                     explanation=(
@@ -2523,7 +2523,7 @@ class SqliteAlpacaClerkFacade:
             priced_by = _order_pricing_bar(
                 entry.instrument.underlying,
                 purpose=purpose,
-                synthesized=self.binds_decision_bar,
+                synthesized=self.simulates_fills,
                 exit_sells=entry.position == "long",
                 decision_bar=retained_source_bar,
                 pricing_bar=pricing_bar,
@@ -2769,7 +2769,7 @@ class SqliteAlpacaClerkFacade:
                     )
 
         trade: BrokerTradePort
-        if self.binds_decision_bar:
+        if self.simulates_fills:
             assert priced_by is not None and retained_source_bar is not None
             # The decision's close tells the port an older bar from the
             # decision minute's own (``SynthesizedOrderLedger.bind_evaluated_bar``).

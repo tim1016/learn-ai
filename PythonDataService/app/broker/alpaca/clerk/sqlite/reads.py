@@ -350,7 +350,7 @@ def market_data_symbols(conn: sqlite3.Connection) -> tuple[str, ...]:
     return tuple(row["symbol"] for row in rows)
 
 
-def option_contracts_to_watch(conn: sqlite3.Connection) -> tuple[str, ...]:
+def option_contracts_requiring_quotes(conn: sqlite3.Connection) -> tuple[str, ...]:
     """The option contracts this account must have quoted, by OCC symbol (ADR 0076).
 
     A contract a bot holds, and a contract an order is working in at the
