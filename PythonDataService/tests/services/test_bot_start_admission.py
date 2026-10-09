@@ -452,6 +452,10 @@ async def test_one_print_stall_blocks_admission_then_replaces_subscription(
     first_bar = await asyncio.wait_for(anext(stream), timeout=1)
     assert fixture.subscription_count == 1
     assert feed.health("SPY").stale is False
+    # Keep reading so the queued print at the next minute's open is observed
+    # before the silence interval begins.
+    pending_recovered_bar = asyncio.create_task(anext(stream))
+    await asyncio.sleep(0)
     last_source_observed_ms = fixture.clock.now_ms()
 
     fixture.clock.advance_ms(30_000)
@@ -475,7 +479,7 @@ async def test_one_print_stall_blocks_admission_then_replaces_subscription(
 
     fixture.clock.advance_ms(30_001)
     assert fixture.clock.now_ms() - last_source_observed_ms == 60_001
-    recovered_bar = await asyncio.wait_for(anext(stream), timeout=1)
+    recovered_bar = await asyncio.wait_for(pending_recovered_bar, timeout=1)
 
     assert recovered_bar.start_ms > first_bar.start_ms
     assert fixture.subscription_count == 2
