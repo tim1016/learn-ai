@@ -82,6 +82,10 @@ def complete_fee_evidence(repo: ClerkSqliteRepository, activities: tuple[BrokerA
 
 def remove_budget_schema_for_legacy_fixture(conn: sqlite3.Connection) -> None:
     """Restore the pre-budget shape before exercising an earlier migration."""
+    conn.execute("DROP TRIGGER trg_orders_effect_state_insert")
+    conn.execute("DROP TRIGGER trg_orders_effect_state_update")
+    conn.execute("DROP INDEX ix_orders_entry_broker_state")
+    conn.execute("ALTER TABLE orders DROP COLUMN effect_state")
     assert not conn.execute("SELECT 1 FROM deployment_budgets LIMIT 1").fetchone()
     conn.execute("DROP TABLE deployment_budgets")
     conn.execute("DROP TABLE account_risk_policy")
