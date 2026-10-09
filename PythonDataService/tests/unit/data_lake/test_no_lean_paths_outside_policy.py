@@ -31,6 +31,7 @@ FORBIDDEN_SUBSTRINGS = (
 # - app/data_lake/path_policy.py: the canonical path-policy module (only permitted author)
 # - app/lean_sidecar/: pre-data-lake staging code
 # - app/engine/data/lean_format.py: the LEAN reader; constructs the paths it reads
+# - app/engine/data/dividends.py: the LEAN factor-file reader; constructs the paths it reads (#2903)
 # - app/engine/data/polygon_bars.py: Polygon->TradeBar helpers; docstring references the layout
 # - app/engine/data/availability.py: availability checker; docstrings reference paths
 # - app/engine/tests/: engine-internal tests referencing the above
@@ -39,6 +40,7 @@ ALLOWLISTED = (
     "app/data_lake/path_policy.py",
     "app/lean_sidecar/",
     "app/engine/data/lean_format.py",
+    "app/engine/data/dividends.py",
     "app/engine/data/polygon_bars.py",
     "app/engine/data/availability.py",
     "app/engine/tests/",

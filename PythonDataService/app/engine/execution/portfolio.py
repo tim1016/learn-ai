@@ -20,6 +20,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from decimal import Decimal
 
+from app.engine.data.dividends import CashDividend
 from app.engine.execution.order import (
     Direction,
     Order,
@@ -199,6 +200,20 @@ class Portfolio:
         self.cash -= Decimal(fill_qty) * fill_price
         self.cash -= event.fee
         self.total_fees += event.fee
+
+    def apply_dividend(self, dividend: CashDividend) -> None:
+        """Credit one cash distribution on the current position (#2903).
+
+        LEAN, on raw prices, pays ``distribution × quantity`` when a position
+        is held over an ex-date; the engine settles that schedule and hands
+        each event here. Long positions are what the fixtures pin; the signed
+        product is the faithful mirror for a short, whose holder owes the
+        distribution.
+        """
+        pos = self.positions.get(dividend.symbol.upper())
+        if pos is None or pos.quantity == 0:
+            return
+        self.cash += dividend.per_share * Decimal(pos.quantity)
 
     def clear_pending(self) -> None:
         self.pending_orders.clear()

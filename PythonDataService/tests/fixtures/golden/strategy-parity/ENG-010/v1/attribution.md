@@ -32,8 +32,11 @@
   run held 154 shares over the 2026-03-20 ex-date: $1.80 a share, $277.20.
   QQQ collected none. `final_equity` is fills plus dividends; the generator
   refuses to write unless it equals LEAN's reported end equity
-  (`lean_reported_end_equity`) to the cent. The Python engine pays no
-  dividends (#2903), so the parity test credits the recorded amount.
+  (`lean_reported_end_equity`) to the cent. The engine's LEAN-compatibility
+  profile pays the same schedule itself (#2903): the parity test reads the
+  capture's factor file with the canonical dividend reader, requires it to
+  carry every recorded dividend, and then must match every fill, fee and the
+  final equity with no test-side credit.
 - Regenerated: 2026-10-05, after the owner replaced the entry rule the same
   day it was first built: the template now enters on a bar that clears the
   gates while the cross is at most `cross_max_age_bars` 15-minute bars old by

@@ -33,7 +33,7 @@ def _lean_get_scaling_factors(rows: list[FactorRow], search_date: date) -> tuple
 
 def _rows(*specs: tuple[str, str, str]) -> list[FactorRow]:
     return [
-        FactorRow(date.fromisoformat(d), Decimal(pf), Decimal(sf))
+        FactorRow(date.fromisoformat(d), Decimal(pf), Decimal(sf), Decimal("100"))
         for d, pf, sf in specs
     ]
 

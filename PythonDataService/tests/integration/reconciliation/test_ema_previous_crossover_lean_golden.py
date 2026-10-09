@@ -10,17 +10,14 @@ The input is the committed cross-engine cell's own minute bars. The fixture
 records their hash because the generator refused to write unless LEAN
 reported receiving exactly those bars.
 
-Accepted divergence -- dividends (owner, 2026-10-05). In raw mode LEAN pays a
-cash dividend on a position held over an ex-date; the Python engine pays none
-(#2903). The
-SPY cell holds 154 shares over the 2026-03-20 ex-date, so LEAN's cash is
-$277.20 higher from then on and some later orders are one share larger: a
-QUANTITY_MISMATCH with a known cause. Nothing is loosened for it. The test
-credits each dividend the fixture records to the engine's cash on the
-ex-date's first minute bar and then requires every fill, fee and the final
-equity to match exactly. The credit is necessary (without it the SPY cell diverges at
-its 87th fill) and sufficient, so the dividend is the whole of the
-difference. The QQQ cell collects no dividend and is credited nothing.
+Dividends (#2903): in raw mode LEAN pays a cash dividend on a position held
+over an ex-date, and the engine's LEAN-compatibility profile pays the same.
+The run below derives its schedule from the capture's factor file — the same
+input LEAN read — and requires it to carry every dividend the fixture
+recorded LEAN paying. Every fill, fee and the final equity then match
+exactly; that was necessary and sufficient when the credit was applied
+test-side, so the dividend schedule is the whole of the engine's cash
+difference. The QQQ cell collects no dividend on either side.
 """
 
 from __future__ import annotations
@@ -32,13 +29,12 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.data.trade_bar import TradeBar
+from app.engine.data.dividends import dividends_from_factor_tree
 from app.engine.engine import BacktestEngine, pin_strategy_window
 from app.engine.execution.commission import IbkrEquityCommissionModel
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import Direction
 from app.engine.execution.sizing import LeanSetHoldingsSizing
-from app.engine.strategy.base import Strategy
 from app.engine.strategy.programs.ema_previous_crossover import (
     EmaPreviousCrossoverParams,
     build_ema_previous_crossover_program,
@@ -50,6 +46,7 @@ from scripts.generate_signal_program_trace_corpus import _minute_bars
 
 _SERVICE_ROOT = Path(__file__).resolve().parents[3]
 _FIXTURE_DIR = _SERVICE_ROOT / "tests/fixtures/golden/strategy-parity/ENG-010/v1"
+_CAPTURE_ROOT = _SERVICE_ROOT / "tests/fixtures/golden/cross-engine-studies/_lean_data_capture"
 _INPUT = json.loads((_FIXTURE_DIR / "input.json").read_text(encoding="utf-8"))
 _OUTPUT = json.loads((_FIXTURE_DIR / "output.json").read_text(encoding="utf-8"))
 _CELL_IDS = sorted(_INPUT["cells"])
@@ -79,12 +76,20 @@ def test_ema_previous_crossover_matches_lean_fills_and_equity(cell_id: str) -> N
         EmaPreviousCrossoverParams(symbol=cell.ticker, **_OUTPUT["parameters"])
     ).strategy
     pin_strategy_window(strategy, cell.start_date, cell.end_date, cash=Decimal(_INPUT["starting_cash"]))
-    _credit_lean_dividends(strategy, oracle["dividends"])
+    dividends = dividends_from_factor_tree(_CAPTURE_ROOT / cell.ticker, cell.ticker, cell.start_date, cell.end_date)
+    # The fixture records only the dividends LEAN *paid* — it drops a row the
+    # run held no shares through, as the QQQ cell does for its in-window row.
+    # The engine's schedule carries every row and settles a flat position as
+    # a no-op, so the receipt is containment: each dividend LEAN paid must be
+    # in the schedule the engine reads, unchanged.
+    derived = {(d.held_through_ms, str(d.per_share)) for d in dividends}
+    assert {(dividend["held_through_ms"], dividend["per_share"]) for dividend in oracle["dividends"]} <= derived
     fee_model = IbkrEquityCommissionModel()
     result = BacktestEngine(
         data_source=InMemoryDataReader(_minute_bars(observations.parent.parent, cell.ticker)),  # type: ignore[arg-type]
         sizing_model=LeanSetHoldingsSizing(fee_model=fee_model),
         fill_model=FillModel(fee_model=fee_model, fill_stale_signal_at_current_open=True),
+        dividends=dividends,
     ).run(strategy)
 
     oracle_fills = oracle["filled_order_events"]
@@ -98,18 +103,6 @@ def test_ema_previous_crossover_matches_lean_fills_and_equity(cell_id: str) -> N
         assert abs(actual.fill_price - Decimal(expected["fill_price"])) <= PRICE_ATOL
     assert abs(result.final_equity - Decimal(oracle["final_equity"])) <= PNL_ATOL
     assert abs(result.final_equity - Decimal(oracle["lean_reported_end_equity"])) <= LEAN_END_EQUITY_ATOL
-
-
-def _credit_lean_dividends(strategy: Strategy, dividends: list[dict]) -> None:
-    """Pay the engine the cash LEAN paid: each dividend on the first minute bar after the close it was held through."""
-    unpaid = sorted(dividends, key=lambda dividend: dividend["held_through_ms"])
-
-    def on_minute_bar(bar: TradeBar) -> None:
-        assert strategy.ctx is not None
-        while unpaid and unpaid[0]["held_through_ms"] < bar.end_ms:
-            strategy.ctx.portfolio.cash += Decimal(unpaid.pop(0)["cash"])
-
-    strategy.on_minute_bar = on_minute_bar  # type: ignore[method-assign]
 
 
 def _direction(direction: Direction) -> str:

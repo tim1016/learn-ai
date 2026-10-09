@@ -31,6 +31,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.data_lake.path_policy import lake_root_for
 from app.engine.data.availability import check_availability
+from app.engine.data.dividends import CashDividend, dividends_from_factor_tree
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.engine.data.policy_store import resolve_data_roots
 from app.engine.data.trade_bar import TradeBar
@@ -366,6 +367,7 @@ def _build_backtest_engine(
     reader: LeanMinuteDataReader | LeanDailyDataReader,
     execution_config: ExecutionConfig,
     request: EngineBacktestRequest,
+    dividends: Sequence[CashDividend] = (),
 ) -> BacktestEngine:
     """Apply the selected execution contract at one construction boundary."""
     if request.compatibility_profile is None:
@@ -384,6 +386,7 @@ def _build_backtest_engine(
             fee_model=fee_model,
             fill_stale_signal_at_current_open=True,
         ),
+        dividends=dividends,
     )
 
 
@@ -424,7 +427,33 @@ def _reader_and_engine(
         commission_per_order=Decimal(str(request.commission_per_order)),
         slippage_per_share=Decimal(str(request.slippage_per_share)),
     )
-    return reader, _build_backtest_engine(reader=reader, execution_config=execution_config, request=request)
+    return reader, _build_backtest_engine(
+        reader=reader,
+        execution_config=execution_config,
+        request=request,
+        dividends=_profile_dividends(request, data_roots),
+    )
+
+
+def _profile_dividends(request: EngineBacktestRequest, data_roots: list[Path]) -> list[CashDividend]:
+    """The cash dividends the LEAN-compatibility profile pays (#2903).
+
+    The v1 profile runs raw prices, where LEAN credits a distribution for a
+    position held over an ex-date; the schedule comes from the run's own
+    data roots — the factor-file tree LEAN reads. Requests without the
+    profile, or without a pinned symbol and window, pay none, mirroring
+    ``_pin_compatibility_fixture``'s handling of the same gaps.
+    """
+    if request.compatibility_profile != COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1:
+        return []
+    if request.data_policy is None or request.from_date is None or request.to_date is None:
+        return []
+    return dividends_from_factor_tree(
+        data_roots,
+        request.data_policy.symbol,
+        _parse_iso_date(request.warmup_from_date or request.from_date, "data_start"),
+        _parse_iso_date(request.to_date, "to_date"),
+    )
 
 
 def _override_after_initialize(strategy: Strategy, request: EngineBacktestRequest) -> None:

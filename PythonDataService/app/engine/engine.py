@@ -10,11 +10,12 @@ EmaCrossoverSignalAlgorithm.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 
+from app.engine.data.dividends import CashDividend
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.execution_config import ExecutionConfig
@@ -131,6 +132,7 @@ class BacktestEngine:
         fill_model: FillModel | None = None,
         execution_config: ExecutionConfig | None = None,
         sizing_model: SizingModel | None = None,
+        dividends: Sequence[CashDividend] | None = None,
     ) -> None:
         self.data_source = data_source
         self.execution_config = execution_config or ExecutionConfig()
@@ -142,6 +144,11 @@ class BacktestEngine:
         # plain-floor policy; LEAN-pinned callers (cross_runner) pass
         # LeanSetHoldingsSizing to reproduce LEAN's buffered share count.
         self.sizing_model = sizing_model or SimpleFloorSizing()
+        # Cash dividends the run pays on positions held over their ex-date —
+        # what LEAN pays on raw prices, read from the same factor file LEAN
+        # reads (#2903). ``None`` — every default caller — pays none; only
+        # the LEAN-compatibility profile passes a schedule.
+        self.dividends: list[CashDividend] = list(dividends) if dividends else []
 
     @classmethod
     def for_decision_identity(cls, data_source: LeanMinuteDataReader | LeanDailyDataReader) -> BacktestEngine:
@@ -272,6 +279,15 @@ class BacktestEngine:
             raise NotImplementedError("Phase 1 engine supports a single symbol only")
         symbol = ctx.symbols[0]
 
+        # Cash dividends settle exactly once each, in session-close order.
+        # A dividend settled inside the warmup phase stays settled: the
+        # evaluation boundary rebases the book to its starting cash, so a
+        # warmup position's dividend is discarded with the position.
+        unsettled_dividends = sorted(
+            (d for d in self.dividends if d.symbol.upper() == symbol.upper()),
+            key=lambda d: d.held_through_ms,
+        )
+
         # Keep a "previous minute bar" so that a NEXT_BAR_OPEN fill can use
         # the bar immediately after the signal bar.
         pending_fills: list[tuple[Order, TradeBar]] = []  # (order, signal_bar)
@@ -310,6 +326,13 @@ class BacktestEngine:
                     else:
                         _record_fill(order, event)
                 pending_fills = still_pending
+
+            # ----- Settle cash dividends whose cum-dividend session has
+            #       closed: credited after this bar's deferred fills and
+            #       before the per-minute hook, so a decision on the
+            #       ex-date's first bar already sees the cash (#2903).
+            while unsettled_dividends and unsettled_dividends[0].held_through_ms < minute_bar.end_ms:
+                portfolio.apply_dividend(unsettled_dividends.pop(0))
 
             # ----- Per-minute hook — fires before consolidator dispatch so the
             #       strategy sees every minute bar including the session-close bar
