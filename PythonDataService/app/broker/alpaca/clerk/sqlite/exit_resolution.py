@@ -649,8 +649,9 @@ async def cancel_each_entry_as_a_pass_step(
 
     ``reason`` is why the cancel is asked for, recorded on the order's first
     ``ORDER_CANCEL_REQUESTED``. ``about`` names the entries as an operator
-    reads them, and ``action`` prefixes the three actions logged, so each
-    step's records stay greppable as its own.
+    reads them, and ``action`` prefixes the three actions logged
+    (``{action}_cancel_deferred``, ``{action}_cancel_unconfirmed``,
+    ``{action}_cancelled``), so each step's records stay greppable as its own.
     """
     run = off_loop if off_loop is not None else run_inline
     for entry in entries:
@@ -666,7 +667,7 @@ async def cancel_each_entry_as_a_pass_step(
             logger.info(
                 f"deferred the cancel of {about}: its operation is claimed",
                 extra={
-                    "action": f"{action}_deferred",
+                    "action": f"{action}_cancel_deferred",
                     "account_id": repo.account_id,
                     "order_ref": entry.order_ref,
                 },
@@ -676,7 +677,7 @@ async def cancel_each_entry_as_a_pass_step(
             logger.warning(
                 f"{about} is still working after its cancel; the next pass re-drives it",
                 extra={
-                    "action": f"{action}_unconfirmed",
+                    "action": f"{action}_cancel_unconfirmed",
                     "account_id": repo.account_id,
                     "order_ref": entry.order_ref,
                     "broker_state": resolved.broker_state,
