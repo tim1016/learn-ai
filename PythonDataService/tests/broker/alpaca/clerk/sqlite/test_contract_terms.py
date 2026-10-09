@@ -196,20 +196,23 @@ def test_a_v22_store_gains_two_empty_tables_and_keeps_every_row(tmp_path: Path) 
     _authority_built_up_to(conn, 22)
     _seed_one_active_run_position_and_working_order(conn)
     assert _contract_tables(conn) == set()
-    tables = ("strategy_instances", "runs", "commands", "effect_operations", "orders", "positions", "custody_transitions")
+    tables = ("strategy_instances", "runs", "commands", "effect_operations", "positions", "custody_transitions")
     before = {table: conn.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall() for table in tables}
+    order_columns = ", ".join(row[1] for row in conn.execute("PRAGMA table_info(orders)"))
+    orders_before = conn.execute(f"SELECT {order_columns} FROM orders ORDER BY order_ref").fetchall()
 
     schema.migrate_schema(conn, from_version=22)
 
-    # The chain runs on to the build's own version: schema 24 adds the legs of an order of several legs.
-    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 24
+    # The chain runs on to the build's own version, through the v24 legs table and v25 entry index.
+    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 25
     assert _contract_tables(conn) == {"option_contracts", "order_contracts"}
     assert {table: conn.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall() for table in tables} == before
+    assert conn.execute(f"SELECT {order_columns} FROM orders ORDER BY order_ref").fetchall() == orders_before
     assert conn.execute("SELECT COUNT(*) FROM option_contracts").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM order_contracts").fetchone()[0] == 0
     assert order_contract_terms(conn, "order-1") is None
     conn.close()
-    assert database_verification.verify_database(db_path, expected_account_id="PA1").schema_version == 24
+    assert database_verification.verify_database(db_path, expected_account_id="PA1").schema_version == 25
 
 
 def _contract_tables(conn: sqlite3.Connection) -> set[str]:

@@ -37,7 +37,7 @@ from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
 from app.broker.alpaca.clerk.sqlite.option_order_legs import SCHEMA_V24_DDL, SCHEMA_V24_STATEMENTS
 from app.broker.alpaca.clerk.sqlite.simulated_execution_schema import SCHEMA_V14_STATEMENTS
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -710,6 +710,21 @@ SCHEMA_V18_STATEMENTS: tuple[str, ...] = (
     "AND json_extract(facts_json, '$.exit_terms') IS NOT NULL) ORDER BY sequence",
 )
 SCHEMA_V18_DDL = "\n".join(f"{statement};" for statement in SCHEMA_V18_STATEMENTS)
+# The effect state is mirrored on each order by triggers so the keeper can seek
+# unanswered, nonterminal entries without scanning terminal NULL history (#2970).
+SCHEMA_V25_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE orders ADD COLUMN effect_state TEXT",
+    "UPDATE orders SET effect_state = (SELECT state FROM effect_operations e "
+    "WHERE e.effect_operation_id = orders.effect_operation_id)",
+    "CREATE TRIGGER trg_orders_effect_state_insert AFTER INSERT ON orders BEGIN "
+    "UPDATE orders SET effect_state = (SELECT state FROM effect_operations e "
+    "WHERE e.effect_operation_id = NEW.effect_operation_id) WHERE order_ref = NEW.order_ref; END",
+    "CREATE TRIGGER trg_orders_effect_state_update AFTER UPDATE OF state ON effect_operations BEGIN "
+    "UPDATE orders SET effect_state = NEW.state WHERE effect_operation_id = NEW.effect_operation_id; END",
+    "CREATE INDEX IF NOT EXISTS ix_orders_entry_broker_state "
+    "ON orders(role, lower(broker_state), effect_state, order_ref)",
+)
+SCHEMA_V25_DDL = "\n".join(f"{statement};" for statement in SCHEMA_V25_STATEMENTS)
 SCHEMA_DDL = (
     SCHEMA_V9_DDL
     + "\n\n"
@@ -741,6 +756,8 @@ SCHEMA_DDL = (
     + SCHEMA_V23_DDL
     + "\n"
     + SCHEMA_V24_DDL
+    + "\n"
+    + SCHEMA_V25_DDL
 ).rstrip("\n")
 
 
@@ -787,6 +804,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     # v23 -> v24: the one empty table that keeps the legs of an option order of
     # several legs (#2913); same statements as the fresh block.
     23: SCHEMA_V24_STATEMENTS,
+    24: SCHEMA_V25_STATEMENTS,
 }
 
 

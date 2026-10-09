@@ -56,12 +56,21 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
     _walk_clock_to,
     documented_option_order_payload,
 )
+from tests.broker.alpaca.clerk.sqlite.option_custody_fixtures import (
+    AAPL_CALL,
+    accept_option_closing_order,
+    accept_option_order,
+    fill,
+    open_option_books,
+)
 from tests.broker.alpaca.clerk.sqlite.resting_entry_harness import (
     SYMBOL,
     WAIT_MS,
     PaperOptions,
     paper,  # noqa: F401 -- pytest fixture, used by name
 )
+from tests.broker.alpaca.clerk.sqlite.test_option_contracts_to_watch import _the_broker_says
+from tests.broker.alpaca.clerk.sqlite.test_option_custody import _accept_stock_order
 from tests.broker.alpaca.clerk.sqlite.test_resting_entry_facts import _PINNED_OPTION
 
 ONE_CONTRACT_SET_ASIDE = 19_406
@@ -804,6 +813,17 @@ def test_the_worklist_is_read_from_the_bound_orders_and_never_scans_the_custody_
     assert plan[0].startswith("SCAN bound")
     assert [step for step in plan[1:] if step.startswith("SCAN")] == []
     assert any(step.startswith("SEARCH accepted USING INDEX") for step in plan)
+    working = _plan(
+        paper.repo, reads._WORKING_OPTION_ENTRY_CANDIDATE_SQL,
+        tuple(sorted(reads.CANCELLABLE_ENTRY_BROKER_STATES)),
+    )
+    unanswered = _plan(
+        paper.repo, reads._UNANSWERED_OPTION_ENTRY_CANDIDATE_SQL,
+        tuple(sorted(reads.NONTERMINAL_EFFECT_STATES)),
+    )
+    assert any("ix_orders_entry_broker_state (role=? AND <expr>=?)" in step for step in working)
+    assert any("ix_orders_entry_broker_state (role=? AND <expr>=? AND effect_state=?)" in step
+               for step in unanswered)
 
 
 class _StepsCounted:
@@ -893,3 +913,69 @@ async def test_one_round_of_the_keeper_reads_the_worklist_once(paper: PaperOptio
 
     # Two entries due and cancelled; what was due and when to wake both came from one read.
     assert len(done.entries.ended) == 2 and reads_made == 1
+
+
+def test_an_empty_option_worklist_has_bounded_cost_after_past_round_trips(tmp_path: Path) -> None:
+    repo = open_option_books(tmp_path)
+    costs: dict[int, int] = {}
+    try:
+        for past_trips in range(65):
+            if past_trips in (0, 4, 12, 64):
+                with _StepsCounted(repo) as counted:
+                    assert resting_entries(repo) == []
+                costs[past_trips] = counted.steps
+            if past_trips == 64:
+                break
+            entry = accept_option_order(
+                repo, terms=AAPL_CALL, side="buy", contracts=1, decision_id=f"entry-{past_trips}",
+            )
+            fill(repo, entry, execution_id=f"entry-fill-{past_trips}", symbol=AAPL_CALL.symbol,
+                 side="BUY", quantity=1, price=1.94)
+            _the_broker_says(repo, entry, symbol=AAPL_CALL.symbol, status="filled", contracts=1)
+            closing = accept_option_closing_order(
+                repo, terms=AAPL_CALL, opened=entry, decision_id=f"exit-{past_trips}",
+            )
+            fill(repo, closing, execution_id=f"exit-fill-{past_trips}", symbol=AAPL_CALL.symbol,
+                 side="SELL", quantity=1, price=1.90)
+            _the_broker_says(repo, closing, symbol=AAPL_CALL.symbol, status="filled", contracts=1)
+    finally:
+        repo.close()
+
+    assert max(costs.values()) < 200, costs
+
+
+def test_terminal_unanswered_entries_and_stock_history_do_not_reopen_the_option_worklist(tmp_path: Path) -> None:
+    repo = open_option_books(tmp_path, bots={"bot-a": "AAPL", **{f"bot-s-{n}": "SPY" for n in range(64)}})
+    costs: dict[int | str, int] = {}
+    try:
+        for past_entries in range(65):
+            if past_entries in (0, 4, 12, 64):
+                with _StepsCounted(repo) as counted:
+                    assert resting_entries(repo) == []
+                costs[past_entries] = counted.steps
+            if past_entries == 64:
+                break
+            never_sent = accept_option_order(
+                repo, terms=AAPL_CALL, side="buy", contracts=1, decision_id=f"never-sent-{past_entries}",
+            )
+            with repo.write_fence() as conn:
+                conn.execute(
+                    "UPDATE effect_operations SET state = 'failed' WHERE effect_operation_id = ?",
+                    (never_sent.effect_operation_id,),
+                )
+                conn.commit()
+
+        for number in range(64):
+            stock = _accept_stock_order(
+                repo, symbol="SPY", side="buy", shares=1, decision_id=f"stock-{number}", bot=f"bot-s-{number}",
+            )
+            fill(repo, stock, execution_id=f"stock-fill-{number}", symbol="SPY",
+                 side="BUY", quantity=1, price=100)
+            _the_broker_says(repo, stock, symbol="SPY", status="filled", contracts=1)
+        with _StepsCounted(repo) as counted:
+            assert resting_entries(repo) == []
+        costs["mixed"] = counted.steps
+    finally:
+        repo.close()
+
+    assert max(costs.values()) < 200, costs

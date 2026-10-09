@@ -80,8 +80,17 @@ def complete_fee_evidence(repo: ClerkSqliteRepository, activities: tuple[BrokerA
     record_fee_evidence(repo, activities, checked_at_ms=repo.clock(), history_complete=True)
 
 
+def remove_v25_order_state_for_legacy_fixture(conn: sqlite3.Connection) -> None:
+    """Restore orders before the effect-state mirror was added."""
+    conn.execute("DROP TRIGGER trg_orders_effect_state_insert")
+    conn.execute("DROP TRIGGER trg_orders_effect_state_update")
+    conn.execute("DROP INDEX ix_orders_entry_broker_state")
+    conn.execute("ALTER TABLE orders DROP COLUMN effect_state")
+
+
 def remove_budget_schema_for_legacy_fixture(conn: sqlite3.Connection) -> None:
     """Restore the pre-budget shape before exercising an earlier migration."""
+    remove_v25_order_state_for_legacy_fixture(conn)
     assert not conn.execute("SELECT 1 FROM deployment_budgets LIMIT 1").fetchone()
     conn.execute("DROP TABLE deployment_budgets")
     conn.execute("DROP TABLE account_risk_policy")

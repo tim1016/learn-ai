@@ -32,7 +32,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
 from app.broker.alpaca.regulatory_fees import RateNotPinnedError
 from app.broker.contract.models import BrokerOrderLeg
 from app.schemas.exit_terms import ExitTerms
-from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
+from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock, remove_v25_order_state_for_legacy_fixture
 
 TERMS = ExitTerms(band_multiple=2.0, spread_cap_bps=100.0, exit_allowance_bps=5.0, provenance="deployed")
 
@@ -261,6 +261,7 @@ def test_a_v21_database_takes_its_recorded_releases_onto_its_budget_rows(tmp_pat
     conn = sqlite3.connect(database)
     try:
         # The v21 shape: the Stop's facts carry the amounts, the row has no columns for them.
+        remove_v25_order_state_for_legacy_fixture(conn)
         conn.execute("ALTER TABLE deployment_budgets DROP COLUMN held_cents")
         conn.execute("ALTER TABLE deployment_budgets DROP COLUMN released_cents")
         conn.execute("UPDATE control_meta SET schema_version = 21 WHERE id = 1")

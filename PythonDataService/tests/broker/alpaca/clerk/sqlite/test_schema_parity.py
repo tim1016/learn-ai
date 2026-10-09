@@ -106,8 +106,8 @@ def _assert_migration_from_version_reaches_current_intact(tmp_path: Path, from_v
         "SELECT subject_id, symbol, attributed_qty FROM positions WHERE subject_id = 'bot:spy'"
     ).fetchone() == ("bot:spy", "SPY", 10.0)
     assert conn.execute(
-        "SELECT order_ref, broker_state FROM orders WHERE order_ref = 'order-1'"
-    ).fetchone() == ("order-1", "working")
+        "SELECT order_ref, broker_state, effect_state FROM orders WHERE order_ref = 'order-1'"
+    ).fetchone() == ("order-1", "working", "accepted")
     conn.close()
 
     # Hash-chain/mirror parity: verify_database is the same read-only check
@@ -144,6 +144,27 @@ def test_v20_migration_preserves_evidence_and_defaults_authorization_version(tmp
 
 def test_v21_migration_preserves_evidence_and_defaults_authorization_version(tmp_path: Path) -> None:
     _assert_migration_from_version_reaches_current_intact(tmp_path, 21)
+
+
+def test_v24_migration_indexes_entry_outcomes_without_changing_orders(tmp_path: Path) -> None:
+    db_path = tmp_path / "clerk-24.db"
+    conn = sqlite3.connect(db_path)
+    schema.configure_connection(conn)
+    _authority_built_up_to(conn, 24)
+    _seed_one_active_run_position_and_working_order(conn)
+
+    schema.migrate_schema(conn, from_version=24)
+
+    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 25
+    assert conn.execute(
+        "SELECT order_ref, broker_state FROM orders WHERE order_ref = 'order-1'"
+    ).fetchone() == ("order-1", "working")
+    assert conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'ix_orders_entry_broker_state'"
+    ).fetchone() == (1,)
+    conn.execute("UPDATE effect_operations SET state = 'failed' WHERE effect_operation_id = 'eff-1'")
+    assert conn.execute("SELECT effect_state FROM orders WHERE order_ref = 'order-1'").fetchone() == ("failed",)
+    conn.close()
 
 
 def test_v9_subject_ownership_invariants_reject_counterfeit_and_cross_wired_rows() -> None:
