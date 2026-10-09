@@ -285,6 +285,9 @@ def test_compatibility_fixture_stages_the_receipted_factor_file(tmp_path, monkey
         data_policy=data_policy,
     )
     monkeypatch.setattr(policy_store, "resolve_data_roots", lambda **_: [store])
+    # The pinned sandbox image exists only where Podman does; staging the
+    # metadata databases is not what this test pins.
+    monkeypatch.setattr(service, "stage_lean_metadata_from_image", lambda *_a, **_k: None)
 
     store_roots, bars_by_date, factor_payload = service._read_compatibility_fixture(request)
 
