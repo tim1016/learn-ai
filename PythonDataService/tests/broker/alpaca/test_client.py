@@ -19,6 +19,7 @@ import anyio
 import pytest
 import responses
 from alpaca.common.enums import Sort
+from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import AssetStatus, QueryOrderStatus
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.sessions import Session
@@ -227,6 +228,25 @@ async def test_submit_order_posts_to_orders_endpoint_and_returns_raw() -> None:
 
     assert fake.post_call == ("/orders", body)
     assert payload == {"id": "broker-order-1", "status": "accepted"}
+
+
+@pytest.mark.parametrize("body", ["", "null"])
+@responses.activate
+async def test_empty_successful_reference_and_submit_answers_stay_unknown(body: str) -> None:
+    sdk = TradingClient(api_key="test-key", secret_key="test-secret", paper=True, raw_data=True)
+    client = AlpacaTradingClient(client_factory=lambda: sdk)
+    base = "https://paper-api.alpaca.markets/v2"
+    responses.add(responses.GET, f"{base}/assets/SPY", body=body, status=200)
+    responses.add(responses.GET, f"{base}/options/contracts/SPY261016C00600000", body=body, status=200)
+    responses.add(responses.POST, f"{base}/orders", body=body, status=200)
+
+    with pytest.raises(BrokerUnavailable):
+        await client.get_asset("SPY")
+    with pytest.raises(BrokerUnavailable):
+        await client.get_option_contract("SPY261016C00600000")
+    with pytest.raises(BrokerUnavailable):
+        await client.submit_order(_ORDER_BODY)
+    assert client._submission_may_become_visible(_ORDER_BODY["client_order_id"])
 
 
 async def test_cancel_order_deletes_by_id_and_returns_none() -> None:

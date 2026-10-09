@@ -261,6 +261,13 @@ class AlpacaTradingClient:
             ),
         )
 
+    def _reference_answer_unreadable(self, kind: str) -> NoReturn:
+        raise BrokerUnavailable(
+            f"Alpaca's {kind} lookup answer could not be read.",
+            broker=self.broker_id,
+            detail="Alpaca answered 2xx with an empty or null body; listing status is unknown.",
+        )
+
     def _build_default_client(self) -> Any:
         # Injected settings are the whole binding; otherwise the one this
         # worker resolved (ADR 0060). Deferred to first use, so the client can
@@ -437,11 +444,14 @@ class AlpacaTradingClient:
 
         def _get(client: Any) -> dict[str, Any] | None:
             try:
-                return client.get_asset(symbol)
+                result = client.get_asset(symbol)
             except APIError as exc:
                 if status_of(exc) == 404:
                     return None
                 raise
+            if result is None:
+                self._reference_answer_unreadable("asset")
+            return result
 
         return await self._call(_get, describe="asset lookup")
 
@@ -456,11 +466,14 @@ class AlpacaTradingClient:
 
         def _get(client: Any) -> dict[str, Any] | None:
             try:
-                return client.get_option_contract(symbol)
+                result = client.get_option_contract(symbol)
             except APIError as exc:
                 if status_of(exc) == 404:
                     return None
                 raise
+            if result is None:
+                self._reference_answer_unreadable("option contract")
+            return result
 
         return await self._call(_get, describe="option contract lookup")
 
@@ -589,7 +602,7 @@ class AlpacaTradingClient:
         client_order_id = str(order.get("client_order_id") or "")
         try:
             result = await self._call_write(
-                lambda client: client.post("/orders", order),
+                lambda client: self._submit_order_with_body(client, order),
                 describe="order submission",
                 throttle_context="order",
                 identifier=client_order_id,
@@ -602,6 +615,16 @@ class AlpacaTradingClient:
             self._mark_submission_uncertain(client_order_id)
             raise
         self._clear_uncertain_submission(client_order_id)
+        return result
+
+    def _submit_order_with_body(self, client: Any, order: dict[str, Any]) -> dict[str, Any]:
+        result = client.post("/orders", order)
+        if result is None:
+            raise BrokerUnavailable(
+                "Alpaca's order submission answer could not be read.",
+                broker=self.broker_id,
+                detail="Alpaca answered 2xx with an empty or null body; the order may have landed.",
+            )
         return result
 
     async def cancel_order(self, order_id: str) -> None:
