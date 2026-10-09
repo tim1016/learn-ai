@@ -25,7 +25,9 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.sessions import Session
 from urllib3.exceptions import ProtocolError
 
+from app.broker.alpaca.clerk.sqlite.repository import DEFAULT_CLAIM_TTL_MS
 from app.broker.alpaca.client import (
+    _DEFAULT_TIMEOUT_S,
     _MAX_RATE_LIMIT_RETRIES,
     _RATE_LIMIT_RETRY_CAP_S,
     AlpacaTradingClient,
@@ -338,11 +340,13 @@ async def test_timed_out_submit_stays_uncertain_until_order_becomes_visible(
     make_api_error: ApiErrorFactory,
 ) -> None:
     fake = _FakeAlpaca()
+    started = Event()
     release = Event()
     visible = Event()
     lookup_calls: list[str] = []
 
     def delayed_post(path: str, data: Any = None) -> dict[str, Any]:
+        started.set()
         release.wait()
         return {
             "id": "broker-order-delayed",
@@ -362,11 +366,8 @@ async def test_timed_out_submit_stays_uncertain_until_order_becomes_visible(
 
     fake.post = delayed_post  # type: ignore[method-assign]
     fake.get_order_by_client_id = lookup_after_visibility  # type: ignore[method-assign]
-    # One client serves both halves of this test, so the budget has to satisfy
-    # both. The timeout assertion is insensitive to it — `delayed_post` parks on
-    # `release.wait()` until the `finally` — but the success assertion at the end
-    # is not: a sub-millisecond budget is shorter than a thread hop on a busy
-    # CPU, so the visible-order lookup timed out instead of returning.
+    # A timed-out write keeps its caller alive until its SDK worker finishes.
+    # The subsequent lookup still uses this client's timeout budget.
     client = AlpacaTradingClient(client_factory=lambda: fake, timeout_s=0.25)
     order = {
         "symbol": "SPY",
@@ -376,9 +377,18 @@ async def test_timed_out_submit_stays_uncertain_until_order_becomes_visible(
         "client_order_id": "manual/inkant/v1:delayed",
     }
 
+    submit = asyncio.create_task(client.submit_order(order))
     try:
+        for _ in range(100):
+            if started.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert started.is_set()
+        await asyncio.sleep(0.3)
+        assert not submit.done()
+        release.set()
         with pytest.raises(BrokerUnavailable, match="timed out"):
-            await client.submit_order(order)
+            await submit
 
         with pytest.raises(BrokerUnavailable, match="still become visible"):
             await client.get_order_by_client_order_id(order["client_order_id"])
@@ -388,6 +398,7 @@ async def test_timed_out_submit_stays_uncertain_until_order_becomes_visible(
         result = await client.get_order_by_client_order_id(order["client_order_id"])
     finally:
         release.set()
+        await asyncio.gather(submit, return_exceptions=True)
 
     assert result is not None
     assert result["id"] == "broker-order-delayed"
@@ -667,6 +678,20 @@ async def test_hung_sdk_call_maps_to_broker_unavailable() -> None:
     assert excinfo.value.detail == "The broker did not respond within 0.001 seconds."
     # #2582: a timeout is the transient kind a startup reconnects on.
     assert isinstance(excinfo.value, BrokerUnreachable)
+
+
+def test_order_send_claim_outlasts_every_bounded_submit_attempt() -> None:
+    worst_send_ms = int(
+        ((_MAX_RATE_LIMIT_RETRIES + 1) * _DEFAULT_TIMEOUT_S
+         + _MAX_RATE_LIMIT_RETRIES * _RATE_LIMIT_RETRY_CAP_S) * 1000
+    )
+
+    assert DEFAULT_CLAIM_TTL_MS - worst_send_ms >= 13_000
+
+
+def test_client_rejects_timeout_above_the_claimed_send_bound() -> None:
+    with pytest.raises(ValueError, match="Alpaca request timeout"):
+        AlpacaTradingClient(client_factory=_FakeAlpaca, timeout_s=_DEFAULT_TIMEOUT_S + 0.001)
 
 
 def test_session_timeout_defaults_connect_and_read_timeouts() -> None:

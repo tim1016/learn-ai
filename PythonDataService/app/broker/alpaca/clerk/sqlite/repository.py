@@ -94,6 +94,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExecutionPriceConflictCause,
     ExecutionPriceConflictOrder,
 )
+from app.broker.alpaca.send_timing import ORDER_SEND_CLAIM_TTL_MS
 from app.schemas.exit_terms import ExitTerms
 from app.utils.timestamps import Clock, now_ms_utc
 
@@ -105,7 +106,7 @@ logger = logging.getLogger(__name__)
 DB_FILENAME = "clerk.db"
 MIRROR_FILENAME = "custody_transitions.mirror"
 DEFAULT_LEASE_TTL_MS = 30_000
-DEFAULT_CLAIM_TTL_MS = 60_000
+DEFAULT_CLAIM_TTL_MS = ORDER_SEND_CLAIM_TTL_MS
 
 
 class ClerkSqliteError(Exception):
