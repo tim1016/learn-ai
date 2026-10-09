@@ -1286,6 +1286,38 @@ def _entries_with_a_deadline_sql(orders: str) -> str:
 OPTION_ENTRIES_WITH_A_DEADLINE_SQL = _entries_with_a_deadline_sql(_ONE_CONTRACT_ORDERS)
 MULTI_LEG_ENTRIES_WITH_A_DEADLINE_SQL = _entries_with_a_deadline_sql(_MULTI_LEG_PARENT_ORDERS)
 OPTION_ENTRIES_WITH_A_DEADLINE_PARAMS = (*sorted(CANCELLABLE_ENTRY_BROKER_STATES), *sorted(NONTERMINAL_EFFECT_STATES))
+_OPTION_ENTRY_BOUND_SQL = (
+    "(EXISTS (SELECT 1 FROM order_contracts bound WHERE bound.order_ref = o.order_ref) "
+    f"OR {MULTI_LEG_PARENT_SQL})"
+)
+_WORKING_OPTION_ENTRY_CANDIDATE_SQL = (
+    "SELECT 1 FROM orders o INDEXED BY ix_orders_entry_broker_state "
+    f"WHERE o.role = 'ENTRY' AND lower(o.broker_state) IN ({', '.join('?' for _ in CANCELLABLE_ENTRY_BROKER_STATES)}) "
+    f"AND {_OPTION_ENTRY_BOUND_SQL} LIMIT 1"
+)
+_UNANSWERED_OPTION_ENTRY_CANDIDATE_SQL = (
+    "SELECT 1 FROM orders o INDEXED BY ix_orders_entry_broker_state "
+    "WHERE o.role = 'ENTRY' AND lower(o.broker_state) IS NULL "
+    f"AND o.effect_state IN ({', '.join('?' for _ in NONTERMINAL_EFFECT_STATES)}) "
+    f"AND {_OPTION_ENTRY_BOUND_SQL} LIMIT 1"
+)
+
+
+def _option_entry_can_still_rest(conn: sqlite3.Connection) -> bool:
+    """Ask the indexed orders before visiting each historical option binding."""
+    if (
+        conn.execute("SELECT 1 FROM order_contracts LIMIT 1").fetchone() is None
+        and not _books_keep_legs(conn)
+    ):
+        return False
+    return (
+        conn.execute(
+            _WORKING_OPTION_ENTRY_CANDIDATE_SQL, tuple(sorted(CANCELLABLE_ENTRY_BROKER_STATES))
+        ).fetchone() is not None
+        or conn.execute(
+            _UNANSWERED_OPTION_ENTRY_CANDIDATE_SQL, tuple(sorted(NONTERMINAL_EFFECT_STATES))
+        ).fetchone() is not None
+    )
 
 
 def option_entries_with_a_deadline(conn: sqlite3.Connection) -> list[EntryDeadline]:
@@ -1303,6 +1335,8 @@ def option_entries_with_a_deadline(conn: sqlite3.Connection) -> list[EntryDeadli
     id for it, so its turn at the deadline is a lookup, which finds the order
     or, past the grace, proves it never arrived.
     """
+    if not _option_entry_can_still_rest(conn):
+        return []
     rows = conn.execute(OPTION_ENTRIES_WITH_A_DEADLINE_SQL, OPTION_ENTRIES_WITH_A_DEADLINE_PARAMS).fetchall()
     if _books_keep_legs(conn):
         # An entry of several legs: its parent, by the same rule.
