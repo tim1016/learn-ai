@@ -80,3 +80,48 @@ def test_a_run_that_recorded_no_skips_lists_none(stored: str | None) -> None:
     wire = BacktestRunDetailResponse.model_validate(run).model_dump(by_alias=True)
 
     assert wire["closingBarSkips"] == []
+
+
+_QUARANTINE = {
+    "bar_start_ms": 1_770_667_200_000,
+    "bar_end_ms": 1_770_668_040_000,
+    "reason": "TIMEFRAME_MISMATCH",
+    "expected_timeframe_ms": 900_000,
+}
+
+
+def test_the_refused_decision_bars_round_trip() -> None:
+    provenance = RunEvidenceProvenance.model_validate(
+        {**_CURRENT_BEFORE_2607, "closing_bar_convention": "skip_closing_bar/v1", "quarantined_decision_bars": [_QUARANTINE]}
+    )
+
+    assert RunEvidenceProvenance.model_validate_json(provenance.model_dump_json()) == provenance
+    with pytest.raises(ValueError):
+        RunEvidenceProvenance.model_validate(
+            {**_CURRENT_BEFORE_2607, "quarantined_decision_bars": [{**_QUARANTINE, "expected_timeframe_ms": None}]}
+        )
+
+
+def test_the_run_report_lists_the_decision_bars_the_session_refused() -> None:
+    provenance = {**_CURRENT_BEFORE_2607, "quarantined_decision_bars": [_QUARANTINE]}
+    run = replace(_run(1, "engine"), evidence_provenance_json=json.dumps(provenance))
+
+    wire = BacktestRunDetailResponse.model_validate(run).model_dump(by_alias=True)
+
+    assert wire["quarantinedDecisionBars"] == [
+        {
+            "barStartMs": 1_770_667_200_000,
+            "barEndMs": 1_770_668_040_000,
+            "reason": "TIMEFRAME_MISMATCH",
+            "expectedTimeframeMs": 900_000,
+        }
+    ]
+
+
+@pytest.mark.parametrize("stored", [None, json.dumps(_CURRENT_BEFORE_2607)], ids=["no-provenance", "before-2909"])
+def test_a_run_that_recorded_no_refused_decision_bars_lists_none(stored: str | None) -> None:
+    run = replace(_run(1, "engine"), evidence_provenance_json=stored)
+
+    wire = BacktestRunDetailResponse.model_validate(run).model_dump(by_alias=True)
+
+    assert wire["quarantinedDecisionBars"] == []

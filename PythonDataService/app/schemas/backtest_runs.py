@@ -36,6 +36,20 @@ def _column(column: str, wire: str) -> Any:
     return Field(validation_alias=column, serialization_alias=wire)
 
 
+def _provenance_or_empty(value: Any) -> RunEvidenceProvenance:
+    """The run's provenance from its stored JSON envelope, empty-handed when absent."""
+    if value is None:
+        return RunEvidenceProvenance(
+            schema_version=1,
+            data_contract="",
+            statistics_basis="",
+            daily_return_convention="",
+        )
+    if isinstance(value, str):
+        return RunEvidenceProvenance.model_validate_json(value)
+    return RunEvidenceProvenance.model_validate(value)
+
+
 class _RunResponse(BaseModel):
     """The columns both reads share, validated from a ``RunRow``."""
 
@@ -108,6 +122,17 @@ class BacktestRunClosingBarSkipResponse(BaseModel):
     close_price: float
 
 
+class BacktestRunQuarantinedDecisionBarResponse(BaseModel):
+    """One decision bar the run's session refused, so the run never decided it (#2909)."""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    bar_start_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    bar_end_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    reason: str
+    expected_timeframe_ms: int = Field(ge=1)
+
+
 class BacktestRunDetailResponse(_RunResponse):
     """Everything the run report renders, plus the bounded trade evidence."""
 
@@ -140,6 +165,11 @@ class BacktestRunDetailResponse(_RunResponse):
     closing_bar_skips: list[BacktestRunClosingBarSkipResponse] = _column(
         "evidence_provenance_json", "closingBarSkips"
     )
+    # The decision bars the run's session refused outright (#2909), read from
+    # the same provenance; empty when it recorded none.
+    quarantined_decision_bars: list[BacktestRunQuarantinedDecisionBarResponse] = _column(
+        "evidence_provenance_json", "quarantinedDecisionBars"
+    )
 
     @field_validator("equity_curve", "validation_analytics", mode="before")
     @classmethod
@@ -155,14 +185,14 @@ class BacktestRunDetailResponse(_RunResponse):
     @field_validator("closing_bar_skips", mode="before")
     @classmethod
     def _parse_closing_bar_skips(cls, value: Any) -> Any:
-        if value is None:
-            return []
-        provenance = (
-            RunEvidenceProvenance.model_validate_json(value)
-            if isinstance(value, str)
-            else RunEvidenceProvenance.model_validate(value)
-        )
+        provenance = _provenance_or_empty(value)
         return [skip.model_dump() for skip in provenance.closing_bar_skips]
+
+    @field_validator("quarantined_decision_bars", mode="before")
+    @classmethod
+    def _parse_quarantined_decision_bars(cls, value: Any) -> Any:
+        provenance = _provenance_or_empty(value)
+        return [refusal.model_dump() for refusal in provenance.quarantined_decision_bars]
 
 
 class BacktestRunViewRefusal(BaseModel):

@@ -64,6 +64,7 @@ def _result(*, closing_bar_skips: list[ClosingBarSkip] | None = None) -> SimpleN
         insight_summary={},
         closing_bar_convention=ClosingBarConvention.SKIP_CLOSING_BAR,
         closing_bar_skips=closing_bar_skips or [],
+        quarantined_decision_bars=[],
     )
 
 

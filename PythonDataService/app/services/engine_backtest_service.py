@@ -68,7 +68,11 @@ from app.models.responses import (
     LeanStatisticsResponse,
     LeanTradeStatsResponse,
 )
-from app.research.backtest_runs.evidence_provenance import ClosingBarSkipRecord, RunEvidenceProvenance
+from app.research.backtest_runs.evidence_provenance import (
+    ClosingBarSkipRecord,
+    QuarantinedDecisionBarRecord,
+    RunEvidenceProvenance,
+)
 from app.research.backtest_runs.records import persisted_execution_configuration
 from app.research.backtest_runs.service import persist_engine_response_sync
 from app.research.sweep.snapshot import ManifestBoundDailyReader, ManifestBoundMinuteReader
@@ -1308,6 +1312,15 @@ def _aggregate_backtest_response(
                     close_price=float(skip.close_price),
                 )
                 for skip in result.closing_bar_skips
+            ),
+            quarantined_decision_bars=tuple(
+                QuarantinedDecisionBarRecord(
+                    bar_start_ms=refusal.bar_start_ms,
+                    bar_end_ms=refusal.bar_end_ms,
+                    reason=refusal.reason,
+                    expected_timeframe_ms=refusal.expected_timeframe_ms,
+                )
+                for refusal in result.quarantined_decision_bars
             ),
         ),
         success=True,
