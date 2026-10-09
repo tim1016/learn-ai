@@ -97,6 +97,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar, Literal, NamedTuple, TypedDict
 
@@ -184,8 +185,8 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
 )
-from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.reads import CANCELLABLE_ENTRY_BROKER_STATES, NONTERMINAL_EFFECT_STATES
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, OperationClaimError
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     EXIT_NOT_FLAT_REASON_CODE,
     Capability,
@@ -623,6 +624,74 @@ async def cancel_and_prove_owned_entry(
     refreshed = await run(lambda: repo.order(entry_order_ref))
     assert refreshed is not None
     return refreshed
+
+
+async def cancel_each_entry_as_a_pass_step(
+    repo: ClerkSqliteRepository,
+    entries: Sequence[OrderResource],
+    *,
+    trade: BrokerTradePort,
+    off_loop: OffLoop | None = None,
+    reason: str,
+    about: str,
+    action: str,
+) -> None:
+    """Cancel and exact-prove each entry of ``entries``, one after another, each under its own order's claim.
+
+    The loop every reconciliation-pass canceller of owned entries runs
+    (``stopped_run_entries``, ``failed_enter_entries``): a held operation
+    claim means another owner is acting on that order right now, so the entry
+    is deferred to the next pass; a cancel whose exact proof still shows the
+    order working is re-driven by the next pass; anything else propagates and
+    the pass records itself incomplete. Broker failures are folded by
+    :func:`cancel_and_prove_owned_entry` itself (``ORDER_CANCEL_UNCERTAIN``),
+    as for every other caller.
+
+    ``reason`` is why the cancel is asked for, recorded on the order's first
+    ``ORDER_CANCEL_REQUESTED``. ``about`` names the entries as an operator
+    reads them, and ``action`` prefixes the three actions logged, so each
+    step's records stay greppable as its own.
+    """
+    run = off_loop if off_loop is not None else run_inline
+    for entry in entries:
+        try:
+            resolved = await cancel_and_prove_owned_entry(
+                repo,
+                entry_order_ref=entry.order_ref,
+                trade=trade,
+                off_loop=run,
+                reason=reason,
+            )
+        except OperationClaimError:
+            logger.info(
+                f"deferred the cancel of {about}: its operation is claimed",
+                extra={
+                    "action": f"{action}_deferred",
+                    "account_id": repo.account_id,
+                    "order_ref": entry.order_ref,
+                },
+            )
+            continue
+        if (resolved.broker_state or "").lower() in CANCELLABLE_ENTRY_BROKER_STATES:
+            logger.warning(
+                f"{about} is still working after its cancel; the next pass re-drives it",
+                extra={
+                    "action": f"{action}_unconfirmed",
+                    "account_id": repo.account_id,
+                    "order_ref": entry.order_ref,
+                    "broker_state": resolved.broker_state,
+                },
+            )
+            continue
+        logger.warning(
+            f"cancelled {about}",
+            extra={
+                "action": f"{action}_cancelled",
+                "account_id": repo.account_id,
+                "order_ref": entry.order_ref,
+                "broker_state": resolved.broker_state,
+            },
+        )
 
 
 class _ClaimedState(NamedTuple):

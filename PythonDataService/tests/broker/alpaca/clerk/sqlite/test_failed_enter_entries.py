@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite import failed_enter_entries, stopped_run_entries
+from app.broker.alpaca.clerk.sqlite import failed_enter_entries, reads, stopped_run_entries
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import resolve_enter_submission, submit_enter
 from app.broker.alpaca.clerk.sqlite.failed_enter_entries import (
@@ -34,7 +34,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 )
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
-from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at, _FakeTradePort
+from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at, _FakeTradePort, _walk_clock_to
 
 ACCOUNT_ID = "PA-FAILED-ENTER"
 SID = "spy-bot"
@@ -89,18 +89,20 @@ class _VenueThatTookTheOrder:
 
     The order lands only when the test puts it in ``taken``, stays working
     until a cancel ends it, and every answer is one ``BrokerOrder`` the real
-    read port could have returned.
+    read port could have returned. While ``silent`` is set the exact lookup
+    answers nothing: a broker whose reads are down.
     """
 
     def __init__(self) -> None:
         self.taken: dict[str, BrokerOrder] = {}
         self.cancel_calls: list[str] = []
+        self.silent = False
 
     async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
         raise BrokerUnavailable("connection reset before any answer", broker="alpaca")
 
     async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
-        return self.taken.get(client_order_id)
+        return None if self.silent else self.taken.get(client_order_id)
 
     async def cancel(self, order_id: str) -> None:
         self.cancel_calls.append(order_id)
@@ -121,7 +123,7 @@ async def _an_entry_voided_as_never_sent(repo: ClerkSqliteRepository, venue: _Ve
         trade=venue,
     )
     assert sent.order_ref is not None
-    _wait(repo, submit_absence_grace_ms() + 1)
+    _walk_clock_to(repo, repo.clock() + submit_absence_grace_ms() + 1)
     await resolve_enter_submission(repo, order_ref=sent.order_ref, trade=venue)
     assert _enter_state(repo, sent.order_ref) == "failed"
     return sent.order_ref
@@ -143,15 +145,6 @@ def _enter_state(repo: ClerkSqliteRepository, order_ref: str) -> str:
     effect = repo.effect_operation(order.effect_operation_id)
     assert effect is not None
     return effect.state
-
-
-def _wait(repo: ClerkSqliteRepository, ms: int) -> None:
-    """Let time pass, the Clerk's hold on its account kept alive as its heartbeat keeps it."""
-    while ms > 0:
-        step = min(ms, 10_000)
-        repo.clock.advance(step)
-        repo.renew_execution_lease()
-        ms -= step
 
 
 def _broker_state(repo: ClerkSqliteRepository, order_ref: str) -> str | None:
@@ -225,3 +218,66 @@ async def test_an_entry_under_a_still_open_enter_is_never_this_steps_to_cancel(
 
     assert failed_enter_entries.entries_owed_a_cancel(repo) == []
     assert stopped_run_entries.entries_owed_a_cancel(repo) == []
+
+
+async def test_a_cancel_whose_proof_stays_uncertain_is_asked_for_again_by_the_next_pass(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """An uncertain cancel cannot end the asking: the ENTER's failure is terminal and stays.
+
+    The shared uncertain fold never moves a terminal effect back, so the
+    order stays on this step's worklist and the next pass asks again — as
+    the stopped-run step's orders are — until a lookup proves the order
+    ended.
+    """
+    venue = _VenueThatTookTheOrder()
+    order_ref = await _an_entry_voided_as_never_sent(repo, venue)
+    _the_abandoned_send_lands(repo, venue, order_ref)
+
+    venue.silent = True
+    await cancel_working_entries_of_failed_enters(repo, trade=venue)
+
+    assert venue.cancel_calls == [f"bo-{order_ref}"]
+    assert _enter_state(repo, order_ref) == "failed" and _broker_state(repo, order_ref) == "new"
+    # Still owed, and the bot's next entry is still refused beside it.
+    assert [entry.order_ref for entry in failed_enter_entries.entries_owed_a_cancel(repo)] == [order_ref]
+    assert admit_new_exposure(repo, strategy_instance_id=SID).reason_code == ENTRY_ORDER_WORKING_REASON_CODE
+
+    # The broker's reads come back: the next pass asks once more, and the proof lands.
+    venue.silent = False
+    await cancel_working_entries_of_failed_enters(repo, trade=venue)
+
+    assert venue.cancel_calls == [f"bo-{order_ref}", f"bo-{order_ref}"]
+    assert _broker_state(repo, order_ref) == "canceled"
+    assert failed_enter_entries.entries_owed_a_cancel(repo) == []
+    assert admit_new_exposure(repo, strategy_instance_id=SID).allowed
+
+
+async def test_the_worklist_is_sought_from_the_entry_state_index_and_touches_no_table_by_a_scan(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """Every pass reads this worklist: it must cost an index seek, not a walk of history."""
+    sent = await submit_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="dec-plan",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+        trade=_FakeTradePort(),
+    )
+    assert sent.order_ref is not None and _broker_state(repo, sent.order_ref) == "accepted"
+
+    with repo.write_fence() as conn:
+        plan = [
+            row[3]
+            for row in conn.execute(
+                f"EXPLAIN QUERY PLAN {reads.WORKING_SHARE_ENTRIES_UNDER_FAILED_ENTERS_SQL}",
+                reads.WORKING_SHARE_ENTRIES_UNDER_FAILED_ENTERS_PARAMS,
+            )
+        ]
+
+    assert any(
+        "ix_orders_entry_broker_state (role=? AND <expr>=? AND effect_state=?)" in step for step in plan
+    )
+    assert [step for step in plan if step.startswith("SCAN")] == []

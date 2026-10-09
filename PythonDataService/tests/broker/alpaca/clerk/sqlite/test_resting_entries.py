@@ -895,8 +895,10 @@ async def test_a_stock_only_accounts_books_are_never_read_however_long_their_log
 
     assert costs[0] == costs[3_000]
     # The round also runs the keeper's other step, the scheduled closes, which reads the positions once.
+    # The gate's question costs more than it did when it read only an empty option table on
+    # stock books (#2961): it names the oldest working entry now, a sorted pick among few rows.
     the_round, the_step, the_gates_question = costs[0]
-    assert 0 < the_round < 200 and 0 < the_step < 100 and 0 < the_gates_question < 100, costs[0]
+    assert 0 < the_round < 200 and 0 < the_step < 100 and 0 < the_gates_question < 200, costs[0]
 
 
 async def test_one_round_of_the_keeper_reads_the_worklist_once(paper: PaperOptions, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811

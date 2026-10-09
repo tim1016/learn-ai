@@ -27,19 +27,14 @@ attributed exposure.
 
 from __future__ import annotations
 
-import logging
-
-from app.broker.alpaca.clerk.sqlite.exit_resolution import cancel_and_prove_owned_entry
+from app.broker.alpaca.clerk.sqlite.exit_resolution import (
+    ENTRY_TERMINAL_PROOF,
+    cancel_each_entry_as_a_pass_step,
+)
 from app.broker.alpaca.clerk.sqlite.models import OrderResource
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, run_inline
-from app.broker.alpaca.clerk.sqlite.reads import CANCELLABLE_ENTRY_BROKER_STATES
-from app.broker.alpaca.clerk.sqlite.repository import (
-    ClerkSqliteRepository,
-    OperationClaimError,
-)
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.ports import BrokerTradePort
-
-logger = logging.getLogger(__name__)
 
 
 def entries_owed_a_cancel(repo: ClerkSqliteRepository) -> list[OrderResource]:
@@ -63,44 +58,16 @@ async def cancel_entries_of_inactive_runs(
     itself incomplete.
     """
     run = off_loop if off_loop is not None else run_inline
-    for entry in await run(lambda: entries_owed_a_cancel(repo)):
-        try:
-            resolved = await cancel_and_prove_owned_entry(
-                repo,
-                entry_order_ref=entry.order_ref,
-                trade=trade,
-                off_loop=run,
-            )
-        except OperationClaimError:
-            logger.info(
-                "deferred the cancel of a stopped run's working ENTRY: its operation is claimed",
-                extra={
-                    "action": "stopped_run_entry_cancel_deferred",
-                    "account_id": repo.account_id,
-                    "order_ref": entry.order_ref,
-                },
-            )
-            continue
-        if (resolved.broker_state or "").lower() in CANCELLABLE_ENTRY_BROKER_STATES:
-            logger.warning(
-                "a stopped run's ENTRY is still working after its cancel; the next pass re-drives it",
-                extra={
-                    "action": "stopped_run_entry_cancel_unconfirmed",
-                    "account_id": repo.account_id,
-                    "order_ref": entry.order_ref,
-                    "broker_state": resolved.broker_state,
-                },
-            )
-            continue
-        logger.warning(
-            "cancelled a working ENTRY whose run is no longer active",
-            extra={
-                "action": "stopped_run_entry_cancelled",
-                "account_id": repo.account_id,
-                "order_ref": entry.order_ref,
-                "broker_state": resolved.broker_state,
-            },
-        )
+    entries = await run(lambda: entries_owed_a_cancel(repo))
+    await cancel_each_entry_as_a_pass_step(
+        repo,
+        entries,
+        trade=trade,
+        off_loop=run,
+        reason=ENTRY_TERMINAL_PROOF,
+        about="a stopped run's ENTRY",
+        action="stopped_run_entry",
+    )
 
 
 __all__ = ["cancel_entries_of_inactive_runs", "entries_owed_a_cancel"]
