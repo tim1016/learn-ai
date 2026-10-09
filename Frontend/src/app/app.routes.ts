@@ -277,6 +277,13 @@ export const routes: Routes = [
         (m) => m.researchLabRoutes
       ),
   },
+  {
+    path: "docs/bot-business-manual",
+    loadComponent: () =>
+      import("./components/docs/bot-manual/bot-manual.component").then(
+        (m) => m.BotManualComponent,
+      ),
+  },
   // Served copy of docs/architecture-manual.md.
   markdownDocRoute("docs/architecture-manual", {
     heading: "Architecture Manual",

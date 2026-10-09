@@ -1,0 +1,26 @@
+// The manual is printed in normal document flow, outside the screen shell's flex layout.
+@media print {
+  @page bot-manual {
+    size: auto;
+    margin: 16mm 17mm 18mm;
+    @bottom-center { content: "Botasur / Bot business logic manual / " counter(page); font: 8pt sans-serif; color: #555; }
+  }
+
+  body:has(app-bot-manual) {
+    page: bot-manual;
+    background: #fff;
+    color: #000;
+
+    app-top-bar, app-markdown-drawer-host, p-toast { display: none !important; }
+    app-root, .shell, .main, .main-content, app-page-body {
+      display: block !important;
+      min-height: 0 !important;
+      height: auto !important;
+      overflow: visible !important;
+      padding: 0 !important;
+      margin: 0 !important;
+      container-type: normal !important;
+      background: #fff !important;
+    }
+  }
+}
