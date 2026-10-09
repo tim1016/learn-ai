@@ -13,7 +13,12 @@ import pytest
 from app.broker.alpaca.clerk.account_authority import AccountAuthorityIdentityError
 from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime
 from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
-from app.broker.alpaca.clerk.models import ChannelHealth, EffectOperationState, EffectPurpose
+from app.broker.alpaca.clerk.models import (
+    CLERK_CUSTODY_BROKER_UNREACHABLE,
+    ChannelHealth,
+    EffectOperationState,
+    EffectPurpose,
+)
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import runtime as runtime_module
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
@@ -40,6 +45,7 @@ from app.broker.alpaca.clerk.sqlite.runtime import (
 )
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
+from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.schemas.decision_explanation import DecisionBarRecord, DecisionExplanationRecord, ExplainedCheckRecord
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
@@ -162,6 +168,33 @@ class _CountingBroker(_Broker):
     async def list_positions(self) -> list:
         self.read_calls += 1
         return await super().list_positions()
+
+
+class _UnreachableBroker(_Broker):
+    """``_Broker`` whose order read fails the way an outage does (#2901)."""
+
+    async def list_orders(self, **_kwargs: Any) -> list[BrokerOrder]:
+        raise BrokerError("Could not reach Alpaca while fetching orders.", broker="alpaca")
+
+
+async def test_a_custody_answer_whose_broker_read_failed_offers_a_recheck(
+    tmp_path: Path,
+) -> None:
+    """#2901: a stale pass that could not READ the broker is not a custody
+    disagreement -- nothing was observed. The snapshot's reason code and
+    recovery step say so, so Deploy can explain the outage and offer to check
+    again instead of sending the trader to reconcile SQLite."""
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _UnreachableBroker()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
+
+    snapshot = await facade.custody_snapshot("sid-1")
+
+    assert snapshot.reconciliation_state == "stale"
+    assert snapshot.reason_code == CLERK_CUSTODY_BROKER_UNREACHABLE
+    assert snapshot.next_step == "Check again when the connection to Alpaca recovers."
+
+    repo.close()
 
 
 async def test_custody_projection_answers_from_the_last_sweep_without_broker_contact(

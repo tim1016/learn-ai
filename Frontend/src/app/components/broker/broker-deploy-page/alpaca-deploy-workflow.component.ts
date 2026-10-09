@@ -27,24 +27,25 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 
 import {
-  BrokerV2PanelService,
-  committedReceipt,
-  uncommittedClaim,
   type BotDeployPrefill,
   type BotEndInput,
   type BotEndPreviewRequest,
   type BotEndView,
+  BrokerV2PanelService,
   type BudgetDeployReceipt,
+  CLERK_CUSTODY_BROKER_UNREACHABLE,
   type DeployBotBody,
   type DeployBotStrategy,
   type DeployBotView,
   type DeployExecutionMode,
+  type DeployStrategyParamsSchema,
   type DeploySubmissionBody,
   type DeploySubmissionUncommitted,
   type DeploymentBudgetInput,
-  type DeployStrategyParamsSchema,
   type QualifiedDeployConfiguration,
   type RunAdmissionDecision,
+  committedReceipt,
+  uncommittedClaim,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { laneKey, type ResourceTarget, withAccount, withCommand } from '../../../fleet/resource-target';
 import {
@@ -64,11 +65,7 @@ import { extractServerMessage } from '../operation-error';
 import { botEndFields, botEndInput, type BotEndFields } from '../bot-end/bot-end-fields';
 import { deriveActionRejection, type ActionRejection } from '../v2-panel/lib/panel-action-outcome';
 import { DeployBindingStripComponent } from './deploy-binding-strip.component';
-import {
-  DeployConfirmStepComponent,
-  type DeployBlocker,
-  type DeployError,
-} from './deploy-confirm-step.component';
+import { DeployConfirmStepComponent, type DeployBlocker, type DeployError } from './deploy-confirm-step.component';
 import {
   DeployDraftStore,
   EMPTY_DEPLOY_SETTINGS,
@@ -558,6 +555,21 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly checkingStatus = signal(false);
   /** The unknown outcome is offered its status read once no Deploy is on its way. */
   protected readonly canCheckStatus = computed(() => this.outcomeUnknown() && !this.submitting());
+  /** #2901: a Start refusal the backend typed as a failed Alpaca read can be
+   * asked again in place — once no Deploy, status read or recheck runs. */
+  protected readonly recheckingAdmission = signal(false);
+  protected readonly canRecheckAdmission = computed(() => {
+    const decision = this.admissionDecision();
+    return (
+      decision !== null
+      && !decision.allowed
+      && decision.reason_code === CLERK_CUSTODY_BROKER_UNREACHABLE
+      && !this.outcomeUnknown()
+      && !this.submitting()
+      && !this.checkingStatus()
+      && !this.recheckingAdmission()
+    );
+  });
   /** The `?submission=` this page last wrote as its own: just before sending
    * it, or to keep an unsettled key in the address. */
   private readonly writtenKey = signal<string | null>(null);
@@ -1186,6 +1198,9 @@ export class AlpacaDeployWorkflowComponent {
     }
     if (this.checkingStatus()) {
       return { canSubmit: false, guidance: 'Checking the last Deploy’s status…' };
+    }
+    if (this.recheckingAdmission()) {
+      return { canSubmit: false, guidance: 'Checking the Alpaca account again…' };
     }
     if (this.admissionDecision()?.allowed === false) {
       return { canSubmit: false, guidance: this.admissionDecision()?.next_step ?? this.submitError()?.message ?? 'Refresh the Deploy checks before deploying.' };
@@ -2185,6 +2200,60 @@ export class AlpacaDeployWorkflowComponent {
       }
     } finally {
       this.checkingStatus.set(false);
+    }
+  }
+
+  /**
+   * "Check again" for a Start refusal the backend typed as a failed Alpaca
+   * read (#2901): the exact ticket on screen, previewed against the same
+   * admission seam, never a submission. A refusal that persists replaces the
+   * one on screen with the backend's own words; an admission clears the
+   * refusal and refreshes the account's readiness evidence. The form and its
+   * budget review are untouched throughout.
+   */
+  protected async recheckAdmission(): Promise<void> {
+    if (!this.canRecheckAdmission()) return;
+    const view = this.currentView();
+    const settings = this.submissionSettings();
+    if (view === null || settings === null) return;
+    this.recheckingAdmission.set(true);
+    try {
+      const submission = this.submissionFor(settings);
+      const commandTarget = this.commandTargetFor(submission, view.account_id);
+      const decision = await this.panelService.previewStartAdmission(commandTarget, settings);
+      // The ticket changed under the check: its answer describes no state on
+      // screen, and the mutator that changed it cleared the refusal already.
+      if (!this.submissionStillCurrent(settings)) return;
+      this.admissionDecision.set(decision);
+      if (decision.allowed) {
+        // The outage is over: a stale "Check not answered" notice would now
+        // contradict the admitted state, so it goes with the refusal, and
+        // the readiness evidence the refusal outlived is re-read the way a
+        // reload reads it, without losing the form.
+        this.submitError.set(null);
+        this.deployView.reload();
+        this.moneyStep()?.refresh();
+        this.focusAfterRender(() => this.confirmStep()?.focusDeploy());
+      } else {
+        this.focusAfterRender(() => this.confirmStep()?.focusRefusal());
+      }
+    } catch (error) {
+      // The ticket changed under the check: the failure belongs to no state
+      // on screen, exactly as an abandoned answer does.
+      if (!this.submissionStillCurrent(settings)) return;
+      // The recheck itself went unanswered: the refused decision on screen
+      // stays the backend's last word, and the notice says the check did not
+      // run — never that Alpaca or the account was found anything.
+      this.submitError.set(deployNotice(
+        'blocked',
+        'Check not answered',
+        extractServerMessage(error, 'Checking the Alpaca account again did not answer.'),
+        null,
+        'Try Check again in a moment.',
+      ));
+      this.focusAfterRender(() => this.confirmStep()?.focusRefusal());
+    } finally {
+      this.recheckingAdmission.set(false);
     }
   }
 

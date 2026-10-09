@@ -55,7 +55,7 @@
 
   @if (submitError() || blockedDecision()) {
     <section #refusal class="confirm-step__refusal" role="alert" tabindex="-1" aria-labelledby="deploy-refusal-title">
-      <h3 id="deploy-refusal-title">{{ submitError()?.title ?? 'Start refused' }}</h3>
+      <h3 id="deploy-refusal-title">{{ refusalTitle() }}</h3>
       @if (submitError(); as error) {
         <p><strong>{{ error.message }}</strong></p>
         @if (error.explanation) { <p>{{ error.explanation }}</p> }
@@ -73,12 +73,23 @@
       @if (blockedDecision(); as decision) {
         <p>{{ decision.explanation }}</p>
         @if (decision.next_step) { <p>Next: {{ decision.next_step }}</p> }
+        @if (canRecheckAdmission()) {
+          <button
+            type="button"
+            [disabled]="recheckingAdmission()"
+            [attr.aria-busy]="recheckingAdmission()"
+            (click)="recheckAdmission.emit()"
+          >
+            {{ recheckingAdmission() ? 'Checking Alpaca…' : 'Check again' }}
+          </button>
+        }
       }
     </section>
   }
 
   <div class="confirm-step__command">
     <button
+      #deployCommand
       type="button"
       class="confirm-step__deploy"
       [disabled]="!canSubmit()"

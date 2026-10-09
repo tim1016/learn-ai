@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
+from app.broker.alpaca.clerk.models import CLERK_CUSTODY_BROKER_UNREACHABLE, ClerkCustodySnapshot
 from app.schemas.market_liveness import MarketLivenessFact
 from app.schemas.run_admission import (
     CORPUS_UNCOVERED_NEXT_STEP,
@@ -358,6 +358,21 @@ def evaluate_run_admission(
                     ),
                 )
         if clerk.reconciliation_state != "clean" or not clerk.reconciliation_fresh:
+            if clerk.reason_code == CLERK_CUSTODY_BROKER_UNREACHABLE:
+                # #2901: the pass could not READ Alpaca, so nothing observed
+                # contradicts the account. The plain sentence a trader can
+                # act on, with the claim limited to what this refusal proves:
+                # the operation was refused, so nothing was started or sent.
+                unstarted = "Your bot has not started." if bot.operation == "START" else "No resume was sent."
+                return decide(
+                    allowed=False,
+                    reason_code=CLERK_CUSTODY_BROKER_UNREACHABLE,
+                    explanation=(
+                        "Alpaca could not be reached to check this account's orders, "
+                        f"so the Clerk cannot prove reconciled custody. {unstarted}"
+                    ),
+                    next_step=clerk.next_step or "Check again when the Alpaca connection recovers.",
+                )
             return decide(
                 allowed=False,
                 reason_code=clerk.reason_code,
