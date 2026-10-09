@@ -971,7 +971,9 @@ async def _iter_leased_raw_bars(
                     stall_timeout_s=stall_timeout_s,
                     last_progress_at=last_progress_at,
                     last_source_ms=last_source_ms,
-                    stall_deferred=stall_deferred is not None and stall_deferred(),
+                    # A paused consumer can have fresh IBKR prints waiting in
+                    # the shared list. Observe them before judging silence.
+                    stall_deferred=index < len(bars) or (stall_deferred is not None and stall_deferred()),
                 )
             except (IBKRBarInterrupted, IBKRBarSubscriptionStalled) as interruption:
                 # Ruling P10: the queue holds real pre-disconnect prints, and
