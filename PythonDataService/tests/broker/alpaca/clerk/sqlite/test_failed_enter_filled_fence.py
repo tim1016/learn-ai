@@ -21,6 +21,7 @@ from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.execution_coverage import ORDER_TOTAL_PROVEN_SUMMARY_CODE
+from app.broker.alpaca.clerk.sqlite.exit_resolution import ENTRY_ENTER_FAILED
 from app.broker.alpaca.clerk.sqlite.order_evidence import fence_fills_on_terminal_enters
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.reconcile import (
@@ -589,7 +590,14 @@ async def test_an_answered_lookup_rests_until_the_recheck_window_passes(
 async def test_an_order_in_the_open_snapshot_spends_no_lookup_slot(
     crashed_with_exposure,  # noqa: F811
 ) -> None:
-    """Snapshot refs are dropped before the budget, not after it."""
+    """Snapshot refs are dropped before the budget, not after it.
+
+    The snapshot's working orders under those failed ENTERs are meanwhile the
+    failed-ENTER step's to cancel (#2961): each is asked to cancel under its
+    own claim and proven by an exact lookup of its own — lookups that are not
+    the terminal-ENTER budget this test is about, which still spends its slot
+    on the filled order alone.
+    """
     repo, clock = crashed_with_exposure
     filled_ref = await _failed_enter_never_filled(repo, clock, decision_id="enter-old")
     open_refs = [
@@ -606,7 +614,23 @@ async def test_an_order_in_the_open_snapshot_spends_no_lookup_slot(
 
     await reconcile_account(repo, read=read, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
-    assert trade.lookup_calls == [filled_ref]
+    # The failed-ENTER step asked about each snapshot ref first — in its own
+    # worklist's order, each cancel recorded under its own reason — and the
+    # budget then reached the filled order.
+    assert trade.lookup_calls[-1] == filled_ref
+    assert sorted(trade.lookup_calls[:-1]) == sorted(open_refs)
+    assert sorted(trade.cancel_calls) == sorted(f"bo-{ref}" for ref in open_refs)
+    for ref in open_refs:
+        assert [
+            transition["summary_code"]
+            for transition in repo.transitions_for_order(ref)
+            if transition["transition_kind"] == "ORDER_CANCEL_REQUESTED"
+        ] == [ENTRY_ENTER_FAILED]
+    # And the fence names the filled order alone: no snapshot ref starved it.
+    episode = _fence(repo)
+    assert episode is not None
+    assert _cause_orders(episode) == [{"order_ref": filled_ref, "symbol": "SPY", "filled_qty": 10.0}]
+    assert repo.position(SID, "SPY") == pytest.approx(10.0, abs=QTY_ATOL, rel=0)
 
 
 def _coverage_conflicts(repo: ClerkSqliteRepository) -> list[dict]:

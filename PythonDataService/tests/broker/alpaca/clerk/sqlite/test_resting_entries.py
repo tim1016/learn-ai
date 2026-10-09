@@ -523,7 +523,7 @@ async def test_the_entry_gates_question_counts_only_an_entry_order_never_a_worki
     await _a_working_closing_order(paper)
 
     with paper.repo.write_fence() as conn:
-        working_entry = reads.working_option_entry_for_strategy(conn, "a")
+        working_entry = reads.working_entry_order_for_strategy(conn, "a")
 
     assert working_entry is None
     # The bot's next entry waits for its EXIT, and is told so by that name.
@@ -882,8 +882,12 @@ async def test_a_stock_only_accounts_books_are_never_read_however_long_their_log
                 done = await keeper.tick()
             with _StepsCounted(repo) as the_step:
                 await cancel_entries_past_their_wait(repo, trade=_FakeTradePort())
+            working = [entry for entry in repo.entry_orders_for_strategy("spy-bot") if entry.broker_state == "accepted"]
             with _StepsCounted(repo) as the_gates_question, repo.write_fence() as conn:
-                assert reads.working_option_entry_for_strategy(conn, "spy-bot") is None
+                # The question is asked of a stock book's own orders now (#2961): it answers
+                # this entry, working under its still-open ENTER, from the index and not the log.
+                found = reads.working_entry_order_for_strategy(conn, "spy-bot")
+            assert found is not None and found.order_ref == working[0].order_ref
             assert done.entries == WaitEndedRound() and repo.last_custody_sequence() == written
             costs[transitions] = (idle_round.steps, the_step.steps, the_gates_question.steps)
         finally:
@@ -891,8 +895,10 @@ async def test_a_stock_only_accounts_books_are_never_read_however_long_their_log
 
     assert costs[0] == costs[3_000]
     # The round also runs the keeper's other step, the scheduled closes, which reads the positions once.
+    # The gate's question costs more than it did when it read only an empty option table on
+    # stock books (#2961): it names the oldest working entry now, a sorted pick among few rows.
     the_round, the_step, the_gates_question = costs[0]
-    assert 0 < the_round < 200 and 0 < the_step < 100 and 0 < the_gates_question < 100, costs[0]
+    assert 0 < the_round < 200 and 0 < the_step < 100 and 0 < the_gates_question < 200, costs[0]
 
 
 async def test_one_round_of_the_keeper_reads_the_worklist_once(paper: PaperOptions, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811

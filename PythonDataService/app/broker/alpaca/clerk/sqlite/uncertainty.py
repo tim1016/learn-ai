@@ -1174,7 +1174,7 @@ def decide_capability(
                     "custody lifecycle for this strategy."
                 ),
             )
-        working_entry = _working_option_entry(repo, strategy_instance_id=strategy_instance_id)
+        working_entry = _working_entry_order(repo, strategy_instance_id=strategy_instance_id)
         if working_entry is not None:
             return CapabilityDecision(
                 allowed=False,
@@ -1218,21 +1218,19 @@ def decide_capability(
 ENTRY_ORDER_WORKING_REASON_CODE = "ENTRY_ORDER_WORKING"
 
 
-def _working_option_entry(repo: ClerkSqliteRepository, *, strategy_instance_id: str) -> OrderResource | None:
-    """An option entry order of this bot that the books show working at the broker, whatever its ENTER's state.
+def _working_entry_order(repo: ClerkSqliteRepository, *, strategy_instance_id: str) -> OrderResource | None:
+    """An entry order of this bot that the books show working at the broker, whatever its ENTER's state.
 
     ``ENTER_IN_PROGRESS`` above reads the ENTER's own state, and an ENTER
     voided as never sent has ended. When the broker later shows that
     ENTER's order after all (the abandoned send landed, #2342), the order
     can still fill, and a second entry beside it would be two buys for one
-    signal. So the order row is asked too (ADR 0076).
-
-    Option entries only, read from the orders the books bind to a contract:
-    an order in shares is never asked about here, and a bot that trades
-    shares is admitted exactly as before.
+    signal. So the order row is asked too (ADR 0076), for every instrument:
+    an order in shares no step of a run cancels at a deadline is the
+    case that made the question general (#2961).
     """
     with repo.write_fence() as conn:
-        return reads.working_option_entry_for_strategy(conn, strategy_instance_id)
+        return reads.working_entry_order_for_strategy(conn, strategy_instance_id)
 
 
 def _outside_option_order_in_the_way(

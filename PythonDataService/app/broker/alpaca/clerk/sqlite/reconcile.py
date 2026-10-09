@@ -34,6 +34,9 @@ from app.broker.alpaca.clerk.sqlite.external_orders import observe_or_record_unf
 from app.broker.alpaca.clerk.sqlite.facts import (
     ReconciliationAttemptedFacts,
 )
+from app.broker.alpaca.clerk.sqlite.failed_enter_entries import (
+    cancel_working_entries_of_failed_enters,
+)
 from app.broker.alpaca.clerk.sqlite.folds import (
     position_quantity_is_nonzero,
 )
@@ -1328,6 +1331,12 @@ async def _reconcile_account_serialized(
     # re-driven every pass, so a crash, a Stop that lost a claim race, or a
     # POST that landed after Stop is cancelled within one sweep.
     await cancel_entries_of_inactive_runs(repo, trade=trade, off_loop=to_thread)
+
+    # An ENTER the books have failed may not leave a working order either,
+    # its run still ACTIVE (#2961): a stock entry voided as never sent that
+    # Alpaca later shows would fill beside the bot's next entry. Option
+    # entries are the deadline keeper's, by the step after this one.
+    await cancel_working_entries_of_failed_enters(repo, trade=trade, off_loop=to_thread)
 
     # No option entry rests past its owner's wait (ADR 0076). The deadline
     # keeper runs this same step on time; run here too, a keeper that died
