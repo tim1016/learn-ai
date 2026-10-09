@@ -266,13 +266,15 @@ class GuardedBrokerTradePort:
             return True
         return bool(probe(symbol) if side is None else probe(symbol, side=side))
 
-    def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str, side: str) -> bool:
+    def bind_latest_recovery_bar(
+        self, client_order_id: str, *, symbol: str, side: str, extended_hours: bool = False
+    ) -> bool:
         """Bind recovery-only synthetic evidence when the inner port requires it."""
         self._assert_unfenced("bind_latest_recovery_bar")
         bind = getattr(self._inner, "bind_latest_recovery_bar", None)
         if not callable(bind):
             return True
-        return bool(bind(client_order_id, symbol=symbol, side=side))
+        return bool(bind(client_order_id, symbol=symbol, side=side, extended_hours=extended_hours))
 
     def bind_decision_bar(
         self, client_order_id: str, *, bar_identity: str, decided_at_ms: int, symbol: str

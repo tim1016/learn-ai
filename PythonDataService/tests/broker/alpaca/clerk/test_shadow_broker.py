@@ -27,6 +27,8 @@ from app.broker.alpaca.clerk.shadow_broker import (
     open_book_orders,
     verify_shadow_namespace_empty,
 )
+from app.broker.alpaca.clerk.sqlite.broker_port_guard import GuardedBrokerTradePort
+from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.reconcile import MAX_OPEN_ORDER_SNAPSHOT
 from app.broker.alpaca.clerk.synthesized_orders import (
     SYNTHESIZED_ORDER_LEDGER_FILENAME,
@@ -549,6 +551,56 @@ async def test_shadow_recovery_does_not_bind_yesterdays_decision_bar(world: tupl
     tomorrow = declared_session_bounds(date(2026, 9, 9), ALPACA_EXTENDED_HOURS_WINDOW)
     clock.now_ms = tomorrow.open_ms
     assert ports.trade.bind_latest_recovery_bar(f"{NAMESPACE}:recovery", symbol="SPY") is False
+
+
+async def test_a_recovery_sale_is_stamped_when_it_is_sent_not_at_its_bars_close(
+    world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock],
+) -> None:
+    """#2926: a recovery fill's instant is the send's; its price stays the older bar's."""
+    ports, bars, _live, clock = world
+    _retain(bars, minute=601, close="100.00")
+    sent_at = et_minute_of_day_ms(DAY, 900)
+    clock.now_ms = sent_at
+    ref = f"{NAMESPACE}:recovery"
+
+    assert ports.trade.bind_latest_recovery_bar(ref, symbol="SPY", side="sell") is True
+    order = await ports.trade.submit(BrokerOrderLeg(
+        symbol="SPY", side=OrderSide.SELL, quantity=1.0, order_type=OrderType.MARKET, time_in_force=TimeInForce.DAY,
+    ), client_order_id=ref)
+
+    assert (order.status, order.filled_avg_price, order.filled_at_ms) == ("filled", 100.0, sent_at)
+    priced = ports.book.fill_anchors()[ref]
+    assert (priced.fill_model, priced.decision_bar_end_ms) == ("older_bar_close", et_minute_of_day_ms(DAY, 601) + MINUTE_MS)
+
+
+async def test_an_extended_recovery_leg_is_bound_by_no_bar_that_closed_before_the_send(
+    world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock],
+) -> None:
+    """An older price anchors no limit, so an extended-session recovery is left unpriced (#2926)."""
+    ports, bars, _live, clock = world
+    _retain(bars, minute=1020, close="100.00", phase="POST")
+    clock.now_ms = et_minute_of_day_ms(DAY, 1025)
+
+    assert ports.trade.bind_latest_recovery_bar(
+        f"{NAMESPACE}:recovery", symbol="SPY", side="sell", extended_hours=True
+    ) is False
+
+
+async def test_the_guarded_port_carries_an_extended_recovery_legs_flag_to_the_book(
+    world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock],
+) -> None:
+    """The Clerk's sweep reaches the book through the guarded port; the leg's own
+    extended-session flag must survive that wrapper, or every re-driven
+    extended EXIT would price itself from an older bar again (#2926)."""
+    ports, bars, _live, clock = world
+    _retain(bars, minute=1020, close="100.00", phase="POST")
+    clock.now_ms = et_minute_of_day_ms(DAY, 1025)
+    guarded = GuardedBrokerTradePort(ports.trade, intake=ReentrantAsyncLock())
+
+    assert guarded.bind_latest_recovery_bar(
+        f"{NAMESPACE}:recovery", symbol="SPY", side="sell", extended_hours=True
+    ) is False
+    assert guarded.bind_latest_recovery_bar(f"{NAMESPACE}:recovery", symbol="SPY", side="sell") is True
 
 
 async def test_shadow_limit_expires_at_the_calendar_early_close(tmp_path: Path) -> None:

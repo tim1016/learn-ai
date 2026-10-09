@@ -233,13 +233,15 @@ class ClaimedBrokerIO:
         self._renew()
         return bound
 
-    def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str, side: str) -> bool:
+    def bind_latest_recovery_bar(
+        self, client_order_id: str, *, symbol: str, side: str, extended_hours: bool = False
+    ) -> bool:
         """Bind optional no-submit recovery evidence under the operation lease."""
         self._renew()
         bind = getattr(self.trade, "bind_latest_recovery_bar", None)
         if not callable(bind):
             return True
-        bound = bool(bind(client_order_id, symbol=symbol, side=side))
+        bound = bool(bind(client_order_id, symbol=symbol, side=side, extended_hours=extended_hours))
         self._renew()
         return bound
 

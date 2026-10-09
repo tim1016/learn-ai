@@ -222,3 +222,17 @@ async def test_an_exit_with_no_bound_bar_fills_at_the_last_market_bar_never_at_f
     order = await broker.submit(BrokerOrderLeg(symbol="SPY", side="sell", quantity=1), client_order_id="bot:ema:exit")
 
     assert (order.status, order.filled_avg_price) == ("filled", 600.0)
+
+
+async def test_an_exit_with_no_bound_bar_is_stamped_when_it_is_sent_not_at_its_bars_close(tmp_path: Path) -> None:
+    """#2926: a re-driven exit's fallback fill carries the send's instant, and its price is an older bar's."""
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id=ACCOUNT)
+    _retain(ledger, end_ms=NOON, close="600.00")
+    sent_at = NOON + 120_000
+    broker = _broker(ledger, now_ms=sent_at, quote=None)
+
+    order = await broker.submit(BrokerOrderLeg(symbol="SPY", side="sell", quantity=1), client_order_id="bot:ema:exit")
+
+    assert (order.status, order.filled_avg_price, order.filled_at_ms) == ("filled", 600.0, sent_at)
+    priced = broker.synthesized_fill_anchors()["bot:ema:exit"]
+    assert (priced.fill_model, priced.decision_bar_end_ms) == ("older_bar_close", NOON)
