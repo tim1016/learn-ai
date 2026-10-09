@@ -277,7 +277,7 @@ def test_an_order_ledger_that_cannot_be_read_does_not_take_the_bot_page_down(unr
     def read() -> dict[str, SynthesizedAnchor]:
         raise unreadable
 
-    no_submit = SimpleNamespace(binds_decision_bar=True, synthesized_fill_anchors=read)
+    no_submit = SimpleNamespace(simulates_fills=True, synthesized_fill_anchors=read)
 
     anchors = panel_data_source._simulated_fill_anchors(no_submit, "spy-bot")
 
@@ -287,7 +287,7 @@ def test_an_order_ledger_that_cannot_be_read_does_not_take_the_bot_page_down(unr
 
 def test_an_authority_whose_fills_alpaca_makes_is_never_asked_for_a_simulated_record() -> None:
     vendor = SimpleNamespace(
-        binds_decision_bar=False, synthesized_fill_anchors=lambda: pytest.fail("Alpaca made these fills"),
+        simulates_fills=False, synthesized_fill_anchors=lambda: pytest.fail("Alpaca made these fills"),
     )
 
     assert panel_data_source._simulated_fill_anchors(vendor, "spy-bot") is None

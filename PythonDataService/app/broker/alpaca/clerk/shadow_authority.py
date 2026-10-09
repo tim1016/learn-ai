@@ -226,7 +226,7 @@ async def select_shadow_clerk_runtime(
     # after this can fail and leave them followed with no runtime to close them.
     option_books = get_held_option_quotes().follow(
         shadow.account_id,
-        books=composed.repository.option_contracts_to_watch,
+        books=composed.repository.option_contracts_requiring_quotes,
         kept=KeptOptionQuotes.of_account(artifacts_root=artifacts_root, account_id=shadow.account_id),
     )
     return ActiveClerkRuntime(

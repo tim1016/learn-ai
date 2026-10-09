@@ -1051,7 +1051,7 @@ async def run_trade_bot(
                 pricing=pricing, continuity=continuity,
                 # A Live Shadow runs this loop too, and fills its own orders. An option close is
                 # priced from quotes, or sent as a market order: it waits for no bar of the underlying.
-                synthesized=clerk.binds_decision_bar and options is None,
+                synthesized=clerk.simulates_fills and options is None,
             )
             if priced.refused:
                 continue
@@ -1588,7 +1588,7 @@ def _option_run(
         option_market or this_process_option_market(),
         # The contracts this bot holds are the Clerk's answer, read from its books at each EXIT.
         held_contracts=lambda: clerk.held_option_contracts(binding.strategy_instance_id),
-        contracts_to_watch=clerk.option_contracts_to_watch,
+        contracts_to_watch=clerk.option_contracts_for_run_quotes,
     )
 
 
@@ -1834,7 +1834,7 @@ async def _option_decision_facts(
     clock before the order is sent.
     """
     if intent.kind is SignalIntentKind.EXIT:
-        if not clerk.binds_decision_bar:
+        if not clerk.simulates_fills:
             # The broker fills this close, as a market order. Only an authority that fills it
             # itself prices it from a quote.
             return {}
@@ -2107,7 +2107,7 @@ async def run_dry_run_bot(
                 decision_receipts, binding=binding, evaluation=evaluation, intent=intent,
                 pricing=pricing, continuity=continuity,
                 # An option close is priced from quotes: it waits for no bar of the underlying.
-                synthesized=clerk.binds_decision_bar and options is None,
+                synthesized=clerk.simulates_fills and options is None,
             )
             if priced.refused:
                 continue

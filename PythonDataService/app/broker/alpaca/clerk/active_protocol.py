@@ -65,7 +65,7 @@ class ActiveAlpacaClerk(Protocol):
         ...
 
     @property
-    def binds_decision_bar(self) -> bool:
+    def simulates_fills(self) -> bool:
         """Whether this authority fills its own orders from retained bars (a Dry Run, a Live Shadow).
 
         Declared here because a runner must know it: such an authority needs
@@ -154,7 +154,7 @@ class ActiveAlpacaClerk(Protocol):
         """Raise the typed refusal of an option plan this account does not take (ADR 0076)."""
         ...
 
-    def option_contracts_to_watch(self) -> tuple[str, ...]:
+    def option_contracts_for_run_quotes(self) -> tuple[str, ...]:
         """The option contracts a bot's run on this account must ask to have quoted, by OCC symbol: held, or an
         order working. None where the authority's own keeping asks for them (ADR 0076)."""
         ...

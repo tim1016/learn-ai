@@ -16,7 +16,7 @@ own is made here: no runner states a mark between its two decisions.
 
 **What is held is read from the Clerk's books**, never from a runner: a
 position in a recorded contract, or an order working in one
-(``reads.option_contracts_to_watch``). Each Dry Run's Clerk and each Live
+(``reads.option_contracts_requiring_quotes``). Each Dry Run's Clerk and each Live
 Shadow's is followed while it is composed.
 
 **What is held is asked for** as the supervisor's first class of quote line

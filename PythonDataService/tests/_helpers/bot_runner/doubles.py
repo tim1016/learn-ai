@@ -483,7 +483,7 @@ class _FakeClerk:
     authority_kind = "sqlite"
     account_id = "PA-TEST"
     # A broker-backed authority: it fills nothing itself.
-    binds_decision_bar = False
+    simulates_fills = False
     # A regular-hours authority: it declares no extended session (ADR 0059 D5.2).
     program_leg_policy: ProgramLegPolicy = ProgramLegPolicy.regular_only()
 
