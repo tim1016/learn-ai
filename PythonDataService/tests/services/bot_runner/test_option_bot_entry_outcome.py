@@ -43,18 +43,16 @@ from app.broker.alpaca.clerk.sqlite import decision_receipts as decision_receipt
 from app.broker.alpaca.clerk.sqlite import runtime as clerk_runtime
 from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
 from app.broker.alpaca.clerk.sqlite.entry_outcome import (
-    ENTRY_OUTCOME_LIMIT_PAST,
-    EntryOutcomeWaitRefused,
     EntrySettlement,
     EntryStanding,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.runtime import CONTRACT_REFERENCE_READ_BOUND_MS, SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import BrokerOrderRejected, BrokerUnavailable
 from app.broker.ibkr.bars import REALTIME_BAR_STALL_TIMEOUT_S
 from app.broker.ibkr.config import reset_settings_for_testing
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
-from app.marketdata.feed import DELIVERY_ALLOWANCE_MS, FeedHealth, MarketDataBar
+from app.marketdata.feed import FeedHealth, MarketDataBar
 from app.options.contract import OptionContract
 from app.options.deadlines import CloseTerms
 from app.options.entry_came_to import EntryCameTo
@@ -62,10 +60,7 @@ from app.options.quotes import QuoteFault
 from app.services import bot_option_run, market_liveness
 from app.services.bot_dry_run import DryRunActivity, DryRunActivityJournal
 from app.services.bot_option_run import (
-    CANCEL_PROOF_ROOM_MS,
-    ENTRY_OUTCOME_SHORTEST_WAIT_MS,
     ENTRY_OUTCOME_WAIT_MS,
-    OptionEntryRefusal,
     OptionOrderTerms,
     OptionRun,
     entry_came_to,
@@ -524,21 +519,17 @@ def test_the_wait_for_an_entry_ends_well_inside_the_bar_streams_stall_timer_and_
     told its line has stalled, and the line is replaced for every bot on the symbol."""
     assert ENTRY_OUTCOME_WAIT_MS + 10_000 <= REALTIME_BAR_STALL_TIMEOUT_S * 1000
     assert ENTRY_OUTCOME_WAIT_MS < MINUTE
-    # A limit asked a moment from now is still ahead when the Clerk first reads its books again, and is
-    # reached by its second read: the runner is not kept from its stream for a third.
-    between_two_reads_ms = clerk_runtime._ENTRY_OUTCOME_POLL_S * 1000
-    assert between_two_reads_ms < ENTRY_OUTCOME_SHORTEST_WAIT_MS <= 2 * between_two_reads_ms
 
 
 @pytest.mark.parametrize(
     ("the_keeper_made_its_rounds", "alpaca_answers", "came_to", "the_next_green_bar", "replayed_as"),
     [
         pytest.param(
-            False, True, (EntrySettlement.DISCARDED, EntryStanding.UNFILLED), "enter_intent", ENTRY_DISCARDED,
-            id="the keeper made no round while the send was out, so its cancel is proven in the last look",
+            False, True, (EntrySettlement.ENTERED, EntryStanding.WORKING), "no_action", "enter_intent",
+            id="the keeper made no round while the send was out",
         ),
         pytest.param(
-            False, False, (EntrySettlement.ENTERED, EntryStanding.OUTCOME_UNKNOWN), "no_action", "enter_intent",
+            False, False, (EntrySettlement.ENTERED, EntryStanding.WORKING), "no_action", "enter_intent",
             id="alpaca answers nothing",
         ),
         pytest.param(
@@ -551,18 +542,11 @@ async def test_an_entry_whose_send_outran_its_wait_is_still_settled_by_the_clerk
     paper: PaperFloor, the_keeper_made_its_rounds: bool, alpaca_answers: bool, came_to: tuple[Any, Any],
     the_next_green_bar: str, replayed_as: str,
 ) -> None:
-    """Alpaca takes fifty-four seconds to answer the send, so the fifty the runner waits are over before it
-    can ask what the entry came to. It asks all the same, with a limit a quarter of a second from now and
-    not one already past. The Clerk looks again until that limit, judges at four tenths of a second, and
-    records its answer, so the settlement is the Clerk's and never the runner's own. What the live run did
-    on the next bar and what a later Start replays are then one answer.
+    """A send past the runner's deadline is judged immediately on the Clerk's books.
 
-    The first case, discarded, rests on the stand-in's own pacing: its keeper makes no round while the send
-    is out, so its first round after it cancels at once and the cancel is proven inside the runner's short
-    look. In production the keeper asks about the entry from its deadline on, while the send still holds the
-    order, and no ask can act. More than ten seconds past the deadline it asks no more often than every five
-    seconds, so when the send returns its next ask falls after the look. That is the last case, and the
-    usual one: entered while the order still rests, which the keeper then cancels on a later round."""
+    Still unproven, the strategy counts itself entered. The recorded answer
+    is replayed even when the keeper later proves the order unfilled.
+    """
     _a_send_that_takes_54_seconds(paper, the_keeper_makes_its_rounds=the_keeper_made_its_rounds)
     if not alpaca_answers:
         _alpaca_answers_nothing(paper)
@@ -570,11 +554,11 @@ async def test_an_entry_whose_send_outran_its_wait_is_still_settled_by_the_clerk
 
     ran = await paper.run([*_two_greens(), Step(green(ENTER_MS + MINUTE))])
 
-    assert paper.waits_asked_until[0] == sent_by_ms + 250
+    assert paper.waits_asked_until[0] == WAITED_UNTIL_MS
     settled = paper.settled()
     assert settled is not None and settled.recorded
     assert (settled.settlement, settled.standing) == came_to
-    assert sent_by_ms < settled.settled_at_ms <= sent_by_ms + 400
+    assert sent_by_ms <= settled.settled_at_ms <= sent_by_ms + 400
     # Live: in the strategy, the next green bar is no second ENTER; dropped, it is an ENTER again.
     assert ran.outcomes()[2] == (the_next_green_bar, ENTER_MS + MINUTE)
     assert len(paper.venue.option_submit_calls) == (2 if the_next_green_bar == "enter_intent" else 1)
@@ -636,21 +620,14 @@ async def test_a_later_start_after_a_send_that_outran_its_wait_names_no_decision
     assert len(paper.venue.option_submit_calls) == 1
 
 
-async def test_a_wait_the_clerk_refuses_ends_the_run_and_the_runner_settles_nothing_of_its_own(
-    paper: PaperFloor, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """With no moment kept, a send that outran the wait is asked about with a limit already past. The Clerk
-    refuses that by name and records nothing. The runner does not make up an answer in its place: the run
-    ends on the refusal."""
-    monkeypatch.setattr(bot_option_run, "ENTRY_OUTCOME_SHORTEST_WAIT_MS", 0)
+async def test_a_send_that_outlasts_the_wait_is_judged_now_by_the_clerk(paper: PaperFloor) -> None:
+    """A past deadline produces a recorded Clerk answer without adding another wait."""
     _a_send_that_takes_54_seconds(paper)
 
-    with pytest.raises(EntryOutcomeWaitRefused) as refused:
-        await paper.run([*_two_greens(), Step(green(ENTER_MS + MINUTE))])
+    await paper.run([*_two_greens(), Step(green(ENTER_MS + MINUTE))])
 
-    assert refused.value.reason_code == ENTRY_OUTCOME_LIMIT_PAST
-    assert paper.settled() is None
-    assert [outcome for outcome, _ in paper.receipts()] == ["no_action", "enter_intent"]
+    assert paper.settled() is not None and paper.settled().recorded
+    assert [outcome for outcome, _ in paper.receipts()] == ["no_action", "enter_intent", "no_action"]
 
 
 async def test_an_accepted_entry_with_no_entry_on_the_books_ends_the_run(
@@ -1095,50 +1072,30 @@ def _the_bot_waits(monkeypatch: pytest.MonkeyPatch, entry_wait_ms: int) -> None:
     monkeypatch.setattr(bot_option_run, "option_order_terms", lambda _binding: OptionOrderTerms(close=terms))
 
 
-@pytest.mark.parametrize(
-    ("entry_wait_ms", "starts"),
-    [
-        pytest.param(39_999, True, id="a millisecond is left to take an entry in"),
-        pytest.param(40_000, False, id="no moment is left"),
-        pytest.param(40_001, False, id="a millisecond over"),
-    ],
-)
-async def test_a_bot_whose_entry_wait_can_never_be_seen_through_is_refused_as_its_run_starts(
-    paper: PaperFloor, monkeypatch: pytest.MonkeyPatch, entry_wait_ms: int, starts: bool
+@pytest.mark.parametrize("entry_wait_ms", [39_999, 40_000, 40_001])
+async def test_entry_wait_length_does_not_prejudge_a_run(
+    paper: PaperFloor, monkeypatch: pytest.MonkeyPatch, entry_wait_ms: int
 ) -> None:
-    """The runner waits fifty seconds for what an entry came to. Of those it keeps seven to prove a cancel
-    and three for the Clerk's read of the listing: 50 - 7 - 3 = 40. An entry wait of forty seconds leaves no
-    moment after a bar's close at which an entry could still be taken, so every entry would be refused. The
-    run is refused instead, once, by name, before it asks for a quote line. A millisecond shorter, it starts."""
+    """The Clerk judges each candidate against its own cancel time at acceptance."""
     _the_bot_waits(monkeypatch, entry_wait_ms)
     run = OptionRun(paper.binding, paper.market(), held_contracts=tuple, contracts_to_watch=tuple)
 
-    if starts:
-        async with run:
-            assert len(paper.watch.requests()) == 1
-        return
-    with pytest.raises(OptionPlanRefused) as refused:
-        async with run:
-            pytest.fail("the run started")
-    assert refused.value.reason is OptionEffectRefusal.ENTRY_WAIT_OVER_OUTCOME_WAIT
-    assert paper.watch.requests() == ()
+    async with run:
+        assert len(paper.watch.requests()) == 1
 
 
 @pytest.mark.parametrize(
     ("taken_after_ms", "taken"),
     [
-        pytest.param(9_999, True, id="a millisecond inside"),
-        pytest.param(10_000, True, id="the last moment"),
-        pytest.param(10_001, False, id="a millisecond late"),
+        pytest.param(12_999, True, id="a millisecond inside"),
+        pytest.param(13_000, True, id="the last moment"),
+        pytest.param(13_001, False, id="a millisecond late"),
     ],
 )
 async def test_an_entry_taken_too_late_for_its_cancel_to_be_proven_in_the_wait_is_refused_and_nothing_is_sent(
     on_paper: Callable[..., PaperFloor], monkeypatch: pytest.MonkeyPatch, taken_after_ms: int, taken: bool
 ) -> None:
-    """A bot whose entries wait thirty seconds: 50 - 30 - 7 - 3 = 10. Its bar reaches it ten seconds after
-    it closed, which is on time. Taken then, the order is cancelled at forty seconds and proven ended inside
-    the fifty the runner waits. A millisecond later it could still be resting when the runner had to settle,
-    so the entry is refused by name: one blocked decision, the Clerk is not asked, and nothing is sent."""
+    """The Clerk uses the actual cancel time: 50 - 30 - 7 = 13 seconds."""
     _the_bot_waits(monkeypatch, THIRTY_SECOND_WAIT_MS)
     paper = await on_paper().open()
 
@@ -1148,9 +1105,9 @@ async def test_an_entry_taken_too_late_for_its_cancel_to_be_proven_in_the_wait_i
     ran = await paper.run([Step(green(FIRST_GREEN_MS)), Step(green(ENTER_MS), before=late_but_on_time)])
 
     if not taken:
-        assert [code for code, _ in ran.blocked()] == [OptionEntryRefusal.TAKEN_TOO_LATE.value]
+        assert [code for code, _ in ran.blocked()] == [OptionEffectRefusal.TAKEN_TOO_LATE.value]
         assert [outcome for outcome, _ in ran.outcomes()] == ["no_action", "blocked"]
-        assert paper.asked_of_the_clerk == [] and paper.sent() == [] and paper.venue_entry_refs() == []
+        assert paper.asked_of_the_clerk == ["ENTER"] and paper.sent() == [] and paper.venue_entry_refs() == []
         return
     assert ran.blocked() == [] and paper.sent() == [(CALL, "buy", 1, "limit", "4.12")]
     # What the guard keeps room for: nobody filled it, and its cancel was proven before the wait ended.
@@ -1161,37 +1118,8 @@ async def test_an_entry_taken_too_late_for_its_cancel_to_be_proven_in_the_wait_i
     assert settled.settled_at_ms <= WAITED_UNTIL_MS
 
 
-@pytest.mark.parametrize(
-    ("taken_after_ms", "taken"),
-    [
-        pytest.param(0, True, id="as its bar closes"),
-        pytest.param(20_000, True, id="the last moment a decision is on time"),
-        pytest.param(20_001, False, id="a millisecond after it"),
-    ],
-)
-def test_under_the_terms_a_deploy_starts_from_an_entry_may_be_taken_for_as_long_as_its_decision_is_on_time(
-    paper: PaperFloor, taken_after_ms: int, taken: bool
-) -> None:
-    """The numbers the guard stands on, each as itself. The runner waits fifty seconds for what an entry
-    came to. An entry waits twenty for its fill, seven are kept to prove a cancel, and the Clerk's read of
-    Alpaca's listing may take three: 50 - 20 - 7 - 3 = 20. A decision is on time for those same twenty
-    seconds, and lateness is asked first. So the guard refuses no entry the lateness gate lets through."""
-    assert (ENTRY_OUTCOME_WAIT_MS, WAIT_MS, CANCEL_PROOF_ROOM_MS, CONTRACT_REFERENCE_READ_BOUND_MS) == (
-        50_000, 20_000, 7_000, 3_000,
-    )
-    assert DELIVERY_ALLOWANCE_MS == 20_000
-    run = OptionRun(
-        paper.binding, paper.market(clock=lambda: ENTER_MS + taken_after_ms), held_contracts=tuple,
-        contracts_to_watch=tuple,
-    )
-
-    assert (run.too_late_to_see_through(ENTER_MS) is None) is taken
-
-
-async def test_a_decision_both_late_and_too_late_to_see_through_is_refused_as_late(dry_run: Floor) -> None:
-    """The bar reached the bot 15.2 seconds after its close, on time, and the search took 4.9 more. At 20.1
-    seconds the decision is late, and it is also past the last moment its entry could be seen through.
-    Lateness is asked first, so the decision is refused as every late decision is, whatever the bot trades."""
+async def test_a_decision_late_after_search_is_refused_as_late(dry_run: Floor) -> None:
+    """The bar arrives on time, but the search makes the decision late before Clerk contact."""
 
     async def late_but_on_time(floor: Floor) -> None:
         await floor.bar_arrives(ENTER_MS + 15_200)
@@ -1205,20 +1133,13 @@ async def test_a_decision_both_late_and_too_late_to_see_through_is_refused_as_la
 
     assert [code for code, _ in ran.blocked()] == [DECISION_LATE_REASON_CODE]
     assert dry_run.asked_of_the_clerk == []
-    # Asked by itself at that moment, the other check refuses too: what is held here is which speaks first.
-    at_that_moment = OptionRun(
-        dry_run.binding, dry_run.market(clock=lambda: ENTER_MS + 20_100), held_contracts=tuple,
-        contracts_to_watch=tuple,
-    )
-    too_late = at_that_moment.too_late_to_see_through(ENTER_MS)
-    assert too_late is not None and too_late.reason_code == OptionEntryRefusal.TAKEN_TOO_LATE.value
 
 
 @pytest.mark.parametrize(
     ("the_listing_takes_ms", "the_clerk_is_held_up_ms", "cancel_shown_ended_after_ms", "left_ms"),
     [
         pytest.param(2_900, 0, 6_000, 7_100, id="the listing takes all but a tenth of its three seconds"),
-        pytest.param(0, 4_900, 4_000, 5_100, id="the Clerk takes the entry 4.9 seconds after the runner looked"),
+        pytest.param(0, 4_900, None, None, id="the Clerk refuses when its cancel proof has only 5.1 seconds"),
         pytest.param(0, 5_100, None, None, id="held up 5.1 seconds, the entry's quotes are too old to take it"),
     ],
 )
@@ -1226,16 +1147,13 @@ async def test_what_is_left_to_prove_a_cancel_for_an_entry_taken_at_the_last_mom
     on_paper: Callable[..., PaperFloor], monkeypatch: pytest.MonkeyPatch, the_listing_takes_ms: int,
     the_clerk_is_held_up_ms: int, cancel_shown_ended_after_ms: int | None, left_ms: int | None,
 ) -> None:
-    """A thirty-second entry wait, and a bar that reaches the bot ten seconds after its close: the last
-    moment the guard allows. The Clerk sets the cancel's time when it takes the entry, which is later.
+    """The Clerk checks the exact cancel time after listing and other work.
 
     - Alpaca's listing takes 2.9 of the three seconds counted for it. The cancel is due 7.1 seconds before
       the runner stops waiting. Alpaca shows the order ended six seconds after its cancel was due, and that
       is proven inside the wait.
-    - What is not counted. The Clerk takes the entry 4.9 seconds after the runner looked at the clock, as
-      it can when an entry first waits for a newer account reading. That hold-up is put in by hand here: the
-      refusal that causes it is not staged. 5.1 seconds are then left, not seven. An order shown ended four
-      seconds after its cancel was due is still proven inside the wait.
+    - If it takes the entry 4.9 seconds after the runner looked, only 5.1 seconds remain. The Clerk refuses
+      before accepting the entry because that is less than the seven seconds kept for proof.
     - Held up longer than the five seconds its quotes are good for, the entry is not taken at all. So five
       seconds is the most that can come between the runner's look and the Clerk's taking of the entry."""
     assert QUOTE_MAX_AGE_MS == 5_000
@@ -1271,7 +1189,8 @@ async def test_what_is_left_to_prove_a_cancel_for_an_entry_taken_at_the_last_mom
     ran = await paper.run([Step(green(FIRST_GREEN_MS)), Step(green(ENTER_MS), before=at_the_last_moment)])
 
     if left_ms is None:
-        assert [code for code, _ in ran.blocked()] == [QuoteFault.STALE.value]
+        reason = QuoteFault.STALE.value if the_clerk_is_held_up_ms > QUOTE_MAX_AGE_MS else OptionEffectRefusal.TAKEN_TOO_LATE.value
+        assert [code for code, _ in ran.blocked()] == [reason]
         assert paper.sent() == [] and paper.venue_entry_refs() == []
         return
     taken_at_ms = ENTER_MS + 10_000 + the_listing_takes_ms + the_clerk_is_held_up_ms

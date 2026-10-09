@@ -1724,10 +1724,8 @@ async def _settle_option_entry(
     The settlement is always the Clerk's, and the runner works out none of
     its own: a later Start replays the entry by the Clerk's record, so an
     answer the runner made up could not be replayed. The send itself can
-    outlast the wait. The limit asked for is then a moment from now and not
-    one already past (``ENTRY_OUTCOME_SHORTEST_WAIT_MS``), so the Clerk
-    still looks again until that limit, judges, and records its answer. A
-    wait the Clerk refuses all the same is raised, and ends the run.
+    outlast the wait. The Clerk judges an already-past limit immediately
+    and records that answer.
 
     The limit is also never further from now than the wait itself. A clock
     set back while the send was out would otherwise put the bar's close,
@@ -1735,16 +1733,12 @@ async def _settle_option_entry(
     stream for as long.
     """
     from app.services.bot_option_run import (
-        ENTRY_OUTCOME_SHORTEST_WAIT_MS,
         ENTRY_OUTCOME_WAIT_MS,
         entry_came_to,
     )
 
     now_ms = now_ms_utc()
-    until_ms = max(
-        min(evaluation.decision_bar_close_ms + ENTRY_OUTCOME_WAIT_MS, now_ms + ENTRY_OUTCOME_WAIT_MS),
-        now_ms + ENTRY_OUTCOME_SHORTEST_WAIT_MS,
-    )
+    until_ms = min(evaluation.decision_bar_close_ms + ENTRY_OUTCOME_WAIT_MS, now_ms + ENTRY_OUTCOME_WAIT_MS)
     settled = await clerk.await_entry_outcome(
         strategy_instance_id=binding.strategy_instance_id,
         decision_id=evaluation.evaluation_id,
@@ -1827,11 +1821,9 @@ async def _option_decision_facts(
     A refusal on the way is one protected ``blocked`` receipt with its own
     reason code and sentence; the candidate is discarded, and nothing is kept
     for a later bar. The resolve and the recheck take time, so lateness is
-    judged again after them, as it is after the wait for a price. Then the
-    run says whether an entry taken this late could still be cancelled and
-    proven ended while the runner waits for what it came to
-    (``OptionRun.too_late_to_see_through``). Nothing after that looks at the
-    clock before the order is sent.
+    judged again after them, as it is after the wait for a price. The Clerk
+    receives the deadline with the entry and judges its actual cancel time
+    at acceptance.
     """
     if intent.kind is SignalIntentKind.EXIT:
         if not clerk.simulates_fills:
@@ -1851,10 +1843,7 @@ async def _option_decision_facts(
         )
         if late.refused:
             return None
-        too_late = options.too_late_to_see_through(evaluation.decision_bar_close_ms)
-        if too_late is None:
-            return {"option_entry": found}
-        blocked, not_sent = too_late, "Bot entry not sent: taken this late, its order could not be seen through"
+        return {"option_entry": found}
     else:
         blocked, not_sent = found, "Bot entry not sent: its option contracts could not be resolved"
     _discard_evaluation(evaluation)

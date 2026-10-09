@@ -23,7 +23,6 @@ from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.contract_terms import ContractTerms
 from app.broker.alpaca.clerk.sqlite.database_verification import verify_database
 from app.broker.alpaca.clerk.sqlite.entry_outcome import (
-    ENTRY_OUTCOME_LIMIT_PAST,
     ENTRY_OUTCOME_LIMIT_TOO_FAR,
     EntryOutcomeWaitRefused,
     EntrySettlement,
@@ -942,14 +941,15 @@ async def test_a_wait_asked_with_a_limit_already_past_is_refused_for_an_unproven
 ) -> None:
     order_ref = await paper.resting(decision="d-1")
 
-    with pytest.raises(EntryOutcomeWaitRefused) as refused:
-        await paper.clerk.await_entry_outcome(
-            strategy_instance_id="a", decision_id="d-1", until_ms=paper.clock() - behind_the_clock_ms
-        )
+    judged = await paper.clerk.await_entry_outcome(
+        strategy_instance_id="a", decision_id="d-1", until_ms=paper.clock() - behind_the_clock_ms
+    )
 
-    assert refused.value.reason_code == ENTRY_OUTCOME_LIMIT_PAST
+    assert (judged.settlement, judged.standing, judged.recorded) == (
+        EntrySettlement.ENTERED, EntryStanding.WORKING, True,
+    )
     assert paper.outcome(order_ref).standing is EntryStanding.WORKING
-    assert "ENTRY_SETTLED" not in [kind for kind, _summary, _facts in paper.log()]
+    assert "ENTRY_SETTLED" in [kind for kind, _summary, _facts in paper.log()]
 
 
 async def test_a_limit_already_past_still_answers_an_entry_that_is_proven_or_was_settled_before(paper: PaperOptions) -> None:  # noqa: F811

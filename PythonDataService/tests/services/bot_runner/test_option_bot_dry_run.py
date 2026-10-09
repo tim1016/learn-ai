@@ -33,7 +33,7 @@ from app.broker.alpaca.clerk.held_option_quotes import KEEP_EVERY_MS, reset_held
 from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
 from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal, OptionPlanRefused
 from app.broker.alpaca.clerk.sqlite import runtime as clerk_runtime
-from app.broker.alpaca.clerk.sqlite.entry_outcome import ENTRY_OUTCOME_LIMIT_PAST, EntryOutcomeWaitRefused
+from app.broker.alpaca.clerk.sqlite.entry_outcome import ENTRY_OUTCOME_LIMIT_TOO_FAR, EntryOutcomeWaitRefused
 from app.broker.alpaca.clerk.sqlite.risk_admission import current_risk_readiness
 from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection, SimulationEvidenceUnavailable
 from app.broker.alpaca.market_liveness import set_market_liveness_consumer
@@ -1652,7 +1652,7 @@ async def test_a_run_ended_by_a_refused_wait_for_its_entrys_outcome_is_recorded_
     """The Clerk refuses the runner's wait for what an option entry came to, and the runner settles nothing
     by itself, so the run ends. Through the registry's own supervision: the bot's page says so in the
     refusal's code, not the name of a Python exception, and the bot is left stopped."""
-    refused = EntryOutcomeWaitRefused(ENTRY_OUTCOME_LIMIT_PAST, "the limit was already past when the wait was asked for")
+    refused = EntryOutcomeWaitRefused(ENTRY_OUTCOME_LIMIT_TOO_FAR, "the wait limit was too far ahead")
     registry = _registry(tmp_path, _FakeFeed([_bar(_T0)], mode="crash", error=refused))
     await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
@@ -1660,7 +1660,7 @@ async def test_a_run_ended_by_a_refused_wait_for_its_entrys_outcome_is_recorded_
 
     view = registry.status("alpaca", _SID)
     assert view.duty_outcome is not None
-    assert (view.duty_outcome.kind, view.duty_outcome.reason_code) == ("CRASHED", ENTRY_OUTCOME_LIMIT_PAST)
+    assert (view.duty_outcome.kind, view.duty_outcome.reason_code) == ("CRASHED", ENTRY_OUTCOME_LIMIT_TOO_FAR)
     assert view.desired_state == "STOPPED"
 
 
