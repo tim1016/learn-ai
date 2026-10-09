@@ -1,0 +1,112 @@
+{
+  "quantlib_version": "1.42.1",
+  "engine": "FdBlackScholesVanillaEngine",
+  "cash_dividend_model": "Escrowed",
+  "scheme": "Douglas",
+  "time_steps": 2000,
+  "price_steps": 2000,
+  "cases": [
+    {
+      "case": "59d_ex_on_day_1_vol0.6_k80_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 80.0,
+        "years_to_expiry": 0.16164383561643836,
+        "rate": 0.045,
+        "volatility": 0.6,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.0027397260273972603,
+            "cash": 3.0
+          }
+        ]
+      }
+    },
+    {
+      "case": "59d_ex_on_day_1_vol0.6_k80_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 80.0,
+        "years_to_expiry": 0.16164383561643836,
+        "rate": 0.045,
+        "volatility": 0.6,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.0027397260273972603,
+            "cash": 3.0
+          }
+        ]
+      }
+    },
+    {
+      "case": "59d_ex_on_day_2_vol0.6_k80_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 80.0,
+        "years_to_expiry": 0.16164383561643836,
+        "rate": 0.045,
+        "volatility": 0.6,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.005479452054794521,
+            "cash": 3.0
+          }
+        ]
+      }
+    },
+    {
+      "case": "59d_ex_on_day_2_vol0.6_k80_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 80.0,
+        "years_to_expiry": 0.16164383561643836,
+        "rate": 0.045,
+        "volatility": 0.6,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.005479452054794521,
+            "cash": 3.0
+          }
+        ]
+      }
+    },
+    {
+      "case": "59d_ex_on_day_59_vol0.6_k80_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 80.0,
+        "years_to_expiry": 0.16164383561643836,
+        "rate": 0.045,
+        "volatility": 0.6,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.16164383561643836,
+            "cash": 3.0
+          }
+        ]
+      }
+    },
+    {
+      "case": "59d_ex_on_day_59_vol0.6_k80_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 80.0,
+        "years_to_expiry": 0.16164383561643836,
+        "rate": 0.045,
+        "volatility": 0.6,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.16164383561643836,
+            "cash": 3.0
+          }
+        ]
+      }
+    }
+  ]
+}

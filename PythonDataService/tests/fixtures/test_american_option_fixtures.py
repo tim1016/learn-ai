@@ -1,4 +1,4 @@
-"""Golden parity for the American option pricer against QuantLib (AM-001 to AM-005)."""
+"""Golden parity for the American option pricer against QuantLib (AM-001 to AM-006)."""
 
 from __future__ import annotations
 
@@ -115,6 +115,48 @@ def test_the_default_step_count_stays_within_a_thousandth_of_delta_of_the_second
 
     _assert_close(
         values, [expected for _, expected in cases], price=_DEFAULT_STEPS_PRICE_ATOL, delta=_DEFAULT_STEPS_DELTA_ATOL
+    )
+
+
+def test_near_ex_dividend_price_and_delta_match_the_second_engine_at_fine_steps() -> None:
+    """AM-006: the day-one dividend call that AM-002 did not cover, plus nearby cases."""
+    cases = _cases("AM-006")
+    values = [american_value(**_with_its_dividends(case["input"]), steps=2003) for case, _ in cases]
+
+    _assert_close(values, [expected for _, expected in cases], price=3e-3, delta=1e-4)
+
+
+def test_near_ex_dividend_default_price_stays_within_half_a_cent_of_the_second_engine() -> None:
+    """AM-006: the default must price the call a day before ex-date more closely."""
+    cases = _cases("AM-006")
+    values = [american_value(**_with_its_dividends(case["input"])) for case, _ in cases]
+
+    _assert_close(values, [expected for _, expected in cases], price=5e-3, delta=1e-3)
+
+
+def test_near_ex_dividend_default_solves_the_second_engines_price_back_to_its_volatility() -> None:
+    """AM-006: the improved price reaches implied volatility and the delta used to pick a leg."""
+    cases = _cases("AM-006")
+    solved = [
+        american_implied_volatility(
+            **{key: value for key, value in _with_its_dividends(given["input"]).items() if key != "volatility"},
+            price=expected["price"],
+        )
+        for given, expected in cases
+    ]
+
+    assert [result.status for result in solved] == [AmericanIvStatus.SOLVED] * len(cases)
+    np.testing.assert_allclose(
+        [result.volatility for result in solved],
+        [given["input"]["volatility"] for given, _ in cases],
+        atol=5e-4,
+        rtol=0,
+    )
+    np.testing.assert_allclose(
+        [result.delta for result in solved],
+        [expected["delta"] for _, expected in cases],
+        atol=1e-3,
+        rtol=0,
     )
 
 
@@ -313,3 +355,11 @@ def test_a_days_decay_at_the_default_step_count_stays_close_to_the_second_engine
             atol=atol,
             group=group,
         )
+
+
+def test_a_days_decay_with_adaptive_default_stays_close_near_an_ex_date() -> None:
+    """AM-005: default call pricing uses more steps with cash dividends."""
+    cases = _cases("AM-005")
+    decays = [american_daily_decay(**_with_its_dividends(case["input"])) for case, _ in cases]
+
+    _assert_decay_close(decays, [expected for _, expected in cases], atol=2e-3)

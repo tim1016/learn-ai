@@ -2239,7 +2239,7 @@
       "tolerance": {
         "atol": 0.01,
         "rtol": 0.0,
-        "note": "The one figure here is the loosest a test of this fixture accepts. An accepted divergence, looser than the strict default: no pinned engine builds this tree with cash dividends, so the decay is checked against a finite-difference grid good to about 2e-5 in the decay (under 1.7e-5 from its own doubling) and agrees to the tree's discretization error. With the canonical tree at 2,003 steps every case is held to atol 2e-3; measured maximum 9.4e-4 in the decay over 100 cases. At the default 401 steps each of the six groups of cases is held to about twice its own measured gap, from 5e-4 with no dividend to 1e-2 for the two groups with a price a day before an ex-date; measured maximum 8.1e-3, a call in the money whose stock goes ex on day 2. These are the fixture's own measured gaps, not a bound: outside it 2e-2 was measured at 401 steps for a call in the money with a larger dividend going ex two days out, and 1e-4 at 2,003. A stock that goes ex inside the day is priced a day later at its price less the dividend in full; the tolerance tells that apart from holding the quoted price (6.4e-2 to 1.75 away) but not from taking off the dividend's present value (2.2e-4 away), which a direct test pins. The test file states every tolerance."
+        "note": "The one figure here is the loosest a test of this fixture accepts. An accepted divergence, looser than the strict default: no pinned engine builds this tree with cash dividends, so the decay is checked against a finite-difference grid good to about 2e-5 in the decay (under 1.7e-5 from its own doubling) and agrees to the tree's discretization error. With the canonical tree at 2,003 steps every case is held to atol 2e-3; measured maximum 9.4e-4 in the decay over 100 cases. At the default 401 steps each of the six groups of cases is held to about twice its own measured gap, from 5e-4 with no dividend to 1e-2 for the two groups with a price a day before an ex-date; measured maximum 8.1e-3, a call in the money whose stock goes ex on day 2. These are the fixture's own measured gaps, not a bound: outside it 2e-2 was measured at 401 steps for a call in the money with a larger dividend going ex two days out, and 1e-4 at 2,003. A stock that goes ex inside the day is priced a day later at its price less the dividend in full; the tolerance tells that apart from holding the quoted price (6.4e-2 to 1.75 away) but not from taking off the dividend's present value (2.2e-4 away), which a direct test pins. The test file states every tolerance. With the adaptive default the measured maximum is 8.9e-4 in decay and 1.57e-3 in either price on these cases; the new test holds all three figures to atol 2e-3."
       },
       "active_version": 1,
       "versions": {
@@ -2262,7 +2262,55 @@
       "status": "active",
       "validated_by": [
         "tests/fixtures/test_american_option_fixtures.py::test_a_days_decay_with_cash_dividends_matches_the_second_engines_difference",
-        "tests/fixtures/test_american_option_fixtures.py::test_a_days_decay_at_the_default_step_count_stays_close_to_the_second_engine_group_by_group"
+        "tests/fixtures/test_american_option_fixtures.py::test_a_days_decay_at_the_default_step_count_stays_close_to_the_second_engine_group_by_group",
+        "tests/fixtures/test_american_option_fixtures.py::test_a_days_decay_with_adaptive_default_stays_close_near_an_ex_date"
+      ]
+    },
+    {
+      "id": "AM-006",
+      "name": "American option price and delta with a cash dividend one day ahead — QuantLib escrowed finite-difference engine",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/options/american.py",
+      "canonical_callable": "american_value",
+      "reference": {
+        "kind": "external_reference",
+        "oracle": "QuantLib 1.42.1 FdBlackScholesVanillaEngine, CashDividendModel.Escrowed, Douglas scheme, 2000 x 2000 grid",
+        "citation": "QuantLib 1.42.1 FdBlackScholesVanillaEngine with escrowed cash dividends; Hull, Options, Futures, and Other Derivatives, known dollar dividend. See the fixture attribution."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "PythonDataService/scripts/fixture_generators/american_options.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.005,
+        "rtol": 0.0,
+        "note": "An accepted second-engine discretization divergence, not rounding. At the adaptive default, price atol 5e-3 and delta atol 1e-3 over six cases; measured maxima 2.87e-3 and 2.83e-4. At explicit 2,003 steps, price atol 3e-3 and delta atol 1e-4; measured maxima 1.66e-3 and 5.74e-5. An explicit 401-step day-one in-the-money call is 1.90e-2 below the reference, outside AM-002’s own 5e-3 fixture tolerance. The test file states both tolerances. The adaptive implied-volatility solve recovers the reference input within atol 5e-4 and its delta within atol 1e-3; measured maxima 4.30e-4 and 4.79e-4."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.json": "702c4526ad2ba05bca9ecfd0d2cd474ee34848de43b7572a8cfc927134d8f990",
+            "output.json": "c9a648f41a7a14cc4da3df0aad1f97f2271b5e738bd8e058494ccdfe0c37d2fe",
+            "attribution.md": "779f4f1009ca2724d3014d97b49d7e347442256b1783450e943f2fed8e10c69f"
+          },
+          "file_sha256": {
+            "input.json": "5817c5f1b53250b00c1ca3d49ee60e775d1e62738c5b74de0e4ec70e322436ba",
+            "output.json": "f19171e7ad4b94c9df25064401886dea90d58b33bccf211e88f289618ce758e0",
+            "attribution.md": "779f4f1009ca2724d3014d97b49d7e347442256b1783450e943f2fed8e10c69f"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_american_option_fixtures.py::test_near_ex_dividend_price_and_delta_match_the_second_engine_at_fine_steps",
+        "tests/fixtures/test_american_option_fixtures.py::test_near_ex_dividend_default_price_stays_within_half_a_cent_of_the_second_engine",
+        "tests/fixtures/test_american_option_fixtures.py::test_near_ex_dividend_default_solves_the_second_engines_price_back_to_its_volatility"
       ]
     },
     {

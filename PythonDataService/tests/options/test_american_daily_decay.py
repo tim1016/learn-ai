@@ -38,6 +38,29 @@ def _ex_in(span_ms: int, cash: float) -> CashDividend:
     return CashDividend(years_to_ex=years_from_ms(span_ms), cash=cash)
 
 
+def test_default_price_and_decay_do_not_jump_when_the_ex_date_moves_one_millisecond() -> None:
+    """A step-selection cutoff must not turn an immaterial timing change into a price change."""
+    given = _AT_THE_MONEY | {
+        "spot": 100.0,
+        "strike": 80.0,
+        "years_to_expiry": years_from_ms(59 * ONE_DAY_MS),
+        "volatility": 1.0,
+        "right": "call",
+    }
+    at_two_days = given | {"dividends": (_ex_in(2 * ONE_DAY_MS, 8.0),)}
+    one_ms_later = given | {"dividends": (_ex_in(2 * ONE_DAY_MS + 1, 8.0),)}
+
+    first_price = american_value(**at_two_days)
+    next_price = american_value(**one_ms_later)
+    first_decay = american_daily_decay(**at_two_days)
+    next_decay = american_daily_decay(**one_ms_later)
+
+    assert first_price is not None and next_price is not None
+    assert first_decay is not None and next_decay is not None
+    assert abs(first_price.price - next_price.price) < 1e-5
+    assert abs(first_decay.decay - next_decay.decay) < 1e-5
+
+
 # A call on a stock that pays nothing is never exercised early, so the tree prices the contract the
 # closed form does and differs from it by its own step error. That error falls with the square of
 # the step count: over these 48 contracts the largest gap in the decay is 2.4e-6 at 101 steps,
@@ -321,7 +344,7 @@ def test_a_dividend_going_ex_exactly_a_day_from_now_has_gone_ex_and_a_millisecon
     assert at_a_day.price_a_day_later == pytest.approx(just_after.price_a_day_later, abs=_SAME_PRICE_ATOL, rel=0)
 
 
-def test_an_ex_date_exactly_on_a_tree_step_moves_the_later_price_by_no_more_than_a_steps_error() -> None:
+def test_an_ex_date_exactly_on_an_explicit_401_step_tree_moves_by_no_more_than_a_steps_error() -> None:
     """A day later this call has 401 hours left and its stock goes ex 100 hours in: exactly on step
     100 of the tree's 401. Whether that step is before the ex-date is decided by the last bit of the
     two times. The decay takes a day off each time as a float and lands on one side; the same
@@ -338,12 +361,19 @@ def test_an_ex_date_exactly_on_a_tree_step_moves_the_later_price_by_no_more_than
                 "years_to_expiry": years_from_ms(ONE_DAY_MS + 401 * _HOUR_MS),
                 "dividends": (_ex_in(ONE_DAY_MS + 100 * _HOUR_MS, 1.75),),
             }
-        )
+        ),
+        steps=DEFAULT_TREE_STEPS,
     )
-    from_instants = american_value(**(a_day_later | {"dividends": (_ex_in(100 * _HOUR_MS, 1.75),)}))
-    # The same contract going ex on step 5, a millisecond before the step and a millisecond after.
+    from_instants = american_value(
+        **(a_day_later | {"dividends": (_ex_in(100 * _HOUR_MS, 1.75),)}), steps=DEFAULT_TREE_STEPS
+    )
+    # The same contract at an explicitly requested 401 steps, a millisecond either side of step 5.
     before_step_5, after_step_5 = (
-        american_value(**(a_day_later | {"dividends": (_ex_in(5 * _HOUR_MS + shift_ms, 1.75),)})) for shift_ms in (-1, 1)
+        american_value(
+            **(a_day_later | {"dividends": (_ex_in(5 * _HOUR_MS + shift_ms, 1.75),)}),
+            steps=DEFAULT_TREE_STEPS,
+        )
+        for shift_ms in (-1, 1)
     )
 
     assert worked is not None and from_instants is not None

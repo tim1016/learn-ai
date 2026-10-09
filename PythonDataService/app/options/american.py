@@ -24,7 +24,7 @@ Reference: Leisen & Reimer (1996), "Binomial models for option valuation -
   ``CashDividendModel.Escrowed`` is the independent check.
 Canonical implementation: this file.
 Validated against: tests/fixtures/test_american_option_fixtures.py (golden
-  fixtures AM-001 to AM-005), tests/options/test_american.py and
+  fixtures AM-001 to AM-006), tests/options/test_american.py and
   tests/options/test_american_daily_decay.py.
 
 Why a tree and not the closed form the rest of the repo uses: a stock or ETF
@@ -35,9 +35,12 @@ Why this tree: with no dividend it reproduces a second pinned engine to
 Accepted divergence, with cash dividends. No engine pinned here builds this
 tree with cash dividends, so that path is checked against QuantLib's
 finite-difference engine for the same escrowed model and agrees with it only
-to the tree's own discretization error: within 1e-3 in price and 2e-4 in
-delta at 2,001 steps, and within 5e-3 and 1e-3 at the default 401 (fixture
-AM-002), not the 1e-9 the no-dividend path meets. An implied volatility
+to the tree's own discretization error. On fixture AM-002, 2,001 steps are
+held to 1e-3 in price and 2e-4 in delta; 401 steps are held to 5e-3 and
+1e-3. Those are fixture tolerances, not bounds on other contracts: AM-006's
+call a day before a $3 ex-date missed the second engine by 1.9e-2 at 401.
+The default uses 1,009 steps for a call with a dividend before or at expiry,
+bringing AM-006's largest price gap to 2.9e-3. An implied volatility
 solved from that engine's price is within 5e-4 of its volatility inside one
 standard deviation of the money, and looser beyond, where vega is small.
 
@@ -59,15 +62,10 @@ the fixture 1.6e-9 was measured with a later price fifteen minutes from
 expiry, and 1.7e-9 with one minute. With cash dividends it is checked
 against the finite-difference engine's difference and agrees to the tree's
 step error, as the price does. On fixture AM-005's cases the largest gap is
-9.4e-4 at 2,003 steps and 8.1e-3 at the default 401. Those are the
-fixture's own measured gaps, not a bound. The gap is largest where one of
-the two prices is a day before an ex-date: a call in the money whose stock
-goes ex one or two days out. The fixture's cases with no ex-date that near
-are within 8.0e-4 at 401 steps. Outside the fixture a gap of 2e-2, 16% of
-the decay, was measured at the default 401 steps for a call in the money
-with a large dividend going ex two days out at high volatility; at 2,003
-steps that gap was 1e-4. So near an ex-date the figure at the default steps
-is an estimate.
+9.4e-4 at an explicit 2,003 steps, 8.1e-3 at an explicit 401 steps, and
+8.9e-4 with the adaptive default. Those are the fixture's own measured gaps,
+not bounds. The gap is largest where one of the two prices is a day before
+an ex-date: a call in the money whose stock goes ex one or two days out.
 
 What it does not do. It has no continuous dividend yield: a bot's dividends
 are cash amounts on dates, given explicitly, and there is no default of
@@ -83,9 +81,11 @@ zero, at any time to expiry. The price there moves in steps of up to about
 about 2e-7/√T: 1e-6 at thirty days, 1e-4 at one minute.
 A dividend whose ex-date falls exactly on a tree step is counted before or
 after that step by the last bit of the two times, and the price can move by
-a step's error for it. The move measured is 5.6e-3 to 1.1e-2 at 401 steps.
+a step's error for it. The move measured is 5.6e-3 to 1.1e-2 at an explicit
+401 steps.
 An ex-date lands on a step only at isolated instants. Whole days to both
-the expiry and the ex-date never do under 401 days, because 401 is prime.
+the expiry and the ex-date never do under 401 or 1,009 days, because both
+step counts are prime.
 The daily decay takes a day off each time as a float, so there its later
 price can differ that much from a price worked a day later from instants.
 """
@@ -113,6 +113,8 @@ _ONE_DAY_YEARS = ONE_DAY_MS / MS_PER_YEAR
 _MIN_YEARS_FOR_A_PRICE_A_DAY_LATER = (ONE_DAY_MS + MIN_TIME_TO_EXPIRY_MS) / MS_PER_YEAR
 # Odd, as the tree requires. More steps buy accuracy with time, about linearly in both.
 DEFAULT_TREE_STEPS = 401
+# A call with a cash dividend needs a finer default tree to resolve early exercise.
+DIVIDEND_CALL_TREE_STEPS = 1009
 MIN_VOLATILITY = 0.005
 MAX_VOLATILITY = 5.0
 _VOLATILITY_XTOL = 1e-12
@@ -327,6 +329,19 @@ def _require_dividends(dividends: Sequence[CashDividend]) -> None:
             raise ValueError(f"a cash dividend is a finite amount above zero at a finite time; got {dividend}")
 
 
+def _effective_steps(
+    steps: int | None, *, right: OptionRight, years_to_expiry: float, dividends: Sequence[CashDividend]
+) -> int:
+    if steps is not None:
+        return steps
+    if right == "call" and any(
+        0.0 < dividend.years_to_ex <= years_to_expiry
+        for dividend in dividends
+    ):
+        return DIVIDEND_CALL_TREE_STEPS
+    return DEFAULT_TREE_STEPS
+
+
 def _exercise_value(stock: np.ndarray | float, strike: float, right: OptionRight) -> np.ndarray | float:
     return np.maximum(stock - strike, 0.0) if right == "call" else np.maximum(strike - stock, 0.0)
 
@@ -374,18 +389,21 @@ def american_value(
     volatility: float,
     right: OptionRight,
     dividends: Sequence[CashDividend],
-    steps: int = DEFAULT_TREE_STEPS,
+    steps: int | None = None,
 ) -> AmericanValue | None:
     """The model price and delta of one American option, per share.
 
     ``dividends`` is every cash dividend the stock may go ex on; it has no
-    default, so pricing with none is said, never assumed. ``None`` when the
+    default, so pricing with none is said, never assumed. With ``steps=None``
+    the tree uses 401 steps, or 1,009 for a call with an ex-date before or at
+    expiry. An explicit ``steps`` is used exactly. ``None`` when the
     strike is too far from the price, for this time and volatility, for the
     tree to resolve, or the inputs are so extreme its prices overflow: such
     an option is not given a made-up value.
     """
-    _require_inputs(spot=spot, strike=strike, years_to_expiry=years_to_expiry, rate=rate, right=right, steps=steps)
     _require_dividends(dividends)
+    effective_steps = _effective_steps(steps, right=right, years_to_expiry=years_to_expiry, dividends=dividends)
+    _require_inputs(spot=spot, strike=strike, years_to_expiry=years_to_expiry, rate=rate, right=right, steps=effective_steps)
     if not (math.isfinite(volatility) and volatility > 0):
         raise ValueError(f"volatility must be a finite number above zero; got {volatility}")
     tree = _tree(
@@ -395,13 +413,13 @@ def american_value(
         rate=rate,
         volatility=volatility,
         dividends=dividends,
-        steps=steps,
+        steps=effective_steps,
     )
     if tree is None:
         return None
     with np.errstate(over="ignore", invalid="ignore"):
         value = _roll_back(
-            tree, strike=strike, right=right, rate=rate, years_to_expiry=years_to_expiry, dividends=dividends, steps=steps
+            tree, strike=strike, right=right, rate=rate, years_to_expiry=years_to_expiry, dividends=dividends, steps=effective_steps
         )
     return value if math.isfinite(value.price) and math.isfinite(value.delta) else None
 
@@ -415,7 +433,7 @@ def american_daily_decay(
     volatility: float,
     right: OptionRight,
     dividends: Sequence[CashDividend],
-    steps: int = DEFAULT_TREE_STEPS,
+    steps: int | None = None,
 ) -> AmericanDailyDecay | None:
     """What the next 24 hours take from one American option's model price, per share.
 
@@ -425,9 +443,9 @@ def american_daily_decay(
     a weekend three such days pass before the next session, and this figure
     is one of them.
 
-    Near an ex-date the figure at the default ``steps`` is an estimate: with
-    a dividend going ex two days out it was measured a sixth out, so a caller
-    shows it as an estimate or asks for more steps.
+    Each price uses the same default selection as ``american_value``. On
+    fixture AM-005 the adaptive default's largest difference from the second
+    engine is 8.9e-4, measured across its cases, not a bound.
 
     A contract with less than a day and a minute left is worth, a day later,
     what exercising pays at the held stock price: nothing when it is out of
@@ -497,7 +515,7 @@ def american_implied_volatility(
     rate: float,
     right: OptionRight,
     dividends: Sequence[CashDividend],
-    steps: int = DEFAULT_TREE_STEPS,
+    steps: int | None = None,
 ) -> AmericanIv:
     """The volatility at which the model prices the option at ``price``, and the delta there.
 
@@ -505,8 +523,9 @@ def american_implied_volatility(
     did not converge does not return where it stopped.
     """
     try:
-        _require_inputs(spot=spot, strike=strike, years_to_expiry=years_to_expiry, rate=rate, right=right, steps=steps)
         _require_dividends(dividends)
+        effective_steps = _effective_steps(steps, right=right, years_to_expiry=years_to_expiry, dividends=dividends)
+        _require_inputs(spot=spot, strike=strike, years_to_expiry=years_to_expiry, rate=rate, right=right, steps=effective_steps)
         _escrowed_spot(spot, dividends, rate=rate, years_to_expiry=years_to_expiry)
         if not (math.isfinite(price) and price > 0):
             raise ValueError(f"an option price must be a finite number above zero; got {price}")
@@ -530,7 +549,7 @@ def american_implied_volatility(
             volatility=volatility,
             right=right,
             dividends=dividends,
-            steps=steps,
+            steps=effective_steps,
         )
 
     # The lowest volatility at which the tree can resolve this strike. Below it the option has no
