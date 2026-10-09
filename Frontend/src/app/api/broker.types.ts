@@ -7721,6 +7721,8 @@ export interface components {
             parityVerdicts: components["schemas"]["BacktestRunParityVerdictResponse"][];
             /** Profitfactor */
             profitFactor: number | null;
+            /** Quarantineddecisionbars */
+            quarantinedDecisionBars: components["schemas"]["BacktestRunQuarantinedDecisionBarResponse"][];
             /** Requestedengine */
             requestedEngine: string | null;
             /** Sharperatio */
@@ -7785,6 +7787,20 @@ export interface components {
             status: string;
             /** Verdictjson */
             verdictJson: string;
+        };
+        /**
+         * BacktestRunQuarantinedDecisionBarResponse
+         * @description One decision bar the run's session refused, so the run never decided it (#2909).
+         */
+        BacktestRunQuarantinedDecisionBarResponse: {
+            /** Barendms */
+            barEndMs: number;
+            /** Barstartms */
+            barStartMs: number;
+            /** Expectedtimeframems */
+            expectedTimeframeMs: number;
+            /** Reason */
+            reason: string;
         };
         /** BacktestRunResult */
         BacktestRunResult: {
@@ -22443,6 +22459,26 @@ export interface components {
             volatility: number;
         };
         /**
+         * QuarantinedDecisionBarRecord
+         * @description One decision bar the run's session refused, so the run never decided it (#2909).
+         *
+         *     A bucket whose width does not match the program's decision clock is
+         *     quarantined before any indicator or strategy code runs: no decision, no
+         *     trace, no fill. The refusal is recorded so a saved run says which decision
+         *     bars it dropped; ``bar_end_ms - bar_start_ms`` is the refused bucket's own
+         *     width, and ``expected_timeframe_ms`` the clock it failed to match.
+         */
+        QuarantinedDecisionBarRecord: {
+            /** Bar End Ms */
+            bar_end_ms: number;
+            /** Bar Start Ms */
+            bar_start_ms: number;
+            /** Expected Timeframe Ms */
+            expected_timeframe_ms: number;
+            /** Reason */
+            reason: string;
+        };
+        /**
          * ReadinessCheckView
          * @description Current enforcement check for one operation, separate from transaction history.
          */
@@ -23378,6 +23414,11 @@ export interface components {
             data_availability_hash?: string | null;
             /** Data Contract */
             data_contract: string;
+            /**
+             * Quarantined Decision Bars
+             * @default []
+             */
+            quarantined_decision_bars?: components["schemas"]["QuarantinedDecisionBarRecord"][];
             /**
              * Schema Version
              * @default 1

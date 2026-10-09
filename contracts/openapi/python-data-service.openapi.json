@@ -3122,6 +3122,13 @@
             ],
             "title": "Profitfactor"
           },
+          "quarantinedDecisionBars": {
+            "items": {
+              "$ref": "#/components/schemas/BacktestRunQuarantinedDecisionBarResponse"
+            },
+            "title": "Quarantineddecisionbars",
+            "type": "array"
+          },
           "requestedEngine": {
             "anyOf": [
               {
@@ -3306,7 +3313,8 @@
           "trades",
           "tradesTruncated",
           "parityVerdicts",
-          "closingBarSkips"
+          "closingBarSkips",
+          "quarantinedDecisionBars"
         ],
         "title": "BacktestRunDetailResponse",
         "type": "object"
@@ -3379,6 +3387,40 @@
           "createdAt"
         ],
         "title": "BacktestRunParityVerdictResponse",
+        "type": "object"
+      },
+      "BacktestRunQuarantinedDecisionBarResponse": {
+        "description": "One decision bar the run's session refused, so the run never decided it (#2909).",
+        "properties": {
+          "barEndMs": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Barendms",
+            "type": "integer"
+          },
+          "barStartMs": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Barstartms",
+            "type": "integer"
+          },
+          "expectedTimeframeMs": {
+            "minimum": 1.0,
+            "title": "Expectedtimeframems",
+            "type": "integer"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "barStartMs",
+          "barEndMs",
+          "reason",
+          "expectedTimeframeMs"
+        ],
+        "title": "BacktestRunQuarantinedDecisionBarResponse",
         "type": "object"
       },
       "BacktestRunResult": {
@@ -40564,6 +40606,41 @@
         "title": "QuantLibPriceRequest",
         "type": "object"
       },
+      "QuarantinedDecisionBarRecord": {
+        "additionalProperties": false,
+        "description": "One decision bar the run's session refused, so the run never decided it (#2909).\n\nA bucket whose width does not match the program's decision clock is\nquarantined before any indicator or strategy code runs: no decision, no\ntrace, no fill. The refusal is recorded so a saved run says which decision\nbars it dropped; ``bar_end_ms - bar_start_ms`` is the refused bucket's own\nwidth, and ``expected_timeframe_ms`` the clock it failed to match.",
+        "properties": {
+          "bar_end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Bar End Ms",
+            "type": "integer"
+          },
+          "bar_start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Bar Start Ms",
+            "type": "integer"
+          },
+          "expected_timeframe_ms": {
+            "minimum": 1.0,
+            "title": "Expected Timeframe Ms",
+            "type": "integer"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bar_start_ms",
+          "bar_end_ms",
+          "reason",
+          "expected_timeframe_ms"
+        ],
+        "title": "QuarantinedDecisionBarRecord",
+        "type": "object"
+      },
       "ReadinessCheckView": {
         "description": "Current enforcement check for one operation, separate from transaction history.",
         "properties": {
@@ -43307,6 +43384,14 @@
           "data_contract": {
             "title": "Data Contract",
             "type": "string"
+          },
+          "quarantined_decision_bars": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/QuarantinedDecisionBarRecord"
+            },
+            "title": "Quarantined Decision Bars",
+            "type": "array"
           },
           "schema_version": {
             "const": 1,
