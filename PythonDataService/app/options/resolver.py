@@ -104,7 +104,6 @@ from typing import Literal, NoReturn, assert_never
 
 from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc
 from app.options.american import (
-    DEFAULT_TREE_STEPS,
     AmericanIvStatus,
     CashDividend,
     american_implied_volatility,
@@ -211,14 +210,15 @@ class ModelInputs:
     rate_source: str
     dividends: tuple[DividendOn, ...]
     dividends_source: str
-    tree_steps: int = DEFAULT_TREE_STEPS
+    # None lets the canonical pricer choose its default for this contract; an explicit count pins the tree.
+    tree_steps: int | None = None
 
     def __post_init__(self) -> None:
         # What the pricer has no meaning for is refused here, as the caller's mistake. Left to reach it, a
         # delta rule would report it as a fault of every quote.
         if not math.isfinite(self.rate):
             raise ValueError(f"the model's rate must be a finite number; got {self.rate}")
-        if self.tree_steps < 3 or self.tree_steps % 2 == 0:
+        if self.tree_steps is not None and (self.tree_steps < 3 or self.tree_steps % 2 == 0):
             raise ValueError(f"the model's tree takes an odd number of steps, three or more; got {self.tree_steps}")
         for dividend in self.dividends:
             if not (math.isfinite(dividend.cash) and dividend.cash > 0):
