@@ -427,6 +427,29 @@ class SyntheticBroker(UnsupportedOptionOrderRefusal):
             )
         self._ledger.bind_evaluated_bar(client_order_id, retained_bar, fill_at_ms=fill_at_ms)
 
+    def bind_decision_bar(
+        self, client_order_id: str, *, bar_identity: str, decided_at_ms: int, symbol: str
+    ) -> bool:
+        """Rebind an order to the exact bar its decision priced it at, from durable evidence (#2919).
+
+        The first send binds the bar in memory
+        (``_PricingBarBoundTradePort``); a process death between the send
+        request and the simulated fill leaves the pass that re-drives the
+        order with none. The acceptance's recorded evidence -- the pricing
+        bar's identity and the decision's close -- rebuilds the same binding,
+        looked up from the authority's own retained bars so nothing is
+        trusted from the record. ``False`` (the bar is no longer retained, or
+        is not the order's symbol) leaves the order unsent: a decision is
+        never re-priced from another bar.
+        """
+        if self._ledger is None or self._source_bars is None:
+            return False
+        retained = self._source_bars.by_identity(bar_identity)
+        if retained is None or retained.symbol != symbol:
+            return False
+        self._ledger.bind_evaluated_bar(client_order_id, retained, fill_at_ms=decided_at_ms)
+        return True
+
     def recovery_price_available(self, symbol: str, *, side: Literal["buy", "sell"] = "sell") -> bool:
         """Whether a recovery EXIT for ``symbol`` sent now has a price to fill at.
 

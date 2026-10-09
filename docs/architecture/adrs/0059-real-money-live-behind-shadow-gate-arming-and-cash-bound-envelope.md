@@ -1,5 +1,7 @@
 # ADR 0059 — Real-money Alpaca Live is reachable only through a shadow gate, a per-instance arming ceremony, and a cash-bound risk envelope
 
+**Amended 2026-10-09 (issue #2919):** A fill the shadow world (or a Dry Run's `sim:` world, which shares the mechanism) synthesizes for a deciding program's EXIT is priced by the binding its first send made in memory — and that binding dies with the process. The pricing evidence is now durable **with the EXIT's acceptance**: the retained pricing bar's identity and the decision's close (`ExitAcceptedFacts.decision_pricing`), recorded by whichever authority synthesizes its fills. Every later send — the reconciliation sweep re-driving an EXIT a process death left between its send request and its simulated fill, the watchdog, restart recovery — rebuilds the same binding from that record, looked up from the authority's own retained bars, never from the newest bar then. An acceptance with no recorded evidence (one written before this amendment) or whose bar is no longer retained sends nothing: the EXIT folds refused, and what the world already owes — a Dry Run's run-end close, the operator's flatten of a stuck Shadow exit — is the way back to flat. A decision is never re-priced from a bar it did not decide on.
+
 **Amended 2026-09-27 (PRD #2540):** The budget-authority amendment below
 supersedes the separate arming, grant expiry and Shadow-receipt prerequisites.
 Their descriptions remain historical; current Live consent is part of Deploy.

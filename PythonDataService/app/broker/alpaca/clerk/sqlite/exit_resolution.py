@@ -2832,7 +2832,8 @@ async def _submit_reducing_order(
                 "kept for it by now can be closed at; no order was sent."
             )
         else:
-            match _exit_intent(_accepted_facts(repo, effect_operation_id)):
+            accepted = _accepted_facts(repo, effect_operation_id)
+            match _exit_intent(accepted):
                 case "run_end_close":
                     bound = broker.bind_run_end_close_bar(reducing.client_order_id, symbol=facts.symbol)
                     why = "The simulation has no price its run saw to close this position at; no order was sent."
@@ -2843,7 +2844,43 @@ async def _submit_reducing_order(
                     )
                     why = "The simulation had no current price to fill this recovery at; no order was sent."
                 case "decision":
-                    bound, why = True, ""
+                    if not trade_port_folds_simulated_evidence(broker.trade):
+                        bound, why = True, ""
+                    else:
+                        # The binding the first send made lives in that
+                        # process's memory alone. A pass that sends the order
+                        # again -- the sweep re-driving an EXIT a process death
+                        # left between its send request and its simulated fill
+                        # -- rebuilds it from the acceptance's durable pricing
+                        # evidence (#2919), never from the newest bar.
+                        try:
+                            pricing = accepted.the_decision_pricing
+                        except ValueError as exc:
+                            _fold_submit_refused(
+                                repo, effect_operation_id=effect_operation_id, reducing=reducing,
+                                refusal=BrokerRefusal(why=f"The decision's recorded pricing evidence is unreadable: {exc}"),
+                            )
+                            return None
+                        if pricing is None:
+                            # An acceptance older than the evidence itself
+                            # (written before #2919): nothing names the bar the
+                            # decision priced its order at.
+                            bound = False
+                            why = (
+                                "This decision's acceptance records no price it was priced at; "
+                                "no order was sent."
+                            )
+                        else:
+                            bound = broker.bind_decision_bar(
+                                reducing.client_order_id,
+                                bar_identity=pricing.bar_identity,
+                                decided_at_ms=pricing.decided_at_ms,
+                                symbol=facts.symbol,
+                            )
+                            why = (
+                                "The simulation no longer holds the exact bar this decision priced its order at; "
+                                "no order was sent."
+                            )
         if not bound:
             _fold_submit_refused(
                 repo, effect_operation_id=effect_operation_id, reducing=reducing, refusal=BrokerRefusal(why=why),

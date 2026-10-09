@@ -15,7 +15,7 @@ from app.broker.alpaca.clerk.recovery_reduction import (
 )
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
 from app.broker.alpaca.clerk.sqlite.exit_resolution import resolve_exit
-from app.broker.alpaca.clerk.sqlite.facts import ExitAcceptedFacts, ScheduledCloseFacts
+from app.broker.alpaca.clerk.sqlite.facts import DecisionPricingFacts, ExitAcceptedFacts, ScheduledCloseFacts
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.idempotency import (
     DurableConflictError,
@@ -192,6 +192,7 @@ def _accept_exit_capture(
     regular_session_only: bool = False,
     option_exit: OptionExitEvidence | None = None,
     scheduled_close: ScheduledCloseFacts | None = None,
+    decision_pricing: DecisionPricingFacts | None = None,
 ) -> ExitSubmission:
     """Capture one EXIT and every same-strategy/symbol entry before contact.
 
@@ -278,6 +279,7 @@ def _accept_exit_capture(
                 else OptionExitFacts.of(option_exit, closing=tuple(leg.symbol for leg in option_entry.leg_terms)).to_facts()
             ),
             scheduled_close=None if scheduled_close is None else scheduled_close.to_mapping(),
+            decision_pricing=None if decision_pricing is None else decision_pricing.to_mapping(),
         ).with_reducing_shape(
             None if recorded is None else recorded.shape,
             valid_until_ms=None if recorded is None else recorded.valid_until_ms,
@@ -342,11 +344,17 @@ def accept_exit(
     decision_receipt: AtomicDecisionReceipt | None = None,
     program_leg: ProgramLeg | None = None,
     option_exit: OptionExitEvidence | None = None,
+    decision_pricing: DecisionPricingFacts | None = None,
 ) -> ExitSubmission:
     """Capture one EXIT and every same-strategy/symbol entry before contact.
 
     ``option_exit`` is the quotes the decision read for an option position
     it closes (ADR 0076); it is kept only when the target is one.
+
+    ``decision_pricing`` is the bar a no-submit world fills this EXIT at, with
+    the decision's close (#2919); it is kept only where the authority
+    synthesizes its fills, so a later pass that sends the order after the
+    accepting process died rebinds the same price instead of guessing one.
 
     ``program_leg`` is the leg the deciding program shaped for this EXIT
     (ADR 0059 D5.3) — its shape, and the end of the session an extended-hours
@@ -374,6 +382,7 @@ def accept_exit(
         decision_receipt=decision_receipt,
         program_leg=program_leg,
         option_exit=option_exit,
+        decision_pricing=decision_pricing,
     )
 
 

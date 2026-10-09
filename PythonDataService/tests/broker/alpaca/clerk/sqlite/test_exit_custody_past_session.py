@@ -35,7 +35,7 @@ from app.broker.alpaca.clerk.sqlite.exit_resolution import (
     EXIT_REDRIVE_DECISION_PREFIX,
     SCHEDULED_END_DECISION_PREFIX,
 )
-from app.broker.alpaca.clerk.sqlite.facts import UnknownOutcomeNotice
+from app.broker.alpaca.clerk.sqlite.facts import DecisionPricingFacts, UnknownOutcomeNotice
 from app.broker.alpaca.clerk.sqlite.folds import POSITION_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection, ProjectedUncertainty
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
@@ -991,6 +991,7 @@ class _Simulation:
         self._filled: dict[str, BrokerOrder] = {}
         self.loses: set[str] = set()
         self.sent: list[str] = []
+        self.bound: list[str] = []
 
     async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
         self.sent.append(leg.side)
@@ -1008,6 +1009,18 @@ class _Simulation:
 
     async def cancel(self, order_id: str) -> None:
         raise AssertionError(f"nothing of a simulation's is working to cancel: {order_id!r}")
+
+    def bind_decision_bar(
+        self, client_order_id: str, *, bar_identity: str, decided_at_ms: int, symbol: str
+    ) -> bool:
+        """This double holds no bar ledger to look the record up in (#2919).
+
+        What the acceptance recorded is bound as it is, exactly as a real
+        simulation binds the bar it looked up.
+        """
+        del client_order_id, decided_at_ms, symbol
+        self.bound.append(bar_identity)
+        return True
 
     async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
         return self._filled.get(client_order_id)
@@ -1030,9 +1043,15 @@ async def test_an_order_sent_to_a_simulated_port_still_fails_and_releases_past_i
         lifecycle_run_id=RUN_ID, leg=safe_flatten._leg(quantity=10, side="buy"), trade=simulation,
     )
     assert entered.order_ref is not None and repo.position(SID, "SPY") == _shares(10)
+    priced_at_ms = clock()
+    recorded_bar = f"fixture:SPY:{priced_at_ms - 60_000}:{priced_at_ms}"
     accepted = accept_exit(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="program-exit-1",
         lifecycle_run_id=RUN_ID, entry_order_ref=entered.order_ref,
+        # What a simulated authority's runtime records with every decision
+        # EXIT (#2919): the bar its fill is priced at, and the decision's
+        # close. Without it the send is refused -- never re-priced.
+        decision_pricing=DecisionPricingFacts(bar_identity=recorded_bar, decided_at_ms=priced_at_ms),
     )
     exit_id = accepted.effect_operation_id
     assert exit_id is not None
@@ -1045,6 +1064,8 @@ async def test_an_order_sent_to_a_simulated_port_still_fails_and_releases_past_i
 
     await the_exit_is_driven()
     assert simulation.sent == ["buy", "sell"] and _exit_state(repo, exit_id) == "unknown"
+    # The sale was bound to the bar the acceptance recorded, before it was sent (#2919).
+    assert simulation.bound == [recorded_bar]
     closing = _closing_order(repo)
 
     await _passes(repo, the_exit_is_driven, RESEND_AFTER_MS // SWEEP_INTERVAL_MS)
@@ -1055,6 +1076,41 @@ async def test_an_order_sent_to_a_simulated_port_still_fails_and_releases_past_i
     assert repo.active_exit_for_strategy(SID) is None
     assert _exit_not_flat(repo) is not None
     assert _notices_recorded(repo, closing) == []
+
+
+async def test_a_simulated_decision_exit_that_recorded_no_price_is_refused_never_re_priced(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """#2919's fail-closed half: an acceptance with no recorded pricing evidence sends nothing.
+
+    An EXIT accepted before the evidence existed, re-driven after a process
+    death, is refused outright -- never silently filled at whatever bar is
+    newest then. The EXIT fails releasably with the position still held, which
+    is what leaves a Dry Run's run-end close and the operator's flatten as the
+    ways back to flat.
+    """
+    repo, clock = crashed_with_exposure
+    simulation = _Simulation(clock)
+    _walk_clock_to(repo, CLOSE_MS - LOST_BEFORE_THE_CLOSE_MS)
+    entered = await submit_enter(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="enter-1",
+        lifecycle_run_id=RUN_ID, leg=safe_flatten._leg(quantity=10, side="buy"), trade=simulation,
+    )
+    assert entered.order_ref is not None
+    accepted = accept_exit(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="program-exit-1",
+        lifecycle_run_id=RUN_ID, entry_order_ref=entered.order_ref,
+    )
+    exit_id = accepted.effect_operation_id
+    assert exit_id is not None
+
+    await resolve_exit(
+        repo, effect_operation_id=exit_id, trade=simulation, pricing=UNPRICEABLE_RECOVERY, read=None
+    )
+
+    assert simulation.sent == ["buy"] and simulation.bound == []
+    assert _exit_state(repo, exit_id) == "failed"
+    assert repo.position(SID, "SPY") == _shares(10)
 
 
 # ── the ledger ───────────────────────────────────────────────────────────────

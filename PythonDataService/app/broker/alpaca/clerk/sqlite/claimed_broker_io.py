@@ -243,6 +243,18 @@ class ClaimedBrokerIO:
         self._renew()
         return bound
 
+    def bind_decision_bar(
+        self, client_order_id: str, *, bar_identity: str, decided_at_ms: int, symbol: str
+    ) -> bool:
+        """Rebind a decision's own pricing bar under the operation lease (#2919)."""
+        self._renew()
+        bind = getattr(self.trade, "bind_decision_bar", None)
+        if not callable(bind):
+            return True
+        bound = bool(bind(client_order_id, bar_identity=bar_identity, decided_at_ms=decided_at_ms, symbol=symbol))
+        self._renew()
+        return bound
+
     def bind_run_end_close_bar(self, client_order_id: str, *, symbol: str) -> bool:
         """Bind a Dry Run's run-end close price under the operation lease.
 
