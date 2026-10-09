@@ -21,6 +21,8 @@ import pytest
 from app.engine.data.dividends import dividends_from_factor_file, dividends_from_factor_tree
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine
+from app.engine.execution.execution_config import ExecutionConfig
+from app.engine.execution.order import FillMode
 from app.engine.strategy.base import Strategy
 from app.lean_sidecar.workspace import SymbolValidationError
 from app.utils.timestamps import datetime_at_ms, to_ms_utc
@@ -124,6 +126,113 @@ def test_factor_file_reader_pins_spy_march_2026_distribution() -> None:
     """The committed capture's own numbers: the dividend LEAN paid on the SPY cell (#2903)."""
     dividends = dividends_from_factor_file(_SPY_CAPTURE_FACTOR_FILE, "SPY", date(2026, 3, 1), date(2026, 4, 30))
     assert [(d.held_through_ms, str(d.per_share)) for d in dividends] == [(1773950400000, "1.80")]
+
+
+def test_factor_file_reader_collapses_same_date_rows_like_lean(tmp_path: Path) -> None:
+    """Two distributions sharing an ex-date are one dividend (#3000 review).
+
+    LEAN's CorporateFactorProvider.GetSplitsAndDividends walks its rows
+    grouped by date and uses each date's first row only, reconstructing from
+    that row's factor to the next date's — not one dividend per row.
+    """
+    factor_file = tmp_path / "equity/usa/factor_files/syn.csv"
+    factor_file.parent.mkdir(parents=True, exist_ok=True)
+    # The 2026-03-19 pair carries two distributions (pf 0.99 then 0.9702);
+    # LEAN's walk uses only the first row, against 2026-04-01's factor of 1:
+    # round_half_even(100 − 100·0.99, 2) = 1.00.
+    factor_file.write_text(
+        "20250102,0.98,1,50.00\n20260319,0.99,1,100.00\n20260319,0.9702,1,100.00\n20260401,1,1,101.00\n",
+        encoding="utf-8",
+    )
+    dividends = dividends_from_factor_file(factor_file, "syn", date(2026, 3, 1), date(2026, 3, 31))
+    assert [(d.held_through_ms, str(d.per_share)) for d in dividends] == [(1773950400000, "1.00")]
+
+
+def _deferred_fill_bars() -> list[TradeBar]:
+    """Three bars on the cum-dividend Thursday, two on the ex-date Friday."""
+    return [_minute(date(2026, 3, 19), 9, 30 + offset) for offset in range(3)] + [
+        _minute(date(2026, 3, 20), 9, 30 + offset) for offset in range(2)
+    ]
+
+
+class _HookBuyThenHookSell(Strategy):
+    """Buys from the per-minute hook off the first bar; sells from the hook off
+    the cum-dividend session's last bar, so the sell pends overnight.
+
+    Hook orders are placed before the consolidator phase, so under
+    NEXT_BAR_OPEN the sell sits pending into the ex-date's first bar — the
+    fill that must not erase entitlement earned through the cum-dividend
+    close. (A consolidator-fired signal submits one bar later, after that
+    bar's settlement, and cannot pin the ordering.)
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._bars = 0
+
+    def initialize(self) -> None:
+        self.set_start_date(2026, 3, 19)
+        self.set_end_date(2026, 3, 20)
+        self.set_cash(10_000)
+        symbol = self.ctx.add_equity("SPY")
+        self.ctx.register_consolidator(symbol, timedelta(minutes=1), lambda bar: None)
+
+    def on_minute_bar(self, bar: TradeBar) -> None:
+        self._bars += 1
+        if self._bars == 2:  # the first bar whose drain has a fired consolidated bar
+            self.ctx.set_holdings("SPY", Decimal("1.0"))
+        elif self._bars == 3:  # the cum-dividend session's last bar
+            self.ctx.set_holdings("SPY", Decimal("0"))
+
+
+class _HookBuyThirdBar(Strategy):
+    """Buys from the per-minute hook off the cum-dividend session's last bar;
+    NEXT_BAR_OPEN fills it on the ex-date's first bar."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._bars = 0
+
+    def initialize(self) -> None:
+        self.set_start_date(2026, 3, 19)
+        self.set_end_date(2026, 3, 20)
+        self.set_cash(10_000)
+        symbol = self.ctx.add_equity("SPY")
+        self.ctx.register_consolidator(symbol, timedelta(minutes=1), lambda bar: None)
+
+    def on_minute_bar(self, bar: TradeBar) -> None:
+        self._bars += 1
+        if self._bars == 3:  # the cum-dividend session's last bar
+            self.ctx.set_holdings("SPY", Decimal("1.0"))
+
+
+def _run_deferred(strategy: type[Strategy], *, with_dividends: bool, tmp_path: Path):
+    factor_file = tmp_path / "equity/usa/factor_files/spy.csv"
+    _write_factor_file(factor_file)
+    schedule = dividends_from_factor_file(factor_file, "SPY", date(2026, 3, 1), date(2026, 3, 31))
+    return BacktestEngine(
+        data_source=_SyntheticStream(_deferred_fill_bars()),
+        dividends=schedule if with_dividends else None,
+        execution_config=ExecutionConfig(fill_mode=FillMode.NEXT_BAR_OPEN),
+    ).run(strategy())
+
+
+def test_deferred_sell_filled_on_ex_date_still_earns_the_dividend(tmp_path: Path) -> None:
+    """Settlement reads the position held through the cum-dividend close, not the
+    one left after the ex-date bar's deferred fills (#3000 review)."""
+    with_div = _run_deferred(_HookBuyThenHookSell, with_dividends=True, tmp_path=tmp_path)
+    without = _run_deferred(_HookBuyThenHookSell, with_dividends=False, tmp_path=tmp_path)
+    buy = with_div.order_events[0]
+    held = Decimal(buy.fill_quantity)
+    assert held > 0, "the strategy must be holding over the ex-date for the credit to be due"
+    assert with_div.equity_curve[-1].cash - without.equity_curve[-1].cash == held * Decimal("1.00")
+
+
+def test_deferred_buy_filled_on_ex_date_earns_no_dividend(tmp_path: Path) -> None:
+    """A position first held on the ex-date itself never saw the cum-dividend close."""
+    with_div = _run_deferred(_HookBuyThirdBar, with_dividends=True, tmp_path=tmp_path)
+    without = _run_deferred(_HookBuyThirdBar, with_dividends=False, tmp_path=tmp_path)
+    assert with_div.equity_curve[-1].cash == without.equity_curve[-1].cash
 
 
 def test_position_held_over_ex_date_ends_with_leans_cash(tmp_path: Path) -> None:

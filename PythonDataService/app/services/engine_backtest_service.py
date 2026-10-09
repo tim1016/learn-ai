@@ -31,7 +31,12 @@ from pydantic import BaseModel, ValidationError
 
 from app.data_lake.path_policy import lake_root_for
 from app.engine.data.availability import check_availability
-from app.engine.data.dividends import CashDividend, dividends_from_factor_tree
+from app.engine.data.dividends import (
+    CashDividend,
+    dividends_from_factor_file,
+    factor_file_key,
+    find_factor_file,
+)
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.engine.data.policy_store import resolve_data_roots
 from app.engine.data.trade_bar import TradeBar
@@ -431,16 +436,23 @@ def _reader_and_engine(
         reader=reader,
         execution_config=execution_config,
         request=request,
-        dividends=_profile_dividends(request, data_roots),
+        dividends=_profile_dividends(request, data_roots, data_manifest),
     )
 
 
-def _profile_dividends(request: EngineBacktestRequest, data_roots: list[Path]) -> list[CashDividend]:
+def _profile_dividends(
+    request: EngineBacktestRequest,
+    data_roots: list[Path],
+    data_manifest: Mapping[str, str] | None,
+) -> list[CashDividend]:
     """The cash dividends the LEAN-compatibility profile pays (#2903).
 
     The v1 profile runs raw prices, where LEAN credits a distribution for a
     position held over an ex-date; the schedule comes from the run's own
-    data roots — the factor-file tree LEAN reads. Requests without the
+    data roots — the factor-file tree LEAN reads. When a fixture manifest is
+    in force, the factor file is read under its receipt: bytes that differ
+    from the manifest's digest refuse the run rather than pay silently
+    different dividends from the same receipted bars. Requests without the
     profile, or without a pinned symbol and window, pay none, mirroring
     ``_pin_compatibility_fixture``'s handling of the same gaps.
     """
@@ -448,9 +460,21 @@ def _profile_dividends(request: EngineBacktestRequest, data_roots: list[Path]) -
         return []
     if request.data_policy is None or request.from_date is None or request.to_date is None:
         return []
-    return dividends_from_factor_tree(
-        data_roots,
-        request.data_policy.symbol,
+    symbol = request.data_policy.symbol
+    found = find_factor_file(data_roots, symbol)
+    if data_manifest is not None:
+        key = factor_file_key(symbol)
+        receipted = data_manifest.get(key)
+        if receipted is not None:
+            if found is None:
+                raise ValueError(f"the run's receipted factor file is gone: {key}")
+            if hashlib.sha256(found[0].read_bytes()).hexdigest() != receipted:
+                raise ValueError(f"the factor file changed under the run's receipt: {key}")
+    if found is None:
+        return []
+    return dividends_from_factor_file(
+        found[0],
+        symbol,
         _parse_iso_date(request.warmup_from_date or request.from_date, "data_start"),
         _parse_iso_date(request.to_date, "to_date"),
     )
@@ -604,7 +628,15 @@ def _pin_compatibility_fixture(
     request.data_policy.provider_kind = "fixture"
     request.data_policy.fixture_id = str(receipt["fixture_id"])
     request.data_policy.fixture_sha256 = str(receipt["fixture_sha256"])
-    return {item["path"]: item["sha256"] for item in receipt["files"]}
+    manifest = {item["path"]: item["sha256"] for item in receipt["files"]}
+    # The dividend schedule must bind to the same receipt as the bars: a
+    # factor file that changes between engines would hand two runs identical
+    # receipted bars and different dividend cash (#3000 review).
+    found = find_factor_file(data_roots, request.data_policy.symbol)
+    if found is not None:
+        factor_file, relative = found
+        manifest[relative.as_posix()] = hashlib.sha256(factor_file.read_bytes()).hexdigest()
+    return manifest
 
 
 def _snapshot_availability_hash(manifest: Mapping[str, str]) -> str:

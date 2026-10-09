@@ -3,9 +3,14 @@
 Formula: distribution = round_half_even(close − close · pf_i/pf_i+1, 2),
   paid as distribution × held quantity on the first bar after the
   cum-dividend session's close.
-Reference: LEAN Common/Data/Market/Dividend.cs (ComputeDistribution;
-  references/lean/7986ed0aade3ae5de06121682409f05984e32ff7), issue #2903.
-Canonical implementation: this file; BacktestEngine settles the schedule.
+Reference: LEAN Common/Data/Market/Dividend.cs (ComputeDistribution) and
+  Common/Data/Auxiliary/CorporateFactorProvider.cs (GetSplitsAndDividends —
+  the first row per factor date; references/lean/
+  7986ed0aade3ae5de06121682409f05984e32ff7), issue #2903.
+Canonical implementation: this file owns per_share and the schedule; the
+  payout credit (per_share × held quantity) is Portfolio.apply_dividend's,
+  which cites this block's Reference as its own. BacktestEngine settles
+  the schedule.
 Validated against: tests/engine/test_engine_dividends.py and
   tests/integration/reconciliation/test_ema_previous_crossover_lean_golden.py.
 """
@@ -17,8 +22,9 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_EVEN, Decimal
 from itertools import pairwise
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
+from app.data_lake.path_policy import LeanFactorFilePath
 from app.lean_sidecar.workspace import TICKER_SYMBOL_PATTERN, SymbolValidationError, validate_symbol
 
 
@@ -40,21 +46,16 @@ class CashDividend:
     per_share: Decimal
 
 
-def dividends_from_factor_tree(
-    data_root: Path | str | Sequence[Path | str],
-    symbol: str,
-    start: date,
-    end: date,
-) -> list[CashDividend]:
-    """Read ``symbol``'s dividends from the first factor file across the roots.
+def find_factor_file(data_root: Path | str | Sequence[Path | str], symbol: str) -> tuple[Path, PurePosixPath] | None:
+    """Locate ``symbol``'s factor file across the roots: ``(absolute, root-relative)``.
 
-    Searches ``<root>/equity/usa/factor_files/<symbol>.csv`` root by root,
-    first hit wins — the same overlay convention :class:`LeanMinuteDataReader`
-    applies to bars, so the dividends a run pays come from the same tree its
-    bars came from. A tree with no factor file yields no dividends: the run
-    then pays exactly what its input can prove, which is what a LEAN run
-    reading the same tree would pay. A ``symbol`` that is not a plain ticker
-    is refused here, where it first becomes a filesystem path.
+    The location is :class:`LeanFactorFilePath`'s — the one place the repo
+    names it — searched root by root with the same first-hit overlay order
+    :class:`LeanMinuteDataReader` applies to bars, so the dividends a run
+    pays come from the same tree its bars came from. The relative half is
+    the key a compatibility fixture receipts the file under; ``None`` when
+    no root holds one. A ``symbol`` that is not a plain ticker is refused
+    here, where it first becomes a filesystem path.
     """
     # The boundary check raises on a symbol that is not a ticker; the value
     # used in the path is then reconstructed from the regex capture, because
@@ -68,10 +69,34 @@ def dividends_from_factor_tree(
     safe_symbol = match.group(0).lower()
     roots: list[Path | str] = [data_root] if isinstance(data_root, (str, Path)) else list(data_root)
     for root in roots:
-        factor_file = Path(root) / "equity" / "usa" / "factor_files" / f"{safe_symbol}.csv"
+        relative = LeanFactorFilePath(market="usa", symbol=safe_symbol).relative_path()
+        factor_file = Path(root) / relative
         if factor_file.exists():
-            return dividends_from_factor_file(factor_file, symbol, start, end)
-    return []
+            return factor_file, relative
+    return None
+
+
+def factor_file_key(symbol: str) -> str:
+    """The manifest key a factor file is receipted under: its root-relative location."""
+    validate_symbol(symbol)
+    return LeanFactorFilePath(market="usa", symbol=symbol.lower()).relative_path().as_posix()
+
+
+def dividends_from_factor_tree(
+    data_root: Path | str | Sequence[Path | str],
+    symbol: str,
+    start: date,
+    end: date,
+) -> list[CashDividend]:
+    """Read ``symbol``'s dividends from the first factor file across the roots.
+
+    First hit wins — the same overlay convention :class:`LeanMinuteDataReader`
+    applies to bars. A tree with no factor file yields no dividends: the run
+    then pays exactly what its input can prove, which is what a LEAN run
+    reading the same tree would pay.
+    """
+    found = find_factor_file(data_root, symbol)
+    return [] if found is None else dividends_from_factor_file(found[0], symbol, start, end)
 
 
 def dividends_from_factor_file(factor_file: Path, symbol: str, start: date, end: date) -> list[CashDividend]:
@@ -92,8 +117,15 @@ def dividends_from_factor_file(factor_file: Path, symbol: str, start: date, end:
     from app.data_lake.factor_files import parse_factor_file
     from app.lean_sidecar.trading_calendar import session_close_ms_utc
 
+    rows = parse_factor_file(factor_file.read_text(encoding="utf-8"))
+    # LEAN walks its factor rows grouped by date and uses each date's first
+    # row only (CorporateFactorProvider.GetSplitsAndDividends reading
+    # SortedFactorFileData): two distributions sharing an ex-date collapse
+    # into one, reconstructed from the first row's factor to the next
+    # date's row.
+    first_per_date = [row for i, row in enumerate(rows) if i == 0 or row.row_date != rows[i - 1].row_date]
     dividends: list[CashDividend] = []
-    for row, next_row in pairwise(parse_factor_file(factor_file.read_text(encoding="utf-8"))):
+    for row, next_row in pairwise(first_per_date):
         ratio = row.price_factor / next_row.price_factor
         if ratio == 1 or not start <= row.row_date <= end:
             continue

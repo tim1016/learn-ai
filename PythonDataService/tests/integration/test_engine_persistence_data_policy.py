@@ -342,6 +342,95 @@ def test_compatibility_run_refuses_bytes_replaced_after_fixture_pin(
     assert "changed since the snapshot was taken" in response.error
 
 
+def _compat_root_with_factor_file(tmp_path: Path) -> tuple[Path, Path]:
+    """A tree holding one minute zip and SPY's factor file; returns (root, factor file)."""
+    trade_dir = tmp_path / "equity/usa/minute/spy"
+    trade_dir.mkdir(parents=True)
+    (trade_dir / "20250113_trade.zip").write_bytes(b"day-one")
+    factor_dir = tmp_path / "equity/usa/factor_files"
+    factor_dir.mkdir(parents=True)
+    factor_file = factor_dir / "spy.csv"
+    factor_file.write_text("20250113,0.99,1,100.00\n20250114,1,1,101.00\n", encoding="utf-8")
+    return tmp_path, factor_file
+
+
+def _compat_request():
+    from app.schemas.engine_backtest import EngineBacktestRequest
+
+    return EngineBacktestRequest(
+        strategy_name="ema_crossover_signal",
+        params={"symbol": "SPY"},
+        from_date="2025-01-13",
+        to_date="2025-01-13",
+        resolution="minute",
+        compatibility_profile="us-equity-raw-ibkr-v1",
+        data_policy=_raw_policy(),
+        auto_fetch=False,
+        save_study=False,
+    )
+
+
+def test_compatibility_fixture_receipts_the_factor_file(tmp_path: Path) -> None:
+    """The dividend schedule's input binds to the same receipt as the bars (#3000 review)."""
+    import hashlib
+
+    from app.services.engine_backtest_service import _pin_compatibility_fixture
+
+    root, factor_file = _compat_root_with_factor_file(tmp_path)
+    request = _compat_request()
+
+    manifest = _pin_compatibility_fixture(request, [root])
+
+    assert manifest is not None
+    key = "equity/usa/factor_files/spy.csv"
+    assert manifest[key] == hashlib.sha256(factor_file.read_bytes()).hexdigest()
+
+
+def test_profile_dividends_bind_to_the_receipted_factor_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bytes that differ from the manifest's digest refuse the run, gone ones too."""
+    from app.services import engine_backtest_service as service
+
+    root, factor_file = _compat_root_with_factor_file(tmp_path)
+    request = _compat_request()
+    manifest = service._pin_compatibility_fixture(request, [root])
+    assert manifest is not None
+
+    assert service._profile_dividends(request, [root], manifest)  # one $1.00 row
+    factor_file.write_text("20250110,0.98,1,100.00\n20250114,1,1,101.00\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="changed under the run's receipt"):
+        service._profile_dividends(request, [root], manifest)
+    factor_file.unlink()
+    with pytest.raises(ValueError, match="factor file is gone"):
+        service._profile_dividends(request, [root], manifest)
+
+
+def test_compatibility_run_refuses_a_factor_file_changed_between_engines(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A paired engine's snapshot must not pair its bars with different dividend cash."""
+    from fastapi import HTTPException
+
+    from app.services import engine_backtest_service as service
+
+    root, factor_file = _compat_root_with_factor_file(tmp_path)
+    monkeypatch.setattr(service, "_resolve_lean_data_roots", lambda **_: [root])
+    request = _compat_request()
+    snapshot = service._pin_compatibility_fixture(request, [root])
+    assert snapshot is not None
+
+    factor_file.write_text("20250110,0.97,1,100.00\n20250114,1,1,101.00\n", encoding="utf-8")
+    with pytest.raises(HTTPException) as excinfo:
+        service.execute_engine_backtest(
+            request=request,
+            on_phase=lambda _: None,
+            on_log=lambda _: None,
+            data_manifest=snapshot,
+        )
+    assert excinfo.value.status_code == 409
+    assert "compatibility fixture differs" in str(excinfo.value.detail)
+
+
 def test_mismatched_params_and_policy_symbols_are_rejected() -> None:
     """The two symbol surfaces must name the same instrument (#1917 review).
 

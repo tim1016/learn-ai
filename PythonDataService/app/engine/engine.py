@@ -314,6 +314,16 @@ class BacktestEngine:
             # replaces the decision reference with its earlier signal close.
             portfolio.update_market_price(symbol, minute_bar.close)
 
+            # ----- Settle cash dividends whose cum-dividend session has
+            #       closed, before this bar's deferred fills: entitlement
+            #       is the position held through the cum-dividend close, so
+            #       a NEXT_BAR_OPEN sell filled on the ex-date's open still
+            #       earns what it held overnight and an overnight buy does
+            #       not. Also before the per-minute hook, so a decision on
+            #       the ex-date's first bar already sees the cash (#2903).
+            while unsettled_dividends and unsettled_dividends[0].held_through_ms < minute_bar.end_ms:
+                portfolio.apply_dividend(unsettled_dividends.pop(0))
+
             # ----- Fill any deferred orders (NEXT_BAR_OPEN / NEXT_SESSION_OPEN /
             # DECISION_MINUTE_OPEN) with this bar as next_bar. DEFERRED_FILL_MODES
             # is the single source of truth shared with Step 5 below.
@@ -326,13 +336,6 @@ class BacktestEngine:
                     else:
                         _record_fill(order, event)
                 pending_fills = still_pending
-
-            # ----- Settle cash dividends whose cum-dividend session has
-            #       closed: credited after this bar's deferred fills and
-            #       before the per-minute hook, so a decision on the
-            #       ex-date's first bar already sees the cash (#2903).
-            while unsettled_dividends and unsettled_dividends[0].held_through_ms < minute_bar.end_ms:
-                portfolio.apply_dividend(unsettled_dividends.pop(0))
 
             # ----- Per-minute hook — fires before consolidator dispatch so the
             #       strategy sees every minute bar including the session-close bar

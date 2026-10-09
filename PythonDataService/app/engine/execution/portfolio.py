@@ -204,11 +204,13 @@ class Portfolio:
     def apply_dividend(self, dividend: CashDividend) -> None:
         """Credit one cash distribution on the current position (#2903).
 
-        LEAN, on raw prices, pays ``distribution × quantity`` when a position
-        is held over an ex-date; the engine settles that schedule and hands
-        each event here. Long positions are what the fixtures pin; the signed
-        product is the faithful mirror for a short, whose holder owes the
-        distribution.
+        Formula: cash += per_share × quantity, on the position held through
+        the cum-dividend session close.
+        Reference: LEAN Common/Data/Market/Dividend.cs — the payout half of
+        app/engine/data/dividends.py's provenance, whose schedule the engine
+        settles and hands each event here. Long positions are what the
+        fixtures pin; the signed product is the faithful mirror for a short,
+        whose holder owes the distribution.
         """
         pos = self.positions.get(dividend.symbol.upper())
         if pos is None or pos.quantity == 0:

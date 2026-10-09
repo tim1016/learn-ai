@@ -160,11 +160,13 @@ _SHARED_EXECUTION_BOUNDARY_EXCLUSIONS: dict[str, str] = {
     ),
 }
 
-# The one import dividends.py makes — the canonical factor-file parser —
-# brings its own app.data_lake tree along (#2903). Every file below is
-# reached ONLY through that reader, reads corporate-action data for cash
-# accounting, and is never consulted by evaluate_signal_bar()'s decision
-# math; one reason covers them all.
+# The imports dividends.py makes — the canonical factor-file parser, the
+# canonical LEAN path policy, and the ticker sanitizer CodeQL's
+# path-injection rule needs the symbol routed through — bring their own
+# module trees along (#2903). Every file below is reached ONLY through that
+# reader, reads corporate-action data for cash accounting, and is never
+# consulted by evaluate_signal_bar()'s decision math; one reason covers
+# them all.
 _DIVIDEND_READER_CHAIN_EXCLUSIONS: dict[str, str] = {
     module: (
         "Reached only through app/engine/data/dividends.py — the cash-dividend "
@@ -180,6 +182,7 @@ _DIVIDEND_READER_CHAIN_EXCLUSIONS: dict[str, str] = {
         "app/data_lake/polygon_corp_actions.py",
         "app/data_lake/root_identity.py",
         "app/data_lake/types.py",
+        "app/lean_sidecar/workspace.py",
         "app/utils/background_loop.py",
         "app/utils/session_anchors.py",
     )
