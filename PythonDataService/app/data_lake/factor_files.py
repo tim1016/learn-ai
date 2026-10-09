@@ -287,6 +287,10 @@ class FactorRow:
     row_date: date
     price_factor: Decimal
     split_factor: Decimal
+    # The raw close of the row's session — the input LEAN's dividend
+    # distribution formula prices against (``Dividend.Create``), kept so the
+    # engine's dividend reader reuses this parse instead of a second one.
+    reference_price: Decimal
 
 
 def parse_factor_file(text: str) -> list[FactorRow]:
@@ -304,11 +308,12 @@ def parse_factor_file(text: str) -> list[FactorRow]:
         parts = line.split(",")
         if len(parts) != 4:
             raise ValueError(f"factor file row does not have 4 columns: {line!r}")
-        raw_date, raw_price_factor, raw_split_factor, _reference = parts
+        raw_date, raw_price_factor, raw_split_factor, raw_reference = parts
         try:
             row_date = datetime.strptime(raw_date, "%Y%m%d").date()
             price_factor = Decimal(raw_price_factor)
             split_factor = Decimal(raw_split_factor)
+            reference_price = Decimal(raw_reference)
         except (ValueError, ArithmeticError) as exc:
             # ArithmeticError covers decimal.InvalidOperation (Decimal("abc")),
             # which is not a ValueError — without it a garbage factor column
@@ -319,6 +324,7 @@ def parse_factor_file(text: str) -> list[FactorRow]:
                 row_date=row_date,
                 price_factor=price_factor,
                 split_factor=split_factor,
+                reference_price=reference_price,
             )
         )
     rows.sort(key=lambda r: r.row_date)

@@ -89,8 +89,8 @@ def test_fixture_recomputes_the_exact_shared_bar_snapshot() -> None:
     )
 
     assert actual == expected
-    assert actual["fixture_id"] == "bar-store-v1-6e96f0f2c5383e2d"
-    assert actual["fixture_sha256"] == "6e96f0f2c5383e2d1ad40f7308433aacc862bbfd6a9828f0b263cade70f0460e"
+    assert actual["fixture_id"] == "bar-store-v1-bc8b963e0582868e"
+    assert actual["fixture_sha256"] == "bc8b963e0582868e3531dd88f3e01206119fe9f81157e01e79f2b45bb7b0ab29"
 
 
 def test_pinned_python_and_lean_trades_match_trade_by_trade() -> None:

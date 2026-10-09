@@ -149,12 +149,43 @@ _SHARED_EXECUTION_BOUNDARY_EXCLUSIONS: dict[str, str] = {
     "app/engine/execution/sizing.py": (
         'Share/notional sizing math belongs to the execution boundary that sizes an already-decided trade; never consulted for entry/exit facts.'
     ),
+    "app/engine/data/dividends.py": (
+        'Cash-dividend schedule and settle math (#2903); reached only through execution/portfolio.py, which credits a position after the fact — it never enters evaluate_signal_bar()\'s decision math.'
+    ),
     "app/engine/framework/insight_scorer.py": (
         'Scores Insight objects for the Alpha framework; never consulted by evaluate_signal_bar().'
     ),
     "app/research/parity/ibkr_commission.py": (
         'IBKR fee-tier table reached only through execution/commission.py; same fee-only reasoning.'
     ),
+}
+
+# The imports dividends.py makes — the canonical factor-file parser, the
+# canonical LEAN path policy, and the ticker sanitizer CodeQL's
+# path-injection rule needs the symbol routed through — bring their own
+# module trees along (#2903). Every file below is reached ONLY through that
+# reader, reads corporate-action data for cash accounting, and is never
+# consulted by evaluate_signal_bar()'s decision math; one reason covers
+# them all.
+_DIVIDEND_READER_CHAIN_EXCLUSIONS: dict[str, str] = {
+    module: (
+        "Reached only through app/engine/data/dividends.py — the cash-dividend "
+        "reader the execution boundary settles after a decision; never enters "
+        "evaluate_signal_bar()'s decision math (#2903)."
+    )
+    for module in (
+        "app/config.py",
+        "app/data_lake/__init__.py",
+        "app/data_lake/admission.py",
+        "app/data_lake/factor_files.py",
+        "app/data_lake/path_policy.py",
+        "app/data_lake/polygon_corp_actions.py",
+        "app/data_lake/root_identity.py",
+        "app/data_lake/types.py",
+        "app/lean_sidecar/workspace.py",
+        "app/utils/background_loop.py",
+        "app/utils/session_anchors.py",
+    )
 }
 
 
@@ -170,6 +201,7 @@ def _closure_exclusions(*, portfolio: str, insight: str, insight_manager: str) -
     """
     return {
         **_SHARED_EXECUTION_BOUNDARY_EXCLUSIONS,
+        **_DIVIDEND_READER_CHAIN_EXCLUSIONS,
         "app/engine/execution/portfolio.py": portfolio,
         "app/engine/framework/insight.py": insight,
         "app/engine/framework/insight_manager.py": insight_manager,

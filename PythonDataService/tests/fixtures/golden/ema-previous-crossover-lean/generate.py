@@ -9,11 +9,12 @@ its ticker, and this script refuses to write unless the minute bars LEAN
 reports receiving are byte-identical to that cell's committed
 ``lean/observations.csv`` -- the bars the parity test replays.
 
-LEAN pays a cash dividend on a position held over an ex-date in raw mode;
-the Python engine does not. Each dividend LEAN paid is derived from the
-capture's factor file with LEAN's own formula and recorded beside the fills,
-and this script refuses to write unless fills plus dividends reproduce the
-end equity LEAN reports.
+LEAN pays a cash dividend on a position held over an ex-date in raw mode,
+and the engine's LEAN-compatibility profile pays the same (#2903). Each
+dividend LEAN paid is read with the canonical factor-file reader the engine
+pays from, enriched with the shares LEAN held, and recorded beside the
+fills; this script refuses to write unless fills plus dividends reproduce
+the end equity LEAN reports.
 
 Run from ``PythonDataService/`` (needs podman and the pinned LEAN image)::
 
@@ -25,12 +26,10 @@ from __future__ import annotations
 import hashlib
 import json
 import tempfile
-from datetime import date
-from decimal import ROUND_HALF_EVEN, Decimal
-from itertools import pairwise
+from decimal import Decimal
 from pathlib import Path
 
-from app.lean_sidecar import trading_calendar
+from app.engine.data.dividends import dividends_from_factor_file
 from app.lean_sidecar.config import PINNED_LEAN_IMAGE_DIGEST
 from app.lean_sidecar.parity_matrix.matrix import Cell, cell_by_id
 from app.lean_sidecar.trusted_samples.ema_previous_crossover import EMA_PREVIOUS_CROSSOVER_SOURCE
@@ -130,33 +129,26 @@ def main() -> None:
 def _dividends_lean_paid(cell: Cell, fills: list[dict]) -> list[dict]:
     """Every cash dividend LEAN paid in the cell: one per factor-file dividend row whose close the run held through.
 
-    A factor row is dated the last session before its ex-date. LEAN's
-    distribution is ``Math.Round(close - close * pf_i / pf_i+1, 2)``
-    (``Common/Data/Market/Dividend.cs``), and ``Math.Round`` rounds half to
-    even.
+    The schedule comes from the canonical factor-file reader — the same
+    function the engine's LEAN-compatibility profile pays from (#2903).
+    This adds the shares LEAN held through each cum-dividend close, derived
+    from its fills, so the end-equity check below reproduces what LEAN
+    reports.
     """
     factor_file = (
         _STUDIES_ROOT / "_lean_data_capture" / cell.ticker / "equity/usa/factor_files" / f"{cell.ticker.lower()}.csv"
     )
-    rows = [line.split(",") for line in factor_file.read_text(encoding="utf-8").splitlines() if line.strip()]
     dividends: list[dict] = []
-    for (stamp, price_factor, _split, reference_price), (_next_stamp, next_price_factor, *_rest) in pairwise(rows):
-        ratio = Decimal(price_factor) / Decimal(next_price_factor)
-        row_date = date(int(stamp[:4]), int(stamp[4:6]), int(stamp[6:8]))
-        if ratio == 1 or not cell.start_date <= row_date <= cell.end_date:
-            continue
-        held_through_ms = trading_calendar.session_close_ms_utc(row_date)
-        shares = sum(fill["fill_quantity"] for fill in fills if fill["ms_utc"] <= held_through_ms)
+    for dividend in dividends_from_factor_file(factor_file, cell.ticker, cell.start_date, cell.end_date):
+        shares = sum(fill["fill_quantity"] for fill in fills if fill["ms_utc"] <= dividend.held_through_ms)
         if shares == 0:
             continue
-        close = Decimal(reference_price)
-        per_share = (close - close * ratio).quantize(Decimal("0.01"), rounding=ROUND_HALF_EVEN)
         dividends.append(
             {
-                "held_through_ms": held_through_ms,
-                "per_share": str(per_share),
+                "held_through_ms": dividend.held_through_ms,
+                "per_share": str(dividend.per_share),
                 "shares": shares,
-                "cash": str(per_share * shares),
+                "cash": str(dividend.per_share * shares),
             }
         )
     return dividends

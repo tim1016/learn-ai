@@ -231,3 +231,79 @@ def test_effective_window_uses_algorithm_contract_not_summary_curve() -> None:
     assert window is not None
     assert window.start_ms == 1_699_920_000_000
     assert window.end_ms == 1_700_092_799_000
+
+
+def test_compatibility_fixture_stages_the_receipted_factor_file(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The staged workspace holds the store's factor bytes, so LEAN pays the receipted dividends (#3000 review)."""
+    import zipfile
+    from datetime import UTC, date, datetime
+    from pathlib import Path
+
+    from app.engine.data import policy_store
+    from app.engine.data.policy_store import snapshot_minute_trade_zips
+    from app.lean_sidecar.data_policy import BarsSpec, DataPolicy
+    from app.lean_sidecar.workspace import Workspace
+    from app.services import lean_sidecar_service as service
+
+    store = tmp_path / "store"
+    trade_dir = store / "equity/usa/minute/spy"
+    trade_dir.mkdir(parents=True)
+    with zipfile.ZipFile(trade_dir / "20250113_trade.zip", "w") as archive:
+        archive.writestr("20250113_spy_minute_trade.csv", "34200000,600,600,600,600,100\n")
+    factor_dir = store / "equity/usa/factor_files"
+    factor_dir.mkdir(parents=True)
+    factor_bytes = b"20250113,0.99,1,100.00\n20250114,1,1,101.00\n"
+    (factor_dir / "spy.csv").write_bytes(factor_bytes)
+
+    receipt = snapshot_minute_trade_zips(
+        [store],
+        symbol="SPY",
+        start=date(2025, 1, 13),
+        end=date(2025, 1, 13),
+        adjusted=False,
+        session="regular",
+    )
+    data_policy = DataPolicy(
+        source="polygon",
+        symbol="SPY",
+        adjusted=False,
+        session="regular",
+        input_bars=BarsSpec(timespan="minute", multiplier=1),
+        strategy_bars=BarsSpec(timespan="minute", multiplier=15),
+        timestamp_policy="bar_close_ms_utc",
+        timezone="America/New_York",
+        provider_kind="fixture",
+        fixture_id=str(receipt["fixture_id"]),
+        fixture_sha256=str(receipt["fixture_sha256"]),
+    )
+    request = service.TrustedRunRequest(
+        run_id="ut-factor-staging",
+        starting_cash=100_000.0,
+        start_ms_utc=int(datetime(2025, 1, 13, 14, 30, tzinfo=UTC).timestamp() * 1000),
+        end_ms_utc=int(datetime(2025, 1, 15, 14, 30, tzinfo=UTC).timestamp() * 1000),
+        template="ema_crossover",
+        data_policy=data_policy,
+    )
+    monkeypatch.setattr(policy_store, "resolve_data_roots", lambda **_: [store])
+    # The pinned sandbox image exists only where Podman does; staging the
+    # metadata databases is not what this test pins.
+    monkeypatch.setattr(service, "stage_lean_metadata_from_image", lambda *_a, **_k: None)
+
+    store_roots, bars_by_date, factor_payload = service._read_compatibility_fixture(request)
+
+    assert factor_payload == factor_bytes
+    assert request.start_date == date(2025, 1, 13) and request.end_date == date(2025, 1, 14)
+    workspace = Workspace(run_id="ut-factor-staging", artifacts_root=tmp_path, root=tmp_path / "ws")
+    workspace.ensure_layout()
+    service._stage_workspace_data(
+        request=request,
+        workspace=workspace,
+        trading_dates=[trading_date for trading_date, _ in bars_by_date],
+        bars_by_date=bars_by_date,
+        store_roots=store_roots,
+        compatibility_fixture=True,
+        factor_file_payload=factor_payload,
+    )
+
+    staged = Path(workspace.data_dir) / "equity" / "usa" / "factor_files" / "spy.csv"
+    assert staged.read_bytes() == factor_bytes

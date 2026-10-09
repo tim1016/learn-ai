@@ -21,15 +21,16 @@ Phase 2a constraints (since widened; caller source now runs per ADR 0070 decisio
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from app.config import active_root_id
@@ -583,8 +584,14 @@ async def _resolve_lake_artifacts_or_refuse(request: TrustedRunRequest) -> LakeA
 
 def _read_compatibility_fixture(
     request: TrustedRunRequest,
-) -> tuple[list[Path], list[tuple[date, list[TradeBar]]]]:
-    """Admit and decode frozen lake inputs on a worker thread."""
+) -> tuple[list[Path], list[tuple[date, list[TradeBar]]], bytes | None]:
+    """Admit and decode frozen lake inputs, plus the receipted factor file, on a worker thread.
+
+    The factor payload is ``None`` when the receipt carries no factor file
+    (a tree without one); otherwise it is the store's bytes, and staging
+    writes exactly these into the workspace so LEAN pays the dividends the
+    receipt digested (#3000 review).
+    """
     from app.engine.data.policy_store import resolve_data_roots, snapshot_minute_trade_zips
     from app.research.sweep.snapshot import ManifestBoundMinuteReader
 
@@ -603,6 +610,7 @@ def _read_compatibility_fixture(
         actual=receipt,
         phase="source",
     )
+    factor_payload = _read_receipted_factor_payload(receipt, store_roots, request.symbol)
     reader = ManifestBoundMinuteReader(
         store_roots, {item["path"]: item["sha256"] for item in receipt["files"]},
         session=request.data_policy.session,
@@ -614,7 +622,24 @@ def _read_compatibility_fixture(
     bars_by_date = [(trading_date, bars) for trading_date, bars in bars_by_date if bars]
     if not bars_by_date:
         raise LeanSidecarServiceError(f"compatibility_fixture_empty: {request.data_policy.fixture_id}")
-    return store_roots, bars_by_date
+    return store_roots, bars_by_date, factor_payload
+
+
+def _read_receipted_factor_payload(receipt: dict[str, Any], store_roots: Sequence[Path], symbol: str) -> bytes | None:
+    """The receipt's factor-file bytes, verified against the digest the receipt just digested."""
+    from app.engine.data.dividends import factor_file_key, find_factor_file
+
+    key = factor_file_key(symbol)
+    entry = next((item for item in receipt["files"] if item["path"] == key), None)
+    if entry is None:
+        return None
+    found = find_factor_file(store_roots, symbol)
+    if found is None:
+        raise LeanSidecarServiceError(f"compatibility_fixture_factor_missing: {key}")
+    payload = found[0].read_bytes()
+    if hashlib.sha256(payload).hexdigest() != entry["sha256"]:
+        raise LeanSidecarServiceError(f"compatibility_fixture_factor_mismatch: {key}")
+    return payload
 
 
 def _stage_workspace_data(
@@ -625,6 +650,7 @@ def _stage_workspace_data(
     bars_by_date: list[tuple[date, list[TradeBar]]],
     store_roots: list[Path] | None,
     compatibility_fixture: bool,
+    factor_file_payload: bytes | None = None,
 ) -> tuple[list[Path], list[Path], Path]:
     """Materialize LEAN's data folder inside the run's workspace.
 
@@ -648,6 +674,18 @@ def _stage_workspace_data(
     else:
         bar_zip_paths = list(stage_minute_bars(workspace, symbol=request.symbol, bars_by_date=bars_by_date))
     if compatibility_fixture:
+        from app.data_lake.path_policy import LeanFactorFilePath
+
+        # Stage the receipted factor bytes before the staged receipt is
+        # taken: the staged tree must hold the same file the store receipt
+        # digested, and LEAN must pay the dividends the Python engine's
+        # schedule paid — an empty factor_files dir would have LEAN pay
+        # none while the paired Python run's cash says otherwise (#3000
+        # review).
+        if factor_file_payload is not None:
+            factor_path = workspace.data_dir / LeanFactorFilePath(market="usa", symbol=request.symbol).relative_path()
+            factor_path.parent.mkdir(parents=True, exist_ok=True)
+            factor_path.write_bytes(factor_file_payload)
         from app.engine.data.policy_store import snapshot_minute_trade_zips
 
         staged_receipt = snapshot_minute_trade_zips(
@@ -988,6 +1026,9 @@ async def _run_trusted_sample(
     # Roots of the shared bar store when the run stages from it. ``None``
     # for synthetic and standalone recorded-fixture replays.
     store_roots: list[Path] | None = None
+    # The receipted factor file's bytes, read once at the fixture source;
+    # ``None`` on every other path (nothing stages a factor file then).
+    factor_payload: bytes | None = None
     # Decoded bars. Only the staging path needs them — it re-encodes
     # quote and daily zips from them — so lake mode leaves this empty
     # because its admitted files are copied without decoding.
@@ -1002,7 +1043,7 @@ async def _run_trusted_sample(
         trading_dates = _iter_trading_dates(request.start_date, request.end_date)
         bars_by_date = [(d, _generate_synthetic_bars(request.symbol, d)) for d in trading_dates]
     elif data_source == "polygon" and compatibility_fixture:
-        store_roots, bars_by_date = await asyncio.to_thread(_read_compatibility_fixture, request)
+        store_roots, bars_by_date, factor_payload = await asyncio.to_thread(_read_compatibility_fixture, request)
         trading_dates = [d for d, _ in bars_by_date]
     elif data_source == "polygon" and request.data_policy.provider_kind == "fixture":
         # Fixture replay (parity tests / freshness canary): stage the
@@ -1067,6 +1108,7 @@ async def _run_trusted_sample(
             bars_by_date=bars_by_date,
             store_roots=store_roots,
             compatibility_fixture=compatibility_fixture,
+            factor_file_payload=factor_payload,
         )
     # Phase 4c: ``algorithm_source`` overrides the bundled trusted
     # sample when present. The Phase 1c sandbox shape (--read-only,

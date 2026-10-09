@@ -31,6 +31,13 @@ from pydantic import BaseModel, ValidationError
 
 from app.data_lake.path_policy import lake_root_for
 from app.engine.data.availability import check_availability
+from app.engine.data.dividends import (
+    CashDividend,
+    dividends_from_factor_bytes,
+    dividends_from_factor_file,
+    factor_file_key,
+    find_factor_file,
+)
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.engine.data.policy_store import resolve_data_roots
 from app.engine.data.trade_bar import TradeBar
@@ -366,6 +373,7 @@ def _build_backtest_engine(
     reader: LeanMinuteDataReader | LeanDailyDataReader,
     execution_config: ExecutionConfig,
     request: EngineBacktestRequest,
+    dividends: Sequence[CashDividend] = (),
 ) -> BacktestEngine:
     """Apply the selected execution contract at one construction boundary."""
     if request.compatibility_profile is None:
@@ -384,6 +392,7 @@ def _build_backtest_engine(
             fee_model=fee_model,
             fill_stale_signal_at_current_open=True,
         ),
+        dividends=dividends,
     )
 
 
@@ -424,7 +433,54 @@ def _reader_and_engine(
         commission_per_order=Decimal(str(request.commission_per_order)),
         slippage_per_share=Decimal(str(request.slippage_per_share)),
     )
-    return reader, _build_backtest_engine(reader=reader, execution_config=execution_config, request=request)
+    return reader, _build_backtest_engine(
+        reader=reader,
+        execution_config=execution_config,
+        request=request,
+        dividends=_profile_dividends(request, data_roots, data_manifest),
+    )
+
+
+def _profile_dividends(
+    request: EngineBacktestRequest,
+    data_roots: list[Path],
+    data_manifest: Mapping[str, str] | None,
+) -> list[CashDividend]:
+    """The cash dividends the LEAN-compatibility profile pays (#2903).
+
+    The v1 profile runs raw prices, where LEAN credits a distribution for a
+    position held over an ex-date; the schedule comes from the run's own
+    data roots — the factor-file tree LEAN reads. When a fixture manifest is
+    in force, the factor file is read under its receipt: bytes that differ
+    from the manifest's digest refuse the run rather than pay silently
+    different dividends from the same receipted bars. Requests without the
+    profile, or without a pinned symbol and window, pay none, mirroring
+    ``_pin_compatibility_fixture``'s handling of the same gaps.
+    """
+    if request.compatibility_profile != COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1:
+        return []
+    if request.data_policy is None or request.from_date is None or request.to_date is None:
+        return []
+    symbol = request.data_policy.symbol
+    data_start = _parse_iso_date(request.warmup_from_date or request.from_date, "data_start")
+    to_date = _parse_iso_date(request.to_date, "to_date")
+    found = find_factor_file(data_roots, symbol)
+    if data_manifest is not None:
+        key = factor_file_key(symbol)
+        receipted = data_manifest.get(key)
+        if receipted is not None:
+            if found is None:
+                raise ValueError(f"the run's receipted factor file is gone: {key}")
+            # One read, verified, then parsed from those same bytes: a
+            # replacement between a hash and a re-open cannot produce cash
+            # that passed no receipt check (#3000 review).
+            payload = found[0].read_bytes()
+            if hashlib.sha256(payload).hexdigest() != receipted:
+                raise ValueError(f"the factor file changed under the run's receipt: {key}")
+            return dividends_from_factor_bytes(payload, symbol, data_start, to_date)
+    if found is None:
+        return []
+    return dividends_from_factor_file(found[0], symbol, data_start, to_date)
 
 
 def _override_after_initialize(strategy: Strategy, request: EngineBacktestRequest) -> None:
@@ -575,6 +631,9 @@ def _pin_compatibility_fixture(
     request.data_policy.provider_kind = "fixture"
     request.data_policy.fixture_id = str(receipt["fixture_id"])
     request.data_policy.fixture_sha256 = str(receipt["fixture_sha256"])
+    # The receipt's files carry the minute zips and, when the tree holds
+    # one, the factor file the dividend schedule derives from — one
+    # receipt for every input that affects the run (#3000 review).
     return {item["path"]: item["sha256"] for item in receipt["files"]}
 
 

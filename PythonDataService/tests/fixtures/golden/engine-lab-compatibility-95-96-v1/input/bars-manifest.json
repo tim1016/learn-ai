@@ -140,9 +140,9 @@
       "trading_date": "2026-08-07"
     }
   ],
-  "fixture_id": "bar-store-v1-6e96f0f2c5383e2d",
-  "fixture_sha256": "6e96f0f2c5383e2d1ad40f7308433aacc862bbfd6a9828f0b263cade70f0460e",
-  "schema_version": 1,
+  "fixture_id": "bar-store-v1-bc8b963e0582868e",
+  "fixture_sha256": "bc8b963e0582868e3531dd88f3e01206119fe9f81157e01e79f2b45bb7b0ab29",
+  "schema_version": 2,
   "session": "regular",
   "symbol": "SPY"
 }

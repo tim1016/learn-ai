@@ -164,7 +164,7 @@ def test_adjust_anchors_dividend_restores_total_return_across_ex_date() -> None:
     # before the ex-date (LEAN's row convention) — so D1's data carries the
     # 0.99 back-adjustment and D2 onward does not.
     anchors = [_flat_day(D1, 100.0), _flat_day(D2, 99.0), _flat_day(D5, 100.0)]
-    rows = [rd.FactorRow(D1, Decimal("0.99"), Decimal(1))]
+    rows = [rd.FactorRow(D1, Decimal("0.99"), Decimal(1), Decimal("100"))]
     adjusted = rd.adjust_anchors(anchors, rows)
     assert adjusted[0].rth_close == Decimal("99.00")
     assert adjusted[1].rth_close == Decimal("99.0")
@@ -183,7 +183,7 @@ def test_adjust_anchors_split_continuity() -> None:
     anchors = [_flat_day(D1, 200.0), _flat_day(D2, 100.5)]  # 2:1 split ex-date D2
     # Row dated D1 (the session before the ex-date) carries split_factor 0.5
     # for data through D1; D2 is post-split and unadjusted.
-    rows = [rd.FactorRow(D1, Decimal(1), Decimal("0.5"))]
+    rows = [rd.FactorRow(D1, Decimal(1), Decimal("0.5"), Decimal("100"))]
     returns = rd.compute_daily_returns(rd.adjust_anchors(anchors, rows), scheduled_sessions=[D1, D2])
     # Adjusted: D1 close 100, D2 close 100.5 → +0.5%, not −49.75%.
     assert returns[1].close_to_close_pct == pytest.approx(0.5, abs=1e-9)

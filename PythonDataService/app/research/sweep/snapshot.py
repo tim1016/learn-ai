@@ -31,6 +31,7 @@ from typing import Any, Literal
 from app.data_lake.adjustment_versions import AdjustmentVersionGuard, adjusted_root_for, companion_path
 from app.data_lake.admission import read_committed_bytes
 from app.engine.data.availability import MissingSessionsError, check_availability
+from app.engine.data.dividends import find_factor_file
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.trading_calendar import expected_sessions
@@ -156,6 +157,15 @@ def capture_data_snapshot(
                     guard.verify(path, payload, symbol, companion_payload=companion)
                     artifacts[str(companion_path(Path(relative)))] = hashlib.sha256(companion).hexdigest()
                 artifacts[relative] = hashlib.sha256(payload).hexdigest()
+    # The factor file, when the tree holds one, is part of the same
+    # contract: a compatibility run's fixture receipt carries it under this
+    # key, so a supplied snapshot must too, or the manifest comparison at
+    # run time would read its absence as a mismatch and refuse a valid
+    # run (#3000 review).
+    found = find_factor_file(roots, symbol)
+    if found is not None:
+        factor_file, relative = found
+        artifacts[relative.as_posix()] = hashlib.sha256(read_committed_bytes(factor_file)).hexdigest()
     return DataSnapshot(
         symbol=symbol.upper(),
         resolution=resolution,

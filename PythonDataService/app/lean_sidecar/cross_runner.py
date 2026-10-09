@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+from app.engine.data.dividends import dividends_from_factor_tree
 from app.engine.data.lean_format import LeanMinuteDataReader
 from app.engine.engine import BacktestEngine
 from app.engine.execution.commission import IbkrEquityCommissionModel
@@ -337,6 +338,11 @@ def run_engine_lab_on_workspace(
         cross_instance.__dict__.update(base_instance.__dict__)
 
         reader = LeanMinuteDataReader(data_root=data_root)
+        # Parity runs also pay the cash dividends LEAN pays on raw prices:
+        # the schedule comes from the same tree the bars came from — the
+        # factor file LEAN itself reads (#2903). A tree without factor files
+        # yields none, which is what LEAN reading that tree would pay.
+        dividends = dividends_from_factor_tree(data_root, symbol, start_date, end_date)
         # Cross-engine parity runs size positions like LEAN: SetHoldings reserves
         # a free-portfolio-value buffer + the order fee. SimpleFloorSizing would
         # buy one share more than LEAN (Gate 3 QUANTITY_MISMATCH).
@@ -352,6 +358,7 @@ def run_engine_lab_on_workspace(
                 fee_model=IbkrEquityCommissionModel(),
                 fill_stale_signal_at_current_open=True,
             ),
+            dividends=dividends,
         )
         result = engine.run(cross_instance)
 
