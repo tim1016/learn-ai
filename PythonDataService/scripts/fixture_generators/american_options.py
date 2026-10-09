@@ -1,4 +1,4 @@
-"""Generate AM-001 to AM-005 from QuantLib, without importing the canonical American pricer.
+"""Generate AM-001 to AM-006 from QuantLib, without importing the canonical American pricer.
 
 AM-001  price and delta with no dividend, from ``BinomialLRVanillaEngine``.
 AM-002  price and delta with cash dividends, and one group with none, from
@@ -13,6 +13,8 @@ AM-005  daily time decay with cash dividends, and one group with none: the
         goes ex inside the day is priced a day later at its price less that
         dividend, with the dividend gone from the schedule. One group goes ex
         on day 2, a day ahead of the later price.
+AM-006  price and delta with a large cash dividend one day before ex-date,
+        including the high-volatility in-the-money call from issue #2963.
 
 QuantLib counts time in whole days. A time to expiry that is not a whole
 number of days is the same problem restated over the next whole number up:
@@ -199,6 +201,29 @@ def _dividend_cases() -> list[dict[str, Any]]:
     return cases
 
 
+def _near_ex_dividend_cases() -> list[dict[str, Any]]:
+    cases = []
+    for ex_day in (1, 2, 59):
+        for right in RIGHTS:
+            option = _escrowed_option(right, 80.0, 59, [(ex_day, 3.0)], 0.6)
+            cases.append(
+                {
+                    "case": f"59d_ex_on_day_{ex_day}_vol0.6_k80_{right}",
+                    "input": {
+                        "spot": SPOT,
+                        "strike": 80.0,
+                        "years_to_expiry": 59 / 365.0,
+                        "rate": DIVIDEND_RATE,
+                        "volatility": 0.6,
+                        "right": right,
+                        "dividends": [{"years_to_ex": ex_day / 365.0, "cash": 3.0}],
+                    },
+                    "expected": {"price": option.NPV(), "delta": option.delta()},
+                }
+            )
+    return cases
+
+
 def _implied_volatility_cases(no_dividend_cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
     cases = []
     for case in no_dividend_cases:
@@ -367,6 +392,17 @@ def main() -> None:
             time_steps=FD_TIME_STEPS,
             price_steps=FD_PRICE_STEPS,
             day_ms=DAY_MS,
+        ),
+    )
+    _write(
+        "AM-006",
+        *_split(
+            _near_ex_dividend_cases(),
+            engine="FdBlackScholesVanillaEngine",
+            cash_dividend_model="Escrowed",
+            scheme="Douglas",
+            time_steps=FD_TIME_STEPS,
+            price_steps=FD_PRICE_STEPS,
         ),
     )
 
