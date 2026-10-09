@@ -312,6 +312,9 @@ ENTRY_TERMINAL_PROOF = "EXIT_ENTRY_TERMINAL_PROOF"
 ENTRY_WAIT_ENDED = "ENTRY_WAIT_ENDED"
 #: Why a resting option entry is cancelled whatever is left of its wait: its Clerk closed (ADR 0076).
 ENTRY_CLERK_CLOSED = "ENTRY_CLERK_CLOSED"
+#: Why an entry in shares is cancelled while its run is still ACTIVE: its own
+#: ENTER ended in failure, and the broker later showed the order working (#2961).
+ENTRY_ENTER_FAILED = "ENTRY_ENTER_FAILED"
 
 # A Dry Run's run-end close (``dry_run_close``, owner decision 2026-09-29): the
 # simulation closing what an ended run left, at the last price the run saw.

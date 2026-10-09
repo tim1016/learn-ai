@@ -1232,6 +1232,43 @@ def entry_orders_owed_a_cancel(conn: sqlite3.Connection) -> list[OrderResource]:
     return [OrderResource(**dict(row)) for row in rows]
 
 
+def working_share_entries_under_failed_enters(conn: sqlite3.Connection) -> list[OrderResource]:
+    """Working ENTRYs in shares whose ENTER has ended in failure while their run stays ACTIVE (#2961).
+
+    The reconciliation pass's worklist for the one state no other step owns.
+    A stock entry has no deadline round to cancel it at, and the stopped-run
+    step waits for the run to end — so an ENTER that failed (its send's answer
+    lost, the lookup then saying the order was not there) whose order Alpaca
+    later shows working would fill beside the bot's next entry, and nothing
+    refused that entry either. This read is the same predicate as
+    :func:`entry_orders_owed_a_cancel` with the reason swapped: the ENTER's
+    own failure in place of the run's, so a working order nobody owns is
+    cancelled however the run stands.
+
+    Entries in shares only: an option entry the books bind to a contract, or
+    the parent of several legs, is the deadline keeper's whatever its ENTER's
+    state (ADR 0076), and a second canceller would race it. As there, an entry
+    a nonterminal EXIT links is that EXIT's to cancel, and the ENTER's own
+    state is asked here only because its machine still owns a nonterminal
+    ENTER's order.
+    """
+    rows = conn.execute(
+        f"SELECT {_ENTRY_ORDER_COLUMNS} FROM orders o "
+        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+        f"WHERE {_STRATEGY_ENTRY_NO_EXIT_OWNS} AND {_ENTRY_SHOWN_WORKING} "
+        # The effect state is asked of its mirror on the order (kept equal by
+        # trigger, v25): with the broker state it seeks this worklist straight
+        # out of ix_orders_entry_broker_state, past all terminal history (#2970).
+        f"AND o.effect_state IN ({', '.join('?' for _ in FAILED_EFFECT_STATES)}) "
+        "AND EXISTS (SELECT 1 FROM runs r WHERE r.run_id = e.run_id "
+        "AND r.strategy_instance_id = e.strategy_instance_id AND r.state = 'ACTIVE') "
+        f"AND NOT {_OPTION_ENTRY_BOUND_SQL} "
+        "ORDER BY o.updated_at_ms ASC, o.order_ref ASC",
+        (*sorted(CANCELLABLE_ENTRY_BROKER_STATES), *sorted(FAILED_EFFECT_STATES)),
+    ).fetchall()
+    return [OrderResource(**dict(row)) for row in rows]
+
+
 class EntryDeadline(NamedTuple):
     """One option entry the Clerk may still have to cancel, and the two times its acceptance keeps."""
 
@@ -1354,36 +1391,25 @@ def option_entries_with_a_deadline(conn: sqlite3.Connection) -> list[EntryDeadli
     )
 
 
-def working_option_entry_for_strategy(conn: sqlite3.Connection, strategy_instance_id: str) -> OrderResource | None:
-    """An option entry of this strategy that the books show working at the broker, or ``None`` (#2913).
+def working_entry_order_for_strategy(conn: sqlite3.Connection, strategy_instance_id: str) -> OrderResource | None:
+    """An entry order of this strategy that the books show working at the broker, or ``None`` (#2913, #2961).
 
     Whatever its ENTER's state: the order of an ENTER voided as never sent,
-    which the broker later showed, can still fill. Read from the orders the
-    books bind to a contract, so a strategy that trades shares is answered
-    from an empty table and its orders are never asked about.
+    which the broker later showed, can still fill. One question for every
+    instrument — an order in shares is asked about exactly like one the books
+    bind to a contract or to several legs — so no bot is admitted a second
+    entry beside an order of its own that may still fill. An existence
+    question: any one working entry answers it, so no order is picked
+    among the few there can be.
     """
-    params = (strategy_instance_id, *sorted(CANCELLABLE_ENTRY_BROKER_STATES))
-    where = (
-        "CROSS JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
-        f"WHERE o.role = 'ENTRY' AND e.strategy_instance_id = ? AND {_ENTRY_SHOWN_WORKING} "
-        "ORDER BY o.updated_at_ms ASC, o.order_ref ASC LIMIT 1"
-    )
     row = conn.execute(
-        f"SELECT {_ENTRY_ORDER_COLUMNS} FROM {_ONE_CONTRACT_ORDERS} {where}",
-        params,
+        f"SELECT {_ENTRY_ORDER_COLUMNS} FROM orders o "
+        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+        f"WHERE o.role = 'ENTRY' AND e.strategy_instance_id = ? AND {_ENTRY_SHOWN_WORKING} "
+        "LIMIT 1",
+        (strategy_instance_id, *sorted(CANCELLABLE_ENTRY_BROKER_STATES)),
     ).fetchone()
-    # An entry of several legs is bound to no contract: its parent is found from its legs (ADR 0076).
-    parent = (
-        conn.execute(f"SELECT {_ENTRY_ORDER_COLUMNS} FROM {_MULTI_LEG_PARENT_ORDERS} {where}", params).fetchone()
-        if _books_keep_legs(conn)
-        else None
-    )
-    found = min(
-        (candidate for candidate in (row, parent) if candidate is not None),
-        key=lambda candidate: (candidate["updated_at_ms"], candidate["order_ref"]),
-        default=None,
-    )
-    return OrderResource(**dict(found)) if found is not None else None
+    return OrderResource(**dict(row)) if row is not None else None
 
 
 class HeldOptionContract(NamedTuple):
