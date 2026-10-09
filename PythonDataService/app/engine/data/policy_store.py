@@ -45,7 +45,10 @@ from app.data_lake.types import polygon_mode_for
 logger = logging.getLogger(__name__)
 
 BarSource = Literal["polygon"]
-COMPATIBILITY_FIXTURE_SCHEMA_VERSION = 1
+# v2: the receipt's files also carry the factor file a compatibility run's
+# dividends are derived from, so the fixture identity covers every input
+# that affects the run, not the minute zips alone (#3000 review).
+COMPATIBILITY_FIXTURE_SCHEMA_VERSION = 2
 COMPATIBILITY_FIXTURE_ID_PREFIX = "bar-store-v1-"
 
 
@@ -134,6 +137,26 @@ def snapshot_minute_trade_zips(
         current += timedelta(days=1)
     if not files:
         raise FileNotFoundError(f"no minute trade zips for {safe_symbol} in {start}..{end}")
+
+    # The factor file beside the zips is an input the run reads too — the
+    # dividends the LEAN-compatibility profile pays are derived from it
+    # (#2903) — so it belongs inside the one receipt the fixture identity
+    # digests: two runs on identical bars must not share an identity while
+    # paying different dividends (#3000 review). A tree with no factor
+    # file receipts none; a run then pays no dividends, exactly as before.
+    from app.engine.data.dividends import find_factor_file
+
+    found = find_factor_file(roots, safe_symbol)
+    if found is not None:
+        factor_file, relative = found
+        payload = factor_file.read_bytes()
+        files.append(
+            {
+                "path": relative.as_posix(),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "size_bytes": len(payload),
+            }
+        )
 
     receipt: dict[str, Any] = {
         "schema_version": COMPATIBILITY_FIXTURE_SCHEMA_VERSION,

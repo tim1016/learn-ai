@@ -33,6 +33,7 @@ from app.data_lake.path_policy import lake_root_for
 from app.engine.data.availability import check_availability
 from app.engine.data.dividends import (
     CashDividend,
+    dividends_from_factor_bytes,
     dividends_from_factor_file,
     factor_file_key,
     find_factor_file,
@@ -461,6 +462,8 @@ def _profile_dividends(
     if request.data_policy is None or request.from_date is None or request.to_date is None:
         return []
     symbol = request.data_policy.symbol
+    data_start = _parse_iso_date(request.warmup_from_date or request.from_date, "data_start")
+    to_date = _parse_iso_date(request.to_date, "to_date")
     found = find_factor_file(data_roots, symbol)
     if data_manifest is not None:
         key = factor_file_key(symbol)
@@ -468,16 +471,16 @@ def _profile_dividends(
         if receipted is not None:
             if found is None:
                 raise ValueError(f"the run's receipted factor file is gone: {key}")
-            if hashlib.sha256(found[0].read_bytes()).hexdigest() != receipted:
+            # One read, verified, then parsed from those same bytes: a
+            # replacement between a hash and a re-open cannot produce cash
+            # that passed no receipt check (#3000 review).
+            payload = found[0].read_bytes()
+            if hashlib.sha256(payload).hexdigest() != receipted:
                 raise ValueError(f"the factor file changed under the run's receipt: {key}")
+            return dividends_from_factor_bytes(payload, symbol, data_start, to_date)
     if found is None:
         return []
-    return dividends_from_factor_file(
-        found[0],
-        symbol,
-        _parse_iso_date(request.warmup_from_date or request.from_date, "data_start"),
-        _parse_iso_date(request.to_date, "to_date"),
-    )
+    return dividends_from_factor_file(found[0], symbol, data_start, to_date)
 
 
 def _override_after_initialize(strategy: Strategy, request: EngineBacktestRequest) -> None:
@@ -628,15 +631,10 @@ def _pin_compatibility_fixture(
     request.data_policy.provider_kind = "fixture"
     request.data_policy.fixture_id = str(receipt["fixture_id"])
     request.data_policy.fixture_sha256 = str(receipt["fixture_sha256"])
-    manifest = {item["path"]: item["sha256"] for item in receipt["files"]}
-    # The dividend schedule must bind to the same receipt as the bars: a
-    # factor file that changes between engines would hand two runs identical
-    # receipted bars and different dividend cash (#3000 review).
-    found = find_factor_file(data_roots, request.data_policy.symbol)
-    if found is not None:
-        factor_file, relative = found
-        manifest[relative.as_posix()] = hashlib.sha256(factor_file.read_bytes()).hexdigest()
-    return manifest
+    # The receipt's files carry the minute zips and, when the tree holds
+    # one, the factor file the dividend schedule derives from — one
+    # receipt for every input that affects the run (#3000 review).
+    return {item["path"]: item["sha256"] for item in receipt["files"]}
 
 
 def _snapshot_availability_hash(manifest: Mapping[str, str]) -> str:

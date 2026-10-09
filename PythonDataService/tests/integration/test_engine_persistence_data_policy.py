@@ -386,6 +386,65 @@ def test_compatibility_fixture_receipts_the_factor_file(tmp_path: Path) -> None:
     assert manifest[key] == hashlib.sha256(factor_file.read_bytes()).hexdigest()
 
 
+def test_compatibility_fixture_identity_covers_the_factor_file(tmp_path: Path) -> None:
+    """Identical bars with different factor files must not share one fixture identity (#3000 review)."""
+    from app.services.engine_backtest_service import _pin_compatibility_fixture
+
+    root_a, _factor_a = _compat_root_with_factor_file(tmp_path / "a")
+    root_b = tmp_path / "b"
+    (root_b / "equity/usa/minute/spy").mkdir(parents=True)
+    (root_b / "equity/usa/minute/spy/20250113_trade.zip").write_bytes(b"day-one")
+    (root_b / "equity/usa/factor_files").mkdir(parents=True)
+    (root_b / "equity/usa/factor_files/spy.csv").write_text(
+        "20250113,0.95,1,100.00\n20250114,1,1,101.00\n", encoding="utf-8"
+    )
+    request_a = _compat_request()
+    request_b = _compat_request()
+
+    pinned_a = _pin_compatibility_fixture(request_a, [root_a])
+    pinned_b = _pin_compatibility_fixture(request_b, [root_b])
+
+    assert pinned_a is not None and pinned_b is not None
+    assert pinned_a["equity/usa/factor_files/spy.csv"] != pinned_b["equity/usa/factor_files/spy.csv"]
+    assert request_a.data_policy is not None and request_b.data_policy is not None
+    assert request_a.data_policy.fixture_sha256 != request_b.data_policy.fixture_sha256
+
+
+def test_compatibility_run_accepts_a_supplied_snapshot_with_a_factor_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A snapshot from the shared contract carries the factor file, so the run is not refused (#3000 review)."""
+    import zipfile
+    from datetime import date
+
+    from app.research.sweep.snapshot import capture_data_snapshot
+    from app.services import engine_backtest_service as service
+
+    root, factor_file = _compat_root_with_factor_file(tmp_path)
+    zip_path = root / "equity/usa/minute/spy/20250113_trade.zip"
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.writestr("20250113_spy_minute_trade.csv", "34200000,600,600,600,600,100\n")
+
+    snapshot = capture_data_snapshot(
+        roots=[root],
+        symbol="SPY",
+        resolution="minute",
+        data_start=date(2025, 1, 13),
+        data_end=date(2025, 1, 13),
+    )
+    assert "equity/usa/factor_files/spy.csv" in snapshot.artifacts
+
+    monkeypatch.setattr(service, "_resolve_lean_data_roots", lambda **_: [root])
+    request = _compat_request()
+
+    response = service.execute_engine_backtest(
+        request=request, on_phase=lambda _: None, on_log=lambda _: None, data_manifest=snapshot.artifacts,
+    )
+
+    assert response.success is True, response.error
+    assert factor_file.exists()
+
+
 def test_profile_dividends_bind_to_the_receipted_factor_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Bytes that differ from the manifest's digest refuse the run, gone ones too."""
     from app.services import engine_backtest_service as service
@@ -429,6 +488,24 @@ def test_compatibility_run_refuses_a_factor_file_changed_between_engines(
         )
     assert excinfo.value.status_code == 409
     assert "compatibility fixture differs" in str(excinfo.value.detail)
+
+
+def test_profile_dividends_parse_the_verified_bytes_not_a_second_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The receipt path computes the schedule from the bytes it verified (#3000 review)."""
+    from app.services import engine_backtest_service as service
+
+    root, _factor_file = _compat_root_with_factor_file(tmp_path)
+    request = _compat_request()
+    manifest = service._pin_compatibility_fixture(request, [root])
+    assert manifest is not None
+
+    def refuse_second_read(*args: object, **kwargs: object) -> None:
+        raise AssertionError("the receipted path must parse the verified payload, not re-open the file")
+
+    monkeypatch.setattr(service, "dividends_from_factor_file", refuse_second_read)
+    assert service._profile_dividends(request, [root], manifest)
 
 
 def test_mismatched_params_and_policy_symbols_are_rejected() -> None:

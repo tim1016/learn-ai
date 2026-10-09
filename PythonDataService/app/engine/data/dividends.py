@@ -100,7 +100,17 @@ def dividends_from_factor_tree(
 
 
 def dividends_from_factor_file(factor_file: Path, symbol: str, start: date, end: date) -> list[CashDividend]:
-    """Every dividend whose cum-dividend session falls in ``[start, end]``.
+    """Every dividend whose cum-dividend session falls in ``[start, end]``, read from the tree."""
+    return dividends_from_factor_bytes(factor_file.read_bytes(), symbol, start, end)
+
+
+def dividends_from_factor_bytes(payload: bytes, symbol: str, start: date, end: date) -> list[CashDividend]:
+    """Every dividend whose cum-dividend session falls in ``[start, end]``, from ``payload``.
+
+    The receipt-verified entry point: a caller that hashes the factor file
+    against a manifest hands the same bytes here, so the schedule is
+    provably computed from the bytes that passed the check, never a second,
+    later read of a path that may have changed under it (#3000 review).
 
     A factor-file row is dated the last session before its ex-date; the
     distribution is LEAN's own ``ComputeDistribution`` on the row's reference
@@ -117,7 +127,7 @@ def dividends_from_factor_file(factor_file: Path, symbol: str, start: date, end:
     from app.data_lake.factor_files import parse_factor_file
     from app.lean_sidecar.trading_calendar import session_close_ms_utc
 
-    rows = parse_factor_file(factor_file.read_text(encoding="utf-8"))
+    rows = parse_factor_file(payload.decode("utf-8"))
     # LEAN walks its factor rows grouped by date and uses each date's first
     # row only (CorporateFactorProvider.GetSplitsAndDividends reading
     # SortedFactorFileData): two distributions sharing an ex-date collapse
