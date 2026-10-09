@@ -28,7 +28,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from threading import Lock
 from time import monotonic
-from typing import Any
+from typing import Any, NoReturn
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -250,6 +250,16 @@ class AlpacaTradingClient:
         read by a broker order id held with :meth:`hold_submission_uncertain`.
         """
         self._clear_uncertain_submission(order_key)
+
+    def _order_answer_unreadable(self) -> NoReturn:
+        raise BrokerUnavailable(
+            "Alpaca's order lookup answer could not be read.",
+            broker=self.broker_id,
+            detail=(
+                "Alpaca answered 2xx with an empty or null body; "
+                "whether the order exists is unknown, not absent."
+            ),
+        )
 
     def _build_default_client(self) -> Any:
         # Injected settings are the whole binding; otherwise the one this
@@ -634,6 +644,10 @@ class AlpacaTradingClient:
         unreachable must stay uncertain. Every other failure (timeout, 5xx,
         network, other 4xx) flows through ``_call`` unchanged.
 
+        A 2xx answered with an empty or ``null`` body never becomes ``None``
+        either: alpaca-py hands that back as ``None`` with no 404, and an
+        answer which could not be read is unknown, not absent (#2954).
+
         A found order closes the visibility window. A caller that judges the
         answer itself passes ``found_settles_submission=False``: the window
         then stays open until that caller takes an answer as this order's
@@ -643,7 +657,7 @@ class AlpacaTradingClient:
 
         def _get(client: Any) -> dict[str, Any] | None:
             try:
-                return client.get_order_by_client_id(client_id=client_order_id)
+                result = client.get_order_by_client_id(client_id=client_order_id)
             except APIError as exc:
                 if status_of(exc) == 404:
                     if self._submission_may_become_visible(client_order_id):
@@ -657,6 +671,9 @@ class AlpacaTradingClient:
                         ) from exc
                     return None
                 raise
+            if result is None:
+                self._order_answer_unreadable()
+            return result
 
         result = await self._call(_get, describe="order lookup by client_order_id")
         if result is not None and found_settles_submission:
@@ -705,6 +722,10 @@ class AlpacaTradingClient:
         canonical spelling): Alpaca answered for the order a moment ago, so
         its not-found proves nothing yet (#2913). Nothing holds one for a
         stock order.
+
+        A 2xx answered with an empty or ``null`` body is never "absent"
+        either: the SDK hands that back as ``None`` with no 404, and an
+        answer which could not be read is unknown (#2954).
         """
         try:
             held_under = str(UUID(order_id))
@@ -718,8 +739,9 @@ class AlpacaTradingClient:
         def _get(client: Any) -> dict[str, Any] | None:
             try:
                 if nested:
-                    return client.get_order_by_id(order_id, filter=GetOrderByIdRequest(nested=True))
-                return client.get_order_by_id(order_id)
+                    result = client.get_order_by_id(order_id, filter=GetOrderByIdRequest(nested=True))
+                else:
+                    result = client.get_order_by_id(order_id)
             except APIError as exc:
                 if status_of(exc) == 404:
                     if self._submission_may_become_visible(held_under):
@@ -733,6 +755,9 @@ class AlpacaTradingClient:
                         ) from exc
                     return None
                 raise
+            if result is None:
+                self._order_answer_unreadable()
+            return result
 
         describe = "nested order lookup by broker order id" if nested else "order lookup by broker order id"
         return await self._call(_get, describe=describe)
