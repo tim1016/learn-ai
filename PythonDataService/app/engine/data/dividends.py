@@ -19,6 +19,8 @@ from decimal import ROUND_HALF_EVEN, Decimal
 from itertools import pairwise
 from pathlib import Path
 
+from app.lean_sidecar.workspace import TICKER_SYMBOL_PATTERN, SymbolValidationError, validate_symbol
+
 
 @dataclass(frozen=True)
 class CashDividend:
@@ -51,11 +53,22 @@ def dividends_from_factor_tree(
     applies to bars, so the dividends a run pays come from the same tree its
     bars came from. A tree with no factor file yields no dividends: the run
     then pays exactly what its input can prove, which is what a LEAN run
-    reading the same tree would pay.
+    reading the same tree would pay. A ``symbol`` that is not a plain ticker
+    is refused here, where it first becomes a filesystem path.
     """
+    # The boundary check raises on a symbol that is not a ticker; the value
+    # used in the path is then reconstructed from the regex capture, because
+    # CodeQL's path-injection rule treats ``re.Match.group(0)`` as sanitized
+    # and a helper's return value (``validate_symbol``'s) it does not — the
+    # same constraint workspace.py documents for run ids.
+    validate_symbol(symbol)
+    match = TICKER_SYMBOL_PATTERN.fullmatch(symbol)
+    if match is None:  # Defensive: validate_symbol already raised on this case.
+        raise SymbolValidationError(f"symbol rejected on second check: {symbol!r}")
+    safe_symbol = match.group(0).lower()
     roots: list[Path | str] = [data_root] if isinstance(data_root, (str, Path)) else list(data_root)
     for root in roots:
-        factor_file = Path(root) / "equity" / "usa" / "factor_files" / f"{symbol.lower()}.csv"
+        factor_file = Path(root) / "equity" / "usa" / "factor_files" / f"{safe_symbol}.csv"
         if factor_file.exists():
             return dividends_from_factor_file(factor_file, symbol, start, end)
     return []

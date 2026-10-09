@@ -16,10 +16,13 @@ from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from app.engine.data.dividends import dividends_from_factor_file, dividends_from_factor_tree
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine
 from app.engine.strategy.base import Strategy
+from app.lean_sidecar.workspace import SymbolValidationError
 from app.utils.timestamps import datetime_at_ms, to_ms_utc
 
 NY = ZoneInfo("America/New_York")
@@ -108,6 +111,13 @@ def test_factor_tree_searches_roots_in_order(tmp_path: Path) -> None:
     assert dividends_from_factor_tree(empty_root, "syn", date(2026, 3, 1), date(2026, 3, 31)) == []
     dividends = dividends_from_factor_tree([empty_root, stocked_root], "syn", date(2026, 3, 1), date(2026, 3, 31))
     assert [str(d.per_share) for d in dividends] == ["1.00"]
+
+
+def test_factor_tree_refuses_a_symbol_that_could_traverse(tmp_path: Path) -> None:
+    """The CodeQL finding behind the fix: a request symbol reaches a path join here."""
+    for hostile in ("../../etc/passwd", "..", "SPY/../../secrets"):
+        with pytest.raises(SymbolValidationError, match="symbol"):
+            dividends_from_factor_tree(tmp_path, hostile, date(2026, 3, 1), date(2026, 3, 31))
 
 
 def test_factor_file_reader_pins_spy_march_2026_distribution() -> None:
