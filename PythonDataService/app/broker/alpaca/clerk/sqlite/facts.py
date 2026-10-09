@@ -490,6 +490,7 @@ _ACCEPTED_SHAPE_DEFAULTS: Mapping[str, Any] = {
     "option_contract": None,
     "option_exit": None,
     "scheduled_close": None,
+    "decision_pricing": None,
 }
 
 
@@ -533,6 +534,38 @@ class ScheduledCloseFacts:
         if any(isinstance(time, bool) or not isinstance(time, int) or time < 0 for time in times):
             raise ValueError("a scheduled close's times are int64 ms UTC")
         return cls(kind=kind, due_ms=times[0], session_open_ms=times[1])
+
+
+@dataclass(frozen=True)
+class DecisionPricingFacts:
+    """The pricing evidence a no-submit world fills a decision EXIT from (#2919).
+
+    The retained bar the decision priced its order at, and the decision bar's
+    close -- the instant an older pricing bar's fill is stamped at (#2912).
+    A simulated world binds both in memory at the first send
+    (``_PricingBarBoundTradePort``); recorded here, whichever pass sends the
+    order later -- the reconciliation sweep re-driving an EXIT a process death
+    left between its send request and its simulated fill -- rebuilds the same
+    binding instead of pricing the sale from whatever bar is newest then.
+    """
+
+    bar_identity: str
+    decided_at_ms: int
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {"bar_identity": self.bar_identity, "decided_at_ms": self.decided_at_ms}
+
+    @classmethod
+    def from_mapping(cls, value: Any) -> DecisionPricingFacts:
+        """Read back exactly what ``to_mapping`` wrote; anything else is refused, never guessed at."""
+        if not isinstance(value, dict) or set(value) != {"bar_identity", "decided_at_ms"}:
+            raise ValueError("a decision's pricing evidence keeps exactly its bar's identity and the decision's close")
+        bar_identity, decided_at_ms = value["bar_identity"], value["decided_at_ms"]
+        if not isinstance(bar_identity, str) or not bar_identity:
+            raise ValueError("a decision's pricing bar is named by its identity")
+        if isinstance(decided_at_ms, bool) or not isinstance(decided_at_ms, int) or decided_at_ms < 0:
+            raise ValueError("the decision's close is int64 ms UTC")
+        return cls(bar_identity=bar_identity, decided_at_ms=decided_at_ms)
 
 
 @dataclass(frozen=True)
@@ -615,11 +648,22 @@ class ExitAcceptedFacts:
     # structure with a sold leg before a session's close, and each re-drive of
     # it made inside that session. Absent for every other EXIT.
     scheduled_close: dict[str, Any] | None = None
+    # The pricing evidence a no-submit world fills this EXIT from
+    # (``DecisionPricingFacts``, #2919), recorded only where the authority
+    # synthesizes its fills: the retained bar the decision priced its order
+    # at, and the decision bar's close. Absent on every EXIT sent to a real
+    # broker, and on every acceptance recorded before it existed.
+    decision_pricing: dict[str, Any] | None = None
 
     @property
     def the_scheduled_close(self) -> ScheduledCloseFacts | None:
         """The scheduled close this EXIT was accepted as, or ``None`` for any other EXIT."""
         return None if self.scheduled_close is None else ScheduledCloseFacts.from_mapping(self.scheduled_close)
+
+    @property
+    def the_decision_pricing(self) -> DecisionPricingFacts | None:
+        """The pricing evidence this EXIT's simulation fills from, or ``None`` where none was recorded."""
+        return None if self.decision_pricing is None else DecisionPricingFacts.from_mapping(self.decision_pricing)
 
     @property
     def operator_priced(self) -> bool:

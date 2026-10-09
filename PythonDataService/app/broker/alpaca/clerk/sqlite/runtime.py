@@ -136,6 +136,7 @@ from app.broker.alpaca.clerk.sqlite.exit_resolution import (
     option_close_unpriced,
     option_flatten_waits_for_open,
 )
+from app.broker.alpaca.clerk.sqlite.facts import DecisionPricingFacts
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
@@ -2753,6 +2754,19 @@ class SqliteAlpacaClerkFacade:
                         # a deferred cancel-and-prove leaves the reducing
                         # order to a later sweep that knows no decision.
                         program_leg=program_leg,
+                        # So is the bar a simulation fills this EXIT at
+                        # (#2919): a process death between the send request
+                        # and the simulated fill leaves the later pass that
+                        # re-drives it with no in-memory binding, and this is
+                        # the only durable record of the decision's price.
+                        decision_pricing=(
+                            None
+                            if not self.simulates_fills or priced_by is None or retained_source_bar is None
+                            else DecisionPricingFacts(
+                                bar_identity=priced_by.bar_identity,
+                                decided_at_ms=retained_source_bar.end_ms,
+                            )
+                        ),
                     )
                 except UnknownEntryOrderError:
                     # The lookup and accept both occur under the Clerk intake

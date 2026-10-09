@@ -271,6 +271,26 @@ class ShadowOrderBook:
         self._require_own_evidence(client_order_id, retained_bar)
         self._ledger.bind_evaluated_bar(client_order_id, retained_bar, fill_at_ms=fill_at_ms)
 
+    def bind_decision_bar(
+        self, client_order_id: str, *, bar_identity: str, decided_at_ms: int, symbol: str
+    ) -> bool:
+        """Rebind an order to the exact bar its decision priced it at, from durable evidence (#2919).
+
+        The bar is looked up by identity in the instance's own evidence
+        ledger -- the namespace the order id names, which
+        :meth:`bind_evaluated_bar` requires of it again -- so the record
+        names the bar and the ledger proves it. ``False`` (nothing retained
+        under that identity, or not the order's symbol) leaves the order
+        unsent: shadow execution is never priced from a later bar.
+        """
+        account_id = self._evidence_namespace_for(client_order_id)
+        with self._evidence.open(account_id) as ledger:
+            retained = ledger.by_identity(bar_identity)
+        if retained is None or retained.symbol != symbol:
+            return False
+        self.bind_evaluated_bar(client_order_id, retained, fill_at_ms=decided_at_ms)
+        return True
+
     def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str, side: str | None = None) -> bool:
         """Bind a recovery EXIT to the latest bar its own instance retained.
 
@@ -675,6 +695,13 @@ class NoSubmitAlpacaTradePort(UnsupportedOptionOrderRefusal):
 
     def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str, side: str | None = None) -> bool:
         return self._book.bind_latest_recovery_bar(client_order_id, symbol=symbol, side=side)
+
+    def bind_decision_bar(
+        self, client_order_id: str, *, bar_identity: str, decided_at_ms: int, symbol: str
+    ) -> bool:
+        return self._book.bind_decision_bar(
+            client_order_id, bar_identity=bar_identity, decided_at_ms=decided_at_ms, symbol=symbol
+        )
 
     def synthesized_fill_anchors(self) -> Mapping[str, SynthesizedAnchor]:
         return self._book.fill_anchors()

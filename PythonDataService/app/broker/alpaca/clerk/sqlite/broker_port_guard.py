@@ -274,6 +274,22 @@ class GuardedBrokerTradePort:
             return True
         return bool(bind(client_order_id, symbol=symbol, side=side))
 
+    def bind_decision_bar(
+        self, client_order_id: str, *, bar_identity: str, decided_at_ms: int, symbol: str
+    ) -> bool:
+        """Rebind the exact bar a decision priced an order at, from durable evidence (#2919).
+
+        A port with the capability is a simulation whose first send binds the
+        bar itself (``_PricingBarBoundTradePort``), so a wrapper that offers
+        no such method has nothing left to bind here; a real broker never
+        prices from a bound bar. Both answer ``True``: nothing is refused.
+        """
+        self._assert_unfenced("bind_decision_bar")
+        bind = getattr(self._inner, "bind_decision_bar", None)
+        if not callable(bind):
+            return True
+        return bool(bind(client_order_id, bar_identity=bar_identity, decided_at_ms=decided_at_ms, symbol=symbol))
+
     def bind_run_end_close_bar(self, client_order_id: str, *, symbol: str) -> bool:
         """Bind a Dry Run's run-end close price; a port that is not a simulation refuses."""
         self._assert_unfenced("bind_run_end_close_bar")

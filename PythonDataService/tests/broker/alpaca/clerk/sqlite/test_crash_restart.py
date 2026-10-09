@@ -14,6 +14,13 @@ the same file the way a new process does, and runs boot recovery against a
 broker double that holds what the broker did while the process was down.
 Closing the handle releases the execution lease; a lease a killed process
 leaves behind is ``test_repository.py::test_expired_lease_allows_a_new_process_to_take_over``.
+
+The crash points of the simulated worlds (#2919) are driven at the bottom of
+this file against the real ``sim:`` and ``shadow:`` ports: their order price
+binding lives in the accepting process's memory alone, so the crash point
+between the send request and the simulated fill is where a restart could
+lose the decision's price. The acceptance's durable pricing evidence
+(``ExitAcceptedFacts.decision_pricing``) rebuilds it.
 """
 
 from __future__ import annotations
@@ -23,7 +30,13 @@ from typing import Any
 
 import pytest
 
+from app.broker.alpaca.clerk.account_authority import (
+    shadow_evidence_account_id_for_strategy,
+    synthetic_account_id_for_strategy,
+)
 from app.broker.alpaca.clerk.models import EffectPurpose
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
+from app.broker.alpaca.clerk.shadow_broker import compose_shadow_ports
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
@@ -31,9 +44,12 @@ from app.broker.alpaca.clerk.sqlite.repository import DEFAULT_CLAIM_TTL_MS, Cler
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.stopped_run_entries import entries_owed_a_cancel
 from app.broker.alpaca.clerk.sqlite.uncertainty import admit_new_exposure
+from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from app.broker.contract.models import BrokerOrder, BrokerPosition
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.lean_sidecar.trading_calendar import next_trading_day, session_open_ms_utc
+from app.services.session_authority import et_minute_of_day_ms
+from app.services.source_bar_ledger import SourceBarLedger
 from app.utils.timestamps import Clock, now_ms_utc
 from tests._helpers.session_clock import IN_SESSION_DAY, pin_wall_clock_at, pin_wall_clock_in_session
 from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at, _TestClock
@@ -48,11 +64,13 @@ from tests.broker.alpaca.clerk.sqlite.test_reconcile import (
     _position,
 )
 from tests.broker.alpaca.clerk.sqlite.test_runtime import _binding, _order
+from tests.broker.alpaca.clerk.sqlite.test_runtime_program_leg import _binding as _sim_binding
 from tests.broker.alpaca.clerk.sqlite.test_stopped_run_entries import (
     _facade,
     _OpenOrdersBroker,
     _working_enter,
 )
+from tests.broker.alpaca.clerk.test_shadow_broker import DAY, _Clock, _LiveRead, _retain
 
 # A second bot on the same account: what a new Deploy would register.
 NEXT_DEPLOY_SID = "spy-bot-next"
@@ -374,3 +392,178 @@ async def test_a_restart_the_next_session_books_the_day_entry_alpaca_expired_and
         assert await clerk.reconcile_once() == "clean"
     finally:
         restarted.close()
+
+
+# ── the simulated worlds' crash point (#2919) ───────────────────────────
+#
+# A simulated decision EXIT binds its price in memory at the first send. The
+# crash point below -- the process dies after the send request is durable and
+# before the simulated order is recorded -- is where that binding is lost, and
+# whichever pass sends the order again must rebuild it from the acceptance's
+# durable pricing evidence, never from whatever bar is newest then.
+
+_ENTRY_MINUTE, _EXIT_MINUTE, _AFTER_CRASH_MINUTE = 600, 601, 604
+_SHADOW_LIVE_ACCOUNT = "9LIVE0001"
+
+
+async def _dying_submit(_leg: Any, *, client_order_id: str) -> BrokerOrder:
+    """The process's last act: the send request is durable, the fill never lands."""
+    raise RuntimeError(f"process death between the send request and the simulated fill: {client_order_id}")
+
+
+def _sale(orders: list[BrokerOrder]) -> BrokerOrder:
+    (the_sale,) = [order for order in orders if order.side == "sell"]
+    return the_sale
+
+
+@pytest.mark.usefixtures("wall_clock_in_session")
+async def test_a_live_shadow_decision_exit_re_driven_after_a_process_death_fills_at_its_own_decision_bar(
+    tmp_path: Path,
+) -> None:
+    clock = _Clock(et_minute_of_day_ms(DAY, 602))
+    ports = compose_shadow_ports(
+        live_read=_LiveRead(), live_account_id=_SHADOW_LIVE_ACCOUNT, artifacts_root=tmp_path
+    )
+    evidence = SourceBarLedger(
+        artifacts_root=tmp_path, account_id=shadow_evidence_account_id_for_strategy(SID)
+    )
+    entry_decision = _retain(evidence, minute=_ENTRY_MINUTE, close="100.25")
+    repo = ClerkSqliteRepository.initialize(
+        account_id=f"shadow:{_SHADOW_LIVE_ACCOUNT}", artifacts_root=tmp_path, clock=clock,
+        lease_ttl_ms=LEASE_TTL_MS,
+    )
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo, read=ports.read, trade=ports.trade, authority_kind="shadow", account_mode="live",
+        program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
+    )
+    binding = _sim_binding(use_rth=True, account_id=f"shadow:{_SHADOW_LIVE_ACCOUNT}")
+    await facade.register_strategy_run(binding)
+    try:
+        bought = await facade.execute_for_instance(
+            strategy_instance_id=SID, run_id=RUN_ID, decision_id="enter-1", purpose=EffectPurpose.ENTER,
+            action_plan=binding.action_plan, quantity=binding.quantity, use_rth=True,
+            retained_source_bar=entry_decision,
+        )
+        assert bought.state == "submitted", bought.explanation
+        exit_decision = _retain(evidence, minute=_EXIT_MINUTE, close="100.50")
+        ports.trade.submit = _dying_submit  # type: ignore[method-assign]
+        with pytest.raises(RuntimeError, match="process death"):
+            await facade.execute_for_instance(
+                strategy_instance_id=SID, run_id=RUN_ID, decision_id="exit-1", purpose=EffectPurpose.EXIT,
+                action_plan=binding.action_plan, quantity=binding.quantity, use_rth=True,
+                retained_source_bar=exit_decision,
+            )
+    finally:
+        repo.close()
+        evidence.close()
+
+    # While the process is down, a newer bar for the symbol lands.
+    reopened_evidence = SourceBarLedger(
+        artifacts_root=tmp_path, account_id=shadow_evidence_account_id_for_strategy(SID)
+    )
+    try:
+        _retain(reopened_evidence, minute=_AFTER_CRASH_MINUTE, close="999.00")
+    finally:
+        reopened_evidence.close()
+    # Past the 30 s submit-absence grace, still inside the session.
+    clock.now_ms = et_minute_of_day_ms(DAY, 605)
+
+    restarted = ClerkSqliteRepository.open(
+        account_id=f"shadow:{_SHADOW_LIVE_ACCOUNT}", artifacts_root=tmp_path, clock=clock,
+        lease_ttl_ms=LEASE_TTL_MS,
+    )
+    ports2 = compose_shadow_ports(
+        live_read=_LiveRead(), live_account_id=_SHADOW_LIVE_ACCOUNT, artifacts_root=tmp_path, clock=clock
+    )
+    clerk = SqliteAlpacaClerkFacade(
+        repo=restarted, read=ports2.read, trade=ports2.trade, authority_kind="shadow", account_mode="live",
+        program_leg_policy=ProgramLegPolicy.from_read_port(ports2.read),
+    )
+    try:
+        await clerk.recover()
+        assert await clerk.reconcile_once() == "clean"
+
+        sale = _sale(await ports2.read.list_orders(status="all"))
+        assert (sale.status, sale.filled_avg_price, sale.filled_at_ms, sale.submitted_at_ms) == (
+            "filled", 100.50, exit_decision.end_ms, exit_decision.end_ms,
+        )
+        assert sale.client_order_id is not None
+        anchor = ports2.trade.synthesized_fill_anchors()[sale.client_order_id]
+        assert (anchor.fill_model, anchor.decision_bar_end_ms) == (
+            "decision_bar_close", exit_decision.end_ms,
+        )
+        assert await ports2.read.list_positions() == []
+        assert restarted.reconcilable_effect_operations(subject_id=bot_subject_id(SID)) == []
+    finally:
+        restarted.close()
+
+
+async def test_a_dry_run_decision_exit_re_driven_after_a_process_death_fills_at_its_own_decision_bar(
+    tmp_path: Path,
+) -> None:
+    sim_account = synthetic_account_id_for_strategy(SID)
+    clock = _Clock(et_minute_of_day_ms(DAY, 602))
+    bars = SourceBarLedger(artifacts_root=tmp_path, account_id=sim_account)
+    entry_decision = _retain(bars, minute=_ENTRY_MINUTE, close="100.25")
+    broker = SyntheticBroker(account_id=sim_account, source_bars=bars, clock=clock)
+    repo = ClerkSqliteRepository.initialize(
+        account_id=sim_account, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=LEASE_TTL_MS
+    )
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo, read=broker, trade=broker, authority_kind="synthetic", account_mode="paper"
+    )
+    binding = _sim_binding(use_rth=True, account_id=sim_account)
+    await facade.register_strategy_run(binding)
+    try:
+        bought = await facade.execute_for_instance(
+            strategy_instance_id=SID, run_id=RUN_ID, decision_id="enter-1", purpose=EffectPurpose.ENTER,
+            action_plan=binding.action_plan, quantity=binding.quantity, use_rth=True,
+            retained_source_bar=entry_decision,
+        )
+        assert bought.state == "submitted", bought.explanation
+        exit_decision = _retain(bars, minute=_EXIT_MINUTE, close="100.50")
+        broker.submit = _dying_submit  # type: ignore[method-assign]
+        with pytest.raises(RuntimeError, match="process death"):
+            await facade.execute_for_instance(
+                strategy_instance_id=SID, run_id=RUN_ID, decision_id="exit-1", purpose=EffectPurpose.EXIT,
+                action_plan=binding.action_plan, quantity=binding.quantity, use_rth=True,
+                retained_source_bar=exit_decision,
+            )
+    finally:
+        repo.close()
+        bars.close()
+
+    # While the process is down, a newer bar for the symbol lands; the Dry
+    # Run's unbound fallback would fill the sale at its close ($999.00).
+    reopened_bars = SourceBarLedger(artifacts_root=tmp_path, account_id=sim_account)
+    try:
+        _retain(reopened_bars, minute=_AFTER_CRASH_MINUTE, close="999.00")
+        # Past the 30 s submit-absence grace, still inside the session.
+        clock.now_ms = et_minute_of_day_ms(DAY, 605)
+
+        restarted = ClerkSqliteRepository.open(
+            account_id=sim_account, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=LEASE_TTL_MS
+        )
+        broker2 = SyntheticBroker(account_id=sim_account, source_bars=reopened_bars, clock=clock)
+        clerk = SqliteAlpacaClerkFacade(
+            repo=restarted, read=broker2, trade=broker2, authority_kind="synthetic", account_mode="paper"
+        )
+        try:
+            await clerk.recover()
+            assert await clerk.reconcile_once() == "clean"
+
+            sale = _sale(await broker2.list_orders(status="all"))
+            assert (sale.status, sale.filled_avg_price, sale.filled_at_ms, sale.submitted_at_ms) == (
+                "filled", 100.50, exit_decision.end_ms, exit_decision.end_ms,
+            )
+            assert sale.client_order_id is not None
+            anchor = broker2.synthesized_fill_anchors()[sale.client_order_id]
+            assert (anchor.fill_model, anchor.decision_bar_end_ms) == (
+                "decision_bar_close", exit_decision.end_ms,
+            )
+            assert await broker2.list_positions() == []
+            assert restarted.reconcilable_effect_operations(subject_id=bot_subject_id(SID)) == []
+        finally:
+            restarted.close()
+    finally:
+        reopened_bars.close()
