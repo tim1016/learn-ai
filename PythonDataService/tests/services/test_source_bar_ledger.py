@@ -156,7 +156,8 @@ async def test_retained_feed_persists_unfiltered_stream_before_applying_rth_poli
 async def test_synthetic_port_fills_only_from_the_retained_decision_bar_and_recovers(tmp_path: Path) -> None:
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
     retained = ledger.append(_bar(), run_id="run-a")
-    broker = SyntheticBroker(account_id="sim:ema-1", source_bars=ledger)
+    sent_at_ms = retained.end_ms + 60_000
+    broker = SyntheticBroker(account_id="sim:ema-1", source_bars=ledger, clock=lambda: sent_at_ms)
 
     order = await broker.submit(
         BrokerOrderLeg(symbol="SPY", side="buy", quantity=2),
@@ -165,7 +166,9 @@ async def test_synthetic_port_fills_only_from_the_retained_decision_bar_and_reco
 
     assert order.status == "filled"
     assert order.filled_avg_price == float(retained.close)
-    assert order.filled_at_ms == retained.end_ms
+    # An unbound submit's fallback price is the last bar the market delivered,
+    # stamped when the order was sent -- never at that bar's own close (#2926).
+    assert order.filled_at_ms == sent_at_ms
     restarted = SyntheticBroker(account_id="sim:ema-1", source_bars=ledger)
     recovered = await restarted.get_order_by_client_order_id("bot:ema:enter")
     assert recovered == order
