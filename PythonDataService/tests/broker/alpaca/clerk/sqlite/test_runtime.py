@@ -636,6 +636,36 @@ async def test_execute_for_instance_rejects_exit_without_owned_entry(tmp_path: P
     repo.close()
 
 
+@pytest.mark.parametrize("quantity", [101, 0, 1.5, True])
+async def test_a_stock_effect_quantity_outside_one_to_one_hundred_is_refused_before_anything_is_sent(
+    tmp_path: Path, quantity: Any,
+) -> None:
+    """#2956: the receipt cannot carry a quantity outside 1 to 100, so the caller's
+    quantity is refused before anything is accepted or sent. Enforced only when the
+    receipt was built, an entry for 101 shares was sent and filled first and the
+    books held it while the caller got an exception instead of a receipt."""
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _Broker()
+    broker.release_submit.set()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
+    binding = _binding()
+    await facade.register_strategy_run(binding)
+
+    with pytest.raises(ValueError, match="1 to 100"):
+        await facade.execute_for_instance(
+            strategy_instance_id=binding.strategy_instance_id,
+            run_id=binding.run_id,
+            decision_id="quantity-out-of-bound",
+            purpose=EffectPurpose.ENTER,
+            action_plan=binding.action_plan,
+            quantity=quantity,
+        )
+
+    assert broker.submissions == []
+    assert repo.effect_operation("effect:spy-bot:quantity-out-of-bound") is None
+    repo.close()
+
+
 async def test_parked_enter_submit_does_not_block_trade_update_fold(tmp_path: Path) -> None:
     """The operation claim, not intake, owns the broker conversation (#1548)."""
     repo = ClerkSqliteRepository.initialize(

@@ -2493,6 +2493,12 @@ class SqliteAlpacaClerkFacade:
                 order_refs=order_refs,
             )
 
+        if isinstance(quantity, bool) or not isinstance(quantity, int) or not 1 <= quantity <= 100:
+            # Checked before anything is written, as the option path checks its
+            # own quantity: a receipt cannot carry a quantity outside these, and
+            # the bound must not first bite after the order was sent (#2956).
+            raise ValueError(f"a stock effect is for a whole number of shares, 1 to 100; got {quantity!r}")
+
         async with self._intake:
             # The run is judged under the fence Stop commits under, so an
             # entry the run no longer owns is never admitted after its reading.
