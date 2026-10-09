@@ -34,10 +34,8 @@ Why each range is what it is:
   wait, and the proof that what did not fill was cancelled, both come out
   of that fifty, so a longer wait leaves less time to take the entry. At
   thirty seconds an entry taken late in that time does not fit, and the
-  runner refuses it by name and sends nothing. The runner's wait and its
-  two guards are not in this module: ``tests/services/bot_runner/
-  test_option_entry_wait_offered.py`` holds this range, and the sentence
-  an owner is given for it, to the runner's own guards.
+  Clerk refuses it by name and sends nothing. The Clerk uses the entry's
+  exact cancel time against the deadline the runner supplies.
 - A close lead is no longer than a whole regular session of 390 minutes,
   which nothing could be counted back from. The Clerk holds every term but
   the entry wait to that.

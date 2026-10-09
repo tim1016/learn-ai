@@ -88,11 +88,8 @@ class OptionEffectRefusal(StrEnum):
     # This Clerk reads its market status from a shared source and makes no IBKR pass of its own,
     # so no option contract is ever quoted on it. Refused when the run starts, not at every entry.
     NO_OPTION_QUOTES_HERE = "OPTION_CLERK_HAS_NO_OPTION_QUOTES"
-    # The bot's entry wait, with the time its runner keeps to prove a cancel and for the Clerk's read
-    # of the listing, leaves nothing of the runner's wait for what an entry came to. No entry could be
-    # taken and still be cancelled and proven ended in time. Refused when the run starts, not at every
-    # entry.
-    ENTRY_WAIT_OVER_OUTCOME_WAIT = "OPTION_ENTRY_WAIT_OVER_OUTCOME_WAIT"
+    # The exact cancel time of this entry leaves too little time to prove its outcome.
+    TAKEN_TOO_LATE = "OPTION_ENTRY_TAKEN_TOO_LATE"
     # The bot was started with no order terms sealed with it. They are fixed at Deploy for the bot's
     # life, and nothing a decision says supplies them. Refused when the run starts.
     ORDER_TERMS_NOT_SEALED = "OPTION_ORDER_TERMS_NOT_SEALED"
@@ -176,6 +173,8 @@ class OptionEntryEvidence:
     leg_gap_limit_percent: Decimal
     # The most opening and closing at once may cost, as a percent of the entry commitment.
     cost_limit_percent: Decimal
+    # The runner's last moment to have this entry's outcome proven (int64 ms UTC).
+    proven_by_ms: int | None = None
     # The owner's order terms: how long the entry waits for its fill before the Clerk
     # cancels what is left, and how long before a close its position is closed.
     terms: CloseTerms = field(default_factory=CloseTerms)

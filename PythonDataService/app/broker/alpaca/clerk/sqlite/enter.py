@@ -141,6 +141,7 @@ __all__ = [
     "MARKET_LIVENESS_BLOCKED",
     "EnterSubmission",
     "EntrySubmissionRefusal",
+    "OptionEntryProofWindowClosed",
     "accept_enter",
     "accept_option_enter",
     "fold_order_evidence",
@@ -162,6 +163,11 @@ class EnterSubmission:
 # the Clerk's intake and again just before broker contact (#2637).
 MARKET_LIVENESS_BLOCKED = "MARKET_LIVENESS_BLOCKED"
 MARKET_CLOSED = "MARKET_CLOSED"
+OPTION_ENTRY_CANCEL_PROOF_ROOM_MS = 7_000
+
+
+class OptionEntryProofWindowClosed(Exception):
+    """The entry's cancel time no longer leaves room for outcome proof."""
 
 
 @dataclass(frozen=True)
@@ -405,6 +411,7 @@ def accept_option_enter(
     decision_id: str,
     lifecycle_run_id: str,
     entry: OptionEntry,
+    proven_by_ms: int | None = None,
     decision_receipt: AtomicDecisionReceipt | None = None,
     envelope: LiveEnvelopeGate | None = None,
 ) -> EnterSubmission:
@@ -440,6 +447,10 @@ def accept_option_enter(
     )
 
     def build_transition() -> TransitionInput:
+        if proven_by_ms is not None:
+            assert entry.cancel_at_ms is not None
+            if max(entry.cancel_at_ms, repo.clock()) + OPTION_ENTRY_CANCEL_PROOF_ROOM_MS > proven_by_ms:
+                raise OptionEntryProofWindowClosed
         active = _require_enter_fences(
             repo, strategy_instance_id=strategy_instance_id, lifecycle_run_id=lifecycle_run_id, envelope=envelope
         )

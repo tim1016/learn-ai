@@ -103,6 +103,7 @@ from app.broker.alpaca.clerk.sqlite.enter import (
     MARKET_LIVENESS_BLOCKED,
     EnterSubmission,
     EntrySubmissionRefusal,
+    OptionEntryProofWindowClosed,
     accept_enter,
     accept_option_enter,
     submit_accepted_enter,
@@ -112,7 +113,6 @@ from app.broker.alpaca.clerk.sqlite.entry_buying_power import (
     review_under_reserved_hold,
 )
 from app.broker.alpaca.clerk.sqlite.entry_outcome import (
-    ENTRY_OUTCOME_LIMIT_PAST,
     ENTRY_OUTCOME_LIMIT_TOO_FAR,
     MAX_ENTRY_OUTCOME_WAIT_MS,
     EntryOnTheBooks,
@@ -2109,8 +2109,18 @@ class SqliteAlpacaClerkFacade:
                         decision_id=durable_decision_id,
                         lifecycle_run_id=run_id,
                         entry=entry,
+                        proven_by_ms=option_entry.proven_by_ms,
                         decision_receipt=atomic_receipt,
                         envelope=self._live_envelope,
+                    )
+                except OptionEntryProofWindowClosed:
+                    return rejected(
+                        reason_code=OptionEffectRefusal.TAKEN_TOO_LATE.value,
+                        explanation=(
+                            "The entry's cancel time leaves too little room to prove its outcome "
+                            "before the bot's deadline. No order was sent."
+                        ),
+                        next_step=_ENTRY_NOT_RETRIED,
                     )
                 except AdmissionBlockedError as exc:
                     return self._entry_admission_blocked(exc, decision_evidence=decision_evidence, rejected=rejected)
@@ -2323,14 +2333,8 @@ class SqliteAlpacaClerkFacade:
         Clerk accepted and the broker then refused is on the books, and is
         answered: never sent, the decision dropped.
 
-        Raises ``EntryOutcomeWaitRefused``, by name, for a limit the Clerk
-        does not take, for an entry still unproven with no answer recorded.
-        One more than a week ahead of its clock: no caller waits that
-        long. And one already past when the wait is asked for:
-        "still unproven at the limit" is a judgment made by waiting to the
-        limit, and is not handed out for a limit that was never waited for.
-        The books are read first, so an entry already settled, or already
-        proven, is answered whatever the limit says.
+        Raises ``EntryOutcomeWaitRefused`` for a limit more than a week
+        ahead. A past limit judges the books immediately.
         """
         if isinstance(until_ms, bool) or not isinstance(until_ms, int) or until_ms < 0:
             raise ValueError(f"until_ms is a time in milliseconds; got {until_ms!r}")
@@ -2341,7 +2345,6 @@ class SqliteAlpacaClerkFacade:
             async with self._intake:
                 settled = self._settle_entry_if_answerable(
                     command_id, until_ms=until_ms,
-                    limit_was_past_when_asked=not waited and until_ms <= asked_at_ms,
                     limit_was_too_far_when_asked=not waited and until_ms - asked_at_ms > MAX_ENTRY_OUTCOME_WAIT_MS,
                 )
             if settled is not None:
@@ -2350,8 +2353,7 @@ class SqliteAlpacaClerkFacade:
             waited = True
 
     def _settle_entry_if_answerable(
-        self, command_id: str, *, until_ms: int, limit_was_past_when_asked: bool = False,
-        limit_was_too_far_when_asked: bool = False,
+        self, command_id: str, *, until_ms: int, limit_was_too_far_when_asked: bool = False,
     ) -> SettledEntry | None:
         """One read of an option entry's outcome: its settlement when one can be given now, else ``None``.
 
@@ -2381,12 +2383,6 @@ class SqliteAlpacaClerkFacade:
             if not outcome.proven and not run_active:
                 return SettledEntry.of(
                     settled_now(outcome, until_ms=until_ms, now_ms=now_ms), order_ref=order.order_ref, recorded=False
-                )
-            if not outcome.proven and limit_was_past_when_asked:
-                raise EntryOutcomeWaitRefused(
-                    ENTRY_OUTCOME_LIMIT_PAST,
-                    f"The wait for this entry's outcome was asked with a limit {now_ms - until_ms:,} ms in the past, "
-                    "and the entry is not proven yet. Ask again with a limit after the account Clerk's clock.",
                 )
             if not outcome.proven and now_ms < until_ms:
                 return None
