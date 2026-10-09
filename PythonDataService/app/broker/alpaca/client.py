@@ -57,6 +57,15 @@ from app.broker.alpaca.fault_injection import (
     craft_write_error,
     get_fault_injection_registry,
 )
+from app.broker.alpaca.send_timing import (
+    DEFAULT_REQUEST_TIMEOUT_S as _DEFAULT_TIMEOUT_S,
+)
+from app.broker.alpaca.send_timing import (
+    MAX_RATE_LIMIT_RETRIES as _MAX_RATE_LIMIT_RETRIES,
+)
+from app.broker.alpaca.send_timing import (
+    RATE_LIMIT_RETRY_CAP_S as _RATE_LIMIT_RETRY_CAP_S,
+)
 from app.broker.capture.journal import CaptureJournal, get_capture_journal
 from app.broker.contract.errors import (
     BrokerAuthError,
@@ -66,7 +75,6 @@ from app.broker.contract.errors import (
     BrokerUnreachable,
 )
 
-_DEFAULT_TIMEOUT_S = 15.0
 _DEFAULT_CONNECT_TIMEOUT_S = 3.05
 _MAX_IN_FLIGHT_SYNC_CALLS = 8
 _SUBMIT_VISIBILITY_GRACE_S = 30.0
@@ -78,8 +86,6 @@ _SUBMIT_VISIBILITY_GRACE_S = 30.0
 # backoff is capped so a large Retry-After can never stall a strategy bar; when retries are exhausted the
 # failure carries a distinct "throttled" message so the operator sees a
 # throttle, not a plain reject. Reads never retry (that would slow the sweep).
-_MAX_RATE_LIMIT_RETRIES = 2
-_RATE_LIMIT_RETRY_CAP_S = 1.0
 _RATE_LIMIT_DEFAULT_BACKOFF_S = 0.5
 
 logger = logging.getLogger(__name__)
@@ -188,6 +194,8 @@ class AlpacaTradingClient:
         client_factory: Callable[[], Any] | None = None,
         timeout_s: float = _DEFAULT_TIMEOUT_S,
     ) -> None:
+        if not 0 < timeout_s <= _DEFAULT_TIMEOUT_S:
+            raise ValueError(f"Alpaca request timeout must be within (0, {_DEFAULT_TIMEOUT_S:g}] seconds")
         self._settings = settings
         self._journal = journal
         self._client_factory = client_factory
@@ -318,10 +326,10 @@ class AlpacaTradingClient:
                 return await anyio.to_thread.run_sync(
                     fn,
                     client,
-                    # AnyIO 3's cancellation option; retained by AnyIO 4 as
-                    # a compatibility alias. It lets fail_after return while
-                    # a stuck synchronous SDK worker winds down.
-                    cancellable=True,
+                    # An order POST must keep its caller (and the Clerk's
+                    # operation claim) alive until the SDK worker finishes.
+                    # Read timeouts may abandon their worker as before.
+                    cancellable=request is not AlpacaRequest.ORDER_SUBMIT,
                     # A timed-out worker cannot be force-killed. Keep
                     # abandoned Alpaca workers off AnyIO's process-wide
                     # limiter while their request-level timeout winds down.
@@ -609,9 +617,8 @@ class AlpacaTradingClient:
                 request=AlpacaRequest.ORDER_SUBMIT,
             )
         except BrokerUnavailable:
-            # The synchronous SDK worker may continue after AnyIO returns a
-            # timeout, and Alpaca can accept before its lookup index catches up.
-            # Preserve uncertainty through that explicit consistency window.
+            # Alpaca can accept before its lookup index catches up. Preserve
+            # uncertainty through that explicit consistency window.
             self._mark_submission_uncertain(client_order_id)
             raise
         self._clear_uncertain_submission(client_order_id)

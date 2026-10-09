@@ -17,6 +17,7 @@ included: a parent names no symbol, so no stock reader can state it.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
@@ -42,11 +43,16 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ExecutionLeaseLostAfterBrokerIO,
     OperationClaimError,
 )
+from app.broker.alpaca.send_timing import ORDER_SEND_CLAIM_TTL_MS
 from app.broker.contract.errors import BrokerError, BrokerEvidenceUnavailable
 from app.broker.contract.models import BrokerActivityEvidence, BrokerOrder, BrokerOrderLeg
 from app.broker.contract.options import MultiLegOptionOrderRequest, OptionOrderRequest, SingleOptionOrderRequest
 from app.broker.contract.ports import BrokerActivityEvidencePort, BrokerReadPort, BrokerTradePort
 from app.options.quotes import HeldQuote
+
+_SEND_CLAIM_RENEWAL_S = ORDER_SEND_CLAIM_TTL_MS / 4_000
+_SEND_CLAIM_RETRY_S = 1.0
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -86,27 +92,65 @@ class ClaimedBrokerIO:
         parent's state, with each leg's evidence under it.
         """
         self._renew()
+        finished = asyncio.Event()
+
+        async def keep_claim() -> ExecutionLeaseLost | OperationClaimError | None:
+            delay = _SEND_CLAIM_RENEWAL_S
+            while not finished.is_set():
+                try:
+                    await asyncio.wait_for(finished.wait(), timeout=delay)
+                except TimeoutError:
+                    try:
+                        self._renew()
+                    except (ExecutionLeaseLost, OperationClaimError) as exc:
+                        logger.critical(
+                            "alpaca order send lost its operation claim while broker I/O was active",
+                            extra={"effect_operation_id": self.effect_operation_id},
+                            exc_info=True,
+                        )
+                        return exc
+                    except Exception:
+                        logger.exception(
+                            "alpaca order send claim renewal failed; retrying while broker I/O remains active",
+                            extra={"effect_operation_id": self.effect_operation_id},
+                        )
+                        delay = _SEND_CLAIM_RETRY_S
+                    else:
+                        delay = _SEND_CLAIM_RENEWAL_S
+            return None
+
+        renewal = asyncio.create_task(keep_claim())
         try:
-            if isinstance(leg, MultiLegOptionOrderRequest):
-                observed = await self._submit_multi_leg_order(leg, client_order_id=client_order_id)
-            elif isinstance(leg, SingleOptionOrderRequest):
-                observed = await self._submit_option_order(leg, client_order_id=client_order_id)
-            else:
-                observed = await self.trade.submit(leg, client_order_id=client_order_id)
-        except asyncio.CancelledError:
-            self._renew()
-            fold_uncertain(
-                self.repo,
-                effect_operation_id=self.effect_operation_id,
-                order_ref=client_order_id,
-                why="Broker submission was cancelled while its transport may still complete.",
-            )
-            raise
-        except BrokerError:
-            self._renew()
-            raise
-        self._renew_after_io()
-        return observed
+            try:
+                if isinstance(leg, MultiLegOptionOrderRequest):
+                    observed = await self._submit_multi_leg_order(leg, client_order_id=client_order_id)
+                elif isinstance(leg, SingleOptionOrderRequest):
+                    observed = await self._submit_option_order(leg, client_order_id=client_order_id)
+                else:
+                    observed = await self.trade.submit(leg, client_order_id=client_order_id)
+            except asyncio.CancelledError:
+                self._renew()
+                fold_uncertain(
+                    self.repo,
+                    effect_operation_id=self.effect_operation_id,
+                    order_ref=client_order_id,
+                    why="Broker submission was cancelled while its transport may still complete.",
+                )
+                raise
+            except BrokerError:
+                self._renew()
+                raise
+            self._renew_after_io()
+            return observed
+        finally:
+            finished.set()
+            claim_loss = await renewal
+            if claim_loss is not None:
+                account_id = claim_loss.account_id if isinstance(claim_loss, ExecutionLeaseLost) else None
+                raise ExecutionLeaseLostAfterBrokerIO(
+                    f"effect_operation {self.effect_operation_id!r} lost its claim during broker submission",
+                    account_id=account_id,
+                ) from claim_loss
 
     async def _submit_option_order(self, order: SingleOptionOrderRequest, *, client_order_id: str) -> BrokerOrder:
         """Send one option order and return the broker's answer as order evidence.
