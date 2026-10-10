@@ -325,7 +325,9 @@ class SignalProgram:
         self._captured_modes_by_close_ms[bar.end_ms] = mode
 
     def on_consolidated_bar(self, bar: TradeBar) -> None:
-        """Advance using the mode captured with the bucket's closing source bar."""
+        """Advance using the mode the bucket resolves to — its closing source
+        bar's capture, or the firing bar's when that minute never arrived
+        (see ``_resolve_evaluation_mode``)."""
         mode = self._resolve_evaluation_mode(bar.end_ms)
         if mode is None:
             raise RuntimeError("SignalProgram requires a captured evaluation mode for every live bar")

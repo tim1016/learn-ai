@@ -166,8 +166,9 @@ def main() -> None:
             "name": "Strategy A/B/C self-equivalence (pre-port receipt)",
             "category": "strategy-parity",
             "canonical_module": (
-                "PythonDataService/app/engine/strategy/algorithms/"
-                "spy_strategy_a.py, spy_strategy_b.py, spy_strategy_c.py "
+                "PythonDataService/app/engine/strategy/algorithms/spy_strategy_a.py, "
+                "PythonDataService/app/engine/strategy/algorithms/spy_strategy_b.py, "
+                "PythonDataService/app/engine/strategy/algorithms/spy_strategy_c.py "
                 "(shared base: _rsi_range_base.py)"
             ),
             "canonical_callable": "SpyStrategyAAlgorithm, SpyStrategyBAlgorithm, SpyStrategyCAlgorithm",
@@ -206,6 +207,7 @@ def main() -> None:
                 }
             },
             "status": "active",
+            "validated_by": ["tests/fixtures/test_strategy_parity_fixtures.py"],
         }
     )
     _write_json(MANIFEST_PATH, manifest)

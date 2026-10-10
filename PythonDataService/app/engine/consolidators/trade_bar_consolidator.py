@@ -86,6 +86,7 @@ class TradeBarConsolidator:
         if period.total_seconds() <= 0:
             raise ValueError("period must be positive")
         self.period = period
+        self._period_ms = int(period.total_seconds() * 1000)
         self.on_data_consolidated: Callable[[TradeBar], None] | None = None
         self._working: dict | None = None
         self._last_emit_ms: int | None = None
@@ -109,8 +110,7 @@ class TradeBarConsolidator:
             # LEAN check (PeriodCountConsolidatorBase):
             #   data.Time - _workingBar.Time >= _period && GetRoundedBarTime(data) > _lastEmit
             time_diff_ms = bar.start_ms - working_start_ms
-            period_ms = int(self.period.total_seconds() * 1000)
-            if time_diff_ms >= period_ms and (
+            if time_diff_ms >= self._period_ms and (
                 self._last_emit_ms is None or rounded_start_ms > self._last_emit_ms
             ):
                 fired = self._emit_working()
@@ -146,12 +146,11 @@ class TradeBarConsolidator:
         """Close out the working bar, emit it, and clear the working slot."""
         assert self._working is not None
         w = self._working
-        period_ms = int(self.period.total_seconds() * 1000)
-        if period_ms < _DAY_MS:
+        if self._period_ms < _DAY_MS:
             # LEAN's EndTime is computed as Time + Period, so the emitted bar
             # spans the full period even when its last minute never arrived
             # (#2909). See the module docstring for the day-or-longer case.
-            end_ms = w["start_ms"] + period_ms
+            end_ms = w["start_ms"] + self._period_ms
         else:
             end_ms = w["last_input_end_ms"]
         fired = TradeBar(
@@ -180,7 +179,7 @@ class TradeBarConsolidator:
         if self._working is None:
             return None
         working_start_ms = self._working["start_ms"]
-        if current_time_ms - working_start_ms >= int(self.period.total_seconds() * 1000):
+        if current_time_ms - working_start_ms >= self._period_ms:
             fired = self._emit_working()
             if self.on_data_consolidated is not None:
                 self.on_data_consolidated(fired)

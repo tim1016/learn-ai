@@ -63,10 +63,10 @@ def test_a_bucket_missing_its_last_minute_is_still_decided():
 def test_a_missing_first_minute_fires_at_the_bucket_start():
     """A bucket missing its FIRST minute is the same rule read from the other
     end: the bar still opens at the bucket's rounded start."""
-    consolidator_bars = _minute_bars(Path(_DEFAULT_CELLS_ROOT) / _CELL, "SPY")
+    minute_bars = _minute_bars(Path(_DEFAULT_CELLS_ROOT) / _CELL, "SPY")
     # Drop the first minute of one mid-cell bucket: 10:00–10:01 ET on 2026-03-18.
     first_minute_end = int(datetime(2026, 3, 18, 14, 1, tzinfo=UTC).timestamp() * 1000)
-    kept = [b for b in consolidator_bars if b.end_ms != first_minute_end]
+    kept = [b for b in minute_bars if b.end_ms != first_minute_end]
     program = build_ema_previous_crossover_program(EmaPreviousCrossoverParams())
     decisions = staged_decisions(program.strategy, kept)
     assert len(decisions) == 1_612
