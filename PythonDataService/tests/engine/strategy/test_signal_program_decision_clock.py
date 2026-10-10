@@ -25,6 +25,7 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_program import (
     EvaluationMode,
+    Settlement,
     SignalProgram,
     StageQuarantine,
     StageStatus,
@@ -36,6 +37,7 @@ from app.services.bot_decision_quarantine import (
 )
 from app.services.bot_trade_strategy import _build_signal_strategy, _LiveSignalRuntime
 from tests._helpers.signal_program import bind_strategy_context, bucket, sealed_programs
+from tests.engine.strategy.conftest import build_program
 
 _RESOLUTIONS_TO_PROVE = (1, 5, 15, 30)
 
@@ -374,3 +376,64 @@ def test_a_runtime_built_without_a_sink_still_drains_and_logs(
     assert len(_quarantine_records(caplog)) == 1
     assert program.take_quarantine() is None, "the runner left the refusal undrained"
 
+
+# ---------------------------------------------------------------------------
+# A bucket whose closing minute never arrives still decides, under the mode
+# in force when it fired (#2909). The capture dict keys every source minute;
+# the bucket resolves at its own end, and stale keys are pruned so a long
+# live run does not keep one entry per minute forever.
+# ---------------------------------------------------------------------------
+
+
+def _minute(index: int, close: str = "100") -> TradeBar:
+    """The ``index``-th source minute of the first bucket, 0-based.
+
+    Minute 0 opens at ``_BASE_MS``; minute 14 ends at the bucket's close.
+    """
+    end = _BASE_MS + (index + 1) * 60_000
+    return bucket(_QUARANTINE_SYMBOL, end - 60_000, end, close)
+
+
+def test_a_short_bucket_decides_under_the_mode_of_the_bar_that_fired_it() -> None:
+    program = build_program(_QUARANTINE_KEY).program
+    program.activate_for_runner()
+    width = program.session.timeframe_ms
+
+    # Minutes 0..13 of the first bucket arrive (its 14th minute -- the one
+    # ending at the bucket close -- never does), all captured as DECIDE.
+    for i in range(14):
+        program.capture_source_bar(_minute(i), mode=EvaluationMode.DECIDE)
+    # The run flips to OBSERVE_ONLY, and the next bucket's first minute --
+    # the bar whose arrival fires the short bucket -- arrives under it.
+    program.capture_source_bar(_minute(15), mode=EvaluationMode.OBSERVE_ONLY)
+
+    short_bucket = bucket(
+        _QUARANTINE_SYMBOL,
+        _BASE_MS,
+        _BASE_MS + width,
+        "100",
+    )
+    program.on_consolidated_bar(short_bucket)
+
+    # Not refused, and decided under the firing bar's mode: deciding stale
+    # data under a gate that has since closed would act against the run. An
+    # OBSERVE_ONLY bar settles in the same call, so the mode is read from
+    # the trace it left.
+    assert program.take_quarantine() is None
+    assert program.session.traces[-1].evaluation_mode is EvaluationMode.OBSERVE_ONLY
+
+
+def test_the_capture_dict_is_pruned_to_the_resolved_bucket() -> None:
+    program = build_program(_QUARANTINE_KEY).program
+    program.activate_for_runner()
+    width = program.session.timeframe_ms
+
+    for i in range(15):
+        program.capture_source_bar(_minute(i), mode=EvaluationMode.DECIDE)
+    program.on_consolidated_bar(bucket(_QUARANTINE_SYMBOL, _BASE_MS, _BASE_MS + width, "100"))
+    program.session.settle(Settlement.DISCARD)
+
+    captured = program._captured_modes_by_close_ms  # noqa: SLF001 -- the prune is the behavior under test
+    assert not [ms for ms in captured if ms <= _BASE_MS + width], (
+        "a minute of a resolved bucket is still keyed: the dict grows per source bar"
+    )

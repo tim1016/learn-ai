@@ -326,7 +326,7 @@ class SignalProgram:
 
     def on_consolidated_bar(self, bar: TradeBar) -> None:
         """Advance using the mode captured with the bucket's closing source bar."""
-        mode = self._captured_modes_by_close_ms.pop(bar.end_ms, self._default_evaluation_mode)
+        mode = self._resolve_evaluation_mode(bar.end_ms)
         if mode is None:
             raise RuntimeError("SignalProgram requires a captured evaluation mode for every live bar")
         stage = self.session.advance(bar, mode=mode)
@@ -349,6 +349,24 @@ class SignalProgram:
             return
         if stage.settlement is not None:
             self._completed_stages.append(stage)
+
+    def _resolve_evaluation_mode(self, bucket_end_ms: int) -> EvaluationMode | None:
+        """The mode this bucket decides under, with the stale captures pruned.
+
+        The closing minute's capture is the gate (#2303). A bucket whose
+        closing minute never arrived fires on the next bucket's first bar,
+        so it decides under the mode in force then: the earliest capture
+        after its close. Captures at or before the close belong to buckets
+        that have already fired and are dropped here, keeping the dict one
+        bucket deep instead of leaking a key per source bar (#2909).
+        """
+        captured = self._captured_modes_by_close_ms
+        mode = captured.pop(bucket_end_ms, None)
+        for stale_ms in [ms for ms in captured if ms <= bucket_end_ms]:
+            del captured[stale_ms]
+        if mode is None and captured:
+            mode = captured[min(captured)]
+        return mode if mode is not None else self._default_evaluation_mode
 
     def take_completed_stage(self) -> EvaluationStage | None:
         """Return an already-settled observation for runner audit projection."""

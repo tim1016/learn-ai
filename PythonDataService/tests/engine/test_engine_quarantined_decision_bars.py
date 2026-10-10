@@ -1,14 +1,16 @@
-"""A backtest says which decision bars its session refused (#2909).
+"""A backtest decides a short bucket, and says which bars it refuses (#2909).
 
 A 15-minute bucket whose last minute has no bar -- a thin symbol, an extended
-session -- arrives one minute short, and the session quarantines it rather
-than deciding on it: the strategy's indicators skip it and no decision is
-recorded. Before #2909 the run dropped that bar in silence; now the refusal
-is the result's, with its window and reason, and the run's log says it.
+session -- still fires with its full width: LEAN's ``TradeBar.EndTime``
+computes ``Time + Period`` and ``AggregateBar`` never rewrites either, so the
+algorithm evaluates the bar, priced at the last minute that did arrive. This
+port now matches that (``TradeBarConsolidator`` stamps the period boundary),
+so a short bucket is decided, not refused.
 
-Whether the engine should instead evaluate such a bar, as LEAN's
-consolidator reportedly does, is unsettled (issue #2909): it needs a LEAN
-run to decide. Saying which bars were refused does not wait for that.
+A session can still refuse a decision bar -- a decision clock fed a bucket
+width it never declared, a non-monotonic clock, an unsettled stage -- and a
+backtest says so: the refusal is the result's, with its window and reason,
+and the run's log says it.
 """
 
 from __future__ import annotations
@@ -65,13 +67,13 @@ class _Stream:
 class _ScriptedSignalProgram(Strategy):
     """A registered-style Signal Program that ENTERs on one bucket's close."""
 
-    def __init__(self, *, first_day: date, last_day: date, enter_at_ms: int) -> None:
+    def __init__(self, *, first_day: date, last_day: date, enter_at_ms: int, timeframe_ms: int = _BUCKET_MS) -> None:
         super().__init__()
         self._first_day = first_day
         self._last_day = last_day
         self._enter_at_ms = enter_at_ms
         self.signal_program = SignalProgram.create(
-            self, program_key="quarantine-probe", program_version="v1", timeframe_ms=_BUCKET_MS
+            self, program_key="quarantine-probe", program_version="v1", timeframe_ms=timeframe_ms
         )
 
     def initialize(self) -> None:
@@ -109,7 +111,9 @@ def _run(strategy: Strategy, bars: list[TradeBar]) -> BacktestResult:
     return BacktestEngine(data_source=_Stream(bars), fill_model=FillModel(mode=FillMode.SIGNAL_BAR_CLOSE)).run(strategy)
 
 
-def test_a_bucket_whose_last_minute_has_no_bar_is_reported_as_refused() -> None:
+def test_a_bucket_whose_last_minute_has_no_bar_is_decided_as_lean_decides_it() -> None:
+    """LEAN evaluates the short bucket, priced at the last minute that
+    arrived; so does this engine now (#2909)."""
     window = trading_calendar.session_window_for_date(REGULAR_DAY)
     # The 10:00-10:15 bucket: complete when every minute trades, one minute
     # short once the 10:14 minute is gone.
@@ -125,19 +129,36 @@ def test_a_bucket_whose_last_minute_has_no_bar_is_reported_as_refused() -> None:
 
     result = _run(strategy, bars)
 
-    assert result.quarantined_decision_bars == [
-        QuarantinedDecisionBar(
-            bar_start_ms=bucket_start_ms,
-            bar_end_ms=bucket_close_ms - _MINUTE_MS,
-            reason="TIMEFRAME_MISMATCH",
-            expected_timeframe_ms=_BUCKET_MS,
-        )
-    ]
-    assert result.order_events == []
-    assert [line for line in result.log_lines if line.startswith("[QUARANTINE]")] == [
-        "[QUARANTINE] TIMEFRAME_MISMATCH refused the decision bar ending "
-        f"{ny_datetime(bucket_close_ms - _MINUTE_MS)}; the run made no decision on it (#2909)"
-    ]
+    assert result.quarantined_decision_bars == []
+    assert [line for line in result.log_lines if line.startswith("[QUARANTINE]")] == []
+    # The ENTER decided on the short bucket reaches execution.
+    assert result.order_events != []
+
+
+def test_a_mis_shaped_decision_clock_is_reported_as_refused() -> None:
+    """The reporting half stays proven: a session fed a bucket of a width it
+    never declared refuses it, and the run says which bar and why."""
+    window = trading_calendar.session_window_for_date(REGULAR_DAY)
+    bucket_start_ms = window.open_ms_utc + 30 * _MINUTE_MS
+    bucket_close_ms = bucket_start_ms + _BUCKET_MS
+    # A session that declared a 16-minute clock, fed this 15-minute bucket.
+    strategy = _ScriptedSignalProgram(
+        first_day=REGULAR_DAY, last_day=REGULAR_DAY, enter_at_ms=bucket_close_ms, timeframe_ms=_BUCKET_MS + _MINUTE_MS
+    )
+
+    result = _run(strategy, _session_minutes(REGULAR_DAY, Decimal("100")))
+
+    first_refusal = next(q for q in result.quarantined_decision_bars if q.bar_start_ms == bucket_start_ms)
+    assert first_refusal == QuarantinedDecisionBar(
+        bar_start_ms=bucket_start_ms,
+        bar_end_ms=bucket_close_ms,
+        reason="TIMEFRAME_MISMATCH",
+        expected_timeframe_ms=_BUCKET_MS + _MINUTE_MS,
+    )
+    assert any(
+        line.startswith("[QUARANTINE] TIMEFRAME_MISMATCH") and line.endswith(f"{ny_datetime(bucket_close_ms)}; the run made no decision on it (#2909)")
+        for line in result.log_lines
+    )
 
 
 def test_a_complete_session_records_no_refused_decision_bar() -> None:

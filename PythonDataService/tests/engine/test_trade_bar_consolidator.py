@@ -135,7 +135,7 @@ def test_consolidated_bar_ohlc_aggregates_correctly():
     assert fired.volume == 150
 
 
-def test_consolidated_bar_end_ms_is_last_input_end_ms():
+def test_consolidated_bar_end_ms_is_start_plus_period():
     consolidator = TradeBarConsolidator(timedelta(minutes=15))
     start = datetime(2024, 1, 1, 9, 30, tzinfo=UTC)
 
@@ -146,7 +146,32 @@ def test_consolidated_bar_end_ms_is_last_input_end_ms():
     fired = consolidator.update(_minute_bar(start + timedelta(minutes=15), "102"))
 
     assert fired is not None
+    # LEAN's TradeBar.EndTime computes Time + Period; for a complete bucket
+    # that is also the last contained minute's end.
     assert fired.end_ms == last_minute.end_ms
+    assert fired.end_ms - fired.start_ms == 15 * 60_000
+
+
+def test_bucket_missing_its_last_minute_still_ends_at_the_period_boundary():
+    """The 09:44 minute never arrives; the 09:45 bar fires the bucket anyway.
+
+    LEAN's emitted bar carries EndTime = Time + Period, so the decision clock
+    fed it sees a full-width bar and evaluates it — the close is the last
+    minute that did arrive (#2909).
+    """
+    consolidator = TradeBarConsolidator(timedelta(minutes=15))
+    start = datetime(2024, 1, 1, 9, 30, tzinfo=UTC)
+
+    consolidator.update(_minute_bar(start, "100"))
+    last_seen = _minute_bar(start + timedelta(minutes=13), "101")  # the 09:43 minute
+    consolidator.update(last_seen)
+    fired = consolidator.update(_minute_bar(start + timedelta(minutes=16), "102"))  # 09:46 fires it
+
+    assert fired is not None
+    assert fired.start_ms == to_ms_utc(start)
+    assert fired.end_ms == to_ms_utc(start + timedelta(minutes=15))
+    assert fired.end_ms - fired.start_ms == 15 * 60_000
+    assert fired.close == Decimal("101")
 
 
 def test_scan_does_not_emit_if_period_not_reached():
