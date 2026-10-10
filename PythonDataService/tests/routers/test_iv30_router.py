@@ -8,14 +8,16 @@ SPY VIX-style ≈ published VIX is exercised separately as a slow live test
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
+from app.options.expiry import option_expiry_anchor_ms
 from app.services.bs_greeks import bs_european_price
+from app.utils.session_anchors import et_date_at_ms
 
 
 def _bs_chain_contracts(
@@ -37,7 +39,10 @@ def _bs_chain_contracts(
     out: list[dict] = []
     for days in expiry_days:
         T = days / 365.0
-        exp_iso = (asof + timedelta(days=days)).date().isoformat()
+        # The router buckets expiries by the New York calendar date, so the
+        # synthetic expiries are laid out on ET dates, matching the bucketing
+        # whenever the test runs.
+        exp_iso = (et_date_at_ms(int(asof.timestamp() * 1000)) + timedelta(days=days)).isoformat()
         for k in strikes:
             for is_call in (True, False):
                 price = bs_european_price(
@@ -51,7 +56,7 @@ def _bs_chain_contracts(
                         "ticker": f"O:SPY{days:03d}{'C' if is_call else 'P'}{int(k*100):08d}",
                         "contract_type": "call" if is_call else "put",
                         "strike_price": float(k),
-                        "expiration_date": exp_iso,
+                        "expiration_ms": option_expiry_anchor_ms(date.fromisoformat(exp_iso)),
                         "last_quote": {"bid": float(bid), "ask": float(ask)},
                     }
                 )

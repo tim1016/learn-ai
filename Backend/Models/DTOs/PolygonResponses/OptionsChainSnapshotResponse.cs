@@ -26,7 +26,7 @@ public class OptionsContractSnapshotDto
     public string? Ticker { get; set; }
     public string? ContractType { get; set; }
     public decimal? StrikePrice { get; set; }
-    public string? ExpirationDate { get; set; }
+    public long? ExpirationMs { get; set; }
     public decimal? BreakEvenPrice { get; set; }
     public decimal? ImpliedVolatility { get; set; }
     public decimal? OpenInterest { get; set; }

@@ -27,8 +27,10 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.engine.edge.features_realtime.iv30_constructor import iv30_atm_50d
+from app.options.expiry import option_expiry_date
 from app.services.polygon_client import PolygonClientService
 from app.services.rate_dividend_service import RateAndDividend, get_rate_and_dividend
+from app.utils.session_anchors import et_date_at_ms
 from app.volatility.iv_provenance import IvProvenance
 from app.volatility.price_normalization import (
     NormalizedOptionPrice,
@@ -107,12 +109,9 @@ class Iv30LiveResponse(BaseModel):
 # ── Polygon → NormalizedOptionQuote conversion ──────────────────────────────
 
 
-def _parse_expiration_to_days(expiration_iso: str, asof: datetime) -> int:
-    """Calendar days from ``asof`` to the contract expiration."""
-    expiry = datetime.fromisoformat(expiration_iso)
-    if expiry.tzinfo is None:
-        expiry = expiry.replace(tzinfo=UTC)
-    return max(0, (expiry.date() - asof.date()).days)
+def _parse_expiration_to_days(expiration_ms: int, asof: datetime) -> int:
+    """Calendar days from ``asof`` to the contract's expiry date, both in the New York calendar."""
+    return max(0, (option_expiry_date(expiration_ms) - et_date_at_ms(int(asof.timestamp() * 1000))).days)
 
 
 def _normalized_quotes_by_expiry(
@@ -128,13 +127,13 @@ def _normalized_quotes_by_expiry(
     """
     by_expiry: dict[int, dict[float, dict[str, NormalizedOptionPrice]]] = {}
     for c in contracts:
-        exp_iso = c.get("expiration_date")
+        exp_ms = c.get("expiration_ms")
         strike = c.get("strike_price")
         ctype = c.get("contract_type")
-        if not exp_iso or strike is None or ctype not in ("call", "put"):
+        if exp_ms is None or strike is None or ctype not in ("call", "put"):
             continue
         try:
-            days = _parse_expiration_to_days(exp_iso, asof)
+            days = _parse_expiration_to_days(exp_ms, asof)
         except (ValueError, TypeError):
             continue
         if days <= 0:

@@ -52,7 +52,7 @@ public class QueryTests
     [Fact]
     public async Task GetOptionsChainSnapshot_Success_MapsFullResponse()
     {
-        _polygonMock.Setup(s => s.FetchOptionsChainSnapshotAsync("AAPL", "2026-02-20", default))
+        _polygonMock.Setup(s => s.FetchOptionsChainSnapshotAsync("AAPL", 1771621200000, default))
             .ReturnsAsync(new OptionsChainSnapshotResponse
             {
                 Success = true,
@@ -71,7 +71,7 @@ public class QueryTests
 
         var query = new Query();
         var result = await query.GetOptionsChainSnapshot(
-            _polygonMock.Object, _loggerMock.Object, "AAPL", "2026-02-20");
+            _polygonMock.Object, _loggerMock.Object, "AAPL", 1771621200000);
 
         Assert.True(result.Success);
         Assert.NotNull(result.Underlying);
@@ -114,7 +114,7 @@ public class QueryTests
             .ReturnsAsync(new OptionsExpirationsResponse
             {
                 Success = true,
-                Expirations = ["2026-02-20", "2026-03-20", "2026-04-17"],
+                Expirations = [1771621200000, 1774036800000, 1776456000000],
                 Count = 3,
             });
 
@@ -125,7 +125,7 @@ public class QueryTests
         Assert.True(result.Success);
         Assert.Equal(3, result.Count);
         Assert.Equal(3, result.Expirations.Count);
-        Assert.Equal("2026-02-20", result.Expirations[0]);
+        Assert.Equal(1771621200000, result.Expirations[0]);
     }
 
     #endregion
@@ -142,7 +142,7 @@ public class QueryTests
         };
 
         _polygonMock.Setup(s => s.AnalyzeOptionsStrategyAsync(
-                "AAPL", legs, "2026-02-20", 230m, null,
+                "AAPL", legs, 1771621200000, 230m, null,
                 It.IsAny<StrategyAnalyzeOptions>(), default))
             .ReturnsAsync(new StrategyAnalyzeResponseDto
             {
@@ -167,7 +167,7 @@ public class QueryTests
         var query = new Query();
         var result = await query.AnalyzeOptionsStrategy(
             _polygonMock.Object, _loggerMock.Object,
-            "AAPL", legs, "2026-02-20", 230m);
+            "AAPL", legs, 1771621200000, 230m);
 
         Assert.True(result.Success);
         Assert.Equal("AAPL", result.Symbol);
@@ -192,9 +192,9 @@ public class QueryTests
         StrategyAnalyzeOptions? capturedOptions = null;
         _polygonMock.Setup(s => s.AnalyzeOptionsStrategyAsync(
                 It.IsAny<string>(), It.IsAny<List<StrategyLegInput>>(),
-                It.IsAny<string>(), It.IsAny<decimal>(), It.IsAny<decimal?>(),
+                It.IsAny<long>(), It.IsAny<decimal>(), It.IsAny<decimal?>(),
                 It.IsAny<StrategyAnalyzeOptions>(), default))
-            .Callback<string, List<StrategyLegInput>, string, decimal, decimal?,
+            .Callback<string, List<StrategyLegInput>, long, decimal, decimal?,
                       StrategyAnalyzeOptions?, CancellationToken>(
                 (_, _, _, _, _, opts, _) => capturedOptions = opts)
             .ReturnsAsync(new StrategyAnalyzeResponseDto
@@ -210,7 +210,7 @@ public class QueryTests
         var query = new Query();
         var result = await query.AnalyzeOptionsStrategy(
             _polygonMock.Object, _loggerMock.Object,
-            "AAPL", legs, "2026-02-20", 100m,
+            "AAPL", legs, 1771621200000, 100m,
             includeCurrentCurve: true,
             includeGreekCurves: true,
             includeLegDiagnostics: true,
@@ -239,14 +239,14 @@ public class QueryTests
     public async Task PricingModelComparison_Success_MapsModelCurves()
     {
         _polygonMock.Setup(s => s.PricingCompareAsync(
-                100m, 100m, 0.20m, "2026-02-20", "call",
+                100m, 100m, 0.20m, 1771621200000, "call",
                 null, 0m, null, null, null, 100, default))
             .ReturnsAsync(new PricingCompareResponse
             {
                 Success = true,
                 Strike = 100m,
                 OptionType = "call",
-                ExpirationDate = "2026-02-20",
+                ExpirationMs = 1771621200000,
                 TimeToExpiryYears = 0.0822m, // ~30 days / 365
                 RiskFreeRate = 0.043m,
                 Models =
@@ -276,7 +276,7 @@ public class QueryTests
         var result = await query.PricingModelComparison(
             _polygonMock.Object, _loggerMock.Object,
             spot: 100m, strike: 100m, volatility: 0.20m,
-            expirationDate: "2026-02-20", optionType: "call");
+            expirationMs: 1771621200000, optionType: "call");
 
         Assert.True(result.Success);
         Assert.Equal(100m, result.Strike);

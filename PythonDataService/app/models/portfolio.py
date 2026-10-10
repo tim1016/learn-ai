@@ -16,6 +16,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.options.expiry import OptionExpiryMs
 from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -37,11 +38,9 @@ class OptionPosition(BaseModel):
     symbol: str = Field(..., min_length=1, max_length=20, description="Underlying ticker")
     option_type: Literal["call", "put"]
     strike: float = Field(..., gt=0)
-    expiration_ms: int = Field(
+    expiration_ms: OptionExpiryMs = Field(
         ...,
-        ge=0,
-        le=MAX_TIMESTAMP_MS,
-        description="Expiration as int64 ms since Unix epoch UTC",
+        description="Expiration as the anchor instant: 16:00 New York time on the expiry date",
     )
     quantity: float = Field(..., description="Net quantity in *contracts* (negative for short)")
     multiplier: float = Field(100.0, gt=0, description="Contract multiplier (default 100)")

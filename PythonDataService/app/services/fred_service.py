@@ -105,8 +105,8 @@ def _fetch_all_tenors(observation_date: str) -> dict[int, float]:
     return rates
 
 
-def _interpolate_rate(rates: dict[int, float], dte_days: int) -> float:
-    """Linear interpolation between adjacent Treasury tenors."""
+def _interpolate_rate(rates: dict[int, float], dte_days: float) -> float:
+    """Linear interpolation between adjacent Treasury tenors, at a possibly fractional DTE (#2934)."""
     if not rates:
         return DEFAULT_RISK_FREE_RATE
 
@@ -135,11 +135,12 @@ def _interpolate_rate(rates: dict[int, float], dte_days: int) -> float:
     return DEFAULT_RISK_FREE_RATE
 
 
-def get_risk_free_rate(dte_days: int = 30, observation_date: str | None = None) -> float:
+def get_risk_free_rate(dte_days: float = 30, observation_date: str | None = None) -> float:
     """Get interpolated risk-free rate for a given DTE.
 
     Args:
-        dte_days: Days to expiration for the option.
+        dte_days: Days to expiration for the option; fractional when measured
+                  to an expiry anchor instant.
         observation_date: Date string (YYYY-MM-DD) for which to fetch rates.
                          Defaults to today.
 
@@ -151,7 +152,7 @@ def get_risk_free_rate(dte_days: int = 30, observation_date: str | None = None) 
     return rate
 
 
-def get_risk_free_rate_and_source(dte_days: int = 30, observation_date: str | None = None) -> tuple[float, str]:
+def get_risk_free_rate_and_source(dte_days: float = 30, observation_date: str | None = None) -> tuple[float, str]:
     """``get_risk_free_rate`` plus where the rate came from: ``RATE_SOURCE_FRED``,
     or ``RATE_SOURCE_DEFAULT`` when FRED could not answer."""
     global _rate_cache, _cache_timestamp
@@ -172,7 +173,7 @@ def get_risk_free_rate_and_source(dte_days: int = 30, observation_date: str | No
         _cache_timestamp = time.time()
         result = _interpolate_rate(rates, dte_days)
         logger.info(
-            "[FRED] Fetched rates for %s: %s → r(%dd) = %.4f",
+            "[FRED] Fetched rates for %s: %s → r(%.2fd) = %.4f",
             observation_date,
             {k: f"{v:.4f}" for k, v in sorted(rates.items())},
             dte_days,

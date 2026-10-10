@@ -11,13 +11,14 @@ agreement is not vacuous.
 from __future__ import annotations
 
 import math
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
 from httpx import AsyncClient
 
 from app.models.requests import OptionsCompanionConfig
+from app.options.expiry import option_expiry_anchor_ms
 from app.routers import quantlib_options
 from app.services.options_companion_service import _compute_row_greeks
 from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
@@ -64,14 +65,14 @@ async def _post_three_ways(
 
 
 async def test_strategy_analyze_prices_an_omitted_rate_at_the_default(client: AsyncClient) -> None:
-    expiration = (datetime.now(UTC).date() + timedelta(days=90)).isoformat()
+    expiration = option_expiry_anchor_ms(datetime.now(UTC).date() + timedelta(days=90))
     payload = {
         "symbol": "AAPL",
         "legs": [
             {"strike": 100, "option_type": "call", "position": "long", "premium": 5.0, "iv": 0.25, "quantity": 1},
             {"strike": 105, "option_type": "call", "position": "short", "premium": 2.0, "iv": 0.23, "quantity": 1},
         ],
-        "expiration_date": expiration,
+        "expiration_ms": expiration,
         "spot_price": 102,
         "include_current_curve": True,
     }
@@ -88,7 +89,7 @@ async def test_quantlib_price_prices_an_omitted_rate_at_the_default(client: Asyn
         "spot": 100.0,
         "strike": 100.0,
         "volatility": 0.25,
-        "expiration_date": "2025-04-02",
+        "expiration_ms": option_expiry_anchor_ms(date(2025, 4, 2)),
         "evaluation_date": "2025-01-02",
         "option_type": "call",
     }
@@ -110,7 +111,7 @@ async def test_pricing_compare_prices_and_echoes_an_omitted_rate_at_the_default(
         "spot": 100.0,
         "strike": 100.0,
         "volatility": 0.25,
-        "expiration_date": "2025-04-02",
+        "expiration_ms": option_expiry_anchor_ms(date(2025, 4, 2)),
         "evaluation_date": "2025-01-02",
         "option_type": "put",
         "num_points": 10,

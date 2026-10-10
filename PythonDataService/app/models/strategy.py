@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.options.expiry import OptionExpiryMs
 from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 
 
@@ -45,7 +46,9 @@ class StrategyAnalyzeRequest(BaseModel):
 
     symbol: str = Field(..., min_length=1, max_length=20, description="Underlying ticker symbol")
     legs: list[StrategyLeg] = Field(..., min_length=1, max_length=8, description="Strategy legs")
-    expiration_date: str = Field(..., description="Expiration date (YYYY-MM-DD)")
+    expiration_ms: OptionExpiryMs = Field(
+        ..., description="Expiry as the anchor instant: 16:00 New York time on the expiry date"
+    )
     spot_price: float = Field(..., gt=0, description="Current underlying price")
     risk_free_rate: float = Field(
         DEFAULT_RISK_FREE_RATE, ge=0, le=0.5, description="Annualized risk-free rate (omit for the Python default)"

@@ -22,13 +22,15 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import date
 from typing import Any
 
 from polygon import RESTClient
 
 from app.config import settings
-from app.utils.timestamps import timestamp_like_to_ms_utc
+from app.options.expiry import option_expiry_anchor_ms, option_expiry_date
+from app.utils.session_anchors import et_date_at_ms
+from app.utils.timestamps import now_ms_utc, timestamp_like_to_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -616,11 +618,16 @@ class PolygonClientService:
         self,
         underlying_ticker: str,
         contract_type: str | None = None,
-        expiration_date_gte: str | None = None,
-        expiration_date_lte: str | None = None,
+        expiration_ms_gte: int | None = None,
+        expiration_ms_lte: int | None = None,
         expired: bool | None = None,
-    ) -> list[str]:
-        """Fetch unique expiration dates for an underlying ticker.
+    ) -> list[int]:
+        """Fetch unique option expirations for an underlying ticker, as anchor instants.
+
+        Each expiry is returned as the anchor instant — 16:00 New York time on
+        the expiry date (ADR 0022 (i)) — converted once at this vendor boundary.
+        Bounds arrive as anchor instants too and are converted to the vendor's
+        ``YYYY-MM-DD`` form here.
 
         Breaks the date range into ~30-day windows and fires all window
         requests **concurrently** via ThreadPoolExecutor (bypassing the
@@ -631,7 +638,7 @@ class PolygonClientService:
         """
         import time
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        from datetime import datetime, timedelta
+        from datetime import timedelta
 
         import requests as _requests
 
@@ -691,14 +698,15 @@ class PolygonClientService:
 
         try:
             logger.info(
-                f"Listing expirations for {underlying_ticker}, range=[{expiration_date_gte}, {expiration_date_lte}]"
+                f"Listing expirations for {underlying_ticker}, range=[{expiration_ms_gte}, {expiration_ms_lte}]"
             )
 
-            today = datetime.now(UTC).strftime("%Y-%m-%d")
-            start = datetime.strptime(expiration_date_gte or today, "%Y-%m-%d")
-            end = datetime.strptime(
-                expiration_date_lte or (datetime.now(UTC) + timedelta(days=180)).strftime("%Y-%m-%d"),
-                "%Y-%m-%d",
+            today = et_date_at_ms(now_ms_utc())
+            start = option_expiry_date(expiration_ms_gte) if expiration_ms_gte is not None else today
+            end = (
+                option_expiry_date(expiration_ms_lte)
+                if expiration_ms_lte is not None
+                else today + timedelta(days=180)
             )
 
             effective_type = contract_type or "call"
@@ -721,7 +729,7 @@ class PolygonClientService:
                 for future in as_completed(futures):
                     dates.update(future.result())
 
-            result = sorted(dates)
+            result = sorted(option_expiry_anchor_ms(date.fromisoformat(d)) for d in dates)
             logger.info(f"Found {len(result)} unique expirations for {underlying_ticker} ({len(windows)} windows)")
             return result
 
@@ -733,19 +741,21 @@ class PolygonClientService:
     def list_snapshot_options_chain(
         self,
         underlying_asset: str,
-        expiration_date: str | None = None,
+        expiration_ms: int | None = None,
     ) -> dict[str, Any]:
         """Fetch snapshot of options chain for an underlying asset.
 
         Args:
             underlying_asset: Ticker symbol (e.g., AAPL)
-            expiration_date: Filter to only this expiration date (YYYY-MM-DD).
-                             Defaults to today if not specified.
+            expiration_ms: Filter to only this expiry, as the anchor instant
+                           (16:00 New York time on the expiry date, ADR 0022 (i)).
+                           Defaults to today's listed expiry if not specified.
         """
         try:
-            # Default to today's date to avoid fetching thousands of contracts
-            if expiration_date is None:
-                expiration_date = datetime.now(UTC).strftime("%Y-%m-%d")
+            # Default to today's ET date to avoid fetching thousands of contracts
+            expiration_date = (
+                option_expiry_date(expiration_ms).isoformat() if expiration_ms is not None else et_date_at_ms(now_ms_utc()).isoformat()
+            )
 
             logger.info(f"Fetching options chain snapshot for {underlying_asset}, expiration={expiration_date}")
 
@@ -776,11 +786,16 @@ class PolygonClientService:
                 last_trade = getattr(snapshot, "last_trade", None)
                 last_quote = getattr(snapshot, "last_quote", None)
 
+                vendor_expiry = getattr(details, "expiration_date", None) if details else None
                 contract = {
                     "ticker": getattr(details, "ticker", None) if details else None,
                     "contract_type": getattr(details, "contract_type", None) if details else None,
                     "strike_price": getattr(details, "strike_price", None) if details else None,
-                    "expiration_date": getattr(details, "expiration_date", None) if details else None,
+                    # The vendor's YYYY-MM-DD becomes the anchor instant once,
+                    # here at the vendor boundary (ADR 0022 (i), #2934).
+                    "expiration_ms": (
+                        option_expiry_anchor_ms(date.fromisoformat(vendor_expiry)) if vendor_expiry else None
+                    ),
                     "break_even_price": getattr(snapshot, "break_even_price", None),
                     "implied_volatility": getattr(snapshot, "implied_volatility", None),
                     "open_interest": getattr(snapshot, "open_interest", None),

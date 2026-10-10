@@ -25,7 +25,7 @@ describe('QuantLibService', () => {
   // null, so the Backend omits it and Python fills its one default (#2764).
   it('priceOption sends no rate unless given one', async () => {
     const pending = service.priceOption({
-      spot: 100, strike: 100, volatility: 0.2, expirationDate: '2099-01-01', optionType: 'call',
+      spot: 100, strike: 100, volatility: 0.2, expirationMs: 4_070_984_400_000, optionType: 'call',
     });
 
     const req = httpMock.expectOne(GRAPHQL_URL);

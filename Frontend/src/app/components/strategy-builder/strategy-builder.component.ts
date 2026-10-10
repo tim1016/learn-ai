@@ -27,6 +27,8 @@ import { VolumeChartComponent } from '../../shared/charts/volume-chart/volume-ch
 import { PayoffChartComponent } from '../../shared/payoff-chart/payoff-chart.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.component';
+import { etIsoDate } from '../../shared/date/et-midnight';
+import { optionExpiryAnchorMs } from '../../shared/option-contract/option-expiry-date';
 
 interface BuilderChainRow {
   strike: number;
@@ -89,7 +91,8 @@ interface SelectedHistoryContract {
   ticker: string;
   contractType: 'call' | 'put';
   strikePrice: number;
-  expirationDate: string;
+  /** The expiry anchor instant: 16:00 New York time on the expiry date. */
+  expirationMs: number | null;
   snapshot: SnapshotContractResult;
 }
 
@@ -148,8 +151,8 @@ export class StrategyBuilderComponent implements OnDestroy {
   error = signal<string | null>(null);
 
   // ── Expiration State ──────────────────────────────────────
-  availableExpirations = signal<string[]>([]);
-  selectedExpiration = signal<string | null>(null);
+  availableExpirations = signal<number[]>([]);
+  selectedExpiration = signal<number | null>(null);
 
   // ── Chain Data ────────────────────────────────────────────
   underlying = signal<SnapshotUnderlyingResult | null>(null);
@@ -205,7 +208,7 @@ export class StrategyBuilderComponent implements OnDestroy {
       ticker: contract.ticker,
       contractType: side,
       strikePrice: contract.strikePrice ?? 0,
-      expirationDate: contract.expirationDate ?? '',
+      expirationMs: contract.expirationMs ?? null,
       snapshot: contract,
     });
     this.historyDrawerOpen.set(true);
@@ -602,9 +605,9 @@ export class StrategyBuilderComponent implements OnDestroy {
   daysToExpiry = computed(() => {
     const exp = this.selectedExpiration();
     if (!exp) return 0;
-    const expDate = new Date(exp + 'T16:00:00');
-    const now = new Date();
-    return Math.max((expDate.getTime() - now.getTime()) / 86400000, 0);
+    // Fractional days to the expiry anchor instant from the wire — never a
+    // 16:00 built in the browser's own zone (#2934).
+    return Math.max((exp - Date.now()) / 86_400_000, 0);
   });
 
   timeToExpiry = computed(() => this.daysToExpiry() / 365);
@@ -962,8 +965,8 @@ export class StrategyBuilderComponent implements OnDestroy {
       this.availableExpirations.set(expirations);
 
       if (expirations.length > 0) {
-        const today = new Date().toISOString().slice(0, 10);
-        const nearest = expirations.find(e => e >= today) ?? expirations[0];
+        const todayAnchor = optionExpiryAnchorMs(etIsoDate(Date.now()));
+        const nearest = expirations.find(e => e >= todayAnchor) ?? expirations[0];
         this.selectedExpiration.set(nearest);
         await this.fetchChainSnapshot(t, nearest);
       }
@@ -974,22 +977,22 @@ export class StrategyBuilderComponent implements OnDestroy {
     }
   }
 
-  async onExpirationSelected(date: string): Promise<void> {
-    this.selectedExpiration.set(date);
+  async onExpirationSelected(expirationMs: number): Promise<void> {
+    this.selectedExpiration.set(expirationMs);
     this.legs.set([]);
     this.analysisResult.set(null);
     const t = this.ticker().trim().toUpperCase();
     if (t) {
-      await this.fetchChainSnapshot(t, date);
+      await this.fetchChainSnapshot(t, expirationMs);
     }
   }
 
-  async fetchChainSnapshot(ticker: string, expiration: string): Promise<void> {
+  async fetchChainSnapshot(ticker: string, expirationMs: number): Promise<void> {
     const request = ++this.chainRequest;
     // A late reply, value or error, for a fetch the user has since moved past
     // must not touch the current expiration's chain, rate or error (#2789).
     const current = () => request === this.chainRequest
-      && this.selectedExpiration() === expiration
+      && this.selectedExpiration() === expirationMs
       && this.ticker().trim().toUpperCase() === ticker;
     this.chainLoading.set(true);
     this.error.set(null);
@@ -998,7 +1001,7 @@ export class StrategyBuilderComponent implements OnDestroy {
 
     try {
       const result = await firstValueFrom(
-        this.marketDataService.getOptionsChainSnapshot(ticker, expiration)
+        this.marketDataService.getOptionsChainSnapshot(ticker, expirationMs)
       );
 
       if (!current()) return;
@@ -1146,8 +1149,8 @@ export class StrategyBuilderComponent implements OnDestroy {
 
   async analyzeStrategy(): Promise<void> {
     const spot = this.spotPrice();
-    const expiration = this.selectedExpiration();
-    if (!expiration || spot === 0) return;
+    const expirationMs = this.selectedExpiration();
+    if (expirationMs === null || spot === 0) return;
 
     this.analyzing.set(true);
     this.error.set(null);
@@ -1166,7 +1169,7 @@ export class StrategyBuilderComponent implements OnDestroy {
         this.marketDataService.analyzeOptionsStrategy(
           this.ticker().trim().toUpperCase(),
           legInputs,
-          expiration,
+          expirationMs,
           spot,
           // The in-browser curves' rate, the selected expiration's, so both sides price
           // alike; null lets Python fill it (#2764, #2789).

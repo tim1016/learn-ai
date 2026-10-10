@@ -21,7 +21,7 @@ class TestStrategyEndpoint:
                 {"strike": 100, "option_type": "call", "position": "long", "premium": 5.0, "iv": 0.25, "quantity": 1},
                 {"strike": 105, "option_type": "call", "position": "short", "premium": 2.0, "iv": 0.23, "quantity": 1},
             ],
-            "expiration_date": "2026-12-31",
+            "expiration_ms": 1798750800000,
             "spot_price": 102,
         }
         response = await client.post("/api/strategy/analyze", json=payload)
@@ -51,7 +51,7 @@ class TestStrategyEndpoint:
                 {"strike": 105, "option_type": "call", "position": "short", "premium": 2.0, "iv": 0.25, "quantity": 1},
                 {"strike": 110, "option_type": "call", "position": "long", "premium": 0.50, "iv": 0.22, "quantity": 1},
             ],
-            "expiration_date": "2026-12-31",
+            "expiration_ms": 1798750800000,
             "spot_price": 100,
         }
         response = await client.post("/api/strategy/analyze", json=payload)
@@ -76,7 +76,7 @@ class TestStrategyEndpointValidation:
         payload = {
             "symbol": "AAPL",
             "legs": [],
-            "expiration_date": "2026-12-31",
+            "expiration_ms": 1798750800000,
             "spot_price": 100,
         }
         response = await client.post("/api/strategy/analyze", json=payload)
@@ -96,7 +96,7 @@ class TestStrategyEndpointValidation:
                     "quantity": 1,
                 },
             ],
-            "expiration_date": "2026-12-31",
+            "expiration_ms": 1798750800000,
             "spot_price": 100,
         }
         response = await client.post("/api/strategy/analyze", json=payload)
@@ -116,7 +116,7 @@ class TestStrategyEndpointValidation:
                     "quantity": 1,
                 },
             ],
-            "expiration_date": "2026-12-31",
+            "expiration_ms": 1798750800000,
             "spot_price": 100,
         }
         response = await client.post("/api/strategy/analyze", json=payload)
@@ -129,7 +129,7 @@ class TestStrategyEndpointValidation:
             "legs": [
                 {"strike": -10, "option_type": "call", "position": "long", "premium": 5.0, "iv": 0.25, "quantity": 1},
             ],
-            "expiration_date": "2026-12-31",
+            "expiration_ms": 1798750800000,
             "spot_price": 100,
         }
         response = await client.post("/api/strategy/analyze", json=payload)
@@ -142,7 +142,7 @@ class TestStrategyEndpointValidation:
             "legs": [
                 {"strike": 100, "option_type": "call", "position": "long", "premium": 5.0, "iv": 0.25, "quantity": 1},
             ],
-            "expiration_date": "2026-12-31",
+            "expiration_ms": 1798750800000,
             "spot_price": 0,
         }
         response = await client.post("/api/strategy/analyze", json=payload)
@@ -155,7 +155,7 @@ class TestStrategyEndpointValidation:
             "legs": [
                 {"strike": 100, "option_type": "call", "position": "long", "premium": 5.0, "iv": 0.25, "quantity": 1},
             ],
-            "expiration_date": "2026-12-31",
+            "expiration_ms": 1798750800000,
             "spot_price": 100,
             "curve_points": 100,
         }

@@ -30,6 +30,9 @@ import {
   SnapshotContractResult,
 } from '../../graphql/types';
 import { MarketDataService } from '../../services/market-data.service';
+import { etIsoDate } from '../../shared/date/et-midnight';
+import { optionExpiryAnchorMs } from '../../shared/option-contract/option-expiry-date';
+import { formatTimestampDisplay } from '../../shared/timestamp/timestamp-display';
 import { createAppChart } from '../../shared/charts/chart-utils';
 import {
   bsDelta, bsGamma,
@@ -154,8 +157,16 @@ export class PricingLabComponent implements OnDestroy {
   readonly compareLoading = signal(false);
 
   // ── Chain data ───────────────────────────────────────────────
-  readonly availableExpirations = signal<string[]>([]);
-  readonly selectedExpiration = signal<string | null>(null);
+  readonly availableExpirations = signal<number[]>([]);
+  readonly selectedExpiration = signal<number | null>(null);
+
+  /** Select options: each expiry anchor rendered as its New York date. */
+  readonly expirationOptions = computed(() =>
+    this.availableExpirations().map(anchor => ({
+      label: formatTimestampDisplay(anchor, { mode: 'date-et', granularity: 'short-date' }),
+      value: anchor,
+    })),
+  );
   readonly underlying = signal<{ ticker: string; price: number } | null>(null);
   readonly allContracts = signal<SnapshotContractResult[]>([]);
 
@@ -334,8 +345,8 @@ export class PricingLabComponent implements OnDestroy {
       const exps = await firstValueFrom(this.marketData.getOptionsExpirations(t));
       this.availableExpirations.set(exps);
 
-      const today = new Date().toISOString().split('T')[0];
-      const nearest = exps.find(e => e >= today) ?? exps[exps.length - 1];
+      const todayAnchor = optionExpiryAnchorMs(etIsoDate(Date.now()));
+      const nearest = exps.find(e => e >= todayAnchor) ?? exps[exps.length - 1];
       if (nearest) {
         this.selectedExpiration.set(nearest);
         await this.fetchChain(t, nearest);
@@ -347,14 +358,14 @@ export class PricingLabComponent implements OnDestroy {
     }
   }
 
-  async fetchChain(ticker: string, expiration: string): Promise<void> {
+  async fetchChain(ticker: string, expirationMs: number): Promise<void> {
     this.chainLoading.set(true);
     this.selectedContract.set(null);
     this.serverResult.set(null);
 
     try {
       const snap = await firstValueFrom(
-        this.marketData.getOptionsChainSnapshot(ticker, expiration),
+        this.marketData.getOptionsChainSnapshot(ticker, expirationMs),
       );
       if (snap.underlying) {
         this.underlying.set({
@@ -376,9 +387,9 @@ export class PricingLabComponent implements OnDestroy {
     }
   }
 
-  async onExpirationChange(exp: string): Promise<void> {
-    this.selectedExpiration.set(exp);
-    await this.fetchChain(this.ticker(), exp);
+  async onExpirationChange(expirationMs: number): Promise<void> {
+    this.selectedExpiration.set(expirationMs);
+    await this.fetchChain(this.ticker(), expirationMs);
   }
 
   async onContractSelect(contract: SnapshotContractResult): Promise<void> {
@@ -424,7 +435,7 @@ export class PricingLabComponent implements OnDestroy {
           spot,
           strike,
           volatility: iv,
-          expirationDate: exp,
+          expirationMs: exp,
           optionType: optType,
           riskFreeRate: this.riskFreeRate() ?? undefined,
           spotMin: spot * (1 - rangePct),

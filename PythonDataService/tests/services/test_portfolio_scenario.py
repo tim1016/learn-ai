@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -33,12 +34,14 @@ from app.models.portfolio import (
     ScenarioRequest,
     StockPosition,
 )
+from app.options.expiry import option_expiry_anchor_ms
 from app.services.bs_greeks import black_scholes_greeks, bs_european_price
 from app.services.portfolio_scenario import (
     DAYS_PER_YEAR,
     MS_PER_DAY,
     evaluate_scenario,
 )
+from app.utils.session_anchors import et_date_at_ms
 
 FIXTURE = (
     Path(__file__).resolve().parent.parent
@@ -271,7 +274,7 @@ class TestExpiredOptionWarnings:
                     symbol="TEST",
                     option_type="call",
                     strike=100.0,
-                    expiration_ms=eval_ms + int(30 * MS_PER_DAY),
+                    expiration_ms=option_expiry_anchor_ms(et_date_at_ms(eval_ms) + timedelta(days=30)),
                     quantity=1.0,
                     multiplier=100.0,
                     entry_price=2.50,

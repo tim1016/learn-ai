@@ -19,7 +19,7 @@ const QUANTLIB_PRICE_QUERY = `
     $spot: Decimal!
     $strike: Decimal!
     $volatility: Decimal!
-    $expirationDate: String!
+    $expirationMs: Long!
     $optionType: String!
     $riskFreeRate: Decimal
     $evaluationDate: String
@@ -30,7 +30,7 @@ const QUANTLIB_PRICE_QUERY = `
       spot: $spot
       strike: $strike
       volatility: $volatility
-      expirationDate: $expirationDate
+      expirationMs: $expirationMs
       optionType: $optionType
       riskFreeRate: $riskFreeRate
       evaluationDate: $evaluationDate
@@ -67,7 +67,8 @@ export class QuantLibService {
     spot: number;
     strike: number;
     volatility: number;
-    expirationDate: string;
+    /** The expiry anchor instant: 16:00 New York time on the expiry date. */
+    expirationMs: number;
     optionType: 'call' | 'put';
     riskFreeRate?: number;
     evaluationDate?: string;
@@ -82,7 +83,7 @@ export class QuantLibService {
             spot: params.spot,
             strike: params.strike,
             volatility: params.volatility,
-            expirationDate: params.expirationDate,
+            expirationMs: params.expirationMs,
             optionType: params.optionType,
             riskFreeRate: params.riskFreeRate ?? null,
             evaluationDate: params.evaluationDate ?? null,

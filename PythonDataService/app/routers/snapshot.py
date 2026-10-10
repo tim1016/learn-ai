@@ -21,9 +21,10 @@ from app.models.responses import (
     StockTickerSnapshot,
     UnderlyingSnapshot,
 )
+from app.options.expiry import option_expiry_dte_days
 from app.services.polygon_client import PolygonClientService
 from app.services.rate_dividend_service import get_rate_and_dividend
-from app.utils.session_anchors import calendar_days_to_expiry
+from app.utils.timestamps import now_ms_utc
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -46,7 +47,7 @@ async def get_options_chain_snapshot(request: OptionsChainSnapshotRequest):
 
         result = polygon_client.list_snapshot_options_chain(
             underlying_asset=request.underlying_ticker,
-            expiration_date=request.expiration_date,
+            expiration_ms=request.expiration_ms,
         )
 
         underlying = UnderlyingSnapshot(**result["underlying"])
@@ -62,7 +63,7 @@ async def get_options_chain_snapshot(request: OptionsChainSnapshotRequest):
                     ticker=c.get("ticker"),
                     contract_type=c.get("contract_type"),
                     strike_price=c.get("strike_price"),
-                    expiration_date=c.get("expiration_date"),
+                    expiration_ms=c.get("expiration_ms"),
                     break_even_price=c.get("break_even_price"),
                     implied_volatility=c.get("implied_volatility"),
                     open_interest=c.get("open_interest"),
@@ -78,13 +79,16 @@ async def get_options_chain_snapshot(request: OptionsChainSnapshotRequest):
         # Source live r and q for callers (pricing-lab, strategy-builder, etc.).
         # The rate always resolves, so the pricing pages never invent their
         # own; the dividend is best-effort (#2764). The rate is the requested
-        # expiry's tenor, on the DTE the strategy analysis prices over; with
-        # no expiry, the IV30 convention's 30 days (#2789).
+        # expiry's tenor, measured to the expiry anchor the strategy analysis
+        # prices over; with no expiry, the IV30 convention's 30 days (#2789,
+        # #2934).
         rd = get_rate_and_dividend(
             ticker=request.underlying_ticker,
             spot_price=underlying.price or 0.0,
             polygon=polygon_client,
-            dte_days=calendar_days_to_expiry(request.expiration_date) if request.expiration_date else 30,
+            dte_days=(
+                option_expiry_dte_days(request.expiration_ms, now_ms_utc()) if request.expiration_ms is not None else 30
+            ),
         )
 
         return OptionsChainSnapshotResponse(

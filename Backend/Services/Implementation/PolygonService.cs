@@ -112,16 +112,16 @@ public class PolygonService : IPolygonService
 
     public async Task<OptionsChainSnapshotResponse> FetchOptionsChainSnapshotAsync(
         string underlyingTicker,
-        string? expirationDate = null,
+        long? expirationMs = null,
         CancellationToken cancellationToken = default)
     {
         try
         {
             _logger.LogInformation(
-                "Fetching options chain snapshot for {Underlying}, expiration={Expiration}",
-                underlyingTicker, expirationDate ?? "today");
+                "Fetching options chain snapshot for {Underlying}, expirationMs={ExpirationMs}",
+                underlyingTicker, expirationMs?.ToString() ?? "today");
 
-            var request = new { underlying_ticker = underlyingTicker, expiration_date = expirationDate };
+            var request = new { underlying_ticker = underlyingTicker, expiration_ms = expirationMs };
 
             var response = await _httpClient.PostAsJsonAsync(
                 "/api/snapshot/options-chain",
@@ -184,7 +184,7 @@ public class PolygonService : IPolygonService
     public async Task<StrategyAnalyzeResponseDto> AnalyzeOptionsStrategyAsync(
         string symbol,
         List<StrategyLegInput> legs,
-        string expirationDate,
+        long expirationMs,
         decimal spotPrice,
         decimal? riskFreeRate = null,
         StrategyAnalyzeOptions? options = null,
@@ -213,7 +213,7 @@ public class PolygonService : IPolygonService
                     iv = l.Iv,
                     quantity = l.Quantity,
                 }),
-                expiration_date = expirationDate,
+                expiration_ms = expirationMs,
                 spot_price = spotPrice,
                 risk_free_rate = riskFreeRate,
                 include_current_curve = options.IncludeCurrentCurve,
@@ -250,22 +250,22 @@ public class PolygonService : IPolygonService
     public async Task<OptionsExpirationsResponse> FetchOptionsExpirationsAsync(
         string underlyingTicker,
         string? contractType = null,
-        string? expirationDateGte = null,
-        string? expirationDateLte = null,
+        long? expirationMsGte = null,
+        long? expirationMsLte = null,
         CancellationToken cancellationToken = default)
     {
         try
         {
             _logger.LogInformation(
                 "Fetching options expirations for {Underlying}, type={Type}, range=[{Gte},{Lte}]",
-                underlyingTicker, contractType, expirationDateGte, expirationDateLte);
+                underlyingTicker, contractType, expirationMsGte, expirationMsLte);
 
             var request = new
             {
                 underlying_ticker = underlyingTicker,
                 contract_type = contractType,
-                expiration_date_gte = expirationDateGte,
-                expiration_date_lte = expirationDateLte,
+                expiration_ms_gte = expirationMsGte,
+                expiration_ms_lte = expirationMsLte,
             };
 
             var response = await _httpClient.PostAsJsonAsync(
@@ -301,7 +301,7 @@ public class PolygonService : IPolygonService
         decimal strike,
         decimal? riskFreeRate,
         decimal volatility,
-        string expirationDate,
+        long expirationMs,
         string optionType,
         string? evaluationDate = null,
         decimal dividendYield = 0m,
@@ -312,7 +312,7 @@ public class PolygonService : IPolygonService
         {
             _logger.LogInformation(
                 "[QuantLib] Pricing {OptionType} S={Spot} K={Strike} σ={Vol} exp={Exp} engine={Engine}",
-                optionType, spot, strike, volatility, expirationDate, engine);
+                optionType, spot, strike, volatility, expirationMs, engine);
 
             var request = new
             {
@@ -320,7 +320,7 @@ public class PolygonService : IPolygonService
                 strike = (double)strike,
                 risk_free_rate = (double?)riskFreeRate,
                 volatility = (double)volatility,
-                expiration_date = expirationDate,
+                expiration_ms = expirationMs,
                 option_type = optionType,
                 evaluation_date = evaluationDate,
                 dividend_yield = (double)dividendYield,
@@ -347,7 +347,7 @@ public class PolygonService : IPolygonService
         decimal spot,
         decimal strike,
         decimal volatility,
-        string expirationDate,
+        long expirationMs,
         string optionType,
         decimal? riskFreeRate = null,
         decimal dividendYield = 0m,
@@ -361,14 +361,14 @@ public class PolygonService : IPolygonService
         {
             _logger.LogInformation(
                 "[PricingCompare] Comparing models for {OptionType} S={Spot} K={Strike} σ={Vol} exp={Exp}",
-                optionType, spot, strike, volatility, expirationDate);
+                optionType, spot, strike, volatility, expirationMs);
 
             var request = new
             {
                 spot = (double)spot,
                 strike = (double)strike,
                 volatility = (double)volatility,
-                expiration_date = expirationDate,
+                expiration_ms = expirationMs,
                 option_type = optionType,
                 risk_free_rate = (double?)riskFreeRate,
                 dividend_yield = (double)dividendYield,

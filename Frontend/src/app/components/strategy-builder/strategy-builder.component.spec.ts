@@ -3,6 +3,9 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { vi } from 'vitest';
 import { StrategyBuilderComponent } from './strategy-builder.component';
+import { etIsoDate } from '../../shared/date/et-midnight';
+import { optionExpiryAnchorMs } from '../../shared/option-contract/option-expiry-date';
+
 import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
 import {
   SnapshotContractResult,
@@ -118,7 +121,7 @@ describe('StrategyBuilderComponent', () => {
       const expReq = expectGraphQL(httpMock, 'getOptionsExpirations');
       const snapReq = expectGraphQLOptional(httpMock, 'getStockSnapshot');
 
-      const futureDate = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+      const futureDate = optionExpiryAnchorMs(etIsoDate(Date.now() + 30 * 86400000));
       expReq.flush({
         data: {
           getOptionsExpirations: {
@@ -166,8 +169,8 @@ describe('StrategyBuilderComponent', () => {
 
     it('clears prior chain state when the user kicks off a new fetch', async () => {
       // Seed prior state
-      component.availableExpirations.set(['2026-01-01']);
-      component.selectedExpiration.set('2026-01-01');
+      component.availableExpirations.set([1_767_301_200_000]);
+      component.selectedExpiration.set(1_767_301_200_000);
       component.legs.set([{ strike: 100, optionType: 'call', position: 'long', premium: 5, iv: 0.3, quantity: 1, enabled: true }]);
       component.analysisResult.set(buildAnalysisResult());
 
@@ -199,7 +202,7 @@ describe('StrategyBuilderComponent', () => {
   describe('SB-C: analyzeStrategy → resolver call → result rendering', () => {
     function seedReadyState(): void {
       component.ticker.set('SPY');
-      component.selectedExpiration.set('2099-01-01');
+      component.selectedExpiration.set(4_070_984_400_000);
       component.underlying.set({ ticker: 'SPY', price: 100, change: 0, changePercent: 0 });
       component.legs.set([
         { strike: 100, optionType: 'call', position: 'long', premium: 5, iv: 0.3, quantity: 1, enabled: true },
@@ -344,7 +347,7 @@ describe('StrategyBuilderComponent', () => {
       component.legs.set([
         { strike: 100, optionType: 'call', position: 'long', premium: 5, iv: 0.3, quantity: 1, enabled: true },
       ]);
-      component.selectedExpiration.set('2099-01-01');
+      component.selectedExpiration.set(4_070_984_400_000);
       // No underlying, no stockSnapshot → spotPrice() === 0
 
       await component.analyzeStrategy();
@@ -356,13 +359,13 @@ describe('StrategyBuilderComponent', () => {
     });
 
     it('canAnalyze is false when no legs are enabled', () => {
-      component.selectedExpiration.set('2099-01-01');
+      component.selectedExpiration.set(4_070_984_400_000);
       component.legs.set([]);
       expect(component.canAnalyze()).toBe(false);
     });
 
     it('canAnalyze is false when a leg has invalid inputs (negative premium)', () => {
-      component.selectedExpiration.set('2099-01-01');
+      component.selectedExpiration.set(4_070_984_400_000);
       component.legs.set([
         { strike: 100, optionType: 'call', position: 'long', premium: -1, iv: 0.3, quantity: 1, enabled: true },
       ]);
@@ -370,7 +373,7 @@ describe('StrategyBuilderComponent', () => {
     });
 
     it('canAnalyze is true when an enabled leg has valid inputs and an expiration is set', () => {
-      component.selectedExpiration.set('2099-01-01');
+      component.selectedExpiration.set(4_070_984_400_000);
       component.legs.set([
         { strike: 100, optionType: 'call', position: 'long', premium: 5, iv: 0.3, quantity: 1, enabled: true },
       ]);
@@ -422,7 +425,7 @@ describe('StrategyBuilderComponent', () => {
         ticker: `O:SPY260220${side === 'call' ? 'C' : 'P'}00590000`,
         contractType: side,
         strikePrice: 590,
-        expirationDate: '2026-02-20',
+        expirationMs: 1_771_621_200_000,
         breakEvenPrice: 595,
         impliedVolatility: 0.20,
         openInterest: 1000,
@@ -480,7 +483,7 @@ describe('StrategyBuilderComponent', () => {
       component.historyDrawerOpen.set(true);
       component.selectedHistoryContract.set({
         ticker: 'O:SPY260220C00590000',
-        contractType: 'call', strikePrice: 590, expirationDate: '2026-02-20',
+        contractType: 'call', strikePrice: 590, expirationMs: 1_771_621_200_000,
         snapshot: buildContract('call'),
       });
       component.historyAggregates.set([{
@@ -501,7 +504,7 @@ describe('StrategyBuilderComponent', () => {
     it('parsedHistoryTicker returns the expected display fields for a SPY call', () => {
       component.selectedHistoryContract.set({
         ticker: 'O:SPY260220C00590000',
-        contractType: 'call', strikePrice: 590, expirationDate: '2026-02-20',
+        contractType: 'call', strikePrice: 590, expirationMs: 1_771_621_200_000,
         snapshot: buildContract('call'),
       });
 
@@ -518,7 +521,7 @@ describe('StrategyBuilderComponent', () => {
   // never at a rate of their own.
   describe('risk-free rate', () => {
     function withPricedLeg(): void {
-      const future = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+      const future = optionExpiryAnchorMs(etIsoDate(Date.now() + 30 * 86400000));
       component.selectedExpiration.set(future);
       component.underlying.set({ ticker: 'SPY', price: 100, change: 0, changePercent: 0 });
       component.legs.set([
@@ -543,8 +546,8 @@ describe('StrategyBuilderComponent', () => {
 
     it('sends the snapshot rate to the server analysis, even a rate of 0', async () => {
       component.ticker.set('SPY');
-      component.selectedExpiration.set('2099-01-01');
-      const chain = component.fetchChainSnapshot('SPY', '2099-01-01');
+      component.selectedExpiration.set(4_070_984_400_000);
+      const chain = component.fetchChainSnapshot('SPY', 4_070_984_400_000);
       expectGraphQL(httpMock, 'getOptionsChainSnapshot').flush({
         data: {
           getOptionsChainSnapshot: {
@@ -590,8 +593,8 @@ describe('StrategyBuilderComponent', () => {
           },
         });
       }
-      const nearExpiry = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
-      const farExpiry = new Date(Date.now() + 182 * 86400000).toISOString().slice(0, 10);
+      const nearExpiry = optionExpiryAnchorMs(etIsoDate(Date.now() + 30 * 86400000));
+      const farExpiry = optionExpiryAnchorMs(etIsoDate(Date.now() + 182 * 86400000));
       component.ticker.set('SPY');
       component.selectedExpiration.set(nearExpiry);
       const nearChain = component.fetchChainSnapshot('SPY', nearExpiry);
@@ -613,7 +616,7 @@ describe('StrategyBuilderComponent', () => {
 
       const analysis = component.analyzeStrategy();
       const req = expectGraphQL(httpMock, 'analyzeOptionsStrategy');
-      expect(req.request.body.variables.expirationDate).toBe(farExpiry);
+      expect(req.request.body.variables.expirationMs).toBe(farExpiry);
       expect(req.request.body.variables.riskFreeRate).toBe(0.05);
 
       req.flush({ data: { analyzeOptionsStrategy: buildAnalysisResult() } });
@@ -638,8 +641,8 @@ describe('StrategyBuilderComponent', () => {
           },
         };
       }
-      const nearExpiry = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
-      const farExpiry = new Date(Date.now() + 182 * 86400000).toISOString().slice(0, 10);
+      const nearExpiry = optionExpiryAnchorMs(etIsoDate(Date.now() + 30 * 86400000));
+      const farExpiry = optionExpiryAnchorMs(etIsoDate(Date.now() + 182 * 86400000));
       component.ticker.set('SPY');
       component.selectedExpiration.set(nearExpiry);
       const nearChain = component.fetchChainSnapshot('SPY', nearExpiry);
@@ -647,7 +650,7 @@ describe('StrategyBuilderComponent', () => {
 
       const pending = httpMock.match(r =>
         r.url === GRAPHQL_URL && (r.body as { query: string }).query.includes('getOptionsChainSnapshot'));
-      expect(pending.map(r => r.request.body.variables.expirationDate)).toEqual([nearExpiry, farExpiry]);
+      expect(pending.map(r => r.request.body.variables.expirationMs)).toEqual([nearExpiry, farExpiry]);
       pending[1].flush(snapshotReply(0.05));
       await farChain;
       pending[0].flush(snapshotReply(0.0401));
@@ -658,8 +661,8 @@ describe('StrategyBuilderComponent', () => {
     });
 
     it('lets neither a late failure nor a late finish for a left expiry touch the current fetch', async () => {
-      const nearExpiry = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
-      const farExpiry = new Date(Date.now() + 182 * 86400000).toISOString().slice(0, 10);
+      const nearExpiry = optionExpiryAnchorMs(etIsoDate(Date.now() + 30 * 86400000));
+      const farExpiry = optionExpiryAnchorMs(etIsoDate(Date.now() + 182 * 86400000));
       component.ticker.set('SPY');
       component.selectedExpiration.set(nearExpiry);
       const nearChain = component.fetchChainSnapshot('SPY', nearExpiry);
@@ -708,8 +711,8 @@ describe('StrategyBuilderComponent', () => {
 
     it('is true when legs exist and selectedExpiration evaluates to T <= 0', () => {
       withEnabledLeg();
-      const todayIso = new Date().toISOString().slice(0, 10);
-      component.selectedExpiration.set(todayIso);
+      const todayAnchor = optionExpiryAnchorMs(etIsoDate(Date.now()));
+      component.selectedExpiration.set(todayAnchor);
 
       // timeToExpiry clamps to 0 once the 16:00 ET deadline passes;
       // for any same-day exp the value is at most a few hours, but
@@ -722,15 +725,15 @@ describe('StrategyBuilderComponent', () => {
     });
 
     it('is false when no legs are enabled (banner only fires once a leg exists)', () => {
-      const todayIso = new Date().toISOString().slice(0, 10);
-      component.selectedExpiration.set(todayIso);
+      const todayAnchor = optionExpiryAnchorMs(etIsoDate(Date.now()));
+      component.selectedExpiration.set(todayAnchor);
       component.legs.set([]);
       expect(component.noForwardCurves()).toBe(false);
     });
 
     it('is false when timeToExpiry > 0 (future expiration with enabled legs)', () => {
       withEnabledLeg();
-      const future = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+      const future = optionExpiryAnchorMs(etIsoDate(Date.now() + 30 * 86400000));
       component.selectedExpiration.set(future);
       // Sanity: timeToExpiry should now be positive.
       expect(component.timeToExpiry()).toBeGreaterThan(0);
@@ -738,8 +741,8 @@ describe('StrategyBuilderComponent', () => {
     });
 
     it('is false when leg is present but disabled', () => {
-      const todayIso = new Date().toISOString().slice(0, 10);
-      component.selectedExpiration.set(todayIso);
+      const todayAnchor = optionExpiryAnchorMs(etIsoDate(Date.now()));
+      component.selectedExpiration.set(todayAnchor);
       component.legs.set([
         { strike: 100, optionType: 'call', position: 'long', premium: 5, iv: 0.3, quantity: 1, enabled: false },
       ]);
@@ -758,7 +761,7 @@ describe('StrategyBuilderComponent', () => {
 
     /** Set the minimum state needed for canAnalyze() to be true. */
     function makeAnalyzable() {
-      const future = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+      const future = optionExpiryAnchorMs(etIsoDate(Date.now() + 30 * 86400000));
       component.selectedExpiration.set(future);
       // Spot of 100 via stockSnapshot.day.close (spotPrice computed).
       component.stockSnapshot.set({

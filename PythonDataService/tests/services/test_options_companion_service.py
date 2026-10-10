@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 
 from app.models.requests import OptionsCompanionConfig
+from app.options.expiry import option_expiry_anchor_ms
 from app.services.options_companion_service import (
     _bar_grid_floor_ms,
     _columns_for,
@@ -281,8 +282,8 @@ class TestResolveTargetExpiry:
 
         class _FakePolygon:
             def list_options_expirations(self, **kwargs):
-                # Echo back the requested date as if it's listed
-                return [kwargs["expiration_date_gte"]]
+                # Echo back the requested anchor as if it's listed
+                return [kwargs["expiration_ms_gte"]]
 
         cfg = OptionsCompanionConfig(enabled=True, dte_distance=7)
         result = _resolve_target_expiry(_FakePolygon(), "SPY", date(2025, 6, 10), cfg)
@@ -307,7 +308,7 @@ class TestResolveTargetExpiry:
 
         class _FakePolygon:
             def list_options_expirations(self, **kwargs):
-                return [kwargs["expiration_date_gte"]]
+                return [kwargs["expiration_ms_gte"]]
 
         cfg = OptionsCompanionConfig(enabled=True, dte_distance=0)
         result = _resolve_target_expiry(_FakePolygon(), "SPY", date(2025, 6, 10), cfg)
@@ -339,9 +340,9 @@ class _FakePolygon:
     def fetch_aggregates(self, ticker: str, **kwargs) -> list[dict]:
         return self._option_bars.get(ticker, [])
 
-    def list_options_expirations(self, **kwargs) -> list[str]:
+    def list_options_expirations(self, **kwargs) -> list[int]:
         # Echo back the requested target so dte_distance=0 (same-day) resolves.
-        return [kwargs["expiration_date_gte"]]
+        return [kwargs["expiration_ms_gte"]]
 
 
 class TestBuildOptionsCompanionTimestampAlignment:
@@ -746,3 +747,30 @@ class TestFirstDayCloseSource:
         # if EOD ($110) was used as the centering price.
         assert 110.0 not in selected_strikes
         assert 109.0 not in selected_strikes
+
+
+class TestExpiryCloseMs:
+    """The countdown ends at the session close on a half day, at the anchor
+    otherwise (#2934). On a same-day half-day expiry the anchor would hand the
+    contract three extra hours it does not have."""
+
+    def test_full_session_end_is_the_anchor(self):
+        from app.services.options_companion_service import _expiry_close_ms
+
+        # 2025-06-10 is a regular Tuesday: close 16:00 ET == the anchor.
+        assert _expiry_close_ms(date(2025, 6, 10)) == option_expiry_anchor_ms(date(2025, 6, 10))
+
+    def test_half_day_ends_at_the_early_close(self):
+        from app.services.options_companion_service import _expiry_close_ms
+
+        # 2025-11-28 is Black Friday: the NYSE closes 13:00 ET. At 12:55 New
+        # York time a same-day contract has five minutes, not 3h05m.
+        close = _expiry_close_ms(date(2025, 11, 28))
+        bar_1255_et = 1_764_352_500_000  # 2025-11-28 12:55 ET (17:55 UTC)
+        assert 0 < close - bar_1255_et == 5 * 60_000
+
+    def test_non_session_expiry_keeps_the_anchor(self):
+        from app.services.options_companion_service import _expiry_close_ms
+
+        # 2025-11-29 is a Saturday: no session, so the anchor stands.
+        assert _expiry_close_ms(date(2025, 11, 29)) == option_expiry_anchor_ms(date(2025, 11, 29))

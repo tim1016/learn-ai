@@ -17,7 +17,6 @@ import { MarketDataFeedService } from '../../../services/market-data-feed.servic
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { brokerSse, type SseStatus, type SseStream } from '../../../services/broker-sse';
 import { QuantLibService } from '../../../services/quantlib.service';
-import { etIsoDate } from '../../../shared/date/et-midnight';
 import type {
   IbkrChainSnapshot,
   IbkrOptionQuote,
@@ -345,7 +344,6 @@ export class BrokerOptionsChainComponent {
   private maybeRepriceEngine(snap: IbkrChainSnapshot, expiryMs: number): void {
     const spot = snap.underlying_price;
     if (spot === null) return;
-    const expirationDate = etIsoDate(expiryMs);
 
     const promises: Promise<void>[] = [];
     for (const q of snap.quotes) {
@@ -364,7 +362,7 @@ export class BrokerOptionsChainComponent {
           right: q.right,
           spot,
           iv,
-          expirationDate,
+          expirationMs: expiryMs,
         }),
       );
     }
@@ -376,14 +374,14 @@ export class BrokerOptionsChainComponent {
     right: OptionRight;
     spot: number;
     iv: number;
-    expirationDate: string;
+    expirationMs: number;
   }): Promise<void> {
     try {
       const result = await this.quantlib.priceOption({
         spot: args.spot,
         strike: args.strike,
         volatility: args.iv,
-        expirationDate: args.expirationDate,
+        expirationMs: args.expirationMs,
         optionType: args.right === 'C' ? 'call' : 'put',
       });
       if (!result.success) return;

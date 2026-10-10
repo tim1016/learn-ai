@@ -19,6 +19,8 @@ import {
 import { ExpirationRibbonComponent } from '../../options-chain-v2/expiration-ribbon/expiration-ribbon.component';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
+import { etIsoDate } from '../../../shared/date/et-midnight';
+import { optionExpiryAnchorMs, optionExpiryDate } from '../../../shared/option-contract/option-expiry-date';
 
 interface ChainRow {
   strike: number;
@@ -86,8 +88,8 @@ export class OptionsLabChainComponent implements OnInit {
   initialLoad = signal(true);
   error = signal<string | null>(null);
 
-  availableExpirations = signal<string[]>([]);
-  selectedExpiration = signal<string | null>(null);
+  availableExpirations = signal<number[]>([]);
+  selectedExpiration = signal<number | null>(null);
 
   underlying = signal<SnapshotUnderlyingResult | null>(null);
   allContracts = signal<SnapshotContractResult[]>([]);
@@ -111,15 +113,16 @@ export class OptionsLabChainComponent implements OnInit {
   daysToExpiry = computed(() => {
     const exp = this.selectedExpiration();
     if (!exp) return 0;
-    const expDate = new Date(exp + 'T16:00:00');
-    return Math.max(Math.ceil((expDate.getTime() - Date.now()) / 86_400_000), 0);
+    // The anchor instant from the wire — never a 16:00 built in the browser's
+    // own zone (#2934).
+    return Math.max(Math.ceil((exp - Date.now()) / 86_400_000), 0);
   });
 
   expirationLabel = computed(() => {
     const exp = this.selectedExpiration();
     if (!exp) return '';
-    const d = new Date(exp + 'T00:00:00');
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const d = new Date(optionExpiryDate(exp) + 'T00:00:00Z');
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
   });
 
   rows = computed<ChainRow[]>(() => {
@@ -275,8 +278,8 @@ export class OptionsLabChainComponent implements OnInit {
       this.availableExpirations.set(expirations);
 
       if (expirations.length > 0) {
-        const today = new Date().toISOString().slice(0, 10);
-        const nearest = expirations.find(e => e >= today) ?? expirations[0];
+        const todayAnchor = optionExpiryAnchorMs(etIsoDate(Date.now()));
+        const nearest = expirations.find(e => e >= todayAnchor) ?? expirations[0];
         this.selectedExpiration.set(nearest);
         await this.fetchChainSnapshot(false);
       } else {
@@ -290,9 +293,9 @@ export class OptionsLabChainComponent implements OnInit {
     }
   }
 
-  async onExpirationSelected(date: string): Promise<void> {
-    if (date === this.selectedExpiration()) return;
-    this.selectedExpiration.set(date);
+  async onExpirationSelected(expirationMs: number): Promise<void> {
+    if (expirationMs === this.selectedExpiration()) return;
+    this.selectedExpiration.set(expirationMs);
     await this.fetchChainSnapshot(false);
   }
 
