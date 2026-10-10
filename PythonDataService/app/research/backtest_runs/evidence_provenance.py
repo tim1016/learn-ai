@@ -30,6 +30,24 @@ class ClosingBarSkipRecord(BaseModel):
     close_price: float
 
 
+class QuarantinedDecisionBarRecord(BaseModel):
+    """One decision bar the run's session refused, so the run never decided it (#2909).
+
+    A bucket whose width does not match the program's decision clock is
+    quarantined before any indicator or strategy code runs: no decision, no
+    trace, no fill. The refusal is recorded so a saved run says which decision
+    bars it dropped; ``bar_end_ms - bar_start_ms`` is the refused bucket's own
+    width, and ``expected_timeframe_ms`` the clock it failed to match.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    bar_start_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    bar_end_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    reason: str
+    expected_timeframe_ms: int = Field(ge=1)
+
+
 class RunEvidenceProvenance(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -44,6 +62,9 @@ class RunEvidenceProvenance(BaseModel):
     # decision at that bar's close.
     closing_bar_convention: ClosingBarConvention | None = None
     closing_bar_skips: tuple[ClosingBarSkipRecord, ...] = ()
+    # Every decision bar the session refused (#2909). Absent on evidence
+    # recorded before #2909, whose runs quarantined silently.
+    quarantined_decision_bars: tuple[QuarantinedDecisionBarRecord, ...] = ()
 
 
 class EvidenceApplicability(BaseModel):

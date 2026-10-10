@@ -65,6 +65,25 @@ class ClosingBarSkip:
     close_price: Decimal
 
 
+@dataclass(frozen=True)
+class QuarantinedDecisionBar:
+    """One decision bar the Signal Session refused, so the run never decided it (#2909).
+
+    A bucket the session turns down (a 15-minute bucket whose last minute has
+    no bar arrives a minute short) is quarantined before any indicator or
+    strategy code runs: no decision, no trace, no fill, and before this record
+    no word of it. The refusal is the result's, so a backtest never drops a
+    decision bar in silence. ``bar_end_ms - bar_start_ms`` is the refused
+    bucket's own width; ``expected_timeframe_ms`` is the program's decision
+    clock it failed to match.
+    """
+
+    bar_start_ms: int
+    bar_end_ms: int
+    reason: str
+    expected_timeframe_ms: int
+
+
 @dataclass
 class BacktestResult:
     initial_cash: Decimal
@@ -88,6 +107,8 @@ class BacktestResult:
     insights: list = field(default_factory=list)
     insight_summary: dict = field(default_factory=dict)
     closing_bar_skips: list[ClosingBarSkip] = field(default_factory=list)
+    # Every decision bar the session refused (#2909); empty when none was.
+    quarantined_decision_bars: list[QuarantinedDecisionBar] = field(default_factory=list)
 
 
 # The one failure every caller reports for a result with an empty
@@ -258,6 +279,7 @@ class BacktestEngine:
         retained_bars: list[TradeBar] = []
         equity_curve: list[EquitySnapshot] = []
         closing_bar_skips: list[ClosingBarSkip] = []
+        quarantined_decision_bars: list[QuarantinedDecisionBar] = []
 
         def _record_fill(order: Order, event: OrderEvent) -> None:
             portfolio.apply_fill(event)
@@ -307,6 +329,7 @@ class BacktestEngine:
                     equity_curve=equity_curve,
                     retained_bars=retained_bars,
                     closing_bar_skips=closing_bar_skips,
+                    quarantined_decision_bars=quarantined_decision_bars,
                 )
                 evaluation_pending = False
 
@@ -361,8 +384,8 @@ class BacktestEngine:
             # adapter: it settles that stage before the existing order-drain
             # phase, preserving historical fill timing while keeping the
             # program's explicit advance/settle boundary available to other
-            # runtimes.
-            self._settle_staged_signal_program(strategy, closing_bar_skips)
+            # runtimes, and records every decision bar the session refused.
+            self._drain_staged_signal_program(strategy, closing_bar_skips, quarantined_decision_bars)
 
             # ----- Drain any pending orders the strategy just submitted.
             #       MARKET orders fill now (SIGNAL_BAR_CLOSE, and
@@ -453,6 +476,7 @@ class BacktestEngine:
             order_events=order_events,
             record_fill=_record_fill,
             closing_bar_skips=closing_bar_skips,
+            quarantined_decision_bars=quarantined_decision_bars,
         )
 
         insight_summary = ctx.insight_manager.get_summary()
@@ -472,6 +496,7 @@ class BacktestEngine:
             insights=ctx.insight_manager.all_insights,
             insight_summary=insight_summary.to_dict(),
             closing_bar_skips=closing_bar_skips,
+            quarantined_decision_bars=quarantined_decision_bars,
         )
 
     # ------------------------------------------------------------------
@@ -490,6 +515,7 @@ class BacktestEngine:
         equity_curve: list[EquitySnapshot],
         retained_bars: list[TradeBar],
         closing_bar_skips: list[ClosingBarSkip],
+        quarantined_decision_bars: list[QuarantinedDecisionBar],
     ) -> None:
         """Cross from warmup into evaluation: flush, assert readiness, reset.
 
@@ -518,7 +544,7 @@ class BacktestEngine:
         """
         for consolidator in ctx.get_consolidators(symbol):
             consolidator.scan(evaluation_start_ms)
-        self._settle_staged_signal_program(strategy, closing_bar_skips)
+        self._drain_staged_signal_program(strategy, closing_bar_skips, quarantined_decision_bars)
 
         program = strategy.signal_program
         if program is not None:
@@ -546,6 +572,7 @@ class BacktestEngine:
         equity_curve.clear()
         retained_bars.clear()
         closing_bar_skips.clear()
+        quarantined_decision_bars.clear()
         ctx.log(f"[EVALUATION START] {ny_datetime(evaluation_start_ms)} — warmup state discarded, indicators primed")
 
     def _finalize(
@@ -561,6 +588,7 @@ class BacktestEngine:
         order_events: list[OrderEvent],
         record_fill: Callable[[Order, OrderEvent], None],
         closing_bar_skips: list[ClosingBarSkip],
+        quarantined_decision_bars: list[QuarantinedDecisionBar],
     ) -> None:
         """Close out the run once the bar stream is exhausted.
 
@@ -592,7 +620,7 @@ class BacktestEngine:
         # still dropped — matching LEAN, which does not emit partial bars.
         for consolidator in ctx.get_consolidators(symbol):
             consolidator.scan(previous_minute_bar.end_ms)
-        self._settle_staged_signal_program(strategy, closing_bar_skips)
+        self._drain_staged_signal_program(strategy, closing_bar_skips, quarantined_decision_bars)
         # A market order submitted from the final consolidated bar's
         # handler fills immediately against that bar in SIGNAL_BAR_CLOSE
         # mode — the same as any in-loop bar, mirroring LEAN's
@@ -734,8 +762,13 @@ class BacktestEngine:
         """
         return getattr(consolidator, "_last_fired_bar", None)
 
-    def _settle_staged_signal_program(self, strategy: Strategy, closing_bar_skips: list[ClosingBarSkip]) -> None:
-        """Settle a registry-owned staged program at Backtest's legacy seam.
+    def _drain_staged_signal_program(
+        self,
+        strategy: Strategy,
+        closing_bar_skips: list[ClosingBarSkip],
+        quarantined_decision_bars: list[QuarantinedDecisionBar],
+    ) -> None:
+        """Drain a registry-owned staged program at Backtest's legacy seam.
 
         A staged decision commits, except under the closing-bar rule (#2607):
         outside the LEAN-compatibility profile, a decision with an intent on
@@ -744,6 +777,12 @@ class BacktestEngine:
         (``app.lean_sidecar.closing_bar``). An ENTER is dropped; an EXIT stays
         due, and the program decides it again from the next session. Each such
         decision is recorded in ``closing_bar_skips``.
+
+        Then every decision bar the session refused outright since the last
+        drain is recorded in ``quarantined_decision_bars`` (#2909). The live
+        runner receipts these the same way
+        (``app.services.bot_trade_strategy``); a backtest used to drop them
+        where they fell, so a thin symbol silently lost decision bars.
 
         A decision commits on its own bar's clock, as a consolidated bar's
         handler runs on that bar's: a program deciding on the per-minute hook
@@ -755,24 +794,37 @@ class BacktestEngine:
         if program is None:
             return
         stage = program.session.active_stage
-        if stage is None:
-            return
-        if (
-            not stage.intents
-            or self.fill_model.closing_bar_convention is not ClosingBarConvention.SKIP_CLOSING_BAR
-            or not is_closing_bar(stage.bar.end_ms)
-        ):
-            if strategy.ctx is not None:
-                strategy.ctx.current_time_ms = stage.bar.end_ms
-            program.session.commit_if_staged()
-            return
-        program.session.settle(Settlement.DISCARD)
-        for intent in stage.intents:
-            closing_bar_skips.append(
-                ClosingBarSkip(bar_close_ms=stage.bar.end_ms, intent=intent.kind, close_price=stage.bar.close)
+        if stage is not None:
+            if (
+                not stage.intents
+                or self.fill_model.closing_bar_convention is not ClosingBarConvention.SKIP_CLOSING_BAR
+                or not is_closing_bar(stage.bar.end_ms)
+            ):
+                if strategy.ctx is not None:
+                    strategy.ctx.current_time_ms = stage.bar.end_ms
+                program.session.commit_if_staged()
+            else:
+                program.session.settle(Settlement.DISCARD)
+                for intent in stage.intents:
+                    closing_bar_skips.append(
+                        ClosingBarSkip(bar_close_ms=stage.bar.end_ms, intent=intent.kind, close_price=stage.bar.close)
+                    )
+                    if strategy.ctx is not None:
+                        strategy.ctx.log(
+                            f"[CLOSING BAR] {intent.kind.value} decided on the session's closing bar "
+                            f"{ny_datetime(stage.bar.end_ms)} was not acted on (#2607)"
+                        )
+        while (quarantine := program.take_quarantine()) is not None:
+            quarantined_decision_bars.append(
+                QuarantinedDecisionBar(
+                    bar_start_ms=quarantine.bar_start_ms,
+                    bar_end_ms=quarantine.bar_end_ms,
+                    reason=quarantine.reason,
+                    expected_timeframe_ms=program.session.timeframe_ms,
+                )
             )
             if strategy.ctx is not None:
                 strategy.ctx.log(
-                    f"[CLOSING BAR] {intent.kind.value} decided on the session's closing bar "
-                    f"{ny_datetime(stage.bar.end_ms)} was not acted on (#2607)"
+                    f"[QUARANTINE] {quarantine.reason} refused the decision bar ending "
+                    f"{ny_datetime(quarantine.bar_end_ms)}; the run made no decision on it (#2909)"
                 )

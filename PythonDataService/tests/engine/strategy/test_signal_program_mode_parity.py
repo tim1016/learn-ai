@@ -21,7 +21,7 @@ stage is *settled*.
 * Backtest: ``program.activate_for_backtest()`` sets a DECIDE default
   (``engine.py`` ``run()``), and every consolidated bar is committed at the
   engine's drain seam, ``program.session.commit_if_staged()`` (``engine.py``
-  ``_settle_staged_signal_program``). The one exception is the closing-bar
+  ``_drain_staged_signal_program``). The one exception is the closing-bar
   rule (#2607): a decision on the session's closing bar settles DISCARD in
   Backtest and is refused by both runners alike
   (``bot_trade_strategy._refused_on_the_closing_bar``), so it cannot separate
@@ -223,7 +223,7 @@ def _replay_backtest(program: SignalProgram, bars: list[TradeBar]) -> list[Evalu
     ``program.activate_for_backtest()``; each consolidated bucket reaches
     ``program.on_consolidated_bar`` through the callback
     ``Strategy._signal_program_handler`` registers; and
-    ``_settle_staged_signal_program`` calls ``program.session.commit_if_staged()``.
+    ``_drain_staged_signal_program`` calls ``program.session.commit_if_staged()``.
     The mode is never passed in -- Backtest supplies it exclusively through
     the DECIDE default ``activate_for_backtest`` sets, which is precisely the
     axis this file claims to vary, so the replay must go through the same
