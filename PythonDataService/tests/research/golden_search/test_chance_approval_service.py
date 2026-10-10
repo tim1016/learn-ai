@@ -235,6 +235,41 @@ async def test_invalid_stored_chance_evidence_requires_the_acknowledgement_and_i
     assert "v999" in research["chance"]["components"]["comparison"]["reason"]
 
 
+def _mismatched_rehearsal_length(results: dict[str, Any]) -> None:
+    """A stored 1× rehearsal whose length names another horizon than the frozen final interval (#3025)."""
+    for candidate in results.get("evidence", {}).get("candidates", []):
+        rehearsal = (candidate.get("chance") or {}).get("rehearsal")
+        if isinstance(rehearsal, dict) and rehearsal.get("status") == "measured":
+            rehearsal["basis"]["final_interval"]["scheduled_sessions"] = 10  # the window itself stays frozen
+
+
+async def test_a_mismatched_rehearsal_shows_its_named_reason_and_reads_never_rewrite_it(
+    lake: Path, monkeypatch: pytest.MonkeyPatch, conn: asyncpg.Connection, symbol: str
+) -> None:
+    driver = _driver(lake, monkeypatch, score=_dominant_on_the_final_interval)
+    # The corruption sits in the evidence record before the final test opens, so the exam's own carry-over
+    # computation faces the mismatched rehearsal the way a corrupted or foreign row would (#3025).
+    row = await driver.to_candidate(symbol)
+    await _mutate_results(conn, row.id, _mismatched_rehearsal_length)
+    row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
+
+    detail = await driver.detail(row)
+    fit = _fit(detail, "all_period")
+    carry = fit["chance"]["carry_over"]
+    assert carry["status"] == "missing"
+    assert carry["code"] == "carry_over_unavailable"
+    assert "1× length is 10 sessions" in carry["reason"]
+    # The valid siblings beside it stay visible and the study still reads wire-valid.
+    assert fit["chance"]["comparison"]["status"] == "measured"
+    assert fit["chance"]["profitability"]["status"] == "measured"
+    GoldenSearchExamView.model_validate(detail["results"]["exam"])
+
+    # Reads never recompute or overwrite the stored evidence: the corrupted rehearsal is still what is stored.
+    stored = json.loads((await conn.fetchrow("SELECT results_json FROM research_golden_search_studies WHERE id = $1", row.id))["results_json"])
+    corrupted = [candidate for candidate in stored["evidence"]["candidates"] if (candidate.get("chance") or {}).get("rehearsal", {}).get("basis", {}).get("final_interval", {}).get("scheduled_sessions") == 10]
+    assert corrupted  # the read served the mismatch, and the stored evidence still holds exactly what it held
+
+
 async def test_a_pre_enrollment_study_never_gates_on_invalid_stored_evidence(
     lake: Path, monkeypatch: pytest.MonkeyPatch, conn: asyncpg.Connection, symbol: str
 ) -> None:

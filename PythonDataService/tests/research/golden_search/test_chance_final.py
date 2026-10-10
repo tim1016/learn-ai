@@ -34,13 +34,13 @@ def _sessions(n: int, start: date) -> tuple[int, ...]:
     return tuple(session_close_ms_utc(day) for day in expected_sessions(start, date(2027, 12, 31))[:n])
 
 
-def _detail(returns: list[float], start: date = date(2025, 1, 2), *, exits: tuple[int, ...] = ()) -> dict[str, Any]:
+def _detail(returns: list[float], start: date = date(2025, 1, 2), *, exits: tuple[int, ...] = (), capital: float = CAPITAL) -> dict[str, Any]:
     session_ms = _sessions(len(returns), start)
-    equity = [CAPITAL]
+    equity = [capital]
     for value in returns:  # compounded, as the engine's daily equity curve is
         equity.append(equity[-1] * (1.0 + value))
     return {
-        "initial_cash": CAPITAL,
+        "initial_cash": capital,
         "daily_equity": [[ms, value] for ms, value in zip(session_ms, equity[1:], strict=True)],
         "trades": [{"exit_ms": session_ms[position] - 60_000} for position in exits],
     }
@@ -60,7 +60,19 @@ def _series(returns: list[float], start: date = date(2025, 1, 2)) -> SessionSeri
     return SessionSeries(session_ms=session_ms, returns=np.asarray(returns, dtype=np.float64), exits=np.zeros(len(returns), dtype=np.int64), capital=CAPITAL)
 
 
-def _stored_rehearsal(returns: list[float], *, objective: str = "total_return_pct", point_hash: str = "cafebabe", scheduled: int = 10, seed: int | None = None) -> dict[str, Any]:
+#: The 25-session final interval every fixture study freezes: April 2025's own scheduled sessions.
+_FINAL_WINDOW = _window(25, date(2025, 4, 1))
+
+
+def _stored_rehearsal(
+    returns: list[float],
+    *,
+    objective: str = "total_return_pct",
+    point_hash: str = "cafebabe",
+    scheduled: int = 25,
+    seed: int | None = None,
+    final_window: tuple[int, int] | None = None,
+) -> dict[str, Any]:
     """A stored 1× rehearsal basis exactly as the evidence stage records it for this development input."""
     from app.research.golden_search.chance_compare import admit_run, series_digest
 
@@ -69,6 +81,7 @@ def _stored_rehearsal(returns: list[float], *, objective: str = "total_return_pc
     digest = series_digest(admitted)
     seed_inputs = ["golden-search-chance-rehearsal/v1", _window(len(returns), date(2025, 1, 2))[0], _window(len(returns), date(2025, 1, 2))[1], objective, *sorted((point_hash, "deadbeef")), 1]
     value = seed if seed is not None else seed_for(*seed_inputs)
+    frozen_final = final_window if final_window is not None else _FINAL_WINDOW
     return {
         "status": "measured",
         "rungs": [{"k": 1, "sessions": scheduled, "trade_floor": 5, "denominator": 10_000, "passes": {}, "undefined": {}, "shares": {}}],
@@ -85,7 +98,7 @@ def _stored_rehearsal(returns: list[float], *, objective: str = "total_return_pc
             "objective": {"measure": objective, "label": "total return", "units": "fraction of the starting capital"},
             "rules": {"max_drawdown_ceiling": 0.2, "require_positive_net": True, "drawdown_basis": "session closes"},
             "activity": {"frequency_based": True, "expected_trades_per_year": 50, "final_trading_years": 0.084},
-            "final_interval": {"window": {"start_ms": 0, "end_ms": 0}, "scheduled_sessions": scheduled},
+            "final_interval": {"window": {"start_ms": frozen_final[0], "end_ms": frozen_final[1]}, "scheduled_sessions": scheduled},
             "source": {
                 "window": {"start_ms": _window(len(returns), date(2025, 1, 2))[0], "end_ms": _window(len(returns), date(2025, 1, 2))[1]},
                 "session_count": len(returns),
@@ -107,6 +120,8 @@ def _carry_over(
     final_returns: list[float] | None = None,
     objective: str = "total_return_pct",
     final_metrics: Metrics | None = None,
+    final_detail: dict[str, Any] | None = None,
+    final_capital: float = CAPITAL,
     development_start: date = date(2025, 1, 2),
     point_hash: str = "cafebabe",
     **kwargs: Any,
@@ -114,7 +129,7 @@ def _carry_over(
     final = final_returns if final_returns is not None else _smooth(25, 99)
     # The fake final result summarizes the final series it stands for: its objective is that series' own compounded value.
     total_return = float(np.prod([1.0 + value for value in final]) - 1.0)
-    metrics = final_metrics if final_metrics is not None else (Metrics(status="completed", total_trades=len(final), net_profit=CAPITAL * total_return, total_return_pct=total_return, sharpe_ratio=final_sharpe, max_drawdown_pct=0.1, win_rate=0.5))
+    metrics = final_metrics if final_metrics is not None else (Metrics(status="completed", total_trades=len(final), net_profit=final_capital * total_return, total_return_pct=total_return, sharpe_ratio=final_sharpe, max_drawdown_pct=0.1, win_rate=0.5))
     return carry_over_reading(
         objective=objective,
         development_window=_window(len(development), development_start),
@@ -122,7 +137,7 @@ def _carry_over(
         development_detail=_detail(development, development_start),
         development_metrics=_completed(),
         final_metrics=metrics,
-        final_detail=_detail(final, date(2025, 4, 1)),
+        final_detail=final_detail if final_detail is not None else _detail(final, date(2025, 4, 1), capital=final_capital),
         point_hash=point_hash,
         stored_rehearsal=stored,
         **kwargs,
@@ -137,7 +152,7 @@ def test_the_rank_counts_strictly_below_over_the_finite_only() -> None:
     assert reading["finite"] + reading["undefined"] == 10_000
     assert 0 <= reading["below"] <= reading["finite"]  # strictly-below counts a subset of the finite paths only
     assert 0.0 <= reading["rank"] <= 1.0
-    assert reading["rank"] == pytest.approx(reading["below"] / reading["finite"])
+    assert reading["rank"] == reading["below"] / reading["finite"]  # the same operation, exactly
     assert reading["selection_note"] == SELECTION_NOTE
 
 
@@ -178,7 +193,7 @@ def test_a_discrete_distribution_where_the_99_percentile_shortcut_disagrees() ->
     stored = _stored_rehearsal(development)
     reading = _carry_over(development, stored, final_returns=[0.0] * 25)
     objectives = reproduce_1x_objectives(
-        _series(development), seed=stored["basis"]["seeds"]["1x"]["value"], size=10, objective="total_return_pct", cancel_check=lambda: None
+        _series(development), seed=stored["basis"]["seeds"]["1x"]["value"], size=25, objective="total_return_pct", cancel_check=lambda: None
     )
     finite = np.isfinite(objectives)
     expected_below = int(np.count_nonzero(objectives[finite] < 0.0))
@@ -199,7 +214,7 @@ def test_mismatched_objective_length_digest_or_scope_is_a_named_missing_never_a_
     assert "digest" in _carry_over(changed_input, _stored_rehearsal(development))["reason"]
 
     too_short = _stored_rehearsal(development, scheduled=50)
-    assert "fewer sessions" in _carry_over(development, too_short, final_returns=_smooth(25, 5))["reason"]
+    assert "1× length is 50 sessions" in _carry_over(development, too_short, final_returns=_smooth(25, 5))["reason"]
 
     no_seed = _stored_rehearsal(development)
     no_seed["basis"]["seeds"] = {}
@@ -207,6 +222,74 @@ def test_mismatched_objective_length_digest_or_scope_is_a_named_missing_never_a_
 
     missing = _carry_over(development, None)
     assert missing["code"] == CARRY_OVER_MISSING[0]
+
+
+def test_a_rehearsal_shorter_or_longer_than_the_frozen_final_horizon_never_ranks() -> None:
+    # A 10-session stored rehearsal against a 25-session final interval used to rank 98.89%; the length
+    # mismatch is a named missing carry-over instead (#3025).
+    development = _smooth(60, 31)
+    for scheduled in (10, 40):
+        mismatched = _stored_rehearsal(development, scheduled=scheduled)
+        reading = _carry_over(development, mismatched)
+        assert reading["code"] == CARRY_OVER_MISSING[0], scheduled
+        assert f"1× length is {scheduled} sessions" in reading["reason"], scheduled
+        assert "schedules 25" in reading["reason"], scheduled
+    # The authentic 25-session rehearsal of the same development input still measures.
+    matching = _carry_over(development, _stored_rehearsal(development))
+    assert matching["status"] == "measured"
+
+
+def test_a_rehearsal_of_a_different_final_window_with_an_equal_session_count_never_ranks() -> None:
+    development = _smooth(60, 32)
+    shifted = _window(25, date(2025, 6, 2))  # 25 sessions, but not this study's frozen final interval
+    rehearsal = _stored_rehearsal(development, final_window=shifted)
+    reading = _carry_over(development, rehearsal)
+    assert reading["code"] == CARRY_OVER_MISSING[0]
+    assert "different final interval" in reading["reason"]
+
+
+def test_a_final_result_from_a_different_starting_capital_never_ranks() -> None:
+    development = _smooth(60, 33)
+    final = _smooth(25, 34)
+    reading = _carry_over(development, _stored_rehearsal(development), final_returns=final, final_capital=200_000.0)
+    assert reading["code"] == CARRY_OVER_MISSING[0]
+    assert "different capital" in reading["reason"]
+
+
+def test_an_unknown_rehearsal_schema_or_chunk_size_is_never_reproduced_under_today_constants() -> None:
+    development = _smooth(60, 35)
+    future = _stored_rehearsal(development)
+    future["basis"]["schema_version"] = "future/v9"
+    reading = _carry_over(development, future)
+    assert reading["code"] == CARRY_OVER_MISSING[0]
+    assert "future/v9" in reading["reason"] and "cannot reproduce" in reading["reason"]
+
+    rechunked = _stored_rehearsal(development)
+    rechunked["basis"]["chunk_replications"] = 2_000
+    reading = _carry_over(development, rechunked)
+    assert reading["code"] == CARRY_OVER_MISSING[0]
+    assert "chunks of 2000" in reading["reason"]
+
+    unchunked = _stored_rehearsal(development)
+    del unchunked["basis"]["chunk_replications"]
+    reading = _carry_over(development, unchunked)
+    assert reading["code"] == CARRY_OVER_MISSING[0]
+    assert "chunks of None" in reading["reason"]
+
+
+def test_an_objective_units_or_development_window_mismatch_is_a_named_missing() -> None:
+    development = _smooth(60, 36)
+    reunit = _stored_rehearsal(development)
+    reunit["basis"]["objective"]["units"] = "US dollars"
+    reading = _carry_over(development, reunit)
+    assert reading["code"] == CARRY_OVER_MISSING[0]
+    assert "US dollars" in reading["reason"]
+
+    elsewhere = _stored_rehearsal(development)
+    elsewhere["basis"]["source"]["window"] = {"start_ms": 0, "end_ms": 1}
+    reading = _carry_over(development, elsewhere)
+    assert reading["code"] == CARRY_OVER_MISSING[0]
+    assert "different development window" in reading["reason"]
 
 
 def test_a_rehearsal_stored_under_different_constants_is_never_reproduced() -> None:
@@ -226,11 +309,14 @@ def test_the_curve_is_the_reproductions_own_1st_to_99th_percentiles() -> None:
     stored = _stored_rehearsal(development)
     reading = _carry_over(development, stored)
     objectives = reproduce_1x_objectives(
-        _series(development), seed=stored["basis"]["seeds"]["1x"]["value"], size=10, objective="total_return_pct", cancel_check=lambda: None
+        _series(development), seed=stored["basis"]["seeds"]["1x"]["value"], size=25, objective="total_return_pct", cancel_check=lambda: None
     )
     finite = objectives[np.isfinite(objectives)]
+    # The reading derives its development returns from the detail's compounded equity, the fixture passes raw
+    # ones, so the redrawn objectives agree only to the last ulp: the strict float tolerance, never a default
+    # approx that would also accept a wrong percentile (#3025).
     expected = [float(value) for value in np.quantile(finite, np.linspace(0.01, 0.99, 99), method="linear")]
-    assert reading["curve"]["p"] == pytest.approx(expected)
+    assert reading["curve"]["p"] == pytest.approx(expected, rel=0.0, abs=1e-9)
     assert len(reading["curve"]["p"]) == 99
 
 
@@ -282,7 +368,7 @@ def test_the_reproduction_repeats_a_real_ladders_own_1x_draw() -> None:
     )
     finite = reproduced[np.isfinite(reproduced)]
     percentiles = [float(value) for value in np.quantile(finite, np.linspace(0.01, 0.99, 99), method="linear")]
-    assert percentiles == pytest.approx(ladder["objective_percentiles_1x"]["p"])
+    assert percentiles == pytest.approx(ladder["objective_percentiles_1x"]["p"], rel=0.0, abs=1e-9)  # raw vs equity-derived returns: last-ulp only
 
 
 def test_a_nonfinite_or_absent_final_objective_has_no_rank() -> None:
@@ -306,8 +392,8 @@ def test_cancellation_propagates_and_never_becomes_a_reading() -> None:
 def test_the_reproduction_is_exactly_the_stored_seed_redrawn() -> None:
     development = _smooth(60, 7)
     stored = _stored_rehearsal(development, seed=987654321)
-    objectives = reproduce_1x_objectives(_series(development), seed=987654321, size=10, objective="total_return_pct", cancel_check=lambda: None)
-    again = reproduce_1x_objectives(_series(development), seed=987654321, size=10, objective="total_return_pct", cancel_check=lambda: None)
+    objectives = reproduce_1x_objectives(_series(development), seed=987654321, size=25, objective="total_return_pct", cancel_check=lambda: None)
+    again = reproduce_1x_objectives(_series(development), seed=987654321, size=25, objective="total_return_pct", cancel_check=lambda: None)
     assert np.array_equal(objectives, again)
     reading = _carry_over(development, stored, final_returns=_smooth(25, 8))
     finite = np.isfinite(objectives)

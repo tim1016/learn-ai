@@ -28,7 +28,12 @@ Validated against: tests/research/golden_search/test_chance_final.py
   fixtures (unsupported versions, forged labels and inclusive counts,
   basisless carry-overs, wrong-fit evidence, malformed outer mappings,
   mixed valid and invalid siblings, aliases and the enrolled-versus-
-  legacy split).
+  legacy split), and for the exact reproduction boundary #3025 adds —
+  stored lengths shorter and longer than the frozen horizon, a different
+  final window of equal length, a different final capital, unknown
+  rehearsal schemas, wrong and missing chunk sizes, unit and development-
+  window mismatches, with every numerical comparison pinned to exact
+  equality or a strict absolute tolerance.
 
 The readings inform. The frozen judgement, checks, exposure claim and
 budget records never read them. The carry-over is a display diagnostic,
@@ -71,9 +76,9 @@ from app.research.golden_search.chance_compare import (
     failed_component,
     series_digest,
 )
-from app.research.golden_search.chance_rehearsal import SCHEMA_REHEARSAL
+from app.research.golden_search.chance_rehearsal import SCHEMA_REHEARSAL, final_session_count
 from app.research.golden_search.selection import Metrics
-from app.research.monte_carlo.stationary import stationary_index_chunks
+from app.research.monte_carlo.stationary import CHUNK_REPLICATIONS, stationary_index_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -162,22 +167,45 @@ def carry_over_reading(
 ) -> dict[str, Any]:
     """The recorded final result's rank among its own reproduced 1× development rehearsal.
 
-    The match is exact — point hash, series digest, objective, starting capital and the 1× scheduled length — and a
-    mismatch, an unknown convention, a nonfinite recorded objective or a scope mismatch is a named missing carry-over,
-    never a fabricated rank. Today's constants are never borrowed for a stored basis that differs.
+    The match is exact — point hash, series digest, development source window, objective and units, starting
+    capital on both sides, the stored final interval and its 1× scheduled length against the frozen study's own
+    calendar — and a mismatch, an unknown schema or convention, a nonfinite recorded objective or a scope
+    mismatch is a named missing carry-over, never a fabricated rank. Today's constants — including the chunk
+    size the draw order depends on — are never borrowed for a stored basis that differs (#3025).
     """
     if stored_rehearsal is None or stored_rehearsal.get("status") != "measured":
         return _missing(CARRY_OVER_MISSING, detail=None if stored_rehearsal is None else f"Recorded state: {stored_rehearsal.get('status', 'unreadable')}.")
     basis = stored_rehearsal.get("basis") or {}
     source = basis.get("source") or {}
+    if basis.get("schema_version") != SCHEMA_REHEARSAL:
+        return _missing(
+            CARRY_OVER_MISSING,
+            detail=f"The stored rehearsal holds schema {basis.get('schema_version')!r}, which this server cannot reproduce; a rank is never redrawn under a basis it cannot name.",
+        )
     stored_objective = (basis.get("objective") or {}).get("measure")
     if stored_objective != objective:
         return _missing(CARRY_OVER_MISSING, detail=f"The stored rehearsal was drawn for the {stored_objective} objective, not this plan's {objective}.")
+    if (basis.get("objective") or {}).get("units") != OBJECTIVES[objective][1]:
+        return _missing(CARRY_OVER_MISSING, detail=f"The stored rehearsal counts its objective in {(basis.get('objective') or {}).get('units')!r}, not this plan's {OBJECTIVES[objective][1]}.")
     if source.get("candidate_point_hash") != point_hash:
         return _missing(CARRY_OVER_MISSING, detail="The stored rehearsal belongs to different settings.")
+    source_window = source.get("window") or {}
+    if source_window.get("start_ms") != development_window[0] or source_window.get("end_ms") != development_window[1]:
+        return _missing(CARRY_OVER_MISSING, detail="The stored rehearsal was drawn over a different development window than this study's frozen one.")
+    stored_final_window = (basis.get("final_interval") or {}).get("window") or {}
+    if stored_final_window.get("start_ms") != final_window[0] or stored_final_window.get("end_ms") != final_window[1]:
+        return _missing(CARRY_OVER_MISSING, detail="The stored rehearsal rehearsed a different final interval than this study's frozen one.")
     scheduled = (basis.get("final_interval") or {}).get("scheduled_sessions")
     if not isinstance(scheduled, int) or scheduled < 1:
         return _missing(CARRY_OVER_MISSING, detail="The stored rehearsal names no valid 1× scheduled length.")
+    # The stored 1× length is the frozen final interval's own calendar count, checked — never re-derived from
+    # today's plan — so a rehearsal of another horizon cannot rank this study's result (#3025).
+    horizon = final_session_count(final_window)
+    if scheduled != horizon:
+        return _missing(
+            CARRY_OVER_MISSING,
+            detail=f"The stored rehearsal's 1× length is {scheduled} sessions, but this study's frozen final interval schedules {horizon}, so its paths are rehearsals of another horizon.",
+        )
     seed_entry = (basis.get("seeds") or {}).get("1x")
     if not isinstance(seed_entry, Mapping) or "value" not in seed_entry:
         return _missing(CARRY_OVER_MISSING, detail="The stored rehearsal kept no 1× seed to reproduce.")
@@ -190,6 +218,13 @@ def carry_over_reading(
             CARRY_OVER_MISSING,
             detail=f"The stored rehearsal was drawn under different resampling constants (convention {stored_constants[0]!r}, "
             f"mean block {stored_constants[1]!r}, {stored_constants[2]!r} replications), so today's draw would not repeat its paths.",
+        )
+    # The chunk size is a seeded draw-order parameter: it decides how the one rng is dealt into draws, so a
+    # rehearsal chunked differently would reorder the same randomness into different paths (#3025).
+    if basis.get("chunk_replications") != CHUNK_REPLICATIONS:
+        return _missing(
+            CARRY_OVER_MISSING,
+            detail=f"The stored rehearsal was drawn in chunks of {basis.get('chunk_replications')!r} replications, not the {CHUNK_REPLICATIONS:,} the draw order depends on, so today's draw would not repeat its paths.",
         )
     if final_metrics is None or final_metrics.status != "completed":
         return _missing(CARRY_OVER_MISSING, detail="The final run has no completed result to rank.")
@@ -216,8 +251,13 @@ def carry_over_reading(
         return failed_component(exc, "carry-over")
     if not isinstance(final_series, SessionSeries):
         return _missing(CARRY_OVER_MISSING, detail=f"The final run could not be read as a session series: {final_series.get('reason', 'unreadable')}")
-    if len(final_series.session_ms) < scheduled:
-        return _missing(CARRY_OVER_MISSING, detail=f"The final run covers fewer sessions than the rehearsal's {scheduled}-session 1× length.")
+    # The recorded result must cover exactly the horizon the rehearsal rehearsed — not merely at least the
+    # stored count — and start from the same capital its paths compound from: a net-profit result from a
+    # different account never ranks against them (#3025).
+    if len(final_series.session_ms) != scheduled:
+        return _missing(CARRY_OVER_MISSING, detail=f"The final run covers {len(final_series.session_ms)} sessions, not exactly the rehearsal's {scheduled}-session 1× length, so the recorded result cannot rank against its paths.")
+    if final_series.capital != source.get("capital"):
+        return _missing(CARRY_OVER_MISSING, detail="The final run starts from a different capital than the rehearsal's stored scope, so its result cannot rank against the rehearsal's paths.")
     try:
         objectives = reproduce_1x_objectives(development, seed=int(seed_entry["value"]), size=scheduled, objective=objective, cancel_check=cancel_check)
     except JobCancelled:
