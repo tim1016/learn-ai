@@ -51,7 +51,9 @@ def symbol() -> str:
 
 
 @pytest.fixture
-def lake(tmp_path: Path, symbol: str) -> Path:
+def lake(tmp_path: Path, symbol: str, conn: asyncpg.Connection) -> Path:
+    # ``conn`` is the ephemeral-Postgres guard: where no attested POSTGRES_URL exists (the PR shards), the
+    # suite skips here rather than seeding a lake it could never study.
     return seed_lake(tmp_path, symbol)
 
 
