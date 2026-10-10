@@ -137,7 +137,7 @@ class StudyRow:
 
 @dataclass(frozen=True, slots=True)
 class NewStudy:
-    """A locked plan ready to insert: protocol, receipt and the lock request's identity."""
+    """A locked plan ready to insert: protocol, receipt, the lock request's identity and the study's first results keys."""
 
     id: str
     parent_study_id: str | None
@@ -149,6 +149,9 @@ class NewStudy:
     budget_cap: int
     request_sha256: str
     idempotency_key: str
+    #: The enrollment marker #3015 locks beside the plan: which chance components an approval of this study
+    #: requires. Written once at the lock transaction; stages merge other top-level keys and never touch it.
+    results: dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)

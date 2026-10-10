@@ -28,6 +28,7 @@ from app.research.golden_search import repository as repo
 from app.research.golden_search.actions import authorize
 from app.research.golden_search.activity import TradeFloors
 from app.research.golden_search.budget import PROOF_EVALUATIONS
+from app.research.golden_search.chance_approval import chance_weakness_items
 from app.research.golden_search.chance_compare import (
     development_readings,
     failed_component,
@@ -35,7 +36,12 @@ from app.research.golden_search.chance_compare import (
     incumbent_readings,
 )
 from app.research.golden_search.chance_drawdown import drawdown_reading
-from app.research.golden_search.chance_final import SELECTION_NOTE, carry_over_reading, fit_to_fit_reading
+from app.research.golden_search.chance_final import (
+    SELECTION_NOTE,
+    carry_over_reading,
+    fit_to_fit_reading,
+    stored_final_chance,
+)
 from app.research.golden_search.chance_rehearsal import failed_rehearsal, rehearsal_reading
 from app.research.golden_search.concentration import concentration
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, point_hash
@@ -822,7 +828,15 @@ def run_qualification(ctx: StageContext, binding: ApprovalBinding, blob_store: A
     chosen = fit_for(exam, ctx.row.candidate_key)
     assert chosen is not None  # the approval command records the fit it names before it authorizes this stage
     evaluator = ctx.evaluator(allowed=ctx.final, limit=ctx.row.budget_cap, total=stage_total(ctx.row, "qualification"))
-    weakness = research_weakness(chosen["outcome"], exam["claim"], exam["exposure_state"])
+    # The same chance authority the approval intent and the page read (#3015): the stored components of the fit
+    # the decision named, retained with the qualification so the acknowledgement's evidence is immutable.
+    chance = stored_final_chance(chosen)
+    chance_items = chance_weakness_items(
+        ctx.results.get("chance_approval"),
+        chance,
+        positive_net_required=bool(ctx.protocol.policy.require_positive_net),
+    )
+    weakness = research_weakness(chosen["outcome"], exam["claim"], exam["exposure_state"]) + [item["code"] for item in chance_items]
     request = binding.request_type(
         study_id=ctx.row.id,
         strategy_key=ctx.row.strategy_key,
@@ -840,6 +854,7 @@ def run_qualification(ctx: StageContext, binding: ApprovalBinding, blob_store: A
             "exam_outcome": chosen["outcome"],
             "checks": list(chosen["checks"]),
             "candidate_key": chosen["key"],
+            "candidate_point_hash": chosen["point_hash"],
             "fits_tested": len(recorded_fits(exam)),
             "pick": pick_of(exam),
             "claim": exam["claim"],
@@ -847,6 +862,13 @@ def run_qualification(ctx: StageContext, binding: ApprovalBinding, blob_store: A
             "validation_verdict_label": _validation_label(ctx.results),
             "research_override": bool(weakness) and bool(decision.get("acknowledge_research_weakness")),
             "weakness": weakness,
+            # The chance evidence behind any chance weakness code: each component's stored status, counts,
+            # method and thresholds, and the enrollment policy version the study locked under (#3015).
+            "chance": {
+                "policy_schema": None if ctx.results.get("chance_approval") is None else ctx.results["chance_approval"].get("schema_version"),
+                "components": chance,
+                "weakness": chance_items,
+            },
         },
         note=str(decision["note"]),
         expected_default_qualification_id=decision.get("expected_default_qualification_id"),
