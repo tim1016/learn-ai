@@ -27,6 +27,7 @@ from tests._helpers.golden_search_study import (
     FakeEngine,
     plan_request,
     seed_lake,
+    smooth_score,
     unique_symbol,
     window_ms,
 )
@@ -52,12 +53,6 @@ def symbol() -> str:
 @pytest.fixture
 def lake(tmp_path: Path, symbol: str) -> Path:
     return seed_lake(tmp_path, symbol)
-
-
-@pytest.fixture
-def driver(lake: Path, monkeypatch: pytest.MonkeyPatch, conn: asyncpg.Connection) -> Driver:
-    monkeypatch.setattr(lifecycle, "roots_for", lambda row: [lake])
-    return Driver(roots=[lake])
 
 
 async def _strip_enrollment(conn: asyncpg.Connection, study_id: str) -> None:
@@ -103,6 +98,18 @@ class NoisyDetailEngine(FakeEngine):
         return replace(result, detail=detail)
 
 
+def _driver(lake: Path, monkeypatch: pytest.MonkeyPatch, *, score: Any = smooth_score, rehearsals: bool = True) -> Driver:
+    """One study driver per test: this lake, and the landscape the test wants, patched in one place."""
+    if not rehearsals:
+        def no_rehearsal(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            raise RuntimeError("rehearsal computation exploded")
+
+        monkeypatch.setattr(stages, "rehearsal_reading", no_rehearsal)
+    monkeypatch.setattr(lifecycle, "roots_for", lambda row: [lake])
+    engine: Any = FakeEngine() if score is smooth_score else NoisyDetailEngine(score=score)
+    return Driver(roots=[lake], engine=engine)
+
+
 async def _to_review(driver: Driver, symbol: str) -> Any:
     row = await driver.to_candidate(symbol)
     return await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
@@ -113,13 +120,9 @@ def _fit(detail: dict[str, Any], key: str) -> dict[str, Any]:
 
 
 async def test_a_lock_enrolls_the_study_and_idempotent_retries_return_the_marker_unchanged(
-    lake: Path, monkeypatch: pytest.MonkeyPatch, conn: asyncpg.Connection
+    lake: Path, monkeypatch: pytest.MonkeyPatch, symbol: str
 ) -> None:
-    symbol = unique_symbol()
-    seed_lake(lake, symbol)
-    monkeypatch.setattr(lifecycle, "roots_for", lambda row: [lake])
-    driver = Driver(roots=[lake])
-
+    driver = _driver(lake, monkeypatch)
     key = driver.key()
     first = await service.lock_study(plan_request(symbol), idempotency_key=key, roots=[lake])
     marker = first.results["chance_approval"]
@@ -131,13 +134,9 @@ async def test_a_lock_enrolls_the_study_and_idempotent_retries_return_the_marker
 
 
 async def test_a_clear_complete_fit_approves_without_the_chance_acknowledgement(
-    lake: Path, monkeypatch: pytest.MonkeyPatch, conn: asyncpg.Connection
+    lake: Path, monkeypatch: pytest.MonkeyPatch, symbol: str
 ) -> None:
-    symbol = unique_symbol()
-    seed_lake(lake, symbol)
-    monkeypatch.setattr(lifecycle, "roots_for", lambda row: [lake])
-    driver = Driver(roots=[lake], engine=NoisyDetailEngine(score=_dominant_on_the_final_interval))  # type: ignore[arg-type]
-
+    driver = _driver(lake, monkeypatch, score=_dominant_on_the_final_interval)
     row = await _to_review(driver, symbol)
     detail = await driver.detail(row)
     fit = _fit(detail, "all_period")
@@ -158,21 +157,13 @@ async def test_a_clear_complete_fit_approves_without_the_chance_acknowledgement(
 
 
 async def test_an_enrolled_study_refuses_to_approve_a_missing_required_carry_over_until_acknowledged(
-    lake: Path, monkeypatch: pytest.MonkeyPatch, conn: asyncpg.Connection
+    lake: Path, monkeypatch: pytest.MonkeyPatch, symbol: str
 ) -> None:
-    symbol = unique_symbol()
-    seed_lake(lake, symbol)
-    monkeypatch.setattr(lifecycle, "roots_for", lambda row: [lake])
-
-    def no_rehearsal(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        raise RuntimeError("rehearsal computation exploded")
-
-    monkeypatch.setattr(stages, "rehearsal_reading", no_rehearsal)
-    driver = Driver(roots=[lake], engine=NoisyDetailEngine(score=_dominant_on_the_final_interval))  # type: ignore[arg-type]
+    driver = _driver(lake, monkeypatch, score=_dominant_on_the_final_interval, rehearsals=False)
     row = await _to_review(driver, symbol)
     detail = await driver.detail(row)
     fit = _fit(detail, "all_period")
-    # The measured comparison is clear; the carry-over is unavailable, and both facts surface beside each other.
+    # The measured comparison is clear; the carry-over is unavailable, and the page names why.
     assert fit["chance"]["carry_over"]["status"] == "missing"
     codes = [item["code"] for item in fit["weakness"]]
     assert codes == ["CHANCE_UNAVAILABLE"]
@@ -193,17 +184,9 @@ async def test_an_enrolled_study_refuses_to_approve_a_missing_required_carry_ove
 
 
 async def test_a_pre_enrollment_study_keeps_the_original_absent_reading_behavior(
-    lake: Path, monkeypatch: pytest.MonkeyPatch, conn: asyncpg.Connection
+    lake: Path, monkeypatch: pytest.MonkeyPatch, conn: asyncpg.Connection, symbol: str
 ) -> None:
-    symbol = unique_symbol()
-    seed_lake(lake, symbol)
-    monkeypatch.setattr(lifecycle, "roots_for", lambda row: [lake])
-
-    def no_rehearsal(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        raise RuntimeError("rehearsal computation exploded")
-
-    monkeypatch.setattr(stages, "rehearsal_reading", no_rehearsal)
-    driver = Driver(roots=[lake], engine=NoisyDetailEngine(score=_dominant_on_the_final_interval))  # type: ignore[arg-type]
+    driver = _driver(lake, monkeypatch, score=_dominant_on_the_final_interval, rehearsals=False)
     row = await _to_review(driver, symbol)
     await _strip_enrollment(conn, row.id)
 
@@ -222,8 +205,9 @@ async def test_a_pre_enrollment_study_keeps_the_original_absent_reading_behavior
 
 
 async def test_a_measured_weak_share_still_asks_on_a_pre_enrollment_study(
-    driver: Driver, symbol: str, conn: asyncpg.Connection
+    lake: Path, monkeypatch: pytest.MonkeyPatch, conn: asyncpg.Connection, symbol: str
 ) -> None:
+    driver = _driver(lake, monkeypatch)
     row = await _to_review(driver, symbol)
     await _strip_enrollment(conn, row.id)
     # The default landscape's final comparison is genuinely weak; owner decision 3 applies with or without

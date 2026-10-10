@@ -36,8 +36,9 @@ inferred from dates on read.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from fractions import Fraction
 from typing import Any
+
+from app.research.golden_search.chance_compare import _at_least
 
 #: What the enrollment marker (and the approval gate it names) call themselves.
 SCHEMA = "golden-search-chance-approval/v1"
@@ -70,11 +71,6 @@ def enrollment_policy() -> dict[str, Any]:
             "rule": "A required component that is missing, unsupported, corrupt, has no finite usable sample, or lacks its stored interpretation basis must be acknowledged as unavailable. An unavailable comparison is not clear evidence against a fit.",
         },
     }
-
-
-def _below_threshold(count: int, replications: int, threshold: float) -> bool:
-    """``count / replications < threshold`` exactly, so a share that rounds up to the threshold still fails it."""
-    return Fraction(count, replications) < Fraction(str(threshold))
 
 
 def _stored_threshold(record: Mapping[str, Any]) -> float | None:
@@ -114,7 +110,7 @@ def _share_item(component: str, label: str, record: Mapping[str, Any], *, numera
     replications = _replications(record)
     if threshold is None or replications is None:
         return _unavailable(component, "its stored interpretation basis holds no clear threshold to read") if enrolled else None
-    if _below_threshold(numerator, replications, threshold):
+    if not _at_least(numerator, replications, threshold):  # the same exact comparison #3011 owns, inverted
         return {
             "code": CHANCE_WITHIN_NOISE,
             "text": f"{label} inside the resampling model's noise: {numerator:,} of {replications:,} paths ({numerator / replications:.1%}), below the {threshold:.0%} clear threshold the reading stored",
@@ -164,9 +160,13 @@ def chance_weakness_items(
             items.append(_unavailable("profitability", _reason_of(profitability)))
 
     # The carry-over is required to exist for enrolled studies, but its rank never decides weakness: a low rank
-    # is not proof that bad luck is ruled out, and a high rank is not the model proving itself right.
+    # is not proof that bad luck is ruled out, and a high rank is not the model proving itself right. A
+    # reproduction with no defined path is not a carry-over at all.
     carry = chance.get("carry_over") or {}
-    if enrolled and carry.get("status") != "measured":
-        items.append(_unavailable("carry-over", _reason_of(carry) if carry else "nothing was measured"))
+    if enrolled:
+        if carry.get("status") != "measured":
+            items.append(_unavailable("carry-over", _reason_of(carry) if carry else "nothing was measured"))
+        elif int(carry.get("finite") or 0) == 0:
+            items.append(_unavailable("carry-over", "its reproduction produced no defined rehearsal path"))
 
     return items

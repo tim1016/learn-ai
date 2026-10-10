@@ -446,15 +446,17 @@ def exam_view(
     stored: Mapping[str, Any],
     *,
     chosen_key: str | None,
+    chance_policy: Mapping[str, Any] | None,
+    positive_net_required: bool,
     approvable: bool = True,
-    chance_policy: Mapping[str, Any] | None = None,
-    positive_net_required: bool = False,
 ) -> dict[str, Any]:
     """The final test as recorded: each fit with its own outcome, and the fit the owner named, if any.
 
     ``approvable`` is false once the study ended without an approval, so the note stops promising one. Each
     fit's weakness items include the chance acknowledgement items (#3015), read from the same stored
-    components and the same one authority the approval intent and the qualification payload use.
+    components and the same one authority the approval intent and the qualification payload use;
+    ``chance_policy``/``positive_net_required`` are required so a caller cannot silently render an enrolled
+    study as though it were legacy.
     """
     fits = recorded_fits(stored)
     chosen = fit_for(stored, chosen_key)

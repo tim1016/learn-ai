@@ -122,6 +122,13 @@ def test_the_carry_over_rank_never_decides_a_weakness() -> None:
         assert chance_weakness_items(POLICY, {"comparison": _measured_share(1.0), "profitability": _measured_profitability(1.0), "carry_over": carry}, positive_net_required=True) == []
 
 
+def test_a_measured_carry_over_with_no_defined_path_is_unavailable() -> None:
+    empty = {**_carry(), "label": "no_defined_paths", "finite": 0, "undefined": 10_000}
+    items = chance_weakness_items(POLICY, {"comparison": _measured_share(1.0), "profitability": _measured_profitability(1.0), "carry_over": empty}, positive_net_required=True)
+    assert _codes(items) == [CHANCE_UNAVAILABLE]
+    assert "no defined rehearsal path" in items[0]["text"]
+
+
 def test_one_weak_component_and_one_unavailable_both_show_without_duplicating_the_control() -> None:
     items = chance_weakness_items(
         POLICY,
