@@ -38,6 +38,7 @@ from app.research.golden_search.chance_compare import (
 from app.research.golden_search.chance_drawdown import drawdown_reading
 from app.research.golden_search.chance_final import (
     SELECTION_NOTE,
+    FinalChanceScope,
     carry_over_reading,
     fit_to_fit_reading,
     stored_final_chance,
@@ -829,8 +830,9 @@ def run_qualification(ctx: StageContext, binding: ApprovalBinding, blob_store: A
     assert chosen is not None  # the approval command records the fit it names before it authorizes this stage
     evaluator = ctx.evaluator(allowed=ctx.final, limit=ctx.row.budget_cap, total=stage_total(ctx.row, "qualification"))
     # The same chance authority the approval intent and the page read (#3015): the stored components of the fit
-    # the decision named, retained with the qualification so the acknowledgement's evidence is immutable.
-    chance = stored_final_chance(chosen)
+    # the decision named, retained with the qualification so the acknowledgement's evidence is immutable. The
+    # scope binds each record to this study's frozen protocol and the chosen fit's point identity (#3024).
+    chance = stored_final_chance(chosen, FinalChanceScope.for_protocol(ctx.protocol, point_hash=chosen["point_hash"]))
     chance_items = chance_weakness_items(
         ctx.results.get("chance_approval"),
         chance,

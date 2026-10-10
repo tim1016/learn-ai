@@ -39,3 +39,6 @@ declare module 'echarts/lib/component/visualMap/installVisualMapContinuous' {
 declare module 'echarts/lib/renderer/installCanvasRenderer' {
   export { CanvasRenderer as install } from 'echarts/renderers';
 }
+declare module 'echarts/lib/renderer/installSVGRenderer' {
+  export { SVGRenderer as install } from 'echarts/renderers';
+}

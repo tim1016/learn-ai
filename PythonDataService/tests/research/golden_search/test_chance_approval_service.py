@@ -7,6 +7,7 @@ database holds them — by deleting the marker from a study's results, never by 
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from app.lean_sidecar.trading_calendar import expected_sessions, session_close_m
 from app.research.golden_search import service, stages
 from app.research.golden_search.models import GoldenSearchRefusal
 from app.research.persistence import lifecycle
+from app.schemas.golden_search import GoldenSearchExamView
 from app.utils.session_anchors import et_date_at_ms
 from tests._helpers.golden_search_study import (
     CAPITAL,
@@ -183,6 +185,109 @@ async def test_an_enrolled_study_refuses_to_approve_a_missing_required_carry_ove
     assert research["research_override"] is True
     assert research["chance"]["components"]["carry_over"]["status"] == "missing"
     assert research["chance"]["weakness"][0]["code"] == "CHANCE_UNAVAILABLE"
+
+
+async def _mutate_results(conn: asyncpg.Connection, study_id: str, mutate: Any) -> None:
+    """Hold a study's stored results the way a corrupted or historical row sits in the database: edited in place, never recomputed (#3024)."""
+    current = await conn.fetchrow("SELECT results_json FROM research_golden_search_studies WHERE id = $1", study_id)
+    results = json.loads(current["results_json"])
+    mutate(results)
+    await conn.execute("UPDATE research_golden_search_studies SET results_json = $2 WHERE id = $1", study_id, json.dumps(results))
+
+
+def _unsupported_comparison_schema(results: dict[str, Any]) -> None:
+    """A fully wire-valid stored comparison whose interpretation version no server understands."""
+    for fit in results["exam"]["fits"]:
+        if fit["key"] == "all_period":
+            fit["chance"]["comparison"]["basis"]["schema_version"] = "golden-search-chance-comparison/v999"
+
+
+async def test_invalid_stored_chance_evidence_requires_the_acknowledgement_and_is_retained(
+    lake: Path, monkeypatch: pytest.MonkeyPatch, conn: asyncpg.Connection, symbol: str
+) -> None:
+    driver = _driver(lake, monkeypatch, score=_dominant_on_the_final_interval)
+    row = await _to_review(driver, symbol)
+    await _mutate_results(conn, row.id, _unsupported_comparison_schema)
+
+    # The page still serves, wire-valid, with the reason named and the valid siblings visible.
+    detail = await driver.detail(row)
+    fit = _fit(detail, "all_period")
+    assert fit["chance"]["comparison"]["status"] == "missing"
+    assert fit["chance"]["comparison"]["code"] == "invalid_record"
+    assert "v999" in fit["chance"]["comparison"]["reason"]
+    assert fit["chance"]["profitability"]["status"] == "measured"
+    assert fit["chance"]["carry_over"]["status"] == "measured"
+    GoldenSearchExamView.model_validate(detail["results"]["exam"])
+    assert [item["code"] for item in fit["weakness"]] == ["CHANCE_UNAVAILABLE"]
+    assert "cannot interpret" in fit["weakness"][0]["text"] or "v999" in fit["weakness"][0]["text"]
+
+    with pytest.raises(GoldenSearchRefusal) as refused:
+        await driver.command(row, "approve", {**APPROVE, "candidate_key": "all_period"})
+    assert refused.value.code == "WEAKNESS_ACKNOWLEDGEMENT_REQUIRED"
+
+    row = await driver.advance(row, "approve", {**APPROVE, "candidate_key": "all_period", "acknowledge_research_weakness": True})
+    assert row.state == "approved"
+    research = driver.approval.requests[-1].research
+    assert research["candidate_key"] == "all_period"  # a retry of this approval names the same fit
+    assert research["weakness"] == ["CHANCE_UNAVAILABLE"]
+    assert research["chance"]["policy_schema"] == APPROVAL_SCHEMA
+    assert research["chance"]["components"]["comparison"]["code"] == "invalid_record"
+    assert "v999" in research["chance"]["components"]["comparison"]["reason"]
+
+
+def _mismatched_rehearsal_length(results: dict[str, Any]) -> None:
+    """A stored 1× rehearsal whose length names another horizon than the frozen final interval (#3025)."""
+    for candidate in results.get("evidence", {}).get("candidates", []):
+        rehearsal = (candidate.get("chance") or {}).get("rehearsal")
+        if isinstance(rehearsal, dict) and rehearsal.get("status") == "measured":
+            rehearsal["basis"]["final_interval"]["scheduled_sessions"] = 10  # the window itself stays frozen
+
+
+async def test_a_mismatched_rehearsal_shows_its_named_reason_and_reads_never_rewrite_it(
+    lake: Path, monkeypatch: pytest.MonkeyPatch, conn: asyncpg.Connection, symbol: str
+) -> None:
+    driver = _driver(lake, monkeypatch, score=_dominant_on_the_final_interval)
+    # The corruption sits in the evidence record before the final test opens, so the exam's own carry-over
+    # computation faces the mismatched rehearsal the way a corrupted or foreign row would (#3025).
+    row = await driver.to_candidate(symbol)
+    await _mutate_results(conn, row.id, _mismatched_rehearsal_length)
+    row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
+
+    detail = await driver.detail(row)
+    fit = _fit(detail, "all_period")
+    carry = fit["chance"]["carry_over"]
+    assert carry["status"] == "missing"
+    assert carry["code"] == "carry_over_unavailable"
+    assert "1× length is 10 sessions" in carry["reason"]
+    # The valid siblings beside it stay visible and the study still reads wire-valid.
+    assert fit["chance"]["comparison"]["status"] == "measured"
+    assert fit["chance"]["profitability"]["status"] == "measured"
+    GoldenSearchExamView.model_validate(detail["results"]["exam"])
+
+    # Reads never recompute or overwrite the stored evidence: the corrupted rehearsal is still what is stored.
+    stored = json.loads((await conn.fetchrow("SELECT results_json FROM research_golden_search_studies WHERE id = $1", row.id))["results_json"])
+    corrupted = [candidate for candidate in stored["evidence"]["candidates"] if (candidate.get("chance") or {}).get("rehearsal", {}).get("basis", {}).get("final_interval", {}).get("scheduled_sessions") == 10]
+    assert corrupted  # the read served the mismatch, and the stored evidence still holds exactly what it held
+
+
+async def test_a_pre_enrollment_study_never_gates_on_invalid_stored_evidence(
+    lake: Path, monkeypatch: pytest.MonkeyPatch, conn: asyncpg.Connection, symbol: str
+) -> None:
+    driver = _driver(lake, monkeypatch, score=_dominant_on_the_final_interval)
+    row = await _to_review(driver, symbol)
+    await _mutate_results(conn, row.id, _unsupported_comparison_schema)
+    await _strip_enrollment(conn, row.id)
+
+    detail = await driver.detail(row)
+    fit = _fit(detail, "all_period")
+    assert fit["chance"]["comparison"]["code"] == "invalid_record"
+    assert fit["weakness"] == []  # absent-reading behavior: an invalid record gates nothing without the marker
+
+    row = await driver.advance(row, "approve", {**APPROVE, "candidate_key": "all_period"})
+    assert row.state == "approved"
+    research = driver.approval.requests[-1].research
+    assert research["weakness"] == []
+    assert research["chance"]["policy_schema"] is None
 
 
 async def test_a_pre_enrollment_study_keeps_the_original_absent_reading_behavior(

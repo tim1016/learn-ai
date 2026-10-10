@@ -21,7 +21,29 @@
       }
     }
   }
-  @if (moneyText(); as money) { <p class="money">{{ money }}</p> }
+  @if (positiveNetRequired()) {
+    <h4 class="sub">Money support, independent of the comparison</h4>
+    @if (profitabilityMeasured(); as p) {
+      <p class="money">{{ p.sentence }}</p>
+      @if (profitSpec(); as s) {
+        <app-golden-search-chart [spec]="s" [height]="110" />
+      } @else {
+        <p class="muted" role="note">
+          This reading predates the compounded-net range; its counts above remain readable, and the range was not recorded — never invented.
+        </p>
+      }
+    }
+    @if (profitabilityNote(); as n) {
+      @switch (n.kind) {
+        @case ('failed') {
+          <p class="diagnostic" role="alert">{{ n.text }}</p>
+        }
+        @default {
+          <p class="muted" role="note">{{ n.text }}</p>
+        }
+      }
+    }
+  }
   </section>
   @if (showCarryOver()) {
   <section class="carry" aria-label="Development rehearsal comparison">
@@ -54,6 +76,10 @@
   @if (fitToFitFailed(); as f) {
     <h4 class="sub">The two fits against each other</h4>
     <p class="diagnostic" role="alert">{{ f }}</p>
+  }
+  @if (fitToFitNote(); as n) {
+    <h4 class="sub">The two fits against each other</h4>
+    <p class="muted" role="note">{{ n }}</p>
   }
   @if (nothingMeasured()) {
     <p class="muted" role="note">No final uncertainty was measured for this fit.</p>

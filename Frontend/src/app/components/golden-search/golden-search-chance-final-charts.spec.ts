@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { FAKE_CHART_THEME } from './testing/fake-charts';
-import { chanceCarryOver, chanceComparison, chanceFitToFit } from './testing/fixtures';
-import { carryOverSpec, fitToFitText, finalIntervalsSpec } from './golden-search-chance-final-charts';
+import { chanceCarryOver, chanceComparison, chanceFitToFitDirection, chanceProfitability } from './testing/fixtures';
+import { carryOverSpec, fitToFitText, finalIntervalsSpec, finalProfitSpec } from './golden-search-chance-final-charts';
 import type { CandidateRef } from './golden-search.types';
 
 const ALL_PERIOD: CandidateRef = { key: 'all_period', label: 'All-period fit' };
@@ -10,14 +10,29 @@ const ALL_PERIOD: CandidateRef = { key: 'all_period', label: 'All-period fit' };
 /** Falsifiability: truncate a rank to the plotted 99 percentiles, relabel the bands as confidence intervals, join the percentiles into a path, or hide the recorded marker, and a spec here names it. */
 
 describe('the final uncertainty chart specs', () => {
-  it('keeps the objective zero separate from break-even profit', () => {
+  it('keeps the objective zero separate from break-even profit, labelled for its own measure (#3026)', () => {
     const spec = finalIntervalsSpec(ALL_PERIOD, chanceComparison(), 'all_period');
     const option = spec.option(FAKE_CHART_THEME) as { series: { markLine?: { data: { xAxis: number }[]; label?: { formatter?: () => string } } }[] };
     const marks = option.series.flatMap((series) => (series.markLine?.data ?? []).map(() => series.markLine?.label?.formatter?.() ?? ''));
     expect(marks).toContain('tie');
-    expect(marks).toContain('zero objective');
+    expect(marks).toContain('zero return');  // the fixture objective is total return; its zero is the objective's, never money's
     expect(marks).not.toContain('break-even');
     expect(JSON.stringify(option)).not.toContain('confidence');
+    const sharpe = chanceComparison({ basis: { ...chanceComparison().basis, objective: { measure: 'sharpe_ratio', label: 'Sharpe ratio', units: 'annualized ratio of session returns (× √252)' } } });
+    const sharpeOption = finalIntervalsSpec(ALL_PERIOD, sharpe, 'all_period').option(FAKE_CHART_THEME) as { series: { markLine?: { label?: { formatter?: () => string } } }[] };
+    const sharpeMarks = sharpeOption.series.map((series) => series.markLine?.label?.formatter?.() ?? '');
+    expect(sharpeMarks).toContain('zero Sharpe');
+    expect(sharpeMarks).not.toContain('break-even');
+  });
+
+  it('draws the compounded-net range as its own chart in percent units against actual break-even (#3026)', () => {
+    const profitability = chanceProfitability();
+    const spec = finalProfitSpec(ALL_PERIOD, profitability as Parameters<typeof finalProfitSpec>[1], 'all_period');
+    const option = spec.option(FAKE_CHART_THEME) as { series: { markLine?: { data: { xAxis: number }[]; label?: { formatter?: () => string } } }[] };
+    const marks = option.series.flatMap((series) => (series.markLine?.data ?? []).map(() => series.markLine?.label?.formatter?.() ?? ''));
+    expect(marks).toEqual(['break-even']);
+    expect(spec.summary).toContain('compounded net return');
+    expect(spec.table.rows.map((row) => row.cells.join(' ')).join('\n')).toContain('+1.2% / +8.1% / +16.4%');
   });
 
   it('marks the recorded final result at its actual value on the percentile curve', () => {
@@ -49,8 +64,8 @@ describe('the final uncertainty chart specs', () => {
     expect(recorded).not.toContain('%');
   });
 
-  it('carries the fit-to-fit sentence with its post-selection caveat', () => {
-    const text = fitToFitText(chanceFitToFit());
+  it('carries the fit’s own direction sentence with its post-selection caveat (#3029)', () => {
+    const text = fitToFitText(chanceFitToFitDirection());
     expect(text).toContain('68.4% of paths');
     expect(text).toContain('not adjusted for that choice');
   });

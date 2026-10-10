@@ -6,6 +6,7 @@ thin lake under a symbol of its own.
 
 from __future__ import annotations
 
+import json
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from app.schemas.golden_search import (
     GoldenSearchChance,
     GoldenSearchChanceRehearsalMeasured,
     GoldenSearchExamFit,
+    GoldenSearchExamView,
     GoldenSearchFinalChance,
 )
 from tests._helpers.golden_search_study import Driver, FakeEngine, seed_lake, unique_symbol, window_ms
@@ -266,11 +268,78 @@ async def test_two_fits_get_one_shared_fit_to_fit_draw_and_each_keeps_its_own_ev
     fit_to_fit = exam["chance"]["fit_to_fit"]
     assert fit_to_fit["status"] == "measured", fit_to_fit.get("reason")
     assert sorted(fit_to_fit["pair"]) == sorted(point_hash(row.strategy_key, dict(fit["point"])) for fit in exam["fits"])
-    assert sum(fit_to_fit["counts"].values()) == 10_000
-    assert "All-period fit" in fit_to_fit["sentence"] and "Recent fit" in fit_to_fit["sentence"]
-    assert "unadjusted for that choice" in fit_to_fit["sentence"] or "not adjusted for that choice" in fit_to_fit["sentence"]
+    first, second = fit_to_fit["directions"]
+    for direction in (first, second):
+        assert sum(direction["counts"].values()) == 10_000
+        assert direction["fit"]["point_hash"] != direction["opponent"]["point_hash"]
+    assert "All-period fit" in first["sentence"] and "Recent fit" in first["sentence"]
+    assert "unadjusted for that choice" in first["sentence"] or "not adjusted for that choice" in first["sentence"]
+    # The sentence the panel reads follows the fit the page is about (#3029): each fit's own chance record
+    # carries its own direction of the same shared draw, and the browser never computes a complement.
+    by_key = {fit["key"]: fit for fit in exam["fits"]}
+    for fit in exam["fits"]:
+        own = fit["chance"]["fit_to_fit"]
+        assert own["status"] == "measured", own.get("reason")
+        assert own["fit"]["point_hash"] == point_hash(row.strategy_key, dict(fit["point"]))
+        assert own["fit"]["label"] == fit["label"]
+        assert own["sentence"].index(fit["label"]) < own["sentence"].index(by_key["recent" if fit["key"] == "all_period" else "all_period"]["label"])
+    all_period = by_key["all_period"]["chance"]["fit_to_fit"]
+    recent = by_key["recent"]["chance"]["fit_to_fit"]
+    assert all_period["counts"]["better"] == recent["counts"]["worse"]
+    assert all_period["counts"]["tied"] == recent["counts"]["tied"]
+    assert all_period["at_least_as_good"]["count"] + recent["counts"]["undefined"] - recent["counts"]["tied"] == 10_000 - recent["counts"]["tied"]  # tied support both, undefined neither
     # Each fit's own readings stand beside the shared one, whatever the other fit did.
     for fit in exam["fits"]:
         assert fit["chance"]["comparison"]["status"] == "measured"
         assert fit["chance"]["carry_over"]["status"] == "measured"
         assert fit["outcome"] is not None
+
+
+async def test_a_legacy_one_direction_fit_to_fit_record_still_serves_a_wire_valid_page(
+    lake: Path, monkeypatch: pytest.MonkeyPatch, conn: asyncpg.Connection, symbol: str
+) -> None:
+    """A study whose exam ran between #3014 and #3029 holds a v1 one-direction record; the page still serves (#3029)."""
+    symbol = unique_symbol()
+    seed_lake(lake, symbol)
+    monkeypatch.setattr(lifecycle, "roots_for", lambda row: [lake])
+
+    def drifting_score(point: dict[str, Any], window: tuple[int, int], scenario: str) -> float:
+        gap = float(point.get("gap", 0.2))
+        hold = float(point.get("hold_bars", 5))
+        cost = {"base": 0.0, "slippage_1c": 0.05, "commission_1": 0.02}.get(scenario, 0.0)
+        peak = 0.10 if window[0] >= RECENT_CUTOFF_MS else 0.35
+        return 2.0 - 8.0 * (gap - peak) ** 2 - ((hold - 7.0) / 4.0) ** 2 - cost
+
+    driver = Driver(roots=[lake], engine=FakeEngine(score=drifting_score))  # type: ignore[arg-type]
+    row = await driver.to_candidate(symbol)
+    row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
+
+    # Hold the exam the way a study examined before #3029 sits in the database: its v1 fit-to-fit record
+    # carries one direction only, with no identity inside the record, exactly as #3014 wrote it.
+    stored = json.loads((await conn.fetchrow("SELECT results_json FROM research_golden_search_studies WHERE id = $1", row.id))["results_json"])
+    v2 = stored["exam"]["chance"]["fit_to_fit"]
+    first_direction = v2["directions"][0]
+    stored["exam"]["chance"]["fit_to_fit"] = {
+        "status": "measured",
+        "pair": v2["pair"],
+        "counts": first_direction["counts"],
+        "shares": first_direction["shares"],
+        "at_least_as_good": first_direction["at_least_as_good"],
+        "sentence": first_direction["sentence"],
+        "selection_note": first_direction["selection_note"],
+        "basis": {**v2["basis"], "schema_version": "golden-search-chance-fit-to-fit/v1"},
+    }
+    await conn.execute("UPDATE research_golden_search_studies SET results_json = $2 WHERE id = $1", row.id, json.dumps(stored))
+
+    detail = await driver.detail(row)
+    exam = detail["results"]["exam"]
+    GoldenSearchExamView.model_validate(exam)  # the legacy record never breaks the wire contract
+    by_key = {fit["key"]: fit for fit in exam["fits"]}
+    owner_key, other_key = stored["exam"]["fits"][0]["key"], stored["exam"]["fits"][1]["key"]
+    owner = by_key[owner_key]["chance"]["fit_to_fit"]
+    assert owner["status"] == "measured"
+    assert owner["fit"]["label"] == by_key[owner_key]["label"]
+    assert owner["sentence"] == first_direction["sentence"]  # the recorded direction, honestly
+    other = by_key[other_key]["chance"]["fit_to_fit"]
+    assert other["status"] == "missing" and other["code"] == "direction_unavailable"
+    assert "never recorded" in other["reason"]

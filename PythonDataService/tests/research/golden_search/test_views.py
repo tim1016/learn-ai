@@ -12,6 +12,7 @@ import pytest
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.research.golden_search.actions import NOTHING_TO_TEST, action_refusals, permitted, presented_status
 from app.research.golden_search.activity import TradeFloors
+from app.research.golden_search.chance_final import FinalChanceScope
 from app.research.golden_search.concentration import NOT_MEASURED
 from app.research.golden_search.declarations import declaration_for
 from app.research.golden_search.final_test import fits_to_test
@@ -122,6 +123,10 @@ def test_the_exam_view_names_each_weakness_the_approval_acknowledges() -> None:
     assert weakness_items(exam, {**weak, "outcome": None}) == []  # not scored yet
 
 
+#: The frozen study identity every exam-view test validates its stored chance records against (#3024).
+_FINAL_SCOPE = FinalChanceScope(objective="sharpe_ratio", development_window=(0, 1), final_window=(2, 3), capital=100_000.0, point_hash="")
+
+
 def _fit(key: str, outcome: str | None, *, same_as: tuple[str, ...] = ()) -> dict:
     return {
         "key": key, "same_as": list(same_as), "point": {"gap": 0.3 if key == "all_period" else 0.5}, "point_hash": f"h-{key}",
@@ -150,7 +155,7 @@ def test_the_final_test_runs_each_distinct_fit_and_never_the_current_settings() 
 def test_the_exam_view_shows_every_fit_and_says_when_the_pick_followed_the_test() -> None:
     stored = _exam(_fit("all_period", "meets_rules"), _fit("recent", "does_not_meet_rules"))
 
-    undecided = exam_view(stored, chosen_key=None, chance_policy=None, positive_net_required=False)
+    undecided = exam_view(stored, chosen_key=None, chance_policy=None, positive_net_required=False, final_scope=_FINAL_SCOPE)
     assert [(fit["key"], fit["label"], fit["outcome"]) for fit in undecided["fits"]] == [
         ("all_period", "All-period fit", "meets_rules"),
         ("recent", "Recent fit", "does_not_meet_rules"),
@@ -159,12 +164,12 @@ def test_the_exam_view_shows_every_fit_and_says_when_the_pick_followed_the_test(
     assert undecided["selection_note"] == "2 fits ran on the final test. The one you approve is recorded as chosen after the final test, from 2 fits."
     assert [item["code"] for item in undecided["fits"][1]["weakness"]] == ["EXAM_DOES_NOT_MEET_RULES"]
 
-    chosen = exam_view(stored, chosen_key="recent", chance_policy=None, positive_net_required=False)
+    chosen = exam_view(stored, chosen_key="recent", chance_policy=None, positive_net_required=False, final_scope=_FINAL_SCOPE)
     assert (chosen["chosen_key"], chosen["selection_note"]) == ("recent", "Chosen after the final test, from 2 fits.")
     # A study that ended without an approval promises none.
-    assert exam_view(stored, chosen_key=None, chance_policy=None, positive_net_required=False, approvable=False)["selection_note"] == "2 fits ran on the final test."
+    assert exam_view(stored, chosen_key=None, chance_policy=None, positive_net_required=False, final_scope=_FINAL_SCOPE, approvable=False)["selection_note"] == "2 fits ran on the final test."
     # One result for two fits with the same settings is no choice, so nothing is noted; either name finds it.
-    twins = exam_view(_exam(_fit("all_period", "meets_rules", same_as=("recent",))), chosen_key="recent", chance_policy=None, positive_net_required=False)
+    twins = exam_view(_exam(_fit("all_period", "meets_rules", same_as=("recent",))), chosen_key="recent", chance_policy=None, positive_net_required=False, final_scope=_FINAL_SCOPE)
     assert (twins["fits"][0]["label"], twins["chosen_key"], twins["selection_note"]) == ("All-period and recent fit", "all_period", None)
 
 
@@ -175,7 +180,7 @@ def test_a_final_test_recorded_with_one_locked_candidate_reads_as_that_one_fit()
         "candidate_metrics": metrics(1.2).as_dict(), "incumbent_metrics": metrics(1.0).as_dict(),
     }
 
-    view = exam_view(legacy, chosen_key="recent", chance_policy=None, positive_net_required=False)
+    view = exam_view(legacy, chosen_key="recent", chance_policy=None, positive_net_required=False, final_scope=_FINAL_SCOPE)
 
     (fit,) = view["fits"]
     assert (fit["key"], fit["outcome"], fit["retention"], fit["metrics"]) == ("recent", "meets_rules", 0.8, legacy["candidate_metrics"])

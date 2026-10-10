@@ -11,16 +11,26 @@ import numpy as np
 import pytest
 
 from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc
-from app.research.golden_search.chance import SessionSeries, path_objective
+from app.research.golden_search.chance import (
+    MEAN_BLOCK_SESSIONS,
+    REPLICATIONS,
+    SessionSeries,
+    path_net_return,
+    path_objective,
+    path_sharpe,
+    seed_for,
+)
 from app.research.golden_search.chance_compare import (
     INCONSISTENT_CAPITAL,
     INCUMBENT_UNAVAILABLE,
     MISSING_SCHEDULED_SESSIONS,
     NON_CANONICAL_CLOSE,
     NOT_MEASURED,
+    SCHEMA_PROFITABILITY,
     UNSCHEDULED_SESSION,
     _classify,
     _pair_chunk,
+    _profitability_reading,
     _range,
     admit_run,
     development_readings,
@@ -185,6 +195,82 @@ def test_profitability_counts_over_the_same_window_but_its_own_seed() -> None:
     assert sum(profitability["counts"].values()) == 10_000
     assert profitability["basis"]["schema_version"] == "golden-search-chance-profitability/v1"
     assert profitability["basis"]["seed"]["inputs"] != readings["comparison"]["basis"]["seed"]["inputs"]
+
+
+# ── The independent compounded-net range (#3026) ─────────────────────────
+
+
+def _profitability_of(returns: list[float], *, objective: str = "total_return_pct", hash_: str = "cafebabe") -> dict[str, Any]:
+    return _profitability_reading(_series(returns), objective=objective, window=_window_for(len(returns)), candidate_hash=hash_, sessions_label="development", cancel_check=lambda: None)
+
+
+def test_a_positive_sharpe_can_compound_to_a_loss_and_the_range_says_so() -> None:
+    # The #3026 counterexample: 20 sessions alternating +50% and -40% have a positive session Sharpe
+    # (+1.7191729277636834) but compound to -65.13%, so the objective's zero and break-even are not one axis.
+    alternating = [0.5, -0.4] * 10
+    series = _series(alternating)
+    assert path_sharpe(series.returns.reshape(1, -1))[0] == pytest.approx(1.7191729277636834, rel=0.0, abs=1e-9)
+    assert float(np.prod(1.0 + series.returns) - 1.0) == pytest.approx(-0.6513215599, rel=0.0, abs=1e-9)
+
+    readings = _profitability_of(alternating)
+    net_range = readings["net_return_range"]
+    assert net_range["quantity"] == {"measure": "compounded_net_return", "label": "compounded net return", "units": "fraction of the starting capital"}
+    assert net_range["p5"] is not None and net_range["p50"] is not None and net_range["p95"] is not None
+    assert net_range["p5"] <= net_range["p50"] <= net_range["p95"]
+    assert net_range["p50"] < 0.0  # the median resampled path loses money whatever the Sharpe says
+    assert readings["counts"]["negative"] > readings["counts"]["positive"]
+    assert net_range["finite"] == sum(readings["counts"][key] for key in ("positive", "zero", "negative"))
+
+
+def test_a_flat_series_compounds_to_exactly_zero_on_every_path() -> None:
+    readings = _profitability_of([0.0] * 40)
+    net_range = readings["net_return_range"]
+    assert readings["counts"] == {"positive": 0, "zero": 10_000, "negative": 0, "undefined": 0}
+    assert (net_range["p5"], net_range["p50"], net_range["p95"]) == (0.0, 0.0, 0.0)  # exactly zero, never a rounded one
+    assert net_range["finite"] == 10_000
+
+
+def test_paths_that_overflow_leave_the_range_undefined_never_money() -> None:
+    # Sessions alternating +1e30 and flat: each session's own (1 + r) is finite, but a resampled path that
+    # draws the big return eleven times or more compounds past every float, and that path is undefined — not
+    # a loss, not a gain.
+    overflowing = [1e30, 0.0] * 20
+    readings = _profitability_of(overflowing)
+    net_range = readings["net_return_range"]
+    assert readings["counts"]["undefined"] > 0
+    assert net_range["finite"] < 10_000 == REPLICATIONS
+    assert net_range["finite"] == sum(readings["counts"][key] for key in ("positive", "zero", "negative"))
+    for key in ("p5", "p50", "p95"):
+        assert net_range[key] is None or np.isfinite(net_range[key])
+
+
+def test_the_range_is_the_same_draw_the_counts_came_from() -> None:
+    returns = _smooth(60, 77)
+    window = _window_for(60)
+    seed_inputs = [SCHEMA_PROFITABILITY, window[0], window[1], "total_return_pct", "cafebabe"]
+    seed = seed_for(*seed_inputs)
+    series = _series(returns)
+    redrawn = np.full(REPLICATIONS, np.nan)
+    done = 0
+    from app.research.monte_carlo.stationary import stationary_index_chunks
+
+    for chunk in stationary_index_chunks(len(returns), size=len(returns), mean_block=MEAN_BLOCK_SESSIONS, replications=REPLICATIONS, rng=np.random.default_rng(seed)):
+        redrawn[done : done + len(chunk)] = path_net_return(series.returns[chunk])
+        done += len(chunk)
+    expected = _range(redrawn)
+    readings = _profitability_of(returns)
+    net_range = readings["net_return_range"]
+    # Identical operations over the identical redrawn array: exact equality, never a rounded agreement (#3026).
+    assert (net_range["p5"], net_range["p50"], net_range["p95"], net_range["finite"]) == (expected["p5"], expected["p50"], expected["p95"], expected["finite"])
+
+
+def test_a_genuinely_positive_series_ranges_positive_with_the_counts() -> None:
+    drifting = list(np.random.default_rng(2).normal(0.01, 0.004, 60))  # a strong, steady per-session gain
+    readings = _profitability_of(drifting)
+    net_range = readings["net_return_range"]
+    assert readings["counts"]["positive"] == 10_000
+    assert net_range["p5"] > 0.0
+    assert net_range["p95"] > net_range["p5"]
 
 
 def test_the_same_inputs_redraw_identically_for_retry_and_reopen() -> None:

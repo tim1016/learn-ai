@@ -9,6 +9,7 @@ import type {
   MeasuredChanceCarryOver,
   MeasuredChanceDrawdown,
   MeasuredChanceFitToFit,
+  MeasuredChanceFitToFitDirection,
   MeasuredChanceRehearsal,
   DecisionSummary,
   EvidenceCandidate,
@@ -585,6 +586,13 @@ export function chanceProfitability(overrides: Partial<MeasuredChanceProfitabili
     sentence: 'The recorded development outcome resamples to a compounded net return positive in 97.4% of 10,000 resampled development paths (60 exactly flat, 200 negative). This is the model’s spread of what was recorded, not a forecast.',
     counts: { positive: 9740, zero: 60, negative: 200, undefined: 0 },
     shares: { positive: 0.974, zero: 0.006, negative: 0.02, undefined: 0 },
+    net_return_range: {
+      quantity: { measure: 'compounded_net_return', label: 'compounded net return', units: 'fraction of the starting capital' },
+      p5: 0.012,
+      p50: 0.081,
+      p95: 0.164,
+      finite: 10_000,
+    },
     basis: { ...CHANCE_BASIS, schema_version: 'golden-search-chance-profitability/v1' },
     ...overrides,
   };
@@ -626,28 +634,54 @@ export function chanceCarryOver(overrides: Partial<MeasuredChanceCarryOver> = {}
   };
 }
 
-/** A measured fit-to-fit comparison (#3014): 68.4% at least as good unless overridden. */
-export function chanceFitToFit(overrides: Partial<MeasuredChanceFitToFit> = {}): MeasuredChanceFitToFit {
+/** A measured fit-to-fit direction (#3029): one fit's own view of the shared draw — 68.4% at least as good unless overridden. */
+export function chanceFitToFitDirection(overrides: Partial<MeasuredChanceFitToFitDirection> = {}): MeasuredChanceFitToFitDirection {
   return {
     status: 'measured',
-    pair: ['aaaa', 'zzzz'],
+    fit: { point_hash: 'h-all', label: 'All-period fit' },
+    opponent: { point_hash: 'h-recent', label: 'Recent fit' },
     counts: { better: 6602, tied: 238, worse: 3160, undefined: 0 },
     shares: { better: 0.6602, tied: 0.0238, worse: 0.316, undefined: 0 },
     at_least_as_good: { count: 6840, share: 0.684 },
     sentence: 'In 10,000 paired resamples of the final sessions, All-period fit was at least as good as Recent fit in 68.4% of paths (6,602 better, 238 tied, 3,160 worse). Both selections were made after these results were viewed; this is not adjusted for that choice.',
-    selection_note: 'This fit was chosen after the final test, from the fits that ran, and was selected by a search over the development data. Its support is unadjusted for both selections and is not a calibrated error rate or a probability of a true edge.',
+    selection_note: FINAL_SELECTION_NOTE,
     basis: {
-      schema_version: 'golden-search-chance-fit-to-fit/v1',
+      schema_version: 'golden-search-chance-fit-to-fit/v2',
       convention: 'stationary-bootstrap/v1',
       replications: 10_000,
       mean_block_sessions: 5,
       thresholds: { clear: 0.95 },
       objective: { measure: 'total_return_pct', label: 'total return', units: 'fraction of the starting capital' },
-      seed: { inputs: ['golden-search-chance-fit-to-fit/v1', FINAL_START_MS, FINAL_START_MS + 2_592_000_000, 'total_return_pct', 'aaaa', 'zzzz'], value: 13579 },
-      source: { window: { start_ms: FINAL_START_MS, end_ms: FINAL_START_MS + 2_592_000_000 }, session_count: 21, point_hashes: ['aaaa', 'zzzz'], series_digests: ['d-a', 'd-z'], capital: 100000 },
+      seed: { inputs: ['golden-search-chance-fit-to-fit/v2', FINAL_START_MS, FINAL_START_MS + 2_592_000_000, 'total_return_pct', 'h-all', 'h-recent'], value: 13579 },
+      source: { window: { start_ms: FINAL_START_MS, end_ms: FINAL_START_MS + 2_592_000_000 }, session_count: 21, point_hashes: ['h-all', 'h-recent'], series_digests: ['d-all', 'd-recent'], capital: 100000 },
     },
     ...overrides,
   };
+}
+
+/** A measured fit-to-fit comparison (#3014, #3029): one shared draw, both directions stored with their identities. */
+export function chanceFitToFit(overrides: Partial<MeasuredChanceFitToFit> = {}): MeasuredChanceFitToFit {
+  const first = chanceFitToFitDirection();
+  return {
+    status: 'measured',
+    pair: ['h-all', 'h-recent'],
+    directions: [first, chanceFitToFitRecentDirection()],
+    selection_note: FINAL_SELECTION_NOTE,
+    basis: first.basis,
+    ...overrides,
+  };
+}
+
+/** The Recent fit's own direction of the same fixture draw: the events reversed, ties kept (34.0% inclusive). */
+export function chanceFitToFitRecentDirection(): MeasuredChanceFitToFitDirection {
+  return chanceFitToFitDirection({
+    fit: { point_hash: 'h-recent', label: 'Recent fit' },
+    opponent: { point_hash: 'h-all', label: 'All-period fit' },
+    counts: { better: 3160, tied: 238, worse: 6602, undefined: 0 },
+    shares: { better: 0.316, tied: 0.0238, worse: 0.6602, undefined: 0 },
+    at_least_as_good: { count: 3398, share: 0.3398 },
+    sentence: 'In 10,000 paired resamples of the final sessions, Recent fit was at least as good as All-period fit in 34.0% of paths (3,160 better, 238 tied, 6,602 worse). Both selections were made after these results were viewed; this is not adjusted for that choice.',
+  });
 }
 
 /** The two-selection caveat the exam's final-window readings carry instead of the development bias note (#3014). */
@@ -669,6 +703,7 @@ export function finalChance(overrides: Partial<FinalChance> = {}): FinalChance {
         'The recorded final outcome resamples to a compounded net return positive in 97.4% of 10,000 resampled final paths (60 exactly flat, 200 negative). This is the model’s spread of what was recorded, not a forecast.',
     }),
     carry_over: chanceCarryOver(),
+    fit_to_fit: chanceFitToFitDirection(),
     ...overrides,
   };
 }
@@ -1136,6 +1171,7 @@ export function examView(overrides: Partial<ExamView> = {}, allPeriod: Partial<E
     pick: 'after_test',
     chosen_key: chosen,
     selection_note: fits.length < 2 ? null : chosen === null ? UNDECIDED_NOTE : CHOSEN_NOTE,
+    positive_net_required: true,
     ...overrides,
     fits,
   };

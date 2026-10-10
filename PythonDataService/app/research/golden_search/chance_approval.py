@@ -23,7 +23,9 @@ Validated against: tests/research/golden_search/test_chance_approval.py
   (threshold equality is clear, raw counts decide, no finite sample,
   missing/failed/unsupported components, legacy studies, positivity off,
   and the carry-over's never-decides rule) and the service tests in
-  test_chance_approval_service.py.
+  test_chance_approval_service.py; #3024 adds the forged-label and
+  inclusive-count fixtures, where the raw counts overrule the stored
+  label and the stored inclusive count.
 
 A study locked before this policy shipped carries no marker and keeps the
 original absent-reading behavior: a measured weak share still asks for the
@@ -118,6 +120,19 @@ def _share_item(component: str, label: str, record: Mapping[str, Any], *, numera
     return None
 
 
+def _numerators(record: Mapping[str, Any], defined_keys: tuple[str, ...], numerator_keys: tuple[str, ...], fallback: Any) -> tuple[int, int]:
+    """One share-bearing component's numerator and defined-path count, derived from its raw counts (#3024).
+
+    The stored label and the stored inclusive count are presentation of the counts, never authority: a forged
+    clear label over all-undefined counts reads as what its counts say. Records reach here already validated
+    by ``chance_final.stored_final_chance`` in production; the fallbacks keep direct callers readable.
+    """
+    counts = record.get("counts")
+    if isinstance(counts, Mapping) and all(isinstance(counts.get(key), int) and not isinstance(counts.get(key), bool) for key in (*defined_keys, "undefined")):
+        return sum(counts[key] for key in numerator_keys), sum(counts[key] for key in defined_keys)
+    return (fallback if isinstance(fallback, int) and not isinstance(fallback, bool) else 0), 1  # no readable counts: never read as no_defined_paths
+
+
 def chance_weakness_items(
     policy: Mapping[str, Any] | None,
     chance: Mapping[str, Mapping[str, Any]],
@@ -129,18 +144,19 @@ def chance_weakness_items(
     ``policy`` is the study's enrollment marker; ``None`` is a pre-enrollment study, which keeps the original
     absent-reading behavior (a measured weak share still asks, nothing missing ever gates). ``chance`` is the
     normalized per-component record :func:`chance_final.stored_final_chance` serves — the server's own stored
-    evidence, never client values.
+    evidence, never client values. Measured shares are read from the raw counts the record carries; the label
+    and the stored inclusive count never decide anything (#3024).
     """
     enrolled = policy is not None
     items: list[dict[str, str]] = []
 
     comparison = chance.get("comparison") or {}
     if comparison.get("status") == "measured":
-        if enrolled and comparison.get("label") == "no_defined_paths":
+        at_least = comparison.get("at_least_as_good")
+        as_good, defined = _numerators(comparison, ("better", "tied", "worse"), ("better", "tied"), at_least.get("count") if isinstance(at_least, Mapping) else 0)
+        if enrolled and defined == 0:
             items.append(_unavailable("comparison", "no resampled path produced a defined result to compare"))
         else:
-            counts = comparison.get("counts") or {}
-            as_good = int(comparison.get("at_least_as_good", {}).get("count") or counts.get("better", 0) + counts.get("tied", 0))
             item = _share_item("comparison", "support against the current settings", comparison, numerator=as_good, enrolled=enrolled)
             if item is not None:
                 items.append(item)
@@ -150,10 +166,11 @@ def chance_weakness_items(
     if positive_net_required:
         profitability = chance.get("profitability") or {}
         if profitability.get("status") == "measured":
-            if enrolled and profitability.get("label") == "no_defined_paths":
+            positive, defined = _numerators(profitability, ("positive", "zero", "negative"), ("positive",), 0)
+            if enrolled and defined == 0:
                 items.append(_unavailable("profitability", "no resampled path produced a defined return"))
             else:
-                item = _share_item("profitability", "resampled profit", profitability, numerator=int((profitability.get("counts") or {}).get("positive", 0)), enrolled=enrolled)
+                item = _share_item("profitability", "resampled profit", profitability, numerator=positive, enrolled=enrolled)
                 if item is not None:
                     items.append(item)
         elif enrolled:

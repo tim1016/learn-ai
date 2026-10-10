@@ -12,7 +12,11 @@ Formula: over the development window's n scheduled sessions, a candidate run
   better + tied over all B. Candidate and difference 5th/50th/95th
   percentiles are linear interpolation over the finite values. Separately,
   the candidate's own paths count compounded net return > 0, == 0, < 0 and
-  undefined over B (the profitability component).
+  undefined over B (the profitability component), whose own 5th/50th/95th
+  percentiles of the compounded net return are recorded beside the counts
+  (#3026) — a quantity in net-return units, independent of the objective:
+  a positive Sharpe can compound to a loss, so the objective's zero and
+  the profit's break-even are never the same axis.
 Reference: issue #3011's delivery contract (the 2026-10-09 adversarial
   review of #2932); the draw is Politis & Romano (1994) via
   ``monte_carlo/stationary.py``; classification thresholds are the owner's
@@ -440,11 +444,18 @@ def _profitability_reading(
     seed = seed_for(*seed_inputs)
     counts = {"positive": 0, "zero": 0, "negative": 0, "undefined": 0}
     n = len(candidate.session_ms)
+    # The per-replication compounded net returns are the O(B) scalars the range's percentiles need (#3026);
+    # nothing else about a path is kept, and every index chunk is released before the next is drawn.
+    net_returns = np.full(REPLICATIONS, np.nan)
     rng = np.random.default_rng(seed)
+    done = 0
     for chunk in stationary_index_chunks(n, size=n, mean_block=MEAN_BLOCK_SESSIONS, replications=REPLICATIONS, rng=rng):
         cancel_check()
-        for name, value in _profit_chunk(path_net_return(candidate.returns[chunk])).items():
+        net = path_net_return(candidate.returns[chunk])
+        net_returns[done : done + len(net)] = net
+        for name, value in _profit_chunk(net).items():
             counts[name] += value
+        done += len(net)
     if counts["positive"] + counts["zero"] + counts["negative"] == 0:
         label = "no_defined_paths"
     elif _at_least(counts["positive"], REPLICATIONS, CLEAR):
@@ -459,6 +470,12 @@ def _profitability_reading(
         "sentence": _profitability_sentence(counts, sessions_label),
         "counts": dict(counts),
         "shares": _shares(counts),
+        # The independent compounded-net range, in net-return units — never the objective's units: a positive
+        # Sharpe can compound to a loss, so the objective's zero is a tie there and break-even only here (#3026).
+        "net_return_range": {
+            "quantity": {"measure": "compounded_net_return", "label": "compounded net return", "units": "fraction of the starting capital"},
+            **_range(net_returns),
+        },
         "basis": _basis(
             SCHEMA_PROFITABILITY,
             objective=objective,

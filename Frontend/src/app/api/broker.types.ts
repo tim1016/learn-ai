@@ -14278,8 +14278,8 @@ export interface components {
             /** Sentence */
             sentence: string;
             /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
+             * Status
+             * @constant
              */
             status: "measured";
             /** Undefined */
@@ -14494,18 +14494,17 @@ export interface components {
             };
         };
         /**
-         * GoldenSearchChanceFitToFitMeasured
-         * @description Two distinct fits' final comparison from one shared paired draw, both directions summarized from it.
+         * GoldenSearchChanceFitToFitDirection
+         * @description One direction of the shared paired draw: this fit against that opponent, counts and sentence its own (#3029).
          */
-        GoldenSearchChanceFitToFitMeasured: {
+        GoldenSearchChanceFitToFitDirection: {
+            /** @description (better + tied) over every replication, in this direction; tied paths support both directions, undefined neither. */
             at_least_as_good: components["schemas"]["GoldenSearchChanceAtLeastAsGood"];
             basis: components["schemas"]["GoldenSearchChanceFitToFitBasis"];
             counts: components["schemas"]["GoldenSearchChanceCounts"];
-            /**
-             * Pair
-             * @description The two point hashes, canonically ordered, that were compared.
-             */
-            pair: string[];
+            /** @description The fit this summary belongs to; sorted pair order never implies it. */
+            fit: components["schemas"]["GoldenSearchChanceFitToFitIdentity"];
+            opponent: components["schemas"]["GoldenSearchChanceFitToFitIdentity"];
             /** Selection Note */
             selection_note: string;
             /** Sentence */
@@ -14514,6 +14513,40 @@ export interface components {
             shares: {
                 [key: string]: number;
             };
+            /**
+             * Status
+             * @constant
+             */
+            status: "measured";
+        };
+        /**
+         * GoldenSearchChanceFitToFitIdentity
+         * @description The point identity one fit-to-fit direction speaks for, and the one it speaks against (#3029).
+         */
+        GoldenSearchChanceFitToFitIdentity: {
+            /** Label */
+            label: string;
+            /** Point Hash */
+            point_hash: string;
+        };
+        /**
+         * GoldenSearchChanceFitToFitMeasured
+         * @description Two distinct fits' final comparison from one shared paired draw, both directions summarized from it (#3029).
+         */
+        GoldenSearchChanceFitToFitMeasured: {
+            basis: components["schemas"]["GoldenSearchChanceFitToFitBasis"];
+            /**
+             * Directions
+             * @description Both directions of the one draw, each naming its own fit and opponent.
+             */
+            directions: components["schemas"]["GoldenSearchChanceFitToFitDirection"][];
+            /**
+             * Pair
+             * @description The two point hashes, canonically ordered, that were compared.
+             */
+            pair: string[];
+            /** Selection Note */
+            selection_note: string;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -14532,11 +14565,56 @@ export interface components {
              * @description The two hashes, canonically ordered.
              */
             point_hashes: string[];
-            /** Series Digests */
+            /**
+             * Series Digests
+             * @description Each run's digest, in the same canonical order as point_hashes (#3029).
+             */
             series_digests: string[];
             /** Session Count */
             session_count: number;
             window: components["schemas"]["GoldenSearchChanceWindow"];
+        };
+        /**
+         * GoldenSearchChanceNetReturnQuantity
+         * @description What the profitability range's numbers count — compounded net return, never the plan objective (#3026).
+         */
+        GoldenSearchChanceNetReturnQuantity: {
+            /**
+             * Label
+             * @description How the quantity reads in a sentence.
+             */
+            label: string;
+            /**
+             * Measure
+             * @constant
+             */
+            measure: "compounded_net_return";
+            /**
+             * Units
+             * @description What one unit counts; a fraction of the starting capital.
+             */
+            units: string;
+        };
+        /**
+         * GoldenSearchChanceNetReturnRange
+         * @description The 5th/50th/95th percentiles of the resampled compounded net return, beside the counts it summarizes (#3026).
+         */
+        GoldenSearchChanceNetReturnRange: {
+            /**
+             * Finite
+             * @description How many resamples produced a finite compounded return.
+             */
+            finite: number;
+            /**
+             * P5
+             * @description Null when no resample produced a defined compounded return.
+             */
+            p5: number | null;
+            /** P50 */
+            p50: number | null;
+            /** P95 */
+            p95: number | null;
+            quantity: components["schemas"]["GoldenSearchChanceNetReturnQuantity"];
         };
         /** GoldenSearchChanceObjective */
         GoldenSearchChanceObjective: {
@@ -14574,6 +14652,8 @@ export interface components {
              * @enum {string}
              */
             label: "clearly_positive" | "clearly_negative" | "mixed" | "no_defined_paths";
+            /** @description The compounded-net-return percentiles recorded beside the counts (#3026); null when the stored reading predates them — never backfilled. */
+            net_return_range?: components["schemas"]["GoldenSearchChanceNetReturnRange"] | null;
             /** Sentence */
             sentence: string;
             /** Shares */
@@ -15553,6 +15633,11 @@ export interface components {
              */
             pick: "before_test" | "after_test";
             /**
+             * Positive Net Required
+             * @description The frozen plan's positive-net rule, read from the study (#3026): it decides whether the money-support row and its approval test exist.
+             */
+            positive_net_required: boolean;
+            /**
              * Selection Note
              * @description What the record says about a pick made with two final-test results in view; null otherwise.
              */
@@ -15621,6 +15706,11 @@ export interface components {
             carry_over: components["schemas"]["GoldenSearchChanceCarryOverMeasured"] | components["schemas"]["GoldenSearchChanceReadingMissing"] | components["schemas"]["GoldenSearchChanceReadingFailed"];
             /** Comparison */
             comparison: components["schemas"]["GoldenSearchChanceComparisonMeasured"] | components["schemas"]["GoldenSearchChanceComparisonSameSettings"] | components["schemas"]["GoldenSearchChanceComparisonBaseline"] | components["schemas"]["GoldenSearchChanceReadingMissing"] | components["schemas"]["GoldenSearchChanceReadingFailed"];
+            /**
+             * Fit To Fit
+             * @description This fit's own direction of the optional fit-to-fit comparison (#3029); a named missing view when the stored record holds no direction for it.
+             */
+            fit_to_fit: components["schemas"]["GoldenSearchChanceFitToFitDirection"] | components["schemas"]["GoldenSearchChanceReadingMissing"] | components["schemas"]["GoldenSearchChanceReadingFailed"];
             /** Profitability */
             profitability: components["schemas"]["GoldenSearchChanceProfitabilityMeasured"] | components["schemas"]["GoldenSearchChanceReadingMissing"] | components["schemas"]["GoldenSearchChanceReadingFailed"];
         };
