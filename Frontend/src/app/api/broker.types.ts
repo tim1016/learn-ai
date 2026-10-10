@@ -14227,6 +14227,64 @@ export interface components {
                 [key: string]: number;
             };
         };
+        /**
+         * GoldenSearchChanceCarryOverBasis
+         * @description The reproduced rehearsal's identity: its schema, its seed, its scheduled length and its source digest.
+         */
+        GoldenSearchChanceCarryOverBasis: {
+            objective: components["schemas"]["GoldenSearchChanceObjective"];
+            /**
+             * Rehearsal Schema
+             * @description Null when the stored rehearsal predates schema versions.
+             */
+            rehearsal_schema: string | null;
+            /** Scheduled Sessions */
+            scheduled_sessions: number;
+            /** Schema Version */
+            schema_version: string;
+            seed: components["schemas"]["GoldenSearchChanceSeed"];
+            /** Source Digest */
+            source_digest: string | null;
+        };
+        /**
+         * GoldenSearchChanceCarryOverMeasured
+         * @description The recorded final result's rank among its own reproduced 1× development rehearsal: a display diagnostic, never an approval test.
+         */
+        GoldenSearchChanceCarryOverMeasured: {
+            basis: components["schemas"]["GoldenSearchChanceCarryOverBasis"];
+            /** Below */
+            below: number;
+            /** @description The reproduced rehearsal's 1st-99th percentiles, plot summaries and never individual rehearsals. */
+            curve: components["schemas"]["GoldenSearchChanceRehearsalPercentiles"];
+            /** Finite */
+            finite: number;
+            /**
+             * Label
+             * @enum {string}
+             */
+            label: "below_most" | "above_most" | "middle" | "no_defined_paths";
+            /**
+             * Rank
+             * @description Strictly-below count over the finite count; 1.0 means above every finite rehearsal.
+             */
+            rank: number;
+            /** Recorded Objective */
+            recorded_objective: number;
+            /**
+             * Selection Note
+             * @description The unadjusted-for-selection caveat carried beside the rank.
+             */
+            selection_note: string;
+            /** Sentence */
+            sentence: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "measured";
+            /** Undefined */
+            undefined: number;
+        };
         /** GoldenSearchChanceComparisonBaseline */
         GoldenSearchChanceComparisonBaseline: {
             basis: components["schemas"]["GoldenSearchChanceBasis"];
@@ -14413,6 +14471,72 @@ export interface components {
              * @description Digest of the series actually resampled.
              */
             series_digest: string;
+        };
+        /**
+         * GoldenSearchChanceFitToFitBasis
+         * @description Everything a stored fit-to-fit reading was drawn under, so reading it back never reclassifies it.
+         */
+        GoldenSearchChanceFitToFitBasis: {
+            /** Convention */
+            convention: string;
+            /** Mean Block Sessions */
+            mean_block_sessions: number;
+            objective: components["schemas"]["GoldenSearchChanceObjective"];
+            /** Replications */
+            replications: number;
+            /** Schema Version */
+            schema_version: string;
+            seed: components["schemas"]["GoldenSearchChanceSeed"];
+            source: components["schemas"]["GoldenSearchChanceFitToFitSource"];
+            /** Thresholds */
+            thresholds: {
+                [key: string]: number;
+            };
+        };
+        /**
+         * GoldenSearchChanceFitToFitMeasured
+         * @description Two distinct fits' final comparison from one shared paired draw, both directions summarized from it.
+         */
+        GoldenSearchChanceFitToFitMeasured: {
+            at_least_as_good: components["schemas"]["GoldenSearchChanceAtLeastAsGood"];
+            basis: components["schemas"]["GoldenSearchChanceFitToFitBasis"];
+            counts: components["schemas"]["GoldenSearchChanceCounts"];
+            /**
+             * Pair
+             * @description The two point hashes, canonically ordered, that were compared.
+             */
+            pair: string[];
+            /** Selection Note */
+            selection_note: string;
+            /** Sentence */
+            sentence: string;
+            /** Shares */
+            shares: {
+                [key: string]: number;
+            };
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "measured";
+        };
+        /**
+         * GoldenSearchChanceFitToFitSource
+         * @description The two final runs a fit-to-fit reading actually resampled.
+         */
+        GoldenSearchChanceFitToFitSource: {
+            /** Capital */
+            capital: number;
+            /**
+             * Point Hashes
+             * @description The two hashes, canonically ordered.
+             */
+            point_hashes: string[];
+            /** Series Digests */
+            series_digests: string[];
+            /** Session Count */
+            session_count: number;
+            window: components["schemas"]["GoldenSearchChanceWindow"];
         };
         /** GoldenSearchChanceObjective */
         GoldenSearchChanceObjective: {
@@ -15340,6 +15464,14 @@ export interface components {
             recommendation: components["schemas"]["GoldenSearchRecommendation"];
             scope: components["schemas"]["GoldenSearchEvidenceScope"];
         };
+        /**
+         * GoldenSearchExamChance
+         * @description The exam-level chance record: the optional fit-to-fit comparison, absent by design when one fit ran.
+         */
+        GoldenSearchExamChance: {
+            /** Fit To Fit */
+            fit_to_fit: components["schemas"]["GoldenSearchChanceFitToFitMeasured"] | components["schemas"]["GoldenSearchChanceReadingMissing"] | components["schemas"]["GoldenSearchChanceReadingFailed"];
+        };
         /** GoldenSearchExamCheck */
         GoldenSearchExamCheck: {
             /** Code */
@@ -15359,6 +15491,7 @@ export interface components {
          * @description One fit that sat the final test, judged on its own under the frozen rules.
          */
         GoldenSearchExamFit: {
+            chance: components["schemas"]["GoldenSearchFinalChance"];
             /** Checks */
             checks: components["schemas"]["GoldenSearchExamCheck"][];
             /**
@@ -15391,6 +15524,7 @@ export interface components {
         };
         /** GoldenSearchExamView */
         GoldenSearchExamView: {
+            chance: components["schemas"]["GoldenSearchExamChance"];
             /**
              * Chosen Key
              * @description The fit the owner named; null until an approval names one.
@@ -15477,6 +15611,18 @@ export interface components {
              * @enum {string}
              */
             state: "not_opened" | "previously_used" | "history_unknown";
+        };
+        /**
+         * GoldenSearchFinalChance
+         * @description One tested fit's final chance components, each normalized independently of the others.
+         */
+        GoldenSearchFinalChance: {
+            /** Carry Over */
+            carry_over: components["schemas"]["GoldenSearchChanceCarryOverMeasured"] | components["schemas"]["GoldenSearchChanceReadingMissing"] | components["schemas"]["GoldenSearchChanceReadingFailed"];
+            /** Comparison */
+            comparison: components["schemas"]["GoldenSearchChanceComparisonMeasured"] | components["schemas"]["GoldenSearchChanceComparisonSameSettings"] | components["schemas"]["GoldenSearchChanceComparisonBaseline"] | components["schemas"]["GoldenSearchChanceReadingMissing"] | components["schemas"]["GoldenSearchChanceReadingFailed"];
+            /** Profitability */
+            profitability: components["schemas"]["GoldenSearchChanceProfitabilityMeasured"] | components["schemas"]["GoldenSearchChanceReadingMissing"] | components["schemas"]["GoldenSearchChanceReadingFailed"];
         };
         /** GoldenSearchFinalMeasure */
         GoldenSearchFinalMeasure: {

@@ -5,7 +5,10 @@ import type {
   ChanceBasis,
   ChanceReadings,
   ChanceRehearsalRung,
+  FinalChance,
+  MeasuredChanceCarryOver,
   MeasuredChanceDrawdown,
+  MeasuredChanceFitToFit,
   MeasuredChanceRehearsal,
   DecisionSummary,
   EvidenceCandidate,
@@ -598,6 +601,78 @@ export function chanceReadings(overrides: Partial<ChanceReadings> = {}): ChanceR
   };
 }
 
+/** A measured carry-over (#3014): rank 0.62 among 10,000 reproduced rehearsals unless overridden. */
+export function chanceCarryOver(overrides: Partial<MeasuredChanceCarryOver> = {}): MeasuredChanceCarryOver {
+  return {
+    status: 'measured',
+    label: 'middle',
+    rank: 0.6221,
+    below: 6221,
+    finite: 10_000,
+    undefined: 0,
+    recorded_objective: 0.031,
+    curve: { p: Array.from({ length: 99 }, (_, i) => -0.02 + (i / 98) * 0.09), finite: 10_000 },
+    sentence: 'The recorded final total return sits inside the middle of the development rehearsals: strictly above 6,221 of the 10,000 defined rehearsal paths (62.2%), 0 undefined. This is conditional on the resampling model: a high rank is not the model proving itself right, and a low rank is not proof that bad luck is ruled out.',
+    selection_note: 'This fit was chosen after the final test, from the fits that ran, and was selected by a search over the development data. Its support is unadjusted for both selections and is not a calibrated error rate or a probability of a true edge.',
+    basis: {
+      schema_version: 'golden-search-chance-carry-over/v1',
+      rehearsal_schema: 'golden-search-chance-rehearsal/v1',
+      seed: { inputs: ['golden-search-chance-rehearsal/v1', DEVELOPMENT_START_MS, FINAL_START_MS, 'total_return_pct', 'h-all', 'h-inc', 1], value: 987654321 },
+      scheduled_sessions: 21,
+      objective: { measure: 'total_return_pct', label: 'total return', units: 'fraction of the starting capital' },
+      source_digest: 'd-all',
+    },
+    ...overrides,
+  };
+}
+
+/** A measured fit-to-fit comparison (#3014): 68.4% at least as good unless overridden. */
+export function chanceFitToFit(overrides: Partial<MeasuredChanceFitToFit> = {}): MeasuredChanceFitToFit {
+  return {
+    status: 'measured',
+    pair: ['aaaa', 'zzzz'],
+    counts: { better: 6602, tied: 238, worse: 3160, undefined: 0 },
+    shares: { better: 0.6602, tied: 0.0238, worse: 0.316, undefined: 0 },
+    at_least_as_good: { count: 6840, share: 0.684 },
+    sentence: 'In 10,000 paired resamples of the final sessions, All-period fit was at least as good as Recent fit in 68.4% of paths (6,602 better, 238 tied, 3,160 worse). Both selections were made after these results were viewed; this is not adjusted for that choice.',
+    selection_note: 'This fit was chosen after the final test, from the fits that ran, and was selected by a search over the development data. Its support is unadjusted for both selections and is not a calibrated error rate or a probability of a true edge.',
+    basis: {
+      schema_version: 'golden-search-chance-fit-to-fit/v1',
+      convention: 'stationary-bootstrap/v1',
+      replications: 10_000,
+      mean_block_sessions: 5,
+      thresholds: { clear: 0.95 },
+      objective: { measure: 'total_return_pct', label: 'total return', units: 'fraction of the starting capital' },
+      seed: { inputs: ['golden-search-chance-fit-to-fit/v1', FINAL_START_MS, FINAL_START_MS + 2_592_000_000, 'total_return_pct', 'aaaa', 'zzzz'], value: 13579 },
+      source: { window: { start_ms: FINAL_START_MS, end_ms: FINAL_START_MS + 2_592_000_000 }, session_count: 21, point_hashes: ['aaaa', 'zzzz'], series_digests: ['d-a', 'd-z'], capital: 100000 },
+    },
+    ...overrides,
+  };
+}
+
+/** The two-selection caveat the exam's final-window readings carry instead of the development bias note (#3014). */
+export const FINAL_SELECTION_NOTE =
+  'This fit was chosen after the final test, from the fits that ran, and was selected by a search over the development data. Its support is unadjusted for both selections and is not a calibrated error rate or a probability of a true edge.';
+
+/** One tested fit's final chance components (#3014), its sentences worded for the final window. */
+export function finalChance(overrides: Partial<FinalChance> = {}): FinalChance {
+  return {
+    comparison: chanceComparison({
+      basis: { ...chanceComparison().basis, source: { ...chanceComparison().basis.source, window: { start_ms: FINAL_START_MS, end_ms: FINAL_START_MS + 2_592_000_000 } } },
+      // The final panel's sentences name the window they resampled: the final sessions, never development ones.
+      sentence:
+        'In 10,000 paired resamples of these final sessions, this fit’s total return was at least as good as the current settings’ in 96.2% of paths (9,350 strictly better, 270 tied, 380 worse). That is support under this resampling model only, not a probability of a true edge.',
+      bias_note: FINAL_SELECTION_NOTE,
+    }),
+    profitability: chanceProfitability({
+      sentence:
+        'The recorded final outcome resamples to a compounded net return positive in 97.4% of 10,000 resampled final paths (60 exactly flat, 200 negative). This is the model’s spread of what was recorded, not a forecast.',
+    }),
+    carry_over: chanceCarryOver(),
+    ...overrides,
+  };
+}
+
 /** A measured drawdown reading (#3013): a 15.8% 95th-percentile range against a 20% ceiling unless overridden. */
 export function chanceDrawdown(overrides: Partial<MeasuredChanceDrawdown> = {}): MeasuredChanceDrawdown {
   return {
@@ -1009,6 +1084,7 @@ const FIT_DEFAULTS: Readonly<Record<'all_period' | 'recent', Omit<ExamFit, 'weak
     ],
     retention: 0.61,
     metrics: metrics({ total_return_pct: 0.018, max_drawdown_pct: 0.031, total_trades: 36, sharpe_ratio: 0.91 }),
+    chance: finalChance(),
   },
   recent: {
     key: 'recent',
@@ -1024,6 +1100,17 @@ const FIT_DEFAULTS: Readonly<Record<'all_period' | 'recent', Omit<ExamFit, 'weak
     ],
     retention: 0.46,
     metrics: metrics({ total_return_pct: 0.012, max_drawdown_pct: 0.052, total_trades: 33, sharpe_ratio: 0.66 }),
+    chance: finalChance({
+      comparison: chanceComparison({
+        label: 'mixed',
+        sentence:
+          'In 10,000 paired resamples of these final sessions, this fit’s total return was at least as good as the current settings’ in 58.2% of paths and strictly worse in 41.5% (4,120 better, 1,700 tied, 4,150 worse). The resampling model does not clearly separate the two settings.',
+        counts: { better: 4120, tied: 1700, worse: 4150, undefined: 30 },
+        shares: { better: 0.412, tied: 0.17, worse: 0.415, undefined: 0.003 },
+        at_least_as_good: { count: 5820, share: 0.582 },
+      }),
+      carry_over: chanceCarryOver({ rank: 0.0412, below: 412, label: 'below_most', sentence: 'The recorded final total return sits below most development rehearsals: strictly above 412 of the 10,000 defined rehearsal paths (4.1%), 0 undefined. This is conditional on the resampling model: a high rank is not the model proving itself right, and a low rank is not proof that bad luck is ruled out.' }),
+    }),
   },
 };
 
@@ -1045,6 +1132,7 @@ export function examView(overrides: Partial<ExamView> = {}, allPeriod: Partial<E
     window: { start_ms: FINAL_START_MS, end_ms: FINAL_END_MS },
     ...claim,
     incumbent_metrics: metrics({ total_return_pct: 0.009, max_drawdown_pct: 0.042, total_trades: 39, sharpe_ratio: 0.54 }),
+    chance: { fit_to_fit: chanceFitToFit() },
     pick: 'after_test',
     chosen_key: chosen,
     selection_note: fits.length < 2 ? null : chosen === null ? UNDECIDED_NOTE : CHOSEN_NOTE,

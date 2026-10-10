@@ -862,6 +862,36 @@ An interval that crosses zero differs visibly from one entirely above it; an all
 
 A chef's dish reheated many ways: how often is the reheated serving at least as good as the original plating? Counting the reheats tells you about the reheating, not about whether the recipe is good — and the chef already tasted this batch when choosing the dish.
 
+### Final uncertainty {#chance-final}
+
+#### The question it answers
+
+How much support does the resampling model give this fit’s frozen final result?
+
+#### What you're looking at
+
+Two bands and a curve beside the frozen outcome. The upper band is the middle 90% of resampled differences between this fit and the current settings over the final sessions, with zero as a tie; the lower band is the fit's own resampled result against break-even. The curve plots the reproduced 1× development rehearsal's objective at each of its 99 percentiles with the recorded final result marked at its actual value — a result above every finite rehearsal ranks 100%, not 99%, and the exact counts sit in the table. When two fits ran, their shared paired comparison is summarized beneath in Python's words.
+
+The frozen "meets the rules" verdict stays separate from these model-support labels. This fit was chosen after the final test, from the fits that ran, and found by a search over the development data: its support is unadjusted for both selections and is not a calibrated error rate, a probability of a true edge, or a multiplicity correction. A high rank among rehearsals is not the model proving itself right, and a low rank is not proof that bad luck is ruled out.
+
+#### How to read it
+
+1. Read the upper band: the middle 90% of resampled differences from the current settings, with zero as a tie; the band below is the fit’s own resampled result against break-even.
+2. The frozen “meets the rules” verdict at the top of the page is separate from this model support; neither relabels the other.
+3. Read the curve: the reproduced 1× development rehearsal’s objective at each percentile, with the recorded final result marked at its actual value — above every finite rehearsal is rank 100%, not 99%.
+4. Remember the selections: this fit was chosen after the final test and found by a development search; its support is unadjusted for both.
+
+#### Good signs and warning signs
+
+- Good: the difference band entirely above zero with the result band above break-even.
+- Warning: a rounded 95-of-100 share: the table's raw counts decide the label, and 9,499 of 10,000 is below the threshold while 9,500 is at it.
+- Warning: a result far outside the rehearsal curve — but read the rank as conditional on the model, never as proof of luck or its absence.
+- Warning: leaning on the fit-to-fit sentence to pick a winner: both selections were made after the results were viewed.
+
+#### An everyday comparison
+
+Reading a race's official result against the stopwatch times from practice laps: the stopwatch tells you how the recorded car ran against its own practice, not who will win the next race — and the driver was picked after seeing both.
+
 ### Drawdown range {#chance-drawdown}
 
 #### The question it answers

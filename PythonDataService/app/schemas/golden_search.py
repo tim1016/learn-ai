@@ -1323,6 +1323,95 @@ class GoldenSearchExamCheck(_Wire):
     detail: str
 
 
+class GoldenSearchChanceCarryOverBasis(_Wire):
+    """The reproduced rehearsal's identity: its schema, its seed, its scheduled length and its source digest."""
+
+    schema_version: str
+    rehearsal_schema: str | None = Field(description="Null when the stored rehearsal predates schema versions.")
+    seed: GoldenSearchChanceSeed
+    scheduled_sessions: int
+    objective: GoldenSearchChanceObjective
+    source_digest: str | None
+
+
+class GoldenSearchChanceCarryOverMeasured(_Wire):
+    """The recorded final result's rank among its own reproduced 1× development rehearsal: a display diagnostic, never an approval test."""
+
+    status: Literal["measured"]
+    label: Literal["below_most", "above_most", "middle", "no_defined_paths"]
+    rank: float = Field(description="Strictly-below count over the finite count; 1.0 means above every finite rehearsal.")
+    below: int
+    finite: int
+    undefined: int
+    recorded_objective: float
+    curve: GoldenSearchChanceRehearsalPercentiles = Field(description="The reproduced rehearsal's 1st-99th percentiles, plot summaries and never individual rehearsals.")
+    sentence: str
+    selection_note: str = Field(description="The unadjusted-for-selection caveat carried beside the rank.")
+    basis: GoldenSearchChanceCarryOverBasis
+
+
+GoldenSearchChanceCarryOver = Annotated[
+    GoldenSearchChanceCarryOverMeasured | GoldenSearchChanceReadingMissing | GoldenSearchChanceReadingFailed,
+    Field(discriminator="status"),
+]
+
+
+class GoldenSearchFinalChance(_Wire):
+    """One tested fit's final chance components, each normalized independently of the others."""
+
+    comparison: GoldenSearchChanceComparison
+    profitability: GoldenSearchChanceProfitability
+    carry_over: GoldenSearchChanceCarryOver
+
+
+class GoldenSearchChanceFitToFitMeasured(_Wire):
+    """Two distinct fits' final comparison from one shared paired draw, both directions summarized from it."""
+
+    status: Literal["measured"]
+    pair: list[str] = Field(description="The two point hashes, canonically ordered, that were compared.")
+    counts: GoldenSearchChanceCounts
+    shares: dict[str, float]
+    at_least_as_good: GoldenSearchChanceAtLeastAsGood
+    sentence: str
+    selection_note: str
+    basis: GoldenSearchChanceFitToFitBasis
+
+
+class GoldenSearchChanceFitToFitSource(_Wire):
+    """The two final runs a fit-to-fit reading actually resampled."""
+
+    window: GoldenSearchChanceWindow
+    session_count: int
+    point_hashes: list[str] = Field(description="The two hashes, canonically ordered.")
+    series_digests: list[str]
+    capital: float
+
+
+class GoldenSearchChanceFitToFitBasis(_Wire):
+    """Everything a stored fit-to-fit reading was drawn under, so reading it back never reclassifies it."""
+
+    schema_version: str
+    convention: str
+    replications: int
+    mean_block_sessions: float
+    thresholds: dict[str, float]
+    objective: GoldenSearchChanceObjective
+    seed: GoldenSearchChanceSeed
+    source: GoldenSearchChanceFitToFitSource
+
+
+GoldenSearchChanceFitToFit = Annotated[
+    GoldenSearchChanceFitToFitMeasured | GoldenSearchChanceReadingMissing | GoldenSearchChanceReadingFailed,
+    Field(discriminator="status"),
+]
+
+
+class GoldenSearchExamChance(_Wire):
+    """The exam-level chance record: the optional fit-to-fit comparison, absent by design when one fit ran."""
+
+    fit_to_fit: GoldenSearchChanceFitToFit
+
+
 class GoldenSearchExamFit(_Wire):
     """One fit that sat the final test, judged on its own under the frozen rules."""
 
@@ -1334,6 +1423,7 @@ class GoldenSearchExamFit(_Wire):
     checks: list[GoldenSearchExamCheck]
     retention: float | None = Field(description="Descriptive only, never a check.")
     metrics: GoldenSearchMetrics | None
+    chance: GoldenSearchFinalChance
     weakness: list[GoldenSearchFinding] = Field(
         description="What approving this fit needs the owner to acknowledge as weak; empty when its evidence meets the rules."
     )
@@ -1343,6 +1433,7 @@ class GoldenSearchExamView(_Wire):
     window: GoldenSearchWindow
     claim: Claim
     exposure_state: ExposureState
+    chance: GoldenSearchExamChance
     fits: list[GoldenSearchExamFit] = Field(description="Every fit that ran on the final interval; one for a final test recorded with a locked candidate.")
     incumbent_metrics: GoldenSearchMetrics | None
     pick: Literal["before_test", "after_test"] = Field(description="Whether the owner named the fit before the test opened or after its outcomes.")

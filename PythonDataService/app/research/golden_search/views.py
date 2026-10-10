@@ -28,6 +28,7 @@ from app.research.golden_search.actions import permitted
 from app.research.golden_search.activity import TradeFloors
 from app.research.golden_search.chance_compare import stored_chance
 from app.research.golden_search.chance_drawdown import stored_drawdown
+from app.research.golden_search.chance_final import stored_final_chance
 from app.research.golden_search.chance_rehearsal import stored_rehearsal
 from app.research.golden_search.compare_measures import neighborhood_view, stress_tally, stress_view, trades_per_year
 from app.research.golden_search.concentration import (
@@ -40,7 +41,7 @@ from app.research.golden_search.decision_summary import decision_summaries
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, scalar
 from app.research.golden_search.evidence import CANDIDATE_LABELS, monthly_results
 from app.research.golden_search.final_measures import final_comparison
-from app.research.golden_search.final_test import fit_for, fits_to_test, pick_of, recorded_fits
+from app.research.golden_search.final_test import fit_for, fit_label, fits_to_test, pick_of, recorded_fits
 from app.research.golden_search.guidance import (
     candidate_flags,
     candidate_guidance,
@@ -434,12 +435,6 @@ def evidence_view(
 # ── Exam and qualification ───────────────────────────────────────────────
 
 
-def fit_label(fit: Mapping[str, Any]) -> str:
-    """``All-period fit``, ``Recent fit``, or ``All-period and recent fit`` when both chose the same settings."""
-    names = [CANDIDATE_LABELS[key] for key in (fit["key"], *fit["same_as"])]
-    return " and ".join([names[0].removesuffix(" fit"), *(name.lower() for name in names[1:])]) if len(names) > 1 else names[0]
-
-
 def exam_view(stored: Mapping[str, Any], *, chosen_key: str | None, approvable: bool = True) -> dict[str, Any]:
     """The final test as recorded: each fit with its own outcome, and the fit the owner named, if any.
 
@@ -463,14 +458,24 @@ def exam_view(stored: Mapping[str, Any], *, chosen_key: str | None, approvable: 
                 "retention": fit["retention"],
                 "metrics": fit["metrics"],
                 "weakness": weakness_items(stored, fit),
+                "chance": stored_final_chance(fit),
             }
             for fit in fits
         ],
         "incumbent_metrics": stored["incumbent_metrics"],
+        "chance": _exam_chance(stored),
         "pick": pick,
         "chosen_key": None if chosen is None else chosen["key"],
         "selection_note": selection_note(fits_tested=len(fits), picked_after_test=pick == "after_test", chosen=chosen is not None, approvable=approvable),
     }
+
+
+def _exam_chance(stored: Mapping[str, Any]) -> dict[str, Any]:
+    """The exam-level chance record (the optional fit-to-fit comparison), normalized per component like every other."""
+    record = ((stored.get("chance") or {}).get("fit_to_fit")) if isinstance(stored.get("chance"), Mapping) else None
+    if isinstance(record, Mapping) and record.get("status") in {"measured", "missing", "failed"}:
+        return {"fit_to_fit": dict(record)}
+    return {"fit_to_fit": {"status": "missing", "code": "not_measured", "reason": "Not measured for this study: fit-to-fit readings were first recorded with #3014."}}
 
 
 def qualification_view(row: StudyRow) -> dict[str, Any] | None:

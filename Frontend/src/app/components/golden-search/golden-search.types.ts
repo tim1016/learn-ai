@@ -303,6 +303,11 @@ export type MeasuredChanceRehearsal = Schemas['GoldenSearchChanceRehearsalMeasur
 export type ChanceRehearsalRung = Schemas['GoldenSearchChanceRung'];
 export type ChanceDrawdown = ChanceReadings['drawdown'];
 export type MeasuredChanceDrawdown = Schemas['GoldenSearchChanceDrawdownMeasured'];
+/** The tested fit's final chance components (#3014), each normalized independently. */
+export type FinalChance = ExamFit['chance'];
+export type MeasuredChanceCarryOver = Schemas['GoldenSearchChanceCarryOverMeasured'];
+export type MeasuredChanceFitToFit = Schemas['GoldenSearchChanceFitToFitMeasured'];
+export type ExamChance = ExamView['chance'];
 export type ChanceBasis = Schemas['GoldenSearchChanceBasis'];
 /** The candidate a development chart draws: its key for colour and walkthrough targets, its label for words. */
 export type CandidateRef = Pick<EvidenceCandidate, 'key' | 'label'>;

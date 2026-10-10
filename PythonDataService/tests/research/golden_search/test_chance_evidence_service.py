@@ -6,6 +6,7 @@ thin lake under a symbol of its own.
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -13,10 +14,21 @@ import asyncpg
 import pytest
 
 from app.research.golden_search import stages
+from app.research.golden_search.chance_final import SELECTION_NOTE
+from app.research.golden_search.declarations import point_hash
 from app.research.golden_search.evaluator import EvaluationRequest, EvaluationResult
 from app.research.persistence import lifecycle
-from app.schemas.golden_search import GoldenSearchChance, GoldenSearchChanceRehearsalMeasured
-from tests._helpers.golden_search_study import Driver, FakeEngine, seed_lake, unique_symbol
+from app.schemas.golden_search import (
+    GoldenSearchChance,
+    GoldenSearchChanceRehearsalMeasured,
+    GoldenSearchExamFit,
+    GoldenSearchFinalChance,
+)
+from tests._helpers.golden_search_study import Driver, FakeEngine, seed_lake, unique_symbol, window_ms
+
+#: Windows starting at or after this instant peak at gap 0.10 instead of 0.35: the recent
+#: months and the final window sit past it, the all-period development window does not.
+RECENT_CUTOFF_MS = window_ms((date(2025, 2, 15), date(2025, 2, 16)))[0]
 
 
 @pytest.fixture
@@ -192,3 +204,73 @@ async def test_a_fit_whose_run_has_no_detail_records_named_missing_not_a_failure
         assert candidate["chance"]["comparison"]["status"] == "missing"
         assert candidate["chance"]["comparison"]["code"] in ("no_trade_list", "not_evaluated", "incumbent_unavailable")
         assert candidate["chance"]["profitability"]["status"] == "missing"
+
+
+async def test_the_exam_stage_stores_final_chance_and_a_carry_over_without_new_evaluations(driver: Driver, symbol: str) -> None:
+    row = await driver.to_candidate(symbol)
+    before = row.consumed_evaluations
+    row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
+    detail = await driver.detail(row)
+    exam = detail["results"]["exam"]
+    GoldenSearchExamFit.model_validate(exam["fits"][0])
+
+    for fit in exam["fits"]:
+        chance = fit["chance"]
+        GoldenSearchFinalChance.model_validate(chance)
+        # The comparison and profitability ran on the final interval's own sessions.
+        assert chance["comparison"]["status"] == "measured"
+        assert chance["comparison"]["basis"]["source"]["window"] == {"start_ms": row.protocol["final_start_ms"], "end_ms": row.protocol["final_end_ms"]}
+        # Every sentence names the window it resampled, and the caveat is the two-selection note, never the
+        # development stage's selected-on-these-sessions one (#3014).
+        assert "final sessions" in chance["comparison"]["sentence"]
+        assert chance["comparison"]["bias_note"] == SELECTION_NOTE
+        assert "final paths" in chance["profitability"]["sentence"]
+        assert chance["profitability"]["status"] == "measured"
+        # The carry-over reproduced the stored 1× rehearsal: same scheduled length the evidence stage recorded.
+        carry = chance["carry_over"]
+        assert carry["status"] == "measured", carry.get("reason")
+        rehearsal = next(candidate["chance"]["rehearsal"] for candidate in (await driver.detail(row))["results"]["evidence"]["candidates"] if candidate["key"] == fit["key"])
+        assert carry["basis"]["scheduled_sessions"] == rehearsal["basis"]["final_interval"]["scheduled_sessions"]
+        assert carry["finite"] + carry["undefined"] == 10_000
+    # One distinct fit ran, so the optional fit-to-fit comparison is absent by design, not failed.
+    assert exam["chance"]["fit_to_fit"]["code"] == "single_fit"
+    # The exam's own final runs are all the engine spent — one per fit plus the incumbent — so the diagnostics
+    # added no evaluation beyond what a chance-less exam would have run.
+    assert row.consumed_evaluations - before == len(exam["fits"]) + 1
+    assert all(fit["outcome"] is not None for fit in exam["fits"])
+
+
+async def test_two_fits_get_one_shared_fit_to_fit_draw_and_each_keeps_its_own_evidence(
+    lake: Path, monkeypatch: pytest.MonkeyPatch, conn: asyncpg.Connection
+) -> None:
+    symbol = unique_symbol()
+    seed_lake(lake, symbol)
+    monkeypatch.setattr(lifecycle, "roots_for", lambda row: [lake])
+
+    def drifting_score(point: dict[str, Any], window: tuple[int, int], scenario: str) -> float:
+        # The development window peaks at gap 0.35 and the recent months (and the final
+        # window) peak at gap 0.10, so the two fits choose different settings and the
+        # exam holds two distinct fits with distinct stored rehearsals.
+        gap = float(point.get("gap", 0.2))
+        hold = float(point.get("hold_bars", 5))
+        cost = {"base": 0.0, "slippage_1c": 0.05, "commission_1": 0.02}.get(scenario, 0.0)
+        peak = 0.10 if window[0] >= RECENT_CUTOFF_MS else 0.35
+        return 2.0 - 8.0 * (gap - peak) ** 2 - ((hold - 7.0) / 4.0) ** 2 - cost
+
+    driver = Driver(roots=[lake], engine=FakeEngine(score=drifting_score))  # type: ignore[arg-type]
+    row = await driver.to_candidate(symbol)
+    row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
+    detail = await driver.detail(row)
+    exam = detail["results"]["exam"]
+    assert len(exam["fits"]) == 2, "the drifting landscape made the two fits choose distinct settings"
+    fit_to_fit = exam["chance"]["fit_to_fit"]
+    assert fit_to_fit["status"] == "measured", fit_to_fit.get("reason")
+    assert sorted(fit_to_fit["pair"]) == sorted(point_hash(row.strategy_key, dict(fit["point"])) for fit in exam["fits"])
+    assert sum(fit_to_fit["counts"].values()) == 10_000
+    assert "All-period fit" in fit_to_fit["sentence"] and "Recent fit" in fit_to_fit["sentence"]
+    assert "unadjusted for that choice" in fit_to_fit["sentence"] or "not adjusted for that choice" in fit_to_fit["sentence"]
+    # Each fit's own readings stand beside the shared one, whatever the other fit did.
+    for fit in exam["fits"]:
+        assert fit["chance"]["comparison"]["status"] == "measured"
+        assert fit["chance"]["carry_over"]["status"] == "measured"
+        assert fit["outcome"] is not None

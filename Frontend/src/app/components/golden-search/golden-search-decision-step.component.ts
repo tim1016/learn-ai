@@ -6,6 +6,7 @@ import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { GoldenSearchApprovalComponent } from './golden-search-approval.component';
 import { examScored, fitFor } from './golden-search-decision';
 import { GoldenSearchExamResultComponent } from './golden-search-exam-result.component';
+import { GoldenSearchChanceFinalPanelComponent } from './golden-search-chance-final-panel.component';
 import { GoldenSearchFinalChartsComponent } from './golden-search-final-charts.component';
 import { GoldenSearchLockboxComponent, type LockFit } from './golden-search-lockbox.component';
 import { RETAIN_KINDS } from './golden-search-retain.component';
@@ -33,6 +34,7 @@ const FINISHED_STATES: ReadonlySet<StudyState> = new Set(['retained', 'closed'])
   imports: [
     ButtonModule,
     GoldenSearchApprovalComponent,
+    GoldenSearchChanceFinalPanelComponent,
     GoldenSearchExamResultComponent,
     GoldenSearchFinalChartsComponent,
     GoldenSearchLockboxComponent,

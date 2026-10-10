@@ -10,6 +10,7 @@ export type GoldenSearchChartId =
   | 'chance-comparison'
   | 'chance-rehearsal'
   | 'chance-drawdown'
+  | 'chance-final'
   | 'concentration-curve'
   | 'without-best'
   | 'month-calendar'
@@ -129,6 +130,16 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
       { text: 'Read the strip beside it: every one of the 10,000 resamples counted as better, tied, worse or undefined. Ties are not improvement.', target: null },
       { text: 'The sentence beneath names the share that was at least as good. 95% is the owner’s reading threshold, not a calibrated error rate.', target: null },
       { text: 'Remember what it cannot say: this fit was selected on these same sessions, and the search is not repeated inside the resamples.', target: null },
+    ],
+  },
+  'chance-final': {
+    title: 'Final uncertainty',
+    question: 'How much support does the resampling model give this fit’s frozen final result?',
+    steps: [
+      { text: 'Read the upper band: the middle 90% of resampled differences from the current settings, with zero as a tie; the band below is the fit’s own resampled result against break-even.', target: { kind: 'series', group: 'final' } },
+      { text: 'The frozen “meets the rules” verdict at the top of the page is separate from this model support; neither relabels the other.', target: null },
+      { text: 'Read the curve: the reproduced 1× development rehearsal’s objective at each percentile, with the recorded final result marked at its actual value — above every finite rehearsal is rank 100%, not 99%.', target: { kind: 'series', group: 'carry' } },
+      { text: 'Remember the selections: this fit was chosen after the final test and found by a development search; its support is unadjusted for both.', target: null },
     ],
   },
   'chance-drawdown': {
