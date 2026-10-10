@@ -125,8 +125,8 @@ def _rehearsal_chunk(
     ceiling: float,
     require_positive_net: bool,
     floor: int,
-) -> tuple[dict[str, int], dict[str, int]]:
-    """One chunk's rule and joint pass counts, and its undefined counts; every denominator is the chunk's own path count."""
+) -> tuple[dict[str, int], dict[str, int], np.ndarray]:
+    """One chunk's rule and joint pass counts, its undefined counts, and its per-path candidate objectives; every count's denominator is the chunk's own path count."""
     net = path_net_return(candidate_returns)
     fall = path_worst_fall(candidate_returns)
     exits = candidate_exits.sum(axis=1)
@@ -357,7 +357,6 @@ def _draw_ladder(
             "seeds": seeds,
         },
     }
-
 
 
 

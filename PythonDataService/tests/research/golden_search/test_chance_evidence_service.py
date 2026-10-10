@@ -138,7 +138,6 @@ async def test_chance_diagnostics_change_no_frozen_result_and_spend_no_engine_ru
     healthy = Driver(roots=[lake])
     healthy_row = await healthy.to_candidate(healthy_symbol)
     healthy_detail = await healthy.detail(healthy_row)
-    healthy_detail = await healthy.detail(healthy_row)
 
     def refusing(*args: Any, **kwargs: Any) -> dict[str, Any]:
         raise RuntimeError("chance computation exploded")
