@@ -16,6 +16,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
+from app.research.golden_search.evidence import CANDIDATE_LABELS
+
 #: When the owner named the fit: before the test opened (a legacy record), or after its outcomes were recorded.
 Pick = Literal["before_test", "after_test"]
 
@@ -82,4 +84,10 @@ def fit_for(exam: Mapping[str, Any], candidate_key: str | None) -> dict[str, Any
     if candidate_key is None:
         return None
     return next((fit for fit in recorded_fits(exam) if candidate_key == fit["key"] or candidate_key in fit["same_as"]), None)
+
+
+def fit_label(fit: Mapping[str, Any]) -> str:
+    """``All-period fit``, ``Recent fit``, or ``All-period and recent fit`` when both chose the same settings."""
+    names = [CANDIDATE_LABELS[key] for key in (fit["key"], *fit["same_as"])]
+    return " and ".join([names[0].removesuffix(" fit"), *(name.lower() for name in names[1:])]) if len(names) > 1 else names[0]
 

@@ -29,8 +29,10 @@ Validated against: tests/research/golden_search/test_chance_compare.py
 The readings inform. Selection, eligibility, the recommendation and each
 final-test outcome do not read them, and no reading here is a probability
 of a true edge, a p-value, or a forecast: the shares describe this
-resampling model only, and the fit they describe was selected on these same
-sessions, so search-selection bias is not corrected.
+resampling model only, and on the development window the fit they describe
+was selected on these same sessions, so search-selection bias is not
+corrected (the exam's final-window readings pass the two-selection note
+instead, since their sessions were never selected on).
 """
 
 from __future__ import annotations
@@ -79,8 +81,6 @@ OBJECTIVES: dict[RankingMeasure, tuple[str, str]] = {
 # ── Missing reasons ───────────────────────────────────────────────────────
 # Codes are stable identifiers the operator copy explains; every known missing input names one.
 
-NOT_EVALUATED = ("not_evaluated", "The development run was never evaluated for this fit, so there are no sessions to resample.")
-FAILED_RUN = ("failed_run", "The development run failed, so there are no sessions to resample.")
 NO_TRADE_LIST = ("no_trade_list", chance.NO_TRADE_LIST)
 TOO_FEW_SESSIONS = ("too_few_sessions", "The run covers too few sessions to resample; at least 20 are needed.")
 NOT_POSITIVE_CAPITAL = ("not_positive_capital", chance.NOT_POSITIVE_CAPITAL)
@@ -92,9 +92,10 @@ DERIVED_RETURN_OVERFLOW = (
     "derived_return_overflow",
     "A session return derived from the run's equity is not a finite number, so the series cannot be resampled.",
 )
+
 MISSING_SCHEDULED_SESSIONS = (
     "missing_scheduled_sessions",
-    "The development run does not cover every session the calendar schedules for its window; the gap is not filled, sorted or interpolated.",
+    "The run does not cover every session the calendar schedules for its window; the gap is not filled, sorted or interpolated.",
 )
 UNSCHEDULED_SESSION = (
     "unscheduled_session",
@@ -106,15 +107,15 @@ NON_CANONICAL_CLOSE = (
 )
 UNPAIRED_SESSIONS = (
     "unpaired_sessions",
-    "This fit's development sessions and the current settings' do not cover the same scheduled sessions, so the two runs cannot be paired path by path.",
+    "This fit's sessions and the current settings' do not cover the same scheduled sessions, so the two runs cannot be paired path by path.",
 )
 INCONSISTENT_CAPITAL = (
     "inconsistent_capital",
-    "This fit's development run and the current settings' start from different capitals, so a paired comparison has no single scope.",
+    "This fit's run and the current settings' start from different capitals, so a paired comparison has no single scope.",
 )
 INCUMBENT_UNAVAILABLE = (
     "incumbent_unavailable",
-    "The current settings' development run cannot be read, so no comparison is available; the fit's own readings are unaffected.",
+    "The current settings' run cannot be read, so no comparison is available; the fit's own readings are unaffected.",
 )
 NOT_MEASURED = (
     "not_measured",
@@ -179,16 +180,20 @@ def admit_run(
     metrics: Metrics | None,
     detail: Mapping[str, Any] | None,
     window: tuple[int, int],
+    *,
+    sessions_label: str = "development",
 ) -> SessionSeries | dict[str, Any]:
-    """Admit one development run's sessions, or the named reason no reading can be drawn from it.
+    """Admit one run's sessions, or the named reason no reading can be drawn from it.
 
     The run's own outcome is checked before its detail is read; the series checks are ``chance.session_series``'s,
     with the boundary checks this slice adds: calendar coverage of the scheduled window, and finite derived returns.
+    ``sessions_label`` names the window in the two outcome missings ("development" or "final"), so a final-interval
+    refusal never calls itself a development one.
     """
     if metrics is None:
-        return _missing(NOT_EVALUATED)
+        return _missing(("not_evaluated", f"The {sessions_label} run was never evaluated for this fit, so there are no sessions to resample."))
     if metrics.status != "completed":
-        return _missing(FAILED_RUN, detail=f"({metrics.error or 'no reason recorded'})")
+        return _missing(("failed_run", f"The {sessions_label} run failed, so there are no sessions to resample."), detail=f"({metrics.error or 'no reason recorded'})")
     series = session_series(detail)
     if isinstance(series, str):
         if series.startswith(TOO_FEW_SESSIONS_PREFIX):
@@ -303,10 +308,10 @@ def _classify(counts: Mapping[str, int], clear: float) -> tuple[str, bool]:
     return "mixed", counts["undefined"] > 0
 
 
-def _comparison_sentence(label: str, counts: Mapping[str, int], objective_label: str) -> str:
+def _comparison_sentence(label: str, counts: Mapping[str, int], objective_label: str, sessions_label: str) -> str:
     shares = _shares(counts)
     as_good = counts["better"] + counts["tied"]
-    prefix = f"In {REPLICATIONS:,} paired resamples of these development sessions, this fit's {objective_label} was"
+    prefix = f"In {REPLICATIONS:,} paired resamples of these {sessions_label} sessions, this fit's {objective_label} was"
     incomplete = (
         f" {counts['undefined']:,} path{'s' if counts['undefined'] != 1 else ''} left the comparison undefined, so this support is incomplete."
     )
@@ -368,6 +373,8 @@ def _comparison_reading(
     window: tuple[int, int],
     candidate_hash: str,
     incumbent_hash: str,
+    sessions_label: str,
+    bias_note: str,
     cancel_check: _Cancel,
 ) -> dict[str, Any]:
     label = OBJECTIVES[objective][0]
@@ -380,9 +387,9 @@ def _comparison_reading(
     return {
         "status": "measured",
         "label": classification,
-        "sentence": _comparison_sentence(classification, counts, label),
+        "sentence": _comparison_sentence(classification, counts, label, sessions_label),
         "incomplete_support": incomplete,
-        "bias_note": BIAS_NOTE,
+        "bias_note": bias_note,
         "counts": dict(counts),
         "shares": _shares(counts),
         "at_least_as_good": {"count": counts["better"] + counts["tied"], "share": (counts["better"] + counts["tied"]) / REPLICATIONS},
@@ -405,19 +412,19 @@ def _comparison_reading(
     }
 
 
-def _profitability_sentence(counts: Mapping[str, int]) -> str:
+def _profitability_sentence(counts: Mapping[str, int], sessions_label: str) -> str:
     shares = _shares(counts)
     if counts["positive"] + counts["zero"] + counts["negative"] == 0:
         return "No resample produced a defined compounded return, so no profitability reading is available from this model."
     direction = (
-        f"positive in {shares['positive']:.1%} of {REPLICATIONS:,} resampled development paths "
+        f"positive in {shares['positive']:.1%} of {REPLICATIONS:,} resampled {sessions_label} paths "
         f"({counts['zero']:,} exactly flat, {counts['negative']:,} negative)"
         if counts["positive"] >= counts["negative"]
-        else f"negative in {shares['negative']:.1%} of {REPLICATIONS:,} resampled development paths "
+        else f"negative in {shares['negative']:.1%} of {REPLICATIONS:,} resampled {sessions_label} paths "
         f"({counts['positive']:,} positive, {counts['zero']:,} exactly flat)"
     )
     incomplete = f" {counts['undefined']:,} path{'s' if counts['undefined'] != 1 else ''} left the return undefined." if counts["undefined"] else ""
-    return f"The recorded development outcome resamples to a compounded net return {direction}.{incomplete} This is the model's spread of what was recorded, not a forecast."
+    return f"The recorded {sessions_label} outcome resamples to a compounded net return {direction}.{incomplete} This is the model's spread of what was recorded, not a forecast."
 
 
 def _profitability_reading(
@@ -426,6 +433,7 @@ def _profitability_reading(
     objective: RankingMeasure,
     window: tuple[int, int],
     candidate_hash: str,
+    sessions_label: str,
     cancel_check: _Cancel,
 ) -> dict[str, Any]:
     seed_inputs = [SCHEMA_PROFITABILITY, window[0], window[1], objective, candidate_hash]
@@ -448,7 +456,7 @@ def _profitability_reading(
     return {
         "status": "measured",
         "label": label,
-        "sentence": _profitability_sentence(counts),
+        "sentence": _profitability_sentence(counts, sessions_label),
         "counts": dict(counts),
         "shares": _shares(counts),
         "basis": _basis(
@@ -502,16 +510,21 @@ def development_readings(
     incumbent_metrics: Metrics | None,
     incumbent_detail: Mapping[str, Any] | None,
     incumbent_hash: str,
+    sessions_label: str = "development",
+    bias_note: str = BIAS_NOTE,
     cancel_check: _Cancel = lambda: None,
 ) -> dict[str, dict[str, Any]]:
-    """One fit's development chance readings — the comparison component and the independent profitability component.
+    """One window's chance readings for a fit — the comparison component and the independent profitability component.
 
-    Known missing inputs come back as typed missing reasons per component; an unexpected error is logged and
+    The window's own name rides through ``sessions_label`` so every sentence names the sessions it actually
+    resampled, and ``bias_note`` is the caveat those sentences deserve: the development-stage default says the fit
+    was selected on these same sessions, while the exam passes the two-selection note its final-interval readings
+    require. Known missing inputs come back as typed missing reasons per component; an unexpected error is logged and
     comes back as a diagnostic failure for that component, never as a number and never silently.
     """
     readings: dict[str, dict[str, Any]] = {}
     try:
-        admitted = admit_run(candidate_metrics, candidate_detail, window)
+        admitted = admit_run(candidate_metrics, candidate_detail, window, sessions_label=sessions_label)
     except JobCancelled:
         raise  # cancellation stops the stage; it is never recorded as a reading
     except Exception as exc:  # a diagnostic failure, not a refusal: the stage records it and continues
@@ -519,7 +532,7 @@ def development_readings(
     if not isinstance(admitted, SessionSeries):
         return {"comparison": dict(admitted), "profitability": dict(admitted)}
     try:
-        readings["profitability"] = _profitability_reading(admitted, objective=objective, window=window, candidate_hash=candidate_hash, cancel_check=cancel_check)
+        readings["profitability"] = _profitability_reading(admitted, objective=objective, window=window, candidate_hash=candidate_hash, sessions_label=sessions_label, cancel_check=cancel_check)
     except JobCancelled:
         raise  # cancellation stops the stage; it is never recorded as a reading
     except Exception as exc:
@@ -540,7 +553,7 @@ def development_readings(
         }
         return readings
     try:
-        incumbent = admit_run(incumbent_metrics, incumbent_detail, window)
+        incumbent = admit_run(incumbent_metrics, incumbent_detail, window, sessions_label=sessions_label)
     except JobCancelled:
         raise  # cancellation stops the stage; it is never recorded as a reading
     except Exception as exc:  # an unexpected incumbent-side error is a diagnostic failure of the comparison, not a missing reading
@@ -565,6 +578,8 @@ def development_readings(
             window=window,
             candidate_hash=candidate_hash,
             incumbent_hash=incumbent_hash,
+            sessions_label=sessions_label,
+            bias_note=bias_note,
             cancel_check=cancel_check,
         )
     except JobCancelled:

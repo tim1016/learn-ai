@@ -38,12 +38,14 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Mapping
+from fractions import Fraction
 from typing import Any
 
 import numpy as np
 
 from app.jobs.progress import JobCancelled
 from app.research.golden_search.chance import (
+    CONVENTION,
     MEAN_BLOCK_SESSIONS,
     REPLICATIONS,
     SessionSeries,
@@ -51,6 +53,7 @@ from app.research.golden_search.chance import (
     seed_for,
 )
 from app.research.golden_search.chance_compare import (
+    KNOWN_STATUSES,
     OBJECTIVES,
     _missing,
     _pair_chunk,
@@ -77,13 +80,39 @@ SELECTION_NOTE = (
 _Cancel = Callable[[], object]
 
 
-def _rank_sentence(rank: float, below: int, finite: int, undefined: int, objective_label: str) -> str:
+def _rank_label(below: int, finite: int) -> str:
+    """The recorded result's bucket: exact-Fraction tails, so no float division decides a boundary.
+
+    ≤ 1/20 of defined paths strictly below reads ``below_most``; ≥ 19/20 reads ``above_most``; a finite path
+    count of zero is its own state.
+    """
     if finite == 0:
+        return "no_defined_paths"
+    rank = Fraction(below, finite)
+    if rank <= Fraction(1, 20):
+        return "below_most"
+    if rank >= Fraction(19, 20):
+        return "above_most"
+    return "middle"
+
+
+#: Each label's phrase in the rank sentence, keyed as the stored reading keys it.
+_RANK_PHRASES = {
+    "no_defined_paths": None,
+    "below_most": "below most development rehearsals",
+    "above_most": "above most development rehearsals",
+    "middle": "inside the middle of the development rehearsals",
+}
+
+
+def _rank_sentence(below: int, finite: int, undefined: int, objective_label: str) -> str:
+    label = _rank_label(below, finite)
+    phrase = _RANK_PHRASES[label]
+    if phrase is None:
         return "The reproduced rehearsal produced no defined objective on any path, so the recorded final result has no rank among it."
-    label = "below most development rehearsals" if rank <= 0.05 else "above most development rehearsals" if rank >= 0.95 else "inside the middle of the development rehearsals"
     return (
-        f"The recorded final {objective_label} sits {label}: strictly above {below:,} of the {finite:,} defined rehearsal paths "
-        f"({rank:.1%}), {undefined:,} undefined. This is conditional on the resampling model: a high rank is not the model "
+        f"The recorded final {objective_label} sits {phrase}: strictly above {below:,} of the {finite:,} defined rehearsal paths "
+        f"({below / finite:.1%}), {undefined:,} undefined. This is conditional on the resampling model: a high rank is not the model "
         "proving itself right, and a low rank is not proof that bad luck is ruled out."
     )
 
@@ -141,6 +170,16 @@ def carry_over_reading(
     seed_entry = (basis.get("seeds") or {}).get("1x")
     if not isinstance(seed_entry, Mapping) or "value" not in seed_entry:
         return _missing(CARRY_OVER_MISSING, detail="The stored rehearsal kept no 1× seed to reproduce.")
+    # The reproduction must repeat the stored draw, so the stored basis's own constants are checked, never
+    # assumed: a rehearsal drawn under different resampling constants would reproduce different paths from
+    # the same seed, and that fabricated rank is exactly what this reading refuses to produce.
+    stored_constants = (basis.get("convention"), basis.get("mean_block_sessions"), basis.get("replications"))
+    if stored_constants != (CONVENTION, MEAN_BLOCK_SESSIONS, REPLICATIONS):
+        return _missing(
+            CARRY_OVER_MISSING,
+            detail=f"The stored rehearsal was drawn under different resampling constants (convention {stored_constants[0]!r}, "
+            f"mean block {stored_constants[1]!r}, {stored_constants[2]!r} replications), so today's draw would not repeat its paths.",
+        )
     if final_metrics is None or final_metrics.status != "completed":
         return _missing(CARRY_OVER_MISSING, detail="The final run has no completed result to rank.")
     recorded = _recorded_objective(final_metrics, objective)
@@ -159,12 +198,14 @@ def carry_over_reading(
     if source.get("capital") != development.capital:
         return _missing(CARRY_OVER_MISSING, detail="The development input's starting capital no longer matches the rehearsal's stored scope.")
     try:
-        final_series = admit_run(final_metrics, final_detail, final_window)
+        final_series = admit_run(final_metrics, final_detail, final_window, sessions_label="final")
     except JobCancelled:
         raise
     except Exception as exc:
         return failed_component(exc, "carry-over")
-    if not isinstance(final_series, SessionSeries) or len(final_series.session_ms) < scheduled:
+    if not isinstance(final_series, SessionSeries):
+        return _missing(CARRY_OVER_MISSING, detail=f"The final run could not be read as a session series: {final_series.get('reason', 'unreadable')}")
+    if len(final_series.session_ms) < scheduled:
         return _missing(CARRY_OVER_MISSING, detail=f"The final run covers fewer sessions than the rehearsal's {scheduled}-session 1× length.")
     try:
         objectives = reproduce_1x_objectives(development, seed=int(seed_entry["value"]), size=scheduled, objective=objective, cancel_check=cancel_check)
@@ -178,17 +219,16 @@ def carry_over_reading(
     rank = below / finite_count if finite_count else 0.0
     # The curve the panel plots: the reproduction's own 1st-99th percentiles, plot summaries and never individual rehearsals.
     curve = [float(value) for value in np.quantile(objectives[finite], np.linspace(0.01, 0.99, 99), method="linear")] if finite_count else []
-    label = "below_most" if finite_count and rank <= 0.05 else "above_most" if finite_count and rank >= 0.95 else "middle" if finite_count else "no_defined_paths"
     return {
         "status": "measured",
-        "label": label,
+        "label": _rank_label(below, finite_count),
         "rank": rank,
         "below": below,
         "finite": finite_count,
         "undefined": int(REPLICATIONS - finite_count),
         "recorded_objective": float(recorded),
         "curve": {"p": curve, "finite": finite_count},
-        "sentence": _rank_sentence(rank, below, finite_count, REPLICATIONS - finite_count, OBJECTIVES[objective][0]),
+        "sentence": _rank_sentence(below, finite_count, REPLICATIONS - finite_count, OBJECTIVES[objective][0]),
         "selection_note": SELECTION_NOTE,
         "basis": {
             "schema_version": SCHEMA_CARRY_OVER,
@@ -244,8 +284,6 @@ def fit_to_fit_reading(
     seed = seed_for(*seed_inputs)
     counts = {"better": 0, "tied": 0, "worse": 0, "undefined": 0}
     rng = np.random.default_rng(seed)
-    done = 0
-    first_objectives = np.full(REPLICATIONS, np.nan)
     for chunk in stationary_index_chunks(len(sides[0].session_ms), size=len(sides[0].session_ms), mean_block=MEAN_BLOCK_SESSIONS, replications=REPLICATIONS, rng=rng):
         cancel_check()
         own = path_objective(sides[0].returns[chunk], objective, sides[0].capital)
@@ -253,8 +291,6 @@ def fit_to_fit_reading(
         chunk_counts, _ = _pair_chunk(own, other)
         for name, value in chunk_counts.items():
             counts[name] += value
-        first_objectives[done : done + len(own)] = own
-        done += len(own)
     label = OBJECTIVES[objective][0]
     sentence = (
         f"In {REPLICATIONS:,} paired resamples of the final sessions, {first['label']} was at least as good as {second['label']} in "
@@ -295,6 +331,15 @@ _NOT_MEASURED_BY_COMPONENT: dict[str, tuple[str, str]] = {
     "carry_over": CARRY_OVER_MISSING,
 }
 
+#: The statuses each stored component may read back as-recorded; the comparison components share #3011's set
+#: (``same_settings``/``baseline`` never arise from the exam wiring, but a stored record that holds one is
+#: served as it stands, never re-classified), while the carry-over is this slice's own vocabulary.
+_KNOWN_BY_COMPONENT: dict[str, frozenset[str]] = {
+    "comparison": KNOWN_STATUSES,
+    "profitability": KNOWN_STATUSES,
+    "carry_over": frozenset({"measured", "missing", "failed"}),
+}
+
 
 def stored_final_chance(fit: Mapping[str, Any]) -> dict[str, Any]:
     """The per-fit final chance components of one stored exam fit, normalized per component like every other chance reading."""
@@ -302,7 +347,7 @@ def stored_final_chance(fit: Mapping[str, Any]) -> dict[str, Any]:
     components: dict[str, dict[str, Any]] = {}
     for component in ("comparison", "profitability", "carry_over"):
         record = stored.get(component)
-        if isinstance(record, Mapping) and record.get("status") in {"measured", "missing", "failed"}:
+        if isinstance(record, Mapping) and record.get("status") in _KNOWN_BY_COMPONENT[component]:
             components[component] = dict(record)
         elif isinstance(record, Mapping):
             components[component] = _missing(

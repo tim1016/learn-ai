@@ -35,7 +35,7 @@ from app.research.golden_search.chance_compare import (
     incumbent_readings,
 )
 from app.research.golden_search.chance_drawdown import drawdown_reading
-from app.research.golden_search.chance_final import carry_over_reading, fit_to_fit_reading
+from app.research.golden_search.chance_final import SELECTION_NOTE, carry_over_reading, fit_to_fit_reading
 from app.research.golden_search.chance_rehearsal import failed_rehearsal, rehearsal_reading
 from app.research.golden_search.concentration import concentration
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, point_hash
@@ -56,7 +56,7 @@ from app.research.golden_search.evidence import (
     recommendation,
 )
 from app.research.golden_search.exam_rules import judge_exam
-from app.research.golden_search.final_test import fit_for, pick_of, recorded_fits
+from app.research.golden_search.final_test import fit_for, fit_label, pick_of, recorded_fits
 from app.research.golden_search.grid_procedure import neighbor_probes, pair_grid, run_grid
 from app.research.golden_search.guidance import research_weakness
 from app.research.golden_search.models import STAGE_ESTIMATES, STAGE_STATES, StageName, StudyRow
@@ -682,6 +682,8 @@ def _final_chance_for(
     """
     readings: dict[str, Any] = {}
     try:
+        # The final interval's own sessions, so every sentence names the window it resampled and carries the
+        # two-selection caveat, never the development stage's selected-on-these-sessions note (#3014).
         readings = development_readings(
             objective=ctx.protocol.policy.objective,
             window=ctx.final,
@@ -691,6 +693,8 @@ def _final_chance_for(
             incumbent_metrics=incumbent,
             incumbent_detail=incumbent_detail,
             incumbent_hash=point_hash(ctx.row.strategy_key, dict(ctx.protocol.incumbent.params)),
+            sessions_label="final",
+            bias_note=SELECTION_NOTE,
             cancel_check=ctx.cancel_check,
         )
     except JobCancelled:
@@ -746,32 +750,31 @@ def run_exam(ctx: StageContext) -> tuple[str, dict[str, Any]]:
         # Diagnostics come after the frozen judgement and are stored on the fit (#3014); they gate nothing.
         fit["chance"] = _final_chance_for(ctx, evaluator, fit, incumbent, incumbent_detail)
     exam.update(fits=fits, incumbent_metrics=incumbent.as_dict())
-    # Two distinct completed fits: one shared paired draw between them, stored beside the per-fit readings (#3014).
-    distinct = [fit for fit in fits if len(fits) > 1]
+    # Two distinct fits (the record's twin folding already guaranteed distinct settings): one shared paired
+    # draw between them, stored beside the per-fit readings (#3014).
     try:
-        exam["chance"] = (
-            {
+        if len(fits) >= 2:
+            exam["chance"] = {
                 "fit_to_fit": fit_to_fit_reading(
                     objective=ctx.protocol.policy.objective,
                     window=ctx.final,
                     first={
-                        "metrics": Metrics.from_dict(distinct[0]["metrics"]),
-                        "detail": evaluator.detail_of(distinct[0]["point"], window=ctx.final),
-                        "point_hash": distinct[0]["point_hash"],
-                        "label": distinct[0]["label"],
+                        "metrics": Metrics.from_dict(fits[0]["metrics"]),
+                        "detail": evaluator.detail_of(fits[0]["point"], window=ctx.final),
+                        "point_hash": fits[0]["point_hash"],
+                        "label": fit_label(fits[0]),
                     },
                     second={
-                        "metrics": Metrics.from_dict(distinct[1]["metrics"]),
-                        "detail": evaluator.detail_of(distinct[1]["point"], window=ctx.final),
-                        "point_hash": distinct[1]["point_hash"],
-                        "label": distinct[1]["label"],
+                        "metrics": Metrics.from_dict(fits[1]["metrics"]),
+                        "detail": evaluator.detail_of(fits[1]["point"], window=ctx.final),
+                        "point_hash": fits[1]["point_hash"],
+                        "label": fit_label(fits[1]),
                     },
                     cancel_check=ctx.cancel_check,
                 )
             }
-            if len(distinct) >= 2
-            else {"fit_to_fit": _missing_single_fit()}
-        )
+        else:
+            exam["chance"] = {"fit_to_fit": _missing_single_fit()}
     except JobCancelled:
         raise  # cancellation stops the stage; it is never recorded as a reading
     except Exception as exc:  # a diagnostic failure the stage records; it never fails the exam itself

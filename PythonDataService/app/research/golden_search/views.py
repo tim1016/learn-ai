@@ -41,7 +41,7 @@ from app.research.golden_search.decision_summary import decision_summaries
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, scalar
 from app.research.golden_search.evidence import CANDIDATE_LABELS, monthly_results
 from app.research.golden_search.final_measures import final_comparison
-from app.research.golden_search.final_test import fit_for, fits_to_test, pick_of, recorded_fits
+from app.research.golden_search.final_test import fit_for, fit_label, fits_to_test, pick_of, recorded_fits
 from app.research.golden_search.guidance import (
     candidate_flags,
     candidate_guidance,
@@ -433,12 +433,6 @@ def evidence_view(
 
 
 # ── Exam and qualification ───────────────────────────────────────────────
-
-
-def fit_label(fit: Mapping[str, Any]) -> str:
-    """``All-period fit``, ``Recent fit``, or ``All-period and recent fit`` when both chose the same settings."""
-    names = [CANDIDATE_LABELS[key] for key in (fit["key"], *fit["same_as"])]
-    return " and ".join([names[0].removesuffix(" fit"), *(name.lower() for name in names[1:])]) if len(names) > 1 else names[0]
 
 
 def exam_view(stored: Mapping[str, Any], *, chosen_key: str | None, approvable: bool = True) -> dict[str, Any]:

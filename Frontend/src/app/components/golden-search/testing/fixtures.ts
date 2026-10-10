@@ -651,10 +651,23 @@ export function chanceFitToFit(overrides: Partial<MeasuredChanceFitToFit> = {}):
 }
 
 /** One tested fit's final chance components (#3014). */
+/** The two-selection caveat the exam's final-window readings carry instead of the development bias note (#3014). */
+export const FINAL_SELECTION_NOTE =
+  'This fit was chosen after the final test, from the fits that ran, and was selected by a search over the development data. Its support is unadjusted for both selections and is not a calibrated error rate or a probability of a true edge.';
+
 export function finalChance(overrides: Partial<FinalChance> = {}): FinalChance {
   return {
-    comparison: chanceComparison({ basis: { ...chanceComparison().basis, source: { ...chanceComparison().basis.source, window: { start_ms: FINAL_START_MS, end_ms: FINAL_START_MS + 2_592_000_000 } } } }),
-    profitability: chanceProfitability(),
+    comparison: chanceComparison({
+      basis: { ...chanceComparison().basis, source: { ...chanceComparison().basis.source, window: { start_ms: FINAL_START_MS, end_ms: FINAL_START_MS + 2_592_000_000 } } },
+      // The final panel's sentences name the window they resampled: the final sessions, never development ones.
+      sentence:
+        'In 10,000 paired resamples of these final sessions, this fit’s total return was at least as good as the current settings’ in 96.2% of paths (9,350 strictly better, 270 tied, 380 worse). That is support under this resampling model only, not a probability of a true edge.',
+      bias_note: FINAL_SELECTION_NOTE,
+    }),
+    profitability: chanceProfitability({
+      sentence:
+        'The recorded final outcome resamples to a compounded net return positive in 97.4% of 10,000 resampled final paths (60 exactly flat, 200 negative). This is the model’s spread of what was recorded, not a forecast.',
+    }),
     carry_over: chanceCarryOver(),
     ...overrides,
   };

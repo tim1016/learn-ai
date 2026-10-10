@@ -35,6 +35,19 @@ describe('the final uncertainty chart specs', () => {
     expect(spec.summary).toContain('never percentile bins');
   });
 
+  it('formats the curve by the recorded objective measure, never by a magnitude guess', () => {
+    const base = chanceCarryOver();
+    const carry = chanceCarryOver({
+      basis: { ...base.basis, objective: { measure: 'net_profit', label: 'net profit', units: 'US dollars' } },
+      recorded_objective: 512.5,
+      curve: { p: base.curve.p.map((value) => value * 10_000), finite: base.curve.finite },
+    });
+    const spec = carryOverSpec(ALL_PERIOD, carry, 'all_period');
+    const recorded = spec.table.rows.find((row) => row.key === 'recorded')?.cells.join(' ') ?? '';
+    expect(recorded).toContain('+$513');
+    expect(recorded).not.toContain('%');
+  });
+
   it('carries the fit-to-fit sentence with its post-selection caveat', () => {
     const text = fitToFitText(chanceFitToFit());
     expect(text).toContain('68.4% of paths');

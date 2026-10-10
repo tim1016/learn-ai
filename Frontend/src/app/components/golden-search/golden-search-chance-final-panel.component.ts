@@ -4,7 +4,16 @@ import { GoldenSearchChartComponent } from './charts/golden-search-chart.compone
 import { GoldenSearchPanelComponent } from './charts/golden-search-panel.component';
 import { sameChart } from './charts/golden-search-chart-spec';
 import { carryOverSpec, finalIntervalsSpec, fitToFitText } from './golden-search-chance-final-charts';
-import type { CandidateRef, ExamChance, FinalChance, MeasuredChanceCarryOver, MeasuredChanceComparison } from './golden-search.types';
+import type { CandidateRef, ChanceComparison, ExamChance, FinalChance, MeasuredChanceCarryOver, MeasuredChanceComparison } from './golden-search.types';
+
+/** Any per-component stored reading: measured, named-missing, or failed with its own sentence. */
+type ChanceReading = FinalChance['carry_over'];
+
+/** How a reading the server could not measure is shown: its own words, never an invented sentence. */
+interface UnmeasuredNote {
+  kind: 'failed' | 'missing' | 'recorded';
+  text: string;
+}
 
 /**
  * The decision step's final-uncertainty panel (#3014): the selected fit's
@@ -13,9 +22,11 @@ import type { CandidateRef, ExamChance, FinalChance, MeasuredChanceCarryOver, Me
  * reproduced 1× rehearsal's percentile curve with the recorded final result
  * marked at its actual value, and the optional fit-to-fit comparison when
  * two fits ran. Every count, share, range, rank and sentence is the
- * server's; the browser formats and draws. The frozen "meets the rules"
- * verdict stays visually separate, the rank never truncates to the plotted
- * range, and the chosen-after-the-test caveat stays visible.
+ * server's; the browser formats and draws. A component the server could not
+ * measure says why in its own words, a failed one raises its sentence as an
+ * alert — neither renders as absence. The frozen "meets the rules" verdict
+ * stays visually separate, the rank never truncates to the plotted range,
+ * and the chosen-after-the-test caveat stays visible.
  */
 @Component({
   selector: 'app-golden-search-chance-final-panel',
@@ -32,19 +43,21 @@ export class GoldenSearchChanceFinalPanelComponent {
   /** The exam-level chance record: the optional fit-to-fit comparison. */
   readonly examChance = input.required<ExamChance>();
 
-  protected readonly comparison = computed<MeasuredChanceComparison | null>(() => {
+  protected readonly comparisonMeasured = computed<MeasuredChanceComparison | null>(() => {
     const comparison = this.chance().comparison;
     return comparison.status === 'measured' ? comparison : null;
   });
+  protected readonly comparisonNote = computed<UnmeasuredNote | null>(() => describeUnmeasured(this.chance().comparison));
 
-  protected readonly carry = computed<MeasuredChanceCarryOver | null>(() => {
+  protected readonly carryMeasured = computed<MeasuredChanceCarryOver | null>(() => {
     const carry = this.chance().carry_over;
     return carry.status === 'measured' ? carry : null;
   });
+  protected readonly carryNote = computed<UnmeasuredNote | null>(() => describeUnmeasured(this.chance().carry_over));
 
   protected readonly intervalsSpec = computed(
     () => {
-      const comparison = this.comparison();
+      const comparison = this.comparisonMeasured();
       return comparison === null ? null : finalIntervalsSpec(this.candidate(), comparison, this.candidate().key);
     },
     // Equal while it draws the same stored reading, so a study poll (new objects, same evidence) does not redraw it.
@@ -53,7 +66,7 @@ export class GoldenSearchChanceFinalPanelComponent {
 
   protected readonly carrySpec = computed(
     () => {
-      const carry = this.carry();
+      const carry = this.carryMeasured();
       return carry === null ? null : carryOverSpec(this.candidate(), carry, this.candidate().key);
     },
     { equal: sameChart },
@@ -70,4 +83,21 @@ export class GoldenSearchChanceFinalPanelComponent {
     const fit_to_fit = this.examChance().fit_to_fit;
     return fit_to_fit.status === 'measured' ? fitToFitText(fit_to_fit) : null;
   });
+
+  /** Why the fit-to-fit comparison could not be computed, when it failed; a failure never renders as absence. */
+  protected readonly fitToFitFailed = computed(() => {
+    const fit_to_fit = this.examChance().fit_to_fit;
+    return fit_to_fit.status === 'failed' ? fit_to_fit.sentence : null;
+  });
+
+  /** True only when both components hold named-missing records — genuinely never measured, with nothing failed. */
+  protected readonly nothingMeasured = computed(() => this.chance().comparison.status === 'missing' && this.chance().carry_over.status === 'missing');
+}
+
+/** A stored reading the panel cannot chart, in the server's words: failed raises an alert, the rest read as notes. */
+function describeUnmeasured(reading: ChanceComparison | ChanceReading): UnmeasuredNote | null {
+  if (reading.status === 'measured') return null;
+  if (reading.status === 'failed') return { kind: 'failed', text: reading.sentence };
+  if (reading.status === 'missing') return { kind: 'missing', text: reading.reason };
+  return { kind: 'recorded', text: reading.sentence };
 }

@@ -1,8 +1,7 @@
 import type { ChartSpec } from './charts/golden-search-chart-spec';
-import { NOT_RECORDED, tooltipFrame, tooltipHtml, type ChartTheme, type TooltipRow } from './charts/golden-search-chart-theme';
+import { dataIndexOf, NOT_RECORDED, tooltipFrame, tooltipHtml, type ChartTheme, type TooltipRow } from './charts/golden-search-chart-theme';
 import type { ChartOption } from './charts/golden-search-echarts';
 import { countText, objectiveTexts, shareText } from './golden-search-chance-charts';
-import { ratioText, signedPercentText, signedUsdText } from './golden-search-display';
 import type { CandidateRef, MeasuredChanceCarryOver, MeasuredChanceComparison, MeasuredChanceFitToFit } from './golden-search.types';
 
 /**
@@ -122,7 +121,8 @@ export function finalIntervalsSpec(candidate: CandidateRef, comparison: Measured
 
 /** The reproduced 1× rehearsal's percentile curve with the recorded final result marked at its actual value. */
 export function carryOverSpec(candidate: CandidateRef, carry: MeasuredChanceCarryOver, featured: string | null): ChartSpec {
-  const texts = { axis: (value: number) => (Math.abs(value) >= 1000 ? signedUsdText(value) : Math.abs(value) <= 5 ? signedPercentText(value) : ratioText(value)) };
+  // The recorded objective's own units decide the format; a magnitude guess would render dollars as percents.
+  const texts = objectiveTexts(carry.basis.objective.measure);
   const percentiles = Array.from({ length: 99 }, (_, index) => index + 1);
   return {
     label: `${candidate.label} result among its rehearsals`,
@@ -133,16 +133,19 @@ export function carryOverSpec(candidate: CandidateRef, carry: MeasuredChanceCarr
       tooltip: {
         ...tooltipFrame(theme),
         trigger: 'axis',
-        formatter: () =>
-          tooltipHtml(
+        formatter: (params: unknown) => {
+          const percentile = percentiles[dataIndexOf(params) ?? -1];
+          if (percentile === undefined) return '';
+          return tooltipHtml(
             {
-              title: 'Rehearsal objective by percentile',
+              title: `Rehearsal objective · ${percentile}th percentile`,
               columns: ['Value'],
-              rows: [{ label: 'Rehearsal curve', swatch: { color: theme.candidates.all_period, dashed: false }, values: ['hover a percentile'] }],
+              rows: [{ label: 'Rehearsal curve', swatch: { color: theme.candidates.all_period, dashed: false }, values: [texts.cell(carry.curve.p[percentile - 1] ?? null)] }],
               notes: ['The dashed line is the recorded final result at its actual value; the rank counts actual paths, never percentile bins.'],
             },
             theme,
-          ),
+          );
+        },
       },
       xAxis: {
         type: 'value',
@@ -184,7 +187,7 @@ export function carryOverSpec(candidate: CandidateRef, carry: MeasuredChanceCarr
       caption: `${candidate.label} recorded final result among its own 1× development rehearsals`,
       columns: ['Quantity', 'Value'],
       rows: [
-        { key: 'recorded', cells: ['Recorded final objective', texts.axis(carry.recorded_objective)] },
+        { key: 'recorded', cells: ['Recorded final objective', texts.cell(carry.recorded_objective)] },
         { key: 'rank', cells: ['Rank among rehearsals', `${countText(carry.below)} of ${countText(carry.finite)} defined paths strictly below (${Math.round(carry.rank * 1000) / 10}%)`] },
         { key: 'undefined', cells: ['Undefined rehearsal paths', countText(carry.undefined)] },
         { key: 'label', cells: ['Reading', carry.sentence] },
