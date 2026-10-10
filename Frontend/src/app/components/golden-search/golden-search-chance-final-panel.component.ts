@@ -18,7 +18,7 @@ interface UnmeasuredNote {
 /**
  * The decision step's final-uncertainty panel (#3014): the selected fit's
  * resampling support beside its frozen outcome — the middle-90% difference
- * band and the fit's own middle-90% result band against break-even, the
+ * band and the fit's own middle-90% result band against objective zero, the
  * reproduced 1× rehearsal's percentile curve with the recorded final result
  * marked at its actual value, and the optional fit-to-fit comparison when
  * two fits ran. Every count, share, range, rank and sentence is the
@@ -42,6 +42,8 @@ export class GoldenSearchChanceFinalPanelComponent {
   readonly chance = input.required<FinalChance>();
   /** The exam-level chance record: the optional fit-to-fit comparison. */
   readonly examChance = input.required<ExamChance>();
+  /** A presentation may exclude a stored diagnostic while retaining final paired support. */
+  readonly showCarryOver = input(true);
 
   protected readonly comparisonMeasured = computed<MeasuredChanceComparison | null>(() => {
     const comparison = this.chance().comparison;

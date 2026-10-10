@@ -2,6 +2,8 @@
 
 This guide explains the charts on the Golden Search pages. For each chart it covers the question the chart answers, what is drawn, how to read it, the good signs and the warning signs, and an everyday comparison.
 
+For the end-to-end procedure, decision checkpoints and presenting a study, open the [Golden Search operating manual](/docs/golden-search-manual). Start research in [Golden Search](/golden-search).
+
 ## How to use this guide
 
 Every chart panel has two buttons:
@@ -870,20 +872,20 @@ How much support does the resampling model give this fit’s frozen final result
 
 #### What you're looking at
 
-Two bands and a curve beside the frozen outcome. The upper band is the middle 90% of resampled differences between this fit and the current settings over the final sessions, with zero as a tie; the lower band is the fit's own resampled result against break-even. The curve plots the reproduced 1× development rehearsal's objective at each of its 99 percentiles with the recorded final result marked at its actual value — a result above every finite rehearsal ranks 100%, not 99%, and the exact counts sit in the table. When two fits ran, their shared paired comparison is summarized beneath in Python's words.
+Two bands and a curve beside the frozen outcome. The upper band is the middle 90% of resampled differences between this fit and the current settings over the final sessions, with zero as a tie; the lower band is the fit's own resampled result against objective zero, which is not necessarily break-even profit. The curve plots the reproduced 1× development rehearsal's objective at each of its 99 percentiles with the recorded final result marked at its actual value — a result above every finite rehearsal ranks 100%, not 99%, and the exact counts sit in the table. When two fits ran, their shared paired comparison is summarized beneath in Python's words.
 
 The frozen "meets the rules" verdict stays separate from these model-support labels. This fit was chosen after the final test, from the fits that ran, and found by a search over the development data: its support is unadjusted for both selections and is not a calibrated error rate, a probability of a true edge, or a multiplicity correction. A high rank among rehearsals is not the model proving itself right, and a low rank is not proof that bad luck is ruled out.
 
 #### How to read it
 
-1. Read the upper band: the middle 90% of resampled differences from the current settings, with zero as a tie; the band below is the fit’s own resampled result against break-even.
+1. Read the upper band: the middle 90% of resampled differences from the current settings, with zero as a tie; the band below is the fit’s own resampled result against objective zero, which is not necessarily break-even profit.
 2. The frozen “meets the rules” verdict at the top of the page is separate from this model support; neither relabels the other.
 3. Read the curve: the reproduced 1× development rehearsal’s objective at each percentile, with the recorded final result marked at its actual value — above every finite rehearsal is rank 100%, not 99%.
 4. Remember the selections: this fit was chosen after the final test and found by a development search; its support is unadjusted for both.
 
 #### Good signs and warning signs
 
-- Good: the difference band entirely above zero with the result band above break-even.
+- Good: a difference band entirely above zero supports the fit relative to the current settings under this model. Read the separately recorded net-profit support to judge profitability; positive Sharpe does not establish positive compounded profit.
 - Warning: a rounded 95-of-100 share: the table's raw counts decide the label, and 9,499 of 10,000 is below the threshold while 9,500 is at it.
 - Warning: a result far outside the rehearsal curve — but read the rank as conditional on the model, never as proof of luck or its absence.
 - Warning: leaning on the fit-to-fit sentence to pick a winner: both selections were made after the results were viewed.

@@ -27,6 +27,8 @@ export class GoldenSearchChancePanelComponent {
   readonly candidate = input.required<CandidateRef>();
   /** The fit's stored development chance readings. */
   readonly chance = input.required<ChanceReadings>();
+  /** Names simultaneous candidate panels, keeping their landmarks distinct. */
+  readonly instance = input<string | null>(null);
 
   protected readonly measured = computed<MeasuredChanceComparison | null>(() => {
     const comparison = this.chance().comparison;

@@ -1,0 +1,4 @@
+@use '../../../styles/page-grid';
+
+app-golden-search-grid { display: block; @include page-grid.container; }
+app-golden-search-grid > .gs-page-grid { @include page-grid.layout; }

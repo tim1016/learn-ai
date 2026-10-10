@@ -3,6 +3,7 @@ import type { BarSeriesOption, CustomSeriesOption, HeatmapSeriesOption, LineSeri
 import type {
   AxisPointerComponentOption,
   GridComponentOption,
+  LegendComponentOption,
   MarkAreaComponentOption,
   MarkLineComponentOption,
   TooltipComponentOption,
@@ -18,6 +19,7 @@ export type ChartOption = ComposeOption<
   | HeatmapSeriesOption
   | CustomSeriesOption
   | GridComponentOption
+  | LegendComponentOption
   | TooltipComponentOption
   | AxisPointerComponentOption
   | MarkAreaComponentOption

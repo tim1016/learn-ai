@@ -1,0 +1,47 @@
+<app-page-header title="Golden Search operating manual" icon="pi-compass">
+  <a slot="actions" [routerLink]="studyRoute()">{{ study() ? 'Return to your study' : 'Start a study' }}</a>
+</app-page-header>
+<app-golden-search-grid>
+  <section class="overview" data-span="12" aria-labelledby="manual-purpose">
+    <h2 id="manual-purpose">One plan. Several rehearsals. One final look.</h2>
+    <p>Use this path to decide whether settings deserve further testing. Keep the question and rules fixed as you move from research to a decision.</p>
+    <ol class="route-map" aria-label="Golden Search workflow">
+      @for (step of steps; track step.id) {
+        <li><a [routerLink]="[]" [fragment]="step.id" queryParamsHandling="preserve">{{ step.title }}</a><span>{{ step.question }}</span></li>
+      }
+    </ol>
+    <p class="sealed"><i class="pi pi-lock" aria-hidden="true"></i> The final test stays sealed through Search, Test over time and Compare.</p>
+  </section>
+  <nav class="contents" data-span="3" aria-label="Manual sections">
+    <h2>Jump to a task</h2>
+    @for (step of steps; track step.id) { <a [routerLink]="[]" [fragment]="step.id" queryParamsHandling="preserve">{{ step.title }}</a> }
+    <a [routerLink]="[]" fragment="present" queryParamsHandling="preserve">Present the evidence</a>
+    <hr />
+    <a routerLink="/docs/golden-search-guide">Full chart reference</a>
+    <a routerLink="/strategy-docs">Strategy reference</a>
+    <a routerLink="/strategy-lab/docs">Metric explanations</a>
+    <a routerLink="/data-quality">Check data quality</a>
+    <a routerLink="/engine/docs">Engine assumptions</a>
+  </nav>
+  <div class="chapters" data-span="9">
+    @for (step of steps; track step.id; let index = $index) {
+      <section class="chapter" [id]="step.id" [attr.aria-labelledby]="step.id + '-title'">
+        <header><span class="number" aria-hidden="true">{{ index + 1 }}</span><div><h2 [id]="step.id + '-title'">{{ step.title }}</h2><p class="question">{{ step.question }}</p></div></header>
+        <div class="instructions"><div><h3>What to do</h3><p>{{ step.action }}</p></div><div><h3>What to look for</h3><p>{{ step.read }}</p></div></div>
+        <p class="checkpoint"><strong>Decision checkpoint.</strong> {{ step.stop }}</p>
+        <div class="links">
+          @if (study()) { <a [routerLink]="studyRoute()" [queryParams]="{ step: step.id }">Open this step in your study</a> }
+          @for (link of step.links; track link.anchor) { <a routerLink="/docs/golden-search-guide" [fragment]="link.anchor">{{ link.label }}</a> }
+        </div>
+      </section>
+    }
+    <section class="chapter" id="present" aria-labelledby="present-title">
+      <h2 id="present-title">Present the evidence to your boss</h2>
+      <p>Open Presentation report in the study. Share its link, or use Print / save PDF. Start with the conclusion and the final-test exposure, then explain what the charts support.</p>
+      <ol><li>State the strategy, dates, capital, costs and the decision being considered.</li><li>Show tests over time before the development winner.</li><li>Show each final fit against the frozen incumbent, including failed rules.</li><li>Show uncertainty beside the observed result, with missing readings visible.</li><li>End with the next decision: retain, collect fresh data, or consider qualification. A report is evidence, not approval to trade.</li></ol>
+      <p>Use <strong>Review this study</strong> for a guided tour. <strong>About this chart</strong> opens the reference beside a chart; <strong>Walk me through it</strong> explains its marks. <strong>Show as table</strong> reveals the recorded values when you need to verify a number.</p>
+      <p class="checkpoint"><strong>Current reading limitation.</strong> The version-1 Sharpe rehearsal rank compares different return conventions. The presentation report excludes it; use the final checks and paired resampling while the <a href="https://github.com/tim1016/learn-ai/issues/3025">tracked repair</a> is open.</p>
+      @if (study()) { <a [routerLink]="studyRoute()" [queryParams]="{ view: 'report' }">Open your presentation report</a> }
+    </section>
+  </div>
+</app-golden-search-grid>

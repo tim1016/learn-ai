@@ -1,8 +1,11 @@
-<app-page-header title="Golden Search" icon="pi-search-plus" />
+<app-page-header title="Golden Search" icon="pi-search-plus">
+  <a slot="actions" routerLink="/docs/golden-search-manual" [queryParams]="{ study: studyId() }">Operating manual</a>
+  @if (studyId(); as id) { <a slot="actions" [routerLink]="['/golden-search', id]" [queryParams]="{ view: 'report' }">Presentation report</a> }
+</app-page-header>
 <section class="golden-search" aria-label="Golden Search">
   @if (capabilitiesError(); as message) { <p class="notice notice--error" role="alert">{{ message }}</p> }
   @if (studyId(); as id) {
-    <app-golden-search-study [studyId]="id" [capabilities]="capabilities() ?? []" (hidden)="onHidden()" />
+    <app-golden-search-study [studyId]="id" [step]="step()" [report]="view() === 'report'" [capabilities]="capabilities() ?? []" (hidden)="onHidden()" />
   } @else {
     <p class="intro">Search on development data, check the method over time, then open one held-back final test.</p>
     <p-tabs [value]="activeTab()" (valueChange)="setTab($event)">

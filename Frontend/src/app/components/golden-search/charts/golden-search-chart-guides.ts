@@ -136,7 +136,7 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
     title: 'Final uncertainty',
     question: 'How much support does the resampling model give this fit’s frozen final result?',
     steps: [
-      { text: 'Read the upper band: the middle 90% of resampled differences from the current settings, with zero as a tie; the band below is the fit’s own resampled result against break-even.', target: { kind: 'series', group: 'final' } },
+      { text: 'Read the upper band: the middle 90% of resampled differences from the current settings, with zero as a tie; the band below is the fit’s own resampled result against objective zero, which is not necessarily break-even profit.', target: { kind: 'series', group: 'final' } },
       { text: 'The frozen “meets the rules” verdict at the top of the page is separate from this model support; neither relabels the other.', target: null },
       { text: 'Read the curve: the reproduced 1× development rehearsal’s objective at each percentile, with the recorded final result marked at its actual value — above every finite rehearsal is rank 100%, not 99%.', target: { kind: 'series', group: 'carry' } },
       { text: 'Remember the selections: this fit was chosen after the final test and found by a development search; its support is unadjusted for both.', target: null },
