@@ -19748,6 +19748,135 @@
         "title": "GoldenSearchChanceBasis",
         "type": "object"
       },
+      "GoldenSearchChanceCarryOverBasis": {
+        "additionalProperties": false,
+        "description": "The reproduced rehearsal's identity: its schema, its seed, its scheduled length and its source digest.",
+        "properties": {
+          "objective": {
+            "$ref": "#/components/schemas/GoldenSearchChanceObjective"
+          },
+          "rehearsal_schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when the stored rehearsal predates schema versions.",
+            "title": "Rehearsal Schema"
+          },
+          "scheduled_sessions": {
+            "title": "Scheduled Sessions",
+            "type": "integer"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "seed": {
+            "$ref": "#/components/schemas/GoldenSearchChanceSeed"
+          },
+          "source_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Digest"
+          }
+        },
+        "required": [
+          "schema_version",
+          "rehearsal_schema",
+          "seed",
+          "scheduled_sessions",
+          "objective",
+          "source_digest"
+        ],
+        "title": "GoldenSearchChanceCarryOverBasis",
+        "type": "object"
+      },
+      "GoldenSearchChanceCarryOverMeasured": {
+        "additionalProperties": false,
+        "description": "The recorded final result's rank among its own reproduced 1\u00d7 development rehearsal: a display diagnostic, never an approval test.",
+        "properties": {
+          "basis": {
+            "$ref": "#/components/schemas/GoldenSearchChanceCarryOverBasis"
+          },
+          "below": {
+            "title": "Below",
+            "type": "integer"
+          },
+          "curve": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceRehearsalPercentiles"
+              }
+            ],
+            "description": "The reproduced rehearsal's 1st-99th percentiles, plot summaries and never individual rehearsals."
+          },
+          "finite": {
+            "title": "Finite",
+            "type": "integer"
+          },
+          "label": {
+            "enum": [
+              "below_most",
+              "above_most",
+              "middle",
+              "no_defined_paths"
+            ],
+            "title": "Label",
+            "type": "string"
+          },
+          "rank": {
+            "description": "Strictly-below count over the finite count; 1.0 means above every finite rehearsal.",
+            "title": "Rank",
+            "type": "number"
+          },
+          "recorded_objective": {
+            "title": "Recorded Objective",
+            "type": "number"
+          },
+          "selection_note": {
+            "description": "The unadjusted-for-selection caveat carried beside the rank.",
+            "title": "Selection Note",
+            "type": "string"
+          },
+          "sentence": {
+            "title": "Sentence",
+            "type": "string"
+          },
+          "status": {
+            "const": "measured",
+            "title": "Status"
+          },
+          "undefined": {
+            "title": "Undefined",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "status",
+          "label",
+          "rank",
+          "below",
+          "finite",
+          "undefined",
+          "recorded_objective",
+          "curve",
+          "sentence",
+          "selection_note",
+          "basis"
+        ],
+        "title": "GoldenSearchChanceCarryOverMeasured",
+        "type": "object"
+      },
       "GoldenSearchChanceComparisonBaseline": {
         "additionalProperties": false,
         "properties": {
@@ -20117,6 +20246,151 @@
           "recorded_engine_per_bar"
         ],
         "title": "GoldenSearchChanceDrawdownSource",
+        "type": "object"
+      },
+      "GoldenSearchChanceFitToFitBasis": {
+        "additionalProperties": false,
+        "description": "Everything a stored fit-to-fit reading was drawn under, so reading it back never reclassifies it.",
+        "properties": {
+          "convention": {
+            "title": "Convention",
+            "type": "string"
+          },
+          "mean_block_sessions": {
+            "title": "Mean Block Sessions",
+            "type": "number"
+          },
+          "objective": {
+            "$ref": "#/components/schemas/GoldenSearchChanceObjective"
+          },
+          "replications": {
+            "title": "Replications",
+            "type": "integer"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "seed": {
+            "$ref": "#/components/schemas/GoldenSearchChanceSeed"
+          },
+          "source": {
+            "$ref": "#/components/schemas/GoldenSearchChanceFitToFitSource"
+          },
+          "thresholds": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Thresholds",
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "convention",
+          "replications",
+          "mean_block_sessions",
+          "thresholds",
+          "objective",
+          "seed",
+          "source"
+        ],
+        "title": "GoldenSearchChanceFitToFitBasis",
+        "type": "object"
+      },
+      "GoldenSearchChanceFitToFitMeasured": {
+        "additionalProperties": false,
+        "description": "Two distinct fits' final comparison from one shared paired draw, both directions summarized from it.",
+        "properties": {
+          "at_least_as_good": {
+            "$ref": "#/components/schemas/GoldenSearchChanceAtLeastAsGood"
+          },
+          "basis": {
+            "$ref": "#/components/schemas/GoldenSearchChanceFitToFitBasis"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/GoldenSearchChanceCounts"
+          },
+          "pair": {
+            "description": "The two point hashes, canonically ordered, that were compared.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Pair",
+            "type": "array"
+          },
+          "selection_note": {
+            "title": "Selection Note",
+            "type": "string"
+          },
+          "sentence": {
+            "title": "Sentence",
+            "type": "string"
+          },
+          "shares": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Shares",
+            "type": "object"
+          },
+          "status": {
+            "const": "measured",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "status",
+          "pair",
+          "counts",
+          "shares",
+          "at_least_as_good",
+          "sentence",
+          "selection_note",
+          "basis"
+        ],
+        "title": "GoldenSearchChanceFitToFitMeasured",
+        "type": "object"
+      },
+      "GoldenSearchChanceFitToFitSource": {
+        "additionalProperties": false,
+        "description": "The two final runs a fit-to-fit reading actually resampled.",
+        "properties": {
+          "capital": {
+            "title": "Capital",
+            "type": "number"
+          },
+          "point_hashes": {
+            "description": "The two hashes, canonically ordered.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Point Hashes",
+            "type": "array"
+          },
+          "series_digests": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Series Digests",
+            "type": "array"
+          },
+          "session_count": {
+            "title": "Session Count",
+            "type": "integer"
+          },
+          "window": {
+            "$ref": "#/components/schemas/GoldenSearchChanceWindow"
+          }
+        },
+        "required": [
+          "window",
+          "session_count",
+          "point_hashes",
+          "series_digests",
+          "capital"
+        ],
+        "title": "GoldenSearchChanceFitToFitSource",
         "type": "object"
       },
       "GoldenSearchChanceObjective": {
@@ -22141,6 +22415,39 @@
         "title": "GoldenSearchEvidenceView",
         "type": "object"
       },
+      "GoldenSearchExamChance": {
+        "additionalProperties": false,
+        "description": "The exam-level chance record: the optional fit-to-fit comparison, absent by design when one fit ran.",
+        "properties": {
+          "fit_to_fit": {
+            "discriminator": {
+              "mapping": {
+                "failed": "#/components/schemas/GoldenSearchChanceReadingFailed",
+                "measured": "#/components/schemas/GoldenSearchChanceFitToFitMeasured",
+                "missing": "#/components/schemas/GoldenSearchChanceReadingMissing"
+              },
+              "propertyName": "status"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceFitToFitMeasured"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceReadingMissing"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceReadingFailed"
+              }
+            ],
+            "title": "Fit To Fit"
+          }
+        },
+        "required": [
+          "fit_to_fit"
+        ],
+        "title": "GoldenSearchExamChance",
+        "type": "object"
+      },
       "GoldenSearchExamCheck": {
         "additionalProperties": false,
         "properties": {
@@ -22179,6 +22486,9 @@
         "additionalProperties": false,
         "description": "One fit that sat the final test, judged on its own under the frozen rules.",
         "properties": {
+          "chance": {
+            "$ref": "#/components/schemas/GoldenSearchFinalChance"
+          },
           "checks": {
             "items": {
               "$ref": "#/components/schemas/GoldenSearchExamCheck"
@@ -22273,6 +22583,7 @@
           "checks",
           "retention",
           "metrics",
+          "chance",
           "weakness"
         ],
         "title": "GoldenSearchExamFit",
@@ -22281,6 +22592,9 @@
       "GoldenSearchExamView": {
         "additionalProperties": false,
         "properties": {
+          "chance": {
+            "$ref": "#/components/schemas/GoldenSearchExamChance"
+          },
           "chosen_key": {
             "anyOf": [
               {
@@ -22362,6 +22676,7 @@
           "window",
           "claim",
           "exposure_state",
+          "chance",
           "fits",
           "incumbent_metrics",
           "pick",
@@ -22470,6 +22785,93 @@
           "explanation"
         ],
         "title": "GoldenSearchExposure",
+        "type": "object"
+      },
+      "GoldenSearchFinalChance": {
+        "additionalProperties": false,
+        "description": "One tested fit's final chance components, each normalized independently of the others.",
+        "properties": {
+          "carry_over": {
+            "discriminator": {
+              "mapping": {
+                "failed": "#/components/schemas/GoldenSearchChanceReadingFailed",
+                "measured": "#/components/schemas/GoldenSearchChanceCarryOverMeasured",
+                "missing": "#/components/schemas/GoldenSearchChanceReadingMissing"
+              },
+              "propertyName": "status"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceCarryOverMeasured"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceReadingMissing"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceReadingFailed"
+              }
+            ],
+            "title": "Carry Over"
+          },
+          "comparison": {
+            "discriminator": {
+              "mapping": {
+                "baseline": "#/components/schemas/GoldenSearchChanceComparisonBaseline",
+                "failed": "#/components/schemas/GoldenSearchChanceReadingFailed",
+                "measured": "#/components/schemas/GoldenSearchChanceComparisonMeasured",
+                "missing": "#/components/schemas/GoldenSearchChanceReadingMissing",
+                "same_settings": "#/components/schemas/GoldenSearchChanceComparisonSameSettings"
+              },
+              "propertyName": "status"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceComparisonMeasured"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceComparisonSameSettings"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceComparisonBaseline"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceReadingMissing"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceReadingFailed"
+              }
+            ],
+            "title": "Comparison"
+          },
+          "profitability": {
+            "discriminator": {
+              "mapping": {
+                "failed": "#/components/schemas/GoldenSearchChanceReadingFailed",
+                "measured": "#/components/schemas/GoldenSearchChanceProfitabilityMeasured",
+                "missing": "#/components/schemas/GoldenSearchChanceReadingMissing"
+              },
+              "propertyName": "status"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceProfitabilityMeasured"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceReadingMissing"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceReadingFailed"
+              }
+            ],
+            "title": "Profitability"
+          }
+        },
+        "required": [
+          "comparison",
+          "profitability",
+          "carry_over"
+        ],
+        "title": "GoldenSearchFinalChance",
         "type": "object"
       },
       "GoldenSearchFinalMeasure": {

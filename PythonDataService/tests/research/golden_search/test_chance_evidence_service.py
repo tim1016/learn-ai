@@ -15,7 +15,12 @@ import pytest
 from app.research.golden_search import stages
 from app.research.golden_search.evaluator import EvaluationRequest, EvaluationResult
 from app.research.persistence import lifecycle
-from app.schemas.golden_search import GoldenSearchChance, GoldenSearchChanceRehearsalMeasured
+from app.schemas.golden_search import (
+    GoldenSearchChance,
+    GoldenSearchChanceRehearsalMeasured,
+    GoldenSearchExamFit,
+    GoldenSearchFinalChance,
+)
 from tests._helpers.golden_search_study import Driver, FakeEngine, seed_lake, unique_symbol
 
 
@@ -192,3 +197,50 @@ async def test_a_fit_whose_run_has_no_detail_records_named_missing_not_a_failure
         assert candidate["chance"]["comparison"]["status"] == "missing"
         assert candidate["chance"]["comparison"]["code"] in ("no_trade_list", "not_evaluated", "incumbent_unavailable")
         assert candidate["chance"]["profitability"]["status"] == "missing"
+
+
+async def test_the_exam_stage_stores_final_chance_and_a_carry_over_without_new_evaluations(driver: Driver, symbol: str) -> None:
+    row = await driver.to_candidate(symbol)
+    before = row.consumed_evaluations
+    row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
+    detail = await driver.detail(row)
+    exam = detail["results"]["exam"]
+    GoldenSearchExamFit.model_validate(exam["fits"][0])
+
+    for fit in exam["fits"]:
+        chance = fit["chance"]
+        GoldenSearchFinalChance.model_validate(chance)
+        # The comparison and profitability ran on the final interval's own sessions.
+        assert chance["comparison"]["status"] == "measured"
+        assert chance["comparison"]["basis"]["source"]["window"] == {"start_ms": row.protocol["final_start_ms"], "end_ms": row.protocol["final_end_ms"]}
+        assert chance["profitability"]["status"] == "measured"
+        # The carry-over reproduced the stored 1× rehearsal: same scheduled length the evidence stage recorded.
+        carry = chance["carry_over"]
+        assert carry["status"] == "measured", carry.get("reason")
+        rehearsal = next(candidate["chance"]["rehearsal"] for candidate in (await driver.detail(row))["results"]["evidence"]["candidates"] if candidate["key"] == fit["key"])
+        assert carry["basis"]["scheduled_sessions"] == rehearsal["basis"]["final_interval"]["scheduled_sessions"]
+        assert carry["finite"] + carry["undefined"] == 10_000
+    # One distinct fit ran, so the optional fit-to-fit comparison is absent by design, not failed.
+    assert exam["chance"]["fit_to_fit"]["code"] == "single_fit"
+    # The exam's own final runs are all the engine spent — one per fit plus the incumbent — so the diagnostics
+    # added no evaluation beyond what a chance-less exam would have run.
+    assert row.consumed_evaluations - before == len(exam["fits"]) + 1
+    assert all(fit["outcome"] is not None for fit in exam["fits"])
+
+
+async def test_two_fits_get_one_shared_fit_to_fit_draw_and_each_keeps_its_own_evidence(driver: Driver, symbol: str) -> None:
+    row = await driver.to_candidate(symbol)
+    row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
+    detail = await driver.detail(row)
+    exam = detail["results"]["exam"]
+    if len(exam["fits"]) < 2:
+        pytest.skip("this plan's two fits chose the same settings, so one run covers both")
+    fit_to_fit = exam["chance"]["fit_to_fit"]
+    assert fit_to_fit["status"] == "measured"
+    assert sorted(fit_to_fit["pair"]) == sorted(fit["point_hash"] for fit in exam["fits"])
+    assert sum(fit_to_fit["counts"].values()) == 10_000
+    assert "unadjusted for that choice" in fit_to_fit["sentence"] or "not adjusted for that choice" in fit_to_fit["sentence"]
+    # Each fit's own readings stand beside the shared one, whatever the other fit did.
+    for fit in exam["fits"]:
+        assert fit["chance"]["comparison"]["status"] == "measured"
+        assert fit["outcome"] is not None
