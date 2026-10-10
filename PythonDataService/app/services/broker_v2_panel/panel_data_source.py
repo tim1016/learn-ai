@@ -43,6 +43,8 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.scheduled_end import (
+    attested_absent_end_sale,
+    attested_absent_end_sale_words,
     end_sale_waits_for_operator_words,
     end_sales_waiting_for_operator,
 )
@@ -73,7 +75,7 @@ from app.services.bot_binding_repository import (
     BrokerBotBinding,
     live_state_binding_repository,
 )
-from app.services.bot_end import bot_end_view_waiting_for_operator
+from app.services.bot_end import bot_end_view_attested_absent_sale, bot_end_view_waiting_for_operator
 from app.services.bot_runner import (
     BotTaskRegistry,
     get_bot_task_registry,
@@ -613,15 +615,29 @@ async def _get_panel_with_entries_from_authority(
 
 
 def end_with_waiting_sale(end: BotEndView | None, repository: ClerkSqliteRepository, sid: str) -> BotEndView | None:
-    """The runner's words for the bot's end, or the Clerk's while the end waits for the operator (#2854)."""
-    if end is None or end.status != "ending":
+    """The runner's words for the bot's end, or the Clerk's where the end's own sale did not stand (#2854).
+
+    An end that has come while the Clerk leaves the bot's position to the
+    operator is told as waiting. An end already recorded carried out whose
+    own sale an operator settled as "Alpaca has no such order" is told as
+    the not-sent sale it became: nothing re-records the end, so the words
+    are corrected here.
+    """
+    if end is None:
         return end
-    waiting = end_sales_waiting_for_operator(repository, [sid])
-    if not waiting:
-        return end
-    return bot_end_view_waiting_for_operator(
-        end, why=" ".join(end_sale_waits_for_operator_words(sale) for sale in waiting)
-    )
+    if end.status == "ending":
+        waiting = end_sales_waiting_for_operator(repository, [sid])
+        if not waiting:
+            return end
+        return bot_end_view_waiting_for_operator(
+            end, why=" ".join(end_sale_waits_for_operator_words(sale) for sale in waiting)
+        )
+    if end.status == "ended":
+        attested = attested_absent_end_sale(repository, sid)
+        if attested is None:
+            return end
+        return bot_end_view_attested_absent_sale(end, why=attested_absent_end_sale_words(attested))
+    return end
 
 
 @dataclass(frozen=True)

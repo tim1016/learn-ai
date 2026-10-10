@@ -79,6 +79,7 @@ from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import (
 from app.broker.contract.errors import BrokerError, BrokerRequestInvalid, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent
 from app.schemas.bot_end import BotEnd
+from app.utils.et_words import et_when_words
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite import test_safe_flatten_execution as safe_flatten
 from tests.broker.alpaca.clerk.sqlite.conftest import (
@@ -1542,6 +1543,55 @@ async def test_an_end_still_pending_whose_own_lost_sale_is_settled_as_not_sent_w
     assert [end for end, _at_ms in schedule.carried_out] == [the_end]
     assert _all_end_sales(repo) == [end_sale] and len(alpaca.sent) == orders_sent_in_all, "the end sold again"
     assert await _end_lines(repo, monkeypatch) == []
+
+
+async def test_an_end_recorded_carried_out_whose_own_lost_sale_is_settled_as_not_sent_is_told_as_no_order_sent(
+    crashed_with_exposure,  # noqa: F811
+    schedule: _Schedule,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The lost closing order is the sale at the bot's scheduled end itself, and the record that
+    the end was carried out stands, as it lands the moment the sale is accepted.
+
+    "No such order" ends that sale as not sent and leaves the position to the
+    operator. The end's card used to keep saying "sale put in" while the bot
+    showed as stuck (#2854); it now says the sale was never at Alpaca, and
+    the end's completion is the operator's.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
+    await safe_flatten._held_position(repo)
+    the_end = ScheduledEnd(strategy_instance_id=SID, end=BotEnd(end_at_ms=repo.clock(), end_action="SELL"))
+    schedule.ends[SID] = the_end
+    await _passes(repo, _the_sweep(repo, alpaca), 1)
+    [end_sale] = _all_end_sales(repo)
+    assert repo.active_run(SID) is None, "the Clerk stopped the run at its end"
+    assert _exit_state(repo, end_sale) == "unknown" and len(alpaca.sent) == 1
+    [(carried, carried_at_ms)] = schedule.carried_out
+    assert carried == the_end, "the end was recorded carried out the moment its sale was accepted"
+    _walk_clock_to(repo, repo.clock() + WAIT_MS)
+    facade, current_context = _facade(repo, alpaca), _context_of(repo, SID)
+
+    await _settle(facade, current_context, ABSENT)
+    _the_position_is_left_to_the_operator(repo, end_sale)
+    await _passes(repo, _the_sweep(repo, alpaca), 2)
+
+    assert len(alpaca.sent) == 1, "the Clerk sold again for a position left to the operator"
+    assert repo.position(SID, "SPY") == 10.0
+    page = _end_on_the_bots_page(repo, the_end, carried_out_at_ms=carried_at_ms)
+    assert (page.status, page.waits_for_operator) == ("ended", True)
+    assert page.headline == f"Ended {et_when_words(carried_at_ms, now_ms=repo.clock())} · no order sent"
+    assert page.notice == (
+        "The end's sale of 10 SPY was sent, its answer was lost, and an operator settled that "
+        "Alpaca has no such order; the exit was ended as not sent. "
+        "Sell the position or write it off from the bot's page."
+    )
+    assert page.explanation == (
+        "The Clerk stopped the bot at its end and sent the sale of its shares, but the sale's "
+        "answer was lost. An operator settled that Alpaca has no such order, so the exit was "
+        "ended as not sent. The Clerk sends no order for the position by itself."
+    )
+    assert await _end_lines(repo, monkeypatch) == [], "the stuck exit bells; the end itself no longer asks"
 
 
 async def test_a_replaced_sale_is_read_through_to_the_order_that_replaced_it(

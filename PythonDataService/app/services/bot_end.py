@@ -233,6 +233,27 @@ def bot_end_view_waiting_for_operator(view: BotEndView, *, why: str) -> BotEndVi
     })
 
 
+def bot_end_view_attested_absent_sale(view: BotEndView, *, why: str) -> BotEndView:
+    """``view``, an ended SELL end whose own sale an operator settled as not sent (#2854).
+
+    The end was recorded carried out when its sale was accepted, and the
+    settlement later ended that sale's exit as not sent, so the words that
+    say a sale exists are replaced: the headline's last words, which
+    :func:`bot_end_view` takes from the end's action, among them. ``why`` is
+    the Clerk's own account of what became of that sale; it is the notice.
+    """
+    return view.model_copy(update={
+        "headline": view.headline.removesuffix(_DONE_WORDS[view.end_action]) + "no order sent",
+        "explanation": (
+            "The Clerk stopped the bot at its end and sent the sale of its shares, but the sale's "
+            "answer was lost. An operator settled that Alpaca has no such order, so the exit was "
+            "ended as not sent. The Clerk sends no order for the position by itself."
+        ),
+        "notice": why,
+        "waits_for_operator": True,
+    })
+
+
 def resolved_bot_end_view(resolved: ResolvedBotEnd, *, now_ms: int, dry_run: bool) -> BotEndView:
     """An end the Deploy form chose, before its bot exists, with the notice when its time was moved.
 
@@ -363,6 +384,7 @@ __all__ = [
     "BotEndRefused",
     "ResolvedBotEnd",
     "bot_end_view",
+    "bot_end_view_attested_absent_sale",
     "bot_end_view_waiting_for_operator",
     "default_bot_end",
     "end_edit_refusal",

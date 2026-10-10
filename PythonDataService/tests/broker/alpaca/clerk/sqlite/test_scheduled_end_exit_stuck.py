@@ -258,14 +258,21 @@ async def _end_lines(repo: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatc
     ]
 
 
-def _end_on_the_bots_page(repo: ClerkSqliteRepository, end: ScheduledEnd | None = None) -> BotEndView:
+def _end_on_the_bots_page(
+    repo: ClerkSqliteRepository, end: ScheduledEnd | None = None, *, carried_out_at_ms: int | None = None
+) -> BotEndView:
     """The bot's end as its page shows it: the runner's words, or the Clerk's while the end waits for the operator.
 
-    The suite's bot and end, unless ``end`` names another's.
+    The suite's bot and end, unless ``end`` names another's. ``carried_out_at_ms``
+    is the runner's record of when the Clerk carried the end out, as it reads
+    once the end's sale was accepted.
     """
     end = end or _the_end()
     words = bot_end_view(
-        RecordedEnd.scheduled(end.end), now_ms=repo.clock(), dry_run=False, running=False, use_rth=True,
+        RecordedEnd(
+            end_at_ms=end.end.end_at_ms, end_action=end.end.end_action, carried_out_at_ms=carried_out_at_ms
+        ),
+        now_ms=repo.clock(), dry_run=False, running=False, use_rth=True,
     )
     return panel_data_source.end_with_waiting_sale(words, repo, end.strategy_instance_id)
 
@@ -448,6 +455,29 @@ async def test_a_short_bots_end_waits_too_and_is_told_as_a_buy_back(
     [line] = await _end_lines(repo, monkeypatch)
     assert line.headline == f"{SID} reached its end. {told}"
     assert _end_on_the_bots_page(repo).notice == told
+
+
+# ── an end recorded carried out keeps its words unless its own sale was settled away ──
+
+
+async def test_an_end_recorded_carried_out_keeps_its_words_while_the_bot_is_stuck_for_another_reason(
+    repo: ClerkSqliteRepository, schedule: _Schedule,
+) -> None:
+    """The end's sale is working and the end is recorded carried out; the bot is stuck for a
+    reason no operator attested anything about. The card's words stand: only the end's own
+    sale settled as not sent rewrites them (#2854)."""
+    await _hold_ten(repo)
+    _the_end_comes(repo, schedule)
+    alpaca, market = _Alpaca(holds=10.0), _Market()
+    await _passes(repo, alpaca, market, 1)
+
+    [(carried, carried_at_ms)] = schedule.carried_out
+    assert carried == _the_end() and repo.position(SID, "SPY") == 10
+    _exit_stuck_is_open(repo, attributed_qty=10.0)
+
+    page = _end_on_the_bots_page(repo, carried_out_at_ms=carried_at_ms)
+    assert page.status == "ended" and page.waits_for_operator is False
+    assert page.headline.endswith("· sale put in") and page.notice is None
 
 
 # ── with no such episode, the end sells as it always has ─────────────────────

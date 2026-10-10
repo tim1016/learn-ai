@@ -80,6 +80,8 @@ from app.broker.alpaca.clerk.sqlite.ended_run_close import (
     closes_owed_under,
     drive_close,
 )
+from app.broker.alpaca.clerk.sqlite.exit import exit_effect_operation_id
+from app.broker.alpaca.clerk.sqlite.exit_recovery import attested_absent_order_ref
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
     SCHEDULED_END_DECISION_PREFIX,
     SCHEDULED_END_WAITS_FOR_OPEN,
@@ -88,7 +90,7 @@ from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, run_inline
 from app.broker.alpaca.clerk.sqlite.order_evidence import unresolved_order_refs, working_order_refs
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseLost
-from app.broker.alpaca.clerk.sqlite.uncertainty import automatic_exit_stopped
+from app.broker.alpaca.clerk.sqlite.uncertainty import automatic_exit_stopped, open_exit_stuck
 from app.broker.contract.ports import BrokerTradePort
 from app.schemas.bot_end import BotEnd
 
@@ -454,12 +456,57 @@ def end_sale_waits_for_operator_words(waiting: EndSaleWaiting) -> str:
     )
 
 
+def attested_absent_end_sale(repo: ClerkSqliteRepository, strategy_instance_id: str) -> EndSaleWaiting | None:
+    """The end's own sale an operator settled as "Alpaca has no such order", while its bot is stuck (#2854).
+
+    The end was recorded carried out when its sale was accepted; the
+    settlement ends that sale's exit as not sent and leaves the position to
+    the operator, but nothing re-records the end, so the panel corrects the
+    end's words from here instead. The stuck episode's attested order must
+    be one of this bot's end-sale decisions (``SCHEDULED_END_DECISION_PREFIX``):
+    an order of any other exit settled as not sent does not change what the
+    end did. Read from the records with nothing recorded for it.
+    """
+    stuck = open_exit_stuck(repo, strategy_instance_id)
+    if stuck is None:
+        return None
+    order_ref = attested_absent_order_ref(stuck)
+    if order_ref is None:
+        return None
+    order = repo.order(order_ref)
+    if order is None:
+        return None
+    for holding in bot_holdings(repo, strategy_instance_id, decision_prefix=SCHEDULED_END_DECISION_PREFIX):
+        if order.effect_operation_id == exit_effect_operation_id(
+            strategy_instance_id=strategy_instance_id, decision_id=holding.close.decision_id
+        ):
+            return EndSaleWaiting(
+                strategy_instance_id,
+                holding.close.symbol,
+                repo.position(strategy_instance_id, holding.close.symbol),
+            )
+    return None
+
+
+def attested_absent_end_sale_words(waiting: EndSaleWaiting) -> str:
+    """Why an end recorded as "sale put in" no longer names an order Alpaca has, and what completes the end (#2854)."""
+    long = waiting.quantity > 0
+    order = "sale" if long else "buy-back"
+    return (
+        f"The end's {order} of {quantity_text(abs(waiting.quantity))} {waiting.symbol} was sent, its answer "
+        f"was lost, and an operator settled that Alpaca has no such order; the exit was ended as not sent. "
+        f"{'Sell the position' if long else 'Buy the position back'} or write it off from the bot's page."
+    )
+
+
 __all__ = [
     "SCHEDULED_END_REASON",
     "SCHEDULED_END_WAITS_FOR_OPERATOR",
     "BotEndSchedule",
     "EndSaleWaiting",
     "ScheduledEnd",
+    "attested_absent_end_sale",
+    "attested_absent_end_sale_words",
     "end_sale_waits_for_operator_words",
     "end_sales_waiting_for_open",
     "end_sales_waiting_for_operator",
