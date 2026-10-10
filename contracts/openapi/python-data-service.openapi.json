@@ -20298,12 +20298,17 @@
         "title": "GoldenSearchChanceFitToFitBasis",
         "type": "object"
       },
-      "GoldenSearchChanceFitToFitMeasured": {
+      "GoldenSearchChanceFitToFitDirection": {
         "additionalProperties": false,
-        "description": "Two distinct fits' final comparison from one shared paired draw, both directions summarized from it.",
+        "description": "One direction of the shared paired draw: this fit against that opponent, counts and sentence its own (#3029).",
         "properties": {
           "at_least_as_good": {
-            "$ref": "#/components/schemas/GoldenSearchChanceAtLeastAsGood"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceAtLeastAsGood"
+              }
+            ],
+            "description": "(better + tied) over every replication, in this direction; tied paths support both directions, undefined neither."
           },
           "basis": {
             "$ref": "#/components/schemas/GoldenSearchChanceFitToFitBasis"
@@ -20311,13 +20316,16 @@
           "counts": {
             "$ref": "#/components/schemas/GoldenSearchChanceCounts"
           },
-          "pair": {
-            "description": "The two point hashes, canonically ordered, that were compared.",
-            "items": {
-              "type": "string"
-            },
-            "title": "Pair",
-            "type": "array"
+          "fit": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceFitToFitIdentity"
+              }
+            ],
+            "description": "The fit this summary belongs to; sorted pair order never implies it."
+          },
+          "opponent": {
+            "$ref": "#/components/schemas/GoldenSearchChanceFitToFitIdentity"
           },
           "selection_note": {
             "title": "Selection Note",
@@ -20341,11 +20349,74 @@
         },
         "required": [
           "status",
-          "pair",
+          "fit",
+          "opponent",
           "counts",
           "shares",
           "at_least_as_good",
           "sentence",
+          "selection_note",
+          "basis"
+        ],
+        "title": "GoldenSearchChanceFitToFitDirection",
+        "type": "object"
+      },
+      "GoldenSearchChanceFitToFitIdentity": {
+        "additionalProperties": false,
+        "description": "The point identity one fit-to-fit direction speaks for, and the one it speaks against (#3029).",
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "point_hash": {
+            "title": "Point Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "point_hash",
+          "label"
+        ],
+        "title": "GoldenSearchChanceFitToFitIdentity",
+        "type": "object"
+      },
+      "GoldenSearchChanceFitToFitMeasured": {
+        "additionalProperties": false,
+        "description": "Two distinct fits' final comparison from one shared paired draw, both directions summarized from it (#3029).",
+        "properties": {
+          "basis": {
+            "$ref": "#/components/schemas/GoldenSearchChanceFitToFitBasis"
+          },
+          "directions": {
+            "description": "Both directions of the one draw, each naming its own fit and opponent.",
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchChanceFitToFitDirection"
+            },
+            "title": "Directions",
+            "type": "array"
+          },
+          "pair": {
+            "description": "The two point hashes, canonically ordered, that were compared.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Pair",
+            "type": "array"
+          },
+          "selection_note": {
+            "title": "Selection Note",
+            "type": "string"
+          },
+          "status": {
+            "const": "measured",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "status",
+          "pair",
+          "directions",
           "selection_note",
           "basis"
         ],
@@ -20369,6 +20440,7 @@
             "type": "array"
           },
           "series_digests": {
+            "description": "Each run's digest, in the same canonical order as point_hashes (#3029).",
             "items": {
               "type": "string"
             },
@@ -22893,15 +22965,7 @@
         "description": "One tested fit's final chance components, each normalized independently of the others.",
         "properties": {
           "carry_over": {
-            "discriminator": {
-              "mapping": {
-                "failed": "#/components/schemas/GoldenSearchChanceReadingFailed",
-                "measured": "#/components/schemas/GoldenSearchChanceCarryOverMeasured",
-                "missing": "#/components/schemas/GoldenSearchChanceReadingMissing"
-              },
-              "propertyName": "status"
-            },
-            "oneOf": [
+            "anyOf": [
               {
                 "$ref": "#/components/schemas/GoldenSearchChanceCarryOverMeasured"
               },
@@ -22915,17 +22979,7 @@
             "title": "Carry Over"
           },
           "comparison": {
-            "discriminator": {
-              "mapping": {
-                "baseline": "#/components/schemas/GoldenSearchChanceComparisonBaseline",
-                "failed": "#/components/schemas/GoldenSearchChanceReadingFailed",
-                "measured": "#/components/schemas/GoldenSearchChanceComparisonMeasured",
-                "missing": "#/components/schemas/GoldenSearchChanceReadingMissing",
-                "same_settings": "#/components/schemas/GoldenSearchChanceComparisonSameSettings"
-              },
-              "propertyName": "status"
-            },
-            "oneOf": [
+            "anyOf": [
               {
                 "$ref": "#/components/schemas/GoldenSearchChanceComparisonMeasured"
               },
@@ -22944,16 +22998,23 @@
             ],
             "title": "Comparison"
           },
-          "profitability": {
-            "discriminator": {
-              "mapping": {
-                "failed": "#/components/schemas/GoldenSearchChanceReadingFailed",
-                "measured": "#/components/schemas/GoldenSearchChanceProfitabilityMeasured",
-                "missing": "#/components/schemas/GoldenSearchChanceReadingMissing"
+          "fit_to_fit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceFitToFitDirection"
               },
-              "propertyName": "status"
-            },
-            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceReadingMissing"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceReadingFailed"
+              }
+            ],
+            "description": "This fit's own direction of the optional fit-to-fit comparison (#3029); a named missing view when the stored record holds no direction for it.",
+            "title": "Fit To Fit"
+          },
+          "profitability": {
+            "anyOf": [
               {
                 "$ref": "#/components/schemas/GoldenSearchChanceProfitabilityMeasured"
               },
@@ -22970,7 +23031,8 @@
         "required": [
           "comparison",
           "profitability",
-          "carry_over"
+          "carry_over",
+          "fit_to_fit"
         ],
         "title": "GoldenSearchFinalChance",
         "type": "object"

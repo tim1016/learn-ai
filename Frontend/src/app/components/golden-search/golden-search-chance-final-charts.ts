@@ -3,7 +3,7 @@ import { dataIndexOf, NOT_RECORDED, tooltipFrame, tooltipHtml, type ChartTheme, 
 import type { ChartOption } from './charts/golden-search-echarts';
 import { countText, objectiveTexts, shareText, valueAxisDomain } from './golden-search-chance-charts';
 import { signedPercentText } from './golden-search-display';
-import type { CandidateRef, MeasuredChanceCarryOver, MeasuredChanceComparison, MeasuredChanceFitToFit, MeasuredChanceProfitability } from './golden-search.types';
+import type { CandidateRef, FinalChance, MeasuredChanceCarryOver, MeasuredChanceComparison, MeasuredChanceProfitability } from './golden-search.types';
 
 /**
  * The final-test chance charts (#3014, #3026): the middle-90% paired
@@ -251,7 +251,10 @@ export function carryOverSpec(candidate: CandidateRef, carry: MeasuredChanceCarr
   };
 }
 
-/** The fit-to-fit sentence's short row text, from the stored reading. */
-export function fitToFitText(fit_to_fit: MeasuredChanceFitToFit): string {
-  return `${fit_to_fit.sentence} ${fit_to_fit.selection_note}`;
+/** The selected fit's own fit-to-fit direction, as the served record types it (#3029). */
+export type MeasuredFitToFitDirection = FinalChance['fit_to_fit'] & { status: 'measured' };
+
+/** The fit-to-fit sentence's short row text, from this fit's own stored direction. */
+export function fitToFitText(direction: MeasuredFitToFitDirection): string {
+  return `${direction.sentence} ${direction.selection_note}`;
 }

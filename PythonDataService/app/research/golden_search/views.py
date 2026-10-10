@@ -29,7 +29,7 @@ from app.research.golden_search.activity import TradeFloors
 from app.research.golden_search.chance_approval import chance_weakness_items
 from app.research.golden_search.chance_compare import stored_chance
 from app.research.golden_search.chance_drawdown import stored_drawdown
-from app.research.golden_search.chance_final import FinalChanceScope, stored_final_chance
+from app.research.golden_search.chance_final import FinalChanceScope, resolved_fit_to_fit, stored_final_chance
 from app.research.golden_search.chance_rehearsal import stored_rehearsal
 from app.research.golden_search.compare_measures import neighborhood_view, stress_tally, stress_view, trades_per_year
 from app.research.golden_search.concentration import (
@@ -473,6 +473,8 @@ def exam_view(
 
     def _fit_view(fit: dict[str, Any]) -> dict[str, Any]:
         chance = stored_final_chance(fit, final_scope.for_fit(fit["point_hash"]))
+        # The fit-to-fit direction this fit reads is chosen server-side by its own point identity (#3029);
+        # Angular never computes a complement or reclassifies support, and aliases share one direction.
         return {
             "key": fit["key"],
             "same_as": list(fit["same_as"]),
@@ -484,7 +486,7 @@ def exam_view(
             "metrics": fit["metrics"],
             "weakness": weakness_items(stored, fit)
             + chance_weakness_items(chance_policy, chance, positive_net_required=positive_net_required),
-            "chance": chance,
+            "chance": {**chance, "fit_to_fit": resolved_fit_to_fit(stored, fit)},
         }
 
     return {

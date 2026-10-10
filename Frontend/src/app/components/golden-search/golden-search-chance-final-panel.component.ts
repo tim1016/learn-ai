@@ -4,7 +4,7 @@ import { GoldenSearchChartComponent } from './charts/golden-search-chart.compone
 import { GoldenSearchPanelComponent } from './charts/golden-search-panel.component';
 import { sameChart } from './charts/golden-search-chart-spec';
 import { carryOverSpec, finalIntervalsSpec, finalProfitSpec, fitToFitText, type ProfitabilityWithRange } from './golden-search-chance-final-charts';
-import type { CandidateRef, ChanceComparison, ChanceProfitability, ExamChance, FinalChance, MeasuredChanceCarryOver, MeasuredChanceComparison } from './golden-search.types';
+import type { CandidateRef, ChanceComparison, ChanceProfitability, FinalChance, MeasuredChanceCarryOver, MeasuredChanceComparison } from './golden-search.types';
 
 /** Any per-component stored reading: measured, named-missing, or failed with its own sentence. */
 type ChanceReading = FinalChance['carry_over'];
@@ -43,10 +43,8 @@ interface UnmeasuredNote {
 export class GoldenSearchChanceFinalPanelComponent {
   /** The fit the page is about. */
   readonly candidate = input.required<CandidateRef>();
-  /** The fit's stored final chance components. */
+  /** The fit's stored final chance components, its own fit-to-fit direction included (#3029). */
   readonly chance = input.required<FinalChance>();
-  /** The exam-level chance record: the optional fit-to-fit comparison. */
-  readonly examChance = input.required<ExamChance>();
   /** The frozen plan's positive-net rule, read from the study — never inferred from a metric (#3026). */
   readonly positiveNetRequired = input.required<boolean>();
 
@@ -100,16 +98,22 @@ export class GoldenSearchChanceFinalPanelComponent {
     { equal: sameChart },
   );
 
-  /** The fit-to-fit sentence, in Python's words, when two distinct fits ran. */
+  /** The fit-to-fit sentence, in Python's words, from this fit's own direction of the shared draw (#3029). */
   protected readonly fitToFitSentence = computed(() => {
-    const fit_to_fit = this.examChance().fit_to_fit;
+    const fit_to_fit = this.chance().fit_to_fit;
     return fit_to_fit.status === 'measured' ? fitToFitText(fit_to_fit) : null;
   });
 
-  /** Why the fit-to-fit comparison could not be computed, when it failed; a failure never renders as absence. */
+  /** Why this fit's fit-to-fit view could not be read, when it failed; a failure never renders as absence. */
   protected readonly fitToFitFailed = computed(() => {
-    const fit_to_fit = this.examChance().fit_to_fit;
+    const fit_to_fit = this.chance().fit_to_fit;
     return fit_to_fit.status === 'failed' ? fit_to_fit.sentence : null;
+  });
+
+  /** A named-missing directional view — a legacy one-direction record, or a fit the pair never compared (#3029). */
+  protected readonly fitToFitNote = computed(() => {
+    const fit_to_fit = this.chance().fit_to_fit;
+    return fit_to_fit.status === 'missing' ? fit_to_fit.reason : null;
   });
 
   /** True only when both components hold named-missing records — genuinely never measured, with nothing failed. */

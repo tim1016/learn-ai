@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { FAKE_CHART_THEME } from './testing/fake-charts';
-import { chanceCarryOver, chanceComparison, chanceFitToFit, chanceProfitability } from './testing/fixtures';
+import { chanceCarryOver, chanceComparison, chanceFitToFitDirection, chanceProfitability } from './testing/fixtures';
 import { carryOverSpec, fitToFitText, finalIntervalsSpec, finalProfitSpec } from './golden-search-chance-final-charts';
 import type { CandidateRef } from './golden-search.types';
 
@@ -70,8 +70,8 @@ describe('the final uncertainty chart specs', () => {
     expect(recorded).not.toContain('%');
   });
 
-  it('carries the fit-to-fit sentence with its post-selection caveat', () => {
-    const text = fitToFitText(chanceFitToFit());
+  it('carries the fit’s own direction sentence with its post-selection caveat (#3029)', () => {
+    const text = fitToFitText(chanceFitToFitDirection());
     expect(text).toContain('68.4% of paths');
     expect(text).toContain('not adjusted for that choice');
   });

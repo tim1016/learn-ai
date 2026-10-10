@@ -15,9 +15,11 @@ from app.research.golden_search.chance_final import (
     CARRY_OVER_MISSING,
     SELECTION_NOTE,
     FinalChanceScope,
+    both_directions,
     carry_over_reading,
     fit_to_fit_reading,
     reproduce_1x_objectives,
+    resolved_fit_to_fit,
     stored_final_chance,
 )
 from app.research.golden_search.selection import Metrics
@@ -414,22 +416,105 @@ def _fit_to_fit(first: list[float], second: list[float], **kwargs: Any) -> dict[
     )
 
 
-def test_fit_to_fit_shares_one_draw_and_both_directions_reverse() -> None:
+def test_fit_to_fit_stores_both_directions_from_one_shared_draw() -> None:
     forward = _fit_to_fit(_smooth(25, 11), _smooth(25, 12))
     assert forward["status"] == "measured"
+    assert forward["basis"]["schema_version"] == "golden-search-chance-fit-to-fit/v2"
     assert forward["pair"] == ["aaaa", "zzzz"]
-    assert sum(forward["counts"].values()) == 10_000
+    first, second = forward["directions"]
+    # Each direction names its own fit and opponent explicitly; sorted pair order never implies the direction.
+    assert first["fit"] == {"point_hash": "aaaa", "label": "All-period fit"}
+    assert first["opponent"] == {"point_hash": "zzzz", "label": "Recent fit"}
+    assert second["fit"] == {"point_hash": "zzzz", "label": "Recent fit"}
+    assert second["opponent"] == {"point_hash": "aaaa", "label": "All-period fit"}
+    for direction in (first, second):
+        assert sum(direction["counts"].values()) == 10_000
+        assert direction["selection_note"] == SELECTION_NOTE
+    # Both directions derive from the same event counts: better and worse reverse, tied and undefined stay.
+    assert first["counts"]["better"] == second["counts"]["worse"]
+    assert first["counts"]["worse"] == second["counts"]["better"]
+    assert first["counts"]["tied"] == second["counts"]["tied"]
+    assert first["counts"]["undefined"] == second["counts"]["undefined"]
+    assert first["basis"]["seed"] == second["basis"]["seed"]
+    assert first["sentence"].index("All-period fit") < first["sentence"].index("Recent fit")
+    assert second["sentence"].index("Recent fit") < second["sentence"].index("All-period fit")
+
+    # Swapping the call order draws the same seed and reverses the stored direction order only.
     backward = fit_to_fit_reading(
         objective="total_return_pct",
         window=_window(25, date(2025, 4, 1)),
         first={"metrics": _completed(), "detail": _detail(_smooth(25, 12), date(2025, 4, 1)), "point_hash": "zzzz", "label": "Recent fit"},
         second={"metrics": _completed(), "detail": _detail(_smooth(25, 11), date(2025, 4, 1)), "point_hash": "aaaa", "label": "All-period fit"},
     )
-    assert forward["counts"]["better"] == backward["counts"]["worse"]
-    assert forward["counts"]["worse"] == backward["counts"]["better"]
-    assert forward["counts"]["tied"] == backward["counts"]["tied"]
     assert forward["basis"]["seed"]["inputs"] == backward["basis"]["seed"]["inputs"]
-    assert forward["selection_note"] == SELECTION_NOTE
+    assert [direction["fit"]["point_hash"] for direction in forward["directions"]] == ["aaaa", "zzzz"]
+    assert [direction["fit"]["point_hash"] for direction in backward["directions"]] == ["zzzz", "aaaa"]
+    by_identity = {direction["fit"]["point_hash"]: direction for direction in backward["directions"]}
+    assert by_identity["aaaa"]["counts"] == first["counts"]
+    assert by_identity["zzzz"]["counts"] == second["counts"]
+
+
+def test_the_opposite_inclusive_support_counts_tied_paths_twice_never_complements() -> None:
+    # B = 10,000 with first better = 6,000, tied = 1,000, worse = 2,000, undefined = 1,000: the two inclusive
+    # supports are 70% and 30% — (worse + tied)/B — not 70% and its complement 30%-of-what's-left. Tied paths
+    # support both directions, undefined support neither, and the counts always total B each side.
+    counts = {"better": 6_000, "tied": 1_000, "worse": 2_000, "undefined": 1_000}
+    basis = {"schema_version": "golden-search-chance-fit-to-fit/v2"}
+    first, second = both_directions(counts, first={"point_hash": "aaaa", "label": "All-period fit"}, second={"point_hash": "zzzz", "label": "Recent fit"}, basis=basis)
+    assert first["at_least_as_good"] == {"count": 7_000, "share": 0.7}
+    assert second["at_least_as_good"] == {"count": 3_000, "share": 0.3}
+    assert second["at_least_as_good"]["count"] == counts["worse"] + counts["tied"]  # never B - 7,000 - undefined
+    assert "70.0% of paths" in first["sentence"] and "30.0% of paths" in second["sentence"]
+    assert first["sentence"] != second["sentence"]
+
+
+def test_the_read_serves_each_fit_its_own_direction_by_point_identity() -> None:
+    forward = _fit_to_fit(_smooth(25, 11), _smooth(25, 12))
+    exam = {
+        "chance": {"fit_to_fit": forward},
+        "fits": [
+            {"key": "all_period", "point_hash": "aaaa", "label": "All-period fit"},
+            {"key": "recent", "point_hash": "zzzz", "label": "Recent fit"},
+            {"key": "other", "point_hash": "elsewhere", "label": "Another fit"},
+        ],
+    }
+    all_period = resolved_fit_to_fit(exam, exam["fits"][0])
+    recent = resolved_fit_to_fit(exam, exam["fits"][1])
+    assert all_period["status"] == "measured" and all_period["fit"]["point_hash"] == "aaaa"
+    assert recent["status"] == "measured" and recent["fit"]["point_hash"] == "zzzz"
+    assert all_period["at_least_as_good"]["count"] + 0 == recent["counts"]["worse"] + recent["counts"]["tied"]  # same draw, opposite directions
+    # An alias — the same point hash — reads the same direction; a fit outside the pair reads a named missing.
+    assert resolved_fit_to_fit(exam, {"point_hash": "aaaa"})["sentence"] == all_period["sentence"]
+    outsider = resolved_fit_to_fit(exam, exam["fits"][2])
+    assert outsider["status"] == "missing" and outsider["code"] == "not_compared"
+
+
+def test_a_legacy_one_direction_record_reads_honestly_and_names_its_unavailable_side() -> None:
+    # The #3014 v1 shape: one set of counts, no identity inside the record. The counts belonged to the exam's
+    # first recorded fit (the wiring always passed it first); that fit reads its record, the other reads a
+    # named unavailable directional view — nothing is redrawn, relabelled or invented.
+    legacy = {
+        "status": "measured",
+        "pair": ["aaaa", "zzzz"],
+        "counts": {"better": 6_602, "tied": 238, "worse": 3_160, "undefined": 0},
+        "shares": {"better": 0.6602, "tied": 0.0238, "worse": 0.316, "undefined": 0.0},
+        "at_least_as_good": {"count": 6_840, "share": 0.684},
+        "sentence": "In 10,000 paired resamples of the final sessions, All-period fit was at least as good as Recent fit in 68.4% of paths (6,602 better, 238 tied, 3,160 worse). Both selections were made after these results were viewed; this is not adjusted for that choice.",
+        "selection_note": SELECTION_NOTE,
+        "basis": {"schema_version": "golden-search-chance-fit-to-fit/v1"},
+    }
+    exam = {"chance": {"fit_to_fit": legacy}, "fits": [{"key": "all_period", "point_hash": "aaaa", "label": "All-period fit"}, {"key": "recent", "point_hash": "zzzz", "label": "Recent fit"}]}
+    owner = resolved_fit_to_fit(exam, exam["fits"][0])
+    assert owner["status"] == "measured" and owner["sentence"] == legacy["sentence"]
+    other = resolved_fit_to_fit(exam, exam["fits"][1])
+    assert other["status"] == "missing" and other["code"] == "direction_unavailable"
+    assert "only the All-period fit's direction" in other["reason"]
+    # A failed or missing exam-level record serves to every fit as it stands.
+    assert resolved_fit_to_fit({"chance": {"fit_to_fit": {"status": "failed", "reason": "x", "sentence": "y"}}}, exam["fits"][0])["status"] == "failed"
+    assert resolved_fit_to_fit({"chance": {"fit_to_fit": {"status": "missing", "code": "single_fit", "reason": "r"}}}, exam["fits"][0])["code"] == "single_fit"
+    # An unknown schema never reads as a direction.
+    unknown = resolved_fit_to_fit({"chance": {"fit_to_fit": {**legacy, "basis": {"schema_version": "v9"}}}}, exam["fits"][0])
+    assert unknown["status"] == "missing" and unknown["code"] == "unsupported"
 
 
 def test_a_failed_other_fit_leaves_a_named_missing_optional_comparison() -> None:

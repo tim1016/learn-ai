@@ -1384,17 +1384,39 @@ class GoldenSearchFinalChance(_Wire):
     comparison: GoldenSearchChanceComparison
     profitability: GoldenSearchChanceProfitability
     carry_over: GoldenSearchChanceCarryOver
+    fit_to_fit: Annotated[
+        GoldenSearchChanceFitToFitDirection | GoldenSearchChanceReadingMissing | GoldenSearchChanceReadingFailed,
+        Field(discriminator="status", description="This fit's own direction of the optional fit-to-fit comparison (#3029); a named missing view when the stored record holds no direction for it."),
+    ]
+
+
+class GoldenSearchChanceFitToFitIdentity(_Wire):
+    """The point identity one fit-to-fit direction speaks for, and the one it speaks against (#3029)."""
+
+    point_hash: str
+    label: str
+
+
+class GoldenSearchChanceFitToFitDirection(_Wire):
+    """One direction of the shared paired draw: this fit against that opponent, counts and sentence its own (#3029)."""
+
+    status: Literal["measured"]
+    fit: GoldenSearchChanceFitToFitIdentity = Field(description="The fit this summary belongs to; sorted pair order never implies it.")
+    opponent: GoldenSearchChanceFitToFitIdentity
+    counts: GoldenSearchChanceCounts
+    shares: dict[str, float]
+    at_least_as_good: GoldenSearchChanceAtLeastAsGood = Field(description="(better + tied) over every replication, in this direction; tied paths support both directions, undefined neither.")
+    sentence: str
+    selection_note: str
+    basis: GoldenSearchChanceFitToFitBasis
 
 
 class GoldenSearchChanceFitToFitMeasured(_Wire):
-    """Two distinct fits' final comparison from one shared paired draw, both directions summarized from it."""
+    """Two distinct fits' final comparison from one shared paired draw, both directions summarized from it (#3029)."""
 
     status: Literal["measured"]
     pair: list[str] = Field(description="The two point hashes, canonically ordered, that were compared.")
-    counts: GoldenSearchChanceCounts
-    shares: dict[str, float]
-    at_least_as_good: GoldenSearchChanceAtLeastAsGood
-    sentence: str
+    directions: list[GoldenSearchChanceFitToFitDirection] = Field(description="Both directions of the one draw, each naming its own fit and opponent.")
     selection_note: str
     basis: GoldenSearchChanceFitToFitBasis
 
@@ -1405,7 +1427,7 @@ class GoldenSearchChanceFitToFitSource(_Wire):
     window: GoldenSearchChanceWindow
     session_count: int
     point_hashes: list[str] = Field(description="The two hashes, canonically ordered.")
-    series_digests: list[str]
+    series_digests: list[str] = Field(description="Each run's digest, in the same canonical order as point_hashes (#3029).")
     capital: float
 
 

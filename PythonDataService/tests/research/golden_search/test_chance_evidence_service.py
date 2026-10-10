@@ -266,9 +266,26 @@ async def test_two_fits_get_one_shared_fit_to_fit_draw_and_each_keeps_its_own_ev
     fit_to_fit = exam["chance"]["fit_to_fit"]
     assert fit_to_fit["status"] == "measured", fit_to_fit.get("reason")
     assert sorted(fit_to_fit["pair"]) == sorted(point_hash(row.strategy_key, dict(fit["point"])) for fit in exam["fits"])
-    assert sum(fit_to_fit["counts"].values()) == 10_000
-    assert "All-period fit" in fit_to_fit["sentence"] and "Recent fit" in fit_to_fit["sentence"]
-    assert "unadjusted for that choice" in fit_to_fit["sentence"] or "not adjusted for that choice" in fit_to_fit["sentence"]
+    first, second = fit_to_fit["directions"]
+    for direction in (first, second):
+        assert sum(direction["counts"].values()) == 10_000
+        assert direction["fit"]["point_hash"] != direction["opponent"]["point_hash"]
+    assert "All-period fit" in first["sentence"] and "Recent fit" in first["sentence"]
+    assert "unadjusted for that choice" in first["sentence"] or "not adjusted for that choice" in first["sentence"]
+    # The sentence the panel reads follows the fit the page is about (#3029): each fit's own chance record
+    # carries its own direction of the same shared draw, and the browser never computes a complement.
+    by_key = {fit["key"]: fit for fit in exam["fits"]}
+    for fit in exam["fits"]:
+        own = fit["chance"]["fit_to_fit"]
+        assert own["status"] == "measured", own.get("reason")
+        assert own["fit"]["point_hash"] == point_hash(row.strategy_key, dict(fit["point"]))
+        assert own["fit"]["label"] == fit["label"]
+        assert own["sentence"].index(fit["label"]) < own["sentence"].index(by_key["recent" if fit["key"] == "all_period" else "all_period"]["label"])
+    all_period = by_key["all_period"]["chance"]["fit_to_fit"]
+    recent = by_key["recent"]["chance"]["fit_to_fit"]
+    assert all_period["counts"]["better"] == recent["counts"]["worse"]
+    assert all_period["counts"]["tied"] == recent["counts"]["tied"]
+    assert all_period["at_least_as_good"]["count"] + recent["counts"]["undefined"] - recent["counts"]["tied"] == 10_000 - recent["counts"]["tied"]  # tied support both, undefined neither
     # Each fit's own readings stand beside the shared one, whatever the other fit did.
     for fit in exam["fits"]:
         assert fit["chance"]["comparison"]["status"] == "measured"

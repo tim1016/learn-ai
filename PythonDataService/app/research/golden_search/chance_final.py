@@ -84,8 +84,10 @@ logger = logging.getLogger(__name__)
 
 #: What the stored per-fit final readings call themselves; a change to their interpretation needs a new one.
 SCHEMA_CARRY_OVER = "golden-search-chance-carry-over/v1"
-#: What the stored fit-to-fit reading calls itself.
-SCHEMA_FIT_TO_FIT = "golden-search-chance-fit-to-fit/v1"
+#: What the stored fit-to-fit reading calls itself; v2 stores both directions of the one shared draw (#3029).
+SCHEMA_FIT_TO_FIT = "golden-search-chance-fit-to-fit/v2"
+#: The #3014 shape: one direction only — the first recorded fit's — with no identity inside the record.
+SCHEMA_FIT_TO_FIT_V1 = "golden-search-chance-fit-to-fit/v1"
 
 CARRY_OVER_MISSING = ("carry_over_unavailable", "No matching stored rehearsal could carry over, so no rank exists; the comparison readings beside it are unaffected.")
 SELECTION_NOTE = (
@@ -342,37 +344,106 @@ def fit_to_fit_reading(
         chunk_counts, _ = _pair_chunk(own, other)
         for name, value in chunk_counts.items():
             counts[name] += value
-    label = OBJECTIVES[objective][0]
-    sentence = (
-        f"In {REPLICATIONS:,} paired resamples of the final sessions, {first['label']} was at least as good as {second['label']} in "
-        f"{(counts['better'] + counts['tied']) / REPLICATIONS:.1%} of paths ({counts['better']:,} better, {counts['tied']:,} tied, {counts['worse']:,} worse). "
-        "Both selections were made after these results were viewed; this is not adjusted for that choice."
-    )
+    basis = {
+        "schema_version": SCHEMA_FIT_TO_FIT,
+        "convention": "stationary-bootstrap/v1",
+        "replications": REPLICATIONS,
+        "mean_block_sessions": MEAN_BLOCK_SESSIONS,
+        "thresholds": {"clear": 0.95},
+        "objective": {"measure": objective, "label": OBJECTIVES[objective][0], "units": OBJECTIVES[objective][1]},
+        "seed": {"inputs": seed_inputs, "value": seed},
+        "source": {
+            "window": {"start_ms": window[0], "end_ms": window[1]},
+            "session_count": len(sides[0].session_ms),
+            "point_hashes": hashes,
+            # In the pair's canonical (sorted) order, so each digest names its point through it (#3029).
+            "series_digests": [series_digest(side) for _, side in sorted(zip(hashes, sides, strict=True), key=lambda item: item[0])],
+            "capital": sides[0].capital,
+        },
+    }
     return {
         "status": "measured",
         "pair": hashes,
+        "directions": both_directions(
+            counts,
+            first={"point_hash": str(first["point_hash"]), "label": str(first["label"])},
+            second={"point_hash": str(second["point_hash"]), "label": str(second["label"])},
+            basis=basis,
+        ),
+        "selection_note": SELECTION_NOTE,
+        "basis": basis,
+    }
+
+
+def _direction_sentence(fit_label: str, opponent_label: str, counts: Mapping[str, int]) -> str:
+    return (
+        f"In {REPLICATIONS:,} paired resamples of the final sessions, {fit_label} was at least as good as {opponent_label} in "
+        f"{(counts['better'] + counts['tied']) / REPLICATIONS:.1%} of paths ({counts['better']:,} better, {counts['tied']:,} tied, {counts['worse']:,} worse). "
+        "Both selections were made after these results were viewed; this is not adjusted for that choice."
+    )
+
+
+def _direction(identity: Mapping[str, str], opponent: Mapping[str, str], counts: Mapping[str, int], basis: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "status": "measured",
+        "fit": dict(identity),
+        "opponent": dict(opponent),
         "counts": dict(counts),
         "shares": {name: value / REPLICATIONS for name, value in counts.items()},
         "at_least_as_good": {"count": counts["better"] + counts["tied"], "share": (counts["better"] + counts["tied"]) / REPLICATIONS},
-        "sentence": sentence,
+        "sentence": _direction_sentence(identity["label"], opponent["label"], counts),
         "selection_note": SELECTION_NOTE,
-        "basis": {
-            "schema_version": SCHEMA_FIT_TO_FIT,
-            "convention": "stationary-bootstrap/v1",
-            "replications": REPLICATIONS,
-            "mean_block_sessions": MEAN_BLOCK_SESSIONS,
-            "thresholds": {"clear": 0.95},
-            "objective": {"measure": objective, "label": label, "units": OBJECTIVES[objective][1]},
-            "seed": {"inputs": seed_inputs, "value": seed},
-            "source": {
-                "window": {"start_ms": window[0], "end_ms": window[1]},
-                "session_count": len(sides[0].session_ms),
-                "point_hashes": hashes,
-                "series_digests": [series_digest(side) for side in sides],
-                "capital": sides[0].capital,
-            },
-        },
+        "basis": basis,
     }
+
+
+def both_directions(counts: Mapping[str, int], *, first: Mapping[str, str], second: Mapping[str, str], basis: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Both directional summaries of one paired draw's event counts, each naming its own fit and opponent (#3029).
+
+    The second direction is derived from the same counts — better and worse reverse, tied and undefined stay
+    equal — never from another draw, and an engine never runs again. Tied paths support both directions and
+    undefined paths support neither, so the opposite inclusive support is (worse + tied) over B, never
+    one minus the other direction's.
+    """
+    reversed_counts = {"better": counts["worse"], "tied": counts["tied"], "worse": counts["better"], "undefined": counts["undefined"]}
+    return [
+        _direction(first, second, counts, basis),
+        _direction(second, first, reversed_counts, basis),
+    ]
+
+
+def resolved_fit_to_fit(exam: Mapping[str, Any], fit: Mapping[str, Any]) -> dict[str, Any]:
+    """The fit-to-fit reading as one fit sees it: the direction of the shared draw that names this fit (#3029).
+
+    A v2 record serves the direction whose fit identity is this fit's point hash — aliases share the hash and
+    so share the direction — and a fit the pair never compared gets a named missing, never a complement
+    computed in the browser or here. A legacy v1 record holds one direction only, the first recorded fit's
+    (the exam wiring always passed it first); that fit reads its own record honestly, the other reads a named
+    unavailable directional view, and nothing is redrawn, relabelled or backfilled on read.
+    """
+    chance = exam.get("chance")
+    record = chance.get("fit_to_fit") if isinstance(chance, Mapping) else None
+    if not isinstance(record, Mapping):
+        return _missing(("not_measured", "Not measured for this study: fit-to-fit readings were first recorded with #3014."))
+    if record.get("status") != "measured":
+        return dict(record)
+    schema = (record.get("basis") or {}).get("schema_version")
+    if schema == SCHEMA_FIT_TO_FIT:
+        for direction in record.get("directions") or []:
+            if isinstance(direction, Mapping) and (direction.get("fit") or {}).get("point_hash") == fit.get("point_hash"):
+                return dict(direction)
+        return _missing(("not_compared", "This fit was not one of the two the stored fit-to-fit record compared, so it has no direction to read."))
+    if schema == SCHEMA_FIT_TO_FIT_V1:
+        fits = [stored for stored in exam.get("fits") or [] if isinstance(stored, Mapping)]
+        if fits and fit.get("point_hash") == fits[0].get("point_hash"):
+            return dict(record)
+        first_label = fits[0].get("label", "first recorded fit") if fits else "the first recorded fit"
+        return _missing(
+            ("direction_unavailable", f"The stored fit-to-fit record predates both-direction summaries (#3029): it recorded only the {first_label}'s direction, and this fit's own direction was never recorded. It is not recomputed on read.")
+        )
+    return _missing(
+        ("unsupported", f"The stored fit-to-fit reading holds schema {schema!r}, which this server cannot interpret; it is shown as unavailable rather than guessed at.")
+    )
 
 
 #: What each component's never-recorded state says, so the copy names the component it belongs to.

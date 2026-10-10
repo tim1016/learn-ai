@@ -3,15 +3,16 @@ import axe from 'axe-core';
 import { describe, expect, it } from 'vitest';
 
 import { GoldenSearchChanceFinalPanelComponent } from './golden-search-chance-final-panel.component';
-import { chanceCarryOver, chanceFitToFit, finalChance } from './testing/fixtures';
+import { chanceCarryOver, chanceFitToFitRecentDirection, finalChance } from './testing/fixtures';
 import { fakeCharts } from './testing/fake-charts';
-import type { CandidateRef, ExamChance, FinalChance } from './golden-search.types';
+import type { CandidateRef, FinalChance } from './golden-search.types';
 
 const CANDIDATE: CandidateRef = { key: 'all_period', label: 'All-period fit' };
+const RECENT: CandidateRef = { key: 'recent', label: 'Recent fit' };
 
-async function renderPanel(chance: FinalChance, examChance: ExamChance = { fit_to_fit: chanceFitToFit() }, candidate: CandidateRef = CANDIDATE, positiveNetRequired = true) {
+async function renderPanel(chance: FinalChance, candidate: CandidateRef = CANDIDATE, positiveNetRequired = true) {
   return render(GoldenSearchChanceFinalPanelComponent, {
-    inputs: { candidate, chance, examChance, positiveNetRequired },
+    inputs: { candidate, chance, positiveNetRequired },
     providers: fakeCharts().providers,
   });
 }
@@ -52,7 +53,7 @@ describe('GoldenSearchChanceFinalPanelComponent', () => {
   });
 
   it('omits the money-support row entirely when the frozen plan does not require a positive net (#3026)', async () => {
-    await renderPanel(finalChance(), { fit_to_fit: chanceFitToFit() }, CANDIDATE, false);
+    await renderPanel(finalChance(), CANDIDATE, false);
     expect(screen.queryByText(/positive in 97\.4% of 10,000 resampled final paths/i)).toBeNull();
     expect(screen.queryByRole('img', { name: /final profit uncertainty/i })).toBeNull();
     expect(screen.queryByText(/Money support/i)).toBeNull();
@@ -91,15 +92,43 @@ describe('GoldenSearchChanceFinalPanelComponent', () => {
   });
 
   it('announces a failed fit-to-fit as an alert instead of rendering nothing', async () => {
-    await renderPanel(finalChance(), {
-      fit_to_fit: {
-        status: 'failed',
-        reason: 'KeyError: label',
-        sentence: 'The fit-to-fit reading could not be computed and nothing was stored: KeyError: label.',
-      },
-    });
+    await renderPanel(
+      finalChance({
+        fit_to_fit: {
+          status: 'failed',
+          reason: 'KeyError: label',
+          sentence: 'The fit-to-fit reading could not be computed and nothing was stored: KeyError: label.',
+        },
+      }),
+    );
     const alert = screen.getByRole('alert');
     expect(alert.textContent).toContain('could not be computed');
+  });
+
+  it('shows the All-period fit its own direction of the shared draw, never the other fit’s (#3029)', async () => {
+    await renderPanel(finalChance(), CANDIDATE);
+    expect(screen.getByText(/All-period fit was at least as good as Recent fit in 68\.4% of paths/i)).toBeTruthy();
+    expect(screen.queryByText(/Recent fit was at least as good as/i)).toBeNull();
+  });
+
+  it('shows the Recent fit its own direction when it is the fit the page is about (#3029)', async () => {
+    await renderPanel(finalChance({ fit_to_fit: chanceFitToFitRecentDirection() }), RECENT);
+    expect(screen.getByText(/Recent fit was at least as good as All-period fit in 34\.0% of paths/i)).toBeTruthy();
+    expect(screen.queryByText(/All-period fit was at least as good as Recent fit in 68\.4%/i)).toBeNull();
+  });
+
+  it('says so in the server’s words when this fit has no recorded direction (#3029)', async () => {
+    await renderPanel(
+      finalChance({
+        fit_to_fit: {
+          status: 'missing',
+          code: 'direction_unavailable',
+          reason:
+            'The stored fit-to-fit record predates both-direction summaries (#3029): it recorded only the All-period fit’s direction, and this fit’s own direction was never recorded. It is not recomputed on read.',
+        },
+      }),
+    );
+    expect(screen.getByText(/recorded only the All-period fit’s direction/i)).toBeTruthy();
   });
 
   it('reads each fit its own way: a weak carry-over shows its own words, never another fit’s', async () => {
@@ -118,19 +147,19 @@ describe('GoldenSearchChanceFinalPanelComponent', () => {
 
   it('says so plainly when nothing was measured', async () => {
     await renderPanel(
-      {
+      finalChance({
         comparison: { status: 'missing', code: 'not_measured', reason: 'Not measured for this study.' },
         profitability: { status: 'missing', code: 'not_measured', reason: 'Not measured for this study.' },
         carry_over: { status: 'missing', code: 'carry_over_unavailable', reason: 'No matching stored rehearsal could carry over.' },
-      },
-      { fit_to_fit: { status: 'missing', code: 'single_fit', reason: 'Only one distinct fit sat this final test.' } },
+        fit_to_fit: { status: 'missing', code: 'single_fit', reason: 'Only one distinct fit sat this final test.' },
+      }),
     );
     expect(screen.getByText(/No final uncertainty was measured for this fit/i)).toBeTruthy();
   });
 
   it('shows the server’s own words for a missing comparison and a failed carry-over, never silence', async () => {
     await renderPanel(
-      {
+      finalChance({
         comparison: { status: 'missing', code: 'not_measured', reason: 'Not measured for this study: final comparison readings were first recorded with #3014.' },
         profitability: { status: 'missing', code: 'not_measured', reason: 'Not measured for this study.' },
         carry_over: {
@@ -138,7 +167,7 @@ describe('GoldenSearchChanceFinalPanelComponent', () => {
           reason: 'ValueError: boom',
           sentence: 'The carry over reading could not be computed and nothing was stored: ValueError: boom.',
         },
-      },
+      }),
     );
     expect(screen.getByText(/first recorded with #3014/i)).toBeTruthy();
     const alert = screen.getByRole('alert');
