@@ -862,6 +862,36 @@ An interval that crosses zero differs visibly from one entirely above it; an all
 
 A chef's dish reheated many ways: how often is the reheated serving at least as good as the original plating? Counting the reheats tells you about the reheating, not about whether the recipe is good — and the chef already tasted this batch when choosing the dish.
 
+### Final-test rehearsal {#chance-rehearsal}
+
+#### The question it answers
+
+If the recorded development outcome had to satisfy the final rules over a test this long, how often would it?
+
+#### What you're looking at
+
+A ladder of four rungs — one, two, three and four times the final test's scheduled session count. At each rung, the bold line shows the share of 10,000 paired resamples of the development sessions that meet every modeled final rule together: a positive net when the plan requires it, a worst fall at session closes within the frozen ceiling, resampled completed exits at or above the rung's trade floor, and an objective at least the current settings'. Thinner lines show each rule on its own, so you can see which one limits the ladder. The dashed amber line is the 80% target, the owner's reading heuristic. The sentence above the chart names the limiting rules and whether any rung reaches the target.
+
+At the final test's own length the trade floor is exactly the one the plan froze; a longer rung under an expected trade frequency scales as the frequency times the rung's trading years, rounded up once. A fixed-floor plan keeps its fixed final floor on every rung.
+
+#### How to read it
+
+1. Read the bold line first: the share of resamples meeting every modeled rule together, at 1× to 4× the final test’s scheduled sessions.
+2. The dashed amber line is the 80% target — the owner’s reading heuristic, not a power calculation.
+3. Read the thinner lines to see which rule limits the ladder; the sentence above names them. A low 1× share is not by itself a “test too short” verdict.
+4. Remember what a rung is not: an exact replay of the final test (the drawdown rule reads session closes, the real gate reads every bar), and a longer rung need not be better.
+
+#### Good signs and warning signs
+
+- Good: the bold line above the target at 1× already, with no single rule far below the rest.
+- Warning: the ladder falling as it lengthens — a longer rehearsal of the same development outcome is not a better one.
+- Warning: the trade-count line flat at zero: the modeled activity floor is out of reach at every length.
+- Warning: reading a low 1× share as "the test is too short". A weak objective, a deep drawdown or low activity can each be the limit; the sentence says which.
+
+#### An everyday comparison
+
+A dress rehearsal run at full length, double length, and beyond: it tells you how the recorded cast holds up under a longer run of the same script. It cannot tell you how opening night's audience will react, and rehearsing longer does not fix a weak script.
+
 ### Stress and neighbor equity {#candidate-curves}
 
 #### The question it answers

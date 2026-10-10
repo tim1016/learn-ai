@@ -601,7 +601,8 @@ _NOT_MEASURED_BY_COMPONENT: dict[str, tuple[str, str]] = {
         "Not measured for this study: profitability readings were first recorded with #3011, and stored evidence is never backfilled.",
     ),
 }
-_KNOWN_STATUSES = frozenset({"measured", "same_settings", "baseline", "missing", "failed"})
+#: The statuses a stored chance component may carry; anything else reads as unsupported rather than guessed at (#3011).
+KNOWN_STATUSES = frozenset({"measured", "same_settings", "baseline", "missing", "failed"})
 
 
 def stored_chance(candidate: Mapping[str, Any]) -> dict[str, Any]:
@@ -615,7 +616,7 @@ def stored_chance(candidate: Mapping[str, Any]) -> dict[str, Any]:
     components: dict[str, dict[str, Any]] = {}
     for component in ("comparison", "profitability"):
         record = (stored or {}).get(component)
-        if isinstance(record, Mapping) and record.get("status") in _KNOWN_STATUSES:
+        if isinstance(record, Mapping) and record.get("status") in KNOWN_STATUSES:
             components[component] = dict(record)
         elif isinstance(record, Mapping):
             unsupported = record.get("status")

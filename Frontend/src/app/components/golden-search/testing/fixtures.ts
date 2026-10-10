@@ -2,7 +2,10 @@ import { etMidnightMs } from '../../../shared/date/et-midnight';
 import type {
   CandidateDetail,
   CandidateKey,
+  ChanceBasis,
   ChanceReadings,
+  ChanceRehearsalRung,
+  MeasuredChanceRehearsal,
   DecisionSummary,
   EvidenceCandidate,
   EvidenceView,
@@ -20,7 +23,6 @@ import type {
   Finding,
   GoldenSearchDefaults,
   GoldenSearchPreflight,
-  ChanceBasis,
   MeasuredChanceComparison,
   MeasuredChanceProfitability,
   MeasuredConcentration,
@@ -584,11 +586,77 @@ export function chanceProfitability(overrides: Partial<MeasuredChanceProfitabili
   };
 }
 
-/** One fit's development chance readings (#3011); measured comparison and profitability unless overridden. */
+/** One fit's development chance readings (#3011, #3012); measured comparison, profitability and rehearsal unless overridden. */
 export function chanceReadings(overrides: Partial<ChanceReadings> = {}): ChanceReadings {
   return {
     comparison: chanceComparison(),
     profitability: chanceProfitability(),
+    rehearsal: chanceRehearsal(),
+    ...overrides,
+  };
+}
+
+/** A measured rehearsal rung (#3012): its pass counts over 10,000 paths unless overridden. */
+export function rehearsalRung(k: number, overrides: Partial<ChanceRehearsalRung> = {}): ChanceRehearsalRung {
+  const joint = [6120, 7480, 8150, 8390][k - 1] ?? 6000;
+  const perRule = {
+    positive_net: [9210, 9540, 9680, 9750][k - 1] ?? 9000,
+    drawdown: [7810, 9020, 9410, 9580][k - 1] ?? 8000,
+    exits: [8840, 9610, 9800, 9880][k - 1] ?? 9000,
+    objective: [7020, 8330, 8890, 9150][k - 1] ?? 7000,
+  };
+  const sessions = 21 * k;
+  const floor = [9, 18, 27, 36][k - 1] ?? 9;
+  const denominator = 10_000;
+  return {
+    k,
+    sessions,
+    trade_floor: floor,
+    denominator,
+    passes: { pass_joint: joint, pass_positive_net: perRule.positive_net, pass_drawdown: perRule.drawdown, pass_exits: perRule.exits, pass_objective: perRule.objective },
+    undefined: { undefined_positive_net: 0, undefined_drawdown: 0, undefined_objective: 0 },
+    shares: {
+      joint: joint / denominator,
+      positive_net: perRule.positive_net / denominator,
+      drawdown: perRule.drawdown / denominator,
+      exits: perRule.exits / denominator,
+      objective: perRule.objective / denominator,
+    },
+    ...overrides,
+  };
+}
+
+/** A measured rehearsal ladder (#3012): rising joint support with a 61.2% 1× rung unless overridden. */
+export function chanceRehearsal(overrides: Partial<MeasuredChanceRehearsal> = {}): MeasuredChanceRehearsal {
+  const rungs = [1, 2, 3, 4].map((k) => rehearsalRung(k));
+  return {
+    status: 'measured',
+    rungs,
+    active_rules: ['positive_net', 'drawdown', 'exits', 'objective'],
+    guidance:
+      "At the final test's own length, 61% of resamples meet every modeled rule; the limit is the objective comparison with the current settings (70%) and the session-close drawdown rule (78%). The 2× rung reaches the 80% target (75%). The 80% target is the owner's reading heuristic, not a power calculation.",
+    objective_percentiles_1x: { p: Array.from({ length: 99 }, (_, i) => -0.02 + (i / 98) * 0.14), finite: 10_000 },
+    basis: {
+      schema_version: 'golden-search-chance-rehearsal/v1',
+      convention: 'stationary-bootstrap/v1',
+      replications: 10_000,
+      chunk_replications: 1_000,
+      mean_block_sessions: 5,
+      thresholds: { rehearsal_target: 0.8 },
+      objective: { measure: 'total_return_pct', label: 'total return', units: 'fraction of the starting capital' },
+      rules: { max_drawdown_ceiling: 0.2, require_positive_net: true, drawdown_basis: 'session closes' },
+      activity: { frequency_based: true, expected_trades_per_year: 50, final_trading_years: 0.084 },
+      final_interval: { window: { start_ms: FINAL_START_MS, end_ms: FINAL_START_MS + 2_592_000_000 }, scheduled_sessions: 21 },
+      source: {
+        window: { start_ms: DEVELOPMENT_START_MS, end_ms: FINAL_START_MS },
+        session_count: 62,
+        candidate_point_hash: 'h-all',
+        incumbent_point_hash: 'h-inc',
+        series_digest: { candidate: 'd-all', incumbent: 'd-inc' },
+        capital: 100000,
+      },
+      seeds: Object.fromEntries([1, 2, 3, 4].map((k) => [`${k}x`, { inputs: ['golden-search-chance-rehearsal/v1', DEVELOPMENT_START_MS, FINAL_START_MS, 'total_return_pct', 'h-all', 'h-inc', k], value: 1000 + k }])),
+    },
     ...overrides,
   };
 }
@@ -653,6 +721,22 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
           difference_range: { p5: -0.071, p50: 0.021, p95: 0.118, finite: 9_930 },
         }),
         profitability: chanceProfitability({ label: 'mixed', counts: { positive: 6310, zero: 40, negative: 3650, undefined: 0 }, shares: { positive: 0.631, zero: 0.004, negative: 0.365, undefined: 0 } }),
+        rehearsal: chanceRehearsal({
+          rungs: [1, 2, 3, 4].map((k) =>
+            rehearsalRung(k, {
+              passes: { pass_joint: [2380, 2050, 1870, 1740][k - 1] ?? 2000, pass_positive_net: [3510, 3120, 2900, 2760][k - 1] ?? 3000, pass_drawdown: [7210, 6880, 6640, 6480][k - 1] ?? 7000, pass_exits: [4390, 4020, 3810, 3660][k - 1] ?? 4000, pass_objective: [3010, 2830, 2710, 2620][k - 1] ?? 3000 },
+              shares: {
+                joint: ([2380, 2050, 1870, 1740][k - 1] ?? 2000) / 10_000,
+                positive_net: ([3510, 3120, 2900, 2760][k - 1] ?? 3000) / 10_000,
+                drawdown: ([7210, 6880, 6640, 6480][k - 1] ?? 7000) / 10_000,
+                exits: ([4390, 4020, 3810, 3660][k - 1] ?? 4000) / 10_000,
+                objective: ([3010, 2830, 2710, 2620][k - 1] ?? 3000) / 10_000,
+              },
+            }),
+          ),
+          guidance:
+            "At the final test's own length, 24% of resamples meet every modeled rule; the limit is the objective comparison with the current settings (30%) and the positive-net rule (35%). No rung reaches the 80% target; the highest is 24% at 1×. Support does not rise with length on this ladder — a longer rehearsal of the same development outcome is not a better one. The 80% target is the owner's reading heuristic, not a power calculation.",
+        }),
       }),
       guidance: { title: 'The extra return comes with a warning', text: 'The largest development return also exceeds your drawdown ceiling.' },
       flags: [{ code: 'DRAWDOWN_ABOVE_CEILING', text: 'Above 12% limit' }],
@@ -683,6 +767,7 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
           basis: { ...CHANCE_BASIS, source: { window: { start_ms: DEVELOPMENT_START_MS, end_ms: FINAL_START_MS }, session_count: 62 } } satisfies ChanceBasis,
         },
         profitability: { status: 'missing', code: 'not_measured', reason: 'The current settings’ own profitability is not measured; every fit’s readings stand against them.' },
+        rehearsal: { status: 'missing', code: 'not_measured', reason: 'The current settings are the baseline; a rehearsal compares a fit against them.' },
       },
       guidance: { title: 'No change can be the best decision', text: 'Keeping the incumbent is a complete research decision.' },
       flags: [],

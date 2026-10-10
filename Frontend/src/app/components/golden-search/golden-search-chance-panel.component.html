@@ -23,7 +23,6 @@
         }
       </div>
     </div>
-    <p caption class="caption">{{ m.bias_note }} Middle 90% of resampled differences — not a confidence interval.</p>
   } @else {
     @if (note(); as n) {
       @switch (n.kind) {
@@ -35,6 +34,9 @@
         }
       }
     }
+  }
+  @if (measured(); as m) {
+    <p caption class="caption">{{ m.bias_note }} Middle 90% of resampled differences — not a confidence interval.</p>
   }
   @if (profitability(); as p) {
     <p class="money">{{ moneyText() }}</p>
