@@ -100,6 +100,23 @@ describe('GoldenSearchChanceFinalPanelComponent', () => {
     expect(screen.queryByText(/No final uncertainty was measured for this fit/i)).toBeNull();
   });
 
+  it('renders an invalid stored comparison’s server reason beside still-valid carry-over evidence (#3024)', async () => {
+    await renderPanel(
+      finalChance({
+        comparison: {
+          status: 'missing',
+          code: 'invalid_record',
+          reason:
+            'The stored comparison reading fails validation and is shown as unavailable rather than guessed at: its schema version \'golden-search-chance-comparison/v999\' is not a supported comparison schema.',
+        },
+      }),
+    );
+    expect(screen.getByText(/fails validation and is shown as unavailable/i)).toBeTruthy();
+    expect(screen.getByText(/v999/i)).toBeTruthy();
+    // The malformed sibling hides nothing: the measured carry-over chart still shows.
+    expect(screen.getByRole('img', { name: /result among its rehearsals/i })).toBeTruthy();
+  });
+
   it('passes an accessibility audit in its measured state', async () => {
     const view = await renderPanel(finalChance());
     const results = await axe.run(view.fixture.nativeElement, { rules: { 'color-contrast': { enabled: false } } });

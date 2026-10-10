@@ -106,7 +106,9 @@ def test_a_missing_stored_threshold_is_unavailable_and_today_constants_are_never
 
 
 def test_a_measured_reading_with_no_defined_path_is_unavailable_for_enrolled_studies() -> None:
+    # Coherent with its own counts: every path undefined, so the label and the counts agree (#3024).
     empty = _measured_share(0.0, label="no_defined_paths")
+    empty["counts"] = {"better": 0, "tied": 0, "worse": 0, "undefined": 10_000}
     enrolled = chance_weakness_items(POLICY, {"comparison": empty, "profitability": _measured_profitability(1.0), "carry_over": _carry()}, positive_net_required=True)
     assert _codes(enrolled) == [CHANCE_UNAVAILABLE]
     assert "no resampled path produced a defined result" in enrolled[0]["text"]

@@ -15,14 +15,20 @@ Reference: issue #3014's delivery contract (the 2026-10-09 adversarial
   review of #2932); the draw is Politis & Romano (1994) via
   ``monte_carlo/stationary.py``; White's Reality Check motivates the
   selection caveats, which this module states and never claims to correct.
-Canonical implementation: this file for the carry-over rank and the
-  fit-to-fit pairing; ``chance_compare`` for the paired counting both
-  reuse; ``chance_rehearsal`` for the stored basis it reproduces.
+Canonical implementation: this file for the carry-over rank, the
+  fit-to-fit pairing and the validation of stored final components
+  (#3024); ``chance_compare`` for the paired counting both reuse;
+  ``chance_rehearsal`` for the stored basis it reproduces.
 Validated against: tests/research/golden_search/test_chance_final.py
   (ranks 0 and 1, ties at the recorded value, a discrete distribution
   where counting stored percentiles disagrees with the empirical rank,
   tails, fewer than all finite, mismatched objective/length/digest,
-  stored constants different from today's, swapped fit-to-fit symmetry).
+  stored constants different from today's, swapped fit-to-fit symmetry)
+  and — for the stored-record validation #3024 adds — the invalid-record
+  fixtures (unsupported versions, forged labels and inclusive counts,
+  basisless carry-overs, wrong-fit evidence, malformed outer mappings,
+  mixed valid and invalid siblings, aliases and the enrolled-versus-
+  legacy split).
 
 The readings inform. The frozen judgement, checks, exposure claim and
 budget records never read them. The carry-over is a display diagnostic,
@@ -37,7 +43,9 @@ correction.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+import math
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from typing import Any
 
@@ -55,12 +63,15 @@ from app.research.golden_search.chance import (
 from app.research.golden_search.chance_compare import (
     KNOWN_STATUSES,
     OBJECTIVES,
+    SCHEMA_COMPARISON,
+    SCHEMA_PROFITABILITY,
     _missing,
     _pair_chunk,
     admit_run,
     failed_component,
     series_digest,
 )
+from app.research.golden_search.chance_rehearsal import SCHEMA_REHEARSAL
 from app.research.golden_search.selection import Metrics
 from app.research.monte_carlo.stationary import stationary_index_chunks
 
@@ -340,15 +351,280 @@ _KNOWN_BY_COMPONENT: dict[str, frozenset[str]] = {
     "carry_over": frozenset({"measured", "missing", "failed"}),
 }
 
+#: The schema versions this server can interpret, per component; anything else reads unavailable (#3024).
+_SUPPORTED_SCHEMAS: dict[str, str] = {
+    "comparison": SCHEMA_COMPARISON,
+    "profitability": SCHEMA_PROFITABILITY,
+    "carry_over": SCHEMA_CARRY_OVER,
+}
+_SUPPORTED_LABELS: dict[str, frozenset[str]] = {
+    "comparison": frozenset({"clearly_as_good", "clearly_worse", "identical_outcomes", "mixed", "no_defined_paths"}),
+    "profitability": frozenset({"clearly_positive", "clearly_negative", "mixed", "no_defined_paths"}),
+    "carry_over": frozenset({"below_most", "above_most", "middle", "no_defined_paths"}),
+}
 
-def stored_final_chance(fit: Mapping[str, Any]) -> dict[str, Any]:
-    """The per-fit final chance components of one stored exam fit, normalized per component like every other chance reading."""
-    stored = fit.get("chance") or {}
+
+@dataclass(frozen=True)
+class FinalChanceScope:
+    """The frozen study identity a stored final reading must belong to before it is served or interpreted (#3024).
+
+    Built from the locked protocol and the fit a page, approval intent or qualification names, so a valid-looking
+    record that belongs to another fit, window, capital or objective never reads as this fit's evidence. Aliases
+    need no special case: they share one point hash, and the hash is the identity.
+    """
+
+    objective: str
+    development_window: tuple[int, int]
+    final_window: tuple[int, int]
+    capital: float
+    point_hash: str
+
+    def for_fit(self, point_hash: str) -> FinalChanceScope:
+        """The same scope bound to one fit's point identity."""
+        return replace(self, point_hash=point_hash)
+
+
+# ── Stored-record validation (#3024) ─────────────────────────────────────
+#
+# One authority, served through ``stored_final_chance``, checks every measured record before the page renders
+# it, the approval intent reads it or the qualification payload freezes it. A record that fails reads as a
+# named ``invalid_record`` missing reason — never repaired with today's constants, never reclassified, and
+# never persisted back.
+
+
+def _count(value: Any) -> int | None:
+    """A stored count: a true integer at least zero — booleans and coerced strings are never counts."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _number(value: Any) -> float | None:
+    """A stored number: int or float (never a boolean), finite."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _text(value: Any) -> str | None:
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _checked_thresholds(basis: Mapping[str, Any]) -> str | None:
+    thresholds = basis.get("thresholds")
+    if not isinstance(thresholds, Mapping):
+        return "its basis holds no threshold record"
+    for name, value in thresholds.items():
+        number = _number(value)
+        if number is None:
+            return f"its basis threshold {name!r} is not a finite number"
+        if name == "clear" and not 0.0 <= number <= 1.0:
+            return f"its basis clear threshold {number:g} is not a share between 0 and 1"
+    return None
+
+
+def _checked_seed(basis: Mapping[str, Any]) -> str | None:
+    seed = basis.get("seed")
+    if not isinstance(seed, Mapping) or _count(seed.get("value")) is None or not isinstance(seed.get("inputs"), Sequence) or isinstance(seed.get("inputs"), (str, bytes)):
+        return "its basis kept no readable seed"
+    return None
+
+
+def _checked_source(basis: Mapping[str, Any], scope: FinalChanceScope) -> str | None:
+    """The identity binding of a stored comparison or profitability record: the fit, the window, the capital."""
+    source = basis.get("source")
+    if not isinstance(source, Mapping):
+        return "its basis names no source run"
+    window = source.get("window")
+    if not isinstance(window, Mapping) or window.get("start_ms") != scope.final_window[0] or window.get("end_ms") != scope.final_window[1]:
+        return "its basis source window is not this study's frozen final window"
+    if source.get("candidate_point_hash") != scope.point_hash:
+        return "its basis names another fit's point, not the fit this reading is being read for"
+    capital = _number(source.get("capital"))
+    if capital is None or capital != scope.capital:
+        return "its basis names a starting capital other than this study's frozen scope"
+    return None
+
+
+def _checked_range(value: Any, *, name: str, finite_maximum: int) -> str | None:
+    """A stored 5/50/95 range: finite support consistent with the counts behind it, endpoints finite and ordered."""
+    if not isinstance(value, Mapping):
+        return f"its {name} is not a recorded range"
+    finite = _count(value.get("finite"))
+    if finite is None or finite > finite_maximum:
+        return f"its {name} claims {value.get('finite')!r} finite paths, which is not a count the reading could have produced"
+    percentiles = []
+    for key in ("p5", "p50", "p95"):
+        raw = value.get(key)
+        if finite == 0:
+            if raw is not None:
+                return f"its {name} records percentiles with no finite path behind them"
+            continue
+        number = _number(raw)
+        if number is None:
+            return f"its {name} holds a {key} that is not a finite number"
+        percentiles.append(number)
+    if percentiles and not percentiles[0] <= percentiles[1] <= percentiles[2]:
+        return f"its {name} percentiles are not ordered from 5th to 95th"
+    return None
+
+
+def _invalid_share_record(component: str, record: Mapping[str, Any], scope: FinalChanceScope) -> str | None:
+    """Why a measured comparison or profitability record cannot be interpreted, or None when it can.
+
+    Wire-required presentation fields are checked too, so a record that reaches the page never breaks the
+    response contract. The interpretation-bearing fields — counts, totals, the inclusive count, the label —
+    are checked against each other, never against today's constants: a historical threshold keeps its own
+    spelling.
+    """
+    basis = record.get("basis")
+    if not isinstance(basis, Mapping):
+        return "it records no interpretation basis"
+    if basis.get("schema_version") != _SUPPORTED_SCHEMAS[component]:
+        return f"its schema version {basis.get('schema_version')!r} is not a supported {component} schema"
+    if basis.get("convention") != CONVENTION:
+        return f"it was drawn under the {basis.get('convention')!r} convention, which this server cannot interpret"
+    replications = _count(basis.get("replications"))
+    if replications is None or replications == 0:
+        return f"its basis names {basis.get('replications')!r} replications, which is no draw to read"
+    if _count(basis.get("chunk_replications")) is None or _number(basis.get("mean_block_sessions")) is None:
+        return "its basis omits a draw-order constant it was drawn under"
+    if reason := _checked_thresholds(basis):
+        return reason
+    if reason := _checked_seed(basis):
+        return reason
+    if reason := _checked_source(basis, scope):
+        return reason
+    objective = basis.get("objective")
+    if not isinstance(objective, Mapping) or objective.get("measure") != scope.objective or objective.get("units") != OBJECTIVES[scope.objective][1]:
+        return "its basis objective is not this plan's frozen objective"
+    keys = ("better", "tied", "worse") if component == "comparison" else ("positive", "zero", "negative")
+    counts = record.get("counts")
+    if not isinstance(counts, Mapping):
+        return "it records no counts"
+    numbers = {key: _count(counts.get(key)) for key in (*keys, "undefined")}
+    if any(value is None for value in numbers.values()):
+        return f"its counts hold a value that is not a nonnegative integer count ({', '.join(f'{key}: {counts.get(key)!r}' for key in (*keys, 'undefined'))})"
+    if sum(numbers.values()) != replications:
+        return f"its counts total {sum(numbers.values()):,} paths, not the {replications:,} replications the reading says it drew"
+    defined = sum(numbers[key] for key in keys)
+    label = record.get("label")
+    if label not in _SUPPORTED_LABELS[component]:
+        return f"its label {label!r} is not a reading this server can interpret"
+    if (defined == 0) != (label == "no_defined_paths"):
+        return f"its label {label!r} disagrees with its own counts ({defined:,} defined paths)"
+    if _text(record.get("sentence")) is None:
+        return "it records no operator sentence"
+    shares = record.get("shares")
+    if not isinstance(shares, Mapping) or any(_number(value) is None for value in shares.values()):
+        return "its shares are not a recorded mapping of numbers"
+    if component == "comparison":
+        at_least = record.get("at_least_as_good")
+        if not isinstance(at_least, Mapping) or _count(at_least.get("count")) != numbers["better"] + numbers["tied"] or _number(at_least.get("share")) is None:
+            return f"its at-least-as-good count does not equal its better and tied counts ({numbers['better']:,} + {numbers['tied']:,})"
+        if not isinstance(record.get("incomplete_support"), bool) or _text(record.get("bias_note")) is None:
+            return "it omits the support-completeness flag or the selection caveat it must carry"
+        if reason := _checked_range(record.get("candidate_range"), name="own-result range", finite_maximum=replications):
+            return reason
+        # A defined pair whose difference subtraction overflows keeps its comparison but not a difference
+        # value, so the difference range may cover fewer paths than the counts defined — never more.
+        if reason := _checked_range(record.get("difference_range"), name="difference range", finite_maximum=defined):
+            return reason
+    return None
+
+
+def _invalid_carry_record(record: Mapping[str, Any], scope: FinalChanceScope) -> str | None:
+    """Why a measured carry-over record cannot be interpreted, or None when it can.
+
+    The carry-over basis carries no window or point hash of its own; its identity is the stored seed's inputs —
+    the rehearsal schema, the development window, the objective, the two points and the 1× rung — and the seed
+    those inputs derive. A record whose inputs name another fit, window or objective, or whose seed does not
+    follow from its inputs, is not this fit's carry-over.
+    """
+    basis = record.get("basis")
+    if not isinstance(basis, Mapping):
+        return "it records no interpretation basis"
+    if basis.get("schema_version") != SCHEMA_CARRY_OVER:
+        return f"its schema version {basis.get('schema_version')!r} is not a supported carry-over schema"
+    if basis.get("rehearsal_schema") != SCHEMA_REHEARSAL:
+        return f"it reproduces a rehearsal of schema {basis.get('rehearsal_schema')!r}, which this server cannot interpret"
+    if _count(basis.get("scheduled_sessions")) is None or basis.get("scheduled_sessions") == 0:
+        return f"its 1× length {basis.get('scheduled_sessions')!r} is not a session count"
+    objective = basis.get("objective")
+    if not isinstance(objective, Mapping) or objective.get("measure") != scope.objective or objective.get("units") != OBJECTIVES[scope.objective][1]:
+        return "its basis objective is not this plan's frozen objective"
+    seed = basis.get("seed")
+    if not isinstance(seed, Mapping) or not isinstance(seed.get("inputs"), Sequence) or isinstance(seed.get("inputs"), (str, bytes)):
+        return "its basis kept no readable seed"
+    inputs = list(seed["inputs"])
+    if len(inputs) < 7 or inputs[0] != SCHEMA_REHEARSAL or inputs[1] != scope.development_window[0] or inputs[2] != scope.development_window[1] or inputs[3] != scope.objective or scope.point_hash not in (inputs[4], inputs[5]) or inputs[6] != 1:
+        return "its seed inputs do not name this fit's own 1× rehearsal on this study's development window"
+    if seed.get("value") != seed_for(*inputs):
+        return "its stored seed does not follow from its own seed inputs"
+    below, finite, undefined = (_count(record.get(key)) for key in ("below", "finite", "undefined"))
+    if below is None or finite is None or undefined is None or below > finite or (finite == 0 and (below != 0 or undefined == 0)):
+        return f"its rank counts ({record.get('below')!r} below of {record.get('finite')!r} finite, {record.get('undefined')!r} undefined) are not coherent"
+    rank = _number(record.get("rank"))
+    if rank is None or not 0.0 <= rank <= 1.0:
+        return f"its rank {record.get('rank')!r} is not a share between 0 and 1"
+    if finite > 0 and abs(rank - below / finite) > 1e-12:
+        return "its rank does not equal its strictly-below count over its finite count"
+    recorded = _number(record.get("recorded_objective"))
+    if recorded is None:
+        return f"its recorded objective {record.get('recorded_objective')!r} is not a finite number"
+    label = record.get("label")
+    if label not in _SUPPORTED_LABELS["carry_over"]:
+        return f"its label {label!r} is not a reading this server can interpret"
+    if (finite == 0) != (label == "no_defined_paths") or (finite > 0 and label != _rank_label(below, finite)):
+        return f"its label {label!r} disagrees with its own counts ({below:,} of {finite:,} strictly below)"
+    curve = record.get("curve")
+    if not isinstance(curve, Mapping) or _count(curve.get("finite")) != finite:
+        return "its percentile curve names a different finite count than its rank does"
+    points = curve.get("p")
+    expected_length = 99 if finite > 0 else 0
+    if not isinstance(points, Sequence) or isinstance(points, (str, bytes)) or len(points) != expected_length or any(_number(value) is None for value in points):
+        return "its percentile curve is not the 99 plot summaries a reproduction of its length would hold"
+    if _text(record.get("sentence")) is None or _text(record.get("selection_note")) is None:
+        return "it records no operator sentence or selection caveat"
+    return None
+
+
+def _invalid_measured(component: str, record: Mapping[str, Any], scope: FinalChanceScope) -> str | None:
+    if component == "carry_over":
+        return _invalid_carry_record(record, scope)
+    return _invalid_share_record(component, record, scope)
+
+
+def stored_final_chance(fit: Mapping[str, Any], scope: FinalChanceScope) -> dict[str, Any]:
+    """The per-fit final chance components of one stored exam fit, validated against the study each record claims to describe (#3024).
+
+    Every measured component is checked — supported schema and draw convention, integer nonnegative counts that
+    total the stored replications, the inclusive count, finite consistent ranges, a coherent label, and the fit,
+    window, capital and objective the record belongs to — before it is served or interpreted. A record that
+    fails reads ``missing`` with an ``invalid_record`` code and its specific reason; a malformed sibling never
+    erases a valid one, nothing is recomputed or backfilled, and nothing is written back. A record this server
+    cannot interpret at all reads ``unsupported``; an absent one keeps its legacy ``not_measured`` reason.
+    """
+    stored = fit.get("chance")
     components: dict[str, dict[str, Any]] = {}
+    if stored is not None and not isinstance(stored, Mapping):
+        for component in ("comparison", "profitability", "carry_over"):
+            components[component] = _missing(
+                ("unreadable", f"The stored final chance record is a {type(stored).__name__}, not a record of components, so the stored {component} reading cannot be read.")
+            )
+        return components
     for component in ("comparison", "profitability", "carry_over"):
-        record = stored.get(component)
-        if isinstance(record, Mapping) and record.get("status") in _KNOWN_BY_COMPONENT[component]:
-            components[component] = dict(record)
+        record = (stored or {}).get(component)
+        if record is not None and not isinstance(record, Mapping):
+            components[component] = _missing(
+                ("unreadable", f"The stored {component} reading is a {type(record).__name__}, not a record, so it cannot be read.")
+            )
+        elif isinstance(record, Mapping) and record.get("status") in _KNOWN_BY_COMPONENT[component]:
+            reason = _invalid_measured(component, record, scope) if record.get("status") == "measured" else None
+            components[component] = dict(record) if reason is None else _missing(
+                ("invalid_record", f"The stored {component} reading fails validation and is shown as unavailable rather than guessed at: {reason}.")
+            )
         elif isinstance(record, Mapping):
             components[component] = _missing(
                 ("unsupported", f"The stored {component} reading holds status {record.get('status')!r}, which this server cannot interpret; it is shown as unavailable rather than guessed at.")

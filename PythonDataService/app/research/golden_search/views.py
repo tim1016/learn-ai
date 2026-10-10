@@ -29,7 +29,7 @@ from app.research.golden_search.activity import TradeFloors
 from app.research.golden_search.chance_approval import chance_weakness_items
 from app.research.golden_search.chance_compare import stored_chance
 from app.research.golden_search.chance_drawdown import stored_drawdown
-from app.research.golden_search.chance_final import stored_final_chance
+from app.research.golden_search.chance_final import FinalChanceScope, stored_final_chance
 from app.research.golden_search.chance_rehearsal import stored_rehearsal
 from app.research.golden_search.compare_measures import neighborhood_view, stress_tally, stress_view, trades_per_year
 from app.research.golden_search.concentration import (
@@ -228,6 +228,13 @@ def results_view(row: StudyRow, protocol: GoldenSearchProtocol, declaration: Sea
             approvable=row.state not in _DECIDED_WITHOUT_APPROVAL,
             chance_policy=results.get("chance_approval"),
             positive_net_required=bool(protocol.policy.require_positive_net),
+            final_scope=FinalChanceScope(
+                objective=protocol.policy.objective,
+                development_window=(protocol.development_start_ms, protocol.development_end_ms),
+                final_window=(protocol.final_start_ms, protocol.final_end_ms),
+                capital=protocol.execution.initial_cash,
+                point_hash="",
+            ),
         ),
         "qualification": qualification_view(row),
     }
@@ -448,6 +455,7 @@ def exam_view(
     chosen_key: str | None,
     chance_policy: Mapping[str, Any] | None,
     positive_net_required: bool,
+    final_scope: FinalChanceScope,
     approvable: bool = True,
 ) -> dict[str, Any]:
     """The final test as recorded: each fit with its own outcome, and the fit the owner named, if any.
@@ -456,14 +464,15 @@ def exam_view(
     fit's weakness items include the chance acknowledgement items (#3015), read from the same stored
     components and the same one authority the approval intent and the qualification payload use;
     ``chance_policy``/``positive_net_required`` are required so a caller cannot silently render an enrolled
-    study as though it were legacy.
+    study as though it were legacy. ``final_scope`` is the frozen study identity every fit's stored chance
+    record is validated against (#3024); its point hash is per fit, taken from each recorded fit.
     """
     fits = recorded_fits(stored)
     chosen = fit_for(stored, chosen_key)
     pick = pick_of(stored)
 
     def _fit_view(fit: dict[str, Any]) -> dict[str, Any]:
-        chance = stored_final_chance(fit)
+        chance = stored_final_chance(fit, final_scope.for_fit(fit["point_hash"]))
         return {
             "key": fit["key"],
             "same_as": list(fit["same_as"]),

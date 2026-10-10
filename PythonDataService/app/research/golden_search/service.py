@@ -41,7 +41,7 @@ from app.research.golden_search.actions import (
 )
 from app.research.golden_search.activity import DEFAULT_EXPECTED_TRADES_PER_YEAR, TradeFloors
 from app.research.golden_search.chance_approval import chance_weakness_items
-from app.research.golden_search.chance_final import stored_final_chance
+from app.research.golden_search.chance_final import FinalChanceScope, stored_final_chance
 from app.research.golden_search.declarations import declaration_for, point_hash, unavailable_reason
 from app.research.golden_search.exposure_rules import EXPOSURE_EXPLANATIONS, claim_for, exposure_state
 from app.research.golden_search.final_test import fit_for, fits_to_test, recorded_fits
@@ -958,11 +958,23 @@ async def _approve(conn: Any, row: StudyRow, body: Mapping[str, Any]) -> Command
     chosen = _fit_to_approve(row, body)
     # The chance items come from the server's own stored evidence for the fit the approval names — the same
     # authority the page's weakness items and the qualification payload read — never from client values (#3015).
-    chance = stored_final_chance(chosen)
+    # The scope is the frozen protocol plus the chosen fit's point identity, so a stored record that belongs to
+    # another fit, window, capital or objective never reads as this approval's evidence (#3024).
+    protocol = row.protocol
+    chance = stored_final_chance(
+        chosen,
+        FinalChanceScope(
+            objective=protocol["policy"]["objective"],
+            development_window=(protocol["development_start_ms"], protocol["development_end_ms"]),
+            final_window=(protocol["final_start_ms"], protocol["final_end_ms"]),
+            capital=float(protocol["execution"]["initial_cash"]),
+            point_hash=chosen["point_hash"],
+        ),
+    )
     chance_items = chance_weakness_items(
         row.results.get("chance_approval"),
         chance,
-        positive_net_required=bool(row.protocol["policy"]["require_positive_net"]),
+        positive_net_required=bool(protocol["policy"]["require_positive_net"]),
     )
     weakness = research_weakness(chosen["outcome"], exam["claim"], exam["exposure_state"]) + [item["code"] for item in chance_items]
     if weakness and not weak_ack:

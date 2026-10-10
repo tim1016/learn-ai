@@ -14,6 +14,7 @@ from app.research.golden_search.chance import SessionSeries, seed_for
 from app.research.golden_search.chance_final import (
     CARRY_OVER_MISSING,
     SELECTION_NOTE,
+    FinalChanceScope,
     carry_over_reading,
     fit_to_fit_reading,
     reproduce_1x_objectives,
@@ -359,11 +360,241 @@ def test_a_failed_other_fit_leaves_a_named_missing_optional_comparison() -> None
 
 def test_stored_final_chance_normalizes_per_component() -> None:
     measured = _carry_over(_smooth(60, 14), _stored_rehearsal(_smooth(60, 14)))
-    partial = stored_final_chance({"chance": {"carry_over": copy.deepcopy(measured)}})
+    partial = stored_final_chance({"chance": {"carry_over": copy.deepcopy(measured)}}, _SCOPE)
     assert partial["carry_over"] == measured
     assert partial["comparison"]["code"] == "not_measured"
     assert partial["profitability"]["code"] == "not_measured"
-    unsupported = stored_final_chance({"chance": {"carry_over": {"status": "from_the_future"}}})
+    unsupported = stored_final_chance({"chance": {"carry_over": {"status": "from_the_future"}}}, _SCOPE)
     assert unsupported["carry_over"]["code"] == "unsupported"
-    absent = stored_final_chance({})
+    absent = stored_final_chance({}, _SCOPE)
     assert absent["carry_over"]["code"] == CARRY_OVER_MISSING[0]
+
+
+# ── Stored-record validation (#3024) ─────────────────────────────────────
+
+
+def _scope() -> FinalChanceScope:
+    """The frozen identity of a 60-session development / 25-session final study of the cafebabe fit."""
+    return FinalChanceScope(
+        objective="total_return_pct",
+        development_window=_window(60, date(2025, 1, 2)),
+        final_window=_window(25, date(2025, 4, 1)),
+        capital=CAPITAL,
+        point_hash="cafebabe",
+    )
+
+
+_SCOPE = _scope()
+
+
+def _comparison_basis() -> dict[str, Any]:
+    window = _window(25, date(2025, 4, 1))
+    inputs = ["golden-search-chance-comparison/v1", window[0], window[1], "total_return_pct", *sorted(("cafebabe", "deadbeef"))]
+    return {
+        "schema_version": "golden-search-chance-comparison/v1",
+        "convention": "stationary-bootstrap/v1",
+        "replications": 10_000,
+        "chunk_replications": 1_000,
+        "mean_block_sessions": 5.0,
+        "thresholds": {"clear": 0.95},
+        "objective": {"measure": "total_return_pct", "label": "total return", "units": "fraction of the starting capital"},
+        "seed": {"inputs": inputs, "value": seed_for(*inputs)},
+        "source": {
+            "window": {"start_ms": window[0], "end_ms": window[1]},
+            "session_count": 25,
+            "candidate_point_hash": "cafebabe",
+            "incumbent_point_hash": "deadbeef",
+            "series_digest": {"candidate": "d-all", "incumbent": "d-inc"},
+            "capital": CAPITAL,
+        },
+    }
+
+
+def _measured_comparison(**overrides: Any) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "status": "measured",
+        "label": "clearly_as_good",
+        "sentence": "A measured comparison sentence.",
+        "incomplete_support": False,
+        "bias_note": "A selection caveat.",
+        "counts": {"better": 9_350, "tied": 270, "worse": 380, "undefined": 0},
+        "shares": {"better": 0.935, "tied": 0.027, "worse": 0.038, "undefined": 0.0},
+        "at_least_as_good": {"count": 9_620, "share": 0.962},
+        "candidate_range": {"p5": 0.031, "p50": 0.089, "p95": 0.152, "finite": 10_000},
+        "difference_range": {"p5": 0.019, "p50": 0.037, "p95": 0.066, "finite": 10_000},
+        "basis": _comparison_basis(),
+    }
+    record.update(overrides)
+    return record
+
+
+def _measured_profitability(**overrides: Any) -> dict[str, Any]:
+    basis = _comparison_basis()
+    basis["schema_version"] = "golden-search-chance-profitability/v1"
+    basis["seed"] = {"inputs": [], "value": 0}
+    record: dict[str, Any] = {
+        "status": "measured",
+        "label": "clearly_positive",
+        "sentence": "A measured profitability sentence.",
+        "counts": {"positive": 9_740, "zero": 60, "negative": 200, "undefined": 0},
+        "shares": {"positive": 0.974, "zero": 0.006, "negative": 0.02, "undefined": 0.0},
+        "basis": basis,
+    }
+    record.update(overrides)
+    return record
+
+
+def _measured_carry() -> dict[str, Any]:
+    return copy.deepcopy(_carry_over(_smooth(60, 30), _stored_rehearsal(_smooth(60, 30))))
+
+
+def _final_fit(**chance: Any) -> dict[str, Any]:
+    return {"point_hash": "cafebabe", "chance": {"comparison": _measured_comparison(), "profitability": _measured_profitability(), "carry_over": _measured_carry(), **chance}}
+
+
+def test_fully_valid_measured_components_read_back_as_measured() -> None:
+    fit = _final_fit()
+    served = stored_final_chance(fit, _SCOPE)
+    assert served["comparison"] == fit["chance"]["comparison"]
+    assert served["profitability"] == fit["chance"]["profitability"]
+    assert served["carry_over"] == fit["chance"]["carry_over"]
+
+
+def test_an_unsupported_schema_version_or_convention_reads_invalid_even_when_fully_wire_valid() -> None:
+    unsupported = _final_fit()
+    unsupported["chance"]["comparison"]["basis"]["schema_version"] = "golden-search-chance-comparison/v999"
+    unsupported["chance"]["profitability"]["basis"]["convention"] = "moving-block/v9"
+    served = stored_final_chance(unsupported, _SCOPE)
+    assert served["comparison"]["code"] == "invalid_record"
+    assert "v999" in served["comparison"]["reason"] and "schema" in served["comparison"]["reason"]
+    assert served["profitability"]["code"] == "invalid_record"
+    assert "moving-block/v9" in served["profitability"]["reason"]
+
+
+def test_forged_counts_over_all_undefined_paths_are_invalid_not_clear() -> None:
+    forged = _final_fit()
+    forged["chance"]["comparison"].update(
+        counts={"better": 0, "tied": 0, "worse": 0, "undefined": 10_000},
+        at_least_as_good={"count": 10_000, "share": 1.0},  # the forged inclusive count
+        label="clearly_as_good",  # the forged label
+    )
+    served = stored_final_chance(forged, _SCOPE)
+    assert served["comparison"]["code"] == "invalid_record"
+    assert "disagrees with its own counts" in served["comparison"]["reason"]
+    # A forged inclusive count alone, over otherwise coherent counts, is named too.
+    inclusive = _final_fit()
+    inclusive["chance"]["comparison"]["at_least_as_good"] = {"count": 9_621, "share": 0.9621}
+    served = stored_final_chance(inclusive, _SCOPE)
+    assert served["comparison"]["code"] == "invalid_record"
+    assert "at-least-as-good" in served["comparison"]["reason"]
+
+
+def test_a_basisless_positive_finite_carry_over_is_invalid() -> None:
+    basisless = _final_fit()
+    basisless["chance"]["carry_over"] = {"status": "measured", "finite": 10_000}
+    served = stored_final_chance(basisless, _SCOPE)
+    assert served["carry_over"]["code"] == "invalid_record"
+    assert "basis" in served["carry_over"]["reason"]
+
+
+def test_invalid_counts_totals_thresholds_and_ranges_are_named() -> None:
+    wrong_total = _final_fit()
+    wrong_total["chance"]["comparison"]["counts"]["undefined"] = 1  # now 10,001 paths
+    boolean = _final_fit()
+    boolean["chance"]["comparison"]["counts"]["better"] = True
+    coerced = _final_fit()
+    coerced["chance"]["comparison"]["counts"]["better"] = "9620"
+    threshold = _final_fit()
+    threshold["chance"]["comparison"]["basis"]["thresholds"] = {"clear": 1.5}
+    unordered = _final_fit()
+    unordered["chance"]["comparison"]["difference_range"] = {"p5": 0.066, "p50": 0.037, "p95": 0.019, "finite": 10_000}
+    impossible_support = _final_fit()
+    impossible_support["chance"]["comparison"]["difference_range"] = {"p5": 0.019, "p50": 0.037, "p95": 0.066, "finite": 10_001}  # one more than the 10,000 defined pairs
+    for record in (wrong_total, boolean, coerced, threshold, unordered, impossible_support):
+        served = stored_final_chance(record, _SCOPE)
+        assert served["comparison"]["code"] == "invalid_record", served["comparison"]["reason"]
+    assert "total" in stored_final_chance(wrong_total, _SCOPE)["comparison"]["reason"]
+    assert "nonnegative integer" in stored_final_chance(boolean, _SCOPE)["comparison"]["reason"]
+    assert "clear threshold" in stored_final_chance(threshold, _SCOPE)["comparison"]["reason"]
+    assert "ordered" in stored_final_chance(unordered, _SCOPE)["comparison"]["reason"]
+    # A defined pair whose subtraction overflows keeps its comparison but not a difference value: a difference
+    # range below the defined count stays valid, one above it cannot exist.
+    overflow_ok = _final_fit()
+    overflow_ok["chance"]["comparison"]["difference_range"] = {"p5": 0.019, "p50": 0.037, "p95": 0.066, "finite": 9_000}
+    assert stored_final_chance(overflow_ok, _SCOPE)["comparison"]["status"] == "measured"
+
+
+def test_wrong_fit_window_capital_or_objective_evidence_is_rejected() -> None:
+    other_fit = _final_fit()
+    other_fit["chance"]["comparison"]["basis"]["source"]["candidate_point_hash"] = "someone-else"
+    other_window = _final_fit()
+    other_window["chance"]["profitability"]["basis"]["source"]["window"] = {"start_ms": 0, "end_ms": 1}
+    other_capital = _final_fit()
+    other_capital["chance"]["profitability"]["basis"]["source"]["capital"] = 200_000.0
+    other_objective = _final_fit()
+    other_objective["chance"]["comparison"]["basis"]["objective"] = {"measure": "sharpe_ratio", "label": "Sharpe ratio", "units": "annualized ratio of session returns (× √252)"}
+    wrong_seed_window = _final_fit()
+    wrong_seed_window["chance"]["carry_over"]["basis"]["seed"]["inputs"][1] = 0  # a development window that is not this study's
+    wrong_seed_point = _final_fit()
+    wrong_seed_point["chance"]["carry_over"]["basis"]["seed"]["inputs"][4] = "not-this-fit"
+    wrong_seed_value = _final_fit()
+    wrong_seed_value["chance"]["carry_over"]["basis"]["seed"]["value"] = 1
+    for record, component in ((other_fit, "comparison"), (other_window, "profitability"), (other_capital, "profitability"), (other_objective, "comparison"), (wrong_seed_window, "carry_over"), (wrong_seed_point, "carry_over"), (wrong_seed_value, "carry_over")):
+        served = stored_final_chance(record, _SCOPE)
+        assert served[component]["code"] == "invalid_record", served[component]["reason"]
+    # An alias — the same point hash — is the same identity and stays valid.
+    aliased = FinalChanceScope(objective=_SCOPE.objective, development_window=_SCOPE.development_window, final_window=_SCOPE.final_window, capital=_SCOPE.capital, point_hash="cafebabe")
+    assert stored_final_chance(_final_fit(), aliased)["comparison"]["status"] == "measured"
+
+
+def test_malformed_outer_mappings_and_records_never_raise_and_keep_valid_siblings() -> None:
+    corrupt = stored_final_chance({"point_hash": "cafebabe", "chance": "corrupt"}, _SCOPE)
+    assert {component: corrupt[component]["code"] for component in ("comparison", "profitability", "carry_over")} == {
+        "comparison": "unreadable",
+        "profitability": "unreadable",
+        "carry_over": "unreadable",
+    }
+    one_bad_sibling = _final_fit()
+    one_bad_sibling["chance"]["profitability"] = 42
+    served = stored_final_chance(one_bad_sibling, _SCOPE)
+    assert served["comparison"]["status"] == "measured"
+    assert served["carry_over"]["status"] == "measured"
+    assert served["profitability"]["code"] == "unreadable"
+
+
+def test_a_carry_over_whose_rank_disagrees_with_its_counts_is_invalid() -> None:
+    mismatched = _final_fit()
+    mismatched["chance"]["carry_over"]["below"] = 200  # the rank still says 62.21%
+    served = stored_final_chance(mismatched, _SCOPE)
+    assert served["carry_over"]["code"] == "invalid_record"
+    assert "rank" in served["carry_over"]["reason"]
+    relabelled = _final_fit()
+    relabelled["chance"]["carry_over"]["label"] = "above_most"
+    assert stored_final_chance(relabelled, _SCOPE)["carry_over"]["code"] == "invalid_record"
+
+
+def test_an_invalid_required_component_gates_an_enrolled_approval_but_not_a_legacy_one() -> None:
+    from app.research.golden_search.chance_approval import (
+        CHANCE_UNAVAILABLE,
+        CHANCE_WITHIN_NOISE,
+        chance_weakness_items,
+        enrollment_policy,
+    )
+
+    fit = _final_fit()
+    fit["chance"]["comparison"]["basis"]["schema_version"] = "golden-search-chance-comparison/v999"
+    served = stored_final_chance(fit, _SCOPE)
+    items = chance_weakness_items(enrollment_policy(), served, positive_net_required=True)
+    assert [item["code"] for item in items] == [CHANCE_UNAVAILABLE]
+    assert "invalid_record" not in items[0]["text"]  # the reason reads as evidence words, not a code dump
+    assert "schema" in items[0]["text"]
+    assert chance_weakness_items(None, served, positive_net_required=True) == []
+    # A weak but valid measured share still follows the existing owner decision, read from the raw counts.
+    weak = _final_fit()
+    weak["chance"]["comparison"].update(counts={"better": 9_499, "tied": 0, "worse": 501, "undefined": 0}, at_least_as_good={"count": 9_499, "share": 0.9499}, label="mixed")
+    weak_items = chance_weakness_items(enrollment_policy(), stored_final_chance(weak, _SCOPE), positive_net_required=True)
+    assert [item["code"] for item in weak_items] == [CHANCE_WITHIN_NOISE]
+    assert "9,499 of 10,000" in weak_items[0]["text"]
+    at_threshold = _final_fit()
+    at_threshold["chance"]["comparison"].update(counts={"better": 9_500, "tied": 0, "worse": 500, "undefined": 0}, at_least_as_good={"count": 9_500, "share": 0.95}, label="clearly_as_good")
+    assert chance_weakness_items(enrollment_policy(), stored_final_chance(at_threshold, _SCOPE), positive_net_required=True) == []
