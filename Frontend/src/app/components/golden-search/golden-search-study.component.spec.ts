@@ -49,6 +49,18 @@ function currentStep(): string {
 }
 
 describe('GoldenSearchStudyComponent', () => {
+  it('opens a linked step once and keeps a subsequent user selection on refresh', async () => {
+    const service = fakeService(studyDetail('locked'));
+    const view = await render(GoldenSearchStudyComponent, {
+      inputs: { studyId: 'study-0001-aaaa', step: 'plan', capabilities: [emaCapability()], pollMs: 0 },
+      providers: [provideRouter([]), { provide: GoldenSearchService, useValue: service }],
+    });
+    await waitFor(() => expect(currentStep()).toMatch(/^1Plan/));
+    view.fixture.componentInstance.selectStep('search');
+    await view.fixture.componentInstance.reload();
+    await waitFor(() => expect(currentStep()).toMatch(/^2Search/));
+  });
+
   it('locked: Run research is the next action and sends run_research against the revision on screen', async () => {
     const service = fakeService(studyDetail('locked'));
     service.command.mockResolvedValueOnce({ study: studyDetail('search_running', { revision: 4, run_to_compare: true }), jobId: 'job-1' });

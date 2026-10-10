@@ -178,8 +178,10 @@ function chanceOption(
         id: 'chance:difference',
         name: 'Middle 90% of resampled differences',
         type: 'custom',
-        // One datum draws one interval; the percentiles are closed over, not carried on the wire.
-        data: hasRange ? [0] : [],
+        // #3027: every percentile contributes to the visible axis extent.
+        dimensions: ['low', 'high', 'median', 'row'],
+        encode: { x: [0, 1, 2], y: 3 },
+        data: hasRange ? [[p5, p95, p50, 0]] : [],
         renderItem: (_params: unknown, api: { coord: (data: number[]) => number[] }) => {
           const lowX = api.coord([p5 as number, 0])[0] as number;
           const highX = api.coord([p95 as number, 0])[0] as number;

@@ -20,10 +20,15 @@ const ALL_PERIOD: CandidateRef = { key: 'all_period', label: 'All-period fit' };
 const WIDTH = 800;
 const HEIGHT = 300;
 
-function renderSvg(option: ChartOption): string {
+function newChart(option: ChartOption) {
   const chart = init(null as unknown as HTMLElement, null, { renderer: 'svg', ssr: true, width: WIDTH, height: HEIGHT });
+  chart.setOption(option as Parameters<typeof chart.setOption>[0], { notMerge: true });
+  return chart;
+}
+
+function renderSvg(option: ChartOption): string {
+  const chart = newChart(option);
   try {
-    chart.setOption(option as Parameters<typeof chart.setOption>[0], { notMerge: true });
     return (chart as unknown as { renderToSVGString(): string }).renderToSVGString();
   } finally {
     chart.dispose();
@@ -297,5 +302,59 @@ describe('the final uncertainty charts, actually rendered by the installed EChar
     expect(svg).not.toContain('NaN');
     // The unavailable-range note reads in the tooltip copy, and the chart still paints its axes and zero line.
     expect(paintedPoints(parse(svg)).length).toBeGreaterThan(0);
+  });
+});
+
+describe('the chance charts, checked through the rendered instance (#3031 approach, consolidated)', () => {
+  it.each([
+    [-0.3, 0.05, 0.4],
+    [0.05, 0.2, 0.7],
+    [-0.9, -0.5, -0.1],
+    [1500, 2000, 3200],
+  ])('keeps every percentile and zero inside the grid: %j', (p5, p50, p95) => {
+    const reading = chanceComparison({ difference_range: { p5, p50, p95, finite: 10_000 } });
+    const chart = newChart(chanceComparisonSpec(ALL_PERIOD, reading, null).option(FAKE_CHART_THEME) as ChartOption);
+    try {
+      for (const value of [p5, p50, p95, 0]) {
+        const pixel = chart.convertToPixel({ gridIndex: 0 }, [value, 0]);
+        expect(Array.isArray(pixel) && pixel.every(Number.isFinite)).toBe(true);
+        expect(chart.containPixel({ gridIndex: 0 }, pixel)).toBe(true);
+      }
+    } finally {
+      chart.dispose();
+    }
+  });
+
+  it('draws two painted band rectangles on ordered rows, first row on top', () => {
+    const chart = newChart(finalIntervalsSpec(ALL_PERIOD, chanceComparison(), null).option(FAKE_CHART_THEME) as ChartOption);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- zrender's storage display list is untyped through the public surface.
+      const bands = (chart.getZr().storage.getDisplayList() as any[]).filter((element) => element.type === 'rect' && element.style?.['opacity'] === 0.28).map((element) => element.getBoundingRect());
+      expect(bands).toHaveLength(2);
+      expect(new Set(bands.map((rect: { y: number }) => rect.y)).size).toBe(2);
+      const difference = chart.convertToPixel({ gridIndex: 0 }, [0, 0]);
+      const ownResult = chart.convertToPixel({ gridIndex: 0 }, [0, 1]);
+      expect(difference[1]).toBeLessThan(ownResult[1]);  // the difference row reads first, top to bottom
+      for (const rect of bands) {
+        expect([rect.x, rect.y, rect.width, rect.height].every(Number.isFinite)).toBe(true);
+        expect(rect.x).toBeGreaterThanOrEqual(0);
+        expect(rect.y).toBeGreaterThanOrEqual(0);
+        expect(rect.x + rect.width).toBeLessThanOrEqual(chart.getWidth());
+        expect(rect.y + rect.height).toBeLessThanOrEqual(chart.getHeight());
+      }
+    } finally {
+      chart.dispose();
+    }
+  });
+
+  it.each([-8, 8])('keeps an extreme recorded final objective inside the grid: %s', (recorded) => {
+    const chart = newChart(carryOverSpec(ALL_PERIOD, chanceCarryOver({ recorded_objective: recorded }), null).option(FAKE_CHART_THEME) as ChartOption);
+    try {
+      const pixel = chart.convertToPixel({ gridIndex: 0 }, [50, recorded]);
+      expect(Array.isArray(pixel) && pixel.every(Number.isFinite)).toBe(true);
+      expect(chart.containPixel({ gridIndex: 0 }, pixel)).toBe(true);
+    } finally {
+      chart.dispose();
+    }
   });
 });

@@ -1,0 +1,53 @@
+@let s = study();
+<article class="report" aria-labelledby="report-title">
+  <header class="report-head">
+    <div><h2 id="report-title"><app-asset-identity [symbol]="s.symbol" size="sm" /> {{ capability()?.display_name ?? (s.strategy_key | receiptLabel) }}</h2><p>Golden Search research report</p></div>
+    <nav class="report-tools" aria-label="Report tools"><a [routerLink]="['/golden-search', s.id]">Study workbench</a><a routerLink="/docs/golden-search-manual" [queryParams]="{ study: s.id }">Operating manual</a><button type="button" (click)="print()">Print / save PDF</button></nav>
+  </header>
+  <section class="scope" aria-label="Report scope">
+    <div><h3>Development</h3><p><app-timestamp-display [value]="s.scope.development_label_start_ms" mode="date-et" /> – <app-timestamp-display [value]="s.scope.development_end_ms - 1" mode="date-et" /></p><small>Used to choose settings</small></div>
+    <div><h3>Final test</h3><p><app-timestamp-display [value]="s.scope.final_start_ms" mode="date-et" /> – <app-timestamp-display [value]="s.scope.final_end_ms - 1" mode="date-et" /></p><small>{{ s.exam_locked ? 'Opened once by this study' : 'Still sealed' }}</small></div>
+    <div><h3>Frozen assumptions</h3><p>{{ s.scope.capital | currency: 'USD' : 'symbol' : '1.0-0' }} starting capital</p><small>{{ s.scope.costs_sentence }}</small></div>
+  </section>
+  <aside class="claim" role="note">
+    <strong>{{ s.results.exam?.claim === 'confirmatory' ? 'Fresh final-test interval in the recorded exposure history.' : 'Exploratory research; independent confirmation has not been established.' }}</strong>
+    <p>{{ s.results.exam?.selection_note ?? s.exposure_preview?.explanation }}</p>
+    <p>{{ s.incomplete ? 'The study has incomplete evidence. Missing results are not passes.' : 'Read the frozen rule checks separately from resampling support.' }}</p>
+  </aside>
+  <section class="chapter" aria-labelledby="report-status"><h2 id="report-status">Current conclusion</h2><p>{{ s.guidance.headline }}</p><p>{{ s.guidance.detail }}</p>
+    @if (s.results.evidence; as evidence) { <h3>Development assessment</h3><p>{{ evidence.recommendation.headline }}</p><ul>@for (finding of evidence.recommendation.findings; track $index) { <li>{{ finding.text }}</li> }</ul> }
+    @if (s.decision; as decision) { <p><strong>Recorded decision:</strong> {{ decision.kind | receiptLabel }}. {{ decision.note }}</p>@if (chosenFit(); as chosen) { <p><strong>Recorded approved fit:</strong> {{ chosen.label }}</p> } } @else { <p>No research approval or deployment decision is recorded for this study.</p> }
+  </section>
+  <section class="chapter" aria-labelledby="report-over-time"><h2 id="report-over-time">Does the procedure hold up over time?</h2><p>{{ s.protocol.training_months }} months training, then {{ s.protocol.test_months }} months testing per fold. Each test uses settings chosen only on its own preceding training data.</p><app-golden-search-test-step [study]="s" [capability]="capability()" /></section>
+  <section class="chapter" aria-labelledby="report-development"><h2 id="report-development">What development research found</h2><p>These results helped choose the settings. They are in-sample evidence, with the frozen incumbent as the comparison.</p>
+    <div class="candidate-grid">
+      @for (candidate of candidates(); track candidate.key) {
+        <section class="result-card"><h3>{{ candidate.label }}</h3><p>{{ candidate.params_sentence }}</p><dl><div><dt>Net return</dt><dd>{{ candidate.figures.netReturn }}</dd></div><div><dt>Worst fall</dt><dd>{{ candidate.figures.worstFall }}</dd></div><div><dt>Trades</dt><dd>{{ candidate.figures.trades }}</dd></div><div><dt>Sharpe</dt><dd>{{ candidate.figures.sharpe }}</dd></div></dl>
+          @if (candidate.ineligibility) { <p class="warning">{{ candidate.ineligibility }}</p> }
+          @for (flag of candidate.flags; track $index) { <p class="warning">{{ flag.text }}</p> }
+          <ul class="support">@for (row of candidate.summary; track row.key) { <li><strong [class.warning]="row.status !== 'meets'">{{ row.status | receiptLabel }} · {{ row.label }}</strong><p>{{ row.text }}</p></li> }</ul>
+        </section>
+      } @empty { <p role="status">Candidate evidence is not recorded yet.</p> }
+    </div>
+    @if (developmentFit(); as candidate) {
+      <h3>Development uncertainty · {{ candidate.label }}</h3>
+      <nav class="fit-picker" aria-label="Fit shown in development charts">@for (option of developmentChoices(); track option.key) { <button type="button" [attr.aria-pressed]="option.key === candidate.key" (click)="selected.set(option.key)">{{ option.label }}</button> }</nav>
+      <div class="development-chance-grid">
+        <app-golden-search-chance-panel [candidate]="candidate" [chance]="candidate.chance" [instance]="candidate.label" />
+        <app-golden-search-rehearsal-panel [candidate]="candidate" [rehearsal]="candidate.chance.rehearsal" />
+        <app-golden-search-drawdown-panel data-span="12" [candidate]="candidate" [drawdown]="candidate.chance.drawdown" />
+      </div>
+    }
+    <a [routerLink]="['/golden-search', s.id]" [queryParams]="{ step: 'compare' }">Inspect neighbors, cost stresses, concentration, rehearsal and drawdown in Compare</a>
+  </section>
+  <section class="chapter" aria-labelledby="report-final"><h2 id="report-final">What survived the final test?</h2>
+    @if (s.results.exam; as exam) {
+      <div class="candidate-grid">
+        @for (row of finals(); track row.key) { <section class="result-card"><h3>{{ row.label }}</h3><p>{{ row.outcome === null ? 'Benchmark' : (row.outcome | receiptLabel) }}</p><dl><div><dt>Net return</dt><dd>{{ row.figures.netReturn }}</dd></div><div><dt>Worst fall</dt><dd>{{ row.figures.worstFall }}</dd></div><div><dt>Trades</dt><dd>{{ row.figures.trades }}</dd></div><div><dt>Sharpe</dt><dd>{{ row.figures.sharpe }}</dd></div></dl>@if (row.missing) { <p class="warning">No result recorded</p> } @if (row.figures.failure) { <p class="warning">{{ row.figures.failure }}</p> }</section> }
+      </div>
+      <nav class="fit-picker" aria-label="Fit shown in final charts">@for (option of exam.fits; track option.key) { <button type="button" [attr.aria-pressed]="option.key === fit()?.key" (click)="selected.set(option.key)">{{ option.label }}</button> }</nav>
+      @if (fit(); as selectedFit) { <app-golden-search-final-charts [study]="s" [exam]="exam" [fit]="selectedFit" />@if (incompatibleRank()) { <p class="warning" role="note">The rehearsal rank is excluded: the recorded Sharpe and the rehearsal Sharpe use different return conventions. Use the final checks and paired resampling below. <a href="https://github.com/tim1016/learn-ai/issues/3025">Tracked repair</a>.</p> }<app-golden-search-chance-final-panel [candidate]="selectedFit" [chance]="selectedFit.chance" [positiveNetRequired]="exam.positive_net_required" [showCarryOver]="!incompatibleRank()" /> }
+    } @else { <p>The final test has no recorded result. Return to the workbench to review development evidence before spending the final look.</p> }
+  </section>
+  <footer class="receipt"><h2>Evidence receipt</h2><p>{{ s.scope.data_source }}</p><p>Study <code>{{ s.id }}</code> · protocol <code>{{ s.protocol_hash }}</code></p><p>Snapshot <code>{{ s.receipt.snapshot_digest }}</code></p><p>Code <code>{{ s.receipt.code.git_revision }}</code> · {{ s.receipt.code.tree_state | receiptLabel }} · program {{ s.receipt.program_version ?? 'Not versioned' }}</p><p>Locked <app-timestamp-display [value]="s.created_at_ms" mode="local" />. {{ s.consumed_evaluations | number }} engine runs recorded.</p></footer>
+</article>

@@ -1,0 +1,41 @@
+@use '../../../styles/page-grid';
+:host { display: block; min-width: 0; }
+.report { display: grid; gap: var(--space-5); }
+h2, h3, p { margin: 0; }
+h2 { font-size: var(--fs-xl); }
+h3 { font-size: var(--fs-md); }
+p { color: var(--text-secondary); line-height: 1.6; max-width: 80ch; }
+a { color: var(--accent-text); text-underline-offset: 3px; }
+button { background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3); cursor: pointer; }
+button[aria-pressed='true'] { border-color: var(--accent); }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.report-head, .report-tools, .fit-picker { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; }
+.report-head { justify-content: space-between; }
+.report-head h2 { display: flex; gap: var(--space-3); align-items: center; }
+.scope, .candidate-grid, .development-chance-grid { @include page-grid.layout; }
+.scope > *, .candidate-grid > * { grid-column: span 4; }
+.development-chance-grid > * { grid-column: span 6; }
+.development-chance-grid > [data-span='12'] { grid-column: span 12; }
+.scope { border-top: 3px solid var(--accent); padding-top: var(--space-4); }
+small { color: var(--text-secondary); line-height: 1.5; }
+.chapter, .result-card, .receipt, .claim { display: grid; gap: var(--space-3); min-width: 0; }
+.result-card { background: var(--bg-surface); border: 1px solid var(--border-light); padding: var(--space-3); }
+.claim { border-left: 3px solid var(--warn); background: var(--warn-soft); padding: var(--space-3); }
+.warning { color: var(--warn); }
+.support { display: grid; gap: var(--space-3); padding: 0; margin: 0; list-style: none; font-size: var(--fs-xs); }
+dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-2); margin: 0; }
+dt { font-size: var(--fs-xs); color: var(--text-secondary); }
+dd { margin: 0; font-variant-numeric: tabular-nums; }
+@container page-grid (max-width: 420px) { .result-card dl { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.receipt { border-top: 1px solid var(--border-light); padding-top: var(--space-4); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+@container page-grid (max-width: 1100px) { .candidate-grid > * { grid-column: span 6; } }
+@container page-grid (max-width: 720px) { .scope > *, .candidate-grid > *, .development-chance-grid > * { grid-column: span 12; } }
+@media print {
+  .report-tools, .fit-picker { display: none; }
+  .report, p, small, dt, dd, .warning { color: #111; }
+  .claim, .result-card { background: white; border-color: #888; }
+  .candidate-grid > * { grid-column: span 12; }
+  .scope > * { grid-column: span 4; }
+  h2, h3 { break-after: avoid; }
+  .result-card, .scope, .claim, .receipt { break-inside: avoid; }
+}

@@ -33,9 +33,12 @@ interface IntervalRow {
   readonly note: string;
 }
 
-/** What zero means on the fit's own objective range: break-even for return quantities, never for a ratio (#3026). */
+/** What zero means on the fit's own objective range: the objective's own zero, named for its measure — never
+ *  break-even money, which only the independent compounded-net chart's zero is (#3026). */
 function objectiveZero(measure: string): string {
-  return measure === 'sharpe_ratio' ? 'zero Sharpe' : 'break-even';
+  if (measure === 'sharpe_ratio') return 'zero Sharpe';
+  if (measure === 'total_return_pct') return 'zero return';
+  return 'zero net profit';
 }
 
 function rangeBand(rowIndex: number, { row, range, zero }: IntervalRow, theme: ChartTheme): FinalSeries[] {
@@ -100,6 +103,7 @@ function intervalOption(rows: readonly IntervalRow[], texts: { axis: (value: num
     },
     yAxis: {
       type: 'category',
+      inverse: true,
       data: rows.map(({ row }) => row),
       axisLine: { lineStyle: { color: theme.axis } },
       axisTick: { show: false },
@@ -118,7 +122,7 @@ export function finalIntervalsSpec(candidate: CandidateRef, comparison: Measured
   const texts = objectiveTexts(comparison.basis.objective.measure);
   const rows: IntervalRow[] = [
     { row: DIFFERENCE_ROW, range: comparison.difference_range, zero: 'tie', note: 'Candidate minus incumbent on every paired resample; zero is a tie.' },
-    { row: RANGE_ROW, range: comparison.candidate_range, zero: objectiveZero(comparison.basis.objective.measure), note: `The fit's own resampled ${comparison.basis.objective.label}; zero is ${objectiveZero(comparison.basis.objective.measure)} in the objective's units — never break-even money.` },
+    { row: RANGE_ROW, range: comparison.candidate_range, zero: objectiveZero(comparison.basis.objective.measure), note: `The fit's own resampled ${comparison.basis.objective.label}; zero is ${objectiveZero(comparison.basis.objective.measure)} in the objective's units — break-even money is the profit chart's zero, never this one.` },
   ];
   return {
     label: `${candidate.label} final objective uncertainty`,

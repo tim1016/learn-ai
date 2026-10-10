@@ -10,25 +10,19 @@ const ALL_PERIOD: CandidateRef = { key: 'all_period', label: 'All-period fit' };
 /** Falsifiability: truncate a rank to the plotted 99 percentiles, relabel the bands as confidence intervals, join the percentiles into a path, or hide the recorded marker, and a spec here names it. */
 
 describe('the final uncertainty chart specs', () => {
-  it('draws both bands against a zero reference labelled tie and break-even', () => {
+  it('keeps the objective zero separate from break-even profit, labelled for its own measure (#3026)', () => {
     const spec = finalIntervalsSpec(ALL_PERIOD, chanceComparison(), 'all_period');
     const option = spec.option(FAKE_CHART_THEME) as { series: { markLine?: { data: { xAxis: number }[]; label?: { formatter?: () => string } } }[] };
     const marks = option.series.flatMap((series) => (series.markLine?.data ?? []).map(() => series.markLine?.label?.formatter?.() ?? ''));
     expect(marks).toContain('tie');
-    expect(marks).toContain('break-even');
+    expect(marks).toContain('zero return');  // the fixture objective is total return; its zero is the objective's, never money's
+    expect(marks).not.toContain('break-even');
     expect(JSON.stringify(option)).not.toContain('confidence');
-  });
-
-  it('labels the own-result zero honestly per measure: break-even only for money, zero Sharpe for a ratio (#3026)', () => {
-    const spec = finalIntervalsSpec(ALL_PERIOD, chanceComparison(), 'all_period');
-    const option = spec.option(FAKE_CHART_THEME) as { series: { markLine?: { label?: { formatter?: () => string } } }[] };
-    const marks = option.series.map((series) => series.markLine?.label?.formatter?.() ?? '');
-    expect(marks).toContain('tie');
-    expect(marks).toContain('break-even'); // the fixture objective is total return, whose zero is break-even
     const sharpe = chanceComparison({ basis: { ...chanceComparison().basis, objective: { measure: 'sharpe_ratio', label: 'Sharpe ratio', units: 'annualized ratio of session returns (× √252)' } } });
     const sharpeOption = finalIntervalsSpec(ALL_PERIOD, sharpe, 'all_period').option(FAKE_CHART_THEME) as { series: { markLine?: { label?: { formatter?: () => string } } }[] };
-    expect(sharpeOption.series.map((series) => series.markLine?.label?.formatter?.() ?? '')).toContain('zero Sharpe');
-    expect(JSON.stringify(sharpeOption)).not.toContain('break-even');
+    const sharpeMarks = sharpeOption.series.map((series) => series.markLine?.label?.formatter?.() ?? '');
+    expect(sharpeMarks).toContain('zero Sharpe');
+    expect(sharpeMarks).not.toContain('break-even');
   });
 
   it('draws the compounded-net range as its own chart in percent units against actual break-even (#3026)', () => {
