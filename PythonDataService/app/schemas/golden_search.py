@@ -1134,11 +1134,15 @@ class GoldenSearchChanceRehearsalActivity(_Wire):
     final_trading_years: float | None = Field(description="The frozen final interval's length in trading years; null on a fixed-floor plan.")
 
 
-class GoldenSearchChanceRehearsalFinalInterval(_Wire):
-    """The frozen final interval whose scheduled session count the rungs scale from."""
+class GoldenSearchChanceWindowSessions(_Wire):
+    """A window and its scheduled session count: a rehearsal's frozen final interval, or a drawdown's source window."""
 
     window: GoldenSearchChanceWindow
     scheduled_sessions: int
+
+
+class GoldenSearchChanceRehearsalFinalInterval(GoldenSearchChanceWindowSessions):
+    """The frozen final interval whose scheduled session count the rungs scale from."""
 
 
 class GoldenSearchChanceRehearsalPercentiles(_Wire):
@@ -1182,12 +1186,64 @@ GoldenSearchChanceRehearsal = Annotated[
 ]
 
 
+class GoldenSearchChanceDrawdownPercentiles(_Wire):
+    """The resampled maximum fall's percentiles by linear interpolation over the finite paths."""
+
+    p50: float | None = Field(description="Null when no resample produced a defined fall.")
+    p95: float | None
+    finite: int
+
+
+class GoldenSearchChanceDrawdownBasis(_Wire):
+    """Everything a stored drawdown reading was drawn and judged under, so reading it back never reclassifies it."""
+
+    schema_version: str
+    convention: str
+    replications: int
+    chunk_replications: int
+    mean_block_sessions: float
+    thresholds: dict[str, float] = Field(description="The frozen ceiling the stored labels were judged by.")
+    horizon: GoldenSearchChanceWindowSessions = Field(description="The source window whose own scheduled session count is the horizon.")
+    seed: GoldenSearchChanceSeed
+    source: GoldenSearchChanceDrawdownSource
+
+
+class GoldenSearchChanceDrawdownSource(_Wire):
+    """The run a drawdown reading actually resampled."""
+
+    point_hash: str
+    series_digest: str = Field(description="Digest of the series actually resampled.")
+    capital: float
+    recorded_engine_per_bar: float | None = Field(description="The engine figure carried verbatim; null when the run kept none.")
+
+
+class GoldenSearchChanceDrawdownMeasured(_Wire):
+    """The resampled session-close drawdown range beside the recorded falls, without sizing advice."""
+
+    status: Literal["measured"]
+    recorded_close_only: float = Field(description="The recorded development run's own worst fall at session closes, starting capital in the initial peak.")
+    recorded_engine_per_bar: float | None = Field(description="The engine's bar-by-bar worst fall as recorded; null is a named missing marker, never zero.")
+    percentiles: GoldenSearchChanceDrawdownPercentiles
+    counts: dict[str, int] = Field(description="Finite falls strictly beyond the ceiling, at or within it, and undefined — all over every replication.")
+    shares: dict[str, float] = Field(description="Presentation shares; labels come from the counts, never from these rounded values.")
+    sentence: str = Field(description="The owner-facing reading; Python writes it, the browser only displays it.")
+    concern: bool = Field(description="True when the 95th percentile is strictly beyond the stored ceiling; equality is within it.")
+    basis: GoldenSearchChanceDrawdownBasis
+
+
+GoldenSearchChanceDrawdown = Annotated[
+    GoldenSearchChanceDrawdownMeasured | GoldenSearchChanceReadingMissing | GoldenSearchChanceReadingFailed,
+    Field(discriminator="status"),
+]
+
+
 class GoldenSearchChance(_Wire):
     """One fit's development chance components, each normalized independently of the others."""
 
     comparison: GoldenSearchChanceComparison
     profitability: GoldenSearchChanceProfitability
     rehearsal: GoldenSearchChanceRehearsal
+    drawdown: GoldenSearchChanceDrawdown
 
 
 class GoldenSearchCandidateGuidance(_Wire):

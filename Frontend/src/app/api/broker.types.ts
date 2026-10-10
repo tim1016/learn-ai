@@ -14177,6 +14177,8 @@ export interface components {
         GoldenSearchChance: {
             /** Comparison */
             comparison: components["schemas"]["GoldenSearchChanceComparisonMeasured"] | components["schemas"]["GoldenSearchChanceComparisonSameSettings"] | components["schemas"]["GoldenSearchChanceComparisonBaseline"] | components["schemas"]["GoldenSearchChanceReadingMissing"] | components["schemas"]["GoldenSearchChanceReadingFailed"];
+            /** Drawdown */
+            drawdown: components["schemas"]["GoldenSearchChanceDrawdownMeasured"] | components["schemas"]["GoldenSearchChanceReadingMissing"] | components["schemas"]["GoldenSearchChanceReadingFailed"];
             /** Profitability */
             profitability: components["schemas"]["GoldenSearchChanceProfitabilityMeasured"] | components["schemas"]["GoldenSearchChanceReadingMissing"] | components["schemas"]["GoldenSearchChanceReadingFailed"];
             /** Rehearsal */
@@ -14302,6 +14304,115 @@ export interface components {
             undefined: number;
             /** Worse */
             worse: number;
+        };
+        /**
+         * GoldenSearchChanceDrawdownBasis
+         * @description Everything a stored drawdown reading was drawn and judged under, so reading it back never reclassifies it.
+         */
+        GoldenSearchChanceDrawdownBasis: {
+            /** Chunk Replications */
+            chunk_replications: number;
+            /** Convention */
+            convention: string;
+            /** @description The source window whose own scheduled session count is the horizon. */
+            horizon: components["schemas"]["GoldenSearchChanceWindowSessions"];
+            /** Mean Block Sessions */
+            mean_block_sessions: number;
+            /** Replications */
+            replications: number;
+            /** Schema Version */
+            schema_version: string;
+            seed: components["schemas"]["GoldenSearchChanceSeed"];
+            source: components["schemas"]["GoldenSearchChanceDrawdownSource"];
+            /**
+             * Thresholds
+             * @description The frozen ceiling the stored labels were judged by.
+             */
+            thresholds: {
+                [key: string]: number;
+            };
+        };
+        /**
+         * GoldenSearchChanceDrawdownMeasured
+         * @description The resampled session-close drawdown range beside the recorded falls, without sizing advice.
+         */
+        GoldenSearchChanceDrawdownMeasured: {
+            basis: components["schemas"]["GoldenSearchChanceDrawdownBasis"];
+            /**
+             * Concern
+             * @description True when the 95th percentile is strictly beyond the stored ceiling; equality is within it.
+             */
+            concern: boolean;
+            /**
+             * Counts
+             * @description Finite falls strictly beyond the ceiling, at or within it, and undefined — all over every replication.
+             */
+            counts: {
+                [key: string]: number;
+            };
+            percentiles: components["schemas"]["GoldenSearchChanceDrawdownPercentiles"];
+            /**
+             * Recorded Close Only
+             * @description The recorded development run's own worst fall at session closes, starting capital in the initial peak.
+             */
+            recorded_close_only: number;
+            /**
+             * Recorded Engine Per Bar
+             * @description The engine's bar-by-bar worst fall as recorded; null is a named missing marker, never zero.
+             */
+            recorded_engine_per_bar: number | null;
+            /**
+             * Sentence
+             * @description The owner-facing reading; Python writes it, the browser only displays it.
+             */
+            sentence: string;
+            /**
+             * Shares
+             * @description Presentation shares; labels come from the counts, never from these rounded values.
+             */
+            shares: {
+                [key: string]: number;
+            };
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "measured";
+        };
+        /**
+         * GoldenSearchChanceDrawdownPercentiles
+         * @description The resampled maximum fall's percentiles by linear interpolation over the finite paths.
+         */
+        GoldenSearchChanceDrawdownPercentiles: {
+            /** Finite */
+            finite: number;
+            /**
+             * P50
+             * @description Null when no resample produced a defined fall.
+             */
+            p50: number | null;
+            /** P95 */
+            p95: number | null;
+        };
+        /**
+         * GoldenSearchChanceDrawdownSource
+         * @description The run a drawdown reading actually resampled.
+         */
+        GoldenSearchChanceDrawdownSource: {
+            /** Capital */
+            capital: number;
+            /** Point Hash */
+            point_hash: string;
+            /**
+             * Recorded Engine Per Bar
+             * @description The engine figure carried verbatim; null when the run kept none.
+             */
+            recorded_engine_per_bar: number | null;
+            /**
+             * Series Digest
+             * @description Digest of the series actually resampled.
+             */
+            series_digest: string;
         };
         /** GoldenSearchChanceObjective */
         GoldenSearchChanceObjective: {
@@ -14615,6 +14726,15 @@ export interface components {
             end_ms: number;
             /** Start Ms */
             start_ms: number;
+        };
+        /**
+         * GoldenSearchChanceWindowSessions
+         * @description A window and its scheduled session count: a rehearsal's frozen final interval, or a drawdown's source window.
+         */
+        GoldenSearchChanceWindowSessions: {
+            /** Scheduled Sessions */
+            scheduled_sessions: number;
+            window: components["schemas"]["GoldenSearchChanceWindow"];
         };
         /** GoldenSearchChartPolicy */
         GoldenSearchChartPolicy: {

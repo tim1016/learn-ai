@@ -247,13 +247,13 @@ describe('GoldenSearchCompareStepComponent', () => {
     ]);
 
     // A study poll brings a new study object with the same runs and evidence: nothing is read or redrawn again.
-    // Ten charts on the step (the stress, neighbor, chance-uncertainty and rehearsal charts among them), and the Trades tab's five.
+    // Eleven charts on the step (the stress, neighbor, chance-uncertainty, rehearsal and drawdown charts among them), and the Trades tab's five.
     const live = () => charts.filter((chart) => !chart.disposed);
-    await waitFor(() => expect(live()).toHaveLength(15));
+    await waitFor(() => expect(live()).toHaveLength(16));
     view.fixture.componentRef.setInput('study', { ...studyDetail('awaiting_candidate') });
     await view.fixture.whenStable();
     expect(service.candidate).toHaveBeenCalledTimes(3);
-    expect(live().map((chart) => chart.options.length)).toEqual(Array.from({ length: 15 }, () => 1));
+    expect(live().map((chart) => chart.options.length)).toEqual(Array.from({ length: 16 }, () => 1));
     expect(service.curveSet).toHaveBeenCalledTimes(1);
   });
 

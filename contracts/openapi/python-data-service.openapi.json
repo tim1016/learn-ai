@@ -19589,6 +19589,28 @@
             ],
             "title": "Comparison"
           },
+          "drawdown": {
+            "discriminator": {
+              "mapping": {
+                "failed": "#/components/schemas/GoldenSearchChanceReadingFailed",
+                "measured": "#/components/schemas/GoldenSearchChanceDrawdownMeasured",
+                "missing": "#/components/schemas/GoldenSearchChanceReadingMissing"
+              },
+              "propertyName": "status"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceDrawdownMeasured"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceReadingMissing"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceReadingFailed"
+              }
+            ],
+            "title": "Drawdown"
+          },
           "profitability": {
             "discriminator": {
               "mapping": {
@@ -19637,7 +19659,8 @@
         "required": [
           "comparison",
           "profitability",
-          "rehearsal"
+          "rehearsal",
+          "drawdown"
         ],
         "title": "GoldenSearchChance",
         "type": "object"
@@ -19882,6 +19905,218 @@
           "undefined"
         ],
         "title": "GoldenSearchChanceCounts",
+        "type": "object"
+      },
+      "GoldenSearchChanceDrawdownBasis": {
+        "additionalProperties": false,
+        "description": "Everything a stored drawdown reading was drawn and judged under, so reading it back never reclassifies it.",
+        "properties": {
+          "chunk_replications": {
+            "title": "Chunk Replications",
+            "type": "integer"
+          },
+          "convention": {
+            "title": "Convention",
+            "type": "string"
+          },
+          "horizon": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceWindowSessions"
+              }
+            ],
+            "description": "The source window whose own scheduled session count is the horizon."
+          },
+          "mean_block_sessions": {
+            "title": "Mean Block Sessions",
+            "type": "number"
+          },
+          "replications": {
+            "title": "Replications",
+            "type": "integer"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "seed": {
+            "$ref": "#/components/schemas/GoldenSearchChanceSeed"
+          },
+          "source": {
+            "$ref": "#/components/schemas/GoldenSearchChanceDrawdownSource"
+          },
+          "thresholds": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "description": "The frozen ceiling the stored labels were judged by.",
+            "title": "Thresholds",
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "convention",
+          "replications",
+          "chunk_replications",
+          "mean_block_sessions",
+          "thresholds",
+          "horizon",
+          "seed",
+          "source"
+        ],
+        "title": "GoldenSearchChanceDrawdownBasis",
+        "type": "object"
+      },
+      "GoldenSearchChanceDrawdownMeasured": {
+        "additionalProperties": false,
+        "description": "The resampled session-close drawdown range beside the recorded falls, without sizing advice.",
+        "properties": {
+          "basis": {
+            "$ref": "#/components/schemas/GoldenSearchChanceDrawdownBasis"
+          },
+          "concern": {
+            "description": "True when the 95th percentile is strictly beyond the stored ceiling; equality is within it.",
+            "title": "Concern",
+            "type": "boolean"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Finite falls strictly beyond the ceiling, at or within it, and undefined \u2014 all over every replication.",
+            "title": "Counts",
+            "type": "object"
+          },
+          "percentiles": {
+            "$ref": "#/components/schemas/GoldenSearchChanceDrawdownPercentiles"
+          },
+          "recorded_close_only": {
+            "description": "The recorded development run's own worst fall at session closes, starting capital in the initial peak.",
+            "title": "Recorded Close Only",
+            "type": "number"
+          },
+          "recorded_engine_per_bar": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The engine's bar-by-bar worst fall as recorded; null is a named missing marker, never zero.",
+            "title": "Recorded Engine Per Bar"
+          },
+          "sentence": {
+            "description": "The owner-facing reading; Python writes it, the browser only displays it.",
+            "title": "Sentence",
+            "type": "string"
+          },
+          "shares": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "description": "Presentation shares; labels come from the counts, never from these rounded values.",
+            "title": "Shares",
+            "type": "object"
+          },
+          "status": {
+            "const": "measured",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "status",
+          "recorded_close_only",
+          "recorded_engine_per_bar",
+          "percentiles",
+          "counts",
+          "shares",
+          "sentence",
+          "concern",
+          "basis"
+        ],
+        "title": "GoldenSearchChanceDrawdownMeasured",
+        "type": "object"
+      },
+      "GoldenSearchChanceDrawdownPercentiles": {
+        "additionalProperties": false,
+        "description": "The resampled maximum fall's percentiles by linear interpolation over the finite paths.",
+        "properties": {
+          "finite": {
+            "title": "Finite",
+            "type": "integer"
+          },
+          "p50": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when no resample produced a defined fall.",
+            "title": "P50"
+          },
+          "p95": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95"
+          }
+        },
+        "required": [
+          "p50",
+          "p95",
+          "finite"
+        ],
+        "title": "GoldenSearchChanceDrawdownPercentiles",
+        "type": "object"
+      },
+      "GoldenSearchChanceDrawdownSource": {
+        "additionalProperties": false,
+        "description": "The run a drawdown reading actually resampled.",
+        "properties": {
+          "capital": {
+            "title": "Capital",
+            "type": "number"
+          },
+          "point_hash": {
+            "title": "Point Hash",
+            "type": "string"
+          },
+          "recorded_engine_per_bar": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The engine figure carried verbatim; null when the run kept none.",
+            "title": "Recorded Engine Per Bar"
+          },
+          "series_digest": {
+            "description": "Digest of the series actually resampled.",
+            "title": "Series Digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "point_hash",
+          "series_digest",
+          "capital",
+          "recorded_engine_per_bar"
+        ],
+        "title": "GoldenSearchChanceDrawdownSource",
         "type": "object"
       },
       "GoldenSearchChanceObjective": {
@@ -20488,6 +20723,25 @@
           "end_ms"
         ],
         "title": "GoldenSearchChanceWindow",
+        "type": "object"
+      },
+      "GoldenSearchChanceWindowSessions": {
+        "additionalProperties": false,
+        "description": "A window and its scheduled session count: a rehearsal's frozen final interval, or a drawdown's source window.",
+        "properties": {
+          "scheduled_sessions": {
+            "title": "Scheduled Sessions",
+            "type": "integer"
+          },
+          "window": {
+            "$ref": "#/components/schemas/GoldenSearchChanceWindow"
+          }
+        },
+        "required": [
+          "window",
+          "scheduled_sessions"
+        ],
+        "title": "GoldenSearchChanceWindowSessions",
         "type": "object"
       },
       "GoldenSearchChartPolicy": {

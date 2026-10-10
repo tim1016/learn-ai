@@ -9,6 +9,7 @@ export type GoldenSearchChartId =
   | 'cost-stress'
   | 'chance-comparison'
   | 'chance-rehearsal'
+  | 'chance-drawdown'
   | 'concentration-curve'
   | 'without-best'
   | 'month-calendar'
@@ -128,6 +129,16 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
       { text: 'Read the strip beside it: every one of the 10,000 resamples counted as better, tied, worse or undefined. Ties are not improvement.', target: null },
       { text: 'The sentence beneath names the share that was at least as good. 95% is the owner’s reading threshold, not a calibrated error rate.', target: null },
       { text: 'Remember what it cannot say: this fit was selected on these same sessions, and the search is not repeated inside the resamples.', target: null },
+    ],
+  },
+  'chance-drawdown': {
+    title: 'Drawdown range',
+    question: 'How deep could this recorded outcome’s falls run, resampled at session closes?',
+    steps: [
+      { text: 'Read the shaded band from zero to the 95th percentile of resampled session-close falls, with the median as the solid tick.', target: { kind: 'series', group: 'drawdown' } },
+      { text: 'The dashed amber line is the plan’s frozen ceiling. A 95th percentile beyond it is marked a research concern; exactly at it is within.', target: null },
+      { text: 'Compare the markers: the ring is the recorded fall at session closes; the block is the engine’s own bar-by-bar figure, or “not recorded”.', target: null },
+      { text: 'Remember what it is not: a maximum future loss, a safe capital amount, or sizing advice — and the engine’s figure and this one start their peaks differently, so neither bounds the other.', target: null },
     ],
   },
   'chance-rehearsal': {

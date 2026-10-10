@@ -49,6 +49,10 @@ async def test_the_evidence_stage_persists_chance_readings_the_contract_can_read
     assert baseline["profitability"]["status"] == "missing"
     assert baseline["rehearsal"]["status"] == "missing"
     assert baseline["rehearsal"]["code"] == "baseline"
+    # The baseline draws its own depth: the incumbent has a drawdown chart too (#3013).
+    assert baseline["drawdown"]["status"] == "measured"
+    assert baseline["drawdown"]["recorded_engine_per_bar"] is not None
+    assert sum(baseline["drawdown"]["counts"].values()) == 10_000
 
     measured = [candidates[key]["chance"] for key in ("all_period", "recent") if key in candidates]
     assert measured, "the plan fits at least the all-period fit"
@@ -71,6 +75,13 @@ async def test_the_evidence_stage_persists_chance_readings_the_contract_can_read
             assert rung["passes"]["pass_joint"] <= min(count for name, count in rung["passes"].items() if name != "pass_joint")
         assert set(rehearsal["basis"]["seeds"]) == {"1x", "2x", "3x", "4x"}
         assert len(rehearsal["objective_percentiles_1x"]["p"]) == 99
+        # The drawdown reading: this run's own source, over the development window's own session count.
+        drawdown = chance["drawdown"]
+        assert drawdown["status"] == "measured"
+        assert drawdown["basis"]["thresholds"] == {"ceiling": row.protocol["policy"]["max_drawdown_ceiling"]}
+        assert drawdown["basis"]["horizon"]["window"] == {"start_ms": row.protocol["development_start_ms"], "end_ms": row.protocol["development_end_ms"]}
+        assert drawdown["counts"]["beyond_ceiling"] + drawdown["counts"]["within_ceiling"] + drawdown["counts"]["undefined"] == 10_000
+        assert 0.0 <= drawdown["recorded_close_only"] <= 1.0
 
     # Same-point fits share one result: the fake landscape peaks both procedures at the same settings.
     if len(measured) > 1:

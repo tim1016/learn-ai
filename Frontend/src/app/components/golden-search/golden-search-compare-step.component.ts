@@ -10,6 +10,7 @@ import { GoldenSearchPanelComponent } from './charts/golden-search-panel.compone
 import { GoldenSearchCandidateAsideComponent } from './golden-search-candidate-aside.component';
 import { GoldenSearchCandidateCardsComponent } from './golden-search-candidate-cards.component';
 import { GoldenSearchChancePanelComponent } from './golden-search-chance-panel.component';
+import { GoldenSearchDrawdownPanelComponent } from './golden-search-drawdown-panel.component';
 import { GoldenSearchRehearsalPanelComponent } from './golden-search-rehearsal-panel.component';
 import { candidateRows, initialRowKey, rowKeyFor, rowSummary, type CandidateRow } from './golden-search-compare';
 import { sideBySideSpec, stressSpec, tornadoSpec } from './golden-search-compare-charts';
@@ -49,6 +50,7 @@ interface DetailRequest {
     GoldenSearchCandidateCardsComponent,
     GoldenSearchChancePanelComponent,
     GoldenSearchChartComponent,
+    GoldenSearchDrawdownPanelComponent,
     GoldenSearchRehearsalPanelComponent,
     GoldenSearchCurveSetComponent,
     GoldenSearchDecisionSummaryComponent,

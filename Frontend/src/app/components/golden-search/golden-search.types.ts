@@ -301,6 +301,8 @@ export type MeasuredChanceProfitability = Schemas['GoldenSearchChanceProfitabili
 export type ChanceRehearsal = ChanceReadings['rehearsal'];
 export type MeasuredChanceRehearsal = Schemas['GoldenSearchChanceRehearsalMeasured'];
 export type ChanceRehearsalRung = Schemas['GoldenSearchChanceRung'];
+export type ChanceDrawdown = ChanceReadings['drawdown'];
+export type MeasuredChanceDrawdown = Schemas['GoldenSearchChanceDrawdownMeasured'];
 export type ChanceBasis = Schemas['GoldenSearchChanceBasis'];
 /** The candidate a development chart draws: its key for colour and walkthrough targets, its label for words. */
 export type CandidateRef = Pick<EvidenceCandidate, 'key' | 'label'>;

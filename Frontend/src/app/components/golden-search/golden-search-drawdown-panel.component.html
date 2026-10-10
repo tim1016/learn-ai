@@ -1,0 +1,30 @@
+<app-golden-search-panel chart="chance-drawdown">
+  @if (measured(); as m) {
+    <p class="sentence" role="note">{{ m.sentence }}</p>
+    @if (spec(); as s) {
+      <app-golden-search-chart [spec]="s" [height]="140" />
+    }
+    <ul class="legend" aria-label="Drawdown markers">
+      <li><i class="bar range" aria-hidden="true"></i>Zero to the 95th percentile of resampled falls</li>
+      <li><i class="tick median" aria-hidden="true"></i>Median</li>
+      <li><i class="ring" aria-hidden="true"></i>Recorded at session closes</li>
+      <li><i class="bar engine" aria-hidden="true"></i>Recorded, engine's every bar: {{ engineText() }}</li>
+      <li><i class="bar ceiling" aria-hidden="true"></i>Frozen ceiling</li>
+    </ul>
+  }
+  @if (measured(); as m) {
+    <p caption class="caption">
+      Session closes, resampled development outcomes, unchanged recorded sizing and cost assumptions. The 95th percentile
+      is a summary of this model's paths, not a promise that exactly one path in twenty falls at least that far, and
+      this chart recommends no capital or position size. The engine's own figure starts its peak at its first bar while
+      this reading starts at capital, so neither bounds the other.
+    </p>
+  }
+  @if (note(); as n) {
+    @if (n.kind === 'failed') {
+      <p class="diagnostic" role="alert">{{ n.text }}</p>
+    } @else {
+      <p class="muted" role="note">{{ n.text }}</p>
+    }
+  }
+</app-golden-search-panel>

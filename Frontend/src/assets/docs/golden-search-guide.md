@@ -862,6 +862,36 @@ An interval that crosses zero differs visibly from one entirely above it; an all
 
 A chef's dish reheated many ways: how often is the reheated serving at least as good as the original plating? Counting the reheats tells you about the reheating, not about whether the recipe is good — and the chef already tasted this batch when choosing the dish.
 
+### Drawdown range {#chance-drawdown}
+
+#### The question it answers
+
+How deep could this recorded outcome’s falls run, resampled at session closes?
+
+#### What you're looking at
+
+A horizontal band from zero to the 95th percentile of the resampled session-close falls, with the median as a solid tick. Beside it, markers for the recorded fall at session closes, the engine's own bar-by-bar figure (or "not recorded" when the run kept none), and the plan's frozen ceiling as a dashed amber line — all on one percentage scale. The sentence above says whether the 95th percentile is beyond the ceiling, and the table shows how many resamples fell strictly beyond it and how many left the fall undefined.
+
+The reading resamples this run's own development sessions over the window's own length. The incumbent has a chart of its own on the same scale.
+
+#### How to read it
+
+1. Read the shaded band from zero to the 95th percentile of resampled session-close falls, with the median as the solid tick.
+2. The dashed amber line is the plan’s frozen ceiling. A 95th percentile beyond it is marked a research concern; exactly at it is within.
+3. Compare the markers: the ring is the recorded fall at session closes; the block is the engine’s own bar-by-bar figure, or “not recorded”.
+4. Remember what it is not: a maximum future loss, a safe capital amount, or sizing advice — and the engine’s figure and this one start their peaks differently, so neither bounds the other.
+
+#### Good signs and warning signs
+
+- Good: the whole band comfortably inside the ceiling, median close to the recorded falls.
+- Warning: the 95th percentile beyond the ceiling — a research concern under this model.
+- Warning: a recorded engine figure missing (—): the chart cannot compare the two conventions then.
+- Warning: reading the 95th percentile as “one path in twenty will be at least this deep”. It is a summary of this model’s paths, not a promise.
+
+#### An everyday comparison
+
+Sounding the depth of a harbour with the lines you have already sailed: it tells you how deep this charted route ran, not how deep an uncharted storm could be.
+
 ### Final-test rehearsal {#chance-rehearsal}
 
 #### The question it answers
