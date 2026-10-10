@@ -9,7 +9,7 @@ import {
   PricingCompareResult,
 } from '../graphql/types';
 import { environment } from '../../environments/environment';
-import { etIsoDate } from '../shared/date/et-midnight';
+import { etIsoDate, shiftIsoDateByMonths } from '../shared/date/et-midnight';
 import { optionExpiryAnchorMs } from '../shared/option-contract/option-expiry-date';
 
 const GRAPHQL_URL = environment.backendUrl;
@@ -266,8 +266,9 @@ export class MarketDataService {
           underlyingTicker,
           contractType: options.contractType,
           expirationMsGte: options.expirationMsGte ?? optionExpiryAnchorMs(etIsoDate(Date.now())),
-          // Both bounds are anchors of ET dates — one zone, six months out.
-          expirationMsLte: options.expirationMsLte ?? optionExpiryAnchorMs(etIsoDate(Date.now() + 183 * 86_400_000)),
+          // Both bounds are anchors of ET dates — one zone, six calendar
+          // months out (clamped month arithmetic, not 183 24-hour periods).
+          expirationMsLte: options.expirationMsLte ?? optionExpiryAnchorMs(shiftIsoDateByMonths(etIsoDate(Date.now()), 6)),
         }
       })
       .pipe(

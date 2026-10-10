@@ -20,7 +20,8 @@ import { ExpirationRibbonComponent } from '../../options-chain-v2/expiration-rib
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
 import { etIsoDate } from '../../../shared/date/et-midnight';
-import { optionExpiryAnchorMs, optionExpiryDate } from '../../../shared/option-contract/option-expiry-date';
+import { optionExpiryAnchorMs } from '../../../shared/option-contract/option-expiry-date';
+import { formatTimestampDisplay } from '../../../shared/timestamp/timestamp-display';
 
 interface ChainRow {
   strike: number;
@@ -120,9 +121,10 @@ export class OptionsLabChainComponent implements OnInit {
 
   expirationLabel = computed(() => {
     const exp = this.selectedExpiration();
+    // The anchor read in New York names its own date — the same expiry copy
+    // as every other research page (#2915).
     if (!exp) return '';
-    const d = new Date(optionExpiryDate(exp) + 'T00:00:00Z');
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+    return formatTimestampDisplay(exp, { mode: 'date-et', granularity: 'short-date' });
   });
 
   rows = computed<ChainRow[]>(() => {

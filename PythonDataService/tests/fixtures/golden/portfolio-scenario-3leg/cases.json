@@ -6,7 +6,7 @@
     "rtol": 1e-6
   },
   "request": {
-    "as_of_ms": 1767225600000,
+    "as_of_ms": 1767301200000,
     "spot_price": 615.0,
     "risk_free_rate": 0.043,
     "dividend_yield": 0.0,
