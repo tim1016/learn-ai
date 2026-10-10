@@ -1134,11 +1134,15 @@ class GoldenSearchChanceRehearsalActivity(_Wire):
     final_trading_years: float | None = Field(description="The frozen final interval's length in trading years; null on a fixed-floor plan.")
 
 
-class GoldenSearchChanceRehearsalFinalInterval(_Wire):
-    """The frozen final interval whose scheduled session count the rungs scale from."""
+class GoldenSearchChanceWindowSessions(_Wire):
+    """A window and its scheduled session count: a rehearsal's frozen final interval, or a drawdown's source window."""
 
     window: GoldenSearchChanceWindow
     scheduled_sessions: int
+
+
+class GoldenSearchChanceRehearsalFinalInterval(GoldenSearchChanceWindowSessions):
+    """The frozen final interval whose scheduled session count the rungs scale from."""
 
 
 class GoldenSearchChanceRehearsalPercentiles(_Wire):
@@ -1199,7 +1203,7 @@ class GoldenSearchChanceDrawdownBasis(_Wire):
     chunk_replications: int
     mean_block_sessions: float
     thresholds: dict[str, float] = Field(description="The frozen ceiling the stored labels were judged by.")
-    horizon: GoldenSearchChanceRehearsalFinalInterval = Field(description="The source window whose own session count is the horizon.")
+    horizon: GoldenSearchChanceWindowSessions = Field(description="The source window whose own scheduled session count is the horizon.")
     seed: GoldenSearchChanceSeed
     source: GoldenSearchChanceDrawdownSource
 

@@ -120,6 +120,24 @@ def drawdown_reading(
         return failed_component(exc, "drawdown")
     if not isinstance(admitted, SessionSeries):
         return dict(admitted)
+    recorded_engine = None if metrics is None or metrics.max_drawdown_pct is None else float(metrics.max_drawdown_pct)
+    try:
+        return _draw(admitted, window=window, ceiling=ceiling, point_hash=point_hash, recorded_engine=recorded_engine, cancel_check=cancel_check)
+    except JobCancelled:
+        raise
+    except Exception as exc:
+        return failed_component(exc, "drawdown")
+
+
+def _draw(
+    admitted: SessionSeries,
+    *,
+    window: tuple[int, int],
+    ceiling: float,
+    point_hash: str,
+    recorded_engine: float | None,
+    cancel_check: _Cancel,
+) -> dict[str, Any]:
     seed_inputs = [SCHEMA_DRAWDOWN, window[0], window[1], point_hash]
     seed = seed_for(*seed_inputs)
     counts = {"beyond_ceiling": 0, "within_ceiling": 0, "undefined": 0}
@@ -135,7 +153,6 @@ def drawdown_reading(
         done += len(chunk_falls)
     percentiles = _percentiles(falls)
     recorded_close_only = float(path_worst_fall(admitted.returns[np.newaxis, :])[0])
-    recorded_engine = None if metrics is None or metrics.max_drawdown_pct is None else float(metrics.max_drawdown_pct)
     return {
         "status": "measured",
         "recorded_close_only": recorded_close_only,

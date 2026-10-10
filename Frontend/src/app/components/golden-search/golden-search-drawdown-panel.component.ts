@@ -5,7 +5,6 @@ import { GoldenSearchPanelComponent } from './charts/golden-search-panel.compone
 import { sameChart } from './charts/golden-search-chart-spec';
 import { drawdownSpec } from './golden-search-drawdown-charts';
 import { percentText } from './golden-search-display';
-import { shareText } from './golden-search-chance-charts';
 import type { CandidateRef, ChanceDrawdown, MeasuredChanceDrawdown } from './golden-search.types';
 
 /**
@@ -60,15 +59,5 @@ export class GoldenSearchDrawdownPanelComponent {
   protected readonly engineText = computed(() => {
     const measured = this.measured();
     return measured === null ? '' : measured.recorded_engine_per_bar === null ? 'not recorded' : percentText(measured.recorded_engine_per_bar);
-  });
-
-  protected readonly beyondText = computed(() => {
-    const measured = this.measured();
-    return measured === null ? '' : `${measured.counts['beyond_ceiling'].toLocaleString('en-US')} of 10,000 (${shareText(measured.shares['beyond_ceiling'])})`;
-  });
-
-  protected readonly undefinedText = computed(() => {
-    const measured = this.measured();
-    return measured === null ? '' : `${measured.counts['undefined'].toLocaleString('en-US')} (${shareText(measured.shares['undefined'])})`;
   });
 }

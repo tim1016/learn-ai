@@ -90,7 +90,8 @@ function drawdownOption(drawdown: MeasuredChanceDrawdown, hasRange: boolean, the
         id: 'drawdown:range',
         name: 'Resampled range',
         type: 'custom',
-        data: hasRange ? [0] : [],
+        // One datum always draws: without a range the band collapses to zero width, but the recorded markers and the ceiling stay visible.
+        data: [0],
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- echarts' custom-series graphic children are a union the limited ComposeOption types cannot name.
         renderItem: (_params: unknown, api: { coord: (data: number[]) => number[] }): any => {
           const zeroX = api.coord([0])[0];
@@ -100,11 +101,14 @@ function drawdownOption(drawdown: MeasuredChanceDrawdown, hasRange: boolean, the
           const engineX = api.coord([drawdown.recorded_engine_per_bar ?? 0])[0];
           const top = api.coord([0])[1] - 15;
           const height = 30;
+          const band = hasRange
+            ? [{ type: 'rect', shape: { x: zeroX, y: top + 6, width: Math.max(1, p95X - zeroX), height: height - 12 }, style: { fill: theme.candidates.all_period, opacity: 0.28 } }]
+            : [];
           return {
             type: 'group',
             children: [
-              { type: 'rect', shape: { x: zeroX, y: top + 6, width: Math.max(1, p95X - zeroX), height: height - 12 }, style: { fill: theme.candidates.all_period, opacity: 0.28 } },
-              { type: 'rect', shape: { x: medianX - 1.5, y: top + 2, width: 3, height: height - 4 }, style: { fill: theme.text } },
+              ...band,
+              ...(hasRange ? [{ type: 'rect', shape: { x: medianX - 1.5, y: top + 2, width: 3, height: height - 4 }, style: { fill: theme.text } }] : []),
               { type: 'circle', shape: { cx: closeX, cy: top + height / 2, r: 5 }, style: { fill: 'transparent', stroke: theme.development, lineWidth: 2 } },
               ...(drawdown.recorded_engine_per_bar === null
                 ? []

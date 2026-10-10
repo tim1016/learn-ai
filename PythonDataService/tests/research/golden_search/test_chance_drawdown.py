@@ -85,6 +85,20 @@ def test_quantiles_interpolate_linearly_and_carry_their_finite_count() -> None:
     assert reading["counts"]["beyond_ceiling"] + reading["counts"]["within_ceiling"] + reading["counts"]["undefined"] == 10_000
 
 
+def test_the_percentiles_interpolate_by_hand_computed_positions() -> None:
+    from app.research.golden_search.chance_drawdown import _percentiles
+
+    values = np.array([0.10, 0.20, 0.30, np.nan, 0.40, 0.50])
+    result = _percentiles(values)
+    finite = np.sort(np.array([0.10, 0.20, 0.30, 0.40, 0.50]))
+    # (n - 1) q by hand: p50 at position 2.0 exactly; p95 at position 3.8, between the 4th and 5th values.
+    expected_p50 = float(finite[2])
+    expected_p95 = float(finite[3] + (finite[4] - finite[3]) * 0.8)
+    assert result["finite"] == 5
+    assert result["p50"] == pytest.approx(expected_p50, abs=1e-15)
+    assert result["p95"] == pytest.approx(expected_p95, abs=1e-15)
+
+
 def test_ceiling_equality_is_within_a_strict_breach_is_a_concern() -> None:
     # At the counting seam the boundary is exact: a fall exactly at the ceiling counts within, never beyond.
     assert count_falls(np.array([0.20, 0.20, 0.19999]), 0.20) == {"beyond_ceiling": 0, "within_ceiling": 3, "undefined": 0}

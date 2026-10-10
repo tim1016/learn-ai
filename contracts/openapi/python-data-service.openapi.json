@@ -19922,10 +19922,10 @@
           "horizon": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/GoldenSearchChanceRehearsalFinalInterval"
+                "$ref": "#/components/schemas/GoldenSearchChanceWindowSessions"
               }
             ],
-            "description": "The source window whose own session count is the horizon."
+            "description": "The source window whose own scheduled session count is the horizon."
           },
           "mean_block_sessions": {
             "title": "Mean Block Sessions",
@@ -20723,6 +20723,25 @@
           "end_ms"
         ],
         "title": "GoldenSearchChanceWindow",
+        "type": "object"
+      },
+      "GoldenSearchChanceWindowSessions": {
+        "additionalProperties": false,
+        "description": "A window and its scheduled session count: a rehearsal's frozen final interval, or a drawdown's source window.",
+        "properties": {
+          "scheduled_sessions": {
+            "title": "Scheduled Sessions",
+            "type": "integer"
+          },
+          "window": {
+            "$ref": "#/components/schemas/GoldenSearchChanceWindow"
+          }
+        },
+        "required": [
+          "window",
+          "scheduled_sessions"
+        ],
+        "title": "GoldenSearchChanceWindowSessions",
         "type": "object"
       },
       "GoldenSearchChartPolicy": {

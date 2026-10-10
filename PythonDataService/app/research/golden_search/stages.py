@@ -472,6 +472,23 @@ class _EvidenceRun:
         return tuple(hoods)
 
 
+def _drawdown_for(ctx: StageContext, evidence: CandidateEvidence, detail: Mapping[str, Any] | None) -> dict[str, Any]:
+    """One run's own drawdown reading; the module owns its failures, so only cancellation escapes it (#3013)."""
+    try:
+        return drawdown_reading(
+            window=ctx.development,
+            ceiling=ctx.protocol.policy.max_drawdown_ceiling,
+            metrics=evidence.metrics,
+            detail=detail,
+            point_hash=evidence.point_hash,
+            cancel_check=ctx.cancel_check,
+        )
+    except JobCancelled:
+        raise  # cancellation stops the stage; it is never recorded as a reading
+    except Exception as exc:  # a diagnostic failure the stage records; it never fails the evidence itself
+        return failed_component(exc, "drawdown")
+
+
 def _chance_records(ctx: StageContext, evaluator: StudyEvaluator, evidences: Sequence[CandidateEvidence]) -> list[dict[str, Any]]:
     """Each candidate's development chance readings, in candidate order (#3011, #3012, ADR 0074 decision 12).
 
@@ -497,19 +514,7 @@ def _chance_records(ctx: StageContext, evaluator: StudyEvaluator, evidences: Seq
             except Exception as exc:  # a diagnostic failure the stage records; it never fails the evidence itself
                 record = failed_readings(exc)
             # The baseline draws its own depth: the incumbent has a drawdown chart of its own (#3013).
-            try:
-                record["drawdown"] = drawdown_reading(
-                    window=ctx.development,
-                    ceiling=ctx.protocol.policy.max_drawdown_ceiling,
-                    metrics=evidence.metrics,
-                    detail=evaluator.detail_of(evidence.point, window=ctx.development),
-                    point_hash=evidence.point_hash,
-                    cancel_check=ctx.cancel_check,
-                )
-            except JobCancelled:
-                raise  # cancellation stops the stage; it is never recorded as a reading
-            except Exception as exc:  # a diagnostic failure the stage records; it never fails the evidence itself
-                record["drawdown"] = failed_component(exc, "drawdown")
+            record["drawdown"] = _drawdown_for(ctx, evidence, incumbent_detail)
             records.append(record)
             continue
         shared = by_hash.get(evidence.point_hash)
@@ -554,19 +559,7 @@ def _chance_records(ctx: StageContext, evaluator: StudyEvaluator, evidences: Seq
             except Exception as exc:  # a diagnostic failure the stage records; it never fails the evidence itself
                 shared["rehearsal"] = failed_rehearsal(exc)
             # The drawdown component is its own too: it needs this run alone, never the pairing (#3013).
-            try:
-                shared["drawdown"] = drawdown_reading(
-                    window=ctx.development,
-                    ceiling=ctx.protocol.policy.max_drawdown_ceiling,
-                    metrics=evidence.metrics,
-                    detail=evaluator.detail_of(evidence.point, window=ctx.development),
-                    point_hash=evidence.point_hash,
-                    cancel_check=ctx.cancel_check,
-                )
-            except JobCancelled:
-                raise  # cancellation stops the stage; it is never recorded as a reading
-            except Exception as exc:  # a diagnostic failure the stage records; it never fails the evidence itself
-                shared["drawdown"] = failed_component(exc, "drawdown")
+            shared["drawdown"] = _drawdown_for(ctx, evidence, evaluator.detail_of(evidence.point, window=ctx.development))
             by_hash[evidence.point_hash] = shared
         records.append(shared)
     return records

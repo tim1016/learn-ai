@@ -14314,8 +14314,8 @@ export interface components {
             chunk_replications: number;
             /** Convention */
             convention: string;
-            /** @description The source window whose own session count is the horizon. */
-            horizon: components["schemas"]["GoldenSearchChanceRehearsalFinalInterval"];
+            /** @description The source window whose own scheduled session count is the horizon. */
+            horizon: components["schemas"]["GoldenSearchChanceWindowSessions"];
             /** Mean Block Sessions */
             mean_block_sessions: number;
             /** Replications */
@@ -14726,6 +14726,15 @@ export interface components {
             end_ms: number;
             /** Start Ms */
             start_ms: number;
+        };
+        /**
+         * GoldenSearchChanceWindowSessions
+         * @description A window and its scheduled session count: a rehearsal's frozen final interval, or a drawdown's source window.
+         */
+        GoldenSearchChanceWindowSessions: {
+            /** Scheduled Sessions */
+            scheduled_sessions: number;
+            window: components["schemas"]["GoldenSearchChanceWindow"];
         };
         /** GoldenSearchChartPolicy */
         GoldenSearchChartPolicy: {
