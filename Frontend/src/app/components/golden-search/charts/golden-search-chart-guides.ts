@@ -7,6 +7,10 @@ export type GoldenSearchChartId =
   | 'side-by-side'
   | 'neighbor-tornado'
   | 'cost-stress'
+  | 'chance-comparison'
+  | 'chance-rehearsal'
+  | 'chance-drawdown'
+  | 'chance-final'
   | 'concentration-curve'
   | 'without-best'
   | 'month-calendar'
@@ -115,6 +119,47 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
       { text: 'Each bar below reruns the same settings with one harsher cost or fill.', target: { kind: 'series', group: 'stress' } },
       { text: 'Find the stressed bar with the lowest return. That stress is the one the result is most sensitive to.', target: { kind: 'point', group: 'stress', at: 'lowest' } },
       { text: 'A bar left of 0% marks a stress that turns the result into a loss.', target: null },
+    ],
+  },
+  'chance-comparison': {
+    title: 'Development uncertainty',
+    question: 'When the recorded development sessions are resampled, how often is this fit at least as good as the current settings?',
+    steps: [
+      { text: 'Read the band: the middle 90% of resampled differences between this fit and the current settings, with the median as the solid mark.', target: { kind: 'series', group: 'chance' } },
+      { text: 'The dashed line at zero is a tie. A band crossing it means the resampling model does not separate the two settings.', target: null },
+      { text: 'Read the strip beside it: every one of the 10,000 resamples counted as better, tied, worse or undefined. Ties are not improvement.', target: null },
+      { text: 'The sentence beneath names the share that was at least as good. 95% is the owner’s reading threshold, not a calibrated error rate.', target: null },
+      { text: 'Remember what it cannot say: this fit was selected on these same sessions, and the search is not repeated inside the resamples.', target: null },
+    ],
+  },
+  'chance-final': {
+    title: 'Final uncertainty',
+    question: 'How much support does the resampling model give this fit’s frozen final result?',
+    steps: [
+      { text: 'Read the upper band: the middle 90% of resampled differences from the current settings, with zero as a tie; the band below is the fit’s own resampled result against break-even.', target: { kind: 'series', group: 'final' } },
+      { text: 'The frozen “meets the rules” verdict at the top of the page is separate from this model support; neither relabels the other.', target: null },
+      { text: 'Read the curve: the reproduced 1× development rehearsal’s objective at each percentile, with the recorded final result marked at its actual value — above every finite rehearsal is rank 100%, not 99%.', target: { kind: 'series', group: 'carry' } },
+      { text: 'Remember the selections: this fit was chosen after the final test and found by a development search; its support is unadjusted for both.', target: null },
+    ],
+  },
+  'chance-drawdown': {
+    title: 'Drawdown range',
+    question: 'How deep could this recorded outcome’s falls run, resampled at session closes?',
+    steps: [
+      { text: 'Read the shaded band from zero to the 95th percentile of resampled session-close falls, with the median as the solid tick.', target: { kind: 'series', group: 'drawdown' } },
+      { text: 'The dashed amber line is the plan’s frozen ceiling. A 95th percentile beyond it is marked a research concern; exactly at it is within.', target: null },
+      { text: 'Compare the markers: the ring is the recorded fall at session closes; the block is the engine’s own bar-by-bar figure, or “not recorded”.', target: null },
+      { text: 'Remember what it is not: a maximum future loss, a safe capital amount, or sizing advice — and the engine’s figure and this one start their peaks differently, so neither bounds the other.', target: null },
+    ],
+  },
+  'chance-rehearsal': {
+    title: 'Final-test rehearsal',
+    question: 'If the recorded development outcome had to satisfy the final rules over a test this long, how often would it?',
+    steps: [
+      { text: 'Read the bold line first: the share of resamples meeting every modeled rule together, at 1× to 4× the final test’s scheduled sessions.', target: { kind: 'series', group: 'rehearsal' } },
+      { text: 'The dashed amber line is the 80% target — the owner’s reading heuristic, not a power calculation.', target: null },
+      { text: 'Read the thinner lines to see which rule limits the ladder; the sentence above names them. A low 1× share is not by itself a “test too short” verdict.', target: null },
+      { text: 'Remember what a rung is not: an exact replay of the final test (the drawdown rule reads session closes, the real gate reads every bar), and a longer rung need not be better.', target: null },
     ],
   },
   'concentration-curve': {

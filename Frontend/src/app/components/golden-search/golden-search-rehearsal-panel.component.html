@@ -1,0 +1,23 @@
+<app-golden-search-panel chart="chance-rehearsal">
+  @if (measured(); as m) {
+    <p class="sentence" role="note">{{ m.guidance }}</p>
+    @if (spec(); as s) {
+      <app-golden-search-chart [spec]="s" [height]="300" />
+    }
+  }
+  @if (measured(); as m) {
+    <p caption class="caption">
+      A conditional rehearsal: the recorded development outcome, resampled to each rung's scheduled session count — not an
+      exact replay of the final test and not a power calculation. The drawdown rule reads session closes; the real gate
+      reads the engine's per-bar drawdown and can be deeper. A longer rung need not be better, and a hypothetical k×
+      length is not a validated date range: a revision that changes the interval starts a new study.
+    </p>
+  }
+  @if (note(); as n) {
+    @if (n.kind === 'failed') {
+      <p class="diagnostic" role="alert">{{ n.text }}</p>
+    } @else {
+      <p class="muted" role="note">{{ n.text }}</p>
+    }
+  }
+</app-golden-search-panel>

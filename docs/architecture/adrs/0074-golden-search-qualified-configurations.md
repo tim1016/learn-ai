@@ -194,6 +194,16 @@ test are unchanged, and no rule reads it. Evidence recorded before the stage
 measured concentration is not backfilled: its row reads "Not measured for this
 study".
 
+### 12. Resampled chance evidence informs the research decision; it never sizes, never unfreezes an outcome, and its absence is acknowledged, not bypassed
+
+Owner decisions, 2026-10-09, from the adversarial review of #2932's plan; built under [#3011](https://github.com/tim1016/learn-ai/issues/3011)–[#3015](https://github.com/tim1016/learn-ai/issues/3015). The stationary-bootstrap math landed first ([#2950](https://github.com/tim1016/learn-ai/pull/2950)); this decision governs what its readings mean and what they may never do.
+
+- **Charts ship in v1, for research decisions.** Compare, the rehearsal view and the final-test view show paired resampling support, ties, drawdown spread and the recorded result's rank among development rehearsals. They recommend no capital, no position size, and change nothing in the live risk envelope. A drawdown percentile over development is not a deployable-capital number.
+- **Interpretation is conditional on the model.** The shares describe one resampling model of the recorded sessions (10,000 replications, mean block 5, convention `stationary-bootstrap/v1`, seeds fixed by frozen identity). They are not posterior probabilities of a true edge, calibrated p-values, search-adjusted significance, or forecasts; 95/5 and 80 are owner-selected reading heuristics. A fit selected on the same sessions keeps its selection-bias caveat visible, and a bootstrapped selected fit alone claims no multiplicity correction.
+- **Frozen outcomes stay frozen.** The readings inform only. Selection, eligibility, the recommendation, final-test checks and outcomes, the engine-run budget and the exposure ledger never read them, and no reading triggers an automatic settings change, extra engine run, historical backfill or qualification rewrite.
+- **Each component is measured or missing on its own.** A reading stores its schema version, draw convention, thresholds, objective, window, seed inputs and a digest of the detail inputs it resampled. Reading a page never reclassifies stored evidence with today's constants; evidence from before a slice shipped reads "not measured" per component and is never backfilled.
+- **The approval exception is explicitly scoped.** For outcomes that meet the frozen rules, measured weak support (below the reading's stored clear threshold) requires the existing research-weakness acknowledgement. For studies enrolled at lock after the approval slice, a *missing* required reading — the chosen fit's final comparison with the incumbent, its profitability reading when positive net is required, and its matching carry-over rank — requires the same acknowledgement; the fit-to-fit comparison and the Compare drawdown stay informational, and the policy names exactly these components, so an absent optional chart never gates. Carry-over ranks and the rehearsal's 80% target never decide the acknowledgement. Studies created before enrollment keep their recorded behavior, and a technical proof failure remains unacknowledgable.
+
 ## Consequences
 
 - An owner-approved tuple for one stock is deployable in Paper or Live without a code edit, a qualification script or a restart. Other stocks keep the registry point.

@@ -166,8 +166,8 @@ async def insert_study(conn: asyncpg.Connection, new: NewStudy) -> tuple[StudyRo
             """
             INSERT INTO research_golden_search_studies (
                 id, parent_study_id, strategy_key, symbol, state, revision, status, attempt,
-                created_at_ms, updated_at_ms, protocol_json, protocol_hash, receipt_json, budget_cap
-            ) VALUES ($1, $2, $3, $4, 'locked', 0, 'idle', 0, $5, $5, $6::jsonb, $7, $8::jsonb, $9)
+                created_at_ms, updated_at_ms, protocol_json, protocol_hash, receipt_json, results_json, budget_cap
+            ) VALUES ($1, $2, $3, $4, 'locked', 0, 'idle', 0, $5, $5, $6::jsonb, $7, $8::jsonb, $9::jsonb, $10)
             ON CONFLICT (id) DO NOTHING
             RETURNING id
             """,
@@ -179,6 +179,7 @@ async def insert_study(conn: asyncpg.Connection, new: NewStudy) -> tuple[StudyRo
             _dumps(new.protocol),
             new.protocol_hash,
             _dumps(new.receipt),
+            _dumps(new.results),
             new.budget_cap,
         )
         if inserted is not None:

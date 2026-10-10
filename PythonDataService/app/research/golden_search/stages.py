@@ -28,6 +28,21 @@ from app.research.golden_search import repository as repo
 from app.research.golden_search.actions import authorize
 from app.research.golden_search.activity import TradeFloors
 from app.research.golden_search.budget import PROOF_EVALUATIONS
+from app.research.golden_search.chance_approval import chance_weakness_items
+from app.research.golden_search.chance_compare import (
+    development_readings,
+    failed_component,
+    failed_readings,
+    incumbent_readings,
+)
+from app.research.golden_search.chance_drawdown import drawdown_reading
+from app.research.golden_search.chance_final import (
+    SELECTION_NOTE,
+    carry_over_reading,
+    fit_to_fit_reading,
+    stored_final_chance,
+)
+from app.research.golden_search.chance_rehearsal import failed_rehearsal, rehearsal_reading
 from app.research.golden_search.concentration import concentration
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, point_hash
 from app.research.golden_search.evaluator import (
@@ -47,7 +62,7 @@ from app.research.golden_search.evidence import (
     recommendation,
 )
 from app.research.golden_search.exam_rules import judge_exam
-from app.research.golden_search.final_test import fit_for, pick_of, recorded_fits
+from app.research.golden_search.final_test import fit_for, fit_label, pick_of, recorded_fits
 from app.research.golden_search.grid_procedure import neighbor_probes, pair_grid, run_grid
 from app.research.golden_search.guidance import research_weakness
 from app.research.golden_search.models import STAGE_ESTIMATES, STAGE_STATES, StageName, StudyRow
@@ -464,6 +479,99 @@ class _EvidenceRun:
         return tuple(hoods)
 
 
+def _drawdown_for(ctx: StageContext, evidence: CandidateEvidence, detail: Mapping[str, Any] | None) -> dict[str, Any]:
+    """One run's own drawdown reading; the module owns its failures, so only cancellation escapes it (#3013)."""
+    try:
+        return drawdown_reading(
+            window=ctx.development,
+            ceiling=ctx.protocol.policy.max_drawdown_ceiling,
+            metrics=evidence.metrics,
+            detail=detail,
+            point_hash=evidence.point_hash,
+            cancel_check=ctx.cancel_check,
+        )
+    except JobCancelled:
+        raise  # cancellation stops the stage; it is never recorded as a reading
+    except Exception as exc:  # a diagnostic failure the stage records; it never fails the evidence itself
+        return failed_component(exc, "drawdown")
+
+
+def _chance_records(ctx: StageContext, evaluator: StudyEvaluator, evidences: Sequence[CandidateEvidence]) -> list[dict[str, Any]]:
+    """Each candidate's development chance readings, in candidate order (#3011, #3012, ADR 0074 decision 12).
+
+    The readings resample detail runs the stage already evaluated, so they spend no engine budget. Candidates that
+    chose the same settings share one computed record instead of drawing twice; the incumbent is the baseline and is
+    never compared with itself. The rehearsal (#3012) reads the same development evidence and the frozen final
+    interval's *scheduled* length — never any final-period detail, return or outcome. The drawdown reading (#3013)
+    is each run's own — the incumbent's included — over the source window's own session count.
+    """
+    incumbent = next((evidence for evidence in evidences if evidence.key == "incumbent"), None)
+    if incumbent is None:
+        return [{} for _ in evidences]
+    incumbent_detail = evaluator.detail_of(incumbent.point, window=ctx.development)
+    rate = ctx.protocol.expected_trades_per_year
+    by_hash: dict[str, dict[str, Any]] = {}
+    records: list[dict[str, Any]] = []
+    for evidence in evidences:
+        if evidence.key == "incumbent":
+            try:
+                record = incumbent_readings(objective=ctx.protocol.policy.objective, window=ctx.development)
+            except JobCancelled:
+                raise  # cancellation stops the stage; it is never recorded as a reading
+            except Exception as exc:  # a diagnostic failure the stage records; it never fails the evidence itself
+                record = failed_readings(exc)
+            # The baseline draws its own depth: the incumbent has a drawdown chart of its own (#3013).
+            record["drawdown"] = _drawdown_for(ctx, evidence, incumbent_detail)
+            records.append(record)
+            continue
+        shared = by_hash.get(evidence.point_hash)
+        if shared is None:
+            try:
+                shared = development_readings(
+                    objective=ctx.protocol.policy.objective,
+                    window=ctx.development,
+                    candidate_metrics=evidence.metrics,
+                    candidate_detail=evaluator.detail_of(evidence.point, window=ctx.development),
+                    candidate_hash=evidence.point_hash,
+                    incumbent_metrics=incumbent.metrics,
+                    incumbent_detail=incumbent_detail,
+                    incumbent_hash=incumbent.point_hash,
+                    cancel_check=ctx.cancel_check,
+                )
+            except JobCancelled:
+                raise  # cancellation stops the stage; it is never recorded as a reading
+            except Exception as exc:  # a diagnostic failure the stage records; it never fails the evidence itself
+                shared = failed_readings(exc)
+            # The rehearsal is its own component: a missing or failed one never erases the comparison beside it.
+            try:
+                shared["rehearsal"] = rehearsal_reading(
+                    objective=ctx.protocol.policy.objective,
+                    window=ctx.development,
+                    final_window=ctx.final,
+                    floors=ctx.floors,
+                    rate=rate,
+                    final_years=ctx.floors.trading_years(ctx.final) if rate is not None else None,
+                    ceiling=ctx.protocol.policy.max_drawdown_ceiling,
+                    require_positive_net=ctx.protocol.policy.require_positive_net,
+                    candidate_metrics=evidence.metrics,
+                    candidate_detail=evaluator.detail_of(evidence.point, window=ctx.development),
+                    candidate_hash=evidence.point_hash,
+                    incumbent_metrics=incumbent.metrics,
+                    incumbent_detail=incumbent_detail,
+                    incumbent_hash=incumbent.point_hash,
+                    cancel_check=ctx.cancel_check,
+                )
+            except JobCancelled:
+                raise  # cancellation stops the stage; it is never recorded as a reading
+            except Exception as exc:  # a diagnostic failure the stage records; it never fails the evidence itself
+                shared["rehearsal"] = failed_rehearsal(exc)
+            # The drawdown component is its own too: it needs this run alone, never the pairing (#3013).
+            shared["drawdown"] = _drawdown_for(ctx, evidence, evaluator.detail_of(evidence.point, window=ctx.development))
+            by_hash[evidence.point_hash] = shared
+        records.append(shared)
+    return records
+
+
 def _evidence(ctx: StageContext, evaluator: StudyEvaluator, verdict: Verdict) -> None:
     run = _EvidenceRun(ctx=ctx, evaluator=evaluator)
     stored: list[dict[str, Any]] = []
@@ -499,6 +607,8 @@ def _evidence(ctx: StageContext, evaluator: StudyEvaluator, verdict: Verdict) ->
                 ),
             }
         )
+    for record, chance in zip(stored, _chance_records(ctx, evaluator, evidences), strict=True):
+        record["chance"] = chance
     advice = recommendation(evidences, verdict, ctx.floors.policy(ctx.development))
     window = ctx.development
     ctx.write(
@@ -537,6 +647,87 @@ def _development_metrics(ctx: StageContext, point_digest: str) -> Metrics | None
     return None
 
 
+def _missing_single_fit() -> dict[str, Any]:
+    """The optional fit-to-fit comparison when only one distinct fit ran: absent by design, not failed (#3014)."""
+    return {
+        "status": "missing",
+        "code": "single_fit",
+        "reason": "Only one distinct fit sat this final test, so there is no second fit to compare it with.",
+    }
+
+
+def _stored_rehearsal_for(ctx: StageContext, point_hash: str) -> dict[str, Any] | None:
+    """The stored 1× development rehearsal of one point's evidence record, if this study recorded one (#3012, #3014)."""
+    for candidate in ctx.results.get("evidence", {}).get("candidates", []):
+        if candidate.get("point_hash") == point_hash:
+            rehearsal = (candidate.get("chance") or {}).get("rehearsal")
+            return rehearsal if isinstance(rehearsal, dict) else None
+    return None
+
+
+def _development_detail_for(ctx: StageContext, point: Mapping[str, Any]) -> tuple[Metrics | None, Mapping[str, Any] | None]:
+    """The stored development detail run of one point, read back without an engine evaluation or budget (#3014)."""
+    digest = point_hash(ctx.row.strategy_key, dict(point))
+    record = run_sync(with_connection(repo.find_detail_evaluation, ctx.row.id, point_hash=digest, window_start_ms=ctx.development[0], window_end_ms=ctx.development[1]))
+    if record is None:
+        return None, None
+    return repo.metrics_of(record), record.detail_json
+
+
+def _final_chance_for(
+    ctx: StageContext,
+    evaluator: StudyEvaluator,
+    fit: dict[str, Any],
+    incumbent: Metrics,
+    incumbent_detail: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """One fit's final chance readings, computed after its frozen judgement from runs the stage already executed.
+
+    No re-test, no extra engine evaluation: the comparison and profitability resample the exam's own detail runs, and
+    the carry-over reproduces the stored rehearsal from its seed over the stored development input read back as-is.
+    """
+    readings: dict[str, Any] = {}
+    try:
+        # The final interval's own sessions, so every sentence names the window it resampled and carries the
+        # two-selection caveat, never the development stage's selected-on-these-sessions note (#3014).
+        readings = development_readings(
+            objective=ctx.protocol.policy.objective,
+            window=ctx.final,
+            candidate_metrics=Metrics.from_dict(fit["metrics"]),
+            candidate_detail=evaluator.detail_of(fit["point"], window=ctx.final),
+            candidate_hash=fit["point_hash"],
+            incumbent_metrics=incumbent,
+            incumbent_detail=incumbent_detail,
+            incumbent_hash=point_hash(ctx.row.strategy_key, dict(ctx.protocol.incumbent.params)),
+            sessions_label="final",
+            bias_note=SELECTION_NOTE,
+            cancel_check=ctx.cancel_check,
+        )
+    except JobCancelled:
+        raise  # cancellation stops the stage; it is never recorded as a reading
+    except Exception as exc:  # a diagnostic failure the stage records; it never fails the exam itself
+        readings = failed_readings(exc)
+    try:
+        development_metrics, development_detail = _development_detail_for(ctx, fit["point"])
+        readings["carry_over"] = carry_over_reading(
+            objective=ctx.protocol.policy.objective,
+            development_window=ctx.development,
+            final_window=ctx.final,
+            development_detail=development_detail,
+            development_metrics=development_metrics,
+            final_metrics=Metrics.from_dict(fit["metrics"]),
+            final_detail=evaluator.detail_of(fit["point"], window=ctx.final),
+            point_hash=fit["point_hash"],
+            stored_rehearsal=_stored_rehearsal_for(ctx, fit["point_hash"]),
+            cancel_check=ctx.cancel_check,
+        )
+    except JobCancelled:
+        raise  # cancellation stops the stage; it is never recorded as a reading
+    except Exception as exc:  # a diagnostic failure the stage records; it never fails the exam itself
+        readings["carry_over"] = failed_component(exc, "carry-over")
+    return readings
+
+
 def run_exam(ctx: StageContext) -> tuple[str, dict[str, Any]]:
     """Score every fit the exam names and the frozen incumbent once on the final interval, and judge each fit."""
     exam = dict(ctx.results["exam"])
@@ -545,6 +736,7 @@ def run_exam(ctx: StageContext) -> tuple[str, dict[str, Any]]:
     ctx.on_phase("exam")
     scored = evaluator.evaluate([fit["point"] for fit in fits], window=ctx.final, stage="exam", detail=True)
     (incumbent,) = evaluator.evaluate([ctx.protocol.incumbent.params], window=ctx.final, stage="exam", detail=True)
+    incumbent_detail = evaluator.detail_of(ctx.protocol.incumbent.params, window=ctx.final)
     for fit, candidate in zip(fits, scored, strict=True):
         development = _development_metrics(ctx, fit["point_hash"])
         judgement = judge_exam(
@@ -561,7 +753,38 @@ def run_exam(ctx: StageContext) -> tuple[str, dict[str, Any]]:
             retention=judgement.retention,
             metrics=candidate.as_dict(),
         )
+        # Diagnostics come after the frozen judgement and are stored on the fit (#3014); they gate nothing.
+        fit["chance"] = _final_chance_for(ctx, evaluator, fit, incumbent, incumbent_detail)
     exam.update(fits=fits, incumbent_metrics=incumbent.as_dict())
+    # Two distinct fits (the record's twin folding already guaranteed distinct settings): one shared paired
+    # draw between them, stored beside the per-fit readings (#3014).
+    try:
+        if len(fits) >= 2:
+            exam["chance"] = {
+                "fit_to_fit": fit_to_fit_reading(
+                    objective=ctx.protocol.policy.objective,
+                    window=ctx.final,
+                    first={
+                        "metrics": Metrics.from_dict(fits[0]["metrics"]),
+                        "detail": evaluator.detail_of(fits[0]["point"], window=ctx.final),
+                        "point_hash": fits[0]["point_hash"],
+                        "label": fit_label(fits[0]),
+                    },
+                    second={
+                        "metrics": Metrics.from_dict(fits[1]["metrics"]),
+                        "detail": evaluator.detail_of(fits[1]["point"], window=ctx.final),
+                        "point_hash": fits[1]["point_hash"],
+                        "label": fit_label(fits[1]),
+                    },
+                    cancel_check=ctx.cancel_check,
+                )
+            }
+        else:
+            exam["chance"] = {"fit_to_fit": _missing_single_fit()}
+    except JobCancelled:
+        raise  # cancellation stops the stage; it is never recorded as a reading
+    except Exception as exc:  # a diagnostic failure the stage records; it never fails the exam itself
+        exam["chance"] = {"fit_to_fit": failed_component(exc, "fit-to-fit")}
     return "awaiting_review", exam
 
 
@@ -605,7 +828,15 @@ def run_qualification(ctx: StageContext, binding: ApprovalBinding, blob_store: A
     chosen = fit_for(exam, ctx.row.candidate_key)
     assert chosen is not None  # the approval command records the fit it names before it authorizes this stage
     evaluator = ctx.evaluator(allowed=ctx.final, limit=ctx.row.budget_cap, total=stage_total(ctx.row, "qualification"))
-    weakness = research_weakness(chosen["outcome"], exam["claim"], exam["exposure_state"])
+    # The same chance authority the approval intent and the page read (#3015): the stored components of the fit
+    # the decision named, retained with the qualification so the acknowledgement's evidence is immutable.
+    chance = stored_final_chance(chosen)
+    chance_items = chance_weakness_items(
+        ctx.results.get("chance_approval"),
+        chance,
+        positive_net_required=bool(ctx.protocol.policy.require_positive_net),
+    )
+    weakness = research_weakness(chosen["outcome"], exam["claim"], exam["exposure_state"]) + [item["code"] for item in chance_items]
     request = binding.request_type(
         study_id=ctx.row.id,
         strategy_key=ctx.row.strategy_key,
@@ -623,6 +854,7 @@ def run_qualification(ctx: StageContext, binding: ApprovalBinding, blob_store: A
             "exam_outcome": chosen["outcome"],
             "checks": list(chosen["checks"]),
             "candidate_key": chosen["key"],
+            "candidate_point_hash": chosen["point_hash"],
             "fits_tested": len(recorded_fits(exam)),
             "pick": pick_of(exam),
             "claim": exam["claim"],
@@ -630,6 +862,13 @@ def run_qualification(ctx: StageContext, binding: ApprovalBinding, blob_store: A
             "validation_verdict_label": _validation_label(ctx.results),
             "research_override": bool(weakness) and bool(decision.get("acknowledge_research_weakness")),
             "weakness": weakness,
+            # The chance evidence behind any chance weakness code: each component's stored status, counts,
+            # method and thresholds, and the enrollment policy version the study locked under (#3015).
+            "chance": {
+                "policy_schema": None if ctx.results.get("chance_approval") is None else ctx.results["chance_approval"].get("schema_version"),
+                "components": chance,
+                "weakness": chance_items,
+            },
         },
         note=str(decision["note"]),
         expected_default_qualification_id=decision.get("expected_default_qualification_id"),

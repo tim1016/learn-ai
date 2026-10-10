@@ -40,6 +40,8 @@ from app.research.golden_search.actions import (
     unclaimed,
 )
 from app.research.golden_search.activity import DEFAULT_EXPECTED_TRADES_PER_YEAR, TradeFloors
+from app.research.golden_search.chance_approval import chance_weakness_items
+from app.research.golden_search.chance_final import stored_final_chance
 from app.research.golden_search.declarations import declaration_for, point_hash, unavailable_reason
 from app.research.golden_search.exposure_rules import EXPOSURE_EXPLANATIONS, claim_for, exposure_state
 from app.research.golden_search.final_test import fit_for, fits_to_test, recorded_fits
@@ -954,7 +956,15 @@ async def _approve(conn: Any, row: StudyRow, body: Mapping[str, Any]) -> Command
         )
     exam = row.results["exam"]
     chosen = _fit_to_approve(row, body)
-    weakness = research_weakness(chosen["outcome"], exam["claim"], exam["exposure_state"])
+    # The chance items come from the server's own stored evidence for the fit the approval names — the same
+    # authority the page's weakness items and the qualification payload read — never from client values (#3015).
+    chance = stored_final_chance(chosen)
+    chance_items = chance_weakness_items(
+        row.results.get("chance_approval"),
+        chance,
+        positive_net_required=bool(row.protocol["policy"]["require_positive_net"]),
+    )
+    weakness = research_weakness(chosen["outcome"], exam["claim"], exam["exposure_state"]) + [item["code"] for item in chance_items]
     if weakness and not weak_ack:
         raise GoldenSearchRefusal(
             "This evidence is weak (" + ", ".join(weakness) + "); approving needs your explicit acceptance of it.",
@@ -971,6 +981,7 @@ async def _approve(conn: Any, row: StudyRow, body: Mapping[str, Any]) -> Command
         "acknowledge_research_weakness": weak_ack,
         "expected_default_qualification_id": body["expected_default_qualification_id"],
         "weakness": weakness,
+        "chance_weakness": chance_items,
         # A retried approval reuses the proof and saved run it already built for this exact candidate.
         "checkpoint": previous.get("checkpoint") if previous.get("kind") == "approve" else None,
     }

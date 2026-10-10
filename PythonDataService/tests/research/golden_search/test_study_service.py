@@ -159,7 +159,7 @@ async def test_lifecycle_runs_from_lock_to_an_approved_golden_configuration(conn
     assert detail["guidance"]["headline"] == "Approve the settings you want to use"
     assert detail["scope"]["final_state"] == "opened_once"
 
-    row = await driver.advance(row, "approve", {**APPROVE, "note": "Meets the rules."})
+    row = await driver.advance(row, "approve", {**APPROVE, "note": "Meets the rules.", "acknowledge_research_weakness": True})
     detail = await driver.detail(row)
     assert detail["state"] == "approved" and row.candidate_key == "all_period"
     assert detail["results"]["exam"]["chosen_key"] == "all_period"
@@ -639,7 +639,7 @@ async def test_a_spent_development_budget_still_leaves_the_exam_and_proof_their_
     assert len(fits) == 2 and (row.state, row.consumed_evaluations) == ("awaiting_review", spent + 3)
     assert all(fit["metrics"]["status"] == "completed" for fit in fits)
 
-    row = await driver.advance(row, "approve", APPROVE)
+    row = await driver.advance(row, "approve", {**APPROVE, "acknowledge_research_weakness": True})
     assert (row.state, row.consumed_evaluations, row.budget_cap) == ("approved", spent + 6, spent + 6)
 
 
@@ -789,7 +789,11 @@ async def test_outside_research_on_the_final_interval_makes_its_history_unknown(
     row = await driver.advance(row, "approve", {**APPROVE, "acknowledge_research_weakness": True})
     assert row.state == "approved"
     research = driver.approval.requests[-1].research
-    assert research["research_override"] and research["weakness"] == ["EXPOSURE_HISTORY_UNKNOWN"]
+    # The enrolled study's weak final comparison rides beside the exposure weakness, and its evidence is
+    # retained with the qualification (#3015).
+    assert research["research_override"] and research["weakness"] == ["EXPOSURE_HISTORY_UNKNOWN", "CHANCE_WITHIN_NOISE"]
+    assert research["chance"]["components"]["comparison"]["status"] == "measured"
+    assert research["chance"]["policy_schema"] == "golden-search-chance-approval/v1"
 
 
 async def test_exposure_rows_survive_hiding_the_study(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
@@ -867,7 +871,7 @@ async def test_both_fits_sit_the_final_test_and_the_owner_names_one_afterwards(c
         await driver.command(row, "approve", {**APPROVE, "candidate_key": "incumbent"})
     assert untested.value.code == "PAYLOAD_INVALID"
 
-    row = await driver.advance(row, "approve", {**APPROVE, "candidate_key": "recent"})
+    row = await driver.advance(row, "approve", {**APPROVE, "candidate_key": "recent", "acknowledge_research_weakness": True})
     detail = await driver.detail(row)
     assert (row.state, row.candidate_key) == ("approved", "recent")
     request = driver.approval.requests[-1]
@@ -889,15 +893,18 @@ async def test_a_fit_that_failed_the_final_test_needs_the_written_acceptance_and
     detail = await driver.detail(row)
     fits = {fit["key"]: fit for fit in detail["results"]["exam"]["fits"]}
     assert (fits["all_period"]["outcome"], fits["recent"]["outcome"]) == ("meets_rules", "does_not_meet_rules")
-    assert fits["all_period"]["weakness"] == [] and [item["code"] for item in fits["recent"]["weakness"]] == ["EXAM_DOES_NOT_MEET_RULES"]
+    # Both fits' final comparisons sit inside the fake landscape's noise, so the chance weakness rides beside
+    # the exam codes — the passing fit's acknowledgement covers it (#3015).
+    assert [item["code"] for item in fits["all_period"]["weakness"]] == ["CHANCE_WITHIN_NOISE"]
+    assert [item["code"] for item in fits["recent"]["weakness"]] == ["EXAM_DOES_NOT_MEET_RULES", "CHANCE_WITHIN_NOISE", "CHANCE_WITHIN_NOISE"]
     # The study reads by its strongest result until a fit is named.
     assert detail["exam_outcome"] == "meets_rules" and detail["guidance"]["headline"] == "Approve the settings you want to use"
 
     with pytest.raises(GoldenSearchRefusal) as weak:
         await driver.command(row, "approve", {**APPROVE, "candidate_key": "recent"})
     assert weak.value.code == "WEAKNESS_ACKNOWLEDGEMENT_REQUIRED"
-    row = await driver.advance(row, "approve", APPROVE)
-    assert row.state == "approved" and driver.approval.requests[-1].research["weakness"] == []
+    row = await driver.advance(row, "approve", {**APPROVE, "acknowledge_research_weakness": True})
+    assert row.state == "approved" and driver.approval.requests[-1].research["weakness"] == ["CHANCE_WITHIN_NOISE"]
 
 
 async def test_a_study_kept_after_two_fits_ran_says_how_many_ran_and_promises_no_approval(driver: Driver, symbol: str) -> None:
@@ -912,14 +919,14 @@ async def test_a_study_kept_after_two_fits_ran_says_how_many_ran_and_promises_no
 async def test_a_retried_approval_must_name_the_fit_it_started_with(driver: Driver, symbol: str) -> None:
     row = await _two_fits_to_review(driver, symbol)
     driver.approval = FakeApproval(fail_with=("PROOF_MISMATCH", "The restored replay differs from the lake replay."))
-    row = await driver.advance(row, "approve", APPROVE)
+    row = await driver.advance(row, "approve", {**APPROVE, "acknowledge_research_weakness": True})
     assert (row.state, row.candidate_key) == ("qualification_failed", "all_period")
 
     driver.approval = FakeApproval()
     with pytest.raises(GoldenSearchRefusal) as other:
         await driver.command(row, "approve", {**APPROVE, "candidate_key": "recent"})
     assert (other.value.code, other.value.kind) == ("FIT_ALREADY_CHOSEN", "conflict")
-    row = await driver.advance(row, "approve", APPROVE)
+    row = await driver.advance(row, "approve", {**APPROVE, "acknowledge_research_weakness": True})
     assert (row.state, row.candidate_key) == ("approved", "all_period")
 
 
@@ -1095,7 +1102,7 @@ async def test_two_concurrent_revisions_under_one_key_fork_one_study(conn: async
 async def test_a_technical_approval_failure_reads_back_failed_and_can_be_retried(driver: Driver, symbol: str) -> None:
     row = await driver.advance(await driver.to_candidate(symbol), "open_exam", {"acknowledge_final_test": True})
     driver.approval = FakeApproval(fail_with=("PROOF_MISMATCH", "The restored replay differs from the lake replay."))
-    row = await driver.advance(row, "approve", APPROVE)
+    row = await driver.advance(row, "approve", {**APPROVE, "acknowledge_research_weakness": True})
     detail = await driver.detail(row)
     assert row.state == "qualification_failed"
     assert detail["guidance"] == {
@@ -1105,7 +1112,7 @@ async def test_a_technical_approval_failure_reads_back_failed_and_can_be_retried
     assert detail["results"]["qualification"]["status"] == "failed" and "approve" in detail["permitted_actions"]
 
     driver.approval = FakeApproval()
-    row = await driver.advance(row, "approve", APPROVE)
+    row = await driver.advance(row, "approve", {**APPROVE, "acknowledge_research_weakness": True})
     assert row.state == "approved"
     # The retry resumed from the proof the failed attempt saved; only the saved run was new work.
     assert driver.approval.checkpoints[0].proof is not None

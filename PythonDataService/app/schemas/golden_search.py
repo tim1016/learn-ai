@@ -969,6 +969,283 @@ class GoldenSearchConcentrationMissing(_Wire):
 GoldenSearchConcentration = Annotated[GoldenSearchConcentrationMeasured | GoldenSearchConcentrationMissing, Field(discriminator="status")]
 
 
+# ── Chance readings (#3011, ADR 0074 decision 12) ────────────────────────
+
+
+class GoldenSearchChanceWindow(_Wire):
+    start_ms: InstantMs
+    end_ms: InstantMs
+
+
+class GoldenSearchChanceObjective(_Wire):
+    measure: RankingMeasure
+    label: str = Field(description="How the objective reads in a sentence.")
+    units: str = Field(description="What one unit of the objective counts.")
+
+
+class GoldenSearchChanceSeed(_Wire):
+    inputs: list[str | int] = Field(description="The exact parts the seed was derived from; empty when nothing was drawn.")
+    value: int = Field(description="The derived seed itself, so a stored reading is reproducible without rederiving it.")
+
+
+class GoldenSearchChanceSource(_Wire):
+    """The runs a reading actually resampled: their shared window, their point hashes, their series digests."""
+
+    window: GoldenSearchChanceWindow
+    session_count: int
+    candidate_point_hash: str = ""
+    incumbent_point_hash: str = Field(default="", description="Empty when the reading is the candidate's alone.")
+    series_digest: dict[str, str] = Field(default_factory=dict, description="Digests of the series actually resampled, keyed by the side they belong to.")
+    capital: float | None = None
+
+
+class GoldenSearchChanceBasis(_Wire):
+    """Everything a stored reading was drawn and judged under, so reading it back never reclassifies with today's constants."""
+
+    schema_version: str = Field(description="The reading's schema/interpretation version.")
+    convention: str
+    replications: int
+    chunk_replications: int
+    mean_block_sessions: float
+    thresholds: dict[str, float] = Field(description="The interpretation thresholds the stored labels were judged by.")
+    objective: GoldenSearchChanceObjective
+    seed: GoldenSearchChanceSeed = Field(description="The exact inputs the seed was derived from and the seed itself.")
+    source: GoldenSearchChanceSource
+
+
+class GoldenSearchChanceCounts(_Wire):
+    better: int
+    tied: int
+    worse: int
+    undefined: int
+
+
+class GoldenSearchChanceRange(_Wire):
+    p5: float | None = Field(description="5th percentile by linear interpolation over the finite values; null when there are none.")
+    p50: float | None
+    p95: float | None
+    finite: int = Field(description="How many resamples produced a finite value.")
+
+
+class GoldenSearchChanceAtLeastAsGood(_Wire):
+    count: int = Field(description="better + tied, the final test's inclusive rule.")
+    share: float = Field(description="Over every replication, not only the defined pairs.")
+
+
+class GoldenSearchChanceComparisonMeasured(_Wire):
+    """The paired comparison of one fit's development result against the current settings', under the resampling model only."""
+
+    status: Literal["measured"]
+    label: Literal["clearly_as_good", "clearly_worse", "identical_outcomes", "mixed", "no_defined_paths"]
+    sentence: str = Field(description="The decision sentence; Python writes it, the browser only displays it.")
+    incomplete_support: bool = Field(description="True when undefined paths leave the support incomplete.")
+    bias_note: str = Field(description="The selection-bias caveat displayed beside the chart.")
+    counts: GoldenSearchChanceCounts = Field(description="Raw event counts over every replication; they sum to the replication count.")
+    shares: dict[str, float] = Field(description="Presentation shares; labels come from the counts, never from these rounded values.")
+    at_least_as_good: GoldenSearchChanceAtLeastAsGood
+    candidate_range: GoldenSearchChanceRange
+    difference_range: GoldenSearchChanceRange = Field(description="Candidate minus incumbent in the objective's units.")
+    basis: GoldenSearchChanceBasis
+
+
+class GoldenSearchChanceComparisonSameSettings(_Wire):
+    status: Literal["same_settings"]
+    sentence: str
+    basis: GoldenSearchChanceBasis
+
+
+class GoldenSearchChanceComparisonBaseline(_Wire):
+    status: Literal["baseline"]
+    sentence: str
+    basis: GoldenSearchChanceBasis
+
+
+class GoldenSearchChanceReadingMissing(_Wire):
+    status: Literal["missing"]
+    code: str = Field(description="A stable identifier for the operator copy in `reason`.")
+    reason: str
+
+
+class GoldenSearchChanceReadingFailed(_Wire):
+    status: Literal["failed"]
+    reason: str = Field(description="The diagnostic: an unexpected computation error, logged with context when it happened.")
+    sentence: str = Field(description="The operator sentence for the failure; Python writes it, the browser only displays it.")
+
+
+GoldenSearchChanceComparison = Annotated[
+    GoldenSearchChanceComparisonMeasured
+    | GoldenSearchChanceComparisonSameSettings
+    | GoldenSearchChanceComparisonBaseline
+    | GoldenSearchChanceReadingMissing
+    | GoldenSearchChanceReadingFailed,
+    Field(discriminator="status"),
+]
+
+
+class GoldenSearchChanceProfitabilityMeasured(_Wire):
+    """The fit's own development outcome resampled: how often the compounded net return was positive, flat or negative."""
+
+    status: Literal["measured"]
+    label: Literal["clearly_positive", "clearly_negative", "mixed", "no_defined_paths"]
+    sentence: str
+    counts: dict[str, int] = Field(description="positive, zero, negative and undefined counts over every replication.")
+    shares: dict[str, float]
+    basis: GoldenSearchChanceBasis
+
+
+GoldenSearchChanceProfitability = Annotated[
+    GoldenSearchChanceProfitabilityMeasured | GoldenSearchChanceReadingMissing | GoldenSearchChanceReadingFailed,
+    Field(discriminator="status"),
+]
+
+
+class GoldenSearchChanceRung(_Wire):
+    """One rung of the rehearsal ladder: what share of its resamples met each modeled rule."""
+
+    k: int = Field(description="The multiple of the frozen final interval's scheduled sessions.")
+    sessions: int = Field(description="Scheduled sessions this rung rehearses over; ordinal sessions, never invented dates.")
+    trade_floor: int
+    denominator: int = Field(description="Every resampled path, the denominator of each share.")
+    passes: dict[str, int] = Field(description="Pass counts per rule and for the joint predicate, keyed `pass_<rule>` and `pass_joint`.")
+    undefined: dict[str, int] = Field(default_factory=dict, description="Undefined counts for the rules that can be, keyed `undefined_<rule>`; the exit rule never is.")
+    shares: dict[str, float] = Field(description="Presentation shares; labels come from the counts, never from these rounded values.")
+
+
+class GoldenSearchChanceRehearsalSeeds(_Wire):
+    """Each rung's exact seed, by its multiple: the 1× seed is what the final-test slice reproduces the carry-over from."""
+
+    inputs: list[str | int]
+    value: int
+
+
+class GoldenSearchChanceRehearsalRules(_Wire):
+    """The rules a rehearsal modeled, as the plan froze them."""
+
+    max_drawdown_ceiling: float = Field(description="A fraction of peak equity.")
+    require_positive_net: bool
+    drawdown_basis: str = Field(description="Always 'session closes'; the real final-test gate reads the engine's per-bar drawdown.")
+
+
+class GoldenSearchChanceRehearsalActivity(_Wire):
+    """The trade-floor basis the rungs' floors came from."""
+
+    frequency_based: bool
+    expected_trades_per_year: int | None
+    final_trading_years: float | None = Field(description="The frozen final interval's length in trading years; null on a fixed-floor plan.")
+
+
+class GoldenSearchChanceWindowSessions(_Wire):
+    """A window and its scheduled session count: a rehearsal's frozen final interval, or a drawdown's source window."""
+
+    window: GoldenSearchChanceWindow
+    scheduled_sessions: int
+
+
+class GoldenSearchChanceRehearsalFinalInterval(GoldenSearchChanceWindowSessions):
+    """The frozen final interval whose scheduled session count the rungs scale from."""
+
+
+class GoldenSearchChanceRehearsalPercentiles(_Wire):
+    """The 1× objective's 1st–99th percentiles by linear interpolation over the finite values, for the later carry-over display."""
+
+    p: list[float] = Field(description="Empty when no resample produced a defined objective.")
+    finite: int
+
+
+class GoldenSearchChanceRehearsalBasis(_Wire):
+    """Everything a stored rehearsal was drawn and judged under, so reading it back never reclassifies it."""
+
+    schema_version: str
+    convention: str
+    replications: int
+    chunk_replications: int
+    mean_block_sessions: float
+    thresholds: dict[str, float] = Field(description="The interpretation thresholds the stored labels were judged by.")
+    objective: GoldenSearchChanceObjective
+    rules: GoldenSearchChanceRehearsalRules
+    activity: GoldenSearchChanceRehearsalActivity
+    final_interval: GoldenSearchChanceRehearsalFinalInterval
+    source: GoldenSearchChanceSource
+    seeds: dict[str, GoldenSearchChanceRehearsalSeeds]
+
+
+class GoldenSearchChanceRehearsalMeasured(_Wire):
+    """The final-test rehearsal ladder: conditional resampling support for each modeled rule, never a power calculation."""
+
+    status: Literal["measured"]
+    rungs: list[GoldenSearchChanceRung]
+    active_rules: list[str] = Field(description="The rules this plan models; a rule the plan does not require has no series here.")
+    guidance: str = Field(description="The owner-facing diagnosis; Python writes it, the browser only displays it.")
+    objective_percentiles_1x: GoldenSearchChanceRehearsalPercentiles
+    basis: GoldenSearchChanceRehearsalBasis
+
+
+GoldenSearchChanceRehearsal = Annotated[
+    GoldenSearchChanceRehearsalMeasured | GoldenSearchChanceReadingMissing | GoldenSearchChanceReadingFailed,
+    Field(discriminator="status"),
+]
+
+
+class GoldenSearchChanceDrawdownPercentiles(_Wire):
+    """The resampled maximum fall's percentiles by linear interpolation over the finite paths."""
+
+    p50: float | None = Field(description="Null when no resample produced a defined fall.")
+    p95: float | None
+    finite: int
+
+
+class GoldenSearchChanceDrawdownBasis(_Wire):
+    """Everything a stored drawdown reading was drawn and judged under, so reading it back never reclassifies it."""
+
+    schema_version: str
+    convention: str
+    replications: int
+    chunk_replications: int
+    mean_block_sessions: float
+    thresholds: dict[str, float] = Field(description="The frozen ceiling the stored labels were judged by.")
+    horizon: GoldenSearchChanceWindowSessions = Field(description="The source window whose own scheduled session count is the horizon.")
+    seed: GoldenSearchChanceSeed
+    source: GoldenSearchChanceDrawdownSource
+
+
+class GoldenSearchChanceDrawdownSource(_Wire):
+    """The run a drawdown reading actually resampled."""
+
+    point_hash: str
+    series_digest: str = Field(description="Digest of the series actually resampled.")
+    capital: float
+    recorded_engine_per_bar: float | None = Field(description="The engine figure carried verbatim; null when the run kept none.")
+
+
+class GoldenSearchChanceDrawdownMeasured(_Wire):
+    """The resampled session-close drawdown range beside the recorded falls, without sizing advice."""
+
+    status: Literal["measured"]
+    recorded_close_only: float = Field(description="The recorded development run's own worst fall at session closes, starting capital in the initial peak.")
+    recorded_engine_per_bar: float | None = Field(description="The engine's bar-by-bar worst fall as recorded; null is a named missing marker, never zero.")
+    percentiles: GoldenSearchChanceDrawdownPercentiles
+    counts: dict[str, int] = Field(description="Finite falls strictly beyond the ceiling, at or within it, and undefined — all over every replication.")
+    shares: dict[str, float] = Field(description="Presentation shares; labels come from the counts, never from these rounded values.")
+    sentence: str = Field(description="The owner-facing reading; Python writes it, the browser only displays it.")
+    concern: bool = Field(description="True when the 95th percentile is strictly beyond the stored ceiling; equality is within it.")
+    basis: GoldenSearchChanceDrawdownBasis
+
+
+GoldenSearchChanceDrawdown = Annotated[
+    GoldenSearchChanceDrawdownMeasured | GoldenSearchChanceReadingMissing | GoldenSearchChanceReadingFailed,
+    Field(discriminator="status"),
+]
+
+
+class GoldenSearchChance(_Wire):
+    """One fit's development chance components, each normalized independently of the others."""
+
+    comparison: GoldenSearchChanceComparison
+    profitability: GoldenSearchChanceProfitability
+    rehearsal: GoldenSearchChanceRehearsal
+    drawdown: GoldenSearchChanceDrawdown
+
+
 class GoldenSearchCandidateGuidance(_Wire):
     title: str
     text: str
@@ -995,6 +1272,7 @@ class GoldenSearchEvidenceCandidate(_Wire):
     )
     stress_tally: GoldenSearchStressTally
     concentration: GoldenSearchConcentration
+    chance: GoldenSearchChance
     edge_hits: list[str]
     guidance: GoldenSearchCandidateGuidance
     flags: list[GoldenSearchFinding]
@@ -1045,6 +1323,95 @@ class GoldenSearchExamCheck(_Wire):
     detail: str
 
 
+class GoldenSearchChanceCarryOverBasis(_Wire):
+    """The reproduced rehearsal's identity: its schema, its seed, its scheduled length and its source digest."""
+
+    schema_version: str
+    rehearsal_schema: str | None = Field(description="Null when the stored rehearsal predates schema versions.")
+    seed: GoldenSearchChanceSeed
+    scheduled_sessions: int
+    objective: GoldenSearchChanceObjective
+    source_digest: str | None
+
+
+class GoldenSearchChanceCarryOverMeasured(_Wire):
+    """The recorded final result's rank among its own reproduced 1× development rehearsal: a display diagnostic, never an approval test."""
+
+    status: Literal["measured"]
+    label: Literal["below_most", "above_most", "middle", "no_defined_paths"]
+    rank: float = Field(description="Strictly-below count over the finite count; 1.0 means above every finite rehearsal.")
+    below: int
+    finite: int
+    undefined: int
+    recorded_objective: float
+    curve: GoldenSearchChanceRehearsalPercentiles = Field(description="The reproduced rehearsal's 1st-99th percentiles, plot summaries and never individual rehearsals.")
+    sentence: str
+    selection_note: str = Field(description="The unadjusted-for-selection caveat carried beside the rank.")
+    basis: GoldenSearchChanceCarryOverBasis
+
+
+GoldenSearchChanceCarryOver = Annotated[
+    GoldenSearchChanceCarryOverMeasured | GoldenSearchChanceReadingMissing | GoldenSearchChanceReadingFailed,
+    Field(discriminator="status"),
+]
+
+
+class GoldenSearchFinalChance(_Wire):
+    """One tested fit's final chance components, each normalized independently of the others."""
+
+    comparison: GoldenSearchChanceComparison
+    profitability: GoldenSearchChanceProfitability
+    carry_over: GoldenSearchChanceCarryOver
+
+
+class GoldenSearchChanceFitToFitMeasured(_Wire):
+    """Two distinct fits' final comparison from one shared paired draw, both directions summarized from it."""
+
+    status: Literal["measured"]
+    pair: list[str] = Field(description="The two point hashes, canonically ordered, that were compared.")
+    counts: GoldenSearchChanceCounts
+    shares: dict[str, float]
+    at_least_as_good: GoldenSearchChanceAtLeastAsGood
+    sentence: str
+    selection_note: str
+    basis: GoldenSearchChanceFitToFitBasis
+
+
+class GoldenSearchChanceFitToFitSource(_Wire):
+    """The two final runs a fit-to-fit reading actually resampled."""
+
+    window: GoldenSearchChanceWindow
+    session_count: int
+    point_hashes: list[str] = Field(description="The two hashes, canonically ordered.")
+    series_digests: list[str]
+    capital: float
+
+
+class GoldenSearchChanceFitToFitBasis(_Wire):
+    """Everything a stored fit-to-fit reading was drawn under, so reading it back never reclassifies it."""
+
+    schema_version: str
+    convention: str
+    replications: int
+    mean_block_sessions: float
+    thresholds: dict[str, float]
+    objective: GoldenSearchChanceObjective
+    seed: GoldenSearchChanceSeed
+    source: GoldenSearchChanceFitToFitSource
+
+
+GoldenSearchChanceFitToFit = Annotated[
+    GoldenSearchChanceFitToFitMeasured | GoldenSearchChanceReadingMissing | GoldenSearchChanceReadingFailed,
+    Field(discriminator="status"),
+]
+
+
+class GoldenSearchExamChance(_Wire):
+    """The exam-level chance record: the optional fit-to-fit comparison, absent by design when one fit ran."""
+
+    fit_to_fit: GoldenSearchChanceFitToFit
+
+
 class GoldenSearchExamFit(_Wire):
     """One fit that sat the final test, judged on its own under the frozen rules."""
 
@@ -1056,6 +1423,7 @@ class GoldenSearchExamFit(_Wire):
     checks: list[GoldenSearchExamCheck]
     retention: float | None = Field(description="Descriptive only, never a check.")
     metrics: GoldenSearchMetrics | None
+    chance: GoldenSearchFinalChance
     weakness: list[GoldenSearchFinding] = Field(
         description="What approving this fit needs the owner to acknowledge as weak; empty when its evidence meets the rules."
     )
@@ -1065,6 +1433,7 @@ class GoldenSearchExamView(_Wire):
     window: GoldenSearchWindow
     claim: Claim
     exposure_state: ExposureState
+    chance: GoldenSearchExamChance
     fits: list[GoldenSearchExamFit] = Field(description="Every fit that ran on the final interval; one for a final test recorded with a locked candidate.")
     incumbent_metrics: GoldenSearchMetrics | None
     pick: Literal["before_test", "after_test"] = Field(description="Whether the owner named the fit before the test opened or after its outcomes.")

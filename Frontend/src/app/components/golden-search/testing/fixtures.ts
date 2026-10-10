@@ -2,6 +2,14 @@ import { etMidnightMs } from '../../../shared/date/et-midnight';
 import type {
   CandidateDetail,
   CandidateKey,
+  ChanceBasis,
+  ChanceReadings,
+  ChanceRehearsalRung,
+  FinalChance,
+  MeasuredChanceCarryOver,
+  MeasuredChanceDrawdown,
+  MeasuredChanceFitToFit,
+  MeasuredChanceRehearsal,
   DecisionSummary,
   EvidenceCandidate,
   EvidenceView,
@@ -19,6 +27,8 @@ import type {
   Finding,
   GoldenSearchDefaults,
   GoldenSearchPreflight,
+  MeasuredChanceComparison,
+  MeasuredChanceProfitability,
   MeasuredConcentration,
   MeasuredTradeCharts,
   Metrics,
@@ -529,6 +539,231 @@ export function pairMap(overrides: Partial<PairMap> = {}): PairMap {
 const ALL_PERIOD_POINT = { gap: 0.15, rsi_min: 48, rsi_max: 72, fast_period: 8, slow_period: 21, hold_bars: 4, symbol: 'SPY' } as const;
 const RECENT_POINT = { gap: 0.1, rsi_min: 45, rsi_max: 70, hold_bars: 3, symbol: 'SPY' } as const;
 
+const CHANCE_BASIS: ChanceBasis = {
+  schema_version: 'golden-search-chance-comparison/v1',
+  convention: 'stationary-bootstrap/v1',
+  replications: 10_000,
+  chunk_replications: 1_000,
+  mean_block_sessions: 5,
+  thresholds: { clear: 0.95 },
+  objective: { measure: 'total_return_pct', label: 'total return', units: 'fraction of the starting capital' },
+  seed: { inputs: ['golden-search-chance-comparison/v1', DEVELOPMENT_START_MS, FINAL_START_MS, 'total_return_pct', 'h-all', 'h-inc'], value: 1234567890 },
+  source: {
+    window: { start_ms: DEVELOPMENT_START_MS, end_ms: FINAL_START_MS },
+    session_count: 62,
+    candidate_point_hash: 'h-all',
+    incumbent_point_hash: 'h-inc',
+    series_digest: { candidate: 'd-all', incumbent: 'd-inc' },
+    capital: 100000,
+  },
+};
+
+/** A measured comparison (#3011): 96.2% at least as good, 2.7% tied, 1.1% worse, none undefined. */
+export function chanceComparison(overrides: Partial<MeasuredChanceComparison> = {}): MeasuredChanceComparison {
+  return {
+    status: 'measured',
+    label: 'clearly_as_good',
+    sentence:
+      'In 10,000 paired resamples of these development sessions, this fit’s total return was at least as good as the current settings’ in 96.2% of paths (9,350 strictly better, 270 tied, 380 worse). That is support under this resampling model only, not a probability of a true edge.',
+    incomplete_support: false,
+    bias_note: 'This fit was selected on these same development sessions.',
+    counts: { better: 9350, tied: 270, worse: 380, undefined: 0 },
+    shares: { better: 0.935, tied: 0.027, worse: 0.038, undefined: 0 },
+    at_least_as_good: { count: 9620, share: 0.962 },
+    candidate_range: { p5: 0.031, p50: 0.089, p95: 0.152, finite: 10_000 },
+    difference_range: { p5: 0.019, p50: 0.037, p95: 0.066, finite: 10_000 },
+    basis: CHANCE_BASIS,
+    ...overrides,
+  };
+}
+
+/** A measured profitability (#3011): positive on 97.4% of the fit's own resampled paths. */
+export function chanceProfitability(overrides: Partial<MeasuredChanceProfitability> = {}): MeasuredChanceProfitability {
+  return {
+    status: 'measured',
+    label: 'clearly_positive',
+    sentence: 'The recorded development outcome resamples to a compounded net return positive in 97.4% of 10,000 resampled development paths (60 exactly flat, 200 negative). This is the model’s spread of what was recorded, not a forecast.',
+    counts: { positive: 9740, zero: 60, negative: 200, undefined: 0 },
+    shares: { positive: 0.974, zero: 0.006, negative: 0.02, undefined: 0 },
+    basis: { ...CHANCE_BASIS, schema_version: 'golden-search-chance-profitability/v1' },
+    ...overrides,
+  };
+}
+
+/** One fit's development chance readings (#3011-#3013); every component measured unless overridden. */
+export function chanceReadings(overrides: Partial<ChanceReadings> = {}): ChanceReadings {
+  return {
+    comparison: chanceComparison(),
+    profitability: chanceProfitability(),
+    rehearsal: chanceRehearsal(),
+    drawdown: chanceDrawdown(),
+    ...overrides,
+  };
+}
+
+/** A measured carry-over (#3014): rank 0.62 among 10,000 reproduced rehearsals unless overridden. */
+export function chanceCarryOver(overrides: Partial<MeasuredChanceCarryOver> = {}): MeasuredChanceCarryOver {
+  return {
+    status: 'measured',
+    label: 'middle',
+    rank: 0.6221,
+    below: 6221,
+    finite: 10_000,
+    undefined: 0,
+    recorded_objective: 0.031,
+    curve: { p: Array.from({ length: 99 }, (_, i) => -0.02 + (i / 98) * 0.09), finite: 10_000 },
+    sentence: 'The recorded final total return sits inside the middle of the development rehearsals: strictly above 6,221 of the 10,000 defined rehearsal paths (62.2%), 0 undefined. This is conditional on the resampling model: a high rank is not the model proving itself right, and a low rank is not proof that bad luck is ruled out.',
+    selection_note: 'This fit was chosen after the final test, from the fits that ran, and was selected by a search over the development data. Its support is unadjusted for both selections and is not a calibrated error rate or a probability of a true edge.',
+    basis: {
+      schema_version: 'golden-search-chance-carry-over/v1',
+      rehearsal_schema: 'golden-search-chance-rehearsal/v1',
+      seed: { inputs: ['golden-search-chance-rehearsal/v1', DEVELOPMENT_START_MS, FINAL_START_MS, 'total_return_pct', 'h-all', 'h-inc', 1], value: 987654321 },
+      scheduled_sessions: 21,
+      objective: { measure: 'total_return_pct', label: 'total return', units: 'fraction of the starting capital' },
+      source_digest: 'd-all',
+    },
+    ...overrides,
+  };
+}
+
+/** A measured fit-to-fit comparison (#3014): 68.4% at least as good unless overridden. */
+export function chanceFitToFit(overrides: Partial<MeasuredChanceFitToFit> = {}): MeasuredChanceFitToFit {
+  return {
+    status: 'measured',
+    pair: ['aaaa', 'zzzz'],
+    counts: { better: 6602, tied: 238, worse: 3160, undefined: 0 },
+    shares: { better: 0.6602, tied: 0.0238, worse: 0.316, undefined: 0 },
+    at_least_as_good: { count: 6840, share: 0.684 },
+    sentence: 'In 10,000 paired resamples of the final sessions, All-period fit was at least as good as Recent fit in 68.4% of paths (6,602 better, 238 tied, 3,160 worse). Both selections were made after these results were viewed; this is not adjusted for that choice.',
+    selection_note: 'This fit was chosen after the final test, from the fits that ran, and was selected by a search over the development data. Its support is unadjusted for both selections and is not a calibrated error rate or a probability of a true edge.',
+    basis: {
+      schema_version: 'golden-search-chance-fit-to-fit/v1',
+      convention: 'stationary-bootstrap/v1',
+      replications: 10_000,
+      mean_block_sessions: 5,
+      thresholds: { clear: 0.95 },
+      objective: { measure: 'total_return_pct', label: 'total return', units: 'fraction of the starting capital' },
+      seed: { inputs: ['golden-search-chance-fit-to-fit/v1', FINAL_START_MS, FINAL_START_MS + 2_592_000_000, 'total_return_pct', 'aaaa', 'zzzz'], value: 13579 },
+      source: { window: { start_ms: FINAL_START_MS, end_ms: FINAL_START_MS + 2_592_000_000 }, session_count: 21, point_hashes: ['aaaa', 'zzzz'], series_digests: ['d-a', 'd-z'], capital: 100000 },
+    },
+    ...overrides,
+  };
+}
+
+/** The two-selection caveat the exam's final-window readings carry instead of the development bias note (#3014). */
+export const FINAL_SELECTION_NOTE =
+  'This fit was chosen after the final test, from the fits that ran, and was selected by a search over the development data. Its support is unadjusted for both selections and is not a calibrated error rate or a probability of a true edge.';
+
+/** One tested fit's final chance components (#3014), its sentences worded for the final window. */
+export function finalChance(overrides: Partial<FinalChance> = {}): FinalChance {
+  return {
+    comparison: chanceComparison({
+      basis: { ...chanceComparison().basis, source: { ...chanceComparison().basis.source, window: { start_ms: FINAL_START_MS, end_ms: FINAL_START_MS + 2_592_000_000 } } },
+      // The final panel's sentences name the window they resampled: the final sessions, never development ones.
+      sentence:
+        'In 10,000 paired resamples of these final sessions, this fit’s total return was at least as good as the current settings’ in 96.2% of paths (9,350 strictly better, 270 tied, 380 worse). That is support under this resampling model only, not a probability of a true edge.',
+      bias_note: FINAL_SELECTION_NOTE,
+    }),
+    profitability: chanceProfitability({
+      sentence:
+        'The recorded final outcome resamples to a compounded net return positive in 97.4% of 10,000 resampled final paths (60 exactly flat, 200 negative). This is the model’s spread of what was recorded, not a forecast.',
+    }),
+    carry_over: chanceCarryOver(),
+    ...overrides,
+  };
+}
+
+/** A measured drawdown reading (#3013): a 15.8% 95th-percentile range against a 20% ceiling unless overridden. */
+export function chanceDrawdown(overrides: Partial<MeasuredChanceDrawdown> = {}): MeasuredChanceDrawdown {
+  return {
+    status: 'measured',
+    recorded_close_only: 0.15,
+    recorded_engine_per_bar: 0.164,
+    percentiles: { p50: 0.092, p95: 0.158, finite: 10_000 },
+    counts: { beyond_ceiling: 0, within_ceiling: 10_000, undefined: 0 },
+    shares: { beyond_ceiling: 0, within_ceiling: 1, undefined: 0 },
+    sentence: 'The 95th percentile of resampled session-close falls is 15.8%, within the 20% ceiling.',
+    concern: false,
+    basis: {
+      schema_version: 'golden-search-chance-drawdown/v1',
+      convention: 'stationary-bootstrap/v1',
+      replications: 10_000,
+      chunk_replications: 1_000,
+      mean_block_sessions: 5,
+      thresholds: { ceiling: 0.2 },
+      horizon: { window: { start_ms: DEVELOPMENT_START_MS, end_ms: FINAL_START_MS }, scheduled_sessions: 62 },
+      seed: { inputs: ['golden-search-chance-drawdown/v1', DEVELOPMENT_START_MS, FINAL_START_MS, 'h-all'], value: 424242 },
+      source: { point_hash: 'h-all', series_digest: 'd-all', capital: 100000, recorded_engine_per_bar: 0.164 },
+    },
+    ...overrides,
+  };
+}
+
+/** A measured rehearsal rung (#3012): its pass counts over 10,000 paths unless overridden. */
+export function rehearsalRung(k: number, overrides: Partial<ChanceRehearsalRung> = {}): ChanceRehearsalRung {
+  const joint = [6120, 7480, 8150, 8390][k - 1] ?? 6000;
+  const perRule = {
+    positive_net: [9210, 9540, 9680, 9750][k - 1] ?? 9000,
+    drawdown: [7810, 9020, 9410, 9580][k - 1] ?? 8000,
+    exits: [8840, 9610, 9800, 9880][k - 1] ?? 9000,
+    objective: [7020, 8330, 8890, 9150][k - 1] ?? 7000,
+  };
+  const sessions = 21 * k;
+  const floor = [9, 18, 27, 36][k - 1] ?? 9;
+  const denominator = 10_000;
+  return {
+    k,
+    sessions,
+    trade_floor: floor,
+    denominator,
+    passes: { pass_joint: joint, pass_positive_net: perRule.positive_net, pass_drawdown: perRule.drawdown, pass_exits: perRule.exits, pass_objective: perRule.objective },
+    undefined: { undefined_positive_net: 0, undefined_drawdown: 0, undefined_objective: 0 },
+    shares: {
+      joint: joint / denominator,
+      positive_net: perRule.positive_net / denominator,
+      drawdown: perRule.drawdown / denominator,
+      exits: perRule.exits / denominator,
+      objective: perRule.objective / denominator,
+    },
+    ...overrides,
+  };
+}
+
+/** A measured rehearsal ladder (#3012): rising joint support with a 61.2% 1× rung unless overridden. */
+export function chanceRehearsal(overrides: Partial<MeasuredChanceRehearsal> = {}): MeasuredChanceRehearsal {
+  const rungs = [1, 2, 3, 4].map((k) => rehearsalRung(k));
+  return {
+    status: 'measured',
+    rungs,
+    active_rules: ['positive_net', 'drawdown', 'exits', 'objective'],
+    guidance:
+      "At the final test's own length, 61% of resamples meet every modeled rule; the limit is the objective comparison with the current settings (70%) and the session-close drawdown rule (78%). The 2× rung reaches the 80% target (75%). The 80% target is the owner's reading heuristic, not a power calculation.",
+    objective_percentiles_1x: { p: Array.from({ length: 99 }, (_, i) => -0.02 + (i / 98) * 0.14), finite: 10_000 },
+    basis: {
+      schema_version: 'golden-search-chance-rehearsal/v1',
+      convention: 'stationary-bootstrap/v1',
+      replications: 10_000,
+      chunk_replications: 1_000,
+      mean_block_sessions: 5,
+      thresholds: { rehearsal_target: 0.8 },
+      objective: { measure: 'total_return_pct', label: 'total return', units: 'fraction of the starting capital' },
+      rules: { max_drawdown_ceiling: 0.2, require_positive_net: true, drawdown_basis: 'session closes' },
+      activity: { frequency_based: true, expected_trades_per_year: 50, final_trading_years: 0.084 },
+      final_interval: { window: { start_ms: FINAL_START_MS, end_ms: FINAL_START_MS + 2_592_000_000 }, scheduled_sessions: 21 },
+      source: {
+        window: { start_ms: DEVELOPMENT_START_MS, end_ms: FINAL_START_MS },
+        session_count: 62,
+        candidate_point_hash: 'h-all',
+        incumbent_point_hash: 'h-inc',
+        series_digest: { candidate: 'd-all', incumbent: 'd-inc' },
+        capital: 100000,
+      },
+      seeds: Object.fromEntries([1, 2, 3, 4].map((k) => [`${k}x`, { inputs: ['golden-search-chance-rehearsal/v1', DEVELOPMENT_START_MS, FINAL_START_MS, 'total_return_pct', 'h-all', 'h-inc', k], value: 1000 + k }])),
+    },
+    ...overrides,
+  };
+}
+
 export function evidenceCandidate(key: CandidateKey, overrides: Partial<EvidenceCandidate> = {}): EvidenceCandidate {
   const base: Record<CandidateKey, EvidenceCandidate> = {
     all_period: {
@@ -555,6 +790,7 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
       trades_per_year: 73,
       stress_tally: { in_profit: 1, recorded: 1, scenarios: 1 },
       concentration: concentration({ without_best_month: 6800, best_trades_net_profit: 3300, without_best_trades: 5400 }),
+      chance: chanceReadings(),
       guidance: { title: 'Prefer evidence that survives small changes', text: 'Less return than the recent fit, with lower drawdown and several useful neighbors.' },
       flags: [],
       params_sentence: 'Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars',
@@ -575,6 +811,45 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
       trades_per_year: 45.5,
       stress_tally: { in_profit: 0, recorded: 0, scenarios: 0 },
       concentration: concentration({ status: 'concern', net_profit: 11600, trades: 91, without_best_month: 2100, best_trades_net_profit: 12000, without_best_trades: -400 }),
+      chance: chanceReadings({
+        comparison: chanceComparison({
+          label: 'mixed',
+          sentence:
+            'In 10,000 paired resamples of these development sessions, this fit’s total return was at least as good as the current settings’ in 61.4% of paths and strictly worse in 37.9% (5,900 better, 240 tied, 3,790 worse). The resampling model does not clearly separate the two settings.',
+          incomplete_support: true,
+          counts: { better: 5900, tied: 240, worse: 3790, undefined: 70 },
+          shares: { better: 0.59, tied: 0.024, worse: 0.379, undefined: 0.007 },
+          at_least_as_good: { count: 6140, share: 0.614 },
+          candidate_range: { p5: -0.048, p50: 0.112, p95: 0.301, finite: 10_000 },
+          difference_range: { p5: -0.071, p50: 0.021, p95: 0.118, finite: 9_930 },
+        }),
+        profitability: chanceProfitability({ label: 'mixed', counts: { positive: 6310, zero: 40, negative: 3650, undefined: 0 }, shares: { positive: 0.631, zero: 0.004, negative: 0.365, undefined: 0 } }),
+        drawdown: chanceDrawdown({
+          recorded_close_only: 0.148,
+          recorded_engine_per_bar: null,
+          percentiles: { p50: 0.121, p95: 0.241, finite: 9_980 },
+          counts: { beyond_ceiling: 1_740, within_ceiling: 8_240, undefined: 20 },
+          shares: { beyond_ceiling: 0.174, within_ceiling: 0.824, undefined: 0.002 },
+          sentence: 'The 95th percentile of resampled session-close falls is 24.1%, beyond the 20% ceiling — a research concern under this model. 17.4% of resamples fall strictly beyond the ceiling and 0.2% leave the fall undefined.',
+          concern: true,
+        }),
+        rehearsal: chanceRehearsal({
+          rungs: [1, 2, 3, 4].map((k) =>
+            rehearsalRung(k, {
+              passes: { pass_joint: [2380, 2050, 1870, 1740][k - 1] ?? 2000, pass_positive_net: [3510, 3120, 2900, 2760][k - 1] ?? 3000, pass_drawdown: [7210, 6880, 6640, 6480][k - 1] ?? 7000, pass_exits: [4390, 4020, 3810, 3660][k - 1] ?? 4000, pass_objective: [3010, 2830, 2710, 2620][k - 1] ?? 3000 },
+              shares: {
+                joint: ([2380, 2050, 1870, 1740][k - 1] ?? 2000) / 10_000,
+                positive_net: ([3510, 3120, 2900, 2760][k - 1] ?? 3000) / 10_000,
+                drawdown: ([7210, 6880, 6640, 6480][k - 1] ?? 7000) / 10_000,
+                exits: ([4390, 4020, 3810, 3660][k - 1] ?? 4000) / 10_000,
+                objective: ([3010, 2830, 2710, 2620][k - 1] ?? 3000) / 10_000,
+              },
+            }),
+          ),
+          guidance:
+            "At the final test's own length, 24% of resamples meet every modeled rule; the limit is the objective comparison with the current settings (30%) and the positive-net rule (35%). No rung reaches the 80% target; the highest is 24% at 1×. Support does not rise with length on this ladder — a longer rehearsal of the same development outcome is not a better one. The 80% target is the owner's reading heuristic, not a power calculation.",
+        }),
+      }),
       guidance: { title: 'The extra return comes with a warning', text: 'The largest development return also exceeds your drawdown ceiling.' },
       flags: [{ code: 'DRAWDOWN_ABOVE_CEILING', text: 'Above 12% limit' }],
       params_sentence: 'Gap $0.10 · RSI 45–70 · EMA 5/10 · hold 3 bars',
@@ -596,6 +871,17 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
       stress_tally: { in_profit: 0, recorded: 0, scenarios: 0 },
       // Evidence recorded before the evidence stage measured concentration.
       concentration: { status: 'missing', reason: 'Not measured for this study: its evidence was recorded before concentration was measured.' },
+      // The current settings are the baseline every fit is compared against, never with themselves.
+      chance: {
+        comparison: {
+          status: 'baseline',
+          sentence: 'The current settings are the baseline every fit is compared against. They are not compared with themselves.',
+          basis: { ...CHANCE_BASIS, source: { window: { start_ms: DEVELOPMENT_START_MS, end_ms: FINAL_START_MS }, session_count: 62 } } satisfies ChanceBasis,
+        },
+        profitability: { status: 'missing', code: 'not_measured', reason: 'The current settings’ own profitability is not measured; every fit’s readings stand against them.' },
+        rehearsal: { status: 'missing', code: 'baseline', reason: 'The current settings are the baseline; a rehearsal compares a fit against them, and there is nothing to rehearse.' },
+        drawdown: chanceDrawdown({ recorded_close_only: 0.102, recorded_engine_per_bar: 0.098, percentiles: { p50: 0.064, p95: 0.119, finite: 10_000 } }),
+      },
       guidance: { title: 'No change can be the best decision', text: 'Keeping the incumbent is a complete research decision.' },
       flags: [],
       params_sentence: 'Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars',
@@ -798,6 +1084,7 @@ const FIT_DEFAULTS: Readonly<Record<'all_period' | 'recent', Omit<ExamFit, 'weak
     ],
     retention: 0.61,
     metrics: metrics({ total_return_pct: 0.018, max_drawdown_pct: 0.031, total_trades: 36, sharpe_ratio: 0.91 }),
+    chance: finalChance(),
   },
   recent: {
     key: 'recent',
@@ -813,6 +1100,17 @@ const FIT_DEFAULTS: Readonly<Record<'all_period' | 'recent', Omit<ExamFit, 'weak
     ],
     retention: 0.46,
     metrics: metrics({ total_return_pct: 0.012, max_drawdown_pct: 0.052, total_trades: 33, sharpe_ratio: 0.66 }),
+    chance: finalChance({
+      comparison: chanceComparison({
+        label: 'mixed',
+        sentence:
+          'In 10,000 paired resamples of these final sessions, this fit’s total return was at least as good as the current settings’ in 58.2% of paths and strictly worse in 41.5% (4,120 better, 1,700 tied, 4,150 worse). The resampling model does not clearly separate the two settings.',
+        counts: { better: 4120, tied: 1700, worse: 4150, undefined: 30 },
+        shares: { better: 0.412, tied: 0.17, worse: 0.415, undefined: 0.003 },
+        at_least_as_good: { count: 5820, share: 0.582 },
+      }),
+      carry_over: chanceCarryOver({ rank: 0.0412, below: 412, label: 'below_most', sentence: 'The recorded final total return sits below most development rehearsals: strictly above 412 of the 10,000 defined rehearsal paths (4.1%), 0 undefined. This is conditional on the resampling model: a high rank is not the model proving itself right, and a low rank is not proof that bad luck is ruled out.' }),
+    }),
   },
 };
 
@@ -834,6 +1132,7 @@ export function examView(overrides: Partial<ExamView> = {}, allPeriod: Partial<E
     window: { start_ms: FINAL_START_MS, end_ms: FINAL_END_MS },
     ...claim,
     incumbent_metrics: metrics({ total_return_pct: 0.009, max_drawdown_pct: 0.042, total_trades: 39, sharpe_ratio: 0.54 }),
+    chance: { fit_to_fit: chanceFitToFit() },
     pick: 'after_test',
     chosen_key: chosen,
     selection_note: fits.length < 2 ? null : chosen === null ? UNDECIDED_NOTE : CHOSEN_NOTE,

@@ -829,6 +829,129 @@ Hover a bar to see its net return, its change from the top bar, its worst fall, 
 
 A bridge engineer tests a bridge with more weight than it should ever carry. If it still stands, the extra margin gives confidence. Here the extra weight is higher costs and slower fills.
 
+### Development uncertainty {#chance-comparison}
+
+#### The question it answers
+
+When the recorded development sessions are resampled, how often is this fit at least as good as the current settings?
+
+#### What you're looking at
+
+A horizontal band showing the middle 90% of resampled differences between the selected fit and the current settings, with the median as a solid mark and a dashed line at zero, where the two settings tie. Beside it, a strip that counts every one of the 10,000 paired resamples as better, tied, worse or undefined, and a sentence with the share that was at least as good. Both sides of every pair are resampled over the same drawn sessions, so each resample compares like with like.
+
+This is one resampling model — a stationary bootstrap over the development sessions the engine recorded, in blocks averaging five sessions. Its shares describe that model, nothing else: they are not a probability of a true edge, not a p-value, and not adjusted for the search that selected the fit. 95% and 80% are the owner's reading thresholds. The fit was selected on these same sessions, and the search is not repeated inside the resamples, so selection bias is not corrected: even unanimous support is not a claim of a true edge.
+
+An interval that crosses zero differs visibly from one entirely above it; an all-tie or same-settings result says so plainly instead of drawing a strong-looking band; undefined paths (an objective with no defined value on a path) are counted as undefined, never as losses or wins.
+
+#### How to read it
+
+1. Read the band: the middle 90% of resampled differences between this fit and the current settings, with the median as the solid mark.
+2. The dashed line at zero is a tie. A band crossing it means the resampling model does not separate the two settings.
+3. Read the strip beside it: every one of the 10,000 resamples counted as better, tied, worse or undefined. Ties are not improvement.
+4. The sentence beneath names the share that was at least as good. 95% is the owner’s reading threshold, not a calibrated error rate.
+5. Remember what it cannot say: this fit was selected on these same sessions, and the search is not repeated inside the resamples.
+
+#### Good signs and warning signs
+
+- Good: a band entirely above zero with a small tied and undefined share.
+- Warning: a band crossing zero, or a large undefined share — the support is then incomplete.
+- Warning: a share just under the threshold. The reading distinguishes 9,499 of 10,000 from 9,500; the label comes from the raw counts.
+- Warning: an all-tie band read as improvement. A tie is a tie.
+
+#### An everyday comparison
+
+A chef's dish reheated many ways: how often is the reheated serving at least as good as the original plating? Counting the reheats tells you about the reheating, not about whether the recipe is good — and the chef already tasted this batch when choosing the dish.
+
+### Final uncertainty {#chance-final}
+
+#### The question it answers
+
+How much support does the resampling model give this fit’s frozen final result?
+
+#### What you're looking at
+
+Two bands and a curve beside the frozen outcome. The upper band is the middle 90% of resampled differences between this fit and the current settings over the final sessions, with zero as a tie; the lower band is the fit's own resampled result against break-even. The curve plots the reproduced 1× development rehearsal's objective at each of its 99 percentiles with the recorded final result marked at its actual value — a result above every finite rehearsal ranks 100%, not 99%, and the exact counts sit in the table. When two fits ran, their shared paired comparison is summarized beneath in Python's words.
+
+The frozen "meets the rules" verdict stays separate from these model-support labels. This fit was chosen after the final test, from the fits that ran, and found by a search over the development data: its support is unadjusted for both selections and is not a calibrated error rate, a probability of a true edge, or a multiplicity correction. A high rank among rehearsals is not the model proving itself right, and a low rank is not proof that bad luck is ruled out.
+
+#### How to read it
+
+1. Read the upper band: the middle 90% of resampled differences from the current settings, with zero as a tie; the band below is the fit’s own resampled result against break-even.
+2. The frozen “meets the rules” verdict at the top of the page is separate from this model support; neither relabels the other.
+3. Read the curve: the reproduced 1× development rehearsal’s objective at each percentile, with the recorded final result marked at its actual value — above every finite rehearsal is rank 100%, not 99%.
+4. Remember the selections: this fit was chosen after the final test and found by a development search; its support is unadjusted for both.
+
+#### Good signs and warning signs
+
+- Good: the difference band entirely above zero with the result band above break-even.
+- Warning: a rounded 95-of-100 share: the table's raw counts decide the label, and 9,499 of 10,000 is below the threshold while 9,500 is at it.
+- Warning: a result far outside the rehearsal curve — but read the rank as conditional on the model, never as proof of luck or its absence.
+- Warning: leaning on the fit-to-fit sentence to pick a winner: both selections were made after the results were viewed.
+
+#### An everyday comparison
+
+Reading a race's official result against the stopwatch times from practice laps: the stopwatch tells you how the recorded car ran against its own practice, not who will win the next race — and the driver was picked after seeing both.
+
+### Drawdown range {#chance-drawdown}
+
+#### The question it answers
+
+How deep could this recorded outcome’s falls run, resampled at session closes?
+
+#### What you're looking at
+
+A horizontal band from zero to the 95th percentile of the resampled session-close falls, with the median as a solid tick. Beside it, markers for the recorded fall at session closes, the engine's own bar-by-bar figure (or "not recorded" when the run kept none), and the plan's frozen ceiling as a dashed amber line — all on one percentage scale. The sentence above says whether the 95th percentile is beyond the ceiling, and the table shows how many resamples fell strictly beyond it and how many left the fall undefined.
+
+The reading resamples this run's own development sessions over the window's own length. The incumbent has a chart of its own on the same scale.
+
+#### How to read it
+
+1. Read the shaded band from zero to the 95th percentile of resampled session-close falls, with the median as the solid tick.
+2. The dashed amber line is the plan’s frozen ceiling. A 95th percentile beyond it is marked a research concern; exactly at it is within.
+3. Compare the markers: the ring is the recorded fall at session closes; the block is the engine’s own bar-by-bar figure, or “not recorded”.
+4. Remember what it is not: a maximum future loss, a safe capital amount, or sizing advice — and the engine’s figure and this one start their peaks differently, so neither bounds the other.
+
+#### Good signs and warning signs
+
+- Good: the whole band comfortably inside the ceiling, median close to the recorded falls.
+- Warning: the 95th percentile beyond the ceiling — a research concern under this model.
+- Warning: a recorded engine figure missing (—): the chart cannot compare the two conventions then.
+- Warning: reading the 95th percentile as “one path in twenty will be at least this deep”. It is a summary of this model’s paths, not a promise.
+
+#### An everyday comparison
+
+Sounding the depth of a harbour with the lines you have already sailed: it tells you how deep this charted route ran, not how deep an uncharted storm could be.
+
+### Final-test rehearsal {#chance-rehearsal}
+
+#### The question it answers
+
+If the recorded development outcome had to satisfy the final rules over a test this long, how often would it?
+
+#### What you're looking at
+
+A ladder of four rungs — one, two, three and four times the final test's scheduled session count. At each rung, the bold line shows the share of 10,000 paired resamples of the development sessions that meet every modeled final rule together: a positive net when the plan requires it, a worst fall at session closes within the frozen ceiling, resampled completed exits at or above the rung's trade floor, and an objective at least the current settings'. Thinner lines show each rule on its own, so you can see which one limits the ladder. The dashed amber line is the 80% target, the owner's reading heuristic. The sentence above the chart names the limiting rules and whether any rung reaches the target.
+
+At the final test's own length the trade floor is exactly the one the plan froze; a longer rung under an expected trade frequency scales as the frequency times the rung's trading years, rounded up once. A fixed-floor plan keeps its fixed final floor on every rung.
+
+#### How to read it
+
+1. Read the bold line first: the share of resamples meeting every modeled rule together, at 1× to 4× the final test’s scheduled sessions.
+2. The dashed amber line is the 80% target — the owner’s reading heuristic, not a power calculation.
+3. Read the thinner lines to see which rule limits the ladder; the sentence above names them. A low 1× share is not by itself a “test too short” verdict.
+4. Remember what a rung is not: an exact replay of the final test (the drawdown rule reads session closes, the real gate reads every bar), and a longer rung need not be better.
+
+#### Good signs and warning signs
+
+- Good: the bold line above the target at 1× already, with no single rule far below the rest.
+- Warning: the ladder falling as it lengthens — a longer rehearsal of the same development outcome is not a better one.
+- Warning: the trade-count line flat at zero: the modeled activity floor is out of reach at every length.
+- Warning: reading a low 1× share as "the test is too short". A weak objective, a deep drawdown or low activity can each be the limit; the sentence says which.
+
+#### An everyday comparison
+
+A dress rehearsal run at full length, double length, and beyond: it tells you how the recorded cast holds up under a longer run of the same script. It cannot tell you how opening night's audience will react, and rehearsing longer does not fix a weak script.
+
 ### Stress and neighbor equity {#candidate-curves}
 
 #### The question it answers

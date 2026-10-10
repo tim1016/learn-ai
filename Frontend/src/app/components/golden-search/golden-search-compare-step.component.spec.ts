@@ -144,6 +144,23 @@ describe('GoldenSearchCompareStepComponent', () => {
     expect(steps).toEqual(['decision']);
   });
 
+  it('the development-uncertainty panel follows the selected fit only: each fit reads its own stored reading, never another’s', async () => {
+    await renderStep();
+
+    expect(screen.getByText(/at least as good as the current settings’ in 96\.2% of paths/i)).toBeTruthy();
+    expect(screen.getByRole('img', { name: /Share of 10,000 paired resamples/i })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /recent fit/i }));
+
+    expect(screen.getByText(/does not clearly separate the two settings/i)).toBeTruthy();
+    expect(screen.getByText(/70 of 10,000 paths left the comparison undefined/i)).toBeTruthy();
+
+    fireEvent.click(within(candidateCard(/^current settings/i)).getByRole('button'));
+
+    expect(screen.getByText('The current settings are the baseline every fit is compared against. They are not compared with themselves.')).toBeTruthy();
+    expect(screen.queryByRole('img', { name: /Share of 10,000 paired resamples/i })).toBeNull();
+  });
+
   it('a final test the server will not open stays closed and says why', async () => {
     const reason = 'Every fit returned the current settings, so there is nothing to test. Use Keep current settings to finish.';
     const { steps } = await renderStep(studyDetail('awaiting_candidate', { permitted_actions: ['retain', 'revise', 'close'], action_refusals: { open_exam: reason } }));
@@ -230,13 +247,13 @@ describe('GoldenSearchCompareStepComponent', () => {
     ]);
 
     // A study poll brings a new study object with the same runs and evidence: nothing is read or redrawn again.
-    // Eight charts on the step (the stress and neighbor curves among them), and the Trades tab's five.
+    // Eleven charts on the step (the stress, neighbor, chance-uncertainty, rehearsal and drawdown charts among them), and the Trades tab's five.
     const live = () => charts.filter((chart) => !chart.disposed);
-    await waitFor(() => expect(live()).toHaveLength(13));
+    await waitFor(() => expect(live()).toHaveLength(16));
     view.fixture.componentRef.setInput('study', { ...studyDetail('awaiting_candidate') });
     await view.fixture.whenStable();
     expect(service.candidate).toHaveBeenCalledTimes(3);
-    expect(live().map((chart) => chart.options.length)).toEqual(Array.from({ length: 13 }, () => 1));
+    expect(live().map((chart) => chart.options.length)).toEqual(Array.from({ length: 16 }, () => 1));
     expect(service.curveSet).toHaveBeenCalledTimes(1);
   });
 

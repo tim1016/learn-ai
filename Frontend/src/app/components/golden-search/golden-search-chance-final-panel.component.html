@@ -1,0 +1,55 @@
+<app-golden-search-panel chart="chance-final">
+  @if (comparisonMeasured(); as c) {
+    <p class="sentence" role="note">{{ c.sentence }}</p>
+    @if (intervalsSpec(); as s) {
+      <app-golden-search-chart [spec]="s" [height]="150" />
+    }
+    @if (moneyText(); as money) {
+      <p class="money">{{ money }}</p>
+    }
+    <p caption class="caption">
+      Middle 90% of resampled differences — not a confidence interval. The frozen "meets the rules" verdict above is
+      separate from this model support. {{ c.bias_note }}
+    </p>
+  }
+  @if (comparisonNote(); as n) {
+    @switch (n.kind) {
+      @case ('failed') {
+        <p class="diagnostic" role="alert">{{ n.text }}</p>
+      }
+      @default {
+        <p class="muted" role="note">{{ n.text }}</p>
+      }
+    }
+  }
+  @if (carryMeasured(); as k) {
+    <h4 class="sub">Where the recorded result sits among its own rehearsals</h4>
+    <p class="sentence" role="note">{{ k.sentence }}</p>
+    @if (carrySpec(); as s) {
+      <app-golden-search-chart [spec]="s" [height]="220" />
+    }
+    <p caption class="caption">{{ k.selection_note }} The curve plots the rehearsal's percentiles; joining them would fake an equity path, so it is never drawn as one.</p>
+  }
+  @if (carryNote(); as n) {
+    <h4 class="sub">Where the recorded result sits among its own rehearsals</h4>
+    @switch (n.kind) {
+      @case ('failed') {
+        <p class="diagnostic" role="alert">{{ n.text }}</p>
+      }
+      @default {
+        <p class="muted" role="note">{{ n.text }}</p>
+      }
+    }
+  }
+  @if (fitToFitSentence(); as f) {
+    <h4 class="sub">The two fits against each other</h4>
+    <p class="sentence" role="note">{{ f }}</p>
+  }
+  @if (fitToFitFailed(); as f) {
+    <h4 class="sub">The two fits against each other</h4>
+    <p class="diagnostic" role="alert">{{ f }}</p>
+  }
+  @if (nothingMeasured()) {
+    <p class="muted" role="note">No final uncertainty was measured for this fit.</p>
+  }
+</app-golden-search-panel>
