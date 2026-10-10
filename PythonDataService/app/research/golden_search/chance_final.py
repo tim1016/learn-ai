@@ -571,6 +571,16 @@ def _invalid_share_record(component: str, record: Mapping[str, Any], scope: Fina
         # value, so the difference range may cover fewer paths than the counts defined — never more.
         if reason := _checked_range(record.get("difference_range"), name="difference range", finite_maximum=defined):
             return reason
+    else:
+        # The compounded-net range is optional — a stored reading from before #3026 carries none, and it is never
+        # backfilled — but a range that is present must name its own quantity, never the objective's units.
+        net_range = record.get("net_return_range")
+        if net_range is not None:
+            quantity = net_range.get("quantity") if isinstance(net_range, Mapping) else None
+            if not isinstance(net_range, Mapping) or not isinstance(quantity, Mapping) or quantity.get("measure") != "compounded_net_return" or quantity.get("units") != "fraction of the starting capital":
+                return "its net-return range does not name the compounded net return it claims to hold"
+            if reason := _checked_range(net_range, name="net-return range", finite_maximum=replications):
+                return reason
     return None
 
 

@@ -3,8 +3,8 @@ import { ChangeDetectionStrategy, Component, computed, input } from '@angular/co
 import { GoldenSearchChartComponent } from './charts/golden-search-chart.component';
 import { GoldenSearchPanelComponent } from './charts/golden-search-panel.component';
 import { sameChart } from './charts/golden-search-chart-spec';
-import { carryOverSpec, finalIntervalsSpec, fitToFitText } from './golden-search-chance-final-charts';
-import type { CandidateRef, ChanceComparison, ExamChance, FinalChance, MeasuredChanceCarryOver, MeasuredChanceComparison } from './golden-search.types';
+import { carryOverSpec, finalIntervalsSpec, finalProfitSpec, fitToFitText, type ProfitabilityWithRange } from './golden-search-chance-final-charts';
+import type { CandidateRef, ChanceComparison, ChanceProfitability, ExamChance, FinalChance, MeasuredChanceCarryOver, MeasuredChanceComparison } from './golden-search.types';
 
 /** Any per-component stored reading: measured, named-missing, or failed with its own sentence. */
 type ChanceReading = FinalChance['carry_over'];
@@ -16,17 +16,22 @@ interface UnmeasuredNote {
 }
 
 /**
- * The decision step's final-uncertainty panel (#3014): the selected fit's
- * resampling support beside its frozen outcome — the middle-90% difference
- * band and the fit's own middle-90% result band against break-even, the
- * reproduced 1× rehearsal's percentile curve with the recorded final result
- * marked at its actual value, and the optional fit-to-fit comparison when
- * two fits ran. Every count, share, range, rank and sentence is the
- * server's; the browser formats and draws. A component the server could not
- * measure says why in its own words, a failed one raises its sentence as an
- * alert — neither renders as absence. The frozen "meets the rules" verdict
- * stays visually separate, the rank never truncates to the plotted range,
- * and the chosen-after-the-test caveat stays visible.
+ * The decision step's final-uncertainty panel (#3014, #3026): the selected fit's
+ * resampling support beside its frozen outcome — the middle-90% difference band
+ * and the fit's own objective band in the objective's units, the independent
+ * compounded-net-return band against actual break-even in its own chart and
+ * units, the reproduced 1× rehearsal's percentile curve with the recorded final
+ * result marked at its actual value, and the optional fit-to-fit comparison
+ * when two fits ran. Every count, share, range, rank and sentence is the
+ * server's; the browser formats and draws. The profit readings stand on their
+ * own — a missing or failed incumbent comparison never hides measured profit,
+ * and a missing or failed profit reading shows its own reason beside a valid
+ * comparison — and the money-support row itself exists only when the frozen
+ * plan requires a positive net. A component the server could not measure says
+ * why in its own words, a failed one raises its sentence as an alert — neither
+ * renders as absence. The frozen "meets the rules" verdict stays visually
+ * separate, the rank never truncates to the plotted range, and the
+ * chosen-after-the-test caveat stays visible.
  */
 @Component({
   selector: 'app-golden-search-chance-final-panel',
@@ -42,12 +47,27 @@ export class GoldenSearchChanceFinalPanelComponent {
   readonly chance = input.required<FinalChance>();
   /** The exam-level chance record: the optional fit-to-fit comparison. */
   readonly examChance = input.required<ExamChance>();
+  /** The frozen plan's positive-net rule, read from the study — never inferred from a metric (#3026). */
+  readonly positiveNetRequired = input.required<boolean>();
 
   protected readonly comparisonMeasured = computed<MeasuredChanceComparison | null>(() => {
     const comparison = this.chance().comparison;
     return comparison.status === 'measured' ? comparison : null;
   });
   protected readonly comparisonNote = computed<UnmeasuredNote | null>(() => describeUnmeasured(this.chance().comparison));
+
+  protected readonly profitabilityMeasured = computed(() => {
+    const profitability = this.chance().profitability;
+    return profitability.status === 'measured' ? profitability : null;
+  });
+  protected readonly profitabilityNote = computed<UnmeasuredNote | null>(() => describeUnmeasured(this.chance().profitability));
+  /** The measured profitability, narrowed to the records that carry the compounded-net range (#3026). */
+  protected readonly profitabilityWithRange = computed<ProfitabilityWithRange | null>(() => {
+    const measured = this.profitabilityMeasured();
+    return measured !== null && measured.net_return_range != null ? (measured as ProfitabilityWithRange) : null;
+  });
+  /** A measured reading from before #3026: counts readable, the range simply not recorded — never fabricated. */
+  protected readonly rangeNotRecorded = computed(() => this.profitabilityMeasured() !== null && this.profitabilityWithRange() === null);
 
   protected readonly carryMeasured = computed<MeasuredChanceCarryOver | null>(() => {
     const carry = this.chance().carry_over;
@@ -64,6 +84,14 @@ export class GoldenSearchChanceFinalPanelComponent {
     { equal: sameChart },
   );
 
+  protected readonly profitSpec = computed(
+    () => {
+      const profitability = this.profitabilityWithRange();
+      return profitability === null ? null : finalProfitSpec(this.candidate(), profitability, this.candidate().key);
+    },
+    { equal: sameChart },
+  );
+
   protected readonly carrySpec = computed(
     () => {
       const carry = this.carryMeasured();
@@ -71,12 +99,6 @@ export class GoldenSearchChanceFinalPanelComponent {
     },
     { equal: sameChart },
   );
-
-  /** The profit line's words when profitability was measured, as Python recorded them. */
-  protected readonly moneyText = computed(() => {
-    const profitability = this.chance().profitability;
-    return profitability.status === 'measured' ? profitability.sentence : null;
-  });
 
   /** The fit-to-fit sentence, in Python's words, when two distinct fits ran. */
   protected readonly fitToFitSentence = computed(() => {
@@ -95,7 +117,7 @@ export class GoldenSearchChanceFinalPanelComponent {
 }
 
 /** A stored reading the panel cannot chart, in the server's words: failed raises an alert, the rest read as notes. */
-function describeUnmeasured(reading: ChanceComparison | ChanceReading): UnmeasuredNote | null {
+function describeUnmeasured(reading: ChanceComparison | ChanceReading | ChanceProfitability): UnmeasuredNote | null {
   if (reading.status === 'measured') return null;
   if (reading.status === 'failed') return { kind: 'failed', text: reading.sentence };
   if (reading.status === 'missing') return { kind: 'missing', text: reading.reason };

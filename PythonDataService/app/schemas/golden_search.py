@@ -1082,6 +1082,24 @@ GoldenSearchChanceComparison = Annotated[
 ]
 
 
+class GoldenSearchChanceNetReturnQuantity(_Wire):
+    """What the profitability range's numbers count — compounded net return, never the plan objective (#3026)."""
+
+    measure: Literal["compounded_net_return"]
+    label: str = Field(description="How the quantity reads in a sentence.")
+    units: str = Field(description="What one unit counts; a fraction of the starting capital.")
+
+
+class GoldenSearchChanceNetReturnRange(_Wire):
+    """The 5th/50th/95th percentiles of the resampled compounded net return, beside the counts it summarizes (#3026)."""
+
+    quantity: GoldenSearchChanceNetReturnQuantity
+    p5: float | None = Field(description="Null when no resample produced a defined compounded return.")
+    p50: float | None
+    p95: float | None
+    finite: int = Field(description="How many resamples produced a finite compounded return.")
+
+
 class GoldenSearchChanceProfitabilityMeasured(_Wire):
     """The fit's own development outcome resampled: how often the compounded net return was positive, flat or negative."""
 
@@ -1090,6 +1108,10 @@ class GoldenSearchChanceProfitabilityMeasured(_Wire):
     sentence: str
     counts: dict[str, int] = Field(description="positive, zero, negative and undefined counts over every replication.")
     shares: dict[str, float]
+    net_return_range: GoldenSearchChanceNetReturnRange | None = Field(
+        default=None,
+        description="The compounded-net-return percentiles recorded beside the counts (#3026); null when the stored reading predates them — never backfilled.",
+    )
     basis: GoldenSearchChanceBasis
 
 
@@ -1439,6 +1461,9 @@ class GoldenSearchExamView(_Wire):
     pick: Literal["before_test", "after_test"] = Field(description="Whether the owner named the fit before the test opened or after its outcomes.")
     chosen_key: CandidateKey | None = Field(description="The fit the owner named; null until an approval names one.")
     selection_note: str | None = Field(description="What the record says about a pick made with two final-test results in view; null otherwise.")
+    positive_net_required: bool = Field(
+        description="The frozen plan's positive-net rule, read from the study (#3026): it decides whether the money-support row and its approval test exist."
+    )
 
 
 class GoldenSearchDeployHandoff(_Wire):

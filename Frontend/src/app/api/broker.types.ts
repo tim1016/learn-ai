@@ -14538,6 +14538,48 @@ export interface components {
             session_count: number;
             window: components["schemas"]["GoldenSearchChanceWindow"];
         };
+        /**
+         * GoldenSearchChanceNetReturnQuantity
+         * @description What the profitability range's numbers count — compounded net return, never the plan objective (#3026).
+         */
+        GoldenSearchChanceNetReturnQuantity: {
+            /**
+             * Label
+             * @description How the quantity reads in a sentence.
+             */
+            label: string;
+            /**
+             * Measure
+             * @constant
+             */
+            measure: "compounded_net_return";
+            /**
+             * Units
+             * @description What one unit counts; a fraction of the starting capital.
+             */
+            units: string;
+        };
+        /**
+         * GoldenSearchChanceNetReturnRange
+         * @description The 5th/50th/95th percentiles of the resampled compounded net return, beside the counts it summarizes (#3026).
+         */
+        GoldenSearchChanceNetReturnRange: {
+            /**
+             * Finite
+             * @description How many resamples produced a finite compounded return.
+             */
+            finite: number;
+            /**
+             * P5
+             * @description Null when no resample produced a defined compounded return.
+             */
+            p5: number | null;
+            /** P50 */
+            p50: number | null;
+            /** P95 */
+            p95: number | null;
+            quantity: components["schemas"]["GoldenSearchChanceNetReturnQuantity"];
+        };
         /** GoldenSearchChanceObjective */
         GoldenSearchChanceObjective: {
             /**
@@ -14574,6 +14616,8 @@ export interface components {
              * @enum {string}
              */
             label: "clearly_positive" | "clearly_negative" | "mixed" | "no_defined_paths";
+            /** @description The compounded-net-return percentiles recorded beside the counts (#3026); null when the stored reading predates them — never backfilled. */
+            net_return_range?: components["schemas"]["GoldenSearchChanceNetReturnRange"] | null;
             /** Sentence */
             sentence: string;
             /** Shares */
@@ -15552,6 +15596,11 @@ export interface components {
              * @enum {string}
              */
             pick: "before_test" | "after_test";
+            /**
+             * Positive Net Required
+             * @description The frozen plan's positive-net rule, read from the study (#3026): it decides whether the money-support row and its approval test exist.
+             */
+            positive_net_required: boolean;
             /**
              * Selection Note
              * @description What the record says about a pick made with two final-test results in view; null otherwise.

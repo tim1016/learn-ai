@@ -633,6 +633,29 @@ def test_wrong_fit_window_capital_or_objective_evidence_is_rejected() -> None:
     assert stored_final_chance(_final_fit(), aliased)["comparison"]["status"] == "measured"
 
 
+def test_a_profitability_range_must_name_its_own_quantity_or_is_invalid() -> None:
+    # A range recorded by #3026 names the compounded net return in its own units; one that names the
+    # objective's measure would put Sharpe numbers on a break-even axis (#3026).
+    mislabelled = _final_fit()
+    mislabelled["chance"]["profitability"]["net_return_range"] = {
+        "quantity": {"measure": "sharpe_ratio", "label": "Sharpe ratio", "units": "annualized ratio of session returns (× √252)"},
+        "p5": -0.19, "p50": -0.09, "p95": 0.01, "finite": 10_000,
+    }
+    served = stored_final_chance(mislabelled, _SCOPE)
+    assert served["profitability"]["code"] == "invalid_record"
+    assert "compounded net return" in served["profitability"]["reason"]
+
+    recorded = _final_fit()
+    recorded["chance"]["profitability"]["net_return_range"] = {
+        "quantity": {"measure": "compounded_net_return", "label": "compounded net return", "units": "fraction of the starting capital"},
+        "p5": -0.19, "p50": -0.09, "p95": 0.01, "finite": 10_000,
+    }
+    assert stored_final_chance(recorded, _SCOPE)["profitability"]["status"] == "measured"
+    # A stored reading from before #3026 carries no range; its counts stay readable, and nothing is backfilled.
+    assert stored_final_chance(_final_fit(), _SCOPE)["profitability"]["status"] == "measured"
+    assert "net_return_range" not in stored_final_chance(_final_fit(), _SCOPE)["profitability"]
+
+
 def test_malformed_outer_mappings_and_records_never_raise_and_keep_valid_siblings() -> None:
     corrupt = stored_final_chance({"point_hash": "cafebabe", "chance": "corrupt"}, _SCOPE)
     assert {component: corrupt[component]["code"] for component in ("comparison", "profitability", "carry_over")} == {

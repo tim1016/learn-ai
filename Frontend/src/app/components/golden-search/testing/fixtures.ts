@@ -585,6 +585,13 @@ export function chanceProfitability(overrides: Partial<MeasuredChanceProfitabili
     sentence: 'The recorded development outcome resamples to a compounded net return positive in 97.4% of 10,000 resampled development paths (60 exactly flat, 200 negative). This is the model’s spread of what was recorded, not a forecast.',
     counts: { positive: 9740, zero: 60, negative: 200, undefined: 0 },
     shares: { positive: 0.974, zero: 0.006, negative: 0.02, undefined: 0 },
+    net_return_range: {
+      quantity: { measure: 'compounded_net_return', label: 'compounded net return', units: 'fraction of the starting capital' },
+      p5: 0.012,
+      p50: 0.081,
+      p95: 0.164,
+      finite: 10_000,
+    },
     basis: { ...CHANCE_BASIS, schema_version: 'golden-search-chance-profitability/v1' },
     ...overrides,
   };
@@ -1136,6 +1143,7 @@ export function examView(overrides: Partial<ExamView> = {}, allPeriod: Partial<E
     pick: 'after_test',
     chosen_key: chosen,
     selection_note: fits.length < 2 ? null : chosen === null ? UNDECIDED_NOTE : CHOSEN_NOTE,
+    positive_net_required: true,
     ...overrides,
     fits,
   };

@@ -20393,6 +20393,90 @@
         "title": "GoldenSearchChanceFitToFitSource",
         "type": "object"
       },
+      "GoldenSearchChanceNetReturnQuantity": {
+        "additionalProperties": false,
+        "description": "What the profitability range's numbers count \u2014 compounded net return, never the plan objective (#3026).",
+        "properties": {
+          "label": {
+            "description": "How the quantity reads in a sentence.",
+            "title": "Label",
+            "type": "string"
+          },
+          "measure": {
+            "const": "compounded_net_return",
+            "title": "Measure"
+          },
+          "units": {
+            "description": "What one unit counts; a fraction of the starting capital.",
+            "title": "Units",
+            "type": "string"
+          }
+        },
+        "required": [
+          "measure",
+          "label",
+          "units"
+        ],
+        "title": "GoldenSearchChanceNetReturnQuantity",
+        "type": "object"
+      },
+      "GoldenSearchChanceNetReturnRange": {
+        "additionalProperties": false,
+        "description": "The 5th/50th/95th percentiles of the resampled compounded net return, beside the counts it summarizes (#3026).",
+        "properties": {
+          "finite": {
+            "description": "How many resamples produced a finite compounded return.",
+            "title": "Finite",
+            "type": "integer"
+          },
+          "p5": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when no resample produced a defined compounded return.",
+            "title": "P5"
+          },
+          "p50": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50"
+          },
+          "p95": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95"
+          },
+          "quantity": {
+            "$ref": "#/components/schemas/GoldenSearchChanceNetReturnQuantity"
+          }
+        },
+        "required": [
+          "quantity",
+          "p5",
+          "p50",
+          "p95",
+          "finite"
+        ],
+        "title": "GoldenSearchChanceNetReturnRange",
+        "type": "object"
+      },
       "GoldenSearchChanceObjective": {
         "additionalProperties": false,
         "properties": {
@@ -20448,6 +20532,17 @@
             ],
             "title": "Label",
             "type": "string"
+          },
+          "net_return_range": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceNetReturnRange"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The compounded-net-return percentiles recorded beside the counts (#3026); null when the stored reading predates them \u2014 never backfilled."
           },
           "sentence": {
             "title": "Sentence",
@@ -22656,6 +22751,11 @@
             "title": "Pick",
             "type": "string"
           },
+          "positive_net_required": {
+            "description": "The frozen plan's positive-net rule, read from the study (#3026): it decides whether the money-support row and its approval test exist.",
+            "title": "Positive Net Required",
+            "type": "boolean"
+          },
           "selection_note": {
             "anyOf": [
               {
@@ -22681,7 +22781,8 @@
           "incumbent_metrics",
           "pick",
           "chosen_key",
-          "selection_note"
+          "selection_note",
+          "positive_net_required"
         ],
         "title": "GoldenSearchExamView",
         "type": "object"

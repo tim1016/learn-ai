@@ -2,27 +2,44 @@ import type { ChartSpec } from './charts/golden-search-chart-spec';
 import { dataIndexOf, NOT_RECORDED, tooltipFrame, tooltipHtml, type ChartTheme, type TooltipRow } from './charts/golden-search-chart-theme';
 import type { ChartOption } from './charts/golden-search-echarts';
 import { countText, objectiveTexts, shareText } from './golden-search-chance-charts';
-import type { CandidateRef, MeasuredChanceCarryOver, MeasuredChanceComparison, MeasuredChanceFitToFit } from './golden-search.types';
+import { signedPercentText } from './golden-search-display';
+import type { CandidateRef, MeasuredChanceCarryOver, MeasuredChanceComparison, MeasuredChanceFitToFit, MeasuredChanceProfitability } from './golden-search.types';
 
 /**
- * The final-test chance charts (#3014): the middle-90% paired difference
- * against zero, the fit's resampled objective range against break-even, and
- * the reproduced 1× rehearsal's percentile curve with the recorded final
- * result marked. Every number is the server's — counts, shares, ranges, the
- * rank and every sentence; the browser only formats and draws. The frozen
- * "meets the rules" verdict stays visually separate from these
+ * The final-test chance charts (#3014, #3026): the middle-90% paired
+ * difference and the fit's own resampled objective range — both in the
+ * objective's units, against a zero labelled honestly for each quantity —
+ * plus the independent compounded-net-return range against actual
+ * break-even, in its own chart and its own units: a positive Sharpe can
+ * compound to a loss, so the objective's zero and the profit's break-even
+ * are never one axis. Every number is the server's — counts, shares,
+ * ranges, the rank and every sentence; the browser only formats and draws.
+ * The frozen "meets the rules" verdict stays visually separate from these
  * model-support labels, the rank never truncates to the plotted 1–99 range,
  * and the percentile curve is never joined into a synthetic equity path.
  */
 
 const DIFFERENCE_ROW = 'Difference from the current settings';
-const RANGE_ROW = 'Resampled result, middle 90%';
+const RANGE_ROW = 'Resampled objective, middle 90%';
+const NET_RETURN_ROW = 'Compounded net return, middle 90%';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- echarts' series union through ComposeOption cannot be indexed here.
 type FinalSeries = any;
 
-function rangeBand(counts: { p5: number | null; p50: number | null; p95: number | null }, row: string, theme: ChartTheme): FinalSeries[] {
-  const has = counts.p5 !== null && counts.p50 !== null && counts.p95 !== null;
+interface IntervalRow {
+  readonly row: string;
+  readonly range: { p5: number | null; p50: number | null; p95: number | null };
+  readonly zero: string;
+  readonly note: string;
+}
+
+/** What zero means on the fit's own objective range: break-even for return quantities, never for a ratio (#3026). */
+function objectiveZero(measure: string): string {
+  return measure === 'sharpe_ratio' ? 'zero Sharpe' : 'break-even';
+}
+
+function rangeBand({ row, range, zero }: IntervalRow, theme: ChartTheme): FinalSeries[] {
+  const has = range.p5 !== null && range.p50 !== null && range.p95 !== null;
   return [
     {
       id: `final:range:${row}`,
@@ -31,9 +48,9 @@ function rangeBand(counts: { p5: number | null; p50: number | null; p95: number 
       data: has ? [0] : [],
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- echarts' custom-series graphic children are a union the limited ComposeOption types cannot name.
       renderItem: (_params: unknown, api: { coord: (data: number[]) => number[] }): any => {
-        const lowX = api.coord([counts.p5 as number])[0];
-        const highX = api.coord([counts.p95 as number])[0];
-        const medianX = api.coord([counts.p50 as number])[0];
+        const lowX = api.coord([range.p5 as number])[0];
+        const highX = api.coord([range.p95 as number])[0];
+        const medianX = api.coord([range.p50 as number])[0];
         const top = api.coord([0])[1] - 13;
         return {
           type: 'group',
@@ -48,14 +65,14 @@ function rangeBand(counts: { p5: number | null; p50: number | null; p95: number 
         silent: true,
         symbol: 'none',
         lineStyle: { color: theme.text, type: 'dashed', width: 1 },
-        label: { show: true, position: 'end', color: theme.textSecondary, fontSize: 10, formatter: () => (row === DIFFERENCE_ROW ? 'tie' : 'break-even') },
+        label: { show: true, position: 'end', color: theme.textSecondary, fontSize: 10, formatter: () => zero },
         data: [{ xAxis: 0 }],
       },
     },
   ];
 }
 
-function intervalOption(rows: readonly { row: string; range: { p5: number | null; p50: number | null; p95: number | null }; note: string }[], texts: { axis: (value: number) => string }, theme: ChartTheme): ChartOption {
+function intervalOption(rows: readonly IntervalRow[], texts: { axis: (value: number) => string }, theme: ChartTheme): ChartOption {
   const values = rows.flatMap(({ range }) => [range.p5, range.p50, range.p95].filter((value): value is number => value !== null));
   const min = Math.min(0, ...values);
   const max = Math.max(0, ...values);
@@ -86,34 +103,67 @@ function intervalOption(rows: readonly { row: string; range: { p5: number | null
       axisTick: { show: false },
       axisLabel: { color: theme.text, fontSize: 12, width: 160, overflow: 'truncate' },
     },
-    series: rows.flatMap(({ row, range }) => rangeBand(range, row, theme)),
+    series: rows.flatMap((row) => rangeBand(row, theme)),
   };
 }
 
-/** The difference and objective-range interval chart: both bands against zero, in the objective's units. */
+/**
+ * The objective-units interval chart: the paired difference against a tie, and the fit's own resampled
+ * objective range with its zero labelled for what it is — "zero Sharpe" for a ratio, break-even only for
+ * return quantities (#3026).
+ */
 export function finalIntervalsSpec(candidate: CandidateRef, comparison: MeasuredChanceComparison, featured: string | null): ChartSpec {
   const texts = objectiveTexts(comparison.basis.objective.measure);
+  const rows: IntervalRow[] = [
+    { row: DIFFERENCE_ROW, range: comparison.difference_range, zero: 'tie', note: 'Candidate minus incumbent on every paired resample; zero is a tie.' },
+    { row: RANGE_ROW, range: comparison.candidate_range, zero: objectiveZero(comparison.basis.objective.measure), note: `The fit's own resampled ${comparison.basis.objective.label}; zero is ${objectiveZero(comparison.basis.objective.measure)} in the objective's units — never break-even money.` },
+  ];
   return {
-    label: `${candidate.label} final uncertainty`,
+    label: `${candidate.label} final objective uncertainty`,
     summary: `Middle 90% of resampled differences from the current settings and of the fit's own resampled result, in ${comparison.basis.objective.units}.`,
     featured,
-    option: (theme) =>
-      intervalOption(
-        [
-          { row: DIFFERENCE_ROW, range: comparison.difference_range, note: 'Candidate minus incumbent on every paired resample; zero is a tie.' },
-          { row: RANGE_ROW, range: comparison.candidate_range, note: "The fit's own resampled result; zero is break-even." },
-        ],
-        texts,
-        theme,
-      ),
+    option: (theme) => intervalOption(rows, texts, theme),
     table: {
-      caption: `${candidate.label} final uncertainty over ${countText(comparison.basis.replications)} paired resamples of the final sessions`,
+      caption: `${candidate.label} final objective uncertainty over ${countText(comparison.basis.replications)} paired resamples of the final sessions`,
       columns: ['Quantity', 'Value'],
       rows: [
         { key: 'as-good', cells: ['Paths at least as good', `${countText(comparison.at_least_as_good.count)} of ${countText(comparison.basis.replications)} (${shareText(comparison.at_least_as_good.share)})`] },
         { key: 'counts', cells: ['Better / tied / worse / undefined', `${countText(comparison.counts.better)} / ${countText(comparison.counts.tied)} / ${countText(comparison.counts.worse)} / ${countText(comparison.counts.undefined)}`] },
         { key: 'diff', cells: ['Difference, 5th / median / 95th', comparison.difference_range.p5 === null ? NOT_RECORDED : `${texts.axis(comparison.difference_range.p5 as number)} / ${texts.axis(comparison.difference_range.p50 as number)} / ${texts.axis(comparison.difference_range.p95 as number)}`] },
-        { key: 'range', cells: ['Own result, 5th / median / 95th', comparison.candidate_range.p5 === null ? NOT_RECORDED : `${texts.axis(comparison.candidate_range.p5 as number)} / ${texts.axis(comparison.candidate_range.p50 as number)} / ${texts.axis(comparison.candidate_range.p95 as number)}`] },
+        { key: 'range', cells: [`Own ${comparison.basis.objective.label}, 5th / median / 95th`, comparison.candidate_range.p5 === null ? NOT_RECORDED : `${texts.axis(comparison.candidate_range.p5 as number)} / ${texts.axis(comparison.candidate_range.p50 as number)} / ${texts.axis(comparison.candidate_range.p95 as number)}`] },
+      ],
+    },
+  };
+}
+
+/**
+ * The independent money chart (#3026): the middle 90% of the fit's resampled compounded net return, in
+ * net-return units on its own axis, against actual break-even. It never shares an axis with the objective —
+ * a positive Sharpe can compound to a loss — and it renders beside profitability's own sentence and counts.
+ */
+/** A measured profitability that carries the compounded-net range #3026 records; a record without one renders no chart. */
+export type ProfitabilityWithRange = MeasuredChanceProfitability & { net_return_range: NonNullable<MeasuredChanceProfitability['net_return_range']> };
+
+export function finalProfitSpec(candidate: CandidateRef, profitability: ProfitabilityWithRange, featured: string | null): ChartSpec {
+  const texts = { axis: (value: number) => signedPercentText(value) };
+  const rows: IntervalRow[] = [
+    { row: NET_RETURN_ROW, range: profitability.net_return_range, zero: 'break-even', note: 'The compounded net return of the fit’s own resampled final paths; zero is actual break-even in money, never a Sharpe tie.' },
+  ];
+  const counts = profitability.counts;
+  return {
+    label: `${candidate.label} final profit uncertainty`,
+    summary: `Middle 90% of the fit’s resampled compounded net return, against actual break-even — independent of the ${profitability.basis.objective.label} comparison.`,
+    featured,
+    option: (theme) => intervalOption(rows, texts, theme),
+    table: {
+      caption: `${candidate.label} final profit uncertainty over ${countText(profitability.basis.replications)} resamples of the final sessions`,
+      columns: ['Quantity', 'Value'],
+      rows: [
+        { key: 'positive', cells: ['Paths with a positive net return', `${countText(counts['positive'])} (${shareText(profitability.shares['positive'])})`] },
+        { key: 'zero', cells: ['Paths exactly flat', `${countText(counts['zero'])} (${shareText(profitability.shares['zero'])})`] },
+        { key: 'negative', cells: ['Paths with a negative net return', `${countText(counts['negative'])} (${shareText(profitability.shares['negative'])})`] },
+        { key: 'undefined', cells: ['Paths undefined', `${countText(counts['undefined'])} (${shareText(profitability.shares['undefined'])})`] },
+        { key: 'range', cells: ['Compounded net return, 5th / median / 95th', `${signedPercentText(profitability.net_return_range.p5)} / ${signedPercentText(profitability.net_return_range.p50)} / ${signedPercentText(profitability.net_return_range.p95)}`] },
       ],
     },
   };

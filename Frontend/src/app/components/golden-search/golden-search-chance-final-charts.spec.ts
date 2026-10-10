@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { FAKE_CHART_THEME } from './testing/fake-charts';
-import { chanceCarryOver, chanceComparison, chanceFitToFit } from './testing/fixtures';
-import { carryOverSpec, fitToFitText, finalIntervalsSpec } from './golden-search-chance-final-charts';
+import { chanceCarryOver, chanceComparison, chanceFitToFit, chanceProfitability } from './testing/fixtures';
+import { carryOverSpec, fitToFitText, finalIntervalsSpec, finalProfitSpec } from './golden-search-chance-final-charts';
 import type { CandidateRef } from './golden-search.types';
 
 const ALL_PERIOD: CandidateRef = { key: 'all_period', label: 'All-period fit' };
@@ -17,6 +17,28 @@ describe('the final uncertainty chart specs', () => {
     expect(marks).toContain('tie');
     expect(marks).toContain('break-even');
     expect(JSON.stringify(option)).not.toContain('confidence');
+  });
+
+  it('labels the own-result zero honestly per measure: break-even only for money, zero Sharpe for a ratio (#3026)', () => {
+    const spec = finalIntervalsSpec(ALL_PERIOD, chanceComparison(), 'all_period');
+    const option = spec.option(FAKE_CHART_THEME) as { series: { markLine?: { label?: { formatter?: () => string } } }[] };
+    const marks = option.series.map((series) => series.markLine?.label?.formatter?.() ?? '');
+    expect(marks).toContain('tie');
+    expect(marks).toContain('break-even'); // the fixture objective is total return, whose zero is break-even
+    const sharpe = chanceComparison({ basis: { ...chanceComparison().basis, objective: { measure: 'sharpe_ratio', label: 'Sharpe ratio', units: 'annualized ratio of session returns (× √252)' } } });
+    const sharpeOption = finalIntervalsSpec(ALL_PERIOD, sharpe, 'all_period').option(FAKE_CHART_THEME) as { series: { markLine?: { label?: { formatter?: () => string } } }[] };
+    expect(sharpeOption.series.map((series) => series.markLine?.label?.formatter?.() ?? '')).toContain('zero Sharpe');
+    expect(JSON.stringify(sharpeOption)).not.toContain('break-even');
+  });
+
+  it('draws the compounded-net range as its own chart in percent units against actual break-even (#3026)', () => {
+    const profitability = chanceProfitability();
+    const spec = finalProfitSpec(ALL_PERIOD, profitability as Parameters<typeof finalProfitSpec>[1], 'all_period');
+    const option = spec.option(FAKE_CHART_THEME) as { series: { markLine?: { data: { xAxis: number }[]; label?: { formatter?: () => string } } }[] };
+    const marks = option.series.flatMap((series) => (series.markLine?.data ?? []).map(() => series.markLine?.label?.formatter?.() ?? ''));
+    expect(marks).toEqual(['break-even']);
+    expect(spec.summary).toContain('compounded net return');
+    expect(spec.table.rows.map((row) => row.cells.join(' ')).join('\n')).toContain('+1.2% / +8.1% / +16.4%');
   });
 
   it('marks the recorded final result at its actual value on the percentile curve', () => {

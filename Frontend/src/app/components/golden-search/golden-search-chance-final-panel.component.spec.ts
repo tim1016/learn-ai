@@ -9,20 +9,66 @@ import type { CandidateRef, ExamChance, FinalChance } from './golden-search.type
 
 const CANDIDATE: CandidateRef = { key: 'all_period', label: 'All-period fit' };
 
-async function renderPanel(chance: FinalChance, examChance: ExamChance = { fit_to_fit: chanceFitToFit() }, candidate: CandidateRef = CANDIDATE) {
+async function renderPanel(chance: FinalChance, examChance: ExamChance = { fit_to_fit: chanceFitToFit() }, candidate: CandidateRef = CANDIDATE, positiveNetRequired = true) {
   return render(GoldenSearchChanceFinalPanelComponent, {
-    inputs: { candidate, chance, examChance },
+    inputs: { candidate, chance, examChance, positiveNetRequired },
     providers: fakeCharts().providers,
   });
 }
 
 describe('GoldenSearchChanceFinalPanelComponent', () => {
-  it('shows the stored comparison sentence, both bands, the profitability line and the carry-over with its curve', async () => {
+  it('shows the stored comparison sentence, both objective bands, the independent profit band and the carry-over with its curve', async () => {
     await renderPanel(finalChance());
     expect(screen.getByText(/at least as good as the current settings’ in 96\.2% of paths/i)).toBeTruthy();
-    expect(screen.getByRole('img', { name: /final uncertainty/i })).toBeTruthy();
+    expect(screen.getByRole('img', { name: /final objective uncertainty/i })).toBeTruthy();
+    expect(screen.getByRole('img', { name: /final profit uncertainty/i })).toBeTruthy();
     expect(screen.getByRole('img', { name: /result among its rehearsals/i })).toBeTruthy();
     expect(screen.getByText(/positive in 97\.4% of 10,000 resampled final paths/i)).toBeTruthy();
+  });
+
+  it('shows measured profit when the incumbent comparison is unavailable, on its own (#3026)', async () => {
+    await renderPanel(
+      finalChance({
+        comparison: { status: 'missing', code: 'incumbent_unavailable', reason: 'The current settings’ run cannot be read, so no comparison is available; the fit’s own readings are unaffected.' },
+      }),
+    );
+    expect(screen.getByText(/no comparison is available/i)).toBeTruthy();
+    expect(screen.getByText(/positive in 97\.4% of 10,000 resampled final paths/i)).toBeTruthy();
+    expect(screen.getByRole('img', { name: /final profit uncertainty/i })).toBeTruthy();
+    expect(screen.getByRole('img', { name: /result among its rehearsals/i })).toBeTruthy();
+    expect(screen.queryByRole('img', { name: /final objective uncertainty/i })).toBeNull();
+  });
+
+  it('shows a missing or failed profit reading’s own reason beside a valid comparison (#3026)', async () => {
+    await renderPanel(
+      finalChance({
+        profitability: { status: 'failed', reason: 'ValueError: boom', sentence: 'The profitability reading could not be computed and nothing was stored: ValueError: boom.' },
+      }),
+    );
+    expect(screen.getByText(/at least as good as the current settings’ in 96\.2% of paths/i)).toBeTruthy();
+    expect(screen.getByRole('img', { name: /final objective uncertainty/i })).toBeTruthy();
+    const alert = screen.getAllByRole('alert')[0];
+    expect(alert.textContent).toContain('profitability reading could not be computed');
+  });
+
+  it('omits the money-support row entirely when the frozen plan does not require a positive net (#3026)', async () => {
+    await renderPanel(finalChance(), { fit_to_fit: chanceFitToFit() }, CANDIDATE, false);
+    expect(screen.queryByText(/positive in 97\.4% of 10,000 resampled final paths/i)).toBeNull();
+    expect(screen.queryByRole('img', { name: /final profit uncertainty/i })).toBeNull();
+    expect(screen.queryByText(/Money support/i)).toBeNull();
+    // The objective comparison and the carry-over stay.
+    expect(screen.getByText(/at least as good as the current settings’ in 96\.2% of paths/i)).toBeTruthy();
+    expect(screen.getByRole('img', { name: /result among its rehearsals/i })).toBeTruthy();
+  });
+
+  it('explains that a stored reading from before the range simply did not record one (#3026)', async () => {
+    const before = finalChance();
+    const legacy = { ...before.profitability } as typeof before.profitability;
+    if (legacy.status === 'measured') delete legacy.net_return_range;
+    await renderPanel(finalChance({ profitability: legacy }));
+    expect(screen.getByText(/predates the compounded-net range/i)).toBeTruthy();
+    expect(screen.getByText(/positive in 97\.4% of 10,000 resampled final paths/i)).toBeTruthy();
+    expect(screen.queryByRole('img', { name: /final profit uncertainty/i })).toBeNull();
   });
 
   it('names the window it resampled and carries the two-selection caveat, never the development note', async () => {

@@ -497,6 +497,8 @@ def exam_view(
         "pick": pick,
         "chosen_key": None if chosen is None else chosen["key"],
         "selection_note": selection_note(fits_tested=len(fits), picked_after_test=pick == "after_test", chosen=chosen is not None, approvable=approvable),
+        # The frozen positive-net rule, read from the study — never inferred from a metric's sign (#3026).
+        "positive_net_required": positive_net_required,
     }
 
 
