@@ -27,7 +27,7 @@ from app.models.strategy import (
     StrategyAnalyzeResponse,
     StrategyLeg,
 )
-from app.options.expiry import option_expiry_ttm_years
+from app.options.expiry import time_to_expiry_years
 from app.services.bs_greeks import black_scholes_greeks, bs_european_price
 from app.utils.timestamps import now_ms_utc
 
@@ -439,7 +439,6 @@ def compute_current_curve(
     low = spot_price * (1.0 - price_range_pct)
     high = spot_price * (1.0 + price_range_pct)
     prices = np.linspace(max(low, 0.01), high, num_points)
-    ttm_years = max(ttm_years, 0.0)
     cost = compute_strategy_cost(legs)
 
     points: list[CurrentCurvePoint] = []
@@ -475,7 +474,6 @@ def compute_greek_curves(
     low = spot_price * (1.0 - price_range_pct)
     high = spot_price * (1.0 + price_range_pct)
     prices = np.linspace(max(low, 0.01), high, num_points)
-    ttm_years = max(ttm_years, 0.0)
 
     points: list[GreekCurvePoint] = []
     for p in prices:
@@ -538,7 +536,6 @@ def compute_leg_diagnostics(
     *unsigned* values (long/short reflected in the `position` field, not the
     numbers) so the UI can format independently. Use the request quantity as-is.
     """
-    ttm_years = max(ttm_years, 0.0)
     rows: list[LegDiagnostic] = []
     for leg in legs:
         if ttm_years > 0 and leg.iv > 0:
@@ -626,7 +623,7 @@ def analyze_strategy(request: StrategyAnalyzeRequest) -> StrategyAnalyzeResponse
         # Time to expiry is measured to the expiry anchor instant (16:00 New
         # York time on the expiry date), the same instant the chain snapshot's
         # rate tenor is measured to (#2789, #2934).
-        ttm_years = option_expiry_ttm_years(request.expiration_ms, now_ms_utc())
+        ttm_years = time_to_expiry_years(request.expiration_ms, now_ms_utc())
 
         strategy_cost = compute_strategy_cost(request.legs)
 

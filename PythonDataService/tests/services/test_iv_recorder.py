@@ -27,6 +27,7 @@ from app.services.iv_recorder import (
     record_iv_snapshot,
 )
 from app.utils.session_anchors import et_date_at_ms
+from app.utils.timestamps import to_ms_utc
 
 
 def _bs_chain_payload(
@@ -36,7 +37,7 @@ def _bs_chain_payload(
     contracts = []
     for d in expiry_days:
         T = d / 365.0
-        exp_iso = (et_date_at_ms(int(asof.timestamp() * 1000)) + timedelta(days=d)).isoformat()
+        exp_iso = (et_date_at_ms(to_ms_utc(asof)) + timedelta(days=d)).isoformat()
         for k in strikes:
             for is_call in (True, False):
                 price = bs_european_price(

@@ -27,8 +27,8 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
-from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.models.requests import OptionsCompanionConfig
+from app.options.deadlines import last_session_close_ms
 from app.options.expiry import option_expiry_anchor_ms, time_to_expiry_years
 from app.services.bs_greeks import black_scholes_greeks
 from app.services.polygon_client import PolygonClientService
@@ -195,24 +195,6 @@ def _fetch_contracts_for_expiry(
     except Exception as exc:
         logger.warning(f"[OC] Contract list failed {ticker} {expiry} {contract_type}: {exc}")
         return []
-
-
-def _expiry_close_ms(expiry: date) -> int:
-    """The instant a contract's countdown ends: the expiry anchor, or the
-    calendar's session close when that comes first (#2934).
-
-    The anchor is 16:00 New York time on the expiry date — on a full session
-    that is the close, so nothing changes. On a half day the session closes at
-    13:00, and a same-day contract has only until then, not three more hours.
-    A non-session expiry date (no listed session) keeps the anchor.
-    """
-    anchor = option_expiry_anchor_ms(expiry)
-    try:
-        return min(anchor, session_close_ms_utc(expiry))
-    except LookupError:
-        # NoSessionError, or the calendar's plain LookupError for a date with
-        # no session at all.
-        return anchor
 
 
 def _compute_row_greeks(
@@ -403,7 +385,10 @@ def _process_contract(
         return [], counters
 
     counters["option_bars_raw"] = len(bars)
-    expiry_close_ms = _expiry_close_ms(contract.expiration)
+    # The countdown ends when the contract stops trading — the session close
+    # on its expiry date, a half day's early close included — not three hours
+    # later at the 16:00 anchor (#2934, ADR 0076).
+    expiry_close_ms = last_session_close_ms(contract.expiration)
     is_call = contract.contract_type == "call"
     iso_expiration = contract.expiration.isoformat()
     needs_greeks = (

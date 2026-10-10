@@ -24,7 +24,7 @@ from unittest.mock import patch
 import pytest
 
 from app.models.strategy import StrategyAnalyzeRequest, StrategyLeg
-from app.options.expiry import option_expiry_anchor_ms, option_expiry_ttm_years
+from app.options.expiry import option_expiry_anchor_ms, time_to_expiry_years
 from app.services.bs_greeks import black_scholes_greeks, bs_european_price
 from app.services.strategy_engine import analyze_strategy
 from app.utils.session_anchors import et_date_at_ms
@@ -37,7 +37,7 @@ def _ttm_years(request: StrategyAnalyzeRequest) -> float:
     Tests should use this rather than hardcoding `30 / 365.0` so they
     don't silently use wrong expected values if the fixture default changes.
     """
-    return option_expiry_ttm_years(request.expiration_ms, now_ms_utc())
+    return time_to_expiry_years(request.expiration_ms, now_ms_utc())
 
 
 def _bull_call_spread(today_plus: int = 30) -> StrategyAnalyzeRequest:

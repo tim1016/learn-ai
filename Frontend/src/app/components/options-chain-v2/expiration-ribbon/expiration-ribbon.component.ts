@@ -5,7 +5,7 @@ interface MonthGroup {
   label: string;
   year: number;
   /** Expiry anchor instants (16:00 New York time on each expiry date). */
-  dates: number[];
+  expirations: number[];
 }
 
 @Component({
@@ -17,10 +17,10 @@ interface MonthGroup {
 })
 export class ExpirationRibbonComponent {
   expirations = input.required<number[]>();
-  selectedDate = input<number | null>(null);
+  selectedExpiration = input<number | null>(null);
   loading = input(false);
 
-  dateSelected = output<number>();
+  expirationSelected = output<number>();
 
   private readonly MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -41,18 +41,18 @@ export class ExpirationRibbonComponent {
         group = {
           label: this.MONTHS[month - 1],
           year,
-          dates: [],
+          expirations: [],
         };
         groups.set(key, group);
       }
-      group.dates.push(anchor);
+      group.expirations.push(anchor);
     }
 
     return [...groups.values()];
   });
 
-  selectDate(anchor: number): void {
-    this.dateSelected.emit(anchor);
+  selectExpiration(anchor: number): void {
+    this.expirationSelected.emit(anchor);
   }
 
   formatDay(anchor: number): string {
@@ -60,6 +60,6 @@ export class ExpirationRibbonComponent {
   }
 
   isSelected(anchor: number): boolean {
-    return anchor === this.selectedDate();
+    return anchor === this.selectedExpiration();
   }
 }

@@ -9,7 +9,6 @@ import {
   PricingCompareResult,
 } from '../graphql/types';
 import { environment } from '../../environments/environment';
-import { dateStringMonthsFromNow } from '../utils/date-validation';
 import { etIsoDate } from '../shared/date/et-midnight';
 import { optionExpiryAnchorMs } from '../shared/option-contract/option-expiry-date';
 
@@ -267,7 +266,8 @@ export class MarketDataService {
           underlyingTicker,
           contractType: options.contractType,
           expirationMsGte: options.expirationMsGte ?? optionExpiryAnchorMs(etIsoDate(Date.now())),
-          expirationMsLte: options.expirationMsLte ?? optionExpiryAnchorMs(dateStringMonthsFromNow(6)),
+          // Both bounds are anchors of ET dates — one zone, six months out.
+          expirationMsLte: options.expirationMsLte ?? optionExpiryAnchorMs(etIsoDate(Date.now() + 183 * 86_400_000)),
         }
       })
       .pipe(

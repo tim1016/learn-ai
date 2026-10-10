@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from app.models.strategy import StrategyAnalyzeRequest, StrategyLeg
-from app.options.expiry import option_expiry_anchor_ms, option_expiry_dte_days, option_expiry_ttm_years
+from app.options.expiry import option_expiry_anchor_ms, option_expiry_dte_days, time_to_expiry_years
 from app.services.bs_greeks import bs_european_price
 from app.services.strategy_engine import (
     analyze_strategy,
@@ -322,7 +322,7 @@ _ANCHOR_2027_03_06 = option_expiry_anchor_ms(date(2027, 3, 6))
 
 class TestTimeToExpiry:
     def test_measures_to_the_anchor_not_the_whole_day(self):
-        assert option_expiry_ttm_years(_ANCHOR_2027_03_06, _LATE_EVENING_ET_2027_03_05) == pytest.approx(
+        assert time_to_expiry_years(_ANCHOR_2027_03_06, _LATE_EVENING_ET_2027_03_05) == pytest.approx(
             16.5 / 24 / 365
         )
 
@@ -330,7 +330,7 @@ class TestTimeToExpiry:
         assert option_expiry_dte_days(_ANCHOR_2027_03_06, _LATE_EVENING_ET_2027_03_05) == pytest.approx(16.5 / 24)
 
     def test_an_expired_contract_is_zero(self):
-        assert option_expiry_ttm_years(option_expiry_anchor_ms(date(2027, 2, 19)), _LATE_EVENING_ET_2027_03_05) == 0.0
+        assert time_to_expiry_years(option_expiry_anchor_ms(date(2027, 2, 19)), _LATE_EVENING_ET_2027_03_05) == 0.0
 
     def test_analysis_prices_over_the_same_anchor_ttm(self):
         req = StrategyAnalyzeRequest(

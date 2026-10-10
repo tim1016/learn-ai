@@ -84,9 +84,9 @@
   <section class="chain-expirations">
     <app-expiration-ribbon
       [expirations]="availableExpirations()"
-      [selectedDate]="selectedExpiration()"
+      [selectedExpiration]="selectedExpiration()"
       [loading]="expirationsLoading()"
-      (dateSelected)="onExpirationSelected($event)"
+      (expirationSelected)="onExpirationSelected($event)"
     />
     @if (selectedExpiration() !== null) {
       <div class="expiration-summary mono">

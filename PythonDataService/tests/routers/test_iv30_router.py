@@ -18,6 +18,7 @@ from app.main import app
 from app.options.expiry import option_expiry_anchor_ms
 from app.services.bs_greeks import bs_european_price
 from app.utils.session_anchors import et_date_at_ms
+from app.utils.timestamps import to_ms_utc
 
 
 def _bs_chain_contracts(
@@ -42,7 +43,7 @@ def _bs_chain_contracts(
         # The router buckets expiries by the New York calendar date, so the
         # synthetic expiries are laid out on ET dates, matching the bucketing
         # whenever the test runs.
-        exp_iso = (et_date_at_ms(int(asof.timestamp() * 1000)) + timedelta(days=days)).isoformat()
+        exp_iso = (et_date_at_ms(to_ms_utc(asof)) + timedelta(days=days)).isoformat()
         for k in strikes:
             for is_call in (True, False):
                 price = bs_european_price(

@@ -31,6 +31,7 @@ from app.options.expiry import option_expiry_date
 from app.services.polygon_client import PolygonClientService
 from app.services.rate_dividend_service import RateAndDividend, get_rate_and_dividend
 from app.utils.session_anchors import et_date_at_ms
+from app.utils.timestamps import to_ms_utc
 from app.volatility.iv_provenance import IvProvenance
 from app.volatility.price_normalization import (
     NormalizedOptionPrice,
@@ -111,7 +112,7 @@ class Iv30LiveResponse(BaseModel):
 
 def _parse_expiration_to_days(expiration_ms: int, asof: datetime) -> int:
     """Calendar days from ``asof`` to the contract's expiry date, both in the New York calendar."""
-    return max(0, (option_expiry_date(expiration_ms) - et_date_at_ms(int(asof.timestamp() * 1000))).days)
+    return max(0, (option_expiry_date(expiration_ms) - et_date_at_ms(to_ms_utc(asof))).days)
 
 
 def _normalized_quotes_by_expiry(
