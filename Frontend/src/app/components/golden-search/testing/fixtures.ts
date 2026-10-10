@@ -650,11 +650,11 @@ export function chanceFitToFit(overrides: Partial<MeasuredChanceFitToFit> = {}):
   };
 }
 
-/** One tested fit's final chance components (#3014). */
 /** The two-selection caveat the exam's final-window readings carry instead of the development bias note (#3014). */
 export const FINAL_SELECTION_NOTE =
   'This fit was chosen after the final test, from the fits that ran, and was selected by a search over the development data. Its support is unadjusted for both selections and is not a calibrated error rate or a probability of a true edge.';
 
+/** One tested fit's final chance components (#3014), its sentences worded for the final window. */
 export function finalChance(overrides: Partial<FinalChance> = {}): FinalChance {
   return {
     comparison: chanceComparison({
