@@ -192,7 +192,9 @@ def test_the_lead_in_is_the_decision_bars_the_run_would_have_staged_had_it_start
     assert build_backtest_run_strategy_view(saved_run).lead_in == []  # the lake holds nothing earlier
     first, middle, last = EARLIER_DAYS
     _seed_earlier(first, last)
-    # The middle session stops five minutes early: its last 15-minute bar is short, and the strategy never decides on it.
+    # The middle session stops five minutes early: its last 15-minute bar is short,
+    # and the strategy decides on it only when the next session's first bar fires it
+    # -- lazily, as LEAN's consolidator does (#2909).
     _seed_earlier(middle, minutes=385)
 
     view = build_backtest_run_strategy_view(saved_run)
@@ -201,7 +203,7 @@ def test_the_lead_in_is_the_decision_bars_the_run_would_have_staged_had_it_start
     started_earlier = _request_from_run(saved_run).model_copy(update={"warmup_from_date": first.isoformat()})
     replay_engine_run(started_earlier, record=lambda bar, _decision: staged.append(bar))
     before_the_run = [bar for bar in staged if bar.end_ms <= view.candles[0].bar_start_ms]
-    assert len(before_the_run) == 3 * 26 - 1
+    assert len(before_the_run) == 3 * 26
     assert _bars(view) == [
         (bar.end_ms, float(bar.open), float(bar.high), float(bar.low), float(bar.close), float(bar.volume))
         for bar in before_the_run

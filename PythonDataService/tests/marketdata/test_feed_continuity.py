@@ -1319,9 +1319,10 @@ async def test_an_omitted_join_minute_that_is_the_buckets_trigger_makes_its_ente
     A 5-minute run whose warmup ended at 10:34 ET joins the live line at
     10:34:30. 10:34 is the first live bucket's trigger minute; omitted, it
     leaves the bucket without its last minute, so the bucket cannot fire at
-    10:35. It fires lazily on 10:35's minute, delivered at 10:36, carrying the
-    close of the last minute it holds (10:34) -- two minutes stale against the
-    20 s allowance, so the runner's lateness gate refuses that ENTER.
+    10:35. It fires lazily on 10:35's minute, delivered at 10:36, ending at
+    its period boundary (10:35, as LEAN's computed EndTime does) while
+    carrying the close of the last minute it holds -- one minute stale against
+    the 20 s allowance, so the runner's lateness gate refuses that ENTER.
     """
     bucket_start = RTH_MINUTE  # 10:30 ET
     trigger_minute = bucket_start + timedelta(minutes=4)  # 10:34 ET
@@ -1344,10 +1345,10 @@ async def test_an_omitted_join_minute_that_is_the_buckets_trigger_makes_its_ente
 
     assert fired[:-1] == [None] * 4
     assert bucket is not None and bucket.start_ms == _ms(bucket_start)
-    assert bucket.end_ms == _ms(trigger_minute)  # the hole: 10:34 never arrived
+    assert bucket.end_ms == _ms(trigger_minute + timedelta(minutes=1))  # the hole: 10:34 never arrived; the bar still ends at its boundary
     monkeypatch.setattr(fcp, "now_ms_utc", lambda: live.end_ms)  # decided when 10:35 lands
     late = fcp.late_decision(_policy(sink), bucket.end_ms)
-    assert late is not None and late.lateness_ms == 120_000 > late.allowance_ms
+    assert late is not None and late.lateness_ms == 60_000 > late.allowance_ms
 
 
 def _trade_bar(start_ms: int) -> TradeBar:
