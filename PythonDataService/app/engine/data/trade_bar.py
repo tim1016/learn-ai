@@ -22,8 +22,12 @@ class TradeBar:
         symbol: Ticker symbol (uppercase).
         start_ms: Bar start time, Unix milliseconds UTC.
         end_ms: Bar end time, Unix milliseconds UTC. For a 1-minute bar,
-            ``end_ms = start_ms + 60_000``. For consolidated bars, ``end_ms``
-            is the end of the last minute bar included in the consolidation.
+            ``end_ms = start_ms + 60_000``. For a bar consolidated over a
+            period under one day, ``end_ms = start_ms + period`` — the period
+            boundary, whatever minutes arrived inside it, as LEAN's computed
+            ``EndTime`` reads (#2909; a bucket missing its last minute still
+            ends at its boundary). A period of one day or longer keeps the
+            last included minute's end; see ``trade_bar_consolidator``.
         open: Opening price.
         high: High price.
         low: Low price.

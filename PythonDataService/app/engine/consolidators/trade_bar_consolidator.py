@@ -1,5 +1,18 @@
 """TradeBarConsolidator — mirrors LEAN's Common/Data/Consolidators/TradeBarConsolidator.cs.
 
+Formula: emitted bar = (start = floor_to_period(first input), end = start + period
+  for a sub-day period, OHLCV folded over contained inputs, close = last
+  contained input's close)
+Reference: LEAN commit 7986ed0a, vendored at
+  references/lean/7986ed0aade3ae5de06121682409f05984e32ff7 —
+  Common/Data/Consolidators/TradeBarConsolidator.cs (AggregateBar),
+  Common/Data/Market/TradeBar.cs (EndTime => Time + Period); the emitted bar
+  was also derived by running LEAN's own consolidator (golden fixture
+  lean-consolidator-short-bucket's attribution names the pinned image).
+Canonical implementation: this file.
+Validated against: tests/engine/test_lean_consolidator_short_bucket.py,
+  tests/engine/test_trade_bar_consolidator.py
+
 Aggregates fine-resolution TradeBars (e.g., minute) into coarser bars
 (e.g., 15 minute). Implements the same rounding and firing semantics as
 LEAN so consolidated bar boundaries match exactly.

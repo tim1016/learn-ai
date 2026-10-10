@@ -10,9 +10,9 @@
   "trades": {
     "strategy_a": [
       {
-        "entry_time_ms": 1704265200000,
+        "entry_time_ms": 1704264360000,
         "entry_price": "411.1549",
-        "exit_time_ms": 1704269700000,
+        "exit_time_ms": 1704268860000,
         "exit_price": "404.8428",
         "quantity": 243,
         "pnl_pts": "-6.3121",
@@ -29,9 +29,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704285900000,
+        "entry_time_ms": 1704285060000,
         "entry_price": "411.9841",
-        "exit_time_ms": 1704286800000,
+        "exit_time_ms": 1704285960000,
         "exit_price": "411.7971",
         "quantity": 239,
         "pnl_pts": "-0.1870",
@@ -48,9 +48,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704287700000,
+        "entry_time_ms": 1704286860000,
         "entry_price": "409.9183",
-        "exit_time_ms": 1704288600000,
+        "exit_time_ms": 1704287760000,
         "exit_price": "407.2129",
         "quantity": 240,
         "pnl_pts": "-2.7054",
@@ -67,9 +67,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704289500000,
+        "entry_time_ms": 1704288660000,
         "entry_price": "406.7723",
-        "exit_time_ms": 1704290400000,
+        "exit_time_ms": 1704289560000,
         "exit_price": "406.954",
         "quantity": 240,
         "pnl_pts": "0.1817",
@@ -86,9 +86,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704292200000,
+        "entry_time_ms": 1704291360000,
         "entry_price": "409.819",
-        "exit_time_ms": 1704293100000,
+        "exit_time_ms": 1704292260000,
         "exit_price": "410.3351",
         "quantity": 238,
         "pnl_pts": "0.5161",
@@ -105,9 +105,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704294000000,
+        "entry_time_ms": 1704293160000,
         "entry_price": "411.6792",
-        "exit_time_ms": 1704294900000,
+        "exit_time_ms": 1704294060000,
         "exit_price": "411.5702",
         "quantity": 237,
         "pnl_pts": "-0.1090",
@@ -124,9 +124,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704295800000,
+        "entry_time_ms": 1704294960000,
         "entry_price": "412.2457",
-        "exit_time_ms": 1704296700000,
+        "exit_time_ms": 1704295860000,
         "exit_price": "414.9027",
         "quantity": 237,
         "pnl_pts": "2.6570",
@@ -143,9 +143,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704309300000,
+        "entry_time_ms": 1704308460000,
         "entry_price": "420.7135",
-        "exit_time_ms": 1704433500000,
+        "exit_time_ms": 1704432660000,
         "exit_price": "411.9279",
         "quantity": 234,
         "pnl_pts": "-8.7856",
@@ -162,9 +162,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704434400000,
+        "entry_time_ms": 1704433560000,
         "entry_price": "413.9748",
-        "exit_time_ms": 1704435300000,
+        "exit_time_ms": 1704434460000,
         "exit_price": "413.9751",
         "quantity": 233,
         "pnl_pts": "0.0003",
@@ -181,9 +181,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704436200000,
+        "entry_time_ms": 1704435360000,
         "entry_price": "413.6761",
-        "exit_time_ms": 1704438000000,
+        "exit_time_ms": 1704437160000,
         "exit_price": "413.9895",
         "quantity": 233,
         "pnl_pts": "0.3134",
@@ -200,9 +200,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704438900000,
+        "entry_time_ms": 1704438060000,
         "entry_price": "414.8313",
-        "exit_time_ms": 1704441600000,
+        "exit_time_ms": 1704440760000,
         "exit_price": "412.6924",
         "quantity": 232,
         "pnl_pts": "-2.1389",
@@ -219,9 +219,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704442500000,
+        "entry_time_ms": 1704441660000,
         "entry_price": "412.069",
-        "exit_time_ms": 1704443400000,
+        "exit_time_ms": 1704442560000,
         "exit_price": "413.6385",
         "quantity": 233,
         "pnl_pts": "1.5695",
@@ -238,9 +238,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704444300000,
+        "entry_time_ms": 1704443460000,
         "entry_price": "414.2641",
-        "exit_time_ms": 1704445200000,
+        "exit_time_ms": 1704444360000,
         "exit_price": "413.0289",
         "quantity": 232,
         "pnl_pts": "-1.2352",
@@ -257,9 +257,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704446100000,
+        "entry_time_ms": 1704445260000,
         "entry_price": "413.3536",
-        "exit_time_ms": 1704447000000,
+        "exit_time_ms": 1704446160000,
         "exit_price": "414.4659",
         "quantity": 232,
         "pnl_pts": "1.1123",
@@ -276,9 +276,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704447900000,
+        "entry_time_ms": 1704447060000,
         "entry_price": "416.409",
-        "exit_time_ms": 1704448800000,
+        "exit_time_ms": 1704447960000,
         "exit_price": "415.2804",
         "quantity": 231,
         "pnl_pts": "-1.1286",
@@ -295,9 +295,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704449700000,
+        "entry_time_ms": 1704448860000,
         "entry_price": "417.456",
-        "exit_time_ms": 1704450600000,
+        "exit_time_ms": 1704449760000,
         "exit_price": "417.4776",
         "quantity": 230,
         "pnl_pts": "0.0216",
@@ -314,9 +314,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704451500000,
+        "entry_time_ms": 1704450660000,
         "entry_price": "417.2886",
-        "exit_time_ms": 1704452400000,
+        "exit_time_ms": 1704451560000,
         "exit_price": "417.238",
         "quantity": 230,
         "pnl_pts": "-0.0506",
@@ -333,9 +333,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704453300000,
+        "entry_time_ms": 1704452460000,
         "entry_price": "417.0917",
-        "exit_time_ms": 1704454200000,
+        "exit_time_ms": 1704453360000,
         "exit_price": "415.5759",
         "quantity": 230,
         "pnl_pts": "-1.5158",
@@ -352,9 +352,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704455100000,
+        "entry_time_ms": 1704454260000,
         "entry_price": "413.4918",
-        "exit_time_ms": 1704456000000,
+        "exit_time_ms": 1704455160000,
         "exit_price": "415.2147",
         "quantity": 231,
         "pnl_pts": "1.7229",
@@ -371,9 +371,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704456900000,
+        "entry_time_ms": 1704456060000,
         "entry_price": "415.7174",
-        "exit_time_ms": 1704457800000,
+        "exit_time_ms": 1704456960000,
         "exit_price": "413.6602",
         "quantity": 231,
         "pnl_pts": "-2.0572",
@@ -390,9 +390,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704458700000,
+        "entry_time_ms": 1704457860000,
         "entry_price": "414.7183",
-        "exit_time_ms": 1704459600000,
+        "exit_time_ms": 1704458760000,
         "exit_price": "414.4148",
         "quantity": 230,
         "pnl_pts": "-0.3035",
@@ -409,9 +409,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704460500000,
+        "entry_time_ms": 1704459660000,
         "entry_price": "413.8395",
-        "exit_time_ms": 1704461400000,
+        "exit_time_ms": 1704460560000,
         "exit_price": "413.9403",
         "quantity": 231,
         "pnl_pts": "0.1008",
@@ -428,9 +428,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704539700000,
+        "entry_time_ms": 1704538860000,
         "entry_price": "410.6405",
-        "exit_time_ms": 1704540600000,
+        "exit_time_ms": 1704539760000,
         "exit_price": "408.5493",
         "quantity": 232,
         "pnl_pts": "-2.0912",
@@ -447,9 +447,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704541500000,
+        "entry_time_ms": 1704540660000,
         "entry_price": "408.9595",
-        "exit_time_ms": 1704605400000,
+        "exit_time_ms": 1704604560000,
         "exit_price": "406.919",
         "quantity": 232,
         "pnl_pts": "-2.0405",
@@ -466,9 +466,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704658500000,
+        "entry_time_ms": 1704657660000,
         "entry_price": "404.9476",
-        "exit_time_ms": 1704663000000,
+        "exit_time_ms": 1704662160000,
         "exit_price": "403.4309",
         "quantity": 233,
         "pnl_pts": "-1.5167",
@@ -485,9 +485,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704708900000,
+        "entry_time_ms": 1704708060000,
         "entry_price": "406.208",
-        "exit_time_ms": 1704755700000,
+        "exit_time_ms": 1704754860000,
         "exit_price": "413.4463",
         "quantity": 232,
         "pnl_pts": "7.2383",
@@ -504,9 +504,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704760200000,
+        "entry_time_ms": 1704759360000,
         "entry_price": "416.5943",
-        "exit_time_ms": 1704761100000,
+        "exit_time_ms": 1704760260000,
         "exit_price": "416.8862",
         "quantity": 230,
         "pnl_pts": "0.2919",
@@ -523,9 +523,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704762000000,
+        "entry_time_ms": 1704761160000,
         "entry_price": "418.2314",
-        "exit_time_ms": 1704771000000,
+        "exit_time_ms": 1704770160000,
         "exit_price": "415.768",
         "quantity": 229,
         "pnl_pts": "-2.4634",
@@ -542,9 +542,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704771900000,
+        "entry_time_ms": 1704771060000,
         "entry_price": "415.7742",
-        "exit_time_ms": 1704772800000,
+        "exit_time_ms": 1704771960000,
         "exit_price": "414.1514",
         "quantity": 229,
         "pnl_pts": "-1.6228",
@@ -561,9 +561,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704773700000,
+        "entry_time_ms": 1704772860000,
         "entry_price": "414.1499",
-        "exit_time_ms": 1704774600000,
+        "exit_time_ms": 1704773760000,
         "exit_price": "415.3118",
         "quantity": 229,
         "pnl_pts": "1.1619",
@@ -580,9 +580,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704775500000,
+        "entry_time_ms": 1704774660000,
         "entry_price": "417.1978",
-        "exit_time_ms": 1704776400000,
+        "exit_time_ms": 1704775560000,
         "exit_price": "415.8291",
         "quantity": 228,
         "pnl_pts": "-1.3687",
@@ -599,9 +599,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704777300000,
+        "entry_time_ms": 1704776460000,
         "entry_price": "415.466",
-        "exit_time_ms": 1704778200000,
+        "exit_time_ms": 1704777360000,
         "exit_price": "416.8847",
         "quantity": 228,
         "pnl_pts": "1.4187",
@@ -618,9 +618,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704779100000,
+        "entry_time_ms": 1704778260000,
         "entry_price": "416.984",
-        "exit_time_ms": 1704780000000,
+        "exit_time_ms": 1704779160000,
         "exit_price": "416.0206",
         "quantity": 228,
         "pnl_pts": "-0.9634",
@@ -637,9 +637,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704780900000,
+        "entry_time_ms": 1704780060000,
         "entry_price": "415.6594",
-        "exit_time_ms": 1704781800000,
+        "exit_time_ms": 1704780960000,
         "exit_price": "417.6429",
         "quantity": 229,
         "pnl_pts": "1.9835",
@@ -656,9 +656,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704782700000,
+        "entry_time_ms": 1704781860000,
         "entry_price": "418.5459",
-        "exit_time_ms": 1704783600000,
+        "exit_time_ms": 1704782760000,
         "exit_price": "417.0296",
         "quantity": 228,
         "pnl_pts": "-1.5163",
@@ -675,9 +675,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704784500000,
+        "entry_time_ms": 1704783660000,
         "entry_price": "416.6674",
-        "exit_time_ms": 1704785400000,
+        "exit_time_ms": 1704784560000,
         "exit_price": "412.9413",
         "quantity": 228,
         "pnl_pts": "-3.7261",
@@ -694,9 +694,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704854700000,
+        "entry_time_ms": 1704853860000,
         "entry_price": "416.1085",
-        "exit_time_ms": 1704973500000,
+        "exit_time_ms": 1704972660000,
         "exit_price": "419.9273",
         "quantity": 227,
         "pnl_pts": "3.8188",
@@ -715,9 +715,9 @@
     ],
     "strategy_b": [
       {
-        "entry_time_ms": 1704250800000,
+        "entry_time_ms": 1704249960000,
         "entry_price": "408.6284",
-        "exit_time_ms": 1704258900000,
+        "exit_time_ms": 1704258060000,
         "exit_price": "408.8903",
         "quantity": 244,
         "pnl_pts": "0.2619",
@@ -733,9 +733,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704309300000,
+        "entry_time_ms": 1704308460000,
         "entry_price": "420.7135",
-        "exit_time_ms": 1704371400000,
+        "exit_time_ms": 1704370560000,
         "exit_price": "403.0664",
         "quantity": 237,
         "pnl_pts": "-17.6471",
@@ -751,9 +751,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704378600000,
+        "entry_time_ms": 1704377760000,
         "entry_price": "408.2012",
-        "exit_time_ms": 1704391200000,
+        "exit_time_ms": 1704390360000,
         "exit_price": "407.3674",
         "quantity": 234,
         "pnl_pts": "-0.8338",
@@ -769,9 +769,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704402000000,
+        "entry_time_ms": 1704401160000,
         "entry_price": "413.1404",
-        "exit_time_ms": 1704412800000,
+        "exit_time_ms": 1704411960000,
         "exit_price": "411.362",
         "quantity": 231,
         "pnl_pts": "-1.7784",
@@ -787,9 +787,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704415500000,
+        "entry_time_ms": 1704414660000,
         "entry_price": "414.3798",
-        "exit_time_ms": 1704416400000,
+        "exit_time_ms": 1704415560000,
         "exit_price": "412.8082",
         "quantity": 229,
         "pnl_pts": "-1.5716",
@@ -805,9 +805,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704546900000,
+        "entry_time_ms": 1704546060000,
         "entry_price": "414.9064",
-        "exit_time_ms": 1704561300000,
+        "exit_time_ms": 1704560460000,
         "exit_price": "413.3671",
         "quantity": 228,
         "pnl_pts": "-1.5393",
@@ -823,9 +823,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704654000000,
+        "entry_time_ms": 1704653160000,
         "entry_price": "405.112",
-        "exit_time_ms": 1704654900000,
+        "exit_time_ms": 1704654060000,
         "exit_price": "404.2193",
         "quantity": 233,
         "pnl_pts": "-0.8927",
@@ -841,9 +841,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704721500000,
+        "entry_time_ms": 1704720660000,
         "entry_price": "414.6868",
-        "exit_time_ms": 1704749400000,
+        "exit_time_ms": 1704748560000,
         "exit_price": "413.6899",
         "quantity": 227,
         "pnl_pts": "-0.9969",
@@ -859,9 +859,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704861900000,
+        "entry_time_ms": 1704861060000,
         "entry_price": "417.4741",
-        "exit_time_ms": 1704894300000,
+        "exit_time_ms": 1704893460000,
         "exit_price": "422.5064",
         "quantity": 225,
         "pnl_pts": "5.0323",
@@ -877,9 +877,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704895200000,
+        "entry_time_ms": 1704894360000,
         "entry_price": "425.1469",
-        "exit_time_ms": 1704906900000,
+        "exit_time_ms": 1704906060000,
         "exit_price": "425.6126",
         "quantity": 224,
         "pnl_pts": "0.4657",
@@ -895,9 +895,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704939300000,
+        "entry_time_ms": 1704938460000,
         "entry_price": "423.2253",
-        "exit_time_ms": 1704954600000,
+        "exit_time_ms": 1704953760000,
         "exit_price": "418.6112",
         "quantity": 225,
         "pnl_pts": "-4.6141",
@@ -915,9 +915,9 @@
     ],
     "strategy_c": [
       {
-        "entry_time_ms": 1704250800000,
+        "entry_time_ms": 1704249960000,
         "entry_price": "408.6284",
-        "exit_time_ms": 1704269700000,
+        "exit_time_ms": 1704268860000,
         "exit_price": "404.8428",
         "quantity": 244,
         "pnl_pts": "-3.7856",
@@ -932,9 +932,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704309300000,
+        "entry_time_ms": 1704308460000,
         "entry_price": "420.7135",
-        "exit_time_ms": 1704433500000,
+        "exit_time_ms": 1704432660000,
         "exit_price": "411.9279",
         "quantity": 235,
         "pnl_pts": "-8.7856",
@@ -949,9 +949,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704472200000,
+        "entry_time_ms": 1704471360000,
         "entry_price": "407.862",
-        "exit_time_ms": 1704493800000,
+        "exit_time_ms": 1704492960000,
         "exit_price": "406.6599",
         "quantity": 237,
         "pnl_pts": "-1.2021",
@@ -966,9 +966,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704546900000,
+        "entry_time_ms": 1704546060000,
         "entry_price": "414.9064",
-        "exit_time_ms": 1704605400000,
+        "exit_time_ms": 1704604560000,
         "exit_price": "406.919",
         "quantity": 233,
         "pnl_pts": "-7.9874",
@@ -983,9 +983,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704654000000,
+        "entry_time_ms": 1704653160000,
         "entry_price": "405.112",
-        "exit_time_ms": 1704663000000,
+        "exit_time_ms": 1704662160000,
         "exit_price": "403.4309",
         "quantity": 234,
         "pnl_pts": "-1.6811",
@@ -1000,9 +1000,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704730500000,
+        "entry_time_ms": 1704729660000,
         "entry_price": "417.7111",
-        "exit_time_ms": 1704755700000,
+        "exit_time_ms": 1704754860000,
         "exit_price": "413.4463",
         "quantity": 226,
         "pnl_pts": "-4.2648",
@@ -1017,9 +1017,9 @@
         "is_synthetic_exit": false
       },
       {
-        "entry_time_ms": 1704861900000,
+        "entry_time_ms": 1704861060000,
         "entry_price": "417.4741",
-        "exit_time_ms": 1704973500000,
+        "exit_time_ms": 1704972660000,
         "exit_price": "419.9273",
         "quantity": 223,
         "pnl_pts": "2.4532",
