@@ -832,16 +832,7 @@ def run_qualification(ctx: StageContext, binding: ApprovalBinding, blob_store: A
     # The same chance authority the approval intent and the page read (#3015): the stored components of the fit
     # the decision named, retained with the qualification so the acknowledgement's evidence is immutable. The
     # scope binds each record to this study's frozen protocol and the chosen fit's point identity (#3024).
-    chance = stored_final_chance(
-        chosen,
-        FinalChanceScope(
-            objective=ctx.protocol.policy.objective,
-            development_window=ctx.development,
-            final_window=ctx.final,
-            capital=ctx.protocol.execution.initial_cash,
-            point_hash=chosen["point_hash"],
-        ),
-    )
+    chance = stored_final_chance(chosen, FinalChanceScope.for_protocol(ctx.protocol, point_hash=chosen["point_hash"]))
     chance_items = chance_weakness_items(
         ctx.results.get("chance_approval"),
         chance,

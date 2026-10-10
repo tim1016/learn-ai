@@ -55,6 +55,7 @@ from fractions import Fraction
 from typing import Any
 
 import numpy as np
+from pydantic import TypeAdapter, ValidationError
 
 from app.jobs.progress import JobCancelled
 from app.research.golden_search.chance import (
@@ -77,8 +78,11 @@ from app.research.golden_search.chance_compare import (
     series_digest,
 )
 from app.research.golden_search.chance_rehearsal import SCHEMA_REHEARSAL, final_session_count
+from app.research.golden_search.final_test import fit_label
+from app.research.golden_search.protocol import GoldenSearchProtocol
 from app.research.golden_search.selection import Metrics
 from app.research.monte_carlo.stationary import CHUNK_REPLICATIONS, stationary_index_chunks
+from app.schemas.golden_search import GoldenSearchChanceFitToFit
 
 logger = logging.getLogger(__name__)
 
@@ -421,29 +425,118 @@ def resolved_fit_to_fit(exam: Mapping[str, Any], fit: Mapping[str, Any]) -> dict
     (the exam wiring always passed it first); that fit reads its own record honestly, the other reads a named
     unavailable directional view, and nothing is redrawn, relabelled or backfilled on read.
     """
+    record = normalized_exam_fit_to_fit(exam)
+    if record.get("status") != "measured":
+        return dict(record)
+    for direction in record.get("directions") or []:
+        if isinstance(direction, Mapping) and (direction.get("fit") or {}).get("point_hash") == fit.get("point_hash"):
+            return dict(direction)
+    if (record.get("basis") or {}).get("schema_version") == SCHEMA_FIT_TO_FIT_V1:
+        # A legacy one-direction record: only its owner has a direction to read; the wording names whose it is.
+        owner = record["directions"][0]["fit"]
+        return _missing(
+            ("direction_unavailable", f"The stored fit-to-fit record predates both-direction summaries (#3029): it recorded only the {owner['label']}'s direction, and this fit's own direction was never recorded. It is not recomputed on read.")
+        )
+    return _missing(("not_compared", "This fit was not one of the two the stored fit-to-fit record compared, so it has no direction to read."))
+
+
+def normalized_exam_fit_to_fit(exam: Mapping[str, Any]) -> dict[str, Any]:
+    """The exam-level fit-to-fit record normalized for the wire (#3029).
+
+    A v2 record is served as stored when it holds its directions. A legacy v1 record holds one direction only,
+    with no identity inside it; the counts belonged to the exam's first recorded fit (the wiring always passed
+    it first), so the record is reshaped into that one served direction — counts, sentence and basis verbatim,
+    the identity supplied from the recorded fit order — never redrawn, relabelled or backfilled. A record this
+    server cannot shape (an unknown schema, a v1 record whose owner cannot be identified) reads as a named
+    unsupported view, so a legacy or malformed record never breaks the page it sits on.
+    """
     chance = exam.get("chance")
     record = chance.get("fit_to_fit") if isinstance(chance, Mapping) else None
     if not isinstance(record, Mapping):
         return _missing(("not_measured", "Not measured for this study: fit-to-fit readings were first recorded with #3014."))
+    served: dict[str, Any] | None
     if record.get("status") != "measured":
-        return dict(record)
-    schema = (record.get("basis") or {}).get("schema_version")
-    if schema == SCHEMA_FIT_TO_FIT:
-        for direction in record.get("directions") or []:
-            if isinstance(direction, Mapping) and (direction.get("fit") or {}).get("point_hash") == fit.get("point_hash"):
-                return dict(direction)
-        return _missing(("not_compared", "This fit was not one of the two the stored fit-to-fit record compared, so it has no direction to read."))
-    if schema == SCHEMA_FIT_TO_FIT_V1:
-        fits = [stored for stored in exam.get("fits") or [] if isinstance(stored, Mapping)]
-        if fits and fit.get("point_hash") == fits[0].get("point_hash"):
-            return dict(record)
-        first_label = fits[0].get("label", "first recorded fit") if fits else "the first recorded fit"
+        served = dict(record)
+    else:
+        schema = (record.get("basis") or {}).get("schema_version")
+        if schema == SCHEMA_FIT_TO_FIT:
+            served = dict(record)
+        elif schema == SCHEMA_FIT_TO_FIT_V1:
+            direction = _v1_fit_to_fit_direction(record, exam)
+            served = (
+                None
+                if direction is None
+                else {
+                    "status": "measured",
+                    "pair": list(record.get("pair") or []),
+                    "directions": [direction],
+                    "selection_note": record.get("selection_note"),
+                    "basis": record.get("basis"),
+                }
+            )
+        else:
+            served = None
+        if served is not None and not (isinstance(served.get("directions"), list) and served["directions"] and all(isinstance(direction, Mapping) for direction in served["directions"])):
+            served = None
+    # Whatever shape a stored record takes, what leaves here satisfies the wire contract the page is served
+    # under: a malformed record — wrong-typed fields, a truncated direction, a missing code — reads as a named
+    # unsupported view instead of breaking the study page it sits on (#3029).
+    if served is None or not _serves_on_the_wire(served):
+        schema = (record.get("basis") or {}).get("schema_version") if isinstance(record.get("basis"), Mapping) else None
         return _missing(
-            ("direction_unavailable", f"The stored fit-to-fit record predates both-direction summaries (#3029): it recorded only the {first_label}'s direction, and this fit's own direction was never recorded. It is not recomputed on read.")
+            ("unsupported", f"The stored fit-to-fit reading (schema {schema!r}) cannot be read as a record this server can serve; it is shown as unavailable rather than guessed at.")
         )
-    return _missing(
-        ("unsupported", f"The stored fit-to-fit reading holds schema {schema!r}, which this server cannot interpret; it is shown as unavailable rather than guessed at.")
-    )
+    return served
+
+
+#: The served fit-to-fit contract as one validator, so a malformed stored record never reaches the page.
+_FIT_TO_FIT_WIRE = TypeAdapter(GoldenSearchChanceFitToFit)
+
+
+def _serves_on_the_wire(record: Mapping[str, Any]) -> bool:
+    """The record satisfies the served fit-to-fit contract; malformed records never reach the page."""
+    try:
+        _FIT_TO_FIT_WIRE.validate_python(record)
+    except ValidationError:
+        return False
+    return True
+
+
+def _v1_fit_to_fit_direction(record: Mapping[str, Any], exam: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The one direction a legacy v1 record holds, in the served direction's shape, or None when it cannot be shaped.
+
+    The counts belonged to the exam's first recorded fit — the wiring always passed it first — and the opponent
+    is the other pair member, resolved against the recorded fits. Only the identity the record never carried is
+    supplied; every number and sentence stays exactly as stored.
+    """
+    fits = [stored for stored in exam.get("fits") or [] if isinstance(stored, Mapping)]
+    if not fits or not isinstance(fits[0].get("point_hash"), str):
+        return None
+    owner = fits[0]
+    if owner["point_hash"] not in (record.get("pair") or []):
+        return None  # the counts cannot belong to a fit the record's own pair never compared
+    opponent_hash = next((hash_ for hash_ in record.get("pair") or [] if hash_ != owner["point_hash"]), None)
+    if not isinstance(opponent_hash, str):
+        return None
+    opponent = next((stored for stored in fits[1:] if stored.get("point_hash") == opponent_hash), None)
+    if not all(isinstance(record.get(key), (str, Mapping)) for key in ("sentence", "selection_note", "basis")):
+        return None
+    try:
+        owner_label = fit_label(owner)
+        opponent_label = fit_label(opponent) if opponent is not None else "the other compared fit"
+    except (KeyError, TypeError):  # a stored fit without a readable key: name it honestly, never guess a label
+        owner_label, opponent_label = "the first recorded fit", "the other compared fit"
+    return {
+        "status": "measured",
+        "fit": {"point_hash": owner["point_hash"], "label": owner_label},
+        "opponent": {"point_hash": opponent_hash, "label": opponent_label},
+        "counts": record.get("counts"),
+        "shares": record.get("shares"),
+        "at_least_as_good": record.get("at_least_as_good"),
+        "sentence": record.get("sentence"),
+        "selection_note": record.get("selection_note"),
+        "basis": record.get("basis"),
+    }
 
 
 #: What each component's never-recorded state says, so the copy names the component it belongs to.
@@ -489,6 +582,21 @@ class FinalChanceScope:
     final_window: tuple[int, int]
     capital: float
     point_hash: str
+
+    @classmethod
+    def for_protocol(cls, protocol: GoldenSearchProtocol, point_hash: str = "") -> FinalChanceScope:
+        """The one mapping from a locked protocol to its scope every authority shares (#3024).
+
+        ``point_hash`` stays empty until a fit is named; ``for_fit`` binds it, so the page binds each fit while
+        the approval intent and the qualification bind the chosen one.
+        """
+        return cls(
+            objective=protocol.policy.objective,
+            development_window=(protocol.development_start_ms, protocol.development_end_ms),
+            final_window=(protocol.final_start_ms, protocol.final_end_ms),
+            capital=protocol.execution.initial_cash,
+            point_hash=point_hash,
+        )
 
     def for_fit(self, point_hash: str) -> FinalChanceScope:
         """The same scope bound to one fit's point identity."""
@@ -536,9 +644,26 @@ def _checked_thresholds(basis: Mapping[str, Any]) -> str | None:
 
 
 def _checked_seed(basis: Mapping[str, Any]) -> str | None:
-    seed = basis.get("seed")
-    if not isinstance(seed, Mapping) or _count(seed.get("value")) is None or not isinstance(seed.get("inputs"), Sequence) or isinstance(seed.get("inputs"), (str, bytes)):
+    if _seed_inputs(basis.get("seed")) is None:
         return "its basis kept no readable seed"
+    return None
+
+
+def _seed_inputs(seed: Any) -> list[Any] | None:
+    """A stored seed's inputs as a list, or None when the seed is not a readable derivation record."""
+    if not isinstance(seed, Mapping) or _count(seed.get("value")) is None:
+        return None
+    inputs = seed.get("inputs")
+    if not isinstance(inputs, Sequence) or isinstance(inputs, (str, bytes)):
+        return None
+    return list(inputs)
+
+
+def _checked_objective(basis: Mapping[str, Any], scope: FinalChanceScope) -> str | None:
+    """The basis objective is the plan's frozen objective, counted in its own units — never another measure's."""
+    objective = basis.get("objective")
+    if not isinstance(objective, Mapping) or objective.get("measure") != scope.objective or objective.get("units") != OBJECTIVES[scope.objective][1]:
+        return "its basis objective is not this plan's frozen objective"
     return None
 
 
@@ -607,9 +732,8 @@ def _invalid_share_record(component: str, record: Mapping[str, Any], scope: Fina
         return reason
     if reason := _checked_source(basis, scope):
         return reason
-    objective = basis.get("objective")
-    if not isinstance(objective, Mapping) or objective.get("measure") != scope.objective or objective.get("units") != OBJECTIVES[scope.objective][1]:
-        return "its basis objective is not this plan's frozen objective"
+    if reason := _checked_objective(basis, scope):
+        return reason
     keys = ("better", "tied", "worse") if component == "comparison" else ("positive", "zero", "negative")
     counts = record.get("counts")
     if not isinstance(counts, Mapping):
@@ -672,16 +796,18 @@ def _invalid_carry_record(record: Mapping[str, Any], scope: FinalChanceScope) ->
         return f"it reproduces a rehearsal of schema {basis.get('rehearsal_schema')!r}, which this server cannot interpret"
     if _count(basis.get("scheduled_sessions")) is None or basis.get("scheduled_sessions") == 0:
         return f"its 1× length {basis.get('scheduled_sessions')!r} is not a session count"
-    objective = basis.get("objective")
-    if not isinstance(objective, Mapping) or objective.get("measure") != scope.objective or objective.get("units") != OBJECTIVES[scope.objective][1]:
-        return "its basis objective is not this plan's frozen objective"
-    seed = basis.get("seed")
-    if not isinstance(seed, Mapping) or not isinstance(seed.get("inputs"), Sequence) or isinstance(seed.get("inputs"), (str, bytes)):
+    if reason := _checked_objective(basis, scope):
+        return reason
+    inputs = _seed_inputs(basis.get("seed"))
+    if inputs is None:
         return "its basis kept no readable seed"
-    inputs = list(seed["inputs"])
     if len(inputs) < 7 or inputs[0] != SCHEMA_REHEARSAL or inputs[1] != scope.development_window[0] or inputs[2] != scope.development_window[1] or inputs[3] != scope.objective or scope.point_hash not in (inputs[4], inputs[5]) or inputs[6] != 1:
         return "its seed inputs do not name this fit's own 1× rehearsal on this study's development window"
-    if seed.get("value") != seed_for(*inputs):
+    try:
+        derives = seed_for(*inputs) == basis["seed"]["value"]
+    except (KeyError, TypeError, ValueError):  # adversarial inputs the canonical serialization refuses: no seed follows
+        derives = False
+    if not derives:
         return "its stored seed does not follow from its own seed inputs"
     below, finite, undefined = (_count(record.get(key)) for key in ("below", "finite", "undefined"))
     if below is None or finite is None or undefined is None or below > finite or (finite == 0 and (below != 0 or undefined == 0)):

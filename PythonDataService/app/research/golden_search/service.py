@@ -960,21 +960,12 @@ async def _approve(conn: Any, row: StudyRow, body: Mapping[str, Any]) -> Command
     # authority the page's weakness items and the qualification payload read — never from client values (#3015).
     # The scope is the frozen protocol plus the chosen fit's point identity, so a stored record that belongs to
     # another fit, window, capital or objective never reads as this approval's evidence (#3024).
-    protocol = row.protocol
-    chance = stored_final_chance(
-        chosen,
-        FinalChanceScope(
-            objective=protocol["policy"]["objective"],
-            development_window=(protocol["development_start_ms"], protocol["development_end_ms"]),
-            final_window=(protocol["final_start_ms"], protocol["final_end_ms"]),
-            capital=float(protocol["execution"]["initial_cash"]),
-            point_hash=chosen["point_hash"],
-        ),
-    )
+    protocol = GoldenSearchProtocol.from_dict(row.protocol)
+    chance = stored_final_chance(chosen, FinalChanceScope.for_protocol(protocol, point_hash=chosen["point_hash"]))
     chance_items = chance_weakness_items(
         row.results.get("chance_approval"),
         chance,
-        positive_net_required=bool(protocol["policy"]["require_positive_net"]),
+        positive_net_required=bool(protocol.policy.require_positive_net),
     )
     weakness = research_weakness(chosen["outcome"], exam["claim"], exam["exposure_state"]) + [item["code"] for item in chance_items]
     if weakness and not weak_ack:

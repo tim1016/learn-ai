@@ -120,19 +120,17 @@ def _share_item(component: str, label: str, record: Mapping[str, Any], *, numera
     return None
 
 
-def _comparison_numerators(record: Mapping[str, Any]) -> tuple[int, int]:
-    """The comparison's inclusive count and defined-path count, derived from its raw counts (#3024).
+def _numerators(record: Mapping[str, Any], defined_keys: tuple[str, ...], numerator_keys: tuple[str, ...], fallback: Any) -> tuple[int, int]:
+    """One share-bearing component's numerator and defined-path count, derived from its raw counts (#3024).
 
     The stored label and the stored inclusive count are presentation of the counts, never authority: a forged
     clear label over all-undefined counts reads as what its counts say. Records reach here already validated
     by ``chance_final.stored_final_chance`` in production; the fallbacks keep direct callers readable.
     """
     counts = record.get("counts")
-    if isinstance(counts, Mapping) and all(isinstance(counts.get(key), int) and not isinstance(counts.get(key), bool) for key in ("better", "tied", "worse")):
-        return counts["better"] + counts["tied"], counts["better"] + counts["tied"] + counts["worse"]
-    at_least = record.get("at_least_as_good")
-    numerator = at_least.get("count") if isinstance(at_least, Mapping) else 0
-    return (numerator if isinstance(numerator, int) else 0), 1  # no readable counts: never read as no_defined_paths
+    if isinstance(counts, Mapping) and all(isinstance(counts.get(key), int) and not isinstance(counts.get(key), bool) for key in (*defined_keys, "undefined")):
+        return sum(counts[key] for key in numerator_keys), sum(counts[key] for key in defined_keys)
+    return (fallback if isinstance(fallback, int) and not isinstance(fallback, bool) else 0), 1  # no readable counts: never read as no_defined_paths
 
 
 def chance_weakness_items(
@@ -154,7 +152,8 @@ def chance_weakness_items(
 
     comparison = chance.get("comparison") or {}
     if comparison.get("status") == "measured":
-        as_good, defined = _comparison_numerators(comparison)
+        at_least = comparison.get("at_least_as_good")
+        as_good, defined = _numerators(comparison, ("better", "tied", "worse"), ("better", "tied"), at_least.get("count") if isinstance(at_least, Mapping) else 0)
         if enrolled and defined == 0:
             items.append(_unavailable("comparison", "no resampled path produced a defined result to compare"))
         else:
@@ -167,13 +166,11 @@ def chance_weakness_items(
     if positive_net_required:
         profitability = chance.get("profitability") or {}
         if profitability.get("status") == "measured":
-            counts = profitability.get("counts") or {}
-            positive = counts.get("positive", 0)
-            defined = sum(counts.get(key, 0) for key in ("positive", "zero", "negative")) if isinstance(counts, Mapping) else 1
+            positive, defined = _numerators(profitability, ("positive", "zero", "negative"), ("positive",), 0)
             if enrolled and defined == 0:
                 items.append(_unavailable("profitability", "no resampled path produced a defined return"))
             else:
-                item = _share_item("profitability", "resampled profit", profitability, numerator=positive if isinstance(positive, int) else 0, enrolled=enrolled)
+                item = _share_item("profitability", "resampled profit", profitability, numerator=positive, enrolled=enrolled)
                 if item is not None:
                     items.append(item)
         elif enrolled:

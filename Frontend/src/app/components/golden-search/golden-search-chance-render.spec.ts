@@ -126,7 +126,7 @@ function bandRowCenters(doc: Document): number[] {
         x = numbers[0];
         y = numbers[1] ?? y;
       } else if (name === 'l' || name === 'm') {
-        const dx = numbers[0] * (name === 'l' ? 1 : 1);
+        const dx = numbers[0];
         const dy = numbers[1] ?? 0;
         if (Math.abs(dy) < 1 && Math.abs(dx) > 50) centers.push(y);
         x += dx;

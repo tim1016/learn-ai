@@ -3,7 +3,7 @@ import { dataIndexOf, NOT_RECORDED, tooltipFrame, tooltipHtml, type ChartTheme, 
 import type { ChartOption } from './charts/golden-search-echarts';
 import { countText, objectiveTexts, shareText, valueAxisDomain } from './golden-search-chance-charts';
 import { signedPercentText } from './golden-search-display';
-import type { CandidateRef, FinalChance, MeasuredChanceCarryOver, MeasuredChanceComparison, MeasuredChanceProfitability } from './golden-search.types';
+import type { CandidateRef, MeasuredChanceCarryOver, MeasuredChanceComparison, MeasuredChanceFitToFitDirection, MeasuredChanceProfitability } from './golden-search.types';
 
 /**
  * The final-test chance charts (#3014, #3026): the middle-90% paired
@@ -138,14 +138,14 @@ export function finalIntervalsSpec(candidate: CandidateRef, comparison: Measured
   };
 }
 
+/** A measured profitability that carries the compounded-net range #3026 records; a record without one renders no chart. */
+export type ProfitabilityWithRange = MeasuredChanceProfitability & { net_return_range: NonNullable<MeasuredChanceProfitability['net_return_range']> };
+
 /**
  * The independent money chart (#3026): the middle 90% of the fit's resampled compounded net return, in
  * net-return units on its own axis, against actual break-even. It never shares an axis with the objective —
  * a positive Sharpe can compound to a loss — and it renders beside profitability's own sentence and counts.
  */
-/** A measured profitability that carries the compounded-net range #3026 records; a record without one renders no chart. */
-export type ProfitabilityWithRange = MeasuredChanceProfitability & { net_return_range: NonNullable<MeasuredChanceProfitability['net_return_range']> };
-
 export function finalProfitSpec(candidate: CandidateRef, profitability: ProfitabilityWithRange, featured: string | null): ChartSpec {
   const texts = { axis: (value: number) => signedPercentText(value) };
   const rows: IntervalRow[] = [
@@ -251,10 +251,7 @@ export function carryOverSpec(candidate: CandidateRef, carry: MeasuredChanceCarr
   };
 }
 
-/** The selected fit's own fit-to-fit direction, as the served record types it (#3029). */
-export type MeasuredFitToFitDirection = FinalChance['fit_to_fit'] & { status: 'measured' };
-
 /** The fit-to-fit sentence's short row text, from this fit's own stored direction. */
-export function fitToFitText(direction: MeasuredFitToFitDirection): string {
+export function fitToFitText(direction: MeasuredChanceFitToFitDirection): string {
   return `${direction.sentence} ${direction.selection_note}`;
 }

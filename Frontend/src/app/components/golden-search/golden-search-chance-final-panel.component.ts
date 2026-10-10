@@ -116,8 +116,14 @@ export class GoldenSearchChanceFinalPanelComponent {
     return fit_to_fit.status === 'missing' ? fit_to_fit.reason : null;
   });
 
-  /** True only when both components hold named-missing records — genuinely never measured, with nothing failed. */
-  protected readonly nothingMeasured = computed(() => this.chance().comparison.status === 'missing' && this.chance().carry_over.status === 'missing');
+  /** True only when every component holds a named-missing record — genuinely never measured, with nothing failed. */
+  protected readonly nothingMeasured = computed(
+    () =>
+      this.chance().comparison.status === 'missing' &&
+      this.chance().profitability.status === 'missing' &&
+      this.chance().carry_over.status === 'missing' &&
+      this.chance().fit_to_fit.status === 'missing',
+  );
 }
 
 /** A stored reading the panel cannot chart, in the server's words: failed raises an alert, the rest read as notes. */

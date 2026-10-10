@@ -18,6 +18,7 @@ from app.research.golden_search.chance_final import (
     both_directions,
     carry_over_reading,
     fit_to_fit_reading,
+    normalized_exam_fit_to_fit,
     reproduce_1x_objectives,
     resolved_fit_to_fit,
     stored_final_chance,
@@ -501,14 +502,72 @@ def test_a_legacy_one_direction_record_reads_honestly_and_names_its_unavailable_
         "at_least_as_good": {"count": 6_840, "share": 0.684},
         "sentence": "In 10,000 paired resamples of the final sessions, All-period fit was at least as good as Recent fit in 68.4% of paths (6,602 better, 238 tied, 3,160 worse). Both selections were made after these results were viewed; this is not adjusted for that choice.",
         "selection_note": SELECTION_NOTE,
-        "basis": {"schema_version": "golden-search-chance-fit-to-fit/v1"},
+        "basis": {
+            "schema_version": "golden-search-chance-fit-to-fit/v1",
+            "convention": "stationary-bootstrap/v1",
+            "replications": 10_000,
+            "mean_block_sessions": 5.0,
+            "thresholds": {"clear": 0.95},
+            "objective": {"measure": "total_return_pct", "label": "total return", "units": "fraction of the starting capital"},
+            "seed": {"inputs": [], "value": 0},
+            "source": {
+                "window": {"start_ms": _FINAL_WINDOW[0], "end_ms": _FINAL_WINDOW[1]},
+                "session_count": 25,
+                "point_hashes": ["aaaa", "zzzz"],
+                "series_digests": ["d-a", "d-z"],
+                "capital": CAPITAL,
+            },
+        },
     }
-    exam = {"chance": {"fit_to_fit": legacy}, "fits": [{"key": "all_period", "point_hash": "aaaa", "label": "All-period fit"}, {"key": "recent", "point_hash": "zzzz", "label": "Recent fit"}]}
+    exam = {"chance": {"fit_to_fit": legacy}, "fits": [{"key": "all_period", "same_as": [], "point_hash": "aaaa", "label": "All-period fit"}, {"key": "recent", "same_as": [], "point_hash": "zzzz", "label": "Recent fit"}]}
     owner = resolved_fit_to_fit(exam, exam["fits"][0])
     assert owner["status"] == "measured" and owner["sentence"] == legacy["sentence"]
+    assert owner["fit"] == {"point_hash": "aaaa", "label": "All-period fit"}
+    assert owner["opponent"] == {"point_hash": "zzzz", "label": "Recent fit"}
+    assert owner["counts"] == legacy["counts"]  # the numbers stay exactly as stored
     other = resolved_fit_to_fit(exam, exam["fits"][1])
     assert other["status"] == "missing" and other["code"] == "direction_unavailable"
     assert "only the All-period fit's direction" in other["reason"]
+    # The reshaped records satisfy the wire contract they are served under — a legacy record never breaks the
+    # study page (#3029).
+    from app.schemas.golden_search import GoldenSearchChanceFitToFitDirection, GoldenSearchExamView
+
+    GoldenSearchChanceFitToFitDirection.model_validate(owner)
+    GoldenSearchExamView.model_validate(
+        {
+            "window": {"start_ms": 0, "end_ms": 1},
+            "claim": "confirmatory",
+            "exposure_state": "not_opened",
+            "chance": {"fit_to_fit": normalized_exam_fit_to_fit(exam)},
+            "fits": [
+                {"key": "all_period", "same_as": [], "label": "All-period fit", "point": {}, "outcome": "meets_rules", "checks": [], "retention": None, "metrics": None, "chance": {"comparison": {"status": "missing", "code": "x", "reason": "r"}, "profitability": {"status": "missing", "code": "x", "reason": "r"}, "carry_over": {"status": "missing", "code": "x", "reason": "r"}, "fit_to_fit": owner}, "weakness": []},
+                {"key": "recent", "same_as": [], "label": "Recent fit", "point": {}, "outcome": "meets_rules", "checks": [], "retention": None, "metrics": None, "chance": {"comparison": {"status": "missing", "code": "x", "reason": "r"}, "profitability": {"status": "missing", "code": "x", "reason": "r"}, "carry_over": {"status": "missing", "code": "x", "reason": "r"}, "fit_to_fit": other}, "weakness": []},
+            ],
+            "incumbent_metrics": None,
+            "pick": "after_test",
+            "chosen_key": None,
+            "selection_note": None,
+            "positive_net_required": True,
+        }
+    )
+    # An unknown schema, at either level, reads as a named unsupported view — never a broken page.
+    unknown = {**legacy, "basis": {"schema_version": "v9"}}
+    assert resolved_fit_to_fit({"chance": {"fit_to_fit": unknown}, "fits": exam["fits"]}, exam["fits"][0])["code"] == "unsupported"
+    assert normalized_exam_fit_to_fit({"chance": {"fit_to_fit": unknown}, "fits": exam["fits"]})["code"] == "unsupported"
+    # A record whose own pair never contained the first recorded fit is foreign: its counts are never
+    # attributed to that fit, and the page still serves.
+    foreign = {**legacy, "pair": ["xxxx", "zzzz"]}
+    assert resolved_fit_to_fit({"chance": {"fit_to_fit": foreign}, "fits": exam["fits"]}, exam["fits"][0])["code"] == "unsupported"
+    # A corrupted record — a basis of wrong-typed fields, a truncated direction, a missing record's dropped
+    # code — reads as a named unsupported view at every level, never a broken study page.
+    corrupted_basis = {**legacy, "basis": {**legacy["basis"], "replications": None, "thresholds": "0.95"}}
+    truncated_v2 = {"status": "measured", "pair": ["aaaa", "zzzz"], "directions": [{"status": "measured"}], "selection_note": SELECTION_NOTE, "basis": legacy["basis"]}
+    dropped_field = {"status": "missing", "reason": "no code left"}
+    for corrupted in (corrupted_basis, truncated_v2, dropped_field):
+        exam_view_chance = normalized_exam_fit_to_fit({"chance": {"fit_to_fit": corrupted}, "fits": exam["fits"]})
+        assert exam_view_chance["status"] == "missing" and exam_view_chance["code"] == "unsupported", corrupted
+        per_fit = resolved_fit_to_fit({"chance": {"fit_to_fit": corrupted}, "fits": exam["fits"]}, exam["fits"][0])
+        assert per_fit["status"] == "missing" and per_fit["code"] == "unsupported", corrupted
     # A failed or missing exam-level record serves to every fit as it stands.
     assert resolved_fit_to_fit({"chance": {"fit_to_fit": {"status": "failed", "reason": "x", "sentence": "y"}}}, exam["fits"][0])["status"] == "failed"
     assert resolved_fit_to_fit({"chance": {"fit_to_fit": {"status": "missing", "code": "single_fit", "reason": "r"}}}, exam["fits"][0])["code"] == "single_fit"

@@ -29,7 +29,12 @@ from app.research.golden_search.activity import TradeFloors
 from app.research.golden_search.chance_approval import chance_weakness_items
 from app.research.golden_search.chance_compare import stored_chance
 from app.research.golden_search.chance_drawdown import stored_drawdown
-from app.research.golden_search.chance_final import FinalChanceScope, resolved_fit_to_fit, stored_final_chance
+from app.research.golden_search.chance_final import (
+    FinalChanceScope,
+    normalized_exam_fit_to_fit,
+    resolved_fit_to_fit,
+    stored_final_chance,
+)
 from app.research.golden_search.chance_rehearsal import stored_rehearsal
 from app.research.golden_search.compare_measures import neighborhood_view, stress_tally, stress_view, trades_per_year
 from app.research.golden_search.concentration import (
@@ -228,13 +233,7 @@ def results_view(row: StudyRow, protocol: GoldenSearchProtocol, declaration: Sea
             approvable=row.state not in _DECIDED_WITHOUT_APPROVAL,
             chance_policy=results.get("chance_approval"),
             positive_net_required=bool(protocol.policy.require_positive_net),
-            final_scope=FinalChanceScope(
-                objective=protocol.policy.objective,
-                development_window=(protocol.development_start_ms, protocol.development_end_ms),
-                final_window=(protocol.final_start_ms, protocol.final_end_ms),
-                capital=protocol.execution.initial_cash,
-                point_hash="",
-            ),
+            final_scope=FinalChanceScope.for_protocol(protocol),
         ),
         "qualification": qualification_view(row),
     }
@@ -505,11 +504,13 @@ def exam_view(
 
 
 def _exam_chance(stored: Mapping[str, Any]) -> dict[str, Any]:
-    """The exam-level chance record (the optional fit-to-fit comparison), normalized per component like every other."""
-    record = ((stored.get("chance") or {}).get("fit_to_fit")) if isinstance(stored.get("chance"), Mapping) else None
-    if isinstance(record, Mapping) and record.get("status") in {"measured", "missing", "failed"}:
-        return {"fit_to_fit": dict(record)}
-    return {"fit_to_fit": {"status": "missing", "code": "not_measured", "reason": "Not measured for this study: fit-to-fit readings were first recorded with #3014."}}
+    """The exam-level chance record (the optional fit-to-fit comparison), normalized like every other component.
+
+    The normalization is #3029's authority: a v2 record passes through, a legacy one-direction record is
+    reshaped into the direction it holds, and anything unreadable reads as a named missing — so a stored record
+    never breaks the wire contract the page is served under.
+    """
+    return {"fit_to_fit": normalized_exam_fit_to_fit(stored)}
 
 
 def qualification_view(row: StudyRow) -> dict[str, Any] | None:

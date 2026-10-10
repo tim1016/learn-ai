@@ -309,7 +309,6 @@ export type MeasuredChanceCarryOver = Schemas['GoldenSearchChanceCarryOverMeasur
 export type MeasuredChanceFitToFit = Schemas['GoldenSearchChanceFitToFitMeasured'];
 /** One fit's own direction of the shared fit-to-fit draw, as its served chance record carries it (#3029). */
 export type MeasuredChanceFitToFitDirection = FinalChance['fit_to_fit'] & { status: 'measured' };
-export type ExamChance = ExamView['chance'];
 export type ChanceBasis = Schemas['GoldenSearchChanceBasis'];
 /** The candidate a development chart draws: its key for colour and walkthrough targets, its label for words. */
 export type CandidateRef = Pick<EvidenceCandidate, 'key' | 'label'>;
