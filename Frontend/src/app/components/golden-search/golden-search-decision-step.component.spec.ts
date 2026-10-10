@@ -256,6 +256,36 @@ describe('GoldenSearchDecisionStepComponent — after the final test', () => {
     ]);
   });
 
+  it('names unavailable chance evidence in the server’s words, and switching fits restarts that acknowledgement', async () => {
+    // One fit carries the enrolled study's missing carry-over; the other is clear. The control is the same
+    // one, its reasons change with the fit, and an acknowledgement given for one never carries to the other (#3015).
+    const exam = examView({
+      fits: [
+        examFit('all_period', { weakness: [{ code: 'CHANCE_UNAVAILABLE', text: 'an unavailable required carry-over reading (No matching stored rehearsal could carry over)' }] }),
+        examFit('recent', { weakness: [] }),
+      ],
+    });
+    const { commands } = await renderStep(reviewWith(exam));
+
+    fireEvent.input(reason(), { target: { value: 'Owner accepts the missing carry-over.' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: /missing independent engine agreement/i }));
+    expect(approveButton().disabled).toBe(true);
+    const weakBox = screen.getByRole('checkbox', { name: 'I approve despite an unavailable required carry-over reading (No matching stored rehearsal could carry over). Preserve this evidence warning and my written reason.' }) as HTMLInputElement;
+    fireEvent.click(weakBox);
+    expect(approveButton().disabled).toBe(false);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Recent fit' }));
+    // The clear fit needs no weakness acknowledgement at all, and the one given for the other fit is gone.
+    expect(screen.queryByRole('checkbox', { name: /i approve despite/i })).toBeNull();
+    fireEvent.input(reason(), { target: { value: 'The Recent fit is clear.' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: /missing independent engine agreement/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve the Recent fit as golden' }));
+
+    expect(commands).toEqual([
+      { command: 'approve', payload: { candidate_key: 'recent', note: 'The Recent fit is clear.', acknowledge_missing_parity: true, acknowledge_research_weakness: false, expected_default_qualification_id: null } },
+    ]);
+  });
+
   it('approval the server does not offer stays disabled even with every acknowledgement, and says why', async () => {
     const { commands } = await renderStep(
       reviewWith({}, {}, { permitted_actions: ['retain', 'revise'], action_refusals: { approve: 'Approval follows the final test.' } }),

@@ -45,7 +45,9 @@ APPROVE = {
     "candidate_key": "all_period",
     "note": "Reviewed.",
     "acknowledge_missing_parity": True,
-    "acknowledge_research_weakness": False,
+    # The default fake landscape's final comparison is genuinely weak, so every enrolled study's approval
+    # acknowledges it (#3015).
+    "acknowledge_research_weakness": True,
     "expected_default_qualification_id": None,
 }
 
@@ -419,6 +421,10 @@ async def test_a_study_runs_from_lock_to_an_approved_golden_configuration_over_h
     assert study["state"] == "approved" and study["guidance"]["headline"] == "Golden configuration ready in Deploy"
     deploy = study["results"]["qualification"]["deploy"]
     assert deploy["symbol"] == symbol and "symbol" not in deploy["parameters"]
+    # The published research retains the acknowledged chance evidence with the qualification (#3015).
+    research = harness.approval.requests[-1].research
+    assert "CHANCE_WITHIN_NOISE" in research["weakness"] and research["research_override"] is True
+    assert research["chance"]["policy_schema"] == "golden-search-chance-approval/v1"
     listed = await client.get(f"{BASE}/studies", params={"symbol": symbol})
     assert [row["id"] for row in listed.json()] == [study["id"]] and listed.json()[0]["qualification_id"] is not None
     # Every phase a stage reported has its label in the job vocabulary, in the order the stages ran.

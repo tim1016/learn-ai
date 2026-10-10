@@ -26,6 +26,7 @@ from typing import Any
 
 from app.research.golden_search.actions import permitted
 from app.research.golden_search.activity import TradeFloors
+from app.research.golden_search.chance_approval import chance_weakness_items
 from app.research.golden_search.chance_compare import stored_chance
 from app.research.golden_search.chance_drawdown import stored_drawdown
 from app.research.golden_search.chance_final import stored_final_chance
@@ -221,7 +222,13 @@ def results_view(row: StudyRow, protocol: GoldenSearchProtocol, declaration: Sea
         else evidence_view(results["evidence"], protocol, declaration, pair_maps=pair_maps, receipt=row.receipt),
         "exam": None
         if "exam" not in results
-        else exam_view(results["exam"], chosen_key=row.candidate_key, approvable=row.state not in _DECIDED_WITHOUT_APPROVAL),
+        else exam_view(
+            results["exam"],
+            chosen_key=row.candidate_key,
+            approvable=row.state not in _DECIDED_WITHOUT_APPROVAL,
+            chance_policy=results.get("chance_approval"),
+            positive_net_required=bool(protocol.policy.require_positive_net),
+        ),
         "qualification": qualification_view(row),
     }
 
@@ -435,33 +442,47 @@ def evidence_view(
 # ── Exam and qualification ───────────────────────────────────────────────
 
 
-def exam_view(stored: Mapping[str, Any], *, chosen_key: str | None, approvable: bool = True) -> dict[str, Any]:
+def exam_view(
+    stored: Mapping[str, Any],
+    *,
+    chosen_key: str | None,
+    chance_policy: Mapping[str, Any] | None,
+    positive_net_required: bool,
+    approvable: bool = True,
+) -> dict[str, Any]:
     """The final test as recorded: each fit with its own outcome, and the fit the owner named, if any.
 
-    ``approvable`` is false once the study ended without an approval, so the note stops promising one.
+    ``approvable`` is false once the study ended without an approval, so the note stops promising one. Each
+    fit's weakness items include the chance acknowledgement items (#3015), read from the same stored
+    components and the same one authority the approval intent and the qualification payload use;
+    ``chance_policy``/``positive_net_required`` are required so a caller cannot silently render an enrolled
+    study as though it were legacy.
     """
     fits = recorded_fits(stored)
     chosen = fit_for(stored, chosen_key)
     pick = pick_of(stored)
+
+    def _fit_view(fit: dict[str, Any]) -> dict[str, Any]:
+        chance = stored_final_chance(fit)
+        return {
+            "key": fit["key"],
+            "same_as": list(fit["same_as"]),
+            "label": fit_label(fit),
+            "point": dict(fit["point"]),
+            "outcome": fit["outcome"],
+            "checks": list(fit["checks"]),
+            "retention": fit["retention"],
+            "metrics": fit["metrics"],
+            "weakness": weakness_items(stored, fit)
+            + chance_weakness_items(chance_policy, chance, positive_net_required=positive_net_required),
+            "chance": chance,
+        }
+
     return {
         "window": dict(stored["window"]),
         "claim": stored["claim"],
         "exposure_state": stored["exposure_state"],
-        "fits": [
-            {
-                "key": fit["key"],
-                "same_as": list(fit["same_as"]),
-                "label": fit_label(fit),
-                "point": dict(fit["point"]),
-                "outcome": fit["outcome"],
-                "checks": list(fit["checks"]),
-                "retention": fit["retention"],
-                "metrics": fit["metrics"],
-                "weakness": weakness_items(stored, fit),
-                "chance": stored_final_chance(fit),
-            }
-            for fit in fits
-        ],
+        "fits": [_fit_view(fit) for fit in fits],
         "incumbent_metrics": stored["incumbent_metrics"],
         "chance": _exam_chance(stored),
         "pick": pick,

@@ -73,6 +73,7 @@ from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc, session_start_for_bar_count
 from app.research.golden_search.activity import DEFAULT_EXPECTED_TRADES_PER_YEAR, activity_plan
 from app.research.golden_search.budget import ProtocolReview, estimate, review_protocol
+from app.research.golden_search.chance_approval import enrollment_policy
 from app.research.golden_search.declarations import (
     SearchDeclaration,
     SearchKnob,
@@ -604,6 +605,9 @@ def prepare_lock(
         budget_cap=protocol.budget_cap,
         request_sha256=request_sha256(protocol_dict),
         idempotency_key=idempotency_key,
+        # Enrolled at the lock transaction (#3015): the immutable chance-approval policy rides in the study's
+        # first results keys, so every later reader sees the rules this study locked under, never today's.
+        results={"chance_approval": enrollment_policy()},
     )
 
 
