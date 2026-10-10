@@ -36,7 +36,10 @@ from app.engine.strategy.base import LoggedTrade  # noqa: E402
 from app.utils.timestamps import to_ms_utc  # noqa: E402
 
 FIXTURE_ID = "ENG-008"
-FIXTURE_DIR = ROOT / "tests" / "fixtures" / "golden" / "strategy-parity" / FIXTURE_ID / "v1"
+# The active version (the golden README's regeneration rule: a new version
+# directory, never an overwrite of the published one).
+FIXTURE_VERSION = 2
+FIXTURE_DIR = ROOT / "tests" / "fixtures" / "golden" / "strategy-parity" / FIXTURE_ID / f"v{FIXTURE_VERSION}"
 MANIFEST_PATH = ROOT / "tests" / "fixtures" / "golden" / "manifest.json"
 
 SEED = 20260820
@@ -157,17 +160,28 @@ def main() -> None:
     _write_attribution(attribution_path, trades_by_strategy)
 
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    prior_entry = next((item for item in manifest["fixtures"] if item["id"] == FIXTURE_ID), None)
+    prior_versions = {} if prior_entry is None else dict(prior_entry.get("versions", {}))
     manifest["fixtures"] = [item for item in manifest["fixtures"] if item["id"] != FIXTURE_ID]
     content_hashes, file_hashes = compute_hashes(FIXTURE_DIR, ["input.arrow", "output.json"])
     file_hashes["attribution.md"] = hashlib.sha256(attribution_path.read_bytes()).hexdigest()
+    versions = dict(prior_versions)
+    versions[str(FIXTURE_VERSION)] = {
+        "input": "input.arrow",
+        "output": "output.json",
+        "attribution": "attribution.md",
+        "content_sha256": content_hashes,
+        "file_sha256": file_hashes,
+    }
     manifest["fixtures"].append(
         {
             "id": FIXTURE_ID,
             "name": "Strategy A/B/C self-equivalence (pre-port receipt)",
             "category": "strategy-parity",
             "canonical_module": (
-                "PythonDataService/app/engine/strategy/algorithms/"
-                "spy_strategy_a.py, spy_strategy_b.py, spy_strategy_c.py "
+                "PythonDataService/app/engine/strategy/algorithms/spy_strategy_a.py, "
+                "PythonDataService/app/engine/strategy/algorithms/spy_strategy_b.py, "
+                "PythonDataService/app/engine/strategy/algorithms/spy_strategy_c.py "
                 "(shared base: _rsi_range_base.py)"
             ),
             "canonical_callable": "SpyStrategyAAlgorithm, SpyStrategyBAlgorithm, SpyStrategyCAlgorithm",
@@ -195,17 +209,10 @@ def main() -> None:
                     "the S3 intent port must explain rather than silently tolerate."
                 ),
             },
-            "active_version": 1,
-            "versions": {
-                "1": {
-                    "input": "input.arrow",
-                    "output": "output.json",
-                    "attribution": "attribution.md",
-                    "content_sha256": content_hashes,
-                    "file_sha256": file_hashes,
-                }
-            },
+            "active_version": FIXTURE_VERSION,
+            "versions": versions,
             "status": "active",
+            "validated_by": ["tests/fixtures/test_strategy_parity_fixtures.py"],
         }
     )
     _write_json(MANIFEST_PATH, manifest)
@@ -215,6 +222,13 @@ def _write_attribution(path: Path, trades_by_strategy: dict[str, list[LoggedTrad
     counts = ", ".join(f"{key}={len(trades)}" for key, trades in trades_by_strategy.items())
     path.write_text(
         "# ENG-008 — Strategy A/B/C self-equivalence (pre-port receipt)\n\n"
+        "## v2 — the #2909 re-baseline\n\n"
+        "v1's trades were stamped by the port's old consolidated-bar end (the last\n"
+        "contained minute's end). v2 re-captures them under the LEAN-exact stamp\n"
+        "(end = start + period, #2909): every trade's entry/exit **time** moves by\n"
+        "the grid offset — prices, quantities, P&L and indicators are byte-identical\n"
+        "to v1. v1 is retained as the pre-#2909 baseline; the manifest's\n"
+        "active_version is 2.\n\n"
         "## Evidence Layers\n\n"
         "**Layer 1 — Market input provenance:** Synthetic. A single seeded "
         f"random-walk series of {BAR_COUNT} 15-minute SPY-like bars "

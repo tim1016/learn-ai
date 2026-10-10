@@ -1,0 +1,10 @@
+{
+  "description": "LEAN's emitted consolidated bar, verbatim from the harness run.",
+  "time": "2026-03-18T10:00:00",
+  "end_time": "2026-03-18T10:15:00",
+  "open": "500.4",
+  "high": "500.4",
+  "low": "496.4",
+  "close": "496.4",
+  "volume": 1491
+}

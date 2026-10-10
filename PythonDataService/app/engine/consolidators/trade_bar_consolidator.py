@@ -1,5 +1,18 @@
 """TradeBarConsolidator — mirrors LEAN's Common/Data/Consolidators/TradeBarConsolidator.cs.
 
+Formula: emitted bar = (start = floor_to_period(first input), end = start + period
+  for a sub-day period, OHLCV folded over contained inputs, close = last
+  contained input's close)
+Reference: LEAN commit 7986ed0a, vendored at
+  references/lean/7986ed0aade3ae5de06121682409f05984e32ff7 —
+  Common/Data/Consolidators/TradeBarConsolidator.cs (AggregateBar),
+  Common/Data/Market/TradeBar.cs (EndTime => Time + Period); the emitted bar
+  was also derived by running LEAN's own consolidator (golden fixture
+  lean-consolidator-short-bucket's attribution names the pinned image).
+Canonical implementation: this file.
+Validated against: tests/engine/test_lean_consolidator_short_bucket.py,
+  tests/engine/test_trade_bar_consolidator.py
+
 Aggregates fine-resolution TradeBars (e.g., minute) into coarser bars
 (e.g., 15 minute). Implements the same rounding and firing semantics as
 LEAN so consolidated bar boundaries match exactly.
@@ -19,8 +32,16 @@ Key behaviors reproduced from LEAN:
     bar, not the current one.
   * The consolidated bar's ``close`` is the close of the last input bar it
     contained, its ``high``/``low`` are the max/min across all input bars,
-    its ``volume`` is the sum, and its ``end_ms`` is the ``end_ms`` of
-    the last contained input bar.
+    its ``volume`` is the sum, and — for a period under one day — its
+    ``end_ms`` is ``start_ms + period``: LEAN's ``TradeBar.EndTime``
+    computes ``Time + Period``, and ``AggregateBar`` never rewrites either
+    once the working bar is opened, so a bucket whose last minute never
+    arrived still ends at its period boundary and a decision clock fed that
+    bar sees its full width (#2909). A period of one day or longer keeps the
+    last contained input's ``end_ms`` — the one deliberate difference from
+    LEAN, whose naive-tick flooring would stamp such a bar midnight to
+    midnight; here the bar labels its ET trading date and its data-bounded
+    end is what session-boundary fill deferral and chart windows read.
 """
 
 from __future__ import annotations
@@ -34,6 +55,7 @@ from app.utils.timestamps import ny_datetime, to_ms_utc
 
 _EASTERN = ZoneInfo("America/New_York")
 _EPOCH_NAIVE = datetime(1970, 1, 1)
+_DAY_MS = 24 * 3600 * 1000
 
 
 def _floor_to_period_ms(timestamp_ms: int, period: timedelta) -> int:
@@ -77,6 +99,7 @@ class TradeBarConsolidator:
         if period.total_seconds() <= 0:
             raise ValueError("period must be positive")
         self.period = period
+        self._period_ms = int(period.total_seconds() * 1000)
         self.on_data_consolidated: Callable[[TradeBar], None] | None = None
         self._working: dict | None = None
         self._last_emit_ms: int | None = None
@@ -100,8 +123,7 @@ class TradeBarConsolidator:
             # LEAN check (PeriodCountConsolidatorBase):
             #   data.Time - _workingBar.Time >= _period && GetRoundedBarTime(data) > _lastEmit
             time_diff_ms = bar.start_ms - working_start_ms
-            period_ms = int(self.period.total_seconds() * 1000)
-            if time_diff_ms >= period_ms and (
+            if time_diff_ms >= self._period_ms and (
                 self._last_emit_ms is None or rounded_start_ms > self._last_emit_ms
             ):
                 fired = self._emit_working()
@@ -111,7 +133,7 @@ class TradeBarConsolidator:
             self._working = {
                 "symbol": bar.symbol,
                 "start_ms": rounded_start_ms,
-                "end_ms": bar.end_ms,
+                "last_input_end_ms": bar.end_ms,
                 "open": bar.open,
                 "high": bar.high,
                 "low": bar.low,
@@ -127,7 +149,7 @@ class TradeBarConsolidator:
                 w["low"] = bar.low
             w["close"] = bar.close
             w["volume"] += bar.volume
-            w["end_ms"] = bar.end_ms
+            w["last_input_end_ms"] = bar.end_ms
 
         if fired is not None and self.on_data_consolidated is not None:
             self.on_data_consolidated(fired)
@@ -137,10 +159,17 @@ class TradeBarConsolidator:
         """Close out the working bar, emit it, and clear the working slot."""
         assert self._working is not None
         w = self._working
+        if self._period_ms < _DAY_MS:
+            # LEAN's EndTime is computed as Time + Period, so the emitted bar
+            # spans the full period even when its last minute never arrived
+            # (#2909). See the module docstring for the day-or-longer case.
+            end_ms = w["start_ms"] + self._period_ms
+        else:
+            end_ms = w["last_input_end_ms"]
         fired = TradeBar(
             symbol=w["symbol"],
             start_ms=w["start_ms"],
-            end_ms=w["end_ms"],
+            end_ms=end_ms,
             open=w["open"],
             high=w["high"],
             low=w["low"],
@@ -163,7 +192,7 @@ class TradeBarConsolidator:
         if self._working is None:
             return None
         working_start_ms = self._working["start_ms"]
-        if current_time_ms - working_start_ms >= int(self.period.total_seconds() * 1000):
+        if current_time_ms - working_start_ms >= self._period_ms:
             fired = self._emit_working()
             if self.on_data_consolidated is not None:
                 self.on_data_consolidated(fired)

@@ -1486,50 +1486,6 @@
       ]
     },
     {
-      "id": "ENG-008",
-      "name": "Strategy A/B/C self-equivalence (pre-port receipt)",
-      "category": "strategy-parity",
-      "canonical_module": "PythonDataService/app/engine/strategy/algorithms/spy_strategy_a.py, PythonDataService/app/engine/strategy/algorithms/spy_strategy_b.py, PythonDataService/app/engine/strategy/algorithms/spy_strategy_c.py",
-      "canonical_callable": "SpyStrategyAAlgorithm, SpyStrategyBAlgorithm, SpyStrategyCAlgorithm",
-      "reference": {
-        "kind": "internal_regression",
-        "oracle": "Strategy A/B/C's own current (pre-port) trade_log output, captured once as a refactor-neutrality receipt — not an external correctness oracle.",
-        "citation": "docs/references/strategy-abc-self-equivalence.md"
-      },
-      "market_input": {
-        "source": "synthetic",
-        "vendor": null,
-        "generated_by": "PythonDataService/scripts/fixture_generators/strategy_abc_self_equivalence.py"
-      },
-      "units": null,
-      "tolerance": {
-        "atol": 0.0,
-        "rtol": 0.0,
-        "note": "Bit-exact. All LoggedTrade fields are Decimal, int, str, or bool produced by exact Decimal arithmetic (no float division) replayed against the same pinned input; any divergence, even at the last Decimal digit, is exactly the signal the S3 intent port must explain rather than silently tolerate."
-      },
-      "active_version": 1,
-      "versions": {
-        "1": {
-          "input": "input.arrow",
-          "output": "output.json",
-          "attribution": "attribution.md",
-          "content_sha256": {
-            "input.arrow": "584e2fe111490e98d3c43e253e2f2fc4c8714b9d6d49ec000081acc524512218",
-            "output.json": "09436ded064f124e62a8de31224b7cda38af40579137723fa9afaaa43d9baf25"
-          },
-          "file_sha256": {
-            "input.arrow": "68eedbcf7f878759cda41b60efb1c643b2fb0142174ca705c710ce0d1a2ae3bb",
-            "output.json": "72eb22f3ab7568991bc97d36471ffaf806783a31fe2805c8b51f914415e0cdfe",
-            "attribution.md": "d869ffc3c79705fb199e7d09a441acae4bcf12e507b1d224c48de3b07cb923cb"
-          }
-        }
-      },
-      "status": "active",
-      "validated_by": [
-        "tests/fixtures/test_strategy_parity_fixtures.py"
-      ]
-    },
-    {
       "id": "ENG-009",
       "name": "RSI Mean Reversion LEAN trade parity",
       "category": "strategy-parity",
@@ -2356,6 +2312,108 @@
       "status": "active",
       "validated_by": [
         "tests/research/monte_carlo/test_stationary.py::test_stationary_bootstrap_agrees_with_arch_fixture_sb_001"
+      ]
+    },
+    {
+      "id": "lean-consolidator-short-bucket",
+      "name": "LEAN consolidator: a bucket missing its last minute still ends at the period boundary",
+      "category": "engine-parity",
+      "canonical_module": "PythonDataService/app/engine/consolidators/trade_bar_consolidator.py",
+      "canonical_callable": "TradeBarConsolidator",
+      "reference": {
+        "kind": "cross_engine",
+        "oracle": "LEAN's own TradeBarConsolidator, executed in the pinned sandbox image quantconnect/lean@sha256:4934c22c2b080a688f25b571746603e01533c5e581499d8457e5624a132ba77b; cross-checked against the vendored commit 7986ed0a's TradeBar.cs (EndTime => Time + Period) and TradeBarConsolidator.cs (AggregateBar never rewrites Time/Period).",
+        "citation": "references/lean/7986ed0aade3ae5de06121682409f05984e32ff7/attribution.md"
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/lean_consolidator_short_bucket/harness.cs"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.0,
+        "rtol": 0.0,
+        "note": "Exact: Decimal prices and integer volume aggregated identically; instants compared as ms."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.json": "5d1ff3d25956c4288db709ffcd5dcfde5da3a7d4835b428edab478cd6c09c7a1",
+            "output.json": "39b6424903b6c63ca11c9288ab5e69a5b00557a1a0aecdc6e79eed17137d226c"
+          },
+          "file_sha256": {
+            "input.json": "b41af1505edbbdc2b3759269c7e5aecab0700f4fcfc005201f6b98599fa7ca01",
+            "output.json": "bbeb5b5129783fec65b283249cbab2775961099bfb54d8a1902d68d785fb7fc4",
+            "attribution.md": "1b038b4351e89ebf4d37b4a74751e1afca19da99e379267e2f8966ca644f4144"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/engine/test_lean_consolidator_short_bucket.py"
+      ]
+    },
+    {
+      "id": "ENG-008",
+      "name": "Strategy A/B/C self-equivalence (pre-port receipt)",
+      "category": "strategy-parity",
+      "canonical_module": "PythonDataService/app/engine/strategy/algorithms/spy_strategy_a.py, PythonDataService/app/engine/strategy/algorithms/spy_strategy_b.py, PythonDataService/app/engine/strategy/algorithms/spy_strategy_c.py (shared base: _rsi_range_base.py)",
+      "canonical_callable": "SpyStrategyAAlgorithm, SpyStrategyBAlgorithm, SpyStrategyCAlgorithm",
+      "reference": {
+        "kind": "internal_regression",
+        "oracle": "Strategy A/B/C's own current (pre-port) trade_log output, captured once as a refactor-neutrality receipt — not an external correctness oracle.",
+        "citation": "docs/references/strategy-abc-self-equivalence.md"
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "PythonDataService/scripts/fixture_generators/strategy_abc_self_equivalence.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.0,
+        "rtol": 0.0,
+        "note": "Bit-exact. All LoggedTrade fields are Decimal, int, str, or bool produced by exact Decimal arithmetic (no float division) replayed against the same pinned input; any divergence, even at the last Decimal digit, is exactly the signal the S3 intent port must explain rather than silently tolerate."
+      },
+      "active_version": 2,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "584e2fe111490e98d3c43e253e2f2fc4c8714b9d6d49ec000081acc524512218",
+            "output.json": "dfbee2a6bd8e7c06780c5af32818d053eb37d281c6d3f3bc0e5740c66626b9b6"
+          },
+          "file_sha256": {
+            "input.arrow": "68eedbcf7f878759cda41b60efb1c643b2fb0142174ca705c710ce0d1a2ae3bb",
+            "output.json": "44143ce6f471961465e296d6d82c1cd7c60fc3eac1b92f523730266ed67d1420",
+            "attribution.md": "d869ffc3c79705fb199e7d09a441acae4bcf12e507b1d224c48de3b07cb923cb"
+          }
+        },
+        "2": {
+          "input": "input.arrow",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "584e2fe111490e98d3c43e253e2f2fc4c8714b9d6d49ec000081acc524512218",
+            "output.json": "dfbee2a6bd8e7c06780c5af32818d053eb37d281c6d3f3bc0e5740c66626b9b6"
+          },
+          "file_sha256": {
+            "input.arrow": "68eedbcf7f878759cda41b60efb1c643b2fb0142174ca705c710ce0d1a2ae3bb",
+            "output.json": "44143ce6f471961465e296d6d82c1cd7c60fc3eac1b92f523730266ed67d1420",
+            "attribution.md": "07c6dfb21bb7473d25a8ffd1a7d8711d2e78be3d413ae9d6647942f7ae6b69ba"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_strategy_parity_fixtures.py"
       ]
     }
   ]

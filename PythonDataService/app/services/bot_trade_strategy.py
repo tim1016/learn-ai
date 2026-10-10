@@ -1503,6 +1503,33 @@ def _decision_bar_ref(binding: BrokerBotBinding, evaluation: StrategyEvaluation)
     )
 
 
+def _retained_decision_bar(
+    source_bars: SourceBarLedger,
+    *,
+    binding: BrokerBotBinding,
+    evaluation: StrategyEvaluation,
+    intent: SignalIntent,
+) -> RetainedSourceBar | None:
+    """The ledger's bar a decision executes against: the bucket's own closing
+    minute, or — for a recovered bucket, one whose closing minute never
+    arrived — the last minute the bucket holds (#2909).
+
+    A bucket fires only once a bar arrived inside it, so the newest retained
+    close at or before the bucket's boundary is always one of that bucket's
+    own minutes, never an earlier bucket's. The boundary itself is looked up
+    exactly first: a complete bucket keeps its closing minute, and the two
+    paths agree on it.
+    """
+    exact = source_bars.find_by_closed_end(
+        provider=evaluation.bar.feed_id, symbol=binding.symbol, end_ms=intent.bar_close_ms
+    )
+    if exact is not None:
+        return exact
+    return source_bars.latest_for_symbol(
+        binding.symbol, provider=evaluation.bar.feed_id, at_or_before_ms=intent.bar_close_ms
+    )
+
+
 def _decision_bar_evidence(
     binding: BrokerBotBinding,
     evaluation: StrategyEvaluation,
@@ -1533,11 +1560,7 @@ def _decision_bar_evidence(
     retained = (
         None
         if source_bars is None
-        else source_bars.find_by_closed_end(
-            provider=evaluation.bar.feed_id,
-            symbol=binding.symbol,
-            end_ms=intent.bar_close_ms,
-        )
+        else _retained_decision_bar(source_bars, binding=binding, evaluation=evaluation, intent=intent)
     )
     evidence = EffectDecisionEvidence(
         evaluation_id=evaluation.evaluation_id,
@@ -1783,15 +1806,14 @@ def _the_money(
 
     The pricing stream's bar when the bot listens to another symbol; it is
     there, with a trade in it, or the entry was already refused. Otherwise
-    the retained decision bar, which is the underlying's own. ``None`` when
-    that minute has no bar with a trade in it: the underlying did not trade,
-    and the resolver refuses the entry by that name.
+    the retained decision bar, which is the underlying's own — the bucket's
+    closing minute, or the last minute a recovered bucket holds (#2909).
+    ``None`` when that minute has no bar with a trade in it: the underlying
+    did not trade, and the resolver refuses the entry by that name.
     """
     if pricing is not None:
         return None if priced.bar is None else priced.bar.close
-    own = source_bars.find_by_closed_end(
-        provider=evaluation.bar.feed_id, symbol=binding.symbol, end_ms=intent.bar_close_ms
-    )
+    own = _retained_decision_bar(source_bars, binding=binding, evaluation=evaluation, intent=intent)
     return None if own is None or own.volume <= 0 else own.close
 
 
