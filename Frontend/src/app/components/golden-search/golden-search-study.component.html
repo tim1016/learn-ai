@@ -1,10 +1,13 @@
-<section class="study" aria-labelledby="gs-study-title">
+<section class="study" [attr.aria-labelledby]="report() ? 'report-title' : 'gs-study-title'">
   <a class="back" routerLink="/golden-search"><i class="pi pi-arrow-left" aria-hidden="true"></i> All studies</a>
   @if (loadError(); as message) { <p class="refusal" role="alert">{{ message }}</p> }
   @if (refreshNotice(); as notice) { <p class="muted" role="status">{{ notice }}</p> }
   <p class="sr-only" role="status">{{ announcement() }}</p>
 
   @if (detail(); as d) {
+    @if (report()) {
+      <app-golden-search-report [study]="d" [capability]="capability()" />
+    } @else {
     <app-golden-search-study-strip [study]="d" [capability]="capability()" />
     @if (stage(); as current) { <app-golden-search-process [current]="current" /> }
 
@@ -90,6 +93,7 @@
       <div class="review-tour">
         <app-golden-search-walkthrough [steps]="reviewSteps()" label="Review this study" (stepChange)="visitStop($event)" (closed)="endReview()" />
       </div>
+    }
     }
   } @else if (loadError() === null) {
     <p class="muted" role="status">Loading the study…</p>

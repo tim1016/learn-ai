@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, effect, inject, input, signal, untracked } from '@angular/core';
-import { Router } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from 'primeng/tabs';
 
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
@@ -20,7 +20,7 @@ export type GoldenSearchTab = 'new' | 'history';
  */
 @Component({
   selector: 'app-golden-search-page',
-  imports: [GoldenSearchHistoryComponent, GoldenSearchPlanFormComponent, GoldenSearchStudyComponent, PageHeaderComponent, Tab, TabList, TabPanel, TabPanels, Tabs],
+  imports: [GoldenSearchHistoryComponent, GoldenSearchPlanFormComponent, GoldenSearchStudyComponent, PageHeaderComponent, RouterLink, Tab, TabList, TabPanel, TabPanels, Tabs],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-search-page.component.html',
   styleUrl: './golden-search-page.component.scss',
@@ -31,6 +31,8 @@ export class GoldenSearchPageComponent {
 
   /** Route parameter: the study to open. */
   readonly studyId = input<string | undefined>(undefined);
+  readonly step = input<string | undefined>(undefined);
+  readonly view = input<string | undefined>(undefined);
   /** Query parameter: the study whose frozen plan a new study revises. */
   readonly revise = input<string | undefined>(undefined);
 

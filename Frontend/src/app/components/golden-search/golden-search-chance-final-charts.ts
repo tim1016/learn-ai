@@ -6,7 +6,7 @@ import type { CandidateRef, MeasuredChanceCarryOver, MeasuredChanceComparison, M
 
 /**
  * The final-test chance charts (#3014): the middle-90% paired difference
- * against zero, the fit's resampled objective range against break-even, and
+ * against zero, the fit's resampled objective range against objective zero, and
  * the reproduced 1× rehearsal's percentile curve with the recorded final
  * result marked. Every number is the server's — counts, shares, ranges, the
  * rank and every sentence; the browser only formats and draws. The frozen
@@ -21,20 +21,22 @@ const RANGE_ROW = 'Resampled result, middle 90%';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- echarts' series union through ComposeOption cannot be indexed here.
 type FinalSeries = any;
 
-function rangeBand(counts: { p5: number | null; p50: number | null; p95: number | null }, row: string, theme: ChartTheme): FinalSeries[] {
+function rangeBand(counts: { p5: number | null; p50: number | null; p95: number | null }, row: string, rowIndex: number, zeroLabel: string, theme: ChartTheme): FinalSeries[] {
   const has = counts.p5 !== null && counts.p50 !== null && counts.p95 !== null;
   return [
     {
       id: `final:range:${row}`,
       name: row,
       type: 'custom',
-      data: has ? [0] : [],
+      dimensions: ['low', 'high', 'median', 'row'],
+      encode: { x: [0, 1, 2], y: 3 },
+      data: has ? [[counts.p5, counts.p95, counts.p50, rowIndex]] : [],
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- echarts' custom-series graphic children are a union the limited ComposeOption types cannot name.
       renderItem: (_params: unknown, api: { coord: (data: number[]) => number[] }): any => {
-        const lowX = api.coord([counts.p5 as number])[0];
-        const highX = api.coord([counts.p95 as number])[0];
-        const medianX = api.coord([counts.p50 as number])[0];
-        const top = api.coord([0])[1] - 13;
+        const lowX = api.coord([counts.p5 as number, rowIndex])[0];
+        const highX = api.coord([counts.p95 as number, rowIndex])[0];
+        const medianX = api.coord([counts.p50 as number, rowIndex])[0];
+        const top = api.coord([0, rowIndex])[1] - 13;
         return {
           type: 'group',
           children: [
@@ -48,14 +50,14 @@ function rangeBand(counts: { p5: number | null; p50: number | null; p95: number 
         silent: true,
         symbol: 'none',
         lineStyle: { color: theme.text, type: 'dashed', width: 1 },
-        label: { show: true, position: 'end', color: theme.textSecondary, fontSize: 10, formatter: () => (row === DIFFERENCE_ROW ? 'tie' : 'break-even') },
+        label: { show: true, position: 'end', color: theme.textSecondary, fontSize: 10, formatter: () => zeroLabel },
         data: [{ xAxis: 0 }],
       },
     },
   ];
 }
 
-function intervalOption(rows: readonly { row: string; range: { p5: number | null; p50: number | null; p95: number | null }; note: string }[], texts: { axis: (value: number) => string }, theme: ChartTheme): ChartOption {
+function intervalOption(rows: readonly { row: string; range: { p5: number | null; p50: number | null; p95: number | null }; note: string; zeroLabel: string }[], texts: { axis: (value: number) => string }, theme: ChartTheme): ChartOption {
   const values = rows.flatMap(({ range }) => [range.p5, range.p50, range.p95].filter((value): value is number => value !== null));
   const min = Math.min(0, ...values);
   const max = Math.max(0, ...values);
@@ -81,12 +83,13 @@ function intervalOption(rows: readonly { row: string; range: { p5: number | null
     },
     yAxis: {
       type: 'category',
+      inverse: true,
       data: rows.map(({ row }) => row),
       axisLine: { lineStyle: { color: theme.axis } },
       axisTick: { show: false },
       axisLabel: { color: theme.text, fontSize: 12, width: 160, overflow: 'truncate' },
     },
-    series: rows.flatMap(({ row, range }) => rangeBand(range, row, theme)),
+    series: rows.flatMap(({ row, range, zeroLabel }, rowIndex) => rangeBand(range, row, rowIndex, zeroLabel, theme)),
   };
 }
 
@@ -100,8 +103,8 @@ export function finalIntervalsSpec(candidate: CandidateRef, comparison: Measured
     option: (theme) =>
       intervalOption(
         [
-          { row: DIFFERENCE_ROW, range: comparison.difference_range, note: 'Candidate minus incumbent on every paired resample; zero is a tie.' },
-          { row: RANGE_ROW, range: comparison.candidate_range, note: "The fit's own resampled result; zero is break-even." },
+          { row: DIFFERENCE_ROW, range: comparison.difference_range, note: 'Candidate minus incumbent on every paired resample; zero is a tie.', zeroLabel: 'tie' },
+          { row: RANGE_ROW, range: comparison.candidate_range, note: `The fit's own resampled ${comparison.basis.objective.label}; zero is the objective's zero, not necessarily break-even profit.`, zeroLabel: 'zero objective' },
         ],
         texts,
         theme,
@@ -161,6 +164,16 @@ export function carryOverSpec(candidate: CandidateRef, carry: MeasuredChanceCarr
       yAxis: {
         type: 'value',
         scale: true,
+        min: extent => {
+          const low = Math.min(extent.min, carry.recorded_objective);
+          const high = Math.max(extent.max, carry.recorded_objective);
+          return low - (high - low || 1) * 0.05;
+        },
+        max: extent => {
+          const low = Math.min(extent.min, carry.recorded_objective);
+          const high = Math.max(extent.max, carry.recorded_objective);
+          return high + (high - low || 1) * 0.05;
+        },
         axisLabel: { color: theme.textSecondary, fontSize: 11, hideOverlap: true, formatter: (value: number) => texts.axis(value) },
         splitLine: { lineStyle: { color: theme.gridLine } },
       },

@@ -59,11 +59,11 @@
           <p caption class="caption">{{ row.candidate.label }} rerun in the engine under each cost scenario the plan declared. Base costs: {{ s.scope.costs_sentence }}</p>
         </app-golden-search-panel>
 
-        <app-golden-search-chance-panel data-span="12" [candidate]="row.candidate" [chance]="row.candidate.chance" />
-        <app-golden-search-rehearsal-panel data-span="12" [candidate]="row.candidate" [rehearsal]="row.candidate.chance.rehearsal" />
-        <app-golden-search-drawdown-panel data-span="12" [candidate]="row.candidate" [drawdown]="row.candidate.chance.drawdown" />
+        <app-golden-search-chance-panel data-span="6" [candidate]="row.candidate" [chance]="row.candidate.chance" />
+        <app-golden-search-rehearsal-panel data-span="6" [candidate]="row.candidate" [rehearsal]="row.candidate.chance.rehearsal" />
+        <app-golden-search-drawdown-panel data-span="6" [candidate]="row.candidate" [drawdown]="row.candidate.chance.drawdown" />
 
-        <app-golden-search-curve-set data-span="12" [study]="s" curves="candidate" [candidate]="row.neighborSource.key" chart="candidate-curves"
+        <app-golden-search-curve-set data-span="6" [study]="s" curves="candidate" [candidate]="row.neighborSource.key" chart="candidate-curves"
           [caption]="curvesCaption()" />
 
         <section class="panel" aria-label="Candidate evidence">

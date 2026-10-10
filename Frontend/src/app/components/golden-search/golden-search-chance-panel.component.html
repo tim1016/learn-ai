@@ -1,4 +1,4 @@
-<app-golden-search-panel chart="chance-comparison">
+<app-golden-search-panel chart="chance-comparison" [instance]="instance()">
   @if (measured(); as m) {
     <p class="sentence" role="note">{{ m.sentence }}</p>
     <div class="body">

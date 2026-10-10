@@ -300,6 +300,10 @@ export const routes: Routes = [
     src: "/assets/docs/signal-engine-methodology.md",
   }),
   // In-app only: the guide lives with the served documents and has no repo copy.
+  {
+    path: "docs/golden-search-manual",
+    loadComponent: () => import("./components/golden-search/manual/golden-search-manual.component").then(m => m.GoldenSearchManualComponent),
+  },
   markdownDocRoute("docs/golden-search-guide", {
     heading: "Reading the Golden Search charts",
     src: "/assets/docs/golden-search-guide.md",

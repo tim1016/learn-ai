@@ -23,6 +23,7 @@ import { GoldenSearchTestStepComponent } from './golden-search-test-step.compone
 import { GoldenSearchRefusedError, GoldenSearchService, StageDispatchError, StudyConflictError } from './golden-search.service';
 import { isLive, type PresentedStatus, type StrategyCapability, type StudyCommand, type StudyCommandRequest, type StudyDetail } from './golden-search.types';
 import { IdempotencyKeys } from './idempotency-keys';
+import { GoldenSearchReportComponent } from './report/golden-search-report.component';
 
 /** Polls kept up after a dispatch while the worker has yet to claim the stage (its claim races the 202). */
 const AWAIT_CLAIM_POLLS = 10;
@@ -60,6 +61,7 @@ const PROGRESS_TEXT: Readonly<Record<StepProgress, string>> = {
     GoldenSearchPlanSummaryComponent,
     GoldenSearchProcessComponent,
     GoldenSearchRunsComponent,
+    GoldenSearchReportComponent,
     GoldenSearchScopeLineComponent,
     GoldenSearchSearchStepComponent,
     GoldenSearchStudyStripComponent,
@@ -80,6 +82,8 @@ export class GoldenSearchStudyComponent {
   private readonly destroyRef = inject(DestroyRef);
 
   readonly studyId = input.required<string>();
+  readonly step = input<string | undefined>(undefined);
+  readonly report = input(false);
   readonly capabilities = input<readonly StrategyCapability[]>([]);
   /** Poll interval while a stage runs; tests set 0 to disable. */
   readonly pollMs = input(3000);
@@ -170,8 +174,16 @@ export class GoldenSearchStudyComponent {
   private viewGeneration = 0;
   private stateStep: StudyStep | null = null;
   private awaitingClaimPolls = 0;
+  private readonly linkedStep = computed(() => `${this.detail()?.id ?? ''}:${this.step() ?? ''}`);
 
   constructor() {
+    effect(() => {
+      this.linkedStep();
+      untracked(() => {
+        const step = STUDY_STEPS.find(item => item.id === this.step());
+        if (step !== undefined && this.detail() !== null) this.selectStep(step.id);
+      });
+    });
     effect(() => {
       const id = this.studyId();
       untracked(() => {

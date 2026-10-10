@@ -1,4 +1,7 @@
+@use '../styles/page-grid';
+
 :host {
+  @include page-grid.container;
   display: block;
   flex: 1;
   min-width: 0;

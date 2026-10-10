@@ -10,12 +10,13 @@ const ALL_PERIOD: CandidateRef = { key: 'all_period', label: 'All-period fit' };
 /** Falsifiability: truncate a rank to the plotted 99 percentiles, relabel the bands as confidence intervals, join the percentiles into a path, or hide the recorded marker, and a spec here names it. */
 
 describe('the final uncertainty chart specs', () => {
-  it('draws both bands against a zero reference labelled tie and break-even', () => {
+  it('keeps the objective zero separate from break-even profit', () => {
     const spec = finalIntervalsSpec(ALL_PERIOD, chanceComparison(), 'all_period');
     const option = spec.option(FAKE_CHART_THEME) as { series: { markLine?: { data: { xAxis: number }[]; label?: { formatter?: () => string } } }[] };
     const marks = option.series.flatMap((series) => (series.markLine?.data ?? []).map(() => series.markLine?.label?.formatter?.() ?? ''));
     expect(marks).toContain('tie');
-    expect(marks).toContain('break-even');
+    expect(marks).toContain('zero objective');
+    expect(marks).not.toContain('break-even');
     expect(JSON.stringify(option)).not.toContain('confidence');
   });
 
