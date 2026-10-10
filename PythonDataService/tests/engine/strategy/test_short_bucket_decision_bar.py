@@ -17,12 +17,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from scripts.generate_signal_program_trace_corpus import _DEFAULT_CELLS_ROOT, _minute_bars
 from app.engine.data.trade_bar import TradeBar
 from app.engine.strategy.programs.ema_previous_crossover import (
     EmaPreviousCrossoverParams,
     build_ema_previous_crossover_program,
 )
+from scripts.generate_signal_program_trace_corpus import _DEFAULT_CELLS_ROOT, _minute_bars
 from tests.fixtures.golden_support.strategy_replay import staged_decisions
 
 _CELL = "SPY_W3mo_2026-02-02_to_2026-04-30"

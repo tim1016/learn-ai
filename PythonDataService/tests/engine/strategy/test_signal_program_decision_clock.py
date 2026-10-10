@@ -433,7 +433,7 @@ def test_the_capture_dict_is_pruned_to_the_resolved_bucket() -> None:
     program.on_consolidated_bar(bucket(_QUARANTINE_SYMBOL, _BASE_MS, _BASE_MS + width, "100"))
     program.session.settle(Settlement.DISCARD)
 
-    captured = program._captured_modes_by_close_ms  # noqa: SLF001 -- the prune is the behavior under test
+    captured = program._captured_modes_by_close_ms
     assert not [ms for ms in captured if ms <= _BASE_MS + width], (
         "a minute of a resolved bucket is still keyed: the dict grows per source bar"
     )
