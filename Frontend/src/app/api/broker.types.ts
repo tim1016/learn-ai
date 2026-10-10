@@ -14179,6 +14179,8 @@ export interface components {
             comparison: components["schemas"]["GoldenSearchChanceComparisonMeasured"] | components["schemas"]["GoldenSearchChanceComparisonSameSettings"] | components["schemas"]["GoldenSearchChanceComparisonBaseline"] | components["schemas"]["GoldenSearchChanceReadingMissing"] | components["schemas"]["GoldenSearchChanceReadingFailed"];
             /** Profitability */
             profitability: components["schemas"]["GoldenSearchChanceProfitabilityMeasured"] | components["schemas"]["GoldenSearchChanceReadingMissing"] | components["schemas"]["GoldenSearchChanceReadingFailed"];
+            /** Rehearsal */
+            rehearsal: components["schemas"]["GoldenSearchChanceRehearsalMeasured"] | components["schemas"]["GoldenSearchChanceReadingMissing"] | components["schemas"]["GoldenSearchChanceReadingFailed"];
         };
         /** GoldenSearchChanceAtLeastAsGood */
         GoldenSearchChanceAtLeastAsGood: {
@@ -14398,6 +14400,172 @@ export interface components {
              * @enum {string}
              */
             status: "missing";
+        };
+        /**
+         * GoldenSearchChanceRehearsalActivity
+         * @description The trade-floor basis the rungs' floors came from.
+         */
+        GoldenSearchChanceRehearsalActivity: {
+            /** Expected Trades Per Year */
+            expected_trades_per_year: number | null;
+            /**
+             * Final Trading Years
+             * @description The frozen final interval's length in trading years; null on a fixed-floor plan.
+             */
+            final_trading_years: number | null;
+            /** Frequency Based */
+            frequency_based: boolean;
+        };
+        /**
+         * GoldenSearchChanceRehearsalBasis
+         * @description Everything a stored rehearsal was drawn and judged under, so reading it back never reclassifies it.
+         */
+        GoldenSearchChanceRehearsalBasis: {
+            activity: components["schemas"]["GoldenSearchChanceRehearsalActivity"];
+            /** Chunk Replications */
+            chunk_replications: number;
+            /** Convention */
+            convention: string;
+            final_interval: components["schemas"]["GoldenSearchChanceRehearsalFinalInterval"];
+            /** Mean Block Sessions */
+            mean_block_sessions: number;
+            objective: components["schemas"]["GoldenSearchChanceObjective"];
+            /** Replications */
+            replications: number;
+            rules: components["schemas"]["GoldenSearchChanceRehearsalRules"];
+            /** Schema Version */
+            schema_version: string;
+            /** Seeds */
+            seeds: {
+                [key: string]: components["schemas"]["GoldenSearchChanceRehearsalSeeds"];
+            };
+            source: components["schemas"]["GoldenSearchChanceSource"];
+            /**
+             * Thresholds
+             * @description The interpretation thresholds the stored labels were judged by.
+             */
+            thresholds: {
+                [key: string]: number;
+            };
+        };
+        /**
+         * GoldenSearchChanceRehearsalFinalInterval
+         * @description The frozen final interval whose scheduled session count the rungs scale from.
+         */
+        GoldenSearchChanceRehearsalFinalInterval: {
+            /** Scheduled Sessions */
+            scheduled_sessions: number;
+            window: components["schemas"]["GoldenSearchChanceWindow"];
+        };
+        /**
+         * GoldenSearchChanceRehearsalMeasured
+         * @description The final-test rehearsal ladder: conditional resampling support for each modeled rule, never a power calculation.
+         */
+        GoldenSearchChanceRehearsalMeasured: {
+            /**
+             * Active Rules
+             * @description The rules this plan models; a rule the plan does not require has no series here.
+             */
+            active_rules: string[];
+            basis: components["schemas"]["GoldenSearchChanceRehearsalBasis"];
+            /**
+             * Guidance
+             * @description The owner-facing diagnosis; Python writes it, the browser only displays it.
+             */
+            guidance: string;
+            objective_percentiles_1x: components["schemas"]["GoldenSearchChanceRehearsalPercentiles"];
+            /** Rungs */
+            rungs: components["schemas"]["GoldenSearchChanceRung"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "measured";
+        };
+        /**
+         * GoldenSearchChanceRehearsalPercentiles
+         * @description The 1× objective's 1st–99th percentiles by linear interpolation over the finite values, for the later carry-over display.
+         */
+        GoldenSearchChanceRehearsalPercentiles: {
+            /** Finite */
+            finite: number;
+            /**
+             * P
+             * @description Empty when no resample produced a defined objective.
+             */
+            p: number[];
+        };
+        /**
+         * GoldenSearchChanceRehearsalRules
+         * @description The rules a rehearsal modeled, as the plan froze them.
+         */
+        GoldenSearchChanceRehearsalRules: {
+            /**
+             * Drawdown Basis
+             * @description Always 'session closes'; the real final-test gate reads the engine's per-bar drawdown.
+             */
+            drawdown_basis: string;
+            /**
+             * Max Drawdown Ceiling
+             * @description A fraction of peak equity.
+             */
+            max_drawdown_ceiling: number;
+            /** Require Positive Net */
+            require_positive_net: boolean;
+        };
+        /**
+         * GoldenSearchChanceRehearsalSeeds
+         * @description Each rung's exact seed, by its multiple: the 1× seed is what the final-test slice reproduces the carry-over from.
+         */
+        GoldenSearchChanceRehearsalSeeds: {
+            /** Inputs */
+            inputs: (string | number)[];
+            /** Value */
+            value: number;
+        };
+        /**
+         * GoldenSearchChanceRung
+         * @description One rung of the rehearsal ladder: what share of its resamples met each modeled rule.
+         */
+        GoldenSearchChanceRung: {
+            /**
+             * Denominator
+             * @description Every resampled path, the denominator of each share.
+             */
+            denominator: number;
+            /**
+             * K
+             * @description The multiple of the frozen final interval's scheduled sessions.
+             */
+            k: number;
+            /**
+             * Passes
+             * @description Pass counts per rule and for the joint predicate, keyed `pass_<rule>` and `pass_joint`.
+             */
+            passes: {
+                [key: string]: number;
+            };
+            /**
+             * Sessions
+             * @description Scheduled sessions this rung rehearses over; ordinal sessions, never invented dates.
+             */
+            sessions: number;
+            /**
+             * Shares
+             * @description Presentation shares; labels come from the counts, never from these rounded values.
+             */
+            shares: {
+                [key: string]: number;
+            };
+            /** Trade Floor */
+            trade_floor: number;
+            /**
+             * Undefined
+             * @description Undefined counts for the rules that can be, keyed `undefined_<rule>`; the exit rule never is.
+             */
+            undefined?: {
+                [key: string]: number;
+            };
         };
         /** GoldenSearchChanceSeed */
         GoldenSearchChanceSeed: {

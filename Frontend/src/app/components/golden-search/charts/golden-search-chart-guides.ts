@@ -8,6 +8,7 @@ export type GoldenSearchChartId =
   | 'neighbor-tornado'
   | 'cost-stress'
   | 'chance-comparison'
+  | 'chance-rehearsal'
   | 'concentration-curve'
   | 'without-best'
   | 'month-calendar'
@@ -127,6 +128,16 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
       { text: 'Read the strip beside it: every one of the 10,000 resamples counted as better, tied, worse or undefined. Ties are not improvement.', target: null },
       { text: 'The sentence beneath names the share that was at least as good. 95% is the owner’s reading threshold, not a calibrated error rate.', target: null },
       { text: 'Remember what it cannot say: this fit was selected on these same sessions, and the search is not repeated inside the resamples.', target: null },
+    ],
+  },
+  'chance-rehearsal': {
+    title: 'Final-test rehearsal',
+    question: 'If the recorded development outcome had to satisfy the final rules over a test this long, how often would it?',
+    steps: [
+      { text: 'Read the bold line first: the share of resamples meeting every modeled rule together, at 1× to 4× the final test’s scheduled sessions.', target: { kind: 'series', group: 'rehearsal' } },
+      { text: 'The dashed amber line is the 80% target — the owner’s reading heuristic, not a power calculation.', target: null },
+      { text: 'Read the thinner lines to see which rule limits the ladder; the sentence above names them. A low 1× share is not by itself a “test too short” verdict.', target: null },
+      { text: 'Remember what a rung is not: an exact replay of the final test (the drawdown rule reads session closes, the real gate reads every bar), and a longer rung need not be better.', target: null },
     ],
   },
   'concentration-curve': {

@@ -19610,11 +19610,34 @@
               }
             ],
             "title": "Profitability"
+          },
+          "rehearsal": {
+            "discriminator": {
+              "mapping": {
+                "failed": "#/components/schemas/GoldenSearchChanceReadingFailed",
+                "measured": "#/components/schemas/GoldenSearchChanceRehearsalMeasured",
+                "missing": "#/components/schemas/GoldenSearchChanceReadingMissing"
+              },
+              "propertyName": "status"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceRehearsalMeasured"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceReadingMissing"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceReadingFailed"
+              }
+            ],
+            "title": "Rehearsal"
           }
         },
         "required": [
           "comparison",
-          "profitability"
+          "profitability",
+          "rehearsal"
         ],
         "title": "GoldenSearchChance",
         "type": "object"
@@ -20045,6 +20068,323 @@
           "reason"
         ],
         "title": "GoldenSearchChanceReadingMissing",
+        "type": "object"
+      },
+      "GoldenSearchChanceRehearsalActivity": {
+        "additionalProperties": false,
+        "description": "The trade-floor basis the rungs' floors came from.",
+        "properties": {
+          "expected_trades_per_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Trades Per Year"
+          },
+          "final_trading_years": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The frozen final interval's length in trading years; null on a fixed-floor plan.",
+            "title": "Final Trading Years"
+          },
+          "frequency_based": {
+            "title": "Frequency Based",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "frequency_based",
+          "expected_trades_per_year",
+          "final_trading_years"
+        ],
+        "title": "GoldenSearchChanceRehearsalActivity",
+        "type": "object"
+      },
+      "GoldenSearchChanceRehearsalBasis": {
+        "additionalProperties": false,
+        "description": "Everything a stored rehearsal was drawn and judged under, so reading it back never reclassifies it.",
+        "properties": {
+          "activity": {
+            "$ref": "#/components/schemas/GoldenSearchChanceRehearsalActivity"
+          },
+          "chunk_replications": {
+            "title": "Chunk Replications",
+            "type": "integer"
+          },
+          "convention": {
+            "title": "Convention",
+            "type": "string"
+          },
+          "final_interval": {
+            "$ref": "#/components/schemas/GoldenSearchChanceRehearsalFinalInterval"
+          },
+          "mean_block_sessions": {
+            "title": "Mean Block Sessions",
+            "type": "number"
+          },
+          "objective": {
+            "$ref": "#/components/schemas/GoldenSearchChanceObjective"
+          },
+          "replications": {
+            "title": "Replications",
+            "type": "integer"
+          },
+          "rules": {
+            "$ref": "#/components/schemas/GoldenSearchChanceRehearsalRules"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "seeds": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/GoldenSearchChanceRehearsalSeeds"
+            },
+            "title": "Seeds",
+            "type": "object"
+          },
+          "source": {
+            "$ref": "#/components/schemas/GoldenSearchChanceSource"
+          },
+          "thresholds": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "description": "The interpretation thresholds the stored labels were judged by.",
+            "title": "Thresholds",
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "convention",
+          "replications",
+          "chunk_replications",
+          "mean_block_sessions",
+          "thresholds",
+          "objective",
+          "rules",
+          "activity",
+          "final_interval",
+          "source",
+          "seeds"
+        ],
+        "title": "GoldenSearchChanceRehearsalBasis",
+        "type": "object"
+      },
+      "GoldenSearchChanceRehearsalFinalInterval": {
+        "additionalProperties": false,
+        "description": "The frozen final interval whose scheduled session count the rungs scale from.",
+        "properties": {
+          "scheduled_sessions": {
+            "title": "Scheduled Sessions",
+            "type": "integer"
+          },
+          "window": {
+            "$ref": "#/components/schemas/GoldenSearchChanceWindow"
+          }
+        },
+        "required": [
+          "window",
+          "scheduled_sessions"
+        ],
+        "title": "GoldenSearchChanceRehearsalFinalInterval",
+        "type": "object"
+      },
+      "GoldenSearchChanceRehearsalMeasured": {
+        "additionalProperties": false,
+        "description": "The final-test rehearsal ladder: conditional resampling support for each modeled rule, never a power calculation.",
+        "properties": {
+          "active_rules": {
+            "description": "The rules this plan models; a rule the plan does not require has no series here.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Active Rules",
+            "type": "array"
+          },
+          "basis": {
+            "$ref": "#/components/schemas/GoldenSearchChanceRehearsalBasis"
+          },
+          "guidance": {
+            "description": "The owner-facing diagnosis; Python writes it, the browser only displays it.",
+            "title": "Guidance",
+            "type": "string"
+          },
+          "objective_percentiles_1x": {
+            "$ref": "#/components/schemas/GoldenSearchChanceRehearsalPercentiles"
+          },
+          "rungs": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchChanceRung"
+            },
+            "title": "Rungs",
+            "type": "array"
+          },
+          "status": {
+            "const": "measured",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "status",
+          "rungs",
+          "active_rules",
+          "guidance",
+          "objective_percentiles_1x",
+          "basis"
+        ],
+        "title": "GoldenSearchChanceRehearsalMeasured",
+        "type": "object"
+      },
+      "GoldenSearchChanceRehearsalPercentiles": {
+        "additionalProperties": false,
+        "description": "The 1\u00d7 objective's 1st\u201399th percentiles by linear interpolation over the finite values, for the later carry-over display.",
+        "properties": {
+          "finite": {
+            "title": "Finite",
+            "type": "integer"
+          },
+          "p": {
+            "description": "Empty when no resample produced a defined objective.",
+            "items": {
+              "type": "number"
+            },
+            "title": "P",
+            "type": "array"
+          }
+        },
+        "required": [
+          "p",
+          "finite"
+        ],
+        "title": "GoldenSearchChanceRehearsalPercentiles",
+        "type": "object"
+      },
+      "GoldenSearchChanceRehearsalRules": {
+        "additionalProperties": false,
+        "description": "The rules a rehearsal modeled, as the plan froze them.",
+        "properties": {
+          "drawdown_basis": {
+            "description": "Always 'session closes'; the real final-test gate reads the engine's per-bar drawdown.",
+            "title": "Drawdown Basis",
+            "type": "string"
+          },
+          "max_drawdown_ceiling": {
+            "description": "A fraction of peak equity.",
+            "title": "Max Drawdown Ceiling",
+            "type": "number"
+          },
+          "require_positive_net": {
+            "title": "Require Positive Net",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "max_drawdown_ceiling",
+          "require_positive_net",
+          "drawdown_basis"
+        ],
+        "title": "GoldenSearchChanceRehearsalRules",
+        "type": "object"
+      },
+      "GoldenSearchChanceRehearsalSeeds": {
+        "additionalProperties": false,
+        "description": "Each rung's exact seed, by its multiple: the 1\u00d7 seed is what the final-test slice reproduces the carry-over from.",
+        "properties": {
+          "inputs": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Inputs",
+            "type": "array"
+          },
+          "value": {
+            "title": "Value",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "inputs",
+          "value"
+        ],
+        "title": "GoldenSearchChanceRehearsalSeeds",
+        "type": "object"
+      },
+      "GoldenSearchChanceRung": {
+        "additionalProperties": false,
+        "description": "One rung of the rehearsal ladder: what share of its resamples met each modeled rule.",
+        "properties": {
+          "denominator": {
+            "description": "Every resampled path, the denominator of each share.",
+            "title": "Denominator",
+            "type": "integer"
+          },
+          "k": {
+            "description": "The multiple of the frozen final interval's scheduled sessions.",
+            "title": "K",
+            "type": "integer"
+          },
+          "passes": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Pass counts per rule and for the joint predicate, keyed `pass_<rule>` and `pass_joint`.",
+            "title": "Passes",
+            "type": "object"
+          },
+          "sessions": {
+            "description": "Scheduled sessions this rung rehearses over; ordinal sessions, never invented dates.",
+            "title": "Sessions",
+            "type": "integer"
+          },
+          "shares": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "description": "Presentation shares; labels come from the counts, never from these rounded values.",
+            "title": "Shares",
+            "type": "object"
+          },
+          "trade_floor": {
+            "title": "Trade Floor",
+            "type": "integer"
+          },
+          "undefined": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Undefined counts for the rules that can be, keyed `undefined_<rule>`; the exit rule never is.",
+            "title": "Undefined",
+            "type": "object"
+          }
+        },
+        "required": [
+          "k",
+          "sessions",
+          "trade_floor",
+          "denominator",
+          "passes",
+          "shares"
+        ],
+        "title": "GoldenSearchChanceRung",
         "type": "object"
       },
       "GoldenSearchChanceSeed": {

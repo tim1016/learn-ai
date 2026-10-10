@@ -468,7 +468,7 @@ def _profitability_reading(
 
 
 def _failed(exc: Exception, component: str) -> dict[str, Any]:
-    """A diagnostic failure record: the operator sentence is Python's, so the browser only displays it (#3011)."""
+    """A diagnostic failure record: the operator sentence is Python's, so the browser only displays it (#3011, #3012)."""
     logger.warning(
         "golden search chance reading failed",
         extra={"action": "golden_search_chance_reading_failed", "component": component},
@@ -480,6 +480,11 @@ def _failed(exc: Exception, component: str) -> dict[str, Any]:
         "reason": reason,
         "sentence": f"The {component.replace('_', ' ')} reading could not be computed and nothing was stored: {reason}.",
     }
+
+
+def failed_component(exc: Exception, component: str) -> dict[str, Any]:
+    """A diagnostic failure record for one named component, for callers outside this module (#3012)."""
+    return _failed(exc, component)
 
 
 def failed_readings(exc: Exception) -> dict[str, dict[str, Any]]:
@@ -588,6 +593,10 @@ def incumbent_readings(*, objective: RankingMeasure, window: tuple[int, int]) ->
         "profitability": _missing(
             ("not_measured", "The current settings' own profitability is not measured; every fit's readings stand against them.")
         ),
+        # The baseline has no ladder of its own: a rehearsal compares a fit against it (#3012).
+        "rehearsal": _missing(
+            ("baseline", "The current settings are the baseline; a rehearsal compares a fit against them, and there is nothing to rehearse.")
+        ),
     }
 
 
@@ -601,7 +610,8 @@ _NOT_MEASURED_BY_COMPONENT: dict[str, tuple[str, str]] = {
         "Not measured for this study: profitability readings were first recorded with #3011, and stored evidence is never backfilled.",
     ),
 }
-_KNOWN_STATUSES = frozenset({"measured", "same_settings", "baseline", "missing", "failed"})
+#: The statuses a stored chance component may carry; anything else reads as unsupported rather than guessed at (#3011).
+KNOWN_STATUSES = frozenset({"measured", "same_settings", "baseline", "missing", "failed"})
 
 
 def stored_chance(candidate: Mapping[str, Any]) -> dict[str, Any]:
@@ -615,7 +625,7 @@ def stored_chance(candidate: Mapping[str, Any]) -> dict[str, Any]:
     components: dict[str, dict[str, Any]] = {}
     for component in ("comparison", "profitability"):
         record = (stored or {}).get(component)
-        if isinstance(record, Mapping) and record.get("status") in _KNOWN_STATUSES:
+        if isinstance(record, Mapping) and record.get("status") in KNOWN_STATUSES:
             components[component] = dict(record)
         elif isinstance(record, Mapping):
             unsupported = record.get("status")

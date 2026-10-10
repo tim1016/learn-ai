@@ -1099,11 +1099,95 @@ GoldenSearchChanceProfitability = Annotated[
 ]
 
 
+class GoldenSearchChanceRung(_Wire):
+    """One rung of the rehearsal ladder: what share of its resamples met each modeled rule."""
+
+    k: int = Field(description="The multiple of the frozen final interval's scheduled sessions.")
+    sessions: int = Field(description="Scheduled sessions this rung rehearses over; ordinal sessions, never invented dates.")
+    trade_floor: int
+    denominator: int = Field(description="Every resampled path, the denominator of each share.")
+    passes: dict[str, int] = Field(description="Pass counts per rule and for the joint predicate, keyed `pass_<rule>` and `pass_joint`.")
+    undefined: dict[str, int] = Field(default_factory=dict, description="Undefined counts for the rules that can be, keyed `undefined_<rule>`; the exit rule never is.")
+    shares: dict[str, float] = Field(description="Presentation shares; labels come from the counts, never from these rounded values.")
+
+
+class GoldenSearchChanceRehearsalSeeds(_Wire):
+    """Each rung's exact seed, by its multiple: the 1× seed is what the final-test slice reproduces the carry-over from."""
+
+    inputs: list[str | int]
+    value: int
+
+
+class GoldenSearchChanceRehearsalRules(_Wire):
+    """The rules a rehearsal modeled, as the plan froze them."""
+
+    max_drawdown_ceiling: float = Field(description="A fraction of peak equity.")
+    require_positive_net: bool
+    drawdown_basis: str = Field(description="Always 'session closes'; the real final-test gate reads the engine's per-bar drawdown.")
+
+
+class GoldenSearchChanceRehearsalActivity(_Wire):
+    """The trade-floor basis the rungs' floors came from."""
+
+    frequency_based: bool
+    expected_trades_per_year: int | None
+    final_trading_years: float | None = Field(description="The frozen final interval's length in trading years; null on a fixed-floor plan.")
+
+
+class GoldenSearchChanceRehearsalFinalInterval(_Wire):
+    """The frozen final interval whose scheduled session count the rungs scale from."""
+
+    window: GoldenSearchChanceWindow
+    scheduled_sessions: int
+
+
+class GoldenSearchChanceRehearsalPercentiles(_Wire):
+    """The 1× objective's 1st–99th percentiles by linear interpolation over the finite values, for the later carry-over display."""
+
+    p: list[float] = Field(description="Empty when no resample produced a defined objective.")
+    finite: int
+
+
+class GoldenSearchChanceRehearsalBasis(_Wire):
+    """Everything a stored rehearsal was drawn and judged under, so reading it back never reclassifies it."""
+
+    schema_version: str
+    convention: str
+    replications: int
+    chunk_replications: int
+    mean_block_sessions: float
+    thresholds: dict[str, float] = Field(description="The interpretation thresholds the stored labels were judged by.")
+    objective: GoldenSearchChanceObjective
+    rules: GoldenSearchChanceRehearsalRules
+    activity: GoldenSearchChanceRehearsalActivity
+    final_interval: GoldenSearchChanceRehearsalFinalInterval
+    source: GoldenSearchChanceSource
+    seeds: dict[str, GoldenSearchChanceRehearsalSeeds]
+
+
+class GoldenSearchChanceRehearsalMeasured(_Wire):
+    """The final-test rehearsal ladder: conditional resampling support for each modeled rule, never a power calculation."""
+
+    status: Literal["measured"]
+    rungs: list[GoldenSearchChanceRung]
+    active_rules: list[str] = Field(description="The rules this plan models; a rule the plan does not require has no series here.")
+    guidance: str = Field(description="The owner-facing diagnosis; Python writes it, the browser only displays it.")
+    objective_percentiles_1x: GoldenSearchChanceRehearsalPercentiles
+    basis: GoldenSearchChanceRehearsalBasis
+
+
+GoldenSearchChanceRehearsal = Annotated[
+    GoldenSearchChanceRehearsalMeasured | GoldenSearchChanceReadingMissing | GoldenSearchChanceReadingFailed,
+    Field(discriminator="status"),
+]
+
+
 class GoldenSearchChance(_Wire):
     """One fit's development chance components, each normalized independently of the others."""
 
     comparison: GoldenSearchChanceComparison
     profitability: GoldenSearchChanceProfitability
+    rehearsal: GoldenSearchChanceRehearsal
 
 
 class GoldenSearchCandidateGuidance(_Wire):

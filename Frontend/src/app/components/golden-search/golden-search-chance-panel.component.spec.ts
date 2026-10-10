@@ -8,6 +8,7 @@ import { fakeCharts } from './testing/fake-charts';
 import type { CandidateRef, ChanceReadings } from './golden-search.types';
 
 const CANDIDATE: CandidateRef = { key: 'all_period', label: 'All-period fit' };
+const MISSING_REHEARSAL = { status: 'missing', code: 'not_measured', reason: 'Not measured for this study.' } as const;
 
 async function renderPanel(chance: ChanceReadings, candidate: CandidateRef = CANDIDATE) {
   return render(GoldenSearchChancePanelComponent, {
@@ -44,6 +45,7 @@ describe('GoldenSearchChancePanelComponent', () => {
     await renderPanel({
       comparison: { status: 'same_settings', sentence: 'These are the current settings themselves; there is nothing to compare them with.', basis: chanceComparison().basis },
       profitability: chanceReadings().profitability,
+      rehearsal: MISSING_REHEARSAL,
     });
     expect(screen.getByText('These are the current settings themselves; there is nothing to compare them with.')).toBeTruthy();
     expect(screen.queryByRole('img', { name: /Share of/i })).toBeNull();
@@ -53,6 +55,7 @@ describe('GoldenSearchChancePanelComponent', () => {
     await renderPanel({
       comparison: { status: 'missing', code: 'not_measured', reason: 'comparison readings were first recorded with #3011' },
       profitability: { status: 'missing', code: 'not_measured', reason: 'Not measured for this study.' },
+      rehearsal: MISSING_REHEARSAL,
     });
     expect(screen.getByText(/comparison readings were first recorded with #3011/i)).toBeTruthy();
     expect(screen.getByText('Not measured for this study.')).toBeTruthy();
@@ -70,6 +73,7 @@ describe('GoldenSearchChancePanelComponent', () => {
         reason: 'RuntimeError: chance computation exploded',
         sentence: 'The profitability reading could not be computed and nothing was stored: RuntimeError: chance computation exploded.',
       },
+      rehearsal: MISSING_REHEARSAL,
     });
     const alerts = screen.getAllByRole('alert');
     expect(alerts).toHaveLength(2);
