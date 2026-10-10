@@ -1,7 +1,7 @@
 import type { ChartSpec } from './charts/golden-search-chart-spec';
 import { dataIndexOf, NOT_RECORDED, tooltipFrame, tooltipHtml, type ChartTheme, type TooltipRow } from './charts/golden-search-chart-theme';
 import type { ChartOption } from './charts/golden-search-echarts';
-import { countText, objectiveTexts, shareText } from './golden-search-chance-charts';
+import { countText, objectiveTexts, shareText, valueAxisDomain } from './golden-search-chance-charts';
 import { signedPercentText } from './golden-search-display';
 import type { CandidateRef, MeasuredChanceCarryOver, MeasuredChanceComparison, MeasuredChanceFitToFit, MeasuredChanceProfitability } from './golden-search.types';
 
@@ -38,20 +38,24 @@ function objectiveZero(measure: string): string {
   return measure === 'sharpe_ratio' ? 'zero Sharpe' : 'break-even';
 }
 
-function rangeBand({ row, range, zero }: IntervalRow, theme: ChartTheme): FinalSeries[] {
+function rangeBand(rowIndex: number, { row, range, zero }: IntervalRow, theme: ChartTheme): FinalSeries[] {
   const has = range.p5 !== null && range.p50 !== null && range.p95 !== null;
   return [
     {
       id: `final:range:${row}`,
       name: row,
       type: 'custom',
-      data: has ? [0] : [],
+      // The datum carries the row's category index; the percentiles stay closed over. Every coordinate is a
+      // full [value, row] pair, so both axes of every drawn point are finite — a bare api.coord([value]) asks
+      // for a category by accident and renders NaN (#3028).
+      data: has ? [rowIndex] : [],
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- echarts' custom-series graphic children are a union the limited ComposeOption types cannot name.
-      renderItem: (_params: unknown, api: { coord: (data: number[]) => number[] }): any => {
-        const lowX = api.coord([range.p5 as number])[0];
-        const highX = api.coord([range.p95 as number])[0];
-        const medianX = api.coord([range.p50 as number])[0];
-        const top = api.coord([0])[1] - 13;
+      renderItem: (_params: unknown, api: { value: (dimension: number) => number; coord: (data: number[]) => number[] }): any => {
+        const at = (value: number): number[] => api.coord([value, api.value(0)]);
+        const lowX = at(range.p5 as number)[0];
+        const highX = at(range.p95 as number)[0];
+        const medianX = at(range.p50 as number)[0];
+        const top = at(0)[1] - 13;
         return {
           type: 'group',
           children: [
@@ -73,9 +77,6 @@ function rangeBand({ row, range, zero }: IntervalRow, theme: ChartTheme): FinalS
 }
 
 function intervalOption(rows: readonly IntervalRow[], texts: { axis: (value: number) => string }, theme: ChartTheme): ChartOption {
-  const values = rows.flatMap(({ range }) => [range.p5, range.p50, range.p95].filter((value): value is number => value !== null));
-  const min = Math.min(0, ...values);
-  const max = Math.max(0, ...values);
   return {
     grid: { left: 168, right: 76, top: 14 + rows.length * 14, bottom: 34 },
     tooltip: {
@@ -91,8 +92,9 @@ function intervalOption(rows: readonly IntervalRow[], texts: { axis: (value: num
     },
     xAxis: {
       type: 'value',
-      min: min * 1.1,
-      max: max === 0 ? 1 : max * 1.1,
+      // Bounded from the stored percentiles and zero (#3027, #3028): every endpoint, the median and the zero
+      // reference stay inside the plot whatever their sign, and a degenerate all-tie row still has one.
+      ...valueAxisDomain(rows.flatMap(({ range }) => [range.p5, range.p50, range.p95])),
       axisLabel: { color: theme.textSecondary, fontSize: 11, hideOverlap: true, formatter: (value: number) => texts.axis(value) },
       splitLine: { lineStyle: { color: theme.gridLine } },
     },
@@ -103,7 +105,7 @@ function intervalOption(rows: readonly IntervalRow[], texts: { axis: (value: num
       axisTick: { show: false },
       axisLabel: { color: theme.text, fontSize: 12, width: 160, overflow: 'truncate' },
     },
-    series: rows.flatMap((row) => rangeBand(row, theme)),
+    series: rows.flatMap((row, index) => rangeBand(index, row, theme)),
   };
 }
 
@@ -210,7 +212,10 @@ export function carryOverSpec(candidate: CandidateRef, carry: MeasuredChanceCarr
       },
       yAxis: {
         type: 'value',
-        scale: true,
+        // The value axis reaches every finite plotted percentile and the recorded objective itself (#3028):
+        // a markLine never expands the axis, so an extreme final result used to vanish precisely when it was
+        // most notable. Zero is not forced in — a curve that never crosses it is not flattened to include it.
+        ...valueAxisDomain([...carry.curve.p, carry.recorded_objective], { includeZero: false }),
         axisLabel: { color: theme.textSecondary, fontSize: 11, hideOverlap: true, formatter: (value: number) => texts.axis(value) },
         splitLine: { lineStyle: { color: theme.gridLine } },
       },

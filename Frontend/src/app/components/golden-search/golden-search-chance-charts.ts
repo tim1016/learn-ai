@@ -54,12 +54,15 @@ const DIFFERENCE_ROW = 'Difference from the current settings';
 
 /**
  * The value-axis domain that keeps every stored percentile, its zero reference and nothing else inside the
- * plot (#3027): custom-series data does not feed autoscaling, so the axis is bounded explicitly from the
- * stored values. Entirely negative, cross-zero, entirely positive and all-tie/degenerate ranges all stay
- * visible; a zero-span domain gets a small pad so a tie still has a plot to sit in.
+ * plot (#3027, #3028): custom-series data does not feed autoscaling, so the axis is bounded explicitly from
+ * the stored values. Entirely negative, cross-zero, entirely positive and all-tie/degenerate ranges all stay
+ * visible; a zero-span domain gets a small pad so a tie still has a plot to sit in. ``includeZero`` is off
+ * for quantities whose zero is not a reference (a rehearsal curve that never crosses zero is not flattened
+ * to include it), and an out-of-range recorded marker is included in the values so the axis reaches it.
  */
-export function valueAxisDomain(values: readonly (number | null)[]): { min: number; max: number } {
-  const finite = [0, ...values.filter((value): value is number => value !== null && Number.isFinite(value))];
+export function valueAxisDomain(values: readonly (number | null)[], { includeZero = true }: { includeZero?: boolean } = {}): { min: number; max: number } {
+  const finite = values.filter((value): value is number => value !== null && Number.isFinite(value));
+  if (includeZero) finite.push(0);
   const low = Math.min(...finite);
   const high = Math.max(...finite);
   const span = high - low;
