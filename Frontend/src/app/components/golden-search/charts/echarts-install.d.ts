@@ -21,6 +21,9 @@ declare module 'echarts/lib/component/axisPointer/install' {
 declare module 'echarts/lib/component/grid/install' {
   export { GridComponent as install } from 'echarts/components';
 }
+declare module 'echarts/lib/component/legend/install' {
+  export { LegendComponent as install } from 'echarts/components';
+}
 declare module 'echarts/lib/component/marker/installMarkArea' {
   export { MarkAreaComponent as install } from 'echarts/components';
 }
@@ -35,4 +38,7 @@ declare module 'echarts/lib/component/visualMap/installVisualMapContinuous' {
 }
 declare module 'echarts/lib/renderer/installCanvasRenderer' {
   export { CanvasRenderer as install } from 'echarts/renderers';
+}
+declare module 'echarts/lib/renderer/installSVGRenderer' {
+  export { SVGRenderer as install } from 'echarts/renderers';
 }

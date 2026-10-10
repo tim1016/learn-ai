@@ -53,6 +53,21 @@ export function shareSegments(comparison: MeasuredChanceComparison): readonly Sh
 const DIFFERENCE_ROW = 'Difference from the current settings';
 
 /**
+ * The value-axis domain that keeps every stored percentile, its zero reference and nothing else inside the
+ * plot (#3027): custom-series data does not feed autoscaling, so the axis is bounded explicitly from the
+ * stored values. Entirely negative, cross-zero, entirely positive and all-tie/degenerate ranges all stay
+ * visible; a zero-span domain gets a small pad so a tie still has a plot to sit in.
+ */
+export function valueAxisDomain(values: readonly (number | null)[]): { min: number; max: number } {
+  const finite = [0, ...values.filter((value): value is number => value !== null && Number.isFinite(value))];
+  const low = Math.min(...finite);
+  const high = Math.max(...finite);
+  const span = high - low;
+  const pad = span > 0 ? span * 0.05 : Math.max(Math.abs(low) * 0.05, 0.02);
+  return { min: low - pad, max: high + pad };
+}
+
+/**
  * The primary chart: a horizontal 5th–95th interval of the resampled
  * differences with the median marked, against a zero (no-improvement)
  * reference. It is labelled the middle 90% of resampled differences — never a
@@ -142,6 +157,9 @@ function chanceOption(
       nameGap: 22,
       nameTextStyle: { color: theme.textSecondary, fontSize: 11 },
       splitNumber: 4,
+      // Bounded from the stored percentiles and zero (#3027): autoscaling saw only the custom series'
+      // placeholder datum and squeezed a -30%..+10% interval into a misleading sliver outside the plot.
+      ...valueAxisDomain([p5, p50, p95]),
       axisLabel: { color: theme.textSecondary, fontSize: 11, hideOverlap: true, formatter: (value: number) => texts.axis(value) },
       splitLine: { lineStyle: { color: theme.gridLine } },
     },
