@@ -1,9 +1,11 @@
 import { Component, computed, input, output, ChangeDetectionStrategy } from '@angular/core';
+import { optionExpiryDate } from '../../../shared/option-contract/option-expiry-date';
 
 interface MonthGroup {
   label: string;
   year: number;
-  dates: string[];
+  /** Expiry anchor instants (16:00 New York time on each expiry date). */
+  expirations: number[];
 }
 
 @Component({
@@ -14,11 +16,11 @@ interface MonthGroup {
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class ExpirationRibbonComponent {
-  expirations = input.required<string[]>();
-  selectedDate = input<string | null>(null);
+  expirations = input.required<number[]>();
+  selectedExpiration = input<number | null>(null);
   loading = input(false);
 
-  dateSelected = output<string>();
+  expirationSelected = output<number>();
 
   private readonly MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -28,36 +30,36 @@ export class ExpirationRibbonComponent {
     const exps = this.expirations();
     const groups = new Map<string, MonthGroup>();
 
-    for (const dateStr of exps) {
-      const d = new Date(dateStr + 'T00:00:00');
-      const month = d.getMonth();
-      const year = d.getFullYear();
+    for (const anchor of exps) {
+      // The anchor names a New York date; group by that calendar date, read in
+      // New York, never in the browser's zone (#2934).
+      const [year, month] = optionExpiryDate(anchor).split('-').map(Number);
       const key = `${year}-${month}`;
 
       let group = groups.get(key);
       if (!group) {
         group = {
-          label: this.MONTHS[month],
+          label: this.MONTHS[month - 1],
           year,
-          dates: [],
+          expirations: [],
         };
         groups.set(key, group);
       }
-      group.dates.push(dateStr);
+      group.expirations.push(anchor);
     }
 
     return [...groups.values()];
   });
 
-  selectDate(date: string): void {
-    this.dateSelected.emit(date);
+  selectExpiration(anchor: number): void {
+    this.expirationSelected.emit(anchor);
   }
 
-  formatDay(dateStr: string): string {
-    return new Date(dateStr + 'T00:00:00').getDate().toString();
+  formatDay(anchor: number): string {
+    return Number(optionExpiryDate(anchor).slice(8, 10)).toString();
   }
 
-  isSelected(dateStr: string): boolean {
-    return dateStr === this.selectedDate();
+  isSelected(anchor: number): boolean {
+    return anchor === this.selectedExpiration();
   }
 }

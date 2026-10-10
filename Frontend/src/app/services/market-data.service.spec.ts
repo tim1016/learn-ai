@@ -73,12 +73,12 @@ describe('MarketDataService', () => {
 
   describe('getOptionsChainSnapshot', () => {
     it('should send correct variables', () => {
-      service.getOptionsChainSnapshot('AAPL', '2026-03-21').subscribe();
+      service.getOptionsChainSnapshot('AAPL', 1_774_123_200_000).subscribe();
 
       const req = httpMock.expectOne(GRAPHQL_URL);
       expect(req.request.body.variables).toEqual({
         underlyingTicker: 'AAPL',
-        expirationDate: '2026-03-21',
+        expirationMs: 1_774_123_200_000,
       });
       req.flush({
         data: {
@@ -139,7 +139,7 @@ describe('MarketDataService', () => {
   // Backend omits it and Python fills its one default (#2764).
   describe('risk-free rate', () => {
     it('analyzeOptionsStrategy sends no rate unless given one', () => {
-      service.analyzeOptionsStrategy('SPY', [], '2099-01-01', 100).subscribe();
+      service.analyzeOptionsStrategy('SPY', [], 4_070_984_400_000, 100).subscribe();
 
       const req = httpMock.expectOne(GRAPHQL_URL);
       expect(req.request.body.variables.riskFreeRate).toBeNull();

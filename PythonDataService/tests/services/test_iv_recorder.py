@@ -10,7 +10,7 @@ Three layers:
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -18,6 +18,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
+from app.options.expiry import option_expiry_anchor_ms
 from app.services.bs_greeks import bs_european_price
 from app.services.iv_recorder import (
     InMemoryIvSnapshotStore,
@@ -25,6 +26,8 @@ from app.services.iv_recorder import (
     RecordedIvSnapshot,
     record_iv_snapshot,
 )
+from app.utils.session_anchors import et_date_at_ms
+from app.utils.timestamps import to_ms_utc
 
 
 def _bs_chain_payload(
@@ -34,7 +37,7 @@ def _bs_chain_payload(
     contracts = []
     for d in expiry_days:
         T = d / 365.0
-        exp_iso = (asof + timedelta(days=d)).date().isoformat()
+        exp_iso = (et_date_at_ms(to_ms_utc(asof)) + timedelta(days=d)).isoformat()
         for k in strikes:
             for is_call in (True, False):
                 price = bs_european_price(
@@ -46,7 +49,7 @@ def _bs_chain_payload(
                         "ticker": f"O:SPY{d}{'C' if is_call else 'P'}{int(k*100):08d}",
                         "contract_type": "call" if is_call else "put",
                         "strike_price": float(k),
-                        "expiration_date": exp_iso,
+                        "expiration_ms": option_expiry_anchor_ms(date.fromisoformat(exp_iso)),
                         "last_quote": {
                             "bid": float(max(0.0, price - half_spread)),
                             "ask": float(price + half_spread),

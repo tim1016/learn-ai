@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel, Field
 
+from app.options.expiry import OptionExpiryMs
+
 
 class AggregateBar(BaseModel):
     """One sanitized OHLCV bar at an ``int64 ms UTC`` timestamp."""
@@ -40,7 +42,7 @@ class OptionsExpirationsResponse(BaseModel):
     """Response schema for unique options expiration dates"""
 
     success: bool
-    expirations: list[str] = []
+    expirations: list[OptionExpiryMs] = []
     count: int = 0
     error: str | None = None
 
@@ -94,7 +96,7 @@ class OptionsContractSnapshotItem(BaseModel):
     ticker: str | None = None
     contract_type: str | None = None
     strike_price: float | None = None
-    expiration_date: str | None = None
+    expiration_ms: OptionExpiryMs | None = None
     break_even_price: float | None = None
     implied_volatility: float | None = None
     open_interest: float | None = None
@@ -117,10 +119,11 @@ class OptionsChainSnapshotResponse(BaseModel):
     """Response schema for options chain snapshot.
 
     ``risk_free_rate`` is FRED's Treasury-bill curve interpolated at the
-    requested expiration's days to expiry (30 days when no expiration is
-    given); ``dividend_yield`` is Polygon's TTM dividends. They replace the
-    historical hardcoded `r=0.043, q=0` defaults used by pricing-lab,
-    options-strategy-lab, strategy-builder.
+    requested expiration's fractional days to expiry, measured to the expiry
+    anchor (30 days when no expiration is given); ``dividend_yield`` is
+    Polygon's TTM dividends. They replace the historical hardcoded
+    `r=0.043, q=0` defaults used by pricing-lab, options-strategy-lab,
+    strategy-builder.
     """
 
     success: bool

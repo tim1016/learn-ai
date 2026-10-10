@@ -382,7 +382,7 @@ def _extract_raw_chain(contracts: list[dict]) -> list[dict]:
                 "ticker": c.get("ticker"),
                 "contract_type": c.get("contract_type"),
                 "strike_price": c.get("strike_price"),
-                "expiration_date": c.get("expiration_date"),
+                "expiration_ms": c.get("expiration_ms"),
                 "bid": lq.get("bid"),
                 "ask": lq.get("ask"),
                 # Polygon's IV is recorded as a diagnostic, NOT used as ours.

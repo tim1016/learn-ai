@@ -9,7 +9,8 @@ import {
   PricingCompareResult,
 } from '../graphql/types';
 import { environment } from '../../environments/environment';
-import { todayDateString, dateStringMonthsFromNow } from '../utils/date-validation';
+import { etIsoDate, shiftIsoDateByMonths } from '../shared/date/et-midnight';
+import { optionExpiryAnchorMs } from '../shared/option-contract/option-expiry-date';
 
 const GRAPHQL_URL = environment.backendUrl;
 
@@ -51,14 +52,14 @@ const GET_OPTIONS_EXPIRATIONS_QUERY = `
   query GetOptionsExpirations(
     $underlyingTicker: String!
     $contractType: String
-    $expirationDateGte: String
-    $expirationDateLte: String
+    $expirationMsGte: Long
+    $expirationMsLte: Long
   ) {
     getOptionsExpirations(
       underlyingTicker: $underlyingTicker
       contractType: $contractType
-      expirationDateGte: $expirationDateGte
-      expirationDateLte: $expirationDateLte
+      expirationMsGte: $expirationMsGte
+      expirationMsLte: $expirationMsLte
     ) {
       success
       expirations
@@ -69,19 +70,19 @@ const GET_OPTIONS_EXPIRATIONS_QUERY = `
 `;
 
 interface OptionsExpirationsResponse {
-  data: { getOptionsExpirations: { success: boolean; expirations: string[]; count: number; error?: string } };
+  data: { getOptionsExpirations: { success: boolean; expirations: number[]; count: number; error?: string } };
   errors?: { message: string }[];
 }
 
 const GET_OPTIONS_CHAIN_SNAPSHOT_QUERY = `
-  query GetOptionsChainSnapshot($underlyingTicker: String!, $expirationDate: String) {
-    getOptionsChainSnapshot(underlyingTicker: $underlyingTicker, expirationDate: $expirationDate) {
+  query GetOptionsChainSnapshot($underlyingTicker: String!, $expirationMs: Long) {
+    getOptionsChainSnapshot(underlyingTicker: $underlyingTicker, expirationMs: $expirationMs) {
       success
       underlying {
         ticker price change changePercent
       }
       contracts {
-        ticker contractType strikePrice expirationDate
+        ticker contractType strikePrice expirationMs
         breakEvenPrice impliedVolatility openInterest
         greeks { delta gamma theta vega }
         day { open high low close volume vwap }
@@ -130,7 +131,7 @@ const ANALYZE_OPTIONS_STRATEGY_QUERY = `
   query AnalyzeOptionsStrategy(
     $symbol: String!
     $legs: [StrategyLegInput!]!
-    $expirationDate: String!
+    $expirationMs: Long!
     $spotPrice: Decimal!
     $riskFreeRate: Decimal
     $includeCurrentCurve: Boolean = false
@@ -142,7 +143,7 @@ const ANALYZE_OPTIONS_STRATEGY_QUERY = `
     analyzeOptionsStrategy(
       symbol: $symbol
       legs: $legs
-      expirationDate: $expirationDate
+      expirationMs: $expirationMs
       spotPrice: $spotPrice
       riskFreeRate: $riskFreeRate
       includeCurrentCurve: $includeCurrentCurve
@@ -177,7 +178,7 @@ const PRICING_MODEL_COMPARISON_QUERY = `
     $spot: Decimal!
     $strike: Decimal!
     $volatility: Decimal!
-    $expirationDate: String!
+    $expirationMs: Long!
     $optionType: String!
     $riskFreeRate: Decimal
     $dividendYield: Decimal = 0
@@ -190,7 +191,7 @@ const PRICING_MODEL_COMPARISON_QUERY = `
       spot: $spot
       strike: $strike
       volatility: $volatility
-      expirationDate: $expirationDate
+      expirationMs: $expirationMs
       optionType: $optionType
       riskFreeRate: $riskFreeRate
       dividendYield: $dividendYield
@@ -202,7 +203,7 @@ const PRICING_MODEL_COMPARISON_QUERY = `
       success
       strike
       optionType
-      expirationDate
+      expirationMs
       timeToExpiryYears
       riskFreeRate
       models {
@@ -253,18 +254,21 @@ export class MarketDataService {
     underlyingTicker: string,
     options: {
       contractType?: string;
-      expirationDateGte?: string;
-      expirationDateLte?: string;
+      /** Bounds are expiry anchor instants (16:00 New York time on the date). */
+      expirationMsGte?: number;
+      expirationMsLte?: number;
     } = {}
-  ): Observable<string[]> {
+  ): Observable<number[]> {
     return this.http
       .post<OptionsExpirationsResponse>(GRAPHQL_URL, {
         query: GET_OPTIONS_EXPIRATIONS_QUERY,
         variables: {
           underlyingTicker,
           contractType: options.contractType,
-          expirationDateGte: options.expirationDateGte ?? todayDateString(),
-          expirationDateLte: options.expirationDateLte ?? dateStringMonthsFromNow(6),
+          expirationMsGte: options.expirationMsGte ?? optionExpiryAnchorMs(etIsoDate(Date.now())),
+          // Both bounds are anchors of ET dates — one zone, six calendar
+          // months out (clamped month arithmetic, not 183 24-hour periods).
+          expirationMsLte: options.expirationMsLte ?? optionExpiryAnchorMs(shiftIsoDateByMonths(etIsoDate(Date.now()), 6)),
         }
       })
       .pipe(
@@ -282,12 +286,12 @@ export class MarketDataService {
 
   getOptionsChainSnapshot(
     underlyingTicker: string,
-    expirationDate?: string
+    expirationMs?: number
   ): Observable<OptionsChainSnapshotResult> {
     return this.http
       .post<OptionsChainSnapshotResponse>(GRAPHQL_URL, {
         query: GET_OPTIONS_CHAIN_SNAPSHOT_QUERY,
-        variables: { underlyingTicker, expirationDate }
+        variables: { underlyingTicker, expirationMs }
       })
       .pipe(
         tap(response => {
@@ -318,7 +322,8 @@ export class MarketDataService {
   analyzeOptionsStrategy(
     symbol: string,
     legs: StrategyLegInput[],
-    expirationDate: string,
+    /** The expiry anchor instant: 16:00 New York time on the expiry date. */
+    expirationMs: number,
     spotPrice: number,
     /** Omit to have Python price at its one default rate (#2764). */
     riskFreeRate: number | null = null,
@@ -328,7 +333,7 @@ export class MarketDataService {
       .post<AnalyzeOptionsStrategyResponse>(GRAPHQL_URL, {
         query: ANALYZE_OPTIONS_STRATEGY_QUERY,
         variables: {
-          symbol, legs, expirationDate, spotPrice, riskFreeRate,
+          symbol, legs, expirationMs, spotPrice, riskFreeRate,
           includeCurrentCurve: options.includeCurrentCurve ?? false,
           includeGreekCurves: options.includeGreekCurves ?? false,
           includeLegDiagnostics: options.includeLegDiagnostics ?? false,
@@ -350,7 +355,8 @@ export class MarketDataService {
     spot: number;
     strike: number;
     volatility: number;
-    expirationDate: string;
+    /** The expiry anchor instant: 16:00 New York time on the expiry date. */
+    expirationMs: number;
     optionType: string;
     riskFreeRate?: number;
     dividendYield?: number;
@@ -366,7 +372,7 @@ export class MarketDataService {
           spot: params.spot,
           strike: params.strike,
           volatility: params.volatility,
-          expirationDate: params.expirationDate,
+          expirationMs: params.expirationMs,
           optionType: params.optionType,
           riskFreeRate: params.riskFreeRate ?? null,
           dividendYield: params.dividendYield ?? 0,

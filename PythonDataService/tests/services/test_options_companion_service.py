@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 
 from app.models.requests import OptionsCompanionConfig
+from app.options.expiry import option_expiry_anchor_ms
 from app.services.options_companion_service import (
     _bar_grid_floor_ms,
     _columns_for,
@@ -281,8 +282,8 @@ class TestResolveTargetExpiry:
 
         class _FakePolygon:
             def list_options_expirations(self, **kwargs):
-                # Echo back the requested date as if it's listed
-                return [kwargs["expiration_date_gte"]]
+                # Echo back the requested anchor as if it's listed
+                return [kwargs["expiration_ms_gte"]]
 
         cfg = OptionsCompanionConfig(enabled=True, dte_distance=7)
         result = _resolve_target_expiry(_FakePolygon(), "SPY", date(2025, 6, 10), cfg)
@@ -307,7 +308,7 @@ class TestResolveTargetExpiry:
 
         class _FakePolygon:
             def list_options_expirations(self, **kwargs):
-                return [kwargs["expiration_date_gte"]]
+                return [kwargs["expiration_ms_gte"]]
 
         cfg = OptionsCompanionConfig(enabled=True, dte_distance=0)
         result = _resolve_target_expiry(_FakePolygon(), "SPY", date(2025, 6, 10), cfg)
@@ -339,9 +340,9 @@ class _FakePolygon:
     def fetch_aggregates(self, ticker: str, **kwargs) -> list[dict]:
         return self._option_bars.get(ticker, [])
 
-    def list_options_expirations(self, **kwargs) -> list[str]:
+    def list_options_expirations(self, **kwargs) -> list[int]:
         # Echo back the requested target so dte_distance=0 (same-day) resolves.
-        return [kwargs["expiration_date_gte"]]
+        return [kwargs["expiration_ms_gte"]]
 
 
 class TestBuildOptionsCompanionTimestampAlignment:
@@ -746,3 +747,84 @@ class TestFirstDayCloseSource:
         # if EOD ($110) was used as the centering price.
         assert 110.0 not in selected_strikes
         assert 109.0 not in selected_strikes
+
+
+class TestHalfDayCountdown:
+    """A same-day contract on a half day counts time to the 13:00 close, not
+    to the 16:00 anchor: at 12:55 New York time on Black Friday it has five
+    minutes, not 3h05m (#2934). The countdown's end is the canonical
+    ``last_session_close_ms`` (ADR 0076); this pins the companion's wiring."""
+
+    def test_half_day_expiry_prices_five_minutes_out(self):
+        from app.services.options_companion_service import _compute_row_greeks, build_options_companion_csvs
+
+        # 2025-11-28 (Black Friday): the NYSE closes 13:00 ET.
+        bar_1255_et = 1_764_352_500_000  # 12:55 ET (17:55 UTC)
+        close_1300_et = 1_764_352_800_000  # 13:00 ET (18:00 UTC)
+
+        underlying_df = pd.DataFrame({"timestamp": [bar_1255_et], "close": [710.0]})
+        contracts = [{"ticker": "O:T710", "strike_price": 710.0}]
+        option_bars = {
+            "O:T710": [
+                {
+                    "timestamp": bar_1255_et, "open": 1.0, "high": 1.05, "low": 0.95,
+                    "close": 1.05, "volume": 10, "vwap": 1.0, "transactions": 5,
+                },
+            ],
+        }
+
+        config = OptionsCompanionConfig(
+            enabled=True,
+            include_calls=True,
+            include_puts=False,
+            strikes_each_side=1,
+            dte_distance=0,
+            include_iv=True,
+            include_delta=True,
+            risk_free_rate=0.05,
+            dividend_yield=0.0,
+        )
+
+        slot_files, report = build_options_companion_csvs(
+            underlying_bars_df=underlying_df,
+            ticker="SPY",
+            from_date="2025-11-28",
+            to_date="2025-11-28",
+            config=config,
+            polygon=_FakePolygon(contracts, option_bars),
+            timespan="minute",
+            multiplier=1,
+        )
+
+        # The slot file exists and the solve at 12:55 succeeded.
+        assert "calls/atm.csv" in slot_files
+        assert report["totals"]["iv_status"].get("ok", 0) >= 1
+        row = slot_files["calls/atm.csv"].decode().strip().split("\n")[1].split(",")
+
+        # The row's IV is the one solved at a five-minute TTM (the 13:00
+        # close), not the 3h05m the 16:00 anchor would have given.
+        at_five_minutes, status_five = _compute_row_greeks(
+            option_close=1.05,
+            underlying_spot=710.0,
+            strike=710.0,
+            bar_ts_ms=bar_1255_et,
+            expiry_close_ms=close_1300_et,
+            is_call=True,
+            config=config,
+        )
+
+        at_three_hours, _ = _compute_row_greeks(
+            option_close=1.05,
+            underlying_spot=710.0,
+            strike=710.0,
+            bar_ts_ms=bar_1255_et,
+            expiry_close_ms=option_expiry_anchor_ms(date(2025, 11, 28)),
+            is_call=True,
+            config=config,
+        )
+        assert status_five == "ok"
+        assert at_five_minutes["iv"] != at_three_hours["iv"]
+
+        header = slot_files["calls/atm.csv"].decode().strip().split("\n")[0].split(",")
+        emitted = float(row[header.index("iv")])
+        assert emitted == pytest.approx(at_five_minutes["iv"], rel=1e-9)

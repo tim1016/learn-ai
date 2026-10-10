@@ -14,6 +14,10 @@ A 3-leg covered-call-with-put-protection on SPY:
 | 3 | long | put | $600 | +1 contract | $5.20 | OTM put bought for downside protection |
 
 Underlying: SPY @ spot 615.00, 30 days to expiration, IV 22%, r=4.3%.
+Expiry instants: the anchor form (16:00 New York time, ADR 0022 (i)) since #2934; the
+midnight-UTC values this fixture started with are no longer admissible inputs.
+`as_of_ms` sits at the same 16:00 New York anchor on 2026-01-01 (2026-01-01 21:00 UTC),
+so the tenor to the 2026-01-31 anchor is exactly 30.0 days — not 30.875.
 
 ## Grid
 

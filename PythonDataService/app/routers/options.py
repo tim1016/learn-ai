@@ -17,22 +17,23 @@ polygon_client = PolygonClientService()
 @router.post("/expirations", response_model=OptionsExpirationsResponse)
 async def list_options_expirations(request: OptionsExpirationsRequest):
     """
-    List unique expiration dates for options on an underlying ticker.
-    Much faster than fetching full contracts — sorts by expiration_date
-    and extracts unique dates without loading full contract payloads.
+    List unique option expirations for an underlying ticker, each as the
+    anchor instant (16:00 New York time on the expiry date). Much faster
+    than fetching full contracts — sorts by expiry and extracts unique
+    dates without loading full contract payloads.
     """
     try:
         logger.info(
             f"[Options] Expirations request: underlying={request.underlying_ticker}, "
             f"type={request.contract_type}, "
-            f"range=[{request.expiration_date_gte}, {request.expiration_date_lte}]"
+            f"range=[{request.expiration_ms_gte}, {request.expiration_ms_lte}]"
         )
 
         expirations = polygon_client.list_options_expirations(
             underlying_ticker=request.underlying_ticker,
             contract_type=request.contract_type,
-            expiration_date_gte=request.expiration_date_gte,
-            expiration_date_lte=request.expiration_date_lte,
+            expiration_ms_gte=request.expiration_ms_gte,
+            expiration_ms_lte=request.expiration_ms_lte,
         )
 
         logger.info(f"[Options] Returning {len(expirations)} expirations for {request.underlying_ticker}")

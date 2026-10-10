@@ -90,3 +90,15 @@ Decision (a) said an expiry is 16:00 ET of its date and left every caller to bui
 - The portfolio scenario's option position (`OptionPosition.expiration_ms`, `app/models/portfolio.py`) takes any instant (#2934).
 - The options companion counts time to expiry to the anchor itself, as it always has, so on a half day a same-day contract is given three hours it does not have (#2934).
 - The Polygon research pages (Options Lab, Pricing Lab, Strategy Builder) carry expiry as a `YYYY-MM-DD` string and count time to expiry in whole days (#2934).
+
+## Amendment 2026-10-09 — the research pages carry the expiry anchor (#2934)
+
+Everything the 2026-10-06 amendment left under #2934 is moved; nothing there remains.
+
+- The Polygon research wire (Options Lab, Pricing Lab, Strategy Builder) carries expiry as the anchor instant end to end. Python's request and response fields declare `OptionExpiryMs` (`expiration_ms`, `expiration_ms_gte/lte`, the `expirations` list), the .NET GraphQL resolvers pass `long` ms through, and the Angular pages hold and send anchors. The vendor's `YYYY-MM-DD` is converted once, inside the Polygon client, at the vendor boundary. The IV30 router and the IV recorder, which read the same client, take the anchor too; IV30 buckets expiries by the New York calendar date.
+- Time to expiry is measured to the anchor instant, not in whole days. The chain snapshot's rate tenor is fractional days to the anchor and the strategy analysis prices over the same instant's years (`time_to_expiry_years`, `option_expiry_dte_days` in `app/options/expiry.py`), so #2789's agreement holds on the new measure and the FRED curve interpolates at a fractional DTE. `calendar_days_to_expiry` is gone. QuantLib endpoints keep QuantLib's own date-based day count for pricing; only their wire field changed.
+- The options companion's countdown ends when the contract stops trading — the canonical `last_session_close_ms` (`app/options/deadlines.py`, ADR 0076): on a half day a same-day contract is no longer given three hours it does not have, and a non-session expiry date counts back to the session before it.
+- The portfolio scenario's option position declares `OptionExpiryMs`; the golden fixture's expiry instants are anchors.
+- The two pages that built 16:00 in the browser's zone now hold the anchor from the wire.
+
+**Left, with reasons.** The QuantLib wire's optional `evaluation_date` stays a `YYYY-MM-DD` string: it is a pricing date, not an expiry, no caller passes it, and QuantLib itself works in dates. The Data Lab past-chain page's analysis date stays a string: it is form state under (e)'s picker decision, and it feeds OCC symbol synthesis, whose `YYMMDD` is part of the vendor's ticker format, like `app/options/contract.py`'s own OCC builder.

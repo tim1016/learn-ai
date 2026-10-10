@@ -19,29 +19,31 @@ This file is a wiring test for the new fields.
 from __future__ import annotations
 
 from datetime import timedelta
+from unittest.mock import patch
 
 import pytest
 
 from app.models.strategy import StrategyAnalyzeRequest, StrategyLeg
+from app.options.expiry import option_expiry_anchor_ms, time_to_expiry_years
 from app.services.bs_greeks import black_scholes_greeks, bs_european_price
 from app.services.strategy_engine import analyze_strategy
-from app.utils.session_anchors import calendar_days_to_expiry, et_date_at_ms
+from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import now_ms_utc
 
 
 def _ttm_years(request: StrategyAnalyzeRequest) -> float:
-    """Derive time-to-maturity (years) from a request's expiration_date.
+    """Derive time-to-maturity (years) from a request's expiry anchor.
 
     Tests should use this rather than hardcoding `30 / 365.0` so they
     don't silently use wrong expected values if the fixture default changes.
     """
-    return calendar_days_to_expiry(request.expiration_date) / 365.0
+    return time_to_expiry_years(request.expiration_ms, now_ms_utc())
 
 
 def _bull_call_spread(today_plus: int = 30) -> StrategyAnalyzeRequest:
     """Long 100C / Short 105C, IV 25%, 30 DTE, spot 102."""
-    # Counted from the ET date, as the engine counts DTE.
-    expiration = (et_date_at_ms(now_ms_utc()) + timedelta(days=today_plus)).strftime("%Y-%m-%d")
+    # Counted from the ET date, as the engine counts time to expiry.
+    expiration_ms = option_expiry_anchor_ms(et_date_at_ms(now_ms_utc()) + timedelta(days=today_plus))
     return StrategyAnalyzeRequest(
         symbol="TEST",
         legs=[
@@ -64,7 +66,7 @@ def _bull_call_spread(today_plus: int = 30) -> StrategyAnalyzeRequest:
                 quantity=1,
             ),
         ],
-        expiration_date=expiration,
+        expiration_ms=expiration_ms,
         spot_price=102.0,
         risk_free_rate=0.04,
     )
@@ -193,13 +195,17 @@ class TestLegDiagnostics:
 
 
 class TestZeroDTEHandling:
-    """At expiration day (DTE=0) the current curve collapses to intrinsic."""
+    """Past the expiry anchor the current curve collapses to intrinsic."""
 
-    def test_dte_zero_current_curve_equals_expiry_curve(self) -> None:
+    def test_past_the_anchor_current_curve_equals_expiry_curve(self) -> None:
         request = _bull_call_spread(today_plus=0)
         request.include_current_curve = True
-        result = analyze_strategy(request)
-        # At DTE=0, theoretical_value == intrinsic.
+        # The anchor is 16:00 New York time on today's date; an hour past it
+        # the contract has no time left, whenever the test runs.
+        past_the_anchor = request.expiration_ms + 3_600_000
+        with patch("app.services.strategy_engine.now_ms_utc", return_value=past_the_anchor):
+            result = analyze_strategy(request)
+        # With no time left, theoretical_value == intrinsic.
         # So theoretical_pnl == expiry pnl on the same price grid.
         for cur, exp in zip(result.current_curve, result.curve, strict=True):
             assert cur.price == pytest.approx(exp.price, abs=1e-6)

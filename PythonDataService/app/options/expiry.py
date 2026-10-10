@@ -26,6 +26,35 @@ def option_expiry_anchor_ms(expiry_date: date) -> int:
     return to_ms_utc(datetime(expiry_date.year, expiry_date.month, expiry_date.day, _ANCHOR_HOUR_NEW_YORK, tzinfo=_NY))
 
 
+#: A year on the 365-day count the research pages price over: the same count
+#: ``days / 365`` always used, now measured to the anchor instant.
+_MS_PER_YEAR = 365 * 24 * 3600 * 1000
+
+
+def time_to_expiry_years(expiry_ms: int, now_ms: int) -> float:
+    """Years from ``now_ms`` to an expiry instant, floored at 0 (#2934).
+
+    The instant is the expiry anchor (ADR 0022 (i), 16:00 New York time on the
+    date), or a session close before it on an early close. The strategy
+    analysis prices over these years.
+    Formula: ttm = max((expiry_ms − now_ms) / (365 · 86400000), 0)
+    Reference: ADR 0022 (i) — the one expiry anchor.
+    Canonical implementation: this file.
+    Validated against: tests/test_strategy_engine.py::TestTimeToExpiry
+    """
+    return max((expiry_ms - now_ms) / _MS_PER_YEAR, 0.0)
+
+
+def option_expiry_dte_days(expiry_ms: int, now_ms: int) -> float:
+    """Fractional calendar days from ``now_ms`` to the expiry anchor, floored at 0 (#2934).
+
+    The chain snapshot looks its risk-free rate up at this tenor on the FRED
+    day-tenored curve, and the strategy analysis prices over the same anchor
+    instant's years, so the two agree (#2789).
+    """
+    return time_to_expiry_years(expiry_ms, now_ms) * 365.0
+
+
 def option_expiry_date(expiry_ms: int) -> date:
     """The expiry date an anchor instant names; refuses an instant that is not an expiry anchor."""
     expiry_date = et_date_at_ms(expiry_ms)

@@ -44,7 +44,7 @@ public class PricingCompareResponse
     public bool Success { get; set; }
     public decimal Strike { get; set; }
     public string OptionType { get; set; } = "";
-    public string ExpirationDate { get; set; } = "";
+    public long ExpirationMs { get; set; }
     public decimal TimeToExpiryYears { get; set; }
     public decimal? RiskFreeRate { get; set; }
     public List<PricingModelCurveDto> Models { get; set; } = [];

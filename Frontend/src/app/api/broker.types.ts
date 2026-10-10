@@ -5030,9 +5030,10 @@ export interface paths {
         put?: never;
         /**
          * List Options Expirations
-         * @description List unique expiration dates for options on an underlying ticker.
-         *     Much faster than fetching full contracts — sorts by expiration_date
-         *     and extracts unique dates without loading full contract payloads.
+         * @description List unique option expirations for an underlying ticker, each as the
+         *     anchor instant (16:00 New York time on the expiry date). Much faster
+         *     than fetching full contracts — sorts by expiry and extracts unique
+         *     dates without loading full contract payloads.
          */
         post: operations["list_options_expirations_api_options_expirations_post"];
         delete?: never;
@@ -21206,10 +21207,10 @@ export interface components {
          */
         OptionsChainSnapshotRequest: {
             /**
-             * Expiration Date
-             * @description Filter to this expiration date (YYYY-MM-DD). Defaults to today.
+             * Expiration Ms
+             * @description Filter to this expiry, as the anchor instant (16:00 New York time on the date). Defaults to today.
              */
-            expiration_date?: string | null;
+            expiration_ms?: number | null;
             /**
              * Underlying Ticker
              * @description Underlying stock ticker
@@ -21221,10 +21222,11 @@ export interface components {
          * @description Response schema for options chain snapshot.
          *
          *     ``risk_free_rate`` is FRED's Treasury-bill curve interpolated at the
-         *     requested expiration's days to expiry (30 days when no expiration is
-         *     given); ``dividend_yield`` is Polygon's TTM dividends. They replace the
-         *     historical hardcoded `r=0.043, q=0` defaults used by pricing-lab,
-         *     options-strategy-lab, strategy-builder.
+         *     requested expiration's fractional days to expiry, measured to the expiry
+         *     anchor (30 days when no expiration is given); ``dividend_yield`` is
+         *     Polygon's TTM dividends. They replace the historical hardcoded
+         *     `r=0.043, q=0` defaults used by pricing-lab, options-strategy-lab,
+         *     strategy-builder.
          */
         OptionsChainSnapshotResponse: {
             /**
@@ -21384,8 +21386,8 @@ export interface components {
             /** Contract Type */
             contract_type?: string | null;
             day?: components["schemas"]["DaySnapshot"] | null;
-            /** Expiration Date */
-            expiration_date?: string | null;
+            /** Expiration Ms */
+            expiration_ms?: number | null;
             greeks?: components["schemas"]["GreeksSnapshot"] | null;
             /** Implied Volatility */
             implied_volatility?: number | null;
@@ -21409,15 +21411,15 @@ export interface components {
              */
             contract_type?: string | null;
             /**
-             * Expiration Date Gte
-             * @description Min expiration date
+             * Expiration Ms Gte
+             * @description Min expiry, as the anchor instant (16:00 New York time on the date)
              */
-            expiration_date_gte?: string | null;
+            expiration_ms_gte?: number | null;
             /**
-             * Expiration Date Lte
-             * @description Max expiration date
+             * Expiration Ms Lte
+             * @description Max expiry, as the anchor instant (16:00 New York time on the date)
              */
-            expiration_date_lte?: string | null;
+            expiration_ms_lte?: number | null;
             /**
              * Underlying Ticker
              * @description Underlying stock ticker
@@ -21440,7 +21442,7 @@ export interface components {
              * Expirations
              * @default []
              */
-            expirations?: string[];
+            expirations?: number[];
             /** Success */
             success: boolean;
         };
@@ -21899,10 +21901,10 @@ export interface components {
             /** Evaluation Date */
             evaluation_date?: string | null;
             /**
-             * Expiration Date
-             * @description Expiration date YYYY-MM-DD
+             * Expiration Ms
+             * @description Expiry as the anchor instant: 16:00 New York time on the expiry date
              */
-            expiration_date: string;
+            expiration_ms: number;
             /**
              * Num Points
              * @description Number of data points
@@ -21950,8 +21952,8 @@ export interface components {
         PricingCompareResponse: {
             /** Error */
             error?: string | null;
-            /** Expiration Date */
-            expiration_date: string;
+            /** Expiration Ms */
+            expiration_ms: number;
             /** Models */
             models: components["schemas"]["PricingModelCurve"][];
             /** Option Type */
@@ -22427,10 +22429,10 @@ export interface components {
              */
             evaluation_date?: string | null;
             /**
-             * Expiration Date
-             * @description Expiration date YYYY-MM-DD
+             * Expiration Ms
+             * @description Expiry as the anchor instant: 16:00 New York time on the expiry date
              */
-            expiration_date: string;
+            expiration_ms: number;
             /**
              * Option Type
              * @description call or put
@@ -24806,10 +24808,10 @@ export interface components {
              */
             curve_points?: number;
             /**
-             * Expiration Date
-             * @description Expiration date (YYYY-MM-DD)
+             * Expiration Ms
+             * @description Expiry as the anchor instant: 16:00 New York time on the expiry date
              */
-            expiration_date: string;
+            expiration_ms: number;
             /**
              * Include Current Curve
              * @description If true, include `current_curve` — theoretical per-share P&L at today's vol surface (not at expiration) over the same price grid as `curve`.

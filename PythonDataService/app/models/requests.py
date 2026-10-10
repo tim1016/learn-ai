@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.options.expiry import OptionExpiryMs
 from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -53,8 +54,12 @@ class OptionsExpirationsRequest(BaseModel):
 
     underlying_ticker: str = Field(..., min_length=1, max_length=20, description="Underlying stock ticker")
     contract_type: str | None = Field(None, description="Filter: call or put")
-    expiration_date_gte: str | None = Field(None, description="Min expiration date")
-    expiration_date_lte: str | None = Field(None, description="Max expiration date")
+    expiration_ms_gte: OptionExpiryMs | None = Field(
+        None, description="Min expiry, as the anchor instant (16:00 New York time on the date)"
+    )
+    expiration_ms_lte: OptionExpiryMs | None = Field(
+        None, description="Max expiry, as the anchor instant (16:00 New York time on the date)"
+    )
 
     @field_validator("contract_type")
     @classmethod
@@ -68,8 +73,8 @@ class OptionsChainSnapshotRequest(BaseModel):
     """Request schema for fetching options chain snapshot"""
 
     underlying_ticker: str = Field(..., min_length=1, max_length=20, description="Underlying stock ticker")
-    expiration_date: str | None = Field(
-        None, description="Filter to this expiration date (YYYY-MM-DD). Defaults to today."
+    expiration_ms: OptionExpiryMs | None = Field(
+        None, description="Filter to this expiry, as the anchor instant (16:00 New York time on the date). Defaults to today."
     )
 
 

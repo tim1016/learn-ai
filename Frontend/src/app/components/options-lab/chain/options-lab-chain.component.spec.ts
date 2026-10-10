@@ -17,7 +17,7 @@ function makeContract(
     ticker: `O:SPY${strike}${contractType[0].toUpperCase()}`,
     contractType,
     strikePrice: strike,
-    expirationDate: '2026-05-15',
+    expirationMs: 1_778_875_200_000,
     breakEvenPrice: null,
     impliedVolatility: 0.2,
     openInterest: 100,
@@ -184,7 +184,7 @@ describe('OptionsLabChainComponent', () => {
   // the banner doesn't linger after a recovery.
   it('clears stale error signal after a successful chain fetch', async () => {
     component.ticker.set('SPY');
-    component.selectedExpiration.set('2026-05-15');
+    component.selectedExpiration.set(1_778_875_200_000);
     component.error.set('previous failure');
 
     const fetchPromise = component.fetchChainSnapshot(true);

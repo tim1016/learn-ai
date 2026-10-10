@@ -95,9 +95,9 @@
     <div class="mb-3 bg-slate-800 rounded-lg px-3 py-2">
       <app-expiration-ribbon
         [expirations]="availableExpirations()"
-        [selectedDate]="selectedExpiration()"
+        [selectedExpiration]="selectedExpiration()"
         [loading]="expirationsLoading()"
-        (dateSelected)="onExpirationSelected($event)"
+        (expirationSelected)="onExpirationSelected($event)"
       />
     </div>
   }

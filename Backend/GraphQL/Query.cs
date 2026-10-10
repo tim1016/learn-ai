@@ -83,17 +83,17 @@ public class Query
         [Service] ILogger<Query> logger,
         string underlyingTicker,
         string? contractType = null,
-        string? expirationDateGte = null,
-        string? expirationDateLte = null)
+        long? expirationMsGte = null,
+        long? expirationMsLte = null)
     {
         try
         {
             logger.LogInformation(
                 "[Options] Expirations query: underlying={Underlying}, type={Type}, range=[{Gte},{Lte}]",
-                underlyingTicker, contractType, expirationDateGte, expirationDateLte);
+                underlyingTicker, contractType, expirationMsGte, expirationMsLte);
 
             var response = await polygonService.FetchOptionsExpirationsAsync(
-                underlyingTicker, contractType, expirationDateGte, expirationDateLte);
+                underlyingTicker, contractType, expirationMsGte, expirationMsLte);
 
             return new OptionsExpirationsResult
             {
@@ -123,16 +123,16 @@ public class Query
         [Service] IPolygonService polygonService,
         [Service] ILogger<Query> logger,
         string underlyingTicker,
-        string? expirationDate = null)
+        long? expirationMs = null)
     {
         try
         {
             logger.LogInformation(
-                "[Snapshot] Query: underlying={Underlying}, expiration={Expiration}",
-                underlyingTicker, expirationDate ?? "today");
+                "[Snapshot] Query: underlying={Underlying}, expirationMs={ExpirationMs}",
+                underlyingTicker, expirationMs?.ToString() ?? "today");
 
             var response = await polygonService.FetchOptionsChainSnapshotAsync(
-                underlyingTicker, expirationDate);
+                underlyingTicker, expirationMs);
 
             var underlying = response.Underlying != null
                 ? new SnapshotUnderlyingResult
@@ -149,7 +149,7 @@ public class Query
                 Ticker = c.Ticker,
                 ContractType = c.ContractType,
                 StrikePrice = c.StrikePrice,
-                ExpirationDate = c.ExpirationDate,
+                ExpirationMs = c.ExpirationMs,
                 BreakEvenPrice = c.BreakEvenPrice,
                 ImpliedVolatility = c.ImpliedVolatility,
                 OpenInterest = c.OpenInterest,
@@ -290,7 +290,7 @@ public class Query
         [Service] ILogger<Query> logger,
         string symbol,
         List<StrategyLegInput> legs,
-        string expirationDate,
+        long expirationMs,
         decimal spotPrice,
         decimal? riskFreeRate = null,
         bool includeCurrentCurve = false,
@@ -302,8 +302,8 @@ public class Query
         try
         {
             logger.LogInformation(
-                "[Strategy] GraphQL query: symbol={Symbol}, legs={LegCount}, expiration={Expiration}",
-                symbol, legs.Count, expirationDate);
+                "[Strategy] GraphQL query: symbol={Symbol}, legs={LegCount}, expirationMs={ExpirationMs}",
+                symbol, legs.Count, expirationMs);
 
             var options = new StrategyAnalyzeOptions
             {
@@ -315,7 +315,7 @@ public class Query
             };
 
             var response = await polygonService.AnalyzeOptionsStrategyAsync(
-                symbol, legs, expirationDate, spotPrice, riskFreeRate, options);
+                symbol, legs, expirationMs, spotPrice, riskFreeRate, options);
 
             return new StrategyAnalyzeResult
             {
@@ -470,7 +470,7 @@ public class Query
         decimal spot,
         decimal strike,
         decimal volatility,
-        string expirationDate,
+        long expirationMs,
         string optionType,
         decimal? riskFreeRate = null,
         string? evaluationDate = null,
@@ -480,7 +480,7 @@ public class Query
         try
         {
             var response = await polygonService.QuantLibPriceAsync(
-                spot, strike, riskFreeRate, volatility, expirationDate,
+                spot, strike, riskFreeRate, volatility, expirationMs,
                 optionType, evaluationDate, dividendYield, engine);
 
             return new QuantLibPriceResult
@@ -520,7 +520,7 @@ public class Query
         decimal spot,
         decimal strike,
         decimal volatility,
-        string expirationDate,
+        long expirationMs,
         string optionType,
         decimal? riskFreeRate = null,
         decimal dividendYield = 0m,
@@ -532,7 +532,7 @@ public class Query
         try
         {
             var response = await polygonService.PricingCompareAsync(
-                spot, strike, volatility, expirationDate, optionType,
+                spot, strike, volatility, expirationMs, optionType,
                 riskFreeRate, dividendYield, evaluationDate,
                 spotMin, spotMax, numPoints);
 
@@ -541,7 +541,7 @@ public class Query
                 Success = response.Success,
                 Strike = response.Strike,
                 OptionType = response.OptionType,
-                ExpirationDate = response.ExpirationDate,
+                ExpirationMs = response.ExpirationMs,
                 TimeToExpiryYears = response.TimeToExpiryYears,
                 RiskFreeRate = response.RiskFreeRate,
                 Models = response.Models.Select(m => new PricingModelCurveResult
@@ -597,7 +597,7 @@ public class SnapshotContractResult
     public string? Ticker { get; set; }
     public string? ContractType { get; set; }
     public decimal? StrikePrice { get; set; }
-    public string? ExpirationDate { get; set; }
+    public long? ExpirationMs { get; set; }
     public decimal? BreakEvenPrice { get; set; }
     public decimal? ImpliedVolatility { get; set; }
     public decimal? OpenInterest { get; set; }
@@ -646,7 +646,7 @@ public class LastQuoteResult
 public class OptionsExpirationsResult
 {
     public bool Success { get; set; }
-    public List<string> Expirations { get; set; } = [];
+    public List<long> Expirations { get; set; } = [];
     public int Count { get; set; }
     public string? Error { get; set; }
 }
@@ -825,7 +825,7 @@ public class PricingCompareResult
     public bool Success { get; set; }
     public decimal Strike { get; set; }
     public string OptionType { get; set; } = "";
-    public string ExpirationDate { get; set; } = "";
+    public long ExpirationMs { get; set; }
     public decimal TimeToExpiryYears { get; set; }
     public decimal? RiskFreeRate { get; set; }
     public List<PricingModelCurveResult> Models { get; set; } = [];

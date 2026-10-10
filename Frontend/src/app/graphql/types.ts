@@ -93,7 +93,8 @@ export interface SnapshotContractResult {
   ticker: string | null;
   contractType: string | null;
   strikePrice: number | null;
-  expirationDate: string | null;
+  /** The expiry anchor instant: 16:00 New York time on the expiry date. */
+  expirationMs: number | null;
   breakEvenPrice: number | null;
   impliedVolatility: number | null;
   openInterest: number | null;
@@ -268,7 +269,8 @@ export interface PricingCompareResult {
   success: boolean;
   strike: number;
   optionType: string;
-  expirationDate: string;
+  /** The expiry anchor instant: 16:00 New York time on the expiry date. */
+  expirationMs: number;
   timeToExpiryYears: number;
   /** The rate Python priced every curve at; null only when the Backend call failed. */
   riskFreeRate: number | null;

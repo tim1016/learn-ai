@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
+from app.options.expiry import option_expiry_anchor_ms
 from app.services import fred_service
 from app.utils.session_anchors import et_midnight_ms
 
@@ -24,7 +25,7 @@ async def test_snapshot_returns_contracts(client):
                 "ticker": "O:AAPL250221C00185000",
                 "contract_type": "call",
                 "strike_price": 185.0,
-                "expiration_date": "2025-02-21",
+                "expiration_ms": option_expiry_anchor_ms(date(2025, 2, 21)),
                 "break_even_price": 187.50,
                 "implied_volatility": 0.25,
                 "open_interest": 1500,
@@ -47,7 +48,7 @@ async def test_snapshot_returns_contracts(client):
                 "ticker": "O:AAPL250221P00185000",
                 "contract_type": "put",
                 "strike_price": 185.0,
-                "expiration_date": "2025-02-21",
+                "expiration_ms": option_expiry_anchor_ms(date(2025, 2, 21)),
                 "break_even_price": 182.50,
                 "implied_volatility": 0.28,
                 "open_interest": 1200,
@@ -181,22 +182,29 @@ async def test_snapshot_prices_each_expiry_at_its_own_tenor_rate(client, fresh_f
     bills = {28: 0.0400, 91: 0.0463, 182: 0.0500, 365: 0.0520}
     chain = {"underlying": {"ticker": "SPY", "price": 0, "change": 0, "change_percent": 0}, "contracts": []}
 
+    near_anchor = option_expiry_anchor_ms(date(2026, 10, 30))
+    far_anchor = option_expiry_anchor_ms(date(2027, 4, 1))
+
     with (
         patch("app.routers.snapshot.polygon_client.list_snapshot_options_chain", return_value=chain),
         patch("app.services.fred_service._fetch_all_tenors", return_value=bills),
-        patch("app.utils.session_anchors.now_ms_utc", return_value=noon_et_2026_10_01),
+        patch("app.routers.snapshot.now_ms_utc", return_value=noon_et_2026_10_01),
     ):
         near = await client.post(
-            "/api/snapshot/options-chain", json={"underlying_ticker": "SPY", "expiration_date": "2026-10-30"}
+            "/api/snapshot/options-chain", json={"underlying_ticker": "SPY", "expiration_ms": near_anchor}
         )
         far = await client.post(
-            "/api/snapshot/options-chain", json={"underlying_ticker": "SPY", "expiration_date": "2027-04-01"}
+            "/api/snapshot/options-chain", json={"underlying_ticker": "SPY", "expiration_ms": far_anchor}
         )
 
     assert (near.status_code, far.status_code) == (200, 200)
     near_rate, far_rate = near.json()["risk_free_rate"], far.json()["risk_free_rate"]
-    # 29 days out sits 1/63 of the way from the 4-week bill (28 d) to the 3-month bill (91 d).
-    assert near_rate == pytest.approx(0.0400 + (1 / 63) * (0.0463 - 0.0400), abs=1e-12, rel=0)
-    # 182 days out is the 6-month bill exactly.
-    assert far_rate == pytest.approx(0.0500, abs=1e-12, rel=0)
+    # From noon ET to the 16:00 anchor: 29 1/6 days and 182 1/6 days out. The
+    # near tenor sits (7/6)/63 of the way from the 4-week bill (28 d) to the
+    # 3-month bill (91 d); the far tenor just past the 6-month bill (182 d)
+    # toward the 1-year bill (365 d).
+    near_dte = 29 + 1 / 6
+    far_dte = 182 + 1 / 6
+    assert near_rate == pytest.approx(0.0400 + ((near_dte - 28) / 63) * (0.0463 - 0.0400), abs=1e-12, rel=0)
+    assert far_rate == pytest.approx(0.0500 + ((far_dte - 182) / 183) * (0.0520 - 0.0500), abs=1e-12, rel=0)
     assert near_rate != far_rate

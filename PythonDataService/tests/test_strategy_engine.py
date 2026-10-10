@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from app.models.strategy import StrategyAnalyzeRequest, StrategyLeg
+from app.options.expiry import option_expiry_anchor_ms, option_expiry_dte_days, time_to_expiry_years
 from app.services.bs_greeks import bs_european_price
 from app.services.strategy_engine import (
     analyze_strategy,
@@ -23,7 +24,7 @@ from app.services.strategy_engine import (
     interpolate_iv_at_price,
     weighted_iv,
 )
-from app.utils.session_anchors import calendar_days_to_expiry, et_midnight_ms
+from app.utils.session_anchors import et_midnight_ms
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -212,25 +213,25 @@ class TestD2:
 
 class TestPOP:
     def test_returns_between_0_and_1(self):
-        pop = compute_pop(bull_call_spread(), 102, 0.043, 30)
+        pop = compute_pop(bull_call_spread(), 102, 0.043, 30 / 365.0)
         assert 0.0 <= pop <= 1.0
 
     def test_deep_itm_high_pop(self):
         """If spot is well above both strikes, POP should be high."""
-        pop = compute_pop(bull_call_spread(), 150, 0.043, 30)
+        pop = compute_pop(bull_call_spread(), 150, 0.043, 30 / 365.0)
         assert pop > 0.8
 
     def test_deep_otm_low_pop(self):
         """If spot is well below lower strike, POP should be low."""
-        pop = compute_pop(bull_call_spread(), 80, 0.043, 30)
+        pop = compute_pop(bull_call_spread(), 80, 0.043, 30 / 365.0)
         assert pop < 0.2
 
     def test_at_expiry_profitable(self):
-        pop = compute_pop(bull_call_spread(), 105, 0.043, 0)
+        pop = compute_pop(bull_call_spread(), 105, 0.043, 0.0)
         assert pop == 1.0
 
     def test_at_expiry_unprofitable(self):
-        pop = compute_pop(bull_call_spread(), 95, 0.043, 0)
+        pop = compute_pop(bull_call_spread(), 95, 0.043, 0.0)
         assert pop == 0.0
 
 
@@ -241,11 +242,11 @@ class TestPOP:
 
 class TestExpectedValue:
     def test_is_finite(self):
-        ev = compute_expected_value(bull_call_spread(), 102, 0.043, 30)
+        ev = compute_expected_value(bull_call_spread(), 102, 0.043, 30 / 365.0)
         assert math.isfinite(ev)
 
     def test_at_expiry(self):
-        ev = compute_expected_value(bull_call_spread(), 105, 0.043, 0)
+        ev = compute_expected_value(bull_call_spread(), 105, 0.043, 0.0)
         assert ev == pytest.approx(2.0, abs=0.01)
 
 
@@ -276,7 +277,7 @@ class TestAnalyzeStrategy:
         req = StrategyAnalyzeRequest(
             symbol="TEST",
             legs=bull_call_spread(),
-            expiration_date="2026-12-31",
+            expiration_ms=option_expiry_anchor_ms(date(2026, 12, 31)),
             spot_price=102,
         )
         result = analyze_strategy(req)
@@ -296,7 +297,7 @@ class TestAnalyzeStrategy:
         req = StrategyAnalyzeRequest(
             symbol="TEST",
             legs=long_straddle(),
-            expiration_date="2026-12-31",
+            expiration_ms=option_expiry_anchor_ms(date(2026, 12, 31)),
             spot_price=100,
         )
         result = analyze_strategy(req)
@@ -308,37 +309,46 @@ class TestAnalyzeStrategy:
 
 
 # ---------------------------------------------------------------------------
-# Days to expiry — the tenor the chain snapshot's rate is looked up at (#2789)
+# Time to expiry — measured to the expiry anchor, the same instant the chain
+# snapshot's rate tenor is measured to (#2789, #2934)
 # ---------------------------------------------------------------------------
 
 # 23:30 ET on 2027-03-05 (EST) is already 04:30 UTC on 2027-03-06.
 _LATE_EVENING_ET_2027_03_05 = et_midnight_ms(date(2027, 3, 5)) + 23 * 3_600_000 + 30 * 60_000
+# The expiry anchor is 16:00 New York time on 2027-03-06: 16.5 hours after the
+# instant above.
+_ANCHOR_2027_03_06 = option_expiry_anchor_ms(date(2027, 3, 6))
 
 
-class TestDaysToExpiry:
-    def test_counts_from_the_et_date_not_the_utc_date(self):
-        assert calendar_days_to_expiry("2027-03-06", now_ms=_LATE_EVENING_ET_2027_03_05) == 1
+class TestTimeToExpiry:
+    def test_measures_to_the_anchor_not_the_whole_day(self):
+        assert time_to_expiry_years(_ANCHOR_2027_03_06, _LATE_EVENING_ET_2027_03_05) == pytest.approx(
+            16.5 / 24 / 365
+        )
 
-    def test_an_expired_contract_is_zero_days_out(self):
-        assert calendar_days_to_expiry("2027-02-19", now_ms=_LATE_EVENING_ET_2027_03_05) == 0
+    def test_dte_days_is_the_same_instant_in_days(self):
+        assert option_expiry_dte_days(_ANCHOR_2027_03_06, _LATE_EVENING_ET_2027_03_05) == pytest.approx(16.5 / 24)
 
-    def test_analysis_prices_over_the_same_et_dte(self):
+    def test_an_expired_contract_is_zero(self):
+        assert time_to_expiry_years(option_expiry_anchor_ms(date(2027, 2, 19)), _LATE_EVENING_ET_2027_03_05) == 0.0
+
+    def test_analysis_prices_over_the_same_anchor_ttm(self):
         req = StrategyAnalyzeRequest(
             symbol="TEST",
             legs=[_leg(100, "call", "long", 5.0)],
-            expiration_date="2027-03-06",
+            expiration_ms=_ANCHOR_2027_03_06,
             spot_price=102,
             risk_free_rate=0.04,
             include_leg_diagnostics=True,
         )
-        with patch("app.utils.session_anchors.now_ms_utc", return_value=_LATE_EVENING_ET_2027_03_05):
+        with patch("app.services.strategy_engine.now_ms_utc", return_value=_LATE_EVENING_ET_2027_03_05):
             result = analyze_strategy(req)
 
-        one_day = bs_european_price(
-            spot=102, strike=100, ttm_years=1 / 365.0, rate=0.04, volatility=0.25, is_call=True, dividend=0.0
+        sixteen_and_a_half_hours = bs_european_price(
+            spot=102, strike=100, ttm_years=16.5 / 24 / 365, rate=0.04, volatility=0.25, is_call=True, dividend=0.0
         )
         assert result.success is True
-        assert result.leg_diagnostics[0].current_theoretical == round(one_day, 6)
+        assert result.leg_diagnostics[0].current_theoretical == round(sixteen_and_a_half_hours, 6)
 
 
 # ---------------------------------------------------------------------------
@@ -471,7 +481,7 @@ class TestIronCondorFull:
         req = StrategyAnalyzeRequest(
             symbol="TEST",
             legs=iron_condor(),
-            expiration_date="2026-12-31",
+            expiration_ms=option_expiry_anchor_ms(date(2026, 12, 31)),
             spot_price=100,
         )
         result = analyze_strategy(req)
@@ -535,7 +545,7 @@ class TestBearPutSpread:
         req = StrategyAnalyzeRequest(
             symbol="TEST",
             legs=bear_put_spread(),
-            expiration_date="2026-12-31",
+            expiration_ms=option_expiry_anchor_ms(date(2026, 12, 31)),
             spot_price=102,
         )
         result = analyze_strategy(req)
@@ -556,21 +566,21 @@ class TestGreeks:
         from app.services.strategy_engine import compute_strategy_greeks
 
         legs = [_leg(100, "call", "long", 5.0, iv=0.25)]
-        greeks = compute_strategy_greeks(legs, spot=100, r=0.043, days_to_expiry=30)
+        greeks = compute_strategy_greeks(legs, spot=100, r=0.043, ttm_years=30 / 365.0)
         assert greeks.delta > 0
 
     def test_short_call_negative_delta(self):
         from app.services.strategy_engine import compute_strategy_greeks
 
         legs = [_leg(100, "call", "short", 5.0, iv=0.25)]
-        greeks = compute_strategy_greeks(legs, spot=100, r=0.043, days_to_expiry=30)
+        greeks = compute_strategy_greeks(legs, spot=100, r=0.043, ttm_years=30 / 365.0)
         assert greeks.delta < 0
 
     def test_straddle_near_zero_delta(self):
         from app.services.strategy_engine import compute_strategy_greeks
 
         legs = long_straddle()
-        greeks = compute_strategy_greeks(legs, spot=100, r=0.043, days_to_expiry=30)
+        greeks = compute_strategy_greeks(legs, spot=100, r=0.043, ttm_years=30 / 365.0)
         # ATM straddle is roughly delta neutral
         assert abs(greeks.delta) < 0.15
 
@@ -578,14 +588,14 @@ class TestGreeks:
         from app.services.strategy_engine import compute_strategy_greeks
 
         legs = long_straddle()
-        greeks = compute_strategy_greeks(legs, spot=100, r=0.043, days_to_expiry=30)
+        greeks = compute_strategy_greeks(legs, spot=100, r=0.043, ttm_years=30 / 365.0)
         assert greeks.gamma > 0  # long options = long gamma
 
     def test_straddle_negative_theta(self):
         from app.services.strategy_engine import compute_strategy_greeks
 
         legs = long_straddle()
-        greeks = compute_strategy_greeks(legs, spot=100, r=0.043, days_to_expiry=30)
+        greeks = compute_strategy_greeks(legs, spot=100, r=0.043, ttm_years=30 / 365.0)
         assert greeks.theta < 0  # long options = time decay
 
     def test_quantity_multiplier(self):
@@ -593,8 +603,8 @@ class TestGreeks:
 
         single = [_leg(100, "call", "long", 5.0, iv=0.25, qty=1)]
         double = [_leg(100, "call", "long", 5.0, iv=0.25, qty=2)]
-        g1 = compute_strategy_greeks(single, spot=100, r=0.043, days_to_expiry=30)
-        g2 = compute_strategy_greeks(double, spot=100, r=0.043, days_to_expiry=30)
+        g1 = compute_strategy_greeks(single, spot=100, r=0.043, ttm_years=30 / 365.0)
+        g2 = compute_strategy_greeks(double, spot=100, r=0.043, ttm_years=30 / 365.0)
         assert g2.delta == pytest.approx(g1.delta * 2, abs=0.001)
         assert g2.gamma == pytest.approx(g1.gamma * 2, abs=0.001)
 
@@ -602,12 +612,12 @@ class TestGreeks:
         from app.services.strategy_engine import compute_strategy_greeks
 
         legs = [_leg(100, "call", "long", 5.0, iv=0.25)]
-        greeks = compute_strategy_greeks(legs, spot=110, r=0.043, days_to_expiry=0)
+        greeks = compute_strategy_greeks(legs, spot=110, r=0.043, ttm_years=0.0)
         assert greeks.delta == pytest.approx(1.0, abs=0.001)
 
     def test_at_expiry_zero_gamma(self):
         from app.services.strategy_engine import compute_strategy_greeks
 
         legs = [_leg(100, "call", "long", 5.0, iv=0.25)]
-        greeks = compute_strategy_greeks(legs, spot=110, r=0.043, days_to_expiry=0)
+        greeks = compute_strategy_greeks(legs, spot=110, r=0.043, ttm_years=0.0)
         assert greeks.gamma == 0.0

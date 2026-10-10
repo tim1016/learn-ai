@@ -28,7 +28,8 @@ import numpy as np
 import pandas as pd
 
 from app.models.requests import OptionsCompanionConfig
-from app.options.expiry import option_expiry_anchor_ms
+from app.options.deadlines import last_session_close_ms
+from app.options.expiry import option_expiry_anchor_ms, time_to_expiry_years
 from app.services.bs_greeks import black_scholes_greeks
 from app.services.polygon_client import PolygonClientService
 from app.volatility.solver import implied_volatility
@@ -36,7 +37,6 @@ from app.volatility.solver import implied_volatility
 logger = logging.getLogger(__name__)
 
 _ET = ZoneInfo("America/New_York")
-_MS_PER_YEAR = 365.0 * 24 * 3600 * 1000
 # Intraday floor for the IV solver — 1 minute. The default solver floor is
 # 1 calendar day, which silently rejects every 0DTE bar (TTM ≤ 6.5 hours).
 # Anything inside the final minute of trading is essentially expired and
@@ -155,22 +155,22 @@ def _resolve_target_expiry(
     not a meaningful comparison for time-decay analysis.
     """
     target = trading_day + timedelta(days=config.dte_distance)
-    target_iso = target.isoformat()
+    target_anchor = option_expiry_anchor_ms(target)
     try:
         # ``expired=True`` is critical: Polygon's /v3/reference/options/contracts
         # filters out expired chains by default, so any historical trading day
         # would otherwise look "no chain listed" and get incorrectly skipped.
         expirations = polygon.list_options_expirations(
             underlying_ticker=ticker,
-            expiration_date_gte=target_iso,
-            expiration_date_lte=target_iso,
+            expiration_ms_gte=target_anchor,
+            expiration_ms_lte=target_anchor,
             expired=True,
         )
     except Exception as exc:
         logger.warning(f"[OC] Expiration lookup failed for {ticker} on {trading_day}: {exc}")
         return None
 
-    if target_iso in expirations:
+    if target_anchor in expirations:
         return target
     return None
 
@@ -231,7 +231,7 @@ def _compute_row_greeks(
         "rho": None,
     }
 
-    ttm_years = max(0.0, (expiry_close_ms - bar_ts_ms) / _MS_PER_YEAR)
+    ttm_years = time_to_expiry_years(expiry_close_ms, bar_ts_ms)
     if ttm_years <= 0:
         return out, "expired"
     if option_close is None or option_close <= 0:
@@ -385,7 +385,10 @@ def _process_contract(
         return [], counters
 
     counters["option_bars_raw"] = len(bars)
-    expiry_close_ms = option_expiry_anchor_ms(contract.expiration)
+    # The countdown ends when the contract stops trading — the session close
+    # on its expiry date, a half day's early close included — not three hours
+    # later at the 16:00 anchor (#2934, ADR 0076).
+    expiry_close_ms = last_session_close_ms(contract.expiration)
     is_call = contract.contract_type == "call"
     iso_expiration = contract.expiration.isoformat()
     needs_greeks = (

@@ -9,6 +9,7 @@ from datetime import date
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+from app.options.expiry import OptionExpiryMs, option_expiry_date
 from app.services.bs_greeks import bs_european_price
 from app.services.quantlib_pricer import (
     _QL_AVAILABLE,
@@ -35,7 +36,9 @@ class QuantLibPriceRequest(BaseModel):
         DEFAULT_RISK_FREE_RATE, description="Annualized risk-free rate (omit for the Python default)"
     )
     volatility: float = Field(..., gt=0, description="Annualized IV (decimal, e.g. 0.20)")
-    expiration_date: str = Field(..., description="Expiration date YYYY-MM-DD")
+    expiration_ms: OptionExpiryMs = Field(
+        ..., description="Expiry as the anchor instant: 16:00 New York time on the expiry date"
+    )
     option_type: str = Field(..., pattern="^(call|put)$", description="call or put")
     evaluation_date: str | None = Field(None, description="Pricing date (default: today)")
     dividend_yield: float = Field(0.0, ge=0, description="Continuous dividend yield")
@@ -84,7 +87,7 @@ async def quantlib_price(request: QuantLibPriceRequest):
     try:
         engine = PricingEngine(request.engine)
         eval_d = date.fromisoformat(request.evaluation_date) if request.evaluation_date else None
-        exp_d = date.fromisoformat(request.expiration_date)
+        exp_d = option_expiry_date(request.expiration_ms)
 
         result = price_option(
             spot=request.spot,
@@ -137,7 +140,9 @@ class PricingCompareRequest(BaseModel):
     spot: float = Field(..., gt=0, description="Current underlying price")
     strike: float = Field(..., gt=0, description="Strike price")
     volatility: float = Field(..., gt=0, description="Annualized IV (decimal)")
-    expiration_date: str = Field(..., description="Expiration date YYYY-MM-DD")
+    expiration_ms: OptionExpiryMs = Field(
+        ..., description="Expiry as the anchor instant: 16:00 New York time on the expiry date"
+    )
     option_type: str = Field(..., pattern="^(call|put)$")
     risk_free_rate: float = Field(
         DEFAULT_RISK_FREE_RATE, description="Annualized risk-free rate (omit for the Python default)"
@@ -174,7 +179,7 @@ class PricingCompareResponse(BaseModel):
     success: bool
     strike: float
     option_type: str
-    expiration_date: str
+    expiration_ms: OptionExpiryMs
     time_to_expiry_years: float
     risk_free_rate: float = Field(
         ..., description="The rate every curve was priced at, so a client overlay can price at the same one"
@@ -443,10 +448,10 @@ async def pricing_compare(request: PricingCompareRequest):
     approximation, |error| < 1.5e-7) client-side and overlays it.
     """
     try:
-        exp_d = date.fromisoformat(request.expiration_date)
+        exp_d = option_expiry_date(request.expiration_ms)
         eval_d = date.fromisoformat(request.evaluation_date) if request.evaluation_date else date.today()
 
-        # Time to expiry in years
+        # Time to expiry in years, on QuantLib's own day-count convention
         delta_days = (exp_d - eval_d).days
         T = delta_days / 365.0
         if T <= 0:
@@ -454,7 +459,7 @@ async def pricing_compare(request: PricingCompareRequest):
                 success=False,
                 strike=request.strike,
                 option_type=request.option_type,
-                expiration_date=request.expiration_date,
+                expiration_ms=request.expiration_ms,
                 time_to_expiry_years=0,
                 risk_free_rate=request.risk_free_rate,
                 models=[],
@@ -541,7 +546,7 @@ async def pricing_compare(request: PricingCompareRequest):
             success=True,
             strike=request.strike,
             option_type=request.option_type,
-            expiration_date=request.expiration_date,
+            expiration_ms=request.expiration_ms,
             time_to_expiry_years=round(T, 6),
             risk_free_rate=request.risk_free_rate,
             models=models,
@@ -553,7 +558,7 @@ async def pricing_compare(request: PricingCompareRequest):
             success=False,
             strike=request.strike,
             option_type=request.option_type,
-            expiration_date=request.expiration_date,
+            expiration_ms=request.expiration_ms,
             time_to_expiry_years=0,
             risk_free_rate=request.risk_free_rate,
             models=[],

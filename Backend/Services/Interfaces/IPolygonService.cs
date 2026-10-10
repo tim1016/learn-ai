@@ -50,11 +50,11 @@ public interface IPolygonService
 
     /// <summary>
     /// Fetch options chain snapshot (greeks, IV, OI) for an underlying ticker.
-    /// Filters to a specific expiration date (defaults to today in Python service).
+    /// Filters to a specific expiry anchor instant (defaults to today in Python service).
     /// </summary>
     Task<OptionsChainSnapshotResponse> FetchOptionsChainSnapshotAsync(
         string underlyingTicker,
-        string? expirationDate = null,
+        long? expirationMs = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -72,20 +72,20 @@ public interface IPolygonService
     Task<StrategyAnalyzeResponseDto> AnalyzeOptionsStrategyAsync(
         string symbol,
         List<StrategyLegInput> legs,
-        string expirationDate,
+        long expirationMs,
         decimal spotPrice,
         decimal? riskFreeRate = null,
         StrategyAnalyzeOptions? options = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// List unique expiration dates for an underlying ticker.
+    /// List unique option expiries for an underlying ticker, as anchor instants.
     /// </summary>
     Task<OptionsExpirationsResponse> FetchOptionsExpirationsAsync(
         string underlyingTicker,
         string? contractType = null,
-        string? expirationDateGte = null,
-        string? expirationDateLte = null,
+        long? expirationMsGte = null,
+        long? expirationMsLte = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -96,7 +96,7 @@ public interface IPolygonService
         decimal strike,
         decimal? riskFreeRate,
         decimal volatility,
-        string expirationDate,
+        long expirationMs,
         string optionType,
         string? evaluationDate = null,
         decimal dividendYield = 0m,
@@ -110,7 +110,7 @@ public interface IPolygonService
         decimal spot,
         decimal strike,
         decimal volatility,
-        string expirationDate,
+        long expirationMs,
         string optionType,
         decimal? riskFreeRate = null,
         decimal dividendYield = 0m,

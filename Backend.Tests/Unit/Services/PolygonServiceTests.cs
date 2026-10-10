@@ -109,7 +109,7 @@ public class PolygonServiceTests
         var handler = CreateHandler(HttpStatusCode.OK, response);
         var service = CreateService(handler);
 
-        var result = await service.FetchOptionsChainSnapshotAsync("AAPL", "2026-02-20");
+        var result = await service.FetchOptionsChainSnapshotAsync("AAPL", 1771621200000);
 
         Assert.Single(result.Contracts);
         Assert.Equal("AAPL", result.Underlying!.Ticker);
@@ -139,7 +139,7 @@ public class PolygonServiceTests
         var handler = CreateHandler(HttpStatusCode.OK, new StrategyAnalyzeResponseDto { Success = true, Symbol = "AAPL" });
         var service = CreateService(handler);
 
-        await service.AnalyzeOptionsStrategyAsync("AAPL", [CallLeg()], "2026-02-20", 230m);
+        await service.AnalyzeOptionsStrategyAsync("AAPL", [CallLeg()], 1771621200000, 230m);
 
         Assert.False(RequestCarriesRiskFreeRate(handler));
     }
@@ -150,7 +150,7 @@ public class PolygonServiceTests
         var handler = CreateHandler(HttpStatusCode.OK, new StrategyAnalyzeResponseDto { Success = true, Symbol = "AAPL" });
         var service = CreateService(handler);
 
-        await service.AnalyzeOptionsStrategyAsync("AAPL", [CallLeg()], "2026-02-20", 230m, 0.05m);
+        await service.AnalyzeOptionsStrategyAsync("AAPL", [CallLeg()], 1771621200000, 230m, 0.05m);
 
         using var body = JsonDocument.Parse(handler.LastRequestBody!);
         Assert.Equal(0.05m, body.RootElement.GetProperty("risk_free_rate").GetDecimal());
@@ -162,7 +162,7 @@ public class PolygonServiceTests
         var handler = CreateHandler(HttpStatusCode.OK, new QuantLibPriceResponse { Success = true, Engine = "analytic_bs" });
         var service = CreateService(handler);
 
-        await service.QuantLibPriceAsync(100m, 100m, null, 0.20m, "2026-02-20", "call");
+        await service.QuantLibPriceAsync(100m, 100m, null, 0.20m, 1771621200000, "call");
 
         Assert.False(RequestCarriesRiskFreeRate(handler));
     }
@@ -173,7 +173,7 @@ public class PolygonServiceTests
         var handler = CreateHandler(HttpStatusCode.OK, new PricingCompareResponse { Success = true, RiskFreeRate = 0.043m });
         var service = CreateService(handler);
 
-        var result = await service.PricingCompareAsync(100m, 100m, 0.20m, "2026-02-20", "call");
+        var result = await service.PricingCompareAsync(100m, 100m, 0.20m, 1771621200000, "call");
 
         Assert.False(RequestCarriesRiskFreeRate(handler));
         Assert.Equal(0.043m, result.RiskFreeRate);

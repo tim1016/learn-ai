@@ -27,8 +27,9 @@ from app.models.strategy import (
     StrategyAnalyzeResponse,
     StrategyLeg,
 )
+from app.options.expiry import time_to_expiry_years
 from app.services.bs_greeks import black_scholes_greeks, bs_european_price
-from app.utils.session_anchors import calendar_days_to_expiry
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +189,7 @@ def compute_pop(
     legs: list[StrategyLeg],
     spot_price: float,
     risk_free_rate: float,
-    days_to_expiry: int,
+    ttm_years: float,
 ) -> float:
     """Probability of Profit using Black-Scholes lognormal model.
 
@@ -198,12 +199,12 @@ def compute_pop(
     Uses per-boundary IV interpolation to capture IV skew effects
     for multi-leg strategies (iron condors, butterflies, etc.).
     """
-    if days_to_expiry <= 0:
+    if ttm_years <= 0:
         # At expiration, POP is binary based on current spot
         pnl_now = compute_payoff_at_expiry(legs, spot_price)
         return 1.0 if pnl_now > 0 else 0.0
 
-    t = days_to_expiry / 365.0
+    t = ttm_years
     breakevens = find_breakevens(legs, spot_price, 0.50)
 
     if not breakevens:
@@ -265,14 +266,14 @@ def compute_expected_value(
     legs: list[StrategyLeg],
     spot_price: float,
     risk_free_rate: float,
-    days_to_expiry: int,
+    ttm_years: float,
     num_points: int = 1000,
 ) -> float:
     """Expected value via numerical integration of PnL(S) * lognormal_PDF(S) dS."""
-    if days_to_expiry <= 0:
+    if ttm_years <= 0:
         return compute_payoff_at_expiry(legs, spot_price)
 
-    t = days_to_expiry / 365.0
+    t = ttm_years
     sigma = weighted_iv(legs)
 
     if sigma <= 0:
@@ -360,10 +361,10 @@ def compute_strategy_greeks(
     legs: list[StrategyLeg],
     spot: float,
     r: float,
-    days_to_expiry: int,
+    ttm_years: float,
 ) -> GreeksResult:
     """Sum Greeks across all legs."""
-    t = days_to_expiry / 365.0
+    t = ttm_years
     total_delta = 0.0
     total_gamma = 0.0
     total_theta = 0.0
@@ -427,7 +428,7 @@ def compute_current_curve(
     price_range_pct: float,
     num_points: int,
     risk_free_rate: float,
-    days_to_expiry: int,
+    ttm_years: float,
     iv_shift: float = 0.0,
 ) -> list[CurrentCurvePoint]:
     """Theoretical per-share strategy value at today's vol surface, over a spot grid.
@@ -438,7 +439,6 @@ def compute_current_curve(
     low = spot_price * (1.0 - price_range_pct)
     high = spot_price * (1.0 + price_range_pct)
     prices = np.linspace(max(low, 0.01), high, num_points)
-    ttm_years = max(days_to_expiry / 365.0, 0.0)
     cost = compute_strategy_cost(legs)
 
     points: list[CurrentCurvePoint] = []
@@ -464,7 +464,7 @@ def compute_greek_curves(
     price_range_pct: float,
     num_points: int,
     risk_free_rate: float,
-    days_to_expiry: int,
+    ttm_years: float,
 ) -> list[GreekCurvePoint]:
     """Aggregate Greek values at each spot grid point.
 
@@ -474,7 +474,6 @@ def compute_greek_curves(
     low = spot_price * (1.0 - price_range_pct)
     high = spot_price * (1.0 + price_range_pct)
     prices = np.linspace(max(low, 0.01), high, num_points)
-    ttm_years = max(days_to_expiry / 365.0, 0.0)
 
     points: list[GreekCurvePoint] = []
     for p in prices:
@@ -528,7 +527,7 @@ def compute_leg_diagnostics(
     legs: list[StrategyLeg],
     spot_price: float,
     risk_free_rate: float,
-    days_to_expiry: int,
+    ttm_years: float,
 ) -> list[LegDiagnostic]:
     """Per-leg current theoretical value and per-leg Greeks at the request spot.
 
@@ -537,7 +536,6 @@ def compute_leg_diagnostics(
     *unsigned* values (long/short reflected in the `position` field, not the
     numbers) so the UI can format independently. Use the request quantity as-is.
     """
-    ttm_years = max(days_to_expiry / 365.0, 0.0)
     rows: list[LegDiagnostic] = []
     for leg in legs:
         if ttm_years > 0 and leg.iv > 0:
@@ -615,14 +613,17 @@ def analyze_strategy(request: StrategyAnalyzeRequest) -> StrategyAnalyzeResponse
     """Main orchestrator: compute all strategy metrics."""
     try:
         logger.info(
-            "[Strategy Engine] Analyzing %d-leg strategy for %s, spot=%.2f, expiry=%s",
+            "[Strategy Engine] Analyzing %d-leg strategy for %s, spot=%.2f, expiry_ms=%s",
             len(request.legs),
             request.symbol,
             request.spot_price,
-            request.expiration_date,
+            request.expiration_ms,
         )
 
-        days_to_expiry = calendar_days_to_expiry(request.expiration_date)
+        # Time to expiry is measured to the expiry anchor instant (16:00 New
+        # York time on the expiry date), the same instant the chain snapshot's
+        # rate tenor is measured to (#2789, #2934).
+        ttm_years = time_to_expiry_years(request.expiration_ms, now_ms_utc())
 
         strategy_cost = compute_strategy_cost(request.legs)
 
@@ -637,11 +638,11 @@ def analyze_strategy(request: StrategyAnalyzeRequest) -> StrategyAnalyzeResponse
 
         max_profit, max_loss = compute_max_profit_loss(request.legs, request.spot_price, request.price_range_pct)
 
-        pop = compute_pop(request.legs, request.spot_price, request.risk_free_rate, days_to_expiry)
+        pop = compute_pop(request.legs, request.spot_price, request.risk_free_rate, ttm_years)
 
-        ev = compute_expected_value(request.legs, request.spot_price, request.risk_free_rate, days_to_expiry)
+        ev = compute_expected_value(request.legs, request.spot_price, request.risk_free_rate, ttm_years)
 
-        greeks = compute_strategy_greeks(request.legs, request.spot_price, request.risk_free_rate, days_to_expiry)
+        greeks = compute_strategy_greeks(request.legs, request.spot_price, request.risk_free_rate, ttm_years)
 
         logger.info(
             "[Strategy Engine] Result: POP=%.2f%%, EV=%.2f, MaxProfit=%.2f, MaxLoss=%.2f, Greeks=%s",
@@ -656,14 +657,14 @@ def analyze_strategy(request: StrategyAnalyzeRequest) -> StrategyAnalyzeResponse
         # callers don't pay the cost.
         current_curve = None
         if request.include_current_curve:
-            shifted_days = max(days_to_expiry - request.what_if_time_shift_days, 0)
+            shifted_years = max(ttm_years - request.what_if_time_shift_days / 365.0, 0.0)
             current_curve = compute_current_curve(
                 request.legs,
                 request.spot_price,
                 request.price_range_pct,
                 request.curve_points,
                 request.risk_free_rate,
-                round(shifted_days),
+                shifted_years,
                 iv_shift=request.what_if_iv_shift,
             )
 
@@ -675,7 +676,7 @@ def analyze_strategy(request: StrategyAnalyzeRequest) -> StrategyAnalyzeResponse
                 request.price_range_pct,
                 request.curve_points,
                 request.risk_free_rate,
-                days_to_expiry,
+                ttm_years,
             )
 
         leg_diagnostics = None
@@ -684,7 +685,7 @@ def analyze_strategy(request: StrategyAnalyzeRequest) -> StrategyAnalyzeResponse
                 request.legs,
                 request.spot_price,
                 request.risk_free_rate,
-                days_to_expiry,
+                ttm_years,
             )
 
         return StrategyAnalyzeResponse(

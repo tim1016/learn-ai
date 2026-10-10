@@ -3,6 +3,8 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { vi } from 'vitest';
 import { PricingLabComponent } from './pricing-lab.component';
+import { etIsoDate } from '../../shared/date/et-midnight';
+import { optionExpiryAnchorMs } from '../../shared/option-contract/option-expiry-date';
 import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
 import { PricingCompareResult, SnapshotContractResult } from '../../graphql/types';
 import { bsPrice } from '../../utils/black-scholes';
@@ -45,7 +47,7 @@ function buildContract(overrides: Partial<SnapshotContractResult> = {}): Snapsho
     ticker: 'O:SPY260220C00590000',
     contractType: 'call',
     strikePrice: 590,
-    expirationDate: '2026-02-20',
+    expirationMs: 1_771_621_200_000,
     breakEvenPrice: 595,
     impliedVolatility: 0.20,
     openInterest: 1000,
@@ -91,7 +93,7 @@ describe('PricingLabComponent', () => {
       const promise = component.fetchExpirations();
 
       const expReq = expectGraphQL(httpMock, 'getOptionsExpirations');
-      const future = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+      const future = optionExpiryAnchorMs(etIsoDate(Date.now() + 30 * 86400000));
       expReq.flush({
         data: {
           getOptionsExpirations: {
@@ -134,7 +136,7 @@ describe('PricingLabComponent', () => {
     });
 
     it('takes a snapshot rate of exactly 0 as the rate', async () => {
-      const promise = component.fetchChain('SPY', '2099-01-01');
+      const promise = component.fetchChain('SPY', 4_070_984_400_000);
       expectGraphQL(httpMock, 'getOptionsChainSnapshot').flush({
         data: {
           getOptionsChainSnapshot: {
@@ -159,11 +161,11 @@ describe('PricingLabComponent', () => {
       // Seed prior state
       component.selectedContract.set(buildContract());
       component.serverResult.set({
-        success: true, strike: 0, optionType: 'call', expirationDate: '',
+        success: true, strike: 0, optionType: 'call', expirationMs: 0,
         timeToExpiryYears: 0, riskFreeRate: null, models: [], error: null,
       } satisfies PricingCompareResult);
 
-      const promise = component.fetchChain('AAPL', '2099-01-01');
+      const promise = component.fetchChain('AAPL', 4_070_984_400_000);
 
       // Synchronous reset
       expect(component.selectedContract()).toBeNull();
@@ -196,7 +198,7 @@ describe('PricingLabComponent', () => {
   describe('PL-B: runComparison → pricingModelComparison resolver call', () => {
     function seedReadyState(): void {
       component.ticker.set('SPY');
-      component.selectedExpiration.set('2099-01-01');
+      component.selectedExpiration.set(4_070_984_400_000);
       component.underlying.set({ ticker: 'SPY', price: 590 });
       component.allContracts.set([buildContract()]);
       component.selectedContract.set(buildContract());
@@ -215,7 +217,7 @@ describe('PricingLabComponent', () => {
       expect(vars.spot).toBe(590);
       expect(vars.strike).toBe(590);
       expect(vars.volatility).toBe(0.20);
-      expect(vars.expirationDate).toBe('2099-01-01');
+      expect(vars.expirationMs).toBe(4_070_984_400_000);
       expect(vars.optionType).toBe('call');
       expect(vars.riskFreeRate).toBe(0.045);
       expect(vars.spotMin).toBeCloseTo(590 * 0.8, 6);
@@ -226,7 +228,7 @@ describe('PricingLabComponent', () => {
         data: {
           pricingModelComparison: {
             success: true,
-            strike: 590, optionType: 'call', expirationDate: '2099-01-01',
+            strike: 590, optionType: 'call', expirationMs: 4_070_984_400_000,
             timeToExpiryYears: 0.0822,
             models: [
               { model: 'python_bs', points: [{ spot: 590, price: 5.5, delta: 0.5, gamma: 0.02, theta: -0.05, vega: 0.15, rho: 0.05 }] },
@@ -255,7 +257,7 @@ describe('PricingLabComponent', () => {
       const req = expectGraphQL(httpMock, 'pricingModelComparison');
       expect(req.request.body.variables.riskFreeRate).toBeNull();
 
-      req.flush({ data: { pricingModelComparison: { success: false, strike: 590, optionType: 'call', expirationDate: '2099-01-01', timeToExpiryYears: 0, riskFreeRate: 0.043, models: [], error: 'stop' } } });
+      req.flush({ data: { pricingModelComparison: { success: false, strike: 590, optionType: 'call', expirationMs: 4_070_984_400_000, timeToExpiryYears: 0, riskFreeRate: 0.043, models: [], error: 'stop' } } });
       await promise;
     });
 
@@ -267,7 +269,7 @@ describe('PricingLabComponent', () => {
       const ttm = 0.25;
       const spotMin = 590 * 0.8;
       component.serverResult.set({
-        success: true, strike: 590, optionType: 'call', expirationDate: '2099-01-01',
+        success: true, strike: 590, optionType: 'call', expirationMs: 4_070_984_400_000,
         timeToExpiryYears: ttm, riskFreeRate: serverRate, error: null,
         models: [{
           model: 'python_bs',
@@ -282,7 +284,7 @@ describe('PricingLabComponent', () => {
     it('records server-level errors in statusMessage and clears serverResult', async () => {
       seedReadyState();
       // Pre-seed a result so we can assert it gets cleared
-      component.serverResult.set({ success: true, strike: 0, optionType: 'call', expirationDate: '', timeToExpiryYears: 0, riskFreeRate: null, models: [], error: null });
+      component.serverResult.set({ success: true, strike: 0, optionType: 'call', expirationMs: 0, timeToExpiryYears: 0, riskFreeRate: null, models: [], error: null });
 
       const promise = component.runComparison();
       const req = expectGraphQL(httpMock, 'pricingModelComparison');
@@ -290,7 +292,7 @@ describe('PricingLabComponent', () => {
         data: {
           pricingModelComparison: {
             success: false,
-            strike: 590, optionType: 'call', expirationDate: '2099-01-01',
+            strike: 590, optionType: 'call', expirationMs: 4_070_984_400_000,
             timeToExpiryYears: 0,
             models: [],
             error: 'QuantLib not available',
@@ -352,7 +354,7 @@ describe('PricingLabComponent', () => {
 
     it('runComparison reports the missing fields when the contract is incomplete', async () => {
       component.underlying.set({ ticker: 'SPY', price: 590 });
-      component.selectedExpiration.set('2099-01-01');
+      component.selectedExpiration.set(4_070_984_400_000);
       // Contract missing implied volatility — the component should call out which field is missing
       component.selectedContract.set(buildContract({ impliedVolatility: null }));
 

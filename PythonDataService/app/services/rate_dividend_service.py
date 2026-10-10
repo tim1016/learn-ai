@@ -41,7 +41,7 @@ def get_rate_and_dividend(
     ticker: str,
     spot_price: float,
     polygon: PolygonClient,
-    dte_days: int = 30,
+    dte_days: float = 30,
     observation_date: str | None = None,
 ) -> RateAndDividend:
     """Return (r, q) for pricing/solving on a given symbol and date.
@@ -55,9 +55,10 @@ def get_rate_and_dividend(
         proxy. A non-positive spot leaves the dividend unset.
     polygon : PolygonClient
         Polygon client instance (caller is responsible for lifecycle).
-    dte_days : int
+    dte_days : float
         Days to expiration of the option being priced — drives FRED interpolation
-        across {DTB4WK, DTB3, DTB6, DTB1YR}. Default 30 matches IV30.
+        across {DTB4WK, DTB3, DTB6, DTB1YR}. Fractional when measured to an
+        expiry anchor instant. Default 30 matches IV30.
     observation_date : str | None
         ``YYYY-MM-DD`` observation date. Defaults to today.
     """
@@ -74,7 +75,7 @@ def get_rate_and_dividend(
         except Exception:
             logger.warning("[RD] %s dividend lookup failed; q left unset", ticker, exc_info=True)
     logger.debug(
-        "[RD] %s @ %s: r=%.4f q=%s (spot=%.2f, dte=%d)",
+        "[RD] %s @ %s: r=%.4f q=%s (spot=%.2f, dte=%.2f)",
         ticker,
         observation_date or "today",
         rate,

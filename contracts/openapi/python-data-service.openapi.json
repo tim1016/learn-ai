@@ -37761,17 +37761,19 @@
       "OptionsChainSnapshotRequest": {
         "description": "Request schema for fetching options chain snapshot",
         "properties": {
-          "expiration_date": {
+          "expiration_ms": {
             "anyOf": [
               {
-                "type": "string"
+                "exclusiveMinimum": 0.0,
+                "maximum": 253402300799999.0,
+                "type": "integer"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "Filter to this expiration date (YYYY-MM-DD). Defaults to today.",
-            "title": "Expiration Date"
+            "description": "Filter to this expiry, as the anchor instant (16:00 New York time on the date). Defaults to today.",
+            "title": "Expiration Ms"
           },
           "underlying_ticker": {
             "description": "Underlying stock ticker",
@@ -37788,7 +37790,7 @@
         "type": "object"
       },
       "OptionsChainSnapshotResponse": {
-        "description": "Response schema for options chain snapshot.\n\n``risk_free_rate`` is FRED's Treasury-bill curve interpolated at the\nrequested expiration's days to expiry (30 days when no expiration is\ngiven); ``dividend_yield`` is Polygon's TTM dividends. They replace the\nhistorical hardcoded `r=0.043, q=0` defaults used by pricing-lab,\noptions-strategy-lab, strategy-builder.",
+        "description": "Response schema for options chain snapshot.\n\n``risk_free_rate`` is FRED's Treasury-bill curve interpolated at the\nrequested expiration's fractional days to expiry, measured to the expiry\nanchor (30 days when no expiration is given); ``dividend_yield`` is\nPolygon's TTM dividends. They replace the historical hardcoded\n`r=0.043, q=0` defaults used by pricing-lab, options-strategy-lab,\nstrategy-builder.",
         "properties": {
           "contracts": {
             "default": [],
@@ -38037,16 +38039,18 @@
               }
             ]
           },
-          "expiration_date": {
+          "expiration_ms": {
             "anyOf": [
               {
-                "type": "string"
+                "exclusiveMinimum": 0.0,
+                "maximum": 253402300799999.0,
+                "type": "integer"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Expiration Date"
+            "title": "Expiration Ms"
           },
           "greeks": {
             "anyOf": [
@@ -38141,29 +38145,33 @@
             "description": "Filter: call or put",
             "title": "Contract Type"
           },
-          "expiration_date_gte": {
+          "expiration_ms_gte": {
             "anyOf": [
               {
-                "type": "string"
+                "exclusiveMinimum": 0.0,
+                "maximum": 253402300799999.0,
+                "type": "integer"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "Min expiration date",
-            "title": "Expiration Date Gte"
+            "description": "Min expiry, as the anchor instant (16:00 New York time on the date)",
+            "title": "Expiration Ms Gte"
           },
-          "expiration_date_lte": {
+          "expiration_ms_lte": {
             "anyOf": [
               {
-                "type": "string"
+                "exclusiveMinimum": 0.0,
+                "maximum": 253402300799999.0,
+                "type": "integer"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "Max expiration date",
-            "title": "Expiration Date Lte"
+            "description": "Max expiry, as the anchor instant (16:00 New York time on the date)",
+            "title": "Expiration Ms Lte"
           },
           "underlying_ticker": {
             "description": "Underlying stock ticker",
@@ -38201,7 +38209,9 @@
           "expirations": {
             "default": [],
             "items": {
-              "type": "string"
+              "exclusiveMinimum": 0.0,
+              "maximum": 253402300799999.0,
+              "type": "integer"
             },
             "title": "Expirations",
             "type": "array"
@@ -39156,10 +39166,12 @@
             ],
             "title": "Evaluation Date"
           },
-          "expiration_date": {
-            "description": "Expiration date YYYY-MM-DD",
-            "title": "Expiration Date",
-            "type": "string"
+          "expiration_ms": {
+            "description": "Expiry as the anchor instant: 16:00 New York time on the expiry date",
+            "exclusiveMinimum": 0.0,
+            "maximum": 253402300799999.0,
+            "title": "Expiration Ms",
+            "type": "integer"
           },
           "num_points": {
             "default": 100,
@@ -39227,7 +39239,7 @@
           "spot",
           "strike",
           "volatility",
-          "expiration_date",
+          "expiration_ms",
           "option_type"
         ],
         "title": "PricingCompareRequest",
@@ -39247,9 +39259,11 @@
             ],
             "title": "Error"
           },
-          "expiration_date": {
-            "title": "Expiration Date",
-            "type": "string"
+          "expiration_ms": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 253402300799999.0,
+            "title": "Expiration Ms",
+            "type": "integer"
           },
           "models": {
             "items": {
@@ -39284,7 +39298,7 @@
           "success",
           "strike",
           "option_type",
-          "expiration_date",
+          "expiration_ms",
           "time_to_expiry_years",
           "risk_free_rate",
           "models"
@@ -40560,10 +40574,12 @@
             "description": "Pricing date (default: today)",
             "title": "Evaluation Date"
           },
-          "expiration_date": {
-            "description": "Expiration date YYYY-MM-DD",
-            "title": "Expiration Date",
-            "type": "string"
+          "expiration_ms": {
+            "description": "Expiry as the anchor instant: 16:00 New York time on the expiry date",
+            "exclusiveMinimum": 0.0,
+            "maximum": 253402300799999.0,
+            "title": "Expiration Ms",
+            "type": "integer"
           },
           "option_type": {
             "description": "call or put",
@@ -40600,7 +40616,7 @@
           "spot",
           "strike",
           "volatility",
-          "expiration_date",
+          "expiration_ms",
           "option_type"
         ],
         "title": "QuantLibPriceRequest",
@@ -46673,10 +46689,12 @@
             "title": "Curve Points",
             "type": "integer"
           },
-          "expiration_date": {
-            "description": "Expiration date (YYYY-MM-DD)",
-            "title": "Expiration Date",
-            "type": "string"
+          "expiration_ms": {
+            "description": "Expiry as the anchor instant: 16:00 New York time on the expiry date",
+            "exclusiveMinimum": 0.0,
+            "maximum": 253402300799999.0,
+            "title": "Expiration Ms",
+            "type": "integer"
           },
           "include_current_curve": {
             "default": false,
@@ -46755,7 +46773,7 @@
         "required": [
           "symbol",
           "legs",
-          "expiration_date",
+          "expiration_ms",
           "spot_price"
         ],
         "title": "StrategyAnalyzeRequest",
@@ -72002,7 +72020,7 @@
     },
     "/api/options/expirations": {
       "post": {
-        "description": "List unique expiration dates for options on an underlying ticker.\nMuch faster than fetching full contracts \u2014 sorts by expiration_date\nand extracts unique dates without loading full contract payloads.",
+        "description": "List unique option expirations for an underlying ticker, each as the\nanchor instant (16:00 New York time on the expiry date). Much faster\nthan fetching full contracts \u2014 sorts by expiry and extracts unique\ndates without loading full contract payloads.",
         "operationId": "list_options_expirations_api_options_expirations_post",
         "requestBody": {
           "content": {
