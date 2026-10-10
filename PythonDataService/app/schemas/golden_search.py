@@ -969,6 +969,143 @@ class GoldenSearchConcentrationMissing(_Wire):
 GoldenSearchConcentration = Annotated[GoldenSearchConcentrationMeasured | GoldenSearchConcentrationMissing, Field(discriminator="status")]
 
 
+# ── Chance readings (#3011, ADR 0074 decision 12) ────────────────────────
+
+
+class GoldenSearchChanceWindow(_Wire):
+    start_ms: InstantMs
+    end_ms: InstantMs
+
+
+class GoldenSearchChanceObjective(_Wire):
+    measure: RankingMeasure
+    label: str = Field(description="How the objective reads in a sentence.")
+    units: str = Field(description="What one unit of the objective counts.")
+
+
+class GoldenSearchChanceSeed(_Wire):
+    inputs: list[str | int] = Field(description="The exact parts the seed was derived from; empty when nothing was drawn.")
+    value: int = Field(description="The derived seed itself, so a stored reading is reproducible without rederiving it.")
+
+
+class GoldenSearchChanceSource(_Wire):
+    """The runs a reading actually resampled: their shared window, their point hashes, their series digests."""
+
+    window: GoldenSearchChanceWindow
+    session_count: int
+    candidate_point_hash: str = ""
+    incumbent_point_hash: str = Field(default="", description="Empty when the reading is the candidate's alone.")
+    series_digest: dict[str, str] = Field(default_factory=dict, description="Digests of the series actually resampled, keyed by the side they belong to.")
+    capital: float | None = None
+
+
+class GoldenSearchChanceBasis(_Wire):
+    """Everything a stored reading was drawn and judged under, so reading it back never reclassifies with today's constants."""
+
+    schema_version: str = Field(description="The reading's schema/interpretation version.")
+    convention: str
+    replications: int
+    chunk_replications: int
+    mean_block_sessions: float
+    thresholds: dict[str, float] = Field(description="The interpretation thresholds the stored labels were judged by.")
+    objective: GoldenSearchChanceObjective
+    seed: GoldenSearchChanceSeed = Field(description="The exact inputs the seed was derived from and the seed itself.")
+    source: GoldenSearchChanceSource
+
+
+class GoldenSearchChanceCounts(_Wire):
+    better: int
+    tied: int
+    worse: int
+    undefined: int
+
+
+class GoldenSearchChanceRange(_Wire):
+    p5: float | None = Field(description="5th percentile by linear interpolation over the finite values; null when there are none.")
+    p50: float | None
+    p95: float | None
+    finite: int = Field(description="How many resamples produced a finite value.")
+
+
+class GoldenSearchChanceAtLeastAsGood(_Wire):
+    count: int = Field(description="better + tied, the final test's inclusive rule.")
+    share: float = Field(description="Over every replication, not only the defined pairs.")
+
+
+class GoldenSearchChanceComparisonMeasured(_Wire):
+    """The paired comparison of one fit's development result against the current settings', under the resampling model only."""
+
+    status: Literal["measured"]
+    label: Literal["clearly_as_good", "clearly_worse", "identical_outcomes", "mixed", "no_defined_paths"]
+    sentence: str = Field(description="The decision sentence; Python writes it, the browser only displays it.")
+    incomplete_support: bool = Field(description="True when undefined paths leave the support incomplete.")
+    bias_note: str = Field(description="The selection-bias caveat displayed beside the chart.")
+    counts: GoldenSearchChanceCounts = Field(description="Raw event counts over every replication; they sum to the replication count.")
+    shares: dict[str, float] = Field(description="Presentation shares; labels come from the counts, never from these rounded values.")
+    at_least_as_good: GoldenSearchChanceAtLeastAsGood
+    candidate_range: GoldenSearchChanceRange
+    difference_range: GoldenSearchChanceRange = Field(description="Candidate minus incumbent in the objective's units.")
+    basis: GoldenSearchChanceBasis
+
+
+class GoldenSearchChanceComparisonSameSettings(_Wire):
+    status: Literal["same_settings"]
+    sentence: str
+    basis: GoldenSearchChanceBasis
+
+
+class GoldenSearchChanceComparisonBaseline(_Wire):
+    status: Literal["baseline"]
+    sentence: str
+    basis: GoldenSearchChanceBasis
+
+
+class GoldenSearchChanceReadingMissing(_Wire):
+    status: Literal["missing"]
+    code: str = Field(description="A stable identifier for the operator copy in `reason`.")
+    reason: str
+
+
+class GoldenSearchChanceReadingFailed(_Wire):
+    status: Literal["failed"]
+    reason: str = Field(description="The diagnostic: an unexpected computation error, logged with context when it happened.")
+    sentence: str = Field(description="The operator sentence for the failure; Python writes it, the browser only displays it.")
+
+
+GoldenSearchChanceComparison = Annotated[
+    GoldenSearchChanceComparisonMeasured
+    | GoldenSearchChanceComparisonSameSettings
+    | GoldenSearchChanceComparisonBaseline
+    | GoldenSearchChanceReadingMissing
+    | GoldenSearchChanceReadingFailed,
+    Field(discriminator="status"),
+]
+
+
+class GoldenSearchChanceProfitabilityMeasured(_Wire):
+    """The fit's own development outcome resampled: how often the compounded net return was positive, flat or negative."""
+
+    status: Literal["measured"]
+    label: Literal["clearly_positive", "clearly_negative", "mixed", "no_defined_paths"]
+    sentence: str
+    counts: dict[str, int] = Field(description="positive, zero, negative and undefined counts over every replication.")
+    shares: dict[str, float]
+    basis: GoldenSearchChanceBasis
+
+
+GoldenSearchChanceProfitability = Annotated[
+    GoldenSearchChanceProfitabilityMeasured | GoldenSearchChanceReadingMissing | GoldenSearchChanceReadingFailed,
+    Field(discriminator="status"),
+]
+
+
+class GoldenSearchChance(_Wire):
+    """One fit's development chance components, each normalized independently of the others."""
+
+    comparison: GoldenSearchChanceComparison
+    profitability: GoldenSearchChanceProfitability
+
+
 class GoldenSearchCandidateGuidance(_Wire):
     title: str
     text: str
@@ -995,6 +1132,7 @@ class GoldenSearchEvidenceCandidate(_Wire):
     )
     stress_tally: GoldenSearchStressTally
     concentration: GoldenSearchConcentration
+    chance: GoldenSearchChance
     edge_hits: list[str]
     guidance: GoldenSearchCandidateGuidance
     flags: list[GoldenSearchFinding]

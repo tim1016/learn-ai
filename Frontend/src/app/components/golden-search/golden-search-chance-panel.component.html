@@ -1,0 +1,46 @@
+<app-golden-search-panel chart="chance-comparison">
+  @if (measured(); as m) {
+    <p class="sentence" role="note">{{ m.sentence }}</p>
+    <div class="body">
+      <div class="chart">
+        @if (spec(); as s) { <app-golden-search-chart [spec]="s" [height]="132" /> }
+      </div>
+      <div class="aside">
+        <div class="strip" role="img" [attr.aria-label]="stripText()">
+          @for (segment of segments(); track segment.key) {
+            @if (segment.share > 0) {
+              <i class="seg" [attr.data-kind]="segment.key" [style.width.%]="segment.share * 100" aria-hidden="true"></i>
+            }
+          }
+        </div>
+        <ul class="legend" aria-label="Paired resample outcomes">
+          @for (segment of segments(); track segment.key) {
+            <li [attr.data-kind]="segment.key"><i class="dot" [attr.data-kind]="segment.key" aria-hidden="true"></i>{{ segment.label }} {{ share(segment.share) }}</li>
+          }
+        </ul>
+        @if (m.incomplete_support) {
+          <p class="undefined-note">{{ count(m.counts.undefined) }} of {{ count(m.basis.replications) }} path{{ m.counts.undefined === 1 ? '' : 's' }} left the comparison undefined, so this support is incomplete.</p>
+        }
+      </div>
+    </div>
+    <p caption class="caption">{{ m.bias_note }} Middle 90% of resampled differences — not a confidence interval.</p>
+  } @else {
+    @if (note(); as n) {
+      @switch (n.kind) {
+        @case ('failed') {
+          <p class="diagnostic" role="alert">{{ n.text }}</p>
+        }
+        @default {
+          <p class="muted" role="note">{{ n.text }}</p>
+        }
+      }
+    }
+  }
+  @if (profitability(); as p) {
+    <p class="money">{{ moneyText() }}</p>
+  } @else if (moneyFailed(); as failed) {
+    <p class="diagnostic" role="alert">{{ failed }}</p>
+  } @else if (moneyMissing(); as missing) {
+    <p class="money muted">{{ missing }}</p>
+  }
+</app-golden-search-panel>

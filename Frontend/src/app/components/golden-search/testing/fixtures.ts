@@ -2,6 +2,7 @@ import { etMidnightMs } from '../../../shared/date/et-midnight';
 import type {
   CandidateDetail,
   CandidateKey,
+  ChanceReadings,
   DecisionSummary,
   EvidenceCandidate,
   EvidenceView,
@@ -19,6 +20,9 @@ import type {
   Finding,
   GoldenSearchDefaults,
   GoldenSearchPreflight,
+  ChanceBasis,
+  MeasuredChanceComparison,
+  MeasuredChanceProfitability,
   MeasuredConcentration,
   MeasuredTradeCharts,
   Metrics,
@@ -529,6 +533,66 @@ export function pairMap(overrides: Partial<PairMap> = {}): PairMap {
 const ALL_PERIOD_POINT = { gap: 0.15, rsi_min: 48, rsi_max: 72, fast_period: 8, slow_period: 21, hold_bars: 4, symbol: 'SPY' } as const;
 const RECENT_POINT = { gap: 0.1, rsi_min: 45, rsi_max: 70, hold_bars: 3, symbol: 'SPY' } as const;
 
+const CHANCE_BASIS: ChanceBasis = {
+  schema_version: 'golden-search-chance-comparison/v1',
+  convention: 'stationary-bootstrap/v1',
+  replications: 10_000,
+  chunk_replications: 1_000,
+  mean_block_sessions: 5,
+  thresholds: { clear: 0.95 },
+  objective: { measure: 'total_return_pct', label: 'total return', units: 'fraction of the starting capital' },
+  seed: { inputs: ['golden-search-chance-comparison/v1', DEVELOPMENT_START_MS, FINAL_START_MS, 'total_return_pct', 'h-all', 'h-inc'], value: 1234567890 },
+  source: {
+    window: { start_ms: DEVELOPMENT_START_MS, end_ms: FINAL_START_MS },
+    session_count: 62,
+    candidate_point_hash: 'h-all',
+    incumbent_point_hash: 'h-inc',
+    series_digest: { candidate: 'd-all', incumbent: 'd-inc' },
+    capital: 100000,
+  },
+};
+
+/** A measured comparison (#3011): 96.2% at least as good, 2.7% tied, 1.1% worse, none undefined. */
+export function chanceComparison(overrides: Partial<MeasuredChanceComparison> = {}): MeasuredChanceComparison {
+  return {
+    status: 'measured',
+    label: 'clearly_as_good',
+    sentence:
+      'In 10,000 paired resamples of these development sessions, this fit’s total return was at least as good as the current settings’ in 96.2% of paths (9,350 strictly better, 270 tied, 380 worse). That is support under this resampling model only, not a probability of a true edge.',
+    incomplete_support: false,
+    bias_note: 'This fit was selected on these same development sessions.',
+    counts: { better: 9350, tied: 270, worse: 380, undefined: 0 },
+    shares: { better: 0.935, tied: 0.027, worse: 0.038, undefined: 0 },
+    at_least_as_good: { count: 9620, share: 0.962 },
+    candidate_range: { p5: 0.031, p50: 0.089, p95: 0.152, finite: 10_000 },
+    difference_range: { p5: 0.019, p50: 0.037, p95: 0.066, finite: 10_000 },
+    basis: CHANCE_BASIS,
+    ...overrides,
+  };
+}
+
+/** A measured profitability (#3011): positive on 97.4% of the fit's own resampled paths. */
+export function chanceProfitability(overrides: Partial<MeasuredChanceProfitability> = {}): MeasuredChanceProfitability {
+  return {
+    status: 'measured',
+    label: 'clearly_positive',
+    sentence: 'The recorded development outcome resamples to a compounded net return positive in 97.4% of 10,000 resampled development paths (60 exactly flat, 200 negative). This is the model’s spread of what was recorded, not a forecast.',
+    counts: { positive: 9740, zero: 60, negative: 200, undefined: 0 },
+    shares: { positive: 0.974, zero: 0.006, negative: 0.02, undefined: 0 },
+    basis: { ...CHANCE_BASIS, schema_version: 'golden-search-chance-profitability/v1' },
+    ...overrides,
+  };
+}
+
+/** One fit's development chance readings (#3011); measured comparison and profitability unless overridden. */
+export function chanceReadings(overrides: Partial<ChanceReadings> = {}): ChanceReadings {
+  return {
+    comparison: chanceComparison(),
+    profitability: chanceProfitability(),
+    ...overrides,
+  };
+}
+
 export function evidenceCandidate(key: CandidateKey, overrides: Partial<EvidenceCandidate> = {}): EvidenceCandidate {
   const base: Record<CandidateKey, EvidenceCandidate> = {
     all_period: {
@@ -555,6 +619,7 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
       trades_per_year: 73,
       stress_tally: { in_profit: 1, recorded: 1, scenarios: 1 },
       concentration: concentration({ without_best_month: 6800, best_trades_net_profit: 3300, without_best_trades: 5400 }),
+      chance: chanceReadings(),
       guidance: { title: 'Prefer evidence that survives small changes', text: 'Less return than the recent fit, with lower drawdown and several useful neighbors.' },
       flags: [],
       params_sentence: 'Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars',
@@ -575,6 +640,20 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
       trades_per_year: 45.5,
       stress_tally: { in_profit: 0, recorded: 0, scenarios: 0 },
       concentration: concentration({ status: 'concern', net_profit: 11600, trades: 91, without_best_month: 2100, best_trades_net_profit: 12000, without_best_trades: -400 }),
+      chance: chanceReadings({
+        comparison: chanceComparison({
+          label: 'mixed',
+          sentence:
+            'In 10,000 paired resamples of these development sessions, this fit’s total return was at least as good as the current settings’ in 61.4% of paths and strictly worse in 37.9% (5,900 better, 240 tied, 3,790 worse). The resampling model does not clearly separate the two settings.',
+          incomplete_support: true,
+          counts: { better: 5900, tied: 240, worse: 3790, undefined: 70 },
+          shares: { better: 0.59, tied: 0.024, worse: 0.379, undefined: 0.007 },
+          at_least_as_good: { count: 6140, share: 0.614 },
+          candidate_range: { p5: -0.048, p50: 0.112, p95: 0.301, finite: 10_000 },
+          difference_range: { p5: -0.071, p50: 0.021, p95: 0.118, finite: 9_930 },
+        }),
+        profitability: chanceProfitability({ label: 'mixed', counts: { positive: 6310, zero: 40, negative: 3650, undefined: 0 }, shares: { positive: 0.631, zero: 0.004, negative: 0.365, undefined: 0 } }),
+      }),
       guidance: { title: 'The extra return comes with a warning', text: 'The largest development return also exceeds your drawdown ceiling.' },
       flags: [{ code: 'DRAWDOWN_ABOVE_CEILING', text: 'Above 12% limit' }],
       params_sentence: 'Gap $0.10 · RSI 45–70 · EMA 5/10 · hold 3 bars',
@@ -596,6 +675,15 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
       stress_tally: { in_profit: 0, recorded: 0, scenarios: 0 },
       // Evidence recorded before the evidence stage measured concentration.
       concentration: { status: 'missing', reason: 'Not measured for this study: its evidence was recorded before concentration was measured.' },
+      // The current settings are the baseline every fit is compared against, never with themselves.
+      chance: {
+        comparison: {
+          status: 'baseline',
+          sentence: 'The current settings are the baseline every fit is compared against. They are not compared with themselves.',
+          basis: { ...CHANCE_BASIS, source: { window: { start_ms: DEVELOPMENT_START_MS, end_ms: FINAL_START_MS }, session_count: 62 } } satisfies ChanceBasis,
+        },
+        profitability: { status: 'missing', code: 'not_measured', reason: 'The current settings’ own profitability is not measured; every fit’s readings stand against them.' },
+      },
       guidance: { title: 'No change can be the best decision', text: 'Keeping the incumbent is a complete research decision.' },
       flags: [],
       params_sentence: 'Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars',
