@@ -44,7 +44,7 @@ export function rehearsalSpec(candidate: CandidateRef, rehearsal: MeasuredChance
     featured,
     option: (theme) => rehearsalOption(rehearsal, series, theme),
     table: {
-      caption: `${candidate.label} final-test rehearsal: share of resamples meeting each modeled rule (— marks a rule this plan does not require)`,
+      caption: `${candidate.label} final-test rehearsal: share of resamples meeting each modeled rule the plan requires`,
       columns: ['Rung', 'Sessions', 'Trade floor', 'All rules together', ...series.slice(1).map((item) => item.label)],
       rows: rehearsal.rungs.map((rung) => ({
         key: `${rung.k}x`,
@@ -52,8 +52,8 @@ export function rehearsalSpec(candidate: CandidateRef, rehearsal: MeasuredChance
           `${rung.k}×`,
           String(rung.sessions),
           String(rung.trade_floor),
-          shareText(rung.shares['joint'] ?? 0),
-          ...rehearsal.active_rules.map((rule) => shareText(rung.shares[rule] ?? 0)),
+          shareText(rung.shares['joint']),
+          ...rehearsal.active_rules.map((rule) => shareText(rung.shares[rule])),
         ],
       })),
     },
@@ -81,7 +81,7 @@ function rehearsalOption(rehearsal: MeasuredChanceRehearsal, series: { key: stri
         const rows: TooltipRow[] = series.map((item, index) => ({
           label: item.label,
           swatch: { color: seriesColor(index, theme), dashed: false },
-          values: [shareText(rung.shares[item.key] ?? 0)],
+          values: [shareText(rung.shares[item.key])],
         }));
         return tooltipHtml(
           {
@@ -118,10 +118,10 @@ function rehearsalOption(rehearsal: MeasuredChanceRehearsal, series: { key: stri
       id: `rehearsal:${item.key}`,
       name: item.label,
       type: 'line' as const,
-      data: rehearsal.rungs.map((rung) => Math.round((rung.shares[item.key] ?? 0) * 1000) / 10),
+      data: rehearsal.rungs.map((rung) => Math.round(rung.shares[item.key] * 1000) / 10),
       showSymbol: true,
       symbolSize: item.key === 'joint' ? 8 : 5,
-      lineStyle: { color: seriesColor(index, theme), width: item.key === 'joint' ? 3 : 1.5, type: item.key === 'joint' ? 'solid' : 'solid' },
+      lineStyle: { color: seriesColor(index, theme), width: item.key === 'joint' ? 3 : 1.5 },
       itemStyle: { color: seriesColor(index, theme) },
       emphasis: { focus: 'series' as const },
       markLine:
@@ -130,8 +130,8 @@ function rehearsalOption(rehearsal: MeasuredChanceRehearsal, series: { key: stri
               silent: true,
               symbol: 'none',
               lineStyle: { color: theme.warn, type: 'dashed', width: 1.5 },
-              label: { show: true, position: 'insideEndTop', color: theme.warn, fontSize: 10, formatter: () => `${Math.round((rehearsal.basis.thresholds['rehearsal_target'] ?? 0.8) * 100)}% target (owner heuristic)` },
-              data: [{ yAxis: (rehearsal.basis.thresholds['rehearsal_target'] ?? 0.8) * 100 }],
+              label: { show: true, position: 'insideEndTop', color: theme.warn, fontSize: 10, formatter: () => `${Math.round(rehearsal.basis.thresholds['rehearsal_target'] * 100)}% target (owner heuristic)` },
+              data: [{ yAxis: rehearsal.basis.thresholds['rehearsal_target'] * 100 }],
             }
           : undefined,
     })),

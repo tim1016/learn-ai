@@ -60,14 +60,13 @@ from app.research.golden_search.chance import (
 from app.research.golden_search.chance_compare import (
     INCONSISTENT_CAPITAL,
     INCUMBENT_UNAVAILABLE,
-    KNOWN_STATUSES,
     OBJECTIVES,
     UNPAIRED_SESSIONS,
     _missing,
     admit_run,
+    failed_component,
     series_digest,
 )
-from app.research.golden_search.protocol import GoldenSearchProtocol
 from app.research.golden_search.selection import Metrics
 from app.research.grid_search.service import window_dates
 from app.research.monte_carlo.stationary import CHUNK_REPLICATIONS, stationary_index_chunks
@@ -101,7 +100,9 @@ def rung_floor(floors: TradeFloors, final_window: tuple[int, int], k: int, *, ra
     ``ceil(rate × k × final trading years)`` — computed on the frozen year fractions and rounded once, never the
     already-rounded 1× floor multiplied. A fixed-floor legacy plan uses its fixed final floor on every rung.
     """
-    if k == 1 or rate is None or final_years is None:
+    if (rate is None and final_years is not None) or (rate is not None and final_years is None):
+        raise ValueError("a frequency rehearsal needs both its rate and its frozen final trading years")
+    if k == 1 or rate is None:
         return floors.at(final_window, final=True)
     return ceil(rate * k * final_years)
 
@@ -124,8 +125,8 @@ def _rehearsal_chunk(
     ceiling: float,
     require_positive_net: bool,
     floor: int,
-) -> dict[str, int]:
-    """One chunk's rule and joint pass counts; every denominator is the chunk's own path count."""
+) -> tuple[dict[str, int], dict[str, int]]:
+    """One chunk's rule and joint pass counts, and its undefined counts; every denominator is the chunk's own path count."""
     net = path_net_return(candidate_returns)
     fall = path_worst_fall(candidate_returns)
     exits = candidate_exits.sum(axis=1)
@@ -148,7 +149,7 @@ def _rehearsal_chunk(
     passes = {f"pass_{name}": int(np.count_nonzero(mask)) for name, mask in rules.items()}
     passes["pass_joint"] = int(np.count_nonzero(joint))
     undefined_counts = {f"undefined_{name}": int(np.count_nonzero(mask)) for name, mask in undefined.items()}
-    return passes, undefined_counts
+    return passes, undefined_counts, own
 
 
 def _guidance(rungs: list[dict[str, Any]], target: float, active: tuple[str, ...]) -> str:
@@ -168,7 +169,7 @@ def _guidance(rungs: list[dict[str, Any]], target: float, active: tuple[str, ...
         "objective": "the objective comparison with the current settings",
     }.__getitem__
     worst_names = " and ".join(f"{limit_words(name)} ({share:.0%})" for share, name in worst) if worst else "no single rule"
-    reaching = [rung for rung in rungs if rung["passes"]["pass_joint"] / rung["denominator"] >= target]
+    reaching = [rung for rung in rungs if Fraction(rung["passes"]["pass_joint"], rung["denominator"]) >= Fraction(str(target))]
     if reaching:
         best = reaching[0]
         reach_words = f"The {best['k']}× rung reaches the {target:.0%} target ({best['shares']['joint']:.0%})."
@@ -218,7 +219,7 @@ def rehearsal_reading(
     except JobCancelled:
         raise
     except Exception as exc:
-        return _diagnostic(exc, "rehearsal")
+        return failed_rehearsal(exc)
     if not isinstance(candidate, SessionSeries):
         return dict(candidate)
     try:
@@ -226,7 +227,7 @@ def rehearsal_reading(
     except JobCancelled:
         raise
     except Exception as exc:
-        return _diagnostic(exc, "rehearsal")
+        return failed_rehearsal(exc)
     if not isinstance(incumbent, SessionSeries):
         return _missing(INCUMBENT_UNAVAILABLE, detail=f"Recorded reason: {incumbent.get('reason', 'the run could not be read')}")
     if candidate.session_ms != incumbent.session_ms:
@@ -252,22 +253,12 @@ def rehearsal_reading(
     except JobCancelled:
         raise
     except Exception as exc:
-        return _diagnostic(exc, "rehearsal")
+        return failed_rehearsal(exc)
 
 
 def failed_rehearsal(exc: Exception) -> dict[str, Any]:
     """The rehearsal component as a diagnostic failure: the stage records it and the comparison beside it stands."""
-    return _diagnostic(exc, "rehearsal")
-
-
-def _diagnostic(exc: Exception, component: str) -> dict[str, Any]:
-    logger.warning(
-        "golden search chance reading failed",
-        extra={"action": "golden_search_chance_reading_failed", "component": component},
-        exc_info=True,
-    )
-    reason = f"{type(exc).__name__}: {exc}"
-    return {"status": "failed", "reason": reason, "sentence": f"The {component} reading could not be computed and nothing was stored: {reason}."}
+    return failed_component(exc, "rehearsal")
 
 
 def _draw_ladder(
@@ -299,12 +290,12 @@ def _draw_ladder(
         passes: dict[str, int] = {}
         undefined_counts: dict[str, int] = {}
         denominator = 0
-        objectives = np.full(REPLICATIONS, np.nan)
+        objectives = np.full(REPLICATIONS, np.nan) if k == 1 else None
         done = 0
         rng = np.random.default_rng(seed)
         for chunk in stationary_index_chunks(n, size=k * m, mean_block=MEAN_BLOCK_SESSIONS, replications=REPLICATIONS, rng=rng):
             cancel_check()
-            chunk_passes, chunk_undefined = _rehearsal_chunk(
+            chunk_passes, chunk_undefined, chunk_objectives = _rehearsal_chunk(
                 candidate.returns[chunk],
                 incumbent.returns[chunk],
                 candidate.exits[chunk],
@@ -319,8 +310,8 @@ def _draw_ladder(
             for name, value in chunk_undefined.items():
                 undefined_counts[name] = undefined_counts.get(name, 0) + value
             denominator += len(chunk)
-            if k == 1:
-                objectives[done : done + len(chunk)] = path_objective(candidate.returns[chunk], objective, candidate.capital)
+            if objectives is not None:
+                objectives[done : done + len(chunk)] = chunk_objectives
             done += len(chunk)
         rung = {
             "k": k,
@@ -333,7 +324,7 @@ def _draw_ladder(
         }
         rungs.append(rung)
         seeds[f"{k}x"] = {"inputs": seed_inputs, "value": seed}
-        if k == 1:
+        if objectives is not None:
             percentile_curve = _percentiles(objectives)
             percentile_finite = int(np.count_nonzero(np.isfinite(objectives)))
     active = tuple(name for name in ("positive_net", "drawdown", "exits", "objective") if f"pass_{name}" in rungs[0]["passes"])
@@ -351,7 +342,7 @@ def _draw_ladder(
             "chunk_replications": CHUNK_REPLICATIONS,
             "mean_block_sessions": MEAN_BLOCK_SESSIONS,
             "thresholds": {"rehearsal_target": REHEARSAL_TARGET},
-            "objective": {"measure": objective, "label": OBJECTIVES[objective][0], "units": _units(objective)},
+            "objective": {"measure": objective, "label": OBJECTIVES[objective][0], "units": OBJECTIVES[objective][1]},
             "rules": {"max_drawdown_ceiling": ceiling, "require_positive_net": require_positive_net, "drawdown_basis": "session closes"},
             "activity": {"frequency_based": rate is not None, "expected_trades_per_year": rate, "final_trading_years": None if years is None else float(years)},
             "final_interval": {"window": {"start_ms": final_window[0], "end_ms": final_window[1]}, "scheduled_sessions": m},
@@ -368,24 +359,15 @@ def _draw_ladder(
     }
 
 
-def _units(objective: RankingMeasure) -> str:
-    return OBJECTIVES[objective][1]
-
-
 
 
 def stored_rehearsal(candidate: Mapping[str, Any]) -> dict[str, Any]:
     """The rehearsal component of one stored evidence candidate, normalized like every other chance component."""
     record = (candidate.get("chance") or {}).get("rehearsal")
-    if isinstance(record, Mapping) and record.get("status") in KNOWN_STATUSES:
+    if isinstance(record, Mapping) and record.get("status") in {"measured", "missing", "failed"}:
         return dict(record)
     if isinstance(record, Mapping):
         return _missing(
             ("unsupported", f"The stored rehearsal reading holds status {record.get('status')!r}, which this server cannot interpret; it is shown as unavailable rather than guessed at.")
         )
     return _missing(NOT_MEASURED)
-
-
-def protocol_rules(protocol: GoldenSearchProtocol) -> tuple[float, bool]:
-    """The frozen rules a rehearsal models: the drawdown ceiling and the positive-net requirement."""
-    return float(protocol.policy.max_drawdown_ceiling), bool(protocol.policy.require_positive_net)

@@ -767,7 +767,7 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
           basis: { ...CHANCE_BASIS, source: { window: { start_ms: DEVELOPMENT_START_MS, end_ms: FINAL_START_MS }, session_count: 62 } } satisfies ChanceBasis,
         },
         profitability: { status: 'missing', code: 'not_measured', reason: 'The current settings’ own profitability is not measured; every fit’s readings stand against them.' },
-        rehearsal: { status: 'missing', code: 'not_measured', reason: 'The current settings are the baseline; a rehearsal compares a fit against them.' },
+        rehearsal: { status: 'missing', code: 'baseline', reason: 'The current settings are the baseline; a rehearsal compares a fit against them, and there is nothing to rehearse.' },
       },
       guidance: { title: 'No change can be the best decision', text: 'Keeping the incumbent is a complete research decision.' },
       flags: [],
