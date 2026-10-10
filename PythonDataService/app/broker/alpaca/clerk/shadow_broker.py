@@ -8,7 +8,10 @@ trade port that never submits. Three objects live here:
   the same ``immediate_fill_price`` the sim world uses). A regular-session
   sale whose traded instrument had no bar for the decision's minute fills at
   the close of the newest earlier one, stamped when it was decided
-  (``older_bar_close``, #2912). An extended-session
+  (``older_bar_close``, #2912). A recovery EXIT has no decision bar: it fills
+  at the newest bar its own instance retained, stamped when it was sent
+  (#2926), and an extended-session recovery leg is bound by no older bar —
+  an older price anchors no limit. An extended-session
   limit leg rests and settles on read under ``limit_touch`` (D5.5) against
   the bars its own instance retained after the decision bar, and it
   cancels at the declared window's close for the decision's trading day — the
@@ -291,7 +294,9 @@ class ShadowOrderBook:
         self.bind_evaluated_bar(client_order_id, retained, fill_at_ms=decided_at_ms)
         return True
 
-    def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str, side: str | None = None) -> bool:
+    def bind_latest_recovery_bar(
+        self, client_order_id: str, *, symbol: str, side: str | None = None, extended_hours: bool = False
+    ) -> bool:
         """Bind a recovery EXIT to the latest bar its own instance retained.
 
         Strategy decisions always bind their exact deciding bar before submit.
@@ -300,12 +305,20 @@ class ShadowOrderBook:
         from the order namespace that owns the exposure. ``False`` keeps the
         recovery effect uncertain when no such evidence exists. A bar prices
         either side alike, so ``side`` is not consulted.
+
+        The fill is stamped when the sale is sent, at the older bar's price
+        (#2926), never at that bar's own close. An extended-session leg is
+        left unbound by any bar that closed before the send: it rests at a
+        limit, and an older price anchors no limit.
         """
         account_id = self._evidence_namespace_for(client_order_id)
         retained_bar = self._evidence.latest_for_symbol(account_id, symbol=symbol)
-        if not recovery_bar_in_send_session(retained_bar, now_ms=self._clock(), extended_window=self._window):
+        sent_at_ms = self._clock()
+        if not recovery_bar_in_send_session(retained_bar, now_ms=sent_at_ms, extended_window=self._window):
             return False
-        self.bind_evaluated_bar(client_order_id, retained_bar)
+        if extended_hours and retained_bar.end_ms < sent_at_ms:
+            return False
+        self.bind_evaluated_bar(client_order_id, retained_bar, fill_at_ms=sent_at_ms)
         return True
 
     def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
@@ -693,8 +706,12 @@ class NoSubmitAlpacaTradePort(UnsupportedOptionOrderRefusal):
     ) -> None:
         self._book.bind_evaluated_bar(client_order_id, retained_bar, fill_at_ms=fill_at_ms)
 
-    def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str, side: str | None = None) -> bool:
-        return self._book.bind_latest_recovery_bar(client_order_id, symbol=symbol, side=side)
+    def bind_latest_recovery_bar(
+        self, client_order_id: str, *, symbol: str, side: str | None = None, extended_hours: bool = False
+    ) -> bool:
+        return self._book.bind_latest_recovery_bar(
+            client_order_id, symbol=symbol, side=side, extended_hours=extended_hours
+        )
 
     def bind_decision_bar(
         self, client_order_id: str, *, bar_identity: str, decided_at_ms: int, symbol: str

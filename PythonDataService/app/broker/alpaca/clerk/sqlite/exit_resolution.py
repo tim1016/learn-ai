@@ -2841,8 +2841,15 @@ async def _submit_reducing_order(
                     assert isinstance(leg, BrokerOrderLeg)
                     bound = broker.bind_latest_recovery_bar(
                         reducing.client_order_id, symbol=facts.symbol, side=leg.side,
+                        extended_hours=leg.extended_hours,
                     )
-                    why = "The simulation had no current price to fill this recovery at; no order was sent."
+                    why = (
+                        "The simulation has no price an extended-session recovery may fill at -- no "
+                        "fresh one, or only a price that closed before the send, and an older price "
+                        "anchors no limit; no order was sent."
+                        if leg.extended_hours
+                        else "The simulation had no current price to fill this recovery at; no order was sent."
+                    )
                 case "decision":
                     if not trade_port_folds_simulated_evidence(broker.trade):
                         bound, why = True, ""

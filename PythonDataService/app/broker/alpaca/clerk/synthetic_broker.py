@@ -8,7 +8,9 @@ binding, the position projection — is ``synthesized_orders.py``, shared with
 
 A sale whose traded instrument had no bar for the decision's minute fills at
 the close of the newest earlier one, stamped when it was decided and recorded
-as ``older_bar_close`` (#2912).
+as ``older_bar_close`` (#2912). An exit re-driven with no bar bound fills the
+same way at the last price the market delivered, stamped when it is sent
+(#2926).
 
 A recovery EXIT (the operator's safe flatten of a stopped Dry Run) has no
 decision bar: it fills at the live IBKR quote read when it is sent -- the bid
@@ -468,14 +470,18 @@ class SyntheticBroker(UnsupportedOptionOrderRefusal):
             return self._options is not None and self._options.prices_a_close(contract_symbol, side=side)
         return self._recovery_quote(symbol) is not None
 
-    def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str, side: str) -> bool:
+    def bind_latest_recovery_bar(
+        self, client_order_id: str, *, symbol: str, side: str, extended_hours: bool = False
+    ) -> bool:
         """Bind a recovery EXIT to the live IBKR quote read now, retained as its evidence bar.
 
         A recovery EXIT -- the operator's safe flatten, a sweep re-drive --
         has no strategy decision bar. It fills at the quote's bid for a sale
         and its ask for a purchase, so a Dry Run stopped yesterday sells at
         today's price, never at a bar from an earlier session. ``False`` (no
-        fresh quote in an open session) leaves the reduction unsent.
+        fresh quote in an open session) leaves the reduction unsent. The
+        fill is the quote's own instant, and this world rests no limit, so
+        ``extended_hours`` names nothing it decides.
         """
         if is_option_contract_symbol(symbol.upper()):
             # A contract is closed from a quote kept for it (``bind_option_close_quotes``), never from the
@@ -703,7 +709,11 @@ class SyntheticBroker(UnsupportedOptionOrderRefusal):
             raise SimulatedPriceUnavailableError(
                 f"No retained source bar exists for {symbol!r}; refusing a synthetic fill."
             )
-        return BoundBar(latest, None, None)
+        # Stamped when it is sent, never at the older bar's own close (#2926).
+        # A clock behind the feed keeps the bar's close: a fill is never
+        # stamped before the close of the bar that prices it.
+        now_ms = self._clock()
+        return BoundBar(latest, now_ms if now_ms > latest.end_ms else None, None)
 
     def _resolved_order(self, leg: BrokerOrderLeg, *, client_order_id: str, priced_by: BoundBar) -> BrokerOrder:
         """The order this leg becomes against one bar: filled, or cancelled unfilled (ruling R9)."""
