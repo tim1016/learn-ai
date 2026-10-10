@@ -19555,6 +19555,595 @@
         "title": "GoldenSearchCapabilityKnob",
         "type": "object"
       },
+      "GoldenSearchChance": {
+        "additionalProperties": false,
+        "description": "One fit's development chance components, each normalized independently of the others.",
+        "properties": {
+          "comparison": {
+            "discriminator": {
+              "mapping": {
+                "baseline": "#/components/schemas/GoldenSearchChanceComparisonBaseline",
+                "failed": "#/components/schemas/GoldenSearchChanceReadingFailed",
+                "measured": "#/components/schemas/GoldenSearchChanceComparisonMeasured",
+                "missing": "#/components/schemas/GoldenSearchChanceReadingMissing",
+                "same_settings": "#/components/schemas/GoldenSearchChanceComparisonSameSettings"
+              },
+              "propertyName": "status"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceComparisonMeasured"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceComparisonSameSettings"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceComparisonBaseline"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceReadingMissing"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceReadingFailed"
+              }
+            ],
+            "title": "Comparison"
+          },
+          "profitability": {
+            "discriminator": {
+              "mapping": {
+                "failed": "#/components/schemas/GoldenSearchChanceReadingFailed",
+                "measured": "#/components/schemas/GoldenSearchChanceProfitabilityMeasured",
+                "missing": "#/components/schemas/GoldenSearchChanceReadingMissing"
+              },
+              "propertyName": "status"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceProfitabilityMeasured"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceReadingMissing"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceReadingFailed"
+              }
+            ],
+            "title": "Profitability"
+          }
+        },
+        "required": [
+          "comparison",
+          "profitability"
+        ],
+        "title": "GoldenSearchChance",
+        "type": "object"
+      },
+      "GoldenSearchChanceAtLeastAsGood": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "description": "better + tied, the final test's inclusive rule.",
+            "title": "Count",
+            "type": "integer"
+          },
+          "share": {
+            "description": "Over every replication, not only the defined pairs.",
+            "title": "Share",
+            "type": "number"
+          }
+        },
+        "required": [
+          "count",
+          "share"
+        ],
+        "title": "GoldenSearchChanceAtLeastAsGood",
+        "type": "object"
+      },
+      "GoldenSearchChanceBasis": {
+        "additionalProperties": false,
+        "description": "Everything a stored reading was drawn and judged under, so reading it back never reclassifies with today's constants.",
+        "properties": {
+          "chunk_replications": {
+            "title": "Chunk Replications",
+            "type": "integer"
+          },
+          "convention": {
+            "title": "Convention",
+            "type": "string"
+          },
+          "mean_block_sessions": {
+            "title": "Mean Block Sessions",
+            "type": "number"
+          },
+          "objective": {
+            "$ref": "#/components/schemas/GoldenSearchChanceObjective"
+          },
+          "replications": {
+            "title": "Replications",
+            "type": "integer"
+          },
+          "schema_version": {
+            "description": "The reading's schema/interpretation version.",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "seed": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceSeed"
+              }
+            ],
+            "description": "The exact inputs the seed was derived from and the seed itself."
+          },
+          "source": {
+            "$ref": "#/components/schemas/GoldenSearchChanceSource"
+          },
+          "thresholds": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "description": "The interpretation thresholds the stored labels were judged by.",
+            "title": "Thresholds",
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "convention",
+          "replications",
+          "chunk_replications",
+          "mean_block_sessions",
+          "thresholds",
+          "objective",
+          "seed",
+          "source"
+        ],
+        "title": "GoldenSearchChanceBasis",
+        "type": "object"
+      },
+      "GoldenSearchChanceComparisonBaseline": {
+        "additionalProperties": false,
+        "properties": {
+          "basis": {
+            "$ref": "#/components/schemas/GoldenSearchChanceBasis"
+          },
+          "sentence": {
+            "title": "Sentence",
+            "type": "string"
+          },
+          "status": {
+            "const": "baseline",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "status",
+          "sentence",
+          "basis"
+        ],
+        "title": "GoldenSearchChanceComparisonBaseline",
+        "type": "object"
+      },
+      "GoldenSearchChanceComparisonMeasured": {
+        "additionalProperties": false,
+        "description": "The paired comparison of one fit's development result against the current settings', under the resampling model only.",
+        "properties": {
+          "at_least_as_good": {
+            "$ref": "#/components/schemas/GoldenSearchChanceAtLeastAsGood"
+          },
+          "basis": {
+            "$ref": "#/components/schemas/GoldenSearchChanceBasis"
+          },
+          "bias_note": {
+            "description": "The selection-bias caveat displayed beside the chart.",
+            "title": "Bias Note",
+            "type": "string"
+          },
+          "candidate_range": {
+            "$ref": "#/components/schemas/GoldenSearchChanceRange"
+          },
+          "counts": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceCounts"
+              }
+            ],
+            "description": "Raw event counts over every replication; they sum to the replication count."
+          },
+          "difference_range": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchChanceRange"
+              }
+            ],
+            "description": "Candidate minus incumbent in the objective's units."
+          },
+          "incomplete_support": {
+            "description": "True when undefined paths leave the support incomplete.",
+            "title": "Incomplete Support",
+            "type": "boolean"
+          },
+          "label": {
+            "enum": [
+              "clearly_as_good",
+              "clearly_worse",
+              "identical_outcomes",
+              "mixed",
+              "no_defined_paths"
+            ],
+            "title": "Label",
+            "type": "string"
+          },
+          "sentence": {
+            "description": "The decision sentence; Python writes it, the browser only displays it.",
+            "title": "Sentence",
+            "type": "string"
+          },
+          "shares": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "description": "Presentation shares; labels come from the counts, never from these rounded values.",
+            "title": "Shares",
+            "type": "object"
+          },
+          "status": {
+            "const": "measured",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "status",
+          "label",
+          "sentence",
+          "incomplete_support",
+          "bias_note",
+          "counts",
+          "shares",
+          "at_least_as_good",
+          "candidate_range",
+          "difference_range",
+          "basis"
+        ],
+        "title": "GoldenSearchChanceComparisonMeasured",
+        "type": "object"
+      },
+      "GoldenSearchChanceComparisonSameSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "basis": {
+            "$ref": "#/components/schemas/GoldenSearchChanceBasis"
+          },
+          "sentence": {
+            "title": "Sentence",
+            "type": "string"
+          },
+          "status": {
+            "const": "same_settings",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "status",
+          "sentence",
+          "basis"
+        ],
+        "title": "GoldenSearchChanceComparisonSameSettings",
+        "type": "object"
+      },
+      "GoldenSearchChanceCounts": {
+        "additionalProperties": false,
+        "properties": {
+          "better": {
+            "title": "Better",
+            "type": "integer"
+          },
+          "tied": {
+            "title": "Tied",
+            "type": "integer"
+          },
+          "undefined": {
+            "title": "Undefined",
+            "type": "integer"
+          },
+          "worse": {
+            "title": "Worse",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "better",
+          "tied",
+          "worse",
+          "undefined"
+        ],
+        "title": "GoldenSearchChanceCounts",
+        "type": "object"
+      },
+      "GoldenSearchChanceObjective": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "description": "How the objective reads in a sentence.",
+            "title": "Label",
+            "type": "string"
+          },
+          "measure": {
+            "enum": [
+              "sharpe_ratio",
+              "total_return_pct",
+              "net_profit"
+            ],
+            "title": "Measure",
+            "type": "string"
+          },
+          "units": {
+            "description": "What one unit of the objective counts.",
+            "title": "Units",
+            "type": "string"
+          }
+        },
+        "required": [
+          "measure",
+          "label",
+          "units"
+        ],
+        "title": "GoldenSearchChanceObjective",
+        "type": "object"
+      },
+      "GoldenSearchChanceProfitabilityMeasured": {
+        "additionalProperties": false,
+        "description": "The fit's own development outcome resampled: how often the compounded net return was positive, flat or negative.",
+        "properties": {
+          "basis": {
+            "$ref": "#/components/schemas/GoldenSearchChanceBasis"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "positive, zero, negative and undefined counts over every replication.",
+            "title": "Counts",
+            "type": "object"
+          },
+          "label": {
+            "enum": [
+              "clearly_positive",
+              "clearly_negative",
+              "mixed",
+              "no_defined_paths"
+            ],
+            "title": "Label",
+            "type": "string"
+          },
+          "sentence": {
+            "title": "Sentence",
+            "type": "string"
+          },
+          "shares": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Shares",
+            "type": "object"
+          },
+          "status": {
+            "const": "measured",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "status",
+          "label",
+          "sentence",
+          "counts",
+          "shares",
+          "basis"
+        ],
+        "title": "GoldenSearchChanceProfitabilityMeasured",
+        "type": "object"
+      },
+      "GoldenSearchChanceRange": {
+        "additionalProperties": false,
+        "properties": {
+          "finite": {
+            "description": "How many resamples produced a finite value.",
+            "title": "Finite",
+            "type": "integer"
+          },
+          "p5": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "5th percentile by linear interpolation over the finite values; null when there are none.",
+            "title": "P5"
+          },
+          "p50": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50"
+          },
+          "p95": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95"
+          }
+        },
+        "required": [
+          "p5",
+          "p50",
+          "p95",
+          "finite"
+        ],
+        "title": "GoldenSearchChanceRange",
+        "type": "object"
+      },
+      "GoldenSearchChanceReadingFailed": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "description": "The diagnostic: an unexpected computation error, logged with context when it happened.",
+            "title": "Reason",
+            "type": "string"
+          },
+          "status": {
+            "const": "failed",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "status",
+          "reason"
+        ],
+        "title": "GoldenSearchChanceReadingFailed",
+        "type": "object"
+      },
+      "GoldenSearchChanceReadingMissing": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "A stable identifier for the operator copy in `reason`.",
+            "title": "Code",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "status": {
+            "const": "missing",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "status",
+          "code",
+          "reason"
+        ],
+        "title": "GoldenSearchChanceReadingMissing",
+        "type": "object"
+      },
+      "GoldenSearchChanceSeed": {
+        "additionalProperties": false,
+        "properties": {
+          "inputs": {
+            "description": "The exact parts the seed was derived from; empty when nothing was drawn.",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Inputs",
+            "type": "array"
+          },
+          "value": {
+            "description": "The derived seed itself, so a stored reading is reproducible without rederiving it.",
+            "title": "Value",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "inputs",
+          "value"
+        ],
+        "title": "GoldenSearchChanceSeed",
+        "type": "object"
+      },
+      "GoldenSearchChanceSource": {
+        "additionalProperties": false,
+        "description": "The runs a reading actually resampled: their shared window, their point hashes, their series digests.",
+        "properties": {
+          "candidate_point_hash": {
+            "default": "",
+            "title": "Candidate Point Hash",
+            "type": "string"
+          },
+          "capital": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capital"
+          },
+          "incumbent_point_hash": {
+            "default": "",
+            "description": "Empty when the reading is the candidate's alone.",
+            "title": "Incumbent Point Hash",
+            "type": "string"
+          },
+          "series_digest": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Digests of the series actually resampled, keyed by the side they belong to.",
+            "title": "Series Digest",
+            "type": "object"
+          },
+          "session_count": {
+            "title": "Session Count",
+            "type": "integer"
+          },
+          "window": {
+            "$ref": "#/components/schemas/GoldenSearchChanceWindow"
+          }
+        },
+        "required": [
+          "window",
+          "session_count"
+        ],
+        "title": "GoldenSearchChanceSource",
+        "type": "object"
+      },
+      "GoldenSearchChanceWindow": {
+        "additionalProperties": false,
+        "properties": {
+          "end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start_ms",
+          "end_ms"
+        ],
+        "title": "GoldenSearchChanceWindow",
+        "type": "object"
+      },
       "GoldenSearchChartPolicy": {
         "additionalProperties": false,
         "properties": {
@@ -20724,6 +21313,9 @@
       "GoldenSearchEvidenceCandidate": {
         "additionalProperties": false,
         "properties": {
+          "chance": {
+            "$ref": "#/components/schemas/GoldenSearchChance"
+          },
           "concentration": {
             "discriminator": {
               "mapping": {
@@ -20870,6 +21462,7 @@
           "trades_per_year",
           "stress_tally",
           "concentration",
+          "chance",
           "edge_hits",
           "guidance",
           "flags",

@@ -285,6 +285,20 @@ export type ConcentrationCurve = Schemas['GoldenSearchConcentrationCurve'];
 /** The concentration measure the evidence stage stored (#2815), or why there is none — evidence recorded before it included. */
 export type Concentration = Schemas['GoldenSearchEvidenceCandidate']['concentration'];
 export type MeasuredConcentration = Schemas['GoldenSearchConcentrationMeasured'];
+/**
+ * The development chance readings the evidence stage stored (#3011): how the
+ * fit's resampled development result stands against the current settings'
+ * (comparison) and how often its own resampled paths made money
+ * (profitability). Every count, share, status and sentence is Python's; the
+ * browser formats and draws, and never reclassifies a stored reading.
+ */
+export type ChanceReadings = Schemas['GoldenSearchEvidenceCandidate']['chance'];
+export type ChanceComparison = ChanceReadings['comparison'];
+export type MeasuredChanceComparison = Schemas['GoldenSearchChanceComparisonMeasured'];
+export type ChanceComparisonLabel = MeasuredChanceComparison['label'];
+export type ChanceProfitability = ChanceReadings['profitability'];
+export type MeasuredChanceProfitability = Schemas['GoldenSearchChanceProfitabilityMeasured'];
+export type ChanceBasis = Schemas['GoldenSearchChanceBasis'];
 /** The candidate a development chart draws: its key for colour and walkthrough targets, its label for words. */
 export type CandidateRef = Pick<EvidenceCandidate, 'key' | 'label'>;
 export type CandidateRunDetail = Schemas['GoldenSearchRunDetail'];

@@ -829,6 +829,39 @@ Hover a bar to see its net return, its change from the top bar, its worst fall, 
 
 A bridge engineer tests a bridge with more weight than it should ever carry. If it still stands, the extra margin gives confidence. Here the extra weight is higher costs and slower fills.
 
+### Development uncertainty {#chance-comparison}
+
+#### The question it answers
+
+When the recorded development sessions are resampled, how often is this fit at least as good as the current settings?
+
+#### What you're looking at
+
+A horizontal band showing the middle 90% of resampled differences between the selected fit and the current settings, with the median as a solid mark and a dashed line at zero, where the two settings tie. Beside it, a strip that counts every one of the 10,000 paired resamples as better, tied, worse or undefined, and a sentence with the share that was at least as good. Both sides of every pair are resampled over the same drawn sessions, so each resample compares like with like.
+
+This is one resampling model — a stationary bootstrap over the development sessions the engine recorded, in blocks averaging five sessions. Its shares describe that model, nothing else: they are not a probability of a true edge, not a p-value, and not adjusted for the search that selected the fit. 95% and 80% are the owner's reading thresholds. The fit was selected on these same sessions, and the search is not repeated inside the resamples, so selection bias is not corrected: even unanimous support is not a claim of a true edge.
+
+An interval that crosses zero differs visibly from one entirely above it; an all-tie or same-settings result says so plainly instead of drawing a strong-looking band; undefined paths (an objective with no defined value on a path) are counted as undefined, never as losses or wins.
+
+#### How to read it
+
+1. Read the band: the middle 90% of resampled differences between this fit and the current settings, with the median as the solid mark.
+2. The dashed line at zero is a tie. A band crossing it means the resampling model does not separate the two settings.
+3. Read the strip beside it: every one of the 10,000 resamples counted as better, tied, worse or undefined. Ties are not improvement.
+4. The sentence beneath names the share that was at least as good. 95% is the owner’s reading threshold, not a calibrated error rate.
+5. Remember what it cannot say: this fit was selected on these same sessions, and the search is not repeated inside the resamples.
+
+#### Good signs and warning signs
+
+- Good: a band entirely above zero with a small tied and undefined share.
+- Warning: a band crossing zero, or a large undefined share — the support is then incomplete.
+- Warning: a share just under the threshold. The reading distinguishes 9,499 of 10,000 from 9,500; the label comes from the raw counts.
+- Warning: an all-tie band read as improvement. A tie is a tie.
+
+#### An everyday comparison
+
+A chef's dish reheated many ways: how often is the reheated serving at least as good as the original plating? Counting the reheats tells you about the reheating, not about whether the recipe is good — and the chef already tasted this batch when choosing the dish.
+
 ### Stress and neighbor equity {#candidate-curves}
 
 #### The question it answers

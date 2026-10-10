@@ -26,6 +26,7 @@ from typing import Any
 
 from app.research.golden_search.actions import permitted
 from app.research.golden_search.activity import TradeFloors
+from app.research.golden_search.chance_compare import stored_chance
 from app.research.golden_search.compare_measures import neighborhood_view, stress_tally, stress_view, trades_per_year
 from app.research.golden_search.concentration import (
     NOT_MEASURED,
@@ -389,6 +390,7 @@ def evidence_view(
                 "trades_per_year": trades_per_year(item["development_metrics"], years),
                 "stress_tally": stress_tally(item["stress"]),
                 "concentration": stored_concentration(item),
+                "chance": stored_chance(item),
                 "edge_hits": list(item["edge_hits"]),
                 "guidance": candidate_guidance(
                     key=item["key"],

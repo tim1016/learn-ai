@@ -28,6 +28,7 @@ from app.research.golden_search import repository as repo
 from app.research.golden_search.actions import authorize
 from app.research.golden_search.activity import TradeFloors
 from app.research.golden_search.budget import PROOF_EVALUATIONS
+from app.research.golden_search.chance_compare import development_readings, failed_readings, incumbent_readings
 from app.research.golden_search.concentration import concentration
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, point_hash
 from app.research.golden_search.evaluator import (
@@ -464,6 +465,47 @@ class _EvidenceRun:
         return tuple(hoods)
 
 
+def _chance_records(ctx: StageContext, evaluator: StudyEvaluator, evidences: Sequence[CandidateEvidence]) -> list[dict[str, Any]]:
+    """Each candidate's development chance readings, in candidate order (#3011, ADR 0074 decision 12).
+
+    The readings resample detail runs the stage already evaluated, so they spend no engine budget. Candidates that
+    chose the same settings share one computed record instead of drawing twice; the incumbent is the baseline and is
+    never compared with itself.
+    """
+    incumbent = next((evidence for evidence in evidences if evidence.key == "incumbent"), None)
+    if incumbent is None:
+        return [{} for _ in evidences]
+    incumbent_detail = evaluator.detail_of(incumbent.point, window=ctx.development)
+    by_hash: dict[str, dict[str, Any]] = {}
+    records: list[dict[str, Any]] = []
+    for evidence in evidences:
+        if evidence.key == "incumbent":
+            try:
+                records.append(incumbent_readings(objective=ctx.protocol.policy.objective, window=ctx.development, session_count=None))
+            except Exception as exc:  # a diagnostic failure the stage records; it never fails the evidence itself
+                records.append(failed_readings(exc))
+            continue
+        shared = by_hash.get(evidence.point_hash)
+        if shared is None:
+            try:
+                shared = development_readings(
+                    objective=ctx.protocol.policy.objective,
+                    window=ctx.development,
+                    candidate_metrics=evidence.metrics,
+                    candidate_detail=evaluator.detail_of(evidence.point, window=ctx.development),
+                    candidate_hash=evidence.point_hash,
+                    incumbent_metrics=incumbent.metrics,
+                    incumbent_detail=incumbent_detail,
+                    incumbent_hash=incumbent.point_hash,
+                    cancel_check=ctx.cancel_check,
+                )
+            except Exception as exc:  # a diagnostic failure the stage records; it never fails the evidence itself
+                shared = failed_readings(exc)
+            by_hash[evidence.point_hash] = shared
+        records.append(shared)
+    return records
+
+
 def _evidence(ctx: StageContext, evaluator: StudyEvaluator, verdict: Verdict) -> None:
     run = _EvidenceRun(ctx=ctx, evaluator=evaluator)
     stored: list[dict[str, Any]] = []
@@ -499,6 +541,8 @@ def _evidence(ctx: StageContext, evaluator: StudyEvaluator, verdict: Verdict) ->
                 ),
             }
         )
+    for record, chance in zip(stored, _chance_records(ctx, evaluator, evidences), strict=True):
+        record["chance"] = chance
     advice = recommendation(evidences, verdict, ctx.floors.policy(ctx.development))
     window = ctx.development
     ctx.write(

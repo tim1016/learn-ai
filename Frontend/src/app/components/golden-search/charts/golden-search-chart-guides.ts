@@ -7,6 +7,7 @@ export type GoldenSearchChartId =
   | 'side-by-side'
   | 'neighbor-tornado'
   | 'cost-stress'
+  | 'chance-comparison'
   | 'concentration-curve'
   | 'without-best'
   | 'month-calendar'
@@ -115,6 +116,17 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
       { text: 'Each bar below reruns the same settings with one harsher cost or fill.', target: { kind: 'series', group: 'stress' } },
       { text: 'Find the stressed bar with the lowest return. That stress is the one the result is most sensitive to.', target: { kind: 'point', group: 'stress', at: 'lowest' } },
       { text: 'A bar left of 0% marks a stress that turns the result into a loss.', target: null },
+    ],
+  },
+  'chance-comparison': {
+    title: 'Development uncertainty',
+    question: 'When the recorded development sessions are resampled, how often is this fit at least as good as the current settings?',
+    steps: [
+      { text: 'Read the band: the middle 90% of resampled differences between this fit and the current settings, with the median as the solid mark.', target: { kind: 'series', group: 'chance' } },
+      { text: 'The dashed line at zero is a tie. A band crossing it means the resampling model does not separate the two settings.', target: null },
+      { text: 'Read the strip beside it: every one of the 10,000 resamples counted as better, tied, worse or undefined. Ties are not improvement.', target: null },
+      { text: 'The sentence beneath names the share that was at least as good. 95% is the owner’s reading threshold, not a calibrated error rate.', target: null },
+      { text: 'Remember what it cannot say: this fit was selected on these same sessions, and the search is not repeated inside the resamples.', target: null },
     ],
   },
   'concentration-curve': {

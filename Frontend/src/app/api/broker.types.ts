@@ -14170,6 +14170,279 @@ export interface components {
             /** Warmup Dependent */
             warmup_dependent: boolean;
         };
+        /**
+         * GoldenSearchChance
+         * @description One fit's development chance components, each normalized independently of the others.
+         */
+        GoldenSearchChance: {
+            /** Comparison */
+            comparison: components["schemas"]["GoldenSearchChanceComparisonMeasured"] | components["schemas"]["GoldenSearchChanceComparisonSameSettings"] | components["schemas"]["GoldenSearchChanceComparisonBaseline"] | components["schemas"]["GoldenSearchChanceReadingMissing"] | components["schemas"]["GoldenSearchChanceReadingFailed"];
+            /** Profitability */
+            profitability: components["schemas"]["GoldenSearchChanceProfitabilityMeasured"] | components["schemas"]["GoldenSearchChanceReadingMissing"] | components["schemas"]["GoldenSearchChanceReadingFailed"];
+        };
+        /** GoldenSearchChanceAtLeastAsGood */
+        GoldenSearchChanceAtLeastAsGood: {
+            /**
+             * Count
+             * @description better + tied, the final test's inclusive rule.
+             */
+            count: number;
+            /**
+             * Share
+             * @description Over every replication, not only the defined pairs.
+             */
+            share: number;
+        };
+        /**
+         * GoldenSearchChanceBasis
+         * @description Everything a stored reading was drawn and judged under, so reading it back never reclassifies with today's constants.
+         */
+        GoldenSearchChanceBasis: {
+            /** Chunk Replications */
+            chunk_replications: number;
+            /** Convention */
+            convention: string;
+            /** Mean Block Sessions */
+            mean_block_sessions: number;
+            objective: components["schemas"]["GoldenSearchChanceObjective"];
+            /** Replications */
+            replications: number;
+            /**
+             * Schema Version
+             * @description The reading's schema/interpretation version.
+             */
+            schema_version: string;
+            /** @description The exact inputs the seed was derived from and the seed itself. */
+            seed: components["schemas"]["GoldenSearchChanceSeed"];
+            source: components["schemas"]["GoldenSearchChanceSource"];
+            /**
+             * Thresholds
+             * @description The interpretation thresholds the stored labels were judged by.
+             */
+            thresholds: {
+                [key: string]: number;
+            };
+        };
+        /** GoldenSearchChanceComparisonBaseline */
+        GoldenSearchChanceComparisonBaseline: {
+            basis: components["schemas"]["GoldenSearchChanceBasis"];
+            /** Sentence */
+            sentence: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "baseline";
+        };
+        /**
+         * GoldenSearchChanceComparisonMeasured
+         * @description The paired comparison of one fit's development result against the current settings', under the resampling model only.
+         */
+        GoldenSearchChanceComparisonMeasured: {
+            at_least_as_good: components["schemas"]["GoldenSearchChanceAtLeastAsGood"];
+            basis: components["schemas"]["GoldenSearchChanceBasis"];
+            /**
+             * Bias Note
+             * @description The selection-bias caveat displayed beside the chart.
+             */
+            bias_note: string;
+            candidate_range: components["schemas"]["GoldenSearchChanceRange"];
+            /** @description Raw event counts over every replication; they sum to the replication count. */
+            counts: components["schemas"]["GoldenSearchChanceCounts"];
+            /** @description Candidate minus incumbent in the objective's units. */
+            difference_range: components["schemas"]["GoldenSearchChanceRange"];
+            /**
+             * Incomplete Support
+             * @description True when undefined paths leave the support incomplete.
+             */
+            incomplete_support: boolean;
+            /**
+             * Label
+             * @enum {string}
+             */
+            label: "clearly_as_good" | "clearly_worse" | "identical_outcomes" | "mixed" | "no_defined_paths";
+            /**
+             * Sentence
+             * @description The decision sentence; Python writes it, the browser only displays it.
+             */
+            sentence: string;
+            /**
+             * Shares
+             * @description Presentation shares; labels come from the counts, never from these rounded values.
+             */
+            shares: {
+                [key: string]: number;
+            };
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "measured";
+        };
+        /** GoldenSearchChanceComparisonSameSettings */
+        GoldenSearchChanceComparisonSameSettings: {
+            basis: components["schemas"]["GoldenSearchChanceBasis"];
+            /** Sentence */
+            sentence: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "same_settings";
+        };
+        /** GoldenSearchChanceCounts */
+        GoldenSearchChanceCounts: {
+            /** Better */
+            better: number;
+            /** Tied */
+            tied: number;
+            /** Undefined */
+            undefined: number;
+            /** Worse */
+            worse: number;
+        };
+        /** GoldenSearchChanceObjective */
+        GoldenSearchChanceObjective: {
+            /**
+             * Label
+             * @description How the objective reads in a sentence.
+             */
+            label: string;
+            /**
+             * Measure
+             * @enum {string}
+             */
+            measure: "sharpe_ratio" | "total_return_pct" | "net_profit";
+            /**
+             * Units
+             * @description What one unit of the objective counts.
+             */
+            units: string;
+        };
+        /**
+         * GoldenSearchChanceProfitabilityMeasured
+         * @description The fit's own development outcome resampled: how often the compounded net return was positive, flat or negative.
+         */
+        GoldenSearchChanceProfitabilityMeasured: {
+            basis: components["schemas"]["GoldenSearchChanceBasis"];
+            /**
+             * Counts
+             * @description positive, zero, negative and undefined counts over every replication.
+             */
+            counts: {
+                [key: string]: number;
+            };
+            /**
+             * Label
+             * @enum {string}
+             */
+            label: "clearly_positive" | "clearly_negative" | "mixed" | "no_defined_paths";
+            /** Sentence */
+            sentence: string;
+            /** Shares */
+            shares: {
+                [key: string]: number;
+            };
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "measured";
+        };
+        /** GoldenSearchChanceRange */
+        GoldenSearchChanceRange: {
+            /**
+             * Finite
+             * @description How many resamples produced a finite value.
+             */
+            finite: number;
+            /**
+             * P5
+             * @description 5th percentile by linear interpolation over the finite values; null when there are none.
+             */
+            p5: number | null;
+            /** P50 */
+            p50: number | null;
+            /** P95 */
+            p95: number | null;
+        };
+        /** GoldenSearchChanceReadingFailed */
+        GoldenSearchChanceReadingFailed: {
+            /**
+             * Reason
+             * @description The diagnostic: an unexpected computation error, logged with context when it happened.
+             */
+            reason: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "failed";
+        };
+        /** GoldenSearchChanceReadingMissing */
+        GoldenSearchChanceReadingMissing: {
+            /**
+             * Code
+             * @description A stable identifier for the operator copy in `reason`.
+             */
+            code: string;
+            /** Reason */
+            reason: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "missing";
+        };
+        /** GoldenSearchChanceSeed */
+        GoldenSearchChanceSeed: {
+            /**
+             * Inputs
+             * @description The exact parts the seed was derived from; empty when nothing was drawn.
+             */
+            inputs: (string | number)[];
+            /**
+             * Value
+             * @description The derived seed itself, so a stored reading is reproducible without rederiving it.
+             */
+            value: number;
+        };
+        /**
+         * GoldenSearchChanceSource
+         * @description The runs a reading actually resampled: their shared window, their point hashes, their series digests.
+         */
+        GoldenSearchChanceSource: {
+            /**
+             * Candidate Point Hash
+             * @default
+             */
+            candidate_point_hash?: string;
+            /** Capital */
+            capital?: number | null;
+            /**
+             * Incumbent Point Hash
+             * @description Empty when the reading is the candidate's alone.
+             * @default
+             */
+            incumbent_point_hash?: string;
+            /**
+             * Series Digest
+             * @description Digests of the series actually resampled, keyed by the side they belong to.
+             */
+            series_digest?: {
+                [key: string]: string;
+            };
+            /** Session Count */
+            session_count: number;
+            window: components["schemas"]["GoldenSearchChanceWindow"];
+        };
+        /** GoldenSearchChanceWindow */
+        GoldenSearchChanceWindow: {
+            /** End Ms */
+            end_ms: number;
+            /** Start Ms */
+            start_ms: number;
+        };
         /** GoldenSearchChartPolicy */
         GoldenSearchChartPolicy: {
             /** Max Drawdown Ceiling */
@@ -14710,6 +14983,7 @@ export interface components {
         };
         /** GoldenSearchEvidenceCandidate */
         GoldenSearchEvidenceCandidate: {
+            chance: components["schemas"]["GoldenSearchChance"];
             /** Concentration */
             concentration: components["schemas"]["GoldenSearchConcentrationMeasured"] | components["schemas"]["GoldenSearchConcentrationMissing"];
             development_metrics: components["schemas"]["GoldenSearchMetrics"] | null;
