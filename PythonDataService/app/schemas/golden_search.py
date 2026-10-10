@@ -1069,6 +1069,7 @@ class GoldenSearchChanceReadingMissing(_Wire):
 class GoldenSearchChanceReadingFailed(_Wire):
     status: Literal["failed"]
     reason: str = Field(description="The diagnostic: an unexpected computation error, logged with context when it happened.")
+    sentence: str = Field(description="The operator sentence for the failure; Python writes it, the browser only displays it.")
 
 
 GoldenSearchChanceComparison = Annotated[

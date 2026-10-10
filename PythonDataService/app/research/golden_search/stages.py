@@ -481,7 +481,9 @@ def _chance_records(ctx: StageContext, evaluator: StudyEvaluator, evidences: Seq
     for evidence in evidences:
         if evidence.key == "incumbent":
             try:
-                records.append(incumbent_readings(objective=ctx.protocol.policy.objective, window=ctx.development, session_count=None))
+                records.append(incumbent_readings(objective=ctx.protocol.policy.objective, window=ctx.development))
+            except JobCancelled:
+                raise  # cancellation stops the stage; it is never recorded as a reading
             except Exception as exc:  # a diagnostic failure the stage records; it never fails the evidence itself
                 records.append(failed_readings(exc))
             continue
@@ -499,6 +501,8 @@ def _chance_records(ctx: StageContext, evaluator: StudyEvaluator, evidences: Seq
                     incumbent_hash=incumbent.point_hash,
                     cancel_check=ctx.cancel_check,
                 )
+            except JobCancelled:
+                raise  # cancellation stops the stage; it is never recorded as a reading
             except Exception as exc:  # a diagnostic failure the stage records; it never fails the evidence itself
                 shared = failed_readings(exc)
             by_hash[evidence.point_hash] = shared

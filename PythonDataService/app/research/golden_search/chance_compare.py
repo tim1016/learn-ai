@@ -44,6 +44,7 @@ from typing import Any
 
 import numpy as np
 
+from app.jobs.progress import JobCancelled
 from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc
 from app.research.golden_search import chance
 from app.research.golden_search.chance import (
@@ -120,7 +121,7 @@ NOT_MEASURED = (
     "Not measured for this study: comparison readings were first recorded with #3011, and stored evidence is never backfilled.",
 )
 
-#: Each ``chance.session_series`` refusal mapped to a stable code. The too-few-sessions refusal is a composed message, matched by its opening words.
+#: Each ``chance.session_series`` refusal mapped to a stable code, owned beside the sentences it names (#3011).
 _SERIES_CODES: dict[str, str] = {
     chance.NO_TRADE_LIST: NO_TRADE_LIST[0],
     chance.NOT_POSITIVE_CAPITAL: NOT_POSITIVE_CAPITAL[0],
@@ -129,6 +130,8 @@ _SERIES_CODES: dict[str, str] = {
     chance.OUT_OF_ORDER: OUT_OF_ORDER_SESSIONS[0],
     chance.UNPLACED_EXIT: UNPLACED_EXIT[0],
 }
+#: The too-few-sessions refusal is a composed message; this is its stable opening, defined beside the codes.
+TOO_FEW_SESSIONS_PREFIX = "The run covers"
 
 #: The caveat that stays beside every measured comparison: selection on the same data is not corrected away.
 BIAS_NOTE = (
@@ -188,7 +191,7 @@ def admit_run(
         return _missing(FAILED_RUN, detail=f"({metrics.error or 'no reason recorded'})")
     series = session_series(detail)
     if isinstance(series, str):
-        if series.startswith("The run covers"):
+        if series.startswith(TOO_FEW_SESSIONS_PREFIX):
             return _missing(TOO_FEW_SESSIONS, detail=series)
         return _missing((_SERIES_CODES.get(series, "unreadable_series"), series))
     scheduled = _window_sessions(window)
@@ -304,7 +307,9 @@ def _comparison_sentence(label: str, counts: Mapping[str, int], objective_label:
     shares = _shares(counts)
     as_good = counts["better"] + counts["tied"]
     prefix = f"In {REPLICATIONS:,} paired resamples of these development sessions, this fit's {objective_label} was"
-    incomplete = f" {counts['undefined']:,} paths left the comparison undefined, so this support is incomplete."
+    incomplete = (
+        f" {counts['undefined']:,} path{'s' if counts['undefined'] != 1 else ''} left the comparison undefined, so this support is incomplete."
+    )
     if label == "no_defined_paths":
         return f"No paired resample produced a defined {objective_label} for both settings, so no comparison is available from this model."
     if label == "identical_outcomes":
@@ -411,7 +416,7 @@ def _profitability_sentence(counts: Mapping[str, int]) -> str:
         else f"negative in {shares['negative']:.1%} of {REPLICATIONS:,} resampled development paths "
         f"({counts['positive']:,} positive, {counts['zero']:,} exactly flat)"
     )
-    incomplete = f" {counts['undefined']:,} paths left the return undefined." if counts["undefined"] else ""
+    incomplete = f" {counts['undefined']:,} path{'s' if counts['undefined'] != 1 else ''} left the return undefined." if counts["undefined"] else ""
     return f"The recorded development outcome resamples to a compounded net return {direction}.{incomplete} This is the model's spread of what was recorded, not a forecast."
 
 
@@ -462,13 +467,19 @@ def _profitability_reading(
     }
 
 
-def _failed(exc: Exception, what: str) -> dict[str, Any]:
+def _failed(exc: Exception, component: str) -> dict[str, Any]:
+    """A diagnostic failure record: the operator sentence is Python's, so the browser only displays it (#3011)."""
     logger.warning(
         "golden search chance reading failed",
-        extra={"action": "golden_search_chance_reading_failed", "component": what},
+        extra={"action": "golden_search_chance_reading_failed", "component": component},
         exc_info=True,
     )
-    return {"status": "failed", "reason": f"{type(exc).__name__}: {exc}"}
+    reason = f"{type(exc).__name__}: {exc}"
+    return {
+        "status": "failed",
+        "reason": reason,
+        "sentence": f"The {component.replace('_', ' ')} reading could not be computed and nothing was stored: {reason}.",
+    }
 
 
 def failed_readings(exc: Exception) -> dict[str, dict[str, Any]]:
@@ -496,13 +507,16 @@ def development_readings(
     readings: dict[str, dict[str, Any]] = {}
     try:
         admitted = admit_run(candidate_metrics, candidate_detail, window)
+    except JobCancelled:
+        raise  # cancellation stops the stage; it is never recorded as a reading
     except Exception as exc:  # a diagnostic failure, not a refusal: the stage records it and continues
-        admitted = _failed(exc, "admission")
+        return {"comparison": _failed(exc, "comparison"), "profitability": _failed(exc, "profitability")}
     if not isinstance(admitted, SessionSeries):
-        missing = admitted if admitted.get("status") == "missing" else _missing(("unreadable_series", "The development run's sessions could not be read."))
-        return {"comparison": dict(missing), "profitability": dict(missing)}
+        return {"comparison": dict(admitted), "profitability": dict(admitted)}
     try:
         readings["profitability"] = _profitability_reading(admitted, objective=objective, window=window, candidate_hash=candidate_hash, cancel_check=cancel_check)
+    except JobCancelled:
+        raise  # cancellation stops the stage; it is never recorded as a reading
     except Exception as exc:
         readings["profitability"] = _failed(exc, "profitability")
     if candidate_hash == incumbent_hash:
@@ -522,8 +536,11 @@ def development_readings(
         return readings
     try:
         incumbent = admit_run(incumbent_metrics, incumbent_detail, window)
-    except Exception as exc:
-        incumbent = _failed(exc, "incumbent_admission")
+    except JobCancelled:
+        raise  # cancellation stops the stage; it is never recorded as a reading
+    except Exception as exc:  # an unexpected incumbent-side error is a diagnostic failure of the comparison, not a missing reading
+        readings["comparison"] = _failed(exc, "comparison")
+        return readings
     if not isinstance(incumbent, SessionSeries):
         readings["comparison"] = _missing(
             INCUMBENT_UNAVAILABLE, detail=f"Recorded reason: {incumbent.get('reason', 'the run could not be read')}"
@@ -545,12 +562,14 @@ def development_readings(
             incumbent_hash=incumbent_hash,
             cancel_check=cancel_check,
         )
+    except JobCancelled:
+        raise  # cancellation stops the stage; it is never recorded as a reading
     except Exception as exc:
         readings["comparison"] = _failed(exc, "comparison")
     return readings
 
 
-def incumbent_readings(*, objective: RankingMeasure, window: tuple[int, int], session_count: int | None) -> dict[str, dict[str, Any]]:
+def incumbent_readings(*, objective: RankingMeasure, window: tuple[int, int]) -> dict[str, dict[str, Any]]:
     """The baseline's own record: the current settings are what every fit is compared against, never with themselves."""
     return {
         "comparison": {
@@ -560,7 +579,7 @@ def incumbent_readings(*, objective: RankingMeasure, window: tuple[int, int], se
                 SCHEMA_COMPARISON,
                 objective=objective,
                 window=window,
-                session_count=session_count or 0,
+                session_count=0,
                 seed_inputs=[],
                 seed_value=0,
                 source={},
@@ -574,16 +593,35 @@ def incumbent_readings(*, objective: RankingMeasure, window: tuple[int, int], se
 
 # ── The stored shape a read model serves ──────────────────────────────────
 
+#: What each component's never-recorded state says, so the copy names the component it belongs to.
+_NOT_MEASURED_BY_COMPONENT: dict[str, tuple[str, str]] = {
+    "comparison": NOT_MEASURED,
+    "profitability": (
+        "not_measured",
+        "Not measured for this study: profitability readings were first recorded with #3011, and stored evidence is never backfilled.",
+    ),
+}
+_KNOWN_STATUSES = frozenset({"measured", "same_settings", "baseline", "missing", "failed"})
+
 
 def stored_chance(candidate: Mapping[str, Any]) -> dict[str, Any]:
     """The chance components of one stored evidence candidate, each normalized independently.
 
     A component the study never recorded (evidence from before the slice that measures it) reads
-    ``missing`` with its reason; nothing is recomputed, backfilled or reclassified with today's constants.
+    ``missing`` with its reason; a record this server cannot interpret says so. Nothing is recomputed,
+    backfilled or reclassified with today's constants.
     """
     stored = candidate.get("chance")
     components: dict[str, dict[str, Any]] = {}
     for component in ("comparison", "profitability"):
         record = (stored or {}).get(component)
-        components[component] = dict(record) if isinstance(record, Mapping) else _missing(NOT_MEASURED)
+        if isinstance(record, Mapping) and record.get("status") in _KNOWN_STATUSES:
+            components[component] = dict(record)
+        elif isinstance(record, Mapping):
+            unsupported = record.get("status")
+            components[component] = _missing(
+                ("unsupported", f"The stored {component} reading holds status {unsupported!r}, which this server cannot interpret; it is shown as unavailable rather than guessed at.")
+            )
+        else:
+            components[component] = _missing(_NOT_MEASURED_BY_COMPONENT[component])
     return components

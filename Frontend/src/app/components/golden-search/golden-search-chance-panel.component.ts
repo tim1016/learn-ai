@@ -68,6 +68,12 @@ export class GoldenSearchChancePanelComponent {
     return reading.status === 'missing' ? reading.reason : null;
   });
 
+  /** The profit line's diagnostic when the profitability reading itself failed, in Python's words. */
+  protected readonly moneyFailed = computed(() => {
+    const reading = this.chance().profitability;
+    return reading.status === 'failed' ? reading.sentence : null;
+  });
+
   /** What the panel says when no comparison was drawn, narrowed here so the template only words it. */
   protected readonly note = computed<{ readonly kind: 'sentence' | 'missing' | 'failed'; readonly text: string } | null>(() => {
     const comparison = this.chance().comparison;
@@ -78,7 +84,7 @@ export class GoldenSearchChancePanelComponent {
       case 'missing':
         return { kind: 'missing', text: comparison.reason };
       case 'failed':
-        return { kind: 'failed', text: `The comparison reading could not be computed: ${comparison.reason}` };
+        return { kind: 'failed', text: comparison.sentence };
       default:
         return null;
     }

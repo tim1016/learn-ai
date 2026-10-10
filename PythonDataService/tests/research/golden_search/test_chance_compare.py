@@ -222,7 +222,7 @@ def test_identical_settings_say_same_settings_without_drawing() -> None:
 
 
 def test_the_incumbent_is_a_baseline_never_compared_with_itself() -> None:
-    readings = incumbent_readings(objective="sharpe_ratio", window=_window_for(60), session_count=60)
+    readings = incumbent_readings(objective="sharpe_ratio", window=_window_for(60))
     assert readings["comparison"]["status"] == "baseline"
     assert readings["profitability"]["status"] == "missing"
     assert readings["profitability"]["code"] == "not_measured"
@@ -371,3 +371,74 @@ def test_json_never_holds_nan_or_infinity() -> None:
     canonical_json(readings)  # raises on NaN/Infinity: a measured reading must serialize cleanly
     overflow_only = _pair_chunk(np.array([1e308]), np.array([-1e308]))
     canonical_json({"counts": overflow_only[0]})
+
+
+# ── Cancellation and diagnostic failures ──────────────────────────────────
+
+
+def test_cancellation_between_chunks_stops_the_stage_and_is_never_a_reading() -> None:
+    from app.jobs.progress import JobCancelled
+
+    def cancelled() -> None:
+        raise JobCancelled("job 42 cancelled")
+
+    with pytest.raises(JobCancelled):
+        _reading(_smooth(60, seed=31), _smooth(60, seed=32), cancel_check=cancelled)
+    # The profitability draw alone also stops: cancellation never becomes a failed or missing record.
+    with pytest.raises(JobCancelled):
+        development_readings(
+            objective="total_return_pct",
+            window=_window_for(60),
+            candidate_metrics=_completed(),
+            candidate_detail=_detail(_smooth(60, seed=31)),
+            candidate_hash="cafebabe",
+            incumbent_metrics=None,
+            incumbent_detail=None,
+            incumbent_hash="deadbeef",
+            cancel_check=cancelled,
+        )
+
+
+def test_an_admission_crash_is_a_diagnostic_failure_with_its_sentence_not_a_missing_reading() -> None:
+    malformed = {"daily_equity": []}  # no initial_cash: session_series itself raises
+    readings = development_readings(
+        objective="sharpe_ratio",
+        window=_window_for(60),
+        candidate_metrics=_completed(),
+        candidate_detail=malformed,
+        candidate_hash="cafebabe",
+        incumbent_metrics=_completed(),
+        incumbent_detail=_detail(_smooth(60, seed=33)),
+        incumbent_hash="deadbeef",
+    )
+    for component in ("comparison", "profitability"):
+        assert readings[component]["status"] == "failed"
+        assert "KeyError" in readings[component]["reason"]
+        assert readings[component]["sentence"].startswith(f"The {component} reading could not be computed")
+
+
+def test_an_incumbent_admission_crash_is_a_failed_comparison_not_an_unavailable_one() -> None:
+    malformed = {"daily_equity": []}
+    readings = development_readings(
+        objective="sharpe_ratio",
+        window=_window_for(60),
+        candidate_metrics=_completed(),
+        candidate_detail=_detail(_smooth(60, seed=34)),
+        candidate_hash="cafebabe",
+        incumbent_metrics=_completed(),
+        incumbent_detail=malformed,
+        incumbent_hash="deadbeef",
+    )
+    assert readings["comparison"]["status"] == "failed"
+    assert "KeyError" in readings["comparison"]["reason"]
+    # The fit's own profitability is untouched by the incumbent's crash.
+    assert readings["profitability"]["status"] == "measured"
+
+
+def test_an_unsupported_stored_status_says_why_it_is_unavailable() -> None:
+    normalized = stored_chance({"chance": {"comparison": {"status": "from_the_future"}, "profitability": None}})
+    assert normalized["comparison"]["status"] == "missing"
+    assert normalized["comparison"]["code"] == "unsupported"
+    assert "from_the_future" in normalized["comparison"]["reason"]
+    assert normalized["profitability"]["code"] == "not_measured"
+    assert "profitability readings were first recorded" in normalized["profitability"]["reason"]

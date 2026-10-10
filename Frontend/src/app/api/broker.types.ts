@@ -14374,6 +14374,11 @@ export interface components {
              */
             reason: string;
             /**
+             * Sentence
+             * @description The operator sentence for the failure; Python writes it, the browser only displays it.
+             */
+            sentence: string;
+            /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */

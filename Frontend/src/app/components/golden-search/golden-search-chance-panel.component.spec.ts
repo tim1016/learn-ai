@@ -58,12 +58,25 @@ describe('GoldenSearchChancePanelComponent', () => {
     expect(screen.getByText('Not measured for this study.')).toBeTruthy();
   });
 
-  it('surfaces a diagnostic failure loudly, never silently', async () => {
+  it('surfaces a diagnostic failure loudly for both components, in Python’s words, never silently', async () => {
     await renderPanel({
-      comparison: { status: 'failed', reason: 'RuntimeError: chance computation exploded' },
-      profitability: { status: 'failed', reason: 'RuntimeError: chance computation exploded' },
+      comparison: {
+        status: 'failed',
+        reason: 'RuntimeError: chance computation exploded',
+        sentence: 'The comparison reading could not be computed and nothing was stored: RuntimeError: chance computation exploded.',
+      },
+      profitability: {
+        status: 'failed',
+        reason: 'RuntimeError: chance computation exploded',
+        sentence: 'The profitability reading could not be computed and nothing was stored: RuntimeError: chance computation exploded.',
+      },
     });
-    expect(screen.getByRole('alert').textContent).toContain('chance computation exploded');
+    const alerts = screen.getAllByRole('alert');
+    expect(alerts).toHaveLength(2);
+    expect(alerts.map((alert) => alert.textContent)).toEqual([
+      'The comparison reading could not be computed and nothing was stored: RuntimeError: chance computation exploded.',
+      'The profitability reading could not be computed and nothing was stored: RuntimeError: chance computation exploded.',
+    ]);
   });
 
   it('passes an accessibility audit in its measured state', async () => {

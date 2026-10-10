@@ -19,7 +19,7 @@
           }
         </ul>
         @if (m.incomplete_support) {
-          <p class="undefined-note">{{ count(m.counts.undefined) }} of {{ count(m.basis.replications) }} paths left the comparison undefined, so this support is incomplete.</p>
+          <p class="undefined-note">{{ count(m.counts.undefined) }} of {{ count(m.basis.replications) }} path{{ m.counts.undefined === 1 ? '' : 's' }} left the comparison undefined, so this support is incomplete.</p>
         }
       </div>
     </div>
@@ -38,6 +38,8 @@
   }
   @if (profitability(); as p) {
     <p class="money">{{ moneyText() }}</p>
+  } @else if (moneyFailed(); as failed) {
+    <p class="diagnostic" role="alert">{{ failed }}</p>
   } @else if (moneyMissing(); as missing) {
     <p class="money muted">{{ missing }}</p>
   }

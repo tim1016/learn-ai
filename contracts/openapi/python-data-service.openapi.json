@@ -20004,6 +20004,11 @@
             "title": "Reason",
             "type": "string"
           },
+          "sentence": {
+            "description": "The operator sentence for the failure; Python writes it, the browser only displays it.",
+            "title": "Sentence",
+            "type": "string"
+          },
           "status": {
             "const": "failed",
             "title": "Status"
@@ -20011,7 +20016,8 @@
         },
         "required": [
           "status",
-          "reason"
+          "reason",
+          "sentence"
         ],
         "title": "GoldenSearchChanceReadingFailed",
         "type": "object"
