@@ -28,7 +28,13 @@ from app.research.golden_search import repository as repo
 from app.research.golden_search.actions import authorize
 from app.research.golden_search.activity import TradeFloors
 from app.research.golden_search.budget import PROOF_EVALUATIONS
-from app.research.golden_search.chance_compare import development_readings, failed_readings, incumbent_readings
+from app.research.golden_search.chance_compare import (
+    development_readings,
+    failed_component,
+    failed_readings,
+    incumbent_readings,
+)
+from app.research.golden_search.chance_drawdown import drawdown_reading
 from app.research.golden_search.chance_rehearsal import failed_rehearsal, rehearsal_reading
 from app.research.golden_search.concentration import concentration
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, point_hash
@@ -472,7 +478,8 @@ def _chance_records(ctx: StageContext, evaluator: StudyEvaluator, evidences: Seq
     The readings resample detail runs the stage already evaluated, so they spend no engine budget. Candidates that
     chose the same settings share one computed record instead of drawing twice; the incumbent is the baseline and is
     never compared with itself. The rehearsal (#3012) reads the same development evidence and the frozen final
-    interval's *scheduled* length — never any final-period detail, return or outcome.
+    interval's *scheduled* length — never any final-period detail, return or outcome. The drawdown reading (#3013)
+    is each run's own — the incumbent's included — over the source window's own session count.
     """
     incumbent = next((evidence for evidence in evidences if evidence.key == "incumbent"), None)
     if incumbent is None:
@@ -484,11 +491,26 @@ def _chance_records(ctx: StageContext, evaluator: StudyEvaluator, evidences: Seq
     for evidence in evidences:
         if evidence.key == "incumbent":
             try:
-                records.append(incumbent_readings(objective=ctx.protocol.policy.objective, window=ctx.development))
+                record = incumbent_readings(objective=ctx.protocol.policy.objective, window=ctx.development)
             except JobCancelled:
                 raise  # cancellation stops the stage; it is never recorded as a reading
             except Exception as exc:  # a diagnostic failure the stage records; it never fails the evidence itself
-                records.append(failed_readings(exc))
+                record = failed_readings(exc)
+            # The baseline draws its own depth: the incumbent has a drawdown chart of its own (#3013).
+            try:
+                record["drawdown"] = drawdown_reading(
+                    window=ctx.development,
+                    ceiling=ctx.protocol.policy.max_drawdown_ceiling,
+                    metrics=evidence.metrics,
+                    detail=evaluator.detail_of(evidence.point, window=ctx.development),
+                    point_hash=evidence.point_hash,
+                    cancel_check=ctx.cancel_check,
+                )
+            except JobCancelled:
+                raise  # cancellation stops the stage; it is never recorded as a reading
+            except Exception as exc:  # a diagnostic failure the stage records; it never fails the evidence itself
+                record["drawdown"] = failed_component(exc, "drawdown")
+            records.append(record)
             continue
         shared = by_hash.get(evidence.point_hash)
         if shared is None:
@@ -531,6 +553,20 @@ def _chance_records(ctx: StageContext, evaluator: StudyEvaluator, evidences: Seq
                 raise  # cancellation stops the stage; it is never recorded as a reading
             except Exception as exc:  # a diagnostic failure the stage records; it never fails the evidence itself
                 shared["rehearsal"] = failed_rehearsal(exc)
+            # The drawdown component is its own too: it needs this run alone, never the pairing (#3013).
+            try:
+                shared["drawdown"] = drawdown_reading(
+                    window=ctx.development,
+                    ceiling=ctx.protocol.policy.max_drawdown_ceiling,
+                    metrics=evidence.metrics,
+                    detail=evaluator.detail_of(evidence.point, window=ctx.development),
+                    point_hash=evidence.point_hash,
+                    cancel_check=ctx.cancel_check,
+                )
+            except JobCancelled:
+                raise  # cancellation stops the stage; it is never recorded as a reading
+            except Exception as exc:  # a diagnostic failure the stage records; it never fails the evidence itself
+                shared["drawdown"] = failed_component(exc, "drawdown")
             by_hash[evidence.point_hash] = shared
         records.append(shared)
     return records

@@ -61,6 +61,7 @@
 
         <app-golden-search-chance-panel data-span="12" [candidate]="row.candidate" [chance]="row.candidate.chance" />
         <app-golden-search-rehearsal-panel data-span="12" [candidate]="row.candidate" [rehearsal]="row.candidate.chance.rehearsal" />
+        <app-golden-search-drawdown-panel data-span="12" [candidate]="row.candidate" [drawdown]="row.candidate.chance.drawdown" />
 
         <app-golden-search-curve-set data-span="12" [study]="s" curves="candidate" [candidate]="row.neighborSource.key" chart="candidate-curves"
           [caption]="curvesCaption()" />

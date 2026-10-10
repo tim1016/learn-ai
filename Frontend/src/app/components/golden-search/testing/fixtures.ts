@@ -5,6 +5,7 @@ import type {
   ChanceBasis,
   ChanceReadings,
   ChanceRehearsalRung,
+  MeasuredChanceDrawdown,
   MeasuredChanceRehearsal,
   DecisionSummary,
   EvidenceCandidate,
@@ -586,12 +587,39 @@ export function chanceProfitability(overrides: Partial<MeasuredChanceProfitabili
   };
 }
 
-/** One fit's development chance readings (#3011, #3012); measured comparison, profitability and rehearsal unless overridden. */
+/** One fit's development chance readings (#3011-#3013); every component measured unless overridden. */
 export function chanceReadings(overrides: Partial<ChanceReadings> = {}): ChanceReadings {
   return {
     comparison: chanceComparison(),
     profitability: chanceProfitability(),
     rehearsal: chanceRehearsal(),
+    drawdown: chanceDrawdown(),
+    ...overrides,
+  };
+}
+
+/** A measured drawdown reading (#3013): a 15.8% 95th-percentile range against a 20% ceiling unless overridden. */
+export function chanceDrawdown(overrides: Partial<MeasuredChanceDrawdown> = {}): MeasuredChanceDrawdown {
+  return {
+    status: 'measured',
+    recorded_close_only: 0.15,
+    recorded_engine_per_bar: 0.164,
+    percentiles: { p50: 0.092, p95: 0.158, finite: 10_000 },
+    counts: { beyond_ceiling: 0, within_ceiling: 10_000, undefined: 0 },
+    shares: { beyond_ceiling: 0, within_ceiling: 1, undefined: 0 },
+    sentence: 'The 95th percentile of resampled session-close falls is 15.8%, within the 20% ceiling.',
+    concern: false,
+    basis: {
+      schema_version: 'golden-search-chance-drawdown/v1',
+      convention: 'stationary-bootstrap/v1',
+      replications: 10_000,
+      chunk_replications: 1_000,
+      mean_block_sessions: 5,
+      thresholds: { ceiling: 0.2 },
+      horizon: { window: { start_ms: DEVELOPMENT_START_MS, end_ms: FINAL_START_MS }, scheduled_sessions: 62 },
+      seed: { inputs: ['golden-search-chance-drawdown/v1', DEVELOPMENT_START_MS, FINAL_START_MS, 'h-all'], value: 424242 },
+      source: { point_hash: 'h-all', series_digest: 'd-all', capital: 100000, recorded_engine_per_bar: 0.164 },
+    },
     ...overrides,
   };
 }
@@ -721,6 +749,15 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
           difference_range: { p5: -0.071, p50: 0.021, p95: 0.118, finite: 9_930 },
         }),
         profitability: chanceProfitability({ label: 'mixed', counts: { positive: 6310, zero: 40, negative: 3650, undefined: 0 }, shares: { positive: 0.631, zero: 0.004, negative: 0.365, undefined: 0 } }),
+        drawdown: chanceDrawdown({
+          recorded_close_only: 0.148,
+          recorded_engine_per_bar: null,
+          percentiles: { p50: 0.121, p95: 0.241, finite: 9_980 },
+          counts: { beyond_ceiling: 1_740, within_ceiling: 8_240, undefined: 20 },
+          shares: { beyond_ceiling: 0.174, within_ceiling: 0.824, undefined: 0.002 },
+          sentence: 'The 95th percentile of resampled session-close falls is 24.1%, beyond the 20% ceiling — a research concern under this model. 17.4% of resamples fall strictly beyond the ceiling and 0.2% leave the fall undefined.',
+          concern: true,
+        }),
         rehearsal: chanceRehearsal({
           rungs: [1, 2, 3, 4].map((k) =>
             rehearsalRung(k, {
@@ -768,6 +805,7 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
         },
         profitability: { status: 'missing', code: 'not_measured', reason: 'The current settings’ own profitability is not measured; every fit’s readings stand against them.' },
         rehearsal: { status: 'missing', code: 'baseline', reason: 'The current settings are the baseline; a rehearsal compares a fit against them, and there is nothing to rehearse.' },
+        drawdown: chanceDrawdown({ recorded_close_only: 0.102, recorded_engine_per_bar: 0.098, percentiles: { p50: 0.064, p95: 0.119, finite: 10_000 } }),
       },
       guidance: { title: 'No change can be the best decision', text: 'Keeping the incumbent is a complete research decision.' },
       flags: [],

@@ -1,0 +1,71 @@
+.sentence {
+  margin: 0 0 0.75rem;
+  color: var(--text);
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+
+  li {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+}
+
+i {
+  flex: none;
+}
+
+.bar {
+  width: 0.9rem;
+  height: 0.45rem;
+
+  &.range {
+    background: var(--chart-series-blue);
+    opacity: 0.5;
+  }
+  &.engine {
+    background: var(--chart-series-teal);
+  }
+  &.ceiling {
+    background: repeating-linear-gradient(90deg, var(--warn) 0 3px, transparent 3px 6px);
+    height: 2px;
+  }
+}
+
+.tick {
+  width: 2px;
+  height: 0.7rem;
+  background: var(--text);
+}
+
+.ring {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  border: 2px solid var(--chart-series-teal);
+}
+
+.muted {
+  color: var(--text-subtle);
+}
+
+.diagnostic {
+  margin: 0;
+  color: var(--bear-text);
+  font-size: 0.875rem;
+}
+
+.caption {
+  margin-top: 0.75rem;
+}
