@@ -314,6 +314,27 @@ async def _row(conn: asyncpg.Connection, study_id: str, key: str) -> asyncpg.Rec
     )
 
 
+async def test_a_retried_start_write_finds_its_own_marker_and_succeeds(conn: asyncpg.Connection) -> None:
+    """#3065 review: the marker write is idempotent under its own generation.
+
+    An uncertain write that committed must read as this run's own marker on
+    the rewrite — never as someone else's row — so the reconciliation the
+    evaluator performs spends nothing. Only a real fence (an advanced
+    generation or a foreign attempt) still refuses.
+    """
+    study = "start-idem-" + unique_symbol().lower()
+    await _bare_study(conn, study)
+    admitted = await repo.reserve_evaluation(conn, study, 1, _new_eval("restarted"), limit=10, retry_allowance=RETRY_ALLOWANCE)
+
+    await repo.start_evaluation(conn, study, 1, "restarted", task_gen=admitted.task_gen)
+    await repo.start_evaluation(conn, study, 1, "restarted", task_gen=admitted.task_gen)  # the rewrite, after the caller stopped waiting
+
+    assert dict(await _row(conn, study, "restarted")) == {
+        "status": "pending", "task_gen": admitted.task_gen, "started": True, "retries": 0,
+    }
+    await repo.complete_evaluation(conn, study, 1, "restarted", metrics=_metrics(), detail=None, task_gen=admitted.task_gen)
+
+
 async def test_the_generation_fence_rejects_late_writes_independently_of_the_attempt_fence(
     conn: asyncpg.Connection,
 ) -> None:

@@ -65,6 +65,7 @@ from app.research.golden_search.selection import Metrics
 from app.research.golden_search.zoom import BudgetExhausted, RetryAllowanceExhausted
 from app.research.grid_search.service import window_dates
 from app.research.persistence.db import run_sync, with_connection
+from app.research.persistence.ownership import GenerationFencedError
 from app.research.sweep.daily_equity import daily_equity
 from app.research.sweep.grid import RunSpec
 from app.schemas.engine_backtest import EngineBacktestRequest, EngineBacktestResponse
@@ -96,6 +97,17 @@ class WorkerLost(RuntimeError):
     replace the worker and continue the same attempt. Distinct from a fenced
     generation (``app.research.persistence.ownership.GenerationFencedError``),
     which nothing may continue.
+    """
+
+
+class IdentityRefusalError(RuntimeError):
+    """The child refused its sealed identity — the runtime is wrong, not lost (#3065 review).
+
+    A deterministic mismatch between the coordinator's sealed code identity
+    and the child's own must fail the stage closed: funnelled into
+    :class:`WorkerLost` it would spend retry allowance per evaluation and end
+    as fabricated ``retry allowance exhausted`` evidence for work that never
+    ran. The evaluator catches nothing here — it propagates.
     """
 
 
@@ -437,9 +449,13 @@ class DeliveredOutcome:
     ``cancelled_by`` carries the cancellation an execution observed — the
     evaluator releases that reservation and re-raises it, and nothing is
     persisted for the item (the synthetic ``result`` placeholder is never
-    recorded). A batch member with no outcome at all never ran. The attempt
-    and task generation travel with the outcome so the evaluator can discard
-    a late delivery in memory before the store's fences ever see it (#3045).
+    recorded). ``lost_reason`` carries one item's worker loss the same way
+    (#3066 review): a pool delivers it instead of raising, so the evaluator
+    re-admits only that item while healthy siblings keep delivering — the
+    placeholder result is never recorded. A batch member with no outcome at
+    all never ran. The attempt and task generation travel with the outcome so
+    the evaluator can discard a late delivery in memory before the store's
+    fences ever see it (#3045).
     """
 
     key: str
@@ -447,6 +463,7 @@ class DeliveredOutcome:
     task_gen: int
     result: EvaluationResult
     cancelled_by: Exception | None = None
+    lost_reason: str | None = None
 
 
 BatchDispatch = Callable[
@@ -458,18 +475,21 @@ BatchDispatch = Callable[
 An adapter executes ``run`` for the admitted batch and delivers one outcome
 per admitted key — a cancellation is *delivered* as ``cancelled_by``, never
 raised out of the adapter, so the evaluator can release every unrecorded
-reservation. The evaluator records each outcome before it asks for the
-next, so a production adapter keeps at most its configured window of items
-begun-but-undelivered — one, for the serial runtime (#3044); a bounded few,
-for a worker pool (#3046) — and a crash mid-batch keeps every outcome
-already delivered. Arrival order is free; logical order is the evaluator's.
-A :class:`WorkerLost` raised mid-batch interrupts it for the
-evaluator's bounded re-admission — the adapter must be callable again with a
-replaced worker. An adapter that owns execution resources (a spawned child)
-exposes ``close()``, which the stage calls on every exit; plain callable
-adapters need none. A documented test adapter (``reordered_dispatch``) may
-trade the window away entirely to permute delivery, keeping only the
-begin-before-engine-work half.
+reservation; a per-item worker loss may be delivered as ``lost_reason`` the
+same way, leaving healthy siblings in flight (#3066 review). The evaluator
+records each outcome before it asks for the next, so a production adapter
+keeps at most its configured window of items begun-but-undelivered — one,
+for the serial runtime (#3044); a bounded few, for a worker pool (#3046) —
+and a crash mid-batch keeps every outcome already delivered. Arrival order
+is free; logical order is the evaluator's. A :class:`WorkerLost` raised
+mid-batch interrupts it for the evaluator's bounded re-admission — the
+adapter must be callable again with a replaced worker. An adapter that owns
+execution resources (a spawned child) exposes ``close()``, which the stage
+calls on every exit, and ``cancel()``, which the evaluator calls before its
+durable release reconciliation on a cancellation so the children never wait
+out that reconciliation; plain callable adapters need neither. A documented
+test adapter (``reordered_dispatch``) may trade the window away entirely to
+permute delivery, keeping only the begin-before-engine-work half.
 """
 
 
@@ -613,12 +633,19 @@ class StudyEvaluator:
                     continue
                 handled.add(key)
                 admitted.append(self._ready(key, reservation.task_gen, point, digest, window=window, stage=stage, fold_index=fold_index, scenario=scenario, detail=detail))
-        except BaseException:
+        except (JobCancelled, GenerationFencedError):
             # An interruption before dispatch leaves the admitted prefix
             # pending with no start marker; a later reserve_evaluation would
             # read those never-run rows as crashed executions and burn their
-            # retry allowance. Release them — the same never-ran semantics
-            # the start markers enforce during dispatch (#3040, #3045).
+            # retry allowance. The adapter's children — idle since the last
+            # batch, but alive — stop before the release writes reconcile
+            # (#3065 review). Release them: the same never-ran semantics the
+            # start markers enforce during dispatch (#3040, #3045).
+            self._stop_dispatch()
+            for item in admitted:
+                self._release(item.key, item.task_gen)
+            raise
+        except BaseException:
             for item in admitted:
                 self._release(item.key, item.task_gen)
             raise
@@ -690,8 +717,29 @@ class StudyEvaluator:
         )
 
     def _begin(self, key: str, task_gen: int) -> Callable[[], None]:
-        """The start-marker write an adapter triggers immediately before an item's engine work (#3045)."""
-        return lambda: run_sync(with_connection(repo.start_evaluation, self.study_id, self.attempt, key, task_gen=task_gen))
+        """The start-marker write an adapter triggers immediately before an item's engine work (#3045).
+
+        An uncertain write reconciles by rewriting (#3065 review): the
+        statement is idempotent under the fence, so a delayed commit lands as
+        this key's own marker — no retry spent, nothing re-ran — and a
+        rollback writes it now. A second stall is a dead database and
+        propagates, the row still honestly un-started.
+        """
+
+        def write() -> None:
+            run_sync(with_connection(repo.start_evaluation, self.study_id, self.attempt, key, task_gen=task_gen))
+
+        def begin() -> None:
+            try:
+                write()
+            except CallerStoppedWaitingError:
+                logger.warning(
+                    "golden search start-marker write uncertain; rewriting the idempotent marker",
+                    extra={"action": "golden_search_start_reconciled", "study_id": self.study_id, "evaluation_key": key},
+                )
+                write()
+
+        return begin
 
     def _ready(
         self,
@@ -766,6 +814,19 @@ class StudyEvaluator:
             self._details[key] = payload
         self.on_evaluated(self.new_runs + self.cache_hits)
 
+    def _stop_dispatch(self) -> None:
+        """Reap the adapter's execution resources before durable reconciliation (#3065 review).
+
+        A cancellation raised in this frame — delivered as an outcome, or
+        raised by a poll outside the adapter — never runs the adapter's own
+        handlers, so its children would otherwise stay alive through the
+        release writes below. An adapter without a ``cancel`` owns nothing
+        to stop.
+        """
+        stop = getattr(self.dispatch, "cancel", None)
+        if stop is not None:
+            stop()
+
     def _release(self, key: str, task_gen: int) -> None:
         """Leave a cancelled run's row pending, marked so the next attempt re-runs it without spending a retry."""
         try:
@@ -790,11 +851,13 @@ class StudyEvaluator:
         adapter keeps at most its configured window begun-but-undelivered
         (#3045 made the window one, #3046 lets a bounded pool widen it), so a
         crash mid-batch keeps every delivered outcome and loses at most the
-        window. A worker lost with work in flight interrupts the
-        batch — not the attempt: the unfinished items re-admit under advanced
-        task generations (the started one spends a retry, the never-started
-        re-run free), the adapter replaces its worker, and the batch
-        continues; replacements without durable progress stop after the retry
+        window. A worker lost with work in flight re-admits exactly the lost
+        item — delivered as ``lost_reason`` by a pool, whose healthy siblings
+        keep delivering, or raised whole by a serial adapter, whose single
+        in-flight item is the only thing outstanding — under an advanced task
+        generation (the started one spends a retry, the never-started re-run
+        free), the adapter replaces its worker, and the batch continues;
+        replacements without durable progress stop after the retry
         allowance, and each item's runs stay bounded by it. Logical
         consumption is by full evaluation key, so arrival order never
         reaches the caller.
@@ -803,36 +866,76 @@ class StudyEvaluator:
         replacements = 0
         while outstanding:
             progressed = False
+            exhausted: str | None = None
+            # The objects this round entered with: a loss marker resolves its
+            # key by REPLACING the item (a fresh generation), so a round that
+            # ended with only replacements outstanding re-dispatches rather
+            # than breaching — the guard fires on untouched items alone.
+            entered = dict(outstanding)
             try:
-                for outcome in (self.dispatch or serial_dispatch)(self._run, list(outstanding.values())):
-                    item = outstanding.get(outcome.key)
-                    if item is None or outcome.attempt != self.attempt or outcome.task_gen != item.task_gen:
-                        # Late output from a cancelled, timed-out or replaced dispatch:
-                        # the store's attempt and task-generation fences would refuse
-                        # it; discard it here, explicitly, and let the owed outcome land (#3045).
-                        logger.warning(
-                            "golden search discarded a stale delivered outcome",
-                            extra={
-                                "action": "golden_search_stale_outcome_discarded",
-                                "study_id": self.study_id,
-                                "evaluation_key": outcome.key,
-                                "outcome_attempt": outcome.attempt,
-                                "outcome_task_gen": outcome.task_gen,
-                            },
-                        )
-                        continue
-                    if outcome.cancelled_by is not None:
-                        raise outcome.cancelled_by
-                    self._persist(outcome, results, detail=detail)
-                    del outstanding[outcome.key]
-                    progressed = True
-                if outstanding:
-                    raise RuntimeError("the dispatch adapter ended without delivering an outcome for every admitted key")
+                outcomes = (self.dispatch or serial_dispatch)(self._run, list(outstanding.values()))
+                try:
+                    for outcome in outcomes:
+                        item = outstanding.get(outcome.key)
+                        if item is None or outcome.attempt != self.attempt or outcome.task_gen != item.task_gen:
+                            # Late output from a cancelled, timed-out or replaced dispatch:
+                            # the store's attempt and task-generation fences would refuse
+                            # it; discard it here, explicitly, and let the owed outcome land (#3045).
+                            logger.warning(
+                                "golden search discarded a stale delivered outcome",
+                                extra={
+                                    "action": "golden_search_stale_outcome_discarded",
+                                    "study_id": self.study_id,
+                                    "evaluation_key": outcome.key,
+                                    "outcome_attempt": outcome.attempt,
+                                    "outcome_task_gen": outcome.task_gen,
+                                },
+                            )
+                            continue
+                        if outcome.lost_reason is not None:
+                            # One item's worker was lost (#3066 review): re-admit only
+                            # it, never the siblings still delivering elsewhere. The
+                            # re-admitted item rejoins through the next dispatch round.
+                            reservation = self._reserve_item(item)
+                            if reservation.kind == "cached":
+                                self._serve_cached(outcome.key, reservation, results, detail=detail)
+                                del outstanding[outcome.key]
+                                replacements = 0
+                            else:
+                                outstanding[outcome.key] = self._rereadied(item, reservation.task_gen)
+                                replacements += 1
+                                if replacements > RETRY_ALLOWANCE:
+                                    # Consecutive replacements bought no durable progress:
+                                    # stop trusting the runtime and leave the honest pending
+                                    # rows for Finish. The per-item bound is the retry
+                                    # allowance, spent by reserve_evaluation as each
+                                    # started run re-admits.
+                                    exhausted = outcome.lost_reason
+                                    break
+                            continue
+                        if outcome.cancelled_by is not None:
+                            raise outcome.cancelled_by
+                        self._persist(outcome, results, detail=detail)
+                        del outstanding[outcome.key]
+                        replacements = 0
+                        progressed = True
+                    if outstanding and exhausted is None and any(outstanding.get(key) is item for key, item in entered.items()):
+                        raise RuntimeError("the dispatch adapter ended without delivering an outcome for every admitted key")
+                finally:
+                    # Close the round's adapter deterministically, not by garbage
+                    # collection: an adapter holding execution resources frees them
+                    # (a pool's window permits among them) the moment the round is
+                    # abandoned, never at the interpreter's pleasure (#3066 review).
+                    close = getattr(outcomes, "close", None)
+                    if close is not None:
+                        close()
             except JobCancelled:
                 # A cancellation — delivered, or raised by an adapter that breaks
-                # the deliver-never-raise contract — releases every unrecorded
-                # reservation, exactly the keys the interleaved loop never
-                # reserved (#3040).
+                # the deliver-never-raise contract — stops the children first
+                # (#3065 review: the slot must not wait out the reconciliation),
+                # then releases every unrecorded reservation, exactly the keys
+                # the interleaved loop never reserved (#3040).
+                self._stop_dispatch()
                 for key, pending_item in outstanding.items():
                     self._release(key, pending_item.task_gen)
                 raise
@@ -843,11 +946,9 @@ class StudyEvaluator:
                 # resolve nothing count toward giving up (#3045).
                 replacements = 0 if (progressed or resolved) else replacements + 1
                 if replacements > RETRY_ALLOWANCE:
-                    # Consecutive replacements bought no durable progress: stop
-                    # trusting the runtime and leave the honest pending rows for
-                    # Finish. The per-item bound is the retry allowance,
-                    # spent by reserve_evaluation as each started run re-admits.
                     raise
+            if exhausted is not None:
+                raise WorkerLost(exhausted)
 
     def _readmit(
         self, outstanding: Mapping[str, ReadyEvaluation], results: dict[str, Metrics], *, detail: bool

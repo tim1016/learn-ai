@@ -422,11 +422,12 @@ def _gated_stage_work(req: GoldenSearchJobRequest):
             # dedicated lock connection dies, a successor can already claim
             # the next generation, so this worker stops instead of renewing
             # a lease for a generation it no longer owns. Fired between
-            # evaluations and on every stage-level poll; fencing inside a
-            # single engine run waits for the child's advancing checkpoints
-            # (#3045). A fenced generation is terminal — nothing may replace
-            # the worker and continue — where a lost worker is retryable, so
-            # this is not WorkerLost (#3045).
+            # evaluations, on every stage-level poll, and by run_task's own
+            # cadence while a child's task runs, so the child is killed
+            # mid-run instead of renewing until the task returns (#3045,
+            # #3065 review). A fenced generation is terminal — nothing may
+            # replace the worker and continue — where a lost worker is
+            # retryable, so this is not WorkerLost (#3045).
             base_cancel()
             if not authority.connected:
                 raise GenerationFencedError("coordinator authority connection lost mid-run; the generation is fenced")

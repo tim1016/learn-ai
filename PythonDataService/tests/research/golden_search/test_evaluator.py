@@ -446,6 +446,7 @@ class _ReservationBridge:
         self.consumed = 0
         self.rows: dict[str, dict] = {}
         self.reserved: list[str] = []
+        self.started: list[str] = []
         self.completed: list[str] = []
         self.released: list[str] = []
         # (key, task_gen) pairs whose complete call raised CallerStoppedWaitingError.
@@ -455,6 +456,9 @@ class _ReservationBridge:
         # Keys whose first reserve call raised CallerStoppedWaitingError — "commit"
         # applies the insert, "rollback" applies nothing, "stall" keeps stalling.
         self.uncertain_reserve: dict[str, str] = {}
+        # Keys whose first start call raised CallerStoppedWaitingError — "commit"
+        # applies the marker, "rollback" applies nothing, "stall" keeps stalling.
+        self.uncertain_start: dict[str, str] = {}
 
     def precomplete(self, key: str, metrics: Metrics) -> None:
         self.rows[key] = {"status": "completed", "attempt": 0, "detail": None, "metrics": metrics, "task_gen": 0, "started_at": None, "retries": 0}
@@ -512,9 +516,18 @@ class _ReservationBridge:
         return SimpleNamespace(kind="run", task_gen=row["task_gen"])
 
     async def start(self, conn, study_id, attempt, key, *, task_gen):
-        row = self.rows[key]
-        if row["status"] != "pending" or row["attempt"] != attempt or row["task_gen"] != task_gen:
+        row = self.rows.get(key)
+        if row is None or row["status"] != "pending" or row["attempt"] != attempt or row["task_gen"] != task_gen:
             raise StaleAttemptError(f"evaluation {key} is not pending under attempt {attempt} task generation {task_gen}")
+        if key in self.uncertain_start:
+            # The in-flight marker write's fate: it applies (a delayed commit) or not.
+            fate = self.uncertain_start.pop(key)
+            if fate == "commit":
+                row["started_at"] = 1
+            if fate == "stall":
+                self.uncertain_start[key] = fate
+            raise CallerStoppedWaitingError(f"still running after 60s; the caller stopped waiting ({key})")
+        self.started.append(key)
         row["started_at"] = 1
 
     async def replace(self, conn, study_id, attempt, key, *, task_gen):
@@ -758,3 +771,46 @@ def test_capability_is_checked_before_any_reservation_or_dispatch(monkeypatch: p
         evaluator.evaluate([_point(0.1)], window=outside, stage="search")
 
     assert bridge.reserved == [] and engine.ran == []
+
+
+def test_an_uncertain_start_marker_reconciles_without_spending_a_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3065 review: a stalled marker write is rewritten, never left to burn allowance later.
+
+    A commit that landed after the caller stopped waiting must read as this
+    run's own marker (no retry, no re-run); a rollback is written by the
+    retry. Either fate, the engine runs once and the row records zero
+    retries.
+    """
+    for fate in ("commit", "rollback"):
+        engine, bridge = _EngineSpy(), _ReservationBridge(limit=10)
+        evaluator = _seamed_evaluator(monkeypatch, engine, bridge)
+        key = _key_of(evaluator, _point(0.1))
+        bridge.uncertain_start[key] = fate
+
+        metrics = evaluator.evaluate([_point(0.1)], window=JAN, stage="search")
+
+        assert metrics[0].net_profit == 0.1
+        assert engine.ran == [0.1], f"{fate}: the engine ran once, after the reconciled marker"
+        assert bridge.rows[key]["retries"] == 0, f"{fate}: no retry spent on a run that began"
+        assert key in bridge.started, f"{fate}: the rewrite reached the store"
+
+
+def test_a_start_marker_that_keeps_stalling_fails_honestly_unstarted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A dead database propagates; the row stays never-started, so a later attempt re-runs it free."""
+    engine, bridge = _EngineSpy(), _ReservationBridge(limit=10)
+    evaluator = _seamed_evaluator(monkeypatch, engine, bridge)
+    key = _key_of(evaluator, _point(0.1))
+    bridge.uncertain_start[key] = "stall"
+
+    with pytest.raises(CallerStoppedWaitingError):
+        evaluator.evaluate([_point(0.1)], window=JAN, stage="search")
+
+    assert engine.ran == [], "nothing executed behind a marker that never landed"
+    assert bridge.rows[key]["started_at"] is None, "the row never claims a begun run"
+    assert bridge.rows[key]["retries"] == 0
+
+    bridge.uncertain_start.pop(key, None)
+    metrics = evaluator.evaluate([_point(0.1)], window=JAN, stage="search")
+
+    assert metrics[0].net_profit == 0.1, "the never-started row re-ran free, without spending a retry"
+    assert bridge.rows[key]["retries"] == 0

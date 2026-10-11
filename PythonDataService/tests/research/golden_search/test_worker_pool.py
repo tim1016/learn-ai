@@ -67,18 +67,23 @@ class _FakeChild:
 
     Speaks exactly the parent-side protocol the pool uses: ``run_task``
     returns the child's result/failed message (or raises ``WorkerLost``),
-    ``cancel``/``close`` are bookkeeping.
+    ``lost_reason`` reports a between-tasks death, ``cancel``/``close`` are
+    bookkeeping.
     """
 
     def __init__(self, context: WorkerDispatchContext) -> None:
         self.context = context
         self.tasks: list[dict[str, Any]] = []
         self.closed = False
+        self.lost: str | None = None
         self.execute: Callable[[dict[str, Any]], dict[str, Any]] = lambda task: _gap_message(task)
 
     def run_task(self, task: dict[str, Any]) -> dict[str, Any]:
         self.tasks.append(task)
         return self.execute(task)
+
+    def lost_reason(self) -> str | None:
+        return self.lost
 
     def cancel(self) -> None:
         self.closed = True
@@ -275,10 +280,19 @@ def test_a_hung_lane_is_fenced_while_its_sibling_keeps_delivering(monkeypatch: p
         dispatch.close()
 
 
-def test_a_straggler_from_a_superseded_dispatch_never_counts_or_records_twice(
+def test_a_straggler_from_an_interrupted_dispatch_never_counts_or_records_twice(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A lane still in flight when a sibling's loss interrupts the batch: its old-generation outcome arrives late."""
+    """A lane still in flight when the owner cancels: its old-generation outcome arrives late (#3066 review).
+
+    Cancellation is what supersedes a dispatch now — one lane's loss no
+    longer does, because the loss re-admits only its own item while healthy
+    siblings keep delivering. The interrupted lane's twin still finishes
+    first once its re-admitted replacement starts, so the production
+    ordering — straggler before replacement — stays covered.
+    """
+    from app.jobs.progress import JobCancelled
+
     slow_started = threading.Event()
     release_slow = threading.Event()
 
@@ -286,27 +300,32 @@ def test_a_straggler_from_a_superseded_dispatch_never_counts_or_records_twice(
         gap = float(task["point"]["gap"])
         if gap == 0.4 and task["task_gen"] == 1:
             slow_started.set()
-            release_slow.wait(timeout=5.0)  # still running when the loss interrupts the batch
-            # Released by the fresh run's start: the twin has a head start, so it
-            # finishes FIRST — the production ordering, not the kind one.
+            release_slow.wait(timeout=5.0)  # still running when the cancellation interrupts the batch
             return _gap_message(task)
         if gap == 0.4 and task["task_gen"] >= 2:
-            release_slow.set()  # the re-admitted run frees its superseded twin
+            release_slow.set()  # the re-admitted run frees its interrupted twin
             time.sleep(0.05)  # and finishes after it
-        if gap == 0.1 and task["task_gen"] == 1:
-            assert slow_started.wait(timeout=5.0), "the slow lane's run had begun before the loss"
-            raise WorkerLost("a lane died while another's task was still in flight")
         return _gap_message(task)
 
     dispatch, _, _ = _wire_pool(monkeypatch, workers=2, window=2, execute=execute)
+
+    def cancelled() -> None:
+        if slow_started.is_set():
+            raise JobCancelled("cancelled by the owner")
+
+    dispatch._context.cancel_check = cancelled
     try:
         bridge = _ReservationBridge(limit=10)
         evaluator = _seamed_evaluator(monkeypatch, _EngineSpy(), bridge)
         evaluator.dispatch = dispatch
 
-        metrics = evaluator.evaluate([_point(0.1), _point(0.4), _point(0.2)], window=JAN, stage="search")
+        with pytest.raises(JobCancelled):
+            evaluator.evaluate([_point(0.4), _point(0.1)], window=JAN, stage="search")
 
-        assert [m.net_profit for m in metrics] == [0.1, 0.4, 0.2], "no adapter-breach error: the straggler did not count"
+        dispatch._context.cancel_check = lambda: None
+        metrics = evaluator.evaluate([_point(0.4), _point(0.1)], window=JAN, stage="search")
+
+        assert [m.net_profit for m in metrics] == [0.4, 0.1], "no adapter-breach error: the straggler did not count"
         slow_key = _key_of(evaluator, _point(0.4))
         assert bridge.completed.count(slow_key) == 1, "the superseded generation's outcome was discarded, not recorded"
         assert bridge.rows[slow_key]["task_gen"] >= 2, "the durable row answered to the current generation"
@@ -368,8 +387,8 @@ def test_the_pool_publishes_its_scheduling_facts(monkeypatch: pytest.MonkeyPatch
     assert set(last.as_dict()) == {"ready_width", "workers", "window", "active", "adaptive_wait_ms"}
 
 
-def test_a_loss_with_queued_stale_work_recovers_without_lane_death(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A loss while the window holds un-started items: the epoch discards them, no lane dies, the batch lands (#3046)."""
+def test_a_loss_with_queued_work_recovers_without_lane_death(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A loss while the window holds un-started items: the batch lands, no lane dies, nothing re-runs free of charge (#3046)."""
     lost_once: set[str] = set()
 
     def execute(task: dict[str, Any]) -> dict[str, Any]:
@@ -648,3 +667,259 @@ async def test_two_real_children_overlap_independent_evaluations(conn, tmp_path:
 
     assert overlaps >= 1, "two real children ran independent evaluations at the same time"
     assert widths[4] < widths[1] * 1.5, "width never made the corpus dramatically slower (transport sanity)"
+
+
+# ── #3065/#3066 review regressions ─────────────────────────────────────────
+
+
+def test_one_lanes_loss_charges_no_retry_to_its_in_flight_sibling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3066 review: a lane's loss re-admits only its own item.
+
+    A whole-dispatch supersession would re-reserve the sibling too — its
+    begun row spending retry allowance and its eventual result discarded as
+    a straggler — timing a fabricated failure into the search.
+    """
+    sibling_started = threading.Event()
+
+    def execute(task: dict[str, Any]) -> dict[str, Any]:
+        gap = float(task["point"]["gap"])
+        if gap == 0.1 and task["task_gen"] == 1:
+            sibling_started.wait(timeout=5.0)  # the sibling is mid-run when this lane dies
+            raise WorkerLost("a lane died while its sibling's task was in flight")
+        if gap == 0.2:
+            sibling_started.set()
+            return _gap_message(task)  # finishes normally while the loss is being re-admitted
+        return _gap_message(task)
+
+    dispatch, _, _ = _wire_pool(monkeypatch, workers=2, window=2, execute=execute)
+    try:
+        bridge = _ReservationBridge(limit=10)
+        evaluator = _seamed_evaluator(monkeypatch, _EngineSpy(), bridge)
+        evaluator.dispatch = dispatch
+
+        metrics = evaluator.evaluate([_point(0.1), _point(0.2)], window=JAN, stage="search")
+
+        assert [m.net_profit for m in metrics] == [0.1, 0.2], "the batch completed: loss re-admitted, sibling recorded"
+        lost_key, sibling_key = _key_of(evaluator, _point(0.1)), _key_of(evaluator, _point(0.2))
+        assert bridge.rows[lost_key]["retries"] == 1, "only the lost run spent a retry"
+        assert bridge.rows[sibling_key]["retries"] == 0, "the in-flight sibling was never re-reserved"
+        assert sibling_key in bridge.completed, "the sibling's result was recorded, not discarded"
+    finally:
+        dispatch.close()
+
+
+def test_the_window_bounds_submitted_work_through_delivery_not_queue_capacity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3066 review: begun-but-undurable work stays inside the window.
+
+    The queue bound alone freed capacity the moment a lane dequeued, so
+    fast lanes with slow persistence could begin nearly the whole batch
+    while nothing durable had landed — the exact blast radius the window
+    promised to bound.
+    """
+
+    class _WatchingBridge(_ReservationBridge):
+        def __init__(self, limit: int) -> None:
+            super().__init__(limit)
+            self.spans: list[int] = []
+
+        async def complete(self, conn, *args: Any, **kwargs: Any):
+            time.sleep(0.02)  # the durable write is the slow thing
+            outcome = await super().complete(conn, *args, **kwargs)
+            self.spans.append(len(self.started) - len(self.completed))
+            return outcome
+
+    def execute(task: dict[str, Any]) -> dict[str, Any]:
+        time.sleep(0.005)
+        return _gap_message(task)
+
+    dispatch, _children, _ = _wire_pool(monkeypatch, workers=2, window=2, execute=execute)
+    try:
+        engine, bridge = _EngineSpy(), _WatchingBridge(limit=20)
+        evaluator = _seamed_evaluator(monkeypatch, engine, bridge)
+        evaluator.dispatch = dispatch
+
+        metrics = evaluator.evaluate([_point(gap / 10) for gap in range(1, 9)], window=JAN, stage="search")
+
+        assert [m.net_profit for m in metrics] == [gap / 10 for gap in range(1, 9)], "the whole batch landed"
+        assert bridge.spans and max(bridge.spans) <= 2, (
+            f"begun-but-undurable work stayed inside the window (max span {max(bridge.spans)})"
+        )
+    finally:
+        dispatch.close()
+
+
+def test_spawn_failure_keeps_the_lanes_alive_and_bounds_by_the_allowance(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3066 review: a child that never comes up is a loss, not a dead lane.
+
+    Lanes exiting on spawn failure would strand the next dispatch on an
+    arrival that never comes, instead of exhausting the bounded allowance.
+    """
+
+    def broken_spawn(context: WorkerDispatchContext) -> _FakeChild:
+        raise WorkerLost("the research worker failed to start: no interpreter in the lane")
+
+    monkeypatch.setattr(pool_module, "ResearchWorker", broken_spawn)
+    dispatch = pool_module.PooledWorkerDispatch(WorkerDispatchContext(**CONTEXT), workers=2, window=4)
+    try:
+        bridge = _ReservationBridge(limit=20)
+        evaluator = _seamed_evaluator(monkeypatch, _EngineSpy(), bridge)
+        evaluator.dispatch = dispatch
+
+        with pytest.raises(WorkerLost, match="failed to start"):
+            evaluator.evaluate([_point(0.1), _point(0.2), _point(0.3)], window=JAN, stage="search")
+
+        assert all(lane.is_alive() for lane in dispatch._lanes), "no lane died on a spawn failure"
+    finally:
+        started = time.monotonic()
+        dispatch.close()
+        assert time.monotonic() - started < 5.0, "teardown never waits on a dead dispatch"
+
+
+def test_a_child_spawning_as_the_pool_closes_is_killed_not_published(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3066 review: startup is invisible to close()'s snapshot, so the lane owns the kill."""
+    from datetime import date as date_of
+
+    from app.research.golden_search.evaluator import EvaluationRequest, ReadyEvaluation
+
+    children: list[_FakeChild] = []
+
+    def spawn(context: WorkerDispatchContext) -> _FakeChild:
+        child = _FakeChild(context)
+        children.append(child)
+        dispatch._closing.set()  # the pool closes while this child is still starting
+        return child
+
+    monkeypatch.setattr(pool_module, "ResearchWorker", spawn)
+    dispatch = pool_module.PooledWorkerDispatch(WorkerDispatchContext(**CONTEXT), workers=1, window=2)
+    try:
+        item = ReadyEvaluation(
+            key="k" * 64,
+            attempt=1,
+            task_gen=1,
+            request=EvaluationRequest(
+                point={"symbol": "SPY", "gap": 0.1},
+                point_hash="p" * 64,
+                window=JAN,
+                warmup_from=date_of(2024, 12, 30),
+                scenario=None,
+                detail=False,
+                stage="search",
+                fold_index=None,
+            ),
+        )
+        dispatch._run_one(0, item)
+
+        _key, _task_gen, arrival = dispatch._arrived.get(timeout=1.0)
+        assert isinstance(arrival, WorkerLost), "the closing is reported as the item's loss"
+        assert children[0].closed, "the runaway child was killed before it could begin"
+        assert dispatch._arrived.empty(), "exactly one answer, for exactly one item"
+    finally:
+        dispatch.close()
+    assert dispatch._slots[0] is None, "the corpse was never published to the slot"
+
+
+def test_a_delivered_cancellation_reaps_the_children_before_release_reconciliation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3065 review: a cancellation observed by the child stops every child before the release writes.
+
+    Raising the cancellation in the evaluator's frame never runs the
+    adapter's own handlers, so without the pre-reconciliation reap the
+    children would sit through every stalled release write.
+    """
+    from app.jobs.progress import JobCancelled
+
+    events: list[str] = []
+
+    def spawn(context: WorkerDispatchContext) -> _FakeChild:
+        child = _FakeChild(context)
+        child.execute = lambda task: {"type": "failed", "key": task["key"], "error": "cancelled"}
+
+        def cancel() -> None:
+            child.closed = True
+            events.append("child-stopped")
+
+        child.cancel = cancel
+        return child
+
+    monkeypatch.setattr(pool_module, "ResearchWorker", spawn)
+    dispatch = pool_module.PooledWorkerDispatch(WorkerDispatchContext(**CONTEXT), workers=2, window=2)
+
+    class _SlowReleaseBridge(_ReservationBridge):
+        async def release(self, conn, *args: Any, **kwargs: Any):
+            time.sleep(0.05)  # the durable reconciliation is the slow thing
+            outcome = await super().release(conn, *args, **kwargs)
+            events.append("released")
+            return outcome
+
+    bridge = _SlowReleaseBridge(limit=10)
+    evaluator = _seamed_evaluator(monkeypatch, _EngineSpy(), bridge)
+    evaluator.dispatch = dispatch
+    try:
+        with pytest.raises(JobCancelled):
+            evaluator.evaluate([_point(0.1), _point(0.2), _point(0.3)], window=JAN, stage="search")
+    finally:
+        dispatch.close()
+
+    assert "child-stopped" in events, "the children were told to stop"
+    assert events.index("child-stopped") < events.index("released"), (
+        f"the reap preceded the first release write: {events}"
+    )
+
+
+def test_the_pool_divides_the_shared_cache_budget_across_its_lanes() -> None:
+    """#3066 review: eight lanes at the parity ceiling would consume the whole runtime envelope in caches alone."""
+    from app.research.golden_search.worker import (
+        WORKER_DECODED_CACHE_BYTES,
+        WORKER_DECODED_CACHE_TOTAL_BYTES,
+        pooled_cache_bytes,
+    )
+
+    assert pooled_cache_bytes(1) == WORKER_DECODED_CACHE_BYTES
+    assert pooled_cache_bytes(4) == WORKER_DECODED_CACHE_BYTES
+    assert pooled_cache_bytes(8) * 8 <= WORKER_DECODED_CACHE_TOTAL_BYTES
+
+    context = WorkerDispatchContext(**CONTEXT)
+    dispatch = pool_module.PooledWorkerDispatch(context, workers=8, window=8)
+    dispatch.close()
+    assert context.decoded_cache_bytes == WORKER_DECODED_CACHE_TOTAL_BYTES // 8, (
+        "the shared budget, split across the configured width"
+    )
+
+
+def test_a_child_dead_between_tasks_is_replaced_before_the_next_marker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3065 review: the pool's slot is health-checked too, not only the serial adapter's."""
+    order: list[tuple[str, str]] = []
+    spawned = iter(["first", "second"])
+
+    children: list[_FakeChild] = []
+
+    def spawn(context: WorkerDispatchContext) -> _FakeChild:
+        child = _FakeChild(context)
+        child.name = next(spawned)
+        order.append(("spawn", child.name))
+        children.append(child)
+        answer = child.run_task
+
+        def run_task(task: dict[str, Any]) -> dict[str, Any]:
+            message = answer(task)
+            child.lost = "the research worker exited with code 1"  # dies right after its answer
+            return message
+
+        child.run_task = run_task
+        return child
+
+    monkeypatch.setattr(pool_module, "ResearchWorker", spawn)
+    dispatch = pool_module.PooledWorkerDispatch(WorkerDispatchContext(**CONTEXT), workers=1, window=2)
+    try:
+        engine, bridge = _EngineSpy(), _ReservationBridge(limit=10)
+        evaluator = _seamed_evaluator(monkeypatch, engine, bridge)
+        evaluator.dispatch = dispatch
+
+        metrics = evaluator.evaluate([_point(0.1), _point(0.2)], window=JAN, stage="search")
+
+        assert [m.net_profit for m in metrics] == [0.1, 0.2], "the batch completed through the replacement"
+        assert [name for _, name in order] == ["first", "second"], "the corpse was replaced before the second marker"
+        assert children[0].closed, "the health check closed the dead child"
+        for gap in (0.1, 0.2):
+            assert bridge.rows[_key_of(evaluator, _point(gap))]["retries"] == 0, "no allowance spent on an undispatched run"
+    finally:
+        dispatch.close()
