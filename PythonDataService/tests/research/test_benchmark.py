@@ -235,7 +235,7 @@ def test_a_failed_evaluation_is_rejected_never_recorded_as_a_no_trade_result(lak
 
     with pytest.raises(BaselineExecutionError, match="engine exploded"):
         run_identity(
-            corpus.identities[0], symbol=SYMBOL, data_policy=RAW_DATA_POLICY,
+            corpus.identities[0], data_policy=RAW_DATA_POLICY,
             execute=lambda request, on_phase, manifest: _FailedResponse(),
         )
 

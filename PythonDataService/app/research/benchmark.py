@@ -526,7 +526,6 @@ class BaselineExecutionError(RuntimeError):
 def run_identity(
     identity: CorpusIdentity,
     *,
-    symbol: str,
     execution: Mapping[str, Any] | None = None,
     data_policy: Mapping[str, Any] | None = None,
     data_manifest: Mapping[str, str] | None = None,
@@ -637,11 +636,16 @@ def run_baseline(
             "attributes no worker startup or imports"
         )
     snapshot = capture_data_snapshot(roots=list(roots), symbol=symbol, resolution="minute", data_start=development[0], data_end=development[1])
+    # One materialized policy feeds the corpus identities and every engine
+    # request: passing None on to the engine would let it synthesize its own
+    # legacy policy while the digest hashed the corpus default — the exact
+    # identity/execution split this harness exists to prevent.
+    policy = dict(data_policy) if data_policy is not None else dict(CORPUS_DATA_POLICY)
     corpus = build_corpus(
         symbol=symbol,
         development=development,
         data_snapshot_digest=snapshot.digest(),
-        data_policy=data_policy,
+        data_policy=policy,
         seed=seed,
         full_development_count=full_development_count,
         fold_count=fold_count,
@@ -650,7 +654,7 @@ def run_baseline(
     report = BaselineReport(
         execution_mode=execution_mode,
         timing_mode=timing_mode,
-        environment=environment_identity(snapshot, timing_mode=timing_mode, data_policy=data_policy),
+        environment=environment_identity(snapshot, timing_mode=timing_mode, data_policy=policy),
         corpus={"digest": corpus.digest, "count": len(corpus.identities)},
     )
     execution = _assumptions_dict()
@@ -660,9 +664,8 @@ def run_baseline(
             report.runs.append(
                 run_identity(
                     identity,
-                    symbol=symbol,
                     execution=execution,
-                    data_policy=data_policy,
+                    data_policy=policy,
                     data_manifest=snapshot.artifacts,
                     repetition=repetition,
                     execute=execute,
@@ -696,17 +699,16 @@ def _summarize(runs: Sequence[IdentityRun]) -> tuple[dict[str, float], dict[str,
     by_key: dict[str, list[IdentityRun]] = {}
     for run in runs:
         by_key.setdefault(run.evaluation_key, []).append(run)
+    # Per key and span, the series is only the repetitions that observed the
+    # span — a repetition missing one is a gap that belongs in the report,
+    # not a value copied from a sibling repetition.
     spans: dict[str, list[list[float]]] = {}
     for key_runs in by_key.values():
         spans.setdefault("total", []).append([run.total_ms for run in key_runs])
-        seen: set[str] = set()
-        for run in key_runs:
-            for name, value in run.additive_ms.items():
-                if name not in seen:
-                    spans.setdefault(name, []).append(
-                        [r.additive_ms.get(name, value) for r in key_runs]
-                    )
-                    seen.add(name)
+        for name in {name for run in key_runs for name in run.additive_ms}:
+            spans.setdefault(name, []).append(
+                [run.additive_ms[name] for run in key_runs if name in run.additive_ms]
+            )
     medians = {name: round(statistics.median(statistics.median(series) for series in per_key), 3) for name, per_key in spans.items()}
     variability = {
         name: round(statistics.median(max(series) - min(series) for series in per_key), 3) for name, per_key in spans.items()
@@ -795,8 +797,9 @@ def protocol_width_histogram(trials: Sequence[Mapping[str, Any]], *, stage: str)
         }
         stop = entry["stop"]
         if stop is not None:
-            # The stop trial spreads the procedure's counts into its payload's top level.
-            counts = stop.get("counts") or stop
+            # The stop trial's payload carries the procedure's counts at its
+            # top level (``stages.run_procedure`` spreads them there).
+            counts = stop
             fold_row["accounting"] = {
                 "newly_reserved": counts.get("evaluated"),
                 "cached_or_duplicate": counts.get("cached"),
