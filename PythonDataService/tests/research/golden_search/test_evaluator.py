@@ -452,6 +452,9 @@ class _ReservationBridge:
         self.uncertain: dict[tuple[str, int], str] = {}
         # Keys whose release call raises CallerStoppedWaitingError without marking.
         self.uncertain_release: set[str] = set()
+        # Keys whose first reserve call raised CallerStoppedWaitingError — "commit"
+        # applies the insert, "rollback" applies nothing, "stall" keeps stalling.
+        self.uncertain_reserve: dict[str, str] = {}
 
     def precomplete(self, key: str, metrics: Metrics) -> None:
         self.rows[key] = {"status": "completed", "attempt": 0, "detail": None, "metrics": metrics, "task_gen": 0, "started_at": None, "retries": 0}
@@ -459,6 +462,17 @@ class _ReservationBridge:
     async def reserve(self, conn, study_id, attempt, new, *, limit, retry_allowance):
         from types import SimpleNamespace
 
+        if new.evaluation_key in self.uncertain_reserve:
+            fate = self.uncertain_reserve.pop(new.evaluation_key)
+            self.reserved.append(new.evaluation_key)
+            if fate == "commit":
+                self.consumed += 1
+                self.rows[new.evaluation_key] = {
+                    "status": "pending", "attempt": attempt, "detail": None, "metrics": None, "task_gen": 1, "started_at": None, "retries": 0,
+                }
+            if fate == "stall":
+                self.uncertain_reserve[new.evaluation_key] = fate
+            raise CallerStoppedWaitingError(f"still running after 60s; the caller stopped waiting ({new.evaluation_key})")
         self.reserved.append(new.evaluation_key)
         row = self.rows.get(new.evaluation_key)
         if row is not None and row["status"] != "pending":

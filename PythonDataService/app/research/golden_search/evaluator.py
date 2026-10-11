@@ -461,10 +461,14 @@ raised out of the adapter, so the evaluator can release every unrecorded
 reservation. Delivery is lazy: the evaluator records each outcome before it
 asks for the next, so an adapter must begin an item (``ReadyEvaluation.begin``)
 only when its predecessor's outcome is already consumed, and a crash mid-batch
-keeps the completed prefix. Arrival order is free; logical order is the
-evaluator's. A :class:`WorkerLost` raised mid-batch interrupts it for the
+keeps the completed prefix — a production adapter's rule; a documented test
+adapter (``reordered_dispatch``) may trade the laziness away to permute
+delivery, keeping only the begin-before-engine-work half. Arrival order is
+free; logical order is the evaluator's. A :class:`WorkerLost` raised mid-batch interrupts it for the
 evaluator's bounded re-admission — the adapter must be callable again with a
-replaced worker.
+replaced worker. An adapter that owns execution resources (a spawned child)
+exposes ``close()``, which the stage calls on every exit; plain callable
+adapters need none.
 """
 
 
@@ -498,14 +502,20 @@ def reordered_dispatch(order: Sequence[int]) -> BatchDispatch:
 
     Execution still runs the whole batch in logical order; only delivery is
     permuted, so a test can prove the evaluator's logical consumption, winner
-    selection and accounting never depend on arrival order (#3040).
+    selection and accounting never depend on arrival order (#3040). A test
+    adapter by design: it deliberately gives up lazy delivery — the whole
+    batch computes before any outcome is consumed — keeping only the contract
+    that matters for fencing, one ``begin`` immediately before each item's
+    engine work.
     """
 
     def dispatch(run: Callable[[EvaluationRequest], EvaluationResult], batch: Sequence[ReadyEvaluation]) -> list[DeliveredOutcome]:
-        outcomes = [
-            DeliveredOutcome(key=item.key, attempt=item.attempt, task_gen=item.task_gen, result=run(item.request))
-            for item in batch
-        ]
+        outcomes = []
+        for item in batch:
+            item.begin()
+            outcomes.append(
+                DeliveredOutcome(key=item.key, attempt=item.attempt, task_gen=item.task_gen, result=run(item.request))
+            )
         return [outcomes[index] for index in order]
 
     return dispatch
@@ -721,16 +731,37 @@ class StudyEvaluator:
     def _serve_cached(
         self, key: str, reservation: repo.Reservation, results: dict[str, Metrics], *, detail: bool
     ) -> None:
-        assert reservation.record is not None
-        self.cache_hits += reservation.counted_as_cache_hit
-        results[key] = repo.metrics_of(reservation.record)
+        self._serve_record(key, reservation.record, results, detail=detail, counted_as_cache_hit=reservation.counted_as_cache_hit)
+
+    def _serve_record(
+        self,
+        key: str,
+        record: Any,
+        results: dict[str, Metrics],
+        *,
+        detail: bool,
+        counted_as_cache_hit: int,
+        count_as_run: bool = False,
+    ) -> None:
+        """Serve a row the store already holds — its recorded result, and the accounting the caller names (#3045).
+
+        A reservation answers this way for a cache hit; a reconciled
+        uncertain write answers this way for the delayed commit of this
+        very run's outcome (``count_as_run`` — one completion happened, even
+        though it is nobody's new reservation).
+        """
+        assert record is not None
+        self.cache_hits += counted_as_cache_hit
+        if count_as_run:
+            self.new_runs += 1
+        results[key] = repo.metrics_of(record)
         if detail:
-            payload = reservation.record.detail_json
-            if reservation.record.attempt != self.attempt:
+            payload = record.detail_json
+            if record.attempt != self.attempt:
                 # A row an earlier attempt left is a durable readback —
                 # the resume's only authority, which must still hold
                 # its payload (#3039).
-                payload = require_intact_detail(key, reservation.record.status, payload)
+                payload = require_intact_detail(key, record.status, payload)
             self._details[key] = payload
         self.on_evaluated(self.new_runs + self.cache_hits)
 
@@ -803,17 +834,15 @@ class StudyEvaluator:
                     self._release(key, pending_item.task_gen)
                 raise
             except WorkerLost:
-                replacements = 0 if progressed else replacements + 1
                 outstanding, resolved = self._readmit(outstanding, results, detail=detail)
-                if resolved:
-                    # A readmit that recorded retry-exhausted evidence moved the
-                    # batch forward durably; only replacements that resolve
-                    # nothing count toward giving up (#3045).
-                    replacements = 0
+                # Durable progress — a completion this round, or a readmit that
+                # resolved an item — resets the counter; only replacements that
+                # resolve nothing count toward giving up (#3045).
+                replacements = 0 if (progressed or resolved) else replacements + 1
                 if replacements > RETRY_ALLOWANCE:
                     # Consecutive replacements bought no durable progress: stop
                     # trusting the runtime and leave the honest pending rows for
-                    # Finish (#3045). The per-item bound is the retry allowance,
+                    # Finish. The per-item bound is the retry allowance,
                     # spent by reserve_evaluation as each started run re-admits.
                     raise
 
@@ -879,7 +908,7 @@ class StudyEvaluator:
                 with_connection(repo.replace_generation, self.study_id, self.attempt, outcome.key, task_gen=outcome.task_gen)
             )
             if claim.resolved is not None:
-                self._serve_cached(outcome.key, repo.Reservation(kind="cached", record=claim.resolved, counted_as_cache_hit=0), results, detail=detail)
+                self._serve_record(outcome.key, claim.resolved, results, detail=detail, counted_as_cache_hit=0, count_as_run=True)
                 return None
             # The delayed write is fenced out by the new generation; the same
             # result — no engine re-run, no retry — lands under it. A second

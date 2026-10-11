@@ -39,6 +39,7 @@ from app.research.golden_search.evaluator import (
 from app.research.golden_search.selection import Metrics
 from app.research.persistence import lifecycle, ownership
 from app.research.persistence.fence import StaleAttemptError
+from app.utils.background_loop import CallerStoppedWaitingError
 from app.utils.session_anchors import et_midnight_ms
 from tests._helpers.golden_search_study import (
     Driver,
@@ -609,3 +610,54 @@ async def test_a_real_sigkill_mid_stage_is_replaced_and_its_durable_evaluations_
             record["evaluation_key"],
         )
         assert (after["completed_at_ms"], after["retries"], after["status"]) == (record["completed_at_ms"], record["retries"], "completed")
+
+
+def test_an_uncertain_reservation_that_committed_charges_one_unit_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The before-reservation boundary's write fate: the insert landed after the caller stopped waiting (#3045)."""
+    engine, bridge = _EngineSpy(), _ReservationBridge(limit=10)
+    evaluator = _seamed_evaluator(monkeypatch, engine, bridge)
+    stalled = _key_of(evaluator, _point(0.1))
+    bridge.uncertain_reserve[stalled] = "commit"
+
+    metrics = evaluator.evaluate([_point(0.1), _point(0.2)], window=JAN, stage="search")
+
+    assert [m.net_profit for m in metrics] == [0.1, 0.2]
+    assert bridge.consumed == 2, "the committed reservation's unit is the only one charged for the stalled row"
+    assert engine.ran == [0.1, 0.2], "each evaluation ran once"
+    assert bridge.rows[stalled]["retries"] == 0, "the re-reserve read its own row back: a free re-admission, never a retry"
+
+
+def test_an_uncertain_reservation_that_rolled_back_inserts_exactly_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    engine, bridge = _EngineSpy(), _ReservationBridge(limit=10)
+    evaluator = _seamed_evaluator(monkeypatch, engine, bridge)
+    bridge.uncertain_reserve[_key_of(evaluator, _point(0.1))] = "rollback"
+
+    metrics = evaluator.evaluate([_point(0.1), _point(0.2)], window=JAN, stage="search")
+
+    assert [m.net_profit for m in metrics] == [0.1, 0.2]
+    assert bridge.consumed == 2 and bridge.rows[_key_of(evaluator, _point(0.1))]["retries"] == 0
+
+
+def test_a_second_reservation_stall_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One reconciliation is allowed; a database that stalls twice is dead, not uncertain (#3045)."""
+    engine, bridge = _EngineSpy(), _ReservationBridge(limit=10)
+    evaluator = _seamed_evaluator(monkeypatch, engine, bridge)
+    bridge.uncertain_reserve[_key_of(evaluator, _point(0.1))] = "stall"
+
+    with pytest.raises(CallerStoppedWaitingError):
+        evaluator.evaluate([_point(0.1)], window=JAN, stage="search")
+    assert engine.ran == []
+
+
+def test_an_adapter_that_ends_without_every_outcome_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The contract's one-outcome-per-admitted-key rule is enforced, not assumed (#3045)."""
+    engine, bridge = _EngineSpy(), _ReservationBridge(limit=10)
+
+    def short_dispatch(run, batch):
+        for item in batch[:1]:
+            item.begin()
+            yield DeliveredOutcome(key=item.key, attempt=item.attempt, task_gen=item.task_gen, result=run(item.request))
+
+    evaluator = _seamed_evaluator(monkeypatch, engine, bridge, dispatch=short_dispatch)
+    with pytest.raises(RuntimeError, match="without delivering an outcome"):
+        evaluator.evaluate([_point(0.1), _point(0.2)], window=JAN, stage="search")

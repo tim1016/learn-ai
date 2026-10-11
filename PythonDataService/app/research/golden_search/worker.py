@@ -52,9 +52,9 @@ from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
-# WorkerLost is re-exported for the router and tests: #3045 moved the type to
-# the evaluator, whose retry loop catches it, but its historical home here is
-# what every existing import names.
+# WorkerLost is re-exported for the tests that spawn children directly: #3045
+# moved the type to the evaluator, whose retry loop catches it, but its
+# historical home here is what those imports name.
 
 # The PRD's envelope: readiness/import bound, and the silence bound between
 # real signals. Work itself is unbounded — an evaluation runs as long as it
@@ -455,6 +455,9 @@ class ResearchWorker:
         self._pump.start()
         ready = self._await(lambda: "ready" in self._outcomes or self._lost is not None, timeout_s=STARTUP_BOUND_S)
         if self._lost is not None:
+            # Kill and reap before raising (#3045): a replacement loop will try
+            # again, and each failure must leave nothing behind.
+            self.close()
             raise WorkerLost(f"the research worker failed to start: {self._lost}")
         if not ready:
             self.close()
