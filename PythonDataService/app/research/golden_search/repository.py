@@ -353,6 +353,27 @@ async def bind_dispatch(conn: asyncpg.Connection, study_id: str, *, stage_token:
         return "bound"
 
 
+async def unbind_dispatch(conn: asyncpg.Connection, study_id: str, *, job_id: str) -> str:
+    """Release a binding whose dispatch never reached a worker (#3042).
+
+    The mirror of ``bind_dispatch``'s queued-and-unclaimed precondition:
+    only a study still queued, still holding this exact job id, releases.
+    A stage that began (any other status) keeps its binding — its claim is
+    attempt-fenced elsewhere — and a different job's binding is never
+    touched.
+    """
+    async with conn.transaction():
+        row = await conn.fetchrow(f"SELECT status, job_id FROM {STUDIES} WHERE id = $1 FOR UPDATE", study_id)
+        if row is None:
+            return "not_found"
+        if row["job_id"] != job_id:
+            return "taken"
+        if row["status"] != "queued":
+            return "not_pending"
+        await conn.execute(f"UPDATE {STUDIES} SET job_id = NULL, updated_at_ms = $2 WHERE id = $1", study_id, now_ms_utc())
+        return "released"
+
+
 class StageClaimError(RuntimeError):
     """The stage token or job does not match what the study authorized."""
 

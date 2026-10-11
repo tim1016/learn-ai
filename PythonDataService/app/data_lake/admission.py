@@ -35,6 +35,19 @@ def read_committed_bytes(path: Path) -> bytes:
     root = lake_root_for(path) or lake_root_for(path.resolve())
     if root is None:
         return payload
+    verify_committed_digest(path, root, hashlib.sha256(payload).hexdigest(), len(payload))
+    return payload
+
+
+def verify_committed_digest(path: Path, root: Path, digest: str, size: int) -> None:
+    """Admit a digest another process already read the bytes for (#3044).
+
+    The research worker's coordinator relay: the child read and hashed the
+    artifact; this is the same committed-receipt verdict
+    :func:`read_committed_bytes` reaches, minus the read. Call from a worker
+    thread. Refusal raises the identical taxonomy — per-file
+    :class:`LakeAdmissionError`, outage :class:`CatalogUnavailableError`.
+    """
     try:
         asyncio.get_running_loop()
     except RuntimeError:
@@ -49,12 +62,11 @@ def read_committed_bytes(path: Path) -> bytes:
         marker = read_marker(root.parent.parent)
         if marker is None:
             raise LakeAdmissionError(f"{path}: no root identity for committed lake admission")
-        digest = hashlib.sha256(payload).hexdigest()
 
         async def admitted() -> bool:
             await catalog_client.init_pool()
             return await catalog_client.has_committed_file_receipt(
-                marker.data_root_id, root.name, relative, digest, len(payload),
+                marker.data_root_id, root.name, relative, digest, size,
             )
 
         if not run_on_background_loop(admitted(), timeout=35):
@@ -68,4 +80,3 @@ def read_committed_bytes(path: Path) -> bytes:
         raise catalog_client.CatalogUnavailableError(
             f"{path}: cannot verify committed lake receipt ({type(exc).__name__})"
         ) from exc
-    return payload

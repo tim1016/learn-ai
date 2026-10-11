@@ -457,6 +457,17 @@ async def get_row(study_id: str) -> StudyRow:
     return row
 
 
+async def study_job_binding(study_id: str) -> str | None:
+    """The job id the study row is currently bound to, or ``None`` — the durable truth of acceptance (#3043).
+
+    A forwarding API asks this after a transport timeout: ``bind_dispatch``
+    writes the binding before any work starts, so a row bound to the same
+    job id means the original acceptance stands and the redelivery joins it.
+    """
+    row = await with_connection(repo.get_study, study_id)
+    return None if row is None else row.job_id
+
+
 def _live(row: StudyRow, liveness: Liveness) -> bool | None:
     return liveness(row.job_id) if row.status in LIVE_PRESENTATIONS and row.job_id is not None else False
 
@@ -1033,6 +1044,18 @@ async def bind_dispatch(study_id: str, *, stage_token: str, job_id: str) -> str:
     raise GoldenSearchRefusal("The study has no stage waiting for a worker.", code="NOTHING_PENDING", kind="conflict")
 
 
+async def release_dispatch_binding(study_id: str, *, job_id: str) -> None:
+    """Undo a binding whose dispatch refused before any worker took the job (#3042).
+
+    A stamp refusal after ``bind_dispatch`` would otherwise strand the study
+    on a job id nothing will ever serve: retries read as redeliveries that
+    liveness must refuse. The release is preconditioned exactly like the
+    bind — still queued, still this job id — so a dispatch that did reach a
+    worker is never unbound.
+    """
+    await with_connection(repo.unbind_dispatch, study_id, job_id=job_id)
+
+
 def run_stage(
     study_id: str,
     *,
@@ -1047,6 +1070,7 @@ def run_stage(
     on_progress: Callable[[int, int], None] = lambda done, total: None,
     on_log: Callable[[str], None] = lambda message: None,
     identity: CodeIdentity | None = None,
+    dispatch_factory: Callable[[Any], Any] | None = None,
 ) -> StageOutcome:
     """Run the bound stage on the calling worker thread (``stages.execute_stage``)."""
     return execute_stage(
@@ -1054,6 +1078,7 @@ def run_stage(
         stage_token=stage_token,
         job_id=job_id,
         execute=execute,
+        dispatch_factory=dispatch_factory,
         approval=approval,
         blob_store=blob_store,
         roots=roots,

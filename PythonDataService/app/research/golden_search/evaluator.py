@@ -84,6 +84,92 @@ class CapabilityError(RuntimeError):
     """An evaluation window lies outside every interval this stage may score."""
 
 
+class EvidenceIntegrityError(RuntimeError):
+    """A completed detail evaluation's recorded payload is absent or not the stored shape (#3039)."""
+
+
+# The keys ``detail_payload`` writes; a completed detail row without them cannot feed a reading.
+_DETAIL_REQUIRED_KEYS = ("initial_cash", "daily_equity", "trades")
+
+
+def _is_number(value: object) -> bool:
+    # JSON round-trips every number the payload writes as int or float; a
+    # bool is an int subclass but never a recorded quantity.
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+# The trade scalars the evidence math reads back (``trade_net``,
+# ``concentration``): a mapping without these in the recorded shape is
+# corrupted evidence, and the KeyError it would raise downstream must not
+# surface as an ordinary failed reading (#3039).
+_TRADE_INT_FIELDS = ("entry_ms", "exit_ms")
+_TRADE_NUMBER_FIELDS = ("entry_price", "exit_price", "quantity", "pnl")
+
+
+def _trade_integrity_problem(trade: Mapping[str, Any]) -> str | None:
+    for name in _TRADE_INT_FIELDS:
+        if not isinstance(trade.get(name), int) or isinstance(trade.get(name), bool):
+            return f"a recorded trade's {name} is not an int"
+    for name in _TRADE_NUMBER_FIELDS:
+        if not _is_number(trade.get(name)):
+            return f"a recorded trade's {name} is not a number"
+    pnl_pct = trade.get("pnl_pct")
+    if pnl_pct is not None and not _is_number(pnl_pct):
+        return "a recorded trade's pnl_pct is neither a number nor null"
+    exit_reason = trade.get("exit_reason")
+    if exit_reason is not None and not isinstance(exit_reason, str):
+        return "a recorded trade's exit_reason is neither a string nor null"
+    return None
+
+
+def detail_integrity_problem(detail: object) -> str | None:
+    """What disqualifies a recorded detail payload as evidence, or ``None`` when it holds the required shape."""
+    if not isinstance(detail, Mapping):
+        return "no recorded detail payload"
+    missing = [name for name in _DETAIL_REQUIRED_KEYS if name not in detail]
+    if missing:
+        return f"recorded detail payload is missing {', '.join(missing)}"
+    if not _is_number(detail["initial_cash"]):
+        return "recorded initial_cash is not a number"
+    daily = detail["daily_equity"]
+    if not isinstance(daily, list) or any(
+        not isinstance(point, list)
+        or len(point) != 2
+        or not isinstance(point[0], int)
+        or isinstance(point[0], bool)
+        or not _is_number(point[1])
+        for point in daily
+    ):
+        return "recorded daily_equity is not a list of (session close ms, equity) points"
+    trades = detail["trades"]
+    if not isinstance(trades, list):
+        return "recorded trades is not a list of trade mappings"
+    for trade in trades:
+        if not isinstance(trade, Mapping):
+            return "recorded trades is not a list of trade mappings"
+        trade_problem = _trade_integrity_problem(trade)
+        if trade_problem is not None:
+            return trade_problem
+    return None
+
+
+def require_intact_detail(key: str, status: str, detail: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+    """The payload of a durable detail readback, or an integrity error (#3039).
+
+    A completed evaluation read back from the store — a resume's cache hit or
+    :meth:`StudyEvaluator.detail_of`'s read — must still hold the payload
+    ``detail_payload`` wrote; anything absent or misshapen raises instead of
+    resurfacing as a spurious missing-evidence reading. An in-flight engine
+    outcome never passes through here: the engine producing a run without
+    detail is the protocol's named-missing case, not a failure (#3012).
+    """
+    if status == "completed":
+        problem = detail_integrity_problem(detail)
+        if problem is not None:
+            raise EvidenceIntegrityError(f"evaluation {key}: {problem}")
+    return detail
+
+
 @dataclass(frozen=True)
 class EvaluationCapability:
     """The half-open intervals a stage may score; a window must fit inside one of them."""
@@ -305,6 +391,86 @@ def _failure_message(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
+# ── The ready-batch dispatch seam (#3040) ─────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ReadyEvaluation:
+    """One admitted evaluation a dispatcher receives: fully keyed and attempt-fenced.
+
+    The key is the whole existing evaluation identity — context digest, point
+    hash, window, scenario, detail — never the point hash alone; ``attempt``
+    is the generation every reservation and completion is fenced by. A
+    dispatcher owns only computation: admission, budget and persistence stay
+    with the evaluator.
+    """
+
+    key: str
+    attempt: int
+    request: EvaluationRequest
+
+
+@dataclass(frozen=True)
+class DeliveredOutcome:
+    """One dispatched evaluation's arrived outcome.
+
+    ``cancelled_by`` carries the cancellation an execution observed — the
+    evaluator releases that reservation and re-raises it, and nothing is
+    persisted for the item (the synthetic ``result`` placeholder is never
+    recorded). A batch member with no outcome at all never ran.
+    """
+
+    key: str
+    result: EvaluationResult
+    cancelled_by: Exception | None = None
+
+
+BatchDispatch = Callable[
+    [Callable[[EvaluationRequest], EvaluationResult], Sequence[ReadyEvaluation]],
+    Sequence[DeliveredOutcome],
+]
+"""One ready batch's dispatch contract (#3040).
+
+An adapter executes ``run`` for the admitted batch and returns one outcome
+per admitted key — a cancellation is *delivered* as ``cancelled_by``, never
+raised out of the adapter, so the evaluator can release every unrecorded
+reservation. Arrival order is free; logical order is the evaluator's.
+"""
+
+
+def serial_dispatch(
+    run: Callable[[EvaluationRequest], EvaluationResult], batch: Sequence[ReadyEvaluation]
+) -> list[DeliveredOutcome]:
+    """Today's executor, as the default adapter: one evaluation at a time, in logical order.
+
+    Cancellation stops the walk at the item that observed it — exactly where
+    the interleaved loop stopped before this seam existed (#3040).
+    """
+    outcomes: list[DeliveredOutcome] = []
+    for item in batch:
+        try:
+            outcomes.append(DeliveredOutcome(key=item.key, result=run(item.request)))
+        except JobCancelled as cancel:
+            outcomes.append(DeliveredOutcome(key=item.key, result=EvaluationResult(metrics=Metrics.failed("cancelled")), cancelled_by=cancel))
+            break
+    return outcomes
+
+
+def reordered_dispatch(order: Sequence[int]) -> BatchDispatch:
+    """A deterministic adapter delivering outcomes in ``order`` — no processes, no timing.
+
+    Execution still runs the whole batch in logical order; only delivery is
+    permuted, so a test can prove the evaluator's logical consumption, winner
+    selection and accounting never depend on arrival order (#3040).
+    """
+
+    def dispatch(run: Callable[[EvaluationRequest], EvaluationResult], batch: Sequence[ReadyEvaluation]) -> list[DeliveredOutcome]:
+        outcomes = [DeliveredOutcome(key=item.key, result=run(item.request)) for item in batch]
+        return [outcomes[index] for index in order]
+
+    return dispatch
+
+
 # ── The study evaluator ──────────────────────────────────────────────────
 
 
@@ -327,10 +493,17 @@ class StudyEvaluator:
     execute: ExecuteBacktest
     cancel_check: Callable[[], object] = lambda: None
     on_evaluated: Callable[[int], None] = lambda done: None
+    # The ready-batch adapter (#3040). None — every production caller today —
+    # runs the serial adapter; tests inject ``reordered_dispatch`` to prove
+    # order independence. Production dispatch stays serial until the worker
+    # runtime exists; the gate contract is untouched by this seam.
+    dispatch: BatchDispatch | None = None
     new_runs: int = 0
     cache_hits: int = 0
     _warmups: dict[int, date] = field(default_factory=dict)
-    # Each detail run's bounded evidence, by evaluation key, as recorded or read back from the cache.
+    # Each detail run's bounded evidence, by evaluation key, as recorded by
+    # this instance or read back from the study's durable rows. An optional
+    # cache: ``detail_of`` resolves completed evaluations without it (#3039).
     _details: dict[str, Mapping[str, Any] | None] = field(default_factory=dict)
 
     def warmup_for(self, window_start_ms: int) -> date:
@@ -348,6 +521,18 @@ class StudyEvaluator:
         scenario: StressScenario | None = None,
         detail: bool = False,
     ) -> list[Metrics]:
+        """Evaluate the caller's ready batch, in input order, under the attempt fence.
+
+        Four separated phases (#3040): capability and key preparation, then
+        atomic reservation in serial logical order — the affordable prefix
+        only, stopping at the first unaffordable new identity — then
+        dispatch of exactly that admitted prefix through the batch adapter
+        (serial by default), then fenced persistence and logical consumption
+        in input order as outcomes arrive. Cached and duplicate identities
+        are served during reservation exactly as before and consume the same
+        units. ``BudgetExhausted`` is raised after the admitted prefix is
+        recorded, never instead of it.
+        """
         self.capability.check(window)
         scenario_key = BASE_SCENARIO if scenario is None else scenario.key
         keyed: list[tuple[str, dict[str, Any], str]] = []
@@ -356,81 +541,160 @@ class StudyEvaluator:
             digest = hash_point(self.strategy_key, canonical)
             keyed.append((evaluation_key(self.context_digest, digest, window, scenario_key, detail), canonical, digest))
         results: dict[str, Metrics] = {}
-        for key, point, digest in keyed:
-            if key in results:
-                continue
-            self.cancel_check()
-            reservation = run_sync(
-                with_connection(
-                    repo.reserve_evaluation,
-                    self.study_id,
-                    self.attempt,
-                    repo.NewEvaluation(
-                        evaluation_key=key,
-                        point_hash=digest,
-                        point=point,
-                        window_start_ms=window[0],
-                        window_end_ms=window[1],
-                        scenario=scenario_key,
-                        detail=detail,
-                        stage=stage,
-                        fold_index=fold_index,
-                    ),
-                    limit=self.budget_limit,
-                    retry_allowance=RETRY_ALLOWANCE,
-                )
-            )
-            if reservation.kind == "exhausted":
-                raise BudgetExhausted(f"the study's evaluation budget cannot admit another {stage} evaluation")
-            if reservation.kind == "cached":
-                assert reservation.record is not None
-                self.cache_hits += reservation.counted_as_cache_hit
-                results[key] = repo.metrics_of(reservation.record)
-                if detail:
-                    self._details[key] = reservation.record.detail_json
-                self.on_evaluated(self.new_runs + self.cache_hits)
-                continue
-            try:
-                outcome = self._run(
-                    EvaluationRequest(
-                        point=point,
-                        point_hash=digest,
-                        window=window,
-                        warmup_from=self.warmup_for(window[0]),
-                        scenario=scenario,
-                        detail=detail,
-                        stage=stage,
-                        fold_index=fold_index,
+        admitted: list[ReadyEvaluation] = []
+        handled: set[str] = set()
+        exhausted = False
+        try:
+            for key, point, digest in keyed:
+                if key in handled:
+                    continue
+                self.cancel_check()
+                reservation = run_sync(
+                    with_connection(
+                        repo.reserve_evaluation,
+                        self.study_id,
+                        self.attempt,
+                        repo.NewEvaluation(
+                            evaluation_key=key,
+                            point_hash=digest,
+                            point=point,
+                            window_start_ms=window[0],
+                            window_end_ms=window[1],
+                            scenario=scenario_key,
+                            detail=detail,
+                            stage=stage,
+                            fold_index=fold_index,
+                        ),
+                        limit=self.budget_limit,
+                        retry_allowance=RETRY_ALLOWANCE,
                     )
                 )
-            except JobCancelled:
-                # The row stays pending for Finish; marked cancelled, its re-run does not spend a retry.
-                run_sync(with_connection(repo.release_evaluation, self.study_id, self.attempt, key))
-                raise
+                if reservation.kind == "exhausted":
+                    # The first unaffordable new identity ends the prefix here:
+                    # later points are not searched for cheaper or cached work,
+                    # and nothing beyond this prefix is dispatched (#3040).
+                    exhausted = True
+                    break
+                if reservation.kind == "cached":
+                    assert reservation.record is not None
+                    handled.add(key)
+                    self.cache_hits += reservation.counted_as_cache_hit
+                    results[key] = repo.metrics_of(reservation.record)
+                    if detail:
+                        payload = reservation.record.detail_json
+                        if reservation.record.attempt != self.attempt:
+                            # A row an earlier attempt left is a durable readback —
+                            # the resume's only authority, which must still hold
+                            # its payload (#3039).
+                            payload = require_intact_detail(key, reservation.record.status, payload)
+                        self._details[key] = payload
+                    self.on_evaluated(self.new_runs + self.cache_hits)
+                    continue
+                handled.add(key)
+                admitted.append(
+                    ReadyEvaluation(
+                        key=key,
+                        attempt=self.attempt,
+                        request=EvaluationRequest(
+                            point=point,
+                            point_hash=digest,
+                            window=window,
+                            warmup_from=self.warmup_for(window[0]),
+                            scenario=scenario,
+                            detail=detail,
+                            stage=stage,
+                            fold_index=fold_index,
+                        ),
+                    )
+                )
+        except BaseException:
+            # An interruption before dispatch leaves the admitted prefix
+            # pending with no marker; a later reserve_evaluation would read
+            # those never-run rows as crashed executions and burn their
+            # retry allowance. Release them — the same never-ran semantics
+            # the dispatch guard below enforces (#3040).
+            for item in admitted:
+                run_sync(with_connection(repo.release_evaluation, self.study_id, self.attempt, item.key))
+            raise
+        if admitted:
+            self._dispatch_and_record(admitted, results, detail=detail)
+        if exhausted:
+            raise BudgetExhausted(f"the study's evaluation budget cannot admit another {stage} evaluation")
+        return [results[key] for key, _, _ in keyed]
+
+    def _dispatch_and_record(
+        self, admitted: Sequence[ReadyEvaluation], results: dict[str, Metrics], *, detail: bool
+    ) -> None:
+        """Run the admitted prefix through the adapter and persist outcomes as they arrive.
+
+        Logical consumption is by full evaluation key, so arrival order never
+        reaches the caller: results land in the caller's input order whatever
+        the dispatcher delivered. A cancellation releases the reservation it
+        stopped on and every never-ran member of the batch — the same keys
+        the interleaved loop never reserved (#3040).
+        """
+        try:
+            outcomes = (self.dispatch or serial_dispatch)(self._run, admitted)
+        except JobCancelled:
+            # The adapter contract says a cancellation is delivered, not
+            # raised; this guard keeps an adapter bug from leaving the
+            # batch's reservations pending with no cancellation marker.
+            for item in admitted:
+                run_sync(with_connection(repo.release_evaluation, self.study_id, self.attempt, item.key))
+            raise
+        recorded: set[str] = set()
+        for outcome in outcomes:
+            if outcome.cancelled_by is not None:
+                never_ran = [item.key for item in admitted if item.key not in recorded and item.key != outcome.key]
+                for key in (outcome.key, *never_ran):
+                    run_sync(with_connection(repo.release_evaluation, self.study_id, self.attempt, key))
+                raise outcome.cancelled_by
             run_sync(
                 with_connection(
                     repo.complete_evaluation,
                     self.study_id,
                     self.attempt,
-                    key,
-                    metrics=outcome.metrics,
-                    detail=outcome.detail,
-                    curve=outcome.curve,
+                    outcome.key,
+                    metrics=outcome.result.metrics,
+                    detail=outcome.result.detail,
+                    curve=outcome.result.curve,
                 )
             )
+            recorded.add(outcome.key)
             self.new_runs += 1
-            results[key] = outcome.metrics
+            results[outcome.key] = outcome.result.metrics
             if detail:
-                self._details[key] = outcome.detail
+                self._details[outcome.key] = outcome.result.detail
             self.on_evaluated(self.new_runs + self.cache_hits)
-        return [results[key] for key, _, _ in keyed]
 
     def detail_of(self, point: Mapping[str, Any], *, window: Window) -> Mapping[str, Any] | None:
-        """The detail payload of ``point``'s base-scenario detail run over ``window`` that this evaluator evaluated; None without one."""
+        """The detail payload of ``point``'s base-scenario detail run over ``window``; None without one.
+
+        The local dictionary is an optional cache, not the authority (#3039):
+        a completed evaluation this instance has not evaluated is read back
+        from the study's durable rows by its exact evaluation key — context,
+        point, window, base scenario, detail — without an engine call and
+        without touching budget or retry allowance. A completed row whose
+        payload is absent or not the stored shape raises
+        :class:`EvidenceIntegrityError`; a row that never ran, or whose run
+        failed, is legitimate missing evidence and stays ``None``.
+        """
         digest = hash_point(self.strategy_key, dict(point))
-        return self._details.get(evaluation_key(self.context_digest, digest, window, BASE_SCENARIO, True))
+        key = evaluation_key(self.context_digest, digest, window, BASE_SCENARIO, True)
+        if key not in self._details:
+            record = run_sync(with_connection(repo.get_evaluation, self.study_id, key))
+            if record is None or record.status != "completed":
+                return None
+            self._details[key] = require_intact_detail(key, record.status, record.detail_json)
+        return self._details[key]
 
     def _run(self, request: EvaluationRequest) -> EvaluationResult:
+        # Reservation checks cancellation once per batch up front, so an
+        # adapter that runs items back-to-back would not observe a
+        # cancellation delivered mid-batch; checking here gives every
+        # adapter a pre-execution poll, delivered through the seam as a
+        # cancelled outcome (#3040).
+        self.cancel_check()
         try:
             return self.execute(request)
         except JobCancelled:

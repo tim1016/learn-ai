@@ -96,6 +96,13 @@ services:
       # restart command. Each lane below declares its own service instead.
       FLEET_WORKER_SERVICE: ""
       TRUSTED_HOSTS: localhost,127.0.0.1,test,testserver,python-service,backend,host.containers.internal,host.docker.internal
+      # Research execution routing (#3043): local by default — this process
+      # keeps running research jobs on its own threads. An operator selects
+      # the isolated runtime by setting RESEARCH_EXECUTION_MODE=research in
+      # .env and starting the research profile:
+      #   podman compose ... --profile research up -d research
+      RESEARCH_EXECUTION_MODE: ${RESEARCH_EXECUTION_MODE:-local}
+      RESEARCH_RUNTIME_URL: ${RESEARCH_RUNTIME_URL:-http://research:8000}
     # Per-clerk transport-token maps are secrets: env-file only, never inline.
     # `required: false` because deploy/fleet/env/coordinator.env does not
     # exist yet on a fresh clone — the coordinator has no committed default.
@@ -173,6 +180,69 @@ services:
       FLEET_COMPOSE_FILES: compose.yaml,compose.fleet.dev.yaml
       IBKR_CLIENT_ID: ${FLEET_PAPER_IBKR_CLIENT_ID:-2}
       TRUSTED_HOSTS: localhost,127.0.0.1,alpaca-paper-clerk
+
+  # The isolated research runtime (#3043, PRD #3034 slice 8; ADR 0077): one
+  # process that owns research job execution behind its own cgroup — the
+  # eight-CPU/16-GiB/512-PID qualification envelope. Opt-in per deployment
+  # via the ``research`` profile plus RESEARCH_EXECUTION_MODE=research on the
+  # coordinator; default routing stays serial/local and this container need
+  # not run. No reload branch in the command: the app refuses reload at
+  # startup (#3043), and a shipped reload option would only ever produce
+  # that error.
+  research:
+    profiles: ["research"]
+    build:
+      context: ./PythonDataService
+      target: runtime
+    restart: unless-stopped
+    command: uvicorn app.research_runtime:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 10
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    volumes: !override
+      - ./PythonDataService/app:/app/app:z
+      - ./.git:/app/.git:ro,z
+      - ./PythonDataService/tests/fixtures/golden/manifest.json:/app/tests/fixtures/golden/manifest.json:ro,z
+      - ../Lean/Data:/lean-data:ro,z
+      - ./PythonDataService/lean-cache:/lean-cache:z
+      - ./PythonDataService/cache:/app/cache:z
+      - ./PythonDataService/artifacts:/app/artifacts:z
+      - ./PythonDataService/scripts:/app/scripts:ro,z
+      - ${LEAN_DATA_VOLUME_HOST_PATH:-./data-lake-volume}:/lean-data-writer:rw,z
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8000"
+      # Settings construction requires the key; the runtime never calls the
+      # provider (no fetch, no subscription — its engine reads the lake).
+      POLYGON_API_KEY: ""
+      # This process IS the research runtime: it executes rather than
+      # forwards, claims the coordinator authority at startup, and stamps
+      # every dispatch it accepts with its boot generation (#3042).
+      RESEARCH_EXECUTION_MODE: research
+      RESEARCH_RUNTIME: "1"
+      DATA_PLANE_CONTROL_SECRET: ${DATA_PLANE_CONTROL_SECRET:?Set DATA_PLANE_CONTROL_SECRET in .env before starting the stack}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-local-dev-redis-password}@redis:6379/0
+      POSTGRES_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
+      LEAN_DATA_WRITE_ROOT: /lean-data-writer
+      TRUSTED_HOSTS: localhost,127.0.0.1,test,testserver,research
+    networks:
+      - app-network
+    # The fleet's containment idiom (x-alpaca-clerk-agent above): top-level
+    # limits, never mixed with deploy.resources.limits — this toolchain
+    # rejects the combination. The PRD #3034 qualification envelope for
+    # eight workers; this slice still runs the serial engine inside it, so
+    # the bounds are the container's, not concurrency's.
+    cpus: "8.0"
+    mem_limit: 16g
+    pids_limit: 512
 
 volumes:
   # Default-named → learn-ai_alpaca-fleet-control. Holds fleet/registry.db.

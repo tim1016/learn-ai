@@ -51,6 +51,12 @@ logger = logging.getLogger(__name__)
 # here forever.
 _pools: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncpg.Pool] = weakref.WeakKeyDictionary()
 
+#: Each loop's pool ceiling. Every process holding this module's pools — the
+#: data plane's two loops, each fleet clerk lane's one — reserves up to this
+#: many server connections, and the benchmark's connection inventory counts
+#: them from here rather than pinning its own copy (#3036).
+POOL_MAX_SIZE = 10
+
 
 class CatalogUnavailableError(RuntimeError):
     """The catalog's Postgres is not reachable or not configured.
@@ -79,7 +85,7 @@ async def init_pool() -> None:
         pool = await asyncpg.create_pool(
             settings.POSTGRES_URL,
             min_size=1,
-            max_size=10,
+            max_size=POOL_MAX_SIZE,
             command_timeout=30,
         )
     except OSError as exc:

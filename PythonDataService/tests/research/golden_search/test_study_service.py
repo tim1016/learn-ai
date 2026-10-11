@@ -22,12 +22,14 @@ from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.jobs.progress import JobCancelled
 from app.research.golden_search import repository as repo
 from app.research.golden_search import service
+from app.research.golden_search.declarations import point_hash
 from app.research.golden_search.evaluator import (
     RETRY_ALLOWANCE,
     CapabilityError,
     EvaluationCapability,
     EvaluationRequest,
     EvaluationResult,
+    EvidenceIntegrityError,
     StudyEvaluator,
 )
 from app.research.golden_search.models import GoldenSearchRefusal, StudyRow
@@ -44,6 +46,7 @@ from tests._helpers.golden_search_study import (
     FakeApproval,
     FakeEngine,
     SimulatedCrash,
+    fake_detail,
     plan_request,
     seed_lake,
     smooth_score,
@@ -455,16 +458,52 @@ async def test_finish_after_cancel_replays_from_the_cache_without_spending_twice
         await driver.run(outcome, cancel_check=cancel_after_five)
     stopped = await service.get_row(row.id)
     assert (stopped.state, stopped.status, stopped.incomplete) == ("search_running", "cancelled", True)
-    spent = stopped.consumed_evaluations
 
     resumed = await driver.command(stopped, "finish")
     await driver.run(resumed)
     done = await service.get_row(row.id)
     assert done.state == "awaiting_validation"
     assert done.consumed_evaluations == reference.consumed_evaluations
-    # Every evaluation the cancelled attempt recorded came back from the cache.
-    assert done.cache_hits >= reference.cache_hits + spent
+    # Every evaluation the cancelled attempt recorded came back from the
+    # cache. A reservation cancelled between admission and its run — the
+    # release path the #3040 review added — never produced a result: its
+    # spent unit is not re-charged (the budget equality above) and it
+    # re-runs fresh rather than replaying, so the cache claim is measured
+    # against what was recorded, never what was merely reserved.
+    recorded = await conn.fetchval(
+        "SELECT COUNT(*) FROM research_golden_search_evaluations WHERE study_id = $1 AND attempt = $2 AND status = 'completed'",
+        row.id,
+        stopped.attempt,
+    )
+    assert done.cache_hits >= reference.cache_hits + recorded
     assert done.results["search"]["procedure"] == reference.results["search"]["procedure"]
+
+
+async def test_a_study_whose_batches_arrive_reversed_lands_where_the_serial_reference_lands(
+    conn: asyncpg.Connection, driver: Driver, symbol: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#3040: delivery order never reaches the science. Every ready batch of a
+    real study — zoom rounds, pair-audit cells, the incumbent — is delivered
+    in reverse; the search must land on the same winner, rounds and counts as
+    the serial reference, because logical consumption follows input order."""
+    from app.research.golden_search import evaluator as evaluator_module
+    from app.research.golden_search.evaluator import serial_dispatch
+
+    reference = await driver.advance(await driver.lock(symbol), "continue")
+    monkeypatch.setattr(
+        evaluator_module, "serial_dispatch", lambda run, batch: list(reversed(serial_dispatch(run, batch)))
+    )
+    row = await driver.lock(symbol)
+    await driver.run(await driver.command(row, "continue"))
+
+    done = await service.get_row(row.id)
+    assert done.state == reference.state == "awaiting_validation"
+    assert done.consumed_evaluations == reference.consumed_evaluations
+    assert done.cache_hits == reference.cache_hits
+    assert done.results["search"]["procedure"] == reference.results["search"]["procedure"], (
+        "winner, rounds and tie decisions are the serial reference's"
+    )
+    assert done.results["search"]["counts"] == reference.results["search"]["counts"]
 
 
 async def test_a_crash_between_reservation_and_result_reruns_that_evaluation_without_new_budget(
@@ -478,7 +517,10 @@ async def test_a_crash_between_reservation_and_result_reruns_that_evaluation_wit
         await driver.run(outcome)
     assert type(crashed.value).__name__ == "SimulatedCrash"
     pending = await conn.fetch("SELECT evaluation_key FROM research_golden_search_evaluations WHERE study_id = $1 AND status = 'pending'", row.id)
-    assert len(pending) == 1
+    # The ready batch is reserved before dispatch (#3040), so a crash inside
+    # it leaves the whole admitted prefix pending — the never-ran members
+    # included — where the interleaved loop left only the crashed one.
+    assert len(pending) == 3
     crashed_row = await service.get_row(row.id)
     assert crashed_row.status == "running" and crashed_row.consumed_evaluations == 4
 
@@ -488,12 +530,14 @@ async def test_a_crash_between_reservation_and_result_reruns_that_evaluation_wit
     await driver.run(await driver.command(crashed_row, "finish"))
     done = await service.get_row(row.id)
     assert done.consumed_evaluations == reference.consumed_evaluations
-    retried = await conn.fetchrow(
-        "SELECT status, retries FROM research_golden_search_evaluations WHERE study_id = $1 AND evaluation_key = $2",
+    retried = await conn.fetch(
+        "SELECT status, retries FROM research_golden_search_evaluations WHERE study_id = $1 AND evaluation_key = ANY($2)",
         row.id,
-        pending[0]["evaluation_key"],
+        [record["evaluation_key"] for record in pending],
     )
-    assert (retried["status"], retried["retries"]) == ("completed", 1)
+    assert [(record["status"], record["retries"]) for record in retried] == [("completed", 1)] * 3, (
+        "every pending member of the crashed batch re-ran once, without new budget"
+    )
 
 
 def _moved_identity() -> CodeIdentity:
@@ -1322,6 +1366,186 @@ async def test_candidate_detail_and_the_evaluation_ledger_read_back_after_the_ex
     # One fit (both chose the same settings) and the incumbent.
     final = await service.runs(row.id, group="final")
     assert final["total"] == 2 and all(run["has_curve"] for run in final["rows"])
+
+
+# ── Exam evidence survives evaluator replacement (#3039) ─────────────────
+
+
+def _final_window(row: StudyRow) -> tuple[int, int]:
+    return (row.protocol["final_start_ms"], row.protocol["final_end_ms"])
+
+
+def _replaced_evaluator(row: StudyRow, engine: FakeEngine) -> StudyEvaluator:
+    """A fresh evaluator, as the next stage run builds one: no in-memory detail state."""
+    return StudyEvaluator(
+        study_id=row.id,
+        attempt=row.attempt,
+        strategy_key=row.strategy_key,
+        context_digest=row.receipt["context_digest"],
+        run_up_sessions=int(row.receipt["run_up"]["run_up_sessions"]),
+        capability=EvaluationCapability(allowed=(_final_window(row),)),
+        budget_limit=row.budget_cap,
+        execute=engine,
+    )
+
+
+async def _exam_counts(conn: asyncpg.Connection, study_id: str) -> dict[str, int]:
+    row = await conn.fetchrow(
+        "SELECT consumed_evaluations, cache_hits FROM research_golden_search_studies WHERE id = $1", study_id
+    )
+    return dict(row)
+
+
+async def test_exam_evidence_survives_evaluator_replacement_without_budget_or_engine(
+    conn: asyncpg.Connection, driver: Driver, symbol: str
+) -> None:
+    row = await driver.advance(await driver.to_candidate(symbol), "open_exam", {"acknowledge_final_test": True})
+    fit = (await driver.detail(row))["results"]["exam"]["fits"][0]
+    window = _final_window(row)
+    counts, calls = await _exam_counts(conn, row.id), len(driver.engine.calls)
+
+    payload = await asyncio.to_thread(
+        _replaced_evaluator(await service.get_row(row.id), driver.engine).detail_of, fit["point"], window=window
+    )
+
+    assert payload == fake_detail(window, fit["metrics"]["sharpe_ratio"])
+    again = await asyncio.to_thread(
+        _replaced_evaluator(await service.get_row(row.id), driver.engine).detail_of, fit["point"], window=window
+    )
+    assert again == payload
+    assert len(driver.engine.calls) == calls, "the durable readback runs no engine evaluation"
+    assert await _exam_counts(conn, row.id) == counts, "the durable readback touches neither budget nor cache counters"
+
+
+async def test_a_completed_exam_detail_row_without_its_payload_is_an_integrity_failure(
+    conn: asyncpg.Connection, driver: Driver, symbol: str
+) -> None:
+    row = await driver.advance(await driver.to_candidate(symbol), "open_exam", {"acknowledge_final_test": True})
+    fit = (await driver.detail(row))["results"]["exam"]["fits"][0]
+    window = _final_window(row)
+    fit_hash = point_hash(row.strategy_key, fit["point"])
+    evaluator = _replaced_evaluator(await service.get_row(row.id), driver.engine)
+
+    async def strip(payload_sql: str) -> str:
+        return await conn.execute(
+            f"""
+            UPDATE research_golden_search_evaluations SET detail_json = {payload_sql}
+             WHERE study_id = $1 AND detail AND scenario = 'base' AND status = 'completed'
+               AND point_hash = $2 AND window_start_ms = $3 AND window_end_ms = $4
+            """,
+            row.id,
+            fit_hash,
+            *window,
+        )
+
+    assert (await strip("NULL")).endswith("1"), "the fit's final detail row is the one stripped"
+    with pytest.raises(EvidenceIntegrityError, match="no recorded detail payload"):
+        await asyncio.to_thread(evaluator.detail_of, fit["point"], window=window)
+
+    assert (await strip("'{\"daily_equity\": [], \"trades\": []}'::jsonb")).endswith("1")
+    with pytest.raises(EvidenceIntegrityError, match="initial_cash"):
+        await asyncio.to_thread(evaluator.detail_of, fit["point"], window=window)
+
+    failed = await conn.execute(
+        """
+        UPDATE research_golden_search_evaluations SET status = 'failed', error = 'the worker died', detail_json = NULL
+         WHERE study_id = $1 AND detail AND scenario = 'base' AND point_hash = $2
+           AND window_start_ms = $3 AND window_end_ms = $4
+        """,
+        row.id,
+        fit_hash,
+        *window,
+    )
+    assert failed.endswith("1")
+    assert await asyncio.to_thread(evaluator.detail_of, fit["point"], window=window) is None, (
+        "a failed run's absent payload stays missing evidence"
+    )
+
+
+async def test_exam_readings_after_a_crash_and_finish_match_an_uninterrupted_exam(
+    conn: asyncpg.Connection, driver: Driver, symbol: str
+) -> None:
+    reference_row = await driver.advance(await driver.to_candidate(symbol), "open_exam", {"acknowledge_final_test": True})
+    reference = (await driver.detail(reference_row))["results"]["exam"]
+
+    row = await driver.lock(symbol)
+    row = await driver.advance(row, "continue")
+    row = await driver.advance(row, "continue")
+    outcome = await driver.command(row, "open_exam", {"acknowledge_final_test": True})
+    driver.engine.crash_on_call = len(driver.engine.calls) + 2
+    with pytest.raises(BaseException):
+        await driver.run(outcome)
+    driver.engine.crash_on_call = None
+    interrupted = await service.get_row(row.id)
+    assert (await driver.detail(interrupted))["presented_status"] == "interrupted"
+
+    resumed = await driver.advance(interrupted, "finish")
+    exam = (await driver.detail(resumed))["results"]["exam"]
+    assert [fit["chance"] for fit in exam["fits"]] == [fit["chance"] for fit in reference["fits"]]
+    assert exam["incumbent_metrics"] == reference["incumbent_metrics"]
+    assert (await _exam_counts(conn, row.id))["consumed_evaluations"] == reference_row.consumed_evaluations
+
+
+async def test_a_finish_over_a_completed_row_that_lost_its_payload_fails_instead_of_acknowledging_a_weakness(
+    conn: asyncpg.Connection, driver: Driver, symbol: str
+) -> None:
+    row = await driver.lock(symbol)
+    row = await driver.advance(row, "continue")
+    row = await driver.advance(row, "continue")
+    outcome = await driver.command(row, "open_exam", {"acknowledge_final_test": True})
+    driver.engine.crash_on_call = len(driver.engine.calls) + 2
+    with pytest.raises(BaseException):
+        await driver.run(outcome)
+    driver.engine.crash_on_call = None
+
+    stripped = await conn.execute(
+        """
+        UPDATE research_golden_search_evaluations SET detail_json = NULL
+         WHERE study_id = $1 AND detail AND scenario = 'base' AND status = 'completed'
+           AND window_start_ms = $2 AND window_end_ms = $3
+        """,
+        row.id,
+        *_final_window(row),
+    )
+    assert stripped.endswith("1"), "the crash left a completed final detail row to corrupt"
+
+    with pytest.raises(EvidenceIntegrityError, match="no recorded detail payload"):
+        await driver.run(await driver.command(await service.get_row(row.id), "finish"))
+    failed = await service.get_row(row.id)
+    assert "EvidenceIntegrityError" in (failed.failure_reason or "")
+
+
+async def test_an_isolated_study_freezes_its_protocol_width_histogram(
+    conn: asyncpg.Connection, driver: Driver, symbol: str
+) -> None:
+    """#3036, protocol freeze: one end-to-end study's per-round widths, frozen from its stored trials.
+
+    The study runs isolated on this test's own lake and database — never the
+    active one. The histogram's totals reconcile the stage's own budget
+    accounting, so the frozen widths and the cache/reservation counts cannot
+    drift apart.
+    """
+    from app.research.benchmark import protocol_width_histogram
+
+    row = await driver.advance(await driver.to_candidate(symbol), "open_exam", {"acknowledge_final_test": True})
+    trials = [trial for trial in await repo.list_trials(conn, row.id) if trial["stage"] == "search"]
+
+    histogram = protocol_width_histogram(trials, stage="search")
+
+    rounds = [round_row for fold in histogram["folds"] for round_row in fold["rounds"]]
+    assert rounds, "the search stage's rounds are the freeze's rows"
+    for round_row in rounds:
+        assert round_row["stage"] == "search"
+        assert round_row["sampled"] >= round_row["testable"] >= 0
+        # The per-round cache/reservation widths were captured at the
+        # procedure source; a real study's rounds carry them.
+        assert round_row["ready"] is not None and round_row["ready"] >= round_row["newly_reserved"] >= 0
+    assert histogram["totals"]["testable"] <= histogram["totals"]["sampled"]
+    # The one real cross-check: each fold's rounds' invalid total must equal
+    # that fold's own accounting, and the frozen widths must reconcile.
+    for fold in histogram["folds"]:
+        assert fold["accounting"]["invalid"] == sum(round_row["invalid"] for round_row in fold["rounds"])
+        assert fold["totals"]["reconciled"] is True
 
 
 async def test_a_stage_under_the_checkpoint_contract_renews_only_on_accepted_checkpoints(

@@ -50,13 +50,17 @@ def run_in_thread(
     # loops that check per bar (feature research passes 100, signal engine 50).
     cancel_check_every_n: int = 1,
     thread_name: str | None = None,
+    emit_renews_lease: bool = True,
 ) -> threading.Thread:
     """Spawn a daemon thread that runs ``work(emitter, cancel_check)``.
 
     Wraps the work in the canonical lifecycle:
       * acquires the job's liveness lease on the request path (#1938) — a
         202 implies a held job; the lease is renewed by the worker's own
-        emits and cancellation checks and deleted in the ``finally`` below
+        emits and cancellation checks and deleted in the ``finally`` below.
+        ``emit_renews_lease=False`` is the checkpoint contract's opt-out
+        (#3041/#3043): the research runtime's emits renew nothing, so only
+        accepted execution checkpoints keep the lease alive
       * emits ``job.started`` before the work runs
       * emits ``job.completed`` with the returned value on success
       * emits ``job.cancelled`` if :class:`JobCancelled` was raised
@@ -66,7 +70,7 @@ def run_in_thread(
     it cares about test determinism; production callers fire-and-forget.
     """
 
-    emitter = ProgressEmitter(job_id)
+    emitter = ProgressEmitter(job_id, renews_lease=emit_renews_lease)
     cancel = CancellationCheck(job_id, check_every_n=cancel_check_every_n)
     acquire_lease(job_id)
 

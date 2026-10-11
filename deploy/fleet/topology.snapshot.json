@@ -236,6 +236,8 @@
         "PORT",
         "POSTGRES_URL",
         "REDIS_URL",
+        "RESEARCH_EXECUTION_MODE",
+        "RESEARCH_RUNTIME_URL",
         "TRUSTED_HOSTS",
         "UVICORN_RELOAD",
         "WATCHFILES_FORCE_POLLING"

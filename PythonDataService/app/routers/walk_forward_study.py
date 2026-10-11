@@ -217,6 +217,12 @@ async def delete_walk_forward_study(study_id: str) -> Response:
 @jobs_router.post("/walk-forward-study", status_code=status.HTTP_202_ACCEPTED)
 async def start_walk_forward_study_job(req: WalkForwardStudyJobRequest) -> dict[str, Any]:
     """Launch (or Finish) a study on a worker thread. Returns 202 once the record is durable."""
+    from app.services.research_runtime_client import refuse_forwarded_research_dispatch
+
+    # Research mode never runs this on the API (#3043, ADR 0077): refuse
+    # before any durable record exists, loudly, until the forwarding slice lands.
+    refuse_forwarded_research_dispatch("walk-forward study")
+    await records.refuse_unauthorized_dispatch()
     if req.resume_study_id:
         row = await _load(req.resume_study_id)
         refusal = await to_thread.run_sync(partial(_resume_refusal, row, live=records.liveness(row), verify_data=True))
@@ -243,5 +249,6 @@ async def start_walk_forward_study_job(req: WalkForwardStudyJobRequest) -> dict[
         )
         return {"study_id": outcome.study_id, "status": outcome.status, "verdict": outcome.verdict.as_dict() if outcome.verdict else None}
 
+    await records.stamp_research_dispatch(job_id=req.job_id, kind="walk_forward", record_id=study_id)
     run_in_thread(req.job_id, work, thread_name=f"walk-forward-study-{req.job_id[:8]}", cancel_check_every_n=1)
     return {"job_id": req.job_id, "study_id": study_id, "status": "queued"}

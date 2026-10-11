@@ -49,6 +49,47 @@ def liveness_or_503(row: FencedRecord, *, noun: str) -> bool:
     return live
 
 
+async def refuse_unauthorized_dispatch() -> None:
+    """Refuse a research dispatch before any durable mutation happens (#3042).
+
+    A stamp that refuses after the job is bound strands the binding on a job
+    no worker will serve; this check runs first, so the common refusals —
+    the lock held elsewhere, a dead authority connection — never bind at
+    all. It cannot prove authority survives until the stamp (the stamp on
+    the lock-owning session answers that); it narrows the window.
+    """
+    from app.research.persistence import ownership
+
+    if ownership.dispatch_refused():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="research dispatch refused: another coordinator holds the singleton authority",
+        )
+    authority = ownership.process_authority()
+    if authority is not None and not authority.connected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="research dispatch refused: this coordinator's authority connection was lost",
+        )
+
+
+async def stamp_research_dispatch(*, job_id: str, kind: str, record_id: str) -> None:
+    """Record one research dispatch under the process's runtime authority (#3042).
+
+    503 when a live coordinator elsewhere — or this process's dead authority
+    connection — outranks the dispatch; a no-op under the legacy lifecycle
+    (no authority claimed, no ownership rows, jobs swept as API-owned).
+    """
+    from fastapi import HTTPException
+
+    from app.research.persistence import ownership
+
+    try:
+        await ownership.stamp_dispatch(job_id=job_id, kind=kind, record_id=record_id)
+    except ownership.CoordinatorHeldElsewhere as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+
 def require_live_redelivery(job_id: str, *, noun: str) -> None:
     """A redelivered dispatch is acknowledged only while the first worker still holds the job.
 

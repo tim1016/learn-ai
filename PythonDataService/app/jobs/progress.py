@@ -24,6 +24,8 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Callable, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from typing import Any
 
@@ -390,7 +392,7 @@ ORPHANED_JOB_CODE = "DATA_SERVICE_RESTARTED"
 ORPHANED_JOB_MESSAGE = "the data service restarted while this job was queued or running; its worker did not survive the restart"
 
 
-def fail_jobs_without_a_worker() -> list[str]:
+def fail_jobs_without_a_worker(protected: Callable[[], AbstractSet[str]] | None = None) -> list[str]:
     """At startup, fail every job the active set still calls queued or running.
 
     Every job runs on a thread of this process (``app.jobs.runner.run_in_thread``),
@@ -404,12 +406,32 @@ def fail_jobs_without_a_worker() -> list[str]:
     unreachable, or silent after connecting, is logged and leaves everything
     alone; the service still boots, and every wait is bounded by the pool's
     connect and command timeouts.
-    Returns the ids failed.
+
+    ``protected`` names the jobs this sweep must not touch (#3042): research
+    work owned by a still-live runtime's current boot generation — an API
+    restart does not take a separate research coordinator with it. A protected
+    id is skipped whole (record and lease); if the callable raises, the sweep
+    is abandoned rather than closing what it could not check — an unreachable
+    catalog leaves orphaned records to the 24 h TTL and the next restart,
+    never destroys live work. Returns the ids failed.
     """
+    protected_ids: AbstractSet[str] = frozenset()
+    if protected is not None:
+        try:
+            protected_ids = frozenset(protected())
+        except Exception as exc:
+            logger.warning(
+                "skipping the orphaned-job sweep: research ownership could not be read (%s)",
+                exc,
+                exc_info=True,
+            )
+            return []
     r = get_redis()
     failed: list[str] = []
     try:
         for job_id in sorted(r.smembers(_active_set_key())):
+            if job_id in protected_ids:
+                continue
             if r.hget(_state_key(job_id), "status") in ("queued", "running"):
                 ProgressEmitter(job_id).failed(code=ORPHANED_JOB_CODE, message=ORPHANED_JOB_MESSAGE)
                 failed.append(job_id)
@@ -423,4 +445,34 @@ def fail_jobs_without_a_worker() -> list[str]:
         logger.warning("could not close the jobs left by the previous process: %s", exc, exc_info=True)
     if failed:
         logger.warning("failed %d job(s) whose worker died with the previous process: %s", len(failed), ", ".join(failed))
+    return failed
+
+
+def close_orphaned_job_records(job_ids: AbstractSet[str] | Sequence[str]) -> list[str]:
+    """Close exactly the named jobs' records as orphaned (#3042).
+
+    The generation-scoped companion to :func:`fail_jobs_without_a_worker`:
+    a research runtime that just claimed authority names the jobs of dead
+    older generations, and this closes each — failed record, dropped lease,
+    active-set entry — without touching anything else in the active set.
+    Whether a lost runtime's results committed before it died is #3045's
+    recovery question; this closes the record, never the accounting.
+    """
+    r = get_redis()
+    failed: list[str] = []
+    try:
+        for job_id in sorted(set(job_ids)):
+            if r.hget(_state_key(job_id), "status") in ("queued", "running"):
+                ProgressEmitter(job_id).failed(code=ORPHANED_JOB_CODE, message=ORPHANED_JOB_MESSAGE)
+                failed.append(job_id)
+            else:
+                r.srem(_active_set_key(), job_id)
+            # The worker is gone either way: its lease must not outlive the
+            # record, or the closed job would still look live until the
+            # lease TTL (#1938).
+            r.delete(_lease_key(job_id))
+    except redis.RedisError as exc:
+        logger.warning("could not close the named orphaned jobs: %s", exc, exc_info=True)
+    if failed:
+        logger.warning("failed %d job(s) of dead runtime generations: %s", len(failed), ", ".join(failed))
     return failed
