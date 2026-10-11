@@ -344,6 +344,18 @@ class Settings(BaseSettings):
     # DATA_LAKE_ENABLED flag that used to select between them), so a
     # deployment without POSTGRES_URL has no market data at all.
     POSTGRES_URL: str = ""
+    # Research execution routing (#3043, PRD #3034 slice 8). ``local`` — the
+    # default — keeps every research job on this process's own threads,
+    # exactly as before. ``research`` forwards each research dispatch over
+    # the authenticated internal boundary to the isolated research runtime
+    # (``app.research_runtime:app``, its own container and cgroup); this
+    # process then claims no coordinator authority and starts no research
+    # thread. Opt-in per deployment; both runtimes executing is what the
+    # singleton ownership lock refuses.
+    RESEARCH_EXECUTION_MODE: Literal["local", "research"] = "local"
+    # Where the isolated research runtime answers (``http://research:8000``),
+    # read only when RESEARCH_EXECUTION_MODE=research.
+    RESEARCH_RUNTIME_URL: str = ""
     # Issue #1735 step 3. Off, a strategy-wiring digest that no longer matches
     # its golden-qualification receipt is reported and Start/Resume proceed;
     # on, it fails closed like any other build drift. Deliberately default-off:

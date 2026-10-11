@@ -291,8 +291,21 @@ async def start_golden_search_job(req: GoldenSearchJobRequest) -> GoldenSearchJo
     """Run the stage a guarded command authorized, on a worker thread. 202 once the job is bound to it.
 
     A token the study did not issue, or a stage another job already holds,
-    is refused (409); nothing runs without the matching token.
+    is refused (409); nothing runs without the matching token. When research
+    execution is routed to the isolated runtime (#3043), this process
+    forwards the dispatch and never binds or starts a thread: binding,
+    ownership and execution happen once, in the runtime.
     """
+    from app.services.research_runtime_client import (
+        forward_golden_search_job,
+        is_research_runtime,
+        research_forwarding_enabled,
+    )
+
+    if research_forwarding_enabled() and not is_research_runtime():
+        forwarded = await forward_golden_search_job(req.model_dump(mode="json"))
+        return GoldenSearchJobAccepted(**forwarded)
+
     try:
         bound = await service.bind_dispatch(req.study_id, stage_token=req.stage_token, job_id=req.job_id)
     except GoldenSearchRefusal as exc:
@@ -303,6 +316,29 @@ async def start_golden_search_job(req: GoldenSearchJobRequest) -> GoldenSearchJo
         # Never a second worker beside the first, and never a replay of a closed job under its old id.
         records.require_live_redelivery(req.job_id, noun=NOUN)
         return accepted
+
+    runtime_executes = is_research_runtime()
+    work = _gated_stage_work(req) if runtime_executes else _stage_work(req)
+
+    run_in_thread(
+        req.job_id,
+        work,
+        thread_name=f"golden-search-{req.job_id[:8]}",
+        cancel_check_every_n=1,
+        # In the runtime, emits renew nothing — only accepted checkpoints
+        # keep the lease alive (#3041); the API's local mode keeps the
+        # emit-and-check renewal ADR 0065 D1 makes authoritative there.
+        emit_renews_lease=not runtime_executes,
+    )
+    logger.info(
+        "golden search stage dispatched",
+        extra={"action": "golden_search_stage_dispatched", "study_id": req.study_id, "job_id": req.job_id},
+    )
+    return accepted
+
+
+def _stage_work(req: GoldenSearchJobRequest):
+    """The local-mode worker: the stage run behind the runner's emit-and-cancel checks."""
 
     def work(emit: ProgressEmitter, cancel: CancellationCheck) -> dict[str, Any]:
         outcome = service.run_stage(
@@ -316,9 +352,59 @@ async def start_golden_search_job(req: GoldenSearchJobRequest) -> GoldenSearchJo
         )
         return outcome.as_dict()
 
-    run_in_thread(req.job_id, work, thread_name=f"golden-search-{req.job_id[:8]}", cancel_check_every_n=1)
-    logger.info(
-        "golden search stage dispatched",
-        extra={"action": "golden_search_stage_dispatched", "study_id": req.study_id, "job_id": req.job_id},
-    )
-    return accepted
+    return work
+
+
+def _gated_stage_work(req: GoldenSearchJobRequest):
+    """The research runtime's worker: the stage run under the checkpoint lease contract (#3041, #3043).
+
+    In the runtime, cancellation polls renew nothing — the lease renews only
+    on accepted checkpoints (the stage's phase transitions and durable
+    evaluation completions), each fenced by the coordinator's boot
+    generation. This is the shape the serial proof in the study lifecycle
+    suite pinned, now wired into the runtime that owns execution.
+    """
+    from app.jobs.checkpoints import CheckpointGate, ExecutionCheckpoint
+    from app.jobs.progress import CancellationCheck
+    from app.research.persistence import ownership
+    from app.utils.timestamps import now_ms_utc
+
+    def work(emit: ProgressEmitter, _runner_cancel: CancellationCheck) -> dict[str, Any]:
+        authority = ownership.process_authority()
+        if authority is None:
+            # The startup claim is fail-closed, so this is an authority lost
+            # mid-run: the generation is dead and its lease must not renew.
+            raise RuntimeError("research runtime worker without coordinator authority; the generation is fenced")
+        generation = authority.boot_generation
+        cancel = CancellationCheck(req.job_id, renews_lease=False)
+        seen: list[ExecutionCheckpoint] = []
+        gate = CheckpointGate(req.job_id, generation, on_accepted=seen.append)
+
+        def phase_checkpoint(phase: str) -> None:
+            gate.accept(
+                ExecutionCheckpoint(
+                    generation=generation, task_id="stage", sequence=len(seen) + 1, cursor=0,
+                    cursor_kind="processed_blocks", phase=phase, occurred_at_ms=now_ms_utc(), transition=True,
+                )
+            )
+
+        def completion_checkpoint(done: int, total: int) -> None:
+            gate.accept(
+                ExecutionCheckpoint(
+                    generation=generation, task_id="stage", sequence=len(seen) + 1, cursor=done,
+                    cursor_kind="durable_completions", phase="search", occurred_at_ms=now_ms_utc(), transition=True,
+                )
+            )
+
+        outcome = service.run_stage(
+            req.study_id,
+            stage_token=req.stage_token,
+            job_id=req.job_id,
+            cancel_check=cancel.raise_if_cancelled,
+            on_phase=lambda phase: (emit.phase(phase), phase_checkpoint(phase)),
+            on_progress=lambda done, total: (emit.progress(done, total, unit="evaluations"), completion_checkpoint(done, total)),
+            on_log=emit.log,
+        )
+        return outcome.as_dict()
+
+    return work

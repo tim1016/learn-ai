@@ -298,3 +298,26 @@ async def startup_authority_and_protection(
             await conn.close()
 
     return authority, protected
+
+
+async def startup_protection_only(
+    *, dsn: str | None
+) -> Callable[[], AbstractSet[str]] | None:
+    """The sweep's protected set for a process that forwards research execution (#3043).
+
+    An API configured with ``RESEARCH_EXECUTION_MODE=research`` claims no
+    authority — the isolated runtime owns it — but its startup sweep still
+    must not close the live runtime's jobs. This reads the same protection
+    without claiming anything or touching process state.
+    """
+    if not dsn:
+        return None
+
+    async def protected() -> AbstractSet[str]:
+        conn = await asyncpg.connect(dsn)
+        try:
+            return await protected_job_ids(conn)
+        finally:
+            await conn.close()
+
+    return protected

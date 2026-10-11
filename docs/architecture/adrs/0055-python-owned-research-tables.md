@@ -31,3 +31,10 @@ PRD #1926 needs cell rows that arrive from eight worker threads at once, are key
 ## Amendment 2026-09-05 — one backtest in flight
 
 The "eight worker threads" above describes the sweep runners as first written. Measured on the data-service container (2 CPUs, 2 GiB) with minute bars over two years, one engine run peaks near 480 MB of resident memory, the engine's per-bar loop holds the GIL (a second thread added memory and no throughput), and at eight the kernel's memory cgroup killed the service mid-search. The runners now execute one backtest at a time (`app/research/sweep/execution.py`), so cells reach the writer loop and pool one at a time; the pool and its ownership are unchanged.
+**Amendment 2026-10-11 (#3043, ADR 0077):** the constraint above is the API
+container's, not the engine's. Research execution now has a separate
+runtime container (8 CPUs / 16 GiB — the eight-worker envelope), and inside
+either process the gate itself is unchanged: one backtest at a time,
+process-wide, held at `BacktestEngine.run` (#1990). The runtime's
+bounded-worker boundary is #3044's; until it ships, the runtime runs this
+same serial engine.

@@ -408,13 +408,35 @@ async def _service_lifespan(
     if _ROLE_RUNS_DATA_PLANE_CORE:
         import os
 
-        from app.research.persistence.ownership import startup_authority_and_protection
+        if settings.RESEARCH_EXECUTION_MODE == "research":
+            # Execution belongs to the isolated research runtime (#3043):
+            # this process claims no authority (the runtime owns it), starts
+            # no research thread, and its sweep still skips the live
+            # runtime's jobs. Reload plus this mode is a startup error — a
+            # reloader restarting the forwarder mid-flight is the same
+            # corruption the runtime's own guard refuses.
+            from app.research_runtime import refuse_reload
 
-        research_authority, protected_research = await startup_authority_and_protection(
-            dsn=settings.POSTGRES_URL or None,
-            instance_id=f"{_FLEET_ROLE}:{os.getpid()}",
-            role="data-plane",
-        )
+            refuse_reload()
+            from app.services.research_runtime_client import is_research_runtime
+
+            if is_research_runtime():
+                raise RuntimeError(
+                    "RESEARCH_RUNTIME=1 belongs to the isolated research runtime container, "
+                    "not this process; an API that both forwards and executes would break "
+                    "the single-execution contract (#3043)"
+                )
+            from app.research.persistence.ownership import startup_protection_only
+
+            protected_research = await startup_protection_only(dsn=settings.POSTGRES_URL or None)
+        else:
+            from app.research.persistence.ownership import startup_authority_and_protection
+
+            research_authority, protected_research = await startup_authority_and_protection(
+                dsn=settings.POSTGRES_URL or None,
+                instance_id=f"{_FLEET_ROLE}:{os.getpid()}",
+                role="data-plane",
+            )
         fail_jobs_without_a_worker(protected=protected_research)
 
     # The coordinator's fleet state: the registry on its own control volume

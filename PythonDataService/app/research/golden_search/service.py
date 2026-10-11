@@ -457,6 +457,17 @@ async def get_row(study_id: str) -> StudyRow:
     return row
 
 
+async def study_job_binding(study_id: str) -> str | None:
+    """The job id the study row is currently bound to, or ``None`` — the durable truth of acceptance (#3043).
+
+    A forwarding API asks this after a transport timeout: ``bind_dispatch``
+    writes the binding before any work starts, so a row bound to the same
+    job id means the original acceptance stands and the redelivery joins it.
+    """
+    row = await with_connection(repo.get_study, study_id)
+    return None if row is None else row.job_id
+
+
 def _live(row: StudyRow, liveness: Liveness) -> bool | None:
     return liveness(row.job_id) if row.status in LIVE_PRESENTATIONS and row.job_id is not None else False
 

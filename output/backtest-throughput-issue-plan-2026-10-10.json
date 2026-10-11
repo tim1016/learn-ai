@@ -1,0 +1,682 @@
+{
+  "parent": 3034,
+  "repository": "tim1016/learn-ai",
+  "status": "published",
+  "verified": true,
+  "issues": [
+    {
+      "n": 1,
+      "number": 3036,
+      "title": "Backtest throughput: freeze the scientific baseline and qualification corpus",
+      "url": "https://github.com/tim1016/learn-ai/issues/3036",
+      "body": "## Parent\n\n[PRD #3034 — Faster backtest research with reusable data and parallel workers](https://github.com/tim1016/learn-ai/issues/3034)\n\n## What to build\n\n**PRD user stories:** 5, 27, 28, 29, 30. **Delivery slice:** 1 of 18.\n\nCreate a repeatable, offline benchmark entry point that runs the existing serial research execution path against a frozen corpus and produces a machine-readable result plus a readable summary. This is the measurement foundation; it must not optimize execution yet.\n\n**Start from:** Golden Search execution context/evaluation identity, the injected `ExecuteBacktest` seam, snapshot-bound readers, existing engine parity fixtures and study trial records. Use the existing benchmark/script conventions.\n\n**Implementation steps**\n1. Freeze 1,000 distinct evaluation identities: 200 full-development and 800 fold-window cases, with multiple strategy/parameter groups and both no-trade and trade-heavy results. Store the manifest/expected outputs as issue evidence or on a throwaway research branch; do not merge one-off reports into master.\n2. Freeze one end-to-end Golden Search protocol separately. Capture per-round sampled, testable, cached/duplicate, newly reserved and ready widths, including stage/fold labels.\n3. Add timing/resource output fields that later executors can populate without changing this corpus: admission, decoding, simulation, aggregation, queue/IPC/persistence, result hashes, memory, connections, native threads and PID use. Distinguish nested from additive timings.\n4. Inventory the deployed API, Backend, clerks, PostgreSQL and VM resource maxima. Record the proposed research envelope and remaining connection headroom. Run measurements in an isolated workspace; never mutate the active study.\n\n**Implementation boundaries:** This is one slice of #3034, not permission to implement its later tickets. Reuse the canonical Python engine and existing study/repository contracts. Keep scientific identities, Decimal values, calendar behavior and int64-ms-UTC boundaries intact. Do not add dependencies, change the market-data provider, touch clerk stores, enable unqualified concurrency by default, or modify an active production study. Read the applicable repository rules before editing; run stack lint and the targeted behavior tests. New real-process/database-heavy tests belong in the existing slow/daily tier, with no new CI jobs. If an edit touches canonical math or its provenance, apply the learn-ai-validation contract and the required independent review; scheduling is not a reason to alter numerical results.\n\n## Acceptance criteria\n\n- [ ] The corpus has exactly 1,000 distinct full evaluation keys with a 200/800 window split; all inputs are local, admitted and identified by checksums, and no provider/broker access is required.\n- [ ] Baseline output includes ordered trades, required curves and result/trade-log/metrics hashes using current canonical projections; no floating tolerance is widened.\n- [ ] A small fixture mode finishes as a quick smoke check and fails if an expected hash, input identity or count changes.\n- [ ] The full baseline supports three repetitions and reports median plus variability, exact code/data/environment identities and competing load; completed-result cache hits are excluded from valid-new-evaluation throughput.\n- [ ] The end-to-end study and width histogram are frozen before optimization. The earlier GLD observation is labeled evidence only, not substituted for the new corpus.\n- [ ] The report distinguishes original serial, same-resource serial and future serial-with-decoded-cache modes, and warm versus preparation-inclusive modes that include worker startup/imports.\n- [ ] The connection inventory accounts for all configured pools and identifies whether research's total cap of 12 leaves at least 20 server connections free; a mismatch is reported, not repaired by increasing PostgreSQL limits.\n- [ ] Long/manual results live on this issue or a linked research branch. The benchmark harness itself has a focused smoke test and normal Python lint.\n\n## Blocked by\n\nNone — can start immediately.\n",
+      "deps": [],
+      "databaseId": 5796960073,
+      "stories": [
+        5,
+        27,
+        28,
+        29,
+        30
+      ],
+      "blockedBy": []
+    },
+    {
+      "n": 2,
+      "number": 3037,
+      "title": "Backtest data: revalidate daily-history cache hits before returning bars",
+      "url": "https://github.com/tim1016/learn-ai/issues/3037",
+      "body": "## Parent\n\n[PRD #3034 — Faster backtest research with reusable data and parallel workers](https://github.com/tim1016/learn-ai/issues/3034)\n\n## What to build\n\n**PRD user stories:** 12, 13, 14, 15, 30. **Delivery slice:** 2 of 18.\n\nFix the existing daily reader so repeated reads cannot bypass catalog admission or current adjustment evidence. This is independently verifiable on today's serial engine.\n\n**Start from:** `LeanDailyDataReader._load_history`, `_read_zip`, `parse_history_zip`, `ManifestBoundDailyReader`, `read_committed_bytes` and `AdjustmentVersionGuard`.\n\n**Implementation steps**\n1. Separate verification of current source bytes from reuse of decoded history. A hit must traverse the reader's applicable override: committed receipt, manifest match where required, and adjustment/companion verification.\n2. Preserve merging precedence across roots, sorted bar order and the unmanaged reference-fixture contract.\n3. Retain decoding reuse only after these checks succeed. Keep adjustment-version pins scoped to the current evaluation.\n4. Add regression cases through the reader/engine-facing interface, not assertions about private dictionary contents.\n\n**Not included:** a persistent cross-evaluation cache, multiprocessing, window-wide receipt preauthorization or retrospective invalidation of completed results.\n\n**Implementation boundaries:** This is one slice of #3034, not permission to implement its later tickets. Reuse the canonical Python engine and existing study/repository contracts. Keep scientific identities, Decimal values, calendar behavior and int64-ms-UTC boundaries intact. Do not add dependencies, change the market-data provider, touch clerk stores, enable unqualified concurrency by default, or modify an active production study. Read the applicable repository rules before editing; run stack lint and the targeted behavior tests. New real-process/database-heavy tests belong in the existing slow/daily tier, with no new CI jobs. If an edit touches canonical math or its provenance, apply the learn-ai-validation contract and the required independent review; scheduling is not a reason to alter numerical results.\n\n## Acceptance criteria\n\n- [ ] After one successful read, revoking the receipt while leaving the file unchanged causes the next read to refuse.\n- [ ] A warm manifest-bound daily reader refuses changed file bytes, changed/missing companion, changed current adjustment basis, missing root marker/source and unavailable catalog.\n- [ ] The subclass's manifest validation cannot be skipped by the base reader's cache-hit branch.\n- [ ] Unchanged admitted history produces identical Decimal values, timestamps, ordering and engine output; repeated reads still avoid unnecessary decoding.\n- [ ] Multi-root precedence and unmanaged LEAN fixture behavior remain covered by existing tests.\n- [ ] The regression test demonstrates the old early-return failure and passes after the fix; related daily-reader, snapshot and adjustment tests pass.\n\n## Blocked by\n\nNone — can start immediately.\n",
+      "deps": [],
+      "databaseId": 5796961509,
+      "stories": [
+        12,
+        13,
+        14,
+        15,
+        30
+      ],
+      "blockedBy": []
+    },
+    {
+      "n": 3,
+      "number": 3038,
+      "title": "Backtest data: reuse verified decoded artifacts across overlapping evaluations",
+      "url": "https://github.com/tim1016/learn-ai/issues/3038",
+      "body": "## Parent\n\n[PRD #3034 — Faster backtest research with reusable data and parallel workers](https://github.com/tim1016/learn-ai/issues/3034)\n\n## What to build\n\n**PRD user stories:** 3, 5, 11, 12, 13, 14, 15, 23, 30. **Delivery slice:** 3 of 18.\n\nAdd a byte-bounded decoded-artifact cache and use it in repeated serial research evaluations. Demonstrate that two different parameter/window evaluations reuse overlapping days while every artifact read still performs fresh admission.\n\n**Start from:** the verified-bytes seams `parse_day_zip`/`parse_history_zip`, snapshot-bound minute/daily readers and the existing engine data-source injection. Build on the daily hit fix; do not copy its former early return.\n\n**Implementation steps**\n1. Cache immutable decoded data by artifact identity: root ID/mode/path, content digest, instrument/resolution, adjustment evidence, session policy, calendar and decoder versions. Exclude study, point, scored window and run-up depth.\n2. Make a window an ordered selection of these artifacts. Keep source hashing, receipt checks, manifest checks and current adjustment checks before a hit is returned.\n3. Share cache ownership across sequential evaluations in one runtime process while constructing fresh per-evaluation readers, manifest bindings and adjustment pins.\n4. Bound retained bytes, account for pinned/in-use entries, evict unused entries and fall back to uncached decoding for an oversized artifact. Expose hit/miss/eviction/residency metrics to the benchmark.\n\n**Not included:** shared memory, Arrow conversion, durable derived files, worker scheduling or positive admission caching.\n\n**Implementation boundaries:** This is one slice of #3034, not permission to implement its later tickets. Reuse the canonical Python engine and existing study/repository contracts. Keep scientific identities, Decimal values, calendar behavior and int64-ms-UTC boundaries intact. Do not add dependencies, change the market-data provider, touch clerk stores, enable unqualified concurrency by default, or modify an active production study. Read the applicable repository rules before editing; run stack lint and the targeted behavior tests. New real-process/database-heavy tests belong in the existing slow/daily tier, with no new CI jobs. If an edit touches canonical math or its provenance, apply the learn-ai-validation contract and the required independent review; scheduling is not a reason to alter numerical results.\n\n## Acceptance criteria\n\n- [ ] Two evaluations with overlapping but different windows/run-up depths decode each shared artifact once while resident; each still executes its current admission checks.\n- [ ] Changing any artifact-key discriminator prevents incompatible reuse; raw/adjusted, regular/extended sessions and different roots never collide.\n- [ ] Mid-evaluation revocation before a later day's read fails even when that day is already decoded.\n- [ ] One evaluation cannot mutate bars seen by another; strategy/portfolio state, manifests and adjustment pins do not persist in the cache.\n- [ ] Eviction does not break an active iterator; resident and pinned-byte accounting stays bounded and oversized data takes the correct uncached path.\n- [ ] Cached/uncached serial runs match strict bar/trade/Decimal/timestamp equality and existing statistic tolerances across DST, early-close, missing-bar and trade-heavy cases.\n- [ ] The benchmark from the blocker reports serial-with-cache separately and records duplicate residency accurately; no speedup target is claimed from this slice alone.\n- [ ] New cache behavior stays behind explicit research configuration until qualification; direct callers retain their existing ownership and numerical behavior.\n\n## Blocked by\n\n- [#3036 — Backtest throughput: freeze the scientific baseline and qualification corpus](https://github.com/tim1016/learn-ai/issues/3036)\n- [#3037 — Backtest data: revalidate daily-history cache hits before returning bars](https://github.com/tim1016/learn-ai/issues/3037)\n",
+      "deps": [
+        1,
+        2
+      ],
+      "databaseId": 5796961574,
+      "stories": [
+        3,
+        5,
+        11,
+        12,
+        13,
+        14,
+        15,
+        23,
+        30
+      ],
+      "blockedBy": [
+        3036,
+        3037
+      ]
+    },
+    {
+      "n": 4,
+      "number": 3039,
+      "title": "Golden Search: read exam detail from durable evaluations",
+      "url": "https://github.com/tim1016/learn-ai/issues/3039",
+      "body": "## Parent\n\n[PRD #3034 — Faster backtest research with reusable data and parallel workers](https://github.com/tim1016/learn-ai/issues/3034)\n\n## What to build\n\n**PRD user stories:** 4, 25, 30, 31. **Delivery slice:** 4 of 18.\n\nMake exam chance/drawdown evidence independent of an evaluator object's memory. A completed detail evaluation must still supply evidence after that evaluator is destroyed and later recreated.\n\n**Start from:** `StudyEvaluator.detail_of`, `evaluation_key`, persisted `detail_json`, existing detail-evaluation repository reads, `_final_chance_for` and `_development_detail_for`. Keep the existing canonical detail projection.\n\n**Implementation steps**\n1. Resolve the exact completed detail row for study/context, point, window, base scenario and detail=true; never substitute a summary row or another window.\n2. Read its recorded detail without executing the engine or consuming budget. A local dictionary may remain an optional cache, not the authority.\n3. Distinguish genuinely absent/protocol-insufficient evidence from a completed detail row whose required payload is absent or corrupt. Surface the latter as an evidence-integrity error.\n4. Exercise the exam lifecycle through existing study-service fixtures, including re-creation of the evaluator and Finish.\n\n**Implementation boundaries:** This is one slice of #3034, not permission to implement its later tickets. Reuse the canonical Python engine and existing study/repository contracts. Keep scientific identities, Decimal values, calendar behavior and int64-ms-UTC boundaries intact. Do not add dependencies, change the market-data provider, touch clerk stores, enable unqualified concurrency by default, or modify an active production study. Read the applicable repository rules before editing; run stack lint and the targeted behavior tests. New real-process/database-heavy tests belong in the existing slow/daily tier, with no new CI jobs. If an edit touches canonical math or its provenance, apply the learn-ai-validation contract and the required independent review; scheduling is not a reason to alter numerical results.\n\n## Acceptance criteria\n\n- [ ] Exam readings and required acknowledgements are identical before and after clearing/replacing the evaluator's in-memory state.\n- [ ] Durable detail readback makes zero engine calls and increments neither consumed evaluations nor retry allowance.\n- [ ] Same point in another context/window/scenario or with detail=false cannot satisfy the requested record.\n- [ ] Missing/corrupt required payload on a completed detail row produces an explicit integrity failure instead of a spurious research-weakness acknowledgement.\n- [ ] Legitimate missing/insufficient readings retain their existing protocol meaning and presentation.\n- [ ] Summary/full response and minute-equity-statistic parity remain unchanged; repository and exam lifecycle tests cover completed, failed and resumed records.\n\n## Blocked by\n\nNone — can start immediately.\n",
+      "deps": [],
+      "databaseId": 5796961630,
+      "stories": [
+        4,
+        25,
+        30,
+        31
+      ],
+      "blockedBy": []
+    },
+    {
+      "n": 5,
+      "number": 3040,
+      "title": "Golden Search: introduce an ordered ready-batch execution seam",
+      "url": "https://github.com/tim1016/learn-ai/issues/3040",
+      "body": "## Parent\n\n[PRD #3034 — Faster backtest research with reusable data and parallel workers](https://github.com/tim1016/learn-ai/issues/3034)\n\n## What to build\n\n**PRD user stories:** 4, 5, 6, 7, 8, 10, 21, 25, 30. **Delivery slice:** 5 of 18.\n\nPrepare the evaluator for concurrent execution while keeping production dispatch serial. Preserve the existing single-evaluation `ExecuteBacktest` callable and introduce the smallest ordered ready-batch adapter at its caller.\n\n**Start from:** `StudyEvaluator.evaluate`, `engine_executor`, `reserve_evaluation`, `complete_evaluation`, `evaluation_key`, `run_zoom`, the grid procedure and pair-audit generation. Reuse the existing shared attempt fence and response projection.\n\n**Implementation steps**\n1. Separate capability/key preparation, serial-order reservation, execution, fenced persistence and logical result consumption. Provide a serial adapter with the existing behavior.\n2. Add a deterministic injected adapter that can simulate out-of-order delivery for tests without real processes.\n3. Define adapter inputs/outputs by full evaluation key and generation, not point hash. Keep summary and detail distinct.\n4. Make each caller expose only its currently ready batch. Keep adaptive round/coordinate/fold dependencies and pair-audit cell order intact.\n\n**Not included:** process creation, remote service deployment, a new scheduler framework or changing search/budget policy. Do not force tests to depend on a particular new class layout.\n\n**Implementation boundaries:** This is one slice of #3034, not permission to implement its later tickets. Reuse the canonical Python engine and existing study/repository contracts. Keep scientific identities, Decimal values, calendar behavior and int64-ms-UTC boundaries intact. Do not add dependencies, change the market-data provider, touch clerk stores, enable unqualified concurrency by default, or modify an active production study. Read the applicable repository rules before editing; run stack lint and the targeted behavior tests. New real-process/database-heavy tests belong in the existing slow/daily tier, with no new CI jobs. If an edit touches canonical math or its provenance, apply the learn-ai-validation contract and the required independent review; scheduling is not a reason to alter numerical results.\n\n## Acceptance criteria\n\n- [ ] All existing evaluator and 15+ study lifecycle scenarios run through the serial adapter with unchanged scientific results, cache counts, retry behavior and public status.\n- [ ] A fake delivery order of C,A,B produces logical A,B,C results and identical winner/tie decisions.\n- [ ] With budget for two new identities, ready input A,B,C reserves/executes only A,B and then reports exhaustion; cached/duplicate identities consume exactly the same units as the serial reference.\n- [ ] Stop at the first unaffordable new identity in logical order; do not search later points for cheaper/cache-hit work or speculate beyond the admitted prefix.\n- [ ] Same full key within the live attempt joins one execution; same point with different window/scenario/detail remains separate, including budget accounting.\n- [ ] Pair-audit truncation retains earlier cells exactly as the serial path does.\n- [ ] Capability and held-out authorization checks occur before dispatch; later Zoom rounds/folds cannot be submitted early.\n- [ ] Full detail is persisted before dependent exam reads, using the durable detail seam from the blocker.\n- [ ] The current engine gate behavior remains unchanged because this slice does not dispatch to another process.\n\n## Blocked by\n\n- [#3039 — Golden Search: read exam detail from durable evaluations](https://github.com/tim1016/learn-ai/issues/3039)\n",
+      "deps": [
+        4
+      ],
+      "databaseId": 5796961699,
+      "stories": [
+        4,
+        5,
+        6,
+        7,
+        8,
+        10,
+        21,
+        25,
+        30
+      ],
+      "blockedBy": [
+        3039
+      ]
+    },
+    {
+      "n": 6,
+      "number": 3041,
+      "title": "Research jobs: make lease renewal follow real execution checkpoints",
+      "url": "https://github.com/tim1016/learn-ai/issues/3041",
+      "body": "## Parent\n\n[PRD #3034 — Faster backtest research with reusable data and parallel workers](https://github.com/tim1016/learn-ai/issues/3034)\n\n## What to build\n\n**PRD user stories:** 17, 18, 19, 21, 30. **Delivery slice:** 6 of 18.\n\nAdd the progress/cancellation contract that the later worker runtime will use, and prove it through a serial Golden Search job plus injected task events. This is a correctness prefactor before remote execution.\n\n**Start from:** `CancellationCheck`, `ProgressEmitter`, `job_is_live`, current engine phase/bar-loop callbacks and research job lifecycle tests. Keep the public 300-second lease and existing non-pooled job behavior.\n\n**Implementation steps**\n1. Separate read-only cancellation polling from lease renewal for the new research execution mode. A timer, poll or public SSE emission is not progress evidence.\n2. Accept checkpoints only for the current job/attempt/task generation with increasing sequence and work cursor. Meaningful cursors include admitted artifacts, processed bar/work blocks and durable completions.\n3. Implement independently testable phase deadlines: startup/queue/preparation/persistence 60 seconds, simulation/aggregation silence 30 seconds, catalog calls at most 35 seconds; target simulation checkpoints within one second.\n4. Keep cancellation observation/control independent from a blocked work path. Expose accepted events for existing progress adapters without emitting one SSE event per bar.\n5. Amend ADR 0065 D1 with the new mode and its progress contract; leave owner-scoped startup changes to the later ticket.\n\n**Implementation boundaries:** This is one slice of #3034, not permission to implement its later tickets. Reuse the canonical Python engine and existing study/repository contracts. Keep scientific identities, Decimal values, calendar behavior and int64-ms-UTC boundaries intact. Do not add dependencies, change the market-data provider, touch clerk stores, enable unqualified concurrency by default, or modify an active production study. Read the applicable repository rules before editing; run stack lint and the targeted behavior tests. New real-process/database-heavy tests belong in the existing slow/daily tier, with no new CI jobs. If an edit touches canonical math or its provenance, apply the learn-ai-validation contract and the required independent review; scheduling is not a reason to alter numerical results.\n\n## Acceptance criteria\n\n- [ ] Cancellation polls, repeated sequence/cursor, status reads and timer ticks do not extend a pooled-mode lease.\n- [ ] An accepted advancing checkpoint or real dispatch/accept/durable-completion transition can renew once; an expired lease cannot be recreated.\n- [ ] Stale attempt/task generation events are rejected and cannot renew or mutate progress.\n- [ ] A serial backtest emits progress at real preparation/simulation/aggregation boundaries without changing bars, trades, ordering or statistic hashes.\n- [ ] Each active task has its own silence deadline: injected progress from task A does not reset hung task B's deadline.\n- [ ] Queued work needs actual queue advancement/capacity handoff, not repeated inspection of a full pool; no-progress expiry is visible.\n- [ ] Clock-controlled tests cover all bounds and cancellation observation within one second. Hard process termination is supplied by the future worker runtime, not simulated as successful cleanup here.\n- [ ] Existing non-pooled job lifecycle tests still pass; changes to shared cancellation/emitter defaults do not silently alter unrelated job types.\n\n## Blocked by\n\nNone — can start immediately.\n",
+      "deps": [],
+      "databaseId": 5796961768,
+      "stories": [
+        17,
+        18,
+        19,
+        21,
+        30
+      ],
+      "blockedBy": []
+    },
+    {
+      "n": 7,
+      "number": 3042,
+      "title": "Research jobs: scope ownership and startup recovery to each runtime",
+      "url": "https://github.com/tim1016/learn-ai/issues/3042",
+      "body": "## Parent\n\n[PRD #3034 — Faster backtest research with reusable data and parallel workers](https://github.com/tim1016/learn-ai/issues/3034)\n\n## What to build\n\n**PRD user stories:** 19, 20, 21, 22, 26, 30. **Delivery slice:** 7 of 18.\n\nMake job recovery safe for an API process and a separate research process. API startup must stop treating every queued/running job as its own.\n\n**Start from:** `fail_jobs_without_a_worker`, `run_in_thread`, `job_is_live`, the shared attempt fence and Python-owned research schema/migrations.\n\n**Implementation steps**\n1. Persist ownership for newly dispatched research jobs (leave unrelated API job families on their existing lifecycle): runtime role, runtime instance/boot generation, job ID and the bound study/launch attempt. Legacy jobs without ownership remain API-owned.\n2. Introduce one coordinator ownership record for the deployment. Use a PostgreSQL session advisory lock held by a dedicated research connection for singleton ownership; include it within the research runtime's four coordination/persistence connections. Advance the boot generation while holding that authority.\n3. Fence every new research task/result/lease transition by owner generation as well as the existing study attempt. Losing coordinator authority stops dispatch and invalidates that generation; do not continue accepting work while disconnected.\n4. Scope startup cleanup to abandoned generations owned by that runtime. A replacement must stop/reap old local children before it makes their jobs recoverable; cross-container generations cannot be accepted by the new coordinator.\n5. Amend ADR 0065 D2 in this PR to distinguish API restart from research restart and document legacy migration behavior.\n\n**Not included:** deploying a service, auto-resume, replacing the study attempt fence or changing the scientific evaluation identity.\n\n**Implementation boundaries:** This is one slice of #3034, not permission to implement its later tickets. Reuse the canonical Python engine and existing study/repository contracts. Keep scientific identities, Decimal values, calendar behavior and int64-ms-UTC boundaries intact. Do not add dependencies, change the market-data provider, touch clerk stores, enable unqualified concurrency by default, or modify an active production study. Read the applicable repository rules before editing; run stack lint and the targeted behavior tests. New real-process/database-heavy tests belong in the existing slow/daily tier, with no new CI jobs. If an edit touches canonical math or its provenance, apply the learn-ai-validation contract and the required independent review; scheduling is not a reason to alter numerical results.\n\n## Acceptance criteria\n\n- [ ] API startup closes legacy/API-owned abandoned jobs but leaves a healthy research-owned job and its lease untouched.\n- [ ] Research startup interrupts only its abandoned research generations; completed/closed jobs and another live owner are untouched.\n- [ ] A second coordinator cannot become ready or dispatch while the first holds singleton authority.\n- [ ] Lost singleton connection makes the coordinator fail closed, fence outstanding work and initiate child cleanup; reconnecting cannot resurrect the former generation.\n- [ ] Owner generation is additive execution metadata and never enters or rewrites the scientific context/evaluation hash.\n- [ ] Stale owners cannot renew a lease, accept a result or overwrite a resumed attempt's terminal state.\n- [ ] Explicit Finish still creates the existing new job/attempt and reuses compatible completed evaluations; closed-job redelivery stays refused.\n- [ ] Migration/recovery tests cover legacy rows, API-only restart, research-only restart, duplicate coordinator startup and stale-generation delivery using the existing persistence/lifecycle seams.\n- [ ] The required ownership connection is counted in configuration/qualification; no hidden extra ten-connection pool is created.\n\n## Blocked by\n\n- [#3041 — Research jobs: make lease renewal follow real execution checkpoints](https://github.com/tim1016/learn-ai/issues/3041)\n",
+      "deps": [
+        6
+      ],
+      "databaseId": 5796961817,
+      "stories": [
+        19,
+        20,
+        21,
+        22,
+        26,
+        30
+      ],
+      "blockedBy": [
+        3041
+      ]
+    },
+    {
+      "n": 8,
+      "number": 3043,
+      "title": "Golden Search: run a complete serial study in an isolated research service",
+      "url": "https://github.com/tim1016/learn-ai/issues/3043",
+      "body": "## Parent\n\n[PRD #3034 — Faster backtest research with reusable data and parallel workers](https://github.com/tim1016/learn-ai/issues/3034)\n\n## What to build\n\n**PRD user stories:** 1, 2, 17, 18, 19, 20, 22, 24, 26, 30. **Delivery slice:** 8 of 18.\n\nMove the existing Golden Search job lifecycle behind the chosen separate-container boundary while retaining serial evaluation. A user starts a study from the existing UI, receives existing progress/results, can Cancel/Finish, and an API-only restart does not stop it.\n\n**Start from:** `start_golden_search_job`, `bind_dispatch`, `run_stage`, the existing internal data-plane authentication and job transport, standalone service startup conventions and compose resource definitions.\n\n**Implementation steps**\n1. Add a minimal research service entry point that runs existing Python study modules and initializes only research/catalog/job resources. Do not import broker/application startup.\n2. Forward authorized Golden Search commands from the API using the existing job ID, stage token and identity. Binding/ownership happens once in the research service; the API must not also start a local thread.\n3. On internal HTTP timeout, query the recorded binding/ownership before redelivery; same command joins the original acceptance, conflicting or closed commands refuse.\n4. Deploy as a separate cgroup with eight-CPU/16-GiB qualification limits and PID cap 512. Keep default routing serial/local until an operator selects research execution.\n5. Wire owner-scoped restart behavior, checkpoint-aware liveness, cancellation and ten-second shutdown cleanup from the blockers. In this slice the research service runs the existing serial engine itself; the next slice replaces that evaluation call with one spawned worker.\n6. Record the topology ADR and engine authority-map ownership. Update ADR 0055 to explain the separate serial research process and the planned bounded-worker boundary without deleting the API's local gate.\n\n**Not included:** multiworker dispatch or qualification/default activation.\n\n**Implementation boundaries:** This is one slice of #3034, not permission to implement its later tickets. Reuse the canonical Python engine and existing study/repository contracts. Keep scientific identities, Decimal values, calendar behavior and int64-ms-UTC boundaries intact. Do not add dependencies, change the market-data provider, touch clerk stores, enable unqualified concurrency by default, or modify an active production study. Read the applicable repository rules before editing; run stack lint and the targeted behavior tests. New real-process/database-heavy tests belong in the existing slow/daily tier, with no new CI jobs. If an edit touches canonical math or its provenance, apply the learn-ai-validation contract and the required independent review; scheduling is not a reason to alter numerical results.\n\n## Acceptance criteria\n\n- [ ] An isolated deployment test exercises start -> progress -> durable results -> existing UI/API readback across the internal service boundary.\n- [ ] The API and research service have distinct cgroups; combined API/clerk deployments do not place the research service under the API's 2-GiB limit.\n- [ ] Same job/stage token redelivery starts at most one study attempt; timeout-after-acceptance reconciles the original attempt without a second start.\n- [ ] Unauthorized, conflicting, expired or closed command delivery is refused through the existing contract.\n- [ ] API-only restart preserves the running research job; research restart presents interruption and requires Finish, with completed compatible evaluations reusable.\n- [ ] Cancel remains observable and stops further work; shutdown stops accepting commands and finishes/interrupts honestly within the configured cleanup bound.\n- [ ] Reload plus research execution is a startup error in both API launch validation and research service configuration.\n- [ ] Connection ownership is capped across all research pools, including the singleton connection; startup does not create a broker, provider subscription or clerk-store handle.\n- [ ] The existing Golden Search lifecycle suite covers the remote transport with injected execution; a slow isolated service test covers real routing/restarts.\n- [ ] Topology ADR, ADR 0055/0065 applicability and the engine authority map describe the behavior shipped by this slice. Operator selection remains opt-in.\n\n## Blocked by\n\n- [#3036 — Backtest throughput: freeze the scientific baseline and qualification corpus](https://github.com/tim1016/learn-ai/issues/3036)\n- [#3040 — Golden Search: introduce an ordered ready-batch execution seam](https://github.com/tim1016/learn-ai/issues/3040)\n- [#3042 — Research jobs: scope ownership and startup recovery to each runtime](https://github.com/tim1016/learn-ai/issues/3042)\n",
+      "deps": [
+        1,
+        5,
+        7
+      ],
+      "databaseId": 5796962539,
+      "stories": [
+        1,
+        2,
+        17,
+        18,
+        19,
+        20,
+        22,
+        24,
+        26,
+        30
+      ],
+      "blockedBy": [
+        3036,
+        3040,
+        3042
+      ]
+    },
+    {
+      "n": 9,
+      "number": 3044,
+      "title": "Golden Search: execute through one isolated worker with read-time admission",
+      "url": "https://github.com/tim1016/learn-ai/issues/3044",
+      "body": "## Parent\n\n[PRD #3034 — Faster backtest research with reusable data and parallel workers](https://github.com/tim1016/learn-ai/issues/3034)\n\n## What to build\n\n**PRD user stories:** 3, 5, 11, 12, 13, 14, 15, 18, 19, 21, 23, 25, 29, 30, 33. **Delivery slice:** 9 of 18.\n\nReplace the research service's inline engine call with one persistent spawn worker. Demonstrate a complete Golden Search evaluation using admitted local history, durable result/detail acceptance, cancellation and cleanup while the child has no database, Redis, provider or broker access.\n\n**Start from:** `ExecuteBacktest`, the ready-batch adapter, `project_response`, the option-search spawn/ownership/kill-and-reap precedent, `one_backtest_in_flight`, verified-byte readers and the decoded-artifact cache.\n\n**Implementation steps**\n1. Define bounded typed IPC messages for task, artifact-admission request/response, checkpoint, cancel, result and typed failure. Include full evaluation key, sealed code/environment identity, capability, manifest reference and owner/attempt/task generation. Encode times as int64 ms UTC.\n2. Set PYTHONHASHSEED=0 and OMP/OPENBLAS/MKL thread counts=1 before interpreter startup; use explicit spawn and minimal imports. Verify code/environment identity at readiness/task acceptance. Initialize fresh simulation state per task.\n3. Let the child read/hash the exact current source bytes, request admission from its parent and then perform manifest/adjustment checks before decode/cache access. No authorization survives that individual read. Parent catalog I/O has its own bounded path, separate from study writes and the API/fleet loop.\n4. Invoke the existing outer service gate and inner engine gate only in the child. The coordinator never holds its gate while submitting/waiting. Move canonical materialization/partial-coverage decisions to parent preparation; no child acquisition/fetch.\n5. Use the checkpoint contract for real worker progress. Track child ownership from spawn through import, readiness, work and exit; cancellation control cannot block behind admission I/O. Initially interrupt on unrecoverable worker loss; bounded retry is added by the next ticket.\n6. Persist projected summary/detail in the parent under the fence before any dependent protocol decision. Reuse original API serial execution for rollback; remove transitional remote-inline dispatch.\n\n**Documentation owed:** amend ADR 0049 D3a for coordinator preparation, ADR 0055 for the process-level gate rule, and the topology ADR/authority map for the actual worker boundary.\n\n**Implementation boundaries:** This is one slice of #3034, not permission to implement its later tickets. Reuse the canonical Python engine and existing study/repository contracts. Keep scientific identities, Decimal values, calendar behavior and int64-ms-UTC boundaries intact. Do not add dependencies, change the market-data provider, touch clerk stores, enable unqualified concurrency by default, or modify an active production study. Read the applicable repository rules before editing; run stack lint and the targeted behavior tests. New real-process/database-heavy tests belong in the existing slow/daily tier, with no new CI jobs. If an edit touches canonical math or its provenance, apply the learn-ai-validation contract and the required independent review; scheduling is not a reason to alter numerical results.\n\n## Acceptance criteria\n\n- [ ] The same evaluation in the serial control and two separately spawned workers yields identical result/trade-log/metrics hashes and required detail.\n- [ ] Worker startup verifies fixed hash/native-thread settings and refuses mismatched sealed identity rather than silently computing a different cache key.\n- [ ] Tests fail if a worker tries to create a database/Redis client, perform schema initialization, download provider data or start broker services.\n- [ ] A decoded hit still requests current committed-byte admission; later-day revocation, changed companion/current basis and catalog outage produce the same failures as serial.\n- [ ] At most one artifact-admission request per active worker is pending; the basic parent path fits the aggregate 12-connection cap, including singleton ownership.\n- [ ] Run materialization refuses required partial coverage before dispatch; worker code cannot narrow the window or synthesize/fetch missing bars.\n- [ ] Two sequential tasks reuse decoded data but no strategy, indicator, portfolio, random, manifest or adjustment-pin state.\n- [ ] Parent dispatch does not enter the engine gate; one child serializes its own runs. Existing run-gate tests are retained and reshaped per process.\n- [ ] A child that misses 60-second startup/preparation or 30-second work-silence bounds is fenced and killed/reaped; a cold-import shutdown leaves no orphan.\n- [ ] Cancel stops dispatch within one second and releases the execution slot within ten seconds even if the child or its admission request is stuck.\n- [ ] Full detail arrives in the coordinator and is durable before exam readback. Result payloads and pending buffers are bounded and measured.\n- [ ] Real spawn/death/cancellation cases are slow tests; the existing quick study lifecycle scenarios continue through injected adapters.\n\n## Blocked by\n\n- [#3038 — Backtest data: reuse verified decoded artifacts across overlapping evaluations](https://github.com/tim1016/learn-ai/issues/3038)\n- [#3043 — Golden Search: run a complete serial study in an isolated research service](https://github.com/tim1016/learn-ai/issues/3043)\n",
+      "deps": [
+        3,
+        8
+      ],
+      "databaseId": 5796962605,
+      "stories": [
+        3,
+        5,
+        11,
+        12,
+        13,
+        14,
+        15,
+        18,
+        19,
+        21,
+        23,
+        25,
+        29,
+        30,
+        33
+      ],
+      "blockedBy": [
+        3038,
+        3043
+      ]
+    },
+    {
+      "n": 10,
+      "number": 3045,
+      "title": "Golden Search: recover worker loss and uncertain writes without double accounting",
+      "url": "https://github.com/tim1016/learn-ai/issues/3045",
+      "body": "## Parent\n\n[PRD #3034 — Faster backtest research with reusable data and parallel workers](https://github.com/tim1016/learn-ai/issues/3034)\n\n## What to build\n\n**PRD user stories:** 4, 7, 18, 19, 20, 21, 30. **Delivery slice:** 10 of 18.\n\nComplete the failure/retry path for the one-worker runtime before increasing concurrency. A crash or lost acknowledgement must not spend the same reservation twice, accept stale results or discard a known completed evaluation.\n\n**Start from:** `reserve_evaluation`, `complete_evaluation`, `release_evaluation`, the shared attempt fence, `CallerStoppedWaitingError`, existing Golden Search FakeEngine/SimulatedCrash scenarios and the option-search real-worker harness.\n\n**Implementation steps**\n1. Track a task generation for each dispatch/retry inside the current study attempt. Retrying the same reservation advances only task generation and obeys existing retry allowance.\n2. Persist successful outcomes exactly once under owner/attempt/task fencing. Late output from a cancelled, timed-out or replaced worker is discarded explicitly.\n3. Treat a database caller timeout as an unknown result. Retain/observe the original operation and reconcile the durable row plus operation generation before retry/release; a read showing pending while the original write is still in flight is not proof of rollback.\n4. On cancellation, stop/reap child work promptly while separately reconciling any already-started write. Coordinator loss requires Finish; it does not schedule automatic recovery work.\n5. Replace lost workers only after cleanup, keeping decoded-cache loss distinct from lost scientific evidence.\n\n**Implementation boundaries:** This is one slice of #3034, not permission to implement its later tickets. Reuse the canonical Python engine and existing study/repository contracts. Keep scientific identities, Decimal values, calendar behavior and int64-ms-UTC boundaries intact. Do not add dependencies, change the market-data provider, touch clerk stores, enable unqualified concurrency by default, or modify an active production study. Read the applicable repository rules before editing; run stack lint and the targeted behavior tests. New real-process/database-heavy tests belong in the existing slow/daily tier, with no new CI jobs. If an edit touches canonical math or its provenance, apply the learn-ai-validation contract and the required independent review; scheduling is not a reason to alter numerical results.\n\n## Acceptance criteria\n\n- [ ] Fault cases cover before reservation, after reservation/before dispatch, during compute, after result delivery/before persistence, and commit-success/acknowledgement-loss.\n- [ ] Retry never consumes a second new-evaluation unit for the same reservation and never exceeds the existing retry allowance.\n- [ ] A delayed original database write that later commits cannot be followed by a duplicate completion, release or budget increment.\n- [ ] Task-generation and study-attempt supersession each independently reject late results and terminal writes.\n- [ ] Cancellation during an uncertain write releases the execution slot within ten seconds and leaves an honest, fenced durable outcome for Finish.\n- [ ] At finite-budget exhaustion, killing the last admitted point gives the same admitted set and final accounting as the equivalent serial failure schedule.\n- [ ] A real SIGKILL worker test proves cleanup/replacement and durable reuse; mocked exceptions alone do not satisfy this criterion.\n- [ ] Research-coordinator restart never auto-resumes. Explicit Finish reads compatible completed records and retries only allowed pending/failed work.\n- [ ] No progress timer, retry loop or healthy sibling placeholder renews a silent task indefinitely; expired leases stay expired.\n\n## Blocked by\n\n- [#3044 — Golden Search: execute through one isolated worker with read-time admission](https://github.com/tim1016/learn-ai/issues/3044)\n",
+      "deps": [
+        9
+      ],
+      "databaseId": 5796962676,
+      "stories": [
+        4,
+        7,
+        18,
+        19,
+        20,
+        21,
+        30
+      ],
+      "blockedBy": [
+        3044
+      ]
+    },
+    {
+      "n": 11,
+      "number": 3046,
+      "title": "Golden Search: run ready candidates concurrently without changing the search",
+      "url": "https://github.com/tim1016/learn-ai/issues/3046",
+      "body": "## Parent\n\n[PRD #3034 — Faster backtest research with reusable data and parallel workers](https://github.com/tim1016/learn-ai/issues/3034)\n\n## What to build\n\n**PRD user stories:** 1, 5, 6, 7, 8, 10, 21, 27, 29, 30. **Delivery slice:** 11 of 18.\n\nEnable bounded multiworker execution for one Golden Search study. Parallelize only the currently ready candidates, keep folds/round dependencies sequential, and preserve scientific output and serial reservation-prefix behavior.\n\n**Start from:** the ready-batch adapter, `StudyEvaluator.evaluate`, `run_zoom`, grid procedure, pair-audit maps, exam-fit/recency stage callers and the isolated worker runtime.\n\n**Implementation steps**\n1. Allow a configured bounded pool and dispatch window. Reserve the affordable logical prefix using the existing transaction/fence before submitting it.\n2. Consume results in canonical input order for procedure decisions while persisting accepted results as they arrive.\n3. Key in-flight joins by full evaluation key within the live attempt; route summary/detail separately and retain per-task generations.\n4. Wire every independent Golden Search batch, including pair audits and exam fits, through this boundary. Do not parallelize adaptive folds or the bar loop.\n5. Publish ready-width, active-worker, completed/reused and adaptive-wait facts through the existing progress contract; visual refinement comes later.\n\n**Not included:** cross-study fairness/affinity, receipt microbatching, other research surfaces or enabling eight workers by default.\n\n**Implementation boundaries:** This is one slice of #3034, not permission to implement its later tickets. Reuse the canonical Python engine and existing study/repository contracts. Keep scientific identities, Decimal values, calendar behavior and int64-ms-UTC boundaries intact. Do not add dependencies, change the market-data provider, touch clerk stores, enable unqualified concurrency by default, or modify an active production study. Read the applicable repository rules before editing; run stack lint and the targeted behavior tests. New real-process/database-heavy tests belong in the existing slow/daily tier, with no new CI jobs. If an edit touches canonical math or its provenance, apply the learn-ai-validation contract and the required independent review; scheduling is not a reason to alter numerical results.\n\n## Acceptance criteria\n\n- [ ] At least two actual workers overlap independent evaluations in an isolated test; replacing a synchronous function inside a serial loop does not count.\n- [ ] Serial, reversed and randomized completion orders give identical winners, objectives, trade/metric hashes and procedure record order.\n- [ ] New reservations are the exact affordable serial prefix for Zoom, grids, pair audits and exam fits, including intervening cache hits and duplicates.\n- [ ] Same point across window/scenario/detail identities is never coalesced; duplicate full keys share one live task and preserve existing accounting.\n- [ ] No next round/coordinate/fold or held-out request starts before its canonical dependencies/authorization permit it.\n- [ ] One hung worker times out independently while another progresses; worker-loss/budget/retry cases from the blocker pass with multiple workers.\n- [ ] The coordinator never holds the engine gate while awaiting workers; direct Strategy Lab remains on its existing local path.\n- [ ] Finite pending-task/result bounds prevent submission of the entire 5,000-point budget as resident futures.\n- [ ] The existing study-service lifecycle scenarios run with the quick fake batch adapter and slow real pool variants, including lock-to-exam detail evidence.\n- [ ] Report an initial same-corpus 1/2/4-worker measurement including transport overhead and effective width; this is evidence, not final performance qualification.\n\n## Blocked by\n\n- [#3040 — Golden Search: introduce an ordered ready-batch execution seam](https://github.com/tim1016/learn-ai/issues/3040)\n- [#3045 — Golden Search: recover worker loss and uncertain writes without double accounting](https://github.com/tim1016/learn-ai/issues/3045)\n",
+      "deps": [
+        5,
+        10
+      ],
+      "databaseId": 5796962778,
+      "stories": [
+        1,
+        5,
+        6,
+        7,
+        8,
+        10,
+        21,
+        27,
+        29,
+        30
+      ],
+      "blockedBy": [
+        3040,
+        3045
+      ]
+    },
+    {
+      "n": 12,
+      "number": 3047,
+      "title": "Backtest admission: batch concurrent read checks within a fixed connection budget",
+      "url": "https://github.com/tim1016/learn-ai/issues/3047",
+      "body": "## Parent\n\n[PRD #3034 — Faster backtest research with reusable data and parallel workers](https://github.com/tim1016/learn-ai/issues/3034)\n\n## What to build\n\n**PRD user stories:** 12, 13, 24, 27, 29, 33. **Delivery slice:** 12 of 18.\n\nImprove the worker admission path by combining requests already waiting at actual artifact-read boundaries. Preserve per-read revocation semantics and isolate admission traffic from study persistence.\n\n**Start from:** `read_committed_bytes`, `has_committed_file_receipt`, catalog pool creation, the parent admission service from the worker slice and the benchmark timing output.\n\n**Implementation steps**\n1. Drain currently pending requests into one set-based receipt lookup, deduplicating identical root/mode/path/digest/size tuples within that batch and returning a decision for each requester.\n2. Do not add a gathering delay or wait for another worker. Keep one pending artifact request per worker and preserve each worker's read order.\n3. Limit all research admission pools together to eight connections and coordination/materialization/persistence (including singleton ownership) to four. Validate total deployment maxima against PostgreSQL with at least 20 spare connections.\n4. Keep the admission I/O loop isolated from API/fleet and study-writer loops; no hashing/decoding/blocking CPU work runs on it.\n5. Instrument batch-size distribution, request versus SQL counts, query/pool wait and IPC latency. Preserve typed failures and the 35-second call bound.\n\n**Explicit prohibition:** one fresh query at evaluation start cannot authorize the whole window. No reusable positive receipt cache or claimed 961-to-one reduction.\n\n**Implementation boundaries:** This is one slice of #3034, not permission to implement its later tickets. Reuse the canonical Python engine and existing study/repository contracts. Keep scientific identities, Decimal values, calendar behavior and int64-ms-UTC boundaries intact. Do not add dependencies, change the market-data provider, touch clerk stores, enable unqualified concurrency by default, or modify an active production study. Read the applicable repository rules before editing; run stack lint and the targeted behavior tests. New real-process/database-heavy tests belong in the existing slow/daily tier, with no new CI jobs. If an edit touches canonical math or its provenance, apply the learn-ai-validation contract and the required independent review; scheduling is not a reason to alter numerical results.\n\n## Acceptance criteria\n\n- [ ] Two or more already-pending read requests can share a SQL lookup; one request completes without waiting for a batch.\n- [ ] Duplicate tuples share one lookup result only within that batch; future reads perform a fresh check even for unchanged bytes.\n- [ ] Revoking a later day's receipt after an earlier batch causes the later read to fail, including decoded-cache hits.\n- [ ] Batched decisions match individual receipt checks at the same read boundaries; root, mode, path, hash, size and committed status all participate.\n- [ ] Catalog outage returns the typed refusal promptly and does not perform a full timeout for every remaining artifact.\n- [ ] Tests/measurements show zero worker database connections, at most 12 research connections total, and no admission starvation of persistence/cancellation control.\n- [ ] The runtime refuses an invalid configured connection envelope or lowers explicit admission concurrency; it never silently raises server max_connections.\n- [ ] Measure p50/p95 admission and write latency at 1/2/4/8 workers and publish actual batch sizes/round-trip reduction on this issue.\n- [ ] Concurrent testing checks for F13-style shared-loop/GIL serialization; identical results alone are not accepted as evidence of good concurrency.\n\n## Blocked by\n\n- [#3046 — Golden Search: run ready candidates concurrently without changing the search](https://github.com/tim1016/learn-ai/issues/3046)\n",
+      "deps": [
+        11
+      ],
+      "databaseId": 5796962832,
+      "stories": [
+        12,
+        13,
+        24,
+        27,
+        29,
+        33
+      ],
+      "blockedBy": [
+        3046
+      ]
+    },
+    {
+      "n": 13,
+      "number": 3048,
+      "title": "Research runtime: share bounded workers fairly and prefer warm data",
+      "url": "https://github.com/tim1016/learn-ai/issues/3048",
+      "body": "## Parent\n\n[PRD #3034 — Faster backtest research with reusable data and parallel workers](https://github.com/tim1016/learn-ai/issues/3034)\n\n## What to build\n\n**PRD user stories:** 2, 3, 9, 17, 18, 23, 24, 26, 27, 33. **Delivery slice:** 13 of 18.\n\nAllow multiple authorized studies/launches to share the one research worker pool without starvation or resource growth. Prefer reusable decoded data only when it does not delay ready work or violate fair share.\n\n**Start from:** the research runtime's ready-batch queue, admission service, per-artifact cache metrics and existing operator configuration. Do not introduce a second scheduler or a pool per caller.\n\n**Implementation steps**\n1. Use a work-conserving round-robin queue across runnable study/launch owners. Each turn offers that owner's next already-authorized logical task; a single runnable owner may fill all free slots.\n2. Bound submitted/unaccepted tasks globally, initially at most twice worker count, and bound payload/result bytes independently. Keep future candidate definitions separate from submitted task state.\n3. Choose among idle compatible workers using artifact residency affinity, then a deterministic tie-break. Never leave an idle worker unused waiting for a warmer busy worker.\n4. Enforce the aggregate CPU/memory/cache/PID/connection envelope. Account for pinned cache entries, simulations, imports, buffers and parent memory; evict unused data or stop new admission under pressure.\n5. Provide operator profiles for 1/2/4/8 workers; retain the initial four-worker rollout and eight-worker qualification envelope of eight CPUs/16 GiB/PID cap 512. Capacity changes require drain.\n\n**Implementation boundaries:** This is one slice of #3034, not permission to implement its later tickets. Reuse the canonical Python engine and existing study/repository contracts. Keep scientific identities, Decimal values, calendar behavior and int64-ms-UTC boundaries intact. Do not add dependencies, change the market-data provider, touch clerk stores, enable unqualified concurrency by default, or modify an active production study. Read the applicable repository rules before editing; run stack lint and the targeted behavior tests. New real-process/database-heavy tests belong in the existing slow/daily tier, with no new CI jobs. If an edit touches canonical math or its provenance, apply the learn-ai-validation contract and the required independent review; scheduling is not a reason to alter numerical results.\n\n## Acceptance criteria\n\n- [ ] When a second owner becomes ready, it receives service on the next available scheduling turns; a long first study cannot enqueue its entire budget ahead of it.\n- [ ] One runnable study can use all available workers, subject to its actual ready width and per-study dependencies.\n- [ ] Warm affinity reduces avoidable decoding in a controlled overlapping-window case without introducing idle slots or starvation; report duplicate residency across workers.\n- [ ] Per-owner reservation order and task generations remain correct despite cross-owner interleaving.\n- [ ] Submitted/unaccepted task count and all queue/result-buffer byte limits remain bounded across many submitted studies.\n- [ ] Aggregate memory includes retained/pinned cache bytes, active simulations, worker imports and coordinator state; pressure cannot silently omit bars/results.\n- [ ] Cold-import and busy Linux-task peaks remain below 80% of PID cap 512 at qualification; startup refuses a configured pool that cannot fit.\n- [ ] No research child is in the API/clerk cgroup; measured VM headroom and shared PostgreSQL budget remain part of admission/qualification.\n- [ ] Queue progress renews liveness only on real advancement/handoff; blocked cancellation and hung tasks still meet independent deadlines.\n- [ ] An operator drain stops new admissions, completes or explicitly interrupts owned work, reaps workers and permits a capacity change without orphaning or changing existing scientific records.\n- [ ] Multi-study quick scheduling tests and slow isolated pressure/cleanup tests cover these outcomes; publish timing/resource evidence without touching the live study.\n\n## Blocked by\n\n- [#3046 — Golden Search: run ready candidates concurrently without changing the search](https://github.com/tim1016/learn-ai/issues/3046)\n- [#3047 — Backtest admission: batch concurrent read checks within a fixed connection budget](https://github.com/tim1016/learn-ai/issues/3047)\n",
+      "deps": [
+        11,
+        12
+      ],
+      "databaseId": 5796962887,
+      "stories": [
+        2,
+        3,
+        9,
+        17,
+        18,
+        23,
+        24,
+        26,
+        27,
+        33
+      ],
+      "blockedBy": [
+        3046,
+        3047
+      ]
+    },
+    {
+      "n": 14,
+      "number": 3049,
+      "title": "Grid Search: use the shared research runtime for parallel cells",
+      "url": "https://github.com/tim1016/learn-ai/issues/3049",
+      "body": "## Parent\n\n[PRD #3034 — Faster backtest research with reusable data and parallel workers](https://github.com/tim1016/learn-ai/issues/3034)\n\n## What to build\n\n**PRD user stories:** 1, 4, 5, 7, 16, 18, 19, 20, 21, 24, 30. **Delivery slice:** 14 of 18.\n\nRun the existing stock Parameter Grid Search feature through the shared isolated research service and pool, from normal launch/Finish to durable cells, leader selection and existing result screens.\n\n**Start from:** Grid Search `execute`, `default_execute_cell`, `run_grid`, shared sweep `run_each`, `write_cells`, `existing_params_hashes`, `claim_attempt` and the existing internal Grid Search job endpoint. Preserve its distinct cell identity/persistence contract.\n\n**Implementation steps**\n1. Forward Grid Search job execution through the same authenticated runtime dispatch/ownership path used by Golden Search.\n2. Prepare the existing immutable launch receipt/materialization in the coordinator; dispatch ready cells through the shared task adapter and parent admission service.\n3. Keep cell persistence, failed-cell handling, final ranking and terminal status in the coordinator under the existing attempt fence.\n4. Reuse completed durable cells on Finish and existing code/environment/data mismatch refusals. Carry progress/cancellation through the normal job/UI route.\n5. Update the authority-map Grid Search row and relevant ADR 0055 wording in this PR.\n\n**Not included:** replacing Grid Search cell identities with Golden Search keys, changing ranking, private pools or new UI design.\n\n**Implementation boundaries:** This is one slice of #3034, not permission to implement its later tickets. Reuse the canonical Python engine and existing study/repository contracts. Keep scientific identities, Decimal values, calendar behavior and int64-ms-UTC boundaries intact. Do not add dependencies, change the market-data provider, touch clerk stores, enable unqualified concurrency by default, or modify an active production study. Read the applicable repository rules before editing; run stack lint and the targeted behavior tests. New real-process/database-heavy tests belong in the existing slow/daily tier, with no new CI jobs. If an edit touches canonical math or its provenance, apply the learn-ai-validation contract and the required independent review; scheduling is not a reason to alter numerical results.\n\n## Acceptance criteria\n\n- [ ] A normal launch produces the same cell set, ordered parameters, statistics and leader as serial, with demonstrated overlap of independent cells.\n- [ ] Partial failure and all-failed searches retain their current status/ranking behavior.\n- [ ] Cancel keeps accepted completed cells; Finish skips exactly the durable completed identities and refuses incompatible code/data receipts.\n- [ ] A superseded attempt or late worker cannot write a cell or terminal status over the new attempt.\n- [ ] Preflight limits, duplicate/interior-invalid-value refusal, uniform run-up and snapshot-bound admission remain unchanged.\n- [ ] Grid and Golden Search can run together under one global pool/resource envelope and the fair scheduling policy.\n- [ ] API-only restart preserves the owned Grid job; research restart requires the existing Finish flow.\n- [ ] The current endpoints and result screens consume unchanged scientific contracts and correct job state/counts.\n- [ ] Existing Grid Search adapter-parity, runner, repository and endpoint tests run against serial/fake-batch adapters; slow real-runtime tests cover concurrency, restart and cancellation.\n\n## Blocked by\n\n- [#3048 — Research runtime: share bounded workers fairly and prefer warm data](https://github.com/tim1016/learn-ai/issues/3048)\n",
+      "deps": [
+        13
+      ],
+      "databaseId": 5796963622,
+      "stories": [
+        1,
+        4,
+        5,
+        7,
+        16,
+        18,
+        19,
+        20,
+        21,
+        24,
+        30
+      ],
+      "blockedBy": [
+        3048
+      ]
+    },
+    {
+      "n": 15,
+      "number": 3050,
+      "title": "Walk-Forward Study: parallelize cells while preserving fold dependencies",
+      "url": "https://github.com/tim1016/learn-ai/issues/3050",
+      "body": "## Parent\n\n[PRD #3034 — Faster backtest research with reusable data and parallel workers](https://github.com/tim1016/learn-ai/issues/3034)\n\n## What to build\n\n**PRD user stories:** 4, 5, 6, 8, 10, 15, 16, 18, 19, 20, 21, 30. **Delivery slice:** 15 of 18.\n\nAdopt the shared runtime for the stock Grid Search-based Walk-Forward Study feature. Independent training cells may overlap; train selection, frozen test evaluation and progression to the next fold remain sequential and scientifically identical.\n\n**Start from:** Walk-Forward Study `execute`, `_run_fold`, `_run_sweep`, fold records, Grid Search `execute` and `default_execute_cell`, the attempt fence and the existing study launch/Finish endpoint.\n\n**Implementation steps**\n1. Route the study's job owner through the shared research service and reuse the Grid Search pool adapter from the blocker.\n2. Within one fold, complete the authorized training sweep, select using the existing rule, persist its choice, then run the required test work. Persist the fold before advancing.\n3. Keep evidence-winner recording, curves, verdict and completed-backtest accounting in the coordinator.\n4. Preserve per-fold child-search IDs and Finish reuse; do not invent a second fold scheduler.\n5. Update the Walk-Forward Study authority-map row and test the existing user flow.\n\n**Boundary:** this ticket targets the stock Walk-Forward Study built on Grid Search. The separate StrategySpec walk-forward analysis has its own engine/artifact contract; do not merge or rewrite that feature as part of this ticket.\n\n**Implementation boundaries:** This is one slice of #3034, not permission to implement its later tickets. Reuse the canonical Python engine and existing study/repository contracts. Keep scientific identities, Decimal values, calendar behavior and int64-ms-UTC boundaries intact. Do not add dependencies, change the market-data provider, touch clerk stores, enable unqualified concurrency by default, or modify an active production study. Read the applicable repository rules before editing; run stack lint and the targeted behavior tests. New real-process/database-heavy tests belong in the existing slow/daily tier, with no new CI jobs. If an edit touches canonical math or its provenance, apply the learn-ai-validation contract and the required independent review; scheduling is not a reason to alter numerical results.\n\n## Acceptance criteria\n\n- [ ] Serial and pool-backed studies produce identical fold windows, selected parameters, child-search identities/relations, curves and verdict.\n- [ ] No test-window evaluation starts before its training winner is durably selected; no next fold starts before the prior fold's required work finishes.\n- [ ] Independent ready training cells actually overlap through the shared pool; adaptive folds themselves do not.\n- [ ] Perturbing held-out inputs cannot change training-stage decisions; warmup/calendar/DST/early-close behavior is unchanged.\n- [ ] Cancel between training and test, during a test and between folds leaves truthful incomplete state and reusable completed child cells.\n- [ ] Finish resumes the recorded study under a new attempt and reuses durable folds/cells without double-counting completed backtests.\n- [ ] Late results from a former attempt cannot overwrite a resumed fold or winner.\n- [ ] The existing fold/verdict/curve screens continue to show the recorded result and progress; API/research restart behavior matches the common runtime.\n- [ ] Walk-Forward Study service/fold/endpoint tests pass with the shared adapters; a slow integration case covers cancellation and completion out of order within a training sweep.\n\n## Blocked by\n\n- [#3049 — Grid Search: use the shared research runtime for parallel cells](https://github.com/tim1016/learn-ai/issues/3049)\n",
+      "deps": [
+        14
+      ],
+      "databaseId": 5796963669,
+      "stories": [
+        4,
+        5,
+        6,
+        8,
+        10,
+        15,
+        16,
+        18,
+        19,
+        20,
+        21,
+        30
+      ],
+      "blockedBy": [
+        3049
+      ]
+    },
+    {
+      "n": 16,
+      "number": 3051,
+      "title": "Recency: run independent evaluations through the shared research runtime",
+      "url": "https://github.com/tim1016/learn-ai/issues/3051",
+      "body": "## Parent\n\n[PRD #3034 — Faster backtest research with reusable data and parallel workers](https://github.com/tim1016/learn-ai/issues/3034)\n\n## What to build\n\n**PRD user stories:** 4, 5, 11, 16, 18, 19, 20, 21, 25, 30. **Delivery slice:** 16 of 18.\n\nMove the existing Recency launch/Finish execution into the shared runtime and parallelize independent run specifications while preserving its evidence fingerprint and durable accounting.\n\n**Start from:** Recency `run_launch`, `run_recency`, `_execute_backtest`, `_persist`, `_recorded_cells`, `RecencyRunSnapshot`, `record_terminal_status`, `resume_refusal` and the current Recency job endpoint.\n\n**Implementation steps**\n1. Route the job through the same remote ownership/cancellation/progress boundary; keep validation and materialization policy canonical in the coordinator.\n2. Adapt independent Recency RunSpecs to the shared worker protocol, including the resolved execution/data policy and required projection.\n3. Persist snapshots and perform trade/evidence deduplication only in the coordinator under the launch attempt fence.\n4. Preserve the distinction between durable succeeded counts and per-attempt failed counts on Finish.\n5. Update the Recency engine authority-map row and ADR 0065 applicability in this PR.\n\n**Not included:** new Recency formulas, changing its fingerprint to a Golden Search key, new pools, or changing overlap deduplication semantics.\n\n**Implementation boundaries:** This is one slice of #3034, not permission to implement its later tickets. Reuse the canonical Python engine and existing study/repository contracts. Keep scientific identities, Decimal values, calendar behavior and int64-ms-UTC boundaries intact. Do not add dependencies, change the market-data provider, touch clerk stores, enable unqualified concurrency by default, or modify an active production study. Read the applicable repository rules before editing; run stack lint and the targeted behavior tests. New real-process/database-heavy tests belong in the existing slow/daily tier, with no new CI jobs. If an edit touches canonical math or its provenance, apply the learn-ai-validation contract and the required independent review; scheduling is not a reason to alter numerical results.\n\n## Acceptance criteria\n\n- [ ] Serial and pooled launches produce identical persisted trades, fees, holding-session/statistic values, fingerprints and swimlane evidence.\n- [ ] Independent runs overlap, but duplicate evidence across overlapping windows is still recorded once under the existing identity.\n- [ ] Completed snapshots survive cancellation/crash and are skipped on Finish; failed runs follow the existing retry/resume behavior.\n- [ ] Durable succeeded counts are not replaced by the resumed attempt's local count; final status matches existing reconciliation rules.\n- [ ] Late prior-attempt output cannot persist a snapshot or terminal status over the resumed launch.\n- [ ] Grid, Golden Search and Recency share one bounded pool, admission service and connection envelope.\n- [ ] API-only restart preserves a healthy launch; research restart/cancel supports the existing explicit Finish refusal/acceptance rules.\n- [ ] The current Recency views receive unchanged scientific DTOs and honest progress/terminal state.\n- [ ] Existing runner, fingerprint, repository, launch and resume-refusal tests cover serial/fake-batch parity; slow real-worker tests cover loss and cancellation.\n\n## Blocked by\n\n- [#3048 — Research runtime: share bounded workers fairly and prefer warm data](https://github.com/tim1016/learn-ai/issues/3048)\n",
+      "deps": [
+        13
+      ],
+      "databaseId": 5796963712,
+      "stories": [
+        4,
+        5,
+        11,
+        16,
+        18,
+        19,
+        20,
+        21,
+        25,
+        30
+      ],
+      "blockedBy": [
+        3048
+      ]
+    },
+    {
+      "n": 17,
+      "number": 3052,
+      "title": "Research progress: show capacity and adaptive waits without event flooding",
+      "url": "https://github.com/tim1016/learn-ai/issues/3052",
+      "body": "## Parent\n\n[PRD #3034 — Faster backtest research with reusable data and parallel workers](https://github.com/tim1016/learn-ai/issues/3034)\n\n## What to build\n\n**PRD user stories:** 9, 17, 18, 19, 20, 22, 24, 32. **Delivery slice:** 17 of 18.\n\nComplete the user-visible progress path for all adopted research callers. Explain whether a job is waiting for capacity, preparing data, evaluating or waiting for an adaptive dependency, and keep completed/reused counts truthful.\n\n**Start from:** accepted runtime checkpoint/progress facts, `ProgressEmitter`, existing Redis/SSE job transport, Angular `JobsService`, Golden Search process/study views and the Grid Search, Walk-Forward Study and Recency job consumers.\n\n**Implementation steps**\n1. Define additive server-authored phase/count fields from accepted runtime facts; preserve existing upper-bound total semantics.\n2. Coalesce ordinary public progress to at most one event per second per study/launch, independent of internal checkpoint/lease processing.\n3. Always deliver terminal transitions and required errors. Bound payloads/retention and ensure coalescing cannot reorder an older progress update after a terminal event.\n4. Render concise phase/reason text and counts in existing views, with Cancel/Finish driven by server liveness/authorization.\n5. Pass any added contract fields through the existing Backend transport and generated contracts as needed; perform no numeric calculation in .NET/Angular.\n\n**Not included:** exposing cache keys, PIDs or database internals in the normal UI, a new dashboard, or a new liveness authority.\n\n**Implementation boundaries:** This is one slice of #3034, not permission to implement its later tickets. Reuse the canonical Python engine and existing study/repository contracts. Keep scientific identities, Decimal values, calendar behavior and int64-ms-UTC boundaries intact. Do not add dependencies, change the market-data provider, touch clerk stores, enable unqualified concurrency by default, or modify an active production study. Read the applicable repository rules before editing; run stack lint and the targeted behavior tests. New real-process/database-heavy tests belong in the existing slow/daily tier, with no new CI jobs. If an edit touches canonical math or its provenance, apply the learn-ai-validation contract and the required independent review; scheduling is not a reason to alter numerical results.\n\n## Acceptance criteria\n\n- [ ] An idle worker pool with a dependency-bound study displays adaptive waiting; a runnable queued task displays capacity waiting; these are distinct backend states.\n- [ ] Queued/preparing/evaluating/completed/reused/failed/interrupted counts describe actual accepted work, and completed-result cache hits never count as newly executed evaluations.\n- [ ] Ordinary SSE updates stay within one per second per study/launch under eight-worker checkpoint traffic.\n- [ ] Terminal/error delivery is preserved, a pending coalesced update cannot follow a terminal state, and stream/payload limits remain bounded.\n- [ ] Coalesced or suppressed UI events neither prevent valid checkpoint lease renewal nor create renewal without real progress.\n- [ ] Browser closure does not cancel research. Reopening reads current durable/job state; Cancel and Finish remain accurate after API-only and research-runtime restarts.\n- [ ] All four feature views handle the additive contract and legacy serial jobs without exposing raw process/cache details.\n- [ ] Backend contract tests plus targeted Angular service/component behavior tests prove rendering and controls; avoid text-only copy pins and private-state assertions.\n- [ ] Use installed frontend versions and existing component patterns; Python remains the source of progress counts and scientific numbers.\n\n## Blocked by\n\n- [#3049 — Grid Search: use the shared research runtime for parallel cells](https://github.com/tim1016/learn-ai/issues/3049)\n- [#3050 — Walk-Forward Study: parallelize cells while preserving fold dependencies](https://github.com/tim1016/learn-ai/issues/3050)\n- [#3051 — Recency: run independent evaluations through the shared research runtime](https://github.com/tim1016/learn-ai/issues/3051)\n",
+      "deps": [
+        14,
+        15,
+        16
+      ],
+      "databaseId": 5796963779,
+      "stories": [
+        9,
+        17,
+        18,
+        19,
+        20,
+        22,
+        24,
+        32
+      ],
+      "blockedBy": [
+        3049,
+        3050,
+        3051
+      ]
+    },
+    {
+      "n": 18,
+      "number": 3053,
+      "title": "Backtest throughput: qualify the complete runtime and document safe rollout",
+      "url": "https://github.com/tim1016/learn-ai/issues/3053",
+      "body": "## Parent\n\n[PRD #3034 — Faster backtest research with reusable data and parallel workers](https://github.com/tim1016/learn-ai/issues/3034)\n\n## What to build\n\n**PRD user stories:** 1, 2, 3, 5, 16, 18, 19, 20, 23, 24, 26, 27, 28, 29, 30, 33. **Delivery slice:** 18 of 18.\n\nRun the frozen scientific/performance qualification across the completed runtime and adopted research callers, publish the evidence, and document the selected operating profile, drain and rollback. This closes the measured objective rather than merely reporting that eight processes started.\n\n**Start from:** the frozen benchmark/corpus, per-slice correctness/fault tests, runtime configuration/metrics, deployment definitions and the completed authority-map/ADR amendments.\n\n**Execution order**\n1. Run relevant quick and slow correctness suites, including the existing Golden Search lifecycle matrix with real workers. Resolve correctness failures before timing.\n2. Run original serial, same-resource serial, serial-with-cache and 1/2/4/8-worker modes with three repetitions each on the fixed corpus. Use local admitted data; no live downloads or broker actions.\n3. Run the frozen end-to-end Golden Search protocol and mixed concurrent research callers; capture widths, adaptive waits, admission contention and transport cost.\n4. Exercise isolated cancellation, worker/coordinator/container death, API restart, drain and rollback. Resource-kill tests run in isolated containers, never against the active trading/research stack.\n5. Publish raw measurements/summary to this issue or a linked throwaway research branch. Put durable operator steps in a runbook; keep one-off reports off master.\n6. Choose the four/eight-worker default only from passing qualification and apply it through the documented operator/drain procedure. Twelve workers and a VM increase are optional separately measured configurations, not prerequisites.\n\n**Failure rule:** if a release target fails, report the measured bottleneck and keep the executor opt-in. Do not relax admission, change the frozen corpus, count result-cache hits or mark the parent objective achieved.\n\n**Implementation boundaries:** This is one slice of #3034, not permission to implement its later tickets. Reuse the canonical Python engine and existing study/repository contracts. Keep scientific identities, Decimal values, calendar behavior and int64-ms-UTC boundaries intact. Do not add dependencies, change the market-data provider, touch clerk stores, enable unqualified concurrency by default, or modify an active production study. Read the applicable repository rules before editing; run stack lint and the targeted behavior tests. New real-process/database-heavy tests belong in the existing slow/daily tier, with no new CI jobs. If an edit touches canonical math or its provenance, apply the learn-ai-validation contract and the required independent review; scheduling is not a reason to alter numerical results.\n\n## Acceptance criteria\n\n- [ ] Every executor/cache mode produces the frozen scientific outputs under existing strict equality/tolerances; exam evidence, budget prefixes, retries and stale-result fences pass.\n- [ ] Eight workers achieve at least 4x warm and 3x preparation-inclusive valid-new-evaluation throughput versus the original serial baseline; cold preparation includes pool startup/imports/cache construction.\n- [ ] The designated Golden Search study is scientifically identical and at least 2x faster; publish its sampled/testable/new-ready round-width distribution and adaptive wait time.\n- [ ] Single-study and mixed-study results are reported separately. Include p50/p95 serialization, IPC, persistence and admission latency plus their share of short-evaluation duration.\n- [ ] Report actual receipt batches/SQL calls, cache residency/duplication/eviction, peak connections, memory/VM headroom, PID/native threads, CPU and SSE volume.\n- [ ] The eight-worker run fits eight CPUs/16 GiB/PID cap 512 with task peaks below 80% of that PID limit, at most 12 research DB connections and at least 20 server connections reserved.\n- [ ] Lightweight API reads have p95 below one second with no unexpected errors and no broker clerk restarts during qualification.\n- [ ] Cancel stops dispatch within one second and releases slots within ten seconds; all isolated crash/restart cases leave honest resumable state and no orphaned worker/task/data references.\n- [ ] The runbook specifies preflight resource/connection inventory, executor selection, drain, capacity/version change, explicit Finish, rollback and smaller-machine defaults.\n- [ ] ADR 0055, ADR 0065, ADR 0049 D3a, topology decisions and all adopted engine-authority rows describe the shipped behavior with no contradictory active serial/global-sweep claim.\n- [ ] Existing quick/daily CI job budgets and independent review requirements are met; no benchmark-only CI jobs are added.\n- [ ] Passing qualification records the selected default; failing performance records measured blockers and opt-in status. The parent issue is not closed automatically by this ticket.\n\n## Blocked by\n\n- [#3036 — Backtest throughput: freeze the scientific baseline and qualification corpus](https://github.com/tim1016/learn-ai/issues/3036)\n- [#3052 — Research progress: show capacity and adaptive waits without event flooding](https://github.com/tim1016/learn-ai/issues/3052)\n",
+      "deps": [
+        1,
+        17
+      ],
+      "databaseId": 5796963849,
+      "stories": [
+        1,
+        2,
+        3,
+        5,
+        16,
+        18,
+        19,
+        20,
+        23,
+        24,
+        26,
+        27,
+        28,
+        29,
+        30,
+        33
+      ],
+      "blockedBy": [
+        3036,
+        3052
+      ]
+    }
+  ],
+  "storyCoverage": {
+    "1": [
+      8,
+      11,
+      14,
+      18
+    ],
+    "2": [
+      8,
+      13,
+      18
+    ],
+    "3": [
+      3,
+      9,
+      13,
+      18
+    ],
+    "4": [
+      4,
+      5,
+      10,
+      14,
+      15,
+      16
+    ],
+    "5": [
+      1,
+      3,
+      5,
+      9,
+      11,
+      14,
+      15,
+      16,
+      18
+    ],
+    "6": [
+      5,
+      11,
+      15
+    ],
+    "7": [
+      5,
+      10,
+      11,
+      14
+    ],
+    "8": [
+      5,
+      11,
+      15
+    ],
+    "9": [
+      13,
+      17
+    ],
+    "10": [
+      5,
+      11,
+      15
+    ],
+    "11": [
+      3,
+      9,
+      16
+    ],
+    "12": [
+      2,
+      3,
+      9,
+      12
+    ],
+    "13": [
+      2,
+      3,
+      9,
+      12
+    ],
+    "14": [
+      2,
+      3,
+      9
+    ],
+    "15": [
+      2,
+      3,
+      9,
+      15
+    ],
+    "16": [
+      14,
+      15,
+      16,
+      18
+    ],
+    "17": [
+      6,
+      8,
+      13,
+      17
+    ],
+    "18": [
+      6,
+      8,
+      9,
+      10,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18
+    ],
+    "19": [
+      6,
+      7,
+      8,
+      9,
+      10,
+      14,
+      15,
+      16,
+      17,
+      18
+    ],
+    "20": [
+      7,
+      8,
+      10,
+      14,
+      15,
+      16,
+      17,
+      18
+    ],
+    "21": [
+      5,
+      6,
+      7,
+      9,
+      10,
+      11,
+      14,
+      15,
+      16
+    ],
+    "22": [
+      7,
+      8,
+      17
+    ],
+    "23": [
+      3,
+      9,
+      13,
+      18
+    ],
+    "24": [
+      8,
+      12,
+      13,
+      14,
+      17,
+      18
+    ],
+    "25": [
+      4,
+      5,
+      9,
+      16
+    ],
+    "26": [
+      7,
+      8,
+      13,
+      18
+    ],
+    "27": [
+      1,
+      11,
+      12,
+      13,
+      18
+    ],
+    "28": [
+      1,
+      18
+    ],
+    "29": [
+      1,
+      9,
+      11,
+      12,
+      18
+    ],
+    "30": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      14,
+      15,
+      16,
+      18
+    ],
+    "31": [
+      4
+    ],
+    "32": [
+      17
+    ],
+    "33": [
+      9,
+      12,
+      13,
+      18
+    ]
+  }
+}
