@@ -24,25 +24,24 @@ import hashlib
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from importlib.metadata import version as _package_version
 from pathlib import Path
 from typing import Any, Literal
 
 from app.data_lake.adjustment_versions import AdjustmentVersionGuard, adjusted_root_for, companion_path
 from app.data_lake.admission import read_committed_bytes
 from app.engine.data.availability import MissingSessionsError, check_availability
+from app.engine.data.decoded_cache import DecodedArtifactCache
 from app.engine.data.dividends import find_factor_file
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.engine.data.trade_bar import TradeBar
-from app.lean_sidecar.trading_calendar import expected_sessions
+from app.lean_sidecar.trading_calendar import (
+    CALENDAR_IDENTITY,
+    CALENDAR_PACKAGE_VERSION,
+    expected_sessions,
+)
 from app.research.runs.hashing import hash_payload
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 
-CALENDAR_IDENTITY = "NYSE"
-# The package version is part of the snapshot because it decides which sessions
-# exist; read from package metadata so the canonical calendar module stays the
-# only importer of pandas_market_calendars (ADR 0022 (d)).
-CALENDAR_PACKAGE_VERSION = _package_version("pandas_market_calendars")
 Resolution = Literal["minute", "daily"]
 
 
@@ -187,7 +186,12 @@ def verify_data_snapshot(snapshot: DataSnapshot, roots: Sequence[Path]) -> list[
     return mismatched
 
 
-def _verify_bytes(manifest: Mapping[str, str], relative: str, payload: bytes) -> None:
+def _verify_bytes(manifest: Mapping[str, str], relative: str, payload: bytes) -> str:
+    """Refuse unreceipted or changed bytes; return the digest that passed.
+
+    The digest is handed back so the decoded-artifact cache keys on it
+    without hashing the payload a second time (#3038).
+    """
     expected = manifest.get(relative)
     actual = hashlib.sha256(payload).hexdigest()
     if expected is None:
@@ -196,6 +200,7 @@ def _verify_bytes(manifest: Mapping[str, str], relative: str, payload: bytes) ->
         raise DataSnapshotMismatchError(
             f"{relative} changed since the snapshot was taken (receipted {expected[:12]}…, found {actual[:12]}…)"
         )
+    return actual
 
 
 def _refuse_if_receipted(manifest: Mapping[str, str], relative: str) -> None:
@@ -226,8 +231,9 @@ class ManifestBoundMinuteReader(LeanMinuteDataReader):
         data_root: Path | str | Sequence[Path | str],
         manifest: Mapping[str, str],
         session: Literal["regular", "extended"] = "regular",
+        decoded_cache: DecodedArtifactCache | None = None,
     ) -> None:
-        super().__init__(data_root, session=session)
+        super().__init__(data_root, session=session, decoded_cache=decoded_cache)
         self._manifest = dict(manifest)
 
     def iter_dates(self, symbol: str, start: date, end: date) -> Iterator[date]:
@@ -245,16 +251,21 @@ class ManifestBoundMinuteReader(LeanMinuteDataReader):
             _refuse_if_receipted(self._manifest, relative)
             return []
         payload = read_committed_bytes(zip_path)
-        _verify_bytes(self._manifest, relative, payload)
+        digest = _verify_bytes(self._manifest, relative, payload)
         _verify_adjustment_receipt(self.adjustment_guard, self._manifest, relative, zip_path, payload, symbol)
-        return self.parse_day_zip(payload, symbol, trading_date)
+        return self._decode_day(zip_path, payload, symbol, trading_date, content_digest=digest)
 
 
 class ManifestBoundDailyReader(LeanDailyDataReader):
     """A daily reader that parses only bytes matching the receipted manifest."""
 
-    def __init__(self, data_root: Path | str | Sequence[Path | str], manifest: Mapping[str, str]) -> None:
-        super().__init__(data_root)
+    def __init__(
+        self,
+        data_root: Path | str | Sequence[Path | str],
+        manifest: Mapping[str, str],
+        decoded_cache: DecodedArtifactCache | None = None,
+    ) -> None:
+        super().__init__(data_root, decoded_cache=decoded_cache)
         self._manifest = dict(manifest)
 
     def _verified_payload(self, zip_path: Path, symbol: str) -> bytes | None:

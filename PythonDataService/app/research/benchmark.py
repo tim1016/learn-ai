@@ -66,6 +66,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
+from app.engine.data.decoded_cache import DecodedArtifactCache
 from app.research.golden_search.declarations import point_hash as hash_point
 from app.research.golden_search.evaluator import (
     BASE_SCENARIO,
@@ -148,13 +149,19 @@ ADDITIVE_PHASES: tuple[str, ...] = ("fetch", "consolidate", "simulate", "aggrega
 NESTED_PHASES: tuple[str, ...] = ("admission", "decoding", "queue", "ipc")
 TIMING_KINDS: dict[str, str] = {**{name: "additive" for name in ADDITIVE_PHASES}, **{name: "nested" for name in NESTED_PHASES}}
 
-# The modes the report names. Only the first of each pair runs today; the
-# others are the contract later executors must answer for, refused by
-# ``run_baseline`` until the executor that measures them exists.
+# The modes the report names. The serial originals and the decoded-artifact
+# cache run today; ``serial-same-resource`` remains the contract a later
+# executor must answer for, refused by ``run_baseline`` until it exists.
 EXECUTION_MODES: tuple[str, ...] = ("serial-original", "serial-same-resource", "serial-decoded-cache")
-RUNNABLE_EXECUTION_MODES: tuple[str, ...] = ("serial-original",)
+RUNNABLE_EXECUTION_MODES: tuple[str, ...] = ("serial-original", "serial-decoded-cache")
 TIMING_MODES: tuple[Literal["warm", "preparation-inclusive"], ...] = ("warm", "preparation-inclusive")
 RUNNABLE_TIMING_MODES: tuple[str, ...] = ("warm",)
+
+# Retention bound for the serial decoded-artifact cache (#3038): an estimate
+# of the decoded bars one process may hold, sized so the qualification corpus
+# (every window's artifacts decoded once) fits resident. One process only —
+# the parallel runtime gets its own envelope in later #3034 slices.
+DECODED_CACHE_DEFAULT_BYTES = 2 * 1024**3
 
 # The engine's ``on_phase`` vocabulary mapped onto the additive spans.
 _PHASE_MAP: dict[str, str] = {
@@ -390,6 +397,11 @@ class BaselineReport:
     variability_ms: dict[str, float] = field(default_factory=dict)
     cache_hits: int = 0
     throughput: dict[str, float] = field(default_factory=dict)
+    # The decoded-artifact cache's accounting, present only for the mode that
+    # ran one (#3038): hit/miss/eviction/uncached counts and resident/pinned
+    # bytes. Distinct from ``cache_hits``, which counts completed-evaluation
+    # reuse — always zero on these paths, where it would be a fault.
+    decoded_cache_metrics: dict[str, Any] | None = None
     notes: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -400,6 +412,7 @@ class BaselineReport:
             "environment": self.environment,
             "corpus": self.corpus,
             "cache_hits": self.cache_hits,
+            **({"decoded_cache": self.decoded_cache_metrics} if self.decoded_cache_metrics is not None else {}),
             "throughput": self.throughput,
             "notes": self.notes,
             "medians_ms": self.medians_ms,
@@ -507,11 +520,17 @@ def _engine_request(
     )
 
 
-def _serial_execute(request: Any, on_phase: Callable[[str], None], data_manifest: Mapping[str, str] | None) -> Any:
+def _serial_execute(
+    request: Any,
+    on_phase: Callable[[str], None],
+    data_manifest: Mapping[str, str] | None,
+    decoded_cache: DecodedArtifactCache | None = None,
+) -> Any:
     from app.services.engine_backtest_service import execute_engine_backtest
 
     return execute_engine_backtest(
-        request=request, on_phase=on_phase, on_log=lambda message: None, data_manifest=data_manifest
+        request=request, on_phase=on_phase, on_log=lambda message: None, data_manifest=data_manifest,
+        decoded_cache=decoded_cache,
     )
 
 
@@ -533,6 +552,7 @@ def run_identity(
     data_manifest: Mapping[str, str] | None = None,
     repetition: int = 0,
     execute: Callable[..., Any] | None = None,
+    decoded_cache: DecodedArtifactCache | None = None,
 ) -> IdentityRun:
     """Execute one identity on the serial path and measure its additive spans.
 
@@ -541,9 +561,11 @@ def run_identity(
     ``execute(request=..., on_phase=..., data_manifest=...)`` — the manifest
     is the snapshot's receipts, and binding the engine's reads to it is what
     makes the report's snapshot digest the digest of the bytes actually
-    consumed. A response with ``success=False`` raises
-    :class:`BaselineExecutionError` rather than recording anything. Timings
-    ride the run's own phase boundaries — no timers, no sampling.
+    consumed. With ``decoded_cache`` the invocation adds that argument, so a
+    three-argument seam keeps working for every non-cache caller (#3038). A
+    response with ``success=False`` raises :class:`BaselineExecutionError`
+    rather than recording anything. Timings ride the run's own phase
+    boundaries — no timers, no sampling.
     """
     execution = _assumptions_dict() if execution is None else dict(execution)
     stamps: dict[str, float] = {}
@@ -557,7 +579,10 @@ def run_identity(
 
     request = _engine_request(identity, execution=execution, data_policy=data_policy)
     start = time.perf_counter()
-    response = (execute or _serial_execute)(request, on_phase, data_manifest)
+    if decoded_cache is None:
+        response = (execute or _serial_execute)(request, on_phase, data_manifest)
+    else:
+        response = (execute or _serial_execute)(request, on_phase, data_manifest, decoded_cache)
     total_ms = (time.perf_counter() - start) * 1000
 
     if not getattr(response, "success", False):
@@ -614,16 +639,23 @@ def run_baseline(
     folds: int = CORPUS_FOLD_COUNT,
     seed: int = CORPUS_SEED,
     data_policy: Mapping[str, Any] | None = None,
+    decoded_cache_byte_bound: int = DECODED_CACHE_DEFAULT_BYTES,
     execute: Callable[..., Any] | None = None,
 ) -> BaselineReport:
-    """Freeze the snapshot, regenerate the corpus, and run it ``repetitions`` times on the serial path.
+    """Freeze the snapshot, regenerate the corpus, and run it ``repetitions`` times.
 
-    The same ``data_policy`` flows into the corpus identities and every
-    engine request, and the snapshot's manifest binds each run's reads to
-    the receipted bytes, so the report's input identity is the identity of
+    The same ``data_policy`` flows into the corpus identities and every engine
+    request, and the snapshot's manifest binds each run's reads to the
+    receipted bytes, so the report's input identity is the identity of
     what was executed. Completed-result cache hits cannot occur here —
     every identity is a fresh evaluation key — and one showing up in a
     future mode is reported as a fault in ``notes``, never as throughput.
+
+    ``serial-decoded-cache`` runs the same corpus with one process-shared
+    decoded-artifact cache (#3038): every artifact read still re-admits, and
+    the report carries the cache's own hit/miss/eviction accounting under
+    ``decoded_cache``. No speedup target is claimed from that mode in this
+    slice — it exists to measure the reuse.
     """
     if execution_mode not in EXECUTION_MODES:
         raise ValueError(f"unknown execution mode {execution_mode!r}")
@@ -637,6 +669,8 @@ def run_baseline(
             f"{timing_mode!r} timing needs an executor with a worker to start; the serial path "
             "attributes no worker startup or imports"
         )
+    if decoded_cache_byte_bound <= 0:
+        raise ValueError(f"decoded-cache bound must be positive, got {decoded_cache_byte_bound}")
     snapshot = capture_data_snapshot(roots=list(roots), symbol=symbol, resolution="minute", data_start=development[0], data_end=development[1])
     # One materialized policy feeds the corpus identities and every engine
     # request: passing None on to the engine would let it synthesize its own
@@ -663,6 +697,12 @@ def run_baseline(
         corpus=corpus.as_dict(),
     )
     execution = _assumptions_dict()
+    # One cache for the whole baseline when the mode asks for it: sequential
+    # evaluations in this process share admitted decodes; each still runs
+    # every admission check per read (#3038).
+    decoded_cache = None
+    if execution_mode == "serial-decoded-cache":
+        decoded_cache = DecodedArtifactCache(max_bytes=decoded_cache_byte_bound)
     run_wall = time.perf_counter()
     for repetition in range(repetitions):
         for identity in corpus.identities:
@@ -674,9 +714,12 @@ def run_baseline(
                     data_manifest=snapshot.artifacts,
                     repetition=repetition,
                     execute=execute,
+                    decoded_cache=decoded_cache,
                 )
             )
     wall_seconds = time.perf_counter() - run_wall
+    if decoded_cache is not None:
+        report.decoded_cache_metrics = decoded_cache.metrics()
     report.medians_ms, report.variability_ms = _summarize(report.runs)
     # Valid new evaluations: every recorded run (failures raised instead of
     # being recorded, and this path holds no completed-evaluation cache), so
@@ -957,6 +1000,14 @@ def summarize_report(report: BaselineReport) -> str:
         f"(repetition variability {report.variability_ms.get('total', 0.0)} ms)",
         f"  expectations held: {sum(1 for run in report.runs if run.expectation_held)}/{len(report.runs)}",
     ]
+    if report.decoded_cache_metrics is not None:
+        cache = report.decoded_cache_metrics
+        lines.append(
+            f"  decoded cache: {cache['hits']} hits / {cache['misses']} misses, "
+            f"{cache['evictions']} evictions, {cache['uncached_decodes']} uncached; "
+            f"{cache['resident_bytes']} of {cache['max_bytes']} bytes resident "
+            f"({cache['pinned_bytes']} pinned, {cache['duplicate_residency_bytes']} duplicated)"
+        )
     inventory = connection_inventory()
     if inventory["verified"]:
         verdict = "meets" if inventory["meets_required_free"] else "FAILS"

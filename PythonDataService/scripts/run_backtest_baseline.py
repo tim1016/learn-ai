@@ -27,7 +27,12 @@ import json
 from datetime import date
 from pathlib import Path
 
-from app.research.benchmark import run_baseline, summarize_report
+from app.research.benchmark import (
+    DECODED_CACHE_DEFAULT_BYTES,
+    RUNNABLE_EXECUTION_MODES,
+    run_baseline,
+    summarize_report,
+)
 
 
 def _iso_date(raw: str) -> date:
@@ -44,6 +49,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--to", dest="development_to", type=_iso_date, required=True, help="development window's last ET trading date")
     parser.add_argument("--roots", type=Path, nargs="+", required=True, help="lake roots to capture (each holds equity/…)")
     parser.add_argument("--repetitions", type=int, default=3, help="times to run the corpus (default 3)")
+    parser.add_argument(
+        "--execution-mode",
+        choices=RUNNABLE_EXECUTION_MODES,
+        default="serial-original",
+        help="which executor to measure (default serial-original; serial-decoded-cache shares admitted decodes, #3038)",
+    )
+    parser.add_argument(
+        "--cache-mb",
+        type=int,
+        default=DECODED_CACHE_DEFAULT_BYTES // (1024**2),
+        help="decoded-artifact retention bound in MiB for serial-decoded-cache (default %(default)s)",
+    )
     parser.add_argument("--output", type=Path, default=Path("baseline-report.json"), help="where to write the JSON report")
     args = parser.parse_args(argv)
 
@@ -52,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
         symbol=args.symbol,
         development=(args.development_from, args.development_to),
         repetitions=args.repetitions,
+        execution_mode=args.execution_mode,
+        decoded_cache_byte_bound=args.cache_mb * 1024**2,
     )
     args.output.write_text(json.dumps(report.as_dict(), indent=2), encoding="utf-8")
     print(summarize_report(report))

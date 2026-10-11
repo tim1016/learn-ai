@@ -31,6 +31,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.data_lake.path_policy import lake_root_for
 from app.engine.data.availability import check_availability
+from app.engine.data.decoded_cache import DecodedArtifactCache
 from app.engine.data.dividends import (
     CashDividend,
     dividends_from_factor_bytes,
@@ -406,14 +407,20 @@ def _reader_and_engine(
     fill_mode: FillMode,
     data_roots: list[Path],
     data_manifest: Mapping[str, str] | None,
+    decoded_cache: DecodedArtifactCache | None = None,
 ) -> tuple[LeanMinuteDataReader | LeanDailyDataReader, BacktestEngine]:
-    """The bar reader and engine a run reads and executes with."""
+    """The bar reader and engine a run reads and executes with.
+
+    ``decoded_cache`` — research callers only — lets sequential runs share
+    admitted decodes (#3038); every caller that passes none decodes per read,
+    exactly as before.
+    """
     reader: LeanMinuteDataReader | LeanDailyDataReader
     if request.resolution == "daily":
         reader = (
-            LeanDailyDataReader(data_roots)
+            LeanDailyDataReader(data_roots, decoded_cache=decoded_cache)
             if data_manifest is None
-            else ManifestBoundDailyReader(data_roots, data_manifest)
+            else ManifestBoundDailyReader(data_roots, data_manifest, decoded_cache=decoded_cache)
         )
     else:
         # Honor the request's ``data_policy.session`` so the reader drops
@@ -428,9 +435,9 @@ def _reader_and_engine(
         if request.data_policy is not None:
             session_mode = request.data_policy.session
         reader = (
-            LeanMinuteDataReader(data_roots, session=session_mode)
+            LeanMinuteDataReader(data_roots, session=session_mode, decoded_cache=decoded_cache)
             if data_manifest is None
-            else ManifestBoundMinuteReader(data_roots, data_manifest, session=session_mode)
+            else ManifestBoundMinuteReader(data_roots, data_manifest, session=session_mode, decoded_cache=decoded_cache)
         )
     execution_config = ExecutionConfig(
         fill_mode=fill_mode,
@@ -730,6 +737,7 @@ def execute_engine_backtest(
     on_log: LogCallback,
     data_manifest: Mapping[str, str] | None = None,
     while_waiting: Callable[[], None] = lambda: None,
+    decoded_cache: DecodedArtifactCache | None = None,
 ) -> EngineBacktestResponse:
     """Core backtest workflow shared by the sync POST and the Jobs worker.
 
@@ -744,6 +752,11 @@ def execute_engine_backtest(
     bytes: a sweep cell whose lake artifact changed after the snapshot
     fails rather than consuming unreceipted data (PRD #1926 F05). Absent
     for ordinary runs, which read whatever the lake currently holds.
+
+    ``decoded_cache`` — research callers only — shares admitted decodes
+    across sequential runs in one process (#3038); admission still runs
+    per read, and the default (``None``) changes nothing for any direct
+    caller.
 
     This holds the *outer* of the two engine-gate holds. ``BacktestEngine.run``
     holds the gate too, which is what makes every engine run counted (#1990);
@@ -764,6 +777,7 @@ def execute_engine_backtest(
             on_phase=on_phase,
             on_log=on_log,
             data_manifest=data_manifest,
+            decoded_cache=decoded_cache,
         )
 
 
@@ -780,6 +794,7 @@ def _execute_engine_backtest_core(
     on_phase: PhaseCallback,
     on_log: LogCallback,
     data_manifest: Mapping[str, str] | None = None,
+    decoded_cache: DecodedArtifactCache | None = None,
 ) -> EngineBacktestResponse:
     """The workflow itself, under the gate :func:`execute_engine_backtest` holds."""
     _run_start = time.time()
@@ -884,7 +899,9 @@ def _execute_engine_backtest_core(
             detail=f"compatibility_fixture_unavailable: {exc}",
         ) from exc
 
-    reader, engine = _reader_and_engine(request, fill_mode=fill_mode, data_roots=data_roots, data_manifest=data_manifest)
+    reader, engine = _reader_and_engine(
+        request, fill_mode=fill_mode, data_roots=data_roots, data_manifest=data_manifest, decoded_cache=decoded_cache
+    )
     _override_after_initialize(strategy, request)
 
     # Decompose the old monolithic "simulating" phase into the two stages

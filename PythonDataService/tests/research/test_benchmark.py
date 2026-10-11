@@ -34,6 +34,7 @@ from app.research.benchmark import (
     fold_windows,
     protocol_width_histogram,
     run_baseline,
+    summarize_report,
 )
 from app.utils.session_anchors import et_midnight_ms
 from tests._helpers.lake_fixture import seed_lake_window
@@ -241,12 +242,43 @@ def test_a_failed_evaluation_is_rejected_never_recorded_as_a_no_trade_result(lak
 
 
 def test_future_modes_are_refused_until_the_executor_that_measures_them_exists(lake) -> None:
-    """No selectable branch without behavior: only serial-original/warm runs today."""
-    for mode in ("serial-same-resource", "serial-decoded-cache"):
-        with pytest.raises(ValueError, match="future executor"):
-            _smoke_baseline(lake, execution_mode=mode)
+    """No selectable branch without behavior: only serial modes run today."""
+    with pytest.raises(ValueError, match="future executor"):
+        _smoke_baseline(lake, execution_mode="serial-same-resource")
     with pytest.raises(ValueError, match="worker"):
         _smoke_baseline(lake, timing_mode="preparation-inclusive")
+    with pytest.raises(ValueError, match="positive"):
+        _smoke_baseline(lake, execution_mode="serial-decoded-cache", decoded_cache_byte_bound=0)
+
+
+def test_serial_decoded_cache_reuses_overlap_and_matches_the_serial_originals_hashes(lake) -> None:
+    """#3038: different identities reuse overlapping artifacts; the answers do not move.
+
+    The cache mode runs the same corpus through one shared decoded-artifact
+    cache. Even at one repetition, distinct identities read overlapping
+    windows — a full-development run's days are re-read by the next — so real
+    reuse occurs, every artifact still admits per read, and each evaluation's
+    scientific projection is byte-identical to the serial original's.
+    """
+    plain = _smoke_baseline(lake)
+    cached = _smoke_baseline(lake, execution_mode="serial-decoded-cache")
+
+    assert plain.decoded_cache_metrics is None
+    metrics = cached.decoded_cache_metrics
+    assert metrics is not None and metrics["misses"] > 0
+    assert metrics["hits"] > 0, "overlapping-but-different identities reused shared artifacts"
+    assert metrics["uncached_decodes"] == 0
+    assert metrics["resident_bytes"] <= metrics["max_bytes"]
+    assert "decoded_cache" in cached.as_dict() and "decoded_cache" not in plain.as_dict()
+    assert "decoded cache:" in summarize_report(cached)
+
+    def hashes(report: BaselineReport) -> dict[str, tuple[str, str, str]]:
+        return {
+            run.evaluation_key: (run.result_hash, run.trade_log_hash, run.metrics_hash)
+            for run in report.runs
+        }
+
+    assert hashes(cached) == hashes(plain), "the cached mode is the serial original, hash for hash"
 
 
 def test_the_median_is_true_and_variability_pools_only_comparable_repetitions() -> None:
