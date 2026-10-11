@@ -92,6 +92,12 @@ class EvidenceIntegrityError(RuntimeError):
 _DETAIL_REQUIRED_KEYS = ("initial_cash", "daily_equity", "trades")
 
 
+def _is_number(value: object) -> bool:
+    # JSON round-trips every number the payload writes as int or float; a
+    # bool is an int subclass but never a recorded quantity.
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def detail_integrity_problem(detail: object) -> str | None:
     """What disqualifies a recorded detail payload as evidence, or ``None`` when it holds the required shape."""
     if not isinstance(detail, Mapping):
@@ -99,11 +105,21 @@ def detail_integrity_problem(detail: object) -> str | None:
     missing = [name for name in _DETAIL_REQUIRED_KEYS if name not in detail]
     if missing:
         return f"recorded detail payload is missing {', '.join(missing)}"
+    if not _is_number(detail["initial_cash"]):
+        return "recorded initial_cash is not a number"
     daily = detail["daily_equity"]
-    if not isinstance(daily, list) or any(not isinstance(point, list) or len(point) != 2 for point in daily):
+    if not isinstance(daily, list) or any(
+        not isinstance(point, list)
+        or len(point) != 2
+        or not isinstance(point[0], int)
+        or isinstance(point[0], bool)
+        or not _is_number(point[1])
+        for point in daily
+    ):
         return "recorded daily_equity is not a list of (session close ms, equity) points"
-    if not isinstance(detail["trades"], list):
-        return "recorded trades is not a list"
+    trades = detail["trades"]
+    if not isinstance(trades, list) or any(not isinstance(trade, Mapping) for trade in trades):
+        return "recorded trades is not a list of trade mappings"
     return None
 
 

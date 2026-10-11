@@ -48,6 +48,7 @@ from app.research.golden_search.concentration import concentration
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, point_hash
 from app.research.golden_search.evaluator import (
     EvaluationCapability,
+    EvidenceIntegrityError,
     ExecuteBacktest,
     StudyEvaluator,
     Window,
@@ -712,6 +713,8 @@ def _final_chance_for(
         )
     except JobCancelled:
         raise  # cancellation stops the stage; it is never recorded as a reading
+    except EvidenceIntegrityError:
+        raise  # corrupted durable evidence fails the exam; a failed reading would conclude over it (#3039)
     except Exception as exc:  # a diagnostic failure the stage records; it never fails the exam itself
         readings = failed_readings(exc)
     try:
@@ -730,6 +733,8 @@ def _final_chance_for(
         )
     except JobCancelled:
         raise  # cancellation stops the stage; it is never recorded as a reading
+    except EvidenceIntegrityError:
+        raise  # corrupted durable evidence fails the exam; a failed component would conclude over it (#3039)
     except Exception as exc:  # a diagnostic failure the stage records; it never fails the exam itself
         readings["carry_over"] = failed_component(exc, "carry-over")
     return readings

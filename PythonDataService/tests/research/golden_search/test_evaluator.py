@@ -286,6 +286,12 @@ def test_the_recorded_detail_shape_admits_what_detail_payload_writes_and_names_w
     assert "daily_equity" in detail_integrity_problem({"initial_cash": 1.0, "daily_equity": "gone", "trades": []})
     assert "trades" in detail_integrity_problem({"initial_cash": 1.0, "daily_equity": [[1, 2]], "trades": "gone"})
     assert "daily_equity" in detail_integrity_problem({"initial_cash": 1.0, "daily_equity": [[1, 2, 3]], "trades": []})
+    # Corrupted scalars inside a structurally valid wrapper are named too —
+    # the reading consumes these values, so a wrong-typed one is not evidence.
+    assert "daily_equity" in detail_integrity_problem({"initial_cash": 1.0, "daily_equity": [["bad", 100.0]], "trades": []})
+    assert "daily_equity" in detail_integrity_problem({"initial_cash": 1.0, "daily_equity": [[1, True]], "trades": []})
+    assert "initial_cash" in detail_integrity_problem({"initial_cash": None, "daily_equity": [], "trades": []})
+    assert "trades" in detail_integrity_problem({"initial_cash": 1.0, "daily_equity": [], "trades": [["not", "a", "mapping"]]})
 
 
 def test_detail_of_reads_a_completed_evaluation_this_evaluator_never_ran(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -335,3 +341,35 @@ def test_detail_of_keeps_missing_evidence_missing_and_surfaces_a_broken_payload_
 
     rows[key] = _record(key, status="completed", detail=payload)
     assert evaluator.detail_of(POINT, window=JAN) == payload
+
+
+def test_final_chance_propagates_a_durable_evidence_integrity_failure() -> None:
+    """A corrupt durable detail fails the exam; it must not read as a failed reading component (#3039 review).
+
+    ``_final_chance_for`` converts diagnostic exceptions into recorded failed
+    readings so a reading bug never fails an exam — but corrupt durable
+    evidence is not a reading bug: an exam that concludes over it would use
+    the very bytes the integrity contract refuses.
+    """
+    from types import SimpleNamespace
+
+    from app.research.golden_search.selection import Metrics
+    from app.research.golden_search.stages import _final_chance_for
+
+    class _CorruptDetailEvaluator:
+        context_digest = "digest"
+
+        def detail_of(self, point, *, window):
+            raise EvidenceIntegrityError("evaluation k: no recorded detail payload")
+
+    ctx = SimpleNamespace(
+        protocol=SimpleNamespace(policy=SimpleNamespace(objective="net_profit")),
+        final=(0, 1),
+        development=(0, 1),
+        cancel_check=lambda: None,
+    )
+    completed = Metrics(status="completed", total_trades=1, net_profit=1.0, total_return_pct=0.01, sharpe_ratio=1.0, max_drawdown_pct=0.01, win_rate=1.0)
+    fit = {"point": {"symbol": "SPY"}, "point_hash": "h", "metrics": completed.as_dict()}
+
+    with pytest.raises(EvidenceIntegrityError, match="no recorded detail payload"):
+        _final_chance_for(ctx, _CorruptDetailEvaluator(), fit, completed, None)
