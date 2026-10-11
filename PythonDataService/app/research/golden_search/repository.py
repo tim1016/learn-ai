@@ -46,8 +46,8 @@ _STUDY_COLUMNS = """
 # Every evaluation column but the detail payload and the curve arrays.
 _RUN_FIELDS = """
     study_id, evaluation_key, point_hash, point_json::text AS point_json, window_start_ms, window_end_ms,
-    scenario, detail, stage, fold_index, status, attempt, retries, total_trades, net_profit, total_return_pct,
-    sharpe_ratio, max_drawdown_pct, win_rate, error, created_at_ms, completed_at_ms,
+    scenario, detail, stage, fold_index, status, attempt, retries, task_gen, started_at_ms, total_trades,
+    net_profit, total_return_pct, sharpe_ratio, max_drawdown_pct, win_rate, error, created_at_ms, completed_at_ms,
     equity_close_ms IS NOT NULL AS has_curve
 """
 _EVALUATION_COLUMNS = f"{_RUN_FIELDS}, detail_json::text AS detail_json"
@@ -125,6 +125,7 @@ def _evaluation(row: asyncpg.Record) -> EvaluationRecord:
         status=row["status"],
         attempt=row["attempt"],
         retries=row["retries"],
+        task_gen=row["task_gen"],
         total_trades=row["total_trades"],
         net_profit=row["net_profit"],
         total_return_pct=row["total_return_pct"],
@@ -683,6 +684,8 @@ class Reservation:
     record: EvaluationRecord | None = None
     # 1 when ``cached`` is a true cache hit; 0 when a retry ran out and the row was just recorded failed.
     counted_as_cache_hit: int = 0
+    # For ``run``: the task generation this dispatch must write under (#3045). 0 when nothing is dispatched.
+    task_gen: int = 0
 
 
 RETRY_EXHAUSTED = "retry allowance exhausted"
@@ -699,7 +702,15 @@ async def reserve_evaluation(
     limit: int,
     retry_allowance: int,
 ) -> Reservation:
-    """In one fenced transaction: answer from the cache, re-admit a crashed attempt's row, or reserve budget and insert."""
+    """In one fenced transaction: answer from the cache, re-admit a crashed attempt's row, or reserve budget and insert.
+
+    Every re-admission of a pending row advances its task generation and
+    clears its start marker (#3045), so a write still in flight from the
+    superseded dispatch matches zero rows. A pending row that never started —
+    reserved, but its engine call never began — re-runs without spending a
+    retry; only a row whose run began and died spends one, and only while the
+    allowance lasts.
+    """
     now = now_ms_utc()
     async with conn.transaction():
         await fence.lock_current_attempt(conn, table=STUDIES, record_id=study_id, attempt=attempt)
@@ -719,8 +730,8 @@ async def reserve_evaluation(
                 """
                 INSERT INTO research_golden_search_evaluations (
                     study_id, evaluation_key, point_hash, point_json, window_start_ms, window_end_ms, scenario, detail,
-                    stage, fold_index, status, attempt, created_at_ms
-                ) VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, 'pending', $11, $12)
+                    stage, fold_index, status, attempt, task_gen, created_at_ms
+                ) VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, 'pending', $11, 1, $12)
                 """,
                 study_id,
                 new.evaluation_key,
@@ -740,7 +751,7 @@ async def reserve_evaluation(
                 study_id,
                 now,
             )
-            return Reservation(kind="run")
+            return Reservation(kind="run", task_gen=1)
         record = _evaluation(row)
         if record.status != "pending":
             await conn.execute(f"UPDATE {STUDIES} SET cache_hits = cache_hits + 1 WHERE id = $1", study_id)
@@ -757,14 +768,29 @@ async def reserve_evaluation(
             # A cancel is not a crash: the allowance bounds runs that died, not runs the owner stopped.
             await conn.execute(
                 """
-                UPDATE research_golden_search_evaluations SET attempt = $3, error = NULL
+                UPDATE research_golden_search_evaluations
+                   SET attempt = $3, error = NULL, task_gen = task_gen + 1, started_at_ms = NULL
                  WHERE study_id = $1 AND evaluation_key = $2
                 """,
                 study_id,
                 new.evaluation_key,
                 attempt,
             )
-            return Reservation(kind="run")
+            return Reservation(kind="run", task_gen=record.task_gen + 1)
+        if row["started_at_ms"] is None:
+            # Reserved but never begun — a crash before the dispatch reached it. The
+            # run the allowance bounds never existed, so this re-admission is free (#3045).
+            await conn.execute(
+                """
+                UPDATE research_golden_search_evaluations
+                   SET attempt = $3, task_gen = task_gen + 1, started_at_ms = NULL
+                 WHERE study_id = $1 AND evaluation_key = $2
+                """,
+                study_id,
+                new.evaluation_key,
+                attempt,
+            )
+            return Reservation(kind="run", task_gen=record.task_gen + 1)
         if record.retries >= retry_allowance:
             failed = await conn.fetchrow(
                 f"""
@@ -791,30 +817,121 @@ async def reserve_evaluation(
             return Reservation(kind="cached", record=_evaluation(failed))
         await conn.execute(
             """
-            UPDATE research_golden_search_evaluations SET retries = retries + 1, attempt = $3
+            UPDATE research_golden_search_evaluations
+               SET retries = retries + 1, attempt = $3, task_gen = task_gen + 1, started_at_ms = NULL
              WHERE study_id = $1 AND evaluation_key = $2
             """,
             study_id,
             new.evaluation_key,
             attempt,
         )
-        return Reservation(kind="run")
+        return Reservation(kind="run", task_gen=record.task_gen + 1)
 
 
-async def release_evaluation(conn: asyncpg.Connection, study_id: str, attempt: int, evaluation_key: str) -> None:
-    """Leave a cancelled run's row pending, marked so the next attempt re-runs it without spending a retry."""
+async def start_evaluation(conn: asyncpg.Connection, study_id: str, attempt: int, evaluation_key: str, *, task_gen: int) -> None:
+    """Mark a pending row's engine call begun under ``(attempt, task_gen)`` — reserve-when-about-to-run (#3045).
+
+    The marker is what separates a crash before the engine call (re-run
+    without a retry) from one during it (the allowance bounds it). A row not
+    pending under exactly this generation is someone else's now: refused.
+    """
     async with conn.transaction():
         await fence.lock_current_attempt(conn, table=STUDIES, record_id=study_id, attempt=attempt)
-        await conn.execute(
+        begun = await conn.fetchval(
+            """
+            UPDATE research_golden_search_evaluations SET started_at_ms = $4
+             WHERE study_id = $1 AND evaluation_key = $2 AND status = 'pending' AND attempt = $3 AND task_gen = $5
+             RETURNING 1
+            """,
+            study_id,
+            evaluation_key,
+            attempt,
+            now_ms_utc(),
+            task_gen,
+        )
+        if begun is None:
+            raise fence.StaleAttemptError(
+                f"evaluation {evaluation_key} is not pending under attempt {attempt} task generation {task_gen}"
+            )
+
+
+@dataclass(frozen=True)
+class DispatchClaim:
+    """What a generation swap decided (#3045): the new generation to write under, or the row's resolved record."""
+
+    task_gen: int
+    # Set when the row already holds a terminal result — the uncertain write committed.
+    resolved: EvaluationRecord | None = None
+
+
+async def replace_generation(conn: asyncpg.Connection, study_id: str, attempt: int, evaluation_key: str, *, task_gen: int) -> DispatchClaim:
+    """Advance one pending row's task generation under the fence, or hand back its resolved record (#3045).
+
+    This is the reconciliation of an uncertain write: the row lock serializes
+    against the original operation still in flight, so when this transaction
+    returns the answer is final — ``resolved`` proves the delayed write
+    committed, and a returned generation means any late landing of the old
+    write matches zero rows and is refused beside the attempt fence. Unlike a
+    re-admission it spends nothing: no budget, no retry, the row's history
+    untouched.
+    """
+    async with conn.transaction():
+        await fence.lock_current_attempt(conn, table=STUDIES, record_id=study_id, attempt=attempt)
+        row = await conn.fetchrow(
+            f"""
+            UPDATE research_golden_search_evaluations
+               SET task_gen = task_gen + 1, started_at_ms = NULL
+             WHERE study_id = $1 AND evaluation_key = $2 AND status = 'pending' AND attempt = $3 AND task_gen = $4
+             RETURNING {_EVALUATION_COLUMNS}
+            """,
+            study_id,
+            evaluation_key,
+            attempt,
+            task_gen,
+        )
+        if row is not None:
+            return DispatchClaim(task_gen=task_gen + 1)
+        current = await conn.fetchrow(
+            f"""
+            SELECT {_EVALUATION_COLUMNS} FROM research_golden_search_evaluations
+             WHERE study_id = $1 AND evaluation_key = $2 AND attempt = $3
+            """,
+            study_id,
+            evaluation_key,
+            attempt,
+        )
+        if current is None or current["status"] == "pending":
+            raise fence.StaleAttemptError(
+                f"evaluation {evaluation_key} is not pending under attempt {attempt} task generation {task_gen}"
+            )
+        return DispatchClaim(task_gen=task_gen, resolved=_evaluation(current))
+
+
+async def release_evaluation(conn: asyncpg.Connection, study_id: str, attempt: int, evaluation_key: str, *, task_gen: int) -> None:
+    """Leave a cancelled run's row pending, marked so the next attempt re-runs it without spending a retry.
+
+    Fenced by the dispatch generation too (#3045): a release from a
+    cancelled, timed-out or replaced dispatch whose generation is no longer
+    current changes nothing.
+    """
+    async with conn.transaction():
+        await fence.lock_current_attempt(conn, table=STUDIES, record_id=study_id, attempt=attempt)
+        released = await conn.fetchval(
             """
             UPDATE research_golden_search_evaluations SET error = $4
-             WHERE study_id = $1 AND evaluation_key = $2 AND status = 'pending' AND attempt = $3
+             WHERE study_id = $1 AND evaluation_key = $2 AND status = 'pending' AND attempt = $3 AND task_gen = $5
+             RETURNING 1
             """,
             study_id,
             evaluation_key,
             attempt,
             CANCELLED_BEFORE_RESULT,
+            task_gen,
         )
+        if released is None:
+            raise fence.StaleAttemptError(
+                f"evaluation {evaluation_key} is not pending under attempt {attempt} task generation {task_gen}"
+            )
 
 
 def _finite(value: float | None) -> float | None:
@@ -830,8 +947,14 @@ async def complete_evaluation(
     metrics: Metrics,
     detail: Mapping[str, Any] | None,
     curve: Sequence[tuple[int, float]] | None = None,
+    task_gen: int,
 ) -> None:
-    """Record a pending evaluation's result under the attempt fence, with its trial and its daily equity when the run kept one."""
+    """Record a pending evaluation's result under the attempt and task-generation fences (#3045).
+
+    A duplicate completion, or one from a cancelled, timed-out or replaced
+    dispatch, matches zero rows and is refused — the same result lands
+    exactly once no matter how many writers still believe they own it.
+    """
     async with conn.transaction():
         await fence.lock_current_attempt(conn, table=STUDIES, record_id=study_id, attempt=attempt)
         row = await conn.fetchrow(
@@ -840,7 +963,7 @@ async def complete_evaluation(
                SET status = $4, total_trades = $5, net_profit = $6, total_return_pct = $7, sharpe_ratio = $8,
                    max_drawdown_pct = $9, win_rate = $10, error = $11, detail_json = $12::jsonb, completed_at_ms = $13,
                    equity_close_ms = $14::bigint[], equity_values = $15::float8[]
-             WHERE study_id = $1 AND evaluation_key = $2 AND status = 'pending' AND attempt = $3
+             WHERE study_id = $1 AND evaluation_key = $2 AND status = 'pending' AND attempt = $3 AND task_gen = $16
             RETURNING point_hash, stage, fold_index, scenario, detail
             """,
             study_id,
@@ -858,9 +981,12 @@ async def complete_evaluation(
             now_ms_utc(),
             None if curve is None else [ms for ms, _ in curve],
             None if curve is None else [equity for _, equity in curve],
+            task_gen,
         )
         if row is None:
-            raise fence.StaleAttemptError(f"evaluation {evaluation_key} is not pending under attempt {attempt}")
+            raise fence.StaleAttemptError(
+                f"evaluation {evaluation_key} is not pending under attempt {attempt} task generation {task_gen}"
+            )
         await insert_trial(
             conn,
             study_id,

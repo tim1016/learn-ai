@@ -61,6 +61,16 @@ class CoordinatorHeldElsewhere(RuntimeError):
     """Another live coordinator holds the singleton authority."""
 
 
+class GenerationFencedError(RuntimeError):
+    """The coordinator generation that owned this work is gone; the work stops (#3045).
+
+    Distinct from a lost worker — which a replacement may continue under the
+    same attempt — this fences everything the generation minted: no retry,
+    renewal or replacement proceeds, and the record waits for explicit
+    recovery (Finish for a study stage).
+    """
+
+
 @dataclass
 class RuntimeAuthority:
     """A claimed coordinator authority: the lock, its connection, and the generation it minted.

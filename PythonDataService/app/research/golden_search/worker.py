@@ -45,11 +45,16 @@ from app.research.golden_search.evaluator import (
     EvaluationRequest,
     EvaluationResult,
     ReadyEvaluation,
+    WorkerLost,
     project_response,
 )
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
+
+# WorkerLost is re-exported for the tests that spawn children directly: #3045
+# moved the type to the evaluator, whose retry loop catches it, but its
+# historical home here is what those imports name.
 
 # The PRD's envelope: readiness/import bound, and the silence bound between
 # real signals. Work itself is unbounded — an evaluation runs as long as it
@@ -63,7 +68,7 @@ SILENCE_BOUND_S = 45.0
 # heartbeating forever, so task progress — checkpoints, admission requests,
 # outcomes — must arrive at least this often. Generous beyond any legitimate
 # single evaluation until the child emits advancing in-engine checkpoints,
-# which is #3045's work and will tighten this to seconds.
+# which is #3045's follow-up work and will tighten this to seconds.
 TASK_SILENCE_BOUND_S = 30 * 60.0
 ALIVE_INTERVAL_S = 5.0
 KILLED_CHILD_WAIT_S = 2.0
@@ -72,15 +77,6 @@ KILLED_CHILD_WAIT_S = 2.0
 # single-threaded native math, set before interpreter startup because a
 # worker initializer would be too late for both (PRD #3034).
 CHILD_ENV_FIXED = {"PYTHONHASHSEED": "0", "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
-
-
-class WorkerLost(RuntimeError):
-    """The spawned worker died or went silent with work in flight (#3044).
-
-    The affected evaluations are not failed evidence — they never ran to an
-    answer — so their reservations are released and the stage interrupts;
-    bounded retry is #3045's, not this slice's.
-    """
 
 
 # ── The wire (one JSON object per line; every time is int64 ms UTC) ───────
@@ -122,6 +118,7 @@ def task_wire(
     return {
         "key": item.key,
         "attempt": item.attempt,
+        "task_gen": item.task_gen,
         "point": dict(request.point),
         "point_hash": request.point_hash,
         "window_start_ms": request.window[0],
@@ -458,6 +455,9 @@ class ResearchWorker:
         self._pump.start()
         ready = self._await(lambda: "ready" in self._outcomes or self._lost is not None, timeout_s=STARTUP_BOUND_S)
         if self._lost is not None:
+            # Kill and reap before raising (#3045): a replacement loop will try
+            # again, and each failure must leave nothing behind.
+            self.close()
             raise WorkerLost(f"the research worker failed to start: {self._lost}")
         if not ready:
             self.close()
@@ -640,31 +640,52 @@ class ResearchWorker:
 
 
 class WorkerDispatch:
-    """The :data:`BatchDispatch` a stage's evaluator runs through (#3044).
+    """The :data:`BatchDispatch` a stage's evaluator runs through (#3044, #3045).
 
     Serial in effect — one worker, one task lane, logical order preserved —
     with the parent's ``run`` callable deliberately unused: the coordinator
-    never executes and never enters the engine gate. Child failures arrive
-    as failed metrics (evidence, like any engine failure); a lost worker
-    interrupts the stage with the affected reservations left pending for
-    Finish.
+    never executes and never enters the engine gate. Delivery is lazy: one
+    outcome is yielded after the evaluator consumed its predecessor, so each
+    result is durable before the next evaluation begins (#3045). Child
+    failures arrive as failed metrics (evidence, like any engine failure);
+    a lost worker interrupts the batch for the evaluator's bounded
+    re-admission — the dead child is killed and reaped here, before any
+    replacement exists, and the next dispatch through this same adapter
+    spawns a fresh one with an empty decoded cache, never a second child
+    beside the first (#3045).
     """
 
-    def __init__(self, worker: ResearchWorker, context: WorkerDispatchContext) -> None:
-        self._worker = worker
+    def __init__(self, context: WorkerDispatchContext) -> None:
         self._context = context
+        self._worker: ResearchWorker | None = None
+
+    def _live_worker(self) -> ResearchWorker:
+        """The owned child, spawning one only when none is alive (#3045)."""
+        if self._worker is None:
+            self._worker = ResearchWorker(self._context)
+        return self._worker
+
+    def _worker_lost(self, worker: ResearchWorker) -> None:
+        """Cleanup before replacement: kill and reap, then forget the child (#3045)."""
+        worker.close()
+        if self._worker is worker:
+            self._worker = None
+
+    def _cancel(self) -> None:
+        """Stop the child promptly — cancel flag, then kill and reap (#3045)."""
+        if self._worker is not None:
+            self._worker.cancel()
 
     def __call__(self, run, batch):  # BatchDispatch signature; run unused by design
         from app.jobs.progress import JobCancelled
         from app.research.golden_search.selection import Metrics
 
-        outcomes = []
         for item in batch:
             cancelled = self._context.cancel_check()
             if cancelled is not None or (type(cancelled) is bool and cancelled):
                 # Stop dispatching, tell the child, deliver the cancellation —
                 # the reservations release and nothing persists (#3040's contract).
-                self._worker.cancel()
+                self._cancel()
                 raise JobCancelled("cancelled between research worker tasks")
             task = task_wire(
                 item,
@@ -673,44 +694,45 @@ class WorkerDispatch:
                 manifest=self._context.manifest,
                 identity=self._context.identity,
             )
+            worker = self._live_worker()
+            item.begin()
             try:
-                message = self._worker.run_task(task)
+                message = worker.run_task(task)
             except WorkerLost:
+                self._worker_lost(worker)
                 raise
             if message["type"] == "failed" and message.get("error") == "cancelled":
-                from app.jobs.progress import JobCancelled
-
-                outcomes.append(
-                    DeliveredOutcome(
-                        key=item.key,
-                        result=EvaluationResult(metrics=Metrics.failed("cancelled")),
-                        cancelled_by=JobCancelled("cancelled in the research worker"),
-                    )
+                yield DeliveredOutcome(
+                    key=item.key,
+                    attempt=item.attempt,
+                    task_gen=item.task_gen,
+                    result=EvaluationResult(metrics=Metrics.failed("cancelled")),
+                    cancelled_by=JobCancelled("cancelled in the research worker"),
                 )
-            elif message["type"] == "failed":
-                outcomes.append(
-                    DeliveredOutcome(
-                        key=item.key,
-                        result=EvaluationResult(metrics=Metrics.failed(str(message.get("error", "worker failure")))),
-                    )
+                return
+            if message["type"] == "failed":
+                yield DeliveredOutcome(
+                    key=item.key,
+                    attempt=item.attempt,
+                    task_gen=item.task_gen,
+                    result=EvaluationResult(metrics=Metrics.failed(str(message.get("error", "worker failure")))),
                 )
-            else:
-                outcomes.append(
-                    DeliveredOutcome(
-                        key=item.key,
-                        result=EvaluationResult(
-                            metrics=Metrics.from_dict(message["metrics"]),
-                            detail=message.get("detail"),
-                            curve=[(int(ms), float(value)) for ms, value in message["curve"]]
-                            if message.get("curve")
-                            else None,
-                        ),
-                    )
-                )
-        return outcomes
+                continue
+            yield DeliveredOutcome(
+                key=item.key,
+                attempt=item.attempt,
+                task_gen=item.task_gen,
+                result=EvaluationResult(
+                    metrics=Metrics.from_dict(message["metrics"]),
+                    detail=message.get("detail"),
+                    curve=[(int(ms), float(value)) for ms, value in message["curve"]] if message.get("curve") else None,
+                ),
+            )
 
     def close(self) -> None:
-        self._worker.close()
+        worker, self._worker = self._worker, None
+        if worker is not None:
+            worker.close()
 
 
 def worker_dispatch_factory(
@@ -721,12 +743,19 @@ def worker_dispatch_factory(
     ``execute_stage`` knows the row's strategy, execution assumptions,
     manifest and identity; the runtime router knows only that execution
     belongs to a spawned worker. This closes the gap: the stage calls the
-    factory with what it knows, and gets a dispatch bound to one owned
-    child for the stage's life.
+    factory with what it knows, and gets a dispatch that owns one child at
+    a time for the stage's life — replacing a lost one only after its
+    cleanup (#3045).
     """
 
     def build(context: WorkerDispatchContext) -> WorkerDispatch:
+        # The stage builds the context from what the row knows; the runtime's
+        # sinks are this factory's to attach. on_checkpoint was silently
+        # dropped here before #3045's SIGKILL test caught it: the child's
+        # checkpoints never reached the lease gate, leaving only the stage's
+        # own phase transitions to renew.
         context.cancel_check = cancel_check
-        return WorkerDispatch(ResearchWorker(context), context)
+        context.on_checkpoint = on_checkpoint
+        return WorkerDispatch(context)
 
     return build

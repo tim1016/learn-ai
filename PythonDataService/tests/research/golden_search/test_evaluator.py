@@ -26,12 +26,13 @@ from app.research.golden_search.evaluator import (
     execution_context,
     project_response,
     reordered_dispatch,
-    serial_dispatch,
     warmup_session,
 )
 from app.research.golden_search.protocol import BASE_SCENARIO, ExecutionAssumptions, StressScenario
 from app.research.golden_search.selection import Metrics
+from app.research.persistence.fence import StaleAttemptError
 from app.schemas.engine_backtest import EngineBacktestResponse, EngineTradeResponse
+from app.utils.background_loop import CallerStoppedWaitingError
 from app.utils.session_anchors import et_midnight_ms
 
 DAY = 24 * 60 * 60 * 1000
@@ -433,10 +434,11 @@ class _EngineSpy:
 class _ReservationBridge:
     """The evaluator's persistence calls, in memory: fenced rows, a budget and a call log.
 
-    Mirrors ``repository.reserve_evaluation``'s contract: a completed row
-    answers ``cached`` without a budget unit, a pending row of this attempt
-    re-admits without a new unit, and ``release`` leaves the row pending and
-    marked (``repository.release_evaluation``), never deleted.
+    Mirrors ``repository.reserve_evaluation``'s contract (#3045 included): a
+    completed row answers ``cached`` without a budget unit, a pending row of
+    this attempt re-admits without a new unit — advancing its task
+    generation, spending a retry only when its run had begun — and
+    ``release`` leaves the row pending and marked, never deleted.
     """
 
     def __init__(self, limit: int) -> None:
@@ -446,13 +448,31 @@ class _ReservationBridge:
         self.reserved: list[str] = []
         self.completed: list[str] = []
         self.released: list[str] = []
+        # (key, task_gen) pairs whose complete call raised CallerStoppedWaitingError.
+        self.uncertain: dict[tuple[str, int], str] = {}
+        # Keys whose release call raises CallerStoppedWaitingError without marking.
+        self.uncertain_release: set[str] = set()
+        # Keys whose first reserve call raised CallerStoppedWaitingError — "commit"
+        # applies the insert, "rollback" applies nothing, "stall" keeps stalling.
+        self.uncertain_reserve: dict[str, str] = {}
 
     def precomplete(self, key: str, metrics: Metrics) -> None:
-        self.rows[key] = {"status": "completed", "attempt": 0, "detail": None, "metrics": metrics}
+        self.rows[key] = {"status": "completed", "attempt": 0, "detail": None, "metrics": metrics, "task_gen": 0, "started_at": None, "retries": 0}
 
     async def reserve(self, conn, study_id, attempt, new, *, limit, retry_allowance):
         from types import SimpleNamespace
 
+        if new.evaluation_key in self.uncertain_reserve:
+            fate = self.uncertain_reserve.pop(new.evaluation_key)
+            self.reserved.append(new.evaluation_key)
+            if fate == "commit":
+                self.consumed += 1
+                self.rows[new.evaluation_key] = {
+                    "status": "pending", "attempt": attempt, "detail": None, "metrics": None, "task_gen": 1, "started_at": None, "retries": 0,
+                }
+            if fate == "stall":
+                self.uncertain_reserve[new.evaluation_key] = fate
+            raise CallerStoppedWaitingError(f"still running after 60s; the caller stopped waiting ({new.evaluation_key})")
         self.reserved.append(new.evaluation_key)
         row = self.rows.get(new.evaluation_key)
         if row is not None and row["status"] != "pending":
@@ -467,15 +487,71 @@ class _ReservationBridge:
             if self.consumed + 1 > self.limit:
                 return SimpleNamespace(kind="exhausted")
             self.consumed += 1
-            self.rows[new.evaluation_key] = {"status": "pending", "attempt": attempt, "detail": None, "metrics": None}
-        return SimpleNamespace(kind="run")
+            self.rows[new.evaluation_key] = {
+                "status": "pending", "attempt": attempt, "detail": None, "metrics": None, "task_gen": 1, "started_at": None, "retries": 0,
+            }
+            return SimpleNamespace(kind="run", task_gen=1)
+        begun = row["started_at"] is not None
+        row["attempt"] = attempt
+        row["task_gen"] += 1
+        row["started_at"] = None
+        if row.pop("cancelled", False):
+            # A cancel is not a crash: the marker wins even over a started run.
+            return SimpleNamespace(kind="run", task_gen=row["task_gen"])
+        if not begun:
+            # Reserved but never begun: re-run free (#3045).
+            return SimpleNamespace(kind="run", task_gen=row["task_gen"])
+        from app.research.golden_search.evaluator import RETRY_ALLOWANCE
 
-    async def complete(self, conn, study_id, attempt, key, *, metrics, detail, curve):
+        if row["retries"] >= RETRY_ALLOWANCE:
+            row["status"] = "failed"
+            row["metrics"] = Metrics.failed("retry allowance exhausted")
+            return SimpleNamespace(kind="cached", counted_as_cache_hit=False, record=SimpleNamespace(
+                status="failed", attempt=attempt, detail_json=None, metrics=row["metrics"]))
+        row["retries"] += 1
+        return SimpleNamespace(kind="run", task_gen=row["task_gen"])
+
+    async def start(self, conn, study_id, attempt, key, *, task_gen):
+        row = self.rows[key]
+        if row["status"] != "pending" or row["attempt"] != attempt or row["task_gen"] != task_gen:
+            raise StaleAttemptError(f"evaluation {key} is not pending under attempt {attempt} task generation {task_gen}")
+        row["started_at"] = 1
+
+    async def replace(self, conn, study_id, attempt, key, *, task_gen):
+        from types import SimpleNamespace
+
+        row = self.rows[key]
+        if row["status"] == "pending" and row["attempt"] == attempt and row["task_gen"] == task_gen:
+            row["task_gen"] += 1
+            row["started_at"] = None
+            return SimpleNamespace(task_gen=row["task_gen"], resolved=None)
+        if row["attempt"] == attempt and row["status"] != "pending":
+            return SimpleNamespace(task_gen=task_gen, resolved=SimpleNamespace(
+                status=row["status"], attempt=attempt, detail_json=row["detail"], metrics=row["metrics"]))
+        raise StaleAttemptError(f"evaluation {key} is not pending under attempt {attempt} task generation {task_gen}")
+
+    async def complete(self, conn, study_id, attempt, key, *, metrics, detail, curve, task_gen):
+        if (key, task_gen) in self.uncertain:
+            # The in-flight operation's fate: it applies (a delayed commit) or not (a rollback).
+            fate = self.uncertain.pop((key, task_gen))
+            if fate == "commit":
+                self.rows[key].update(status="completed", attempt=attempt, detail=detail, metrics=metrics)
+                self.completed.append(key)
+            raise CallerStoppedWaitingError(f"still running after 60s; the caller stopped waiting ({key})")
+        row = self.rows[key]
+        if row["status"] != "pending" or row["attempt"] != attempt or row["task_gen"] != task_gen:
+            raise StaleAttemptError(f"evaluation {key} is not pending under attempt {attempt} task generation {task_gen}")
         self.completed.append(key)
-        self.rows[key] = {"status": "completed", "attempt": attempt, "detail": detail, "metrics": metrics}
+        previous = self.rows[key]
+        self.rows[key] = {"status": "completed", "attempt": attempt, "detail": detail, "metrics": metrics, "task_gen": task_gen, "started_at": None, "retries": previous["retries"]}
 
-    async def release(self, conn, study_id, attempt, key):
+    async def release(self, conn, study_id, attempt, key, *, task_gen):
         self.released.append(key)
+        if key in self.uncertain_release:
+            raise CallerStoppedWaitingError(f"still running after 60s; the caller stopped waiting ({key})")
+        row = self.rows[key]
+        if row["status"] != "pending" or row["attempt"] != attempt or row["task_gen"] != task_gen:
+            raise StaleAttemptError(f"evaluation {key} is not pending under attempt {attempt} task generation {task_gen}")
         if key in self.rows and self.rows[key]["status"] == "pending":
             self.rows[key]["cancelled"] = True
 
@@ -487,6 +563,8 @@ def _seamed_evaluator(
     import app.research.golden_search.repository as repository
 
     monkeypatch.setattr(repository, "reserve_evaluation", bridge.reserve)
+    monkeypatch.setattr(repository, "start_evaluation", bridge.start)
+    monkeypatch.setattr(repository, "replace_generation", bridge.replace)
     monkeypatch.setattr(repository, "complete_evaluation", bridge.complete)
     monkeypatch.setattr(repository, "release_evaluation", bridge.release)
     monkeypatch.setattr(repository, "metrics_of", lambda record: record.metrics)
@@ -642,8 +720,11 @@ def test_an_adapter_that_raises_a_cancellation_releases_every_reservation(monkey
     engine, bridge = _EngineSpy(cancel_on_gap=0.2), _ReservationBridge(limit=10)
 
     def raising_dispatch(run, batch):
-        return [serial_dispatch(run, [batch[0]])[0], *[  # second item raises out of the adapter
-            DeliveredOutcome(key=item.key, result=run(item.request)) for item in batch[1:]
+        def outcome_of(item):
+            return DeliveredOutcome(key=item.key, attempt=item.attempt, task_gen=item.task_gen, result=run(item.request))
+
+        return [outcome_of(batch[0]), *[  # second item raises out of the adapter
+            DeliveredOutcome(key=item.key, attempt=item.attempt, task_gen=item.task_gen, result=run(item.request)) for item in batch[1:]
         ]]
 
     evaluator = _seamed_evaluator(monkeypatch, engine, bridge, dispatch=raising_dispatch)
