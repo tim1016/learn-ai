@@ -25,6 +25,7 @@ from app.research.benchmark import (
     build_corpus,
     connection_inventory,
     fold_windows,
+    protocol_width_histogram,
     run_baseline,
 )
 from app.utils.session_anchors import et_midnight_ms
@@ -207,7 +208,8 @@ def test_the_connection_inventory_reports_and_never_repairs(monkeypatch: pytest.
 
     squeezed = connection_inventory(research_cap=95)
     assert squeezed["free_after_research_cap"] < 0
-    assert squeezed["mismatch"] is None or isinstance(squeezed["mismatch"], str)
+    assert squeezed["meets_required_free"] is False
+    assert squeezed["mismatch"] is not None and "research cap of 95" in squeezed["mismatch"]
 
 
 def test_an_under_provisioned_server_is_reported_as_a_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -216,3 +218,45 @@ def test_an_under_provisioned_server_is_reported_as_a_mismatch(monkeypatch: pyte
 
     assert inventory["meets_required_free"] is False
     assert inventory["mismatch"] is not None and "below the required 20" in inventory["mismatch"]
+
+
+def test_the_width_histogram_reconciles_and_names_drift() -> None:
+    """The frozen widths agree with the stop accounting on a consistent stage and read False on drift."""
+    trials = [
+        {"stage": "search", "kind": "round", "fold_index": None, "payload": {
+            "pass_index": 0, "knob": "gap", "round_index": 0,
+            "values": [0.1, 0.2, 0.3], "invalid": [[0.2, "outside domain"]],
+            "results": [[0.1, None], [0.3, "NO_TRADES"]],
+        }},
+        {"stage": "validation", "kind": "round", "fold_index": 0, "payload": {
+            "pass_index": 0, "knob": "gap", "round_index": 0,
+            "values": [0.4], "invalid": [], "results": [[0.4, None]],
+        }},
+        {"stage": "search", "kind": "stop", "fold_index": None, "payload": {
+            "stop_reason": "quantization", "winner_hash": "h", "window": [0, 1],
+            "evaluated": 1, "cached": 1, "invalid": 1,
+        }},
+    ]
+
+    histogram = protocol_width_histogram(trials, stage="search")
+
+    assert [row["round_index"] for row in histogram["rounds"]] == [0], "other stages' rounds do not enter the histogram"
+    assert histogram["totals"]["sampled"] == 3
+    assert histogram["totals"]["invalid"] == 1
+    assert histogram["totals"]["testable"] == 2
+    assert histogram["totals"]["eligible"] == 1
+    assert histogram["accounting"] == {"newly_reserved": 1, "cached_or_duplicate": 1, "invalid": 1, "ready": 2}
+    assert histogram["totals"]["reconciled"] is True, "the rounds' invalid total agrees with the stop accounting"
+
+    from copy import deepcopy
+
+    drifted = deepcopy(trials)
+    drifted[-1]["payload"]["invalid"] = 2
+    assert protocol_width_histogram(drifted, stage="search")["totals"]["reconciled"] is False, (
+        "a drifted invalid count must read False, not pass silently"
+    )
+    drifted_round = deepcopy(trials)
+    drifted_round[0]["payload"]["invalid"] = []
+    assert protocol_width_histogram(drifted_round, stage="search")["totals"]["reconciled"] is False, (
+        "rounds that lost an invalid record must read False against the stop accounting"
+    )

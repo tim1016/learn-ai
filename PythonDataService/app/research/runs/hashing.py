@@ -2,7 +2,8 @@
 
 Formula: ``sha256(json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8'))``.
 Reference: RFC 8785 (JSON Canonicalization Scheme) for the sort-keys + tight separators contract; SHA-256 per FIPS 180-4. Not literally JCS — JCS demands UTF-8 ``\\uXXXX`` escaping for non-ASCII and exact float formatting per ECMAScript ToString. Our use is closed-vocabulary (StrategySpec round-trip + bounded numeric fields) so the simpler contract is sufficient and doesn't pull in a JCS dependency.
-Canonical implementation: this file. Used only inside ``app/research/runs/``.
+Canonical implementation: this file. Used inside ``app/research/runs/`` and by the
+benchmark corpus's result hashes (``app/research/benchmark.py``, #3036).
 Validated against: ``tests/research/runs/test_hashing.py`` (key-order independence, non-ASCII stability, float-equality, payload nesting).
 
 The hash is a *forward-only* identity device: collisions are not expected

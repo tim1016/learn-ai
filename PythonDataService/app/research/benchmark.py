@@ -12,7 +12,7 @@ Exactly 1,000 distinct full evaluation keys — 200 over the full development
 window, 800 spread across its calendar-derived fold windows — across several
 strategy/parameter groups chosen to include runs that trade heavily and runs
 that place no trade at all. Windows come from the canonical calendar (never
-hardcoded), parameter groups are declared here, and the identity assignment
+hardcoded) and the identity assignment
 is a seeded, order-stable draw, so the same inputs regenerate the same
 manifest byte for byte. Inputs are the local lake only: every artifact is
 admitted and checksummed through the data snapshot before any run, and no
@@ -111,9 +111,7 @@ PARAMETER_GROUPS: tuple[ParameterGroup, ...] = (
     ParameterGroup("sma_crossover", "sma-typical", {"short_window": 10, "long_window": 30, "resolution_minutes": 15}, "trade-heavy"),
     # ``sma-no-trade`` demands 900 *daily* bars of warmup — more history
     # than any window the corpus holds — so the run scores a curve and
-    # places no trade. A no-trade group is part of the contract: a corpus of
-    # only trade-heavy runs would never exercise the empty-trade-list
-    # projections the serial path must keep byte-identical.
+    # places no trade.
     ParameterGroup("sma_crossover", "sma-no-trade", {"short_window": 10, "long_window": 900, "resolution_minutes": 1440}, "no-trade"),
     ParameterGroup(
         "ema_crossover_signal",
@@ -440,14 +438,14 @@ def _assumptions_dict() -> dict[str, Any]:
 
 
 def _engine_request(
-    identity: CorpusIdentity, *, symbol: str, execution: Mapping[str, Any], data_policy: Mapping[str, Any] | None = None
+    identity: CorpusIdentity, *, execution: Mapping[str, Any], data_policy: Mapping[str, Any] | None = None
 ) -> Any:
     from app.schemas.engine_backtest import EngineBacktestRequest
 
     start, end = window_dates(identity.window_start_ms, identity.window_end_ms)
     return EngineBacktestRequest(
         strategy_name=identity.strategy,
-        params={"symbol": symbol, **identity.params},
+        params=dict(identity.params),
         from_date=start.isoformat(),
         to_date=end.isoformat(),
         fill_mode=execution["fill_mode"],
@@ -493,7 +491,7 @@ def run_identity(
             stamps[mapped] = time.perf_counter()
             order.append(mapped)
 
-    request = _engine_request(identity, symbol=symbol, execution=execution, data_policy=data_policy)
+    request = _engine_request(identity, execution=execution, data_policy=data_policy)
     start = time.perf_counter()
     response = (execute or _serial_execute)(request, on_phase)
     total_ms = (time.perf_counter() - start) * 1000
@@ -502,6 +500,11 @@ def run_identity(
     for position, name in enumerate(order):
         end = stamps[order[position + 1]] if position + 1 < len(order) else start + total_ms / 1000
         additive[name] = round((end - stamps[name]) * 1000, 3)
+    if order and stamps[order[0]] > start:
+        # The queue/IPC span before the first observed boundary is the part
+        # a later executor attributes; the serial report names it rather
+        # than letting the additive spans silently miss the total.
+        additive["unattributed_prefix"] = round((stamps[order[0]] - start) * 1000, 3)
 
     trades = response.trades or []
     # The result hash pins the run's scientific projection — ordered trades,
@@ -613,12 +616,15 @@ def round_widths(round_payload: Mapping[str, Any]) -> dict[str, int]:
 
 
 def protocol_width_histogram(trials: Sequence[Mapping[str, Any]], *, stage: str) -> dict[str, Any]:
-    """The per-round width histogram of one stage's stored trials, with the stage's cache accounting.
+    """One stage's per-round width histogram from its stored trials, with the stage's cache accounting.
 
-    Round rows carry the stage and fold labels; the totals reconcile the
-    stage's own evaluated/cached/invalid counts from its stop trial, so the
-    frozen widths and the budget accounting cannot drift apart.
+    ``trials`` may span every stage; only ``stage``'s trials enter the
+    histogram. The totals reconcile the stage's own evaluated/cached/invalid
+    counts from its stop trial, so the frozen widths and the budget
+    accounting cannot drift apart — ``reconciled`` is that agreement, and a
+    drifted stop count reads False.
     """
+    trials = [trial for trial in trials if trial.get("stage") == stage]
     rounds: list[dict[str, Any]] = []
     stop: Mapping[str, Any] | None = None
     for trial in trials:
@@ -641,6 +647,7 @@ def protocol_width_histogram(trials: Sequence[Mapping[str, Any]], *, stage: str)
         "rounds": rounds,
         "totals": {
             "sampled": sum(row["sampled"] for row in rounds),
+            "invalid": sum(row["invalid"] for row in rounds),
             "testable": sum(row["testable"] for row in rounds),
             "eligible": sum(row["eligible"] for row in rounds),
         },
@@ -654,10 +661,13 @@ def protocol_width_histogram(trials: Sequence[Mapping[str, Any]], *, stage: str)
             "invalid": counts.get("invalid"),
             "ready": (counts.get("evaluated") or 0) + (counts.get("cached") or 0),
         }
-        histogram["totals"]["reconciled"] = (
-            histogram["totals"]["sampled"] - histogram["totals"].get("invalid", 0)
-            == histogram["totals"]["testable"]
-        )
+        # The rounds and the stop payload record the invalid population
+        # independently — one per refinement round, one as the stage's own
+        # count — so their agreement is the reconciliation that can catch
+        # drift. (The evaluated/cached counts span the whole stage's window,
+        # including points the rounds never sampled, so they reconcile as
+        # ranges, not equalities; the report carries them as accounting.)
+        histogram["totals"]["reconciled"] = histogram["totals"]["invalid"] == counts.get("invalid")
     return histogram
 
 
@@ -673,13 +683,14 @@ def connection_inventory(*, research_cap: int = CONNECTION_INVENTORY_RESEARCH_CA
     """
     server_max = int(os.environ.get("POSTGRES_SERVER_MAX_CONNECTIONS", ASSUMED_SERVER_MAX_CONNECTIONS))
     catalog_pool_max = _catalog_pool_max()
-    deployed_loops = 2  # the API loop and the research writer loop (review F15)
+    deployed_loops = 2  # the API loop and the research writer loop
     pools = [
         {"name": "data-lake catalog / research persistence (asyncpg, per loop)", "max_connections": catalog_pool_max, "loops": deployed_loops},
         {"name": "job store (redis)", "max_connections": 32, "server": "redis"},
     ]
     reserved = catalog_pool_max * deployed_loops
     free = server_max - reserved
+    free_after_research = free - research_cap
     return {
         "pools": pools,
         "postgres_server_max_connections": server_max,
@@ -687,11 +698,14 @@ def connection_inventory(*, research_cap: int = CONNECTION_INVENTORY_RESEARCH_CA
         "research_cap": research_cap,
         "reserved_by_configured_pools": reserved,
         "free_at_server_without_research": free,
-        "free_after_research_cap": server_max - reserved - research_cap,
+        "free_after_research_cap": free_after_research,
         "required_free": CONNECTION_INVENTORY_REQUIRED_FREE,
-        "meets_required_free": free >= CONNECTION_INVENTORY_REQUIRED_FREE,
-        "mismatch": None if free >= CONNECTION_INVENTORY_REQUIRED_FREE
-        else f"the configured pools leave {free} server connections free, below the required {CONNECTION_INVENTORY_REQUIRED_FREE}",
+        "meets_required_free": free_after_research >= CONNECTION_INVENTORY_REQUIRED_FREE,
+        "mismatch": None if free_after_research >= CONNECTION_INVENTORY_REQUIRED_FREE
+        else (
+            f"with the research cap of {research_cap}, {free_after_research} server connections "
+            f"would remain free, below the required {CONNECTION_INVENTORY_REQUIRED_FREE}"
+        ),
     }
 
 
