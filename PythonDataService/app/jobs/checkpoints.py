@@ -91,8 +91,8 @@ class ExecutionCheckpoint:
     cursor: int
     cursor_kind: CursorKind
     phase: str
+    occurred_at_ms: int
     transition: bool = False
-    occurred_at_ms: int = 0
 
 
 class CheckpointGate:
@@ -127,9 +127,16 @@ class CheckpointGate:
         """Admit ``checkpoint`` if it is current, ordered and advancing; renew once when it is.
 
         Rejected without renewal: a stale generation, a sequence that does not
-        advance past the task's last accepted one, and a non-transition
-        checkpoint whose cursor did not advance. Acceptance renews the lease
-        exactly once and hands the checkpoint to the adapter callback.
+        advance past the task's last accepted one, a non-transition checkpoint
+        whose cursor did not advance past the kind's ground (zero before the
+        first accepted cursor — a transition may seed the state at any
+        cursor, but it never lowers a recorded watermark). Acceptance renews
+        the lease exactly once and hands the checkpoint to the adapter
+        callback. A lease-renewal store failure rejects the checkpoint
+        without recording it — the work path carries on, and retrying the
+        same checkpoint once the store recovers renews then; a failure must
+        consume no sequence (EXPIRE only: a lease that already expired must
+        not be recreated).
         """
         if checkpoint.generation != self.generation:
             return False
@@ -138,18 +145,21 @@ class CheckpointGate:
             return False
         kind_state = (checkpoint.task_id, checkpoint.cursor_kind)
         prior_cursor = self._cursors.get(kind_state)
-        if prior_cursor is not None and not checkpoint.transition and checkpoint.cursor <= prior_cursor:
+        if not checkpoint.transition and checkpoint.cursor <= (0 if prior_cursor is None else prior_cursor):
             return False
-        # Renew before recording: a store failure must neither consume the
-        # sequence silently nor fail the work path — the same tolerance the
-        # cancellation check applies (log, carry on). EXPIRE only: a lease
-        # that already expired must not be recreated.
+        # Renew before recording: a store failure consumes no sequence and
+        # fails no work path — the same tolerance the cancellation check
+        # applies (log, carry on).
         try:
             progress.get_redis().expire(_lease_key(self.job_id), self._lease_ttl_s)
         except redis.RedisError as exc:
             logger.warning("checkpoint lease renewal failed for job %s: %s", self.job_id, exc)
+            return False
         self._sequences[checkpoint.task_id] = checkpoint.sequence
-        self._cursors[kind_state] = checkpoint.cursor
+        # A transition is evidence at one cursor, but only ever raises the
+        # kind's watermark: a later ordinary checkpoint reads against the
+        # task's true high-water mark, never a lowered one.
+        self._cursors[kind_state] = checkpoint.cursor if prior_cursor is None else max(prior_cursor, checkpoint.cursor)
         self._on_accepted(checkpoint)
         return True
 
@@ -171,17 +181,28 @@ class TaskSilence:
 
     def __init__(self, *, limits_s: dict[str, float] | None = None) -> None:
         self._limits_s = limits_s if limits_s is not None else PHASE_SILENCE_LIMIT_S
-        # task_id -> (phase, deadline_ms)
-        self._deadlines: dict[str, tuple[str, float]] = {}
+        # task_id -> (phase, deadline_ms); deadlines are int64 ms UTC, like
+        # every other temporal value in flight.
+        self._deadlines: dict[str, tuple[str, int]] = {}
 
-    def record(self, task_id: str, phase: str, *, at_ms: int) -> float:
+    def record(self, task_id: str, phase: str, *, at_ms: int) -> int:
         """Stamp ``task_id``'s deadline for ``phase`` from a real event; returns the new deadline in ms."""
         limit_s = self._limits_s.get(phase)
         if limit_s is None:
             raise ValueError(f"no silence limit for phase {phase!r}")
-        deadline_ms = at_ms + limit_s * 1000
+        deadline_ms = at_ms + int(limit_s * 1000)
         self._deadlines[task_id] = (phase, deadline_ms)
         return deadline_ms
+
+    def forget(self, task_id: str) -> None:
+        """Drop ``task_id``'s deadline at its durable completion.
+
+        A finished task must stop policing: without this, ``expired_tasks``
+        keeps scanning every task ever stamped and a completed sibling reads
+        hung while its still-running mate works past the finished one's last
+        deadline.
+        """
+        self._deadlines.pop(task_id, None)
 
     def seconds_silent(self, task_id: str, *, now_ms: int) -> float | None:
         """How far past its deadline the task is, in seconds; 0.0 while within it; ``None`` if never stamped."""

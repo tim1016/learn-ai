@@ -212,7 +212,7 @@ def test_cursor_ground_is_per_kind_not_per_task(fake, monkeypatch) -> None:
 
 
 def test_a_store_failure_consumes_nothing(fake, monkeypatch) -> None:
-    """A Redis hiccup neither consumes the sequence nor fails the work path."""
+    """A Redis hiccup neither consumes the sequence nor fails the work path; the retry renews."""
     monkeypatch.setattr(progress, "get_redis", lambda: fake)
     gate = CheckpointGate("pooled-1", GENERATION)
 
@@ -221,10 +221,12 @@ def test_a_store_failure_consumes_nothing(fake, monkeypatch) -> None:
             raise redis.ConnectionError("connection refused")
 
     monkeypatch.setattr(progress, "get_redis", lambda: Unreachable())
-    assert gate.accept(_checkpoint(1, 100)) is True, "the checkpoint is real even when the store cannot hear it"
+    assert gate.accept(_checkpoint(1, 100)) is False, "the checkpoint is not accepted while the store cannot hear it"
+    assert gate.last_accepted("task-a", "processed_blocks") is None, "the failed renewal recorded no ordering state"
 
     monkeypatch.setattr(progress, "get_redis", lambda: fake)
-    assert gate.accept(_checkpoint(2, 200)) is True, "the failed renewal did not consume the sequence"
+    assert gate.accept(_checkpoint(1, 100)) is True, "retrying the same checkpoint after recovery renews it"
+    assert fake.expires == [(LEASE, gate._lease_ttl_s)]
 
 
 def test_a_pooled_emitter_renews_nothing(fake, monkeypatch) -> None:
@@ -239,3 +241,41 @@ def test_a_pooled_emitter_renews_nothing(fake, monkeypatch) -> None:
     assert fake.expires == [("job:pooled-1:events", JOB_TTL_SECONDS)], (
         "only the stream TTL slides; the lease does not"
     )
+
+
+def test_a_first_non_transition_cursor_at_the_ground_renews_nothing(fake, monkeypatch) -> None:
+    """Cursor zero is the kind's ground: no work advanced, so the checkpoint is not evidence (#3041 review)."""
+    monkeypatch.setattr(progress, "get_redis", lambda: fake)
+    gate = CheckpointGate("pooled-1", GENERATION)
+
+    assert gate.accept(_checkpoint(1, 0)) is False
+    assert gate.accept(_checkpoint(1, -5)) is False
+    assert fake.expires == [] and gate.last_accepted("task-a", "processed_blocks") is None
+
+    assert gate.accept(_checkpoint(2, 1)) is True, "the first real unit of work past the ground is evidence"
+
+
+def test_a_transition_never_lowers_the_cursor_watermark(fake, monkeypatch) -> None:
+    """A transition may land at any cursor, but a later ordinary checkpoint reads against the high-water mark (#3041 review)."""
+    monkeypatch.setattr(progress, "get_redis", lambda: fake)
+    gate = CheckpointGate("pooled-1", GENERATION)
+
+    assert gate.accept(_checkpoint(1, 100)) is True
+    assert gate.accept(_checkpoint(2, 3, transition=True)) is True, "the transition is evidence at its own cursor"
+
+    below = gate.accept(_checkpoint(3, 50))
+    at_watermark = gate.accept(_checkpoint(4, 100))
+
+    assert below is False and at_watermark is False, "cursors below the preserved watermark 100 advance nothing"
+    assert gate.accept(_checkpoint(5, 101)) is True
+
+
+def test_a_forgotten_task_stops_policing() -> None:
+    """A durably completed task leaves the silence watch; it must not read hung beside its running sibling (#3041 review)."""
+    watch = TaskSilence()
+    watch.record("done-1", "simulation", at_ms=0)
+    watch.record("running-1", "simulation", at_ms=0)
+
+    watch.forget("done-1")
+    assert watch.seconds_silent("done-1", now_ms=60_000) is None
+    assert watch.expired_tasks(now_ms=60_001) == ["running-1"], "the finished task is not returned as hung"

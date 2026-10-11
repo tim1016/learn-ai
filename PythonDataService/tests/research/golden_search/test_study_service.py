@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import time
 from datetime import date
 from pathlib import Path
 
@@ -1360,7 +1361,8 @@ async def test_a_stage_under_the_checkpoint_contract_renews_only_on_accepted_che
         gate.accept(
             ExecutionCheckpoint(
                 generation=generation, task_id="stage", sequence=len(seen) + 1, cursor=0,
-                cursor_kind="processed_blocks", phase=phase, transition=True,
+                cursor_kind="processed_blocks", phase=phase, occurred_at_ms=time.time_ns() // 1_000_000,
+                transition=True,
             )
         )
 
@@ -1368,7 +1370,8 @@ async def test_a_stage_under_the_checkpoint_contract_renews_only_on_accepted_che
         gate.accept(
             ExecutionCheckpoint(
                 generation=generation, task_id="stage", sequence=len(seen) + 1, cursor=done,
-                cursor_kind="durable_completions", phase="search", transition=True,
+                cursor_kind="durable_completions", phase="search", occurred_at_ms=time.time_ns() // 1_000_000,
+                transition=True,
             )
         )
 
@@ -1394,13 +1397,15 @@ async def test_a_stage_under_the_checkpoint_contract_renews_only_on_accepted_che
     stale_attempt = gate.accept(
         ExecutionCheckpoint(
             generation=generation - 1, task_id="stage", sequence=len(seen) + 100, cursor=10_000,
-            cursor_kind="durable_completions", phase="search", transition=True,
+            cursor_kind="durable_completions", phase="search", occurred_at_ms=time.time_ns() // 1_000_000,
+            transition=True,
         )
     )
     repeated = gate.accept(
         ExecutionCheckpoint(
             generation=generation, task_id="stage", sequence=len(seen), cursor=10_000,
-            cursor_kind="durable_completions", phase="search", transition=True,
+            cursor_kind="durable_completions", phase="search", occurred_at_ms=time.time_ns() // 1_000_000,
+            transition=True,
         )
     )
     assert stale_attempt is False and repeated is False
