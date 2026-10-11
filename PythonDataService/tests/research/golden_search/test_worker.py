@@ -273,7 +273,7 @@ def _runtime_identity() -> dict:
     }
 
 
-def _unspawned_worker() -> "ResearchWorker":
+def _unspawned_worker() -> ResearchWorker:
     """A ResearchWorker with its spawn bypassed: the pump loop driven by hand."""
     from concurrent.futures import ThreadPoolExecutor
 

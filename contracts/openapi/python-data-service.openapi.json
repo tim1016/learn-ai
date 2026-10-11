@@ -28540,6 +28540,17 @@
             "title": "Current Before",
             "type": "number"
           },
+          "first_evaluated": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Evaluated"
+          },
           "high": {
             "title": "High",
             "type": "number"
@@ -28634,6 +28645,17 @@
           "round_index": {
             "title": "Round Index",
             "type": "integer"
+          },
+          "submitted": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submitted"
           },
           "values": {
             "items": {
@@ -73112,7 +73134,7 @@
     },
     "/api/jobs-internal/golden-search": {
       "post": {
-        "description": "Run the stage a guarded command authorized, on a worker thread. 202 once the job is bound to it.\n\nA token the study did not issue, or a stage another job already holds,\nis refused (409); nothing runs without the matching token.",
+        "description": "Run the stage a guarded command authorized, on a worker thread. 202 once the job is bound to it.\n\nA token the study did not issue, or a stage another job already holds,\nis refused (409); nothing runs without the matching token. When research\nexecution is routed to the isolated runtime (#3043), this process\nforwards the dispatch and never binds or starts a thread: binding,\nownership and execution happen once, in the runtime.",
         "operationId": "start_golden_search_job_api_jobs_internal_golden_search_post",
         "requestBody": {
           "content": {
