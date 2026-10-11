@@ -12,15 +12,18 @@ Every silence bound is answered from an injected clock, never the wall.
 from __future__ import annotations
 
 import pytest
+import redis
 
 from app.jobs import progress
 from app.jobs.checkpoints import (
     PHASE_SILENCE_LIMIT_S,
     SIMULATION_CHECKPOINT_TARGET_S,
     CheckpointGate,
+    CursorKind,
     ExecutionCheckpoint,
     TaskSilence,
 )
+from app.jobs.progress import JOB_TTL_SECONDS
 from app.research.persistence import lifecycle
 from tests.jobs.conftest import _FakeRedis
 
@@ -34,7 +37,7 @@ def _checkpoint(
     *,
     task_id: str = "task-a",
     generation: int = GENERATION,
-    kind: str = "processed_blocks",
+    kind: CursorKind = "processed_blocks",
     phase: str = "simulation",
     transition: bool = False,
 ) -> ExecutionCheckpoint:
@@ -43,7 +46,7 @@ def _checkpoint(
         task_id=task_id,
         sequence=sequence,
         cursor=cursor,
-        cursor_kind=kind,  # type: ignore[arg-type]
+        cursor_kind=kind,
         phase=phase,
         transition=transition,
         occurred_at_ms=1_000_000,
@@ -133,7 +136,7 @@ def test_stale_generation_events_are_rejected_and_renew_nothing(fake: _FakeRedis
 
     assert stale_attempt is False and stale_task is False
     assert seen == [] and fake.expires == []
-    assert gate.last_accepted("task-a") is None, "a stale event may not seed the task's ordering state"
+    assert gate.last_accepted("task-a", "processed_blocks") is None, "a stale event may not seed the task's ordering state"
 
 
 def test_a_current_generation_checkpoint_after_a_stale_one_is_accepted(fake: _FakeRedis, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -170,15 +173,12 @@ def test_every_phase_bound_is_pinned() -> None:
     assert SIMULATION_CHECKPOINT_TARGET_S == 1.0
 
 
-def test_preparation_and_catalog_deadlines_expire_on_the_injected_clock() -> None:
+def test_every_phase_class_boundary_is_checked_on_the_injected_clock() -> None:
     watch = TaskSilence()
-    watch.record("prep", "preparation", at_ms=1_000)
-    watch.record("catalog", "catalog", at_ms=1_000)
-
-    assert watch.expired("prep", now_ms=61_000) is False
-    assert watch.expired("prep", now_ms=61_001) is True
-    assert watch.expired("catalog", now_ms=36_000) is False
-    assert watch.expired("catalog", now_ms=36_001) is True
+    for phase, limit in PHASE_SILENCE_LIMIT_S.items():
+        watch.record(phase, phase, at_ms=1_000)
+        assert watch.expired(phase, now_ms=1_000 + limit * 1000) is False
+        assert watch.expired(phase, now_ms=1_000 + limit * 1000 + 1) is True
 
 
 def test_no_progress_expiry_is_visible_by_task(fake: _FakeRedis) -> None:
@@ -197,3 +197,45 @@ def test_an_unknown_phase_is_refused_rather_than_silently_unbounded() -> None:
     watch = TaskSilence()
     with pytest.raises(ValueError, match="no silence limit"):
         watch.record("task-a", "unknown-phase", at_ms=0)
+
+
+def test_cursor_ground_is_per_kind_not_per_task(fake, monkeypatch) -> None:
+    """A task switching from admitted artifacts to processed blocks restarts its cursor's ground."""
+    monkeypatch.setattr(progress, "get_redis", lambda: fake)
+    gate = CheckpointGate("pooled-1", GENERATION)
+
+    assert gate.accept(_checkpoint(1, 12, kind="admitted_artifacts")) is True
+    assert gate.accept(_checkpoint(2, 1, kind="processed_blocks")) is True, (
+        "cursor values are kind-local: blocks cursor 1 is past the artifacts ground, not behind it"
+    )
+    assert gate.accept(_checkpoint(3, 1, kind="processed_blocks")) is False
+
+
+def test_a_store_failure_consumes_nothing(fake, monkeypatch) -> None:
+    """A Redis hiccup neither consumes the sequence nor fails the work path."""
+    monkeypatch.setattr(progress, "get_redis", lambda: fake)
+    gate = CheckpointGate("pooled-1", GENERATION)
+
+    class Unreachable:
+        def expire(self, *_args):
+            raise redis.ConnectionError("connection refused")
+
+    monkeypatch.setattr(progress, "get_redis", lambda: Unreachable())
+    assert gate.accept(_checkpoint(1, 100)) is True, "the checkpoint is real even when the store cannot hear it"
+
+    monkeypatch.setattr(progress, "get_redis", lambda: fake)
+    assert gate.accept(_checkpoint(2, 200)) is True, "the failed renewal did not consume the sequence"
+
+
+def test_a_pooled_emitter_renews_nothing(fake, monkeypatch) -> None:
+    """The public SSE event is presentation: a pooled-mode emit must not slide the lease."""
+    from app.jobs.progress import ProgressEmitter
+
+    fake.job("pooled-1", "running")
+    fake.lease("pooled-1")
+    emitter = ProgressEmitter("pooled-1", renews_lease=False)
+    emitter.log("retry")
+
+    assert fake.expires == [("job:pooled-1:events", JOB_TTL_SECONDS)], (
+        "only the stream TTL slides; the lease does not"
+    )

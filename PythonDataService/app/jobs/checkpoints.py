@@ -35,12 +35,17 @@ Validated against: tests/jobs/test_checkpoints.py.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
+import redis
+
 from app.jobs import progress
-from app.jobs.progress import JOB_LEASE_TTL_SECONDS
+from app.jobs.progress import JOB_LEASE_TTL_SECONDS, _lease_key
+
+logger = logging.getLogger(__name__)
 
 CursorKind = Literal["admitted_artifacts", "processed_bars", "processed_blocks", "durable_completions"]
 
@@ -69,8 +74,15 @@ class ExecutionCheckpoint:
 
     ``transition`` marks a dispatch/acceptance/durable-completion boundary —
     an event that is evidence even though no work cursor moved. Every other
-    checkpoint must advance ``cursor`` to be accepted. ``occurred_at_ms`` is
-    when the work step happened, not when the report was made.
+    checkpoint must advance ``cursor`` to be accepted, against the cursor's
+    own kind's ground: cursors are ``cursor_kind``-local, so a task moving
+    from ``admitted_artifacts`` to ``processed_blocks`` starts its new kind's
+    cursor from zero without a transition. ``phase`` is the worker's own
+    phase label (the engine's vocabulary, a stage name); mapping it onto
+    :data:`PHASE_SILENCE_LIMIT_S`'s silence classes is the runtime's
+    reporting choice, made when it calls :meth:`TaskSilence.record`.
+    ``occurred_at_ms`` is when the work step happened, not when the report
+    was made.
     """
 
     generation: int
@@ -104,8 +116,12 @@ class CheckpointGate:
         self.generation = generation
         self._lease_ttl_s = lease_ttl_s
         self._on_accepted = on_accepted
-        # Per task: the highest accepted (sequence, cursor) pair.
-        self._accepted: dict[str, tuple[int, int]] = {}
+        # Sequence is per task; the cursor is per (task, cursor kind) — a
+        # task switching from admitted artifacts to processed blocks does
+        # not restart its sequence, but its new cursor starts from its own
+        # kind's ground.
+        self._sequences: dict[str, int] = {}
+        self._cursors: dict[tuple[str, str], int] = {}
 
     def accept(self, checkpoint: ExecutionCheckpoint) -> bool:
         """Admit ``checkpoint`` if it is current, ordered and advancing; renew once when it is.
@@ -117,24 +133,31 @@ class CheckpointGate:
         """
         if checkpoint.generation != self.generation:
             return False
-        prior = self._accepted.get(checkpoint.task_id)
-        if prior is not None and checkpoint.sequence <= prior[0]:
+        prior_sequence = self._sequences.get(checkpoint.task_id)
+        if prior_sequence is not None and checkpoint.sequence <= prior_sequence:
             return False
-        if prior is not None and not checkpoint.transition and checkpoint.cursor <= prior[1]:
+        kind_state = (checkpoint.task_id, checkpoint.cursor_kind)
+        prior_cursor = self._cursors.get(kind_state)
+        if prior_cursor is not None and not checkpoint.transition and checkpoint.cursor <= prior_cursor:
             return False
-        self._accepted[checkpoint.task_id] = (checkpoint.sequence, checkpoint.cursor)
-        # EXPIRE only: a lease that already expired must not be recreated.
-        progress.get_redis().expire(_lease_key(self.job_id), self._lease_ttl_s)
+        # Renew before recording: a store failure must neither consume the
+        # sequence silently nor fail the work path — the same tolerance the
+        # cancellation check applies (log, carry on). EXPIRE only: a lease
+        # that already expired must not be recreated.
+        try:
+            progress.get_redis().expire(_lease_key(self.job_id), self._lease_ttl_s)
+        except redis.RedisError as exc:
+            logger.warning("checkpoint lease renewal failed for job %s: %s", self.job_id, exc)
+        self._sequences[checkpoint.task_id] = checkpoint.sequence
+        self._cursors[kind_state] = checkpoint.cursor
         self._on_accepted(checkpoint)
         return True
 
-    def last_accepted(self, task_id: str) -> tuple[int, int] | None:
-        """The task's highest accepted ``(sequence, cursor)``, or ``None`` before its first."""
-        return self._accepted.get(task_id)
-
-
-def _lease_key(job_id: str) -> str:
-    return f"job:{job_id}:lease"
+    def last_accepted(self, task_id: str, cursor_kind: str) -> tuple[int, int] | None:
+        """The task's highest accepted ``(sequence, cursor)`` for one cursor kind, or ``None`` before its first."""
+        sequence = self._sequences.get(task_id)
+        cursor = self._cursors.get((task_id, cursor_kind))
+        return None if sequence is None or cursor is None else (sequence, cursor)
 
 
 class TaskSilence:

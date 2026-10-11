@@ -228,8 +228,14 @@ class ProgressEmitter:
     entry ID so callers can log it for debugging.
     """
 
-    def __init__(self, job_id: str) -> None:
+    def __init__(self, job_id: str, *, renews_lease: bool = True) -> None:
         self.job_id = job_id
+        # The serial job modes renew on every emit (ADR 0065 decision 1). The
+        # pooled research mode opts out: its public events are presentation,
+        # and its lease renews on accepted execution checkpoints
+        # (:mod:`app.jobs.checkpoints`) — a hung task that logs would
+        # otherwise read alive.
+        self.renews_lease = renews_lease
         self._r = get_redis()
 
     # ----- low-level -----
@@ -244,12 +250,15 @@ class ProgressEmitter:
         )
         # Stream itself doesn't carry a TTL when first created — XADD
         # against a fresh key just creates it. Set the TTL on every emit
-        # cheaply so it slides forward while the job is active. The emit is
-        # also a liveness proof: renew the worker's lease on the same
-        # round trips (#1938).
+        # cheaply so it slides forward while the job is active. In the
+        # serial modes the emit is also a liveness proof: renew the worker's
+        # lease on the same round trip (#1938). The pooled research mode
+        # opts out — its lease renews on execution checkpoints, never on a
+        # public event (#3034, ADR 0065 D1 as amended).
         pipe = self._r.pipeline()
         pipe.expire(_events_key(self.job_id), JOB_TTL_SECONDS)
-        pipe.expire(_lease_key(self.job_id), JOB_LEASE_TTL_SECONDS)
+        if self.renews_lease:
+            pipe.expire(_lease_key(self.job_id), JOB_LEASE_TTL_SECONDS)
         pipe.execute()
         return entry_id
 
