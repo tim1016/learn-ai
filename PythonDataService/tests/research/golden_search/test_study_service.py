@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import time
 from datetime import date
 from pathlib import Path
 
@@ -1354,3 +1355,98 @@ async def test_an_isolated_study_freezes_its_protocol_width_histogram(
     for fold in histogram["folds"]:
         assert fold["accounting"]["invalid"] == sum(round_row["invalid"] for round_row in fold["rounds"])
         assert fold["totals"]["reconciled"] is True
+
+
+async def test_a_stage_under_the_checkpoint_contract_renews_only_on_accepted_checkpoints(
+    conn: asyncpg.Connection, driver: Driver, symbol: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#3041, serial proof: the stage's real boundaries ride the checkpoint gate.
+
+    Cancellation polls are read-only; the lease renews once per accepted
+    checkpoint (the stage's phase transitions and its durable evaluation
+    completions); stale-generation task events renew nothing and mutate no
+    progress; and the stage lands where an uninterrupted reference lands.
+    """
+    from app.jobs import progress as jobs_progress
+    from app.jobs.checkpoints import CheckpointGate, ExecutionCheckpoint
+    from tests.jobs.conftest import _FakeRedis
+
+    fake = _FakeRedis()
+    monkeypatch.setattr(jobs_progress, "get_redis", lambda: fake)
+    monkeypatch.setattr(lifecycle, "get_redis", lambda: fake)
+
+    reference = await driver.lock(symbol)
+    reference = await driver.advance(reference, "continue")
+
+    row = await driver.lock(symbol)
+    outcome = await driver.command(row, "continue")
+    assert outcome.dispatch is not None
+    job = "job-checkpoint-proof"
+    await service.bind_dispatch(outcome.study.id, stage_token=outcome.dispatch["payload"]["stage_token"], job_id=job)
+    fake.job(job, "running")
+    fake.lease(job)
+
+    generation = 1
+    seen: list[ExecutionCheckpoint] = []
+    gate = CheckpointGate(job, generation, on_accepted=seen.append)
+
+    def phase_checkpoint(phase: str) -> None:
+        gate.accept(
+            ExecutionCheckpoint(
+                generation=generation, task_id="stage", sequence=len(seen) + 1, cursor=0,
+                cursor_kind="processed_blocks", phase=phase, occurred_at_ms=time.time_ns() // 1_000_000,
+                transition=True,
+            )
+        )
+
+    def completion_checkpoint(done: int, total: int) -> None:
+        gate.accept(
+            ExecutionCheckpoint(
+                generation=generation, task_id="stage", sequence=len(seen) + 1, cursor=done,
+                cursor_kind="durable_completions", phase="search", occurred_at_ms=time.time_ns() // 1_000_000,
+                transition=True,
+            )
+        )
+
+    state = await asyncio.to_thread(
+        service.run_stage,
+        outcome.study.id,
+        stage_token=outcome.dispatch["payload"]["stage_token"],
+        job_id=job,
+        cancel_check=jobs_progress.CancellationCheck(job, renews_lease=False).raise_if_cancelled,
+        on_phase=phase_checkpoint,
+        on_progress=completion_checkpoint,
+        on_log=lambda message: None,
+        execute=driver.engine,
+        approval=driver.approval.binding(),
+        roots=driver.roots,
+    )
+
+    assert state.state == reference.state
+    assert seen, "the stage's real boundaries reached the gate"
+    assert all(key == f"job:{job}:lease" for key, _ in fake.expires)
+    assert len(fake.expires) == len(seen), "polls and reads renewed nothing; each accepted checkpoint renewed once"
+
+    stale_attempt = gate.accept(
+        ExecutionCheckpoint(
+            generation=generation - 1, task_id="stage", sequence=len(seen) + 100, cursor=10_000,
+            cursor_kind="durable_completions", phase="search", occurred_at_ms=time.time_ns() // 1_000_000,
+            transition=True,
+        )
+    )
+    repeated = gate.accept(
+        ExecutionCheckpoint(
+            generation=generation, task_id="stage", sequence=len(seen), cursor=10_000,
+            cursor_kind="durable_completions", phase="search", occurred_at_ms=time.time_ns() // 1_000_000,
+            transition=True,
+        )
+    )
+    assert stale_attempt is False and repeated is False
+    assert len(fake.expires) == len(seen), "stale or repeated events renew nothing after the stage is done"
+
+    finished = await service.get_row(outcome.study.id)
+    reference_finished = await service.get_row(reference.id)
+    assert finished.results["search"]["counts"] == reference_finished.results["search"]["counts"], (
+        "running under the contract does not change the search"
+    )
+    assert finished.consumed_evaluations == reference_finished.consumed_evaluations
