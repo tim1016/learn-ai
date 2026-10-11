@@ -29,11 +29,17 @@ test('the manual supports chapter links, mobile reading and complete printing', 
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.locator('app-bot-manual').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
   await chapters.filter({ hasText: 'Stocks, sizing & budgets' }).click();
+  // The jump must land the heading just below the sticky bar. Sampling before
+  // the router's anchor scroll fires reads the heading still below the fold,
+  // which passed vacuously while the scroll really landed under the bar
+  // (#3020) — so pin a window straddling the bar's bottom edge.
   await expect.poll(async () => {
     const heading = await page.locator('#stocks-and-budgets').boundingBox();
     const header = await page.locator('app-top-bar').boundingBox();
-    return !!heading && !!header && heading.y >= header.y + header.height;
-  }).toBe(true);
+    if (!heading || !header) return false;
+    const barBottom = header.y + header.height;
+    return heading.y >= barBottom - 1 && heading.y <= barBottom + 120;
+  }, { timeout: 15_000 }).toBe(true);
 
   await page.emulateMedia({ media: 'print' });
   await expect(print).toBeHidden();

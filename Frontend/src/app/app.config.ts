@@ -1,4 +1,4 @@
-import { ApplicationConfig, provideZonelessChangeDetection } from "@angular/core";
+import { ApplicationConfig, provideAppInitializer, provideZonelessChangeDetection } from "@angular/core";
 import {
   provideRouter,
   withComponentInputBinding,
@@ -14,6 +14,7 @@ import Aura from "@primeuix/themes/aura";
 import { environment } from "../environments/environment";
 import { routes } from "./app.routes";
 import { dataPlaneControlIntentInterceptor } from "./security/data-plane-control-intent.interceptor";
+import { configureShellViewportScroller } from "./shell/shell-viewport-scroller";
 
 /**
  * The menubar is shell chrome, not a card. It renders inside the top bar and
@@ -60,6 +61,8 @@ export const appConfig: ApplicationConfig = {
       withExperimentalAutoCleanupInjectors(),
     ),
     provideHttpClient(withXhr(), withInterceptors([dataPlaneControlIntentInterceptor])),
+    // Router anchor scrolling must clear the shell's sticky top bar (#3020).
+    provideAppInitializer(configureShellViewportScroller),
     providePrimeNG({
       license: environment.primeUiLicense,
       theme: {
