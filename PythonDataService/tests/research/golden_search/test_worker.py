@@ -56,7 +56,7 @@ def _ready_item(point_gap: float = 0.2, *, detail: bool = False) -> ReadyEvaluat
         stage="search",
         fold_index=None,
     )
-    return ReadyEvaluation(key="k" * 64, attempt=3, request=request)
+    return ReadyEvaluation(key="k" * 64, attempt=3, task_gen=1, request=request)
 
 
 # ── The wire (fast) ────────────────────────────────────────────────────────
@@ -154,7 +154,7 @@ def _serial_item() -> ReadyEvaluation:
         stage="search",
         fold_index=None,
     )
-    return ReadyEvaluation(key="w" * 64, attempt=1, request=request)
+    return ReadyEvaluation(key="w" * 64, attempt=1, task_gen=1, request=request)
 
 
 @pytest.fixture
@@ -338,3 +338,31 @@ def test_task_progress_resets_both_clocks_and_the_outcome_wins() -> None:
     finally:
         progressing.join(timeout=2.0)
         worker._verdicts.shutdown(wait=False)
+
+
+@pytest.mark.slow
+def test_cancellation_frees_the_execution_slot_within_ten_seconds(no_active_children) -> None:
+    """#3045's bound: cancelling with a write's fate uncertain still reaps the child promptly.
+
+    The durable reconciliation is separate and may be slow; the execution
+    slot — the child — must not wait for it.
+    """
+    manifest: dict[str, str] = {}
+    worker = ResearchWorker(WorkerDispatchContext(
+        strategy_key="sma_crossover",
+        execution=_assumptions(),
+        manifest=manifest,
+        identity=_runtime_identity(),
+        job_id="job-worker-test",
+        generation=1,
+    ))
+    pid = worker._child.pid
+
+    started = time.monotonic()
+    worker.cancel()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 10.0, f"the slot took {elapsed:.1f}s to free; the bound is ten"
+    with pytest.raises(OSError):
+        os.kill(pid, 0)
+    assert worker._child is None

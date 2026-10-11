@@ -35,6 +35,7 @@ APPLIED_VERSION_DIGESTS: dict[int, str] = {
     15: "740c3fb259daa2fd",
     16: "3daafaddfe68c5ad",
     17: "b179559cd44c2260",
+    18: "81e46d16b20848a1",
 }
 
 
@@ -315,3 +316,37 @@ async def test_version_16_leaves_recorded_cells_without_a_curve_and_keeps_the_tw
     for close_ms, values in (("'{1,2}'", "'{10.0}'"), ("'{1}'", "NULL"), ("NULL", "'{10.0}'")):
         with pytest.raises(asyncpg.CheckViolationError):
             await scratch_db.execute(f"UPDATE research_grid_search_cells SET equity_close_ms = {close_ms}, equity_values = {values} WHERE params_hash = 'old-cell'")
+
+
+async def test_version_18_gives_recorded_evaluations_a_generation_and_a_start_marker(scratch_db: asyncpg.Connection) -> None:
+    """A pending row records before v18 as never dispatched; the columns arrive without touching its result (#3045)."""
+    await ensure_schema(scratch_db)
+    await scratch_db.execute(
+        """
+        ALTER TABLE research_golden_search_evaluations
+            DROP COLUMN IF EXISTS task_gen, DROP COLUMN IF EXISTS started_at_ms
+        """
+    )
+    await scratch_db.execute("DELETE FROM research_schema_migrations WHERE version = 18")
+    await scratch_db.execute(
+        """
+        INSERT INTO research_golden_search_studies (
+            id, strategy_key, symbol, state, created_at_ms, updated_at_ms, protocol_json, protocol_hash, receipt_json, budget_cap
+        ) VALUES ('s18', 'ema_crossover_signal', 'SPY', 'search_running', 1, 1, '{}'::jsonb, 'h', '{}'::jsonb, 5000)
+        """
+    )
+    await scratch_db.execute(
+        """
+        INSERT INTO research_golden_search_evaluations (
+            study_id, evaluation_key, point_hash, point_json, window_start_ms, window_end_ms, stage, status, attempt, created_at_ms
+        ) VALUES ('s18', 'pending-run', 'p', '{}'::jsonb, 1, 2, 'search', 'pending', 1, 1)
+        """
+    )
+
+    await ensure_schema(scratch_db)
+
+    row = await scratch_db.fetchrow(
+        "SELECT task_gen, started_at_ms FROM research_golden_search_evaluations WHERE evaluation_key = 'pending-run'"
+    )
+    # Generation 0, never started: the safe direction — a legacy pending row re-runs without spending a retry.
+    assert (row["task_gen"], row["started_at_ms"]) == (0, None)

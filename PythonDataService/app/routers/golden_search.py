@@ -401,7 +401,9 @@ def _gated_stage_work(req: GoldenSearchJobRequest):
     """
     from app.jobs.checkpoints import CheckpointGate, ExecutionCheckpoint
     from app.jobs.progress import CancellationCheck
+    from app.research.golden_search.worker import worker_dispatch_factory
     from app.research.persistence import ownership
+    from app.research.persistence.ownership import GenerationFencedError
     from app.utils.timestamps import now_ms_utc
 
     def work(emit: ProgressEmitter, _runner_cancel: CancellationCheck) -> dict[str, Any]:
@@ -421,10 +423,12 @@ def _gated_stage_work(req: GoldenSearchJobRequest):
             # a lease for a generation it no longer owns. Fired between
             # evaluations and on every stage-level poll; fencing inside a
             # single engine run waits for the child's advancing checkpoints
-            # (#3045).
+            # (#3045). A fenced generation is terminal — nothing may replace
+            # the worker and continue — where a lost worker is retryable, so
+            # this is not WorkerLost (#3045).
             base_cancel()
             if not authority.connected:
-                raise WorkerLost("coordinator authority connection lost mid-run; the generation is fenced")
+                raise GenerationFencedError("coordinator authority connection lost mid-run; the generation is fenced")
 
         seen: list[ExecutionCheckpoint] = []
         gate = CheckpointGate(req.job_id, generation, on_accepted=seen.append)
@@ -459,7 +463,6 @@ def _gated_stage_work(req: GoldenSearchJobRequest):
                     )
                 )
 
-        from app.research.golden_search.worker import WorkerLost, worker_dispatch_factory
 
         gate_lock = threading.Lock()
 

@@ -491,7 +491,7 @@ async def test_a_study_whose_batches_arrive_reversed_lands_where_the_serial_refe
 
     reference = await driver.advance(await driver.lock(symbol), "continue")
     monkeypatch.setattr(
-        evaluator_module, "serial_dispatch", lambda run, batch: list(reversed(serial_dispatch(run, batch)))
+        evaluator_module, "serial_dispatch", lambda run, batch: list(reversed(list(serial_dispatch(run, batch))))
     )
     row = await driver.lock(symbol)
     await driver.run(await driver.command(row, "continue"))
@@ -517,10 +517,10 @@ async def test_a_crash_between_reservation_and_result_reruns_that_evaluation_wit
         await driver.run(outcome)
     assert type(crashed.value).__name__ == "SimulatedCrash"
     pending = await conn.fetch("SELECT evaluation_key FROM research_golden_search_evaluations WHERE study_id = $1 AND status = 'pending'", row.id)
-    # The ready batch is reserved before dispatch (#3040), so a crash inside
-    # it leaves the whole admitted prefix pending — the never-ran members
-    # included — where the interleaved loop left only the crashed one.
-    assert len(pending) == 3
+    # Delivery is lazy (#3045): the batch's completed prefix persisted before
+    # the crashing item began, so only the run that died stays pending — the
+    # eager batch would have stranded its finished members too.
+    assert len(pending) == 1
     crashed_row = await service.get_row(row.id)
     assert crashed_row.status == "running" and crashed_row.consumed_evaluations == 4
 
@@ -535,9 +535,9 @@ async def test_a_crash_between_reservation_and_result_reruns_that_evaluation_wit
         row.id,
         [record["evaluation_key"] for record in pending],
     )
-    assert [(record["status"], record["retries"]) for record in retried] == [("completed", 1)] * 3, (
-        "every pending member of the crashed batch re-ran once, without new budget"
-    )
+    # The crashed run had begun — its start marker is set — so its re-run
+    # spends one retry, never a second budget unit (#3045).
+    assert [(record["status"], record["retries"]) for record in retried] == [("completed", 1)]
 
 
 def _moved_identity() -> CodeIdentity:
@@ -589,7 +589,7 @@ async def test_closing_a_stopped_stage_seals_its_attempt_against_a_worker_still_
         await repo.update_study_fenced(conn, row.id, interrupted.attempt, changes={"state": "awaiting_validation"})
     pending = await conn.fetchval("SELECT evaluation_key FROM research_golden_search_evaluations WHERE study_id = $1 AND status = 'pending'", row.id)
     with pytest.raises(StaleAttemptError):
-        await repo.complete_evaluation(conn, row.id, interrupted.attempt, pending, metrics=Metrics.failed("late"), detail=None)
+        await repo.complete_evaluation(conn, row.id, interrupted.attempt, pending, metrics=Metrics.failed("late"), detail=None, task_gen=1)
     assert (await service.get_row(row.id)).state == "closed"
 
 
@@ -663,7 +663,7 @@ async def test_a_superseded_attempt_can_neither_record_nor_spend(conn: asyncpg.C
     with pytest.raises(StaleAttemptError):
         await asyncio.to_thread(old.evaluate, [{**stale.protocol["seed"], "gap": 0.55}], window=_development(stale), stage="search")
     with pytest.raises(StaleAttemptError):
-        await repo.complete_evaluation(conn, row.id, stale.attempt, pending, metrics=Metrics.failed("late"), detail=None)
+        await repo.complete_evaluation(conn, row.id, stale.attempt, pending, metrics=Metrics.failed("late"), detail=None, task_gen=1)
     assert len(driver.engine.calls) == calls
     assert (await service.get_row(row.id)).consumed_evaluations == stale.consumed_evaluations
 

@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import asyncpg
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 # Arbitrary but fixed: serializes concurrent first-use across FastAPI's loop
 # and the worker loop so CREATE IF NOT EXISTS never races itself.
 _ADVISORY_LOCK_KEY = 0x1926_0001
@@ -872,6 +872,23 @@ DDL_V17: tuple[str, ...] = (
     """,
 )
 
+# Worker loss and uncertain writes (#3045, PRD #3034): each evaluation row
+# carries the dispatch generation inside its attempt and a start marker.
+# ``task_gen`` advances on every re-admission of a pending row, so a complete,
+# release or start write from a cancelled, timed-out or replaced dispatch
+# matches zero rows and is rejected beside the attempt fence; a pending row
+# whose ``started_at_ms`` is NULL never reached its engine call and re-runs
+# without spending retry allowance. Rows recorded before this version read as
+# generation 0, never started — pending legacy rows re-run free, the safe
+# direction for accounting.
+DDL_V18: tuple[str, ...] = (
+    """
+    ALTER TABLE research_golden_search_evaluations
+        ADD COLUMN IF NOT EXISTS task_gen INTEGER NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS started_at_ms BIGINT NULL
+    """,
+)
+
 VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (1, DDL_V1),
     (2, DDL_V2),
@@ -890,6 +907,7 @@ VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (15, DDL_V15),
     (16, DDL_V16),
     (17, DDL_V17),
+    (18, DDL_V18),
 )
 
 

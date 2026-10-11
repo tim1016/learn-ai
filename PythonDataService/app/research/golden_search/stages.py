@@ -990,9 +990,14 @@ def _stage_incomplete(results: Mapping[str, Any], stage: StageName) -> bool:
 
 
 def _close_dispatch(ctx: StageContext) -> None:
-    """Kill and reap the stage's spawned worker, if it built one (#3044)."""
-    if ctx._built_dispatch is not None:
-        ctx._built_dispatch.close()
+    """Kill and reap the stage's spawned worker, if it built one (#3044).
+
+    Only a dispatch that owns a child has a ``close``; the seam's other
+    adapters are plain callables with nothing to tear down.
+    """
+    close = getattr(ctx._built_dispatch, "close", None)
+    if close is not None:
+        close()
 
 
 def execute_stage(

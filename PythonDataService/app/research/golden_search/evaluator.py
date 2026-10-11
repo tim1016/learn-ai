@@ -24,9 +24,10 @@ Formula:
     while ``consumed + 1 <= limit``; the limit keeps the exam and proof
     reservations out of reach of the development stages. A recorded result
     is a cache hit and consumes nothing; a pending row left by a crashed
-    attempt is re-run without new budget, at most ``RETRY_ALLOWANCE`` times,
-    then recorded failed. A run the owner cancelled stays pending and is
-    re-run without new budget or a retry.
+    attempt is re-run without new budget — its retry spent only when its
+    run had begun, which the row's start marker decides (#3045) — at most
+    ``RETRY_ALLOWANCE`` times, then recorded failed. A run the owner
+    cancelled stays pending and is re-run without new budget or a retry.
   * daily curve — every completed run keeps ``(session close ms, equity)``
     for each session it scored: the engine's last equity sample of each ET
     date (``equity_day_ends``, filled on a summary run too), anchored by
@@ -39,7 +40,8 @@ Reference: PRD https://github.com/tim1016/learn-ai/issues/2696 "Small
   ``app/research/grid_search/engine_adapter.py``.
 Canonical implementation: this file.
 Validated against: tests/research/golden_search/test_evaluator.py,
-  tests/research/golden_search/test_study_service.py.
+  tests/research/golden_search/test_study_service.py,
+  tests/research/golden_search/test_worker_loss_recovery.py.
 """
 
 from __future__ import annotations
@@ -47,7 +49,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any
@@ -66,6 +68,7 @@ from app.research.persistence.db import run_sync, with_connection
 from app.research.sweep.daily_equity import daily_equity
 from app.research.sweep.grid import RunSpec
 from app.schemas.engine_backtest import EngineBacktestRequest, EngineBacktestResponse
+from app.utils.background_loop import CallerStoppedWaitingError
 from app.utils.session_anchors import et_date_at_ms
 
 logger = logging.getLogger(__name__)
@@ -82,6 +85,18 @@ Window = tuple[int, int]
 
 class CapabilityError(RuntimeError):
     """An evaluation window lies outside every interval this stage may score."""
+
+
+class WorkerLost(RuntimeError):
+    """The execution backend died with work in flight (#3044, #3045).
+
+    The affected evaluations' fates are unknown, not failed: their rows stay
+    pending with their start markers, so a re-admission spends retry
+    allowance only for a run that may have begun, and the dispatch may
+    replace the worker and continue the same attempt. Distinct from a fenced
+    generation (``app.research.persistence.ownership.GenerationFencedError``),
+    which nothing may continue.
+    """
 
 
 class EvidenceIntegrityError(RuntimeError):
@@ -396,18 +411,23 @@ def _failure_message(exc: Exception) -> str:
 
 @dataclass(frozen=True)
 class ReadyEvaluation:
-    """One admitted evaluation a dispatcher receives: fully keyed and attempt-fenced.
+    """One admitted evaluation a dispatcher receives: fully keyed and generation-fenced.
 
     The key is the whole existing evaluation identity — context digest, point
     hash, window, scenario, detail — never the point hash alone; ``attempt``
-    is the generation every reservation and completion is fenced by. A
-    dispatcher owns only computation: admission, budget and persistence stay
-    with the evaluator.
+    is the study generation and ``task_gen`` the dispatch generation inside
+    it, and together they fence every start, completion and release (#3045).
+    A dispatcher owns only computation: admission, budget and persistence stay
+    with the evaluator — including ``begin``, the start marker it must call
+    immediately before the item's engine work begins, so a crash between
+    admission and execution re-runs free instead of spending a retry.
     """
 
     key: str
     attempt: int
+    task_gen: int
     request: EvaluationRequest
+    begin: Callable[[], None] = lambda: None
 
 
 @dataclass(frozen=True)
@@ -417,43 +437,60 @@ class DeliveredOutcome:
     ``cancelled_by`` carries the cancellation an execution observed — the
     evaluator releases that reservation and re-raises it, and nothing is
     persisted for the item (the synthetic ``result`` placeholder is never
-    recorded). A batch member with no outcome at all never ran.
+    recorded). A batch member with no outcome at all never ran. The attempt
+    and task generation travel with the outcome so the evaluator can discard
+    a late delivery in memory before the store's fences ever see it (#3045).
     """
 
     key: str
+    attempt: int
+    task_gen: int
     result: EvaluationResult
     cancelled_by: Exception | None = None
 
 
 BatchDispatch = Callable[
     [Callable[[EvaluationRequest], EvaluationResult], Sequence[ReadyEvaluation]],
-    Sequence[DeliveredOutcome],
+    Iterable[DeliveredOutcome],
 ]
-"""One ready batch's dispatch contract (#3040).
+"""One ready batch's dispatch contract (#3040, #3045).
 
-An adapter executes ``run`` for the admitted batch and returns one outcome
+An adapter executes ``run`` for the admitted batch and delivers one outcome
 per admitted key — a cancellation is *delivered* as ``cancelled_by``, never
 raised out of the adapter, so the evaluator can release every unrecorded
-reservation. Arrival order is free; logical order is the evaluator's.
+reservation. Delivery is lazy: the evaluator records each outcome before it
+asks for the next, so an adapter must begin an item (``ReadyEvaluation.begin``)
+only when its predecessor's outcome is already consumed, and a crash mid-batch
+keeps the completed prefix. Arrival order is free; logical order is the
+evaluator's. A :class:`WorkerLost` raised mid-batch interrupts it for the
+evaluator's bounded re-admission — the adapter must be callable again with a
+replaced worker.
 """
 
 
 def serial_dispatch(
     run: Callable[[EvaluationRequest], EvaluationResult], batch: Sequence[ReadyEvaluation]
-) -> list[DeliveredOutcome]:
+) -> Iterator[DeliveredOutcome]:
     """Today's executor, as the default adapter: one evaluation at a time, in logical order.
 
     Cancellation stops the walk at the item that observed it — exactly where
-    the interleaved loop stopped before this seam existed (#3040).
+    the interleaved loop stopped before this seam existed (#3040). Each item's
+    start marker lands immediately before its engine call (#3045).
     """
-    outcomes: list[DeliveredOutcome] = []
     for item in batch:
+        item.begin()
         try:
-            outcomes.append(DeliveredOutcome(key=item.key, result=run(item.request)))
+            outcome = DeliveredOutcome(key=item.key, attempt=item.attempt, task_gen=item.task_gen, result=run(item.request))
         except JobCancelled as cancel:
-            outcomes.append(DeliveredOutcome(key=item.key, result=EvaluationResult(metrics=Metrics.failed("cancelled")), cancelled_by=cancel))
-            break
-    return outcomes
+            yield DeliveredOutcome(
+                key=item.key,
+                attempt=item.attempt,
+                task_gen=item.task_gen,
+                result=EvaluationResult(metrics=Metrics.failed("cancelled")),
+                cancelled_by=cancel,
+            )
+            return
+        yield outcome
 
 
 def reordered_dispatch(order: Sequence[int]) -> BatchDispatch:
@@ -465,7 +502,10 @@ def reordered_dispatch(order: Sequence[int]) -> BatchDispatch:
     """
 
     def dispatch(run: Callable[[EvaluationRequest], EvaluationResult], batch: Sequence[ReadyEvaluation]) -> list[DeliveredOutcome]:
-        outcomes = [DeliveredOutcome(key=item.key, result=run(item.request)) for item in batch]
+        outcomes = [
+            DeliveredOutcome(key=item.key, attempt=item.attempt, task_gen=item.task_gen, result=run(item.request))
+            for item in batch
+        ]
         return [outcomes[index] for index in order]
 
     return dispatch
@@ -549,26 +589,7 @@ class StudyEvaluator:
                 if key in handled:
                     continue
                 self.cancel_check()
-                reservation = run_sync(
-                    with_connection(
-                        repo.reserve_evaluation,
-                        self.study_id,
-                        self.attempt,
-                        repo.NewEvaluation(
-                            evaluation_key=key,
-                            point_hash=digest,
-                            point=point,
-                            window_start_ms=window[0],
-                            window_end_ms=window[1],
-                            scenario=scenario_key,
-                            detail=detail,
-                            stage=stage,
-                            fold_index=fold_index,
-                        ),
-                        limit=self.budget_limit,
-                        retry_allowance=RETRY_ALLOWANCE,
-                    )
-                )
+                reservation = self._reserve(key, point, digest, window=window, stage=stage, fold_index=fold_index, scenario_key=scenario_key, detail=detail)
                 if reservation.kind == "exhausted":
                     # The first unaffordable new identity ends the prefix here:
                     # later points are not searched for cheaper or cached work,
@@ -576,45 +597,19 @@ class StudyEvaluator:
                     exhausted = True
                     break
                 if reservation.kind == "cached":
-                    assert reservation.record is not None
                     handled.add(key)
-                    self.cache_hits += reservation.counted_as_cache_hit
-                    results[key] = repo.metrics_of(reservation.record)
-                    if detail:
-                        payload = reservation.record.detail_json
-                        if reservation.record.attempt != self.attempt:
-                            # A row an earlier attempt left is a durable readback —
-                            # the resume's only authority, which must still hold
-                            # its payload (#3039).
-                            payload = require_intact_detail(key, reservation.record.status, payload)
-                        self._details[key] = payload
-                    self.on_evaluated(self.new_runs + self.cache_hits)
+                    self._serve_cached(key, reservation, results, detail=detail)
                     continue
                 handled.add(key)
-                admitted.append(
-                    ReadyEvaluation(
-                        key=key,
-                        attempt=self.attempt,
-                        request=EvaluationRequest(
-                            point=point,
-                            point_hash=digest,
-                            window=window,
-                            warmup_from=self.warmup_for(window[0]),
-                            scenario=scenario,
-                            detail=detail,
-                            stage=stage,
-                            fold_index=fold_index,
-                        ),
-                    )
-                )
+                admitted.append(self._ready(key, reservation.task_gen, point, digest, window=window, stage=stage, fold_index=fold_index, scenario=scenario, detail=detail))
         except BaseException:
             # An interruption before dispatch leaves the admitted prefix
-            # pending with no marker; a later reserve_evaluation would read
-            # those never-run rows as crashed executions and burn their
+            # pending with no start marker; a later reserve_evaluation would
+            # read those never-run rows as crashed executions and burn their
             # retry allowance. Release them — the same never-ran semantics
-            # the dispatch guard below enforces (#3040).
+            # the start markers enforce during dispatch (#3040, #3045).
             for item in admitted:
-                run_sync(with_connection(repo.release_evaluation, self.study_id, self.attempt, item.key))
+                self._release(item.key, item.task_gen)
             raise
         if admitted:
             self._dispatch_and_record(admitted, results, detail=detail)
@@ -622,33 +617,239 @@ class StudyEvaluator:
             raise BudgetExhausted(f"the study's evaluation budget cannot admit another {stage} evaluation")
         return [results[key] for key, _, _ in keyed]
 
+    def _reserve(
+        self,
+        key: str,
+        point: Mapping[str, Any],
+        digest: str,
+        *,
+        window: Window,
+        stage: str,
+        fold_index: int | None,
+        scenario_key: str,
+        detail: bool,
+    ) -> repo.Reservation:
+        def call() -> repo.Reservation:
+            return run_sync(
+                with_connection(
+                    repo.reserve_evaluation,
+                    self.study_id,
+                    self.attempt,
+                    repo.NewEvaluation(
+                        evaluation_key=key,
+                        point_hash=digest,
+                        point=dict(point),
+                        window_start_ms=window[0],
+                        window_end_ms=window[1],
+                        scenario=scenario_key,
+                        detail=detail,
+                        stage=stage,
+                        fold_index=fold_index,
+                    ),
+                    limit=self.budget_limit,
+                    retry_allowance=RETRY_ALLOWANCE,
+                )
+            )
+
+        try:
+            return call()
+        except CallerStoppedWaitingError:
+            # The reservation's outcome is unknown, not failed (#3045). The
+            # fenced transaction is idempotent from the row's side: a first
+            # attempt that committed reads back as this key's own row — no
+            # second unit, a free re-admission — and one that rolled back
+            # inserts now. A second stall is a dead database: propagate it.
+            logger.warning(
+                "golden search reservation write uncertain; reconciling by re-reserving",
+                extra={"action": "golden_search_reserve_reconciled", "study_id": self.study_id, "evaluation_key": key},
+            )
+            return call()
+
+    def _reserve_item(self, item: ReadyEvaluation) -> repo.Reservation:
+        request = item.request
+        return self._reserve(
+            item.key,
+            request.point,
+            request.point_hash,
+            window=request.window,
+            stage=request.stage,
+            fold_index=request.fold_index,
+            scenario_key=BASE_SCENARIO if request.scenario is None else request.scenario.key,
+            detail=request.detail,
+        )
+
+    def _begin(self, key: str, task_gen: int) -> Callable[[], None]:
+        """The start-marker write an adapter triggers immediately before an item's engine work (#3045)."""
+        return lambda: run_sync(with_connection(repo.start_evaluation, self.study_id, self.attempt, key, task_gen=task_gen))
+
+    def _ready(
+        self,
+        key: str,
+        task_gen: int,
+        point: Mapping[str, Any],
+        digest: str,
+        *,
+        window: Window,
+        stage: str,
+        fold_index: int | None,
+        scenario: StressScenario | None,
+        detail: bool,
+    ) -> ReadyEvaluation:
+        return ReadyEvaluation(
+            key=key,
+            attempt=self.attempt,
+            task_gen=task_gen,
+            request=EvaluationRequest(
+                point=dict(point),
+                point_hash=digest,
+                window=window,
+                warmup_from=self.warmup_for(window[0]),
+                scenario=scenario,
+                detail=detail,
+                stage=stage,
+                fold_index=fold_index,
+            ),
+            begin=self._begin(key, task_gen),
+        )
+
+    def _rereadied(self, item: ReadyEvaluation, task_gen: int) -> ReadyEvaluation:
+        """The same item under a new generation: the request and key stand, the fencing moves on (#3045)."""
+        return ReadyEvaluation(
+            key=item.key, attempt=item.attempt, task_gen=task_gen, request=item.request, begin=self._begin(item.key, task_gen)
+        )
+
+    def _serve_cached(
+        self, key: str, reservation: repo.Reservation, results: dict[str, Metrics], *, detail: bool
+    ) -> None:
+        assert reservation.record is not None
+        self.cache_hits += reservation.counted_as_cache_hit
+        results[key] = repo.metrics_of(reservation.record)
+        if detail:
+            payload = reservation.record.detail_json
+            if reservation.record.attempt != self.attempt:
+                # A row an earlier attempt left is a durable readback —
+                # the resume's only authority, which must still hold
+                # its payload (#3039).
+                payload = require_intact_detail(key, reservation.record.status, payload)
+            self._details[key] = payload
+        self.on_evaluated(self.new_runs + self.cache_hits)
+
+    def _release(self, key: str, task_gen: int) -> None:
+        """Leave a cancelled run's row pending, marked so the next attempt re-runs it without spending a retry."""
+        try:
+            run_sync(with_connection(repo.release_evaluation, self.study_id, self.attempt, key, task_gen=task_gen))
+        except CallerStoppedWaitingError:
+            # The release write's outcome is unknown; cancellation must not
+            # wait on it (#3045). Its late landing is fenced by the task
+            # generation — it can only mark a row still pending under
+            # exactly this generation — and the row staying pending is an
+            # honest outcome for Finish.
+            logger.warning(
+                "golden search release write uncertain; leaving the reservation pending",
+                extra={"action": "golden_search_release_uncertain", "study_id": self.study_id, "evaluation_key": key},
+            )
+
     def _dispatch_and_record(
         self, admitted: Sequence[ReadyEvaluation], results: dict[str, Metrics], *, detail: bool
     ) -> None:
-        """Run the admitted prefix through the adapter and persist outcomes as they arrive.
+        """Run the admitted prefix through the adapter, recording each outcome before the next evaluation begins.
 
-        Logical consumption is by full evaluation key, so arrival order never
-        reaches the caller: results land in the caller's input order whatever
-        the dispatcher delivered. A cancellation releases the reservation it
-        stopped on and every never-ran member of the batch — the same keys
-        the interleaved loop never reserved (#3040).
+        Delivery is lazy (#3045): the adapter begins an item only after its
+        predecessor's outcome is recorded, so a crash mid-batch keeps its
+        completed prefix. A worker lost with work in flight interrupts the
+        batch — not the attempt: the unfinished items re-admit under advanced
+        task generations (the started one spends a retry, the never-started
+        re-run free), the adapter replaces its worker, and the batch
+        continues; replacements without durable progress stop after the retry
+        allowance, and each item's runs stay bounded by it. Logical
+        consumption is by full evaluation key, so arrival order never
+        reaches the caller.
+        """
+        outstanding: dict[str, ReadyEvaluation] = {item.key: item for item in admitted}
+        replacements = 0
+        while outstanding:
+            progressed = False
+            try:
+                for outcome in (self.dispatch or serial_dispatch)(self._run, list(outstanding.values())):
+                    item = outstanding.get(outcome.key)
+                    if item is None or outcome.attempt != self.attempt or outcome.task_gen != item.task_gen:
+                        # Late output from a cancelled, timed-out or replaced dispatch:
+                        # the store's attempt and task-generation fences would refuse
+                        # it; discard it here, explicitly, and let the owed outcome land (#3045).
+                        logger.warning(
+                            "golden search discarded a stale delivered outcome",
+                            extra={
+                                "action": "golden_search_stale_outcome_discarded",
+                                "study_id": self.study_id,
+                                "evaluation_key": outcome.key,
+                                "outcome_attempt": outcome.attempt,
+                                "outcome_task_gen": outcome.task_gen,
+                            },
+                        )
+                        continue
+                    if outcome.cancelled_by is not None:
+                        raise outcome.cancelled_by
+                    self._persist(outcome, results, detail=detail)
+                    del outstanding[outcome.key]
+                    progressed = True
+                if outstanding:
+                    raise RuntimeError("the dispatch adapter ended without delivering an outcome for every admitted key")
+            except JobCancelled:
+                # A cancellation — delivered, or raised by an adapter that breaks
+                # the deliver-never-raise contract — releases every unrecorded
+                # reservation, exactly the keys the interleaved loop never
+                # reserved (#3040).
+                for key, pending_item in outstanding.items():
+                    self._release(key, pending_item.task_gen)
+                raise
+            except WorkerLost:
+                replacements = 0 if progressed else replacements + 1
+                outstanding, resolved = self._readmit(outstanding, results, detail=detail)
+                if resolved:
+                    # A readmit that recorded retry-exhausted evidence moved the
+                    # batch forward durably; only replacements that resolve
+                    # nothing count toward giving up (#3045).
+                    replacements = 0
+                if replacements > RETRY_ALLOWANCE:
+                    # Consecutive replacements bought no durable progress: stop
+                    # trusting the runtime and leave the honest pending rows for
+                    # Finish (#3045). The per-item bound is the retry allowance,
+                    # spent by reserve_evaluation as each started run re-admits.
+                    raise
+
+    def _readmit(
+        self, outstanding: Mapping[str, ReadyEvaluation], results: dict[str, Metrics], *, detail: bool
+    ) -> tuple[dict[str, ReadyEvaluation], bool]:
+        """Re-reserve every unfinished item after a worker loss (#3045).
+
+        A re-admission never draws a second budget unit — the row exists.
+        One whose run had begun spends a retry, bounded by the allowance; one
+        that never started, or whose allowance is spent, resolves here as a
+        cached (possibly failed) record instead of a re-run. Returns the
+        still-unfinished items and whether anything resolved durably.
+        """
+        readmitted: dict[str, ReadyEvaluation] = {}
+        resolved = False
+        for key, item in outstanding.items():
+            reservation = self._reserve_item(item)
+            if reservation.kind == "cached":
+                self._serve_cached(key, reservation, results, detail=detail)
+                resolved = True
+            else:
+                readmitted[key] = self._rereadied(item, reservation.task_gen)
+        return readmitted, resolved
+
+    def _persist(self, outcome: DeliveredOutcome, results: dict[str, Metrics], *, detail: bool) -> None:
+        """Record one outcome exactly once under its task generation (#3045).
+
+        An uncertain write — the caller stopped waiting, the operation may
+        still commit — is reconciled through a fenced generation swap before
+        anything is retried: the row lock decides against the delayed write,
+        so either the row resolved (it committed; its recorded result stands)
+        or the same in-hand result persists under the new generation, fencing
+        the delayed write out. No retry is spent and the engine never re-runs.
         """
         try:
-            outcomes = (self.dispatch or serial_dispatch)(self._run, admitted)
-        except JobCancelled:
-            # The adapter contract says a cancellation is delivered, not
-            # raised; this guard keeps an adapter bug from leaving the
-            # batch's reservations pending with no cancellation marker.
-            for item in admitted:
-                run_sync(with_connection(repo.release_evaluation, self.study_id, self.attempt, item.key))
-            raise
-        recorded: set[str] = set()
-        for outcome in outcomes:
-            if outcome.cancelled_by is not None:
-                never_ran = [item.key for item in admitted if item.key not in recorded and item.key != outcome.key]
-                for key in (outcome.key, *never_ran):
-                    run_sync(with_connection(repo.release_evaluation, self.study_id, self.attempt, key))
-                raise outcome.cancelled_by
             run_sync(
                 with_connection(
                     repo.complete_evaluation,
@@ -658,14 +859,53 @@ class StudyEvaluator:
                     metrics=outcome.result.metrics,
                     detail=outcome.result.detail,
                     curve=outcome.result.curve,
+                    task_gen=outcome.task_gen,
                 )
             )
-            recorded.add(outcome.key)
-            self.new_runs += 1
-            results[outcome.key] = outcome.result.metrics
-            if detail:
-                self._details[outcome.key] = outcome.result.detail
-            self.on_evaluated(self.new_runs + self.cache_hits)
+        except CallerStoppedWaitingError:
+            # The write is unknown, not failed: it may still commit under
+            # this generation, and a pending read proves nothing while it is
+            # in flight. Swap the generation under the fence — the row lock
+            # decides against the delayed write — then either the row
+            # resolved (it committed; done, nothing re-runs) or the same
+            # result persists under the new generation, which fences the
+            # delayed write out. No retry is spent and the engine never
+            # re-runs (#3045).
+            logger.warning(
+                "golden search completion write uncertain; reconciling the durable row",
+                extra={"action": "golden_search_completion_reconciled", "study_id": self.study_id, "evaluation_key": outcome.key},
+            )
+            claim = run_sync(
+                with_connection(repo.replace_generation, self.study_id, self.attempt, outcome.key, task_gen=outcome.task_gen)
+            )
+            if claim.resolved is not None:
+                self._serve_cached(outcome.key, repo.Reservation(kind="cached", record=claim.resolved, counted_as_cache_hit=0), results, detail=detail)
+                return None
+            # The delayed write is fenced out by the new generation; the same
+            # result — no engine re-run, no retry — lands under it. A second
+            # uncertain write propagates: the row stays honestly pending, its
+            # start marker cleared, for Finish to re-run free.
+            run_sync(
+                with_connection(
+                    repo.complete_evaluation,
+                    self.study_id,
+                    self.attempt,
+                    outcome.key,
+                    metrics=outcome.result.metrics,
+                    detail=outcome.result.detail,
+                    curve=outcome.result.curve,
+                    task_gen=claim.task_gen,
+                )
+            )
+        results[outcome.key] = outcome.result.metrics
+        self._count_persisted(outcome, detail=detail)
+        return None
+
+    def _count_persisted(self, outcome: DeliveredOutcome, *, detail: bool) -> None:
+        self.new_runs += 1
+        if detail:
+            self._details[outcome.key] = outcome.result.detail
+        self.on_evaluated(self.new_runs + self.cache_hits)
 
     def detail_of(self, point: Mapping[str, Any], *, window: Window) -> Mapping[str, Any] | None:
         """The detail payload of ``point``'s base-scenario detail run over ``window``; None without one.

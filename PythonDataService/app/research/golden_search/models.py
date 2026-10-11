@@ -195,6 +195,9 @@ class EvaluationRecord:
     completed_at_ms: int | None
     # Whether the run's daily equity was kept (#2930); a run recorded before it was has none.
     has_curve: bool = False
+    # The dispatch generation inside this attempt: advances on every re-admission of the row.
+    # 0 is the pre-#3045 shape, exactly the column's database default.
+    task_gen: int = 0
 
 
 def require_mapping(value: object, what: str) -> Mapping[str, Any]:
