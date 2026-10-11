@@ -639,6 +639,44 @@ class ResearchWorker:
         return True
 
 
+def delivered_outcome(item: ReadyEvaluation, message: Mapping[str, Any]) -> DeliveredOutcome:
+    """One child answer as the evaluator consumes it — the wire contract in one place (#3044, #3046).
+
+    The serial and pooled adapters translate identical child messages
+    identically: a cancelled run delivers the cancellation, a failure is
+    evidence like any engine failure, and a result carries its metrics,
+    detail and curve under the item's own fencing.
+    """
+    from app.jobs.progress import JobCancelled
+    from app.research.golden_search.selection import Metrics
+
+    if message["type"] == "failed" and message.get("error") == "cancelled":
+        return DeliveredOutcome(
+            key=item.key,
+            attempt=item.attempt,
+            task_gen=item.task_gen,
+            result=EvaluationResult(metrics=Metrics.failed("cancelled")),
+            cancelled_by=JobCancelled("cancelled in a research worker"),
+        )
+    if message["type"] == "failed":
+        return DeliveredOutcome(
+            key=item.key,
+            attempt=item.attempt,
+            task_gen=item.task_gen,
+            result=EvaluationResult(metrics=Metrics.failed(str(message.get("error", "worker failure")))),
+        )
+    return DeliveredOutcome(
+        key=item.key,
+        attempt=item.attempt,
+        task_gen=item.task_gen,
+        result=EvaluationResult(
+            metrics=Metrics.from_dict(message["metrics"]),
+            detail=message.get("detail"),
+            curve=[(int(ms), float(value)) for ms, value in message["curve"]] if message.get("curve") else None,
+        ),
+    )
+
+
 class WorkerDispatch:
     """The :data:`BatchDispatch` a stage's evaluator runs through (#3044, #3045).
 
@@ -678,13 +716,19 @@ class WorkerDispatch:
 
     def __call__(self, run, batch):  # BatchDispatch signature; run unused by design
         from app.jobs.progress import JobCancelled
-        from app.research.golden_search.selection import Metrics
+        from app.research.persistence.ownership import GenerationFencedError
 
         for item in batch:
-            cancelled = self._context.cancel_check()
-            if cancelled is not None or (type(cancelled) is bool and cancelled):
-                # Stop dispatching, tell the child, deliver the cancellation —
-                # the reservations release and nothing persists (#3040's contract).
+            try:
+                cancelled = self._context.cancel_check()
+            except (JobCancelled, GenerationFencedError):
+                # The production polls raise (#3041): the child stops on every
+                # cancellation or fencing path, never only the returning one (#3045).
+                self._cancel()
+                raise
+            if cancelled:
+                # A truthy return is a cancel token; the reservations release and
+                # nothing persists (#3040's contract).
                 self._cancel()
                 raise JobCancelled("cancelled between research worker tasks")
             task = task_wire(
@@ -701,33 +745,11 @@ class WorkerDispatch:
             except WorkerLost:
                 self._worker_lost(worker)
                 raise
-            if message["type"] == "failed" and message.get("error") == "cancelled":
-                yield DeliveredOutcome(
-                    key=item.key,
-                    attempt=item.attempt,
-                    task_gen=item.task_gen,
-                    result=EvaluationResult(metrics=Metrics.failed("cancelled")),
-                    cancelled_by=JobCancelled("cancelled in the research worker"),
-                )
+            outcome = delivered_outcome(item, message)
+            if outcome.cancelled_by is not None:
+                yield outcome
                 return
-            if message["type"] == "failed":
-                yield DeliveredOutcome(
-                    key=item.key,
-                    attempt=item.attempt,
-                    task_gen=item.task_gen,
-                    result=EvaluationResult(metrics=Metrics.failed(str(message.get("error", "worker failure")))),
-                )
-                continue
-            yield DeliveredOutcome(
-                key=item.key,
-                attempt=item.attempt,
-                task_gen=item.task_gen,
-                result=EvaluationResult(
-                    metrics=Metrics.from_dict(message["metrics"]),
-                    detail=message.get("detail"),
-                    curve=[(int(ms), float(value)) for ms, value in message["curve"]] if message.get("curve") else None,
-                ),
-            )
+            yield outcome
 
     def close(self) -> None:
         worker, self._worker = self._worker, None

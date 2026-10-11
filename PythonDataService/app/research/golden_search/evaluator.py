@@ -458,17 +458,18 @@ BatchDispatch = Callable[
 An adapter executes ``run`` for the admitted batch and delivers one outcome
 per admitted key — a cancellation is *delivered* as ``cancelled_by``, never
 raised out of the adapter, so the evaluator can release every unrecorded
-reservation. Delivery is lazy: the evaluator records each outcome before it
-asks for the next, so an adapter must begin an item (``ReadyEvaluation.begin``)
-only when its predecessor's outcome is already consumed, and a crash mid-batch
-keeps the completed prefix — a production adapter's rule; a documented test
-adapter (``reordered_dispatch``) may trade the laziness away to permute
-delivery, keeping only the begin-before-engine-work half. Arrival order is
-free; logical order is the evaluator's. A :class:`WorkerLost` raised mid-batch interrupts it for the
+reservation. The evaluator records each outcome before it asks for the
+next, so a production adapter keeps at most its configured window of items
+begun-but-undelivered — one, for the serial runtime (#3044); a bounded few,
+for a worker pool (#3046) — and a crash mid-batch keeps every outcome
+already delivered. Arrival order is free; logical order is the evaluator's.
+A :class:`WorkerLost` raised mid-batch interrupts it for the
 evaluator's bounded re-admission — the adapter must be callable again with a
 replaced worker. An adapter that owns execution resources (a spawned child)
 exposes ``close()``, which the stage calls on every exit; plain callable
-adapters need none.
+adapters need none. A documented test adapter (``reordered_dispatch``) may
+trade the window away entirely to permute delivery, keeping only the
+begin-before-engine-work half.
 """
 
 
@@ -783,11 +784,13 @@ class StudyEvaluator:
     def _dispatch_and_record(
         self, admitted: Sequence[ReadyEvaluation], results: dict[str, Metrics], *, detail: bool
     ) -> None:
-        """Run the admitted prefix through the adapter, recording each outcome before the next evaluation begins.
+        """Run the admitted prefix through the adapter, recording each outcome as it arrives.
 
-        Delivery is lazy (#3045): the adapter begins an item only after its
-        predecessor's outcome is recorded, so a crash mid-batch keeps its
-        completed prefix. A worker lost with work in flight interrupts the
+        Each outcome is durable before the evaluator asks for the next; an
+        adapter keeps at most its configured window begun-but-undelivered
+        (#3045 made the window one, #3046 lets a bounded pool widen it), so a
+        crash mid-batch keeps every delivered outcome and loses at most the
+        window. A worker lost with work in flight interrupts the
         batch — not the attempt: the unfinished items re-admit under advanced
         task generations (the started one spends a retry, the never-started
         re-run free), the adapter replaces its worker, and the batch

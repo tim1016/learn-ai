@@ -356,6 +356,14 @@ class Settings(BaseSettings):
     # Where the isolated research runtime answers (``http://research:8000``),
     # read only when RESEARCH_EXECUTION_MODE=research.
     RESEARCH_RUNTIME_URL: str = ""
+    # Bounded research worker pool (#3046, PRD #3034 slice 11). One ready
+    # batch may spread across this many spawned workers with at most
+    # RESEARCH_DISPATCH_WINDOW evaluations begun-but-undelivered. One worker
+    # — the default — is exactly the serial runtime #3044 shipped; more is
+    # opt-in per deployment and always bounded, never the whole budget as
+    # resident work.
+    RESEARCH_WORKER_COUNT: int = Field(default=1, ge=1, le=8)
+    RESEARCH_DISPATCH_WINDOW: int = Field(default=8, ge=1, le=64)
     # Issue #1735 step 3. Off, a strategy-wiring digest that no longer matches
     # its golden-qualification receipt is reported and Start/Resume proceed;
     # on, it fails closed like any other build drift. Deliberately default-off:
