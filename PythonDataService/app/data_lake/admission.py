@@ -15,6 +15,7 @@ a round trip — on a loop of its own inside a bounded connection envelope.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import logging
 import threading
@@ -132,6 +133,13 @@ def verify_committed_digest(path: Path, root: Path, digest: str, size: int) -> N
 
 ADMISSION_CALL_BOUND_S = 35.0
 
+# Shutdown and bound-expiry answers share the outage type: a relay that
+# cannot answer is an infrastructure event, never evidence about the bytes
+# (#3047 review) — the same taxonomy the single-check relay kept.
+_SHUTTING_DOWN = catalog_client.CatalogUnavailableError(
+    "the admission batcher is shutting down; the catalog's answer is unresolved"
+)
+
 
 class _AdmissionWaiter:
     """One submitting thread's parking spot: its check, and the verdict that releases it."""
@@ -183,14 +191,20 @@ class AdmissionBatcher:
         self._call_bound_s = call_bound_s
         self._pending: list[_AdmissionWaiter] = []
         self._wakeup: asyncio.Event | None = None
-        self._facts: dict[str, object] = {
-            "requests": 0, "sql_lookups": 0, "outages": 0,
-            "deduplicated": 0, "batch_sizes": Counter(), "last_query_ms": 0.0,
-        }
+        # The instrumentation #3047 asks for, as plain counters the loop and
+        # the readers share under the GIL: batch-size distribution, request
+        # versus SQL counts, round trips saved, last query latency.
+        self._requests = 0
+        self._sql_lookups = 0
+        self._outages = 0
+        self._deduplicated = 0
+        self._batch_sizes: Counter[int] = Counter()
+        self._last_query_ms = 0.0
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._loop.run_forever, name="admission-loop", daemon=True)
         self._thread.start()
-        self._serve_task = asyncio.run_coroutine_threadsafe(self._start(), self._loop)
+        self._serve_boot = asyncio.run_coroutine_threadsafe(self._start(), self._loop)
+        self._serve_task: asyncio.Future[None] | None = None
 
     async def _start(self) -> None:
         self._wakeup = asyncio.Event()
@@ -200,9 +214,10 @@ class AdmissionBatcher:
         """One read's verdict, blocking the calling thread at most the call bound.
 
         Raises the relay's established taxonomy: the outage type for an
-        unreachable catalog, :class:`LakeAdmissionError` for a refused
-        receipt or a verdict that never arrived inside the bound — the same
-        answers ``verify_committed_digest`` reaches, minus the queueing.
+        unreachable catalog *and for a verdict that never arrived inside the
+        bound* — a slow or shutting-down relay is an infrastructure event,
+        never evidence about the bytes (#3047 review) — and
+        :class:`LakeAdmissionError` for a refused receipt.
         """
         waiter = _AdmissionWaiter(check)
 
@@ -213,7 +228,9 @@ class AdmissionBatcher:
 
         self._loop.call_soon_threadsafe(deposit)
         if not waiter.event.wait(timeout=self._call_bound_s):
-            raise LakeAdmissionError("no admission verdict in time; the read's receipt check is unresolved")
+            raise catalog_client.CatalogUnavailableError(
+                "no admission verdict in time; the catalog's answer is unresolved"
+            )
         if waiter.failure is not None:
             raise waiter.failure
         assert waiter.admitted is not None
@@ -240,6 +257,12 @@ class AdmissionBatcher:
                     pool_ready = True
                 lookup = self._lookup if self._lookup is not None else catalog_client.has_committed_file_receipts
                 admitted = await lookup([check.as_tuple() for check in checks])
+            except asyncio.CancelledError:
+                # Shutdown reached into an in-flight batch: fail it with the
+                # outage, never leave a waiter to its own bound (#3047 review).
+                for waiter in batch:
+                    waiter.fail(_SHUTTING_DOWN)
+                raise
             except (catalog_client.CatalogUnavailableError, asyncpg.PostgresError,
                     OSError, TimeoutError, CallerStoppedWaitingError) as exc:
                 outage = catalog_client.CatalogUnavailableError(
@@ -255,57 +278,56 @@ class AdmissionBatcher:
             self._record(len(batch), len(checks), served_at)
 
     def _record(self, requests: int, unique: int, served_at: float, *, outage: bool = False) -> None:
-        query_ms = (time.perf_counter() - served_at) * 1000.0
-        facts = self._facts
-        facts["requests"] = int(facts["requests"]) + requests  # type: ignore[arg-type]
-        if not outage:
-            facts["sql_lookups"] = int(facts["sql_lookups"]) + 1  # type: ignore[arg-type]
-            facts["deduplicated"] = int(facts["deduplicated"]) + max(requests - unique, 0)  # type: ignore[arg-type]
+        self._last_query_ms = (time.perf_counter() - served_at) * 1000.0
+        self._requests += requests
+        self._batch_sizes.update({requests: 1})
+        if outage:
+            self._outages += 1
         else:
-            facts["outages"] = int(facts["outages"]) + 1  # type: ignore[arg-type]
-        facts["batch_sizes"] = Counter(facts["batch_sizes"])  # type: ignore[arg-type]
-        facts["batch_sizes"].update({requests: 1})  # type: ignore[union-attr]
-        facts["last_query_ms"] = query_ms
+            self._sql_lookups += 1
+            self._deduplicated += max(requests - unique, 0)
         logger.info(
             "research admission batch",
             extra={
                 "action": "research_admission_batch",
                 "requests": requests,
                 "unique_tuples": unique,
-                "query_ms": round(query_ms, 2),
+                "query_ms": round(self._last_query_ms, 2),
                 "outage": outage,
             },
         )
 
     def facts(self) -> dict[str, object]:
         """The instrumentation #3047 asks for: batch-size distribution, request versus SQL counts, query latency."""
-        sizes = Counter(self._facts["batch_sizes"])  # type: ignore[arg-type]
-        lookups = int(self._facts["sql_lookups"])  # type: ignore[arg-type]
-        requests = int(self._facts["requests"])  # type: ignore[arg-type]
         return {
-            "requests": requests,
-            "sql_lookups": lookups,
-            "outages": int(self._facts["outages"]),  # type: ignore[arg-type]
-            "deduplicated": int(self._facts["deduplicated"]),  # type: ignore[arg-type]
-            "batch_sizes": dict(sizes),
-            "round_trips_saved": max(requests - lookups, 0),
-            "last_query_ms": round(float(self._facts["last_query_ms"]), 2),  # type: ignore[arg-type]
+            "requests": self._requests,
+            "sql_lookups": self._sql_lookups,
+            "outages": self._outages,
+            "deduplicated": self._deduplicated,
+            "batch_sizes": dict(self._batch_sizes),
+            "round_trips_saved": max(self._requests - self._sql_lookups, 0),
+            "last_query_ms": round(self._last_query_ms, 2),
         }
 
     def close(self) -> None:
-        """Stop serving, close this loop's pool, stop the loop. Idempotent."""
+        """Stop serving, fail everything still parked with the typed outage, close this loop's pool."""
         if not self._thread.is_alive():
             return
 
         async def _stop() -> None:
-            serve = getattr(self, "_serve_task", None)
-            if serve is not None:
-                serve.cancel()
+            for waiter in self._pending:
+                waiter.fail(_SHUTTING_DOWN)
+            self._pending = []
+            if self._serve_task is not None:
+                self._serve_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._serve_task
             await catalog_client.close_pool()
             self._loop.stop()
 
         asyncio.run_coroutine_threadsafe(_stop(), self._loop)
-        self._thread.join(timeout=5.0)
+        if not self._thread.join(timeout=5.0):
+            logger.error("the admission loop did not stop within 5s of close; its thread is abandoned")
 
 
 _batcher: AdmissionBatcher | None = None

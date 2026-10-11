@@ -313,6 +313,22 @@ async def get_candidate(candidate_key: CandidateKey, study_id: StudyId) -> Golde
 # ── Jobs boundary ────────────────────────────────────────────────────────
 
 
+async def _research_record_write(coro, timeout: float = 60.0):
+    """Await a dispatch-time research-record write on the named writer loop (#3047).
+
+    Binding, stamping and release are research-record writes — F15's writer
+    loop owns those — and in the isolated runtime that loop's pool is the
+    capped one the connection envelope sized. Awaiting them here instead
+    would lazily size the app loop's own pool at the module ceiling,
+    spending ten connections no envelope accounted for.
+    """
+    from asyncio import to_thread
+
+    from app.utils.background_loop import run_on_background_loop
+
+    return await to_thread(run_on_background_loop, coro, timeout=timeout)
+
+
 @jobs_router.post("/golden-search", status_code=status.HTTP_202_ACCEPTED, response_model=GoldenSearchJobAccepted)
 async def start_golden_search_job(req: GoldenSearchJobRequest) -> GoldenSearchJobAccepted:
     """Run the stage a guarded command authorized, on a worker thread. 202 once the job is bound to it.
@@ -335,18 +351,18 @@ async def start_golden_search_job(req: GoldenSearchJobRequest) -> GoldenSearchJo
 
     # Refused authority must never bind: a stamp refusal after the bind
     # strands the study on a job no worker will serve (#3042).
-    await records.refuse_unauthorized_dispatch()
+    await _research_record_write(records.refuse_unauthorized_dispatch())
     try:
-        bound = await service.bind_dispatch(req.study_id, stage_token=req.stage_token, job_id=req.job_id)
+        bound = await _research_record_write(service.bind_dispatch(req.study_id, stage_token=req.stage_token, job_id=req.job_id))
     except GoldenSearchRefusal as exc:
         raise await _refused(exc) from exc
     try:
-        await records.stamp_research_dispatch(job_id=req.job_id, kind="golden_search", record_id=req.study_id)
+        await _research_record_write(records.stamp_research_dispatch(job_id=req.job_id, kind="golden_search", record_id=req.study_id))
     except HTTPException:
         # The binding is durable but this dispatch will not run: release it
         # (still queued, still this job id) so a retry binds instead of
         # becoming a redelivery that liveness refuses forever (#3042).
-        await service.release_dispatch_binding(req.study_id, job_id=req.job_id)
+        await _research_record_write(service.release_dispatch_binding(req.study_id, job_id=req.job_id))
         raise
     accepted = GoldenSearchJobAccepted(job_id=req.job_id, study_id=req.study_id, status="queued")
     if bound == "redelivery":

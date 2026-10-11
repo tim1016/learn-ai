@@ -12,6 +12,7 @@ next batch — including for unchanged bytes.
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 from collections.abc import Callable
@@ -22,7 +23,7 @@ import pytest
 
 from app.config import settings
 from app.data_lake import catalog_client
-from app.data_lake.admission import AdmissionBatcher, AdmissionCheck, LakeAdmissionError
+from app.data_lake.admission import AdmissionBatcher, AdmissionCheck
 from app.data_lake.catalog_client import CatalogUnavailableError
 
 ROOT = UUID(int=3047)
@@ -214,22 +215,59 @@ def _capture(submit: Callable[[AdmissionCheck], bool], check: AdmissionCheck) ->
         return exc
 
 
-def test_the_call_bound_is_preserved() -> None:
-    """A verdict that never arrives fails at the bound, with the relay's taxonomy (#3047)."""
+def test_the_call_bound_is_preserved_as_the_outage_taxonomy() -> None:
+    """A verdict that never arrives fails at the bound, as an outage (#3047 review).
+
+    A slow or wedged relay is an infrastructure event, never evidence about
+    the bytes: the child must see the typed outage, not a fabricated
+    no-receipt refusal.
+    """
 
     async def never(requests: list[tuple[UUID, str, str, str, int]]) -> frozenset[int]:
-        threading.Event().wait()  # the lookup never returns
+        await asyncio.sleep(3600)  # the lookup never returns; unlike a wall, it stays cancellable
         return frozenset()
 
     batcher = AdmissionBatcher(pool_max_size=1, lookup=never, call_bound_s=0.1)
     try:
         started = time.monotonic()
-        with pytest.raises(LakeAdmissionError, match="no admission verdict in time"):
+        with pytest.raises(CatalogUnavailableError, match="no admission verdict in time"):
             batcher.submit(_check(1))
         elapsed = time.monotonic() - started
     finally:
         batcher.close()
     assert elapsed < 5.0, "the bound fired promptly, not at some outer timeout"
+
+
+def test_closing_fails_everything_still_parked_with_the_typed_outage() -> None:
+    """Teardown never leaves a waiter to its own bound (#3047 review)."""
+    in_flight = threading.Event()
+
+    async def held(requests: list[tuple[UUID, str, str, str, int]]) -> frozenset[int]:
+        in_flight.set()
+        await asyncio.sleep(3600)  # the lookup outlives the close, cancellably
+        return frozenset()
+
+    batcher = AdmissionBatcher(pool_max_size=1, lookup=held)
+    failures: dict[int, BaseException | bool] = {}
+
+    def submit(n: int) -> None:
+        failures[n] = _capture(batcher.submit, _check(n))
+
+    first = threading.Thread(target=submit, args=(1,), daemon=True)
+    first.start()
+    assert in_flight.wait(timeout=5.0), "the lookup is in flight"
+    second = threading.Thread(target=submit, args=(2,), daemon=True)  # parks behind it
+    second.start()
+    time.sleep(0.1)
+
+    started = time.monotonic()
+    batcher.close()
+    first.join(timeout=5.0)
+    second.join(timeout=5.0)
+
+    assert isinstance(failures.get(1), CatalogUnavailableError), "the in-flight batch failed with the outage"
+    assert isinstance(failures.get(2), CatalogUnavailableError), "the parked waiter failed with the outage"
+    assert time.monotonic() - started < 5.0, "both failed at close, not at their own call bound"
 
 
 # ── Database tier: set-based parity and revocation ─────────────────────────
