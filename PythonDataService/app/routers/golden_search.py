@@ -19,10 +19,12 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Path, Query, Response, status
 
+from app.config import settings
 from app.jobs.progress import CancellationCheck, ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.research.golden_search import service
@@ -401,7 +403,6 @@ def _gated_stage_work(req: GoldenSearchJobRequest):
     """
     from app.jobs.checkpoints import CheckpointGate, ExecutionCheckpoint
     from app.jobs.progress import CancellationCheck
-    from app.research.golden_search.worker import worker_dispatch_factory
     from app.research.persistence import ownership
     from app.research.persistence.ownership import GenerationFencedError
     from app.utils.timestamps import now_ms_utc
@@ -498,8 +499,33 @@ def _gated_stage_work(req: GoldenSearchJobRequest):
                 completion_checkpoint(done, total),
             ),
             on_log=emit.log,
-            dispatch_factory=worker_dispatch_factory(on_checkpoint=on_child_checkpoint, cancel_check=fenced_cancel),
+            dispatch_factory=_runtime_dispatch_factory(
+                on_checkpoint=on_child_checkpoint, cancel_check=fenced_cancel, emit=emit
+            ),
         )
         return outcome.as_dict()
 
     return work
+
+
+def _runtime_dispatch_factory(*, on_checkpoint, cancel_check, emit) -> Callable[[Any], Any]:
+    """The dispatch the runtime executes through: one worker, or the configured bounded pool (#3046).
+
+    ``RESEARCH_WORKER_COUNT`` is the deployment's opt-in width — one is
+    exactly the serial runtime #3044 shipped — and the pool's scheduling
+    facts ride the existing log channel until their visual refinement.
+    """
+    from app.research.golden_search.worker import worker_dispatch_factory
+
+    workers = settings.RESEARCH_WORKER_COUNT
+    window = settings.RESEARCH_DISPATCH_WINDOW
+    if workers < 2:
+        return worker_dispatch_factory(on_checkpoint=on_checkpoint, cancel_check=cancel_check)
+    from app.research.golden_search.pool import DispatchFacts, worker_pool_factory
+
+    def on_facts(facts: DispatchFacts) -> None:
+        emit.log(f"research worker pool: {facts.as_dict()}")
+
+    return worker_pool_factory(
+        on_checkpoint=on_checkpoint, cancel_check=cancel_check, on_facts=on_facts, workers=workers, window=window
+    )
