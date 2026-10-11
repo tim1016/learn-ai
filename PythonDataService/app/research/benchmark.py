@@ -78,7 +78,7 @@ from app.research.grid_search.service import window_dates
 from app.research.runs.hashing import hash_payload
 from app.research.sweep.identity import CodeIdentity, resolve_code_identity
 from app.research.sweep.snapshot import DataSnapshot, capture_data_snapshot
-from app.utils.session_anchors import et_midnight_ms
+from app.utils.session_anchors import et_day_end_ms, et_midnight_ms
 
 CORPUS_FULL_DEVELOPMENT_IDENTITIES = 200
 CORPUS_FOLD_IDENTITIES = 800
@@ -233,7 +233,7 @@ def fold_windows(development: tuple[date, date], folds: int) -> tuple[tuple[tupl
         raise ValueError(f"the development window holds {len(sessions)} sessions, fewer than the {folds} folds requested")
     bounds = [round(index * len(sessions) / folds) for index in range(folds + 1)]
     return tuple(
-        ((et_midnight_ms(sessions[bounds[index]]), et_midnight_ms(sessions[bounds[index + 1] - 1]) + 24 * 60 * 60 * 1000), index)
+        ((et_midnight_ms(sessions[bounds[index]]), et_day_end_ms(sessions[bounds[index + 1] - 1])), index)
         for index in range(folds)
     )
 
@@ -304,7 +304,7 @@ def build_corpus(
     )
     digest = context_digest(context)
 
-    full_window = (et_midnight_ms(development[0]), et_midnight_ms(development[1]) + 24 * 60 * 60 * 1000)
+    full_window = (et_midnight_ms(development[0]), et_day_end_ms(development[1]))
     folds_with_index = fold_windows(development, folds)
     assignments: list[tuple[tuple[int, int], WindowKind, int | None]] = [
         (full_window, "full-development", None)
@@ -462,7 +462,9 @@ def _rss_bytes() -> int | None:
     try:
         import resource
 
-        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
+        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # Linux reports ru_maxrss in KiB, macOS in bytes; the report carries bytes.
+        return rss if sys.platform == "darwin" else rss * 1024
     except (ImportError, OSError):  # pragma: no cover - non-Unix
         return None
 
@@ -655,7 +657,10 @@ def run_baseline(
         execution_mode=execution_mode,
         timing_mode=timing_mode,
         environment=environment_identity(snapshot, timing_mode=timing_mode, data_policy=policy),
-        corpus={"digest": corpus.digest, "count": len(corpus.identities)},
+        # The report carries the whole frozen manifest — windows, context
+        # digest, every identity — not just its digest, so the artifact is
+        # the manifest (regenerable from seeds, but complete on its face).
+        corpus=corpus.as_dict(),
     )
     execution = _assumptions_dict()
     run_wall = time.perf_counter()
