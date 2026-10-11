@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import asyncpg
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 # Arbitrary but fixed: serializes concurrent first-use across FastAPI's loop
 # and the worker loop so CREATE IF NOT EXISTS never races itself.
 _ADVISORY_LOCK_KEY = 0x1926_0001
@@ -840,6 +840,38 @@ DDL_V16: tuple[str, ...] = (
     """,
 )
 
+# Research runtime ownership (#3042, PRD #3034): one coordinator record for the
+# deployment, and one ownership row per dispatched research job. The boot
+# generation advances only while the coordinator holds the session advisory
+# lock (app.research.persistence.ownership); a job whose owning generation is
+# no longer current belonged to a runtime that lost or released authority, so
+# startup recovery may close it. Rows for jobs dispatched before this version
+# do not exist — those jobs stay API-owned legacy work under ADR 0065 D2's
+# amended rule. Ownership is execution metadata only: it never enters the
+# scientific context digest or an evaluation key.
+DDL_V17: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS research_runtime_owners (
+        singleton        TEXT PRIMARY KEY DEFAULT 'coordinator',
+        instance_id      TEXT NOT NULL,
+        role             TEXT NOT NULL,
+        boot_generation  BIGINT NOT NULL,
+        claimed_at_ms    BIGINT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS research_job_owners (
+        job_id            TEXT PRIMARY KEY,
+        kind              TEXT NOT NULL,
+        record_id         TEXT NOT NULL,
+        attempt           INTEGER NULL,
+        owner_instance_id TEXT NOT NULL,
+        boot_generation   BIGINT NOT NULL,
+        dispatched_at_ms  BIGINT NOT NULL
+    )
+    """,
+)
+
 VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (1, DDL_V1),
     (2, DDL_V2),
@@ -857,6 +889,7 @@ VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (14, DDL_V14),
     (15, DDL_V15),
     (16, DDL_V16),
+    (17, DDL_V17),
 )
 
 

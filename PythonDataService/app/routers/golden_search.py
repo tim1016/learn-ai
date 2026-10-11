@@ -297,6 +297,7 @@ async def start_golden_search_job(req: GoldenSearchJobRequest) -> GoldenSearchJo
         bound = await service.bind_dispatch(req.study_id, stage_token=req.stage_token, job_id=req.job_id)
     except GoldenSearchRefusal as exc:
         raise await _refused(exc) from exc
+    await records.stamp_research_dispatch(job_id=req.job_id, kind="golden_search", record_id=req.study_id)
     accepted = GoldenSearchJobAccepted(job_id=req.job_id, study_id=req.study_id, status="queued")
     if bound == "redelivery":
         # Never a second worker beside the first, and never a replay of a closed job under its old id.

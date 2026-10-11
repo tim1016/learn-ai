@@ -49,6 +49,23 @@ def liveness_or_503(row: FencedRecord, *, noun: str) -> bool:
     return live
 
 
+async def stamp_research_dispatch(*, job_id: str, kind: str, record_id: str) -> None:
+    """Record one research dispatch under the process's runtime authority (#3042).
+
+    503 when a live coordinator elsewhere — or this process's dead authority
+    connection — outranks the dispatch; a no-op under the legacy lifecycle
+    (no authority claimed, no ownership rows, jobs swept as API-owned).
+    """
+    from fastapi import HTTPException
+
+    from app.research.persistence import ownership
+
+    try:
+        await ownership.stamp_dispatch(job_id=job_id, kind=kind, record_id=record_id)
+    except ownership.CoordinatorHeldElsewhere as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+
 def require_live_redelivery(job_id: str, *, noun: str) -> None:
     """A redelivered dispatch is acknowledged only while the first worker still holds the job.
 

@@ -277,5 +277,6 @@ async def start_grid_search_job(req: GridSearchJobRequest) -> dict[str, Any]:
             "failed_cells": outcome.summary.failed_cells,
         }
 
+    await records.stamp_research_dispatch(job_id=req.job_id, kind="grid_search", record_id=search_id)
     run_in_thread(req.job_id, work, thread_name=f"grid-search-{req.job_id[:8]}", cancel_check_every_n=1)
     return {"job_id": req.job_id, "search_id": search_id, "status": "queued"}

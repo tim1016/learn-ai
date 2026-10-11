@@ -243,5 +243,6 @@ async def start_walk_forward_study_job(req: WalkForwardStudyJobRequest) -> dict[
         )
         return {"study_id": outcome.study_id, "status": outcome.status, "verdict": outcome.verdict.as_dict() if outcome.verdict else None}
 
+    await records.stamp_research_dispatch(job_id=req.job_id, kind="walk_forward", record_id=study_id)
     run_in_thread(req.job_id, work, thread_name=f"walk-forward-study-{req.job_id[:8]}", cancel_check_every_n=1)
     return {"job_id": req.job_id, "study_id": study_id, "status": "queued"}

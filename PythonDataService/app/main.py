@@ -398,10 +398,24 @@ async def _service_lifespan(
     # no worker (a crash, an out-of-memory kill, a restart). Close those records
     # before the listener opens, so nothing reads as live for a day and the
     # research record behind each can be Finished.
-    # Job ownership is the coordinator's: a clerk agent restarting (every
-    # Apply) must not fail the coordinator's queued research jobs.
+    # Job ownership is scoped per runtime (#3042): this process claims the
+    # research coordinator's singleton authority when it is free, and the
+    # sweep skips the jobs a still-live coordinator owns — a clerk agent
+    # restarting (every Apply) must not fail the coordinator's queued
+    # research jobs, and an API restart must not fail a separate research
+    # runtime's either.
+    research_authority = None
     if _ROLE_RUNS_DATA_PLANE_CORE:
-        fail_jobs_without_a_worker()
+        import os
+
+        from app.research.persistence.ownership import startup_authority_and_protection
+
+        research_authority, protected_research = await startup_authority_and_protection(
+            dsn=settings.POSTGRES_URL or None,
+            instance_id=f"{_FLEET_ROLE}:{os.getpid()}",
+            role="data-plane",
+        )
+        fail_jobs_without_a_worker(protected=protected_research)
 
     # The coordinator's fleet state: the registry on its own control volume
     # plus the internal agent-token mapping the /internal/fleet surface
@@ -1056,6 +1070,11 @@ async def _service_lifespan(
     try:
         yield
     finally:
+        # The research coordinator authority goes back before anything else:
+        # while it is held, no other runtime may claim dispatch authority.
+        if research_authority is not None:
+            with contextlib.suppress(Exception):
+                await research_authority.release()
         # The beat stops before anything else comes down. Everything below —
         # bots, consumers, custody, repositories — is this clerk being taken
         # apart, and a lane still beating through it is telling the

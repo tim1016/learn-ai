@@ -576,6 +576,9 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
     def work(emit: ProgressEmitter, cancel: CancellationCheck) -> dict:
         return recency_service.run_launch(launch.config, emit=emit, cancel=cancel)
 
+    from app.routers import research_records as records
+
+    await records.stamp_research_dispatch(job_id=req.job_id, kind="recency", record_id=launch.config.launch_id)
     run_in_thread(req.job_id, work, thread_name=f"recency-{req.job_id[:8]}", cancel_check_every_n=1)
     return {"job_id": req.job_id, "launch_id": launch.config.launch_id, "status": "queued"}
 
