@@ -30,6 +30,7 @@ policy-store writers this module exists for.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import os
 import zipfile
@@ -43,6 +44,7 @@ from zoneinfo import ZoneInfo
 from app.data_lake.adjustment_versions import AdjustmentVersionGuard
 from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
 from app.data_lake.lean_writer import format_volume, parse_volume, to_deci_cent
+from app.engine.data.decoded_cache import DecodedArtifactCache, artifact_key
 from app.engine.data.path_safety import ensure_within_root
 from app.engine.data.trade_bar import TradeBar
 from app.utils.timestamps import datetime_at_ms, to_ms_utc
@@ -238,6 +240,7 @@ class LeanMinuteDataReader:
         self,
         data_root: Path | str | Sequence[Path | str],
         session: Literal["regular", "extended"] = "regular",
+        decoded_cache: DecodedArtifactCache | None = None,
     ) -> None:
         # Normalize to a list of Paths while preserving order.
         if isinstance(data_root, (str, Path)):
@@ -260,6 +263,10 @@ class LeanMinuteDataReader:
         # (``polygon_bars.py``) stores the full session so both modes can
         # be served from the same files without reseeding.
         self.session: Literal["regular", "extended"] = session
+        # A shared decoded-artifact cache reuses one admitted day-decode
+        # across evaluations; admission itself still runs on every read
+        # (#3038). None — every existing caller — decodes per read as before.
+        self._decoded_cache = decoded_cache
 
     def _symbol_dir(self, root: Path, symbol: str) -> Path:
         return root / "equity" / "usa" / "minute" / symbol.lower()
@@ -313,7 +320,37 @@ class LeanMinuteDataReader:
             return []
         payload = read_committed_bytes(zip_path)
         self.adjustment_guard.verify(zip_path, payload, symbol)
-        return self.parse_day_zip(payload, symbol, trading_date)
+        return self._decode_day(zip_path, payload, symbol, trading_date)
+
+    def _decode_day(
+        self,
+        zip_path: Path,
+        payload: bytes,
+        symbol: str,
+        trading_date: date,
+        content_digest: str | None = None,
+    ) -> list[TradeBar]:
+        """Decode one admitted day — or reuse a prior decode of the same admitted bytes (#3038).
+
+        Called only after the applicable admission chain (committed receipt,
+        manifest comparison, adjustment verification) has passed for
+        ``payload``; a shared cache hit reuses the decode, never the verdict.
+        ``content_digest`` lets a bound reader hand in the digest it already
+        computed rather than hashing the payload twice.
+        """
+        if self._decoded_cache is None:
+            return self.parse_day_zip(payload, symbol, trading_date)
+        digest = content_digest or hashlib.sha256(payload).hexdigest()
+        key = artifact_key(
+            artifact_path=zip_path,
+            data_roots=self.data_roots,
+            content_digest=digest,
+            instrument=symbol,
+            resolution="minute",
+            adjustment_evidence=self.adjustment_guard.versions.get(symbol.upper(), ""),
+            session_policy=self.session,
+        )
+        return self._decoded_cache.get_or_decode(key, lambda: self.parse_day_zip(payload, symbol, trading_date))
 
     def parse_day_zip(self, payload: bytes, symbol: str, trading_date: date) -> list[TradeBar]:
         """Decode one day's zip bytes under this reader's session filter.
@@ -431,6 +468,7 @@ class LeanDailyDataReader:
     def __init__(
         self,
         data_root: Path | str | Sequence[Path | str],
+        decoded_cache: DecodedArtifactCache | None = None,
     ) -> None:
         if isinstance(data_root, (str, Path)):
             roots: list[Path] = [Path(data_root)]
@@ -448,6 +486,11 @@ class LeanDailyDataReader:
         # :meth:`_verified_payload` — it reuses the decode, never the
         # admission verdict (#3037).
         self._history_cache: dict[str, list[TradeBar]] = {}
+        # Shared decoded-artifact reuse across evaluations (#3038); None
+        # decodes per read as before. The per-reader ``_history_cache`` above
+        # stays per-evaluation: each reader still merges its own window from
+        # the shared per-artifact decodes.
+        self._decoded_cache = decoded_cache
 
     def _zip_path(self, root: Path, symbol: str) -> Path:
         return root / "equity" / "usa" / "daily" / f"{symbol.lower()}.zip"
@@ -471,7 +514,28 @@ class LeanDailyDataReader:
         payload = self._verified_payload(zip_path, symbol)
         if payload is None:
             return []
-        return self.parse_history_zip(payload, symbol)
+        return self._decode_history(zip_path, payload, symbol)
+
+    def _decode_history(self, zip_path: Path, payload: bytes, symbol: str) -> list[TradeBar]:
+        """Decode one admitted per-symbol history archive — or reuse a prior decode (#3038).
+
+        Same contract as :meth:`LeanMinuteDataReader._decode_day`: only after
+        the applicable admission chain passed, and a hit reuses the decode
+        never the verdict. Runs once per root per reader, so re-hashing the
+        payload here costs one digest per symbol per evaluation.
+        """
+        if self._decoded_cache is None:
+            return self.parse_history_zip(payload, symbol)
+        key = artifact_key(
+            artifact_path=zip_path,
+            data_roots=self.data_roots,
+            content_digest=hashlib.sha256(payload).hexdigest(),
+            instrument=symbol,
+            resolution="daily",
+            adjustment_evidence=self.adjustment_guard.versions.get(symbol.upper(), ""),
+            session_policy="none",
+        )
+        return self._decoded_cache.get_or_decode(key, lambda: self.parse_history_zip(payload, symbol))
 
     def parse_history_zip(self, payload: bytes, symbol: str) -> list[TradeBar]:
         """Decode a per-symbol daily history zip from bytes (see ``LeanMinuteDataReader.parse_day_zip``)."""

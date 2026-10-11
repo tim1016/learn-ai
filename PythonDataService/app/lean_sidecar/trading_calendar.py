@@ -16,6 +16,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from functools import lru_cache
+from importlib.metadata import version as _package_version
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -30,6 +31,13 @@ _LOOKBACK_DAYS = 14
 _BAR_COUNT_CHUNK_DAYS = 366
 _UNIX_EPOCH_DATE = date(1970, 1, 1)
 _REGULAR_CLOSE_MINUTE_ET = 16 * 60
+
+# The identity of the calendar that decides which sessions exist, for anyone
+# that must pin "same calendar" in an artifact key or receipt (#3038): the
+# backing package version, read from package metadata so this module stays
+# the only importer of pandas_market_calendars (ADR 0022 (d)).
+CALENDAR_IDENTITY = "NYSE"
+CALENDAR_PACKAGE_VERSION = _package_version("pandas_market_calendars")
 
 NyseSessionState = Literal["RTH_OPEN", "CLOSED"]
 

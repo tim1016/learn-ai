@@ -1506,6 +1506,39 @@ async def test_a_finish_over_a_completed_row_that_lost_its_payload_fails_instead
     assert "EvidenceIntegrityError" in (failed.failure_reason or "")
 
 
+async def test_an_isolated_study_freezes_its_protocol_width_histogram(
+    conn: asyncpg.Connection, driver: Driver, symbol: str
+) -> None:
+    """#3036, protocol freeze: one end-to-end study's per-round widths, frozen from its stored trials.
+
+    The study runs isolated on this test's own lake and database — never the
+    active one. The histogram's totals reconcile the stage's own budget
+    accounting, so the frozen widths and the cache/reservation counts cannot
+    drift apart.
+    """
+    from app.research.benchmark import protocol_width_histogram
+
+    row = await driver.advance(await driver.to_candidate(symbol), "open_exam", {"acknowledge_final_test": True})
+    trials = [trial for trial in await repo.list_trials(conn, row.id) if trial["stage"] == "search"]
+
+    histogram = protocol_width_histogram(trials, stage="search")
+
+    rounds = [round_row for fold in histogram["folds"] for round_row in fold["rounds"]]
+    assert rounds, "the search stage's rounds are the freeze's rows"
+    for round_row in rounds:
+        assert round_row["stage"] == "search"
+        assert round_row["sampled"] >= round_row["testable"] >= 0
+        # The per-round cache/reservation widths were captured at the
+        # procedure source; a real study's rounds carry them.
+        assert round_row["ready"] is not None and round_row["ready"] >= round_row["newly_reserved"] >= 0
+    assert histogram["totals"]["testable"] <= histogram["totals"]["sampled"]
+    # The one real cross-check: each fold's rounds' invalid total must equal
+    # that fold's own accounting, and the frozen widths must reconcile.
+    for fold in histogram["folds"]:
+        assert fold["accounting"]["invalid"] == sum(round_row["invalid"] for round_row in fold["rounds"])
+        assert fold["totals"]["reconciled"] is True
+
+
 async def test_a_stage_under_the_checkpoint_contract_renews_only_on_accepted_checkpoints(
     conn: asyncpg.Connection, driver: Driver, symbol: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
