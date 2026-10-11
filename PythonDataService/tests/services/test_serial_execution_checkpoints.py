@@ -13,6 +13,7 @@ one that does not: reporting sits beside the work, never in it.
 
 from __future__ import annotations
 
+import time
 from datetime import date
 from pathlib import Path
 
@@ -104,6 +105,7 @@ def test_reporting_checkpoints_changes_nothing_and_renews_only_on_boundaries(lak
                 cursor=0,
                 cursor_kind="processed_blocks",
                 phase=phase,
+                occurred_at_ms=time.time_ns() // 1_000_000,
                 transition=True,
             )
         )
