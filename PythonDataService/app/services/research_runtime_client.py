@@ -54,6 +54,25 @@ def is_research_runtime() -> bool:
     return os.environ.get("RESEARCH_RUNTIME", "").strip() == "1"
 
 
+def refuse_forwarded_research_dispatch(noun: str) -> None:
+    """503 when this API must forward a research dispatch it cannot forward yet (#3043).
+
+    ADR 0077: in ``RESEARCH_EXECUTION_MODE=research`` the API never starts a
+    research thread — execution belongs to the isolated runtime. Golden
+    Search is forwarded today; grid and walk-forward join it in later
+    #3034 slices, and until then their dispatches fail loudly here rather
+    than silently running unisolated, unstamped work on the forwarding API.
+    """
+    if research_forwarding_enabled() and not is_research_runtime():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                f"{noun} cannot start on this API while RESEARCH_EXECUTION_MODE=research; "
+                "it joins the isolated research runtime in a later PRD #3034 slice"
+            ),
+        )
+
+
 def _require_runtime_url() -> str:
     url = settings.RESEARCH_RUNTIME_URL.strip().rstrip("/")
     if not url:
@@ -107,27 +126,31 @@ def _detail_of(response: httpx.Response) -> Any:
 
 
 async def _reconcile_after_transport_failure(payload: dict[str, Any], exc: Exception) -> dict[str, Any]:
-    """A timeout is not a refusal: ask the durable binding what actually happened.
+    """A timeout is not a refusal: ask the durable state what actually happened.
 
     The runtime binds the job to the study before it starts any work, so the
-    study row's ``job_id`` is the truth of acceptance. Bound to this job id
-    means the original acceptance stands and this call joins it — the same
-    answer the runtime's redelivery branch would give; anything else means
-    nothing started, and the operator gets the transport error, not silence.
+    binding alone proves acceptance *began*, not that a worker took the job —
+    the bind is written before the ownership stamp and the lease, and a
+    runtime that died in that window would leave the study parked on a job
+    nothing will run. Only a binding **plus** a held lease is durable
+    evidence dispatch reached a live worker; then this call joins the
+    original acceptance, the same answer the runtime's redelivery branch
+    would give. Anything less refuses with the transport error, not silence.
     """
     from app.research.golden_search import service
+    from app.research.persistence import lifecycle
 
     study_id = str(payload.get("study_id", ""))
     job_id = str(payload.get("job_id", ""))
     binding = await service.study_job_binding(study_id)
-    if binding is not None and binding == job_id:
+    if binding is not None and binding == job_id and lifecycle.job_is_live(job_id) is True:
         logger.warning(
-            "research runtime transport failed after acceptance; joining the original dispatch (%s)",
+            "research runtime transport failed after a live worker took the job; joining the original dispatch (%s)",
             exc,
             exc_info=True,
         )
         return {"job_id": job_id, "study_id": study_id, "status": "queued"}
-    logger.error("research runtime dispatch failed without a durable binding: %s", exc, exc_info=True)
+    logger.error("research runtime dispatch failed without a live worker on the job: %s", exc, exc_info=True)
     raise HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY,
         detail=f"the research runtime did not accept the dispatch ({type(exc).__name__}); no study attempt started",

@@ -127,6 +127,34 @@ def test_the_corpus_identity_is_built_from_the_data_policy_the_runs_actually_use
     assert {item.evaluation_key for item in adjusted.identities}.isdisjoint({item.evaluation_key for item in raw.identities})
 
 
+def test_the_default_decoded_cache_bound_leaves_room_inside_the_container() -> None:
+    """The default bound is half the deployed python-service cgroup limit, never all of it (#3060 review)."""
+    from app.research.benchmark import DECODED_CACHE_DEFAULT_BYTES
+
+    assert DECODED_CACHE_DEFAULT_BYTES <= 1024**3
+
+
+def test_the_default_corpus_policy_is_a_complete_engine_wire_policy() -> None:
+    """The frozen default must run without an operator-named policy — the CLI's own path.
+
+    The default once carried a source the engine's policy block rejects, so
+    ``run_baseline`` with no explicit policy crashed on the first identity's
+    request; this pins the completed default as engine-executable and the
+    cold-window claim as exactly what the request executes (#3036 review).
+    """
+    from app.research.benchmark import CORPUS_DATA_POLICY, _assumptions_dict, _engine_request
+
+    corpus = build_corpus(symbol=SYMBOL, development=DEVELOPMENT, data_snapshot_digest="d" * 64)
+    request = _engine_request(
+        corpus.identities[0], execution=_assumptions_dict(), data_policy={**CORPUS_DATA_POLICY, "symbol": SYMBOL}
+    )
+    assert request.data_policy is not None and request.data_policy.source == "polygon"
+    # The corpus claims COLD windows and executes cold: an unprimed request
+    # is the claim, not an oversight — the never-ready no-trade group only
+    # scores over an unprimed window (#3036 review).
+    assert request.warmup_from_date is None
+
+
 def test_fold_windows_are_calendar_derived_and_tile_the_development_window() -> None:
     windows = fold_windows(DEVELOPMENT, CORPUS_FOLD_COUNT)
 

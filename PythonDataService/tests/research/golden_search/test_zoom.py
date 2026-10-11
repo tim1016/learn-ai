@@ -332,6 +332,21 @@ def test_procedure_result_round_trips_through_its_dict() -> None:
     assert ProcedureResult.from_dict(result.as_dict()) == result
 
 
+def test_a_legacy_round_without_width_accounting_stays_absent_never_zero() -> None:
+    """Rounds stored before the width capture deserialize as absent, not measured-zero (#3036 review)."""
+    decl = declaration(knob("x", high="10"))
+    plan = protocol(decl)
+    result = _zoom(decl, plan, Landscape(lambda p: -float((p["x"] - 3) ** 2)))
+    legacy = result.as_dict()
+    assert legacy["rounds"], "the zoom fixture produced rounds to strip"
+    for stored_round in legacy["rounds"]:
+        stored_round.pop("submitted", None)
+        stored_round.pop("first_evaluated", None)
+
+    restored = ProcedureResult.from_dict(legacy)
+    assert all(round_.submitted is None and round_.first_evaluated is None for round_ in restored.rounds)
+
+
 def test_run_zoom_over_the_registered_ema_knobs_sends_canonical_points_without_float_drift() -> None:
     decl = ema_declaration()
     seed = canonical_point("ema_crossover_signal", "SPY", {})

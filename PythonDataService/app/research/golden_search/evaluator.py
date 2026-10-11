@@ -98,6 +98,30 @@ def _is_number(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+# The trade scalars the evidence math reads back (``trade_net``,
+# ``concentration``): a mapping without these in the recorded shape is
+# corrupted evidence, and the KeyError it would raise downstream must not
+# surface as an ordinary failed reading (#3039).
+_TRADE_INT_FIELDS = ("entry_ms", "exit_ms")
+_TRADE_NUMBER_FIELDS = ("entry_price", "exit_price", "quantity", "pnl")
+
+
+def _trade_integrity_problem(trade: Mapping[str, Any]) -> str | None:
+    for name in _TRADE_INT_FIELDS:
+        if not isinstance(trade.get(name), int) or isinstance(trade.get(name), bool):
+            return f"a recorded trade's {name} is not an int"
+    for name in _TRADE_NUMBER_FIELDS:
+        if not _is_number(trade.get(name)):
+            return f"a recorded trade's {name} is not a number"
+    pnl_pct = trade.get("pnl_pct")
+    if pnl_pct is not None and not _is_number(pnl_pct):
+        return "a recorded trade's pnl_pct is neither a number nor null"
+    exit_reason = trade.get("exit_reason")
+    if exit_reason is not None and not isinstance(exit_reason, str):
+        return "a recorded trade's exit_reason is neither a string nor null"
+    return None
+
+
 def detail_integrity_problem(detail: object) -> str | None:
     """What disqualifies a recorded detail payload as evidence, or ``None`` when it holds the required shape."""
     if not isinstance(detail, Mapping):
@@ -118,8 +142,14 @@ def detail_integrity_problem(detail: object) -> str | None:
     ):
         return "recorded daily_equity is not a list of (session close ms, equity) points"
     trades = detail["trades"]
-    if not isinstance(trades, list) or any(not isinstance(trade, Mapping) for trade in trades):
+    if not isinstance(trades, list):
         return "recorded trades is not a list of trade mappings"
+    for trade in trades:
+        if not isinstance(trade, Mapping):
+            return "recorded trades is not a list of trade mappings"
+        trade_problem = _trade_integrity_problem(trade)
+        if trade_problem is not None:
+            return trade_problem
     return None
 
 
@@ -514,68 +544,78 @@ class StudyEvaluator:
         admitted: list[ReadyEvaluation] = []
         handled: set[str] = set()
         exhausted = False
-        for key, point, digest in keyed:
-            if key in handled:
-                continue
-            self.cancel_check()
-            reservation = run_sync(
-                with_connection(
-                    repo.reserve_evaluation,
-                    self.study_id,
-                    self.attempt,
-                    repo.NewEvaluation(
-                        evaluation_key=key,
-                        point_hash=digest,
-                        point=point,
-                        window_start_ms=window[0],
-                        window_end_ms=window[1],
-                        scenario=scenario_key,
-                        detail=detail,
-                        stage=stage,
-                        fold_index=fold_index,
-                    ),
-                    limit=self.budget_limit,
-                    retry_allowance=RETRY_ALLOWANCE,
+        try:
+            for key, point, digest in keyed:
+                if key in handled:
+                    continue
+                self.cancel_check()
+                reservation = run_sync(
+                    with_connection(
+                        repo.reserve_evaluation,
+                        self.study_id,
+                        self.attempt,
+                        repo.NewEvaluation(
+                            evaluation_key=key,
+                            point_hash=digest,
+                            point=point,
+                            window_start_ms=window[0],
+                            window_end_ms=window[1],
+                            scenario=scenario_key,
+                            detail=detail,
+                            stage=stage,
+                            fold_index=fold_index,
+                        ),
+                        limit=self.budget_limit,
+                        retry_allowance=RETRY_ALLOWANCE,
+                    )
                 )
-            )
-            if reservation.kind == "exhausted":
-                # The first unaffordable new identity ends the prefix here:
-                # later points are not searched for cheaper or cached work,
-                # and nothing beyond this prefix is dispatched (#3040).
-                exhausted = True
-                break
-            if reservation.kind == "cached":
-                assert reservation.record is not None
+                if reservation.kind == "exhausted":
+                    # The first unaffordable new identity ends the prefix here:
+                    # later points are not searched for cheaper or cached work,
+                    # and nothing beyond this prefix is dispatched (#3040).
+                    exhausted = True
+                    break
+                if reservation.kind == "cached":
+                    assert reservation.record is not None
+                    handled.add(key)
+                    self.cache_hits += reservation.counted_as_cache_hit
+                    results[key] = repo.metrics_of(reservation.record)
+                    if detail:
+                        payload = reservation.record.detail_json
+                        if reservation.record.attempt != self.attempt:
+                            # A row an earlier attempt left is a durable readback —
+                            # the resume's only authority, which must still hold
+                            # its payload (#3039).
+                            payload = require_intact_detail(key, reservation.record.status, payload)
+                        self._details[key] = payload
+                    self.on_evaluated(self.new_runs + self.cache_hits)
+                    continue
                 handled.add(key)
-                self.cache_hits += reservation.counted_as_cache_hit
-                results[key] = repo.metrics_of(reservation.record)
-                if detail:
-                    payload = reservation.record.detail_json
-                    if reservation.record.attempt != self.attempt:
-                        # A row an earlier attempt left is a durable readback —
-                        # the resume's only authority, which must still hold
-                        # its payload (#3039).
-                        payload = require_intact_detail(key, reservation.record.status, payload)
-                    self._details[key] = payload
-                self.on_evaluated(self.new_runs + self.cache_hits)
-                continue
-            handled.add(key)
-            admitted.append(
-                ReadyEvaluation(
-                    key=key,
-                    attempt=self.attempt,
-                    request=EvaluationRequest(
-                        point=point,
-                        point_hash=digest,
-                        window=window,
-                        warmup_from=self.warmup_for(window[0]),
-                        scenario=scenario,
-                        detail=detail,
-                        stage=stage,
-                        fold_index=fold_index,
-                    ),
+                admitted.append(
+                    ReadyEvaluation(
+                        key=key,
+                        attempt=self.attempt,
+                        request=EvaluationRequest(
+                            point=point,
+                            point_hash=digest,
+                            window=window,
+                            warmup_from=self.warmup_for(window[0]),
+                            scenario=scenario,
+                            detail=detail,
+                            stage=stage,
+                            fold_index=fold_index,
+                        ),
+                    )
                 )
-            )
+        except BaseException:
+            # An interruption before dispatch leaves the admitted prefix
+            # pending with no marker; a later reserve_evaluation would read
+            # those never-run rows as crashed executions and burn their
+            # retry allowance. Release them — the same never-ran semantics
+            # the dispatch guard below enforces (#3040).
+            for item in admitted:
+                run_sync(with_connection(repo.release_evaluation, self.study_id, self.attempt, item.key))
+            raise
         if admitted:
             self._dispatch_and_record(admitted, results, detail=detail)
         if exhausted:
@@ -649,6 +689,12 @@ class StudyEvaluator:
         return self._details[key]
 
     def _run(self, request: EvaluationRequest) -> EvaluationResult:
+        # Reservation checks cancellation once per batch up front, so an
+        # adapter that runs items back-to-back would not observe a
+        # cancellation delivered mid-batch; checking here gives every
+        # adapter a pre-execution poll, delivered through the seam as a
+        # cancelled outcome (#3040).
+        self.cancel_check()
         try:
             return self.execute(request)
         except JobCancelled:

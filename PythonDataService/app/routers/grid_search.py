@@ -242,6 +242,12 @@ async def delete_grid_search(search_id: str) -> Response:
 @jobs_router.post("/grid-search", status_code=status.HTTP_202_ACCEPTED)
 async def start_grid_search_job(req: GridSearchJobRequest) -> dict[str, Any]:
     """Launch (or Finish) a search on a worker thread. Returns 202 once the record is durable."""
+    from app.services.research_runtime_client import refuse_forwarded_research_dispatch
+
+    # Research mode never runs this on the API (#3043, ADR 0077): refuse
+    # before any durable record exists, loudly, until the forwarding slice lands.
+    refuse_forwarded_research_dispatch("grid search")
+    await records.refuse_unauthorized_dispatch()
     if req.resume_search_id:
         row = await _load(req.resume_search_id)
         _refuse_if_owned(row)

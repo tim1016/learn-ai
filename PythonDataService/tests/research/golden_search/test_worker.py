@@ -11,6 +11,8 @@ stage runs to completion through the worker dispatch.
 from __future__ import annotations
 
 import os
+import threading
+import time
 from datetime import date
 from pathlib import Path
 
@@ -269,3 +271,70 @@ def _runtime_identity() -> dict:
         "environment_digest": identity.environment_digest,
         "digest_scheme": identity.digest_scheme,
     }
+
+
+def _unspawned_worker() -> "ResearchWorker":
+    """A ResearchWorker with its spawn bypassed: the pump loop driven by hand."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    worker = ResearchWorker.__new__(ResearchWorker)
+    worker._context = None
+    worker._lock = threading.Lock()
+    worker._outcomes = {}
+    worker._arrived = threading.Condition(worker._lock)
+    worker._alive_signal = threading.Event()
+    worker._progress_signal = threading.Event()
+    worker._child = None
+    worker._lost = None
+    worker._pump = None
+    worker._verdicts = ThreadPoolExecutor(max_workers=1, thread_name_prefix="test-verdicts")
+    return worker
+
+
+def test_heartbeats_alone_do_not_defeat_the_task_silence_bound() -> None:
+    """A wedged-but-alive worker is fenced by the task bound, not trusted forever (#3044 review)."""
+    worker = _unspawned_worker()
+    stop = threading.Event()
+
+    def heartbeats() -> None:
+        while not stop.wait(0.05):
+            worker._alive_signal.set()
+
+    beating = threading.Thread(target=heartbeats, daemon=True)
+    beating.start()
+    try:
+        with pytest.raises(WorkerLost, match="no task progress"):
+            worker.run_task({"key": "k"}, silence_bound_s=5.0, task_silence_bound_s=0.8)
+    finally:
+        stop.set()
+        beating.join(timeout=2.0)
+        worker._verdicts.shutdown(wait=False)
+
+
+def test_task_progress_resets_both_clocks_and_the_outcome_wins() -> None:
+    """Progress signals keep a legitimately slow worker alive until its outcome arrives."""
+    worker = _unspawned_worker()
+
+    def slow_progress() -> None:
+        for _ in range(6):
+            time.sleep(0.1)
+            worker._progress_signal.set()
+
+    progressing = threading.Thread(target=slow_progress, daemon=True)
+    progressing.start()
+    try:
+        delivering = threading.Timer(
+            0.45,
+            lambda: (
+                worker._arrived.__enter__(),
+                worker._outcomes.__setitem__("k", {"type": "result", "key": "k"}),
+                worker._arrived.notify_all(),
+                worker._arrived.__exit__(None, None, None),
+            ),
+        )
+        delivering.start()
+        outcome = worker.run_task({"key": "k"}, silence_bound_s=0.6, task_silence_bound_s=0.6)
+        assert outcome["key"] == "k"
+    finally:
+        progressing.join(timeout=2.0)
+        worker._verdicts.shutdown(wait=False)

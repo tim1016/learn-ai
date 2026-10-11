@@ -1044,6 +1044,18 @@ async def bind_dispatch(study_id: str, *, stage_token: str, job_id: str) -> str:
     raise GoldenSearchRefusal("The study has no stage waiting for a worker.", code="NOTHING_PENDING", kind="conflict")
 
 
+async def release_dispatch_binding(study_id: str, *, job_id: str) -> None:
+    """Undo a binding whose dispatch refused before any worker took the job (#3042).
+
+    A stamp refusal after ``bind_dispatch`` would otherwise strand the study
+    on a job id nothing will ever serve: retries read as redeliveries that
+    liveness must refuse. The release is preconditioned exactly like the
+    bind — still queued, still this job id — so a dispatch that did reach a
+    worker is never unbound.
+    """
+    await with_connection(repo.unbind_dispatch, study_id, job_id=job_id)
+
+
 def run_stage(
     study_id: str,
     *,

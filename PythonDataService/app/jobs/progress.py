@@ -24,7 +24,7 @@ import logging
 import os
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from typing import Any
@@ -445,4 +445,34 @@ def fail_jobs_without_a_worker(protected: Callable[[], AbstractSet[str]] | None 
         logger.warning("could not close the jobs left by the previous process: %s", exc, exc_info=True)
     if failed:
         logger.warning("failed %d job(s) whose worker died with the previous process: %s", len(failed), ", ".join(failed))
+    return failed
+
+
+def close_orphaned_job_records(job_ids: AbstractSet[str] | Sequence[str]) -> list[str]:
+    """Close exactly the named jobs' records as orphaned (#3042).
+
+    The generation-scoped companion to :func:`fail_jobs_without_a_worker`:
+    a research runtime that just claimed authority names the jobs of dead
+    older generations, and this closes each — failed record, dropped lease,
+    active-set entry — without touching anything else in the active set.
+    Whether a lost runtime's results committed before it died is #3045's
+    recovery question; this closes the record, never the accounting.
+    """
+    r = get_redis()
+    failed: list[str] = []
+    try:
+        for job_id in sorted(set(job_ids)):
+            if r.hget(_state_key(job_id), "status") in ("queued", "running"):
+                ProgressEmitter(job_id).failed(code=ORPHANED_JOB_CODE, message=ORPHANED_JOB_MESSAGE)
+                failed.append(job_id)
+            else:
+                r.srem(_active_set_key(), job_id)
+            # The worker is gone either way: its lease must not outlive the
+            # record, or the closed job would still look live until the
+            # lease TTL (#1938).
+            r.delete(_lease_key(job_id))
+    except redis.RedisError as exc:
+        logger.warning("could not close the named orphaned jobs: %s", exc, exc_info=True)
+    if failed:
+        logger.warning("failed %d job(s) of dead runtime generations: %s", len(failed), ", ".join(failed))
     return failed

@@ -458,15 +458,24 @@ async def test_finish_after_cancel_replays_from_the_cache_without_spending_twice
         await driver.run(outcome, cancel_check=cancel_after_five)
     stopped = await service.get_row(row.id)
     assert (stopped.state, stopped.status, stopped.incomplete) == ("search_running", "cancelled", True)
-    spent = stopped.consumed_evaluations
 
     resumed = await driver.command(stopped, "finish")
     await driver.run(resumed)
     done = await service.get_row(row.id)
     assert done.state == "awaiting_validation"
     assert done.consumed_evaluations == reference.consumed_evaluations
-    # Every evaluation the cancelled attempt recorded came back from the cache.
-    assert done.cache_hits >= reference.cache_hits + spent
+    # Every evaluation the cancelled attempt recorded came back from the
+    # cache. A reservation cancelled between admission and its run — the
+    # release path the #3040 review added — never produced a result: its
+    # spent unit is not re-charged (the budget equality above) and it
+    # re-runs fresh rather than replaying, so the cache claim is measured
+    # against what was recorded, never what was merely reserved.
+    recorded = await conn.fetchval(
+        "SELECT COUNT(*) FROM research_golden_search_evaluations WHERE study_id = $1 AND attempt = $2 AND status = 'completed'",
+        row.id,
+        stopped.attempt,
+    )
+    assert done.cache_hits >= reference.cache_hits + recorded
     assert done.results["search"]["procedure"] == reference.results["search"]["procedure"]
 
 

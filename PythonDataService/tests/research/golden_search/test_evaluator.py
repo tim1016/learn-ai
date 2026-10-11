@@ -345,7 +345,17 @@ def test_detail_of_keeps_missing_evidence_missing_and_surfaces_a_broken_payload_
     rows[key] = _record(key, status="failed", detail=None)
     assert evaluator.detail_of(POINT, window=JAN) is None, "a failed run's absent payload is legitimate missing evidence"
 
-    for broken in (None, {"daily_equity": [], "trades": []}, {"initial_cash": 1.0, "daily_equity": "gone", "trades": []}):
+    for broken in (
+        None,
+        {"daily_equity": [], "trades": []},
+        {"initial_cash": 1.0, "daily_equity": "gone", "trades": []},
+        # A trade mapping without the fields the evidence math reads back
+        # (#3039 review): downstream KeyErrors must be integrity failures
+        # here, never ordinary failed readings.
+        {"initial_cash": 1.0, "daily_equity": [], "trades": [{}]},
+        {"initial_cash": 1.0, "daily_equity": [], "trades": [{"entry_ms": "x", "exit_ms": 1, "entry_price": 1.0, "exit_price": 1.0, "quantity": 1, "pnl": 0.0}]},
+        {"initial_cash": 1.0, "daily_equity": [], "trades": [{"entry_ms": 1, "exit_ms": 2, "entry_price": 1.0, "exit_price": 1.0, "quantity": 1, "pnl": None}]},
+    ):
         rows[key] = _record(key, status="completed", detail=broken)
         with pytest.raises(EvidenceIntegrityError, match=key[:12]):
             evaluator.detail_of(POINT, window=JAN)

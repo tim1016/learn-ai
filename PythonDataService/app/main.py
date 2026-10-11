@@ -406,8 +406,6 @@ async def _service_lifespan(
     # runtime's either.
     research_authority = None
     if _ROLE_RUNS_DATA_PLANE_CORE:
-        import os
-
         if settings.RESEARCH_EXECUTION_MODE == "research":
             # Execution belongs to the isolated research runtime (#3043):
             # this process claims no authority (the runtime owns it), starts
@@ -426,18 +424,23 @@ async def _service_lifespan(
                     "not this process; an API that both forwards and executes would break "
                     "the single-execution contract (#3043)"
                 )
-            from app.research.persistence.ownership import startup_protection_only
+        # The sweep protects whoever holds the lock NOW — another runtime in
+        # forwarding mode, or nobody in local mode — so it reads protection
+        # without claiming anything. This process's own claim moves to the
+        # very end of startup, inside the release fence, so a failure in any
+        # later startup step cannot strand the singleton lock in a process
+        # that never serves (#3042). The protected set is resolved on this
+        # loop before the sync sweep runs: handing it the async callable
+        # would pass a coroutine to ``frozenset`` and silently abandon the
+        # sweep.
+        from app.research.persistence.ownership import startup_protection_only
 
-            protected_research = await startup_protection_only(dsn=settings.POSTGRES_URL or None)
+        protected_research = await startup_protection_only(dsn=settings.POSTGRES_URL or None)
+        if protected_research is not None:
+            protected_ids = await protected_research()
+            fail_jobs_without_a_worker(protected=lambda: protected_ids)
         else:
-            from app.research.persistence.ownership import startup_authority_and_protection
-
-            research_authority, protected_research = await startup_authority_and_protection(
-                dsn=settings.POSTGRES_URL or None,
-                instance_id=f"{_FLEET_ROLE}:{os.getpid()}",
-                role="data-plane",
-            )
-        fail_jobs_without_a_worker(protected=protected_research)
+            fail_jobs_without_a_worker(protected=None)
 
     # The coordinator's fleet state: the registry on its own control volume
     # plus the internal agent-token mapping the /internal/fleet surface
@@ -1088,6 +1091,21 @@ async def _service_lifespan(
     from app.utils.loop_lag import watch_loop_lag
 
     loop_lag_task = asyncio.create_task(watch_loop_lag(), name="loop-lag-monitor")
+
+    # The research coordinator claim is the last startup step (#3042): it
+    # sits directly inside the release fence below, so any failure in the
+    # steps above exits a process that holds nothing — an authority claimed
+    # mid-startup would outlive a failed boot and refuse every successor.
+    if _ROLE_RUNS_DATA_PLANE_CORE and settings.RESEARCH_EXECUTION_MODE != "research":
+        import os
+
+        from app.research.persistence.ownership import startup_authority_and_protection
+
+        research_authority, _ = await startup_authority_and_protection(
+            dsn=settings.POSTGRES_URL or None,
+            instance_id=f"{_FLEET_ROLE}:{os.getpid()}",
+            role="data-plane",
+        )
 
     try:
         yield

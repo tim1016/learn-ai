@@ -121,10 +121,10 @@ class ZoomRound:
     # distinct points the batch submitted, and of those the first-seen ones
     # this procedure had not scored before. The difference is the round's
     # cached/duplicate width; the sum of a stage's rounds reconciles against
-    # its stop trial's evaluated/cached counts. Zero-defaulted so rounds
-    # stored before the capture deserialise unchanged.
-    submitted: int = 0
-    first_evaluated: int = 0
+    # its stop trial's evaluated/cached counts. ``None`` for rounds stored
+    # before the capture — absent accounting, never guessed as zero.
+    submitted: int | None = None
+    first_evaluated: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -161,8 +161,8 @@ class ZoomRound:
             moved=bool(data["moved"]),
             current_before=float(data["current_before"]),
             quantization_limit=bool(data["quantization_limit"]),
-            submitted=int(data.get("submitted", 0)),
-            first_evaluated=int(data.get("first_evaluated", 0)),
+            submitted=None if data.get("submitted") is None else int(data["submitted"]),
+            first_evaluated=None if data.get("first_evaluated") is None else int(data["first_evaluated"]),
         )
 
 

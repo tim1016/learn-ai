@@ -12,7 +12,9 @@ old generation's jobs out of protection.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -133,20 +135,49 @@ async def test_forwarding_without_a_runtime_url_refuses(research_mode, monkeypat
 
 
 async def test_a_timeout_after_acceptance_joins_the_original_dispatch(research_mode, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A transport timeout is not a refusal: the durable binding is the truth (#3043)."""
+    """A transport timeout is not a refusal: binding plus a live worker is the truth (#3043).
+
+    A binding alone only proves acceptance began — the runtime binds before
+    the lease exists — so the join also demands a live worker; this test
+    holds the lease, and the next one proves a dead lease refuses.
+    """
     from app.research.golden_search import service
+    from app.research.persistence import lifecycle
 
     monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "sec")
     async def _bound_to_this(study_id):
         return "job-1"
 
     monkeypatch.setattr(service, "study_job_binding", _bound_to_this)
+    monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: True)
     with respx.mock(base_url="http://127.0.0.1:8000") as mock:
         mock.post("/api/jobs-internal/golden-search").mock(side_effect=httpx.ConnectTimeout("boom"))
         answer = await forward_golden_search_job(dict(PAYLOAD))
     assert answer == {"job_id": "job-1", "study_id": "study-1", "status": "queued"}, (
-        "bound to this job id: the original acceptance stands"
+        "bound to this job id with a live worker: the original acceptance stands"
     )
+
+
+async def test_a_timeout_over_a_dead_leash_is_a_refusal_not_a_join(research_mode, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A binding whose worker never took the lease parks nobody: refuse instead of joining (#3043)."""
+    from fastapi import HTTPException
+
+    from app.research.golden_search import service
+    from app.research.persistence import lifecycle
+
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "sec")
+
+    async def _bound_to_this(study_id):
+        return "job-1"
+
+    monkeypatch.setattr(service, "study_job_binding", _bound_to_this)
+    monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: False)
+    with respx.mock(base_url="http://127.0.0.1:8000") as mock:
+        mock.post("/api/jobs-internal/golden-search").mock(side_effect=httpx.ConnectTimeout("boom"))
+        with pytest.raises(HTTPException) as thrown:
+            await forward_golden_search_job(dict(PAYLOAD))
+    assert thrown.value.status_code == 502
+    assert "did not accept" in str(thrown.value.detail)
 
 
 async def test_a_timeout_without_a_binding_is_a_refusal_not_silence(research_mode, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -274,11 +305,13 @@ async def test_a_dispatch_crosses_the_boundary_binds_stamps_and_runs_then_restar
     monkeypatch.setattr(research_lifecycle, "get_redis", lambda: fake)
 
     executed: list[str] = []
+    stage_ran = threading.Event()
 
     def fake_run_stage(study_id, **kwargs):
         executed.append(study_id)
         kwargs["on_phase"]("search")
         kwargs["on_progress"](1, 2)
+        stage_ran.set()
         return SimpleNamespace(as_dict=lambda: {"study_id": study_id, "state": "awaiting_validation", "stage": "search"})
 
     monkeypatch.setattr(service, "run_stage", fake_run_stage)
@@ -306,6 +339,11 @@ async def test_a_dispatch_crosses_the_boundary_binds_stamps_and_runs_then_restar
             )
             assert accepted.status_code == 202, accepted.text
 
+        # The 202 only proves the thread started; the stage itself runs on a
+        # worker thread nobody joins, so synchronize on its own signal before
+        # asserting it ran — a scheduling-delayed start must not read as "never
+        # executed".
+        assert stage_ran.wait(timeout=5.0), "the stage did not run inside the runtime"
         assert executed == [row.id], "the stage ran once, inside the runtime"
         stamped = await conn.fetchrow(
             "SELECT boot_generation FROM research_job_owners WHERE job_id = $1", job_id
@@ -335,3 +373,114 @@ async def test_a_dispatch_crosses_the_boundary_binds_stamps_and_runs_then_restar
     finally:
         await probe.close()
     await conn.execute("DELETE FROM research_job_owners WHERE job_id = $1", job_id)
+
+
+# ── Review hardening: dispatch refusals, health, generation recovery ──────
+
+
+def test_forwarded_research_dispatches_refuse_loudly_in_research_mode(
+    research_mode, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR 0077: the forwarding API never starts grid or walk-forward threads (#3043 review)."""
+    from fastapi import HTTPException
+
+    from app.services.research_runtime_client import refuse_forwarded_research_dispatch
+
+    with pytest.raises(HTTPException) as thrown:
+        refuse_forwarded_research_dispatch("grid search")
+    assert thrown.value.status_code == 503 and "research runtime" in str(thrown.value.detail)
+
+    monkeypatch.setattr(settings, "RESEARCH_EXECUTION_MODE", "local")
+    assert refuse_forwarded_research_dispatch("grid search") is None
+
+
+async def test_unauthorized_dispatch_refuses_before_any_durable_mutation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The singleton refusal states surface as 503 before a route binds anything (#3042 review)."""
+    from fastapi import HTTPException
+
+    from app.research.persistence import ownership
+    from app.routers.research_records import refuse_unauthorized_dispatch
+
+    monkeypatch.setattr(ownership, "dispatch_refused", lambda: True)
+    monkeypatch.setattr(ownership, "process_authority", lambda: None)
+    with pytest.raises(HTTPException) as thrown:
+        await refuse_unauthorized_dispatch()
+    assert thrown.value.status_code == 503 and "another coordinator" in str(thrown.value.detail)
+
+    monkeypatch.setattr(ownership, "dispatch_refused", lambda: False)
+    monkeypatch.setattr(
+        ownership,
+        "process_authority",
+        lambda: SimpleNamespace(connected=False, boot_generation=3),
+    )
+    with pytest.raises(HTTPException) as dead:
+        await refuse_unauthorized_dispatch()
+    assert dead.value.status_code == 503 and "authority connection was lost" in str(dead.value.detail)
+
+    monkeypatch.setattr(ownership, "process_authority", lambda: None)
+    assert await refuse_unauthorized_dispatch() is None
+
+
+async def test_healthz_fails_once_the_authority_connection_dies(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A runtime holding a dead lock connection answers 503, so the compose check restarts it (#3042 review)."""
+    from app.research.persistence import ownership
+    from app.research_runtime import healthz
+
+    monkeypatch.setattr(
+        ownership,
+        "process_authority",
+        lambda: SimpleNamespace(connected=True, boot_generation=3),
+    )
+    healthy = await healthz()
+    assert healthy.status_code == 200 and healthy.background is None
+
+    monkeypatch.setattr(
+        ownership,
+        "process_authority",
+        lambda: SimpleNamespace(connected=False, boot_generation=3),
+    )
+    degraded = await healthz()
+    assert degraded.status_code == 503
+
+    monkeypatch.setattr(ownership, "process_authority", lambda: None)
+    assert (await healthz()).status_code == 503
+
+
+async def test_a_claiming_runtime_closes_the_jobs_of_dead_generations(conn, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ownership module's promised generation sweep: old queued records close, others stay (#3042 review)."""
+    import app.jobs.progress as progress_module
+    from app.research.persistence import ownership
+    from app.research_runtime import _close_abandoned_generations
+    from tests.jobs.conftest import _FakeRedis
+    from tests.research.conftest import _ephemeral_url
+
+    fake = _FakeRedis()
+    monkeypatch.setattr(progress_module, "get_redis", lambda: fake)
+    await conn.execute("DELETE FROM research_job_owners")
+    authority = await ownership.claim_coordinator_authority(
+        dsn=_ephemeral_url(), instance_id="sweep-test", role="research"
+    )
+    try:
+        await conn.execute(
+            """
+            INSERT INTO research_job_owners
+                (job_id, kind, record_id, owner_instance_id, boot_generation, dispatched_at_ms)
+            VALUES ('job-dead-gen', 'golden_search', 'study-1', 'dead-runtime', $1, 0),
+                   ('job-live-gen', 'golden_search', 'study-2', 'this-runtime', $2, 0)
+            """,
+            authority.boot_generation - 1,
+            authority.boot_generation,
+        )
+        fake.job("job-dead-gen", "queued")
+        fake.lease("job-dead-gen")
+        fake.job("job-live-gen", "queued")
+        fake.lease("job-live-gen")
+
+        await _close_abandoned_generations(authority)
+
+        assert fake.hget("job:job-dead-gen:state", "status") == "failed", "the dead generation's record closed"
+        assert not fake.exists("job:job-dead-gen:lease"), "the dead generation's lease is gone"
+        assert fake.hget("job:job-live-gen:state", "status") == "queued", "the claiming generation's jobs stay live"
+        assert fake.exists("job:job-live-gen:lease")
+    finally:
+        await authority.release()

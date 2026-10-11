@@ -63,6 +63,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal
 
@@ -88,11 +89,25 @@ CORPUS_SEED = 20261010
 BASELINE_REPETITIONS = 3
 CONNECTION_INVENTORY_RESEARCH_CAP = 12
 CONNECTION_INVENTORY_REQUIRED_FREE = 20
-# The data policy the corpus freezes into its identities and hands the engine
-# when the operator names none: the local lake, adjusted bars, regular
-# sessions. One constant feeds both the context digest and the request, so
-# the identity can never disagree with the bytes the run reads.
-CORPUS_DATA_POLICY: dict[str, Any] = {"source": "local-lake", "adjusted": True, "session": "regular"}
+# The data policy the corpus freezes into its identities and hands the
+# engine when the operator names none: the lake's polygon-captured bars,
+# adjusted, regular sessions. ``polygon`` is the capture lineage the
+# engine's policy block names; the manifest still binds every read to the
+# local lake. The corpus symbol completes the block per run, so one
+# constant feeds both the context digest and the request and the identity
+# can never disagree with the bytes the run reads.
+CORPUS_DATA_POLICY: dict[str, Any] = {
+    "source": "polygon",
+    "adjusted": True,
+    "session": "regular",
+    "input_bars": {"timespan": "minute", "multiplier": 1},
+    "strategy_bars": {"timespan": "minute", "multiplier": 1},
+}
+
+
+def _corpus_data_policy(symbol: str) -> dict[str, Any]:
+    """The frozen corpus policy completed with the corpus's symbol — the engine's policy block demands one."""
+    return {**CORPUS_DATA_POLICY, "symbol": symbol}
 # The deployed render of the fleet topology: the committed artifact that
 # names every deployed service and its VM containment.
 FLEET_TOPOLOGY_PATH = Path(__file__).resolve().parents[3] / "deploy" / "fleet" / "topology.snapshot.json"
@@ -159,9 +174,12 @@ RUNNABLE_TIMING_MODES: tuple[str, ...] = ("warm",)
 
 # Retention bound for the serial decoded-artifact cache (#3038): an estimate
 # of the decoded bars one process may hold, sized so the qualification corpus
-# (every window's artifacts decoded once) fits resident. One process only —
+# (every window's artifacts decoded once) fits resident. Half the deployed
+# python-service cgroup memory limit (2 GiB in compose.yaml): the cache must
+# share that envelope with the interpreter, the engine and every retained
+# run, so the bound alone may never claim the whole limit. One process only —
 # the parallel runtime gets its own envelope in later #3034 slices.
-DECODED_CACHE_DEFAULT_BYTES = 2 * 1024**3
+DECODED_CACHE_DEFAULT_BYTES = 1 * 1024**3
 
 # The engine's ``on_phase`` vocabulary mapped onto the additive spans.
 _PHASE_MAP: dict[str, str] = {
@@ -289,8 +307,9 @@ def build_corpus(
     ``data_policy`` is the policy the runs will execute under — the same
     mapping the harness hands the engine — because it is part of every
     evaluation key's context digest. It defaults to the frozen corpus
-    policy (local lake, adjusted); a raw run must pass its raw policy or
-    its identities would claim adjusted bytes the runs never read.
+    policy (the lake's polygon-captured bars, adjusted); a raw run must
+    pass its raw policy or its identities would claim adjusted bytes the
+    runs never read.
     """
     identity = code_identity if code_identity is not None else resolve_code_identity()
     assumptions = ExecutionAssumptions()
@@ -306,8 +325,15 @@ def build_corpus(
         },
         data_snapshot_digest=data_snapshot_digest,
         execution=assumptions,
-        data_policy=dict(data_policy) if data_policy is not None else CORPUS_DATA_POLICY,
-        run_up={"required_samples": 16, "bar_span_ms": 900_000, "run_up_sessions": 1},
+        data_policy=dict(data_policy) if data_policy is not None else _corpus_data_policy(symbol),
+        # The run-up claim matches the execution exactly: the corpus
+        # evaluates COLD windows. The no-trade group's mechanism is a
+        # program that never readies (900 daily bars of demand, more
+        # history than any window holds) and still scores a curve — an
+        # execution the engine only permits over an unprimed window, since
+        # a primed run refuses a program not ready at the evaluation
+        # boundary. A primed claim here would key runs that never execute.
+        run_up={"required_samples": 0, "bar_span_ms": 900_000, "run_up_sessions": 0},
     )
     digest = context_digest(context)
 
@@ -440,6 +466,21 @@ class BaselineReport:
         }
 
 
+def _harness_digest() -> str:
+    """SHA-256 over the benchmark harness's own bytes — the measurement methodology's identity.
+
+    ``resolve_code_identity`` covers the engine and research paths this
+    harness drives, not the harness itself: a timing-accounting, projection
+    or summarizer change moves this digest, so a report can never present
+    new methodology under the old harness identity (#3036).
+    """
+    hasher = sha256()
+    for path in (Path(__file__), Path(__file__).resolve().parent / "runs" / "hashing.py"):
+        hasher.update(path.name.encode("utf-8"))
+        hasher.update(path.read_bytes())
+    return hasher.hexdigest()
+
+
 def environment_identity(
     snapshot: DataSnapshot, *, timing_mode: str = "warm", data_policy: Mapping[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -456,6 +497,7 @@ def environment_identity(
             "digest_scheme": identity.digest_scheme,
             "tree_state": identity.tree_state,
         },
+        "harness_digest": _harness_digest(),
         "python": sys.version.split()[0],
         "platform": platform.platform(),
         "pid": os.getpid(),
@@ -676,7 +718,7 @@ def run_baseline(
     # request: passing None on to the engine would let it synthesize its own
     # legacy policy while the digest hashed the corpus default — the exact
     # identity/execution split this harness exists to prevent.
-    policy = dict(data_policy) if data_policy is not None else dict(CORPUS_DATA_POLICY)
+    policy = dict(data_policy) if data_policy is not None else _corpus_data_policy(symbol)
     corpus = build_corpus(
         symbol=symbol,
         development=development,
@@ -930,6 +972,12 @@ def connection_inventory(*, research_cap: int = CONNECTION_INVENTORY_RESEARCH_CA
         )
 
     free = None if server_max is None else server_max - reserved
+    # The research cap is NOT a pool above: it is the opt-in research runtime
+    # process's own PostgreSQL connections (ADR 0077), a separate process
+    # whose asyncpg usage no listed pool counts. Research persistence inside
+    # the API process is already inside the first pool above; subtracting the
+    # cap again here would double-count it — the cap reserves only the
+    # runtime process, so the report names its source explicitly.
     free_after_research = None if free is None else free - research_cap
     verified = not unverified
     meets: bool | None = None if not verified else free_after_research >= CONNECTION_INVENTORY_REQUIRED_FREE
@@ -938,6 +986,7 @@ def connection_inventory(*, research_cap: int = CONNECTION_INVENTORY_RESEARCH_CA
         "postgres_server_max_connections": server_max,
         "server_max_supplied_by_operator": supplied,
         "research_cap": research_cap,
+        "research_cap_source": "the opt-in research runtime process's own PostgreSQL connections (ADR 0077); no pool above counts them",
         "reserved_by_configured_pools": reserved,
         "free_at_server_without_research": free,
         "free_after_research_cap": free_after_research,

@@ -33,11 +33,12 @@ Validated against: tests/research/persistence/test_ownership.py.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 from collections.abc import Callable
 from collections.abc import Set as AbstractSet
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import asyncpg
@@ -74,6 +75,10 @@ class RuntimeAuthority:
     role: str
     boot_generation: int
     connection: asyncpg.Connection
+    # Serializes stamping on the dedicated connection: asyncpg forbids two
+    # concurrent operations on one connection, and two dispatches may land
+    # together. Everything else leaves the connection idle.
+    stamp_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     @property
     def connected(self) -> bool:
@@ -165,7 +170,10 @@ async def protected_job_ids(conn: asyncpg.Connection) -> set[str]:
     A job is protected exactly when its owning generation is the singleton
     row's current generation and that generation's lock is still granted.
     Older generations are dead by the singleton rule; a dead lock protects
-    nothing.
+    nothing. ``pg_locks`` is cluster-wide while advisory locks are
+    per-database, so the lock row is pinned to the current database — a
+    coordinator holding the same key in another database must not make a
+    dead generation here read as protected.
     """
     rows = await conn.fetch(
         """
@@ -176,6 +184,7 @@ async def protected_job_ids(conn: asyncpg.Connection) -> set[str]:
            AND EXISTS (
                 SELECT 1 FROM pg_locks
                  WHERE locktype = 'advisory' AND classid = $2 AND objid = $3 AND granted
+                   AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
            )
         """,
         SINGLETON_ROW_ID,
@@ -238,6 +247,13 @@ async def stamp_dispatch(*, job_id: str, kind: ResearchKind, record_id: str) -> 
     is API-owned and the sweep closes it on restart). A process that saw the
     lock held elsewhere, or whose authority connection has died, refuses:
     raising :class:`CoordinatorHeldElsewhere` for the router to surface.
+
+    The insert runs on the lock-owning session itself, not a pool member:
+    a check on one connection followed by an insert on another is not a
+    fence — a successor could already hold the lock while the stale insert
+    lands for a dead generation. On the lock's own connection, a dead
+    authority fails the insert, and a successor's claim implies this
+    session's lock — and its inserts — are gone (#3042).
     """
     authority = process_authority()
     if authority is None:
@@ -248,9 +264,8 @@ async def stamp_dispatch(*, job_id: str, kind: ResearchKind, record_id: str) -> 
         # The lock connection died: this generation is fenced, and a runtime
         # that lost authority must not dispatch on its way down.
         raise CoordinatorHeldElsewhere("research dispatch refused: this coordinator's authority connection was lost")
-    from app.research.persistence.db import with_connection
-
-    await with_connection(record_dispatch, authority, job_id=job_id, kind=kind, record_id=record_id)
+    async with authority.stamp_lock:
+        await record_dispatch(authority.connection, authority, job_id=job_id, kind=kind, record_id=record_id)
 
 
 async def startup_authority_and_protection(
@@ -285,9 +300,19 @@ async def startup_authority_and_protection(
     except CoordinatorHeldElsewhere as exc:
         logger.warning("research dispatch disabled: %s", exc)
         set_process_authority(None, held_elsewhere=True)
-    except (asyncpg.PostgresError, OSError) as exc:
+    except (asyncpg.PostgresConnectionError, OSError) as exc:
+        # Only a genuinely unreachable database degrades to the legacy
+        # lifecycle — the behavior that predates this module.
         logger.warning("running without research runtime ownership (database unreachable at startup): %s", exc)
         set_process_authority(None)
+        return None, None
+    except asyncpg.PostgresError as exc:
+        # Reachable but refusing us — permissions, a DDL race, a lock
+        # timeout: fail closed for research dispatch instead of degrading
+        # to the unstamped legacy path, which is exactly the split-brain
+        # a second healthy coordinator could ride (#3042).
+        logger.error("research dispatch disabled: ownership setup failed against a reachable database: %s", exc)
+        set_process_authority(None, held_elsewhere=True)
         return None, None
 
     async def protected() -> AbstractSet[str]:

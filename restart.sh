@@ -66,6 +66,15 @@ if [[ -z "${COMPOSE_FILE:-}" ]]; then
   [[ -f compose.fleet.dev.yaml ]] && COMPOSE_ARGS+=(--file compose.fleet.dev.yaml)
   [[ -f compose.override.yaml ]] && COMPOSE_ARGS+=(--file compose.override.yaml)
 fi
+# The research runtime is opt-in via the profile it lives behind (#3043):
+# without the flag, build/down/up all skip it, and an opted-in deployment's
+# restart would recreate a forwarding API beside a stale or absent runtime.
+# .env is the opt-in's home (compose interpolates it); an explicit
+# COMPOSE_PROFILES keeps authority with the operator.
+if [[ -z "${COMPOSE_PROFILES:-}" ]] && grep -qs '^RESEARCH_EXECUTION_MODE=research' .env; then
+  COMPOSE_ARGS+=(--profile research)
+  echo "==> Research profile active (RESEARCH_EXECUTION_MODE=research)"
+fi
 echo "==> Compose files: ${COMPOSE_ARGS[*]:-\$COMPOSE_FILE=$COMPOSE_FILE}"
 
 echo "==> Tearing down all containers..."

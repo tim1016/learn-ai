@@ -2,7 +2,7 @@
 
 The operator entry point the benchmark issue asks for: it runs
 ``app.research.benchmark.run_baseline`` over the local lake — offline, no
-provider or broker — writes the machine-readable JSON report, and prints the
+provider or broker — writes the machine-readable JSON report, and logs the
 readable summary. Long/manual results live as issue evidence on #3036 or a
 throwaway research branch; the report is never committed to master.
 
@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import sys
 from datetime import date
 from pathlib import Path
 
@@ -34,6 +36,8 @@ from app.research.benchmark import (
     summarize_report,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _iso_date(raw: str) -> date:
     try:
@@ -43,6 +47,9 @@ def _iso_date(raw: str) -> date:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # The operator reads this summary from a terminal; stdout is the channel,
+    # through the logger — never a bare print.
+    logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(message)s")
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--symbol", required=True, help="the symbol the corpus evaluates")
     parser.add_argument("--from", dest="development_from", type=_iso_date, required=True, help="development window's first ET trading date")
@@ -73,8 +80,8 @@ def main(argv: list[str] | None = None) -> int:
         decoded_cache_byte_bound=args.cache_mb * 1024**2,
     )
     args.output.write_text(json.dumps(report.as_dict(), indent=2), encoding="utf-8")
-    print(summarize_report(report))
-    print(f"  report written: {args.output}")
+    logger.info("%s", summarize_report(report))
+    logger.info("  report written: %s", args.output)
     return 0
 
 

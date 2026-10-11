@@ -331,11 +331,21 @@ async def start_golden_search_job(req: GoldenSearchJobRequest) -> GoldenSearchJo
         forwarded = await forward_golden_search_job(req.model_dump(mode="json"))
         return GoldenSearchJobAccepted(**forwarded)
 
+    # Refused authority must never bind: a stamp refusal after the bind
+    # strands the study on a job no worker will serve (#3042).
+    await records.refuse_unauthorized_dispatch()
     try:
         bound = await service.bind_dispatch(req.study_id, stage_token=req.stage_token, job_id=req.job_id)
     except GoldenSearchRefusal as exc:
         raise await _refused(exc) from exc
-    await records.stamp_research_dispatch(job_id=req.job_id, kind="golden_search", record_id=req.study_id)
+    try:
+        await records.stamp_research_dispatch(job_id=req.job_id, kind="golden_search", record_id=req.study_id)
+    except HTTPException:
+        # The binding is durable but this dispatch will not run: release it
+        # (still queued, still this job id) so a retry binds instead of
+        # becoming a redelivery that liveness refuses forever (#3042).
+        await service.release_dispatch_binding(req.study_id, job_id=req.job_id)
+        raise
     accepted = GoldenSearchJobAccepted(job_id=req.job_id, study_id=req.study_id, status="queued")
     if bound == "redelivery":
         # Never a second worker beside the first, and never a replay of a closed job under its old id.
@@ -402,6 +412,20 @@ def _gated_stage_work(req: GoldenSearchJobRequest):
             raise RuntimeError("research runtime worker without coordinator authority; the generation is fenced")
         generation = authority.boot_generation
         cancel = CancellationCheck(req.job_id, renews_lease=False)
+        base_cancel = cancel.raise_if_cancelled
+
+        def fenced_cancel() -> None:
+            # Cancellation and the coordinator fence in one poll: once the
+            # dedicated lock connection dies, a successor can already claim
+            # the next generation, so this worker stops instead of renewing
+            # a lease for a generation it no longer owns. Fired between
+            # evaluations and on every stage-level poll; fencing inside a
+            # single engine run waits for the child's advancing checkpoints
+            # (#3045).
+            base_cancel()
+            if not authority.connected:
+                raise WorkerLost("coordinator authority connection lost mid-run; the generation is fenced")
+
         seen: list[ExecutionCheckpoint] = []
         gate = CheckpointGate(req.job_id, generation, on_accepted=seen.append)
 
@@ -435,7 +459,7 @@ def _gated_stage_work(req: GoldenSearchJobRequest):
                     )
                 )
 
-        from app.research.golden_search.worker import worker_dispatch_factory
+        from app.research.golden_search.worker import WorkerLost, worker_dispatch_factory
 
         gate_lock = threading.Lock()
 
@@ -464,14 +488,14 @@ def _gated_stage_work(req: GoldenSearchJobRequest):
             req.study_id,
             stage_token=req.stage_token,
             job_id=req.job_id,
-            cancel_check=cancel.raise_if_cancelled,
+            cancel_check=fenced_cancel,
             on_phase=lambda phase: (emit.phase(phase), phase_checkpoint(phase)),
             on_progress=lambda done, total: (
                 emit.progress(done, total, unit="evaluations"),
                 completion_checkpoint(done, total),
             ),
             on_log=emit.log,
-            dispatch_factory=worker_dispatch_factory(on_checkpoint=on_child_checkpoint, cancel_check=cancel.raise_if_cancelled),
+            dispatch_factory=worker_dispatch_factory(on_checkpoint=on_child_checkpoint, cancel_check=fenced_cancel),
         )
         return outcome.as_dict()
 

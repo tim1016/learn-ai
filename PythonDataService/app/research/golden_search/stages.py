@@ -140,6 +140,10 @@ class StageContext:
     on_progress: Callable[[int, int], None]
     on_log: Callable[[str], None]
     results: dict[str, Any] = field(default_factory=dict)
+    # The code identity that passed this run's refusal check, sealed into
+    # every spawned worker's task: the child runs the code that was checked,
+    # never a fresh filesystem resolve after the check (#3044).
+    identity: CodeIdentity | None = None
     # The spawned-worker dispatch (#3044). None — every caller today — runs
     # the serial adapter; the research runtime passes a factory bound to its
     # lease gate, and execute_stage hands it this stage's sealed context.
@@ -183,6 +187,8 @@ class StageContext:
         if self._built_dispatch is None:
             from app.research.golden_search.worker import WorkerDispatchContext
 
+            sealed = self.identity
+            assert sealed is not None, "a dispatch factory requires the identity the stage checked"
             execution = self.protocol.execution
             self._built_dispatch = factory(WorkerDispatchContext(
                 strategy_key=self.row.strategy_key,
@@ -193,7 +199,7 @@ class StageContext:
                     "initial_cash": execution.initial_cash,
                 },
                 manifest=self.row.receipt["data_snapshot"]["artifacts"],
-                identity=resolve_code_identity().__dict__,
+                identity=sealed.__dict__,
                 job_id=str(self.row.job_id or ""),
                 generation=self.attempt,
             ))
@@ -552,6 +558,8 @@ def _chance_records(ctx: StageContext, evaluator: StudyEvaluator, evidences: Seq
                 record = incumbent_readings(objective=ctx.protocol.policy.objective, window=ctx.development)
             except JobCancelled:
                 raise  # cancellation stops the stage; it is never recorded as a reading
+            except EvidenceIntegrityError:
+                raise  # corrupted durable evidence fails the exam; a failed reading would conclude over it (#3039)
             except Exception as exc:  # a diagnostic failure the stage records; it never fails the evidence itself
                 record = failed_readings(exc)
             # The baseline draws its own depth: the incumbent has a drawdown chart of its own (#3013).
@@ -574,6 +582,8 @@ def _chance_records(ctx: StageContext, evaluator: StudyEvaluator, evidences: Seq
                 )
             except JobCancelled:
                 raise  # cancellation stops the stage; it is never recorded as a reading
+            except EvidenceIntegrityError:
+                raise  # corrupted durable evidence fails the exam; a failed reading would conclude over it (#3039)
             except Exception as exc:  # a diagnostic failure the stage records; it never fails the evidence itself
                 shared = failed_readings(exc)
             # The rehearsal is its own component: a missing or failed one never erases the comparison beside it.
@@ -597,6 +607,8 @@ def _chance_records(ctx: StageContext, evaluator: StudyEvaluator, evidences: Seq
                 )
             except JobCancelled:
                 raise  # cancellation stops the stage; it is never recorded as a reading
+            except EvidenceIntegrityError:
+                raise  # corrupted durable evidence fails the exam; a failed reading would conclude over it (#3039)
             except Exception as exc:  # a diagnostic failure the stage records; it never fails the evidence itself
                 shared["rehearsal"] = failed_rehearsal(exc)
             # The drawdown component is its own too: it needs this run alone, never the pairing (#3013).
@@ -1011,6 +1023,10 @@ def execute_stage(
     row, attempt = run_sync(with_connection(repo.claim_stage, study_id, stage_token=stage_token, job_id=job_id))
     stage = row.pending_stage
     assert stage is not None  # claim_stage refuses a study with no authorized stage
+    # One resolve per run: the identity that passes the refusal check is the
+    # one the spawned worker is sealed to — a later fresh resolve could bind
+    # the child to code that was never checked (#3044).
+    identity = identity or resolve_code_identity()
     refused = stage_refusal(row, identity=identity)
     if refused is not None:
         logger.warning(
@@ -1042,6 +1058,7 @@ def execute_stage(
         on_progress=on_progress,
         on_log=on_log,
         results=dict(row.results),
+        identity=identity,
         dispatch_factory=dispatch_factory,
     )
     logger.info("golden search stage started", extra={"action": "golden_search_stage_started", "study_id": study_id, "stage": stage, "attempt": attempt})

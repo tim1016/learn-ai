@@ -37,13 +37,18 @@ import os
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
 
 from fastapi import Depends, FastAPI
+from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.routers import golden_search
 from app.security.data_plane_control import require_data_plane_control_secret
 from app.utils.error_handlers import install_fleet_control_error_handler
+
+if TYPE_CHECKING:
+    from app.research.persistence import ownership
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +74,7 @@ def refuse_reload() -> None:
         )
 
 
-async def _claim_authority_or_die() -> None:
+async def _claim_authority_or_die() -> ownership.RuntimeAuthority:
     """Claim the deployment's research coordinator authority or fail startup.
 
     A second live coordinator must not become ready (#3042): the lock is the
@@ -88,14 +93,46 @@ async def _claim_authority_or_die() -> None:
     if authority is None:
         raise RuntimeError(
             "the research runtime could not claim the singleton coordinator authority "
-            "(another runtime holds it, or the database is unreachable); refusing to start"
+            "(another runtime holds it, or ownership setup failed); refusing to start"
         )
+    return authority
+
+
+async def _close_abandoned_generations(authority: ownership.RuntimeAuthority) -> None:
+    """Close the job records of generations older than the one just claimed (#3042).
+
+    A prior runtime that lost the lock is dead by the singleton rule, but
+    its jobs' records would read queued/running until the 24 h TTL and
+    refuse Finish. Only older generations close here — the API's own legacy
+    jobs and anything stamped under the new generation are not this
+    process's to touch. Whether a lost runtime's results committed before
+    it died is #3045's uncertain-write question; this closes records,
+    never accounting.
+    """
+    import asyncpg
+
+    from app.research.persistence import ownership
+
+    dsn = settings.POSTGRES_URL
+    if not dsn:
+        return
+    conn = await asyncpg.connect(dsn)
+    try:
+        job_ids = await ownership.abandoned_job_ids(conn, up_to_generation=authority.boot_generation)
+    finally:
+        await conn.close()
+    if not job_ids:
+        return
+    from app.jobs.progress import close_orphaned_job_records
+
+    await asyncio.to_thread(close_orphaned_job_records, job_ids)
 
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     refuse_reload()
-    await _claim_authority_or_die()
+    authority = await _claim_authority_or_die()
+    await _close_abandoned_generations(authority)
     from app.research.persistence.db import ensure_schema_at_startup
 
     schema_task = asyncio.create_task(ensure_schema_at_startup(), name="research-runtime-schema-ensure")
@@ -107,9 +144,9 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
             await schema_task
         from app.research.persistence import ownership
 
-        authority = ownership.process_authority()
-        if authority is not None:
-            await authority.release()
+        held = ownership.process_authority()
+        if held is not None:
+            await held.release()
         ownership.set_process_authority(None)
 
 
@@ -146,13 +183,23 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.get_trusted_hos
 
 
 @app.get("/healthz")
-async def healthz() -> dict[str, str]:
-    """Reachability plus the one fact an operator needs: authority held or not."""
+async def healthz() -> JSONResponse:
+    """Reachability plus the one fact an operator needs: authority held or not.
+
+    Held means connected as well as claimed: a runtime whose dedicated lock
+    connection has died holds nothing and must stop passing healthchecks —
+    the compose check only fails on the HTTP status, so the degraded branch
+    answers 503, never a 200 with a sad body (#3042).
+    """
     from app.research.persistence import ownership
 
     authority = ownership.process_authority()
-    return {
-        "status": "ok" if authority is not None else "degraded",
-        "version": RUNTIME_VERSION,
-        "boot_generation": str(authority.boot_generation) if authority is not None else "none",
-    }
+    held = authority is not None and authority.connected
+    return JSONResponse(
+        status_code=200 if held else 503,
+        content={
+            "status": "ok" if held else "degraded",
+            "version": RUNTIME_VERSION,
+            "boot_generation": str(authority.boot_generation) if authority is not None else "none",
+        },
+    )

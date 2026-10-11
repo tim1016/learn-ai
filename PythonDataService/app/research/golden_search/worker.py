@@ -59,6 +59,12 @@ STARTUP_BOUND_S = 60.0
 # Above the catalog's own 35s verify bound: a slow verdict must never read
 # as a silent child (#3044 review).
 SILENCE_BOUND_S = 45.0
+# Heartbeats prove the process, never the work: a wedged engine loop keeps
+# heartbeating forever, so task progress — checkpoints, admission requests,
+# outcomes — must arrive at least this often. Generous beyond any legitimate
+# single evaluation until the child emits advancing in-engine checkpoints,
+# which is #3045's work and will tighten this to seconds.
+TASK_SILENCE_BOUND_S = 30 * 60.0
 ALIVE_INTERVAL_S = 5.0
 KILLED_CHILD_WAIT_S = 2.0
 
@@ -183,9 +189,15 @@ def _child_main() -> int:
     out.write({"type": "ready", "pid": os.getpid(), "env": pinned, "identity": identity})
 
     pending_admissions: dict[int, threading.Event] = {}
-    admission_answers: dict[int, dict[str, Any]] = {}
+    admission_answers: dict[int, Any] = {}
     cancel_flag = threading.Event()
-    state = {"identity": identity, "admission_sequence": 0}
+    from app.engine.data.decoded_cache import DecodedArtifactCache
+
+    # One cache for the child's whole life: the persistent worker exists to
+    # reuse admitted decodes across evaluations, so it must not be rebuilt
+    # per task (#3038, #3044). The single-slot lane makes it single-threaded.
+    decoded_cache = DecodedArtifactCache(max_bytes=WORKER_DECODED_CACHE_BYTES)
+    state = {"identity": identity, "admission_sequence": 0, "decoded_cache": decoded_cache}
 
     def ask_admission(path: Path) -> bytes:
         payload = path.read_bytes()
@@ -272,7 +284,6 @@ def _run_one_task(
     cancel_flag: threading.Event,
     state: dict[str, Any],
 ) -> None:
-    from app.engine.data.decoded_cache import DecodedArtifactCache
     from app.research.golden_search.protocol import ExecutionAssumptions
 
     def checkpoint(phase: str) -> None:
@@ -315,7 +326,7 @@ def _run_one_task(
             on_log=lambda message: None,
             data_manifest=manifest,
             while_waiting=raise_if_cancelled,
-            decoded_cache=DecodedArtifactCache(max_bytes=WORKER_DECODED_CACHE_BYTES),
+            decoded_cache=state["decoded_cache"],
             admission=ask_admission,
         )
         result = project_response(request, response, strategy_key=strategy_key, initial_cash=execution.initial_cash)
@@ -407,8 +418,10 @@ class ResearchWorker:
     the study's logical order never sees the process boundary. The pump
     thread drains the child's messages forever, so a blocked dispatch never
     blocks the child's writes; admission verdicts run on the coordinator's
-    own bounded I/O path; checkpoints feed the job's lease gate; alives
-    reset the silence clock and nothing else.
+    own bounded I/O path; checkpoints feed the job's lease gate. Alives
+    refresh only the process clock; task progress refreshes both, so a
+    heartbeating-but-wedged worker is fenced by the task bound, not trusted
+    forever.
     """
 
     def __init__(self, context: WorkerDispatchContext) -> None:
@@ -416,7 +429,8 @@ class ResearchWorker:
         self._lock = threading.Lock()
         self._outcomes: dict[str, dict[str, Any]] = {}
         self._arrived = threading.Condition(self._lock)
-        self._silence_reset = threading.Event()
+        self._alive_signal = threading.Event()
+        self._progress_signal = threading.Event()
         self._child: subprocess.Popen | None = None
         self._lost: str | None = None
         self._pump: threading.Thread | None = None
@@ -461,6 +475,7 @@ class ResearchWorker:
                     continue
                 kind = message.get("type")
                 if kind in ("result", "failed"):
+                    self._progress_signal.set()
                     with self._arrived:
                         self._outcomes[message["key"]] = message
                         self._arrived.notify_all()
@@ -469,14 +484,19 @@ class ResearchWorker:
                         self._outcomes["ready"] = message
                         self._arrived.notify_all()
                 elif kind == "admission_request":
-                    # Off the pump thread: a slow catalog verdict must not
-                    # stop alives and checkpoints from being drained (#3044).
+                    # A read in flight is work in flight: it counts toward
+                    # the task clock. The verdict itself runs off the pump
+                    # thread — a slow catalog verdict must not stop alives
+                    # and checkpoints from being drained (#3044).
+                    self._progress_signal.set()
                     self._verdicts.submit(self._answer_admission, message)
                 elif kind == "checkpoint":
+                    self._progress_signal.set()
                     self._context.on_checkpoint(message)
                 elif kind == "alive":
-                    self._silence_reset.set()
+                    self._alive_signal.set()
                 elif kind == "identity_refused":
+                    self._progress_signal.set()
                     with self._arrived:
                         self._lost = message.get("reason", "identity refused")
                         self._arrived.notify_all()
@@ -526,12 +546,18 @@ class ResearchWorker:
 
     # -- the task lane ------------------------------------------------------
 
-    def run_task(self, task: Mapping[str, Any], *, silence_bound_s: float = SILENCE_BOUND_S) -> dict[str, Any]:
+    def run_task(
+        self,
+        task: Mapping[str, Any],
+        *,
+        silence_bound_s: float = SILENCE_BOUND_S,
+        task_silence_bound_s: float = TASK_SILENCE_BOUND_S,
+    ) -> dict[str, Any]:
         """Submit one task and return its delivered outcome message.
 
-        Waits bounded by real signals — outcome messages, alives and a live
-        child — so a wedged child is fenced within the silence bound, not
-        trusted forever.
+        Waits bounded by real signals — outcomes, alives and task progress —
+        so a dead child is fenced by the process bound and a heartbeating
+        but wedged one by the task bound, never trusted forever.
         """
         key = str(task["key"])
         with self._arrived:
@@ -539,25 +565,40 @@ class ResearchWorker:
                 raise WorkerLost(f"the research worker is lost: {self._lost}")
             self._outcomes.pop(key, None)
         self._send({"type": "task", "task": task})
-        last_signal = time.monotonic()
+        last_alive = time.monotonic()
+        last_progress = last_alive
         while True:
             with self._arrived:
                 if key in self._outcomes:
                     return self._outcomes.pop(key)
                 if self._lost is not None:
                     raise WorkerLost(f"the research worker is lost: {self._lost}")
-                self._silence_reset.clear()
+                self._alive_signal.clear()
+                self._progress_signal.clear()
                 self._arrived.wait(timeout=0.5)
-                signalled = self._silence_reset.is_set()
-            if signalled:
-                last_signal = time.monotonic()
-                continue
-            if self._child is not None and self._child.poll() is not None:
-                raise WorkerLost(f"the research worker exited with code {self._child.returncode}")
-            if time.monotonic() - last_signal > silence_bound_s:
+                alive_signalled = self._alive_signal.is_set()
+                progress_signalled = self._progress_signal.is_set()
+            now = time.monotonic()
+            if progress_signalled:
+                # Work in flight proves the process too; heartbeats alone
+                # prove nothing about the lane — they refresh the process
+                # clock only, never the task clock below.
+                last_alive = last_progress = now
+            elif alive_signalled:
+                last_alive = now
+            else:
+                if self._child is not None and self._child.poll() is not None:
+                    raise WorkerLost(f"the research worker exited with code {self._child.returncode}")
+            if now - last_alive > silence_bound_s:
                 self.close()
                 raise WorkerLost(
                     f"the research worker went silent for {silence_bound_s:.0f}s with a task in flight; fenced and killed"
+                )
+            if now - last_progress > task_silence_bound_s:
+                self.close()
+                raise WorkerLost(
+                    f"the research worker made no task progress for {task_silence_bound_s:.0f}s "
+                    "while its heartbeats continued; fenced and killed"
                 )
 
     def cancel(self) -> None:
