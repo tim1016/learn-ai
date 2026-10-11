@@ -107,6 +107,23 @@ def detail_integrity_problem(detail: object) -> str | None:
     return None
 
 
+def require_intact_detail(key: str, status: str, detail: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+    """The payload of a durable detail readback, or an integrity error (#3039).
+
+    A completed evaluation read back from the store — a resume's cache hit or
+    :meth:`StudyEvaluator.detail_of`'s read — must still hold the payload
+    ``detail_payload`` wrote; anything absent or misshapen raises instead of
+    resurfacing as a spurious missing-evidence reading. An in-flight engine
+    outcome never passes through here: the engine producing a run without
+    detail is the protocol's named-missing case, not a failure (#3012).
+    """
+    if status == "completed":
+        problem = detail_integrity_problem(detail)
+        if problem is not None:
+            raise EvidenceIntegrityError(f"evaluation {key}: {problem}")
+    return detail
+
+
 @dataclass(frozen=True)
 class EvaluationCapability:
     """The half-open intervals a stage may score; a window must fit inside one of them."""
@@ -412,16 +429,13 @@ class StudyEvaluator:
                 self.cache_hits += reservation.counted_as_cache_hit
                 results[key] = repo.metrics_of(reservation.record)
                 if detail:
-                    # A row this attempt's own engine recorded is the in-flight
-                    # outcome (a repeated request cache-hits it); a row left by
-                    # an earlier attempt is a durable readback — the resume's
-                    # only authority, which must still hold its payload (#3039).
-                    self._cache_detail(
-                        key,
-                        status=reservation.record.status,
-                        detail=reservation.record.detail_json,
-                        verify=reservation.record.attempt != self.attempt,
-                    )
+                    payload = reservation.record.detail_json
+                    if reservation.record.attempt != self.attempt:
+                        # A row an earlier attempt left is a durable readback —
+                        # the resume's only authority, which must still hold
+                        # its payload (#3039).
+                        payload = require_intact_detail(key, reservation.record.status, payload)
+                    self._details[key] = payload
                 self.on_evaluated(self.new_runs + self.cache_hits)
                 continue
             try:
@@ -455,27 +469,9 @@ class StudyEvaluator:
             self.new_runs += 1
             results[key] = outcome.metrics
             if detail:
-                self._cache_detail(key, status=outcome.metrics.status, detail=outcome.detail, verify=False)
+                self._details[key] = outcome.detail
             self.on_evaluated(self.new_runs + self.cache_hits)
         return [results[key] for key, _, _ in keyed]
-
-    def _cache_detail(self, key: str, *, status: str, detail: Mapping[str, Any] | None, verify: bool) -> None:
-        """Remember one run's recorded detail for this instance's lifetime.
-
-        ``verify`` marks a *durable readback* — a completed row this instance
-        is re-reading as its only authority (a resume's cache hit, or
-        :meth:`detail_of`'s store read). There, an absent or misshapen payload
-        is an integrity fault of the evidence store (#3039) and raises instead
-        of resurfacing as a spurious missing-evidence reading. An in-flight
-        engine outcome records as it was returned: a completed run the engine
-        produced without detail is the protocol's named-missing case, not a
-        failure (#3012).
-        """
-        if verify and status == "completed":
-            problem = detail_integrity_problem(detail)
-            if problem is not None:
-                raise EvidenceIntegrityError(f"evaluation {key}: {problem}")
-        self._details[key] = detail
 
     def detail_of(self, point: Mapping[str, Any], *, window: Window) -> Mapping[str, Any] | None:
         """The detail payload of ``point``'s base-scenario detail run over ``window``; None without one.
@@ -495,7 +491,7 @@ class StudyEvaluator:
             record = run_sync(with_connection(repo.get_evaluation, self.study_id, key))
             if record is None or record.status != "completed":
                 return None
-            self._cache_detail(key, status=record.status, detail=record.detail_json, verify=True)
+            self._details[key] = require_intact_detail(key, record.status, record.detail_json)
         return self._details[key]
 
     def _run(self, request: EvaluationRequest) -> EvaluationResult:

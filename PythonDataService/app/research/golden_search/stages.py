@@ -48,12 +48,11 @@ from app.research.golden_search.concentration import concentration
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, point_hash
 from app.research.golden_search.evaluator import (
     EvaluationCapability,
-    EvidenceIntegrityError,
     ExecuteBacktest,
     StudyEvaluator,
     Window,
-    detail_integrity_problem,
     engine_executor,
+    require_intact_detail,
 )
 from app.research.golden_search.evidence import (
     CandidateEvidence,
@@ -679,11 +678,7 @@ def _development_detail_for(ctx: StageContext, point: Mapping[str, Any]) -> tupl
     record = run_sync(with_connection(repo.find_detail_evaluation, ctx.row.id, point_hash=digest, window_start_ms=ctx.development[0], window_end_ms=ctx.development[1]))
     if record is None:
         return None, None
-    if record.status == "completed":
-        problem = detail_integrity_problem(record.detail_json)
-        if problem is not None:
-            raise EvidenceIntegrityError(f"evaluation {record.evaluation_key}: {problem}")
-    return repo.metrics_of(record), record.detail_json
+    return repo.metrics_of(record), require_intact_detail(record.evaluation_key, record.status, record.detail_json)
 
 
 def _final_chance_for(

@@ -235,10 +235,10 @@ def _evaluator() -> StudyEvaluator:
     )
 
 
-def _record(evaluation_key: str, *, status: str = "completed", detail: object = None) -> object:
+def _record(key: str, *, status: str = "completed", detail: object = None) -> object:
     from types import SimpleNamespace
 
-    return SimpleNamespace(evaluation_key=evaluation_key, status=status, detail_json=detail)
+    return SimpleNamespace(evaluation_key=key, status=status, detail_json=detail)
 
 
 def _durable_rows(monkeypatch: pytest.MonkeyPatch, records: dict[str, object]) -> list[str]:
