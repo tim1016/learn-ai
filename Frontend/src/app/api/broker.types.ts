@@ -4781,7 +4781,10 @@ export interface paths {
          * @description Run the stage a guarded command authorized, on a worker thread. 202 once the job is bound to it.
          *
          *     A token the study did not issue, or a stage another job already holds,
-         *     is refused (409); nothing runs without the matching token.
+         *     is refused (409); nothing runs without the matching token. When research
+         *     execution is routed to the isolated runtime (#3043), this process
+         *     forwards the dispatch and never binds or starts a thread: binding,
+         *     ownership and execution happen once, in the runtime.
          */
         post: operations["start_golden_search_job_api_jobs_internal_golden_search_post"];
         delete?: never;
@@ -17618,6 +17621,8 @@ export interface components {
             chosen: number;
             /** Current Before */
             current_before: number;
+            /** First Evaluated */
+            first_evaluated?: number | null;
             /** High */
             high: number;
             /**
@@ -17653,6 +17658,8 @@ export interface components {
             ][];
             /** Round Index */
             round_index: number;
+            /** Submitted */
+            submitted?: number | null;
             /** Values */
             values: number[];
         };
