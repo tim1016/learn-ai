@@ -257,12 +257,12 @@ class ManifestBoundDailyReader(LeanDailyDataReader):
         super().__init__(data_root)
         self._manifest = dict(manifest)
 
-    def _read_zip(self, zip_path: Path, symbol: str) -> list[TradeBar]:
+    def _verified_payload(self, zip_path: Path, symbol: str) -> bytes | None:
         relative = _daily_relative(symbol)
         if not zip_path.exists():
             _refuse_if_receipted(self._manifest, relative)
-            return []
+            return None
         payload = read_committed_bytes(zip_path)
         _verify_bytes(self._manifest, relative, payload)
         _verify_adjustment_receipt(self.adjustment_guard, self._manifest, relative, zip_path, payload, symbol)
-        return self.parse_history_zip(payload, symbol)
+        return payload
