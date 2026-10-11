@@ -9,6 +9,7 @@ from uuid import UUID
 import pytest
 
 from app.data_lake import catalog_client
+from app.data_lake.adjustment_versions import AdjustmentVersionError
 from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
 from app.data_lake.path_policy import lake_subpath
 from app.data_lake.root_identity import init_empty_root, marker_path
@@ -24,6 +25,7 @@ from app.services.chart_bar_source import compose_chart_bars
 from app.services.return_distribution_service import _probe_lake_sessions, _read_study_window
 from tests._helpers.lake_fixture import (
     seed_lake_corporate_actions,
+    seed_lake_daily,
     seed_lake_interest_rate,
     seed_lake_window,
 )
@@ -143,6 +145,130 @@ def test_missing_root_identity_never_downgrades_to_reference_reader(lake):
     marker_path(lake.parent.parent).unlink()
     with pytest.raises(LakeAdmissionError, match="root identity"):
         LeanDailyDataReader(lake).available_dates("SPY")
+
+
+# -- #3037: a warm daily history cache re-verifies before it serves --------
+
+
+def test_warm_daily_reader_rechecks_the_commit_on_every_read(lake, seeded_lake_catalog):
+    """A repeat read may reuse the decoded history, never the admission verdict (#3037).
+
+    The old cache-hit return handed back decoded bars with no catalog round
+    trip, so a receipt revoked between two reads still served the history.
+    """
+    reader = LeanDailyDataReader(lake)
+    assert list(reader.iter_bars("SPY", DAY, DAY))
+    seeded_lake_catalog.clear()
+    with pytest.raises(LakeAdmissionError, match="committed"):
+        list(reader.iter_bars("SPY", DAY, DAY))
+
+
+def test_warm_daily_reader_refuses_when_the_source_archive_vanishes(lake, seeded_lake_catalog):
+    """The archive and its receipt removed after the first read: the cache has nothing left to verify against.
+
+    A ``None`` payload from every root once meant "skip this root" on the
+    cache-hit path, serving bars decoded under an admission verdict whose
+    source no longer exists (#3037 review).
+    """
+    reader = LeanDailyDataReader(lake)
+    assert list(reader.iter_bars("SPY", DAY, DAY))
+    (lake / "equity" / "usa" / "daily" / "spy.zip").unlink()
+    seeded_lake_catalog.clear()
+    with pytest.raises(LakeAdmissionError, match="no root holds a verifiable daily archive"):
+        list(reader.iter_bars("SPY", DAY, DAY))
+
+
+def test_warm_daily_reader_avoids_decoding_after_reverification(lake, seeded_lake_catalog, monkeypatch):
+    reader = LeanDailyDataReader(lake)
+    decodes = 0
+    real_parse = reader.parse_history_zip
+
+    def counting_parse(payload, symbol):
+        nonlocal decodes
+        decodes += 1
+        return real_parse(payload, symbol)
+
+    monkeypatch.setattr(reader, "parse_history_zip", counting_parse)
+    first = list(reader.iter_bars("SPY", DAY, DAY))
+    second = list(reader.iter_bars("SPY", DAY, DAY))
+    assert second == first
+    assert decodes == 1, "a reverified repeat read must not decode the zip again"
+
+
+def test_warm_daily_reader_fails_closed_when_the_catalog_goes_offline(lake, seeded_lake_catalog, monkeypatch):
+    reader = LeanDailyDataReader(lake)
+    assert list(reader.iter_bars("SPY", DAY, DAY))
+
+    async def unavailable(*args):
+        raise catalog_client.CatalogUnavailableError("offline")
+
+    monkeypatch.setattr(catalog_client, "has_committed_file_receipt", unavailable)
+    with pytest.raises(catalog_client.CatalogUnavailableError, match="cannot verify committed"):
+        list(reader.iter_bars("SPY", DAY, DAY))
+
+
+def test_warm_daily_reader_refuses_a_root_that_lost_its_identity(lake, seeded_lake_catalog):
+    reader = LeanDailyDataReader(lake)
+    assert list(reader.iter_bars("SPY", DAY, DAY))
+    marker_path(lake.parent.parent).unlink()
+    with pytest.raises(LakeAdmissionError, match="root identity"):
+        list(reader.iter_bars("SPY", DAY, DAY))
+
+
+def _adjusted_daily_lake(tmp_path):
+    root = init_empty_root(tmp_path / "adjusted-store", UUID(int=2456)).lake_root("polygon_split_adjusted")
+    seed_lake_daily(root, "SPY", [DAY])
+    return root
+
+
+def test_warm_daily_reader_refuses_a_changed_adjustment_basis(tmp_path, seeded_lake_catalog):
+    from app.data_lake.adjustment_versions import CorporateActionSnapshot, current_snapshot_path
+    from app.data_lake.polygon_corp_actions import DividendEvent
+
+    root = _adjusted_daily_lake(tmp_path)
+    reader = LeanDailyDataReader(root)
+    assert list(reader.iter_bars("SPY", DAY, DAY))
+
+    # A refresh moved the current corporate-action basis; the archive and its
+    # companion still carry the old one.
+    moved = CorporateActionSnapshot((), (DividendEvent("2000-01-02", 1.0),), date(2000, 1, 1))
+    (root / current_snapshot_path("SPY")).write_bytes(moved.payload())
+
+    with pytest.raises(AdjustmentVersionError, match="stale or mixed corporate-action version"):
+        list(reader.iter_bars("SPY", DAY, DAY))
+
+
+def test_warm_daily_reader_refuses_a_companion_deleted_after_the_first_read(tmp_path, seeded_lake_catalog):
+    from app.data_lake.adjustment_versions import companion_path
+
+    root = _adjusted_daily_lake(tmp_path)
+    reader = LeanDailyDataReader(root)
+    assert list(reader.iter_bars("SPY", DAY, DAY))
+    companion_path(root / "equity" / "usa" / "daily" / "spy.zip").unlink()
+    with pytest.raises(AdjustmentVersionError, match="no valid corporate-action version"):
+        list(reader.iter_bars("SPY", DAY, DAY))
+
+
+def test_warm_bound_daily_reader_refuses_a_root_that_lost_its_identity(lake, seeded_lake_catalog):
+    snapshot = _snapshot(lake, "daily")
+    reader = ManifestBoundDailyReader(lake, snapshot.artifacts)
+    assert list(reader.iter_bars("SPY", DAY, DAY))
+    marker_path(lake.parent.parent).unlink()
+    with pytest.raises(LakeAdmissionError, match="root identity"):
+        list(reader.iter_bars("SPY", DAY, DAY))
+
+
+def test_warm_bound_daily_reader_fails_closed_when_the_catalog_goes_offline(lake, seeded_lake_catalog, monkeypatch):
+    snapshot = _snapshot(lake, "daily")
+    reader = ManifestBoundDailyReader(lake, snapshot.artifacts)
+    assert list(reader.iter_bars("SPY", DAY, DAY))
+
+    async def unavailable(*args):
+        raise catalog_client.CatalogUnavailableError("offline")
+
+    monkeypatch.setattr(catalog_client, "has_committed_file_receipt", unavailable)
+    with pytest.raises(catalog_client.CatalogUnavailableError, match="cannot verify committed"):
+        list(reader.iter_bars("SPY", DAY, DAY))
 
 
 def test_catalog_outage_fails_closed(lake, monkeypatch):
