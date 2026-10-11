@@ -632,7 +632,7 @@ def end_with_waiting_sale(end: BotEndView | None, repository: ClerkSqliteReposit
         return bot_end_view_waiting_for_operator(
             end, why=" ".join(end_sale_waits_for_operator_words(sale) for sale in waiting)
         )
-    if end.status == "ended":
+    if end.status == "ended" and end.end_action == "SELL":
         attested = attested_absent_end_sale(repository, sid)
         if attested is None:
             return end

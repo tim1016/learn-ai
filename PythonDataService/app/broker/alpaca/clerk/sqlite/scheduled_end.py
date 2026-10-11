@@ -379,7 +379,7 @@ def _outside_an_exit(repo: ClerkSqliteRepository, order_ref: str) -> bool:
 
 @dataclass(frozen=True)
 class EndSaleWaiting:
-    """A bot's end sale not sent: held for the next regular open, or left to the operator."""
+    """A bot's end sale not standing: held for the next regular open, left to the operator, or settled as not sent."""
 
     strategy_instance_id: str
     symbol: str
@@ -457,15 +457,16 @@ def end_sale_waits_for_operator_words(waiting: EndSaleWaiting) -> str:
 
 
 def attested_absent_end_sale(repo: ClerkSqliteRepository, strategy_instance_id: str) -> EndSaleWaiting | None:
-    """The end's own sale an operator settled as "Alpaca has no such order", while its bot is stuck (#2854).
+    """The end's own first sale an operator settled as "Alpaca has no such order", while its bot is stuck (#2854).
 
     The end was recorded carried out when its sale was accepted; the
     settlement ends that sale's exit as not sent and leaves the position to
     the operator, but nothing re-records the end, so the panel corrects the
     end's words from here instead. The stuck episode's attested order must
-    be one of this bot's end-sale decisions (``SCHEDULED_END_DECISION_PREFIX``):
-    an order of any other exit settled as not sent does not change what the
-    end did. Read from the records with nothing recorded for it.
+    be one of this bot's end-sale decisions (``SCHEDULED_END_DECISION_PREFIX``)
+    -- the sale the end itself sent, never a later retry of it under another
+    namespace; an order of any other exit settled as not sent does not change
+    what the end did. Read from the records with nothing recorded for it.
     """
     stuck = open_exit_stuck(repo, strategy_instance_id)
     if stuck is None:
