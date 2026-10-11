@@ -175,10 +175,19 @@ class CancellationCheck:
     would otherwise never read the flag at all, so its Cancel control was
     inert. Hot loops that genuinely check per bar opt into throttling with
     an explicit ``check_every_n``; the default (1) reads on every call.
+
+    ``renews_lease`` keeps the #1938 rule the serial job modes run under:
+    a consult is progress, so it slides the lease. The pooled research
+    execution mode opts out with ``renews_lease=False`` — there a poll is
+    only observation, and the lease renews on accepted execution checkpoints
+    (:mod:`app.jobs.checkpoints`, ADR 0065 decision 1 as amended) — because a
+    poll proves neither that the task holding the lease is executing nor
+    that any work advanced.
     """
 
     job_id: str
     check_every_n: int = 1
+    renews_lease: bool = True
 
     def __post_init__(self) -> None:
         self._calls = 0
@@ -193,9 +202,12 @@ class CancellationCheck:
             pipe = r.pipeline()
             pipe.hget(_state_key(self.job_id), "cancel_requested")
             # Same gated round trip doubles as the liveness heartbeat (#1938):
-            # a loop that consults cancellation is making progress.
-            pipe.expire(_lease_key(self.job_id), JOB_LEASE_TTL_SECONDS)
-            val, _ = pipe.execute()
+            # a loop that consults cancellation is making progress. The pooled
+            # research mode opts out: its lease renews on execution
+            # checkpoints, never on a poll (#3034, ADR 0065 D1 as amended).
+            if self.renews_lease:
+                pipe.expire(_lease_key(self.job_id), JOB_LEASE_TTL_SECONDS)
+            val = pipe.execute()[0]
             self._cached = val == "1"
         except redis.RedisError as exc:
             # Don't mask the real work because Redis hiccupped — log and
