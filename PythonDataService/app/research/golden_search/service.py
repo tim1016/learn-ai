@@ -1058,6 +1058,7 @@ def run_stage(
     on_progress: Callable[[int, int], None] = lambda done, total: None,
     on_log: Callable[[str], None] = lambda message: None,
     identity: CodeIdentity | None = None,
+    dispatch_factory: Callable[[Any], Any] | None = None,
 ) -> StageOutcome:
     """Run the bound stage on the calling worker thread (``stages.execute_stage``)."""
     return execute_stage(
@@ -1065,6 +1066,7 @@ def run_stage(
         stage_token=stage_token,
         job_id=job_id,
         execute=execute,
+        dispatch_factory=dispatch_factory,
         approval=approval,
         blob_store=blob_store,
         roots=roots,

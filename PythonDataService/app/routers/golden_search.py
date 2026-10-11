@@ -18,6 +18,7 @@ refusals map to HTTP by kind — invalid 400, not found 404, conflict 409
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Path, Query, Response, status
@@ -74,7 +75,9 @@ async def _detail(row: StudyRow, *, dispatch: dict[str, Any] | None = None) -> G
 
 async def _refused(exc: GoldenSearchRefusal) -> HTTPException:
     """The refusal as its HTTP answer; a conflict about a study carries the study as it now stands."""
-    study = (await _detail(exc.study)).model_dump(mode="json") if exc.kind == "conflict" and exc.study is not None else None
+    study = (
+        (await _detail(exc.study)).model_dump(mode="json") if exc.kind == "conflict" and exc.study is not None else None
+    )
     detail = GoldenSearchRefusalDetail.model_validate(
         {"code": exc.code, "message": str(exc), "field": exc.field, "refusals": list(exc.refusals), "study": study}
     )
@@ -97,8 +100,12 @@ async def get_defaults(
     final_months: int = Query(service.DEFAULT_FINAL_MONTHS, ge=1, le=60),
     training_months: int = Query(service.DEFAULT_TRAINING_MONTHS, ge=1, le=120),
     test_months: int = Query(service.DEFAULT_TEST_MONTHS, ge=1, le=60),
-    range_start_ms: int | None = Query(None, ge=0, le=MAX_TIMESTAMP_MS, description="The first day of a picked study range, as its ET midnight."),
-    range_end_ms: int | None = Query(None, ge=0, le=MAX_TIMESTAMP_MS, description="The ET midnight after the picked range's last day."),
+    range_start_ms: int | None = Query(
+        None, ge=0, le=MAX_TIMESTAMP_MS, description="The first day of a picked study range, as its ET midnight."
+    ),
+    range_end_ms: int | None = Query(
+        None, ge=0, le=MAX_TIMESTAMP_MS, description="The ET midnight after the picked range's last day."
+    ),
 ) -> GoldenSearchDefaults:
     """A complete starting plan whose intervals the server computes from the calendar and the lake, inside a picked range when one is given."""
     try:
@@ -129,7 +136,9 @@ async def preflight_plan(body: GoldenSearchProtocolRequest) -> GoldenSearchPrefl
 # ── Studies ──────────────────────────────────────────────────────────────
 
 
-@router.post("/studies", status_code=status.HTTP_201_CREATED, response_model=GoldenSearchStudyDetail, responses=_REFUSALS)
+@router.post(
+    "/studies", status_code=status.HTTP_201_CREATED, response_model=GoldenSearchStudyDetail, responses=_REFUSALS
+)
 async def lock_study(body: GoldenSearchCreateStudyRequest) -> GoldenSearchStudyDetail:
     """Lock a reviewed plan into a new study; the same key and plan return the study it already locked.
 
@@ -188,7 +197,9 @@ async def run_command(body: GoldenSearchCommandRequest, study_id: StudyId) -> Go
     return await _detail(outcome.study, dispatch=outcome.dispatch)
 
 
-@router.delete("/studies/{study_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response, responses=_REFUSALS)
+@router.delete(
+    "/studies/{study_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response, responses=_REFUSALS
+)
 async def hide_study(study_id: StudyId) -> Response:
     """Hide a study from history; refused while a stage runs. Its rows, trials and exposures stay recorded."""
     try:
@@ -210,7 +221,15 @@ async def list_runs(
 ) -> GoldenSearchRunsPage:
     """Every run of the study, grouped by what asked for it (#2930)."""
     try:
-        result = await service.runs(study_id, group=group, fold_index=fold_index, sort=sort, descending=descending, page=page, page_size=page_size)
+        result = await service.runs(
+            study_id,
+            group=group,
+            fold_index=fold_index,
+            sort=sort,
+            descending=descending,
+            page=page,
+            page_size=page_size,
+        )
     except GoldenSearchRefusal as exc:
         raise await _refused(exc) from exc
     return GoldenSearchRunsPage.model_validate(result)
@@ -233,7 +252,9 @@ async def get_run_curves(
 async def get_curve_set(
     study_id: StudyId,
     curve_set: Annotated[CurveSet, Query(alias="set", description="Which step's runs to draw.")],
-    candidate: CandidateKey | None = Query(None, description="The candidate whose run, stresses and neighbors to draw; for the candidate set only."),
+    candidate: CandidateKey | None = Query(
+        None, description="The candidate whose run, stresses and neighbors to draw; for the candidate set only."
+    ),
 ) -> GoldenSearchCurveSet:
     """The runs one step draws together, each with its role and its daily curve (#2930)."""
     try:
@@ -263,7 +284,9 @@ async def get_search_charts(study_id: StudyId) -> GoldenSearchSearchCharts:
     return GoldenSearchSearchCharts.model_validate(result)
 
 
-@router.get("/studies/{study_id}/charts/test-over-time", response_model=GoldenSearchTestOverTimeCharts, responses=_REFUSALS)
+@router.get(
+    "/studies/{study_id}/charts/test-over-time", response_model=GoldenSearchTestOverTimeCharts, responses=_REFUSALS
+)
 async def get_test_over_time_charts(study_id: StudyId) -> GoldenSearchTestOverTimeCharts:
     """The Test over time step's charts: every fold's windows and results, the linked returns and each searched knob's drift."""
     try:
@@ -273,7 +296,9 @@ async def get_test_over_time_charts(study_id: StudyId) -> GoldenSearchTestOverTi
     return GoldenSearchTestOverTimeCharts.model_validate(result)
 
 
-@router.get("/studies/{study_id}/candidates/{candidate_key}", response_model=GoldenSearchCandidateDetail, responses=_REFUSALS)
+@router.get(
+    "/studies/{study_id}/candidates/{candidate_key}", response_model=GoldenSearchCandidateDetail, responses=_REFUSALS
+)
 async def get_candidate(candidate_key: CandidateKey, study_id: StudyId) -> GoldenSearchCandidateDetail:
     """A candidate's development detail run (equity, drawdown, months, trades), and its final-test run once scored."""
     try:
@@ -381,20 +406,59 @@ def _gated_stage_work(req: GoldenSearchJobRequest):
         gate = CheckpointGate(req.job_id, generation, on_accepted=seen.append)
 
         def phase_checkpoint(phase: str) -> None:
-            gate.accept(
-                ExecutionCheckpoint(
-                    generation=generation, task_id="stage", sequence=len(seen) + 1, cursor=0,
-                    cursor_kind="processed_blocks", phase=phase, occurred_at_ms=now_ms_utc(), transition=True,
+            with gate_lock:
+                gate.accept(
+                    ExecutionCheckpoint(
+                        generation=generation,
+                        task_id="stage",
+                        sequence=len(seen) + 1,
+                        cursor=0,
+                        cursor_kind="processed_blocks",
+                        phase=phase,
+                        occurred_at_ms=now_ms_utc(),
+                        transition=True,
+                    )
                 )
-            )
 
         def completion_checkpoint(done: int, total: int) -> None:
-            gate.accept(
-                ExecutionCheckpoint(
-                    generation=generation, task_id="stage", sequence=len(seen) + 1, cursor=done,
-                    cursor_kind="durable_completions", phase="search", occurred_at_ms=now_ms_utc(), transition=True,
+            with gate_lock:
+                gate.accept(
+                    ExecutionCheckpoint(
+                        generation=generation,
+                        task_id="stage",
+                        sequence=len(seen) + 1,
+                        cursor=done,
+                        cursor_kind="durable_completions",
+                        phase="search",
+                        occurred_at_ms=now_ms_utc(),
+                        transition=True,
+                    )
                 )
-            )
+
+        from app.research.golden_search.worker import worker_dispatch_factory
+
+        gate_lock = threading.Lock()
+
+        def on_child_checkpoint(message: dict) -> None:
+            # The child's real progress renews the lease through the same
+            # gate: phase transitions and durable completions, generation-fenced.
+            # Inline (never via the nested helpers): this runs on the pump
+            # thread, and nesting two acquisitions of one non-reentrant lock
+            # would deadlock the whole stage on the child's first checkpoint.
+            with gate_lock:
+                kind = str(message.get("cursor_kind", "processed_blocks"))
+                gate.accept(
+                    ExecutionCheckpoint(
+                        generation=generation,
+                        task_id="stage",
+                        sequence=len(seen) + 1,
+                        cursor=int(message.get("cursor", 0)),
+                        cursor_kind=kind,
+                        phase=str(message.get("phase", "search")),
+                        occurred_at_ms=now_ms_utc(),
+                        transition=True,
+                    )
+                )
 
         outcome = service.run_stage(
             req.study_id,
@@ -402,8 +466,12 @@ def _gated_stage_work(req: GoldenSearchJobRequest):
             job_id=req.job_id,
             cancel_check=cancel.raise_if_cancelled,
             on_phase=lambda phase: (emit.phase(phase), phase_checkpoint(phase)),
-            on_progress=lambda done, total: (emit.progress(done, total, unit="evaluations"), completion_checkpoint(done, total)),
+            on_progress=lambda done, total: (
+                emit.progress(done, total, unit="evaluations"),
+                completion_checkpoint(done, total),
+            ),
             on_log=emit.log,
+            dispatch_factory=worker_dispatch_factory(on_checkpoint=on_child_checkpoint, cancel_check=cancel.raise_if_cancelled),
         )
         return outcome.as_dict()
 

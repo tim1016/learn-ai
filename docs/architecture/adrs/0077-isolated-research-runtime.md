@@ -70,6 +70,24 @@ coordinator's jobs.
    fence and every recorded result are byte-identical. The bounded-worker
    boundary inside this container is #3044's, not this ADR's.
 
+7. **The runtime's evaluations run in one spawned worker (#3044).** A
+   bare child interpreter — `python -m app.research.golden_search.worker`,
+   born with `PYTHONHASHSEED=0` and the native thread counts pinned before
+   interpreter startup — speaks one JSON-line protocol over stdin/stdout and
+   owns computation only: no database, Redis, provider or broker handle
+   exists in it. Every artifact read asks the runtime for the current
+   committed-byte verdict (a fresh verdict per read; nothing survives an
+   individual read), then runs the manifest/adjustment checks and the decode
+   against its own process-local cache (#3038) — the same
+   `execute_engine_backtest`, gates and all, in the child where they are
+   process-local. The runtime owns the child from spawn through exit:
+   bounded readiness, one task lane, admission verdicts on its own bounded
+   I/O, checkpoints feeding the job's lease gate, kill-and-reap on silence,
+   loss or shutdown. A lost or wedged child interrupts the stage — the
+   affected reservations stay pending for Finish; bounded retry is #3045's.
+   One worker, still serial: concurrency is later slices' qualification,
+   never this ADR's.
+
 ## Consequences
 
 - The engine authority map gains the research-runtime row; the Golden

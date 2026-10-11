@@ -83,7 +83,7 @@ from app.research.golden_search.zoom import BudgetExhausted, ProcedureResult, ru
 from app.research.persistence import lifecycle
 from app.research.persistence.db import run_sync, with_connection
 from app.research.persistence.fence import StaleAttemptError, lock_current_attempt
-from app.research.sweep.identity import CodeIdentity
+from app.research.sweep.identity import CodeIdentity, resolve_code_identity
 from app.research.sweep.snapshot import DataSnapshot
 from app.research.walk_forward_study.verdict import Verdict, compute_verdict
 from app.utils.session_anchors import et_midnight_ms
@@ -140,6 +140,11 @@ class StageContext:
     on_progress: Callable[[int, int], None]
     on_log: Callable[[str], None]
     results: dict[str, Any] = field(default_factory=dict)
+    # The spawned-worker dispatch (#3044). None — every caller today — runs
+    # the serial adapter; the research runtime passes a factory bound to its
+    # lease gate, and execute_stage hands it this stage's sealed context.
+    dispatch_factory: Callable[[Any], Any] | None = None
+    _built_dispatch: Any = field(default=None, init=False, repr=False)
 
     @property
     def development(self) -> Window:
@@ -166,7 +171,33 @@ class StageContext:
             execute=self.execute,
             cancel_check=self.cancel_check,
             on_evaluated=lambda done: self.on_progress(done, total),
+            dispatch=self._dispatch,
         )
+
+    @property
+    def _dispatch(self):
+        """The built worker dispatch, or None for the serial adapter (#3044)."""
+        factory = self.dispatch_factory
+        if factory is None:
+            return None
+        if self._built_dispatch is None:
+            from app.research.golden_search.worker import WorkerDispatchContext
+
+            execution = self.protocol.execution
+            self._built_dispatch = factory(WorkerDispatchContext(
+                strategy_key=self.row.strategy_key,
+                execution={
+                    "fill_mode": execution.fill_mode,
+                    "commission_per_order": execution.commission_per_order,
+                    "slippage_per_share": execution.slippage_per_share,
+                    "initial_cash": execution.initial_cash,
+                },
+                manifest=self.row.receipt["data_snapshot"]["artifacts"],
+                identity=resolve_code_identity().__dict__,
+                job_id=str(self.row.job_id or ""),
+                generation=self.attempt,
+            ))
+        return self._built_dispatch
 
     def write(self, patch: Mapping[str, Any]) -> None:
         """Persist stage output under the fence; the study's invalid-point total follows from every stored procedure."""
@@ -946,12 +977,19 @@ def _stage_incomplete(results: Mapping[str, Any], stage: StageName) -> bool:
     return any(bool(results.get(key, {}).get("incomplete")) or bool(results.get(key, {}).get("pair_maps_incomplete")) for key in keys)
 
 
+def _close_dispatch(ctx: StageContext) -> None:
+    """Kill and reap the stage's spawned worker, if it built one (#3044)."""
+    if ctx._built_dispatch is not None:
+        ctx._built_dispatch.close()
+
+
 def execute_stage(
     study_id: str,
     *,
     stage_token: str,
     job_id: str,
     execute: ExecuteBacktest | None = None,
+    dispatch_factory: Callable[[Any], Any] | None = None,
     approval: ApprovalBinding | None = None,
     blob_store: Any | None = None,
     roots: Sequence[Path] | None = None,
@@ -1004,23 +1042,34 @@ def execute_stage(
         on_progress=on_progress,
         on_log=on_log,
         results=dict(row.results),
+        dispatch_factory=dispatch_factory,
     )
     logger.info("golden search stage started", extra={"action": "golden_search_stage_started", "study_id": study_id, "stage": stage, "attempt": attempt})
     try:
         state, next_token = _run(ctx, stage, approval=approval, blob_store=blob_store)
     except JobCancelled:
+        _close_dispatch(ctx)
         _end_run(study_id, attempt, status="cancelled", reason=None)
         raise
     except StaleAttemptError:
+        _close_dispatch(ctx)
         logger.warning(
             "golden search stage superseded; leaving the newer attempt's record alone",
             extra={"action": "golden_search_stage_superseded", "study_id": study_id, "stage": stage, "attempt": attempt},
         )
         raise
     except Exception as exc:
+        _close_dispatch(ctx)
         _end_run(study_id, attempt, status="failed", reason=f"{type(exc).__name__}: {exc}")
         raise
+    except BaseException:
+        # Anything else (a crash, a kill): the spawned worker dies with the
+        # stage — its reservations stay pending for Finish, its process never leaks.
+        _close_dispatch(ctx)
+        raise
     logger.info("golden search stage finished", extra={"action": "golden_search_stage_finished", "study_id": study_id, "stage": stage, "state": state})
+    # One worker per stage run: the next stage (if any) spawns its own.
+    _close_dispatch(ctx)
     if next_token is not None:
         # Run research (#2811): the same job claims the stage its search authorized, under one cancel flag and lease.
         logger.info("golden search research advanced", extra={"action": "golden_search_research_advanced", "study_id": study_id, "from_stage": stage})
@@ -1029,6 +1078,7 @@ def execute_stage(
             stage_token=next_token,
             job_id=job_id,
             execute=execute,
+            dispatch_factory=dispatch_factory,
             approval=approval,
             blob_store=blob_store,
             roots=roots,

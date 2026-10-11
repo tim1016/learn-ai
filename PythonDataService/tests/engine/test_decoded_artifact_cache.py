@@ -291,33 +291,28 @@ def _snapshot(root: Path):
 
 
 def _counting_decodes(monkeypatch, reader) -> dict[str, int]:
-    """Count one reader's decodes (instance seam) and every admission (module seams).
+    """Count one reader's decodes and admissions, both at the instance seams.
 
-    ``read_committed_bytes`` is resolved in the module that defines the
-    reader's read path — ``lean_format`` for the base readers, ``snapshot``
-    for the manifest-bound ones — so both bindings are wrapped and each read
-    counts exactly once.
+    Admission rides the reader's injectable ``admission`` callable (#3044),
+    so counting it per reader is one instance patch — and it is the same
+    seam a spawned worker redirects to its parent.
     """
     import app.engine.data.lean_format as lean_format
-    import app.research.sweep.snapshot as sweep_snapshot
 
     counts = {"decode": 0, "admit": 0}
     real_decode = reader.parse_day_zip
+    real_admit = lean_format.read_committed_bytes
 
     def counting_decode(payload, symbol, trading_date):
         counts["decode"] += 1
         return real_decode(payload, symbol, trading_date)
 
-    def wrap_admit(real_admit):
-        def counting_admit(path):
-            counts["admit"] += 1
-            return real_admit(path)
-
-        return counting_admit
+    def counting_admit(path):
+        counts["admit"] += 1
+        return real_admit(path)
 
     monkeypatch.setattr(reader, "parse_day_zip", counting_decode)
-    monkeypatch.setattr(lean_format, "read_committed_bytes", wrap_admit(lean_format.read_committed_bytes))
-    monkeypatch.setattr(sweep_snapshot, "read_committed_bytes", wrap_admit(sweep_snapshot.read_committed_bytes))
+    monkeypatch.setattr(reader, "admission", counting_admit)
     return counts
 
 

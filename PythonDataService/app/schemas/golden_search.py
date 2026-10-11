@@ -553,6 +553,11 @@ class GoldenSearchZoomRound(_Wire):
     moved: bool
     current_before: float
     quantization_limit: bool
+    # Width accounting captured on the round itself (#3036): ready is the
+    # distinct batch the round consumed, first_evaluated its new points.
+    # Rounds stored before that capture carry None — absent, never zero.
+    submitted: int | None = None
+    first_evaluated: int | None = None
 
 
 class GoldenSearchKnobSummary(_Wire):

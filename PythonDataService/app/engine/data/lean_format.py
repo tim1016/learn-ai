@@ -34,7 +34,7 @@ import hashlib
 import io
 import os
 import zipfile
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -241,6 +241,7 @@ class LeanMinuteDataReader:
         data_root: Path | str | Sequence[Path | str],
         session: Literal["regular", "extended"] = "regular",
         decoded_cache: DecodedArtifactCache | None = None,
+        admission: Callable[[Path], bytes] = read_committed_bytes,
     ) -> None:
         # Normalize to a list of Paths while preserving order.
         if isinstance(data_root, (str, Path)):
@@ -267,6 +268,10 @@ class LeanMinuteDataReader:
         # across evaluations; admission itself still runs on every read
         # (#3038). None — every existing caller — decodes per read as before.
         self._decoded_cache = decoded_cache
+        # How this reader admits bytes. The default is the module function;
+        # a spawned worker injects a callable that asks its parent process,
+        # because the worker owns no catalog connection (#3044).
+        self.admission: Callable[[Path], bytes] = admission
 
     def _symbol_dir(self, root: Path, symbol: str) -> Path:
         return root / "equity" / "usa" / "minute" / symbol.lower()
@@ -318,7 +323,7 @@ class LeanMinuteDataReader:
         zip_path = self._zip_path(symbol, trading_date)
         if not zip_path.exists():
             return []
-        payload = read_committed_bytes(zip_path)
+        payload = self.admission(zip_path)
         self.adjustment_guard.verify(zip_path, payload, symbol)
         return self._decode_day(zip_path, payload, symbol, trading_date)
 
@@ -469,6 +474,7 @@ class LeanDailyDataReader:
         self,
         data_root: Path | str | Sequence[Path | str],
         decoded_cache: DecodedArtifactCache | None = None,
+        admission: Callable[[Path], bytes] = read_committed_bytes,
     ) -> None:
         if isinstance(data_root, (str, Path)):
             roots: list[Path] = [Path(data_root)]
@@ -491,6 +497,8 @@ class LeanDailyDataReader:
         # stays per-evaluation: each reader still merges its own window from
         # the shared per-artifact decodes.
         self._decoded_cache = decoded_cache
+        # How this reader admits bytes — the spawned-worker seam (#3044).
+        self.admission: Callable[[Path], bytes] = admission
 
     def _zip_path(self, root: Path, symbol: str) -> Path:
         return root / "equity" / "usa" / "daily" / f"{symbol.lower()}.zip"
@@ -506,7 +514,7 @@ class LeanDailyDataReader:
         """
         if not zip_path.exists():
             return None
-        payload = read_committed_bytes(zip_path)
+        payload = self.admission(zip_path)
         self.adjustment_guard.verify(zip_path, payload, symbol)
         return payload
 

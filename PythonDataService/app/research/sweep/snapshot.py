@@ -21,7 +21,7 @@ Validated against: tests/research/sweep/test_snapshot.py.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
@@ -232,8 +232,9 @@ class ManifestBoundMinuteReader(LeanMinuteDataReader):
         manifest: Mapping[str, str],
         session: Literal["regular", "extended"] = "regular",
         decoded_cache: DecodedArtifactCache | None = None,
+        admission: Callable[[Path], bytes] = read_committed_bytes,
     ) -> None:
-        super().__init__(data_root, session=session, decoded_cache=decoded_cache)
+        super().__init__(data_root, session=session, decoded_cache=decoded_cache, admission=admission)
         self._manifest = dict(manifest)
 
     def iter_dates(self, symbol: str, start: date, end: date) -> Iterator[date]:
@@ -250,7 +251,7 @@ class ManifestBoundMinuteReader(LeanMinuteDataReader):
         if not zip_path.exists():
             _refuse_if_receipted(self._manifest, relative)
             return []
-        payload = read_committed_bytes(zip_path)
+        payload = self.admission(zip_path)
         digest = _verify_bytes(self._manifest, relative, payload)
         _verify_adjustment_receipt(self.adjustment_guard, self._manifest, relative, zip_path, payload, symbol)
         return self._decode_day(zip_path, payload, symbol, trading_date, content_digest=digest)
@@ -264,8 +265,9 @@ class ManifestBoundDailyReader(LeanDailyDataReader):
         data_root: Path | str | Sequence[Path | str],
         manifest: Mapping[str, str],
         decoded_cache: DecodedArtifactCache | None = None,
+        admission: Callable[[Path], bytes] = read_committed_bytes,
     ) -> None:
-        super().__init__(data_root, decoded_cache=decoded_cache)
+        super().__init__(data_root, decoded_cache=decoded_cache, admission=admission)
         self._manifest = dict(manifest)
 
     def _verified_payload(self, zip_path: Path, symbol: str) -> bytes | None:
@@ -273,7 +275,7 @@ class ManifestBoundDailyReader(LeanDailyDataReader):
         if not zip_path.exists():
             _refuse_if_receipted(self._manifest, relative)
             return None
-        payload = read_committed_bytes(zip_path)
+        payload = self.admission(zip_path)
         _verify_bytes(self._manifest, relative, payload)
         _verify_adjustment_receipt(self.adjustment_guard, self._manifest, relative, zip_path, payload, symbol)
         return payload
