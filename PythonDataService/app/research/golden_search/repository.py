@@ -834,6 +834,9 @@ async def start_evaluation(conn: asyncpg.Connection, study_id: str, attempt: int
     The marker is what separates a crash before the engine call (re-run
     without a retry) from one during it (the allowance bounds it). A row not
     pending under exactly this generation is someone else's now: refused.
+    The write is idempotent under that fence: a retried start whose first
+    attempt committed finds the marker already down and succeeds, so an
+    uncertain write reconciles without spending anything (#3065 review).
     """
     async with conn.transaction():
         await fence.lock_current_attempt(conn, table=STUDIES, record_id=study_id, attempt=attempt)
@@ -841,6 +844,7 @@ async def start_evaluation(conn: asyncpg.Connection, study_id: str, attempt: int
             """
             UPDATE research_golden_search_evaluations SET started_at_ms = $4
              WHERE study_id = $1 AND evaluation_key = $2 AND status = 'pending' AND attempt = $3 AND task_gen = $5
+               AND started_at_ms IS NULL
              RETURNING 1
             """,
             study_id,
@@ -850,9 +854,21 @@ async def start_evaluation(conn: asyncpg.Connection, study_id: str, attempt: int
             task_gen,
         )
         if begun is None:
-            raise fence.StaleAttemptError(
-                f"evaluation {evaluation_key} is not pending under attempt {attempt} task generation {task_gen}"
+            already = await conn.fetchval(
+                """
+                SELECT 1 FROM research_golden_search_evaluations
+                 WHERE study_id = $1 AND evaluation_key = $2 AND status = 'pending' AND attempt = $3 AND task_gen = $4
+                   AND started_at_ms IS NOT NULL
+                """,
+                study_id,
+                evaluation_key,
+                attempt,
+                task_gen,
             )
+            if already is None:
+                raise fence.StaleAttemptError(
+                    f"evaluation {evaluation_key} is not pending under attempt {attempt} task generation {task_gen}"
+                )
 
 
 @dataclass(frozen=True)

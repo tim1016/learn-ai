@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
@@ -21,12 +22,15 @@ import pytest
 from app.config import settings
 from app.research.golden_search.evaluator import (
     EvaluationRequest,
+    IdentityRefusalError,
     ReadyEvaluation,
 )
 from app.research.golden_search.selection import Metrics
 from app.research.golden_search.worker import (
     CHILD_ENV_FIXED,
+    FENCE_POLL_INTERVAL_S,
     ResearchWorker,
+    WorkerDispatch,
     WorkerDispatchContext,
     WorkerLost,
     request_of_wire,
@@ -236,8 +240,12 @@ def test_a_refused_sealed_identity_interrupts_instead_of_computing(tmp_path: Pat
         task = task_wire(_serial_item(), strategy_key="sma_crossover",
                          execution=_assumptions(),
                          manifest=manifest, identity=forged)
-        with pytest.raises(WorkerLost, match="identity"):
+        # Terminal, never WorkerLost (#3065 review): a retried refusal would
+        # spend the allowance and fabricate failed evidence for a code
+        # mismatch instead of failing the stage closed.
+        with pytest.raises(IdentityRefusalError, match="identity"):
             worker.run_task(task, silence_bound_s=120.0)
+        assert worker._child is None, "the refusing child was reaped, not left idling"
     finally:
         worker.close()
 
@@ -273,12 +281,20 @@ def _runtime_identity() -> dict:
     }
 
 
-def _unspawned_worker() -> ResearchWorker:
+def _unspawned_worker(cancel_check: Callable[[], object] = lambda: None) -> ResearchWorker:
     """A ResearchWorker with its spawn bypassed: the pump loop driven by hand."""
     from concurrent.futures import ThreadPoolExecutor
 
     worker = ResearchWorker.__new__(ResearchWorker)
-    worker._context = None
+    worker._context = WorkerDispatchContext(
+        strategy_key="sma_crossover",
+        execution={},
+        manifest={},
+        identity={},
+        job_id="job-worker-test",
+        generation=1,
+        cancel_check=cancel_check,
+    )
     worker._lock = threading.Lock()
     worker._outcomes = {}
     worker._arrived = threading.Condition(worker._lock)
@@ -286,6 +302,7 @@ def _unspawned_worker() -> ResearchWorker:
     worker._progress_signal = threading.Event()
     worker._child = None
     worker._lost = None
+    worker._refusal = None
     worker._pump = None
     worker._verdicts = ThreadPoolExecutor(max_workers=1, thread_name_prefix="test-verdicts")
     return worker
@@ -366,3 +383,196 @@ def test_cancellation_frees_the_execution_slot_within_ten_seconds(no_active_chil
     with pytest.raises(OSError):
         os.kill(pid, 0)
     assert worker._child is None
+
+
+# ── #3065 review regressions (fast: the pump's own machinery, no real child) ─
+
+
+def test_a_fenced_generation_while_a_task_runs_kills_the_child_promptly() -> None:
+    """#3065 review: the authority is polled while awaiting the child.
+
+    Without the poll, a dead generation's checkpoints kept renewing its
+    lease until the task returned — up to the task silence bound.
+    """
+    from app.research.persistence.ownership import GenerationFencedError
+
+    fenced = threading.Event()
+
+    def poll() -> None:
+        if fenced.is_set():
+            raise GenerationFencedError("coordinator authority connection lost mid-run")
+
+    worker = _unspawned_worker(cancel_check=poll)
+    reaped = threading.Event()
+    worker.close = lambda: reaped.set()  # instance attribute: the reap is the assertion
+
+    fenced.set()
+    started = time.monotonic()
+    with pytest.raises(GenerationFencedError):
+        worker.run_task({"key": "k"}, silence_bound_s=60.0, task_silence_bound_s=60.0)
+    elapsed = time.monotonic() - started
+
+    assert reaped.is_set(), "the child was killed, not left renewing a dead generation's lease"
+    assert elapsed < FENCE_POLL_INTERVAL_S + 5.0, f"the fence was noticed within one poll cadence ({elapsed:.1f}s)"
+
+
+def test_a_refused_identity_is_terminal_not_a_worker_loss() -> None:
+    """#3065 review: the refusal must never enter the worker-loss retry path."""
+    worker = _unspawned_worker()
+    reaped: list[bool] = []
+    worker.close = lambda: reaped.append(True)
+    worker._refusal = "sealed identity differs from the task's"
+
+    with pytest.raises(IdentityRefusalError, match="identity"):
+        worker.run_task({"key": "k"})
+
+    assert reaped, "the refusing child was reaped, not left idling"
+
+
+def test_a_dead_idle_child_is_replaced_before_the_next_start_marker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3065 review: a child that died between tasks never receives a marker it cannot serve.
+
+    The start marker decides whether a re-admission spends retry allowance;
+    writing it against a corpse would charge a run nobody dispatched.
+    """
+    from typing import Any
+
+    import app.research.golden_search.worker as worker_module
+    from tests.research.golden_search.test_evaluator import (
+        _EngineSpy,
+        _key_of,
+        _point,
+        _ReservationBridge,
+        _seamed_evaluator,
+    )
+    from tests.research.golden_search.test_worker_loss_recovery import JAN
+
+    events: list[tuple[str, str]] = []
+    spawned = iter(["first", "second"])
+
+    class _DyingChild:
+        """Answers one task, then dies where only a health check can see it."""
+
+        def __init__(self, context: Any) -> None:
+            self.name = next(spawned)
+            self.lost: str | None = None
+
+        def run_task(self, task: dict[str, Any]) -> dict[str, Any]:
+            from tests.research.golden_search.test_worker_pool import _gap_message
+
+            message = _gap_message(task)
+            self.lost = "the research worker exited with code 1"  # dies right after its answer
+            return message
+
+        def lost_reason(self) -> str | None:
+            return self.lost
+
+        def cancel(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    class _OrderingBridge(_ReservationBridge):
+        async def start(self, conn, study_id, attempt, key, *, task_gen):
+            events.append(("start", key))
+            return await super().start(conn, study_id, attempt, key, task_gen=task_gen)
+
+    def spawn(context: Any) -> _DyingChild:
+        child = _DyingChild(context)
+        events.append(("spawn", child.name))
+        return child
+
+    monkeypatch.setattr(worker_module, "ResearchWorker", spawn)
+    context = WorkerDispatchContext(
+        strategy_key="ema_crossover_signal",
+        execution={"fill_mode": "next_bar_open", "commission_per_order": 0.0, "slippage_per_share": 0.0, "initial_cash": 100_000.0},
+        manifest={},
+        identity=IDENTITY,
+        job_id="job-worker-test",
+        generation=1,
+    )
+    dispatch = WorkerDispatch(context)
+    engine, bridge = _EngineSpy(), _OrderingBridge(limit=10)
+    evaluator = _seamed_evaluator(monkeypatch, engine, bridge)
+    evaluator.dispatch = dispatch
+
+    first, second = _point(0.1), _point(0.2)
+    metrics = evaluator.evaluate([first, second], window=JAN, stage="search")
+
+    assert [m.net_profit for m in metrics] == [0.1, 0.2], "the batch completed through the replacement"
+    order = [(kind, name) for kind, name in events]
+    assert [kind for kind, _ in order] == ["spawn", "start", "spawn", "start"], f"each marker landed on a live child: {order}"
+    for key in (_key_of(evaluator, first), _key_of(evaluator, second)):
+        assert bridge.rows[key]["retries"] == 0, "no allowance spent on a run nobody dispatched"
+
+
+def test_the_spawn_environment_carries_the_sized_cache_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3066 review: the parent sizes the child's decoded cache — the shared budget's share."""
+    import json as json_module
+    from typing import Any
+
+    import app.research.golden_search.worker as worker_module
+    from app.research.golden_search.worker import WORKER_DECODED_CACHE_BYTES
+
+    captured: dict[str, str] = {}
+
+    class _StubPipe:
+        """One readable, writable, closeable line: the ready handshake, then an open pipe."""
+
+        line = json_module.dumps({"type": "ready", "pid": 4242, "identity": {}}) + "\n"
+
+        def __iter__(self):
+            yield self.line
+            threading.Event().wait()  # stdout stays open for the child's life; the pump never sees EOF
+
+        def write(self, data: str) -> None:
+            pass
+
+        def flush(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    class _StubChild:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            captured.update(kwargs.get("env") or {})
+            self.pid = 4242
+            self.stdin = _StubPipe()
+            self.stdout = _StubPipe()
+
+        def poll(self) -> int | None:
+            return None
+
+        def kill(self) -> None:
+            pass
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    monkeypatch.setattr(worker_module.subprocess, "Popen", _StubChild)
+
+    context = WorkerDispatchContext(
+        strategy_key="sma_crossover",
+        execution={},
+        manifest={},
+        identity=IDENTITY,
+        job_id="job-worker-test",
+        generation=1,
+        decoded_cache_bytes=123,
+    )
+    worker = ResearchWorker(context)
+    assert captured["RESEARCH_WORKER_DECODED_CACHE_BYTES"] == "123"
+    assert captured["PYTHONHASHSEED"] == "0", "the pinned environment rides along"
+    parity = ResearchWorker(WorkerDispatchContext(
+        strategy_key="sma_crossover", execution={}, manifest={}, identity=IDENTITY,
+        job_id="job-worker-test", generation=1,
+    ))
+    try:
+        assert parity._context.decoded_cache_bytes == WORKER_DECODED_CACHE_BYTES, (
+            "an unsized child keeps the serial parity ceiling"
+        )
+    finally:
+        worker.close()
+        parity.close()

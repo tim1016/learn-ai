@@ -44,6 +44,7 @@ from app.research.golden_search.evaluator import (
     DeliveredOutcome,
     EvaluationRequest,
     EvaluationResult,
+    IdentityRefusalError,
     ReadyEvaluation,
     WorkerLost,
     project_response,
@@ -72,6 +73,11 @@ SILENCE_BOUND_S = 45.0
 TASK_SILENCE_BOUND_S = 30 * 60.0
 ALIVE_INTERVAL_S = 5.0
 KILLED_CHILD_WAIT_S = 2.0
+# The authority poll while a task runs (#3065 review): between the adapter's
+# own polls nothing watched the coordinator connection, so a fenced
+# generation's child checkpoints kept renewing its lease until the task
+# returned. Polled at this cadence from run_task's bounded wait.
+FENCE_POLL_INTERVAL_S = 2.0
 
 # The environment every child is born with: deterministic hashing and
 # single-threaded native math, set before interpreter startup because a
@@ -193,7 +199,11 @@ def _child_main() -> int:
     # One cache for the child's whole life: the persistent worker exists to
     # reuse admitted decodes across evaluations, so it must not be rebuilt
     # per task (#3038, #3044). The single-slot lane makes it single-threaded.
-    decoded_cache = DecodedArtifactCache(max_bytes=WORKER_DECODED_CACHE_BYTES)
+    # The parent sizes it — the pool divides the shared budget across its
+    # lanes (#3066 review); a lone child keeps the serial parity ceiling.
+    decoded_cache = DecodedArtifactCache(
+        max_bytes=int(os.environ.get("RESEARCH_WORKER_DECODED_CACHE_BYTES") or WORKER_DECODED_CACHE_BYTES)
+    )
     state = {"identity": identity, "admission_sequence": 0, "decoded_cache": decoded_cache}
 
     def ask_admission(path: Path) -> bytes:
@@ -381,6 +391,16 @@ class _LockedStdout:
 # Parity with the serial baseline's cache bound (app.research.benchmark's
 # DECODED_CACHE_DEFAULT_BYTES): one worker holds what one serial process held.
 WORKER_DECODED_CACHE_BYTES = 2 * 1024**3
+# Every spawned child's decoded cache shares this budget inside ADR 0077's
+# runtime envelope, leaving the rest of the 16 GiB cgroup for interpreters,
+# the engine, the coordinator and accounting (#3066 review): eight children
+# at the parity ceiling alone would consume the whole envelope.
+WORKER_DECODED_CACHE_TOTAL_BYTES = 8 * 1024**3
+
+
+def pooled_cache_bytes(workers: int) -> int:
+    """One lane's decoded-cache ceiling: the shared budget split, capped at the serial parity ceiling."""
+    return min(WORKER_DECODED_CACHE_BYTES, WORKER_DECODED_CACHE_TOTAL_BYTES // max(workers, 1))
 
 
 if __name__ == "__main__":
@@ -403,8 +423,13 @@ class WorkerDispatchContext:
     on_checkpoint: Callable[[Mapping[str, Any]], None] = lambda checkpoint: None
     # The stage's own cancellation check (#3044): polled between tasks, the
     # seam's shape — a cancelled batch stops dispatching and delivers the
-    # cancellation, never persisted failures.
+    # cancellation, never persisted failures. run_task polls it while a task
+    # runs too, so a fenced generation stops its child promptly instead of
+    # renewing its lease until the task returns (#3065 review).
     cancel_check: Callable[[], object] = lambda: None
+    # This child's decoded-cache ceiling in bytes: the serial parity ceiling
+    # by default, the shared budget's share under a pool (#3066 review).
+    decoded_cache_bytes: int = WORKER_DECODED_CACHE_BYTES
 
 
 class ResearchWorker:
@@ -430,6 +455,7 @@ class ResearchWorker:
         self._progress_signal = threading.Event()
         self._child: subprocess.Popen | None = None
         self._lost: str | None = None
+        self._refusal: str | None = None
         self._pump: threading.Thread | None = None
         from concurrent.futures import ThreadPoolExecutor
 
@@ -439,7 +465,13 @@ class ResearchWorker:
     # -- lifecycle ---------------------------------------------------------
 
     def _spawn(self) -> None:
-        env = {**os.environ, **CHILD_ENV_FIXED}
+        env = {
+            **os.environ,
+            **CHILD_ENV_FIXED,
+            # The parent sizes the child's decoded cache (#3066 review): the
+            # pool divides the shared budget, a lone child keeps the ceiling.
+            "RESEARCH_WORKER_DECODED_CACHE_BYTES": str(self._context.decoded_cache_bytes),
+        }
         self._child = subprocess.Popen(
             [sys.executable, "-m", "app.research.golden_search.worker"],
             stdin=subprocess.PIPE,
@@ -453,7 +485,15 @@ class ResearchWorker:
             target=self._pump_messages, name=f"research-worker-{self._child.pid}", daemon=True
         )
         self._pump.start()
-        ready = self._await(lambda: "ready" in self._outcomes or self._lost is not None, timeout_s=STARTUP_BOUND_S)
+        ready = self._await(
+            lambda: "ready" in self._outcomes or self._lost is not None or self._refusal is not None,
+            timeout_s=STARTUP_BOUND_S,
+        )
+        if self._refusal is not None:
+            # The child's environment or identity is wrong before any work:
+            # terminal, and nothing may be left running behind the refusal.
+            self.close()
+            raise IdentityRefusalError(self._refusal)
         if self._lost is not None:
             # Kill and reap before raising (#3045): a replacement loop will try
             # again, and each failure must leave nothing behind.
@@ -498,9 +538,12 @@ class ResearchWorker:
                 elif kind == "identity_refused":
                     self._progress_signal.set()
                     with self._arrived:
-                        self._lost = message.get("reason", "identity refused")
+                        # A refusal is terminal, not a loss (#3065 review):
+                        # recorded separately so run_task raises
+                        # IdentityRefusalError and nothing retries it.
+                        self._refusal = str(message.get("reason", "identity refused"))
                         self._arrived.notify_all()
-                    logger.error("research worker refused its sealed identity: %s", self._lost)
+                    logger.error("research worker refused its sealed identity: %s", self._refusal)
         except Exception as exc:  # the pump dying is worker loss, never a silent hang
             with self._arrived:
                 self._lost = f"pump failed: {exc}"
@@ -546,6 +589,23 @@ class ResearchWorker:
 
     # -- the task lane ------------------------------------------------------
 
+    def lost_reason(self) -> str | None:
+        """Why this child can take no more work, or ``None`` while it is live (#3065 review).
+
+        A dispatch asks before writing an item's start marker, so a child
+        that died between tasks is replaced first and the marker never lands
+        on a run nobody will dispatch.
+        """
+        with self._arrived:
+            if self._refusal is not None:
+                return self._refusal
+            if self._lost is not None:
+                return self._lost
+        child = self._child
+        if child is not None and child.poll() is not None:
+            return f"the research worker exited with code {child.returncode}"
+        return None
+
     def run_task(
         self,
         task: Mapping[str, Any],
@@ -557,28 +617,56 @@ class ResearchWorker:
 
         Waits bounded by real signals — outcomes, alives and task progress —
         so a dead child is fenced by the process bound and a heartbeating
-        but wedged one by the task bound, never trusted forever.
+        but wedged one by the task bound, never trusted forever. While the
+        task runs, the coordinator's cancellation poll runs too: a cancelled
+        or fenced generation kills the child right here instead of renewing
+        its lease until the task returns (#3065 review).
         """
+        from app.jobs.progress import JobCancelled
+        from app.research.persistence.ownership import GenerationFencedError
+
         key = str(task["key"])
         with self._arrived:
-            if self._lost is not None:
-                raise WorkerLost(f"the research worker is lost: {self._lost}")
+            refusal, lost = self._refusal, self._lost
             self._outcomes.pop(key, None)
+        if refusal is not None:
+            self.close()
+            raise IdentityRefusalError(refusal)
+        if lost is not None:
+            raise WorkerLost(f"the research worker is lost: {lost}")
         self._send({"type": "task", "task": task})
         last_alive = time.monotonic()
         last_progress = last_alive
+        last_fence_poll = last_alive
         while True:
             with self._arrived:
                 if key in self._outcomes:
                     return self._outcomes.pop(key)
-                if self._lost is not None:
-                    raise WorkerLost(f"the research worker is lost: {self._lost}")
-                self._alive_signal.clear()
-                self._progress_signal.clear()
-                self._arrived.wait(timeout=0.5)
-                alive_signalled = self._alive_signal.is_set()
-                progress_signalled = self._progress_signal.is_set()
+                refusal, lost = self._refusal, self._lost
+                if refusal is None and lost is None:
+                    self._alive_signal.clear()
+                    self._progress_signal.clear()
+                    self._arrived.wait(timeout=0.5)
+                    alive_signalled = self._alive_signal.is_set()
+                    progress_signalled = self._progress_signal.is_set()
+            if refusal is not None:
+                self.close()
+                raise IdentityRefusalError(refusal)
+            if lost is not None:
+                raise WorkerLost(f"the research worker is lost: {lost}")
             now = time.monotonic()
+            if now - last_fence_poll >= FENCE_POLL_INTERVAL_S:
+                last_fence_poll = now
+                try:
+                    cancelled = self._context.cancel_check()
+                except (JobCancelled, GenerationFencedError):
+                    # The child stops here, not when its task returns (#3065
+                    # review): a fenced generation's lease must stop renewing.
+                    self.close()
+                    raise
+                if cancelled:
+                    self.close()
+                    raise JobCancelled("cancelled in a research worker while a task was in flight")
             if progress_signalled:
                 # Work in flight proves the process too; heartbeats alone
                 # prove nothing about the lane — they refresh the process
@@ -698,7 +786,15 @@ class WorkerDispatch:
         self._worker: ResearchWorker | None = None
 
     def _live_worker(self) -> ResearchWorker:
-        """The owned child, spawning one only when none is alive (#3045)."""
+        """The owned child, spawning one only when none is alive (#3045).
+
+        A child that died or refused between tasks is replaced before the
+        caller writes the next item's start marker, so a run nobody will
+        dispatch never burns retry allowance (#3065 review).
+        """
+        worker = self._worker
+        if worker is not None and worker.lost_reason() is not None:
+            self._worker_lost(worker)
         if self._worker is None:
             self._worker = ResearchWorker(self._context)
         return self._worker
@@ -713,6 +809,10 @@ class WorkerDispatch:
         """Stop the child promptly — cancel flag, then kill and reap (#3045)."""
         if self._worker is not None:
             self._worker.cancel()
+
+    def cancel(self) -> None:
+        """The evaluator's pre-reconciliation reap (#3065 review): stop the child now."""
+        self._cancel()
 
     def __call__(self, run, batch):  # BatchDispatch signature; run unused by design
         from app.jobs.progress import JobCancelled
@@ -742,7 +842,9 @@ class WorkerDispatch:
             item.begin()
             try:
                 message = worker.run_task(task)
-            except WorkerLost:
+            except (WorkerLost, JobCancelled, GenerationFencedError, IdentityRefusalError):
+                # run_task has already killed and reaped its child on the
+                # terminal paths; forget it so nothing reuses the corpse.
                 self._worker_lost(worker)
                 raise
             outcome = delivered_outcome(item, message)
