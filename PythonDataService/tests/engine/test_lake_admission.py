@@ -163,6 +163,21 @@ def test_warm_daily_reader_rechecks_the_commit_on_every_read(lake, seeded_lake_c
         list(reader.iter_bars("SPY", DAY, DAY))
 
 
+def test_warm_daily_reader_refuses_when_the_source_archive_vanishes(lake, seeded_lake_catalog):
+    """The archive and its receipt removed after the first read: the cache has nothing left to verify against.
+
+    A ``None`` payload from every root once meant "skip this root" on the
+    cache-hit path, serving bars decoded under an admission verdict whose
+    source no longer exists (#3037 review).
+    """
+    reader = LeanDailyDataReader(lake)
+    assert list(reader.iter_bars("SPY", DAY, DAY))
+    (lake / "equity" / "usa" / "daily" / "spy.zip").unlink()
+    seeded_lake_catalog.clear()
+    with pytest.raises(LakeAdmissionError, match="no root holds a verifiable daily archive"):
+        list(reader.iter_bars("SPY", DAY, DAY))
+
+
 def test_warm_daily_reader_avoids_decoding_after_reverification(lake, seeded_lake_catalog, monkeypatch):
     reader = LeanDailyDataReader(lake)
     decodes = 0

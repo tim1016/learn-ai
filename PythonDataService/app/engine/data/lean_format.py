@@ -494,9 +494,22 @@ class LeanDailyDataReader:
             # Reuse the decoded bars only after the current source bytes
             # re-verify through the applicable override: a receipt revoked,
             # a file replaced, or an adjustment basis moved between reads
-            # must refuse, not serve the cached history (#3037).
-            for root in self.data_roots:
-                self._verified_payload(self._zip_path(root, symbol), symbol)
+            # must refuse, not serve the cached history (#3037). An empty
+            # cached history never had a source to vanish; bars that did
+            # come from a source need at least one root still holding a
+            # verifiable archive — ``None`` from every root means the
+            # source vanished after the first read, and decoding under its
+            # since-revoked admission is not servable either.
+            if cached:
+                verified_any = False
+                for root in self.data_roots:
+                    if self._verified_payload(self._zip_path(root, symbol), symbol) is not None:
+                        verified_any = True
+                if not verified_any:
+                    raise LakeAdmissionError(
+                        f"no root holds a verifiable daily archive for {symbol}; "
+                        "the cached history was decoded under an admission verdict that no longer has a source"
+                    )
             return cached
 
         merged: dict[date, TradeBar] = {}
