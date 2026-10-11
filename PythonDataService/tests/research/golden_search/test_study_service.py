@@ -1321,3 +1321,31 @@ async def test_candidate_detail_and_the_evaluation_ledger_read_back_after_the_ex
     # One fit (both chose the same settings) and the incumbent.
     final = await service.runs(row.id, group="final")
     assert final["total"] == 2 and all(run["has_curve"] for run in final["rows"])
+
+
+async def test_an_isolated_study_freezes_its_protocol_width_histogram(
+    conn: asyncpg.Connection, driver: Driver, symbol: str
+) -> None:
+    """#3036, protocol freeze: one end-to-end study's per-round widths, frozen from its stored trials.
+
+    The study runs isolated on this test's own lake and database — never the
+    active one. The histogram's totals reconcile the stage's own budget
+    accounting, so the frozen widths and the cache/reservation counts cannot
+    drift apart.
+    """
+    from app.research.benchmark import protocol_width_histogram
+
+    row = await driver.advance(await driver.to_candidate(symbol), "open_exam", {"acknowledge_final_test": True})
+    trials = [trial for trial in await repo.list_trials(conn, row.id) if trial["stage"] == "search"]
+
+    histogram = protocol_width_histogram(trials, stage="search")
+
+    assert histogram["rounds"], "the search stage's rounds are the freeze's rows"
+    for round_row in histogram["rounds"]:
+        assert round_row["stage"] == "search"
+        assert round_row["sampled"] >= round_row["testable"] >= 0
+        assert round_row["evaluated"] == round_row["eligible"] + round_row["ineligible"]
+    assert histogram["totals"]["testable"] <= histogram["totals"]["sampled"]
+    accounting = histogram["accounting"]
+    assert accounting["ready"] == accounting["newly_reserved"] + accounting["cached_or_duplicate"]
+    assert accounting["invalid"] == sum(round_row["invalid"] for round_row in histogram["rounds"])
