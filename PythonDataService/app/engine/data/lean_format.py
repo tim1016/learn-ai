@@ -441,19 +441,36 @@ class LeanDailyDataReader:
         self.data_roots: list[Path] = roots
         self.adjustment_guard = AdjustmentVersionGuard()
         self.data_root: Path = roots[0]
-        # Cache of parsed history per symbol: {symbol_upper: list[TradeBar]}.
+        # Cache of decoded history per symbol: {symbol_upper: list[TradeBar]}.
         # Lazily populated on first access and kept for the life of the
         # reader instance; a backtest typically touches one symbol repeatedly.
+        # A cache hit still re-verifies the current source bytes through
+        # :meth:`_verified_payload` — it reuses the decode, never the
+        # admission verdict (#3037).
         self._history_cache: dict[str, list[TradeBar]] = {}
 
     def _zip_path(self, root: Path, symbol: str) -> Path:
         return root / "equity" / "usa" / "daily" / f"{symbol.lower()}.zip"
 
-    def _read_zip(self, zip_path: Path, symbol: str) -> list[TradeBar]:
+    def _verified_payload(self, zip_path: Path, symbol: str) -> bytes | None:
+        """Read and verify one root's current source bytes for ``symbol``.
+
+        Every read — first or repeated — passes through this hook, so a warm
+        history cache cannot bypass the reader's applicable verification:
+        committed-lake admission, the manifest match where the subclass
+        requires one, and the adjustment/companion check. Returns ``None``
+        when this root has no zip for the symbol.
+        """
         if not zip_path.exists():
-            return []
+            return None
         payload = read_committed_bytes(zip_path)
         self.adjustment_guard.verify(zip_path, payload, symbol)
+        return payload
+
+    def _read_zip(self, zip_path: Path, symbol: str) -> list[TradeBar]:
+        payload = self._verified_payload(zip_path, symbol)
+        if payload is None:
+            return []
         return self.parse_history_zip(payload, symbol)
 
     def parse_history_zip(self, payload: bytes, symbol: str) -> list[TradeBar]:
@@ -472,8 +489,15 @@ class LeanDailyDataReader:
         same-date conflicts. The returned list is sorted by bar time.
         """
         key = symbol.upper()
-        if key in self._history_cache:
-            return self._history_cache[key]
+        cached = self._history_cache.get(key)
+        if cached is not None:
+            # Reuse the decoded bars only after the current source bytes
+            # re-verify through the applicable override: a receipt revoked,
+            # a file replaced, or an adjustment basis moved between reads
+            # must refuse, not serve the cached history (#3037).
+            for root in self.data_roots:
+                self._verified_payload(self._zip_path(root, symbol), symbol)
+            return cached
 
         merged: dict[date, TradeBar] = {}
         for root in self.data_roots:

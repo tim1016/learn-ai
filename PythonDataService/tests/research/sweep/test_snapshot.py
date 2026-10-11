@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from app.data_lake.adjustment_versions import AdjustmentVersionError
 from app.engine.data.availability import MissingSessionsError
 from app.engine.data.lean_format import write_lean_daily_zip
 from app.engine.data.trade_bar import TradeBar
@@ -134,6 +135,115 @@ def test_daily_snapshot_and_bound_reader(tmp_path: Path) -> None:
     write_lean_daily_zip(tmp_path, "SPY", [_daily_bar(SESSIONS[0], "501")])
     with pytest.raises(DataSnapshotMismatchError):
         list(ManifestBoundDailyReader([tmp_path], snapshot.artifacts).iter_bars("SPY", *WINDOW))
+
+
+def test_a_warm_bound_daily_reader_refuses_bytes_changed_after_its_first_read(tmp_path: Path) -> None:
+    """#3037: the manifest check cannot be skipped by the history cache's hit branch.
+
+    The base reader's old early return handed back decoded bars without
+    traversing the subclass's ``_read_zip``, so a warm bound reader served
+    history that no longer matched the receipted manifest.
+    """
+    write_lean_daily_zip(tmp_path, "SPY", [_daily_bar(day, "500") for day in SESSIONS])
+    snapshot = capture_data_snapshot(roots=[tmp_path], symbol="SPY", resolution="daily", data_start=WINDOW[0], data_end=WINDOW[1])
+    bound = ManifestBoundDailyReader([tmp_path], snapshot.artifacts)
+    assert len(list(bound.iter_bars("SPY", *WINDOW))) == len(SESSIONS)
+
+    write_lean_daily_zip(tmp_path, "SPY", [_daily_bar(SESSIONS[0], "501")])
+
+    with pytest.raises(DataSnapshotMismatchError, match="changed since the snapshot"):
+        list(bound.iter_bars("SPY", *WINDOW))
+
+
+def test_a_warm_bound_daily_reader_refuses_a_receipted_archive_deleted_after_the_first_read(tmp_path: Path) -> None:
+    write_lean_daily_zip(tmp_path, "SPY", [_daily_bar(day, "500") for day in SESSIONS])
+    snapshot = capture_data_snapshot(roots=[tmp_path], symbol="SPY", resolution="daily", data_start=WINDOW[0], data_end=WINDOW[1])
+    bound = ManifestBoundDailyReader([tmp_path], snapshot.artifacts)
+    assert list(bound.iter_bars("SPY", *WINDOW))
+
+    (tmp_path / "equity" / "usa" / "daily" / "spy.zip").unlink()
+
+    with pytest.raises(DataSnapshotMismatchError, match="was receipted at launch but is missing now"):
+        list(bound.iter_bars("SPY", *WINDOW))
+
+
+def test_a_warm_bound_daily_reader_rereads_identical_bars_without_redecoding(tmp_path: Path, monkeypatch) -> None:
+    write_lean_daily_zip(tmp_path, "SPY", [_daily_bar(day, "500") for day in SESSIONS])
+    snapshot = capture_data_snapshot(roots=[tmp_path], symbol="SPY", resolution="daily", data_start=WINDOW[0], data_end=WINDOW[1])
+    bound = ManifestBoundDailyReader([tmp_path], snapshot.artifacts)
+    decodes = 0
+    real_parse = bound.parse_history_zip
+
+    def counting_parse(payload, symbol):
+        nonlocal decodes
+        decodes += 1
+        return real_parse(payload, symbol)
+
+    monkeypatch.setattr(bound, "parse_history_zip", counting_parse)
+    first = list(bound.iter_bars("SPY", *WINDOW))
+    second = list(bound.iter_bars("SPY", *WINDOW))
+    assert first == second
+    assert decodes == 1, "a warm bound read re-verifies the bytes but must not decode again"
+
+
+def test_a_warm_bound_daily_reader_refuses_a_changed_adjustment_basis(tmp_path, seeded_lake_catalog) -> None:
+    from uuid import UUID
+
+    from app.data_lake.adjustment_versions import CorporateActionSnapshot, current_snapshot_path
+    from app.data_lake.polygon_corp_actions import DividendEvent
+    from app.data_lake.root_identity import init_empty_root
+    from tests._helpers.lake_fixture import seed_lake_daily
+
+    root = init_empty_root(tmp_path / "store", UUID(int=2456)).lake_root("polygon_split_adjusted")
+    seed_lake_daily(root, "SPY", list(SESSIONS))
+    snapshot = capture_data_snapshot(roots=[root], symbol="SPY", resolution="daily", data_start=WINDOW[0], data_end=WINDOW[1])
+    bound = ManifestBoundDailyReader([root], snapshot.artifacts)
+    assert len(list(bound.iter_bars("SPY", *WINDOW))) == len(SESSIONS)
+
+    moved = CorporateActionSnapshot((), (DividendEvent("2000-01-02", 1.0),), date(2000, 1, 1))
+    (root / current_snapshot_path("SPY")).write_bytes(moved.payload())
+
+    with pytest.raises(AdjustmentVersionError, match="stale or mixed corporate-action version"):
+        list(bound.iter_bars("SPY", *WINDOW))
+
+
+def test_a_warm_bound_daily_reader_refuses_a_companion_deleted_after_the_first_read(tmp_path, seeded_lake_catalog) -> None:
+    from uuid import UUID
+
+    from app.data_lake.adjustment_versions import companion_path
+    from app.data_lake.root_identity import init_empty_root
+    from tests._helpers.lake_fixture import seed_lake_daily
+
+    root = init_empty_root(tmp_path / "store", UUID(int=2456)).lake_root("polygon_split_adjusted")
+    seed_lake_daily(root, "SPY", list(SESSIONS))
+    snapshot = capture_data_snapshot(roots=[root], symbol="SPY", resolution="daily", data_start=WINDOW[0], data_end=WINDOW[1])
+    bound = ManifestBoundDailyReader([root], snapshot.artifacts)
+    assert list(bound.iter_bars("SPY", *WINDOW))
+
+    companion_path(root / "equity" / "usa" / "daily" / "spy.zip").unlink()
+
+    with pytest.raises(DataSnapshotMismatchError, match="corporate-action version receipt is missing"):
+        list(bound.iter_bars("SPY", *WINDOW))
+
+
+def test_a_warm_bound_daily_reader_refuses_a_companion_changed_after_the_first_read(tmp_path, seeded_lake_catalog) -> None:
+    from uuid import UUID
+
+    from app.data_lake.adjustment_versions import companion_path
+    from app.data_lake.root_identity import init_empty_root
+    from tests._helpers.lake_fixture import seed_lake_daily
+
+    root = init_empty_root(tmp_path / "store", UUID(int=2456)).lake_root("polygon_split_adjusted")
+    seed_lake_daily(root, "SPY", list(SESSIONS))
+    snapshot = capture_data_snapshot(roots=[root], symbol="SPY", resolution="daily", data_start=WINDOW[0], data_end=WINDOW[1])
+    bound = ManifestBoundDailyReader([root], snapshot.artifacts)
+    assert list(bound.iter_bars("SPY", *WINDOW))
+
+    companion = companion_path(root / "equity" / "usa" / "daily" / "spy.zip")
+    companion.write_bytes(companion.read_bytes() + b"\n")
+
+    with pytest.raises(DataSnapshotMismatchError, match="changed since the snapshot"):
+        list(bound.iter_bars("SPY", *WINDOW))
 
 
 def test_daily_capture_refuses_a_missing_session(tmp_path: Path) -> None:
