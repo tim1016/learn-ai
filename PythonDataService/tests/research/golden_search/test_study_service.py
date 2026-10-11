@@ -470,6 +470,33 @@ async def test_finish_after_cancel_replays_from_the_cache_without_spending_twice
     assert done.results["search"]["procedure"] == reference.results["search"]["procedure"]
 
 
+async def test_a_study_whose_batches_arrive_reversed_lands_where_the_serial_reference_lands(
+    conn: asyncpg.Connection, driver: Driver, symbol: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#3040: delivery order never reaches the science. Every ready batch of a
+    real study — zoom rounds, pair-audit cells, the incumbent — is delivered
+    in reverse; the search must land on the same winner, rounds and counts as
+    the serial reference, because logical consumption follows input order."""
+    from app.research.golden_search import evaluator as evaluator_module
+    from app.research.golden_search.evaluator import serial_dispatch
+
+    reference = await driver.advance(await driver.lock(symbol), "continue")
+    monkeypatch.setattr(
+        evaluator_module, "serial_dispatch", lambda run, batch: list(reversed(serial_dispatch(run, batch)))
+    )
+    row = await driver.lock(symbol)
+    await driver.run(await driver.command(row, "continue"))
+
+    done = await service.get_row(row.id)
+    assert done.state == reference.state == "awaiting_validation"
+    assert done.consumed_evaluations == reference.consumed_evaluations
+    assert done.cache_hits == reference.cache_hits
+    assert done.results["search"]["procedure"] == reference.results["search"]["procedure"], (
+        "winner, rounds and tie decisions are the serial reference's"
+    )
+    assert done.results["search"]["counts"] == reference.results["search"]["counts"]
+
+
 async def test_a_crash_between_reservation_and_result_reruns_that_evaluation_without_new_budget(
     conn: asyncpg.Connection, driver: Driver, symbol: str
 ) -> None:
@@ -481,7 +508,10 @@ async def test_a_crash_between_reservation_and_result_reruns_that_evaluation_wit
         await driver.run(outcome)
     assert type(crashed.value).__name__ == "SimulatedCrash"
     pending = await conn.fetch("SELECT evaluation_key FROM research_golden_search_evaluations WHERE study_id = $1 AND status = 'pending'", row.id)
-    assert len(pending) == 1
+    # The ready batch is reserved before dispatch (#3040), so a crash inside
+    # it leaves the whole admitted prefix pending — the never-ran members
+    # included — where the interleaved loop left only the crashed one.
+    assert len(pending) == 3
     crashed_row = await service.get_row(row.id)
     assert crashed_row.status == "running" and crashed_row.consumed_evaluations == 4
 
@@ -491,12 +521,14 @@ async def test_a_crash_between_reservation_and_result_reruns_that_evaluation_wit
     await driver.run(await driver.command(crashed_row, "finish"))
     done = await service.get_row(row.id)
     assert done.consumed_evaluations == reference.consumed_evaluations
-    retried = await conn.fetchrow(
-        "SELECT status, retries FROM research_golden_search_evaluations WHERE study_id = $1 AND evaluation_key = $2",
+    retried = await conn.fetch(
+        "SELECT status, retries FROM research_golden_search_evaluations WHERE study_id = $1 AND evaluation_key = ANY($2)",
         row.id,
-        pending[0]["evaluation_key"],
+        [record["evaluation_key"] for record in pending],
     )
-    assert (retried["status"], retried["retries"]) == ("completed", 1)
+    assert [(record["status"], record["retries"]) for record in retried] == [("completed", 1)] * 3, (
+        "every pending member of the crashed batch re-ran once, without new budget"
+    )
 
 
 def _moved_identity() -> CodeIdentity:

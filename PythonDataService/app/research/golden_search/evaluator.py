@@ -361,6 +361,86 @@ def _failure_message(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
+# ── The ready-batch dispatch seam (#3040) ─────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ReadyEvaluation:
+    """One admitted evaluation a dispatcher receives: fully keyed and attempt-fenced.
+
+    The key is the whole existing evaluation identity — context digest, point
+    hash, window, scenario, detail — never the point hash alone; ``attempt``
+    is the generation every reservation and completion is fenced by. A
+    dispatcher owns only computation: admission, budget and persistence stay
+    with the evaluator.
+    """
+
+    key: str
+    attempt: int
+    request: EvaluationRequest
+
+
+@dataclass(frozen=True)
+class DeliveredOutcome:
+    """One dispatched evaluation's arrived outcome.
+
+    ``cancelled_by`` carries the cancellation an execution observed — the
+    evaluator releases that reservation and re-raises it, and nothing is
+    persisted for the item (the synthetic ``result`` placeholder is never
+    recorded). A batch member with no outcome at all never ran.
+    """
+
+    key: str
+    result: EvaluationResult
+    cancelled_by: Exception | None = None
+
+
+BatchDispatch = Callable[
+    [Callable[[EvaluationRequest], EvaluationResult], Sequence[ReadyEvaluation]],
+    Sequence[DeliveredOutcome],
+]
+"""One ready batch's dispatch contract (#3040).
+
+An adapter executes ``run`` for the admitted batch and returns one outcome
+per admitted key — a cancellation is *delivered* as ``cancelled_by``, never
+raised out of the adapter, so the evaluator can release every unrecorded
+reservation. Arrival order is free; logical order is the evaluator's.
+"""
+
+
+def serial_dispatch(
+    run: Callable[[EvaluationRequest], EvaluationResult], batch: Sequence[ReadyEvaluation]
+) -> list[DeliveredOutcome]:
+    """Today's executor, as the default adapter: one evaluation at a time, in logical order.
+
+    Cancellation stops the walk at the item that observed it — exactly where
+    the interleaved loop stopped before this seam existed (#3040).
+    """
+    outcomes: list[DeliveredOutcome] = []
+    for item in batch:
+        try:
+            outcomes.append(DeliveredOutcome(key=item.key, result=run(item.request)))
+        except JobCancelled as cancel:
+            outcomes.append(DeliveredOutcome(key=item.key, result=EvaluationResult(metrics=Metrics.failed("cancelled")), cancelled_by=cancel))
+            break
+    return outcomes
+
+
+def reordered_dispatch(order: Sequence[int]) -> BatchDispatch:
+    """A deterministic adapter delivering outcomes in ``order`` — no processes, no timing.
+
+    Execution still runs the whole batch in logical order; only delivery is
+    permuted, so a test can prove the evaluator's logical consumption, winner
+    selection and accounting never depend on arrival order (#3040).
+    """
+
+    def dispatch(run: Callable[[EvaluationRequest], EvaluationResult], batch: Sequence[ReadyEvaluation]) -> list[DeliveredOutcome]:
+        outcomes = [DeliveredOutcome(key=item.key, result=run(item.request)) for item in batch]
+        return [outcomes[index] for index in order]
+
+    return dispatch
+
+
 # ── The study evaluator ──────────────────────────────────────────────────
 
 
@@ -383,6 +463,11 @@ class StudyEvaluator:
     execute: ExecuteBacktest
     cancel_check: Callable[[], object] = lambda: None
     on_evaluated: Callable[[int], None] = lambda done: None
+    # The ready-batch adapter (#3040). None — every production caller today —
+    # runs the serial adapter; tests inject ``reordered_dispatch`` to prove
+    # order independence. Production dispatch stays serial until the worker
+    # runtime exists; the gate contract is untouched by this seam.
+    dispatch: BatchDispatch | None = None
     new_runs: int = 0
     cache_hits: int = 0
     _warmups: dict[int, date] = field(default_factory=dict)
@@ -406,6 +491,18 @@ class StudyEvaluator:
         scenario: StressScenario | None = None,
         detail: bool = False,
     ) -> list[Metrics]:
+        """Evaluate the caller's ready batch, in input order, under the attempt fence.
+
+        Four separated phases (#3040): capability and key preparation, then
+        atomic reservation in serial logical order — the affordable prefix
+        only, stopping at the first unaffordable new identity — then
+        dispatch of exactly that admitted prefix through the batch adapter
+        (serial by default), then fenced persistence and logical consumption
+        in input order as outcomes arrive. Cached and duplicate identities
+        are served during reservation exactly as before and consume the same
+        units. ``BudgetExhausted`` is raised after the admitted prefix is
+        recorded, never instead of it.
+        """
         self.capability.check(window)
         scenario_key = BASE_SCENARIO if scenario is None else scenario.key
         keyed: list[tuple[str, dict[str, Any], str]] = []
@@ -414,8 +511,11 @@ class StudyEvaluator:
             digest = hash_point(self.strategy_key, canonical)
             keyed.append((evaluation_key(self.context_digest, digest, window, scenario_key, detail), canonical, digest))
         results: dict[str, Metrics] = {}
+        admitted: list[ReadyEvaluation] = []
+        handled: set[str] = set()
+        exhausted = False
         for key, point, digest in keyed:
-            if key in results:
+            if key in handled:
                 continue
             self.cancel_check()
             reservation = run_sync(
@@ -439,9 +539,14 @@ class StudyEvaluator:
                 )
             )
             if reservation.kind == "exhausted":
-                raise BudgetExhausted(f"the study's evaluation budget cannot admit another {stage} evaluation")
+                # The first unaffordable new identity ends the prefix here:
+                # later points are not searched for cheaper or cached work,
+                # and nothing beyond this prefix is dispatched (#3040).
+                exhausted = True
+                break
             if reservation.kind == "cached":
                 assert reservation.record is not None
+                handled.add(key)
                 self.cache_hits += reservation.counted_as_cache_hit
                 results[key] = repo.metrics_of(reservation.record)
                 if detail:
@@ -454,9 +559,12 @@ class StudyEvaluator:
                     self._details[key] = payload
                 self.on_evaluated(self.new_runs + self.cache_hits)
                 continue
-            try:
-                outcome = self._run(
-                    EvaluationRequest(
+            handled.add(key)
+            admitted.append(
+                ReadyEvaluation(
+                    key=key,
+                    attempt=self.attempt,
+                    request=EvaluationRequest(
                         point=point,
                         point_hash=digest,
                         window=window,
@@ -465,29 +573,59 @@ class StudyEvaluator:
                         detail=detail,
                         stage=stage,
                         fold_index=fold_index,
-                    )
+                    ),
                 )
-            except JobCancelled:
-                # The row stays pending for Finish; marked cancelled, its re-run does not spend a retry.
-                run_sync(with_connection(repo.release_evaluation, self.study_id, self.attempt, key))
-                raise
+            )
+        if admitted:
+            self._dispatch_and_record(admitted, results, detail=detail)
+        if exhausted:
+            raise BudgetExhausted(f"the study's evaluation budget cannot admit another {stage} evaluation")
+        return [results[key] for key, _, _ in keyed]
+
+    def _dispatch_and_record(
+        self, admitted: Sequence[ReadyEvaluation], results: dict[str, Metrics], *, detail: bool
+    ) -> None:
+        """Run the admitted prefix through the adapter and persist outcomes as they arrive.
+
+        Logical consumption is by full evaluation key, so arrival order never
+        reaches the caller: results land in the caller's input order whatever
+        the dispatcher delivered. A cancellation releases the reservation it
+        stopped on and every never-ran member of the batch — the same keys
+        the interleaved loop never reserved (#3040).
+        """
+        try:
+            outcomes = (self.dispatch or serial_dispatch)(self._run, admitted)
+        except JobCancelled:
+            # The adapter contract says a cancellation is delivered, not
+            # raised; this guard keeps an adapter bug from leaving the
+            # batch's reservations pending with no cancellation marker.
+            for item in admitted:
+                run_sync(with_connection(repo.release_evaluation, self.study_id, self.attempt, item.key))
+            raise
+        recorded: set[str] = set()
+        for outcome in outcomes:
+            if outcome.cancelled_by is not None:
+                never_ran = [item.key for item in admitted if item.key not in recorded and item.key != outcome.key]
+                for key in (outcome.key, *never_ran):
+                    run_sync(with_connection(repo.release_evaluation, self.study_id, self.attempt, key))
+                raise outcome.cancelled_by
             run_sync(
                 with_connection(
                     repo.complete_evaluation,
                     self.study_id,
                     self.attempt,
-                    key,
-                    metrics=outcome.metrics,
-                    detail=outcome.detail,
-                    curve=outcome.curve,
+                    outcome.key,
+                    metrics=outcome.result.metrics,
+                    detail=outcome.result.detail,
+                    curve=outcome.result.curve,
                 )
             )
+            recorded.add(outcome.key)
             self.new_runs += 1
-            results[key] = outcome.metrics
+            results[outcome.key] = outcome.result.metrics
             if detail:
-                self._details[key] = outcome.detail
+                self._details[outcome.key] = outcome.result.detail
             self.on_evaluated(self.new_runs + self.cache_hits)
-        return [results[key] for key, _, _ in keyed]
 
     def detail_of(self, point: Mapping[str, Any], *, window: Window) -> Mapping[str, Any] | None:
         """The detail payload of ``point``'s base-scenario detail run over ``window``; None without one.
