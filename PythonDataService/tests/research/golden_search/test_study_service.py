@@ -1340,13 +1340,17 @@ async def test_an_isolated_study_freezes_its_protocol_width_histogram(
 
     histogram = protocol_width_histogram(trials, stage="search")
 
-    assert histogram["rounds"], "the search stage's rounds are the freeze's rows"
-    for round_row in histogram["rounds"]:
+    rounds = [round_row for fold in histogram["folds"] for round_row in fold["rounds"]]
+    assert rounds, "the search stage's rounds are the freeze's rows"
+    for round_row in rounds:
         assert round_row["stage"] == "search"
         assert round_row["sampled"] >= round_row["testable"] >= 0
+        # The per-round cache/reservation widths were captured at the
+        # procedure source; a real study's rounds carry them.
+        assert round_row["ready"] is not None and round_row["ready"] >= round_row["newly_reserved"] >= 0
     assert histogram["totals"]["testable"] <= histogram["totals"]["sampled"]
-    accounting = histogram["accounting"]
-    # The one real cross-check: the rounds' invalid total must equal the
-    # stage's own accounting, and the frozen widths must reconcile.
-    assert accounting["invalid"] == sum(round_row["invalid"] for round_row in histogram["rounds"])
-    assert histogram["totals"]["reconciled"] is True
+    # The one real cross-check: each fold's rounds' invalid total must equal
+    # that fold's own accounting, and the frozen widths must reconcile.
+    for fold in histogram["folds"]:
+        assert fold["accounting"]["invalid"] == sum(round_row["invalid"] for round_row in fold["rounds"])
+        assert fold["totals"]["reconciled"] is True

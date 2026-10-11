@@ -117,6 +117,14 @@ class ZoomRound:
     # True on the round where this knob's refinement stopped because the sample spacing
     # reached the plan's smallest step for the knob.
     quantization_limit: bool = False
+    # Width accounting captured at the round's own evaluation call (#3036):
+    # distinct points the batch submitted, and of those the first-seen ones
+    # this procedure had not scored before. The difference is the round's
+    # cached/duplicate width; the sum of a stage's rounds reconciles against
+    # its stop trial's evaluated/cached counts. Zero-defaulted so rounds
+    # stored before the capture deserialise unchanged.
+    submitted: int = 0
+    first_evaluated: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -133,6 +141,8 @@ class ZoomRound:
             "moved": self.moved,
             "current_before": self.current_before,
             "quantization_limit": self.quantization_limit,
+            "submitted": self.submitted,
+            "first_evaluated": self.first_evaluated,
         }
 
     @classmethod
@@ -151,6 +161,8 @@ class ZoomRound:
             moved=bool(data["moved"]),
             current_before=float(data["current_before"]),
             quantization_limit=bool(data["quantization_limit"]),
+            submitted=int(data.get("submitted", 0)),
+            first_evaluated=int(data.get("first_evaluated", 0)),
         )
 
 
@@ -416,6 +428,7 @@ class _ZoomRun:
             else:
                 invalid.append((value, message))
                 self.invalid_assignments.add(_assignment_key(assignment))
+        submitted_before, first_seen_before = self.evaluator.submitted, len(self.evaluator.evaluated)
         results = self.evaluator.run([point for _, point in testable])
         evaluated = [(value, metrics) for (value, _), metrics in zip(testable, results, strict=True)]
         current_metrics = next(metrics for value, metrics in evaluated if value == before)
@@ -435,6 +448,8 @@ class _ZoomRun:
                 moved=choice.moved,
                 current_before=float(before),
                 quantization_limit=reached_step,
+                submitted=self.evaluator.submitted - submitted_before,
+                first_evaluated=len(self.evaluator.evaluated) - first_seen_before,
             )
         )
         self.current[knob.name] = choice.value

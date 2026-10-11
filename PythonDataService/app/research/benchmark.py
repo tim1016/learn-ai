@@ -15,20 +15,18 @@ that place no trade at all. Windows come from the canonical calendar (never
 hardcoded) and the identity assignment
 is a seeded, order-stable draw, so the same inputs regenerate the same
 manifest byte for byte. Inputs are the local lake only: every artifact is
-admitted and checksummed through the data snapshot before any run, and no
+admitted and checksummed through the data snapshot before any run, the
+snapshot's manifest binds every engine read to the receipted bytes, and no
 provider or broker is contacted.
 
 Modes
 -----
-``baseline`` runs the full corpus; the operator fires it manually and its
-outputs live as issue evidence on #3036, never merged. The quick-tier smoke
-check runs the same generator scaled down over a seeded fixture lake and
-fails on any drift in identity count, corpus digest or result hash. Reports
-distinguish the execution modes later slices must compare —
-``serial-original`` (today's path), ``serial-same-resource`` and
-``serial-decoded-cache`` (the future executors; fields present,
-unpopulated) — and warm versus preparation-inclusive timing, which counts
-worker startup and imports.
+``serial-original`` — today's path — is the only runnable execution mode;
+``serial-same-resource`` and ``serial-decoded-cache`` name the executors
+later slices must add, and ``run_baseline`` refuses them until one exists to
+supply its own measurements. Likewise ``warm`` is the only runnable timing
+mode; ``preparation-inclusive`` (worker startup and imports) exists only
+when an executor that has a worker can measure it.
 
 Timing vocabulary: an *additive* timing partitions the run (fetch,
 consolidate, simulate, aggregate, persist — they sum toward the total); a
@@ -41,6 +39,14 @@ The completed-evaluation cache has no entry in baseline throughput: every
 corpus identity is a fresh evaluation key, so a cache hit in a baseline run
 is a fault to report, never throughput.
 
+Formula: corpus digest = hash_payload(identities' canonical dicts); per-run
+  result/trade-log/metrics hashes = hash_payload over the run's ordered
+  trades, equity curve and statistics projections; medians and variability =
+  statistics.median over repetitions of the *same* evaluation key (never
+  pooled across identities), variability = max − min per key.
+Reference: #3036 (this slice's contract), PRD #3034, and the golden-search
+  evaluation identity (``app/research/golden_search/evaluator.py``, pinned by
+  ``tests/research/golden_search/``) the corpus keys reuse.
 Canonical implementation: this file.
 Validated against: tests/research/test_benchmark.py.
 """
@@ -50,6 +56,7 @@ from __future__ import annotations
 import os
 import platform
 import random
+import statistics
 import sys
 import threading
 import time
@@ -80,9 +87,17 @@ CORPUS_SEED = 20261010
 BASELINE_REPETITIONS = 3
 CONNECTION_INVENTORY_RESEARCH_CAP = 12
 CONNECTION_INVENTORY_REQUIRED_FREE = 20
-# The PostgreSQL server limit the inventory checks against when the operator
-# has not supplied the deployed one. Reported as an assumption, never repaired.
-ASSUMED_SERVER_MAX_CONNECTIONS = 100
+# The data policy the corpus freezes into its identities and hands the engine
+# when the operator names none: the local lake, adjusted bars, regular
+# sessions. One constant feeds both the context digest and the request, so
+# the identity can never disagree with the bytes the run reads.
+CORPUS_DATA_POLICY: dict[str, Any] = {"source": "local-lake", "adjusted": True, "session": "regular"}
+# The deployed render of the fleet topology: the committed artifact that
+# names every deployed service and its VM containment.
+FLEET_TOPOLOGY_PATH = Path(__file__).resolve().parents[3] / "deploy" / "fleet" / "topology.snapshot.json"
+# The Backend's Npgsql pool when its deployed connection string sets no
+# "Max Pool Size" — Npgsql's documented default maximum.
+NPGSQL_DEFAULT_MAX_POOL_SIZE = 100
 
 WindowKind = Literal["full-development", "fold"]
 
@@ -133,7 +148,13 @@ ADDITIVE_PHASES: tuple[str, ...] = ("fetch", "consolidate", "simulate", "aggrega
 NESTED_PHASES: tuple[str, ...] = ("admission", "decoding", "queue", "ipc")
 TIMING_KINDS: dict[str, str] = {**{name: "additive" for name in ADDITIVE_PHASES}, **{name: "nested" for name in NESTED_PHASES}}
 
+# The modes the report names. Only the first of each pair runs today; the
+# others are the contract later executors must answer for, refused by
+# ``run_baseline`` until the executor that measures them exists.
 EXECUTION_MODES: tuple[str, ...] = ("serial-original", "serial-same-resource", "serial-decoded-cache")
+RUNNABLE_EXECUTION_MODES: tuple[str, ...] = ("serial-original",)
+TIMING_MODES: tuple[Literal["warm", "preparation-inclusive"], ...] = ("warm", "preparation-inclusive")
+RUNNABLE_TIMING_MODES: tuple[str, ...] = ("warm",)
 
 # The engine's ``on_phase`` vocabulary mapped onto the additive spans.
 _PHASE_MAP: dict[str, str] = {
@@ -250,12 +271,20 @@ def build_corpus(
     development: tuple[date, date],
     data_snapshot_digest: str,
     code_identity: CodeIdentity | None = None,
+    data_policy: Mapping[str, Any] | None = None,
     seed: int = CORPUS_SEED,
     full_development_count: int = CORPUS_FULL_DEVELOPMENT_IDENTITIES,
     fold_count: int = CORPUS_FOLD_IDENTITIES,
     folds: int = CORPUS_FOLD_COUNT,
 ) -> BenchmarkCorpus:
-    """Regenerate the frozen manifest from its seeds; the same inputs yield the same identities byte for byte."""
+    """Regenerate the frozen manifest from its seeds; the same inputs yield the same identities byte for byte.
+
+    ``data_policy`` is the policy the runs will execute under — the same
+    mapping the harness hands the engine — because it is part of every
+    evaluation key's context digest. It defaults to the frozen corpus
+    policy (local lake, adjusted); a raw run must pass its raw policy or
+    its identities would claim adjusted bytes the runs never read.
+    """
     identity = code_identity if code_identity is not None else resolve_code_identity()
     assumptions = ExecutionAssumptions()
     context = execution_context(
@@ -270,7 +299,7 @@ def build_corpus(
         },
         data_snapshot_digest=data_snapshot_digest,
         execution=assumptions,
-        data_policy={"source": "local-lake", "adjusted": True, "session": "regular"},
+        data_policy=dict(data_policy) if data_policy is not None else CORPUS_DATA_POLICY,
         run_up={"required_samples": 16, "bar_span_ms": 900_000, "run_up_sessions": 1},
     )
     digest = context_digest(context)
@@ -342,6 +371,10 @@ class IdentityRun:
     trade_log_hash: str = ""
     metrics_hash: str = ""
     expectation_held: bool | None = None
+    # The run's own projections, ordered: the baseline output carries the
+    # trades and the curve themselves, not only their hashes (#3036).
+    ordered_trades: list[dict[str, Any]] = field(default_factory=list)
+    equity_curve: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -356,16 +389,18 @@ class BaselineReport:
     medians_ms: dict[str, float] = field(default_factory=dict)
     variability_ms: dict[str, float] = field(default_factory=dict)
     cache_hits: int = 0
+    throughput: dict[str, float] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "execution_mode": self.execution_mode,
             "timing_mode": self.timing_mode,
-            "modes_distinguished": list(EXECUTION_MODES),
+            "modes_distinguished": {"execution": list(EXECUTION_MODES), "timing": list(TIMING_MODES)},
             "environment": self.environment,
             "corpus": self.corpus,
             "cache_hits": self.cache_hits,
+            "throughput": self.throughput,
             "notes": self.notes,
             "medians_ms": self.medians_ms,
             "variability_ms": self.variability_ms,
@@ -384,13 +419,17 @@ class BaselineReport:
                     "trade_log_hash": run.trade_log_hash,
                     "metrics_hash": run.metrics_hash,
                     "expectation_held": run.expectation_held,
+                    "ordered_trades": run.ordered_trades,
+                    "equity_curve": run.equity_curve,
                 }
                 for run in self.runs
             ],
         }
 
 
-def environment_identity(snapshot: DataSnapshot, *, timing_mode: str = "warm") -> dict[str, Any]:
+def environment_identity(
+    snapshot: DataSnapshot, *, timing_mode: str = "warm", data_policy: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
     """The exact code/data/environment identity a baseline run answers for."""
     identity = resolve_code_identity()
     try:
@@ -414,6 +453,7 @@ def environment_identity(snapshot: DataSnapshot, *, timing_mode: str = "warm") -
         "calendar_version": snapshot.calendar_version,
         "data_snapshot_digest": snapshot.digest(),
         "data_artifact_checksums": dict(sorted(snapshot.artifacts.items())),
+        "data_policy": dict(data_policy) if data_policy is not None else dict(CORPUS_DATA_POLICY),
         "timing_mode": timing_mode,
     }
 
@@ -442,6 +482,11 @@ def _engine_request(
 ) -> Any:
     from app.schemas.engine_backtest import EngineBacktestRequest
 
+    # The engine's request contract carries ET trading dates as ISO strings
+    # (its own schema, predating this harness); this function is the one
+    # place the corpus's int64-ms-UTC windows cross that boundary — an
+    # in-function conversion under ADR 0022, never persisted or transmitted
+    # further ("Left, with reasons", the engine backtest request dates).
     start, end = window_dates(identity.window_start_ms, identity.window_end_ms)
     return EngineBacktestRequest(
         strategy_name=identity.strategy,
@@ -456,14 +501,26 @@ def _engine_request(
         save_study=False,
         auto_fetch=False,
         summary_only=False,
-        data_policy=dict(data_policy) if data_policy else None,
+        data_policy=dict(data_policy) if data_policy is not None else None,
     )
 
 
-def _serial_execute(request: Any, on_phase: Callable[[str], None]) -> Any:
+def _serial_execute(request: Any, on_phase: Callable[[str], None], data_manifest: Mapping[str, str] | None) -> Any:
     from app.services.engine_backtest_service import execute_engine_backtest
 
-    return execute_engine_backtest(request=request, on_phase=on_phase, on_log=lambda message: None)
+    return execute_engine_backtest(
+        request=request, on_phase=on_phase, on_log=lambda message: None, data_manifest=data_manifest
+    )
+
+
+class BaselineExecutionError(RuntimeError):
+    """An evaluation the harness cannot record: the engine failed the run.
+
+    A failed response (``success=False``) carries no scientific projection,
+    so recording it as a zero-trade result would launder an engine fault
+    into a satisfied no-trade expectation (#3036 review). Failed runs fail
+    the baseline instead.
+    """
 
 
 def run_identity(
@@ -472,14 +529,20 @@ def run_identity(
     symbol: str,
     execution: Mapping[str, Any] | None = None,
     data_policy: Mapping[str, Any] | None = None,
+    data_manifest: Mapping[str, str] | None = None,
     repetition: int = 0,
-    execute: Callable[[Any], Any] | None = None,
+    execute: Callable[..., Any] | None = None,
 ) -> IdentityRun:
     """Execute one identity on the serial path and measure its additive spans.
 
     ``execute`` is the injection seam the worker runtime will replace; the
-    default is today's ``execute_engine_backtest``. Timings ride the run's
-    own phase boundaries — no timers, no sampling.
+    default is today's ``execute_engine_backtest``. The seam is invoked as
+    ``execute(request=..., on_phase=..., data_manifest=...)`` — the manifest
+    is the snapshot's receipts, and binding the engine's reads to it is what
+    makes the report's snapshot digest the digest of the bytes actually
+    consumed. A response with ``success=False`` raises
+    :class:`BaselineExecutionError` rather than recording anything. Timings
+    ride the run's own phase boundaries — no timers, no sampling.
     """
     execution = _assumptions_dict() if execution is None else dict(execution)
     stamps: dict[str, float] = {}
@@ -493,8 +556,13 @@ def run_identity(
 
     request = _engine_request(identity, execution=execution, data_policy=data_policy)
     start = time.perf_counter()
-    response = (execute or _serial_execute)(request, on_phase)
+    response = (execute or _serial_execute)(request, on_phase, data_manifest)
     total_ms = (time.perf_counter() - start) * 1000
+
+    if not getattr(response, "success", False):
+        raise BaselineExecutionError(
+            f"evaluation {identity.evaluation_key} failed; the engine reported: {getattr(response, 'error', None)!r}"
+        )
 
     additive: dict[str, float] = {}
     for position, name in enumerate(order):
@@ -507,6 +575,8 @@ def run_identity(
         additive["unattributed_prefix"] = round((stamps[order[0]] - start) * 1000, 3)
 
     trades = response.trades or []
+    ordered_trades = [trade.model_dump(mode="json") for trade in trades]
+    equity_curve = list(response.equity_curve or [])
     # The result hash pins the run's scientific projection — ordered trades,
     # the equity curve and the statistics — never the response envelope's
     # wall-clock stamps, so a projection change fails the freeze and a rerun
@@ -518,17 +588,13 @@ def run_identity(
         repetition=repetition,
         total_ms=round(total_ms, 3),
         additive_ms=additive,
-        bars_scored=len(response.equity_curve or []),
+        bars_scored=len(equity_curve),
         trades=len(trades),
-        result_hash=hash_payload(
-            {
-                "trades": [trade.model_dump(mode="json") for trade in trades],
-                "equity_curve": response.equity_curve or [],
-                "statistics": response.statistics,
-            }
-        ),
-        trade_log_hash=hash_payload([trade.model_dump(mode="json") for trade in trades]),
+        result_hash=hash_payload({"trades": ordered_trades, "equity_curve": equity_curve, "statistics": response.statistics}),
+        trade_log_hash=hash_payload(ordered_trades),
         metrics_hash=hash_payload(response.statistics),
+        ordered_trades=ordered_trades,
+        equity_curve=equity_curve,
     )
     run.expectation_held = (run.trades > 0) is (identity.expectation == "trade-heavy")
     return run
@@ -547,21 +613,35 @@ def run_baseline(
     folds: int = CORPUS_FOLD_COUNT,
     seed: int = CORPUS_SEED,
     data_policy: Mapping[str, Any] | None = None,
-    execute: Callable[[Any], Any] | None = None,
+    execute: Callable[..., Any] | None = None,
 ) -> BaselineReport:
     """Freeze the snapshot, regenerate the corpus, and run it ``repetitions`` times on the serial path.
 
-    Completed-result cache hits cannot occur here — every identity is a fresh
-    evaluation key — and one showing up in a future mode is reported as a
-    fault in ``notes``, never as throughput.
+    The same ``data_policy`` flows into the corpus identities and every
+    engine request, and the snapshot's manifest binds each run's reads to
+    the receipted bytes, so the report's input identity is the identity of
+    what was executed. Completed-result cache hits cannot occur here —
+    every identity is a fresh evaluation key — and one showing up in a
+    future mode is reported as a fault in ``notes``, never as throughput.
     """
     if execution_mode not in EXECUTION_MODES:
         raise ValueError(f"unknown execution mode {execution_mode!r}")
+    if execution_mode not in RUNNABLE_EXECUTION_MODES:
+        raise ValueError(
+            f"{execution_mode!r} is a future executor; run_baseline refuses it until the executor "
+            "that measures it exists (its fields are named in modes_distinguished)"
+        )
+    if timing_mode not in RUNNABLE_TIMING_MODES:
+        raise ValueError(
+            f"{timing_mode!r} timing needs an executor with a worker to start; the serial path "
+            "attributes no worker startup or imports"
+        )
     snapshot = capture_data_snapshot(roots=list(roots), symbol=symbol, resolution="minute", data_start=development[0], data_end=development[1])
     corpus = build_corpus(
         symbol=symbol,
         development=development,
         data_snapshot_digest=snapshot.digest(),
+        data_policy=data_policy,
         seed=seed,
         full_development_count=full_development_count,
         fold_count=fold_count,
@@ -570,42 +650,85 @@ def run_baseline(
     report = BaselineReport(
         execution_mode=execution_mode,
         timing_mode=timing_mode,
-        environment=environment_identity(snapshot, timing_mode=timing_mode),
+        environment=environment_identity(snapshot, timing_mode=timing_mode, data_policy=data_policy),
         corpus={"digest": corpus.digest, "count": len(corpus.identities)},
     )
-    if execution_mode != "serial-original":
-        report.notes.append(f"{execution_mode} is a future executor; this report carries its fields unpopulated")
-    if timing_mode == "preparation-inclusive":
-        report.notes.append("preparation-inclusive timings count worker startup and imports; the serial mode attributes none")
     execution = _assumptions_dict()
+    run_wall = time.perf_counter()
     for repetition in range(repetitions):
         for identity in corpus.identities:
             report.runs.append(
-                run_identity(identity, symbol=symbol, execution=execution, data_policy=data_policy, repetition=repetition, execute=execute)
+                run_identity(
+                    identity,
+                    symbol=symbol,
+                    execution=execution,
+                    data_policy=data_policy,
+                    data_manifest=snapshot.artifacts,
+                    repetition=repetition,
+                    execute=execute,
+                )
             )
+    wall_seconds = time.perf_counter() - run_wall
     report.medians_ms, report.variability_ms = _summarize(report.runs)
+    # Valid new evaluations: every recorded run (failures raised instead of
+    # being recorded, and this path holds no completed-evaluation cache), so
+    # throughput is runs over the execution wall time, cache hits excluded
+    # by construction and faulted in ``notes`` should one ever appear.
+    report.throughput = {
+        "valid_new_evaluations": len(report.runs),
+        "wall_seconds": round(wall_seconds, 3),
+        "evaluations_per_second": round(len(report.runs) / wall_seconds, 3) if wall_seconds > 0 else 0.0,
+    }
     return report
 
 
 def _summarize(runs: Sequence[IdentityRun]) -> tuple[dict[str, float], dict[str, float]]:
-    """Median and variability per additive span and per total, across repetitions of the same identities."""
-    spans: dict[str, list[float]] = {}
+    """True median and repetition variability, per span, over repetitions of the same identity.
+
+    Repetitions of *one* evaluation key are the only comparable sample —
+    pooling identities would fold workload differences into what the report
+    calls variability. Each identity contributes the median of its
+    repetitions to the report's median and the max−min spread of its
+    repetitions to its variability; the report value is the median of those
+    per-identity values, so an even number of samples averages the middle
+    pair instead of picking the upper one.
+    """
+    by_key: dict[str, list[IdentityRun]] = {}
     for run in runs:
-        spans.setdefault("total", []).append(run.total_ms)
-        for name, value in run.additive_ms.items():
-            spans.setdefault(name, []).append(value)
-    medians = {name: round(sorted(values)[len(values) // 2], 3) for name, values in spans.items()}
-    variability = {name: round(max(values) - min(values), 3) for name, values in spans.items()}
+        by_key.setdefault(run.evaluation_key, []).append(run)
+    spans: dict[str, list[list[float]]] = {}
+    for key_runs in by_key.values():
+        spans.setdefault("total", []).append([run.total_ms for run in key_runs])
+        seen: set[str] = set()
+        for run in key_runs:
+            for name, value in run.additive_ms.items():
+                if name not in seen:
+                    spans.setdefault(name, []).append(
+                        [r.additive_ms.get(name, value) for r in key_runs]
+                    )
+                    seen.add(name)
+    medians = {name: round(statistics.median(statistics.median(series) for series in per_key), 3) for name, per_key in spans.items()}
+    variability = {
+        name: round(statistics.median(max(series) - min(series) for series in per_key), 3) for name, per_key in spans.items()
+    }
     return medians, variability
 
 
-def round_widths(round_payload: Mapping[str, Any]) -> dict[str, int]:
-    """One stored Zoom round's widths: what was sampled, testable, eligible and refused."""
+def round_widths(round_payload: Mapping[str, Any]) -> dict[str, Any]:
+    """One stored Zoom round's widths: what was sampled, testable, eligible, refused, cached and ready.
+
+    ``newly_reserved``/``cached_or_duplicate``/``ready`` come from the width
+    accounting the procedure captures on the round itself (``submitted`` /
+    ``first_evaluated``): ready is the distinct batch the round consumed,
+    newly reserved its first-seen points, cached the repeats an earlier
+    round had already answered. Rounds stored before that capture carry
+    ``None`` — absent, never guessed as zero.
+    """
     sampled = len(round_payload["values"])
     invalid = len(round_payload["invalid"])
     results = round_payload["results"]
     ineligible = sum(1 for _, code in results if code is not None)
-    return {
+    widths: dict[str, Any] = {
         "sampled": sampled,
         "invalid": invalid,
         "testable": sampled - invalid,
@@ -613,27 +736,41 @@ def round_widths(round_payload: Mapping[str, Any]) -> dict[str, int]:
         "eligible": len(results) - ineligible,
         "ineligible": ineligible,
     }
+    if "submitted" in round_payload and "first_evaluated" in round_payload:
+        submitted = int(round_payload["submitted"])
+        first_evaluated = int(round_payload["first_evaluated"])
+        widths["newly_reserved"] = first_evaluated
+        widths["cached_or_duplicate"] = submitted - first_evaluated
+        widths["ready"] = submitted
+    else:
+        widths["newly_reserved"] = widths["cached_or_duplicate"] = widths["ready"] = None
+    return widths
 
 
 def protocol_width_histogram(trials: Sequence[Mapping[str, Any]], *, stage: str) -> dict[str, Any]:
-    """One stage's per-round width histogram from its stored trials, with the stage's cache accounting.
+    """One stage's per-fold, per-round width histogram from its stored trials.
 
-    ``trials`` may span every stage; only ``stage``'s trials enter the
-    histogram. The totals reconcile the stage's own evaluated/cached/invalid
-    counts from its stop trial, so the frozen widths and the budget
-    accounting cannot drift apart — ``reconciled`` is that agreement, and a
-    drifted stop count reads False.
+    A stage runs one procedure per fold (the full-development window is the
+    ``None`` fold), and every procedure records its own rounds and its own
+    stop accounting — so the histogram keys by fold and each fold's
+    accounting comes from that fold's stop trial. The totals reconcile each
+    fold's invalid counts against its rounds, so frozen widths and budget
+    accounting cannot drift apart; ``reconciled`` is that agreement and a
+    drifted count reads False. ``trials`` may span every stage; only
+    ``stage``'s trials enter the histogram.
     """
-    trials = [trial for trial in trials if trial.get("stage") == stage]
-    rounds: list[dict[str, Any]] = []
-    stop: Mapping[str, Any] | None = None
+    by_fold: dict[Any, dict[str, Any]] = {}
     for trial in trials:
+        if trial.get("stage") != stage:
+            continue
+        fold = trial.get("fold_index")
+        entry = by_fold.setdefault(fold, {"rounds": [], "stop": None})
         payload = trial.get("payload") or {}
         if trial.get("kind") == "round":
-            rounds.append(
+            entry["rounds"].append(
                 {
                     "stage": stage,
-                    "fold_index": trial.get("fold_index"),
+                    "fold_index": fold,
                     "pass_index": payload.get("pass_index"),
                     "knob": payload.get("knob"),
                     "round_index": payload.get("round_index"),
@@ -641,76 +778,187 @@ def protocol_width_histogram(trials: Sequence[Mapping[str, Any]], *, stage: str)
                 }
             )
         elif trial.get("kind") == "stop":
-            stop = payload
-    histogram = {
+            entry["stop"] = payload
+    folds: list[dict[str, Any]] = []
+    for fold in sorted(by_fold, key=lambda value: (value is not None, value)):
+        entry = by_fold[fold]
+        rounds = entry["rounds"]
+        fold_row: dict[str, Any] = {
+            "fold_index": fold,
+            "rounds": rounds,
+            "totals": {
+                "sampled": sum(row["sampled"] for row in rounds),
+                "invalid": sum(row["invalid"] for row in rounds),
+                "testable": sum(row["testable"] for row in rounds),
+                "eligible": sum(row["eligible"] for row in rounds),
+            },
+        }
+        stop = entry["stop"]
+        if stop is not None:
+            # The stop trial spreads the procedure's counts into its payload's top level.
+            counts = stop.get("counts") or stop
+            fold_row["accounting"] = {
+                "newly_reserved": counts.get("evaluated"),
+                "cached_or_duplicate": counts.get("cached"),
+                "invalid": counts.get("invalid"),
+                "ready": (counts.get("evaluated") or 0) + (counts.get("cached") or 0),
+            }
+            # The rounds and the stop payload record the invalid population
+            # independently — one per refinement round, one as the procedure's own
+            # count — so their agreement is the reconciliation that can catch
+            # drift. (The evaluated/cached counts span the whole procedure's window,
+            # including points the rounds never sampled, so they reconcile as
+            # ranges, not equalities; the report carries them as accounting.)
+            fold_row["totals"]["reconciled"] = fold_row["totals"]["invalid"] == counts.get("invalid")
+        folds.append(fold_row)
+    return {
         "stage": stage,
-        "rounds": rounds,
+        "folds": folds,
         "totals": {
-            "sampled": sum(row["sampled"] for row in rounds),
-            "invalid": sum(row["invalid"] for row in rounds),
-            "testable": sum(row["testable"] for row in rounds),
-            "eligible": sum(row["eligible"] for row in rounds),
+            name: sum(fold_row["totals"][name] for fold_row in folds)
+            for name in ("sampled", "invalid", "testable", "eligible")
         },
     }
-    if stop is not None:
-        # The stop trial spreads the stage's counts into its payload's top level.
-        counts = stop.get("counts") or stop
-        histogram["accounting"] = {
-            "newly_reserved": counts.get("evaluated"),
-            "cached_or_duplicate": counts.get("cached"),
-            "invalid": counts.get("invalid"),
-            "ready": (counts.get("evaluated") or 0) + (counts.get("cached") or 0),
-        }
-        # The rounds and the stop payload record the invalid population
-        # independently — one per refinement round, one as the stage's own
-        # count — so their agreement is the reconciliation that can catch
-        # drift. (The evaluated/cached counts span the whole stage's window,
-        # including points the rounds never sampled, so they reconcile as
-        # ranges, not equalities; the report carries them as accounting.)
-        histogram["totals"]["reconciled"] = histogram["totals"]["invalid"] == counts.get("invalid")
-    return histogram
 
 
 def connection_inventory(*, research_cap: int = CONNECTION_INVENTORY_RESEARCH_CAP) -> dict[str, Any]:
-    """Account for every configured pool against the server's connection budget.
+    """Account for every deployed pool and service maximum against the server's connection budget.
 
-    The research envelope's cap is the PRD's number (12). The research
-    persistence layer shares the data-lake catalog's per-loop asyncpg pool
-    (max 10 per loop; the API loop and the research writer loop are the two
-    deployed). The check verifies the deployment leaves at least
-    ``CONNECTION_INVENTORY_REQUIRED_FREE`` server connections free; a
-    mismatch is *reported*, never repaired by raising PostgreSQL limits.
+    The pools come from the deployment's own facts: the data plane's two
+    loops and each fleet clerk lane's one share the catalog pool's ceiling
+    (``catalog_client.POOL_MAX_SIZE``), the Backend's Npgsql pool is capped
+    by its deployed connection string (Npgsql's documented default when the
+    string sets no maximum), and the fleet topology snapshot names the
+    deployed services and their VM containment. The PostgreSQL server
+    maximum is an operator input (``POSTGRES_SERVER_MAX_CONNECTIONS``):
+    without it the verdict is *unverified* — ``meets_required_free`` is
+    None with the reason, never a pass guessed against an assumed limit.
+    A mismatch is *reported*, never repaired by raising PostgreSQL limits.
     """
-    server_max = int(os.environ.get("POSTGRES_SERVER_MAX_CONNECTIONS", ASSUMED_SERVER_MAX_CONNECTIONS))
-    catalog_pool_max = _catalog_pool_max()
-    deployed_loops = 2  # the API loop and the research writer loop
-    pools = [
-        {"name": "data-lake catalog / research persistence (asyncpg, per loop)", "max_connections": catalog_pool_max, "loops": deployed_loops},
-        {"name": "job store (redis)", "max_connections": 32, "server": "redis"},
+    from app.data_lake.catalog_client import POOL_MAX_SIZE
+
+    topology = _fleet_topology()
+    deployed = set(topology.get("services", [])) if topology is not None else set()
+    unverified: list[str] = []
+
+    coordinator_loops = 2  # the FastAPI app loop and the background writer loop (app/research/persistence/db.py)
+    pools: list[dict[str, Any]] = [
+        {
+            "name": "python-service: data-lake catalog / research persistence",
+            "max_connections": POOL_MAX_SIZE * coordinator_loops,
+            "server": "postgres",
+            "source": f"catalog_client.POOL_MAX_SIZE={POOL_MAX_SIZE} × {coordinator_loops} deployed loops",
+        },
+        {
+            "name": "backend: Npgsql pool",
+            "max_connections": NPGSQL_DEFAULT_MAX_POOL_SIZE,
+            "server": "postgres",
+            "source": "Npgsql default maximum; compose.yaml's ConnectionStrings__DefaultConnection sets no Max Pool Size",
+        },
     ]
-    reserved = catalog_pool_max * deployed_loops
-    free = server_max - reserved
-    free_after_research = free - research_cap
+    for clerk in sorted(name for name in deployed if "clerk" in name):
+        pools.append(
+            {
+                "name": f"{clerk}: lane-served lake reads (asyncpg)",
+                "max_connections": POOL_MAX_SIZE,
+                "server": "postgres",
+                "source": f"catalog_client.POOL_MAX_SIZE={POOL_MAX_SIZE} × 1 lane loop; deployed in the fleet topology",
+            }
+        )
+    if topology is None:
+        unverified.append("the fleet topology snapshot is absent; the clerk lanes and VM limits are uncounted")
+    pools.append({"name": "job store (redis)", "max_connections": 32, "server": "redis", "source": "redis maxclients default, its own server"})
+
+    reserved = sum(pool["max_connections"] for pool in pools if pool["server"] == "postgres")
+    supplied = "POSTGRES_SERVER_MAX_CONNECTIONS" in os.environ
+    server_max = int(os.environ["POSTGRES_SERVER_MAX_CONNECTIONS"]) if supplied else None
+    if not supplied:
+        unverified.append(
+            "POSTGRES_SERVER_MAX_CONNECTIONS is not set; the deployed server maximum is unknown "
+            "and no free-connection verdict is computed from an assumed one"
+        )
+
+    free = None if server_max is None else server_max - reserved
+    free_after_research = None if free is None else free - research_cap
+    verified = not unverified
+    meets: bool | None = None if not verified else free_after_research >= CONNECTION_INVENTORY_REQUIRED_FREE
     return {
         "pools": pools,
         "postgres_server_max_connections": server_max,
-        "server_max_is_assumed": "POSTGRES_SERVER_MAX_CONNECTIONS" not in os.environ,
+        "server_max_supplied_by_operator": supplied,
         "research_cap": research_cap,
         "reserved_by_configured_pools": reserved,
         "free_at_server_without_research": free,
         "free_after_research_cap": free_after_research,
         "required_free": CONNECTION_INVENTORY_REQUIRED_FREE,
-        "meets_required_free": free_after_research >= CONNECTION_INVENTORY_REQUIRED_FREE,
-        "mismatch": None if free_after_research >= CONNECTION_INVENTORY_REQUIRED_FREE
-        else (
+        "verified": verified,
+        "unverified_reasons": unverified,
+        "meets_required_free": meets,
+        "mismatch": None if meets is not False else (
             f"with the research cap of {research_cap}, {free_after_research} server connections "
             f"would remain free, below the required {CONNECTION_INVENTORY_REQUIRED_FREE}"
         ),
+        "vm_limits": _vm_limits(topology),
     }
 
 
-def _catalog_pool_max() -> int:
-    # The pool is created inline with max_size=10 (catalog_client's
-    # init_pool); there is no module constant to read, so the inventory
-    # pins the deployed number and its source here.
-    return 10
+def _fleet_topology() -> dict[str, Any] | None:
+    """The committed fleet topology render, or None when the file is absent."""
+    import json
+
+    try:
+        return json.loads(FLEET_TOPOLOGY_PATH.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def _vm_limits(topology: dict[str, Any] | None) -> dict[str, dict[str, Any]] | None:
+    """Each deployed service's containment from the topology snapshot (VM resource maxima)."""
+    if topology is None:
+        return None
+    limits: dict[str, dict[str, Any]] = {}
+    for name, detail in sorted(topology.get("service_detail", {}).items()):
+        containment = detail.get("containment") or {}
+        limits[name] = {"cpus": containment.get("cpus"), "memory_bytes": containment.get("mem_limit")}
+    return limits
+
+
+def summarize_report(report: BaselineReport) -> str:
+    """The readable summary an operator reads beside the machine-readable report.
+
+    Every number here restates the report's own fields — the summary adds
+    no measurement of its own.
+    """
+    environment = report.environment
+    lines = [
+        f"Backtest baseline — {report.execution_mode} ({report.timing_mode})",
+        f"  corpus: {report.corpus['count']} identities, digest {report.corpus['digest'][:16]}…",
+        f"  code identity: {environment['code_identity']['source_digest'][:16]}… "
+        f"({environment['code_identity']['tree_state']})",
+        f"  data snapshot: {environment['data_snapshot_digest'][:16]}… "
+        f"over {len(environment['data_artifact_checksums'])} admitted artifacts",
+        f"  data policy: {environment['data_policy']}",
+        f"  environment: Python {environment['python']} on {environment['platform']}, "
+        f"load average {environment['competing_load_average']}",
+        f"  runs: {len(report.runs)} recorded, cache hits {report.cache_hits} "
+        f"(a hit is a fault here, never throughput)",
+        f"  throughput: {report.throughput.get('valid_new_evaluations', 0)} valid new evaluations "
+        f"in {report.throughput.get('wall_seconds', 0.0)}s "
+        f"({report.throughput.get('evaluations_per_second', 0.0)}/s)",
+        f"  median total: {report.medians_ms.get('total', 0.0)} ms "
+        f"(repetition variability {report.variability_ms.get('total', 0.0)} ms)",
+        f"  expectations held: {sum(1 for run in report.runs if run.expectation_held)}/{len(report.runs)}",
+    ]
+    inventory = connection_inventory()
+    if inventory["verified"]:
+        verdict = "meets" if inventory["meets_required_free"] else "FAILS"
+        lines.append(
+            f"  connections: {inventory['reserved_by_configured_pools']} reserved of "
+            f"{inventory['postgres_server_max_connections']}; after the research cap of "
+            f"{inventory['research_cap']}, {inventory['free_after_research_cap']} free — {verdict} the required "
+            f"{inventory['required_free']}"
+        )
+    else:
+        lines.append("  connections: UNVERIFIED — " + "; ".join(inventory["unverified_reasons"]))
+    lines.extend(f"  note: {note}" for note in report.notes)
+    return "\n".join(lines)
