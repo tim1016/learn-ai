@@ -14,7 +14,7 @@ import json
 import logging
 import time
 import weakref
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date
@@ -70,8 +70,16 @@ class CatalogUnavailableError(RuntimeError):
     """
 
 
-async def init_pool() -> None:
-    """Create the asyncpg pool for the calling loop. Idempotent per loop."""
+async def init_pool(*, max_size: int = POOL_MAX_SIZE) -> None:
+    """Create the asyncpg pool for the calling loop. Idempotent per loop.
+
+    ``max_size`` fixes the calling loop's ceiling — the first initializer
+    per loop decides it, later calls are no-ops — so a purpose that owns
+    its loop (the research admission loop at eight, the research runtime's
+    background writer at four) reserves exactly its share of the
+    deployment's connection budget (#3047); every other caller keeps the
+    module ceiling.
+    """
     loop = asyncio.get_running_loop()
     if loop in _pools:
         return
@@ -85,7 +93,7 @@ async def init_pool() -> None:
         pool = await asyncpg.create_pool(
             settings.POSTGRES_URL,
             min_size=1,
-            max_size=POOL_MAX_SIZE,
+            max_size=max_size,
             command_timeout=30,
         )
     except OSError as exc:
@@ -169,6 +177,45 @@ async def has_committed_file_receipt(
             data_root_id, price_adjustment_mode, file_path, file_sha256, file_size_bytes,
         )
     return row is not None
+
+
+async def has_committed_file_receipts(
+    requests: Sequence[tuple[UUID, str, str, str, int]],
+) -> frozenset[int]:
+    """The set-based form of :func:`has_committed_file_receipt` (#3047).
+
+    One SQL lookup answers every tuple in ``requests`` at the same read
+    boundary the per-file check stands at: identical semantics — root, mode,
+    path, digest, size and committed status all participate — only the
+    round trip is shared. Returns the indices into ``requests`` whose tuple
+    has a committed receipt; the caller decides per requester. Duplicate
+    tuples are the caller's to deduplicate before the call (the batcher
+    does); this function answers positions, not identities.
+    """
+    if not requests:
+        return frozenset()
+    async with connection() as conn:
+        rows = await conn.fetch(
+            '''
+            SELECT t.ordinality - 1 AS position
+              FROM unnest(
+                    $1::uuid[], $2::varchar[], $3::text[], $4::char(64)[], $5::bigint[]
+                  ) WITH ORDINALITY AS t(root_id, mode, file_path, sha256, size, ordinality)
+              JOIN "DataLakeArtifacts" a
+                ON a."DataRootId" = t.root_id
+               AND a."PriceAdjustmentMode" = t.mode
+               AND a."FilePath" = t.file_path
+               AND a."FileSha256" = t.sha256
+               AND a."FileSizeBytes" = t.size
+               AND a."Status" = 'complete'
+            ''',
+            [request[0] for request in requests],
+            [request[1] for request in requests],
+            [request[2] for request in requests],
+            [request[3] for request in requests],
+            [request[4] for request in requests],
+        )
+    return frozenset(int(row["position"]) for row in rows)
 
 
 async def select_complete_metadata_artifact(

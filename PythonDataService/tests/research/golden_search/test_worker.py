@@ -576,3 +576,54 @@ def test_the_spawn_environment_carries_the_sized_cache_ceiling(monkeypatch: pyte
     finally:
         worker.close()
         parity.close()
+
+
+def test_the_verdict_relays_through_the_batcher_with_the_single_check_taxonomy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#3047: the parent's relay batches, with the single-check verdict shapes intact."""
+    from typing import Any
+    from uuid import UUID
+
+    from app.data_lake import admission
+    from app.data_lake.catalog_client import CatalogUnavailableError
+    from app.data_lake.root_identity import init_empty_root
+
+    base = tmp_path / "envelope-root"
+    init_empty_root(base, UUID(int=4711))
+    lake = base / "lake" / "polygon_split_adjusted"
+    artifact = lake / "equity" / "usa" / "minute" / "spy" / "20250102_trade.zip"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_bytes(b"bytes")
+
+    submitted: list[admission.AdmissionCheck] = []
+
+    class _StubBatcher:
+        def submit(self, check: admission.AdmissionCheck) -> bool:
+            submitted.append(check)
+            if check.file_sha256 == "f" * 64:
+                return False
+            if check.file_sha256 == "u" * 64:
+                raise CatalogUnavailableError("catalog Postgres is unreachable")
+            return True
+
+    monkeypatch.setattr(admission, "admission_batcher", lambda: _StubBatcher())
+    worker = _unspawned_worker()
+    sent: list[dict[str, Any]] = []
+    worker._send = sent.append  # type: ignore[method-assign]
+
+    def message(digest: str, *, path: Path = artifact, id: int = 1) -> dict[str, Any]:
+        return {"id": id, "path": str(path), "digest": digest, "size": path.stat().st_size}
+
+    worker._answer_admission(message("0" * 64, id=1))
+    worker._answer_admission(message("f" * 64, id=2))
+    worker._answer_admission(message("u" * 64, id=3))
+    plain = tmp_path / "plain-fixture.zip"
+    plain.write_bytes(b"fixture")
+    worker._answer_admission(message("0" * 64, path=plain, id=4))
+
+    assert [verdict.get("admitted") for verdict in sent] == [True, False, None, True]
+    assert sent[2].get("unavailable") is True, "the outage stays the typed refusal"
+    assert sent[3] == {"type": "admission", "id": 4, "admitted": True}, "a fixture path keeps its file-only contract"
+    assert len(submitted) == 3, "only lake paths reach the batcher"
+    assert submitted[0].data_root_id == UUID(int=4711) and submitted[0].file_path.endswith("20250102_trade.zip")

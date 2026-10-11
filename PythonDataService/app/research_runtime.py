@@ -37,7 +37,7 @@ import os
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
@@ -128,20 +128,89 @@ async def _close_abandoned_generations(authority: ownership.RuntimeAuthority) ->
     await asyncio.to_thread(close_orphaned_job_records, job_ids)
 
 
+async def enforce_connection_envelope() -> dict[str, Any]:
+    """Cap and validate this process's PostgreSQL envelope (#3047, PRD #3034 slice 12).
+
+    Admission verdicts get their own loop and pool at
+    ``RESEARCH_ADMISSION_CONNECTIONS`` (started right after this passes);
+    coordination, materialization and study persistence share the background
+    writer loop, pre-initialized here at ``RESEARCH_COORDINATION_CONNECTIONS``
+    minus one — the coordinator authority's dedicated lock connection, held
+    since the claim above, counts inside that bound. The sum must stay
+    inside the twelve the connection inventory reserves for this runtime,
+    and the inventory's free-connection verdict — whenever the operator
+    supplied the server maximum — must hold at least twenty spare. An
+    envelope that fails either check refuses startup; nothing here ever
+    raises the server's ``max_connections`` to make room.
+    """
+    from app.data_lake import catalog_client
+    from app.research.benchmark import CONNECTION_INVENTORY_RESEARCH_CAP, connection_inventory
+    from app.utils.background_loop import run_on_background_loop
+
+    admission_n = settings.RESEARCH_ADMISSION_CONNECTIONS
+    coordination_n = settings.RESEARCH_COORDINATION_CONNECTIONS
+    if admission_n + coordination_n > CONNECTION_INVENTORY_RESEARCH_CAP:
+        raise RuntimeError(
+            f"the configured research connection envelope ({admission_n} admission + "
+            f"{coordination_n} coordination) exceeds the {CONNECTION_INVENTORY_RESEARCH_CAP}-connection "
+            "research cap the deployment's connection inventory reserves; refusing to start"
+        )
+    await asyncio.to_thread(
+        run_on_background_loop, catalog_client.init_pool(max_size=coordination_n - 1), timeout=30.0
+    )
+    inventory = connection_inventory(research_cap=admission_n + coordination_n)
+    if inventory["meets_required_free"] is False:
+        raise RuntimeError(f"the connection inventory refuses this envelope: {inventory['mismatch']}")
+    return inventory
+
+
+async def _ensure_schema_via_writer_loop() -> None:
+    """The research schema rides the capped background pool (#3047).
+
+    The app loop this lifespan runs on must never own a catalog pool — a
+    lazy ``ensure_schema_at_startup`` here would size one at the module
+    ceiling and blow the envelope this runtime just enforced.
+    """
+
+    async def _ensure() -> None:
+        from app.research.persistence.db import connection
+
+        async with connection():
+            # Opening this loop's first pooled connection applies every pending version.
+            pass
+
+    from app.utils.background_loop import run_on_background_loop
+
+    try:
+        await asyncio.to_thread(run_on_background_loop, _ensure(), timeout=60.0)
+    except Exception:
+        logger.warning(
+            "research schema could not be ensured; research routes retry on first use",
+            extra={"action": "research_schema_ensure_failed"},
+            exc_info=True,
+        )
+    else:
+        logger.info("research schema ensured", extra={"action": "research_schema_ensured"})
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    from app.data_lake.admission import start_admission_batcher, stop_admission_batcher
+
     refuse_reload()
     authority = await _claim_authority_or_die()
+    await enforce_connection_envelope()
     await _close_abandoned_generations(authority)
-    from app.research.persistence.db import ensure_schema_at_startup
-
-    schema_task = asyncio.create_task(ensure_schema_at_startup(), name="research-runtime-schema-ensure")
+    batcher = start_admission_batcher()
+    schema_task = asyncio.create_task(_ensure_schema_via_writer_loop(), name="research-runtime-schema-ensure")
     try:
         yield
     finally:
         schema_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await schema_task
+        batcher.close()
+        stop_admission_batcher()
         from app.research.persistence import ownership
 
         held = ownership.process_authority()

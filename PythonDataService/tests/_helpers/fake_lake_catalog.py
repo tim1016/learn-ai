@@ -665,20 +665,31 @@ def seeded_lake_catalog(monkeypatch):
     receipts = {}
     token = _fixture_publications.set(receipts)
 
-    async def init_pool():
+    async def init_pool(**_kwargs):
         # Receipts are faked below, but the pool must stay real when a
         # database is configured: app.research.persistence.db shares
         # catalog_client's pool for its own writes, so stubbing init_pool
         # out entirely makes every research-DB write in a seeded test
-        # fail with "pool not initialized" (#2619).
+        # fail with "pool not initialized" (#2619). The admission batcher's
+        # per-loop sizing kwarg is accepted and ignored here (#3047).
         if settings.POSTGRES_URL:
             await _REAL_INIT_POOL()
 
     async def has_receipt(root_id, mode, relative, digest, size):
         return receipts.get((root_id, mode, relative)) == (digest, size)
 
+    async def has_receipts(requests):
+        # The batched form answers from the same receipts (#3047): one
+        # round trip, one decision per tuple, identical to the single check.
+        return frozenset(
+            index
+            for index, (root_id, mode, relative, digest, size) in enumerate(requests)
+            if receipts.get((root_id, mode, relative)) == (digest, size)
+        )
+
     monkeypatch.setattr(catalog_client, "init_pool", init_pool)
     monkeypatch.setattr(catalog_client, "has_committed_file_receipt", has_receipt)
+    monkeypatch.setattr(catalog_client, "has_committed_file_receipts", has_receipts)
     try:
         yield receipts
     finally:
