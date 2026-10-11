@@ -873,52 +873,62 @@ class StudyEvaluator:
             # than breaching — the guard fires on untouched items alone.
             entered = dict(outstanding)
             try:
-                for outcome in (self.dispatch or serial_dispatch)(self._run, list(outstanding.values())):
-                    item = outstanding.get(outcome.key)
-                    if item is None or outcome.attempt != self.attempt or outcome.task_gen != item.task_gen:
-                        # Late output from a cancelled, timed-out or replaced dispatch:
-                        # the store's attempt and task-generation fences would refuse
-                        # it; discard it here, explicitly, and let the owed outcome land (#3045).
-                        logger.warning(
-                            "golden search discarded a stale delivered outcome",
-                            extra={
-                                "action": "golden_search_stale_outcome_discarded",
-                                "study_id": self.study_id,
-                                "evaluation_key": outcome.key,
-                                "outcome_attempt": outcome.attempt,
-                                "outcome_task_gen": outcome.task_gen,
-                            },
-                        )
-                        continue
-                    if outcome.lost_reason is not None:
-                        # One item's worker was lost (#3066 review): re-admit only
-                        # it, never the siblings still delivering elsewhere. The
-                        # re-admitted item rejoins through the next dispatch round.
-                        reservation = self._reserve_item(item)
-                        if reservation.kind == "cached":
-                            self._serve_cached(outcome.key, reservation, results, detail=detail)
-                            del outstanding[outcome.key]
-                            replacements = 0
-                        else:
-                            outstanding[outcome.key] = self._rereadied(item, reservation.task_gen)
-                            replacements += 1
-                            if replacements > RETRY_ALLOWANCE:
-                                # Consecutive replacements bought no durable progress:
-                                # stop trusting the runtime and leave the honest pending
-                                # rows for Finish. The per-item bound is the retry
-                                # allowance, spent by reserve_evaluation as each
-                                # started run re-admits.
-                                exhausted = outcome.lost_reason
-                                break
-                        continue
-                    if outcome.cancelled_by is not None:
-                        raise outcome.cancelled_by
-                    self._persist(outcome, results, detail=detail)
-                    del outstanding[outcome.key]
-                    replacements = 0
-                    progressed = True
-                if outstanding and exhausted is None and any(outstanding.get(key) is item for key, item in entered.items()):
-                    raise RuntimeError("the dispatch adapter ended without delivering an outcome for every admitted key")
+                outcomes = (self.dispatch or serial_dispatch)(self._run, list(outstanding.values()))
+                try:
+                    for outcome in outcomes:
+                        item = outstanding.get(outcome.key)
+                        if item is None or outcome.attempt != self.attempt or outcome.task_gen != item.task_gen:
+                            # Late output from a cancelled, timed-out or replaced dispatch:
+                            # the store's attempt and task-generation fences would refuse
+                            # it; discard it here, explicitly, and let the owed outcome land (#3045).
+                            logger.warning(
+                                "golden search discarded a stale delivered outcome",
+                                extra={
+                                    "action": "golden_search_stale_outcome_discarded",
+                                    "study_id": self.study_id,
+                                    "evaluation_key": outcome.key,
+                                    "outcome_attempt": outcome.attempt,
+                                    "outcome_task_gen": outcome.task_gen,
+                                },
+                            )
+                            continue
+                        if outcome.lost_reason is not None:
+                            # One item's worker was lost (#3066 review): re-admit only
+                            # it, never the siblings still delivering elsewhere. The
+                            # re-admitted item rejoins through the next dispatch round.
+                            reservation = self._reserve_item(item)
+                            if reservation.kind == "cached":
+                                self._serve_cached(outcome.key, reservation, results, detail=detail)
+                                del outstanding[outcome.key]
+                                replacements = 0
+                            else:
+                                outstanding[outcome.key] = self._rereadied(item, reservation.task_gen)
+                                replacements += 1
+                                if replacements > RETRY_ALLOWANCE:
+                                    # Consecutive replacements bought no durable progress:
+                                    # stop trusting the runtime and leave the honest pending
+                                    # rows for Finish. The per-item bound is the retry
+                                    # allowance, spent by reserve_evaluation as each
+                                    # started run re-admits.
+                                    exhausted = outcome.lost_reason
+                                    break
+                            continue
+                        if outcome.cancelled_by is not None:
+                            raise outcome.cancelled_by
+                        self._persist(outcome, results, detail=detail)
+                        del outstanding[outcome.key]
+                        replacements = 0
+                        progressed = True
+                    if outstanding and exhausted is None and any(outstanding.get(key) is item for key, item in entered.items()):
+                        raise RuntimeError("the dispatch adapter ended without delivering an outcome for every admitted key")
+                finally:
+                    # Close the round's adapter deterministically, not by garbage
+                    # collection: an adapter holding execution resources frees them
+                    # (a pool's window permits among them) the moment the round is
+                    # abandoned, never at the interpreter's pleasure (#3066 review).
+                    close = getattr(outcomes, "close", None)
+                    if close is not None:
+                        close()
             except JobCancelled:
                 # A cancellation — delivered, or raised by an adapter that breaks
                 # the deliver-never-raise contract — stops the children first
