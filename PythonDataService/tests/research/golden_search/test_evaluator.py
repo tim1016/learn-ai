@@ -8,19 +8,24 @@ from datetime import date
 import pytest
 
 from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
+from app.research.golden_search.declarations import point_hash as hash_point
 from app.research.golden_search.evaluator import (
     EXIT_AT_WINDOW_END,
     CapabilityError,
     EvaluationCapability,
     EvaluationRequest,
+    EvaluationResult,
+    EvidenceIntegrityError,
+    StudyEvaluator,
     context_digest,
+    detail_integrity_problem,
     engine_request,
     evaluation_key,
     execution_context,
     project_response,
     warmup_session,
 )
-from app.research.golden_search.protocol import ExecutionAssumptions, StressScenario
+from app.research.golden_search.protocol import BASE_SCENARIO, ExecutionAssumptions, StressScenario
 from app.schemas.engine_backtest import EngineBacktestResponse, EngineTradeResponse
 from app.utils.session_anchors import et_midnight_ms
 
@@ -208,3 +213,125 @@ def test_a_run_the_engine_kept_no_day_ends_for_has_no_curve_and_keeps_its_result
 def test_a_failed_engine_run_is_a_failed_evaluation_with_its_reason() -> None:
     result = project_response(_request(detail=True), _response(success=False, error="no bars"), strategy_key="ema_crossover_signal", initial_cash=1.0)
     assert (result.metrics.status, result.metrics.error, result.detail, result.curve) == ("failed", "no bars", None, None)
+
+
+# ── Durable detail readback (#3039) ─────────────────────────────────────
+
+
+def _no_engine_call(request: EvaluationRequest) -> EvaluationResult:
+    raise AssertionError("a durable detail readback must not execute the engine")
+
+
+def _evaluator() -> StudyEvaluator:
+    return StudyEvaluator(
+        study_id="study-1",
+        attempt=1,
+        strategy_key="ema_crossover_signal",
+        context_digest=context_digest(_context()),
+        run_up_sessions=1,
+        capability=EvaluationCapability(allowed=(JAN,)),
+        budget_limit=10,
+        execute=_no_engine_call,
+    )
+
+
+def _record(evaluation_key: str, *, status: str = "completed", detail: object = None) -> object:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(evaluation_key=evaluation_key, status=status, detail_json=detail)
+
+
+def _durable_rows(monkeypatch: pytest.MonkeyPatch, records: dict[str, object]) -> list[str]:
+    """Replace the DB bridge with an in-memory evaluation store; returns the keys detail_of looked up."""
+    from types import SimpleNamespace
+
+    import app.research.golden_search.repository as repository
+    from app.research.golden_search import evaluator as evaluator_module
+
+    looked_up: list[str] = []
+
+    async def fake_get_evaluation(conn, study_id, key):
+        looked_up.append(key)
+        return records.get(key)
+
+    async def fake_with_connection(fn, /, *args, **kwargs):
+        return await fn(SimpleNamespace(), *args, **kwargs)
+
+    def fake_run_sync(coroutine):
+        import asyncio
+
+        return asyncio.run(coroutine)
+
+    monkeypatch.setattr(repository, "get_evaluation", fake_get_evaluation)
+    monkeypatch.setattr(evaluator_module, "with_connection", fake_with_connection)
+    monkeypatch.setattr(evaluator_module, "run_sync", fake_run_sync)
+    return looked_up
+
+
+def _detail_key(evaluator: StudyEvaluator, point: dict, window: tuple[int, int]) -> str:
+    return evaluation_key(
+        evaluator.context_digest,
+        hash_point(evaluator.strategy_key, dict(point)),
+        window,
+        BASE_SCENARIO,
+        True,
+    )
+
+
+def test_the_recorded_detail_shape_admits_what_detail_payload_writes_and_names_what_is_missing() -> None:
+    recorded = project_response(_request(detail=True), _response(), strategy_key="ema_crossover_signal", initial_cash=100_000.0).detail
+    assert recorded is not None and detail_integrity_problem(recorded) is None
+    assert detail_integrity_problem(None) == "no recorded detail payload"
+    assert "initial_cash" in detail_integrity_problem({"daily_equity": [], "trades": []})
+    assert "daily_equity" in detail_integrity_problem({"initial_cash": 1.0, "daily_equity": "gone", "trades": []})
+    assert "trades" in detail_integrity_problem({"initial_cash": 1.0, "daily_equity": [[1, 2]], "trades": "gone"})
+    assert "daily_equity" in detail_integrity_problem({"initial_cash": 1.0, "daily_equity": [[1, 2, 3]], "trades": []})
+
+
+def test_detail_of_reads_a_completed_evaluation_this_evaluator_never_ran(monkeypatch: pytest.MonkeyPatch) -> None:
+    evaluator = _evaluator()
+    payload = project_response(_request(detail=True), _response(), strategy_key="ema_crossover_signal", initial_cash=100_000.0).detail
+    looked_up = _durable_rows(monkeypatch, {_detail_key(evaluator, POINT, JAN): _record(_detail_key(evaluator, POINT, JAN), detail=payload)})
+
+    first = evaluator.detail_of(POINT, window=JAN)
+    second = _evaluator().detail_of(POINT, window=JAN)
+
+    assert first == payload and second == payload
+    assert looked_up == [_detail_key(evaluator, POINT, JAN)] * 2, "each fresh instance resolves the row durably"
+
+
+def test_detail_of_cannot_substitute_a_summary_row_or_another_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    evaluator = _evaluator()
+    summary_key = evaluation_key(evaluator.context_digest, hash_point(evaluator.strategy_key, dict(POINT)), JAN, BASE_SCENARIO, False)
+    other_window = (JAN[0], JAN[1] + DAY)
+    payload = project_response(_request(detail=True), _response(), strategy_key="ema_crossover_signal", initial_cash=100_000.0).detail
+    looked_up = _durable_rows(monkeypatch, {
+        summary_key: _record(summary_key, detail=payload),
+        _detail_key(evaluator, POINT, other_window): _record(_detail_key(evaluator, POINT, other_window), detail=payload),
+    })
+
+    assert evaluator.detail_of(POINT, window=JAN) is None
+
+    assert _detail_key(evaluator, POINT, JAN) in looked_up
+    assert summary_key not in looked_up, "a detail request must resolve the detail row by its exact key"
+
+
+def test_detail_of_keeps_missing_evidence_missing_and_surfaces_a_broken_payload_as_integrity(monkeypatch: pytest.MonkeyPatch) -> None:
+    evaluator = _evaluator()
+    key = _detail_key(evaluator, POINT, JAN)
+    payload = project_response(_request(detail=True), _response(), strategy_key="ema_crossover_signal", initial_cash=100_000.0).detail
+    rows: dict[str, object] = {}
+    _durable_rows(monkeypatch, rows)
+
+    assert evaluator.detail_of(POINT, window=JAN) is None, "a row that never ran is legitimate missing evidence"
+
+    rows[key] = _record(key, status="failed", detail=None)
+    assert evaluator.detail_of(POINT, window=JAN) is None, "a failed run's absent payload is legitimate missing evidence"
+
+    for broken in (None, {"daily_equity": [], "trades": []}, {"initial_cash": 1.0, "daily_equity": "gone", "trades": []}):
+        rows[key] = _record(key, status="completed", detail=broken)
+        with pytest.raises(EvidenceIntegrityError, match=key[:12]):
+            evaluator.detail_of(POINT, window=JAN)
+
+    rows[key] = _record(key, status="completed", detail=payload)
+    assert evaluator.detail_of(POINT, window=JAN) == payload

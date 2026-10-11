@@ -48,9 +48,11 @@ from app.research.golden_search.concentration import concentration
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, point_hash
 from app.research.golden_search.evaluator import (
     EvaluationCapability,
+    EvidenceIntegrityError,
     ExecuteBacktest,
     StudyEvaluator,
     Window,
+    detail_integrity_problem,
     engine_executor,
 )
 from app.research.golden_search.evidence import (
@@ -667,11 +669,20 @@ def _stored_rehearsal_for(ctx: StageContext, point_hash: str) -> dict[str, Any] 
 
 
 def _development_detail_for(ctx: StageContext, point: Mapping[str, Any]) -> tuple[Metrics | None, Mapping[str, Any] | None]:
-    """The stored development detail run of one point, read back without an engine evaluation or budget (#3014)."""
+    """The stored development detail run of one point, read back without an engine evaluation or budget (#3014).
+
+    A completed row whose recorded payload is absent or misshapen raises
+    :class:`EvidenceIntegrityError` instead of resurfacing as a missing
+    carry-over reading (#3039); a failed run's absent payload is legitimate.
+    """
     digest = point_hash(ctx.row.strategy_key, dict(point))
     record = run_sync(with_connection(repo.find_detail_evaluation, ctx.row.id, point_hash=digest, window_start_ms=ctx.development[0], window_end_ms=ctx.development[1]))
     if record is None:
         return None, None
+    if record.status == "completed":
+        problem = detail_integrity_problem(record.detail_json)
+        if problem is not None:
+            raise EvidenceIntegrityError(f"evaluation {record.evaluation_key}: {problem}")
     return repo.metrics_of(record), record.detail_json
 
 

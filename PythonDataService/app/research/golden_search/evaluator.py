@@ -84,6 +84,29 @@ class CapabilityError(RuntimeError):
     """An evaluation window lies outside every interval this stage may score."""
 
 
+class EvidenceIntegrityError(RuntimeError):
+    """A completed detail evaluation's recorded payload is absent or not the stored shape (#3039)."""
+
+
+# The keys ``detail_payload`` writes; a completed detail row without them cannot feed a reading.
+_DETAIL_REQUIRED_KEYS = ("initial_cash", "daily_equity", "trades")
+
+
+def detail_integrity_problem(detail: object) -> str | None:
+    """What disqualifies a recorded detail payload as evidence, or ``None`` when it holds the required shape."""
+    if not isinstance(detail, Mapping):
+        return "no recorded detail payload"
+    missing = [name for name in _DETAIL_REQUIRED_KEYS if name not in detail]
+    if missing:
+        return f"recorded detail payload is missing {', '.join(missing)}"
+    daily = detail["daily_equity"]
+    if not isinstance(daily, list) or any(not isinstance(point, list) or len(point) != 2 for point in daily):
+        return "recorded daily_equity is not a list of (session close ms, equity) points"
+    if not isinstance(detail["trades"], list):
+        return "recorded trades is not a list"
+    return None
+
+
 @dataclass(frozen=True)
 class EvaluationCapability:
     """The half-open intervals a stage may score; a window must fit inside one of them."""
@@ -330,7 +353,9 @@ class StudyEvaluator:
     new_runs: int = 0
     cache_hits: int = 0
     _warmups: dict[int, date] = field(default_factory=dict)
-    # Each detail run's bounded evidence, by evaluation key, as recorded or read back from the cache.
+    # Each detail run's bounded evidence, by evaluation key, as recorded by
+    # this instance or read back from the study's durable rows. An optional
+    # cache: ``detail_of`` resolves completed evaluations without it (#3039).
     _details: dict[str, Mapping[str, Any] | None] = field(default_factory=dict)
 
     def warmup_for(self, window_start_ms: int) -> date:
@@ -387,7 +412,16 @@ class StudyEvaluator:
                 self.cache_hits += reservation.counted_as_cache_hit
                 results[key] = repo.metrics_of(reservation.record)
                 if detail:
-                    self._details[key] = reservation.record.detail_json
+                    # A row this attempt's own engine recorded is the in-flight
+                    # outcome (a repeated request cache-hits it); a row left by
+                    # an earlier attempt is a durable readback — the resume's
+                    # only authority, which must still hold its payload (#3039).
+                    self._cache_detail(
+                        key,
+                        status=reservation.record.status,
+                        detail=reservation.record.detail_json,
+                        verify=reservation.record.attempt != self.attempt,
+                    )
                 self.on_evaluated(self.new_runs + self.cache_hits)
                 continue
             try:
@@ -421,14 +455,48 @@ class StudyEvaluator:
             self.new_runs += 1
             results[key] = outcome.metrics
             if detail:
-                self._details[key] = outcome.detail
+                self._cache_detail(key, status=outcome.metrics.status, detail=outcome.detail, verify=False)
             self.on_evaluated(self.new_runs + self.cache_hits)
         return [results[key] for key, _, _ in keyed]
 
+    def _cache_detail(self, key: str, *, status: str, detail: Mapping[str, Any] | None, verify: bool) -> None:
+        """Remember one run's recorded detail for this instance's lifetime.
+
+        ``verify`` marks a *durable readback* — a completed row this instance
+        is re-reading as its only authority (a resume's cache hit, or
+        :meth:`detail_of`'s store read). There, an absent or misshapen payload
+        is an integrity fault of the evidence store (#3039) and raises instead
+        of resurfacing as a spurious missing-evidence reading. An in-flight
+        engine outcome records as it was returned: a completed run the engine
+        produced without detail is the protocol's named-missing case, not a
+        failure (#3012).
+        """
+        if verify and status == "completed":
+            problem = detail_integrity_problem(detail)
+            if problem is not None:
+                raise EvidenceIntegrityError(f"evaluation {key}: {problem}")
+        self._details[key] = detail
+
     def detail_of(self, point: Mapping[str, Any], *, window: Window) -> Mapping[str, Any] | None:
-        """The detail payload of ``point``'s base-scenario detail run over ``window`` that this evaluator evaluated; None without one."""
+        """The detail payload of ``point``'s base-scenario detail run over ``window``; None without one.
+
+        The local dictionary is an optional cache, not the authority (#3039):
+        a completed evaluation this instance has not evaluated is read back
+        from the study's durable rows by its exact evaluation key — context,
+        point, window, base scenario, detail — without an engine call and
+        without touching budget or retry allowance. A completed row whose
+        payload is absent or not the stored shape raises
+        :class:`EvidenceIntegrityError`; a row that never ran, or whose run
+        failed, is legitimate missing evidence and stays ``None``.
+        """
         digest = hash_point(self.strategy_key, dict(point))
-        return self._details.get(evaluation_key(self.context_digest, digest, window, BASE_SCENARIO, True))
+        key = evaluation_key(self.context_digest, digest, window, BASE_SCENARIO, True)
+        if key not in self._details:
+            record = run_sync(with_connection(repo.get_evaluation, self.study_id, key))
+            if record is None or record.status != "completed":
+                return None
+            self._cache_detail(key, status=record.status, detail=record.detail_json, verify=True)
+        return self._details[key]
 
     def _run(self, request: EvaluationRequest) -> EvaluationResult:
         try:
