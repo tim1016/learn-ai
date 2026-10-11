@@ -110,7 +110,8 @@ class BotEndView(BaseModel):
     before an early close, and while the end waits for the operator, when it
     says why. ``waits_for_operator`` is true while the end has come and the
     Clerk sends no order at it: the bot's position is the operator's to close
-    or write off (#2854). ``editable`` says whether the panel may offer to
+    or write off, and it stays so once an end already carried out has its own
+    sale settled as not sent (#2854). ``editable`` says whether the panel may offer to
     change it now. ``default_end_at_ms`` is the default end (Deploy's rule)
     the fields open on when the owner adds an end to a bot with none. It is
     null whenever an end is already set -- so always on Deploy's
