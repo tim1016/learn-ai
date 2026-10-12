@@ -301,6 +301,52 @@ describe('a run that is going', () => {
     expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
   });
 
+  it('says nothing of a failed earlier reading once a later one has shown the result', async () => {
+    const service = fakeService(vi);
+    const failures: ((error: Error) => void)[] = [];
+    service.run.mockImplementationOnce(() => new Promise<RunDetail>((_resolve, reject) => failures.push(reject)));
+    service.run.mockResolvedValue(runDetail());
+    const jobs = fakeJobs();
+    jobs.register('job-7');
+    await renderRun(runItem(), { service, jobs });
+
+    jobs.emit('job-7', { type: 'job.completed', result_url: '/x' });
+    expect(await screen.findByRole('region', { name: 'Headline figures' })).toBeTruthy();
+    failures[0]?.(new Error('offline'));
+    await lettingGo();
+
+    expect(screen.queryByText(/could not be read/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+
+  it('shows nothing of the result of the run it had before while the next run is being read', async () => {
+    const service = fakeService(vi);
+    service.run.mockImplementation((id: number) => (id === 7 ? Promise.resolve(runDetail({ id: 7 })) : new Promise<RunDetail>(() => undefined)));
+    const { view } = await renderRun(runItem({ id: 7, status: 'complete' }), { service });
+    expect(await screen.findByRole('region', { name: 'Headline figures' })).toBeTruthy();
+
+    view.fixture.componentRef.setInput('run', runItem({ id: 8, job_id: 'job-8', status: 'running' }));
+    await lettingGo();
+
+    await waitFor(() => expect(service.run).toHaveBeenCalledWith(8));
+    expect(screen.queryByRole('region', { name: 'Headline figures' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
+  });
+
+  it('shows the next run as it was given, not as the run before it ended, when the next run cannot be read', async () => {
+    const service = fakeService(vi);
+    service.run.mockImplementation((id: number) => (id === 7 ? Promise.resolve(runDetail({ id: 7 })) : Promise.reject(new Error('offline'))));
+    const { view } = await renderRun(runItem({ id: 7, status: 'complete' }), { service });
+    expect(await screen.findByRole('region', { name: 'Headline figures' })).toBeTruthy();
+
+    view.fixture.componentRef.setInput('run', runItem({ id: 8, job_id: 'job-8', status: 'running' }));
+
+    expect(await screen.findByText(/could not be read/)).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Headline figures' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
+  });
+
   it('reads a run that is over once, even when its job is still known to this tab and ended', async () => {
     const service = fakeService(vi);
     readsAs(service, runDetail());
