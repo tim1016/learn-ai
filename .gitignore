@@ -107,6 +107,8 @@ PythonDataService/.cutover/
 PythonDataService/var/broker_captures/
 # Optional local working notes and handoff artifacts.
 .scratch/
+# Local scratch output under the data service (benchmark dumps, one-off drivers).
+PythonDataService/tmp/
 
 # Playwright local run output (CI uploads these as artifacts).
 Frontend/test-results/
