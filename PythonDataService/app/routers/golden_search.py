@@ -315,22 +315,6 @@ async def get_candidate(candidate_key: CandidateKey, study_id: StudyId) -> Golde
 # ── Jobs boundary ────────────────────────────────────────────────────────
 
 
-async def _research_record_write(coro, timeout: float = 60.0):
-    """Await a dispatch-time research-record write on the named writer loop (#3047).
-
-    Binding, stamping and release are research-record writes — F15's writer
-    loop owns those — and in the isolated runtime that loop's pool is the
-    capped one the connection envelope sized. Awaiting them here instead
-    would lazily size the app loop's own pool at the module ceiling,
-    spending ten connections no envelope accounted for.
-    """
-    from asyncio import to_thread
-
-    from app.utils.background_loop import run_on_background_loop
-
-    return await to_thread(run_on_background_loop, coro, timeout=timeout)
-
-
 @jobs_router.post("/golden-search", status_code=status.HTTP_202_ACCEPTED, response_model=GoldenSearchJobAccepted)
 async def start_golden_search_job(req: GoldenSearchJobRequest) -> GoldenSearchJobAccepted:
     """Run the stage a guarded command authorized, on a worker thread. 202 once the job is bound to it.
@@ -353,19 +337,22 @@ async def start_golden_search_job(req: GoldenSearchJobRequest) -> GoldenSearchJo
 
     # Refused authority must never bind: a stamp refusal after the bind
     # strands the study on a job no worker will serve (#3042).
+    from app.research.persistence.db import writer_loop_call
+
     await records.refuse_unauthorized_dispatch()
     try:
-        bound = await _research_record_write(service.bind_dispatch(req.study_id, stage_token=req.stage_token, job_id=req.job_id))
+        bound = await writer_loop_call(service.bind_dispatch(req.study_id, stage_token=req.stage_token, job_id=req.job_id))
     except GoldenSearchRefusal as exc:
         raise await _refused(exc) from exc
     except CallerStoppedWaitingError as exc:
         # The writer loop stalled past the call bound: the binding's fate is
-        # unknown — it may still commit. Release behind the stall (the loop
-        # drains in order) and answer retryable, never stranding the study on
+        # unknown — it may still commit. Release behind the stall (the
+        # writer pool's FIFO waiters queue the release behind the stalled
+        # bind's holder) and answer retryable, never stranding the study on
         # a job id whose retry would be refused as a dead redelivery (#3047
         # review).
         with contextlib.suppress(CallerStoppedWaitingError):
-            await _research_record_write(service.release_dispatch_binding(req.study_id, job_id=req.job_id))
+            await writer_loop_call(service.release_dispatch_binding(req.study_id, job_id=req.job_id))
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="the research writer loop stalled while binding the dispatch; retry",
@@ -376,8 +363,10 @@ async def start_golden_search_job(req: GoldenSearchJobRequest) -> GoldenSearchJo
         # The binding is durable but this dispatch will not run: release it
         # (still queued, still this job id) so a retry binds instead of
         # becoming a redelivery that liveness refuses forever (#3042). The
-        # stamp's own stall answer is a 503 here — same recovery (#3047).
-        await _research_record_write(service.release_dispatch_binding(req.study_id, job_id=req.job_id))
+        # stamp's own stall answer is a 503 here — same recovery, and a
+        # stalled release must not bury it under a 500 (#3047 review).
+        with contextlib.suppress(CallerStoppedWaitingError):
+            await writer_loop_call(service.release_dispatch_binding(req.study_id, job_id=req.job_id))
         raise
     accepted = GoldenSearchJobAccepted(job_id=req.job_id, study_id=req.study_id, status="queued")
     if bound == "redelivery":

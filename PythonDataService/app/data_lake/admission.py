@@ -269,11 +269,15 @@ class AdmissionBatcher:
                 raise
             except (catalog_client.CatalogUnavailableError, asyncpg.PostgresError,
                     OSError, TimeoutError, CallerStoppedWaitingError) as exc:
-                outage = catalog_client.CatalogUnavailableError(
+                # One fresh instance per waiter, sharing only the message —
+                # each waiter re-raises its failure on its own thread, and a
+                # shared instance races its traceback across threads (#3047
+                # review, same class as the shutdown answer above).
+                outage_message = (
                     f"cannot verify committed lake receipts ({type(exc).__name__}); the whole batch refuses together"
                 )
                 for waiter in batch:
-                    waiter.fail(outage)
+                    waiter.fail(catalog_client.CatalogUnavailableError(outage_message))
                 self._record(len(batch), 0, served_at, outage=True)
                 continue
             admitted_checks = {checks[position] for position in admitted}

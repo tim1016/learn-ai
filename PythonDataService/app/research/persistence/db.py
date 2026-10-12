@@ -54,6 +54,19 @@ def run_sync[T](coroutine: Coroutine[Any, Any, T]) -> T:
     return run_on_background_loop(coroutine, timeout=DB_CALL_TIMEOUT_SECONDS)
 
 
+async def writer_loop_call[T](coroutine: Coroutine[Any, Any, T], *, timeout: float = DB_CALL_TIMEOUT_SECONDS) -> T:
+    """Await a writer-loop coroutine from an async caller — ``run_sync``'s async twin.
+
+    A route's dispatch-time writes (binds, stamps, releases) run on the app
+    loop but belong to the writer loop: awaiting them inline would lazily
+    size the app loop's own pool at the module ceiling, spending connections
+    no envelope accounted for (#3047). A stall past ``timeout`` raises
+    ``CallerStoppedWaitingError`` while the coroutine keeps running on the
+    loop — the caller decides the recovery.
+    """
+    return await asyncio.to_thread(run_on_background_loop, coroutine, timeout=timeout)
+
+
 async def ensure_schema_at_startup() -> None:
     """Apply every pending research schema version once, as the data plane starts (#2696).
 

@@ -265,11 +265,9 @@ async def stamp_dispatch(*, job_id: str, kind: ResearchKind, record_id: str) -> 
     lock held elsewhere, or whose authority connection has died, refuses:
     raising :class:`CoordinatorHeldElsewhere` for the router to surface.
     """
-    from asyncio import to_thread
+    from app.research.persistence.db import writer_loop_call
 
-    from app.utils.background_loop import run_on_background_loop
-
-    await to_thread(run_on_background_loop, _stamp_on_authority(job_id=job_id, kind=kind, record_id=record_id), timeout=60.0)
+    await writer_loop_call(_stamp_on_authority(job_id=job_id, kind=kind, record_id=record_id))
 
 
 async def _stamp_on_authority(*, job_id: str, kind: ResearchKind, record_id: str) -> None:

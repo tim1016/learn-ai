@@ -183,27 +183,34 @@ def test_an_outage_refuses_every_pending_requester_promptly() -> None:
         first.start()
         assert in_flight.wait(timeout=5.0), "the failing lookup is in flight"
 
-        # The outage's batch-mate queues behind the failing lookup; when the
-        # outage lands, its own batch fails at once too — not after a full
-        # call bound of waiting per artifact.
+        # The outage's batch-mates queue behind the failing lookup; when the
+        # outage lands, they drain as one batch that fails at once — not
+        # after a full call bound of waiting per artifact.
         second = threading.Thread(target=submit, args=(2,), daemon=True)
+        third = threading.Thread(target=submit, args=(3,), daemon=True)
         second.start()
+        third.start()
         time.sleep(0.1)
         release.set()
 
         first.join(timeout=5.0)
         second.join(timeout=5.0)
+        third.join(timeout=5.0)
 
         # The next requester after recovery is served, not poisoned.
         recovered.set()
-        assert batcher.submit(_check(3)) is True
+        assert batcher.submit(_check(4)) is True
     finally:
         release.set()
         batcher.close()
 
     assert isinstance(failures.get(1), CatalogUnavailableError), "the failing lookup's requester got the typed outage"
     assert isinstance(failures.get(2), CatalogUnavailableError), "the queued requester got the same typed outage"
+    assert isinstance(failures.get(3), CatalogUnavailableError), "its batch-mate got the same typed outage"
     assert arrivals[2] < 5.0, "the second refusal arrived promptly, not at a full timeout"
+    assert failures[2] is not failures[3], (
+        "batch-mates re-raise their own outage instances — one shared object races its traceback across the waiter threads"
+    )
     facts = batcher.facts()
     assert facts["outages"] == 2 and facts["sql_lookups"] == 1, "one outage attempt per batch, one serving lookup after recovery"
 
