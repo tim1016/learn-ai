@@ -228,6 +228,8 @@ At most four option requests are in flight in the process, however many runs and
 
 The gate is one semaphore per event loop. So both callers run their captures on the process's background loop. A caller that held it from another loop would count a second four.
 
+A past-chain download that the caller cancels (a client that hangs up) does not stop a capture that has begun. A capture that has claimed its row must reach its publish or its failure, or the row stays `fetching` until its lease runs out. A task that awaits work on another loop and is cancelled cancels that work, so the cancellation is held at the caller. It keeps waiting, through every further cancellation, until each capture it began has ended, a capture waiting for a place at the gate included. It begins no more, and only then is it cancelled. An error the captures meet after the cancellation is logged and dropped.
+
 A day another request is fetching right now is not a failure. A run's capture waits and asks again for up to the lake's lease and a minute, then fails with its own reason. While it waits nothing else moves, so the job's log says so once for each wait, and says when it carries on.
 
 Why. Two runs at once must not double the rate the vendor sees, and nothing should be asked of the vendor twice.
@@ -238,9 +240,13 @@ Why. Two runs at once must not double the rate the vendor sees, and nothing shou
 
 For a contract's day the lake reader tells three things apart: not captured, captured and empty, and a fault. The underlying's day is held, not held, or a fault. A damaged file, bytes the catalog does not admit and an unreachable catalog are faults. They are never read as "missing".
 
-A bar that cannot be placed makes the whole day a fault. That means a close that is not on a whole minute, or that falls on another New York date. Nothing is left out, filled in or carried forward. The bar left out could be the minute a stop was hit, and the result would not say so. The reader raises the kind's unreadable-file error, or a subclass of it, and hands nothing over. A run reports such a day as stored bars that break the rules of a bar, and names the session. Check data lists the session as one that cannot be tested.
+The underlying's day is also a fault when its file holds a row the stock reader would skip or read loosely (a row of another width, an empty line, a number written another way), or does not hold exactly the one member named for the day. The stock reader would hand over a good, shorter day. So the reader checks every row of the admitted bytes against the form the lake writes, and refuses the day instead.
 
-At ingest the lake refuses an option bar that does not start on a whole minute, like any other corrupt vendor answer. A bar that starts in the last minute of a date closes on the next date: the lake can store it, and the read refuses the day.
+A bar that cannot be placed makes the whole day a fault. That means a close that is not on a whole minute, or that falls on another New York date. Nothing is left out, filled in or carried forward. The bar left out could be the minute a stop was hit, and the result would not say so. The reader raises the kind's unreadable-file error, or a subclass of it, and hands nothing over.
+
+At ingest the lake refuses an option bar that does not start on a whole minute, like any other corrupt vendor answer. The lake's own parser of a stored option day refuses one too, so a stored day holding one is unreadable, and a download fetches it again. A bar that starts in the last minute of a date closes on the next date: the lake's parser accepts it, and the read refuses the day.
+
+Whether a download fetches an unreadable day again is the lake's to say, and Check data says no more than that. The lake fetches a contract's day again whenever its own parser refuses the file, because its reuse gate runs that parser, and it holds as good the one thing the reader still refuses after it, a close on another New York date. For the underlying the stock capture's own gate decides, and it is not the reader. It rebuilds a day that fails the publication contract (a minute twice, a price of zero), a row it cannot parse, and bytes the catalog does not admit. It keeps a bar off a whole minute, a row of another width and an empty line. Check data says "will be fetched again" only of a day the lake replaces. A session whose stored day the lake keeps cannot be tested. A run that meets such a day fails as unreadable and names the session, in words that tell bars that break the rules of a bar from a file that cannot be read. The table is in the module docstring of `data_check.py`, and a test puts each row through a real download.
 
 *Rejected:* leaving such a bar out and counting it, the lake reader's first design.
 

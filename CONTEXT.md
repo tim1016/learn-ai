@@ -1866,8 +1866,12 @@ structures).
   stored, or it is skipped and needs nothing), **needs download** (it can be tested
   once data is fetched, and what is missing is named) or **cannot be tested** (with
   every plain reason: older than the data plan, its data not final yet, no
-  published fee rates, a failure the lake holds and will not try again, stored bars
-  that break the rules of a bar).
+  published fee rates, a failure the lake holds and will not try again, a stored day
+  the run cannot use and a download would not replace: bars that break the rules of
+  a bar, or a file not in the form the lake writes). A stored day the run cannot use
+  and the lake will fetch again (a damaged file, a contract day with a bar off a
+  whole minute, an underlying day the stock capture rejects) is **needs download**,
+  with a note; the table of which days are which is in `data_check.py`.
 - **Longest testable stretch** — the longest unbroken run of testable sessions in a
   checked range, offered with the range that runs just them. Running it is the
   owner's explicit choice and makes a new, stated range (#3030 calls it "Run
@@ -1879,7 +1883,8 @@ structures).
   holds the day for a listed contract and the day has no bar, so the contract did
   not trade. Not captured: the lake holds nothing for it. A run stops on the second
   and takes the first as a fact about the market. A damaged file is neither: it is
-  an error.
+  an error. Whether a download then fetches it again is the lake's to say, not the
+  reader's: some days the reader refuses are days the lake keeps.
 - **Option day** — one contract's minute trade bars for one session, held in the
   lake. A minute with no trade has no bar and is never filled. It is taken only
   once the session's New York date has passed.
@@ -1890,7 +1895,8 @@ structures).
   nothing else, what a view or a run needs. A run's download comes before its
   replay and brings the underlying's raw minute bars, each session's listing and
   the contract days the session can read. A run never goes on over data that was
-  only partly fetched.
+  only partly fetched. A download the caller cancels lets the captures it began end,
+  begins no more, and then ends cancelled.
 - **Trade, trade win rate, daily win rate** — a trade is one leg round trip, won,
   lost or break-even by its profit after fees and slippage. Trade win rate is won
   trades over trades. Daily win rate is profitable sessions over traded sessions.
