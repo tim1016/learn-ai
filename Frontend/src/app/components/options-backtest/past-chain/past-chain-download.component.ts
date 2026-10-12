@@ -48,6 +48,11 @@ export class PastChainDownloadComponent {
     this.result()?.nativeElement.focus();
   }
 
+  /** An item is one thing the download was for, named by its kind and its subject. */
+  protected itemKey(item: DownloadItem): string {
+    return `${item.kind}:${item.subject}`;
+  }
+
   protected kindLabel(item: DownloadItem): string {
     return item.kind === 'listing' ? 'Listing' : item.kind === 'underlying' ? "Underlying's bars" : 'Contract';
   }

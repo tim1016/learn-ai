@@ -454,6 +454,12 @@ describe('what an answer of a download comes to', () => {
     expect(sessionNotOver(downloadAnswer([item('listing', 'SPY', 'fetched'), item('underlying', 'SPY', 'failed', 'provider_rate_limited')]))).toBe(false);
   });
 
+  it('says the session is not over when one item among others says so', () => {
+    const answer = downloadAnswer([item('listing', 'SPY', 'fetched'), item('underlying', 'SPY', 'failed', 'session_not_over', 'not over'), item('contract', 'SPY261016C00602000', 'failed', 'provider_no_data')]);
+
+    expect(sessionNotOver(answer)).toBe(true);
+  });
+
   it('counts the items by how each came out', () => {
     const answer = downloadAnswer([
       item('listing', 'SPY', 'fetched'),

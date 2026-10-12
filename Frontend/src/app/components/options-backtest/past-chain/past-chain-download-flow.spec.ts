@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { ChainDownloadFlow, type DownloadAsked } from './past-chain-download-flow';
-import { DownloadNotAllowedError } from './past-chain.service';
+import { DownloadNotAllowedError, PastChainRefusedError } from './past-chain.service';
 import type { DownloadAnswer } from './past-chain.types';
 import { downloadAnswer, item, TRADING_DATE_MS } from './testing/fixtures';
 
@@ -78,6 +78,18 @@ describe('a download being asked for', () => {
     await expect(flow.run(ASKED)).resolves.toBe(true);
 
     expect(flow.state().kind).toBe('answered');
+  });
+
+  it.each([
+    ['the server answered', () => Promise.resolve(downloadAnswer([])), true],
+    ['the server refused the request, which it did nothing about', () => Promise.reject(new PastChainRefusedError('OPTIONS_BACKTEST_TOO_MANY_CONTRACTS', 'too many', 400)), false],
+    ['the page is not allowed', () => Promise.reject(new DownloadNotAllowedError(null, 403)), false],
+    ['the server failed (503), and may have fetched before it did', () => Promise.reject(new PastChainRefusedError('OPTIONS_BACKTEST_LAKE_CATALOG_UNAVAILABLE', 'out of reach', 503)), true],
+    ['the call never came back, and the server may have fetched', () => Promise.reject(new Error('network down')), true],
+  ])('says whether what is stored may have changed, and so should be read again, when %s', async (_name, send, readAgain) => {
+    const flow = new ChainDownloadFlow(send);
+
+    await expect(flow.run(ASKED)).resolves.toBe(readAgain);
   });
 
   it('puts away an answer that no longer describes what is on screen', async () => {

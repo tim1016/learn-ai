@@ -66,17 +66,29 @@ describe('why a download did not happen', () => {
     expect(downloadProblemOf(new DownloadNotAllowedError(null, 401))).toEqual({ kind: 'not_allowed', serverMessage: null });
   });
 
-  it('is the server refusal with its code, and tryable only when the server could not be reached', () => {
+  it('is the server refusal with its code, and says nothing was downloaded only for a refusal of the request itself', () => {
     expect(downloadProblemOf(new PastChainRefusedError('OPTIONS_BACKTEST_TOO_MANY_CONTRACTS', 'a download takes at most N contracts', 400))).toEqual({
       kind: 'refused',
       message: 'a download takes at most N contracts',
       code: 'OPTIONS_BACKTEST_TOO_MANY_CONTRACTS',
-      canRetry: false,
+      nothingDownloaded: true,
     });
-    expect(downloadProblemOf(new PastChainRefusedError('OPTIONS_BACKTEST_LAKE_CATALOG_UNAVAILABLE', 'out of reach', 503))).toMatchObject({ canRetry: true });
+    expect(downloadProblemOf(new PastChainRefusedError('OPTIONS_BACKTEST_LAKE_CATALOG_UNAVAILABLE', 'out of reach', 503))).toMatchObject({ nothingDownloaded: false });
   });
 
-  it('has words of its own when nothing readable came back', () => {
-    expect(downloadProblemOf(new HttpErrorResponse({ status: 0 }))).toEqual({ kind: 'refused', message: 'The download could not be started.', code: null, canRetry: true });
+  it.each([
+    ['a 422 the server read and refused', invalid(['body', 'underlying']), true],
+    ['a 404', new HttpErrorResponse({ status: 404 }), true],
+    ['a 409', new HttpErrorResponse({ status: 409 }), true],
+    ['a 500', new HttpErrorResponse({ status: 500, error: { detail: { message: 'the lake is on fire' } } }), false],
+    ['a 502', new HttpErrorResponse({ status: 502 }), false],
+    ['a call that never came back', new HttpErrorResponse({ status: 0 }), false],
+    ['something that is not an answer at all', new Error('network down'), false],
+  ])('says nothing was downloaded only when the server refused before doing anything: %s is %s', (_name, error, nothing) => {
+    expect(downloadProblemOf(error)).toMatchObject({ kind: 'refused', nothingDownloaded: nothing });
+  });
+
+  it('has words of its own when nothing readable came back, and cannot say that nothing was downloaded', () => {
+    expect(downloadProblemOf(new HttpErrorResponse({ status: 0 }))).toEqual({ kind: 'refused', message: 'The download could not be started.', code: null, nothingDownloaded: false });
   });
 });

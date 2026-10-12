@@ -1,8 +1,9 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
+import { pickSymbol } from '../../../shared/symbol-picker/testing/fake-picker-world';
 import { paragraph, reads } from '../testing/page-actions';
-import { DownloadNotAllowedError, PastChainRefusedError } from './past-chain.service';
+import { DownloadNotAllowedError, PastChainInvalidError, PastChainRefusedError } from './past-chain.service';
 import type { DownloadAnswer, DownloadRequest } from './past-chain.types';
 import { deferred } from './testing/deferred';
 import { chainDay, chainExpiry, contract, downloadAnswer, EXPIRY_MS, item, side, TRADING_DATE, TRADING_DATE_MS, underlyingPrice } from './testing/fixtures';
@@ -163,6 +164,18 @@ describe('what a download answers', () => {
     expect(assertNewYorkTimes(result)).toBe(1);
   });
 
+  it('shows the tickers of the answer through the shared symbol display, and a contract symbol as plain code', async () => {
+    await openChainOf(chainWithFiveMissing(), async () => answered());
+
+    fireEvent.click(button());
+
+    const result = await screen.findByRole('group', { name: 'Download result' });
+    const items = within(result).getAllByRole('listitem');
+    expect(items.map((line) => line.querySelectorAll('app-asset-identity').length)).toEqual([1, 1, 0, 0, 0]);
+    expect(items.map((line) => line.querySelectorAll('.subject').length)).toEqual([0, 0, 1, 1, 1]);
+    expect(result.querySelectorAll('h3 app-asset-identity').length).toBe(1);
+  });
+
   it('moves the keyboard to the result, where the pressed button no longer is', async () => {
     await openChainOf(chainWithFiveMissing(), async () => answered());
 
@@ -207,6 +220,54 @@ function chainTableOf(): HTMLElement {
   return screen.getByRole('table', { name: /Calls on the left/ });
 }
 
+describe('a download for an underlying other than the one the tab started with', () => {
+  const NOT_STORED = () => chainDay({ listing_state: 'not_stored', expiries: [] });
+
+  async function renderAfterPicking(download: (request: DownloadRequest) => Promise<DownloadAnswer>) {
+    const service = fakeChainService(vi, { day: vi.fn(async () => NOT_STORED()), download: vi.fn(download) });
+    const view = await renderChainTab(service);
+    pickDate(TRADING_DATE);
+    await screen.findByRole('button', { name: 'Download missing data' });
+    pickSymbol(view.fixture, 'AAPL');
+    await waitFor(() => expect(service.day).toHaveBeenCalledTimes(2));
+    return { service, view };
+  }
+
+  it('asks for the underlying that was picked, and not for the one the tab started with', async () => {
+    const { service } = await renderAfterPicking(async () => downloadAnswer([], { underlying: 'AAPL' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Download missing data' }));
+
+    await waitFor(() => expect(service.download).toHaveBeenCalledTimes(1));
+    expect(service.download.mock.calls[0]?.[0]).toEqual({ underlying: 'AAPL', trading_date_ms: TRADING_DATE_MS, contracts: [] });
+  });
+
+  it('names the underlying the answer is about in its heading, and not the one the tab started with', async () => {
+    await renderAfterPicking(async () => downloadAnswer([item('listing', 'AAPL', 'fetched'), item('underlying', 'AAPL', 'fetched')], { underlying: 'AAPL' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Download missing data' }));
+
+    expect(reads(await screen.findByRole('heading', { name: /Download of/ }))).toBe('Download of AAPL on 2026-10-09');
+    expect(within(screen.getByRole('group', { name: 'Download result' })).getAllByRole('listitem').map((line) => reads(line))).toEqual(['Listing AAPL Fetched', "Underlying's bars AAPL Fetched"]);
+  });
+
+  it('puts away the answer for the earlier underlying when another is picked, so that it is never read as the answer for the new one', async () => {
+    const day = vi.fn(async () => NOT_STORED());
+    const service = fakeChainService(vi, { day, download: vi.fn(async () => downloadAnswer([item('listing', 'SPY', 'fetched')])) });
+    const view = await renderChainTab(service);
+    pickDate(TRADING_DATE);
+    fireEvent.click(await screen.findByRole('button', { name: 'Download missing data' }));
+    expect(reads(await screen.findByRole('heading', { name: /Download of/ }))).toBe('Download of SPY on 2026-10-09');
+
+    pickSymbol(view.fixture, 'AAPL');
+
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Download result' })).toBeNull());
+    expect(screen.queryByRole('heading', { name: /Download of/ })).toBeNull();
+    // The date was not changed, so this is the underlying's doing alone.
+    expect((screen.getByLabelText('Trading date') as HTMLInputElement).value).toBe(TRADING_DATE);
+  });
+});
+
 describe('a download the server will not take', () => {
   it('names the server cap in the server words when it refuses a call for naming too many, sends nothing else, and leaves the button free', async () => {
     const refusal = new PastChainRefusedError('OPTIONS_BACKTEST_TOO_MANY_CONTRACTS', 'a download takes at most 60 contracts; 61 were named', 400);
@@ -239,15 +300,67 @@ describe('a download the server will not take', () => {
     expect(screen.queryByText(/could not be started/)).toBeNull();
   });
 
-  it('says what the browser says when the call never reached the server, and that nothing was downloaded', async () => {
-    await openChainOf(chainWithFiveMissing(), async () => {
+  const MAY_OR_MAY_NOT = 'The download may or may not have happened. The day has been read again: what is shown is what is stored.';
+
+  it('says what the browser says when the call never came back, that it may or may not have happened, and reads the day and the chain again', async () => {
+    const service = await openChainOf(chainWithFiveMissing(), async () => {
       throw new Error('network down');
     });
 
     fireEvent.click(button());
 
     expect(reads(await screen.findByRole('alert'))).toBe('The download could not be started.');
-    expect(screen.getByText('Nothing was downloaded. You can press the button again.')).toBeTruthy();
+    expect(screen.getByText(MAY_OR_MAY_NOT)).toBeTruthy();
+    expect(screen.queryByText(/Nothing was downloaded/)).toBeNull();
+    await waitFor(() => expect(service.day).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(service.expiry).toHaveBeenCalledTimes(2));
+  });
+
+  it('says it may or may not have happened, and reads again, when the server failed (503) after it began', async () => {
+    const service = await openChainOf(chainWithFiveMissing(), async () => {
+      throw new PastChainRefusedError('OPTIONS_BACKTEST_LAKE_CATALOG_UNAVAILABLE', "The data lake's catalog cannot be reached.", 503);
+    });
+
+    fireEvent.click(button());
+
+    expect(await screen.findByText(MAY_OR_MAY_NOT)).toBeTruthy();
+    expect(screen.queryByText(/Nothing was downloaded/)).toBeNull();
+    await waitFor(() => expect(service.day).toHaveBeenCalledTimes(2));
+  });
+
+  it.each([
+    ['refuses the request', new PastChainRefusedError('OPTIONS_BACKTEST_TOO_MANY_CONTRACTS', 'too many', 400)],
+    ['does not accept it (422)', new PastChainInvalidError([{ loc: ['body', 'contracts'], msg: 'Input should be a valid list' }])],
+  ])('says nothing was downloaded, and reads nothing again, when the server %s', async (_name, refusal) => {
+    const service = await openChainOf(chainWithFiveMissing(), async () => {
+      throw refusal;
+    });
+
+    fireEvent.click(button());
+
+    expect(await screen.findByText('Nothing was downloaded.')).toBeTruthy();
+    expect(screen.queryByText(/may or may not have happened/)).toBeNull();
+    await new Promise((done) => setTimeout(done, 20));
+    expect(service.day).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a download that finishes after the tab is gone', () => {
+  it('ends quietly: there is nothing left to read again or to put the keyboard on', async () => {
+    const answer = deferred<DownloadAnswer>();
+    const service = fakeChainService(vi, { day: vi.fn(async () => chainDay({ listing_state: 'not_stored', expiries: [] })), download: vi.fn(() => answer.promise) });
+    const view = await renderChainTab(service);
+    pickDate(TRADING_DATE);
+    await screen.findByRole('button', { name: 'Download missing data' });
+    // The click handler does not hand back its promise, so the spec starts the download as the button does and keeps it.
+    const download: Promise<void> = view.fixture.componentInstance['startDownload']();
+    await waitFor(() => expect(service.download).toHaveBeenCalledTimes(1));
+
+    view.fixture.destroy();
+    answer.resolve(downloadAnswer([item('listing', 'SPY', 'fetched')]));
+
+    await expect(download).resolves.toBeUndefined();
+    expect(service.day).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -274,6 +387,17 @@ describe('a session that is not over yet', () => {
     expect(screen.queryByRole('button', { name: 'Download missing data' })).toBeNull();
     expect(screen.getAllByText(/is not over in New York yet/).length).toBe(2);
     expect(screen.getAllByText('Session Not Over').length).toBe(2);
+  });
+
+  it('is said when only some of the items say so, as well as when all do', async () => {
+    const mixed = downloadAnswer([item('listing', 'SPY', 'fetched'), item('underlying', 'SPY', 'failed', 'session_not_over', 'not over'), item('contract', 'SPY261016C00602000', 'failed', 'provider_no_data', 'none')]);
+    const day = vi.fn(async () => chainDay({ listing_state: 'not_stored', expiries: [] }));
+    await renderChainTab(fakeChainService(vi, { day, download: vi.fn(async () => mixed) }));
+    pickDate(TRADING_DATE);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Download missing data' }));
+
+    expect(await screen.findByText('The session is not over yet, so its data cannot be fetched until the next New York day.')).toBeTruthy();
   });
 
   it('is only said of that date: another date offers the download again', async () => {

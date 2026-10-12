@@ -1,3 +1,5 @@
+import { HttpErrorResponse } from '@angular/common/http';
+
 import { extractServerMessage } from '../../broker/operation-error';
 import { DownloadNotAllowedError, PastChainInvalidError, PastChainRefusedError } from './past-chain.service';
 
@@ -57,13 +59,30 @@ function invalidControl(error: PastChainInvalidError): ControlName | 'area' {
   return 'area';
 }
 
-/** Why a download did not happen at all (as against an item that failed, which is an answer). */
+/** Why a download did not come back with an answer (as against an item that failed, which is an answer). */
 export type DownloadProblem =
   | { readonly kind: 'not_allowed'; readonly serverMessage: string | null }
-  | { readonly kind: 'refused'; readonly message: string; readonly code: string | null; readonly canRetry: boolean };
+  | {
+      readonly kind: 'refused';
+      readonly message: string;
+      readonly code: string | null;
+      /**
+       * True only when the server refused the request (a 4xx) and so did nothing. After a 5xx, or a call that never
+       * came back, it may have fetched some or all of what was asked, so nothing is said to have been left undone.
+       */
+      readonly nothingDownloaded: boolean;
+    };
 
 export function downloadProblemOf(error: unknown): DownloadProblem {
   if (error instanceof DownloadNotAllowedError) return { kind: 'not_allowed', serverMessage: error.serverMessage };
   const problem = readProblemOf(error, 'The download could not be started.');
-  return { kind: 'refused', message: problem.message, code: problem.code, canRetry: problem.canRetry };
+  const status = statusOf(error);
+  return { kind: 'refused', message: problem.message, code: problem.code, nothingDownloaded: status !== null && status >= 400 && status < 500 };
+}
+
+/** The HTTP status a failed call came back with, when it came back with one. */
+function statusOf(error: unknown): number | null {
+  if (error instanceof PastChainRefusedError) return error.status;
+  if (error instanceof PastChainInvalidError) return 422;
+  return error instanceof HttpErrorResponse ? error.status : null;
 }

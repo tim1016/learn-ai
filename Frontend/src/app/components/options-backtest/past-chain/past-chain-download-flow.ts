@@ -28,7 +28,11 @@ export class ChainDownloadFlow {
 
   constructor(private readonly send: (request: DownloadRequest) => Promise<DownloadAnswer>) {}
 
-  /** Asks for the download. Resolves to whether the server answered; false too when one was already running. */
+  /**
+   * Asks for the download. Resolves to whether what is stored may have changed, so that it should be read again: the
+   * server answered, or it may have fetched before the call failed. False when the server refused the request
+   * (it did nothing), when the page is not allowed, and when one was already running.
+   */
   async run(asked: DownloadAsked): Promise<boolean> {
     if (this.busy()) return false;
     this.state.set({ kind: 'running', asked });
@@ -37,8 +41,9 @@ export class ChainDownloadFlow {
       this.state.set({ kind: 'answered', asked, answer });
       return true;
     } catch (error) {
-      this.state.set({ kind: 'failed', asked, problem: downloadProblemOf(error) });
-      return false;
+      const problem = downloadProblemOf(error);
+      this.state.set({ kind: 'failed', asked, problem });
+      return problem.kind === 'refused' && !problem.nothingDownloaded;
     }
   }
 

@@ -1,4 +1,4 @@
-import { afterNextRender, ChangeDetectionStrategy, Component, computed, effect, inject, Injector, input, OnInit, resource, signal, untracked, viewChild } from '@angular/core';
+import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, Injector, input, OnInit, resource, signal, untracked, viewChild } from '@angular/core';
 import { form } from '@angular/forms/signals';
 
 import { PastChainControlsComponent } from './past-chain-controls.component';
@@ -40,8 +40,9 @@ export class PastChainTabComponent implements OnInit {
   protected readonly controls = form(this.model);
   /** The `expiry_ms` of the expiry whose chain is open. Only the owner's pick writes it. */
   protected readonly expiryMs = signal<number | null>(null);
-  /** Counts the downloads that have finished, so that reading the day again is a read of new params and never a reload. */
+  /** Counts the downloads that may have changed what is stored, so that reading the day again is a read of new params and never a reload. */
   private readonly generation = signal(0);
+  private destroyed = false;
 
   private readonly underlying = computed(() => this.model().underlying);
   private readonly tradingDateMs = computed(() => tradingDateMsOf(this.model().date));
@@ -133,6 +134,9 @@ export class PastChainTabComponent implements OnInit {
   private readonly downloadCard = viewChild(PastChainDownloadComponent);
 
   constructor() {
+    inject(DestroyRef).onDestroy(() => {
+      this.destroyed = true;
+    });
     // An answer says what it was asked for; a different underlying or date is a different subject, so the old one goes.
     effect(() => {
       this.underlying();
@@ -157,15 +161,20 @@ export class PastChainTabComponent implements OnInit {
     this.chainRead.reload();
   }
 
-  /** One call, naming exactly the contracts on screen that are not stored. When it has answered, the day and the chain are read again. */
+  /**
+   * One call, naming exactly the contracts on screen that are not stored. When it has answered, or may have fetched
+   * before it failed, the day and the chain are read again.
+   */
   protected async startDownload(): Promise<void> {
     const plan = this.plan();
     const tradingDateMs = this.tradingDateMs();
     if (plan === null || tradingDateMs === null || this.downloader.busy()) return;
     const underlying = this.underlying();
     const request = downloadRequest(plan, underlying, tradingDateMs, this.expiryMs());
-    const answered = await this.downloader.run({ underlying, tradingDateMs, request });
-    if (answered) this.generation.update((count) => count + 1);
+    const readAgain = await this.downloader.run({ underlying, tradingDateMs, request });
+    // The tab may be gone by the time the server answers: there is nothing then to read again or to put the keyboard on.
+    if (this.destroyed) return;
+    if (readAgain) this.generation.update((count) => count + 1);
     afterNextRender(() => this.downloadCard()?.focusResult(), { injector: this.injector });
   }
 
