@@ -78072,13 +78072,13 @@
         "operationId": "delete_setup_api_research_options_backtest_setups__name__delete",
         "parameters": [
           {
-            "description": "A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), not starting or ending with a space.",
+            "description": "A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), starting with a letter or a digit and not ending with a space.",
             "in": "path",
             "name": "name",
             "required": true,
             "schema": {
-              "description": "A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), not starting or ending with a space.",
-              "pattern": "^[A-Za-z0-9_.,()-](?:[A-Za-z0-9 _.,()-]{0,78}[A-Za-z0-9_.,()-])?$",
+              "description": "A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), starting with a letter or a digit and not ending with a space.",
+              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9 _.,()-]{0,78}[A-Za-z0-9_.,()-])?$",
               "title": "Name",
               "type": "string"
             }
@@ -78129,13 +78129,13 @@
         "operationId": "save_setup_api_research_options_backtest_setups__name__put",
         "parameters": [
           {
-            "description": "A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), not starting or ending with a space.",
+            "description": "A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), starting with a letter or a digit and not ending with a space.",
             "in": "path",
             "name": "name",
             "required": true,
             "schema": {
-              "description": "A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), not starting or ending with a space.",
-              "pattern": "^[A-Za-z0-9_.,()-](?:[A-Za-z0-9 _.,()-]{0,78}[A-Za-z0-9_.,()-])?$",
+              "description": "A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), starting with a letter or a digit and not ending with a space.",
+              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9 _.,()-]{0,78}[A-Za-z0-9_.,()-])?$",
               "title": "Name",
               "type": "string"
             }

@@ -39685,7 +39685,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), not starting or ending with a space. */
+                /** @description A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), starting with a letter or a digit and not ending with a space. */
                 name: string;
             };
             cookie?: never;
@@ -39730,7 +39730,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), not starting or ending with a space. */
+                /** @description A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), starting with a letter or a digit and not ending with a space. */
                 name: string;
             };
             cookie?: never;
