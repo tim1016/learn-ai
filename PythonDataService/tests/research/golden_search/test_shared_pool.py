@@ -440,7 +440,7 @@ def test_the_runtime_factorys_handoff_renews_through_the_checkpoint_relay(monkey
     monkeypatch.setattr(shared_pool_module, "ResearchWorker", lambda context: _FakeChild(context))
     try:
         factory = router._runtime_dispatch_factory(
-            on_checkpoint=on_checkpoint, cancel_check=lambda: None, emit=SimpleNamespace(log=lambda line: None)
+            on_checkpoint=on_checkpoint, cancel_check=lambda: None, emit=SimpleNamespace(log=lambda line: None, research_waiting=lambda waiting, detail=None: None)
         )
         dispatch = factory(worker_module.WorkerDispatchContext(**CONTEXT))
         outcomes = list(dispatch(None, [_crafted_item(0.1)]))

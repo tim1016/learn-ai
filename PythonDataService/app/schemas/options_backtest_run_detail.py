@@ -199,7 +199,11 @@ class OptionsBacktestTradeResponse(BaseModel):
 
 class OptionsBacktestTradesResponse(BaseModel):
     """A page of a run's leg trades. ``total`` counts every trade that matches, on every page; ``next_offset`` is the
-    ``offset`` to ask for the rest, and is ``None`` on the last page. The CSV export is never paged."""
+    ``offset`` to ask for the rest, and is ``None`` on the last page. The CSV export is never paged.
+
+    A ``leg_id`` that the run's setup does not have is a 404 when the setup can be read. On a run whose stored setup can
+    no longer be read there is no setup to say which legs the run had, so an unknown ``leg_id`` is answered from the
+    stored trades alone: a 200 with ``total`` 0, which says only that no trade was stored for that leg."""
 
     run_id: int
     total: int = Field(ge=0)
@@ -419,7 +423,16 @@ class OptionsBacktestSessionResponse(BaseModel):
     levels: list[OptionsBacktestLevelResponse]
     fills: list[OptionsBacktestFillResponse]
     marks: list[OptionsBacktestMarkResponse]
-    setup_cannot_open_reason: str | None = None
+    setup_cannot_open_reason: str | None = Field(
+        default=None,
+        description=(
+            "Why the run's stored setup can no longer be read; null when it can. When it is set, `levels` leaves out "
+            "the `momentum` line of every attempt that never filled, because that line is the leg's momentum rule "
+            "applied to the attempt's starting price and the rule is lost. Nothing else is left out: the same "
+            "attempt's `starting_price` line, the lines of every attempt that filled, and the trades, events, fills, "
+            "marks and series are served as for any run."
+        ),
+    )
 
     @classmethod
     def from_view(cls, view: SessionView) -> Self:

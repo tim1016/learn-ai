@@ -46,6 +46,10 @@ These are recorded on the claimed row, which is failed and never left fetching:
 * ``validation_failed``: what the vendor sent cannot be stored as a fact (corrupt bars, a
   price the file cannot hold or would store as 0, a listing row with no ticker or a ticker
   listed twice).
+* ``io_error``: the vendor answered and the file could not be written (a full disk, a lake or
+  staging folder that cannot be made, staging on another filesystem than the lake). The text
+  names the kind of error and the system's reason and no path; the log has the rest. Asked
+  again like any failure, up to ``MAX_CLAIM_RETRIES`` times.
 
 These come from the claim protocol, when nothing was fetched:
 
@@ -74,7 +78,7 @@ from uuid import uuid4
 
 from app.data_lake import catalog_client
 from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
-from app.data_lake.atomic import ArtifactLeaseLostError, publish_artifact
+from app.data_lake.atomic import ArtifactLeaseLostError, AtomicRenameUnsafeError, publish_artifact
 from app.data_lake.ensure_data import _LEASE_TTL_MS, _MAX_CLAIM_RETRIES, _WORKER_ID, _minute_trade_dch
 from app.data_lake.path_policy import lake_root_for, resolve_lake_root, resolve_staging_root
 from app.data_lake.polygon_fetcher import (
@@ -93,6 +97,7 @@ from app.data_lake.types import (
     PriceAdjustmentMode,
 )
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
+from app.utils.background_loop import background_loop
 from app.utils.session_anchors import et_date_at_ms, et_day_end_ms
 
 logger = logging.getLogger(__name__)
@@ -319,7 +324,7 @@ def storable_failure_text(text: str) -> str:
     return storable[:MAX_FAILURE_TEXT_CHARS]
 
 
-async def fail_row(
+async def record_failure(
     *,
     artifact_id: int,
     lease_generation: int,
@@ -327,8 +332,8 @@ async def fail_row(
     detail: str,
     symbol: str,
     trading_date: date,
-) -> OptionCaptureResult:
-    """Fail the claimed row under its generation (fenced), and answer with the typed failure.
+) -> OptionDataFailure:
+    """Fail the claimed row under its generation (fenced), and say what became of the failure.
 
     The text is made storable first (:func:`storable_failure_text`), and the answer carries the text stored.
     The catalog refuses the update when this writer no longer holds the generation (its lease was taken
@@ -341,17 +346,37 @@ async def fail_row(
         artifact_id, reason, detail, worker_id=WORKER_ID, lease_generation=lease_generation
     )
     if not recorded:
-        return OptionCaptureResult.failed(
-            OptionDataFailure(
-                "lease_timeout",
-                f"the lease on this row was taken over before this writer's failure ({reason}) could be recorded; "
-                "the row is the new owner's",
-                symbol,
-                trading_date,
-                attempt_count=1,
-            )
+        return OptionDataFailure(
+            "lease_timeout",
+            f"the lease on this row was taken over before this writer's failure ({reason}) could be recorded; "
+            "the row is the new owner's",
+            symbol,
+            trading_date,
+            attempt_count=1,
         )
-    return OptionCaptureResult.failed(OptionDataFailure(reason, detail, symbol, trading_date, attempt_count=1))
+    return OptionDataFailure(reason, detail, symbol, trading_date, attempt_count=1)
+
+
+async def fail_row(
+    *,
+    artifact_id: int,
+    lease_generation: int,
+    reason: OptionFailureReason,
+    detail: str,
+    symbol: str,
+    trading_date: date,
+) -> OptionCaptureResult:
+    """:func:`record_failure`, answered as a capture result."""
+    return OptionCaptureResult.failed(
+        await record_failure(
+            artifact_id=artifact_id,
+            lease_generation=lease_generation,
+            reason=reason,
+            detail=detail,
+            symbol=symbol,
+            trading_date=trading_date,
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -470,6 +495,17 @@ def writable_raw_roots() -> tuple[Path, Path]:
     return lake_root, staging_root
 
 
+def _write_failure_words(error: OSError | AtomicRenameUnsafeError) -> str:
+    """What failed, for the row and the wire: the kind of error and the system's reason, and no path.
+
+    An ``OSError``'s text carries the path of the file it met (``strerror`` is the reason alone); the
+    full text goes to the log.
+    """
+    if isinstance(error, OSError) and error.strerror:
+        return f"{type(error).__name__}: {error.strerror}"
+    return f"{type(error).__name__}: {error}"
+
+
 async def publish_option_artifact(
     *,
     payload: bytes,
@@ -490,9 +526,15 @@ async def publish_option_artifact(
     generation check, the rename and the completion receipt happen as one
     operation. Returns the file's sha256. A writer that lost its lease gets a ``lease_timeout``
     failure instead and must not fail the row; it is the winner's now.
+
+    A file that cannot be written (the lake or staging folder cannot be made, the disk is full, the
+    staging root is on another filesystem than the lake) is this writer's own failure on a row it
+    holds, so the row is failed under its generation as ``io_error`` and that failure is returned,
+    as every vendor failure is, and the row is never left fetching until its lease runs out. An
+    outage of the catalog is not a failed write and propagates.
     """
-    lake_root, staging_root = writable_raw_roots()
     try:
+        lake_root, staging_root = writable_raw_roots()
         file_sha = await publish_artifact(
             content=payload,
             lake_root=lake_root,
@@ -510,6 +552,25 @@ async def publish_option_artifact(
         )
     except ArtifactLeaseLostError as e:
         return OptionDataFailure("lease_timeout", str(e), symbol, trading_date, attempt_count=1)
+    except (OSError, AtomicRenameUnsafeError) as e:
+        logger.warning(
+            "data_lake.option_lake: the file could not be written; failing the row",
+            extra={
+                "action": "option_file_write_failed",
+                "file_path": str(rel_path),
+                "error_type": type(e).__name__,
+                "error": str(e),
+            },
+        )
+        return await record_failure(
+            artifact_id=lease.artifact_id,
+            lease_generation=lease.lease_generation,
+            reason="io_error",
+            detail=f"the file for {symbol} on {trading_date.isoformat()} could not be written "
+            f"({_write_failure_words(e)})",
+            symbol=symbol,
+            trading_date=trading_date,
+        )
     return file_sha
 
 
@@ -596,13 +657,19 @@ _request_gates: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Sem
 
 
 def vendor_request_gate() -> asyncio.Semaphore:
-    """The one gate on option vendor requests for the loop this runs on: ``async with`` it around a capture.
+    """The one gate on option vendor requests: ``async with`` it around a capture.
 
     Every caller of the process shares the background loop (:mod:`app.utils.background_loop`), so they share one
-    semaphore of ``MAX_VENDOR_REQUESTS_IN_FLIGHT``. A semaphore belongs to the loop that first waits on it, so one is
-    made per loop and dropped with it. Called from a coroutine.
+    semaphore of ``MAX_VENDOR_REQUESTS_IN_FLIGHT``. A semaphore belongs to the loop that first waits on it, so it is
+    made on that loop and dropped with it. Called from a coroutine running on the background loop; on any other loop
+    it raises ``RuntimeError``, since a gate made there would be a second limit of four beside the first.
     """
     loop = asyncio.get_running_loop()
+    if loop is not background_loop():
+        raise RuntimeError(
+            "the vendor request gate belongs to the process's background loop; asked for on another loop it would "
+            "make a second limit of four. Hand the work to that loop (app.utils.background_loop) and ask there."
+        )
     gate = _request_gates.get(loop)
     if gate is None:
         gate = asyncio.Semaphore(MAX_VENDOR_REQUESTS_IN_FLIGHT)

@@ -49,7 +49,7 @@ import queue
 import threading
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -1054,6 +1054,25 @@ class PooledOwnerDispatch:
             state.outstanding -= 1
             yield item, arrival
 
+
+
+def waiting_state_of(facts: Mapping[str, Any]) -> str | None:
+    """The waiting state one dispatch's scheduling facts describe (#3052).
+
+    ``"capacity"`` — runnable work is offered while every lane is busy (or
+    the global bounds refused an offer): the machine is the constraint.
+    ``"adaptive"`` — nothing is offered while lanes still run: the procedure
+    itself waits on results it depends on. ``None`` — evaluating. Read from
+    accepted scheduling facts only, never a liveness authority.
+    """
+    ready = int(facts.get("ready_width", 0))
+    busy = int(facts.get("busy_lanes", facts.get("active", 0)))
+    workers = int(facts.get("workers", 1))
+    if ready > 0 and busy >= workers:
+        return "capacity"
+    if ready == 0 and busy > 0:
+        return "adaptive"
+    return None
 
 # The wire an owner's item carries to whichever lane runs it: the child is
 # generic, so the wire — not the spawn — binds strategy, execution, manifest

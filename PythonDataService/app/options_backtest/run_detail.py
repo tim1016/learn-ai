@@ -12,7 +12,7 @@ status; nothing here knows HTTP.
 A run whose stored setup no longer validates still opens (see ``saved_runs.RunHeader``). What reads stored rows
 answers all the same: the trades, one session, the export. What needs the setup says so: the legs a trade filter can
 name come from it, so with no setup a leg filter is judged by the stored trades alone; two runs' settings cannot be
-compared without both setups, which is ``RunsSetupCannotBeRead``.
+compared without both setups, which is ``TwoRunsSetupCannotBeRead``.
 
 The decisions that need no database (is the run complete, is the leg one the setup has, may these two runs be compared)
 are functions of the headers already read: ``require_a_complete_run``, ``require_the_leg`` and ``judge_pair``.
@@ -72,8 +72,11 @@ class RunsNotComplete(RuntimeError):
         super().__init__("; ".join(f"run {run_id} ({role}) is {status}" for role, run_id, status in runs))
 
 
-class RunsSetupCannotBeRead(RuntimeError):
-    """Two runs were asked to be compared and a stored setup no longer validates: each, with its place and its reason."""
+class TwoRunsSetupCannotBeRead(RuntimeError):
+    """Two runs were asked to be compared and a stored setup no longer validates: each, with its place and its reason.
+
+    Not ``saved_runs.RunSetupCannotBeRead``, which is about one run whose result is to be rebuilt.
+    """
 
     def __init__(self, runs: tuple[tuple[str, int, str], ...]) -> None:
         self.runs = runs
@@ -201,7 +204,7 @@ def judge_pair(a_id: int, a: RunHeader | None, b_id: int, b: RunHeader | None) -
     """Both headers when the two runs may be compared, else the first reason they may not.
 
     ``RunNotFound`` for the first of the two that is missing (``a`` before ``b``); ``RunsNotComplete`` naming every one
-    that is not complete; ``RunsSetupCannotBeRead`` naming every one whose stored setup no longer validates (its
+    that is not complete; ``TwoRunsSetupCannotBeRead`` naming every one whose stored setup no longer validates (its
     settings cannot be compared without it); ``RunsOfDifferentUnderlyings`` for a pair that trade different
     underlyings. The same run twice is allowed and compares equal to itself.
     """
@@ -219,7 +222,7 @@ def judge_pair(a_id: int, a: RunHeader | None, b_id: int, b: RunHeader | None) -
         (role, run_id, header.setup_cannot_open_reason or "") for role, run_id, header in pair if header.setup is None
     )
     if unreadable:
-        raise RunsSetupCannotBeRead(unreadable)
+        raise TwoRunsSetupCannotBeRead(unreadable)
     if a.record.underlying != b.record.underlying:
         raise RunsOfDifferentUnderlyings((a_id, a.record.underlying), (b_id, b.record.underlying))
     return a, b

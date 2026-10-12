@@ -68,10 +68,12 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.engine.data.decoded_cache import DecodedArtifactCache
+from app.jobs.progress import JobCancelled
 from app.research.golden_search.declarations import point_hash as hash_point
 from app.research.golden_search.evaluator import (
     BASE_SCENARIO,
     ExecutionAssumptions,
+    WorkerLost,
     context_digest,
     evaluation_key,
     execution_context,
@@ -167,10 +169,26 @@ TIMING_KINDS: dict[str, str] = {**{name: "additive" for name in ADDITIVE_PHASES}
 # The modes the report names. The serial originals and the decoded-artifact
 # cache run today; ``serial-same-resource`` remains the contract a later
 # executor must answer for, refused by ``run_baseline`` until it exists.
-EXECUTION_MODES: tuple[str, ...] = ("serial-original", "serial-same-resource", "serial-decoded-cache")
-RUNNABLE_EXECUTION_MODES: tuple[str, ...] = ("serial-original", "serial-decoded-cache")
+EXECUTION_MODES: tuple[str, ...] = (
+    "serial-original",
+    "serial-same-resource",
+    "serial-decoded-cache",
+    "pooled-1",
+    "pooled-2",
+    "pooled-4",
+    "pooled-8",
+)
+RUNNABLE_EXECUTION_MODES: tuple[str, ...] = (
+    "serial-original",
+    "serial-decoded-cache",
+    "serial-same-resource",
+    "pooled-1",
+    "pooled-2",
+    "pooled-4",
+    "pooled-8",
+)
 TIMING_MODES: tuple[Literal["warm", "preparation-inclusive"], ...] = ("warm", "preparation-inclusive")
-RUNNABLE_TIMING_MODES: tuple[str, ...] = ("warm",)
+RUNNABLE_TIMING_MODES: tuple[str, ...] = ("warm", "preparation-inclusive")
 
 # Retention bound for the serial decoded-artifact cache (#3038): an estimate
 # of the decoded bars one process may hold, sized so the qualification corpus
@@ -706,6 +724,12 @@ def run_baseline(
             f"{execution_mode!r} is a future executor; run_baseline refuses it until the executor "
             "that measures it exists (its fields are named in modes_distinguished)"
         )
+    pooled_workers = int(execution_mode.split("-", 1)[1]) if execution_mode.startswith("pooled-") else None
+    if execution_mode == "serial-same-resource":
+        # The same-resource serial baseline is the #3044 runtime at width
+        # one: a spawned worker per evaluation, warm timing excluding its
+        # startup — the fair serial comparator for the pooled modes.
+        pooled_workers = 1
     if timing_mode not in RUNNABLE_TIMING_MODES:
         raise ValueError(
             f"{timing_mode!r} timing needs an executor with a worker to start; the serial path "
@@ -739,6 +763,32 @@ def run_baseline(
         corpus=corpus.as_dict(),
     )
     execution = _assumptions_dict()
+    if pooled_workers is not None:
+        from app.config import settings
+
+        window = max(settings.RESEARCH_DISPATCH_WINDOW, pooled_workers)
+        # Warm timing measures the pool already built; preparation-inclusive
+        # starts the clock before construction so worker startup, imports
+        # and cache construction are inside the reported wall (#3053).
+        wall_seconds = _run_pooled_baseline(
+            report=report,
+            corpus=corpus,
+            snapshot=snapshot,
+            policy=policy,
+            execution=execution,
+            workers=pooled_workers,
+            repetitions=repetitions,
+            window=window,
+            preparation_inclusive=timing_mode == "preparation-inclusive",
+            roots=list(roots),
+        )
+        report.medians_ms, report.variability_ms = _summarize(report.runs)
+        report.throughput = {
+            "valid_new_evaluations": len(report.runs),
+            "wall_seconds": round(wall_seconds, 3),
+            "evaluations_per_second": round(len(report.runs) / wall_seconds, 3) if wall_seconds > 0 else 0.0,
+        }
+        return report
     # One cache for the whole baseline when the mode asks for it: sequential
     # evaluations in this process share admitted decodes; each still runs
     # every admission check per read (#3038).
@@ -1070,3 +1120,307 @@ def summarize_report(report: BaselineReport) -> str:
         lines.append("  connections: UNVERIFIED — " + "; ".join(inventory["unverified_reasons"]))
     lines.extend(f"  note: {note}" for note in report.notes)
     return "\n".join(lines)
+
+
+# ── The pooled executor (#3053): the corpus through the real runtime ──────
+
+
+#: The task-kind marker a benchmark evaluation carries on the worker wire
+#: (#3053). The harness is a runtime caller like grid or recency; the child
+#: branch lives in ``app.research.golden_search.worker``'s kind table.
+BENCHMARK_WIRE_KIND = "benchmark_eval"
+
+
+@dataclass(frozen=True)
+class _BenchmarkReady:
+    """One corpus identity as a pool item: keyed by its evaluation key, generation-fenced."""
+
+    key: str
+    attempt: int
+    task_gen: int
+    identity: CorpusIdentity
+    request: Mapping[str, Any]
+    manifest: Mapping[str, str]
+    identity_seal: Mapping[str, Any]
+    begin: Callable[[], None] = lambda: None
+
+    def as_wire(self) -> dict[str, Any]:
+        return {
+            "kind": BENCHMARK_WIRE_KIND,
+            "key": self.key,
+            "attempt": self.attempt,
+            "task_gen": self.task_gen,
+            "evaluation_key": self.key,
+            "request": dict(self.request),
+            "manifest": dict(self.manifest),
+            "identity": {
+                "source_digest": str(self.identity_seal["source_digest"]),
+                "environment_digest": str(self.identity_seal["environment_digest"]),
+                "digest_scheme": self.identity_seal["digest_scheme"],
+            },
+        }
+
+    def outcome_of(self, message: Mapping[str, Any]) -> _BenchmarkOutcome:
+        if message.get("key") != self.key:
+            raise WorkerLost(f"a research worker answered evaluation {self.key[:16]} as another")
+        return _BenchmarkOutcome(
+            key=self.key,
+            attempt=self.attempt,
+            task_gen=self.task_gen,
+            run=message.get("run"),
+            error=str(message["error"]) if message["type"] == "failed" else None,
+            cancelled_by=JobCancelled("cancelled in a research worker")
+            if message["type"] == "failed" and message.get("error") == "cancelled"
+            else None,
+        )
+
+
+@dataclass(frozen=True)
+class _BenchmarkOutcome:
+    key: str
+    attempt: int
+    task_gen: int
+    run: Mapping[str, Any] | None
+    error: str | None = None
+    cancelled_by: Exception | None = None
+
+
+def run_benchmark_eval_task(
+    task: Mapping[str, Any],
+    *,
+    out: Any,
+    ask_admission: Callable[[Any], bytes],
+    cancel_flag: Any,
+    state: dict[str, Any],
+) -> None:
+    """The child's half of one benchmark evaluation (#3053).
+
+    Rebuilds the harness's own engine request from the wire (the window
+    crosses as int64 ms UTC; the ISO conversion happens in-function under
+    ADR 0022 exactly as the serial path's does), stamps the same additive
+    phase boundaries the serial path stamps, and returns the same
+    projection fields the serial ``IdentityRun`` hashes — plus the child's
+    own additive spans, so the report can split queue/IPC (parent-side)
+    from engine work (child-side).
+    """
+    from app.research.golden_search.worker import _expected_identity, _residency_fields, _task_checkpoint
+    from app.schemas.engine_backtest import EngineBacktestRequest
+    from app.services.engine_backtest_service import execute_engine_backtest
+
+    def raise_if_cancelled() -> None:
+        if cancel_flag.is_set():
+            raise JobCancelled("cancelled by the coordinator")
+
+    stamps: dict[str, float] = {}
+    order: list[str] = []
+
+    def on_phase(phase: str) -> None:
+        mapped = _PHASE_MAP.get(phase)
+        if mapped is not None and mapped not in stamps:
+            stamps[mapped] = time.perf_counter()
+            order.append(mapped)
+
+    try:
+        if state["identity"] != _expected_identity(task):
+            out.write(
+                {"type": "identity_refused", "key": task["key"], "reason": "sealed identity differs from the task's"}
+            )
+            return
+        checkpoint = _task_checkpoint(out, state)
+        checkpoint("preparation")
+        request = EngineBacktestRequest.model_validate(task["request"])
+        start = time.perf_counter()
+        response = execute_engine_backtest(
+            request=request,
+            on_phase=on_phase,
+            on_log=lambda message: None,
+            data_manifest=dict(task["manifest"]),
+            while_waiting=raise_if_cancelled,
+            decoded_cache=state["decoded_cache"],
+            admission=ask_admission,
+        )
+        child_total_ms = round((time.perf_counter() - start) * 1000, 3)
+        if not getattr(response, "success", False):
+            raise RuntimeError(getattr(response, "error", None) or "backtest did not succeed")
+        additive: dict[str, float] = {}
+        for position, name in enumerate(order):
+            end = stamps[order[position + 1]] if position + 1 < len(order) else start + child_total_ms / 1000
+            additive[name] = round((end - stamps[name]) * 1000, 3)
+        state["completed"] = int(state.get("completed", 0)) + 1
+        checkpoint("search", cursor_kind="durable_completions", cursor=state["completed"])
+        out.write(
+            {
+                "type": "result",
+                "key": task["key"],
+                "run": {
+                    "child_total_ms": child_total_ms,
+                    "additive_ms": additive,
+                    "bars_scored": len(response.equity_curve or []),
+                    "trades": [trade.model_dump(mode="json") for trade in response.trades or []],
+                    "equity_curve": list(response.equity_curve or []),
+                    "statistics": response.statistics,
+                },
+                **_residency_fields(state),
+            }
+        )
+    except BaseException as exc:  # the child's terminal sink
+        from app.jobs.progress import JobCancelled as Cancelled
+
+        if isinstance(exc, Cancelled):
+            out.write({"type": "failed", "key": str(task.get("key", "?")), "error": "cancelled", **_residency_fields(state)})
+            cancel_flag.set()
+            return
+        out.write(
+            {
+                "type": "failed",
+                "key": str(task.get("key", "?")),
+                "error": f"{type(exc).__name__}: {exc}",
+                **_residency_fields(state),
+            }
+        )
+
+
+def _run_pooled_baseline(
+    *,
+    report: BaselineReport,
+    corpus: BenchmarkCorpus,
+    snapshot: Any,
+    policy: Mapping[str, Any],
+    execution: Mapping[str, Any],
+    workers: int,
+    repetitions: int,
+    window: int,
+    preparation_inclusive: bool,
+    roots: Sequence[Path],
+) -> float:
+    """Run the corpus through the real runtime: one owner on the shared pool.
+
+    Warm timing excludes the pool's construction; preparation-inclusive
+    includes it (worker startup and imports) inside the reported wall, per
+    the PRD's cold-preparation definition. Nested queue/IPC per run is the
+    parent-side submit-to-result span minus the child's own total.
+    """
+    from app.research.golden_search.evaluator import WorkerLost
+    from app.research.golden_search.shared_pool import SUBMISSION_FACTOR, SharedWorkerPool, waiting_state_of
+    from app.research.sweep.identity import resolve_code_identity
+
+    pool = SharedWorkerPool(
+        workers=workers,
+        submission_bound=SUBMISSION_FACTOR * workers,
+        payload_bound_bytes=2 * 256 * 1024**2,
+        result_bound_bytes=2 * 256 * 1024**2,
+    )
+    seal = resolve_code_identity().as_dict()
+    run_wall = time.perf_counter()
+    try:
+        report.notes = report.notes or []
+        for repetition in range(repetitions):
+            items = {
+                identity.evaluation_key: _BenchmarkReady(
+                    key=identity.evaluation_key,
+                    attempt=repetition + 1,
+                    task_gen=1,
+                    identity=identity,
+                    request=_engine_request(identity, execution=execution, data_policy=policy).model_dump(mode="json"),
+                    manifest=snapshot.artifacts,
+                    identity_seal=seal,
+                )
+                for identity in corpus.identities
+            }
+            from app.research.golden_search.worker import WorkerDispatchContext
+
+            context = WorkerDispatchContext(
+                strategy_key="benchmark",
+                execution={},
+                manifest=snapshot.artifacts,
+                identity=seal,
+                job_id=f"benchmark-{report.execution_mode}",
+                generation=repetition + 1,
+            )
+            handle = pool.register(context, window=window, epoch_of=lambda: 1)
+            submitted: set[str] = set()
+            submitted_at: dict[str, float] = {}
+            outstanding = 0
+            owed = dict(items)
+            adaptive_wait_ms = 0
+            waiting_states: list[str] = []
+            try:
+                def feed(owed: Mapping[str, _BenchmarkReady], submitted: set[str], handle=handle, submitted_at=submitted_at) -> None:
+                    nonlocal outstanding
+                    for key, item in owed.items():
+                        if key in submitted or outstanding >= window:
+                            continue
+                        if handle.offer(1, item):
+                            submitted.add(key)
+                            submitted_at[key] = time.perf_counter()
+                            outstanding += 1
+
+                feed(owed, submitted)
+                while owed:
+                    waited_at = time.perf_counter()
+                    try:
+                        key, task_gen, arrival = handle.arrived.get(timeout=0.2)
+                    except Exception:
+                        adaptive_wait_ms += int((time.perf_counter() - waited_at) * 1000)
+                        feed(owed, submitted)
+                        continue
+                    item = owed.get(key)
+                    if item is None or item.task_gen != task_gen:
+                        handle.consume(key, task_gen)
+                        continue
+                    submit_at = submitted_at.pop(key, None)
+                    if isinstance(arrival, WorkerLost):
+                        handle.consume(key, task_gen)
+                        outstanding -= 1
+                        raise BaselineExecutionError(f"evaluation {key} lost its worker: {arrival}")
+                    if isinstance(arrival, BaseException):
+                        handle.consume(key, task_gen)
+                        raise arrival
+                    handle.consume(key, task_gen)
+                    outstanding -= 1
+                    del owed[key]
+                    waiting_states.append(waiting_state_of({"ready_width": len(owed), "busy_lanes": pool.facts()["busy_lanes"], "workers": workers}) or "evaluating")
+                    parent_ms = (time.perf_counter() - (submit_at or waited_at)) * 1000 if submit_at else 0.0
+                    outcome = arrival  # the pool decoded the child's message on delivery
+                    if outcome.cancelled_by is not None:
+                        raise outcome.cancelled_by
+                    if outcome.error is not None or outcome.run is None:
+                        raise BaselineExecutionError(f"evaluation {key} failed: {outcome.error}")
+                    child = outcome.run
+                    nested = {
+                        "queue": None,
+                        "ipc": round(parent_ms - float(child["child_total_ms"]), 3) if parent_ms else None,
+                        "admission": None,
+                        "decoding": None,
+                    }
+                    run = IdentityRun(
+                        evaluation_key=key,
+                        group=item.identity.group,
+                        window_kind=item.identity.window_kind,
+                        repetition=repetition,
+                        total_ms=round(parent_ms, 3) if parent_ms else float(child["child_total_ms"]),
+                        additive_ms={name: float(value) for name, value in child["additive_ms"].items()},
+                        nested_ms=nested,  # type: ignore[arg-type]
+                        bars_scored=int(child["bars_scored"]),
+                        trades=len(child["trades"]),
+                        result_hash=hash_payload(
+                            {"trades": child["trades"], "equity_curve": child["equity_curve"], "statistics": child["statistics"]}
+                        ),
+                        trade_log_hash=hash_payload(child["trades"]),
+                        metrics_hash=hash_payload(child["statistics"]),
+                        ordered_trades=list(child["trades"]),
+                        equity_curve=list(child["equity_curve"]),
+                    )
+                    run.expectation_held = (run.trades > 0) is (item.identity.expectation == "trade-heavy")
+                    report.runs.append(run)
+                    feed(owed, submitted)
+            finally:
+                handle.close()
+        wall_seconds = time.perf_counter() - run_wall
+    finally:
+        pool.close()
+    report.notes.append(
+        f"pooled executor: {workers} worker(s), window {window}, adaptive_wait_ms_total={int(adaptive_wait_ms)}"
+    )
+    return wall_seconds
+

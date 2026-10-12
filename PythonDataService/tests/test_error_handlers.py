@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import httpx
+import pytest
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic_core import PydanticUndefined
 
 from app.utils.error_handlers import (
@@ -141,3 +144,102 @@ async def test_a_route_posted_a_deeply_nested_json_body_answers_422_not_500() ->
 
     assert response.status_code == 422
     assert isinstance(json.loads(response.content)["detail"], list)
+
+
+# ── A string no UTF-8 can write (a lone surrogate, JSON "\ud800") ───────────────────────────────
+
+
+async def test_a_lone_surrogate_in_the_echoed_input_is_written_as_a_question_mark_in_a_value_and_in_a_key() -> None:
+    # "\ud800" is half of a UTF-16 pair and has no UTF-8 form: encoding it with errors="replace" gives the one byte
+    # 0x3F, a question mark. The value "a\ud800b" is read back as "a?b", the key "\ud800" as "?", and the surrogate in
+    # the error's own location ("loc") the same way.
+    exc = RequestValidationError(
+        [
+            {
+                "type": "extra_forbidden",
+                "loc": ("body", "\ud800"),
+                "msg": "Extra inputs are not permitted",
+                "input": {"\ud800": 1, "ok": "a\ud800b"},
+            }
+        ]
+    )
+
+    response = await request_validation_exception_handler(_make_request(), exc)
+
+    assert response.status_code == 422
+    assert json.loads(response.body)["detail"] == [
+        {
+            "type": "extra_forbidden",
+            "loc": ["body", "?"],
+            "msg": "Extra inputs are not permitted",
+            "input": {"?": 1, "ok": "a?b"},
+        }
+    ]
+
+
+async def test_an_answer_with_no_lone_surrogate_in_it_is_written_exactly_as_it_was() -> None:
+    # Strings UTF-8 can write (accents, Japanese, an emoji outside the basic plane) are untouched, and so is the rest:
+    # numbers, null, a boolean, nested lists and a key, and a NaN is the word "nan" as before.
+    echoed = {
+        "é": "日本語",
+        "pair": "\U0001f600",
+        "numbers": [1, 2.5, None, True],
+        "nested": {"k": ["v"]},
+        "x": float("nan"),
+    }
+    exc = RequestValidationError([{"type": "missing", "loc": ("body", "é"), "msg": "Field required", "input": echoed}])
+
+    response = await request_validation_exception_handler(_make_request(), exc)
+
+    expected = {
+        "detail": [
+            {
+                "type": "missing",
+                "loc": ["body", "é"],
+                "msg": "Field required",
+                "input": {
+                    "é": "日本語",
+                    "pair": "\U0001f600",
+                    "numbers": [1, 2.5, None, True],
+                    "nested": {"k": ["v"]},
+                    "x": "nan",
+                },
+            }
+        ]
+    }
+    assert response.status_code == 422
+    assert response.body == JSONResponse(content=expected).body
+
+
+# Two job routes of other features that take a JSON body and refuse this one at validation, so nothing starts (the
+# options backtest's own two routes are held in its route tests). The body is sent as ASCII-escaped JSON bytes, since
+# httpx's json= will not encode a lone surrogate on the client side.
+JOB_ROUTES = [
+    "/api/jobs-internal/grid-search",
+    "/api/jobs-internal/golden-search",
+]
+
+
+@pytest.mark.parametrize("route", JOB_ROUTES)
+@pytest.mark.parametrize(
+    ("payload", "echoed"),
+    [
+        # The body lacks the fields the route needs, so each "missing" error echoes the body it was given.
+        ({"job_id": "\ud800"}, '"job_id":"?"'),
+        ({"job_id": "job-1", "x": {"\ud800": 1}}, '"x":{"?":1}'),
+    ],
+    ids=["in a value", "in a key"],
+)
+async def test_a_job_route_refuses_a_body_with_a_lone_surrogate_in_it_with_a_422_and_not_a_500(
+    route: str, payload: dict[str, Any], echoed: str
+) -> None:
+    from app.main import app
+
+    body = json.dumps(payload, ensure_ascii=True).encode("ascii")
+    assert b"\\ud800" in body
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(route, content=body, headers={"Content-Type": "application/json"})
+
+    assert response.status_code == 422
+    assert echoed in response.text

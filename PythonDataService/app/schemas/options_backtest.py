@@ -101,6 +101,18 @@ class OptionsBacktestLimitsResponse(BaseModel):
     max_expiry_days: int
     # The most trading days one run, or one check, may name.
     max_range_sessions: int
+    max_strikes_each_side: int = Field(
+        description=(
+            "The most strikes each side of the money one read of the past chain takes (a window of this many above "
+            "and below the money strike, for each right). A request for more is refused."
+        )
+    )
+    max_contracts_per_download: int = Field(
+        description=(
+            "The most distinct contracts one download of the past chain takes. A request naming more is refused "
+            "before anything is fetched."
+        )
+    )
     setup_name: OptionsBacktestSetupNameRuleResponse
 
 

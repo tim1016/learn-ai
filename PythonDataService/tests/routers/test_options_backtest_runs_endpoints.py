@@ -9,6 +9,8 @@ neighbours. Hand-worked figures are in ``tests/options_backtest/test_service.py`
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import random
 import re
 import uuid
@@ -28,6 +30,7 @@ from httpx import ASGITransport
 from app.data_lake.catalog_client import CatalogUnavailableError
 from app.jobs.phases import JOB_PHASES
 from app.jobs.progress import JobCancelled
+from app.jobs.runner import run_in_thread as run_the_job
 from app.lean_sidecar.trading_calendar import expected_sessions, session_window_for_date
 from app.main import app
 from app.options_backtest import service
@@ -42,11 +45,13 @@ from app.options_backtest.saved_runs import (
     create_run,
     fail_run,
 )
-from app.options_backtest.service import RunFailedError
 from app.research.persistence import lifecycle
 from app.routers import options_backtest_runs as runs_router
+from app.utils.background_loop import CallerStoppedWaitingError
 from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_day_end_ms, et_midnight_ms
 from tests._helpers.fake_lake_catalog import FakeCatalog
+from tests.jobs.conftest import _FakeRedis
+from tests.jobs.conftest import fake as fake
 from tests.options_backtest._lake import fake_catalog as fake_catalog
 from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixed
 from tests.options_backtest._lake import tmp_lake as tmp_lake
@@ -98,13 +103,17 @@ class FakeEmitter:
 
     def __init__(self) -> None:
         self.events: list[tuple[str, Any]] = []
+        self.failures: list[tuple[str, str]] = []
 
     @property
     def phases(self) -> list[str]:
         return [value for kind, value in self.events if kind == "phase"]
 
-    def phase(self, name: str) -> None:
+    def phase(self, name: str, *, friendly: str | None = None) -> None:
         self.events.append(("phase", name))
+
+    def failed(self, code: str, message: str) -> None:
+        self.failures.append((code, message))
 
     def progress(self, current: int, total: int, *, unit: str = "bars", message: str | None = None) -> None:
         self.events.append(("progress", (current, total, unit)))
@@ -315,6 +324,27 @@ async def test_a_body_that_is_not_a_run_request_is_a_422_before_anything_is_made
     assert harness.store.created == [] and harness.started == []
 
 
+@pytest.mark.parametrize("route", [JOBS, f"{PREFIX}/check-data"], ids=["the job route", "check data"])
+@pytest.mark.parametrize(
+    "payload",
+    [{"job_id": "\ud800"}, {"\ud800": "x"}, {"job_id": "job-1", "setup": {"\ud800": 1}}],
+    ids=["a lone surrogate in a value", "in a key", "in a key inside the setup"],
+)
+async def test_a_lone_surrogate_in_a_body_is_a_422_and_not_a_500_on_the_runs_two_routes_and_makes_no_run(
+    client: httpx.AsyncClient, harness: Harness, route: str, payload: dict[str, Any]
+) -> None:
+    # httpx's json= will not encode a lone surrogate, so the body is ASCII-escaped JSON bytes ("\\ud800").
+    body = json.dumps(payload, ensure_ascii=True).encode("ascii")
+    assert b"\\ud800" in body
+
+    async with client as c:
+        response = await c.post(route, content=body, headers={"Content-Type": "application/json"})
+
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], list)
+    assert harness.store.created == [] and harness.started == []
+
+
 @pytest.mark.parametrize("job_id", [str(uuid.UUID(int=0xA1B2C3D4E5F60718293A4B5C6D7E8F90)), "a", "A_b-9", "x" * 128])
 async def test_a_job_id_of_the_shape_the_jobs_boundary_mints_is_accepted(
     client: httpx.AsyncClient, harness: Harness, job_id: str
@@ -441,7 +471,7 @@ async def test_a_cancel_the_worker_sees_ends_the_job_as_cancelled_and_the_run_as
 
 
 @respx.mock
-async def test_a_failed_run_fails_the_job_with_the_plain_reason(
+async def test_a_failed_run_ends_the_job_failed_with_the_runs_code_and_its_plain_reason(
     client: httpx.AsyncClient, harness: Harness, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
     # One session older than the options plan reaches: check data refuses the whole run.
@@ -450,12 +480,143 @@ async def test_a_failed_run_fails_the_job_with_the_plain_reason(
     async with client as c:
         await c.post(JOBS, json=job_body(start_ms=et_midnight_ms(old), end_ms=et_day_end_ms(old)))
 
-    with pytest.raises(RunFailedError) as caught:
-        await asyncio.to_thread(harness.the_work(), FakeEmitter(), FakeCancel())
+    emitter = FakeEmitter()
 
-    assert "cannot be tested" in str(caught.value)
+    result = await asyncio.to_thread(harness.the_work(), emitter, FakeCancel())
+
+    # The work has sent the job's end itself, with the run's own code and reason, so it returns nothing to complete with.
     [(_, failure, _)] = harness.store.failed
-    assert failure.code == "SESSIONS_CANNOT_BE_TESTED"
+    assert failure.code == "SESSIONS_CANNOT_BE_TESTED" and "cannot be tested" in failure.reason
+    assert result is None
+    assert emitter.failures == [("SESSIONS_CANNOT_BE_TESTED", failure.reason)]
+
+
+# ── The job as the runner ends it ────────────────────────────────────────
+# These start the captured worker through the job runner itself, on the tests' stand-in for the job store, and read the
+# events a page would receive and the records the logs got.
+
+
+async def _the_job_runs_to_its_end(harness: Harness, job_id: str = "job-1") -> None:
+    thread = run_the_job(job_id, harness.the_work(), thread_name="options-backtest-test", cancel_check_every_n=1)
+    await asyncio.to_thread(thread.join, 60)
+    assert not thread.is_alive()
+
+
+@respx.mock
+async def test_each_phase_event_of_a_run_carries_the_plain_label_the_vocabulary_gives_that_phase(
+    client: httpx.AsyncClient, harness: Harness, fake: _FakeRedis, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    Vendor(the_scene()).mount()
+    async with client as c:
+        await c.post(JOBS, json=job_body())
+
+    await _the_job_runs_to_its_end(harness)
+
+    phase_events = [event for event in fake.events("job-1") if event["type"] == "job.phase"]
+    labels = {phase.id: phase.label for phase in JOB_PHASES["options_backtest"]}
+    # A lone run never waits for the engine: the four phases it enters, in order.
+    assert [event["phase"] for event in phase_events] == ["checking_data", "downloading_data", "replaying", "saving"]
+    for event in phase_events:
+        assert event["friendly"] == labels[event["phase"]]
+        assert event["friendly"] != event["phase"].replace("_", " ").title(), "the id made readable is no label"
+
+
+@respx.mock
+async def test_a_run_that_fails_for_a_reason_the_service_explains_ends_the_job_failed_with_the_runs_code_and_logs_no_error(
+    client: httpx.AsyncClient,
+    harness: Harness,
+    fake: _FakeRedis,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # One session older than the options plan reaches: check data refuses the whole run.
+    old = date(2024, 10, 11)
+    Vendor(the_scene()).mount()
+    async with client as c:
+        await c.post(JOBS, json=job_body(start_ms=et_midnight_ms(old), end_ms=et_day_end_ms(old)))
+
+    with caplog.at_level(logging.DEBUG):
+        await _the_job_runs_to_its_end(harness)
+
+    [(run_id, failure, _)] = harness.store.failed
+    assert fake.events("job-1")[-1] == {
+        "type": "job.failed",
+        "code": "SESSIONS_CANNOT_BE_TESTED",
+        "message": failure.reason,
+    }
+    assert fake.hashes["job:job-1:state"]["status"] == "failed"
+    # One line says so, with the run's id (the first run made is 41) and its code, and neither it nor anything else
+    # logged is an error or carries a traceback.
+    [line] = [record for record in caplog.records if getattr(record, "action", "") == "options_backtest_run_failed"]
+    assert (line.levelno, run_id, line.run_id, line.code) == (
+        logging.INFO,
+        41,
+        41,
+        "SESSIONS_CANNOT_BE_TESTED",
+    )
+    assert [record for record in caplog.records if record.levelno >= logging.ERROR or record.exc_info] == []
+
+
+@respx.mock
+async def test_a_run_that_is_cancelled_ends_the_job_cancelled_and_logs_no_error(
+    client: httpx.AsyncClient,
+    harness: Harness,
+    fake: _FakeRedis,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    Vendor(the_scene()).mount()
+    async with client as c:
+        await c.post(JOBS, json=job_body())
+    fake.hset("job:job-1:state", mapping={"cancel_requested": "1"})
+
+    with caplog.at_level(logging.DEBUG):
+        await _the_job_runs_to_its_end(harness)
+
+    assert fake.events("job-1")[-1] == {"type": "job.cancelled", "reason": "run 41 was cancelled"}
+    assert [run_id for run_id, _ in harness.store.cancelled] == [41]
+    assert [record for record in caplog.records if record.levelno >= logging.ERROR or record.exc_info] == []
+
+
+@pytest.mark.parametrize(
+    ("how", "code_of_the_end"),
+    [
+        pytest.param("the service raises", "KeyError", id="an error the service does not catch"),
+        pytest.param("the replay raises", "RunFailedError", id="an error the run records as INTERNAL_ERROR"),
+    ],
+)
+@respx.mock
+async def test_an_error_nobody_expected_still_ends_the_job_failed_with_an_error_in_the_log_and_its_traceback(
+    how: str,
+    code_of_the_end: str,
+    client: httpx.AsyncClient,
+    harness: Harness,
+    fake: _FakeRedis,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    Vendor(the_scene()).mount()
+    async with client as c:
+        await c.post(JOBS, json=job_body())
+
+    def breaks(*_args: Any, **_kwargs: Any) -> None:
+        raise KeyError("boom")
+
+    monkeypatch.setattr(service, "execute_run" if how == "the service raises" else "run_sessions", breaks)
+
+    with caplog.at_level(logging.DEBUG):
+        await _the_job_runs_to_its_end(harness)
+
+    assert fake.events("job-1")[-1]["type"] == "job.failed"
+    assert fake.events("job-1")[-1]["code"] == code_of_the_end
+    errors = [record for record in caplog.records if record.levelno >= logging.ERROR]
+    assert errors and all(record.exc_info for record in errors)
+    if how == "the replay raises":
+        assert [failure.code for _, failure, _ in harness.store.failed] == ["INTERNAL_ERROR"]
 
 
 # ── Check data ───────────────────────────────────────────────────────────
@@ -582,6 +743,27 @@ async def test_check_data_when_the_catalog_cannot_be_reached_is_a_503_with_a_cod
 
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_DATA_CATALOG_UNAVAILABLE"
+
+
+async def test_check_data_when_the_catalog_does_not_answer_in_time_is_the_same_503_as_when_it_cannot_be_reached(
+    client: httpx.AsyncClient, now_is_monday_afternoon: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    answers = {}
+    async with client as c:
+        for name, error in (
+            ("unreachable", CatalogUnavailableError("down")),
+            ("too slow", CallerStoppedWaitingError("still running on the background-loop after 60.0s")),
+        ):
+
+            def fails(*_args: Any, error: Exception = error, **_kwargs: Any) -> None:
+                raise error
+
+            monkeypatch.setattr(runs_router, "check_data", fails)
+            answers[name] = await c.post(f"{PREFIX}/check-data", json=check_body(TUE, FRI))
+
+    assert answers["too slow"].status_code == 503
+    assert answers["too slow"].json() == answers["unreachable"].json()
+    assert answers["too slow"].json()["detail"]["code"] == "OPTIONS_BACKTEST_DATA_CATALOG_UNAVAILABLE"
 
 
 # ── The history, one run, delete: on a real database ─────────────────────

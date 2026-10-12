@@ -1,4 +1,4 @@
-"""Cases the option lake tests share (#3030): when a session may be captured, what a database refuses, a publish race, a slow listing.
+"""Cases the option lake tests share (#3030): when a session may be captured, what a database refuses, a publish race, a slow listing, a file that cannot be written.
 
 Each is here once because more than one test module needs it, and a copy in each
 would be a second place to get a hand-worked figure or a timing wrong.
@@ -7,9 +7,11 @@ would be a second place to get a hand-worked figure or a timing wrong.
 from __future__ import annotations
 
 import asyncio
+import errno
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path, PurePosixPath
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -17,7 +19,9 @@ import asyncpg
 import httpx
 import pytest
 
-from app.data_lake import catalog_client
+from app.data_lake import atomic, catalog_client
+from app.data_lake import option_lake as option_lake_module
+from app.data_lake.atomic import AtomicRenameUnsafeError
 from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes
 from app.data_lake.types import ArtifactIdentity, ArtifactRecord
 
@@ -117,6 +121,78 @@ def publish_stale_writer_first_once_both_have_staged(monkeypatch: pytest.MonkeyP
                 stale_done.set()
 
     monkeypatch.setattr(catalog_client, "publish_under_lease", ordered)
+
+
+#: The three ways a lake file fails to be written, each at a different step of a publish: staging is on another filesystem
+#: than the lake (raised before the catalog is asked), the folder the lake is made in cannot be made (raised before staging),
+#: and the disk is full at the rename (raised inside the catalog's publication, which then rolls back).
+DISK_FULL_AT_THE_RENAME = "the disk is full at the rename"
+STAGING_ELSEWHERE = "staging is on another filesystem"
+LAKE_FOLDER_REFUSED = "the lake folder cannot be made"
+WRITE_FAULTS = (DISK_FULL_AT_THE_RENAME, STAGING_ELSEWHERE, LAKE_FOLDER_REFUSED)
+#: What the failure's words must name for each fault: the kind of error and the system's own reason (never the path).
+WRITE_FAULT_WORDS = {
+    DISK_FULL_AT_THE_RENAME: ("OSError", "No space left on device"),
+    STAGING_ELSEWHERE: ("AtomicRenameUnsafeError", "different filesystems"),
+    LAKE_FOLDER_REFUSED: ("PermissionError", "Permission denied"),
+}
+
+
+class WriteFault:
+    """A fault in writing the lake's file that a test installs and can clear; ``hits`` counts the writes it refused."""
+
+    def __init__(self) -> None:
+        self.active = True
+        self.hits = 0
+
+    def clear(self) -> None:
+        self.active = False
+
+
+def install_write_fault(monkeypatch: pytest.MonkeyPatch, kind: str, *, only_bars: bool = False) -> WriteFault:
+    """Make every write of a lake file fail the way ``kind`` says until the fault is cleared.
+
+    The real publish code runs up to the failing step: only the step named is replaced, by one that raises what the
+    system raises (an ``OSError`` with an errno and a path, the lake's own unsafe-rename error). ``only_bars`` leaves the
+    listing's file alone, so one download can store a listing and meet the fault on a contract; only the rename fault can
+    be told apart that way (it is the only step that knows which file it moves).
+    """
+    fault = WriteFault()
+    if only_bars and kind != DISK_FULL_AT_THE_RENAME:
+        raise ValueError("only the rename fault can be limited to the bars files")
+    if kind == DISK_FULL_AT_THE_RENAME:
+        move = atomic.promote_staged
+
+        def promote_staged(staged: Path, lake_root: Path, rel_lake_path: PurePosixPath) -> None:
+            if fault.active and (not only_bars or "minute" in rel_lake_path.parts):
+                fault.hits += 1
+                raise OSError(errno.ENOSPC, "No space left on device", str(lake_root / Path(*rel_lake_path.parts)))
+            move(staged, lake_root, rel_lake_path)
+
+        monkeypatch.setattr(atomic, "promote_staged", promote_staged)
+    elif kind == STAGING_ELSEWHERE:
+        check = atomic.assert_same_filesystem
+
+        def assert_same_filesystem(lake_root: Path, staging_root: Path) -> None:
+            if fault.active:
+                fault.hits += 1
+                raise AtomicRenameUnsafeError("lake_root and staging_root are on different filesystems (st_dev 1 vs 2)")
+            check(lake_root, staging_root)
+
+        monkeypatch.setattr(atomic, "assert_same_filesystem", assert_same_filesystem)
+    elif kind == LAKE_FOLDER_REFUSED:
+        roots = option_lake_module.writable_raw_roots
+
+        def writable_raw_roots() -> tuple[Path, Path]:
+            if fault.active:
+                fault.hits += 1
+                raise PermissionError(errno.EACCES, "Permission denied", "/data/lake/raw")
+            return roots()
+
+        monkeypatch.setattr(option_lake_module, "writable_raw_roots", writable_raw_roots)
+    else:
+        raise ValueError(f"no such write fault: {kind!r}")
+    return fault
 
 
 class MovableClock:

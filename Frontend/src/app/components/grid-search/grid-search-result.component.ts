@@ -14,6 +14,7 @@ import { ValidationScopeNoteComponent } from '../../shared/validation-scope/vali
 import type { StrategyInfo } from '../strategy-lab/strategy-lab.models';
 import { GridSearchCurvesComponent, type DrawnCell } from './grid-search-curves.component';
 import { GridSearchService } from './grid-search.service';
+import { WaitingBadgeComponent } from '../../shared/research-record/waiting-badge.component';
 import {
   isTerminal,
   type CellPageQuery,
@@ -51,7 +52,7 @@ function settingsText(params: Readonly<Record<string, number>>): string {
  */
 @Component({
   selector: 'app-grid-search-result',
-  imports: [AssetIdentityComponent, ButtonModule, DecimalPipe, GridSearchCurvesComponent, KeyValuePipe, PercentPipe, RecordControlsComponent, RouterLink, ReceiptLabelPipe, TimestampDisplayComponent, ValidationScopeNoteComponent],
+  imports: [AssetIdentityComponent, ButtonModule, DecimalPipe, GridSearchCurvesComponent, KeyValuePipe, PercentPipe, RecordControlsComponent, RouterLink, ReceiptLabelPipe, TimestampDisplayComponent, ValidationScopeNoteComponent, WaitingBadgeComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './grid-search-result.component.html',
   styleUrl: './grid-search-result.component.scss',

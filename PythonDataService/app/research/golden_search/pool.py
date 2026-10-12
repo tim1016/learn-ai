@@ -164,6 +164,7 @@ def worker_pool_factory(
     window: int,
     pool: SharedWorkerPool | None = None,
     on_capacity_handoff: Callable[[], None] = lambda: None,
+    on_waiting: Callable[[str | None, Mapping[str, Any]], None] = lambda waiting, facts: None,
 ) -> Callable[[WorkerDispatchContext], PooledWorkerDispatch]:
     """The pool-side factory a stage run hands its context to (#3046, #3048).
 
@@ -177,9 +178,19 @@ def worker_pool_factory(
     def build(context: WorkerDispatchContext) -> PooledWorkerDispatch:
         context.cancel_check = cancel_check
         context.on_checkpoint = on_checkpoint
-        return PooledWorkerDispatch(
+        dispatch = PooledWorkerDispatch(
             context, workers=workers, window=window, on_facts=on_facts,
             pool=pool, on_capacity_handoff=on_capacity_handoff,
         )
+        inner_facts = on_facts
+
+        def facts_with_waiting(facts: DispatchFacts) -> None:
+            from app.research.golden_search.shared_pool import waiting_state_of
+
+            inner_facts(facts)
+            on_waiting(waiting_state_of(facts.as_dict()), facts.as_dict())
+
+        dispatch._on_facts_callback = facts_with_waiting
+        return dispatch
 
     return build

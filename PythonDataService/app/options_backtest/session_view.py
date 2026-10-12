@@ -45,7 +45,9 @@ def build_session_view(record: SessionRecord, data: RunData) -> SessionView:
     outcome = record.session.result.outcome
     levels = levels_of(record.header.setup, outcome)
     # The underlying is stored on the run's own record, so it is known even when the setup can no longer be read.
-    series = read_session_series(record.session.result, underlying=record.header.record.underlying, data=data)
+    series = read_session_series(
+        record.session.result, run_id=record.header.record.id, underlying=record.header.record.underlying, data=data
+    )
     return SessionView(
         record=record, series=series, levels=levels, fills=fills_of(outcome.trades), marks=marks_of(outcome.trades)
     )

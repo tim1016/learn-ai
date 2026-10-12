@@ -53,6 +53,7 @@ from tests.options_backtest._lake import fake_catalog as fake_catalog
 from tests.options_backtest._lake import option_day_zip, raw_root, replace_the_stored_file
 from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixed
 from tests.options_backtest._lake import tmp_lake as tmp_lake
+from tests.options_backtest._refused_days import REFUSED_DAYS, RefusedDay
 from tests.options_backtest._run_data import HALF_DAY, Day, fake_data, steady
 from tests.options_backtest._stored_runs import PREFIX, SaveRun, no_date_in
 from tests.options_backtest._stored_runs import client as client
@@ -328,11 +329,9 @@ def _served_whole_but_for(body: dict[str, Any], unreadable: str) -> None:
         6,
         0,
     )
-    assert body["underlying"]["state"] == "shown"
-    by_symbol = {each["symbol"]: each for each in body["contracts"]}
-    assert sorted(by_symbol) == [CALL_500, PUT_495, PUT_500]
-    for symbol, series in by_symbol.items():
-        if symbol == unreadable:
+    assert [each["symbol"] for each in body["contracts"]] == [CALL_500, PUT_495, PUT_500]
+    for series in [body["underlying"], *body["contracts"]]:
+        if series["symbol"] == unreadable:
             assert (series["state"], series["reason"], series["points"]) == ("not_shown", "unreadable", [])
             assert series["message"] == "The stored bars cannot be read now."
         else:
@@ -400,29 +399,28 @@ async def test_a_contract_read_that_fails_with_an_operating_system_error_is_an_u
     assert "/a/server/path" not in response.text and "Permission denied" not in response.text
 
 
+@pytest.mark.parametrize("day", REFUSED_DAYS)
 @respx.mock
-async def test_a_stored_day_holding_a_bar_no_session_can_place_is_an_unreadable_series_and_the_stored_facts_are_served(
-    client: httpx.AsyncClient, save_run: SaveRun, fake_catalog: FakeCatalog, tmp_lake: Path, is_the_job_alive: Any
+async def test_a_stored_day_the_lake_reader_refuses_is_an_unreadable_series_and_the_stored_facts_are_served_with_no_path(
+    day: RefusedDay,
+    client: httpx.AsyncClient,
+    save_run: SaveRun,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    is_the_job_alive: Any,
 ) -> None:
-    run_id = await save_run(await run_the_scene(), "unplaceable")
-    put = OptionContract.from_occ_symbol(PUT_500)
-    # The second bar starts half a minute past the minute, so it closes off a whole minute and the lake reader refuses
-    # the day. The catalog is given a receipt for the file, so it reads cleanly and only the bar is wrong.
-    replace_the_stored_file(
-        fake_catalog,
-        raw_root(tmp_lake),
-        "option/usa/minute/spy/spy261007p00500000/20261007_trade.zip",
-        option_day_zip(
-            put, [WED_OPEN_MS + 5 * MS_PER_MINUTE, WED_OPEN_MS + 6 * MS_PER_MINUTE + 30_000], day=date(2026, 10, 7)
-        ),
-        admit=True,
-    )
+    run_id = await save_run(await run_the_scene(), "refused-day")
+    # The catalog is given a receipt for the bytes, so they read cleanly as far as the catalog goes; ``_refused_days.py``
+    # works out what is wrong with each.
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), day.file, day.payload, admit=True)
 
     response = await _get(client, run_id, WED_OPEN_MS)
 
     assert response.status_code == 200, response.text
-    _served_whole_but_for(response.json(), PUT_500)
-    assert str(tmp_lake) not in response.text
+    _served_whole_but_for(response.json(), day.symbol)
+    # The page gets the reason's fixed words: nothing of the file's place on the server's disk, nor of the lake's own text.
+    assert str(tmp_lake) not in response.text and ".zip" not in response.text
+    assert "cannot be decoded" not in response.text and "cannot be placed" not in response.text
 
 
 # ── Sessions that did not trade ──────────────────────────────────────────
@@ -588,6 +586,34 @@ async def test_a_stored_session_whose_trades_and_events_disagree_is_a_500_with_a
     assert response.status_code == 500, response.text
     assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_STORED_SESSION_INCONSISTENT"
     assert "lag" in response.json()["detail"]["message"]
+    assert other.status_code == 200
+
+
+async def test_a_stored_setup_edited_into_another_valid_one_without_a_leg_that_waited_is_the_coded_500_and_not_a_bare_one(
+    client: httpx.AsyncClient,
+    conn: asyncpg.Connection,
+    save_run: SaveRun,
+    scene: RunResult,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    is_the_job_alive: Any,
+) -> None:
+    run_id = await save_run(scene, "renamed-leg")
+    # The setup's legs are call (0), put (1) and lag (2). Renaming the third makes another valid setup, with no leg called
+    # "lag", while the stored trades and events still name it: Wednesday's lag leg took a starting price and never filled.
+    await conn.execute(
+        "UPDATE research_options_backtest_runs SET setup_json = jsonb_set(setup_json, '{legs,2,leg_id}', '\"lag2\"') "
+        "WHERE id = $1",
+        run_id,
+    )
+
+    response = await _get(client, run_id, WED_OPEN_MS)
+    other = await _get(client, run_id, THU_OPEN_MS)
+
+    assert response.status_code == 500, response.text
+    assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_STORED_SESSION_INCONSISTENT"
+    assert "lag" in response.json()["detail"]["message"]
+    # Thursday was skipped and took no starting price, so nothing in it names the leg: it opens.
     assert other.status_code == 200
 
 

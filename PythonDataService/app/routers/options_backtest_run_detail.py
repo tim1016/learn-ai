@@ -24,8 +24,8 @@ from app.options_backtest.run_detail import (
     RunNotFound,
     RunsNotComplete,
     RunsOfDifferentUnderlyings,
-    RunsSetupCannotBeRead,
     SessionNotInRun,
+    TwoRunsSetupCannotBeRead,
     read_comparison_inputs,
     read_every_trade,
     read_session_record,
@@ -33,7 +33,7 @@ from app.options_backtest.run_detail import (
 )
 from app.options_backtest.session_levels import SessionRecordInconsistent
 from app.options_backtest.session_view import session_view_of
-from app.options_backtest.setup import _LEG_ID_PATTERN as LEG_ID_PATTERN
+from app.options_backtest.setup import LEG_ID_PATTERN
 from app.options_backtest.trade_export import csv_file_name, trades_csv
 from app.research.persistence import lifecycle
 from app.research.persistence.db import with_connection
@@ -99,7 +99,17 @@ async def list_the_trades(
     ] = None,
     # A leg id has the one shape the setup gives it (the setup's own pattern, so the two cannot drift), and nothing else
     # is looked for in the database: a text with a NUL in it is refused there.
-    leg_id: Annotated[str | None, Query(pattern=LEG_ID_PATTERN, description="Only this leg's trades.")] = None,
+    leg_id: Annotated[
+        str | None,
+        Query(
+            pattern=LEG_ID_PATTERN,
+            description=(
+                "Only this leg's trades. A leg the run's setup does not have is a 404 when the setup can be read. "
+                "When the run's stored setup can no longer be read, an unknown leg is answered from the stored "
+                "trades alone: a 200 with `total` 0."
+            ),
+        ),
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=TRADES_PAGE_MAX)] = TRADES_PAGE_DEFAULT,
     offset: Annotated[int, Query(ge=0, le=RUN_ID_MAX)] = 0,
 ) -> OptionsBacktestTradesResponse:
@@ -232,7 +242,7 @@ async def compare_two_runs(
                 "message": f"Only complete runs can be compared, and {exc}.",
             },
         ) from exc
-    except RunsSetupCannotBeRead as exc:
+    except TwoRunsSetupCannotBeRead as exc:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             {

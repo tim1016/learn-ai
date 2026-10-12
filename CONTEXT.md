@@ -1776,6 +1776,204 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
 - **Refused run (option bot)** — a run ended by name as it starts, before it asks for a bar: its account's Clerk does not take an option plan (a Live account's, or a plan of several legs on any account), its watched window cannot fit the Clerk's line budget, or its Clerk has no option quotes of its own because it reads its market status from a shared source.
 - **Contract reference (in a Dry Run)** — IBKR's own listing of the contract. A simulated broker has none of its own.
 
+## Options Backtest (resolved 2026-10-12)
+
+**Lineage: neutral.**
+
+Decision record: ADR 0078. Options Backtest is the research page that replays a
+setup of bought option legs over past sessions, on the trade prices the data lake
+holds (PRD #3030). It tests a setup the owner writes. It never tests what a bot
+trades, so Deploy's warning that options have no backtest still stands (Option
+structures).
+
+- **Setup** — the trading window, the option legs and the cost assumptions one run
+  is replayed under. It names no dates: the same setup runs over whatever sessions
+  a run asks for.
+  _Avoid_: strategy (that is a stock signal), plan (a bot's Action Plan).
+- **Saved setup** — a setup kept by name, for the owner to reopen. Saving under a
+  name again replaces it. An **example setup** ships with the product and can be
+  neither overwritten nor deleted: the #3030 strategy, without a re-entry rule and
+  with one. A saved setup that no longer passes the current rules stays listed as
+  **cannot be opened**, with the reason.
+- **Leg** — one bought call or put: a number of contracts, a rule for its expiry,
+  a rule for its strike, and three rules of its own that may each be off: stop
+  loss, momentum, re-entry on stop. A leg only buys.
+  _Avoid_: a structure's leg (Option structures), which may be sold.
+- **Entry time, exit time** — the minutes at which a setup's rules start and stop
+  being read. Each is stored as a distance after the open or before the close (its
+  **anchor**), so a half day keeps the distance. The entry time is when each leg's
+  contract is picked. At the exit time whatever is open is sold, legs still waiting
+  are cancelled and nothing more is bought. An order read at either fills in the
+  next minute.
+- **Momentum** — a leg's wait for its own premium to move before it buys. The leg
+  takes a starting price at the entry time and buys once a minute closes at or
+  beyond that price moved by a set percent or number of points, up or down.
+  _Avoid_: signal (a strategy's decision from the underlying's bars; momentum here
+  reads only the option's own price).
+- **Starting price** — a momentum leg's reference: the close of its contract in the
+  minute that closes at the entry time, or at a re-entry's start. A setup's
+  sentences call it the starting premium. A leg whose contract did not trade in
+  that minute has none, and the leg is done for the day.
+- **Stop loss** — a leg's sell level, a set percent or number of points under what
+  the leg paid, taken from its own fill price. It is hit when a minute closes at or
+  below it. A high or a low inside a minute never hits it. Unrelated to **Stop**
+  (ending a deployment).
+- **Re-entry on stop** — after a stop a leg may come back, up to a count in one
+  session. **At once**: a fresh contract by the same rules, bought with no wait.
+  **On momentum**: a fresh contract, a new starting price, and the momentum wait
+  again; it needs the leg's momentum rule.
+- **No re-entry after** — a time after which a stop earns no re-entry. A stop hit
+  later than it earns none. First entries are not affected.
+- **Square off** — what a stop closes. **Partial**: only the stopped leg.
+  **Complete**: every open leg, and legs still waiting for momentum are cancelled
+  for the day.
+  _Avoid_: exit (the exit time).
+- **Session** — one trading day as a run replays it. It is named everywhere by its
+  open in ms; its trading date is the New York date of that open and is never
+  stored or sent. A session the setup's times do not fit (a half day, say), or in
+  which the underlying did not trade at the entry time, is **skipped**, and says
+  why. A session's status is **traded**, **no trade**, **skipped** or **incomplete**.
+- **Price seen, price filled** — the price seen is the open of the minute an order
+  fills in. The price filled is that price moved against the trader by the
+  slippage, then rounded against the trader to the price step: up on a buy, down on
+  a sale.
+- **Slippage, slippage tolerance** — slippage is the percent each fill is moved
+  against the trader. It stands in for the bid-ask spread, which the data plan
+  cannot show. The tolerance is how much of it a result survives: the highest value
+  on a ladder of slippage values (0 to 5 percent by default) at which, and at every
+  lower value, net profit is above zero, and the first value where it is not. When
+  every value profits it reads "survives the whole ladder", not "survives any
+  slippage".
+  _Avoid_: spread.
+- **Marked, not sold** — a leg still held when the session's data ends: valued at
+  the close of the last bar its contract traded in, and never sold. Its session is
+  **incomplete** and stays in the totals, and the mark returns to cash at the start
+  of the next session. Unrelated to the **Mark (of a held contract)** in Option
+  structures, which is a live quote.
+- **What did not trade** — the counts a result keeps beside its figures, so that a
+  day that made nothing is told from a day that could not. **Sessions without
+  momentum**: a leg took a starting price and no leg's momentum was reached.
+  **Entries refused for cash**: the entries filling in one minute cost more than the
+  cash on hand. **Re-entries blocked by the cutoff**: a stop came after the "No
+  re-entry after" time. **Entries dropped**: the contract did not trade in the
+  minute the order filled. **Legs without a starting price**: the contract did not
+  trade in the minute its starting price was due. **Re-entries lost**: a re-entry
+  ended without entering for want of market data (its pick was refused, it had no
+  starting price, or its entry was dropped); it overlaps those counts and is not to
+  be added to them.
+- **Check data** — which sessions of a range can be tested, from what is already
+  stored and with no vendor call. A session is **ready** (everything it can need is
+  stored, or it is skipped and needs nothing), **needs download** (it can be tested
+  once data is fetched, and what is missing is named) or **cannot be tested** (with
+  every plain reason: older than the data plan, its data not final yet, no
+  published fee rates, a failure the lake holds and will not try again, a stored day
+  the run cannot use and a download would not replace: bars that break the rules of
+  a bar, or a file not in the form the lake writes). A stored day the run cannot use
+  and the lake will fetch again (a damaged file, a contract day with a bar off a
+  whole minute, an underlying day the stock capture rejects) is **needs download**,
+  with a note; the table of which days are which is in `data_check.py`.
+- **Longest testable stretch** — the longest unbroken run of testable sessions in a
+  checked range, offered with the range that runs just them. Running it is the
+  owner's explicit choice and makes a new, stated range (#3030 calls it "Run
+  available dates"). A request is never shortened silently: if any session of the
+  range cannot be tested, the run fails at once.
+- **Option prices from** — the first date the data plan serves option minute bars
+  for, as of the check. It moves forward every day, so what is fetched is kept.
+- **Captured and never traded, not captured** — captured and never traded: the lake
+  holds the day for a listed contract and the day has no bar, so the contract did
+  not trade. Not captured: the lake holds nothing for it. A run stops on the second
+  and takes the first as a fact about the market. A damaged file is neither: it is
+  an error. Whether a download then fetches it again is the lake's to say, not the
+  reader's: some days the reader refuses are days the lake keeps.
+- **Option day** — one contract's minute trade bars for one session, held in the
+  lake. A minute with no trade has no bar and is never filled. It is taken only
+  once the session's New York date has passed.
+- **Outside the data plan** — a session older than the plan's rolling window of two
+  years. It is a failure of its own, distinct from an outage or a missing
+  entitlement, and it is never latched: an upgraded plan clears it.
+- **Download** — capturing into the lake, through the lake's own functions and
+  nothing else, what a view or a run needs. A run's download comes before its
+  replay and brings the underlying's raw minute bars, each session's listing and
+  the contract days the session can read. A run never goes on over data that was
+  only partly fetched. A download the caller cancels lets the captures it began end,
+  begins no more, and then ends cancelled.
+- **Trade, trade win rate, daily win rate** — a trade is one leg round trip, won,
+  lost or break-even by its profit after fees and slippage. Trade win rate is won
+  trades over trades. Daily win rate is profitable sessions over traded sessions.
+  They are two figures, and each names what it counts. A **traded session** has at
+  least one trade.
+- **Profit factor, drawdown** — profit factor is gross profit over gross loss, and
+  none when no trade lost. Drawdown is the largest fall of equity below its running
+  peak, measured at the end of each session and not inside a day; the starting cash
+  is the first peak.
+- **Estimated fee** — the option fee model's fee for one fill, each fee type
+  rounded up to the cent. It is charged only where the model has a published rate
+  for every fee type. A session before that cannot be tested with estimated fees,
+  and no fee is ever charged as nothing.
+- **Expiry series** — Daily, Weekly, Monthly, Quarterly or Unknown: the tag a
+  listed expiry date carries in the past chain, decided from where the date sits on
+  the exchange calendar and never from the contract. **Monthly** is the third
+  Friday of the month, or the session before it when that Friday is closed.
+  **Quarterly** is the last session of March, June, September or December.
+  **Weekly** is the last session of its week. **Daily** is any other session.
+  **Unknown** is a date that is not a session, or any date of a trading day before
+  a chosen first tagged date. Unknown is tested first, then Monthly, Quarterly,
+  Weekly and Daily, so a Monthly that ends its week is Monthly. **Expires today**
+  is a separate fact beside the series: a Monthly on its last day is a Monthly that
+  expires today, never a Daily.
+  _Avoid_: expiry type. **This week** as the expiry choice on a leg is not the
+  series: it is the nearest listed expiry, today included, on the last trading day
+  of its week, and it can land on a Monthly or Quarterly date, or in a later week.
+- **Past listing, past chain** — a past listing is the contracts one underlying
+  listed on one trading date. The past chain is what the past-chain routes give of
+  it: every listed expiry with its series, and, for one expiry at one instant of
+  that session, the calls and puts around the money with the price each last
+  traded at. It reads only what the lake holds and fills in nothing.
+  _Avoid_: chain for the live set of quoted contracts, contract listing (the
+  broker's reference, Option structures).
+- **Price state (past chain)** — for a contract: **traded** (the close of the last
+  bar closing at or before the instant, shown with that bar's close time, the end
+  of the minute and not the trade's own time), **did not trade** (the day is stored
+  and holds no bar by then), **not stored** (the lake never captured the day) or
+  **unreadable** (the lake's own error). The underlying's price answers **priced**,
+  **no bar yet**, **not stored** or **unreadable**. A price is never carried from
+  another day or taken from a neighbouring strike.
+- **The money (past chain)** — the at-the-money strike of each right: the listed
+  standard strike nearest the underlying's raw price, the lower of two as near, by
+  the rule a leg's at-the-money strike uses. Calls and puts can differ.
+- **Run** — one setup replayed over a list of past sessions in date order, with
+  cash carried from one session to the next. Unrelated to a bot's **run_id** (the
+  Identity ladder).
+- **Saved run** — a run kept in the history. It starts **running** and ends
+  **complete** (all of it), **failed** (a code, a plain reason and the list of what
+  failed, with no figures) or **cancelled**. A part of a run is never a result. A
+  running run whose job is gone reads **interrupted**.
+- **Pin** — the sha256 of each file a session read: the underlying's day, the
+  listing and each contract's day. A saved run keeps them, so the data it read can
+  be told from data that changed later.
+- **Fills banner** — the facts a result states about itself: fills are simulated
+  from trade prices, bid and ask are not available, and the slippage, the price
+  step and the fee policy that were assumed.
+- **Attempt** — one try of a leg to enter, named by the leg and its entry number (0
+  for the first entry, 1 for its first re-entry, and so on). An attempt that fills
+  leaves a trade. One that does not (momentum never reached, cancelled, refused for
+  cash) leaves events and no trade.
+- **Level** — a horizontal line a one-day timeline draws at one price between two
+  minute closes: a leg's starting price, its momentum level while it waits, or a
+  position's stop level. Each is a stored figure with the two instants it applied
+  between, except the momentum level of an attempt that never filled, which is the
+  leg's rule applied to its stored starting price. A line that waits ends when the
+  thing it waited for happened, whatever came next: a buy refused for cash ends its
+  lines at the minute the buy was decided, not the minute of the refusal.
+- **Pin check** — before a saved session's price series is shown, the file it would
+  be read from is read now and its sha256 is compared with the pin the run stored.
+  A series is not shown, and the answer says which, when its session was skipped,
+  the run kept no pin for it, its file is gone, has changed, cannot be read or is
+  not one the lake's catalog can vouch for, or the catalog cannot be asked. The
+  session's stored facts are shown all the same.
+- **Shared sessions** — when two runs are compared, the sessions whose open is in
+  both. The comparison's totals are over those only.
+
 ## Market-data readiness (resolved 2026-09-22)
 
 - **Market-data readiness** — current evidence that the symbol's live data is usable for a trading decision. It is distinct from connection health and the venue's reported halt status.

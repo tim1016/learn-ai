@@ -361,6 +361,37 @@ def test_an_attempt_refused_for_cash_whose_momentum_was_never_reached_cannot_be_
         levels_of(written, without_the_decision)
 
 
+def test_an_attempt_whose_buy_was_decided_and_that_nothing_ended_was_ended_zero_times_and_cannot_be_drawn() -> None:
+    written = setup(leg("call", momentum=("percent_up", "10")))
+    market = TableMarket(
+        underlying=steady("500.00"),
+        picks=_picks(("call", CALL)),
+        # The starting price at m5 is 2.00, so the level is 2.00 x 1.1 = 2.200. m8 closes at 2.30: reached, the buy is
+        # decided. It would fill at the open of m9 for 2.30 x 100 = 230.00 against 100.00 of cash: refused at m9.
+        options={CALL: {5: ("2.00", "2.00"), **flat("2.00", 6, 7), 8: ("2.30", "2.30"), 9: ("2.30", "2.30")}},
+    )
+    outcome = replay(written, market, cash="100")
+    without_the_refusal = replace(
+        outcome, events=tuple(e for e in outcome.events if e.kind is not EventKind.ENTRY_REFUSED_FOR_CASH)
+    )
+
+    # What is left of the waiting: a starting price at m5 and the decision at m8, with no cancel and no refusal. An attempt
+    # that waited for its level ends exactly once, so this one ended 0 times and the reader must not take the decision
+    # for an end.
+    waiting = (
+        EventKind.STARTING_PRICE_TAKEN,
+        EventKind.MOMENTUM_HIT,
+        EventKind.LEG_CANCELLED,
+        EventKind.ENTRY_REFUSED_FOR_CASH,
+    )
+    assert [(e.kind, minute_of(e.at_ms)) for e in without_the_refusal.events if e.kind in waiting] == [
+        (EventKind.STARTING_PRICE_TAKEN, 5),
+        (EventKind.MOMENTUM_HIT, 8),
+    ]
+    with pytest.raises(SessionRecordInconsistent, match="ended 0 times"):
+        levels_of(written, without_the_refusal)
+
+
 def test_a_complete_square_off_ends_the_waiting_of_a_leg_that_had_not_bought_at_the_minute_of_the_stop() -> None:
     written = setup(
         leg("a", stop=("percent", "10")),
@@ -445,6 +476,25 @@ def test_a_starting_price_on_a_leg_whose_setup_has_no_momentum_rule_cannot_be_dr
 
     with pytest.raises(SessionRecordInconsistent, match="momentum rule"):
         levels_of(without_momentum, friday)
+
+
+def test_a_setup_edited_so_that_a_leg_that_waited_is_no_longer_in_it_cannot_be_drawn(scene: RunResult) -> None:
+    friday = scene.sessions[2].outcome
+    # Friday's lag leg took a starting price (1.00 at m5) and was cancelled at m60 without trading, so its momentum line
+    # is the leg's own rule applied to 1.00. With the leg called "lag2" in the setup, no leg is called "lag": there is no
+    # rule to apply, and nothing to draw it from without a guess. The setup is still a valid setup.
+    renamed = scene.setup.model_copy(
+        update={
+            "legs": tuple(
+                each.model_copy(update={"leg_id": "lag2"}) if each.leg_id == "lag" else each
+                for each in scene.setup.legs
+            )
+        }
+    )
+    assert [each.leg_id for each in renamed.legs] == ["call", "put", "lag2"]
+
+    with pytest.raises(SessionRecordInconsistent, match=r"leg 'lag', entry 0: .*setup"):
+        levels_of(renamed, friday)
 
 
 def test_a_fill_shows_the_price_seen_and_the_different_price_it_filled_at_after_slippage() -> None:

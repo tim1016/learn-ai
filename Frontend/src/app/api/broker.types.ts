@@ -22873,6 +22873,11 @@ export interface components {
          * @description The limits the server holds a setup and a request to, so the page copies none of them.
          */
         OptionsBacktestLimitsResponse: {
+            /**
+             * Max Contracts Per Download
+             * @description The most distinct contracts one download of the past chain takes. A request naming more is refused before anything is fetched.
+             */
+            max_contracts_per_download: number;
             /** Max Contracts Per Leg */
             max_contracts_per_leg: number;
             /** Max Expiry Days */
@@ -22885,6 +22890,11 @@ export interface components {
             max_reentries_per_leg: number;
             /** Max Strike Steps */
             max_strike_steps: number;
+            /**
+             * Max Strikes Each Side
+             * @description The most strikes each side of the money one read of the past chain takes (a window of this many above and below the money strike, for each right). A request for more is refused.
+             */
+            max_strikes_each_side: number;
             setup_name: components["schemas"]["OptionsBacktestSetupNameRuleResponse"];
         };
         /**
@@ -23308,7 +23318,10 @@ export interface components {
             session_close_ms: number;
             /** Session Open Ms */
             session_open_ms: number;
-            /** Setup Cannot Open Reason */
+            /**
+             * Setup Cannot Open Reason
+             * @description Why the run's stored setup can no longer be read; null when it can. When it is set, `levels` leaves out the `momentum` line of every attempt that never filled, because that line is the leg's momentum rule applied to the attempt's starting price and the rule is lost. Nothing else is left out: the same attempt's `starting_price` line, the lines of every attempt that filled, and the trades, events, fills, marks and series are served as for any run.
+             */
             setup_cannot_open_reason?: string | null;
             /** Skip Reason */
             skip_reason?: ("window_does_not_fit" | "underlying_did_not_trade") | null;
@@ -23590,6 +23603,10 @@ export interface components {
          * OptionsBacktestTradesResponse
          * @description A page of a run's leg trades. ``total`` counts every trade that matches, on every page; ``next_offset`` is the
          *     ``offset`` to ask for the rest, and is ``None`` on the last page. The CSV export is never paged.
+         *
+         *     A ``leg_id`` that the run's setup does not have is a 404 when the setup can be read. On a run whose stored setup can
+         *     no longer be read there is no setup to say which legs the run had, so an unknown ``leg_id`` is answered from the
+         *     stored trades alone: a 200 with ``total`` 0, which says only that no trade was stored for that leg.
          */
         OptionsBacktestTradesResponse: {
             /** Limit */
@@ -24141,6 +24158,8 @@ export interface components {
         PastChainDayResponse: {
             /** Expiries */
             expiries: components["schemas"]["PastChainExpirySummary"][];
+            /** @description Set when the lake would fetch nothing for this session now, by the rule a download asks: the reason and its plain words. Null when it would. A page offers no download for a session that has one. */
+            fetch_refusal?: components["schemas"]["PastChainFetchRefusal"] | null;
             /** Listing Problem */
             listing_problem: string | null;
             /**
@@ -24278,6 +24297,23 @@ export interface components {
             series: "daily" | "weekly" | "monthly" | "quarterly" | "unknown";
             /** Version */
             version: number;
+        };
+        /**
+         * PastChainFetchRefusal
+         * @description Why the lake will not fetch this session's data now: the rule a download asks, before it claims anything.
+         */
+        PastChainFetchRefusal: {
+            /**
+             * Reason
+             * @description The lake's own reason code: `not_a_session` for a date the exchange had no session on, and `session_not_over` for a session whose New York date has not passed, which is taken from the next New York midnight.
+             * @enum {string}
+             */
+            reason: "not_a_session" | "session_not_over";
+            /**
+             * Words
+             * @description Plain words for the reason, to be shown as they are.
+             */
+            words: string;
         };
         /**
          * PastChainSide
@@ -41613,7 +41649,7 @@ export interface operations {
             query?: {
                 /** @description Only this session's trades, by its open. */
                 session_open_ms?: number | null;
-                /** @description Only this leg's trades. */
+                /** @description Only this leg's trades. A leg the run's setup does not have is a 404 when the setup can be read. When the run's stored setup can no longer be read, an unknown leg is answered from the stored trades alone: a 200 with `total` 0. */
                 leg_id?: string | null;
                 limit?: number;
                 offset?: number;

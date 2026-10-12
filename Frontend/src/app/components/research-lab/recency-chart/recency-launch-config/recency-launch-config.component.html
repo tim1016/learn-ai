@@ -58,6 +58,9 @@
         @if (rangeValidationMessage(); as message) {
           <small class="text-xs font-medium text-red-300" role="alert">{{ message }}</small>
         }
+        @if (launchedJobId(); as jobId) {
+          <app-waiting-badge [jobId]="jobId" />
+        }
         <button pButton type="button" (click)="launch()">
           <i class="pi pi-play" aria-hidden="true"></i>
           <span>Launch timeline</span>

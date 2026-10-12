@@ -427,9 +427,11 @@ async def test_the_limits_are_served_with_the_names_a_page_reads(client) -> None
 
     assert response.status_code == 200, response.text
     limits = response.json()
-    assert set(limits) == {*_LIMIT_OF_A_FIELD, "max_range_sessions", "setup_name"}
+    chain_limits = ("max_strikes_each_side", "max_contracts_per_download")
+    assert set(limits) == {*_LIMIT_OF_A_FIELD, "max_range_sessions", *chain_limits, "setup_name"}
     assert all(
-        isinstance(limits[name], int) and limits[name] > 0 for name in (*_LIMIT_OF_A_FIELD, "max_range_sessions")
+        isinstance(limits[name], int) and limits[name] > 0
+        for name in (*_LIMIT_OF_A_FIELD, "max_range_sessions", *chain_limits)
     )
     assert set(limits["setup_name"]) == {"pattern", "sentence"} and limits["setup_name"]["sentence"]
 
