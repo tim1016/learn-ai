@@ -1,8 +1,12 @@
 """What a replay asks of one past session's market data (#3030).
 
 A minute bar is named by its close: the bar closing at ``t`` holds the trades
-in ``(t - 60 s, t]``, and its ``open`` is the first of them. A minute with no
+in ``[t - 60 s, t)``, and its ``open`` is the first of them. A minute with no
 trade has no bar. Nothing here interpolates or carries a price forward.
+
+Every price is above zero. Whoever implements ``SessionMarket`` has made sure the
+session's data is there to read before a replay starts, so ``None`` only ever means
+that nothing traded in that minute, and never that the data is missing.
 """
 
 from __future__ import annotations
@@ -66,13 +70,24 @@ class SessionMarket(Protocol):
     def session_close_ms(self) -> int: ...
 
     def underlying_close(self, close_ms: int) -> Decimal | None:
-        """The close of the underlying's raw bar closing at ``close_ms``, or None when it did not trade."""
+        """The close of the underlying's raw bar closing at ``close_ms``, or None when it did not trade.
+
+        ``close_ms`` is a whole minute after the session's open and no later than its close.
+        """
         ...
 
     def pick(self, leg: LegSetup, *, at_ms: int, underlying_price: Decimal) -> Picked | PickRefused:
-        """The contract ``leg``'s rules come to at ``at_ms`` with the underlying at ``underlying_price``."""
+        """The contract ``leg``'s rules come to with the underlying at ``underlying_price``.
+
+        ``at_ms`` is the minute close the pick is decided at. A pick depends on the session's
+        trading date and on the price, so the same leg and price give the same contract at any
+        minute of one session.
+        """
         ...
 
     def option_bar(self, contract: OptionContract, close_ms: int) -> MinuteBar | None:
-        """The contract's bar closing at ``close_ms``, or None when it did not trade in that minute."""
+        """The contract's bar closing at ``close_ms``, or None when it did not trade in that minute.
+
+        ``close_ms`` is a whole minute after the session's open and no later than its close.
+        """
         ...
