@@ -12,7 +12,7 @@ reaches two years back with two days of headroom, reaches 2024-10-14. 2024-06-14
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import date
 from pathlib import Path
 
@@ -51,6 +51,7 @@ from tests.options_backtest._lake import (
     raw_root,
     replace_the_stored_file,
     stock_bar,
+    stock_day_zip,
     store_underlying_day,
     symbol_asked,
     vendor_bars,
@@ -230,9 +231,28 @@ async def test_when_the_listing_cannot_be_captured_no_contract_is_tried_and_each
     assert "provider_rate_limited" in (items[2].detail or "")
 
 
+@pytest.fixture
+def stock_fetch_that_must_not_run(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> StockFetchDouble:
+    """The stock engine's fetch, made to fail the test if it is asked for anything at all."""
+    double = StockFetchDouble(
+        fake_catalog, tmp_lake, error=AssertionError("the stock engine was asked for the underlying's bars")
+    )
+    monkeypatch.setattr(chain_download, "materialize_engine_run", double)
+    return double
+
+
+# 2025-06-13's session closes at 16:00 EDT = 20:00 UTC = 1749844800000, and the lake takes a session's data from the
+# New York midnight after its date: 2025-06-14 00:00 EDT = 04:00 UTC. Worked from the epoch: 2025-01-01 is day 20089
+# (55 years of 365 days and 14 leap days), 2025-06-14 is 164 days on (31 + 28 + 31 + 30 + 31 + 13), day 20253, and
+# 20253 * 86 400 000 = 1749859200000 is that UTC midnight; four hours later is 1749859200000 + 14 400 000.
+CAPTURE_OPENS_MS = 1749873600000
+
+
 @respx.mock
-async def test_a_session_that_is_not_over_fails_the_listing_with_the_lakes_reason_and_asks_the_vendor_nothing(
-    fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
+async def test_a_session_that_is_not_over_asks_the_stock_engine_for_nothing_and_fails_the_underlying_like_the_listing(
+    fake_catalog: FakeCatalog, tmp_lake: Path, stock_fetch_that_must_not_run: StockFetchDouble
 ) -> None:
     listing_route = vendor_lists(CALL_600)
     bars_route = vendor_bars(lambda symbol: no_trades(symbol))
@@ -242,13 +262,86 @@ async def test_a_session_that_is_not_over_fails_the_listing_with_the_lakes_reaso
 
     items = await ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[CALL_600], now_ms=an_hour_into_the_session)
 
-    assert [
-        (item.kind.value, item.outcome.value, item.reason) for item in items if item.kind is not ItemKind.UNDERLYING
-    ] == [
-        ("listing", "failed", "session_not_over"),
-        ("contract", "failed", "listing_not_captured"),
+    assert _summary(items) == [
+        ("listing", "SPY", "failed", "session_not_over"),
+        ("underlying", "SPY", "failed", "session_not_over"),
+        ("contract", SYMBOL_600, "failed", "listing_not_captured"),
     ]
+    assert stock_fetch_that_must_not_run.calls == []
     assert listing_route.call_count == 0 and bars_route.call_count == 0
+    # The lake's own words, the same for the underlying as for the listing: nothing here restates its rule.
+    assert items[1].detail and items[1].detail == items[0].detail
+    # And nothing is stored: asked again once the session is over, the underlying is fetched.
+    assert (await asyncio.to_thread(LakeRunData("SPY").underlying_day, FRIDAY)) is None
+
+
+@pytest.mark.parametrize(
+    ("now_ms", "fetched"),
+    [
+        pytest.param(CAPTURE_OPENS_MS - 1, False, id="one millisecond before the New York midnight after the session"),
+        pytest.param(CAPTURE_OPENS_MS, True, id="the millisecond the New York date has passed"),
+    ],
+)
+@respx.mock
+async def test_the_underlying_is_fetched_from_the_millisecond_the_lake_takes_the_sessions_data_and_not_before(
+    now_ms: int, fetched: bool, fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
+) -> None:
+    vendor_lists(CALL_600)
+
+    items = await ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[], now_ms=now_ms)
+
+    assert _summary(items) == (
+        [("listing", "SPY", "fetched", None), ("underlying", "SPY", "fetched", None)]
+        if fetched
+        else [("listing", "SPY", "failed", "session_not_over"), ("underlying", "SPY", "failed", "session_not_over")]
+    )
+    assert len(materializer.calls) == (1 if fetched else 0)
+
+
+@pytest.mark.parametrize("no_session", [date(2025, 6, 14), date(2025, 6, 19)], ids=["a Saturday", "Juneteenth"])
+@respx.mock
+async def test_a_date_that_is_not_a_session_asks_the_stock_engine_for_nothing_and_fails_the_underlying_like_the_listing(
+    no_session: date, fake_catalog: FakeCatalog, tmp_lake: Path, stock_fetch_that_must_not_run: StockFetchDouble
+) -> None:
+    items = await ensure_chain_data("SPY", no_session, expiry=None, contracts=[])
+
+    assert _summary(items) == [
+        ("listing", "SPY", "failed", "not_a_session"),
+        ("underlying", "SPY", "failed", "not_a_session"),
+    ]
+    assert stock_fetch_that_must_not_run.calls == []  # and an un-mocked request to the vendor would have failed the test
+    assert items[1].detail and items[1].detail == items[0].detail
+
+
+@respx.mock
+async def test_todays_session_before_new_york_midnight_is_not_fetched_on_the_lakes_own_clock(
+    fake_catalog: FakeCatalog, tmp_lake: Path, stock_fetch_that_must_not_run: StockFetchDouble
+) -> None:
+    # No clock is passed, so the lake's is used: the tests' fixed one, 2026-10-12 at 14:00 New York, with the session of
+    # that Monday still to close at 16:00 and its date to end at midnight.
+    items = await ensure_chain_data("SPY", date(2026, 10, 12), expiry=None, contracts=[])
+
+    assert _summary(items) == [
+        ("listing", "SPY", "failed", "session_not_over"),
+        ("underlying", "SPY", "failed", "session_not_over"),
+    ]
+    assert stock_fetch_that_must_not_run.calls == []
+
+
+@respx.mock
+async def test_an_underlying_already_held_is_reported_stored_even_while_its_session_is_not_over(
+    fake_catalog: FakeCatalog, tmp_lake: Path, stock_fetch_that_must_not_run: StockFetchDouble
+) -> None:
+    await store_underlying_day(
+        fake_catalog, tmp_lake, [stock_bar(FRIDAY_OPEN_MS, "600.00", "600.50", "599.75", "600.25")]
+    )
+
+    items = await ensure_chain_data(
+        "SPY", FRIDAY, expiry=None, contracts=[], now_ms=FRIDAY_OPEN_MS + 60 * MINUTE_MS
+    )
+
+    assert items[1].outcome is Outcome.ALREADY_STORED and items[1].reason is None
+    assert stock_fetch_that_must_not_run.calls == []
 
 
 @respx.mock
@@ -309,15 +402,31 @@ async def test_an_underlying_the_stock_function_cannot_fetch_is_a_failed_item_wi
     assert "could not materialize" in (items[1].detail or "")
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param(lambda: b"admitted, but not a zip", id="a damaged file"),
+        # The second bar starts at 09:31:30, 1749821400000 + 60 000 + 30 000 = 1749821490000, off the minute.
+        pytest.param(
+            lambda: stock_day_zip(
+                [
+                    stock_bar(FRIDAY_OPEN_MS, "600.00", "600.50", "599.75", "600.25"),
+                    stock_bar(FRIDAY_OPEN_MS + MINUTE_MS + 30_000, "600.25", "600.60", "600.20", "600.40"),
+                ]
+            ),
+            id="a bar off the minute",
+        ),
+    ],
+)
 @respx.mock
 async def test_a_damaged_underlying_file_is_reported_and_is_not_fetched_over(
-    fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
+    payload: Callable[[], bytes], fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
 ) -> None:
     vendor_lists(CALL_600)
     await store_underlying_day(
         fake_catalog, tmp_lake, [stock_bar(FRIDAY_OPEN_MS, "600.00", "600.50", "599.75", "600.25")]
     )
-    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), STOCK_PATH, b"admitted, but not a zip", admit=True)
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), STOCK_PATH, payload(), admit=True)
 
     items = await ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[])
 
@@ -464,7 +573,7 @@ async def test_the_underlyings_fetch_waits_for_a_free_place_among_the_requests_i
     # counted, and is shown here with every place taken.
     gate = asyncio.Semaphore(1)
     await gate.acquire()
-    fetch = asyncio.create_task(chain_download._capture_underlying("SPY", FRIDAY, gate))
+    fetch = asyncio.create_task(chain_download._capture_underlying("SPY", FRIDAY, gate, None))
 
     await asyncio.sleep(0.2)
     waited = (fetch.done(), len(materializer.calls))

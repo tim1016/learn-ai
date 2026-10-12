@@ -23,15 +23,13 @@ Three reads, one per kind of stored file:
   contract did not trade.
 
 Bars. For an option every stored bar of the date is handed over, any hour (an option prints until 16:15); for the
-underlying, the bars of the regular session. In both, a bar is left out when its close is not on a whole minute or
-falls on another New York date than the trading date's: one that starts in the last minute of a date, or is stamped
-off the minute. The lake stores such a bar (its
-rule is only that the start lies inside the date) and ``session_market.bars_by_close`` refuses a session that holds
-one, as a whole. No replay can read it, as its close is outside every session or on no minute, so it is left out,
-``StoredBars.left_out`` counts the bars left out, and a warning is logged naming the instrument and the count. A day
-on which nothing is left out says ``left_out == 0`` and logs nothing. (For the
-underlying, whether the day is held is decided before any bar is left out, so a held day all of whose bars are left
-out is held and empty.)
+underlying, the bars of the regular session. In both, every bar must be one a replay can place: its close (its start
+plus a minute) is on a whole minute and falls on the trading date's New York date. The lake stores a bar whose start
+is anywhere inside the date, so it can hold one stamped off the minute or starting in the last minute of the date, and
+``session_market.bars_by_close`` refuses a session that holds one, as a whole. So a day with such a bar is unreadable,
+as a damaged file is: the read raises the kind's own error (``UnderlyingDayUnreadable``, ``OptionBarsFileError``) and
+hands nothing over. A series run without that bar would have a minute missing, one a stop could have been hit in, and
+nothing in its result would say so; nothing is left out or repaired.
 
 Every answer carries the sha256 of the exact bytes that were decoded. A damaged file, a file the catalog does not
 admit and an unreachable catalog are errors and never ``None``: ``OptionBarsFileError`` and ``OptionListingFileError``
@@ -48,15 +46,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Self
 
 from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
-from app.data_lake.option_bars import OptionBar, read_option_day_bars
+from app.data_lake.option_bars import OptionBar, OptionBarsFileError, read_option_day_bars
 from app.data_lake.option_lake import option_read_root
 from app.data_lake.option_listing import read_option_listing
 from app.data_lake.types import is_lake_addressable_symbol
@@ -72,9 +68,7 @@ from app.options_backtest.data import Captured
 from app.options_backtest.market import MinuteBar
 from app.options_backtest.picking import ListedContract, Listing
 from app.options_backtest.setup import MS_PER_MINUTE
-from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
-
-logger = logging.getLogger(__name__)
+from app.utils.session_anchors import et_date_at_ms
 
 
 class UnderlyingDayUnreadable(ValueError):
@@ -87,18 +81,6 @@ class StoredListing(Listing):
 
     # Stored rows with no parsed contract (an adjusted root, a ticker that disagrees with its row) or no share count.
     rows_left_out: int = 0
-
-
-class StoredBars(tuple[MinuteBar, ...]):
-    """A day's bars named by their close, in a tuple that also says how many stored bars it had to leave out."""
-
-    # Stored bars whose close is not on a whole minute, or falls on another New York date than the trading date.
-    left_out: int
-
-    def __new__(cls, bars: Iterable[MinuteBar], left_out: int = 0) -> Self:
-        stored = super().__new__(cls, bars)
-        stored.left_out = left_out
-        return stored
 
 
 class _AdmittedBytes:
@@ -123,32 +105,36 @@ def _require_a_worker_thread() -> None:
     )
 
 
-def _named_by_close(stored: Sequence[OptionBar | TradeBar], trading_date: date, *, instrument: str) -> StoredBars:
-    """The stored bars as ``MinuteBar``s named by their close, less any that no replay could read.
+def _named_by_close(
+    stored: Sequence[OptionBar | TradeBar],
+    trading_date: date,
+    *,
+    subject: str,
+    unreadable: type[ValueError],
+) -> tuple[MinuteBar, ...]:
+    """The stored bars as ``MinuteBar``s named by their close, or ``unreadable`` when any cannot be placed.
 
-    A bar whose close is not on a whole minute or is not on ``trading_date`` (New York) is left out, counted, and
-    said in a warning that names ``instrument``.
+    A bar cannot be placed when its close is not on a whole minute or is not on ``trading_date`` (New York). The
+    error names ``subject``, how many of the stored bars cannot be placed and why the first cannot; no bar is left out.
     """
-    kept: list[MinuteBar] = []
+    named: list[MinuteBar] = []
+    unplaceable = 0
+    first = ""
     for bar in stored:
         # The one place a stored start becomes a close.
         close_ms = bar.start_ms + MS_PER_MINUTE
-        if close_ms % MS_PER_MINUTE or et_date_at_ms(close_ms) != trading_date:
+        if close_ms % MS_PER_MINUTE:
+            why = "is not on a whole minute"
+        elif et_date_at_ms(close_ms) != trading_date:
+            why = "closes on another New York date"
+        else:
+            named.append(MinuteBar(close_ms=close_ms, open=bar.open, high=bar.high, low=bar.low, close=bar.close))
             continue
-        kept.append(MinuteBar(close_ms=close_ms, open=bar.open, high=bar.high, low=bar.low, close=bar.close))
-    left_out = len(stored) - len(kept)
-    if left_out:
-        logger.warning(
-            "stored bars left out of a backtest read",
-            extra={
-                "action": "options_backtest_bars_left_out",
-                "instrument": instrument,
-                "trading_date_ms": et_midnight_ms(trading_date),
-                "left_out": left_out,
-                "stored": len(stored),
-            },
-        )
-    return StoredBars(kept, left_out=left_out)
+        unplaceable += 1
+        first = first or f"the first starts at {bar.start_ms} ms and {why}"
+    if unplaceable:
+        raise unreadable(f"{subject}: {unplaceable} of {len(stored)} stored bars cannot be placed in a session; {first}")
+    return tuple(named)
 
 
 class LakeRunData:
@@ -164,15 +150,14 @@ class LakeRunData:
         self._underlying = underlying
         self._lake_root = lake_root
 
-    def underlying_day(self, trading_date: date) -> Captured[StoredBars] | None:
+    def underlying_day(self, trading_date: date) -> Captured[tuple[MinuteBar, ...]] | None:
         """The underlying's raw minute bars of the regular session on ``trading_date``, or ``None`` when not held.
 
         Not held is the lake's own coverage rule: no file, or a file with no bar inside the regular session. The
-        bars come from the lake's raw tree alone, never the split-adjusted one. The value is a ``StoredBars``:
-        ``left_out`` counts the bars no replay could read (the module docstring says which). Raises
-        ``UnderlyingDayUnreadable`` for a file that cannot be decoded, ``LakeAdmissionError`` for bytes the catalog does
-        not admit and ``CatalogUnavailableError`` when the catalog cannot be asked. A thread with a running event loop
-        is a ``RuntimeError``.
+        bars come from the lake's raw tree alone, never the split-adjusted one. Raises ``UnderlyingDayUnreadable``
+        for a file that cannot be decoded and for a day holding a bar no replay can place (the module docstring says
+        which), ``LakeAdmissionError`` for bytes the catalog does not admit and ``CatalogUnavailableError`` when the
+        catalog cannot be asked. A thread with a running event loop is a ``RuntimeError``.
         """
         _require_a_worker_thread()
         admitted = _AdmittedBytes()
@@ -189,10 +174,13 @@ class LakeRunData:
             ) from exc
         if admitted.payload is None or not bars:
             return None
-        return Captured(
-            value=_named_by_close(bars, trading_date, instrument=self._underlying),
-            sha256=hashlib.sha256(admitted.payload).hexdigest(),
+        named = _named_by_close(
+            bars,
+            trading_date,
+            subject=f"the stored {self._underlying} minute bars for {trading_date.isoformat()}",
+            unreadable=UnderlyingDayUnreadable,
         )
+        return Captured(value=named, sha256=hashlib.sha256(admitted.payload).hexdigest())
 
     def listing(self, trading_date: date) -> Captured[StoredListing] | None:
         """The stored listing of the underlying as of ``trading_date``, or ``None`` when none is stored.
@@ -223,17 +211,22 @@ class LakeRunData:
             sha256=stored.sha256,
         )
 
-    def option_day(self, contract: OptionContract, trading_date: date) -> Captured[StoredBars] | None:
+    def option_day(self, contract: OptionContract, trading_date: date) -> Captured[tuple[MinuteBar, ...]] | None:
         """One contract's stored bars on ``trading_date``; ``None`` when not captured, empty when it never traded.
 
-        Every bar the lake holds for the date, whatever the hour (an option prints until 16:15), less any bar no replay
-        could read, which ``StoredBars.left_out`` counts. Raises ``OptionBarsFileError`` for a damaged file,
-        ``LakeAdmissionError`` and ``CatalogUnavailableError`` as the lake does, and ``RuntimeError`` off a worker thread.
+        Every bar the lake holds for the date, whatever the hour (an option prints until 16:15). Raises
+        ``OptionBarsFileError`` for a damaged file and for a day holding a bar no replay can place (the module docstring
+        says which), ``LakeAdmissionError`` and ``CatalogUnavailableError`` as the lake does, and ``RuntimeError`` off a
+        worker thread.
         """
         _require_a_worker_thread()
         stored = read_option_day_bars(contract, trading_date, lake_root=self._lake_root)
         if stored is None:
             return None
-        return Captured(
-            value=_named_by_close(stored.bars, trading_date, instrument=contract.occ_symbol), sha256=stored.sha256
+        named = _named_by_close(
+            stored.bars,
+            trading_date,
+            subject=f"the stored bars of {contract.occ_symbol} for {trading_date.isoformat()}",
+            unreadable=OptionBarsFileError,
         )
+        return Captured(value=named, sha256=stored.sha256)

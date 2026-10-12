@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import tempfile
 from collections.abc import Callable, Sequence
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -27,6 +29,7 @@ from app.data_lake import catalog_client
 from app.data_lake import option_bars as option_bars_module
 from app.data_lake import option_lake as option_lake_module
 from app.data_lake import option_listing as option_listing_module
+from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes
 from app.data_lake.option_bars import ensure_option_day_bars
 from app.data_lake.option_lake import OptionCaptureResult
 from app.data_lake.option_listing import ensure_option_listing
@@ -137,6 +140,12 @@ def stock_bar(start_ms: int, o: str, h: str, low: str, c: str, *, symbol: str = 
     )
 
 
+def stock_day_zip(bars: Sequence[TradeBar], *, symbol: str = "SPY", day: date = FRIDAY) -> bytes:
+    """The stock writer's bytes for a day holding exactly these bars, whatever their starts (no receipt, nothing stored)."""
+    with tempfile.TemporaryDirectory() as folder:
+        return write_lean_day_zip(Path(folder), symbol, day, list(bars)).read_bytes()
+
+
 async def store_underlying_day(
     fake_catalog: FakeCatalog, tmp_lake: Path, bars: Sequence[TradeBar], *, symbol: str = "SPY", day: date = FRIDAY
 ) -> Path:
@@ -167,6 +176,34 @@ async def store_underlying_day(
     )
     assert completed
     return path
+
+
+def option_bars_path(contract: OptionContract, day: date = FRIDAY) -> str:
+    """Where the lake keeps one contract's bars for a day, relative to the raw root."""
+    return f"option/usa/minute/{contract.root.lower()}/{contract.occ_symbol.lower()}/{day:%Y%m%d}_trade.zip"
+
+
+def option_day_zip(contract: OptionContract, starts_ms: Sequence[int], *, day: date = FRIDAY) -> bytes:
+    """The lake's own bytes for a contract's day, one bar starting at each of these instants, on a minute or not.
+
+    The capture refuses a vendor bar that does not start on a whole minute, so a stored day holding one is made here
+    and put in place of a captured file with ``replace_the_stored_file``.
+    """
+    epoch = datetime(1970, 1, 1, tzinfo=UTC)
+    bars = [
+        MinuteTradeBar(
+            bar_start_et=(epoch + timedelta(milliseconds=start_ms)).astimezone(ZoneInfo("America/New_York")),
+            open=D("1.27"),
+            high=D("1.31"),
+            low=D("1.25"),
+            close=D("1.27"),
+            volume=D(10),
+        )
+        for start_ms in starts_ms
+    ]
+    return build_minute_trade_zip_bytes(
+        symbol=contract.occ_symbol, trading_date_yyyymmdd=f"{day:%Y%m%d}", bars=bars
+    )
 
 
 def replace_the_stored_file(
