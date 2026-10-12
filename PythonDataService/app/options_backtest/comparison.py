@@ -12,6 +12,10 @@ change nothing about what counts as a difference. Legs are matched by their id, 
 another order are the same setup; a leg only one run has is one difference. The two runs are of the same underlying (the
 caller refuses any other pair), so the underlying is not compared.
 
+A rule reads here as it reads in ``describe.py``: both take its words from ``phrases.py``, and a leg only one run has is
+said with the sentences ``describe.leg_sentences`` makes of it. Three settings are said shorter than their sentence, for
+the reason beside each: a time of day, the slippage and the price step, and the starting cash.
+
 Totals are sums of the stored per-session figures, in exact decimals (``fills.EXACT``): a sum is never rounded and never
 runs through a float. A session that one run has and the other lacks is counted, and is in neither run's totals.
 """
@@ -24,12 +28,10 @@ from decimal import Decimal, localcontext
 from enum import StrEnum
 from typing import Any
 
-from app.options_backtest import fills
-from app.options_backtest.describe import fee_policy_sentence
+from app.options_backtest import fills, phrases
+from app.options_backtest.describe import fee_policy_sentence, leg_sentences
 from app.options_backtest.saved_runs import RunHeader, RunSetupCannotBeRead, SessionLine
 from app.options_backtest.setup import (
-    MS_PER_MINUTE,
-    ExpiryRule,
     LegSetup,
     Momentum,
     OptionsBacktestSetup,
@@ -78,83 +80,31 @@ class SettingDifference:
 # ── Words ────────────────────────────────────────────────────────────────
 
 
-def _count(number: int, noun: str) -> str:
-    return f"{number} {noun}{'' if number == 1 else 's'}"
-
-
-def _plain(value: Decimal) -> str:
-    """``value`` without a trailing zero or an exponent: 25.0000 reads 25."""
-    return format(value.normalize(), "f")
-
-
-def _points(value: Decimal) -> str:
-    return f"{_plain(value)} {'point' if value == 1 else 'points'}"
-
-
-def _dollars(value: Decimal) -> str:
-    """Dollars and cents, with thousands grouped: $10,000.00. Every dollar figure of a setup has at most two decimals."""
-    return f"${format(value.quantize(Decimal('0.01')), ',f')}"
-
-
 def _time_words(time: SessionTime | None) -> str:
-    if time is None:
-        return NOT_SET
-    minutes = time.offset_ms // MS_PER_MINUTE
-    if minutes == 0:
-        return f"at the {time.anchor}"
-    return f"{_count(minutes, 'minute')} {'after' if time.anchor == 'open' else 'before'} the {time.anchor}"
-
-
-def _expiry_words(rule: ExpiryRule) -> str:
-    if rule.kind == "same_day":
-        return "same day"
-    if rule.kind == "this_week":
-        return "the last trading day of the week"
-    if rule.days == 0:
-        return "the nearest listed, today included"
-    return f"at least {_count(rule.days, 'calendar day')} out"
+    # The distance alone: "5 minutes after the open". The describe sentence adds the clock time on a full day, which
+    # needs a session clock and belongs to a day, not to the setting being compared.
+    return NOT_SET if time is None else phrases.distance(time)
 
 
 def _strike_words(rule: StrikeRule) -> str:
-    if rule.kind == "atm":
-        return "at the money"
-    return f"{_count(abs(rule.steps), 'strike')} {'above' if rule.steps > 0 else 'below'} the money"
+    # "at the money", as a value of its own. The describe sentence works the money into a noun ("an at-the-money call").
+    return "at the money" if rule.kind == "atm" else phrases.strikes_from_the_money(rule.steps)
 
 
 def _stop_words(rule: StopLoss | None) -> str:
-    if rule is None:
-        return NOT_SET
-    amount = f"{_plain(rule.value)}%" if rule.kind == "percent" else _points(rule.value)
-    return f"{amount} below the price paid"
+    return NOT_SET if rule is None else phrases.stop_loss(rule)
 
 
 def _momentum_words(rule: Momentum | None) -> str:
-    if rule is None:
-        return NOT_SET
-    way = "up" if rule.kind.endswith("_up") else "down"
-    amount = f"{_plain(rule.value)}%" if rule.kind.startswith("percent") else _points(rule.value)
-    return f"{amount} {way} from where it stood at the entry time"
+    return NOT_SET if rule is None else phrases.momentum(rule)
 
 
 def _reentry_words(rule: ReentryOnStop | None) -> str:
-    if rule is None:
-        return NOT_SET
-    when = "at once" if rule.kind == "at_once" else "on momentum"
-    return f"{when}, up to {_count(rule.count, 'time')}"
+    return NOT_SET if rule is None else phrases.reentry(rule)
 
 
-def _leg_words(leg: LegSetup) -> str:
-    parts = [
-        f"{leg.right}, {_count(leg.contracts, 'contract')}, expiry {_expiry_words(leg.expiry)}, "
-        f"strike {_strike_words(leg.strike)}"
-    ]
-    if leg.stop_loss is not None:
-        parts.append(f"stop loss {_stop_words(leg.stop_loss)}")
-    if leg.momentum is not None:
-        parts.append(f"momentum {_momentum_words(leg.momentum)}")
-    if leg.reentry_on_stop is not None:
-        parts.append(f"re-entry on stop {_reentry_words(leg.reentry_on_stop)}")
-    return "; ".join(parts)
+def _contracts_words(contracts: int) -> str:
+    return phrases.count(contracts, "contract")
 
 
 # ── Settings ─────────────────────────────────────────────────────────────
@@ -162,8 +112,8 @@ def _leg_words(leg: LegSetup) -> str:
 # Each setting of a leg that is compared: its code, what it is called, how to read it off a leg and how to say it.
 _LEG_SETTINGS: tuple[tuple[Setting, str, Callable[[LegSetup], Any], Callable[[Any], str]], ...] = (
     (Setting.LEG_RIGHT, "call or put", lambda leg: leg.right, str),
-    (Setting.LEG_CONTRACTS, "contracts", lambda leg: leg.contracts, str),
-    (Setting.LEG_EXPIRY, "expiry", lambda leg: leg.expiry, _expiry_words),
+    (Setting.LEG_CONTRACTS, "contracts", lambda leg: leg.contracts, _contracts_words),
+    (Setting.LEG_EXPIRY, "expiry", lambda leg: leg.expiry, phrases.expiry),
     (Setting.LEG_STRIKE, "strike", lambda leg: leg.strike, _strike_words),
     (Setting.LEG_STOP_LOSS, "stop loss", lambda leg: leg.stop_loss, _stop_words),
     (Setting.LEG_MOMENTUM, "momentum", lambda leg: leg.momentum, _momentum_words),
@@ -178,6 +128,10 @@ def _leg_differences(a: LegSetup, b: LegSetup) -> list[SettingDifference]:
         if first != second:
             found.append(SettingDifference(setting, a.leg_id, f"leg {a.leg_id}: {name}", say(first), say(second)))
     return found
+
+
+def _whole_leg(leg: LegSetup) -> str:
+    return " ".join(leg_sentences(leg))
 
 
 def setting_differences(a: OptionsBacktestSetup, b: OptionsBacktestSetup) -> tuple[SettingDifference, ...]:
@@ -202,7 +156,14 @@ def setting_differences(a: OptionsBacktestSetup, b: OptionsBacktestSetup) -> tup
         _time_words(a.no_reentry_after),
         _time_words(b.no_reentry_after),
     )
-    compare(Setting.SQUARE_OFF, "square off", a.square_off, b.square_off, a.square_off, b.square_off)
+    compare(
+        Setting.SQUARE_OFF,
+        "square off",
+        a.square_off,
+        b.square_off,
+        phrases.square_off(a.square_off),
+        phrases.square_off(b.square_off),
+    )
 
     b_legs = {leg.leg_id: leg for leg in b.legs}
     a_ids = {leg.leg_id for leg in a.legs}
@@ -210,31 +171,33 @@ def setting_differences(a: OptionsBacktestSetup, b: OptionsBacktestSetup) -> tup
         other = b_legs.get(leg.leg_id)
         if other is None:
             found.append(
-                SettingDifference(Setting.LEG, leg.leg_id, f"leg {leg.leg_id}", _leg_words(leg), NOT_IN_THIS_RUN)
+                SettingDifference(Setting.LEG, leg.leg_id, f"leg {leg.leg_id}", _whole_leg(leg), NOT_IN_THIS_RUN)
             )
         else:
             found.extend(_leg_differences(leg, other))
     for leg in b.legs:
         if leg.leg_id not in a_ids:
             found.append(
-                SettingDifference(Setting.LEG, leg.leg_id, f"leg {leg.leg_id}", NOT_IN_THIS_RUN, _leg_words(leg))
+                SettingDifference(Setting.LEG, leg.leg_id, f"leg {leg.leg_id}", NOT_IN_THIS_RUN, _whole_leg(leg))
             )
 
+    # Slippage and the price step are said apart, shorter than the one describe sentence that holds both: a difference
+    # is in one of them. The starting cash likewise, without its sentence.
     compare(
         Setting.SLIPPAGE,
         "slippage",
         a.slippage_percent,
         b.slippage_percent,
-        f"{_plain(a.slippage_percent)}%",
-        f"{_plain(b.slippage_percent)}%",
+        f"{phrases.plain(a.slippage_percent)}%",
+        f"{phrases.plain(b.slippage_percent)}%",
     )
     compare(
         Setting.PRICE_STEP,
         "price step",
         a.price_step_usd,
         b.price_step_usd,
-        f"${_plain(a.price_step_usd)}",
-        f"${_plain(b.price_step_usd)}",
+        phrases.dollars(a.price_step_usd),
+        phrases.dollars(b.price_step_usd),
     )
     compare(Setting.FEES, "fees", a.fees, b.fees, fee_policy_sentence(a.fees), fee_policy_sentence(b.fees))
     compare(
@@ -242,8 +205,8 @@ def setting_differences(a: OptionsBacktestSetup, b: OptionsBacktestSetup) -> tup
         "starting cash",
         a.starting_cash_usd,
         b.starting_cash_usd,
-        _dollars(a.starting_cash_usd),
-        _dollars(b.starting_cash_usd),
+        phrases.dollars(a.starting_cash_usd),
+        phrases.dollars(b.starting_cash_usd),
     )
     return tuple(found)
 

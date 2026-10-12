@@ -36,16 +36,18 @@ from tests.options_backtest.setup_fixtures import unique as unique
 
 D = Decimal
 
+# A leg only one run has is said with the sentences a setup's description makes of it.
 CALL_LEG = (
-    "call, 1 contract, expiry same day, strike at the money; stop loss 20% below the price paid; "
-    "momentum 25% up from where it stood at the entry time; re-entry on stop on momentum, up to 1 time"
+    "Leg call: buys 1 at-the-money call expiring on the trading date itself. "
+    "The buy waits until a minute closes at least 25% above where its premium stood at the entry time. "
+    "Sells once a minute closes at least 20% below what was paid. "
+    "After a stop, picks a fresh contract by the same rules, takes a new starting premium from it and waits for "
+    "momentum again, up to 1 time in a session."
 )
 LAG_LEG = (
-    "put, 1 contract, expiry same day, strike 1 strike below the money; "
-    "momentum 10% down from where it stood at the entry time"
+    "Leg lag: buys 1 put 1 strike below the money expiring on the trading date itself. "
+    "The buy waits until a minute closes at least 10% below where its premium stood at the entry time."
 )
-
-
 A_CREATED_AT_MS = 1_791_800_000_000
 B_CREATED_AT_MS = 1_791_900_000_000
 

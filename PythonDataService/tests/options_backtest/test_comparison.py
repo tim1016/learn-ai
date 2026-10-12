@@ -4,6 +4,9 @@ Every expectation is worked out by hand in a comment. The base setup is ``setup_
 after the open and leaves 46 minutes before the close, squares off completely, 0.3 percent slippage, a price step of
 0.01, no fees and 10,000 to start, with one leg ``call`` (a call at the money expiring on the last trading day of its
 week) and no rule on it.
+
+A rule reads here as it reads in a setup's description: the words come from ``phrases.py`` for both, and
+``test_a_rule_reads_in_the_comparison_as_it_reads_in_the_description`` holds the two together.
 """
 
 from __future__ import annotations
@@ -21,14 +24,14 @@ from app.options_backtest.comparison import (
     overlap,
     setting_differences,
 )
+from app.options_backtest.describe import leg_sentences
 from app.options_backtest.results import SessionStatus
-from app.options_backtest.saved_runs import RunHeader, RunRecord, RunSetupCannotBeRead, SessionLine
-from app.options_backtest.setup import MS_PER_MINUTE
+from app.options_backtest.saved_runs import RunSetupCannotBeRead, SessionLine
+from app.options_backtest.setup import MS_PER_MINUTE, LegSetup
 from tests.options_backtest._headers import THE_REASON, a_header, an_unreadable_header
 from tests.options_backtest.setup_fixtures import leg, setup
 
 D = Decimal
-CALL_WORDS = "call, 1 contract, expiry the last trading day of the week, strike at the money"
 
 
 def _differences(a: dict[str, Any], b: dict[str, Any]) -> list[tuple[Setting, str | None, str, str, str]]:
@@ -106,7 +109,17 @@ BASE_ENTRY = {"anchor": "open", "offset_ms": 5 * MS_PER_MINUTE}
             {"no_reentry_after": {"anchor": "open", "offset_ms": 90 * MS_PER_MINUTE}},
             (Setting.NO_REENTRY_AFTER, None, "no re-entry after", NOT_SET, "90 minutes after the open"),
         ),
-        ({"square_off": "partial"}, (Setting.SQUARE_OFF, None, "square off", "complete", "partial")),
+        (
+            {"square_off": "partial"},
+            (
+                Setting.SQUARE_OFF,
+                None,
+                "square off",
+                "Square off is complete: a stop closes every open leg and cancels legs still waiting for momentum, "
+                "which stay cancelled for the day.",
+                "Square off is partial: a stop closes only the leg that was stopped.",
+            ),
+        ),
         # The costs.
         (
             {"slippage_percent": "0.5"},
@@ -147,11 +160,17 @@ BASE_ENTRY = {"anchor": "open", "offset_ms": 5 * MS_PER_MINUTE}
         ),
         (
             {"legs": [leg(contracts=3)]},
-            (Setting.LEG_CONTRACTS, "call", "leg call: contracts", "1", "3"),
+            (Setting.LEG_CONTRACTS, "call", "leg call: contracts", "1 contract", "3 contracts"),
         ),
         (
             {"legs": [leg(expiry={"kind": "same_day"})]},
-            (Setting.LEG_EXPIRY, "call", "leg call: expiry", "the last trading day of the week", "same day"),
+            (
+                Setting.LEG_EXPIRY,
+                "call",
+                "leg call: expiry",
+                "expiring on the nearest listed expiry, today included, that falls on the last trading day of its week",
+                "expiring on the trading date itself",
+            ),
         ),
         (
             {"legs": [leg(expiry={"kind": "min_days", "days": 7})]},
@@ -159,8 +178,8 @@ BASE_ENTRY = {"anchor": "open", "offset_ms": 5 * MS_PER_MINUTE}
                 Setting.LEG_EXPIRY,
                 "call",
                 "leg call: expiry",
-                "the last trading day of the week",
-                "at least 7 calendar days out",
+                "expiring on the nearest listed expiry, today included, that falls on the last trading day of its week",
+                "expiring on the nearest listed expiry at least 7 calendar days after the trading day",
             ),
         ),
         (
@@ -173,7 +192,7 @@ BASE_ENTRY = {"anchor": "open", "offset_ms": 5 * MS_PER_MINUTE}
         ),
         (
             {"legs": [leg(stop_loss={"kind": "percent", "value": "20"})]},
-            (Setting.LEG_STOP_LOSS, "call", "leg call: stop loss", NOT_SET, "20% below the price paid"),
+            (Setting.LEG_STOP_LOSS, "call", "leg call: stop loss", NOT_SET, "at least 20% below what was paid"),
         ),
         (
             {"legs": [leg(momentum={"kind": "percent_down", "value": "10"})]},
@@ -182,7 +201,7 @@ BASE_ENTRY = {"anchor": "open", "offset_ms": 5 * MS_PER_MINUTE}
                 "call",
                 "leg call: momentum",
                 NOT_SET,
-                "10% down from where it stood at the entry time",
+                "at least 10% below where its premium stood at the entry time",
             ),
         ),
     ],
@@ -196,17 +215,6 @@ def test_each_setting_that_differs_is_one_difference_named_as_an_owner_would_wit
     assert _differences(changes, {}) == [swapped]
 
 
-def test_a_re_entry_rule_is_a_difference_in_the_leg_that_gains_it() -> None:
-    # A re-entry needs a stop that can earn it (the setup refuses one without), so both legs carry the same stop.
-    stop = {"kind": "percent", "value": "20"}
-    none = {"legs": [leg(stop_loss=stop)]}
-    once = {"legs": [leg(stop_loss=stop, reentry_on_stop={"kind": "at_once", "count": 2})]}
-
-    assert _differences(none, once) == [
-        (Setting.LEG_REENTRY, "call", "leg call: re-entry on stop", NOT_SET, "at once, up to 2 times")
-    ]
-
-
 def test_one_rule_replaced_by_another_of_the_same_leg_is_one_difference_with_each_in_words() -> None:
     a = {"legs": [leg(stop_loss={"kind": "percent", "value": "25"}, momentum={"kind": "points_up", "value": "0.40"})]}
     b = {"legs": [leg(stop_loss={"kind": "points", "value": "1"}, momentum={"kind": "points_up", "value": "0.4"})]}
@@ -217,10 +225,62 @@ def test_one_rule_replaced_by_another_of_the_same_leg_is_one_difference_with_eac
             Setting.LEG_STOP_LOSS,
             "call",
             "leg call: stop loss",
-            "25% below the price paid",
-            "1 point below the price paid",
+            "at least 25% below what was paid",
+            "at least 1 point below what was paid",
         ),
     ]
+
+
+def test_a_re_entry_rule_is_a_difference_in_the_leg_that_gains_it_and_in_how_many_times_it_may_come_back() -> None:
+    # A re-entry needs a stop that can earn it, so every leg here carries the same 20 percent stop.
+    stop = {"kind": "percent", "value": "20"}
+    none = {"legs": [leg(stop_loss=stop)]}
+    once = {"legs": [leg(stop_loss=stop, reentry_on_stop={"kind": "at_once", "count": 1})]}
+    on_momentum = leg(
+        stop_loss=stop,
+        momentum={"kind": "percent_up", "value": "10"},
+        reentry_on_stop={"kind": "on_momentum", "count": 2},
+    )
+
+    at_once = "After a stop, picks a fresh contract by the same rules and buys it at once, up to 1 time in a session."
+    # On momentum, twice: the starting premium is taken afresh and the leg waits for momentum again.
+    again = (
+        "After a stop, picks a fresh contract by the same rules, takes a new starting premium from it and waits for "
+        "momentum again, up to 2 times in a session."
+    )
+    assert _differences(none, once) == [(Setting.LEG_REENTRY, "call", "leg call: re-entry on stop", NOT_SET, at_once)]
+    assert [(d.setting, d.a, d.b) for d in setting_differences(setup(**once), setup(legs=[on_momentum]))] == [
+        (Setting.LEG_MOMENTUM, NOT_SET, "at least 10% above where its premium stood at the entry time"),
+        (Setting.LEG_REENTRY, at_once, again),
+    ]
+
+
+def test_a_price_step_is_said_with_every_digit_it_has_so_two_steps_never_read_alike() -> None:
+    # 0.0125 is a quarter of a cent more than 0.01. Rounded to cents both would read $0.01, a difference that looks like
+    # none; every digit is kept: $0.01 and $0.0125.
+    assert _differences({}, {"price_step_usd": "0.0125"}) == [
+        (Setting.PRICE_STEP, None, "price step", "$0.01", "$0.0125")
+    ]
+
+
+def test_a_rule_reads_in_the_comparison_as_it_reads_in_the_description() -> None:
+    # One place says how a rule reads (phrases.py). So each value the comparison gives for a rule is a phrase of the
+    # sentences the description makes of the leg that has it: nothing is re-worded here.
+    rules = [
+        ("expiry", {"expiry": {"kind": "min_days", "days": 7}}, Setting.LEG_EXPIRY),
+        ("strike", {"strike": {"kind": "atm_offset", "steps": -2}}, Setting.LEG_STRIKE),
+        ("stop loss", {"stop_loss": {"kind": "points", "value": "1.5"}}, Setting.LEG_STOP_LOSS),
+        ("momentum", {"momentum": {"kind": "percent_down", "value": "15"}}, Setting.LEG_MOMENTUM),
+    ]
+    for name, changes, setting in rules:
+        written = leg(**changes)
+        [difference] = [d for d in setting_differences(setup(), setup(legs=[written])) if d.setting is setting]
+        described = " ".join(leg_sentences(LegSetup.model_validate(written)))
+        assert difference.b in described, (name, difference.b, described)
+
+    stopped = leg(stop_loss={"kind": "percent", "value": "20"}, reentry_on_stop={"kind": "at_once", "count": 3})
+    [reentry] = [d for d in setting_differences(setup(), setup(legs=[stopped])) if d.setting is Setting.LEG_REENTRY]
+    assert reentry.b in leg_sentences(LegSetup.model_validate(stopped))
 
 
 # ── Legs added and removed, and several differences at once ──────────────
@@ -242,9 +302,13 @@ def test_a_leg_only_one_run_has_is_one_difference_describing_it_and_saying_the_o
     added = _differences({"legs": [call]}, {"legs": [call, put]})
     removed = _differences({"legs": [call, put]}, {"legs": [call]})
 
+    # The leg is said with the sentences the description makes of it, one after the other.
     described = (
-        "put, 2 contracts, expiry same day, strike 1 strike below the money; stop loss 0.4 points below the price paid; "
-        "momentum 25% up from where it stood at the entry time; re-entry on stop on momentum, up to 1 time"
+        "Leg put: buys 2 puts 1 strike below the money expiring on the trading date itself. "
+        "The buy waits until a minute closes at least 25% above where its premium stood at the entry time. "
+        "Sells once a minute closes at least 0.4 points below what was paid. "
+        "After a stop, picks a fresh contract by the same rules, takes a new starting premium from it and waits for "
+        "momentum again, up to 1 time in a session."
     )
     assert added == [(Setting.LEG, "put", "leg put", NOT_IN_THIS_RUN, described)]
     assert removed == [(Setting.LEG, "put", "leg put", described, NOT_IN_THIS_RUN)]
@@ -343,30 +407,11 @@ def test_runs_with_no_session_in_common_share_nothing_and_total_nothing() -> Non
 # ── The whole comparison ─────────────────────────────────────────────────
 
 
-def _header(run_id: int, first: int, last: int, requested: int, **changes: Any) -> RunHeader:
-    record = RunRecord(
-        id=run_id,
-        created_at_ms=1_791_800_000_000,
-        finished_at_ms=1_791_800_100_000,
-        job_id=f"job-{run_id}",
-        status="complete",
-        setup_name=None,
-        underlying="SPY",
-        first_session_open_ms=first,
-        last_session_open_ms=last,
-        sessions_requested=requested,
-        fee_policy_text="Fees are not charged, so results are before fees.",
-        calendar_identity="NYSE",
-        calendar_package_version="5.1.0",
-        failure=None,
-        headline=None,
-    )
-    return RunHeader(record=record, setup=setup(**changes))
-
-
 def test_a_comparison_carries_the_underlying_the_differences_and_whether_the_ranges_differ() -> None:
-    same_range = compare(_header(1, 10, 30, 3), [], _header(2, 10, 30, 3, slippage_percent="0.5"), [])
-    other_range = compare(_header(1, 10, 30, 3), [], _header(2, 10, 20, 2), [])
+    same_range = compare(
+        a_header(1, 10, 30, 3), [], a_header(2, 10, 30, 3, setup_changes={"slippage_percent": "0.5"}), []
+    )
+    other_range = compare(a_header(1, 10, 30, 3), [], a_header(2, 10, 20, 2), [])
 
     assert same_range.underlying == "SPY"
     assert [difference.setting for difference in same_range.settings] == [Setting.SLIPPAGE]
