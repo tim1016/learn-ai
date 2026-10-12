@@ -67,6 +67,7 @@ from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixe
 from tests.options_backtest._lake import tmp_lake as tmp_lake
 
 PREFIX = "/api/research/options-backtest/past-chain"
+LIMITS = "/api/research/options-backtest/limits"
 FRIDAY_MIDNIGHT_MS = 1749787200000
 NEXT_FRIDAY = date(2025, 6, 20)
 NEXT_FRIDAY_ANCHOR_MS = 1750449600000
@@ -477,6 +478,19 @@ async def test_a_window_of_fourteen_strikes_is_allowed_and_fifteen_is_not(
         wider = await c.get(f"{PREFIX}/expiry", params=_expiry_params(strikes=15))
 
     assert (widest.status_code, wider.status_code) == (200, 422)
+
+
+async def test_the_most_strikes_each_side_a_read_takes_is_the_limit_served_the_limit_is_allowed_and_one_more_is_not(
+    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    async with client as c:
+        limit = (await c.get(LIMITS)).json()["max_strikes_each_side"]
+        at_the_limit = await c.get(f"{PREFIX}/expiry", params=_expiry_params(strikes=limit))
+        one_more = await c.get(f"{PREFIX}/expiry", params=_expiry_params(strikes=limit + 1))
+
+    # 14 strikes each side is 29 strikes a right, 58 standard contracts, under the 60 a window may hold.
+    assert limit == 14
+    assert (at_the_limit.status_code, one_more.status_code) == (200, 422)
 
 
 async def test_an_expiry_read_with_the_catalog_down_is_a_503(
@@ -957,6 +971,27 @@ async def test_a_download_the_page_should_not_have_asked_for_is_refused_before_a
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == code and response.json()["detail"]["message"]
     assert stock_fetch.calls == []  # and an un-mocked request to the vendor would have failed the test
+
+
+@respx.mock
+async def test_the_most_contracts_a_download_takes_is_the_limit_served_the_limit_is_taken_and_one_more_is_refused(
+    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path, stock_fetch: StockFetchDouble
+) -> None:
+    async with client as c:
+        limit = (await c.get(LIMITS)).json()["max_contracts_per_download"]
+        symbols = [f"SPY250613C{strike * 1000:08d}" for strike in range(400, 400 + limit + 1)]
+        vendor_lists(*(OptionContract.from_occ_symbol(symbol) for symbol in symbols))
+        vendor_bars(lambda symbol: no_trades(symbol))
+        at_the_limit = await c.post(f"{PREFIX}/download", json=_download(contracts=symbols[:limit]))
+        one_more = await c.post(f"{PREFIX}/download", json=_download(contracts=symbols))
+
+    # A window holds at most 60 contracts and a download takes as many: the listing, the underlying and 60 contracts
+    # are 62 items; 61 contracts are refused before anything is asked.
+    assert limit == 60
+    assert at_the_limit.status_code == 200, at_the_limit.text
+    assert len(at_the_limit.json()["items"]) == 62
+    assert one_more.status_code == 400
+    assert one_more.json()["detail"]["code"] == "OPTIONS_BACKTEST_TOO_MANY_CONTRACTS"
 
 
 @pytest.mark.parametrize(

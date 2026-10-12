@@ -14,8 +14,10 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Path, Response, status
 
 from app.options_backtest import saved_setups
+from app.options_backtest.chain_download import MAX_CONTRACTS_PER_DOWNLOAD
 from app.options_backtest.describe import describe_setup
 from app.options_backtest.limits import MAX_RANGE_SESSIONS
+from app.options_backtest.past_chain import MAX_STRIKES_EACH_SIDE
 from app.options_backtest.saved_setups import SETUP_NAME_PATTERN, SETUP_NAME_RULE, ExampleSetupError
 from app.options_backtest.session_clock import SessionClock, full_session_clock
 from app.options_backtest.setup import (
@@ -64,7 +66,11 @@ async def describe(setup: OptionsBacktestSetup) -> SetupDescriptionResponse:
 
 @router.get("/limits", response_model=OptionsBacktestLimitsResponse)
 async def get_limits() -> OptionsBacktestLimitsResponse:
-    """What a setup may hold (legs, contracts, re-entries, strike steps, expiry days), what a name may be, and how long a range may be."""
+    """What a setup may hold (legs, contracts, re-entries, strike steps, expiry days), what a name may be, and how long a range may be.
+
+    Also what the past chain takes: the most strikes each side of the money one read takes and the most contracts one
+    download takes, each the number the past-chain routes enforce.
+    """
     return OptionsBacktestLimitsResponse(
         max_legs=MAX_LEGS,
         max_contracts_per_leg=MAX_CONTRACTS,
@@ -72,6 +78,8 @@ async def get_limits() -> OptionsBacktestLimitsResponse:
         max_strike_steps=MAX_STRIKE_STEPS,
         max_expiry_days=MAX_EXPIRY_DAYS,
         max_range_sessions=MAX_RANGE_SESSIONS,
+        max_strikes_each_side=MAX_STRIKES_EACH_SIDE,
+        max_contracts_per_download=MAX_CONTRACTS_PER_DOWNLOAD,
         setup_name=OptionsBacktestSetupNameRuleResponse(pattern=SETUP_NAME_PATTERN, sentence=SETUP_NAME_RULE),
     )
 
