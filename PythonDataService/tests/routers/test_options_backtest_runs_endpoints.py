@@ -9,6 +9,7 @@ neighbours. Hand-worked figures are in ``tests/options_backtest/test_service.py`
 from __future__ import annotations
 
 import asyncio
+import json
 import random
 import re
 import uuid
@@ -313,6 +314,27 @@ async def test_a_body_that_is_not_a_run_request_is_a_422_before_anything_is_made
         response = await c.post(JOBS, json=body)
 
     assert response.status_code == 422
+    assert harness.store.created == [] and harness.started == []
+
+
+@pytest.mark.parametrize("route", [JOBS, f"{PREFIX}/check-data"], ids=["the job route", "check data"])
+@pytest.mark.parametrize(
+    "payload",
+    [{"job_id": "\ud800"}, {"\ud800": "x"}, {"job_id": "job-1", "setup": {"\ud800": 1}}],
+    ids=["a lone surrogate in a value", "in a key", "in a key inside the setup"],
+)
+async def test_a_lone_surrogate_in_a_body_is_a_422_and_not_a_500_on_the_runs_two_routes_and_makes_no_run(
+    client: httpx.AsyncClient, harness: Harness, route: str, payload: dict[str, Any]
+) -> None:
+    # httpx's json= will not encode a lone surrogate, so the body is ASCII-escaped JSON bytes ("\\ud800").
+    body = json.dumps(payload, ensure_ascii=True).encode("ascii")
+    assert b"\\ud800" in body
+
+    async with client as c:
+        response = await c.post(route, content=body, headers={"Content-Type": "application/json"})
+
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], list)
     assert harness.store.created == [] and harness.started == []
 
 
