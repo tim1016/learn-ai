@@ -174,6 +174,36 @@ describe('the name a run is recorded under', () => {
   });
 });
 
+describe('the name a run is recorded under, when a save is under way', () => {
+  it('is the name of the setup opened meanwhile, not the one the save was of, when the save comes back after another setup was opened', async () => {
+    let finish: () => void = () => undefined;
+    const setup = scriptedRun(vi);
+    setup.service.save.mockImplementation(
+      (name: string, body) =>
+        new Promise((resolve) => {
+          finish = () => resolve({ name, example: false, saved_at_ms: 1_760_000_000_000, setup: body as never, cannot_open_reason: null });
+        }),
+    );
+    await renderPage(setup.service, undefined, { jobs: setup.jobs });
+    addLeg();
+    typeInto('Setup name', 'Mine');
+    await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save setup' }).disabled).toBe(false));
+    press('Save setup');
+    await waitFor(() => expect(setup.service.save).toHaveBeenCalledTimes(1));
+    await openExample();
+    pickDates('2026-09-14', '2026-09-18');
+
+    finish();
+    await lettingGo();
+    await lettingGo();
+    await waitFor(() => expect(startButton().disabled).toBe(false));
+    fireEvent.click(startButton());
+
+    await waitFor(() => expect(setup.service.startRun).toHaveBeenCalledTimes(1));
+    expect(setup.service.startRun.mock.calls[0]?.[0].setup_name).toBe(EXAMPLE_ONE_REENTRY);
+  });
+});
+
 describe('the shortcut, Shift+Enter', () => {
   it('starts a backtest from anywhere on the page, once', async () => {
     const setup = await readyToStart();
