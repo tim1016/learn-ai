@@ -101,13 +101,16 @@ describe('the one-day chart, time', () => {
     expect(optionsOf(fake).localization.timeFormatter(sec(2))).toBe('Sep 15, 09:32:00 ET');
   });
 
-  it('shows the time of the cursor in the tooltip in New York time with the zone marked', async () => {
+  // The call was bought in the bar that closed at 09:38: it filled in that minute, so the tooltip must not head it as an instant to the second.
+  it('names the minute under the cursor in the tooltip by the time it ended, in New York time with the zone marked, and not as an instant', async () => {
     const fake = fakeTimelineChart(vi);
     await renderChart(fake);
 
     fake.crosshair({ time: sec(8), point: { x: 40, y: 20 } });
 
-    expect(await screen.findByText('09:38:00 ET')).toBeTruthy();
+    expect(await screen.findByText('Minute ending 09:38 ET')).toBeTruthy();
+    expect(document.querySelector('.tip strong')?.textContent).toBe('Minute ending 09:38 ET');
+    expect([...document.querySelectorAll('.tip li')].map((item) => item.textContent)).toContain("Bought SPY Oct 16 '26 585 Call (contracts: 1): filled $2.57, seen $2.55");
   });
 });
 
@@ -334,7 +337,7 @@ describe('the one-day chart, the tooltip', () => {
 
     fake.crosshair({ time: sec(8), point: { x: 40, y: 20 } });
 
-    await screen.findByText('09:38:00 ET');
+    await screen.findByText('Minute ending 09:38 ET');
     const lines = [...document.querySelectorAll('.tip li')].map((item) => item.textContent);
     expect(lines).toEqual([
       'SPY: $585.55',
@@ -351,7 +354,7 @@ describe('the one-day chart, the tooltip', () => {
     Object.defineProperty(screen.getByRole('img'), 'clientWidth', { value: 1000 });
 
     fake.crosshair({ time: sec(8), point: { x: 300, y: 20 } });
-    await screen.findByText('09:38:00 ET');
+    await screen.findByText('Minute ending 09:38 ET');
     const tip = () => document.querySelector<HTMLElement>('.tip');
     expect([tip()?.style.left, tip()?.style.top, tip()?.classList.contains('tip--left')]).toEqual(['300px', '20px', false]);
 
@@ -366,7 +369,7 @@ describe('the one-day chart, the tooltip', () => {
 
     fake.crosshair({ time: sec(8), point: { x: 40, y: 20 } });
 
-    await screen.findByText('09:38:00 ET');
+    await screen.findByText('Minute ending 09:38 ET');
     expect(document.querySelector('.tip')?.getAttribute('aria-hidden')).toBe('true');
   });
 
@@ -374,12 +377,12 @@ describe('the one-day chart, the tooltip', () => {
     const fake = fakeTimelineChart(vi);
     await renderChart(fake);
     fake.crosshair({ time: sec(8), point: { x: 40, y: 20 } });
-    await screen.findByText('09:38:00 ET');
+    await screen.findByText('Minute ending 09:38 ET');
 
     fake.crosshair({});
     await waitFor(() => expect(document.querySelector('.tip')).toBeNull());
     fake.crosshair({ time: sec(8), point: { x: 40, y: 20 } });
-    await screen.findByText('09:38:00 ET');
+    await screen.findByText('Minute ending 09:38 ET');
     fake.crosshair({ time: sec(500), point: { x: 40, y: 20 } });
 
     await waitFor(() => expect(document.querySelector('.tip')).toBeNull());
@@ -391,7 +394,7 @@ describe('the one-day chart, the tooltip', () => {
 
     fake.crosshair({ time: sec(1), point: { x: 40, y: 20 } });
 
-    await screen.findByText('09:31:00 ET');
+    await screen.findByText('Minute ending 09:31 ET');
     expect(document.querySelector('.tip li')?.textContent).toBe('SPY: $9,007,199,254,740,993.01');
   });
 });

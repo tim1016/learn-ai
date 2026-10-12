@@ -7,12 +7,12 @@
       <table class="rows">
         <caption class="sr-only">What happened on this day, in the order it happened</caption>
         <thead>
-          <tr><th scope="col">Time</th><th scope="col">What happened</th><th scope="col">Leg</th><th scope="col">Contract</th><th scope="col" class="num">Price</th><th scope="col">Reason</th><th scope="col">The server’s words</th></tr>
+          <tr><th scope="col">Minute ending</th><th scope="col">What happened</th><th scope="col">Leg</th><th scope="col">Contract</th><th scope="col" class="num">Price</th><th scope="col">Reason</th><th scope="col">The server’s words</th></tr>
         </thead>
         <tbody>
           @for (row of rows(); track row.key) {
             <tr>
-              <td><app-timestamp-display [value]="row.event.at_ms" mode="et" granularity="time" /></td>
+              <td><app-timestamp-display [value]="row.event.at_ms" mode="et" granularity="minute" /></td>
               <td>{{ row.event.kind | receiptLabel }}</td>
               <td>{{ row.event.leg_id }}, {{ row.attempt }}</td>
               <td><app-options-backtest-instrument [instrument]="row.instrument" /></td>

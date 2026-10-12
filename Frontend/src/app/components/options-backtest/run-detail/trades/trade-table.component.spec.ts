@@ -34,9 +34,9 @@ describe('the table of leg trades, its columns', () => {
 
     expect(screen.getAllByRole('columnheader').map((header) => reads(header))).toEqual([
       'Day', 'Leg', 'Entry', 'Contract', 'Contracts',
-      'Entry decided', 'Entry filled', 'Entry price seen', 'Entry price filled',
+      'Entry decided', 'Entry filled in the minute ending', 'Entry price seen', 'Entry price filled',
       'Starting price', 'Momentum level', 'Stop level',
-      'Left because', 'Exit decided', 'Exit filled', 'Exit price seen', 'Exit price filled',
+      'Left because', 'Exit decided', 'Exit filled in the minute ending', 'Exit price seen', 'Exit price filled',
       'Entry fee', 'Exit fee', 'Profit',
     ]);
   });
@@ -50,9 +50,9 @@ describe('the table of leg trades, its columns', () => {
     expect(row[3]).toContain("Oct 16 '26 585 Call");
     expect(row.slice(4)).toEqual([
       '1',
-      '09:37:00 ET', '09:38:00 ET', '$2.55', '$2.57',
+      '09:37:00 ET', '09:38 ET', '$2.55', '$2.57',
       '$2.00', '$2.50', '$1.93',
-      'Stop', '09:40:00 ET', '09:41:00 ET', '$1.84', '$1.82',
+      'Stop', '09:40:00 ET', '09:41 ET', '$1.84', '$1.82',
       '$0.65', '$0.65', '-$76.30',
     ]);
   });
@@ -64,7 +64,7 @@ describe('the table of leg trades, its columns', () => {
     expect(row.slice(1, 3)).toEqual(['call', 're-entry 1']);
     expect(row[3]).toContain("Oct 16 '26 586 Call");
     expect(row.slice(9, 12)).toEqual(['— none', '— none', '$1.20']);
-    expect(row.slice(12, 17)).toEqual(['Exit Time', '15:55:00 ET', '15:56:00 ET', '$1.90', '$1.88']);
+    expect(row.slice(12, 17)).toEqual(['Exit Time', '15:55:00 ET', '15:56 ET', '$1.90', '$1.88']);
     expect(row[19]).toBe('$26.70');
   });
 
@@ -83,7 +83,7 @@ describe('the table of leg trades, its columns', () => {
     expect(marked.slice(1, 3)).toEqual(['put', 'first entry']);
     expect(marked[4]).toBe('2');
     expect(marked.slice(12, 14)).toEqual(['Marked Not Sold', '16:00:00 ET']);
-    expect(marked[14]).toBe('Marked at $1.25, not sold, last traded in the bar that closed at 15:58:00 ET');
+    expect(marked[14]).toBe('Marked at $1.25, not sold, last traded in the minute ending 15:58 ET');
     expect(row.querySelectorAll('td')[14].getAttribute('colspan')).toBe('3');
     // The fees and the profit follow the mark in the same columns as for a sale.
     expect(marked.slice(15)).toEqual(['$1.30', '$0.00', '-$55.30']);
@@ -97,8 +97,8 @@ describe('the table of leg trades, its columns', () => {
     const row = cells(bodyRows()[3]);
     expect(row[0]).toBe('2026-09-16');
     expect(row.slice(1, 3)).toEqual(['put', 'first entry']);
-    expect(row.slice(5, 9)).toEqual(['09:35:00 ET', '09:36:00 ET', '$3.10', '$3.12']);
-    expect(row.slice(12, 17)).toEqual(['Exit Time', '15:54:00 ET', '15:55:00 ET', '$3.40', '$3.38']);
+    expect(row.slice(5, 9)).toEqual(['09:35:00 ET', '09:36 ET', '$3.10', '$3.12']);
+    expect(row.slice(12, 17)).toEqual(['Exit Time', '15:54:00 ET', '15:55 ET', '$3.40', '$3.38']);
     expect(row[19]).toBe('$24.70');
   });
 
@@ -126,6 +126,18 @@ describe('the table of leg trades, time', () => {
     expect(modes.length).toBeGreaterThan(0);
     expect(modes.every((mode) => mode === 'et' || mode === 'date-et')).toBe(true);
     expect(modes.filter((mode) => mode === 'date-et').length).toBe(4);
+  });
+
+  // The order is decided at the close of the 09:37 bar and fills in the next minute, the one that ends 09:38: the table must not read as a fill at 09:38:00 sharp.
+  it('says that a fill’s time is the end of the minute it filled in, shown to the minute, while a decision’s time is an instant, shown to the second', async () => {
+    await renderTable({ trades: [stoppedTrade()] });
+
+    const headers = screen.getAllByRole('columnheader').map((header) => reads(header));
+    const row = cells(bodyRows()[0]);
+    const under = (header: RegExp) => row[headers.findIndex((name) => header.test(name))];
+    expect(headers.filter((name) => /^(Entry|Exit) filled in the minute ending$/.test(name))).toHaveLength(2);
+    expect([under(/^Entry decided/), under(/^Exit decided/)]).toEqual(['09:37:00 ET', '09:40:00 ET']);
+    expect([under(/^Entry filled/), under(/^Exit filled/)]).toEqual(['09:38 ET', '09:41 ET']);
   });
 
   // 00:30 New York time on the 16th is 23:30 on the 15th in Chicago and 18:30 on the 15th in Honolulu.

@@ -39,6 +39,7 @@ function servedAs(day: SessionDetail) {
 const facts = () => [...document.querySelectorAll('.facts > div')].map((each) => reads(each));
 const tableRows = (name: string) => [...within(screen.getByRole('region', { name })).getAllByRole('row')].slice(1).map((row) => [...row.querySelectorAll('td')].map((cell) => reads(cell)));
 const heading = () => screen.getByRole('heading', { name: 'One day' });
+const columnNames = (name: string) => within(screen.getByRole('region', { name })).getAllByRole('columnheader').map((header) => reads(header));
 
 describe('one day, before one is chosen', () => {
   it('is a region of its own with a picker of the run’s days, and reads nothing yet', async () => {
@@ -128,18 +129,18 @@ describe('one day, the stored facts', () => {
 
     const rows = tableRows('What happened, in order (scrolls sideways)');
     expect(rows.map((row) => row.slice(0, 2).concat(row[2], row[4], row[5]))).toEqual([
-      ['09:31:00 ET', 'Picked', 'call, first entry', '', ''],
-      ['09:31:00 ET', 'Picked', 'put, first entry', '', ''],
-      ['09:31:00 ET', 'Pick Refused', 'wing, first entry', '', 'Strike Not Listed'],
-      ['09:32:00 ET', 'Starting Price Taken', 'call, first entry', '$2.00', ''],
-      ['09:34:00 ET', 'Entry Filled', 'put, first entry', '$1.42', ''],
-      ['09:37:00 ET', 'Momentum Hit', 'call, first entry', '$2.50', ''],
-      ['09:38:00 ET', 'Entry Filled', 'call, first entry', '$2.57', ''],
-      ['09:40:00 ET', 'Stop Hit', 'call, first entry', '$1.85', ''],
-      ['09:41:00 ET', 'Close Filled', 'call, first entry', '$1.82', ''],
-      ['09:41:00 ET', 'Re Entry Earned', 'call, re-entry 1', '', ''],
-      ['09:41:00 ET', 'Exit Time', 'put, first entry', '', 'Exit Time'],
-      ['09:42:00 ET', 'Marked Not Sold', 'put, first entry', '$1.25', ''],
+      ['09:31 ET', 'Picked', 'call, first entry', '', ''],
+      ['09:31 ET', 'Picked', 'put, first entry', '', ''],
+      ['09:31 ET', 'Pick Refused', 'wing, first entry', '', 'Strike Not Listed'],
+      ['09:32 ET', 'Starting Price Taken', 'call, first entry', '$2.00', ''],
+      ['09:34 ET', 'Entry Filled', 'put, first entry', '$1.42', ''],
+      ['09:37 ET', 'Momentum Hit', 'call, first entry', '$2.50', ''],
+      ['09:38 ET', 'Entry Filled', 'call, first entry', '$2.57', ''],
+      ['09:40 ET', 'Stop Hit', 'call, first entry', '$1.85', ''],
+      ['09:41 ET', 'Close Filled', 'call, first entry', '$1.82', ''],
+      ['09:41 ET', 'Re Entry Earned', 'call, re-entry 1', '', ''],
+      ['09:41 ET', 'Exit Time', 'put, first entry', '', 'Exit Time'],
+      ['09:42 ET', 'Marked Not Sold', 'put, first entry', '$1.25', ''],
     ]);
   });
 
@@ -226,9 +227,9 @@ describe('one day, the chart as text', () => {
     await screen.findByRole('region', { name: 'Fills (scrolls sideways)' });
 
     expect(tableRows('Fills (scrolls sideways)').map((row) => [row[0], row[1], row[2], row[4], row[5], row[6], row[7], row[8]])).toEqual([
-      ['Bought', 'up arrow', 'put, first entry', '2', '09:34:00 ET', '$1.42', '$1.40', ''],
-      ['Bought', 'up arrow', 'call, first entry', '1', '09:38:00 ET', '$2.57', '$2.55', ''],
-      ['Sold', 'down arrow', 'call, first entry', '1', '09:41:00 ET', '$1.82', '$1.84', 'Stop'],
+      ['Bought', 'up arrow', 'put, first entry', '2', '09:34 ET', '$1.42', '$1.40', ''],
+      ['Bought', 'up arrow', 'call, first entry', '1', '09:38 ET', '$2.57', '$2.55', ''],
+      ['Sold', 'down arrow', 'call, first entry', '1', '09:41 ET', '$1.82', '$1.84', 'Stop'],
     ]);
   });
 
@@ -237,9 +238,22 @@ describe('one day, the chart as text', () => {
     await screen.findByRole('region', { name: 'Marks (scrolls sideways)' });
 
     expect(tableRows('Marks (scrolls sideways)').map((row) => [row[0], row[1], row[2], row[4], row[5]])).toEqual([
-      ['Marked, not sold', 'square', 'put, first entry', '09:40:00 ET', '$1.25'],
+      ['Marked, not sold', 'square', 'put, first entry', '09:40 ET', '$1.25'],
     ]);
     expect(tableRows('Fills (scrolls sideways)').map((row) => row[0])).not.toContain('Marked, not sold');
+  });
+
+  // The put was bought in the bar that closed at 09:34 and the call was sold in the one that closed at 09:41: each filled in that minute, at its open.
+  it('names the time of a fill, a mark and an event as the minute that ended then, and a level’s as the instants it was drawn between', async () => {
+    await renderSession(vi, { detail: servedAs(sessionDetail()), request: ASKED });
+    await screen.findByRole('region', { name: 'Fills (scrolls sideways)' });
+
+    expect(columnNames('Fills (scrolls sideways)')).toContain('Filled in the minute ending');
+    expect(columnNames('Marks (scrolls sideways)')).toContain('Last traded in the minute ending');
+    expect(columnNames('What happened, in order (scrolls sideways)')[0]).toBe('Minute ending');
+    expect(columnNames('Levels (scrolls sideways)').slice(-2)).toEqual(['From', 'To']);
+    expect(tableRows('Fills (scrolls sideways)').map((row) => row[5])).toEqual(['09:34 ET', '09:38 ET', '09:41 ET']);
+    expect(tableRows('Levels (scrolls sideways)').map((row) => row[5])).toEqual(['09:32:00 ET', '09:32:00 ET', '09:38:00 ET']);
   });
 
   it('says so when there is no level, no fill and no mark', async () => {

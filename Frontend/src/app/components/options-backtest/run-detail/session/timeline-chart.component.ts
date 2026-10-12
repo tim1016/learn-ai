@@ -43,7 +43,8 @@ const LINE_STYLES: Readonly<Record<PlanLineStyle, LineStyle>> = {
 const chartTime = (seconds: number): UTCTimestamp => seconds as UTCTimestamp;
 
 interface Tip {
-  readonly time: string;
+  /** The minute under the cursor, named by its close: a fill in the tooltip filled in that minute, not at that instant. */
+  readonly heading: string;
   readonly lines: readonly string[];
   readonly left: number;
   readonly top: number;
@@ -197,7 +198,7 @@ export class TimelineChartComponent {
     }
     const width = this.canvas().nativeElement.clientWidth;
     this.tip.set({
-      time: formatTimestampDisplay(param.time * 1000, { mode: 'et', granularity: 'time' }),
+      heading: `Minute ending ${formatTimestampDisplay(param.time * 1000, { mode: 'et', granularity: 'minute' })}`,
       lines,
       left: param.point.x,
       top: param.point.y,
