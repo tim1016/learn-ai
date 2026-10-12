@@ -99,6 +99,8 @@ export const SERVED_LIMITS: SetupLimits = {
   max_strike_steps: 50,
   max_expiry_days: 730,
   max_range_sessions: 1300,
+  max_strikes_each_side: 14,
+  max_contracts_per_download: 60,
   setup_name: {
     pattern: '^[A-Za-z0-9](?:[A-Za-z0-9 _.,()-]{0,78}[A-Za-z0-9_.,()-])?$',
     sentence: 'A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), starting with a letter or a digit and not ending with a space.',
