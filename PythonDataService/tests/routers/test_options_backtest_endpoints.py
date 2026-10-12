@@ -109,7 +109,7 @@ async def test_a_setup_that_does_not_validate_is_a_422_with_the_field_errors(cli
 
 @pytest.mark.parametrize(
     "name",
-    ["semi;colon", " leading", "trailing ", "x" * 81, "line\nbreak", "slash\\back"],
+    ["semi;colon", " leading", "trailing ", "x" * 81, "line\nbreak", "slash\\back", ".hidden", "-dash"],
 )
 async def test_a_name_outside_the_rule_is_a_422_before_anything_is_saved(client, name: str) -> None:
     async with client as c:
@@ -117,6 +117,18 @@ async def test_a_name_outside_the_rule_is_a_422_before_anything_is_saved(client,
 
     assert response.status_code == 422, response.text
     assert response.json()["detail"][0]["loc"] == ["path", "name"]
+
+
+@pytest.mark.parametrize("encoded", ["%2E", "%2E%2E"])
+async def test_a_name_of_only_dots_is_a_422_not_a_saved_setup(client, encoded: str) -> None:
+    # Percent-encoded so the client keeps the dots in the path, as a server that decodes it would see them.
+    async with client as c:
+        response = await c.put(f"{PREFIX}/setups/{encoded}", json=setup_body())
+        deleted = await c.delete(f"{PREFIX}/setups/{encoded}")
+
+    for refused in (response, deleted):
+        assert refused.status_code == 422, refused.text
+        assert refused.json()["detail"][0]["loc"] == ["path", "name"]
 
 
 async def test_a_setup_that_does_not_validate_is_a_422_when_saving_too(client) -> None:

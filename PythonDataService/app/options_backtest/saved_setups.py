@@ -33,11 +33,14 @@ from app.options_backtest.setup import (
     ThisWeekExpiryRule,
 )
 
-# 1 to 80 characters of ASCII letters, digits, spaces and - _ . , ( ); a space never starts or ends a name, so
-# "a" and "a " cannot be two rows that read alike. ASCII only, so Python's re and pydantic's engine agree.
-SETUP_NAME_PATTERN = r"^[A-Za-z0-9_.,()-](?:[A-Za-z0-9 _.,()-]{0,78}[A-Za-z0-9_.,()-])?$"
+# 1 to 80 characters of ASCII letters, digits, spaces and - _ . , ( ). A name starts with a letter or a digit, so
+# "." and ".." (which a browser's URL parser removes from a path) and a leading dot or dash cannot be saved. A space
+# never ends a name, so "a" and "a " cannot be two rows that read alike. ASCII only, so Python's re and pydantic's
+# engine agree.
+SETUP_NAME_PATTERN = r"^[A-Za-z0-9](?:[A-Za-z0-9 _.,()-]{0,78}[A-Za-z0-9_.,()-])?$"
 SETUP_NAME_RULE = (
-    "A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), not starting or ending with a space."
+    "A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), "
+    "starting with a letter or a digit and not ending with a space."
 )
 _NAME = re.compile(SETUP_NAME_PATTERN)
 

@@ -125,7 +125,7 @@ async def test_an_example_is_read_without_the_database() -> None:
 
 @pytest.mark.parametrize(
     "name",
-    ["a", "SPY (v2), 0.3-slippage_a.b", "x" * 80, "two  spaces inside", "7"],
+    ["a", "SPY (v2), 0.3-slippage_a.b", "x" * 80, "two  spaces inside", "7", "ends with a dot.", "a.."],
 )
 def test_a_name_of_letters_digits_spaces_and_the_few_marks_is_taken(name: str) -> None:
     assert is_valid_setup_name(name)
@@ -146,6 +146,14 @@ def test_a_name_of_letters_digits_spaces_and_the_few_marks_is_taken(name: str) -
         "tab\there",
         "line\nbreak",
         "end\n",
+        # A name that starts with a mark: "." and ".." never reach a route from a browser, and a leading dot hides.
+        ".",
+        "..",
+        ".hidden",
+        "-dash",
+        "_under",
+        "(paren",
+        ",comma",
     ],
 )
 def test_a_name_outside_the_rule_is_refused(name: str) -> None:
@@ -245,6 +253,22 @@ async def test_a_stored_setup_that_no_longer_validates_is_listed_as_one_that_can
     assert listed[not_a_setup].cannot_open_reason
     # The same answer from a direct read, and the setup is still there to be seen, not dropped.
     assert await get_setup(conn, stale_stop) == listed[stale_stop]
+
+
+async def test_a_name_that_differs_from_an_example_only_by_case_is_an_ordinary_setup(conn) -> None:
+    # Names are compared exactly, so the lookalike is its own row: saved, listed beside the example, and deletable.
+    name = _EXAMPLE_NAMES[0].upper()
+    assert name != _EXAMPLE_NAMES[0]
+    try:
+        saved = await save_setup(conn, name, _setup(underlying="QQQ"), saved_at_ms=1_000)
+        listed = {s.name: s for s in await list_setups(conn)}
+
+        assert saved.example is False and saved.saved_at_ms == 1_000
+        assert listed[name] == saved and listed[_EXAMPLE_NAMES[0]].example is True
+        assert await delete_setup(conn, name) is True
+    finally:
+        await conn.execute("DELETE FROM research_options_backtest_setups WHERE name = $1", name)
+    assert [example.name for example in EXAMPLE_SETUPS] == list(_EXAMPLE_NAMES)
 
 
 async def test_deleting_removes_the_setup_and_says_whether_there_was_one(conn, tag: str) -> None:
