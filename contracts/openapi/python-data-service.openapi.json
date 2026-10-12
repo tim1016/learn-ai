@@ -11664,7 +11664,7 @@
       },
       "CrossSectionalJobRequest": {
         "additionalProperties": false,
-        "description": "Body of POST /api/jobs-internal/cross-sectional.\nThe Frontend's research request, plus an injected ``job_id`` from the\n.NET JobsApi.",
+        "description": "Body of POST /api/jobs-internal/cross-sectional.\n\nThe Frontend's research request, plus an injected ``job_id`` from the\n.NET JobsApi.",
         "properties": {
           "featureName": {
             "minLength": 1,
@@ -12799,6 +12799,25 @@
           "calendar_version"
         ],
         "title": "DatasetPlanResponse",
+        "type": "object"
+      },
+      "DatasetZipJobRequest": {
+        "description": "Body of POST /api/jobs-internal/dataset-zip.\n\nCarries every field the existing :class:`DatasetGenerationRequest`\naccepts \u2014 since the dataset request is an established schema, we\naccept it as a ``dataset`` sub-object rather than flattening, so the\nbundler keeps its single source of truth for shape validation.",
+        "properties": {
+          "dataset": {
+            "title": "Dataset",
+            "type": "object"
+          },
+          "jobId": {
+            "minLength": 1,
+            "title": "Jobid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "jobId"
+        ],
+        "title": "DatasetZipJobRequest",
         "type": "object"
       },
       "DayCandleBarModel": {
@@ -14602,6 +14621,25 @@
           }
         },
         "title": "EmaPreviousCrossoverStrategyParametersModel",
+        "type": "object"
+      },
+      "EngineBacktestJobRequest": {
+        "description": "Body of POST /api/jobs-internal/engine-backtest.\n\nMirrors the existing synchronous EngineBacktestRequest shape but\naccepts it as a ``backtest`` sub-object so the field validation\nremains the single source of truth. The .NET JobsApi forwards the\nEngine Lab POST body verbatim plus an injected ``job_id``.",
+        "properties": {
+          "backtest": {
+            "title": "Backtest",
+            "type": "object"
+          },
+          "jobId": {
+            "minLength": 1,
+            "title": "Jobid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "jobId"
+        ],
+        "title": "EngineBacktestJobRequest",
         "type": "object"
       },
       "EngineBacktestRequest": {
@@ -16550,7 +16588,7 @@
       },
       "FeatureResearchJobRequest": {
         "additionalProperties": false,
-        "description": "Body of POST /api/jobs-internal/feature-research.\nThe runner fetches bars from Polygon itself \u2014 the Frontend sends only\nthe symbol + date range + feature, no payload of OHLCV. This keeps\nthe .NET round-trip small and matches the cross-sectional pattern.\nInherits all defaults from the base (``multiplier=1``,\n``timespan=\"minute\"``, ``session=\"rth\"``) \u2014 those match the\npre-migration shape exactly.",
+        "description": "Body of POST /api/jobs-internal/feature-research.\n\nThe runner fetches bars from Polygon itself \u2014 the Frontend sends only\nthe symbol + date range + feature, no payload of OHLCV. This keeps\nthe .NET round-trip small and matches the cross-sectional pattern.\n\nInherits all defaults from the base (``multiplier=1``,\n``timespan=\"minute\"``, ``session=\"rth\"``) \u2014 those match the\npre-migration shape exactly.",
         "properties": {
           "featureName": {
             "minLength": 1,
@@ -32537,7 +32575,7 @@
         "type": "object"
       },
       "LeanEngineRunJobRequest": {
-        "description": "Body of POST /api/jobs-internal/lean-engine-run.\nWraps the existing synchronous ``TrustedRunRequestModel`` shape as a\n``request`` sub-object so the lean-sidecar router's Pydantic\nvalidation remains the single source of truth for the payload. The\n.NET JobsApi forwards the Engine Lab POST body verbatim plus an\ninjected ``job_id``.",
+        "description": "Body of POST /api/jobs-internal/lean-engine-run.\n\nWraps the existing synchronous ``TrustedRunRequestModel`` shape as a\n``request`` sub-object so the lean-sidecar router's Pydantic\nvalidation remains the single source of truth for the payload. The\n.NET JobsApi forwards the Engine Lab POST body verbatim plus an\ninjected ``job_id``.",
         "properties": {
           "jobId": {
             "minLength": 1,
@@ -47409,7 +47447,7 @@
       },
       "SignalEngineJobRequest": {
         "additionalProperties": false,
-        "description": "Body of POST /api/jobs-internal/signal-engine.\n**Default override**: ``multiplier=15`` to preserve the\npre-migration default. Signal-engine processing operates on\n15-minute bars by default; the inherited base default of 1 would\nsilently switch every caller to 1-minute bars.",
+        "description": "Body of POST /api/jobs-internal/signal-engine.\n\n**Default override**: ``multiplier=15`` to preserve the\npre-migration default. Signal-engine processing operates on\n15-minute bars by default; the inherited base default of 1 would\nsilently switch every caller to 1-minute bars.",
         "properties": {
           "featureName": {
             "minLength": 1,
@@ -72960,6 +72998,92 @@
           }
         },
         "summary": "Start Cross Sectional Job",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
+    "/api/jobs-internal/dataset-zip": {
+      "post": {
+        "description": "Kick off a dataset fetch + bundle into a ZIP archive.\n\nMaps the existing dataset bundling pipeline (`_fetch_and_process` +\n`_build_zip_with_events`) onto the generic job framework. The pipeline\nalready supports ``on_event`` and ``cancel_check`` callables \u2014 we\nplug those into :class:`ProgressEmitter` and\n:class:`CancellationCheck` respectively, so the inner code is\nunchanged. The final ZIP bytes go through ``completed_blob`` which\nparks them at ``job:{id}:result-blob``; the .NET ``GET /api/jobs/\n{id}/download`` streams them with the right Content-Disposition.",
+        "operationId": "start_dataset_zip_job_api_jobs_internal_dataset_zip_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetZipJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Start Dataset Zip Job Api Jobs Internal Dataset Zip Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Dataset Zip Job",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
+    "/api/jobs-internal/engine-backtest": {
+      "post": {
+        "description": "Kick off a LEAN-engine backtest in a worker thread. Returns 202.\n\nThe Engine Lab UI is the primary caller; the .NET JobsApi forwards\nthe request after minting the ``job_id`` and writing the initial\nstate record to Redis. The worker emits ``phase`` and ``log`` events\nto the same Redis stream, then ``completed`` with the\nEngineBacktestResponse-shaped result body.",
+        "operationId": "start_engine_backtest_job_api_jobs_internal_engine_backtest_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EngineBacktestJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Start Engine Backtest Job Api Jobs Internal Engine Backtest Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Engine Backtest Job",
         "tags": [
           "jobs-internal"
         ]
