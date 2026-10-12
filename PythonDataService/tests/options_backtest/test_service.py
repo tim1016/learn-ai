@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
-import re
+import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -43,13 +43,14 @@ import respx
 
 from app.data_lake.admission import LakeAdmissionError
 from app.data_lake.catalog_client import CatalogUnavailableError
+from app.data_lake.option_bars import OptionBarsFileError
+from app.data_lake.option_listing import OptionListingFileError
 from app.engine import run_gate
 from app.jobs.phases import JOB_PHASES
 from app.lean_sidecar.trading_calendar import session_window_for_date
-from app.options_backtest import service
-from app.options_backtest.data_check import DataCheck
+from app.options_backtest import fetching, service
 from app.options_backtest.fees import FeeRateNotPublished
-from app.options_backtest.fetching import DownloadFailed, DownloadReport
+from app.options_backtest.fetching import DownloadFailed
 from app.options_backtest.lake_data import UnderlyingDayUnreadable
 from app.options_backtest.results import SessionStatus
 from app.options_backtest.run import RunResult, SessionDataMissing
@@ -60,6 +61,7 @@ from app.options_backtest.service import (
     RunFailedError,
     RunHooks,
     RunRefused,
+    SaveTimedOut,
     execute_run,
     failure_of,
     sessions_of_range,
@@ -74,6 +76,7 @@ from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixe
 from tests.options_backtest._lake import tmp_lake as tmp_lake
 from tests.options_backtest._run_data import FRI, THU, WED, Day, flat, steady
 from tests.options_backtest._run_lake import Vendor
+from tests.options_backtest._words import assert_plain
 from tests.options_backtest.setup_fixtures import conn as conn
 from tests.options_backtest.setup_fixtures import leg
 from tests.options_backtest.setup_fixtures import setup as setup_of
@@ -91,14 +94,11 @@ for _day in (TUE, WED, THU, FRI):
     session_window_for_date(_day)  # raises for a day that is not a session
 
 
-NO_DATE_IN_WORDS = re.compile(r"\d{4}-\d{2}-\d{2}")
-
-
 def _says_no_date(failure: RunFailure) -> None:
-    """A failure's words name no date: its sessions are in its items, by their opens."""
-    assert not NO_DATE_IN_WORDS.search(failure.reason), failure.reason
+    """A failure's words name no date, JSON or path: its sessions are in its items, by their opens."""
+    assert_plain(failure.reason)
     for item in failure.items:
-        assert not NO_DATE_IN_WORDS.search(item.message), item.message
+        assert_plain(item.message)
 
 
 def _open(day: date) -> int:
@@ -196,6 +196,7 @@ async def _execute(
     setup: OptionsBacktestSetup | None = None,
     sessions: list[date] | None = None,
     hooks: RunHooks | None = None,
+    clock: Callable[[], int] | None = None,
 ) -> RunResult:
     return await asyncio.to_thread(
         execute_run,
@@ -204,7 +205,7 @@ async def _execute(
         sessions=sessions or SESSION_OF_THE_RANGE,
         store=store,
         hooks=hooks or job.hooks,
-        clock=_clock(),
+        clock=clock or _clock(),
     )
 
 
@@ -383,26 +384,6 @@ async def test_a_vendor_failure_in_the_middle_of_the_download_fails_the_run_nami
     assert FRI not in vendor.listing_requests, "nothing after the failed session was fetched"
 
 
-@respx.mock
-async def test_a_download_that_left_something_missing_does_not_let_the_replay_go_on_over_it(
-    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Nothing was fetched at all, as if the download had stopped short without saying so: the replay finds the
-    # underlying's day missing and the run fails, naming the session.
-    Vendor(the_scene()).mount()
-    monkeypatch.setattr(service, "ensure_run_data", lambda *args, **kwargs: DownloadReport(0, 0, 0, 0, 0))
-    monkeypatch.setattr(service, "check_data", lambda *args, **kwargs: DataCheck((), date(2024, 10, 14)))
-    store = FakeStore()
-
-    with pytest.raises(RunFailedError):
-        await _execute(store, Job())
-
-    [(_, failure, _)] = store.failed
-    assert failure.code == "DATA_MISSING"
-    assert failure.items[0].session_open_ms == session_window_for_date(TUE).open_ms_utc
-    assert store.completed == []
-
-
 # ── Cancel ───────────────────────────────────────────────────────────────
 
 
@@ -572,7 +553,6 @@ def test_an_unpublished_fee_rate_fails_with_its_session_and_types() -> None:
     [
         LakeAdmissionError("no receipt"),
         UnderlyingDayUnreadable("bad zip"),
-        MalformedBars("a repeated minute"),
     ],
 )
 def test_a_stored_file_that_cannot_be_read_is_a_failure_that_says_so(error: Exception) -> None:
@@ -580,6 +560,13 @@ def test_a_stored_file_that_cannot_be_read_is_a_failure_that_says_so(error: Exce
 
     assert failure.code == "DATA_UNREADABLE"
     assert type(error).__name__ in failure.reason and "Nothing was saved" in failure.reason
+
+
+def test_stored_bars_that_break_the_rules_of_a_bar_are_a_failure_that_says_so() -> None:
+    failure = failure_of(MalformedBars("the underlying on 2026-10-07: a bar closing at 1 comes twice"))
+
+    assert failure.code == "DATA_UNREADABLE"
+    assert "rules of a bar" in failure.reason and "Nothing was saved" in failure.reason
 
 
 def test_an_unreachable_catalog_and_a_wait_that_ran_out_are_told_apart() -> None:
@@ -601,6 +588,326 @@ def test_a_download_failure_with_no_session_is_a_failure_of_the_run_as_a_whole()
 
     assert failure.code == "DOWNLOAD_FAILED" and failure.items[0].session_open_ms is None
     _says_no_date(failure)
+
+
+# ── Every way a run fails is said in plain words ─────────────────────────
+# Nothing a failed run says to an owner names a date, holds a vendor's JSON or names a file: a session is named by its
+# open in the failure's items. That holds for the reason, for each item, for every log line of the feature, and for
+# the text of the exception the job logs (it logs everything chained to the error it is given).
+
+
+def _what_the_exception_says(raised: BaseException) -> list[str]:
+    """The text of ``raised`` and of each error chained to it, as a traceback prints the chain."""
+    said: list[str] = []
+    current: BaseException | None = raised
+    while current is not None:
+        said.append(str(current))
+        current = current.__cause__ or (None if current.__suppress_context__ else current.__context__)
+    return said
+
+
+def _everything_a_failed_run_said(
+    failure: RunFailure, raised: BaseException, caplog: pytest.LogCaptureFixture
+) -> list[str]:
+    ours = ("app.options_backtest", "app.jobs")
+    return [
+        failure.reason,
+        *(item.message for item in failure.items),
+        *(record.getMessage() for record in caplog.records if record.name.startswith(ours)),
+        *_what_the_exception_says(raised),
+    ]
+
+
+async def _fails(
+    vendor: Vendor, store: FakeStore, *, clock: Callable[[], int] | None = None, **kwargs: Any
+) -> RunFailedError:
+    with pytest.raises(RunFailedError) as caught:
+        await _execute(store, Job(), clock=clock, **kwargs)
+    return caught.value
+
+
+def _inside_friday() -> Callable[[], int]:
+    now = [session_window_for_date(FRI).open_ms_utc + 60 * 60_000, FINISHED_AT_MS]
+    return lambda: now.pop(0) if len(now) > 1 else now[0]
+
+
+@pytest.mark.parametrize(
+    ("what_is_wrong", "code", "reason"),
+    [
+        ("a session older than the plan", "SESSIONS_CANNOT_BE_TESTED", "older_than_the_data_plan"),
+        ("a session that is not over", "SESSIONS_CANNOT_BE_TESTED", "session_data_not_final"),
+        ("estimated fees before the rates", "SESSIONS_CANNOT_BE_TESTED", "no_published_fee_rates"),
+        ("a contract the vendor refuses with its key", "DOWNLOAD_FAILED", "provider_auth_error"),
+        ("a contract the plan does not include", "DOWNLOAD_FAILED", "provider_entitlement_error"),
+        ("a contract the vendor asks us to slow down for", "DOWNLOAD_FAILED", "provider_rate_limited"),
+        ("a contract the vendor does not know", "DOWNLOAD_FAILED", "unknown_symbol"),
+        ("a contract the vendor fails to answer", "DOWNLOAD_FAILED", "provider_api_error"),
+        ("a listing the vendor fails to give", "DOWNLOAD_FAILED", "provider_api_error"),
+        ("an underlying the vendor fails to give", "DOWNLOAD_FAILED", "underlying_bars_not_materialized"),
+        ("a contract another request holds", "DOWNLOAD_FAILED", "another_request_still_fetching"),
+        ("a wait that runs out", "DOWNLOAD_FAILED", "took_too_long"),
+    ],
+)
+@respx.mock
+async def test_no_way_a_run_can_fail_before_or_during_the_download_names_a_date_holds_json_or_names_a_file(
+    what_is_wrong: str,
+    code: str,
+    reason: str,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    store, scene = FakeStore(), the_scene()
+    thursday_call = "SPY261008C00500000"
+    clock: Callable[[], int] | None = None
+    kwargs: dict[str, Any] = {}
+    match what_is_wrong:
+        case "a session older than the plan":
+            older = date(2024, 10, 11)
+            vendor, kwargs = Vendor({**scene, older: Day(underlying=steady("500.20"))}), {
+                "sessions": [older, *SESSION_OF_THE_RANGE]
+            }
+        case "a session that is not over":
+            vendor, clock = Vendor(scene), _inside_friday()
+        case "estimated fees before the rates":
+            june = [date(2026, 6, 29), date(2026, 6, 30)]
+            vendor, kwargs = Vendor(scene), {
+                "sessions": june,
+                "setup": the_setup().model_copy(update={"fees": FeePolicy(kind="estimated")}),
+            }
+        case "a contract the vendor refuses with its key":
+            vendor = Vendor(scene, option_errors={thursday_call: 401})
+        case "a contract the plan does not include":
+            vendor = Vendor(scene, option_errors={thursday_call: 403})
+        case "a contract the vendor asks us to slow down for":
+            vendor = Vendor(scene, option_errors={thursday_call: 429})
+        case "a contract the vendor does not know":
+            vendor = Vendor(scene, option_errors={thursday_call: 404})
+        case "a contract the vendor fails to answer":
+            vendor = Vendor(scene, option_errors={thursday_call: 500})
+        case "a listing the vendor fails to give":
+            vendor = Vendor(scene, listing_errors={THU: 503})
+        case "an underlying the vendor fails to give":
+            vendor = Vendor(scene, stock_errors={THU: 500})
+        case "a contract another request holds":
+            vendor = Vendor(scene)
+            monkeypatch.setattr(fetching, "OTHER_REQUEST_WAIT_SECONDS", 0.2)
+            monkeypatch.setattr(fetching, "OTHER_REQUEST_POLL_SECONDS", 0.02)
+            monkeypatch.setattr(fetching, "STOP_POLL_SECONDS", 0.05)
+            vendor.mount()
+            await _another_request_holds_the_contract(fake_catalog)
+        case _:
+            vendor = Vendor(scene, option_latency_s=0.3)
+            monkeypatch.setattr(fetching, "_CONTRACTS_TIMEOUT_SECONDS", 0.1)
+            monkeypatch.setattr(fetching, "STOP_POLL_SECONDS", 0.05)
+    if what_is_wrong != "a contract another request holds":
+        vendor.mount()
+    raised = await _fails(vendor, store, clock=clock, **kwargs)
+
+    [(_, failure, _)] = store.failed
+    assert failure.code == code and raised.failure == failure
+    assert {item.code for item in failure.items} == {reason}
+    for said in _everything_a_failed_run_said(failure, raised, caplog):
+        assert_plain(said)
+
+
+async def _another_request_holds_the_contract(fake_catalog: FakeCatalog) -> None:
+    from app.data_lake.option_bars import option_minute_trade_dch
+    from app.data_lake.option_listing import ensure_option_listing
+    from app.data_lake.run_materialization import materialize_engine_run
+    from app.data_lake.types import ArtifactIdentity
+
+    await asyncio.to_thread(
+        materialize_engine_run, symbol="SPY", start=THU, end=THU, resolution="minute", price_adjustment_mode="raw"
+    )
+    await ensure_option_listing("SPY", THU, now_ms=NOW_MS)
+    identity = ArtifactIdentity(
+        artifact_kind="time_series_bars",
+        market="usa_options",
+        symbol="SPY261008C00500000",
+        trading_date=THU,
+        resolution="minute",
+        data_type="trade",
+        provider="polygon",
+        price_adjustment_mode="raw",
+    )
+    claimed = await fake_catalog.claim_minute_bar(identity, "another", 600_000, option_minute_trade_dch(), "x.zip")
+    assert claimed is not None
+
+
+_HOSTILE = "2026-10-07 {\"status\":\"ERROR\",\"error\":\"x\"} /Users/owner/lake/raw/spy/20261007_trade.zip"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        SessionDataMissing(WED, underlying=True, listing=True, contracts=()),
+        FeeRateNotPublished(date(2026, 6, 1), ("cat", "orf")),
+        MalformedBars(f"the underlying on {_HOSTILE}"),
+        UnderlyingDayUnreadable(_HOSTILE),
+        LakeAdmissionError(_HOSTILE),
+        OptionBarsFileError(_HOSTILE),
+        OptionListingFileError(_HOSTILE),
+        CatalogUnavailableError(f"postgresql://owner@host/db {_HOSTILE}"),
+        CallerStoppedWaitingError(_HOSTILE),
+        SaveTimedOut(7),
+        DownloadFailed(session=WED, what="the minute bars of SPY", reason="provider_api_error", detail=_HOSTILE),
+        DownloadFailed(session=None, what="the minute bars of SPY", reason="underlying_bars_not_materialized", detail=_HOSTILE),
+        KeyError(_HOSTILE),
+    ],
+    ids=lambda error: type(error).__name__,
+)
+def test_what_a_failure_says_is_composed_here_and_copies_nothing_of_the_exception_that_caused_it(
+    error: Exception,
+) -> None:
+    failure = failure_of(error)
+
+    _says_no_date(failure)
+    assert "owner" not in failure.reason and "Users" not in failure.reason
+
+
+@pytest.mark.parametrize("error", [MalformedBars(_HOSTILE), SessionDataMissing(WED, underlying=True, listing=False, contracts=())])
+@respx.mock
+async def test_a_known_failure_is_raised_without_the_error_that_caused_it_so_the_jobs_log_of_it_holds_none_of_its_text(
+    error: Exception, fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    Vendor(the_scene()).mount()
+    monkeypatch.setattr(service, "run_sessions", lambda *args, **kwargs: (_ for _ in ()).throw(error))
+
+    with pytest.raises(RunFailedError) as caught:
+        await _execute(FakeStore(), Job())
+
+    for said in _what_the_exception_says(caught.value):
+        assert_plain(said)
+
+
+# ── Stopping, and the words for the ends that are not a replay ───────────
+
+
+@respx.mock
+async def test_a_cancel_during_check_data_marks_the_run_cancelled_before_anything_is_fetched(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    vendor = Vendor(the_scene())
+    vendor.mount()
+    job, store = Job(), FakeStore()
+    job.on_progress_hook = lambda phase, done, _total: job.stop.set() if (phase, done) == ("checking_data", 2) else None
+
+    with pytest.raises(RunCancelled):
+        await _execute(store, job)
+
+    assert store.cancelled == [(7, FINISHED_AT_MS)] and store.completed == [] and store.failed == []
+    assert job.phases == ["checking_data"]
+    assert [done for phase, done, _ in job.progress if phase == "checking_data"] == [1, 2], (
+        "the third session was never checked"
+    )
+    assert vendor.vendor_requests == 0
+
+
+@respx.mock
+async def test_check_data_reports_its_progress_in_sessions_like_the_other_phases(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    Vendor(the_scene()).mount()
+    job = Job()
+
+    await _execute(FakeStore(), job)
+
+    assert [(phase, done, total) for phase, done, total in job.progress if phase == "checking_data"] == [
+        ("checking_data", n, 4) for n in (1, 2, 3, 4)
+    ]
+
+
+@respx.mock
+async def test_a_save_that_takes_longer_than_the_run_waits_is_a_failure_of_its_own_and_not_a_download_failure(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    Vendor(the_scene()).mount()
+
+    class SlowToSave(FakeStore):
+        def complete(self, run_id: int, result: RunResult, *, finished_at_ms: int) -> None:
+            raise CallerStoppedWaitingError("still saving")
+
+    store = SlowToSave()
+
+    with pytest.raises(RunFailedError):
+        await _execute(store, Job())
+
+    [(_, failure, _)] = store.failed
+    assert failure.code == "SAVE_TIMED_OUT"
+    assert "saving" in failure.reason and "may or may not have been saved" in failure.reason
+    _says_no_date(failure)
+
+
+class _StoreThatCannotRecordTheEnd(FakeStore):
+    """A store whose ``fail`` and ``cancel`` raise a given number of times, as a database that is down would."""
+
+    def __init__(self, raises: int) -> None:
+        super().__init__()
+        self._raises = raises
+        self.tries = 0
+
+    def _try(self) -> None:
+        self.tries += 1
+        if self.tries <= self._raises:
+            raise RuntimeError("the database is down: password authentication failed")
+
+    def fail(self, run_id: int, failure: RunFailure, *, finished_at_ms: int) -> None:
+        self._try()
+        super().fail(run_id, failure, finished_at_ms=finished_at_ms)
+
+    def cancel(self, run_id: int, *, finished_at_ms: int) -> None:
+        self._try()
+        super().cancel(run_id, finished_at_ms=finished_at_ms)
+
+
+async def _a_run_that_ends(how: str, store: FakeStore) -> BaseException:
+    job = Job()
+    if how == "cancelled":
+        job.stop.set()
+        with pytest.raises(RunCancelled) as cancelled:
+            await _execute(store, job)
+        return cancelled.value
+    with pytest.raises(RunFailedError) as failed:
+        await _execute(store, job, sessions=[date(2024, 10, 11)])
+    return failed.value
+
+
+@pytest.mark.parametrize("how", ["failed", "cancelled"])
+@respx.mock
+async def test_if_recording_the_end_fails_once_it_is_tried_again(
+    how: str, fake_catalog: FakeCatalog, tmp_lake: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    Vendor(the_scene()).mount()
+    store = _StoreThatCannotRecordTheEnd(raises=1)
+
+    await _a_run_that_ends(how, store)
+
+    assert store.tries == 2
+    assert len(store.failed if how == "failed" else store.cancelled) == 1
+    assert not [record for record in caplog.records if getattr(record, "action", "") == "options_backtest_run_end_lost"]
+
+
+@pytest.mark.parametrize("how", ["failed", "cancelled"])
+@respx.mock
+async def test_if_recording_the_end_fails_twice_the_run_id_is_logged_the_row_stays_running_and_the_job_ends_as_the_run_did(
+    how: str, fake_catalog: FakeCatalog, tmp_lake: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    Vendor(the_scene()).mount()
+    store = _StoreThatCannotRecordTheEnd(raises=2)
+    caplog.set_level(logging.INFO)
+
+    raised = await _a_run_that_ends(how, store)
+
+    assert store.tries == 2 and store.failed == [] and store.cancelled == []
+    [lost] = [record for record in caplog.records if getattr(record, "action", "") == "options_backtest_run_end_lost"]
+    assert lost.run_id == 7  # type: ignore[attr-defined]
+    assert how in lost.getMessage() and "interrupted" in lost.getMessage()
+    # The job is told what happened to the run, in the run's words, and not what the database said.
+    assert "password" not in str(raised) and "database" not in str(raised)
+    assert isinstance(raised, RunFailedError if how == "failed" else RunCancelled)
 
 
 # ── The range ────────────────────────────────────────────────────────────

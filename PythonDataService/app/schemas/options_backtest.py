@@ -8,7 +8,8 @@ distance that holds all year, named for it.
 
 from __future__ import annotations
 
-from typing import Self
+from decimal import Decimal
+from typing import Any, Self
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -19,6 +20,25 @@ from app.options_backtest.setup import OptionsBacktestSetup
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 MINUTES_PER_DAY = 24 * 60
+
+
+def _plain_numbers(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return Decimal(format(value, "f"))
+    if isinstance(value, dict):
+        return {key: _plain_numbers(each) for key, each in value.items()}
+    if isinstance(value, list | tuple):
+        return type(value)(_plain_numbers(each) for each in value)
+    return value
+
+
+def served_setup(setup: OptionsBacktestSetup) -> OptionsBacktestSetup:
+    """The same setup with every number in plain digits, so the text served names it the way an owner writes it.
+
+    A setup spelled ``1e5`` holds ``Decimal("1E+5")``, which a model writes as ``"1E+5"``. A setup's numbers are held to a
+    few places (``setup.py``), so only a positive exponent can show, and writing the digits out never changes a value.
+    """
+    return OptionsBacktestSetup.model_validate(_plain_numbers(setup.model_dump()))
 
 
 class SessionClockResponse(BaseModel):
@@ -55,7 +75,7 @@ class SetupDescriptionResponse(BaseModel):
     @classmethod
     def from_description(cls, setup: OptionsBacktestSetup, description: SetupDescription) -> Self:
         return cls(
-            setup=setup,
+            setup=served_setup(setup),
             window=list(description.window),
             legs=[LegDescriptionResponse(leg_id=leg.leg_id, sentences=list(leg.sentences)) for leg in description.legs],
             square_off=list(description.square_off),
@@ -105,7 +125,7 @@ class SavedSetupResponse(BaseModel):
             name=saved.name,
             example=saved.example,
             saved_at_ms=saved.saved_at_ms,
-            setup=saved.setup,
+            setup=None if saved.setup is None else served_setup(saved.setup),
             cannot_open_reason=saved.cannot_open_reason,
         )
 

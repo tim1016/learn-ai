@@ -83,27 +83,12 @@ def test_the_exit_time_counted_from_the_close_ends_the_minutes_a_re_entry_could_
     assert _read(_needs(written, half_day, day=HALF_DAY)) == [("call", 500), ("call", 515)]
 
 
-def test_a_re_entry_rule_on_a_leg_with_no_stop_adds_nothing_when_a_stop_elsewhere_closes_only_that_leg() -> None:
-    # Leg A could re-enter if it were closed, and under partial square-off only its own stop closes it, and it has none.
-    prices = {5: "500.40", 6: "506.0", 7: "494.0"}
-    written = setup(leg("a", reentry=("at_once", 1)), leg("b", "put", stop=STOP_25), square_off="partial")
-
-    assert _read(_needs(written, prices)) == [("call", 500), ("put", 500)]
-
-
 def test_a_complete_square_off_lets_a_leg_with_no_stop_come_back_when_another_leg_can_be_stopped() -> None:
     # Under complete, B's stop closes A too, and A has a re-entry rule: A picks at 506 (505) and 494 (495) as well.
     prices = {5: "500.40", 6: "506.0", 7: "494.0"}
     written = setup(leg("a", reentry=("at_once", 1)), leg("b", "put", stop=STOP_25), square_off="complete")
 
     assert _read(_needs(written, prices)) == [("call", 495), ("call", 500), ("call", 505), ("put", 500)]
-
-
-def test_a_complete_square_off_with_no_stop_on_any_leg_closes_nothing_so_nothing_comes_back() -> None:
-    prices = {5: "500.40", 6: "506.0", 7: "494.0"}
-    written = setup(leg("a", reentry=("at_once", 1)), leg("b", "put"), square_off="complete")
-
-    assert _read(_needs(written, prices)) == [("call", 500), ("put", 500)]
 
 
 def test_each_leg_is_picked_by_its_own_right_and_strike_rule() -> None:

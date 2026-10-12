@@ -12,23 +12,31 @@ Validated against: tests/options_backtest/test_service.py.
 
 A run ends in one of three ways and saves nothing else: complete (saved whole), failed (a code and a plain reason; the
 request is never shortened to the sessions that can be tested), or cancelled. A stop is asked for at the boundary of
-every phase, between sessions in the download and in the replay, and while the run waits for the gate. A stop that
-comes after the save has begun is too late: the run is complete.
+every phase, after every session of the check, the download and the replay, at least every few seconds while the
+download waits on the vendor, and while the run waits for the gate. Each of those asks renews the job's lease, so no
+stretch of a healthy run is long enough for it to read as interrupted, and Cancel is heard within one of them. A stop
+that comes after the save has begun is too late: the run is complete.
 
 The service knows nothing of Redis or of a database: it is handed the callbacks of a job (``RunHooks``) and a store
 (``RunStore``). The job route wires them. ``execute_run`` ends by raising ``RunCancelled`` for a cancelled run and
 ``RunFailedError`` for a failed one, after the store has recorded it, so the job can end the same way; a run that
-completes is returned.
+completes is returned. Recording the end is tried twice; if the store fails both times the run's id is logged and its
+row stays ``running``, which reads as ``interrupted`` once the job is gone.
+
+What a failure says. A reason is composed here from facts: what could not be read or fetched, the lake's reason code
+and a short plain phrase for the code. It never carries the text the lake, the vendor or another module wrote, which
+can name a date, hold a vendor's JSON or a file path; a session is named by its open in ms in the failure's items, and
+no sentence names a date. For the same reason a known failure is raised without the exception that caused it chained
+on, so the job's own log of the failure holds none of that text either; an unexpected error keeps its chain.
 """
 
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.data_lake.admission import LakeAdmissionError
 from app.data_lake.catalog_client import CatalogUnavailableError
@@ -36,11 +44,19 @@ from app.data_lake.option_bars import OptionBarsFileError
 from app.data_lake.option_listing import OptionListingFileError
 from app.engine.run_gate import one_backtest_in_flight
 from app.lean_sidecar.trading_calendar import expected_sessions, session_window_for_date
-from app.options_backtest.data_check import SESSION_DATA_NOT_FINAL_WORDS, DataCheck, SessionVerdict, check_data
+from app.options_backtest.data_check import (
+    STORED_FILE_ERRORS,
+    CheckStopped,
+    DataCheck,
+    SessionVerdict,
+    check_data,
+    lake_reason_words,
+)
 from app.options_backtest.fees import FeeRateNotPublished
 from app.options_backtest.fetching import DownloadFailed, DownloadStopped, ensure_run_data
 from app.options_backtest.lake_check import LakeCheckData
-from app.options_backtest.lake_data import LakeRunData, UnderlyingDayUnreadable
+from app.options_backtest.lake_data import BARS_CANNOT_BE_PLACED, LakeRunData, UnderlyingDayUnreadable
+from app.options_backtest.limits import MAX_RANGE_SESSIONS
 from app.options_backtest.run import RunResult, RunStopped, SessionDataMissing, run_sessions
 from app.options_backtest.saved_runs import FailureItem, RunFailure
 from app.options_backtest.session_market import MalformedBars
@@ -51,10 +67,6 @@ from app.utils.session_anchors import require_schedulable_end
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
-
-# The most sessions one request may name: about five years of trading days. Nothing older than the options plan can be
-# tested anyway; this only keeps a mistyped range from asking the calendar for a century.
-MAX_RANGE_SESSIONS = 1_300
 
 # The phases a job reports, in the order of the work. ``app/jobs/phases.py`` gives each its label.
 PHASE_CHECKING_DATA = "checking_data"
@@ -70,22 +82,11 @@ DATA_MISSING = "DATA_MISSING"
 DATA_UNREADABLE = "DATA_UNREADABLE"
 FEE_RATE_NOT_PUBLISHED = "FEE_RATE_NOT_PUBLISHED"
 DATA_CATALOG_UNAVAILABLE = "DATA_CATALOG_UNAVAILABLE"
+SAVE_TIMED_OUT = "SAVE_TIMED_OUT"
 INTERNAL_ERROR = "INTERNAL_ERROR"
 
-
-# What the lake says when it refuses to take a session at all. Its own sentences name the day and the rule it judged by;
-# a run's words name neither (the session is in the failure's items, by its open, and the rule is the lake's to state).
-_LAKE_REFUSAL_WORDS = {
-    "session_not_over": SESSION_DATA_NOT_FINAL_WORDS,
-    "not_a_session": "The exchange was closed on that day.",
-    "outside_data_plan": "The data plan does not reach that session.",
-}
-_ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
-
-
-def _words_of(exc: DownloadFailed) -> str:
-    """The lake's reason in words with no date in them: a refusal in this module's words, any other detail scrubbed."""
-    return _LAKE_REFUSAL_WORDS.get(exc.reason) or _ISO_DATE.sub("that day", exc.detail)
+# The code of the item a DATA_UNREADABLE failure carries for the session it was on.
+STORED_DATA_UNREADABLE = "stored_data_unreadable"
 
 
 class RunRefused(ValueError):
@@ -107,6 +108,26 @@ class RunFailedError(Exception):
     def __init__(self, failure: RunFailure) -> None:
         self.failure = failure
         super().__init__(failure.reason)
+
+
+class SaveTimedOut(Exception):
+    """Saving a replayed run took longer than the run waits. The save may still commit."""
+
+    def __init__(self, run_id: int) -> None:
+        self.run_id = run_id
+        super().__init__(f"saving run {run_id} took longer than the run waits")
+
+
+class StoredDayUnreadable(Exception):
+    """A stored day a session needs cannot be used. ``session`` is the session the phase was on, if it is known.
+
+    ``cause`` is the error behind it: a file that cannot be read, or bars that break the rules of a bar.
+    """
+
+    def __init__(self, session: date | None, cause: Exception) -> None:
+        self.session = session
+        self.cause = cause
+        super().__init__("a stored day a session needs cannot be used")
 
 
 class SessionsCannotBeTested(Exception):
@@ -174,21 +195,57 @@ def execute_run(
     """Check, fetch, replay and save one run. Blocking: call it from a worker thread.
 
     Returns the result of a run that was saved. Raises ``RunCancelled`` or ``RunFailedError`` once the store has
-    recorded the run as cancelled or failed.
+    recorded the run as cancelled or failed; if the store cannot record it, in two tries, the run's id is logged and
+    its row stays ``running``, which reads as ``interrupted`` once the job is gone. Either way the job ends as the run
+    did, with the run's own words and not the store's.
     """
     try:
         result = _work(setup, sessions, hooks, clock)
         _stop_if_asked(hooks)
         hooks.on_phase(PHASE_SAVING)
-        store.complete(run_id, result, finished_at_ms=clock())
+        _save(store, run_id, result, clock)
         return result
-    except (RunCancelled, RunStopped, DownloadStopped):
-        store.cancel(run_id, finished_at_ms=clock())
+    except (RunCancelled, RunStopped, DownloadStopped, CheckStopped):
+        finished_at_ms = clock()
+        _record_the_end(lambda: store.cancel(run_id, finished_at_ms=finished_at_ms), run_id=run_id, ended="cancelled")
         raise RunCancelled(f"run {run_id} was cancelled") from None
     except Exception as exc:
         failure = failure_of(exc)
-        store.fail(run_id, failure, finished_at_ms=clock())
-        raise RunFailedError(failure) from exc
+        finished_at_ms = clock()
+        _record_the_end(
+            lambda: store.fail(run_id, failure, finished_at_ms=finished_at_ms), run_id=run_id, ended="failed"
+        )
+        # A failure whose words were composed here has said what it has to; the text of the exception behind it may
+        # name a date or hold the vendor's JSON, and the job logs everything chained to what it is given.
+        raise RunFailedError(failure) from (exc if failure.code == INTERNAL_ERROR else None)
+
+
+def _save(store: RunStore, run_id: int, result: RunResult, clock: Callable[[], int]) -> None:
+    try:
+        store.complete(run_id, result, finished_at_ms=clock())
+    except CallerStoppedWaitingError as exc:
+        raise SaveTimedOut(run_id) from exc
+
+
+def _record_the_end(record: Callable[[], None], *, run_id: int, ended: str) -> None:
+    """Write how the run ended, trying twice; log the run's id if both tries fail, and let the row stay ``running``."""
+    for attempt in (1, 2):
+        try:
+            record()
+            return
+        except Exception:
+            logger.warning(
+                "recording the run as %s failed (try %d of 2)",
+                ended,
+                attempt,
+                extra={"action": "options_backtest_run_end_not_recorded", "run_id": run_id, "ended": ended},
+                exc_info=True,
+            )
+    logger.error(
+        "the run could not be recorded as %s; its row stays running and reads as interrupted once the job is gone",
+        ended,
+        extra={"action": "options_backtest_run_end_lost", "run_id": run_id, "ended": ended},
+    )
 
 
 def _work(
@@ -197,19 +254,30 @@ def _work(
     now_ms = clock()
     _stop_if_asked(hooks)
     hooks.on_phase(PHASE_CHECKING_DATA)
-    check = check_data(setup, sessions, now_ms=now_ms, data=LakeCheckData(setup.underlying))
+    check = check_data(
+        setup,
+        sessions,
+        now_ms=now_ms,
+        data=LakeCheckData(setup.underlying),
+        on_session=hooks.on_progress,
+        should_stop=hooks.should_stop,
+    )
     if check.count(SessionVerdict.CANNOT_BE_TESTED):
         raise SessionsCannotBeTested(check)
 
     _stop_if_asked(hooks)
     hooks.on_phase(PHASE_DOWNLOADING_DATA)
-    report = ensure_run_data(
-        setup,
+    report = _naming_the_session(
         sessions,
-        now_ms=now_ms,
-        on_progress=hooks.on_progress,
-        should_stop=hooks.should_stop,
-        on_log=hooks.on_log,
+        hooks,
+        lambda progress: ensure_run_data(
+            setup,
+            sessions,
+            now_ms=now_ms,
+            on_progress=progress,
+            should_stop=hooks.should_stop,
+            on_log=hooks.on_log,
+        ),
     )
     hooks.on_log(
         f"Brought in {report.listings_fetched} listings and {report.option_days_fetched} contract days "
@@ -228,13 +296,37 @@ def _replay(setup: OptionsBacktestSetup, sessions: Sequence[date], hooks: RunHoo
 
     with one_backtest_in_flight(on_wait=lambda: hooks.on_phase(PHASE_WAITING_FOR_ENGINE), while_waiting=while_waiting):
         hooks.on_phase(PHASE_REPLAYING)
-        return run_sessions(
-            setup,
+        return _naming_the_session(
             sessions,
-            LakeRunData(setup.underlying),
-            on_session=lambda done, total, _day: hooks.on_progress(done, total),
-            should_stop=hooks.should_stop,
+            hooks,
+            lambda progress: run_sessions(
+                setup,
+                sessions,
+                LakeRunData(setup.underlying),
+                on_session=lambda done, total, _day: progress(done, total),
+                should_stop=hooks.should_stop,
+            ),
         )
+
+
+def _naming_the_session[T](
+    sessions: Sequence[date], hooks: RunHooks, phase: Callable[[Callable[[int, int], None]], T]
+) -> T:
+    """Run a phase that reports each session done; if it meets a stored day it cannot use, say which session it was on.
+
+    A phase reports a session after it has finished it, so the one it was on is the one after the last reported.
+    """
+    finished = 0
+
+    def progress(done: int, total: int) -> None:
+        nonlocal finished
+        finished = done
+        hooks.on_progress(done, total)
+
+    try:
+        return phase(progress)
+    except (*STORED_FILE_ERRORS, MalformedBars) as exc:
+        raise StoredDayUnreadable(sessions[finished] if finished < len(sessions) else None, exc) from exc
 
 
 def _stop_if_asked(hooks: RunHooks) -> None:
@@ -249,52 +341,114 @@ def failure_of(exc: Exception) -> RunFailure:
     """What a failed run records: a code, a plain reason and the list of what failed.
 
     A session is named by its open in the list's items and not in the reason, which says what went wrong in words.
+    Nothing the exception says is copied into those words (see the module docstring); an exception this table does
+    not know is an unexpected error, named by its type and logged with its traceback.
     """
-    if isinstance(exc, SessionsCannotBeTested):
-        return _cannot_be_tested(exc.check)
-    if isinstance(exc, DownloadFailed):
-        opened = None if exc.session is None else session_window_for_date(exc.session).open_ms_utc
-        return RunFailure(
-            DOWNLOAD_FAILED,
-            f"The data could not be fetched, so nothing was replayed: {exc.what} ({exc.reason}): {_words_of(exc)}",
-            (FailureItem(opened, exc.reason, f"{exc.what}: {_words_of(exc)}"),),
-        )
-    if isinstance(exc, SessionDataMissing):
-        opened = session_window_for_date(exc.trading_date).open_ms_utc
-        missing = _what_is_missing(exc)
-        return RunFailure(
-            DATA_MISSING,
-            f"A session cannot be replayed: {missing} not in the lake. Nothing was saved.",
-            (FailureItem(opened, "not_captured", f"{missing} not captured"),),
-        )
-    if isinstance(exc, FeeRateNotPublished):
-        opened = session_window_for_date(exc.trading_date).open_ms_utc
-        return RunFailure(
-            FEE_RATE_NOT_PUBLISHED,
-            f"Estimated fees cannot be priced for a session in the range: the fee model has no published rate for "
-            f"{', '.join(exc.components)}. Charge a fee per contract or none, or start the run later.",
-            (FailureItem(opened, "no_published_fee_rates", f"no published rate for {', '.join(exc.components)}"),),
-        )
-    if isinstance(
-        exc, LakeAdmissionError | OptionBarsFileError | OptionListingFileError | UnderlyingDayUnreadable | MalformedBars
-    ):
-        return RunFailure(
-            DATA_UNREADABLE,
-            f"A stored file the run needs cannot be read ({type(exc).__name__}). Nothing was saved.",
-        )
-    if isinstance(exc, CatalogUnavailableError):
-        return RunFailure(
-            DATA_CATALOG_UNAVAILABLE, "The data catalog could not be reached, so the run stopped. Nothing was saved."
-        )
-    if isinstance(exc, CallerStoppedWaitingError):
-        return RunFailure(
-            DOWNLOAD_FAILED,
-            "The lake took longer to answer than the run waits. What it fetched is kept; run again to go on.",
-        )
+    for kind, build in _BUILDERS:
+        if isinstance(exc, kind):
+            return build(exc)
     logger.exception("an options backtest run failed unexpectedly", extra={"action": "options_backtest_run_failed"})
     return RunFailure(
         INTERNAL_ERROR, f"The run stopped because of an unexpected error ({type(exc).__name__}). Nothing was saved."
     )
+
+
+def _opened(day: date | None) -> int | None:
+    return None if day is None else session_window_for_date(day).open_ms_utc
+
+
+def _download_failed(exc: DownloadFailed) -> RunFailure:
+    why = f"{lake_reason_words(exc.reason)} ({exc.reason})"
+    return RunFailure(
+        DOWNLOAD_FAILED,
+        f"The data could not be fetched, so nothing was replayed. The lake could not bring in {exc.what}: {why}.",
+        (FailureItem(_opened(exc.session), exc.reason, f"{exc.what}: {why}"),),
+    )
+
+
+def _session_data_missing(exc: SessionDataMissing) -> RunFailure:
+    missing = _what_is_missing(exc)
+    return RunFailure(
+        DATA_MISSING,
+        f"A session cannot be replayed: {missing} not in the lake. Nothing was saved.",
+        (FailureItem(_opened(exc.trading_date), "not_captured", f"{missing} not captured"),),
+    )
+
+
+def _fee_rate_not_published(exc: FeeRateNotPublished) -> RunFailure:
+    return RunFailure(
+        FEE_RATE_NOT_PUBLISHED,
+        f"Estimated fees cannot be priced for a session in the range: the fee model has no published rate for "
+        f"{', '.join(exc.components)}. Charge a fee per contract or none, or start the run later.",
+        (
+            FailureItem(
+                _opened(exc.trading_date), "no_published_fee_rates", f"no published rate for {', '.join(exc.components)}"
+            ),
+        ),
+    )
+
+
+_BARS_BREAK_THE_RULES = (
+    "Stored bars the run needs break the rules of a bar (a minute twice or out of order, a bar not on a whole minute, "
+    "a price of zero or less, or bars of another day), so it cannot use them."
+)
+
+
+def _bars_break_the_rules(_exc: MalformedBars) -> RunFailure:
+    return RunFailure(DATA_UNREADABLE, f"{_BARS_BREAK_THE_RULES} Nothing was saved.")
+
+
+def _stored_file_cannot_be_read(exc: Exception) -> RunFailure:
+    return RunFailure(
+        DATA_UNREADABLE, f"A stored file the run needs cannot be read ({type(exc).__name__}). Nothing was saved."
+    )
+
+
+def _stored_day_cannot_be_used(exc: StoredDayUnreadable) -> RunFailure:
+    """The failure of the error behind it, with the session it was on named by its open."""
+    failure = failure_of(exc.cause)
+    return RunFailure(
+        failure.code, failure.reason, (FailureItem(_opened(exc.session), STORED_DATA_UNREADABLE, failure.reason),)
+    )
+
+
+def _catalog_unavailable(_exc: CatalogUnavailableError) -> RunFailure:
+    return RunFailure(
+        DATA_CATALOG_UNAVAILABLE, "The data catalog could not be reached, so the run stopped. Nothing was saved."
+    )
+
+
+def _lake_took_too_long(_exc: CallerStoppedWaitingError) -> RunFailure:
+    return RunFailure(
+        DOWNLOAD_FAILED,
+        "The lake took longer to answer than the run waits. What it fetched is kept; run again to go on.",
+    )
+
+
+def _save_timed_out(_exc: SaveTimedOut) -> RunFailure:
+    return RunFailure(
+        SAVE_TIMED_OUT,
+        "The run was replayed, but saving it took longer than the run waits, so it may or may not have been saved. "
+        "Look in the history before running it again.",
+    )
+
+
+# The first entry an exception is an instance of builds its failure. Each takes the exception as its own type.
+_BUILDERS: tuple[tuple[type[Exception] | tuple[type[Exception], ...], Callable[[Any], RunFailure]], ...] = (
+    (SessionsCannotBeTested, lambda exc: _cannot_be_tested(exc.check)),
+    (DownloadFailed, _download_failed),
+    (SessionDataMissing, _session_data_missing),
+    (FeeRateNotPublished, _fee_rate_not_published),
+    (StoredDayUnreadable, _stored_day_cannot_be_used),
+    ((MalformedBars, *BARS_CANNOT_BE_PLACED), _bars_break_the_rules),
+    (
+        (LakeAdmissionError, OptionBarsFileError, OptionListingFileError, UnderlyingDayUnreadable),
+        _stored_file_cannot_be_read,
+    ),
+    (CatalogUnavailableError, _catalog_unavailable),
+    (SaveTimedOut, _save_timed_out),
+    (CallerStoppedWaitingError, _lake_took_too_long),
+)
 
 
 def _what_is_missing(exc: SessionDataMissing) -> str:

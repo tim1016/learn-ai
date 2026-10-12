@@ -20,7 +20,8 @@ not asked:
 
 * ``symbol_too_long``: the symbol has more characters than the catalog's Symbol column holds.
 * ``not_a_session``: the exchange was closed that day.
-* ``session_not_over``: the session closed less than ``OPTION_SESSION_SETTLE_MS`` ago.
+* ``session_not_over``: the session's New York calendar date has not passed yet
+  (:func:`option_capture_opens_ms`).
 * ``outside_data_plan``: the plan's rolling window does not reach the session; a bars
   session before ``option_history_floor`` is refused before any claim, and a day at the
   edge the vendor's own 403 names (bars or listing) is recorded on the row, asked again
@@ -32,12 +33,15 @@ not asked:
 
 These are recorded on the claimed row, which is failed and never left fetching:
 
-* ``provider_auth_error``: the vendor refused the key (401); a run should stop.
+* ``provider_auth_error``: the vendor refused the key (401), or the key cannot be sent at all
+  (empty, or holding a space or a character that is not printable ASCII; no request is made); a
+  run should stop.
 * ``provider_entitlement_error``: a 403 that is not the plan-timeframe answer.
 * ``provider_rate_limited``: the vendor said to slow down (429).
 * ``unknown_symbol``: the vendor does not know the ticker (404, or status NOT_FOUND).
 * ``provider_api_error``: any other trouble with the vendor (a 5xx, a timeout, a body that
-  is not a confirmed well-formed answer); asked again, up to ``MAX_CLAIM_RETRIES`` times.
+  is not a confirmed well-formed answer, a listing whose paging ran past
+  :data:`LISTING_FETCH_BUDGET_MS`); asked again, up to ``MAX_CLAIM_RETRIES`` times.
 * ``provider_no_data`` (listing): the vendor listed no contracts; that is not pinned as a fact.
 * ``validation_failed``: what the vendor sent cannot be stored as a fact (corrupt bars, a
   price the file cannot hold or would store as 0, a listing row with no ticker or a ticker
@@ -46,7 +50,8 @@ These are recorded on the claimed row, which is failed and never left fetching:
 These come from the claim protocol, when nothing was fetched:
 
 * ``lease_timeout``: another worker holds the row, or this writer lost its lease while
-  fetching and published nothing.
+  working and published or recorded nothing: not a publish, and not a failure it met (a
+  failure it met is the row's only when it still holds the lease to record it).
 * ``fetch_timeout``: the row has spent its attempts; the vendor is not asked again.
 """
 
@@ -57,6 +62,7 @@ import io
 import logging
 import lzma
 import time
+import weakref
 import zipfile
 import zlib
 from collections.abc import Awaitable, Callable
@@ -69,7 +75,7 @@ from uuid import uuid4
 from app.data_lake import catalog_client
 from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
 from app.data_lake.atomic import ArtifactLeaseLostError, publish_artifact
-from app.data_lake.ensure_data import _LEASE_TTL_MS, _MAX_CLAIM_RETRIES, _WORKER_ID
+from app.data_lake.ensure_data import _LEASE_TTL_MS, _MAX_CLAIM_RETRIES, _WORKER_ID, _minute_trade_dch
 from app.data_lake.path_policy import lake_root_for, resolve_lake_root, resolve_staging_root
 from app.data_lake.polygon_fetcher import (
     PolygonAuthError,
@@ -87,7 +93,7 @@ from app.data_lake.types import (
     PriceAdjustmentMode,
 )
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
-from app.utils.session_anchors import et_date_at_ms
+from app.utils.session_anchors import et_date_at_ms, et_day_end_ms
 
 logger = logging.getLogger(__name__)
 
@@ -98,11 +104,6 @@ OPTION_PROVIDER = "polygon"
 #: the row's mode must equal the lake root's directory name for admission.
 OPTION_PRICE_ADJUSTMENT_MODE: PriceAdjustmentMode = "raw"
 
-#: A session is taken only this long after its scheduled close. The vendor's
-#: data runs 15 minutes behind, and SPY options print until 16:15 New York,
-#: 15 minutes after the calendar's close; 30 minutes covers both (#3030).
-OPTION_SESSION_SETTLE_MS = 30 * 60 * 1000
-
 #: How many years back the owner's options plan serves minute bars. It comes from a
 #: probe of the owner's plan on 2026-10-12: a session of 2024-10-11 answered 403
 #: NOT_AUTHORIZED ("this data timeframe") and 2024-10-14 answered with bars. The
@@ -112,6 +113,10 @@ OPTION_SESSION_SETTLE_MS = 30 * 60 * 1000
 OPTION_HISTORY_YEARS = 2
 #: Days of headroom over the plan's boundary, as ``polygon_fetcher`` keeps for stocks.
 _HISTORY_FLOOR_MARGIN_DAYS = 2
+
+#: The most characters of a failure's text kept on a row. The vendor's body is already cut to 200
+#: by the shared fetcher; this bounds the rest (our own messages) so none can grow without limit.
+MAX_FAILURE_TEXT_CHARS = 1000
 
 #: One staging request id for the whole process, as the stock path shares one per run:
 #: staging leaves its folders behind (nothing sweeps them), so a fresh id per publish
@@ -124,14 +129,25 @@ WORKER_ID = _WORKER_ID
 LEASE_TTL_MS = _LEASE_TTL_MS
 MAX_CLAIM_RETRIES = _MAX_CLAIM_RETRIES
 
+#: What a listing's paging leaves of the lease for everything after its last request. The pages are asked
+#: one after another while the lease stays fixed, and a listing that finishes after its lease is thrown away
+#: at publication. After the last request starts there is still that request (up to its 30 s timeout), building the
+#: file, staging it with an fsync, and the publish itself, so the paging stops this long before the lease ends.
+LISTING_PUBLISH_MARGIN_MS = 60_000
+#: The time a whole listing fetch may take: the lease less the margin above. Past it the fetch ends as a
+#: failed row (``provider_api_error``) before another page is asked, and a later ask tries again.
+LISTING_FETCH_BUDGET_MS = LEASE_TTL_MS - LISTING_PUBLISH_MARGIN_MS
+
 #: ``LastError`` values that are retried however many times they were spent. A day
 #: the vendor says is outside the plan is environmental, not data: the owner upgrading
 #: the plan clears it, so it must not latch into a terminal ``fetch_timeout`` after
 #: three asks. Only a day at the edge of the floor reaches the vendor to be told so
-#: (an older one is refused before any claim). The exemption lasts while the row's last
-#: error is this one: a transient failure after the plan changed, on a row already asked
-#: three times or more, spends the ceiling and ends as ``fetch_timeout``, because every
-#: ask counts as an attempt and the shared reclaim has no reset for it.
+#: (an older one is refused before any claim). Known gap: the exemption lasts only while
+#: the row's last error is this one, and every ask counts as an attempt (the shared
+#: reclaim has no reset for it). So a row told "outside the plan" on two asks and then hit
+#: by one transient failure (a 429, a 5xx, a malformed answer) has spent its three
+#: attempts, and its next ask is ``fetch_timeout`` with no vendor call. One plan answer
+#: before the failure is survived; two are not.
 NOT_LATCHED_ERRORS = frozenset({"outside_data_plan"})
 
 #: The lake's own reasons (``ArtifactFailureReason``) and the six an option capture adds; the module docstring says what each means.
@@ -215,23 +231,32 @@ def symbol_refusal(symbol: str, trading_date: date) -> OptionDataFailure | None:
     return None
 
 
-def session_refusal(symbol: str, trading_date: date, *, now_ms: int) -> OptionDataFailure | None:
-    """A session that is not over is never fetched or admitted, and no claim is made for it.
+def option_capture_opens_ms(trading_date: date) -> int:
+    """The first instant a session's option data may be captured: New York midnight after the session's date.
 
-    "Over" is the canonical calendar's close for that date (an early close counts
-    as its own close) plus :data:`OPTION_SESSION_SETTLE_MS`.
+    The vendor's data runs behind and its late prints are unmeasured, and an empty answer stored
+    too early is a permanent wrong "never traded" (#3030); so a session is taken only once its New
+    York calendar date has passed, whatever time it closed (an early close follows the same rule).
+    The canonical calendar gives the session's close, the New York zone gives the date it falls on
+    and the midnight that ends it, so a day the clocks change is never a fixed offset out.
+    Raises ``LookupError`` for a day that is not a session.
     """
+    return et_day_end_ms(et_date_at_ms(session_close_ms_utc(trading_date)))
+
+
+def session_refusal(symbol: str, trading_date: date, *, now_ms: int) -> OptionDataFailure | None:
+    """A session whose New York date has not passed is never fetched or admitted, and no claim is made for it."""
     try:
-        close_ms = session_close_ms_utc(trading_date)
+        opens_ms = option_capture_opens_ms(trading_date)
     except LookupError:
         return OptionDataFailure(
             "not_a_session", f"{trading_date.isoformat()} is not a NYSE session", symbol, trading_date
         )
-    if now_ms < close_ms + OPTION_SESSION_SETTLE_MS:
+    if now_ms < opens_ms:
         return OptionDataFailure(
             "session_not_over",
-            f"{trading_date.isoformat()} closed at {close_ms}; options data is taken "
-            f"{OPTION_SESSION_SETTLE_MS // 60_000} minutes after the close, and it is {now_ms}",
+            f"{trading_date.isoformat()} is not over in New York yet; its option data is taken from "
+            f"New York midnight after it, {opens_ms}, and it is {now_ms}",
             symbol,
             trading_date,
         )
@@ -283,6 +308,17 @@ def vendor_reason(error: PolygonFetchError) -> OptionFailureReason:
     return "provider_api_error"
 
 
+def storable_failure_text(text: str) -> str:
+    """A failure's text as a row can hold it: no NUL, nothing UTF-8 cannot encode, and a bounded length.
+
+    Postgres refuses a NUL in text, and a character no UTF-8 can encode (a lone surrogate from a
+    JSON escape) fails the driver, so a vendor's text carrying either would make recording the
+    failure itself raise and leave the row fetching. At most :data:`MAX_FAILURE_TEXT_CHARS` are kept.
+    """
+    storable = text.replace("\x00", "").encode("utf-8", errors="replace").decode("utf-8")
+    return storable[:MAX_FAILURE_TEXT_CHARS]
+
+
 async def fail_row(
     *,
     artifact_id: int,
@@ -292,10 +328,29 @@ async def fail_row(
     symbol: str,
     trading_date: date,
 ) -> OptionCaptureResult:
-    """Fail the claimed row under its generation (fenced), and answer with the typed failure."""
-    await catalog_client.fail_artifact(
+    """Fail the claimed row under its generation (fenced), and answer with the typed failure.
+
+    The text is made storable first (:func:`storable_failure_text`), and the answer carries the text stored.
+    The catalog refuses the update when this writer no longer holds the generation (its lease was taken
+    over while it fetched or validated). Then the failure was not recorded and is not the row's: the row
+    is the new owner's, and the answer is ``lease_timeout``, as a publish by a writer that lost its lease
+    answers, never the failure this writer met.
+    """
+    detail = storable_failure_text(detail)
+    recorded = await catalog_client.fail_artifact(
         artifact_id, reason, detail, worker_id=WORKER_ID, lease_generation=lease_generation
     )
+    if not recorded:
+        return OptionCaptureResult.failed(
+            OptionDataFailure(
+                "lease_timeout",
+                f"the lease on this row was taken over before this writer's failure ({reason}) could be recorded; "
+                "the row is the new owner's",
+                symbol,
+                trading_date,
+                attempt_count=1,
+            )
+        )
     return OptionCaptureResult.failed(OptionDataFailure(reason, detail, symbol, trading_date, attempt_count=1))
 
 
@@ -485,3 +540,71 @@ async def stored_file_still_reads(
         )
         return False
     return True
+
+
+def failed_row_is_asked_again(
+    state: catalog_client.ArtifactClaimState,
+    *,
+    data_contract_hash: str,
+    exempt_errors: frozenset[str] = NOT_LATCHED_ERRORS,
+) -> bool:
+    """Would the lake fetch this failed row again on the next capture, rather than answer ``fetch_timeout``?
+
+    Pure: it reads the row's claim state and makes no claim, no vendor request and no catalog call. It is the Python
+    statement of the steal in :func:`catalog_client.steal_or_retry_minute_bar`, which a capture reaches through
+    :func:`claim_or_take_over` with this module's ``MAX_CLAIM_RETRIES`` and ``NOT_LATCHED_ERRORS``. A failed row is
+    asked again when any one of three things holds:
+
+    * it has spent fewer than ``MAX_CLAIM_RETRIES`` attempts;
+    * its last error is in ``exempt_errors``, which are retried however often they were spent;
+    * it was recorded under another data contract than ``data_contract_hash`` (the recipe the caller will fetch
+      under): a budget spent under a recipe since replaced does not count.
+
+    ``data_contract_hash`` is the recipe the capture of that kind of row runs under (``option_minute_trade_dch()``
+    for a contract's day, ``option_listing_dch(...)`` for a listing, :func:`stock_day_is_asked_again` for the
+    underlying's days). A row that is not ``failed`` is no question for this function: a ``ValueError``.
+    """
+    if state.status != "failed":
+        raise ValueError(f"only a failed row is asked about, this one is {state.status!r}")
+    return (
+        state.attempt_count < MAX_CLAIM_RETRIES
+        or state.last_error in exempt_errors
+        or state.data_contract_hash != data_contract_hash
+    )
+
+
+def stock_day_is_asked_again(state: catalog_client.ArtifactClaimState, trading_date: date) -> bool:
+    """:func:`failed_row_is_asked_again` for a raw stock minute day, which the stock capture fetches.
+
+    The stock capture (``ensure_data._process_minute_trade_artifact``) reclaims with no exempt errors, and a raw
+    day is captured under the recipe ``_minute_trade_dch("raw", None, ...)`` writes for that date.
+    """
+    return failed_row_is_asked_again(
+        state,
+        data_contract_hash=_minute_trade_dch("raw", None, trading_date=trading_date),
+        exempt_errors=frozenset(),
+    )
+
+
+#: The most vendor requests for option data one process has in flight at once, however many runs it is serving.
+#: Callers that fetch many contract days (a run's download, the past chain's) hold :func:`vendor_request_gate`
+#: around each capture, so the limit is the process's and never one run's. The capture functions do not take it
+#: themselves: a single ask is never delayed by other people's batches.
+MAX_VENDOR_REQUESTS_IN_FLIGHT = 4
+
+_request_gates: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = weakref.WeakKeyDictionary()
+
+
+def vendor_request_gate() -> asyncio.Semaphore:
+    """The one gate on option vendor requests for the loop this runs on: ``async with`` it around a capture.
+
+    Every caller of the process shares the background loop (:mod:`app.utils.background_loop`), so they share one
+    semaphore of ``MAX_VENDOR_REQUESTS_IN_FLIGHT``. A semaphore belongs to the loop that first waits on it, so one is
+    made per loop and dropped with it. Called from a coroutine.
+    """
+    loop = asyncio.get_running_loop()
+    gate = _request_gates.get(loop)
+    if gate is None:
+        gate = asyncio.Semaphore(MAX_VENDOR_REQUESTS_IN_FLIGHT)
+        _request_gates[loop] = gate
+    return gate

@@ -8,7 +8,10 @@ and skip without one, like their neighbours.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -111,6 +114,91 @@ async def test_the_description_carries_the_setup_as_the_server_read_it_with_its_
     # What the page sends back to run is this, not what it sent: the same setup, in full.
     assert read["fees"] == {"kind": "not_charged", "per_contract_usd": None}
     assert read["starting_cash_usd"] == "10000"
+
+
+async def test_a_setup_using_every_rule_is_described_in_the_order_the_owner_reads_it(client) -> None:
+    # One setup that switches on every rule: an entry and an exit, the re-entry cutoff, partial square-off, slippage and a
+    # price step, estimated fees, and two legs that between them use each way to pick, wait, stop and come back.
+    body = setup_body(
+        entry={"anchor": "open", "offset_ms": 15 * 60_000},
+        exit={"anchor": "close", "offset_ms": 30 * 60_000},
+        no_reentry_after={"anchor": "close", "offset_ms": 90 * 60_000},
+        square_off="partial",
+        slippage_percent="0.45",
+        price_step_usd="0.05",
+        fees={"kind": "estimated"},
+        starting_cash_usd="25000",
+        legs=[
+            leg(
+                leg_id="call",
+                contracts=2,
+                expiry={"kind": "same_day"},
+                strike={"kind": "atm_offset", "steps": 1},
+                stop_loss={"kind": "percent", "value": "20"},
+                momentum={"kind": "percent_up", "value": "10"},
+                reentry_on_stop={"kind": "at_once", "count": 2},
+            ),
+            leg(
+                leg_id="put",
+                right="put",
+                expiry={"kind": "min_days", "days": 7},
+                strike={"kind": "atm_offset", "steps": -2},
+                stop_loss={"kind": "points", "value": "0.5"},
+                momentum={"kind": "points_down", "value": "0.25"},
+                reentry_on_stop={"kind": "on_momentum", "count": 1},
+            ),
+        ],
+    )
+
+    async with client as c:
+        described = (await c.post(f"{PREFIX}/setups/describe", json=body)).json()
+
+    def starts(sentences: list[str]) -> list[str]:
+        return [" ".join(sentence.split()[:4]) for sentence in sentences]
+
+    # The order is the order of the setup: the window opens with the market, then the entry, the exit, how an order
+    # fills, what happens at the exit, and last the re-entry cutoff with the sentence that spares first entries.
+    assert starts(described["window"]) == [
+        "Trades SPY.",
+        "The entry is read",
+        "The exit is read",
+        "On a day that",
+        "An order fills at",
+        "A buy is dropped",
+        "At the exit, whatever",
+        "A stop hit later",
+        "First entries are not",
+    ]
+    # A leg: what it buys, when it buys, when it sells, and what it does after a sell.
+    for leg_description in described["legs"]:
+        first, *rest = leg_description["sentences"]
+        assert first.startswith(f"Leg {leg_description['leg_id']}: buys")
+        assert starts(rest) == ["The buy waits until", "Sells once a minute", "After a stop, picks"]
+    # Costs: the fills first, then the fees (two sentences for estimated fees), the starting cash last.
+    assert starts(described["costs"]) == [
+        "Each fill is moved",
+        "Fees are estimated from",
+        "A session from before",
+        "Starting cash is $25,000.00.",
+    ]
+    assert [leg_description["leg_id"] for leg_description in described["legs"]] == ["call", "put"]
+
+
+@pytest.mark.parametrize("spelled", ["1e5", "100000", "1.0E+5", "100000.00"])
+async def test_a_setups_money_is_served_in_plain_digits_however_it_was_spelled(client, tag: str, spelled: str) -> None:
+    body = setup_body(starting_cash_usd=spelled)
+    # 1e5 and 1.0E+5 are a hundred thousand; the two-place spelling keeps its places, which are the owner's own.
+    plain = "100000.00" if spelled == "100000.00" else "100000"
+
+    async with client as c:
+        described = (await c.post(f"{PREFIX}/setups/describe", json=body)).json()
+        saved = (await c.put(_url(f"Plain {tag}"), json=body)).json()
+        listed = (await c.get(f"{PREFIX}/setups")).json()
+
+    [mine] = [row for row in listed if row["name"] == f"Plain {tag}"]
+    assert described["setup"]["starting_cash_usd"] == plain
+    assert saved["setup"]["starting_cash_usd"] == plain
+    assert mine["setup"]["starting_cash_usd"] == plain
 
 
 async def test_a_setup_that_does_not_validate_is_a_422_with_the_field_errors(client) -> None:
@@ -344,6 +432,22 @@ async def test_the_limits_are_served_with_the_names_a_page_reads(client) -> None
         isinstance(limits[name], int) and limits[name] > 0 for name in (*_LIMIT_OF_A_FIELD, "max_range_sessions")
     )
     assert set(limits["setup_name"]) == {"pattern", "sentence"} and limits["setup_name"]["sentence"]
+
+
+def test_the_setup_routes_read_the_range_limit_without_importing_the_run_service() -> None:
+    # A fresh interpreter: this file imports the whole app, and the app imports the service.
+    probe = "import sys, app.routers.options_backtest; print('app.options_backtest.service' in sys.modules)"
+
+    done = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=True,
+        cwd=Path(__file__).resolve().parents[2],
+    )
+
+    assert done.stdout.split() == ["False"], done.stderr
 
 
 @pytest.mark.parametrize("name", list(_LIMIT_OF_A_FIELD))

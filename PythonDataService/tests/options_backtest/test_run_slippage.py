@@ -251,8 +251,12 @@ def test_a_run_that_traded_and_broke_even_or_lost_everywhere_is_not_a_run_that_m
     # Traded at one value only (the higher ones cost the trade its cash): the run did trade.
     traded_once = slippage_tolerance([_point("0", "-2"), _point("1", "0", trades=0)])
 
+    # Traded at every value and made exactly nothing at each: profit alone cannot tell this from a run with no trade.
+    flat_everywhere = slippage_tolerance([_point("0", "0"), _point("1", "0"), _point("5", "0")])
+
     assert broke_even == SlippageTolerance(None, D("0")) and not broke_even.nothing_traded
     assert traded_once == SlippageTolerance(None, D("0")) and not traded_once.nothing_traded
+    assert flat_everywhere == SlippageTolerance(None, D("0")) and not flat_everywhere.nothing_traded
 
 
 def test_a_whole_run_that_never_traded_has_no_tolerance_to_report_and_one_that_lost_everywhere_has_a_value() -> None:

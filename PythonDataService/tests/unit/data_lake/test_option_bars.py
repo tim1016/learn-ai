@@ -8,6 +8,8 @@ Hand-worked figures used below:
 
 * 2025-06-13 is a full Friday session. Its open, 09:30 EDT, is 13:30 UTC =
   1749821400000 ms, and its close, 16:00 EDT, is 20:00 UTC = 1749844800000 ms.
+* A session's option data may be captured from New York midnight after its date: for 2025-06-13 that
+  is 00:00 EDT on the 14th = 04:00 UTC = 1749873600000 ms (the close plus 8 hours).
 * 09:30 is 34 200 000 ms after midnight, New York time, which is what the zip
   stores as a bar's start. A premium of 1.27 is stored as 12700 ten-thousandths.
 * 2025-11-28 (the day after Thanksgiving) closes at 13:00 EST = 18:00 UTC =
@@ -34,7 +36,7 @@ import zipfile
 import zlib
 from datetime import date, datetime
 from decimal import Decimal
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -60,7 +62,15 @@ from app.data_lake.option_bars import (
     parse_option_day_zip,
     read_option_day_bars,
 )
-from app.data_lake.option_lake import option_history_floor
+from app.data_lake.option_lake import (
+    MAX_FAILURE_TEXT_CHARS,
+    HeldLease,
+    OptionDataFailure,
+    fail_row,
+    option_history_floor,
+    publish_option_artifact,
+    storable_failure_text,
+)
 from app.data_lake.option_listing import ensure_option_listing, read_option_listing
 from app.data_lake.path_policy import lake_subpath
 from app.data_lake.polygon_option_bars import PolygonOptionBar
@@ -68,6 +78,15 @@ from app.data_lake.types import ArtifactIdentity
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.options.contract import OptionContract
 from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, point_lake_writer_at_tmp
+from tests._helpers.option_lake_cases import (
+    CAPTURE_OPENS,
+    HALF_DAY_CLOSE_MS,
+    complete_row_of_another_provider,
+    one_bar_file,
+    pieces_of_the_key_in,
+    publish_stale_writer_first_once_both_have_staged,
+    refuse_what_postgres_refuses,
+)
 from tests._helpers.option_vendor import (
     bad_bars_answers,
     bar_row,
@@ -125,6 +144,13 @@ def _mock_vendor(*responses: httpx.Response, contract: str = SYMBOL) -> respx.Ro
     if len(responses) > 1:
         return route.mock(side_effect=list(responses))
     return route.mock(return_value=responses[0] if responses else _ok([_bar(0)], contract))
+
+
+def _mock_vendor_with(side_effect: Any, contract: str = SYMBOL) -> respx.Route:
+    """Answer every ask for the contract by calling ``side_effect(request)``."""
+    return respx.get(url__regex=rf"https://api\.polygon\.io/v2/aggs/ticker/O:{contract}/range/1/minute/.*").mock(
+        side_effect=side_effect
+    )
 
 
 def _listing_row(contract: OptionContract, underlying: str = "SPY") -> dict[str, Any]:
@@ -709,6 +735,49 @@ async def test_after_the_plan_is_upgraded_an_edge_day_that_failed_outside_the_pl
 
 
 @respx.mock
+async def test_a_day_told_it_is_outside_the_plan_twice_and_then_hit_by_one_transient_failure_has_spent_its_attempts(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """A known gap, pinned at its true size (the comment at ``NOT_LATCHED_ERRORS`` states it): the next ask is a timeout.
+
+    The exemption lasts only while the row's last error is the plan's, and every ask counts toward the
+    three attempts, so two plan answers and one 429 leave none, though the vendor would now answer.
+    """
+    contract = OptionContract.of(root="SPY", expiry_date=date(2024, 10, 18), right="call", strike=580)
+    open_ms = session_open_ms_utc(date(2024, 10, 14))
+    route = _mock_vendor(
+        outside_plan(), outside_plan(), httpx.Response(429), _ok([_bar(t=open_ms)], contract.occ_symbol),
+        contract=contract.occ_symbol,
+    )
+
+    asked = [await _ensure(contract, date(2024, 10, 14), now_ms=NOW_2026_10_12_MS) for _ in range(4)]
+
+    assert [r.failure.reason if r.failure else "captured" for r in asked] == [
+        "outside_data_plan", "outside_data_plan", "provider_rate_limited", "fetch_timeout",
+    ]
+    assert route.call_count == 3  # the fourth ask never reached the vendor, who would have answered with bars
+
+
+@respx.mock
+async def test_a_day_told_it_is_outside_the_plan_once_survives_one_transient_failure_and_is_captured(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """The other side of the same number: with one plan answer behind it, a 429 leaves an attempt."""
+    contract = OptionContract.of(root="SPY", expiry_date=date(2024, 10, 18), right="call", strike=580)
+    open_ms = session_open_ms_utc(date(2024, 10, 14))
+    route = _mock_vendor(
+        outside_plan(), httpx.Response(429), _ok([_bar(t=open_ms)], contract.occ_symbol), contract=contract.occ_symbol
+    )
+
+    asked = [await _ensure(contract, date(2024, 10, 14), now_ms=NOW_2026_10_12_MS) for _ in range(3)]
+
+    assert [r.failure.reason if r.failure else "captured" for r in asked] == [
+        "outside_data_plan", "provider_rate_limited", "captured",
+    ]
+    assert route.call_count == 3
+
+
+@respx.mock
 @pytest.mark.parametrize(
     "body",
     [
@@ -735,46 +804,52 @@ def test_the_plan_floor_is_two_years_back_plus_the_two_days_the_lake_composes_in
 
 
 @respx.mock
-async def test_a_session_that_closed_under_thirty_minutes_ago_is_refused_and_nothing_is_claimed(
-    fake_catalog: FakeCatalog, tmp_lake: Path
+@pytest.mark.parametrize(("session", "opens_ms"), [(day, ms) for _, day, ms in CAPTURE_OPENS], ids=[label for label, _, _ in CAPTURE_OPENS])
+async def test_a_session_is_refused_until_new_york_midnight_after_it_and_taken_from_that_midnight(
+    session: date, opens_ms: int, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
-    route = _mock_vendor()
+    """One millisecond before the midnight that ends the session's New York date is refused; the midnight is taken.
 
-    result = await ensure_option_day_bars(
-        CONTRACT, TRADING_DAY, listed_under="SPY", now_ms=SESSION_CLOSE_MS + 30 * MINUTE_MS - 1
-    )
+    The days around both clock changes would each be an hour out under a fixed offset, and the two half
+    days show an early close changes nothing about the rule.
+    """
+    contract = OptionContract.of(root="SPY", expiry_date=session, right="call", strike=600)
+    route = _mock_vendor(_ok([_bar(t=session_open_ms_utc(session))], contract.occ_symbol), contract=contract.occ_symbol)
 
-    assert result.record is None
-    assert result.failure is not None
-    assert result.failure.reason == "session_not_over"
+    too_early = await ensure_option_day_bars(contract, session, listed_under="SPY", now_ms=opens_ms - 1)
+
+    assert too_early.record is None
+    assert too_early.failure is not None and too_early.failure.reason == "session_not_over"
     assert route.call_count == 0
-    assert fake_catalog.rows == {}
+    assert fake_catalog.rows == {}  # refused before any claim
     assert _lake_files(tmp_lake) == []
 
+    on_time = await _ensure(contract, session, now_ms=opens_ms)
 
-@respx.mock
-async def test_a_session_thirty_minutes_after_the_close_is_taken(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
-    route = _mock_vendor()
-
-    result = await _ensure(now_ms=SESSION_CLOSE_MS + 30 * MINUTE_MS)
-
-    assert result.failure is None and result.record is not None
-    assert route.call_count == 1
-
-
-@respx.mock
-async def test_an_early_close_is_judged_by_its_own_close_not_by_four_oclock(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
-    day = date(2025, 11, 28)
-    open_ms, close_ms = 1764340200000, 1764352800000  # 09:30 EST, 13:00 EST
-    contract = OptionContract.of(root="SPY", expiry_date=day, right="call", strike=600)
-    route = _mock_vendor(_ok([_bar(t=open_ms)], "SPY251128C00600000"), contract="SPY251128C00600000")
-
-    early = await ensure_option_day_bars(contract, day, listed_under="SPY", now_ms=close_ms + 30 * MINUTE_MS - 1)
-    on_time = await _ensure(contract, day, now_ms=close_ms + 30 * MINUTE_MS)
-
-    assert early.failure is not None and early.failure.reason == "session_not_over"
     assert on_time.failure is None and on_time.record is not None
     assert route.call_count == 1
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("session", "close_ms"),
+    [(TRADING_DAY, SESSION_CLOSE_MS), *HALF_DAY_CLOSE_MS.items()],
+    ids=["a full day", "a half day in november", "a half day in july"],
+)
+async def test_the_evening_of_a_session_is_refused_from_the_close_to_the_midnight_on_a_full_day_or_a_half_day(
+    session: date, close_ms: int, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """Six hours after the close it is 22:00 New York on the full day, which UTC already calls the next date."""
+    contract = OptionContract.of(root="SPY", expiry_date=session, right="call", strike=600)
+    route = _mock_vendor(contract=contract.occ_symbol)
+
+    at_the_close = await ensure_option_day_bars(contract, session, listed_under="SPY", now_ms=close_ms)
+    half_an_hour_on = await ensure_option_day_bars(contract, session, listed_under="SPY", now_ms=close_ms + 30 * MINUTE_MS)
+    six_hours_on = await ensure_option_day_bars(contract, session, listed_under="SPY", now_ms=close_ms + 6 * 60 * MINUTE_MS)
+
+    for refused in (at_the_close, half_an_hour_on, six_hours_on):
+        assert refused.failure is not None and refused.failure.reason == "session_not_over"
+    assert route.call_count == 0 and fake_catalog.rows == {}
 
 
 @respx.mock
@@ -834,6 +909,65 @@ async def test_a_second_capture_reuses_the_complete_row_without_asking_the_vendo
     assert second.reused is True and second.failure is None
     assert second.record == first.record
     assert len(_bar_rows(fake_catalog)) == 1
+
+
+# ── Another provider's row for the same contract-day is not this provider's row ──
+
+
+@respx.mock
+async def test_another_providers_complete_row_with_the_same_file_and_recipe_is_not_reused_for_this_providers_failed_row(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """The lookup after a lost claim took the first complete row of the contract-day, whichever provider's."""
+    route = _mock_vendor()
+    first = await _ensure()
+    assert first.record is not None
+    other_id = await complete_row_of_another_provider(first.record)
+    assert await catalog_client.mark_complete_artifact_failed(first.record.id, "provider_api_error", "gone wrong")
+
+    again = await _ensure()
+
+    assert again.failure is None and again.reused is False
+    assert again.record is not None and again.record.id == first.record.id and again.record.provider == "polygon"
+    assert route.call_count == 2  # asked again for its own row
+    assert fake_catalog.rows[first.record.id]["status"] == "complete"
+    other = fake_catalog.rows[other_id]
+    assert (other["provider"], other["status"], other["lease_generation"]) == ("alpaca", "complete", 1)
+
+
+@respx.mock
+async def test_another_providers_complete_row_is_never_refreshed_with_this_providers_bytes(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """Under another recipe the lookup's row was refreshed and published over: the other provider's artifact held our bytes."""
+    _mock_vendor()
+    first = await _ensure()
+    assert first.record is not None
+    other_id = await complete_row_of_another_provider(first.record, data_contract_hash="0" * 64, file_path="elsewhere/theirs.zip")
+    before = dict(fake_catalog.rows[other_id])
+    assert await catalog_client.mark_complete_artifact_failed(first.record.id, "provider_api_error", "gone wrong")
+
+    again = await _ensure()
+
+    assert again.failure is None and again.record is not None and again.record.id == first.record.id
+    assert fake_catalog.rows[other_id] == before  # not one field of it changed
+    assert fake_catalog.rows[first.record.id]["status"] == "complete"
+
+
+@respx.mock
+async def test_another_providers_complete_row_is_not_a_captured_option_day(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    _mock_vendor()
+    first = await _ensure()
+    assert first.record is not None
+    await complete_row_of_another_provider(first.record)
+    assert await catalog_client.mark_complete_artifact_failed(first.record.id, "provider_api_error", "gone wrong")
+
+    named_with_only_the_others_row = await captured_option_days([SYMBOL], TRADING_DAY)
+    await _ensure()
+    named_with_both = await captured_option_days([SYMBOL], TRADING_DAY)
+
+    assert named_with_only_the_others_row == frozenset()
+    assert named_with_both == frozenset({SYMBOL})
 
 
 @respx.mock
@@ -950,6 +1084,50 @@ def _polygon_option_bar() -> PolygonOptionBar:
     )
 
 
+async def test_a_writer_that_lost_its_lease_and_the_winner_publishing_together_leave_the_winners_file_and_a_complete_row(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both stage their bytes first. If they staged to one path, the loser's refusal would delete the winner's staged file.
+
+    The staging path carries the lease generation, so each writer has its own. The scheduler is told to give the
+    stale writer its turn at the catalog (refusal and cleanup) before the winner's, the order that hurts.
+    """
+    dch = option_minute_trade_dch()
+    identity = ArtifactIdentity(
+        artifact_kind="time_series_bars", market="usa_options", symbol=SYMBOL, trading_date=TRADING_DAY,
+        resolution="minute", data_type="trade", provider="polygon", price_adjustment_mode="raw",
+    )
+    artifact_id = await catalog_client.claim_minute_bar(
+        identity=identity, worker_id=option_lake_module.WORKER_ID, lease_ttl_ms=option_lake_module.LEASE_TTL_MS,
+        data_contract_hash=dch, file_path=RELATIVE_PATH,
+    )
+    assert artifact_id is not None
+    fake_catalog.rows[artifact_id]["lease_expires_at_ms"] = 1  # the first writer's lease runs out
+    winner_generation = await catalog_client.steal_or_retry_minute_bar(
+        artifact_id, option_lake_module.WORKER_ID, option_lake_module.LEASE_TTL_MS, option_lake_module.MAX_CLAIM_RETRIES,
+        fresh_budget_for_contract=dch,
+    )
+    assert winner_generation == 2
+    stale_file, winner_file = one_bar_file("1.11"), one_bar_file("2.22")
+    publish_stale_writer_first_once_both_have_staged(monkeypatch, winner_generation=2)
+    shared = {
+        "rel_path": PurePosixPath(RELATIVE_PATH), "row_count": 1, "first_bar_start_ms": SESSION_OPEN_MS,
+        "last_bar_start_ms": SESSION_OPEN_MS, "data_contract_hash": dch, "symbol": SYMBOL, "trading_date": TRADING_DAY,
+    }
+
+    stale, winner = await asyncio.gather(
+        publish_option_artifact(payload=stale_file, lease=HeldLease(artifact_id, 1), **shared),
+        publish_option_artifact(payload=winner_file, lease=HeldLease(artifact_id, 2), **shared),
+    )
+
+    assert isinstance(stale, OptionDataFailure) and stale.reason == "lease_timeout"  # told the row is not its own
+    assert winner == hashlib.sha256(winner_file).hexdigest()
+    assert (_raw_root(tmp_lake) / RELATIVE_PATH).read_bytes() == winner_file
+    row = fake_catalog.rows[artifact_id]
+    assert (row["status"], row["file_sha256"], row["lease_generation"]) == ("complete", winner, 2)
+    assert _staged_files(tmp_lake) == []
+
+
 # ── A vendor error is a typed failure on the row ─────────────────────────
 
 
@@ -987,6 +1165,168 @@ async def test_a_transport_failure_is_a_provider_api_error(fake_catalog: FakeCat
     result = await _ensure()
 
     assert result.failure is not None and result.failure.reason == "provider_api_error"
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "key",
+    ["", "  \n", "Zq9xV7wK\u00e9", "Zq9xV7wK Zq9xV7wK", "Zq9xV7wK\x00", "Zq9xV7wK\ud800"],
+    ids=["empty", "only whitespace", "accented letter", "inner space", "nul", "lone surrogate"],
+)
+async def test_a_key_that_cannot_be_sent_fails_the_row_as_an_auth_error_and_leaves_none_fetching(
+    key: str, fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A raw ``UnicodeEncodeError`` once escaped here and left the row ``fetching`` for the length of its lease."""
+    route = _mock_vendor()
+    await _list(CONTRACT)  # stored while the key is good
+    stored = refuse_what_postgres_refuses(monkeypatch)
+    monkeypatch.setattr(settings, "POLYGON_API_KEY", key)
+    caplog.set_level(logging.DEBUG)
+
+    result = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
+
+    assert result.record is None
+    assert result.failure is not None and result.failure.reason == "provider_auth_error"
+    assert "malformed" in result.failure.detail
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "provider_auth_error", None)
+    assert route.call_count == 0  # no request was made
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+    shown = [result.failure.detail, *stored, *(r.getMessage() + repr(r.__dict__) for r in caplog.records)]
+    assert pieces_of_the_key_in(key.strip(), *shown) == set()
+
+
+@respx.mock
+async def test_a_vendor_error_text_with_a_nul_is_stored_without_it_and_the_row_is_failed_not_left_fetching(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The table refuses a NUL, so recording the failure raised and the row stayed ``fetching``."""
+    stored = refuse_what_postgres_refuses(monkeypatch)
+    _mock_vendor(httpx.Response(500, content=b"boom\x00boom"))
+
+    result = await _ensure()
+
+    assert result.failure is not None and result.failure.reason == "provider_api_error"
+    assert "boomboom" in result.failure.detail and "\x00" not in result.failure.detail
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "provider_api_error", None)
+    assert stored == [result.failure.detail]
+
+
+@respx.mock
+async def test_a_vendor_status_with_a_character_no_utf8_holds_is_stored_cleaned_and_the_row_is_failed(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """JSON can spell a lone surrogate (``\\ud800``); the status is echoed into the error text, and the driver cannot encode it."""
+    stored = refuse_what_postgres_refuses(monkeypatch)
+    _mock_vendor(raw_json('{"status":"\\ud800","ticker":"O:' + SYMBOL + '","resultsCount":0}'))
+
+    result = await _ensure()
+
+    assert result.failure is not None and result.failure.reason == "provider_api_error"
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "provider_api_error", None)
+    assert len(stored) == 1 and stored[0] == result.failure.detail
+    stored[0].encode("utf-8")  # storable
+
+
+def test_a_failure_text_loses_its_nuls_is_made_encodable_and_is_cut_to_the_stored_length() -> None:
+    assert storable_failure_text("a\x00b\x00\x00c") == "abc"
+    assert storable_failure_text("x\ud800y") == "x?y"
+    assert storable_failure_text("caf\u00e9 \u2603") == "caf\u00e9 \u2603"  # what UTF-8 holds is kept
+    assert storable_failure_text("x" * (MAX_FAILURE_TEXT_CHARS + 500)) == "x" * MAX_FAILURE_TEXT_CHARS
+    assert storable_failure_text("") == ""
+    assert MAX_FAILURE_TEXT_CHARS > 200  # the vendor's body is cut to 200 elsewhere; this never clips that
+
+
+async def _claim_the_contract_day() -> int:
+    """This worker's own claim on the contract-day, at the first generation: the row a capture would fail."""
+    claimed = await catalog_client.claim_minute_bar(
+        identity=ArtifactIdentity(
+            artifact_kind="time_series_bars", market="usa_options", symbol=SYMBOL, trading_date=TRADING_DAY,
+            resolution="minute", data_type="trade", provider="polygon", price_adjustment_mode="raw",
+        ),
+        worker_id=option_lake_module.WORKER_ID, lease_ttl_ms=option_lake_module.LEASE_TTL_MS,
+        data_contract_hash=option_minute_trade_dch(), file_path=RELATIVE_PATH,
+    )
+    assert claimed is not None
+    return claimed
+
+
+async def test_fail_row_hands_the_catalog_the_cleaned_text_and_answers_with_it(
+    fake_catalog: FakeCatalog, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stored = refuse_what_postgres_refuses(monkeypatch)
+    artifact_id = await _claim_the_contract_day()
+
+    result = await fail_row(
+        artifact_id=artifact_id, lease_generation=catalog_client.INITIAL_LEASE_GENERATION, reason="provider_api_error",
+        detail="bad\x00\ud800" + "y" * 5000, symbol=SYMBOL, trading_date=TRADING_DAY,
+    )
+
+    assert result.failure is not None
+    assert stored == [result.failure.detail] and stored[0].startswith("bad?y")
+    assert len(stored[0]) == MAX_FAILURE_TEXT_CHARS
+
+
+async def test_a_failure_whose_lease_was_taken_over_is_not_recorded_and_is_answered_as_lease_lost(
+    fake_catalog: FakeCatalog,
+) -> None:
+    artifact_id = await _claim_the_contract_day()
+    fake_catalog.rows[artifact_id].update(lease_generation=2, lease_owner="the-winner")
+
+    result = await fail_row(
+        artifact_id=artifact_id, lease_generation=catalog_client.INITIAL_LEASE_GENERATION, reason="provider_auth_error",
+        detail="no key", symbol=SYMBOL, trading_date=TRADING_DAY,
+    )
+
+    assert result.record is None
+    assert result.failure is not None and result.failure.reason == "lease_timeout"
+    row = fake_catalog.rows[artifact_id]
+    assert (row["status"], row["lease_owner"], row["lease_generation"], row["last_error"]) == ("fetching", "the-winner", 2, None)
+
+
+#: What a writer that lost its lease can meet while it fetches or validates: the answer, and the reason it would have been failed with.
+_STALE_WRITER_MEETS = [
+    ("a 401", lambda: httpx.Response(401, text="no key"), "provider_auth_error"),
+    ("a 403", lambda: httpx.Response(403, text="not entitled"), "provider_entitlement_error"),
+    ("a 429", lambda: httpx.Response(429), "provider_rate_limited"),
+    ("a 404", lambda: httpx.Response(404), "unknown_symbol"),
+    ("a 500", lambda: httpx.Response(500, text="boom"), "provider_api_error"),
+    ("the plan's 403", outside_plan, "outside_data_plan"),
+    ("a malformed answer", lambda: bad_bars_answers(SYMBOL)["bare object"](), "provider_api_error"),
+    ("corrupt bars", lambda: _ok([_bar(0, h=1.0)]), "validation_failed"),
+]
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("answer", "would_have_been"), [(a, r) for _, a, r in _STALE_WRITER_MEETS], ids=[name for name, _, _ in _STALE_WRITER_MEETS]
+)
+async def test_a_stale_writers_vendor_failure_comes_back_as_lease_lost_and_the_row_is_whatever_the_new_owner_makes_it(
+    answer: Any, would_have_been: str, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """A writer whose lease was taken over while it fetched met a failure: it must not report it as the row's."""
+
+    def another_worker_takes_the_row_while_the_vendor_answers(request: httpx.Request) -> httpx.Response:
+        [row] = _bar_rows(fake_catalog)
+        row.update(lease_generation=row["lease_generation"] + 1, lease_owner="the-winner")
+        return answer()
+
+    _mock_vendor_with(another_worker_takes_the_row_while_the_vendor_answers)
+
+    result = await _ensure(now_ms=NOW_2026_10_12_MS)
+
+    assert result.record is None
+    assert result.failure is not None
+    assert result.failure.reason == "lease_timeout" != would_have_been
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["lease_owner"], row["lease_generation"], row["last_error"]) == ("fetching", "the-winner", 2, None)
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+    # the new owner's own lease is intact: it can still finish the row
+    assert await catalog_client.fail_artifact(
+        row["id"], "provider_api_error", "its own", worker_id="the-winner", lease_generation=2
+    )
 
 
 @respx.mock
@@ -1039,7 +1379,7 @@ async def test_a_price_the_file_cannot_hold_fails_the_row_and_raises_nothing(
 async def test_a_vendor_answer_that_is_not_well_formed_fails_the_row_and_raises_nothing(
     name: str, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
-    """Every body the review drove in: a caller looping over contracts must get a result for each, and no row may stay fetching."""
+    """Every body that is not well formed: a caller looping over contracts must get a result for each, and no row may stay fetching."""
     route = _mock_vendor(bad_bars_answers(SYMBOL)[name]())
 
     result = await _ensure()  # returns; nothing escapes
@@ -1095,10 +1435,17 @@ async def test_a_price_the_float_route_would_round_the_other_way_is_stored_by_it
 
 
 @respx.mock
+@pytest.mark.parametrize(
+    "configured_key",
+    [SENTINEL_KEY, f"{SENTINEL_KEY}\n", f"  {SENTINEL_KEY}\r\n"],
+    ids=["as typed", "with a trailing newline", "with spaces in front and a crlf behind"],
+)
 async def test_the_key_is_in_no_url_no_log_line_no_error_text_and_no_stored_failure(
-    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    configured_key: str, fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    monkeypatch.setattr(settings, "POLYGON_API_KEY", SENTINEL_KEY)
+    """The key is sent as itself, stripped of the whitespace an ``.env`` line or a copy-paste leaves on it."""
+    monkeypatch.setattr(settings, "POLYGON_API_KEY", configured_key)
     caplog.set_level(logging.INFO)  # the level the app logs at; httpx logs each request's URL there
     failed_with: list[Any] = []
     stored_fail = catalog_client.fail_artifact
@@ -1751,3 +2098,130 @@ async def test_the_smallest_price_that_rounds_up_to_one_ten_thousandth_is_stored
     assert day is not None
     assert (day.bars[1].open, day.bars[1].low) == (Decimal("0.0001"), Decimal("0.0001"))
 
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("prices", "named", "as_floats"),
+    [
+        ({"o": "1.0", "h": "1.5", "l": "1.0000000000000001", "c": "1.2"}, "low 1.0000000000000001 > open 1.0", ("1.0", "1.0000000000000001")),
+        ({"o": "1.5", "h": "2.0", "l": "1.20000000000000001", "c": "1.2"}, "low 1.20000000000000001 > close 1.2", ("1.2", "1.20000000000000001")),
+        ({"o": "1.5", "h": "1.49999999999999999", "l": "1.0", "c": "1.2"}, "high 1.49999999999999999 < open 1.5", ("1.5", "1.49999999999999999")),
+        ({"o": "1.0", "h": "1.49999999999999999", "l": "0.9", "c": "1.5"}, "high 1.49999999999999999 < close 1.5", ("1.5", "1.49999999999999999")),
+    ],
+    ids=["low above open", "low above close", "high below open", "high below close"],
+)
+async def test_a_bar_whose_low_or_high_is_out_of_place_by_less_than_a_float_holds_fails_the_day_naming_the_relation(
+    prices: dict[str, str], named: str, as_floats: tuple[str, str], fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """Open 1.0 and low 1.0000000000000001 are one number as floats, so the float gate alone passed such a bar and it was published."""
+    assert float(as_floats[0]) == float(as_floats[1])  # the premise: the hairline is gone once the prices are floats
+    _mock_vendor(_one_price_bars(**prices))
+
+    result = await _ensure()
+
+    assert result.record is None
+    assert result.failure is not None and result.failure.reason == "validation_failed"
+    assert "bar[1]" in result.failure.detail and named in result.failure.detail
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "validation_failed", None)
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+    assert await _read() is None
+
+
+@respx.mock
+async def test_a_low_below_the_open_by_a_hairline_is_in_place_and_the_day_is_stored(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    _mock_vendor(_one_price_bars(o="1.0", h="1.5", l="0.99999999999999999", c="1.2"))
+
+    result = await _ensure()
+
+    assert result.failure is None and result.record is not None
+
+
+# ── A bar that does not start on a whole minute fails the day ─────────────
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "offset_ms",
+    [1, 30_000, 59_999],
+    ids=["a millisecond past the minute", "half a minute past it", "a millisecond short of the next"],
+)
+async def test_a_vendor_bar_that_does_not_start_on_a_whole_minute_fails_the_day_naming_the_bar(
+    offset_ms: int, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """A bar is named by its close, its start plus a minute, so a start between two minutes closes on no minute.
+
+    The second bar starts offset_ms past 09:31, which is 1749821400000 + 60 000 = 1749821460000.
+    """
+    off_the_minute = SESSION_OPEN_MS + MINUTE_MS + offset_ms
+    _mock_vendor(_ok([_bar(0), _bar(1, t=off_the_minute)]))
+
+    result = await _ensure()
+
+    assert result.record is None
+    assert result.failure is not None and result.failure.reason == "validation_failed"
+    assert "bar[1]" in result.failure.detail and f"t_ms={off_the_minute}" in result.failure.detail
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "validation_failed", None)
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+    assert await _read() is None
+
+
+@respx.mock
+async def test_the_first_of_several_bars_off_the_minute_is_the_one_named(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    """Bar 1 starts a millisecond past 09:31 (1749821460001) and bar 2 half a minute past 09:32 (1749821550000)."""
+    _mock_vendor(
+        _ok([_bar(0), _bar(1, t=SESSION_OPEN_MS + MINUTE_MS + 1), _bar(2, t=SESSION_OPEN_MS + 2 * MINUTE_MS + 30_000)])
+    )
+
+    result = await _ensure()
+
+    assert result.failure is not None and result.failure.reason == "validation_failed"
+    assert "bar[1] t_ms=1749821460001" in result.failure.detail and "bar[2]" not in result.failure.detail
+
+
+@respx.mock
+async def test_a_day_failed_for_a_bar_off_the_minute_is_asked_again_and_a_corrected_answer_is_stored(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """The failure is the row's like any corrupt answer: within its attempts the vendor is asked again."""
+    route = _mock_vendor(_ok([_bar(0), _bar(1, t=SESSION_OPEN_MS + MINUTE_MS + 30_000)]), _ok([_bar(0), _bar(1)]))
+
+    first = await _ensure()
+    second = await _ensure()
+
+    assert first.failure is not None and first.failure.reason == "validation_failed"
+    assert second.failure is None and second.record is not None and second.record.row_count == 2
+    assert route.call_count == 2
+    day = await _read()
+    # Every bar on a whole minute is stored as it was sent: 09:30 and 09:31.
+    assert day is not None and [bar.start_ms for bar in day.bars] == [SESSION_OPEN_MS, SESSION_OPEN_MS + MINUTE_MS]
+    assert [row["status"] for row in _bar_rows(fake_catalog)] == ["complete"]
+
+
+@respx.mock
+@pytest.mark.parametrize("price", ["NaN", "Infinity", "-Infinity", "0", "-0.0", "-1.27"])
+async def test_a_bar_with_a_price_that_is_not_finite_and_above_zero_fails_the_day_and_raises_nothing(
+    price: str, fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``Decimal`` NaN cannot be compared, so the price relations must not be asked of it."""
+
+    async def fetch(*args: Any, **kwargs: Any) -> list[PolygonOptionBar]:
+        return [
+            PolygonOptionBar(
+                t_ms=SESSION_OPEN_MS, open=Decimal("1.27"), high=Decimal("1.31"), low=Decimal(price), close=Decimal("1.27"),
+                volume=Decimal(12),
+            )
+        ]
+
+    monkeypatch.setattr(option_bars_module, "fetch_option_minute_bars", fetch)
+
+    result = await _ensure()
+
+    assert result.record is None
+    assert result.failure is not None and result.failure.reason == "validation_failed"
+    assert f"low={Decimal(price)} is not finite and positive" in result.failure.detail
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "validation_failed", None)
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []

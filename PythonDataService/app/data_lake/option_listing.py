@@ -11,10 +11,11 @@ overwrite the winner.
 The file is a zip with one CSV member, a header row and one row per contract,
 sorted by the vendor's ticker so the same listing always makes the same bytes:
 the ticker, call or put, the strike in thousandths of a dollar, the expiry as
-``YYYYMMDD``, the exercise style, the shares per contract, and whether the
-vendor listed additional underlyings. Whether a contract is *standard* is not
-stored: it is a rule applied when the file is read, so the rule can change
-without a refetch.
+``expiry_ms`` (the expiry date's 16:00 New York anchor in epoch milliseconds, the one
+way an expiry is held, ADR 0022 (i)), the exercise style, the shares per contract, and
+whether the vendor listed additional underlyings. No date is written as text inside the
+file. Whether a contract is *standard* is not stored: it is a rule applied when the file
+is read, so the rule can change without a refetch.
 
 Every row the vendor sends with a ticker is kept. A field the vendor left out or
 wrote as something the file cannot hold (a strike that is not a finite number
@@ -44,9 +45,9 @@ import re
 import zipfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from app.config import settings
 from app.data_lake import catalog_client
@@ -55,6 +56,7 @@ from app.data_lake.data_contract import data_contract_hash as _dch
 from app.data_lake.lean_writer import _DETERMINISTIC_ZIP_DATE_TIME
 from app.data_lake.option_lake import (
     LEASE_TTL_MS,
+    LISTING_FETCH_BUDGET_MS,
     OPTION_MARKET,
     OPTION_PRICE_ADJUSTMENT_MODE,
     OPTION_PROVIDER,
@@ -79,7 +81,7 @@ from app.data_lake.polygon_option_http import OPTION_TICKER_PREFIX
 from app.data_lake.types import ArtifactIdentity, ArtifactRecord, is_lake_addressable_symbol
 from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc
 from app.options.contract import OptionContract, strike_thousandths
-from app.options.expiry import option_expiry_anchor_ms
+from app.options.expiry import option_expiry_anchor_ms, option_expiry_date
 
 logger = logging.getLogger(__name__)
 
@@ -87,14 +89,16 @@ OPTION_LISTING_ENDPOINT = "v3/reference/options/contracts"
 #: Bump when the file's columns or encoding change. The format is part of a listing's
 #: recipe, so a new format is a new catalog row: capturing a date again under it
 #: publishes over the old file and stales the old format's row for that file
-#: (``mark_metadata_artifacts_stale_for_path``). A date not captured again keeps its
-#: old row and file until it is.
-OPTION_LISTING_FILE_FORMAT = 1
+#: (``mark_metadata_artifacts_stale_for_path``, run again whenever the new row is found
+#: complete). A date not captured again keeps its old row and file until it is. Format 1
+#: wrote the expiry as a ``YYYYMMDD`` text in a column named ``expiry``; format 2 writes
+#: ``expiry_ms``.
+OPTION_LISTING_FILE_FORMAT = 2
 _HEADER = (
     "ticker",
     "contract_type",
     "strike_thousandths",
-    "expiry",
+    "expiry_ms",
     "exercise_style",
     "shares_per_contract",
     "additional_underlyings",
@@ -191,15 +195,14 @@ def _strike_cell(strike: Decimal | None) -> str:
         return ""
 
 
-def _expiry_cell(text: str | None) -> str:
+def _expiry_ms_cell(text: str | None) -> str:
+    """The vendor's expiry date as its 16:00 New York anchor in epoch milliseconds; empty when it is no date the calendar can anchor."""
     if text is None or _VENDOR_DATE.fullmatch(text) is None:
         return ""
     try:
-        expiry = date.fromisoformat(text)
-        option_expiry_anchor_ms(expiry)  # the reader computes this; a date it could not anchor is not storable
+        return str(option_expiry_anchor_ms(date.fromisoformat(text)))
     except (ValueError, OverflowError):
         return ""
-    return f"{expiry.year:04d}{expiry.month:02d}{expiry.day:02d}"
 
 
 def _shares_cell(shares: Decimal | None) -> str:
@@ -222,7 +225,7 @@ def _csv_line(contract: PolygonOptionContract) -> list[str]:
         contract.ticker,
         contract_type if contract_type in _CONTRACT_TYPES else "",
         _strike_cell(contract.strike),
-        _expiry_cell(contract.expiration_date),
+        _expiry_ms_cell(contract.expiration_date),
         exercise_style if exercise_style in _EXERCISE_STYLES else "",
         _shares_cell(contract.shares_per_contract),
         "1" if contract.has_additional_underlyings else "0",
@@ -294,7 +297,9 @@ def parse_option_listing_zip(payload: bytes, underlying: str, as_of: date) -> tu
 
     A file that is not the one this module writes is :class:`OptionListingFileError`, with
     its cause chained: not a zip, a damaged one, a wrong or extra member, text that is not
-    UTF-8 or not CSV, a wrong header, a row of the wrong shape or with a cell that is no number.
+    UTF-8 or not CSV, a wrong header (a file of format 1 has an ``expiry`` column and is refused
+    here), a row of the wrong shape or with a cell that is no number, and an ``expiry_ms`` that is
+    not an expiry's 16:00 New York anchor.
     """
     expected = _member_name(underlying, as_of)
     raw = zip_member_bytes(payload, expected, OptionListingFileError)
@@ -309,13 +314,15 @@ def parse_option_listing_zip(payload: bytes, underlying: str, as_of: date) -> tu
     for number, fields in enumerate(table[1:], start=2):
         if len(fields) != len(_HEADER):
             raise OptionListingFileError(f"{expected} line {number}: expected {len(_HEADER)} columns, found {len(fields)}")
-        ticker, contract_type, strike_text, expiry_text, style_text, shares_text, additional_text = fields
+        ticker, contract_type, strike_text, expiry_ms_text, style_text, shares_text, additional_text = fields
         try:
             strike = int(strike_text) if strike_text else None
-            expiry_ms = option_expiry_anchor_ms(datetime.strptime(expiry_text, "%Y%m%d").date()) if expiry_text else None
+            expiry_ms = int(expiry_ms_text) if expiry_ms_text else None
+            if expiry_ms is not None:
+                option_expiry_date(expiry_ms)  # a cell that is no expiry anchor is not what this module writes
             shares = int(shares_text) if shares_text else None
             additional = {"0": False, "1": True}[additional_text]
-        except (ValueError, KeyError, ArithmeticError) as exc:
+        except (ValueError, KeyError, ArithmeticError, OSError) as exc:
             raise OptionListingFileError(f"{expected} line {number}: {exc!r}") from exc
         # The writer stores both in lower case; a cell in another case still names the same thing.
         contract_type = contract_type.lower()
@@ -388,15 +395,34 @@ def read_option_listing(
     )
 
 
+async def _stale_other_formats(identity: ArtifactIdentity, rel_path: PurePosixPath, *, keep_artifact_id: int) -> None:
+    """Stale every other complete row for this listing's file: a listing recipe of another file format has its own row for it, and no longer describes it.
+
+    Safe to run when there is nothing to do (it then touches no row), so a capture that publishes and a capture
+    that finds the row complete both run it.
+    """
+    await catalog_client.mark_metadata_artifacts_stale_for_path(
+        data_root_id=identity.data_root_id,
+        price_adjustment_mode=OPTION_PRICE_ADJUSTMENT_MODE,
+        file_path=str(rel_path),
+        keep_artifact_id=keep_artifact_id,
+    )
+
+
 async def ensure_option_listing(
     underlying: str, as_of: date, *, now_ms: int | None = None
 ) -> OptionCaptureResult:
     """Capture the contracts listed for ``underlying`` as of ``as_of`` into the lake, or reuse what is there.
 
     Claim, reuse-or-refresh on a lost claim, reclaim, fetch every page, build the
-    file, publish under the lease; a typed failure on every vendor error. The refusals
+    file, publish under the lease; a typed failure on every vendor error. The paging is
+    given :data:`LISTING_FETCH_BUDGET_MS`, inside the lease, and a fetch that runs past it
+    ends as a failed row before another page is asked. A listing found complete and reused is
+    returned only after the same cleanup of other formats' rows a publish does, because the publish
+    that made it may have ended before doing it. The refusals
     that cost no claim come first (``symbol_too_long``, ``not_a_session``,
-    ``session_not_over``; ``option_lake``'s docstring says what each means).
+    ``session_not_over``, which holds until the session's New York date has passed;
+    ``option_lake``'s docstring says what each means).
     """
     _require_ticker(underlying)
     now = now_ms if now_ms is not None else current_ms()
@@ -438,6 +464,10 @@ async def ensure_option_listing(
         trading_date=as_of,
     )
     if isinstance(held, OptionCaptureResult):
+        if held.reused and held.record is not None:
+            # The publish that made this row complete may have ended before it staled the old format's row (an
+            # outage, a process that stopped), and nothing else would try again once the row reads as complete.
+            await _stale_other_formats(identity, rel_path, keep_artifact_id=held.record.id)
         return held
 
     async def fail(reason: OptionFailureReason, detail: str) -> OptionCaptureResult:
@@ -451,7 +481,9 @@ async def ensure_option_listing(
         )
 
     try:
-        contracts = await fetch_option_contracts(underlying, as_of, settings.POLYGON_API_KEY)
+        contracts = await fetch_option_contracts(
+            underlying, as_of, settings.POLYGON_API_KEY, budget_s=LISTING_FETCH_BUDGET_MS / 1000
+        )
     except PolygonFetchError as e:
         return await fail(vendor_reason(e), str(e))
 
@@ -477,13 +509,7 @@ async def ensure_option_listing(
     )
     if isinstance(published, OptionDataFailure):
         return OptionCaptureResult.failed(published)
-    # A listing recipe of another file format has its own row for this same file; it no longer describes it.
-    await catalog_client.mark_metadata_artifacts_stale_for_path(
-        data_root_id=identity.data_root_id,
-        price_adjustment_mode=OPTION_PRICE_ADJUSTMENT_MODE,
-        file_path=str(rel_path),
-        keep_artifact_id=held.artifact_id,
-    )
+    await _stale_other_formats(identity, rel_path, keep_artifact_id=held.artifact_id)
 
     logger.info(
         "data_lake.option_listing: listing captured",

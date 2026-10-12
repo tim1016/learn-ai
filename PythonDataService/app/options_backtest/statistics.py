@@ -28,7 +28,6 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import date
 from decimal import Decimal, Inexact, localcontext
 from enum import StrEnum
 from fractions import Fraction
@@ -87,10 +86,9 @@ class Drawdown:
     fall_usd: Decimal
     # The fall over the peak.
     fall_ratio: Ratio
-    # None when the peak is the starting cash, before the first session.
-    peak_date: date | None
+    # The sessions are named by their open in int64 ms UTC. None when the peak is the starting cash, before the first
+    # session.
     peak_session_open_ms: int | None
-    trough_date: date
     trough_session_open_ms: int
     measured_at: Literal["session_end"] = "session_end"
 
@@ -99,7 +97,7 @@ class Drawdown:
 class DayRow:
     """One session, as a row of the by-day table."""
 
-    trading_date: date
+    # The session's open in int64 ms UTC, the 09:30 New York anchor of its trading date.
     session_open_ms: int
     status: SessionStatus
     skip_reason: SkipReason | None
@@ -114,7 +112,7 @@ class DayRow:
 
 @dataclass(frozen=True)
 class MonthRow:
-    """The sessions of one calendar month (New York) that the run covered."""
+    """The sessions of one calendar month that the run covered, the month being that of their New York date."""
 
     year: int
     month: int
@@ -183,9 +181,10 @@ class RunSummary:
     picks_refused_by_reason: tuple[tuple[PickRefusal, int], ...]
     # A leg whose contract did not trade at the minute its starting price was due.
     legs_without_a_starting_price: int
-    # A re-entry that ended without entering, whatever the cause: its pick was refused, its contract had no starting
-    # price, or its entry was dropped at once. Each of those is also counted under its own heading above, so this
-    # overlaps them and is not to be added to them: it says how many of those incidents ended a re-entry.
+    # A re-entry that ended without entering for want of market data: its pick was refused, its contract had no
+    # starting price, or its entry was dropped at once. Each of those is also counted under its own heading above,
+    # so this overlaps them and is not to be added to them: it says how many of those incidents ended a re-entry.
+    # A re-entry refused for want of cash is not among them; it is an entry refused for cash.
     re_entries_lost: int
     # --- tables
     by_day: tuple[DayRow, ...]
@@ -263,9 +262,7 @@ def _drawdowns(
             trough_equity_usd=trough_equity,
             fall_usd=fall,
             fall_ratio=Ratio(fall, peak_equity),
-            peak_date=None if peak_session is None else peak_session.trading_date,
             peak_session_open_ms=None if peak_session is None else peak_session.session_open_ms,
-            trough_date=trough_session.trading_date,
             trough_session_open_ms=trough_session.session_open_ms,
         )
 
@@ -284,7 +281,6 @@ def _never_reached_its_momentum(session: SessionResult) -> bool:
 def _day_row(session: SessionResult) -> DayRow:
     won, lost, even = _wins_losses_even(session.outcome.trades)
     return DayRow(
-        trading_date=session.trading_date,
         session_open_ms=session.session_open_ms,
         status=session.status,
         skip_reason=session.outcome.skip_reason,
@@ -297,10 +293,11 @@ def _day_row(session: SessionResult) -> DayRow:
     )
 
 
-def _month_rows(days: Sequence[DayRow]) -> tuple[MonthRow, ...]:
+def _month_rows(sessions: Sequence[SessionResult], days: Sequence[DayRow]) -> tuple[MonthRow, ...]:
+    """One row per New York month of the sessions, in order; ``days`` holds the row of each session, in the same order."""
     months: dict[tuple[int, int], list[DayRow]] = {}
-    for day in days:
-        months.setdefault((day.trading_date.year, day.trading_date.month), []).append(day)
+    for session, day in zip(sessions, days, strict=True):
+        months.setdefault((session.trading_date.year, session.trading_date.month), []).append(day)
     return tuple(
         MonthRow(
             year=year,
@@ -372,5 +369,5 @@ def summarize_run(sessions: Sequence[SessionResult], *, starting_cash_usd: Decim
         legs_without_a_starting_price=kinds[EventKind.NO_STARTING_PRICE],
         re_entries_lost=kinds[EventKind.RE_ENTRY_LOST],
         by_day=days,
-        by_month=_month_rows(days),
+        by_month=_month_rows(sessions, days),
     )

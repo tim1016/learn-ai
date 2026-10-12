@@ -4,7 +4,9 @@ The key rides in an ``Authorization: Bearer`` header and in no URL and no query
 (probed 2026-10-12: the vendor accepts it that way for minute bars, for the
 contract listing and for a later page of the listing). A URL is what a log line,
 an exception message or a stored error text carries; a header is what none of
-them do. The stock fetchers still put the key in the URL.
+them do. The stock fetchers still put the key in the URL. The key is sent stripped of
+surrounding whitespace, and a key that cannot be a header value (empty, or holding a space
+or anything but printable ASCII) is refused before any request, as the error a 401 gives.
 
 Every way a request can go wrong ends as a ``Polygon*`` error of
 ``polygon_fetcher``, never as a raw ``httpx`` or ``json`` exception: a timeout,
@@ -14,6 +16,7 @@ JSON, a JSON value that is not an object.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from decimal import Decimal
 from typing import Any
@@ -21,6 +24,7 @@ from typing import Any
 import httpx
 
 from app.data_lake.polygon_fetcher import (
+    PolygonAuthError,
     PolygonEntitlementError,
     PolygonFetchError,
     PolygonUnknownSymbolError,
@@ -30,9 +34,31 @@ from app.data_lake.polygon_fetcher import (
 #: The vendor writes an option's ticker as its OCC symbol behind this prefix.
 OPTION_TICKER_PREFIX = "O:"
 
+#: What a key may hold to ride in a header: printable ASCII, no space. Anything else is
+#: refused before a request, because the HTTP library's own error text for a bad header
+#: value names the value, and a stored failure must never hold the key.
+_SENDABLE_KEY = re.compile(r"[\x21-\x7e]+")
+
 #: What the vendor's 403 says when a session is older than the plan reaches (probed
 #: 2026-10-12: "Your plan doesn't include this data timeframe. Please upgrade your plan").
 _OUTSIDE_PLAN_PHRASE = "data timeframe"
+
+
+def _sendable_key(api_key: str) -> str:
+    """The key to send: ``api_key`` without surrounding whitespace, or a typed auth error when it cannot ride in a header.
+
+    A key that is empty, or holds a space or a character that is not printable ASCII, is
+    refused before any request with the error a 401 gives. The message names no part of the
+    key, not a character, a position or a length, because it is stored on the row and logged.
+    """
+    key = api_key.strip()
+    if _SENDABLE_KEY.fullmatch(key) is None:
+        raise PolygonAuthError(
+            "the Polygon API key is malformed: it is empty, or holds a space or a character that is not "
+            "printable ASCII; correct POLYGON_API_KEY",
+            None,
+        )
+    return key
 
 
 class PolygonOutsidePlanError(PolygonEntitlementError):
@@ -53,13 +79,16 @@ async def get_json_object(
 ) -> dict[str, Any]:
     """GET ``url`` with the key in a header; the answer as a JSON object, or a typed error.
 
+    The key is stripped of surrounding whitespace, and a key that cannot ride in a header
+    raises :class:`PolygonAuthError` before the request (:func:`_sendable_key`).
     ``params`` is given for a first request only. A later page's URL already holds the
     vendor's cursor, and httpx would replace that query if ``params`` were passed.
     JSON numbers with a decimal point parse as ``Decimal``, so a price or a strike
     keeps the vendor's exact digits. ``label`` names the request in error texts.
     """
+    key = _sendable_key(api_key)
     try:
-        resp = await client.get(url, params=params, headers={"Authorization": f"Bearer {api_key}"})
+        resp = await client.get(url, params=params, headers={"Authorization": f"Bearer {key}"})
     except httpx.TimeoutException as exc:
         raise PolygonFetchError(f"Polygon request timed out for {label}: {exc}", status_code=None) from exc
     except (httpx.RequestError, httpx.InvalidURL) as exc:
