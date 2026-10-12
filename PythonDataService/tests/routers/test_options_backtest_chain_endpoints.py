@@ -623,6 +623,16 @@ def _stamp_a_bar_off_the_minute_on_call_602(fake_catalog: FakeCatalog, tmp_lake:
     )
 
 
+def _stamp_a_bar_closing_on_another_day_on_call_602(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    # Friday's New York midnight is 04:00 UTC, 34 200 000 ms before the 09:30 open (1749821400000 - 34 200 000 =
+    # 1749787200000). A bar starting at 23:59 starts inside Friday, so the lake's parser accepts it, and closes 60 000
+    # later at Saturday's midnight: 1749787200000 + 23 * 3 600 000 + 59 * 60 000 = 1749873540000 for the start.
+    starts = [FRIDAY_OPEN_MS + 4 * MINUTE_MS, 1749873540000]
+    replace_the_stored_file(
+        fake_catalog, raw_root(tmp_lake), BARS_PATH_602, option_day_zip(CALLS[602], starts), admit=True
+    )
+
+
 def _replace(path: str, payload: bytes, *, admit: bool):
     def damage(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
         replace_the_stored_file(fake_catalog, raw_root(tmp_lake), path, payload, admit=admit)
@@ -704,8 +714,15 @@ _UNREADABLE_ON_THE_EXPIRY = [
         _stamp_a_bar_off_the_minute_on_call_602,
         _contract_problem,
         "SPY250613C00602000",
-        "OptionBarsCannotBePlaced",
+        "OptionBarsFileError",  # the lake's own parser refuses a start off a whole minute, before the reader's guard
         id="a contract day with a bar off the minute",
+    ),
+    pytest.param(
+        _stamp_a_bar_closing_on_another_day_on_call_602,
+        _contract_problem,
+        "SPY250613C00602000",
+        "OptionBarsCannotBePlaced",
+        id="a contract day with a bar closing on another day",
     ),
 ]
 

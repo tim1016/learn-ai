@@ -20,16 +20,19 @@ from __future__ import annotations
 from datetime import date
 
 from app.data_lake import catalog_client
-from app.data_lake.ensure_data import provider_for_data_type
+from app.data_lake.admission import LakeAdmissionError
+from app.data_lake.ensure_data import STORED_MINUTE_DAY_ERRORS, check_stored_minute_day, provider_for_data_type
 from app.data_lake.option_bars import option_minute_trade_dch
 from app.data_lake.option_lake import (
     OPTION_MARKET,
     OPTION_PRICE_ADJUSTMENT_MODE,
     OPTION_PROVIDER,
     failed_row_is_asked_again,
+    option_read_root,
     stock_day_is_asked_again,
 )
 from app.data_lake.option_listing import option_listing_dch
+from app.data_lake.path_policy import LeanMinuteBarPath
 from app.data_lake.types import ArtifactIdentity
 from app.options.contract import OptionContract
 from app.options_backtest.data_check import DataKind, DataThing, RecordedFailure
@@ -67,7 +70,28 @@ def _option_day_identity(contract: OptionContract, day: date) -> ArtifactIdentit
 
 
 class LakeCheckData(LakeRunData):
-    """``LakeRunData`` that can also say what the lake recorded when a fetch failed. For the data check."""
+    """``LakeRunData`` that can also say what the lake recorded when a fetch failed, and what a download would do with
+    a stored underlying day this feature cannot use. For the data check."""
+
+    def download_replaces_the_underlying(self, trading_date: date) -> bool:
+        """Would a download fetch the underlying's stored day again, whatever this feature thinks of it?
+
+        The stock capture reuses a stored raw minute day unless its own gate rejects it (``ensure_data``'s
+        ``check_stored_minute_day``, the one function the capture and this call both run) or the catalog does not
+        admit its bytes. That gate is not this feature's reader, so a day this reader refuses may pass it, and then
+        the download keeps it. Reads the file and asks the catalog, so a worker thread; ``True`` also for a day that
+        is not stored at all (nothing to keep).
+        """
+        relative = LeanMinuteBarPath(
+            market="usa", symbol=self._underlying, trading_date=trading_date, data_type="trade"
+        ).relative_path()
+        try:
+            check_stored_minute_day(
+                str(relative), option_read_root(self._lake_root), symbol=self._underlying, trading_date=trading_date
+            )
+        except (*STORED_MINUTE_DAY_ERRORS, LakeAdmissionError):
+            return True
+        return False
 
     def recorded_failure(self, thing: DataThing, trading_date: date) -> RecordedFailure | None:
         """The failure the lake recorded for ``thing`` on ``trading_date``, or ``None`` when it recorded none.

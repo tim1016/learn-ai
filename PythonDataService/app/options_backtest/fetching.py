@@ -15,7 +15,11 @@ the phase with ``DownloadFailed``, naming the session and the lake's reason code
 date or a vendor's JSON): a run never goes on over data that was only partly fetched. The listing of a session is read
 from the lake once and handed to every contract capture of that session, so it is not parsed again for each contract.
 The lake is asked once which of a session's contract days are captured, and only the rest are captured; a captured
-day whose file does not read is captured again, as the check promised.
+day whose file does not read is captured again, as the check promised. The lake fetches such a day again whenever its
+own parser refuses the file (the reuse gate runs that parser). A day that parser accepts and this feature's reader
+refuses, a bar closing on another New York date, is held as good: the capture reuses it with no request, and the replay
+is where it ends the run; the check refuses such a session first and promises no fetch for it
+(``data_check``'s table of stored days).
 
 Order. The underlying's bars are asked for in chunks of ``UNDERLYING_CHUNK_SESSIONS`` sessions, each chunk just before
 the first session in it, so the progress counts sessions from the start; then, for each session, its listing and its

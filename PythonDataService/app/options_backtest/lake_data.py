@@ -33,7 +33,9 @@ is anywhere inside the date, so it can hold one stamped off the minute or starti
 as a damaged file is: the read raises the kind's own error (``UnderlyingDayUnreadable``, ``OptionBarsFileError``; for
 bars that cannot be placed, its subclass ``UnderlyingBarsCannotBePlaced`` or ``OptionBarsCannotBePlaced``) and hands
 nothing over. A series run without that bar would have a minute missing, one a stop could have been hit in, and
-nothing in its result would say so; nothing is left out or repaired.
+nothing in its result would say so; nothing is left out or repaired. For an option the lake's own parser of a stored day
+refuses a start off a whole minute before this reader looks (``option_bars.parse_option_day_zip``), so what this
+reader's own guard is left to catch there is a close on another New York date.
 
 Every answer carries the sha256 of the exact bytes that were decoded. A damaged file, a file the catalog does not
 admit and an unreachable catalog are errors and never ``None``: ``OptionBarsFileError`` and ``OptionListingFileError``
@@ -93,8 +95,12 @@ class OptionBarsCannotBePlaced(OptionBarsFileError):
 
 
 # A day with a bar that cannot be placed is unreadable as a damaged file is, and every caller that handles one handles
-# these. They differ in one thing: the lake holds such a day as good and never fetches it again, so a caller that tells
-# the owner "it will be fetched again" of an unreadable day must not say it of these.
+# these. For a contract's day they differ in one thing: the lake's parser of a stored day, which its reuse gate and its
+# reader both run, accepts a day whose only fault is a close on another New York date, so the lake holds it as good and a
+# download never fetches it again; a caller that tells the owner "it will be fetched again" of an unreadable contract
+# day must not say it of this. Every other refusal of a contract's day is that parser's, and its reuse gate refuses it
+# too. For the underlying the class says what is wrong with the bars and nothing of a download: whether one replaces
+# the day is the stock capture's gate to say (``LakeCheckData.download_replaces_the_underlying``).
 BARS_CANNOT_BE_PLACED = (UnderlyingBarsCannotBePlaced, OptionBarsCannotBePlaced)
 
 
