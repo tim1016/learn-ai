@@ -9,13 +9,23 @@ the reader a run uses. Hand-worked figures:
   20:00:00 = 1749844800000) closes at 20:01:00 = 1749844860000.
 * 2025-11-28 is the half day after Thanksgiving: it closes at 13:00 New York = 18:00 UTC = 1764352800000. The bar
   that starts at 12:59 (17:59 UTC = 1764352740000) is its last and closes at 1764352800000.
+* New York midnight of 2025-06-13 is 04:00 UTC = 1749787200000, and the date ends 86 400 000 ms later. A bar starting
+  at 23:59 New York is 03:59 UTC on the 14th = 1749787200000 + 86 400 000 - 60 000 = 1749873540000, and closes at
+  1749873600000, which is midnight and so the 14th. The bar starting a minute earlier (23:58, 1749873480000) closes at
+  23:59 on the 13th, 1749873540000. A bar starting at 10:00:30 (14:00:30 UTC = 1749821400000 + 600 000 + 30 000 =
+  1749822030000) closes at 1749822090000, which is 30 000 ms past a whole minute.
+* The underlying's last regular-session bars: the one starting at 15:59:00 (19:59 UTC = 1749844740000) closes at
+  20:00:00 = 1749844800000, the one starting at 15:59:30 (1749844770000) closes at 1749844830000, off the minute.
 """
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import shutil
+import zipfile
+import zlib
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -30,9 +40,18 @@ from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_byt
 from app.data_lake.option_bars import OptionBarsFileError
 from app.data_lake.option_listing import OptionListingFileError
 from app.engine.data.availability import check_availability
+from app.engine.data.lean_format import LeanMinuteDataReader, write_lean_day_zip
 from app.options.contract import OptionContract
-from app.options_backtest.lake_data import LakeRunData, StoredListing, UnderlyingDayUnreadable
+from app.options_backtest.lake_data import (
+    _STOCK_FILE_ERRORS,
+    LakeRunData,
+    StoredBars,
+    StoredListing,
+    UnderlyingDayUnreadable,
+)
+from app.options_backtest.session_market import bars_by_close
 from tests._helpers.fake_lake_catalog import FakeCatalog
+from tests._helpers.option_vendor import bar_row
 from tests.options_backtest._lake import (
     FRIDAY,
     FRIDAY_CLOSE_MS,
@@ -146,43 +165,30 @@ async def test_a_half_day_keeps_its_last_minute_and_drops_the_one_after_the_earl
     assert [bar.close_ms for bar in read.value] == [1764340260000, 1764352800000]
 
 
-async def test_an_underlying_day_the_lake_does_not_hold_is_none(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
-    assert await _read(LakeRunData("SPY").underlying_day, FRIDAY) is None
-
-
-async def test_an_underlying_file_with_no_bar_in_the_regular_session_is_not_held(
-    fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    await store_underlying_day(
-        fake_catalog, tmp_lake, [stock_bar(PRE_MARKET_START_MS, "599.00", "599.10", "598.90", "599.05")]
-    )
-
-    assert await _read(LakeRunData("SPY").underlying_day, FRIDAY) is None
-
-
-@pytest.mark.parametrize("held", [False, True], ids=["nothing stored", "a normal day"])
+@pytest.mark.parametrize(
+    ("bars", "held"),
+    [
+        pytest.param(None, False, id="nothing stored"),
+        pytest.param(
+            [stock_bar(PRE_MARKET_START_MS, "599.00", "599.10", "598.90", "599.05")],
+            False,
+            id="only a pre-market bar, no bar in the regular session",
+        ),
+        pytest.param(_underlying_bars(), True, id="a normal day"),
+    ],
+)
 async def test_the_underlying_is_held_exactly_when_the_lakes_own_coverage_check_says_so(
-    held: bool, fake_catalog: FakeCatalog, tmp_lake: Path
+    bars: list | None, held: bool, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
-    if held:
-        await store_underlying_day(fake_catalog, tmp_lake, _underlying_bars())
+    if bars is not None:
+        await store_underlying_day(fake_catalog, tmp_lake, bars)
 
     report = await asyncio.to_thread(check_availability, [raw_root(tmp_lake)], "SPY", FRIDAY, FRIDAY)
     read = await _read(LakeRunData("SPY").underlying_day, FRIDAY)
 
     assert (report.available_days == 1) is held
     assert (read is not None) is held
-
-
-async def test_the_same_holds_for_a_file_with_only_pre_market_bars(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
-    await store_underlying_day(
-        fake_catalog, tmp_lake, [stock_bar(PRE_MARKET_START_MS, "599.00", "599.10", "598.90", "599.05")]
-    )
-
-    report = await asyncio.to_thread(check_availability, [raw_root(tmp_lake)], "SPY", FRIDAY, FRIDAY)
-
-    assert report.available_days == 0 and report.missing_days == [FRIDAY]
-    assert await _read(LakeRunData("SPY").underlying_day, FRIDAY) is None
+    assert report.missing_days == ([] if held else [FRIDAY])
 
 
 async def test_a_damaged_underlying_file_is_one_named_error_and_not_none(
@@ -206,6 +212,185 @@ async def test_underlying_bytes_the_catalog_does_not_admit_are_refused_and_not_r
 
     with pytest.raises(LakeAdmissionError):
         await _read(LakeRunData("SPY").underlying_day, FRIDAY)
+
+
+# What the lake's stock minute file holds in a row: the time in ms after New York midnight, then four prices in ten
+# thousandths of a dollar and the volume. 34 200 000 ms is 09:30:00.
+_ROW = "34200000,600000,600500,599750,600250,100"
+_MEMBER = "20250613_spy_minute_trade.csv"
+
+
+def _stock_zip(rows: bytes, *, member: str = _MEMBER) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(member, rows)
+    return buffer.getvalue()
+
+
+def _a_zip_with_no_member() -> bytes:
+    buffer = io.BytesIO()
+    zipfile.ZipFile(buffer, "w").close()
+    return buffer.getvalue()
+
+
+def _a_deflate_member_that_is_not_a_deflate_stream() -> bytes:
+    # A stored member whose method is then changed to deflate in both headers: its seven bytes are a block of the
+    # reserved type 3 (the first byte 0b00000111 is "last block" and type 3), which no zlib decodes.
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as archive:
+        archive.writestr(_MEMBER, b"\x07" * 7)
+    zipped = bytearray(buffer.getvalue())
+    deflate = (8).to_bytes(2, "little")
+    zipped[8:10] = deflate  # the local header's method
+    central = zipped.index(b"PK\x01\x02")
+    zipped[central + 10 : central + 12] = deflate  # the central directory's method
+    return bytes(zipped)
+
+
+# Each kind of damage a stored stock file can have that the stock reader lets out as a different error type, and the type.
+_DAMAGED_STOCK_FILES = [
+    pytest.param(b"admitted, but not a zip", zipfile.BadZipFile, id="not a zip"),
+    pytest.param(_a_zip_with_no_member(), IndexError, id="a zip with no member"),
+    pytest.param(_a_deflate_member_that_is_not_a_deflate_stream(), zlib.error, id="a corrupt compressed stream"),
+    pytest.param(
+        _stock_zip(b"34200000,abc,600500,599750,600250,100"), ArithmeticError, id="a price that is not a number"
+    ),
+    pytest.param(_stock_zip(b"later,600000,600500,599750,600250,100"), ValueError, id="a time that is not a number"),
+]
+
+
+@pytest.mark.parametrize(("payload", "cause"), _DAMAGED_STOCK_FILES)
+async def test_a_stock_file_damaged_in_each_way_the_reader_lets_out_is_the_one_named_error_with_its_cause(
+    payload: bytes, cause: type[Exception], fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    await store_underlying_day(fake_catalog, tmp_lake, _underlying_bars())
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), STOCK_PATH, payload, admit=True)
+
+    with pytest.raises(UnderlyingDayUnreadable) as caught:
+        await _read(LakeRunData("SPY").underlying_day, FRIDAY)
+
+    assert "SPY" in str(caught.value) and "2025-06-13" in str(caught.value)
+    assert isinstance(caught.value.__cause__, cause)
+
+
+async def test_a_directory_where_the_stock_file_should_be_is_the_one_named_error_with_an_os_error_as_its_cause(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    path = await store_underlying_day(fake_catalog, tmp_lake, _underlying_bars())
+    path.unlink()
+    path.mkdir()
+
+    with pytest.raises(UnderlyingDayUnreadable) as caught:
+        await _read(LakeRunData("SPY").underlying_day, FRIDAY)
+
+    assert isinstance(caught.value.__cause__, OSError)
+
+
+@pytest.mark.parametrize(
+    "error", [kind for kind in _STOCK_FILE_ERRORS if kind is not LakeAdmissionError], ids=lambda kind: kind.__name__
+)
+async def test_every_error_the_stock_reader_lets_out_for_a_file_it_cannot_decode_is_the_one_named_error(
+    error: type[Exception], fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def cannot_decode(self: LeanMinuteDataReader, symbol: str, trading_date: date) -> list:
+        raise error("a decode that failed")
+
+    monkeypatch.setattr(LeanMinuteDataReader, "read_day", cannot_decode)
+
+    with pytest.raises(UnderlyingDayUnreadable) as caught:
+        await _read(LakeRunData("SPY").underlying_day, FRIDAY)
+
+    assert type(caught.value.__cause__) is error and "a decode that failed" in str(caught.value)
+
+
+async def test_the_lakes_own_admission_error_is_the_one_kind_the_stock_reader_lets_out_that_is_not_wrapped(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def not_admitted(self: LeanMinuteDataReader, symbol: str, trading_date: date) -> list:
+        raise LakeAdmissionError("no receipt")
+
+    monkeypatch.setattr(LeanMinuteDataReader, "read_day", not_admitted)
+
+    with pytest.raises(LakeAdmissionError):
+        await _read(LakeRunData("SPY").underlying_day, FRIDAY)
+
+
+def test_the_stock_readers_list_of_errors_is_the_eight_kinds_these_tests_cover() -> None:
+    # A kind added to the stock list fails here, to be given a damaged file or a double of its own above.
+    assert set(_STOCK_FILE_ERRORS) == {
+        LakeAdmissionError,
+        zipfile.BadZipFile,
+        zlib.error,
+        EOFError,
+        IndexError,
+        ValueError,
+        ArithmeticError,
+        OSError,
+    }
+
+
+# The same day stored in the lake's raw tree and in the split-adjusted tree, at other prices. The adjusted file is
+# written without the receipt and the adjustment record the lake gives a captured one, so a reader that opened it would
+# fail on that and not hand its prices over: either way a test below fails if the adjusted tree is consulted at all.
+def _write_the_adjusted_tree(tmp_lake: Path, bars: list) -> Path:
+    return write_lean_day_zip(tmp_lake / "lake" / "polygon_split_adjusted", "SPY", FRIDAY, bars)
+
+
+async def test_the_underlying_comes_from_the_raw_tree_and_never_the_split_adjusted_one(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    await store_underlying_day(
+        fake_catalog, tmp_lake, [stock_bar(FRIDAY_OPEN_MS, "600.00", "600.50", "599.75", "600.25")]
+    )
+    # A 2-for-1 split later, the adjusted tree holds half the prices for the same minute.
+    _write_the_adjusted_tree(tmp_lake, [stock_bar(FRIDAY_OPEN_MS, "300.00", "300.25", "299.88", "300.12")])
+
+    read = await _read(LakeRunData("SPY").underlying_day, FRIDAY)
+
+    assert read is not None
+    assert [(bar.close_ms, bar.open, bar.close) for bar in read.value] == [
+        (FRIDAY_OPEN_MS + MINUTE_MS, D("600.00"), D("600.25"))
+    ]
+
+
+async def test_a_day_only_the_split_adjusted_tree_holds_is_not_captured(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    _write_the_adjusted_tree(tmp_lake, [stock_bar(FRIDAY_OPEN_MS, "300.00", "300.25", "299.88", "300.12")])
+
+    assert await _read(LakeRunData("SPY").underlying_day, FRIDAY) is None
+
+
+async def test_an_underlying_bar_stamped_off_the_minute_is_left_out_and_counted_and_the_rest_is_kept(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    await store_underlying_day(
+        fake_catalog,
+        tmp_lake,
+        [
+            stock_bar(FRIDAY_OPEN_MS, "600.00", "600.50", "599.75", "600.25"),
+            stock_bar(LAST_REGULAR_START_MS, "601.10", "601.20", "601.00", "601.15"),
+            stock_bar(LAST_REGULAR_START_MS + 30_000, "601.15", "601.30", "601.10", "601.20"),
+        ],
+    )
+
+    read = await _read(LakeRunData("SPY").underlying_day, FRIDAY)
+
+    assert read is not None and isinstance(read.value, StoredBars)
+    # 09:30:00 closes at 13:31:00 and 15:59:00 at 20:00:00; the 15:59:30 bar closes at 20:00:30, off the minute.
+    assert [bar.close_ms for bar in read.value] == [1749821460000, 1749844800000]
+    assert read.value.left_out == 1
+    assert (
+        len(bars_by_close(read.value, trading_date=FRIDAY, what="SPY")) == 2
+    )  # and a replay's reader accepts what is left
+
+
+async def test_a_normal_underlying_day_leaves_nothing_out(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    await store_underlying_day(fake_catalog, tmp_lake, _underlying_bars())
+
+    read = await _read(LakeRunData("SPY").underlying_day, FRIDAY)
+
+    assert read is not None and read.value.left_out == 0 and len(read.value) == 3
 
 
 # ── The listing ──────────────────────────────────────────────────────────
@@ -303,6 +488,53 @@ async def test_an_option_day_is_every_stored_bar_named_by_its_close_one_minute_a
     ]
     assert str(read.value[0].open) == "1.27" and str(read.value[0].close) == "1.27"
     assert read.sha256 == hashlib.sha256(the_file_of(raw_root(tmp_lake), BARS_PATH_600)).hexdigest()
+
+
+@respx.mock
+async def test_option_bars_no_replay_can_read_are_left_out_and_counted_and_a_bar_a_minute_inside_the_date_is_kept(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    await store_listing(_the_option_rows())
+    await store_option_day(
+        CALL_600,
+        [
+            bar_row(0, t=FRIDAY_OPEN_MS, o=1.27, h=1.31, l=1.25, c=1.27, v=10, vw=1.27, n=1),  # 09:30:00
+            bar_row(0, t=1749822030000, o=1.30, h=1.40, l=1.28, c=1.35, v=10, vw=1.35, n=1),  # 10:00:30, off the minute
+            bar_row(0, t=1749873480000, o=0.90, h=0.95, l=0.88, c=0.92, v=10, vw=0.92, n=1),  # 23:58, closes at 23:59
+            bar_row(
+                0, t=1749873540000, o=0.80, h=0.85, l=0.78, c=0.82, v=10, vw=0.82, n=1
+            ),  # 23:59, closes at midnight
+        ],
+    )
+
+    read = await _read(LakeRunData("SPY").option_day, CALL_600, FRIDAY)
+
+    assert read is not None and isinstance(read.value, StoredBars)
+    # 09:30:00 closes at 13:31:00 = 1749821460000 and the 23:58 bar at 23:59 on the 13th = 1749873540000. The 10:00:30 bar
+    # closes 30 000 ms past a minute and the 23:59 bar closes at 1749873600000, midnight, which is the 14th.
+    assert [bar.close_ms for bar in read.value] == [1749821460000, 1749873540000]
+    assert [bar.close for bar in read.value] == [D("1.27"), D("0.92")]
+    assert read.value.left_out == 2
+    # The bars a session reads are accepted whole by its own reader, which refuses a session holding a bar of another day.
+    assert list(bars_by_close(read.value, trading_date=FRIDAY, what=CALL_600.occ_symbol)) == [
+        1749821460000,
+        1749873540000,
+    ]
+
+
+@respx.mock
+async def test_a_normal_option_day_leaves_nothing_out_and_a_day_that_never_traded_leaves_nothing_out(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    await store_listing(_the_option_rows())
+    await store_option_day(CALL_600, [minute_bar(0, 1.27, 1.31, 1.25, 1.27), minute_bar(390, 0.90, 0.95, 0.88, 0.92)])
+    await store_option_day(CALL_601, [])
+
+    busy = await _read(LakeRunData("SPY").option_day, CALL_600, FRIDAY)
+    quiet = await _read(LakeRunData("SPY").option_day, CALL_601, FRIDAY)
+
+    assert busy is not None and len(busy.value) == 2 and busy.value.left_out == 0
+    assert quiet is not None and len(quiet.value) == 0 and quiet.value.left_out == 0
 
 
 @respx.mock
