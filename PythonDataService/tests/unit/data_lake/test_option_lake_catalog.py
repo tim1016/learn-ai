@@ -35,7 +35,12 @@ from app.data_lake import catalog_client
 from app.data_lake import option_bars as option_bars_module
 from app.data_lake import option_lake as option_lake_module
 from app.data_lake import option_listing as option_listing_module
-from app.data_lake.option_bars import ensure_option_day_bars, option_minute_trade_dch, read_option_day_bars
+from app.data_lake.option_bars import (
+    captured_option_days,
+    ensure_option_day_bars,
+    option_minute_trade_dch,
+    read_option_day_bars,
+)
 from app.data_lake.option_listing import (
     captured_listing_dates,
     ensure_option_listing,
@@ -252,6 +257,47 @@ async def test_a_contract_that_never_traded_completes_with_zero_rows_and_reads_b
     never = await asyncio.to_thread(read_option_day_bars, CONTRACT, date(2025, 6, 12))
     assert captured is not None and captured.bars == ()
     assert never is None
+
+
+@respx.mock
+async def test_the_captured_contract_days_of_a_date_come_from_one_select_on_the_real_table(clean_artifacts, pool, tmp_lake) -> None:
+    traded_contract, quiet_contract, failing_contract, fetching_contract, stock_only = (
+        OptionContract.of(root="SPY", expiry_date=date(2025, 6, 13), right="call", strike=strike) for strike in (600, 601, 602, 603, 604)
+    )
+    await _list(traded_contract, quiet_contract, failing_contract, fetching_contract)
+    _mock_bars(_bars_ok([_bar(0)]), contract=traded_contract.occ_symbol)
+    _mock_bars(no_trades(quiet_contract.occ_symbol), contract=quiet_contract.occ_symbol)
+    _mock_bars(httpx.Response(500, text="boom"), contract=failing_contract.occ_symbol)
+    for contract in (traded_contract, quiet_contract, failing_contract):
+        await ensure_option_day_bars(contract, TRADING_DAY, listed_under="SPY")
+    assert await catalog_client.claim_minute_bar(
+        identity=ArtifactIdentity(
+            artifact_kind="time_series_bars", market="usa_options", symbol=fetching_contract.occ_symbol,
+            trading_date=TRADING_DAY, resolution="minute", data_type="trade", provider="polygon", price_adjustment_mode="raw",
+        ),
+        worker_id="w", lease_ttl_ms=300_000, data_contract_hash=option_minute_trade_dch(), file_path="x.zip",
+    ) is not None
+    stock_id = await catalog_client.claim_minute_bar(
+        identity=ArtifactIdentity(
+            artifact_kind="time_series_bars", market="usa", symbol=stock_only.occ_symbol, trading_date=TRADING_DAY,
+            resolution="minute", data_type="trade", provider="polygon", price_adjustment_mode="raw",
+        ),
+        worker_id="w", lease_ttl_ms=300_000, data_contract_hash="a" * 64, file_path="equity/x.zip",
+    )
+    assert stock_id is not None
+    assert await catalog_client.complete_artifact(
+        stock_id, 1, SESSION_OPEN_MS, SESSION_OPEN_MS, 10, "b" * 64, lease_generation=catalog_client.INITIAL_LEASE_GENERATION
+    )
+    asked = [c.occ_symbol for c in (traded_contract, quiet_contract, failing_contract, fetching_contract, stock_only)]
+
+    named = await captured_option_days(asked, TRADING_DAY)
+    named_on_another_date = await captured_option_days(asked, date(2025, 6, 12))
+    named_when_asked_about_none = await captured_option_days([], TRADING_DAY)
+
+    # complete with trades, and complete with none; not failed, not still fetching, and not a stock-market row
+    assert named == frozenset({traded_contract.occ_symbol, quiet_contract.occ_symbol})
+    assert named_on_another_date == frozenset()
+    assert named_when_asked_about_none == frozenset()
 
 
 @respx.mock

@@ -26,7 +26,12 @@ step by step. Four things differ, all on purpose:
   refused before any claim.
 * The vendor's digits go to the stored integer as decimals, never through a float.
 
-``read_option_day_bars`` reads only bytes the catalog admits.
+``read_option_day_bars`` reads only bytes the catalog admits, so it needs the catalog
+reachable, the lake root's identity marker and a thread with no running event loop
+(its docstring says what each costs a caller). ``captured_option_days`` asks the catalog
+alone which contract-days of a date have a complete row. Folders: the bars of a contract
+live under its OCC root lowered (``BRK.B`` options are ``brkb``), where its listing lives
+under the underlying's ticker lowered (``brk.b``); the two spellings are both right.
 """
 
 from __future__ import annotations
@@ -39,7 +44,7 @@ import lzma
 import re
 import zipfile
 import zlib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -74,14 +79,15 @@ from app.data_lake.option_lake import (
     claim_or_take_over,
     current_ms,
     fail_row,
+    option_read_root,
     plan_window_refusal,
     publish_option_artifact,
     refusal_before_claim,
     stored_file_still_reads,
     vendor_reason,
 )
-from app.data_lake.option_listing import read_option_listing
-from app.data_lake.path_policy import OptionMinuteBarPath, resolve_lake_root
+from app.data_lake.option_listing import OptionListing, read_option_listing
+from app.data_lake.path_policy import OptionMinuteBarPath
 from app.data_lake.polygon_fetcher import PolygonBar, PolygonFetchError
 from app.data_lake.polygon_option_bars import PolygonOptionBar, fetch_option_minute_bars
 from app.data_lake.polygon_option_http import OPTION_TICKER_PREFIX
@@ -224,19 +230,39 @@ def read_option_day_bars(
     trading_date: date,
     *,
     admission: Callable[[Path], bytes] = read_committed_bytes,
+    lake_root: Path | None = None,
 ) -> OptionDayBars | None:
-    """One contract's captured session, or ``None`` when that day was never captured.
+    """One contract's captured session, or ``None`` when that day has no file.
 
     A captured day with no trades is an :class:`OptionDayBars` with no bars, which
     is not the same as ``None``. Prices are exact ``Decimal`` and a bar's start is
-    epoch ms UTC. The bytes are read only through ``admission`` (the catalog's
-    committed receipt for exactly these bytes by default; a research worker that
-    owns no catalog connection passes one that asks its parent), so a file that is
-    not admitted raises ``LakeAdmissionError`` rather than reading. Synchronous, like
-    ``LeanMinuteDataReader.read_day``: call it from a worker thread.
+    epoch ms UTC; every bar the vendor sent for the date is here, whatever the hour.
+
+    What a caller must have. The bytes are read only through ``admission``, which by
+    default asks the catalog for the committed receipt of exactly these bytes. So:
+
+    * the catalog must be reachable, or ``catalog_client.CatalogUnavailableError`` is
+      raised (a research worker that owns no catalog connection passes an ``admission``
+      that asks its parent);
+    * the lake root must carry its identity marker (``<base>/lake/.data-root.json``), or
+      the bytes are refused;
+    * the thread must have no running event loop (call it with ``asyncio.to_thread``): on
+      an event-loop thread it raises ``RuntimeError``. A day with no file answers ``None``
+      before admission is asked, even on the wrong thread, so that error first shows on a
+      captured day.
+
+    What it raises. ``LakeAdmissionError``: the file exists but the catalog does not admit
+    these bytes (no receipt, other bytes, or the row is being rebuilt); capture the day
+    again. :class:`OptionBarsFileError`: the admitted file is not what the lake writes, or
+    its bars break the rules of a stored day. A day whose row is complete but whose file has
+    gone is ``None``, like a day never captured.
+
+    ``lake_root`` reads from another raw lake root (``<base>/lake/raw``, such as an alternate
+    mount of the lake) instead of the configured one; any other path is a ``ValueError``.
+    Synchronous, like ``LeanMinuteDataReader.read_day``.
     """
     symbol = contract.occ_symbol
-    path = resolve_lake_root(OPTION_PRICE_ADJUSTMENT_MODE) / Path(*_bars_path(contract, trading_date).parts)
+    path = option_read_root(lake_root) / Path(*_bars_path(contract, trading_date).parts)
     if not path.is_file():
         return None
     payload = admission(path)
@@ -248,34 +274,52 @@ def read_option_day_bars(
     )
 
 
+async def captured_option_days(symbols: Collection[str], trading_date: date) -> frozenset[str]:
+    """Of these contract symbols, those with a complete minute-bar row for ``trading_date``, from one catalog query.
+
+    A symbol is an OCC symbol as ``OptionContract.occ_symbol`` writes it, without the vendor's
+    ``O:``. A day captured with no trades has a complete row and is named too. This answers
+    only "is there a complete row": it reads no file, so a complete row whose file has since
+    gone, or whose file is damaged, is still named, and the reader is the judge of "readable"
+    (:func:`read_option_day_bars`: ``None`` for a file that is gone, ``OptionBarsFileError``
+    for a damaged one, ``LakeAdmissionError`` for bytes the catalog does not admit). It needs
+    the catalog reachable (``catalog_client.CatalogUnavailableError`` otherwise) and nothing
+    else, no marker and no thread. An empty ``symbols`` asks nothing and names nothing.
+    """
+    return await catalog_client.select_complete_minute_bar_symbols(
+        OPTION_MARKET, symbols, "trade", trading_date, price_adjustment_mode=OPTION_PRICE_ADJUSTMENT_MODE
+    )
+
+
 async def _listing_refusal(
-    listed_under: str, symbol: str, trading_date: date
+    listed_under: str, symbol: str, trading_date: date, listing: OptionListing | None
 ) -> OptionDataFailure | None:
     """Does the stored listing of ``listed_under`` for ``trading_date`` hold the contract? A refusal if not.
 
-    Read through the catalog's admission, like any reader of the lake. A listing that is
-    there but not admitted or not readable is no usable listing: it is refused as not
-    captured, and capturing the listing again repairs it. An outage of the catalog
-    is not a verdict on the listing and propagates.
+    The listing is the one handed in, or else read through the catalog's admission, like any
+    reader of the lake. A listing that is there but not admitted or not readable is no usable
+    listing: it is refused as not captured, and capturing the listing again repairs it. An
+    outage of the catalog is not a verdict on the listing and propagates.
     """
-    try:
-        listing = await asyncio.to_thread(read_option_listing, listed_under, trading_date)
-    except (LakeAdmissionError, OSError, zipfile.BadZipFile, ValueError) as exc:
-        return OptionDataFailure(
-            "listing_not_captured",
-            f"the stored listing of {listed_under} for {trading_date.isoformat()} is not admitted or does not read "
-            f"({type(exc).__name__}); capture the listing again",
-            symbol,
-            trading_date,
-        )
     if listing is None:
-        return OptionDataFailure(
-            "listing_not_captured",
-            f"no listing of {listed_under} is stored for {trading_date.isoformat()}; capture it first",
-            symbol,
-            trading_date,
-        )
-    if symbol not in {row.ticker.removeprefix(OPTION_TICKER_PREFIX) for row in listing.rows}:
+        try:
+            listing = await asyncio.to_thread(read_option_listing, listed_under, trading_date)
+        except (LakeAdmissionError, OSError, zipfile.BadZipFile, ValueError) as exc:
+            return OptionDataFailure(
+                "listing_not_captured",
+                f"the stored listing of {listed_under} for {trading_date.isoformat()} is not admitted or does not read "
+                f"({type(exc).__name__}); capture the listing again",
+                symbol,
+                trading_date,
+            )
+        if listing is None:
+            return OptionDataFailure(
+                "listing_not_captured",
+                f"no listing of {listed_under} is stored for {trading_date.isoformat()}; capture it first",
+                symbol,
+                trading_date,
+            )
+    if not any(row.ticker.removeprefix(OPTION_TICKER_PREFIX) == symbol for row in listing.rows):
         return OptionDataFailure(
             "not_listed",
             f"{symbol} is not in the {listed_under} listing stored for {trading_date.isoformat()}",
@@ -333,31 +377,51 @@ def _require_prices_above_zero_on_the_grid(bars: Sequence[PolygonOptionBar]) -> 
 
 
 async def ensure_option_day_bars(
-    contract: OptionContract, trading_date: date, *, listed_under: str, now_ms: int | None = None
+    contract: OptionContract,
+    trading_date: date,
+    *,
+    listed_under: str,
+    listing: OptionListing | None = None,
+    now_ms: int | None = None,
 ) -> OptionCaptureResult:
     """Capture one contract's session into the lake, or reuse what is there.
 
     ``listed_under`` is the underlying whose listing holds the contract (a contract's
     OCC root is not always its underlying's ticker: ``BRK.B`` options are ``BRKB...``).
-    Before any claim and any vendor call it refuses, as a typed failure and with no row:
-    a symbol the catalog cannot hold (``symbol_too_long``), a day with no session
-    (``not_a_session``), a session not yet over (``session_not_over``), a session older
-    than the plan reaches (``outside_data_plan``), a date whose listing of that underlying
-    is not stored (``listing_not_captured``), and a contract that listing does not hold
-    (``not_listed``). Only then does it claim, reuse-or-refresh on a lost claim, reclaim,
-    fetch, validate, encode and publish under the lease. Every vendor outcome, a malformed
-    answer included, is a typed failure on the row and none raises. ``now_ms`` fixes the
-    clock for the session and plan rules; it defaults to the wall clock.
+    Before any claim and any vendor call it refuses, as a typed failure and with no row
+    (each reason is explained in ``option_lake``'s docstring), in this order:
+    ``symbol_too_long``, ``not_a_session``, ``session_not_over``, ``outside_data_plan``,
+    ``listing_not_captured``, ``not_listed``. Only then does it claim, reuse-or-refresh on
+    a lost claim, reclaim, fetch, validate, encode and publish under the lease. Every
+    vendor outcome, a malformed answer included, is a typed failure on the row and none
+    raises. ``now_ms`` fixes the clock for the session and plan rules; it defaults to the
+    wall clock.
+
+    Each call proves the contract is listed from that date's stored listing, which it
+    reads and parses whole (about a third of a second for a real one). A caller capturing
+    many contracts of one date reads the listing once (:func:`read_option_listing`) and
+    hands it in as ``listing``; it is then used in place of a read. It must be the listing
+    of ``listed_under`` as of ``trading_date`` (a ``ValueError`` otherwise, a caller's
+    mistake) and one the caller read from the lake: it is trusted as handed.
+
+    Raises ``ValueError`` for a ``listed_under`` that is not an upper-case ticker or a
+    ``listing`` of another underlying or date, and ``catalog_client.CatalogUnavailableError``
+    when the catalog cannot be reached.
     """
     if not is_lake_addressable_symbol(listed_under):
         raise ValueError(f"listed_under must be an upper-case ticker, got {listed_under!r}")
+    if listing is not None and (listing.underlying, listing.as_of) != (listed_under, trading_date):
+        raise ValueError(
+            f"the listing handed in is for {listing.underlying} as of {listing.as_of.isoformat()}, "
+            f"not {listed_under} as of {trading_date.isoformat()}"
+        )
     symbol = contract.occ_symbol
     now = now_ms if now_ms is not None else current_ms()
     refusal = refusal_before_claim(symbol, trading_date, now_ms=now) or plan_window_refusal(
         symbol, trading_date, now_ms=now
     )
     if refusal is None:
-        refusal = await _listing_refusal(listed_under, symbol, trading_date)
+        refusal = await _listing_refusal(listed_under, symbol, trading_date, listing)
     if refusal is not None:
         return OptionCaptureResult.failed(refusal)
 

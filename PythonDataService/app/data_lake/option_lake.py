@@ -13,12 +13,46 @@ failure type, the "is the session over" rule, the plan's rolling window, the
 steps from a claim to a lease this caller holds, and the publication step. The
 stock path does the same steps in ``ensure_data._process_minute_trade_artifact``;
 the functions it calls are called here as they are.
+
+Why a capture does not produce an artifact (``OptionDataFailure.reason``), each
+once, here. These are refused before any claim, so no row is made and the vendor is
+not asked:
+
+* ``symbol_too_long``: the symbol has more characters than the catalog's Symbol column holds.
+* ``not_a_session``: the exchange was closed that day.
+* ``session_not_over``: the session closed less than ``OPTION_SESSION_SETTLE_MS`` ago.
+* ``outside_data_plan``: the plan's rolling window does not reach the session; a bars
+  session before ``option_history_floor`` is refused before any claim, and a day at the
+  edge the vendor's own 403 names (bars or listing) is recorded on the row, asked again
+  on every call and never latched into ``fetch_timeout``.
+* ``listing_not_captured`` (bars): the lake holds no usable listing of that underlying for
+  that date, so the contract cannot be vouched for; capture the listing first.
+* ``not_listed`` (bars): that listing does not hold the contract, and the vendor says the
+  same empty thing for a contract that never existed as for one that did not trade.
+
+These are recorded on the claimed row, which is failed and never left fetching:
+
+* ``provider_auth_error``: the vendor refused the key (401); a run should stop.
+* ``provider_entitlement_error``: a 403 that is not the plan-timeframe answer.
+* ``provider_rate_limited``: the vendor said to slow down (429).
+* ``unknown_symbol``: the vendor does not know the ticker (404, or status NOT_FOUND).
+* ``provider_api_error``: any other trouble with the vendor (a 5xx, a timeout, a body that
+  is not a confirmed well-formed answer); asked again, up to ``MAX_CLAIM_RETRIES`` times.
+* ``provider_no_data`` (listing): the vendor listed no contracts; that is not pinned as a fact.
+* ``validation_failed``: what the vendor sent cannot be stored as a fact (corrupt bars, a
+  price the file cannot hold or would store as 0, a listing row with no ticker or a ticker
+  listed twice).
+
+These come from the claim protocol, when nothing was fetched:
+
+* ``lease_timeout``: another worker holds the row, or this writer lost its lease while
+  fetching and published nothing.
+* ``fetch_timeout``: the row has spent its attempts; the vendor is not asked again.
 """
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import time
 import zipfile
@@ -33,7 +67,7 @@ from app.data_lake import catalog_client
 from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
 from app.data_lake.atomic import ArtifactLeaseLostError, publish_artifact
 from app.data_lake.ensure_data import _LEASE_TTL_MS, _MAX_CLAIM_RETRIES, _WORKER_ID
-from app.data_lake.path_policy import resolve_lake_root, resolve_staging_root
+from app.data_lake.path_policy import lake_root_for, resolve_lake_root, resolve_staging_root
 from app.data_lake.polygon_fetcher import (
     PolygonAuthError,
     PolygonEntitlementError,
@@ -97,22 +131,23 @@ MAX_CLAIM_RETRIES = _MAX_CLAIM_RETRIES
 #: ask counts as an attempt and the shared reclaim has no reset for it.
 NOT_LATCHED_ERRORS = frozenset({"outside_data_plan"})
 
+#: The lake's own reasons (``ArtifactFailureReason``) and the six an option capture adds; the module docstring says what each means.
 OptionFailureReason = (
     ArtifactFailureReason
     | Literal[
-        "outside_data_plan",  # the plan's rolling window does not reach this session (our floor, or the vendor's 403)
-        "session_not_over",  # the session closed under OPTION_SESSION_SETTLE_MS ago
-        "not_a_session",  # the exchange was closed that day
-        "symbol_too_long",  # more characters than the catalog's Symbol column holds
-        "listing_not_captured",  # no usable stored listing of that underlying for that date
-        "not_listed",  # the stored listing of that date does not hold the contract
+        "outside_data_plan",
+        "session_not_over",
+        "not_a_session",
+        "symbol_too_long",
+        "listing_not_captured",
+        "not_listed",
     ]
 )
 
 
 @dataclass(frozen=True)
 class OptionDataFailure:
-    """Why a capture did not produce an artifact.
+    """Why a capture did not produce an artifact; the module docstring says what each ``reason`` means.
 
     ``symbol`` is the contract's symbol, or the underlying for a listing, and
     ``trading_date`` the session or the listing's as-of date. The lake's own
@@ -327,6 +362,21 @@ async def claim_or_take_over(
     return HeldLease(reclaim.artifact_id, reclaim.lease_generation)
 
 
+def option_read_root(lake_root: Path | None = None) -> Path:
+    """The raw lake root a reader reads option files from: the configured one, or the one it is handed.
+
+    A root it is handed must be a lake's raw root (``<base>/lake/raw``, the shape the catalog's
+    admission recognises, on this machine or an alternate mount of it). Any other path would be
+    read by the default admission without being admitted, so it is a ``ValueError``.
+    """
+    if lake_root is None:
+        return resolve_lake_root(OPTION_PRICE_ADJUSTMENT_MODE)
+    root = lake_root.absolute()
+    if root.name != OPTION_PRICE_ADJUSTMENT_MODE or lake_root_for(root / "any") != root:
+        raise ValueError(f"lake_root must be a lake's raw root (<base>/lake/{OPTION_PRICE_ADJUSTMENT_MODE}), got {lake_root}")
+    return root
+
+
 def writable_raw_roots() -> tuple[Path, Path]:
     """The raw lake root and its staging root, created if this is the first write.
 
@@ -390,17 +440,16 @@ async def stored_file_still_reads(
 
     The gate before reusing a row. A file that is gone, changed, orphaned, or does
     not parse is not a hit: the refresh path rebuilds it. An outage of the catalog
-    is not a verdict on the file and propagates.
+    is not a verdict on the file and propagates. That the bytes are the row's own
+    is the admission's job: it admits only bytes that have a committed receipt, and
+    the row asked about is the only one for its recipe.
     """
     if record.file_path != str(rel_path):
         return False
     path = resolve_lake_root(OPTION_PRICE_ADJUSTMENT_MODE) / Path(*rel_path.parts)
 
     def check() -> None:
-        payload = read_committed_bytes(path)
-        if hashlib.sha256(payload).hexdigest() != record.file_sha256:
-            raise LakeAdmissionError(f"{path}: bytes differ from the row's receipt")
-        parse(payload)
+        parse(read_committed_bytes(path))
 
     try:
         await asyncio.to_thread(check)

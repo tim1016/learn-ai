@@ -19,6 +19,7 @@ import csv
 import hashlib
 import io
 import json
+import shutil
 import zipfile
 from datetime import date
 from decimal import Decimal
@@ -823,6 +824,65 @@ async def test_bytes_that_changed_after_their_receipt_are_refused_not_read(fake_
 
     with pytest.raises(LakeAdmissionError):
         await _read()
+
+
+@respx.mock
+async def test_what_a_caller_must_have_to_read_a_listing_is_what_the_reader_says(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A thread with no event loop, the catalog reachable, the root's marker: each missing is its own error."""
+    _mock_one_page(STANDARD_ROWS)
+    await ensure_option_listing("SPY", AS_OF)
+
+    assert read_option_listing("SPY", date(2025, 6, 12)) is None  # on the loop's thread: no file, so nothing to admit
+    with pytest.raises(RuntimeError, match="worker thread"):
+        read_option_listing("SPY", AS_OF)
+
+    async def down(*args: Any, **kwargs: Any) -> bool:
+        raise catalog_client.CatalogUnavailableError("down")
+
+    with monkeypatch.context() as outage:
+        outage.setattr(catalog_client, "has_committed_file_receipt", down)
+        with pytest.raises(catalog_client.CatalogUnavailableError):
+            await _read()
+
+    (tmp_lake / "lake" / ".data-root.json").unlink()
+    with pytest.raises(LakeAdmissionError):
+        await _read()
+
+
+@respx.mock
+async def test_a_listing_is_read_from_the_lake_root_it_is_handed_and_the_configured_root_is_not_touched(
+    fake_catalog: FakeCatalog, tmp_lake: Path, tmp_path: Path
+) -> None:
+    """A snapshot or an alternate mount of the lake: the same relative path, the same receipt."""
+    _mock_one_page(STANDARD_ROWS)
+    result = await ensure_option_listing("SPY", AS_OF)
+    mount = tmp_path / "mount"
+    shutil.copytree(tmp_lake / "lake", mount / "lake")
+    shutil.rmtree(_raw_root(tmp_lake) / "option")  # the configured root no longer holds the listing
+
+    configured = await _read()
+    from_the_mount = await asyncio.to_thread(read_option_listing, "SPY", AS_OF, lake_root=mount / "lake" / "raw")
+
+    assert result.record is not None
+    assert configured is None
+    assert from_the_mount is not None and len(from_the_mount.rows) == 3
+    assert from_the_mount.sha256 == result.record.file_sha256
+
+
+@pytest.mark.parametrize("where", ["somewhere", "raw", "lake", "lake/polygon_split_adjusted", "lake/raw/option"])
+async def test_a_lake_root_that_is_not_a_raw_lake_root_is_refused_rather_than_read_without_admission(
+    where: str, fake_catalog: FakeCatalog, tmp_lake: Path, tmp_path: Path
+) -> None:
+    """The default admission lets a path outside the lake through unchecked, so such a root must never reach it."""
+    loose = tmp_path / "loose" / where
+    listing_file = loose / RELATIVE_PATH
+    listing_file.parent.mkdir(parents=True)
+    listing_file.write_bytes(build_option_listing_zip_bytes("SPY", AS_OF, [_vendor_contract("O:SPY250613C00375000", "375")]))
+
+    with pytest.raises(ValueError, match="lake_root"):
+        await asyncio.to_thread(read_option_listing, "SPY", AS_OF, lake_root=loose)
 
 
 # ── The file itself ─────────────────────────────────────────────────────

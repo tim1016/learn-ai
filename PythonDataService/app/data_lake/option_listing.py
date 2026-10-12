@@ -26,6 +26,12 @@ listed twice, fail the listing.
 
 A listing is admitted only if it is whole: the fetcher either returns every
 page or raises, and an empty answer is refused, not pinned.
+
+``read_option_listing`` reads only bytes the catalog admits, so it needs the catalog
+reachable, the lake root's identity marker and a thread with no running event loop
+(its docstring says what each costs a caller). A listing lives under the underlying's
+ticker lowered (``brk.b``), where a contract's bars live under its OCC root lowered
+(``brkb``, ``option_bars``); the two spellings are both right.
 """
 
 from __future__ import annotations
@@ -59,12 +65,13 @@ from app.data_lake.option_lake import (
     claim_or_take_over,
     current_ms,
     fail_row,
+    option_read_root,
     publish_option_artifact,
     refusal_before_claim,
     stored_file_still_reads,
     vendor_reason,
 )
-from app.data_lake.path_policy import OptionListingPath, resolve_lake_root
+from app.data_lake.path_policy import OptionListingPath
 from app.data_lake.polygon_fetcher import PolygonFetchError
 from app.data_lake.polygon_option_contracts import PolygonOptionContract, fetch_option_contracts
 from app.data_lake.polygon_option_http import OPTION_TICKER_PREFIX
@@ -332,16 +339,38 @@ def read_option_listing(
     as_of: date,
     *,
     admission: Callable[[Path], bytes] = read_committed_bytes,
+    lake_root: Path | None = None,
 ) -> OptionListing | None:
-    """The listing captured for an underlying as of a date, or ``None`` when that date was never captured.
+    """The listing captured for an underlying as of a date, or ``None`` when that date has no file.
 
-    Read only through ``admission`` (the catalog's committed receipt for exactly these
-    bytes by default), so a file the catalog does not admit raises ``LakeAdmissionError``
-    rather than reading. Synchronous: call it from a worker thread.
+    Every row the vendor listed is here, marked standard or not (:func:`_classify`). The
+    ``underlying`` must be spelled as the lake spells it, an upper-case ticker (``ValueError``).
+
+    What a caller must have. The bytes are read only through ``admission``, which by default
+    asks the catalog for the committed receipt of exactly these bytes. So:
+
+    * the catalog must be reachable, or ``catalog_client.CatalogUnavailableError`` is raised
+      (a research worker that owns no catalog connection passes an ``admission`` that asks its
+      parent);
+    * the lake root must carry its identity marker (``<base>/lake/.data-root.json``), or the
+      bytes are refused;
+    * the thread must have no running event loop (call it with ``asyncio.to_thread``): on an
+      event-loop thread it raises ``RuntimeError``. A date with no file answers ``None`` before
+      admission is asked, even on the wrong thread, so that error first shows on a captured date.
+
+    What it raises. ``LakeAdmissionError``: the file exists but the catalog does not admit these
+    bytes; capture the listing again. :class:`OptionListingFileError`: the admitted file is not
+    what the lake writes. A date whose row is complete but whose file has gone is ``None``, like a
+    date never captured; a listing the vendor answered with nothing is never stored, so ``None``
+    also covers "the vendor listed nothing" (the row's ``LastError`` tells them apart).
+
+    ``lake_root`` reads from another raw lake root (``<base>/lake/raw``, such as an alternate
+    mount of the lake) instead of the configured one; any other path is a ``ValueError``.
+    Synchronous, like ``LeanMinuteDataReader.read_day``.
     """
     _require_ticker(underlying)
     relative = OptionListingPath(underlying=underlying, as_of=as_of).relative_path()
-    path = resolve_lake_root(OPTION_PRICE_ADJUSTMENT_MODE) / Path(*relative.parts)
+    path = option_read_root(lake_root) / Path(*relative.parts)
     if not path.is_file():
         return None
     payload = admission(path)
@@ -359,9 +388,9 @@ async def ensure_option_listing(
     """Capture the contracts listed for ``underlying`` as of ``as_of`` into the lake, or reuse what is there.
 
     Claim, reuse-or-refresh on a lost claim, reclaim, fetch every page, build the
-    file, publish under the lease; a typed failure on every vendor error. The same
-    refusals as a session's bars come first (an unstorable symbol, a day with no
-    session, a session not over), and cost no claim.
+    file, publish under the lease; a typed failure on every vendor error. The refusals
+    that cost no claim come first (``symbol_too_long``, ``not_a_session``,
+    ``session_not_over``; ``option_lake``'s docstring says what each means).
     """
     _require_ticker(underlying)
     now = now_ms if now_ms is not None else current_ms()
@@ -484,7 +513,12 @@ async def captured_listing_dates(underlying: str, start: date, end: date) -> tup
 
     A listing row has no queryable date, so the underlying's complete listing rows
     are read at once and each session of the range is kept if the hash of its
-    listing is among them. Dates that are not sessions are never listings.
+    listing is among them. Dates that are not sessions are never listings. Both ends
+    of the range are included. Like :func:`captured_option_days` it answers "is there
+    a complete row" and reads no file: a date whose file has since gone is still named,
+    and :func:`read_option_listing` is the judge of "readable". It needs the catalog
+    reachable (``catalog_client.CatalogUnavailableError`` otherwise) and nothing else.
+    An ``underlying`` that is not an upper-case ticker is a ``ValueError``.
     """
     _require_ticker(underlying)
     held = {

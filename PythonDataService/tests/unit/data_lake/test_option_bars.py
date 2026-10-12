@@ -29,6 +29,7 @@ import contextlib
 import hashlib
 import io
 import logging
+import shutil
 import zipfile
 import zlib
 from datetime import date, datetime
@@ -53,15 +54,17 @@ from app.data_lake.option_bars import (
     OptionBar,
     OptionBarsFileError,
     OptionDayBars,
+    captured_option_days,
     ensure_option_day_bars,
     option_minute_trade_dch,
     parse_option_day_zip,
     read_option_day_bars,
 )
 from app.data_lake.option_lake import option_history_floor
-from app.data_lake.option_listing import ensure_option_listing
+from app.data_lake.option_listing import ensure_option_listing, read_option_listing
 from app.data_lake.path_policy import lake_subpath
 from app.data_lake.polygon_option_bars import PolygonOptionBar
+from app.data_lake.types import ArtifactIdentity
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.options.contract import OptionContract
 from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, point_lake_writer_at_tmp
@@ -1145,6 +1148,45 @@ async def test_bytes_that_changed_after_their_receipt_are_refused_not_read(fake_
 
 
 @respx.mock
+async def test_a_reader_called_on_the_event_loop_thread_answers_none_for_a_day_with_no_file_and_raises_for_a_captured_one(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """The reader's docstring says so: the thread error first shows on a captured day."""
+    _mock_vendor()
+    await _ensure()
+
+    assert read_option_day_bars(CONTRACT, date(2025, 6, 12)) is None  # called here, on the loop's own thread
+    with pytest.raises(RuntimeError, match="worker thread"):
+        read_option_day_bars(CONTRACT, TRADING_DAY)
+
+
+@respx.mock
+async def test_a_reader_whose_catalog_is_unreachable_raises_the_outage_and_not_a_missing_day(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mock_vendor()
+    await _ensure()
+
+    async def down(*args: Any, **kwargs: Any) -> bool:
+        raise catalog_client.CatalogUnavailableError("down")
+
+    monkeypatch.setattr(catalog_client, "has_committed_file_receipt", down)
+
+    with pytest.raises(catalog_client.CatalogUnavailableError):
+        await _read()
+
+
+@respx.mock
+async def test_a_lake_root_without_its_identity_marker_refuses_the_bytes(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    _mock_vendor()
+    await _ensure()
+    (tmp_lake / "lake" / ".data-root.json").unlink()
+
+    with pytest.raises(LakeAdmissionError):
+        await _read()
+
+
+@respx.mock
 async def test_the_reader_takes_the_admission_it_is_given(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
     """A worker that owns no catalog connection hands in a callable that asks its parent."""
     _mock_vendor()
@@ -1159,6 +1201,219 @@ async def test_the_reader_takes_the_admission_it_is_given(fake_catalog: FakeCata
 
     assert day is not None and len(day.bars) == 1
     assert asked == [_raw_root(tmp_lake) / RELATIVE_PATH]
+
+
+@respx.mock
+async def test_a_day_is_read_from_the_lake_root_it_is_handed_and_the_configured_root_is_not_touched(
+    fake_catalog: FakeCatalog, tmp_lake: Path, tmp_path: Path
+) -> None:
+    """A snapshot or an alternate mount of the lake: the same relative path, the same receipt."""
+    _mock_vendor()
+    result = await _ensure()
+    mount = tmp_path / "mount"
+    shutil.copytree(tmp_lake / "lake", mount / "lake")
+    shutil.rmtree(_raw_root(tmp_lake) / "option")  # the configured root no longer holds the day
+
+    configured = await _read()
+    from_the_mount = await asyncio.to_thread(read_option_day_bars, CONTRACT, TRADING_DAY, lake_root=mount / "lake" / "raw")
+
+    assert result.record is not None
+    assert configured is None
+    assert from_the_mount is not None and len(from_the_mount.bars) == 1
+    assert from_the_mount.sha256 == result.record.file_sha256
+
+
+@pytest.mark.parametrize("where", ["somewhere", "raw", "lake", "lake/polygon_split_adjusted", "lake/raw/option"])
+async def test_a_lake_root_that_is_not_a_raw_lake_root_is_refused_rather_than_read_without_admission(
+    where: str, fake_catalog: FakeCatalog, tmp_lake: Path, tmp_path: Path
+) -> None:
+    """The default admission lets a path outside the lake through unchecked, so such a root must never reach it."""
+    loose = tmp_path / "loose" / where
+    day_file = loose / RELATIVE_PATH
+    day_file.parent.mkdir(parents=True)
+    day_file.write_bytes(_zip(MEMBER, "34200000,12700,13100,12500,12700,12\n"))
+
+    with pytest.raises(ValueError, match="lake_root"):
+        await asyncio.to_thread(read_option_day_bars, CONTRACT, TRADING_DAY, lake_root=loose)
+
+
+# ── Which contract-days are captured ─────────────────────────────────────
+
+THIRD_CONTRACT = OptionContract.of(root="SPY", expiry_date=date(2025, 6, 13), right="call", strike=602)
+UNASKED_CONTRACT = OptionContract.of(root="SPY", expiry_date=date(2025, 6, 13), right="call", strike=603)
+
+
+@respx.mock
+async def test_the_captured_contract_days_of_a_date_come_from_one_catalog_query(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    contracts = {c.occ_symbol: c for c in (CONTRACT, OTHER_CONTRACT, THIRD_CONTRACT, UNASKED_CONTRACT)}
+    await _list(*contracts.values())
+    await _list(CONTRACT, day=date(2025, 6, 12))
+    for day, answer in ((TRADING_DAY, _ok([_bar(0)])), (date(2025, 6, 12), _ok([_bar(t=session_open_ms_utc(date(2025, 6, 12)))]))):
+        respx.get(url__regex=rf"https://api\.polygon\.io/v2/aggs/ticker/O:{SYMBOL}/range/1/minute/{day.isoformat()}/.*").mock(
+            return_value=answer
+        )
+    _mock_vendor(no_trades(OTHER_CONTRACT.occ_symbol), contract=OTHER_CONTRACT.occ_symbol)
+    _mock_vendor(httpx.Response(500, text="boom"), contract=THIRD_CONTRACT.occ_symbol)
+    captured = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
+    quiet = await ensure_option_day_bars(OTHER_CONTRACT, TRADING_DAY, listed_under="SPY")
+    failed = await ensure_option_day_bars(THIRD_CONTRACT, TRADING_DAY, listed_under="SPY")
+    still_fetching = await catalog_client.claim_minute_bar(
+        identity=ArtifactIdentity(
+            artifact_kind="time_series_bars", market="usa_options", symbol=UNASKED_CONTRACT.occ_symbol,
+            trading_date=TRADING_DAY, resolution="minute", data_type="trade", provider="polygon", price_adjustment_mode="raw",
+        ),
+        worker_id="w", lease_ttl_ms=300_000, data_contract_hash=option_minute_trade_dch(), file_path="x.zip",
+    )
+    earlier_day_only = await ensure_option_day_bars(CONTRACT, date(2025, 6, 12), listed_under="SPY")
+    assert captured.failure is None and quiet.failure is None and failed.failure is not None
+    assert still_fetching is not None and earlier_day_only.failure is None
+    asked: list[tuple] = []
+    real = fake_catalog.select_complete_minute_bar_symbols
+
+    async def counting(*args: Any, **kwargs: Any):
+        asked.append((args, kwargs))
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(catalog_client, "select_complete_minute_bar_symbols", counting)
+
+    named = await captured_option_days(list(contracts), TRADING_DAY)
+    named_a_day_earlier = await captured_option_days(list(contracts), date(2025, 6, 12))
+
+    # captured with trades and captured with none; not the failed, the one still being fetched, or the one not asked for
+    assert named == frozenset({CONTRACT.occ_symbol, OTHER_CONTRACT.occ_symbol})
+    assert named_a_day_earlier == frozenset({CONTRACT.occ_symbol})
+    assert len(asked) == 2  # one question per date, however many contracts
+
+
+@respx.mock
+async def test_only_the_symbols_asked_about_are_named(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    _mock_vendor()
+    await _ensure()
+
+    assert await captured_option_days([OTHER_CONTRACT.occ_symbol], TRADING_DAY) == frozenset()
+    assert await captured_option_days({CONTRACT.occ_symbol}, TRADING_DAY) == frozenset({CONTRACT.occ_symbol})
+
+
+async def test_naming_no_symbols_asks_the_catalog_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    def no_connection() -> None:
+        raise AssertionError("an empty question reached the catalog")
+
+    monkeypatch.setattr(catalog_client, "connection", no_connection)
+
+    assert await captured_option_days([], TRADING_DAY) == frozenset()
+
+
+@respx.mock
+async def test_a_stock_row_with_a_contracts_symbol_is_not_a_captured_option_day(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    stock = ArtifactIdentity(
+        artifact_kind="time_series_bars", market="usa", symbol=SYMBOL, trading_date=TRADING_DAY, resolution="minute",
+        data_type="trade", provider="polygon", price_adjustment_mode="raw",
+    )
+    stock_id = await catalog_client.claim_minute_bar(
+        identity=stock, worker_id="w", lease_ttl_ms=300_000, data_contract_hash="a" * 64, file_path="equity/x.zip"
+    )
+    assert stock_id is not None
+    assert await catalog_client.complete_artifact(
+        stock_id, 1, SESSION_OPEN_MS, SESSION_OPEN_MS, 10, "b" * 64, lease_generation=catalog_client.INITIAL_LEASE_GENERATION
+    )
+
+    assert await captured_option_days([SYMBOL], TRADING_DAY) == frozenset()
+
+
+@respx.mock
+async def test_a_complete_row_whose_file_has_since_gone_is_still_named_and_the_reader_says_it_is_not_there(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """The catalog question is not the judge of "readable": the reader is."""
+    _mock_vendor()
+    await _ensure()
+    (_raw_root(tmp_lake) / RELATIVE_PATH).unlink()
+
+    assert await captured_option_days([SYMBOL], TRADING_DAY) == frozenset({SYMBOL})
+    assert await _read() is None
+
+
+# ── A listing already read is not read again ─────────────────────────────
+
+
+def _count_listing_reads(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
+    reads: list[tuple] = []
+    real = option_bars_module.read_option_listing
+
+    def counting(*args: Any, **kwargs: Any):
+        reads.append(args)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(option_bars_module, "read_option_listing", counting)
+    return reads
+
+
+@respx.mock
+async def test_a_listing_handed_in_is_used_in_place_of_a_read_for_every_contract_of_the_date(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    contracts = [CONTRACT, OTHER_CONTRACT, THIRD_CONTRACT]
+    await _list(*contracts)
+    for contract in contracts:
+        _mock_vendor(_ok([_bar(0)], contract.occ_symbol), contract=contract.occ_symbol)
+    listing = await asyncio.to_thread(read_option_listing, "SPY", TRADING_DAY)
+    reads = _count_listing_reads(monkeypatch)
+
+    results = [await ensure_option_day_bars(c, TRADING_DAY, listed_under="SPY", listing=listing) for c in contracts]
+
+    assert [r.failure for r in results] == [None, None, None]
+    assert reads == []
+
+
+@respx.mock
+async def test_without_a_listing_handed_in_each_capture_reads_the_stored_one_as_before(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    contracts = [CONTRACT, OTHER_CONTRACT]
+    await _list(*contracts)
+    for contract in contracts:
+        _mock_vendor(_ok([_bar(0)], contract.occ_symbol), contract=contract.occ_symbol)
+    reads = _count_listing_reads(monkeypatch)
+
+    results = [await ensure_option_day_bars(c, TRADING_DAY, listed_under="SPY") for c in contracts]
+
+    assert [r.failure for r in results] == [None, None]
+    assert reads == [("SPY", TRADING_DAY)] * 2
+
+
+@respx.mock
+async def test_a_listing_handed_in_that_does_not_hold_the_contract_refuses_it_with_no_row_and_no_vendor_call(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    route = _mock_vendor(no_trades(SYMBOL))
+    await _list(OTHER_CONTRACT)
+    listing = await asyncio.to_thread(read_option_listing, "SPY", TRADING_DAY)
+
+    result = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY", listing=listing)
+
+    assert result.failure is not None and result.failure.reason == "not_listed"
+    assert route.call_count == 0 and _bar_rows(fake_catalog) == []
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("underlying", "day"),
+    [("QQQ", TRADING_DAY), ("SPY", date(2025, 6, 12))],
+    ids=["another underlying", "another date"],
+)
+async def test_a_listing_handed_in_for_another_underlying_or_date_is_a_callers_mistake(
+    underlying: str, day: date, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    route = _mock_vendor(no_trades(SYMBOL))
+    await _list(CONTRACT, day=day, underlying=underlying)
+    wrong = await asyncio.to_thread(read_option_listing, underlying, day)
+
+    with pytest.raises(ValueError, match="listing handed in"):
+        await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY", listing=wrong)
+
+    assert route.call_count == 0 and _bar_rows(fake_catalog) == []
 
 
 # ── Option rows stay out of every stock answer ───────────────────────────

@@ -14,7 +14,7 @@ import json
 import logging
 import time
 import weakref
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Collection, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date
@@ -331,6 +331,44 @@ async def select_complete_metadata_artifacts(
         )
         for r in rows
     ]
+
+
+async def select_complete_minute_bar_symbols(
+    market: str,
+    symbols: Collection[str],
+    data_type: str,
+    trading_date: date,
+    *,
+    price_adjustment_mode: str,
+    data_root_id: UUID | None = None,
+) -> frozenset[str]:
+    """Which of ``symbols`` have a complete minute-bar row for one date, in one query.
+
+    The set-based twin of :func:`select_coverage_minute_bars` for a caller that holds many
+    symbols and one date (a run asking which contract-days of a session are captured).
+    It answers "is there a complete row" and returns only the symbols that have one; it
+    does not look at the file, the recipe or the row count. Root-scoped like the other
+    reads (issue #1876). No symbols, no query.
+    """
+    if not symbols:
+        return frozenset()
+    root_id = _resolve_data_root_id(data_root_id)
+    query = """
+        SELECT DISTINCT "Symbol"
+          FROM "DataLakeArtifacts"
+         WHERE "ArtifactKind" = 'time_series_bars'
+           AND "Resolution" = 'minute'
+           AND "Market" = $1
+           AND "Symbol" = ANY($2::text[])
+           AND "DataType" = $3
+           AND "TradingDate" = $4
+           AND "PriceAdjustmentMode" = $5
+           AND "DataRootId" = $6
+           AND "Status" = 'complete'
+    """
+    async with connection() as conn:
+        rows = await conn.fetch(query, market, list(symbols), data_type, trading_date, price_adjustment_mode, root_id)
+    return frozenset(r["Symbol"] for r in rows)
 
 
 async def scope_verified_legacy_metadata(
