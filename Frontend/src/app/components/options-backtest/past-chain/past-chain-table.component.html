@@ -22,7 +22,7 @@
         <p class="words">Expiry <app-timestamp-display [value]="chain.expiry_ms" mode="date-et" granularity="date" /></p>
         @if (chain.tag; as tag) { <app-options-backtest-expiry-tag [tag]="tag" /> }
         <p class="words">Priced as of <app-timestamp-display [value]="chain.at_ms" mode="et" granularity="minute" /></p>
-        <p class="words">{{ chain.strikes_each_side }} strikes each side of the money</p>
+        <p class="words">{{ chain.strikes_each_side }} {{ chain.strikes_each_side === 1 ? 'strike' : 'strikes' }} each side of the money</p>
       </div>
       <div class="strip" role="group" aria-label="The underlying at that time">
         <app-asset-identity [symbol]="chain.underlying" size="xs" [logo]="false" />

@@ -6,7 +6,7 @@ import { DownloadNotAllowedError, PastChainRefusedError } from './past-chain.ser
 import type { DownloadAnswer, DownloadRequest } from './past-chain.types';
 import { deferred } from './testing/deferred';
 import { chainDay, chainExpiry, contract, downloadAnswer, EXPIRY_MS, item, side, TRADING_DATE, TRADING_DATE_MS, underlyingPrice } from './testing/fixtures';
-import { fakeChainService, openStandardChain, pickDate, renderChainTab } from './testing/render-chain';
+import { assertNewYorkTimes, fakeChainService, openStandardChain, pickDate, renderChainTab } from './testing/render-chain';
 
 const button = () => screen.getByRole<HTMLButtonElement>('button', { name: 'Download missing data' });
 const call = (thousandths: number, state: Parameters<typeof contract>[0]['state'], standard = true) => contract({ right: 'call', thousandths, state, standard });
@@ -152,6 +152,15 @@ describe('what a download answers', () => {
     fireEvent.click(button());
 
     expect(reads(await screen.findByRole('heading', { name: /Download of/ }))).toBe('Download of SPY on 2026-10-09');
+  });
+
+  it('names the date in New York terms, never in the viewer', async () => {
+    await openChainOf(chainWithFiveMissing(), async () => answered());
+
+    fireEvent.click(button());
+
+    const result = await screen.findByRole('group', { name: 'Download result' });
+    expect(assertNewYorkTimes(result)).toBe(1);
   });
 
   it('moves the keyboard to the result, where the pressed button no longer is', async () => {

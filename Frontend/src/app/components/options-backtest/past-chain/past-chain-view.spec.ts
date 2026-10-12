@@ -152,6 +152,15 @@ describe('the strikes of the table', () => {
     expect(rows[0]).toMatchObject({ callMoney: true, putMoney: true });
   });
 
+  it('marks the money of the puts at a strike only the puts list, and not the calls', () => {
+    const rows = strikeRows(side('call', [call(601_000)], 601_000), side('put', [put(601_000), put(602_000)], 602_000));
+
+    expect(rows.map((row) => [row.thousandths, row.callMoney, row.putMoney])).toEqual([
+      [601_000, true, false],
+      [602_000, false, true],
+    ]);
+  });
+
   it('marks nothing when a side has no money strike, and a money strike on a side that does not list it marks that side only where it lists it', () => {
     const none = strikeRows(side('call', [call(602_000)], null), side('put', [put(602_000)], null));
     expect(none[0]).toMatchObject({ callMoney: false, putMoney: false });

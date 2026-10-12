@@ -40,7 +40,7 @@ export class PastChainTabComponent implements OnInit {
   protected readonly controls = form(this.model);
   /** The `expiry_ms` of the expiry whose chain is open. Only the owner's pick writes it. */
   protected readonly expiryMs = signal<number | null>(null);
-  /** Counts the downloads that have finished, so that reading again is a read of new params and never a reload. */
+  /** Counts the downloads that have finished, so that reading the day again is a read of new params and never a reload. */
   private readonly generation = signal(0);
 
   private readonly underlying = computed(() => this.model().underlying);
@@ -80,17 +80,15 @@ export class PastChainTabComponent implements OnInit {
       const strikes = this.strikes();
       if (this.day() === null || tradingDateMs === null || expiryMs === null || this.unsendable() !== null) return undefined;
       return {
-        query: {
-          underlying: this.underlying(),
-          tradingDateMs,
-          expiryMs,
-          atMs: minute.kind === 'at' ? minute.atMs : null,
-          strikes: strikes.kind === 'count' ? strikes.digits : null,
-        },
-        generation: this.generation(),
+        underlying: this.underlying(),
+        tradingDateMs,
+        expiryMs,
+        atMs: minute.kind === 'at' ? minute.atMs : null,
+        strikes: strikes.kind === 'count' ? strikes.digits : null,
       };
     },
-    loader: ({ params }) => this.service.expiry(params.query),
+    // Unlike the day, no count rides in these params: a download that finishes reads the day again, and this read waits on the day.
+    loader: ({ params }) => this.service.expiry(params),
   });
   private readonly chain = computed(() => (this.chainRead.hasValue() ? this.chainRead.value() : null));
   private readonly chainProblem = computed(() => this.problemOf(this.chainRead.error(), 'The chain could not be read.'));
@@ -129,7 +127,7 @@ export class PastChainTabComponent implements OnInit {
     const state = this.downloader.state();
     return state.kind === 'answered' && state.asked.underlying === this.underlying() && state.asked.tradingDateMs === this.tradingDateMs() && sessionNotOver(state.answer);
   });
-  protected readonly plan = computed(() => (this.notOver() ? null : downloadPlan(this.day(), this.chain())));
+  protected readonly plan = computed(() => downloadPlan(this.day(), this.chain()));
   private readonly downloadCard = viewChild(PastChainDownloadComponent);
 
   constructor() {

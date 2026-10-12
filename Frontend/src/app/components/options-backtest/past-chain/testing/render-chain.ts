@@ -73,3 +73,24 @@ export async function openStandardChain(): Promise<void> {
   showChain('2026-10-16');
   await screen.findByRole('table', { name: /Calls on the left/ });
 }
+
+/**
+ * Every date and every time on the tab is drawn in New York, whatever zone the viewer is in: a bare date must be in
+ * `date-et` mode and a time of day must be in `et` mode and carry its ET marker. A date in the viewer's zone is
+ * a day off for a viewer east of New York, and a time in it is the wrong time for everyone but one.
+ */
+export function assertNewYorkTimes(container: ParentNode): number {
+  const stamps = [...container.querySelectorAll('app-timestamp-display')];
+  for (const stamp of stamps) {
+    const text = (stamp.textContent ?? '').trim();
+    const mode = stamp.getAttribute('data-timestamp-mode');
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+      if (mode !== 'date-et') throw new Error(`The date ${text} is drawn in ${mode ?? 'no'} mode, not in New York dates.`);
+    } else if (/^\d{2}:\d{2} ET$/.test(text)) {
+      if (mode !== 'et') throw new Error(`The time ${text} is drawn in ${mode ?? 'no'} mode, not in New York time.`);
+    } else {
+      throw new Error(`A timestamp reads "${text}", which is neither a New York date nor a New York time with its marker.`);
+    }
+  }
+  return stamps.length;
+}

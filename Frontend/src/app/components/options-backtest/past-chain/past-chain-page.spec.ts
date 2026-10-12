@@ -34,8 +34,9 @@ describe('the Past chain as a tab of the page', () => {
     openChainTab();
     await screen.findByRole('heading', { name: 'Past chain' });
 
-    expect(screen.queryByRole('button', { name: 'Start backtest' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Check data' })).toBeNull();
+    // Not in the page at all: a bar that were only hidden would be fixed to the window and still be there for the keyboard.
+    expect(screen.queryByRole('button', { name: 'Start backtest', hidden: true })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Check data', hidden: true })).toBeNull();
   });
 
   it('is made once and kept: leaving it and coming back finds the date, the expiry and the chain where they were', async () => {

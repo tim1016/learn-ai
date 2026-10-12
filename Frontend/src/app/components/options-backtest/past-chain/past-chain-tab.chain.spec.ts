@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { paragraph, reads } from '../testing/page-actions';
 import { PastChainRefusedError } from './past-chain.service';
 import { chainDay, chainExpiry, contract, EXPIRY_MS, MINUTE_1559_MS, side, summary, tag, TRADING_DATE, TRADING_DATE_MS, underlyingPrice } from './testing/fixtures';
-import { chainTable, expiriesTable, fakeChainService, openStandardChain, pickDate, renderChainTab, showChain } from './testing/render-chain';
+import { assertNewYorkTimes, chainTable, expiriesTable, fakeChainService, openStandardChain, pickDate, renderChainTab, showChain } from './testing/render-chain';
 
 /** The row of the chain table whose strike reads `strike` (the dollars as shown). */
 function rowOf(strike: string): HTMLElement {
@@ -173,6 +173,7 @@ describe('the chain of one expiry', () => {
 
     const head = reads(paragraph(/^Priced as of/).closest('.head'));
 
+    expect(head).toContain('Expiry 2026-10-16');
     expect(head).toContain('Monthly');
     expect(head).toContain('Expires today');
     expect(head).toContain('Priced as of 16:00 ET');
@@ -312,5 +313,39 @@ describe('a chain that cannot be had', () => {
 
     expect(await screen.findByRole('table', { name: /Calls on the left/ })).toBeTruthy();
     expect(expiry).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('every date and every time of the tab', () => {
+  it('is New York time on the chain: the expiry, the instant it is priced at, and the time of each trade', async () => {
+    await renderChainTab(fakeChainService(vi));
+    await openStandardChain();
+
+    // The head's date, the instant, the underlying's time, three trades, the caption's date and the expiry rows: all of them.
+    expect(assertNewYorkTimes(document.body)).toBeGreaterThanOrEqual(11);
+    expect(screen.getByRole('table', { name: /for the 2026-10-16 expiry\.$/ })).toBeTruthy();
+  });
+
+  it('is New York time where an expiry is not listed, and where whether it is cannot be said', async () => {
+    const service = fakeChainService(vi, { expiry: vi.fn(async () => chainExpiry({ expiry_listed: false, tag: null, calls: side('call', [], null), puts: side('put', [], null) })) });
+    await renderChainTab(service);
+    pickDate(TRADING_DATE);
+    await screen.findByRole('table', { name: /Every expiry the listing held/ });
+    showChain('2026-10-16');
+    await waitFor(() => expect(paragraph(/expiry is not listed on this date/)).toBeTruthy());
+
+    expect(assertNewYorkTimes(paragraph(/expiry is not listed on this date/))).toBe(1);
+  });
+
+  it('names the date of the expiry to open in the name of its button, so that Show chain is not said twenty times without one', async () => {
+    await renderChainTab(fakeChainService(vi));
+    pickDate(TRADING_DATE);
+    await screen.findByRole('table', { name: /Every expiry the listing held/ });
+
+    const names = within(expiriesTable()).getAllByRole('button').map((button) => button.getAttribute('aria-labelledby'));
+
+    expect(names).toHaveLength(3);
+    expect(within(expiriesTable()).getByRole('button', { name: '2026-10-16 Show chain' })).toBeTruthy();
+    expect(within(expiriesTable()).getByRole('button', { name: '2026-10-30 Show chain' })).toBeTruthy();
   });
 });
