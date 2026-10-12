@@ -73176,7 +73176,7 @@
     },
     "/api/jobs-internal/grid-search": {
       "post": {
-        "description": "Launch (or Finish) a search on a worker thread. Returns 202 once the record is durable.",
+        "description": "Launch (or Finish) a search. Returns 202 once the record is durable and a worker holds it.\n\nIn research mode the API forwards the dispatch and never binds, stamps\nor starts a thread: the runtime prepares the immutable receipt and\nmaterialization, claims the attempt and runs the cells (#3049). Here \u2014\nthe local mode, or this process being the runtime \u2014 the search runs on\na worker thread exactly as before, through spawned research workers in\nthe runtime.",
         "operationId": "start_grid_search_job_api_jobs_internal_grid_search_post",
         "requestBody": {
           "content": {
