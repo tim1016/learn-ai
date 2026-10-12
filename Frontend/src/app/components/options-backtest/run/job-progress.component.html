@@ -3,7 +3,7 @@
   @if (view().count; as count) {
     <p class="count">
       <progress [value]="count.current" [max]="count.total" aria-label="Sessions done"></progress>
-      <span>{{ count.current }} of {{ count.total }} {{ count.unit }}</span>
+      <span>{{ count.unit | receiptLabel }} done: {{ count.current }} of {{ count.total }}</span>
     </p>
   } @else if (view().counted) {
     <p class="count"><progress aria-label="No session counted yet"></progress></p>

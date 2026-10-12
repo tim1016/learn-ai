@@ -25,30 +25,30 @@ describe('a run that is going', () => {
     jobs.emit('job-7', { type: 'job.phase', phase: 'checking_data', friendly: 'Checking which sessions can be tested' });
     expect(await screen.findByText('Checking which sessions can be tested')).toBeTruthy();
     jobs.emit('job-7', { type: 'job.progress', current: 3, total: 5, unit: 'sessions' });
-    expect(await screen.findByText('3 of 5 sessions')).toBeTruthy();
+    expect(await screen.findByText('Sessions done: 3 of 5')).toBeTruthy();
 
     jobs.emit('job-7', { type: 'job.phase', phase: 'downloading_data', friendly: 'Fetching the market data the run is missing' });
     jobs.emit('job-7', { type: 'job.progress', current: 2, total: 5, unit: 'sessions' });
     jobs.emit('job-7', { type: 'job.log', message: 'Fetched the listing for session 2 of 5.' });
     expect(await screen.findByText('Fetching the market data the run is missing')).toBeTruthy();
-    expect(screen.getByText('2 of 5 sessions')).toBeTruthy();
+    expect(screen.getByText('Sessions done: 2 of 5')).toBeTruthy();
     expect(screen.getByText('Fetched the listing for session 2 of 5.')).toBeTruthy();
     const bar = screen.getByLabelText('Sessions done') as HTMLProgressElement;
     expect([bar.value, bar.max]).toEqual([2, 5]);
 
     jobs.emit('job-7', { type: 'job.phase', phase: 'waiting_for_engine', friendly: 'Waiting for the backtest already running' });
     expect(await screen.findByText('Waiting for the backtest already running')).toBeTruthy();
-    expect(screen.queryByText(/of \d+ sessions/)).toBeNull();
+    expect(screen.queryByText(/Sessions done: \d+ of \d+/)).toBeNull();
     expect(screen.queryByRole('progressbar')).toBeNull();
 
     jobs.emit('job-7', { type: 'job.phase', phase: 'replaying', friendly: 'Replaying each session' });
     jobs.emit('job-7', { type: 'job.progress', current: 1, total: 5, unit: 'sessions' });
     expect(await screen.findByText('Replaying each session')).toBeTruthy();
-    expect(screen.getByText('1 of 5 sessions')).toBeTruthy();
+    expect(screen.getByText('Sessions done: 1 of 5')).toBeTruthy();
 
     jobs.emit('job-7', { type: 'job.phase', phase: 'saving', friendly: 'Saving the run' });
     expect(await screen.findByText('Saving the run')).toBeTruthy();
-    expect(screen.queryByText(/of \d+ sessions/)).toBeNull();
+    expect(screen.queryByText(/Sessions done: \d+ of \d+/)).toBeNull();
     expect(screen.queryByRole('progressbar')).toBeNull();
   });
 
@@ -71,11 +71,11 @@ describe('a run that is going', () => {
 
     expect(await screen.findByText(words)).toBeTruthy();
     await lettingGo();
-    expect(screen.queryByText(/of \d+ sessions/)).toBeNull();
+    expect(screen.queryByText(/Sessions done: \d+ of \d+/)).toBeNull();
     const bar = screen.getByRole('progressbar') as HTMLProgressElement;
     expect(bar.hasAttribute('value')).toBe(false);
     jobs.emit('job-7', { type: 'job.progress', current: 1, total: 5, unit: 'sessions' });
-    expect(await screen.findByText('1 of 5 sessions')).toBeTruthy();
+    expect(await screen.findByText('Sessions done: 1 of 5')).toBeTruthy();
     const filled = screen.getByRole('progressbar') as HTMLProgressElement;
     expect([filled.value, filled.max]).toEqual([1, 5]);
   });
@@ -95,11 +95,11 @@ describe('a run that is going', () => {
 
     expect(await screen.findByText('Waiting for data another request is already fetching.')).toBeTruthy();
     expect(screen.queryByText('Fetched the listing for session 2 of 5.')).toBeNull();
-    expect(screen.getByText('2 of 5 sessions')).toBeTruthy();
+    expect(screen.getByText('Sessions done: 2 of 5')).toBeTruthy();
     jobs.emit('job-7', { type: 'job.log', message: 'The other request has finished; carrying on.' });
     expect(await screen.findByText('The other request has finished; carrying on.')).toBeTruthy();
     expect(screen.queryByText('Waiting for data another request is already fetching.')).toBeNull();
-    expect(screen.getByText('2 of 5 sessions')).toBeTruthy();
+    expect(screen.getByText('Sessions done: 2 of 5')).toBeTruthy();
   });
 
   it('announces the phase to a screen reader and not the count', async () => {
@@ -114,7 +114,23 @@ describe('a run that is going', () => {
     const phase = await screen.findByText('Replaying each session');
 
     expect(phase.getAttribute('role')).toBe('status');
-    expect(screen.getByText('1 of 5 sessions').closest('[role="status"]')).toBeNull();
+    expect(screen.getByText('Sessions done: 1 of 5').closest('[role="status"]')).toBeNull();
+  });
+
+  it.each([
+    ['sessions', 1, 1, 'Sessions done: 1 of 1'],
+    ['contracts', 2, 9, 'Contracts done: 2 of 9'],
+  ])('says the count as the job’s unit word (%s) made a label, and the two numbers, so that no rule has to turn a unit into a plural', async (unit, current, total, words) => {
+    const service = fakeService(vi);
+    readsAs(service, going());
+    const jobs = fakeJobs();
+    jobs.register('job-7');
+    await renderRun(runItem(), { service, jobs });
+    jobs.emit('job-7', { type: 'job.phase', phase: 'replaying', friendly: 'Replaying each session' });
+
+    jobs.emit('job-7', { type: 'job.progress', current, total, unit });
+
+    expect(await screen.findByText(words)).toBeTruthy();
   });
 
   it('asks the server to stop when Cancel is pressed, once, and says it is waiting', async () => {

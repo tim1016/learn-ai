@@ -376,7 +376,7 @@ describe('coming back to the page while a backtest is going', () => {
 
     const panel = await screen.findByRole('region', { name: 'Backtest run' });
     expect(within(panel).getByText('Replaying each session')).toBeTruthy();
-    expect(within(panel).getByText('4 of 5 sessions')).toBeTruthy();
+    expect(within(panel).getByText('Sessions done: 4 of 5')).toBeTruthy();
     await openExample();
     pickDates('2026-09-14', '2026-09-18');
     await waitFor(() => expect(screen.getByText('A backtest is already running.')).toBeTruthy());
