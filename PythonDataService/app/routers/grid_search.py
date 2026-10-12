@@ -340,13 +340,9 @@ def _gated_grid_work(req: GridSearchJobRequest, search_id: str) -> Callable[[Pro
     workers — one child at the serial width, the shared pool wider — and
     persistence, ranking and the terminal status stay in the coordinator.
     """
-    import threading
-
-    from app.jobs.checkpoints import CheckpointGate, ExecutionCheckpoint
+    from app.jobs.checkpoints import GatedLease
     from app.research.grid_search.dispatch import runtime_cell_dispatch
     from app.research.persistence import ownership
-    from app.research.persistence.ownership import GenerationFencedError
-    from app.utils.timestamps import now_ms_utc
 
     def work(emit: ProgressEmitter, _runner_cancel: CancellationCheck) -> dict[str, Any]:
         authority = ownership.process_authority()
@@ -354,71 +350,7 @@ def _gated_grid_work(req: GridSearchJobRequest, search_id: str) -> Callable[[Pro
             # The startup claim is fail-closed, so this is an authority lost
             # mid-run: the generation is dead and its lease must not renew.
             raise RuntimeError("research runtime worker without coordinator authority; the generation is fenced")
-        generation = authority.boot_generation
-        cancel = CancellationCheck(req.job_id, renews_lease=False)
-        base_cancel = cancel.raise_if_cancelled
-
-        def fenced_cancel() -> None:
-            # Cancellation and the coordinator fence in one poll (#3065):
-            # a fenced generation is terminal — nothing may replace the
-            # worker and continue.
-            base_cancel()
-            if not authority.connected:
-                raise GenerationFencedError("coordinator authority connection lost mid-run; the generation is fenced")
-
-        seen: list[ExecutionCheckpoint] = []
-        gate = CheckpointGate(req.job_id, generation, on_accepted=seen.append)
-        gate_lock = threading.Lock()
-
-        def phase_checkpoint(phase: str) -> None:
-            with gate_lock:
-                gate.accept(
-                    ExecutionCheckpoint(
-                        generation=generation,
-                        task_id="search",
-                        sequence=len(seen) + 1,
-                        cursor=0,
-                        cursor_kind="processed_blocks",
-                        phase=phase,
-                        occurred_at_ms=now_ms_utc(),
-                        transition=True,
-                    )
-                )
-
-        def completion_checkpoint(done: int, total: int) -> None:
-            with gate_lock:
-                gate.accept(
-                    ExecutionCheckpoint(
-                        generation=generation,
-                        task_id="search",
-                        sequence=len(seen) + 1,
-                        cursor=done,
-                        cursor_kind="durable_completions",
-                        phase="search",
-                        occurred_at_ms=now_ms_utc(),
-                        transition=True,
-                    )
-                )
-
-        def on_child_checkpoint(message: dict) -> None:
-            # A child's real progress renews the lease through the same
-            # gate, inline: this runs on the pump thread, and nesting two
-            # acquisitions of one non-reentrant lock would deadlock the
-            # whole run on the child's first checkpoint.
-            with gate_lock:
-                gate.accept(
-                    ExecutionCheckpoint(
-                        generation=generation,
-                        task_id="search",
-                        sequence=len(seen) + 1,
-                        cursor=int(message.get("cursor", 0)),
-                        cursor_kind=str(message.get("cursor_kind", "processed_blocks")),
-                        phase=str(message.get("phase", "search")),
-                        occurred_at_ms=now_ms_utc(),
-                        transition=True,
-                    )
-                )
-
+        lease = GatedLease(req.job_id, task_id="search", authority=authority)
         outcome = service.execute(
             search_id,
             job_id=req.job_id,
@@ -427,13 +359,13 @@ def _gated_grid_work(req: GridSearchJobRequest, search_id: str) -> Callable[[Pro
                 spec,
                 attempt=attempt,
                 job_id=job_id,
-                on_checkpoint=on_child_checkpoint,
-                cancel_check=fenced_cancel,
+                on_checkpoint=lease.child_checkpoint,
+                cancel_check=lease.fenced_cancel,
                 on_log=emit.log,
             ),
-            cancel_check=fenced_cancel,
-            on_phase=lambda phase: (emit.phase(phase), phase_checkpoint(phase)),
-            on_progress=lambda done, total: (emit.progress(done, total, unit="backtests"), completion_checkpoint(done, total)),
+            cancel_check=lease.fenced_cancel,
+            on_phase=lambda phase: (emit.phase(phase), lease.phase(phase)),
+            on_progress=lambda done, total: (emit.progress(done, total, unit="backtests"), lease.completion(done, total)),
             on_log=emit.log,
         )
         return _outcome_response(outcome)

@@ -36,19 +36,29 @@ from app.services.engine_backtest_service import execute_engine_backtest
 logger = logging.getLogger(__name__)
 
 
+def execution_block(spec: GridSearchSpec) -> dict[str, Any]:
+    """The spec's frozen execution contract as the dispatch wire carries it (#3049).
+
+    The one place the field list lives: the in-process adapter and the
+    dispatched item build the same block, so a new spec field can never
+    reach one path and silently miss the other.
+    """
+    return {
+        "strategy_key": spec.strategy_key,
+        "symbol": spec.symbol,
+        "fill_mode": spec.fill_mode,
+        "commission_per_order": spec.commission_per_order,
+        "slippage_per_share": spec.slippage_per_share,
+        "initial_cash": spec.initial_cash,
+        "resolution": spec.resolution,
+    }
+
+
 def engine_request(row: SearchRow, spec: GridSearchSpec, candidate: RunSpec) -> EngineBacktestRequest:
     return engine_request_over(
         candidate,
         interval=row.receipt["interval_table"],
-        execution={
-            "strategy_key": spec.strategy_key,
-            "symbol": spec.symbol,
-            "fill_mode": spec.fill_mode,
-            "commission_per_order": spec.commission_per_order,
-            "slippage_per_share": spec.slippage_per_share,
-            "initial_cash": spec.initial_cash,
-            "resolution": spec.resolution,
-        },
+        execution=execution_block(spec),
     )
 
 

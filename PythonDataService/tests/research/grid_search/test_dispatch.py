@@ -278,7 +278,11 @@ def _serial_dispatch(
         children.append(child)
         return child
 
-    monkeypatch.setattr(dispatch_module, "ResearchWorker", spawn)
+    # The shared serial base resolves the spawn in the worker module's own
+    # namespace — the base is the lifecycle, the subclass the policy (#3049).
+    from app.research.golden_search import worker as worker_module
+
+    monkeypatch.setattr(worker_module, "ResearchWorker", spawn)
     context = WorkerDispatchContext(
         strategy_key="sma_crossover",
         execution={},
@@ -716,3 +720,42 @@ def test_a_spawned_worker_returns_the_in_process_cell_exactly(tmp_path, monkeypa
         dispatch.close()
 
     assert pairs == [(candidate, local)], "the child is the in-process adapter, cell for cell"
+
+
+def test_a_straggler_from_a_superseded_re_offer_is_discarded_never_persisted(monkeypatch: pytest.MonkeyPatch) -> None:
+    def answer(task: dict[str, Any]) -> dict[str, Any]:
+        return _result_message(str(task["key"]))
+
+    children: list[_PoolFakeChild] = []
+
+    def spawn(context: WorkerDispatchContext) -> _PoolFakeChild:
+        child = _PoolFakeChild(context, answer)
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(shared_pool_module, "ResearchWorker", spawn)
+    context = WorkerDispatchContext(
+        strategy_key="sma_crossover", execution={}, manifest=MANIFEST, identity=IDENTITY,
+        job_id="job-grid-straggler", generation=1, cancel_check=lambda: None,
+    )
+    dispatch = dispatch_module.PooledCellDispatch(context, _ready_of, workers=1, window=1)
+    try:
+        # A stale-generation arrival lands before any real one: the owed item
+        # still holds task_gen 1, so the answer for generation 9 is discarded
+        # — consumed for budget, never delivered to the runner.
+        dispatch._handle.arrived.put(("hash-0", 9, _straggler_outcome()))
+        pairs = list(dispatch([_candidate(0)]))
+    finally:
+        dispatch.close()
+
+    assert [spec.params_hash for spec, _ in pairs] == ["hash-0"], "the real generation's cell arrived once"
+    assert pairs[0][1].net_profit == 100.0, "the persisted cell is the real answer, not the straggler's"
+
+
+def _straggler_outcome() -> CellOutcome:
+    return CellOutcome(
+        key="hash-0",
+        attempt=1,
+        task_gen=9,
+        cell=CellResult(params_hash="hash-0", params={}, status="completed", total_trades=99, net_profit=-1.0),
+    )

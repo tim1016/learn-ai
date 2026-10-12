@@ -33,9 +33,7 @@ Validated against: tests/research/grid_search/test_dispatch.py.
 from __future__ import annotations
 
 import logging
-import queue
 import threading
-import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from typing import Any
@@ -44,19 +42,15 @@ from app.config import settings
 from app.jobs.progress import JobCancelled
 from app.research.golden_search.evaluator import RETRY_ALLOWANCE, IdentityRefusalError, WorkerLost
 from app.research.golden_search.shared_pool import (
-    DEFAULT_PAYLOAD_BOUND_BYTES,
-    DEFAULT_RESULT_BOUND_BYTES,
     SUBMISSION_FACTOR,
-    OwnerHandle,
+    PooledOwnerDispatch,
     SharedWorkerPool,
     shared_worker_pool,
 )
 from app.research.golden_search.worker import (
-    ResearchWorker,
+    ChildOwnerDispatch,
     WorkerDispatchContext,
-    pooled_cache_bytes,
 )
-from app.research.grid_search.engine_adapter import cell_from_response, engine_request_over
 from app.research.grid_search.models import CellResult, GridSearchSpec, SearchRow
 from app.research.persistence.ownership import GenerationFencedError
 from app.research.sweep.grid import RunSpec
@@ -162,14 +156,19 @@ def cell_outcome(item: ReadyCell, message: Mapping[str, Any]) -> CellOutcome:
             ),
         )
     cell = dict(message["cell"])
+    if cell.get("params_hash") != item.key:
+        # The item's identity is the one the store fence will check; a child
+        # answer keyed otherwise is a protocol break, never a foreign cell
+        # Finish would skip forever.
+        raise WorkerLost(f"a research worker answered cell {item.key[:8]} as {str(cell.get('params_hash'))[:8]}")
     equity = cell.get("daily_equity")
     return CellOutcome(
         key=item.key,
         attempt=item.attempt,
         task_gen=item.task_gen,
         cell=CellResult(
-            params_hash=cell["params_hash"],
-            params=dict(cell["params"]),
+            params_hash=item.key,
+            params=dict(item.candidate.params),
             status=cell["status"],
             total_trades=int(cell["total_trades"]),
             net_profit=cell["net_profit"],
@@ -205,12 +204,14 @@ def cell_to_wire(cell: CellResult) -> dict[str, Any]:
 #: What ``run_grid`` consumes from either adapter: each arrival as its
 #: ``(candidate, result)`` pair, in arrival order — the runner persists and
 #: counts as it consumes, so arrival order is free and logical order is the
-#: ranking's.
-CellDispatch = Callable[[Iterable[RunSpec]], Iterator[tuple[RunSpec, CellResult]]]
+#: ranking's. The alias lives with the parameter it names, in ``runner.py``.
 
 
 def ready_cell_builder(row: SearchRow, spec: GridSearchSpec, attempt: int) -> Callable[[RunSpec], ReadyCell]:
     """The per-candidate item builder: the receipt's frozen parts, one cell's identity."""
+    from app.research.grid_search.engine_adapter import execution_block
+
+    interval = row.receipt["interval_table"]
 
     def build(candidate: RunSpec) -> ReadyCell:
         return ReadyCell(
@@ -219,19 +220,11 @@ def ready_cell_builder(row: SearchRow, spec: GridSearchSpec, attempt: int) -> Ca
             task_gen=1,
             candidate=candidate,
             interval={
-                "data_start_ms": int(row.receipt["interval_table"]["data_start_ms"]),
-                "evaluation_start_ms": int(row.receipt["interval_table"]["evaluation_start_ms"]),
-                "evaluation_end_ms": int(row.receipt["interval_table"]["evaluation_end_ms"]),
+                "data_start_ms": int(interval["data_start_ms"]),
+                "evaluation_start_ms": int(interval["evaluation_start_ms"]),
+                "evaluation_end_ms": int(interval["evaluation_end_ms"]),
             },
-            execution={
-                "strategy_key": spec.strategy_key,
-                "symbol": spec.symbol,
-                "fill_mode": spec.fill_mode,
-                "commission_per_order": spec.commission_per_order,
-                "slippage_per_share": spec.slippage_per_share,
-                "initial_cash": spec.initial_cash,
-                "resolution": spec.resolution,
-            },
+            execution=execution_block(spec),
             manifest=row.receipt["data_snapshot"]["artifacts"],
             identity=row.receipt["code_identity"],
         )
@@ -259,6 +252,7 @@ def run_grid_cell_task(
     the numbers are the in-process adapter's numbers.
     """
     from app.research.golden_search.worker import _expected_identity, _residency_fields, _task_checkpoint
+    from app.research.grid_search.engine_adapter import cell_from_response, engine_request_over
     from app.services.engine_backtest_service import execute_engine_backtest
 
     candidate = RunSpec(
@@ -313,52 +307,26 @@ def run_grid_cell_task(
 # ── The serial adapter: one owned child, one task lane ────────────────────
 
 
-class WorkerCellDispatch:
+class WorkerCellDispatch(ChildOwnerDispatch):
     """The one-worker cell dispatch: grid's twin of the golden serial adapter (#3044, #3049).
 
     Serial in effect — one child, one task lane, the runner's logical order
     preserved — with the coordinator never executing and never entering the
-    engine gate. A lost child is killed and reaped before any replacement
-    exists, the lost cell is re-offered under an advanced task generation
-    within the retry allowance, and a loss past the bound raises instead of
-    recording a cell nobody ran.
+    engine gate. The child lifecycle is the shared serial base's (#3049);
+    this subclass is exactly grid's wire, decode and loss policy: a lost
+    child is killed and reaped before any replacement exists, the lost
+    cell is re-offered under an advanced task generation within the retry
+    allowance, and a loss past the bound raises instead of recording a
+    cell nobody ran.
     """
 
     def __init__(self, context: WorkerDispatchContext, ready: Callable[[RunSpec], ReadyCell]) -> None:
-        self._context = context
+        super().__init__(context)
         self._ready = ready
-        self._worker: ResearchWorker | None = None
-
-    def _live_worker(self) -> ResearchWorker:
-        worker = self._worker
-        if worker is not None and worker.lost_reason() is not None:
-            self._worker_lost(worker)
-        if self._worker is None:
-            self._worker = ResearchWorker(self._context)
-        return self._worker
-
-    def _worker_lost(self, worker: ResearchWorker) -> None:
-        worker.close()
-        if self._worker is worker:
-            self._worker = None
-
-    def _cancel(self) -> None:
-        if self._worker is not None:
-            self._worker.cancel()
-
-    def cancel(self) -> None:
-        self._cancel()
 
     def __call__(self, cells: Iterable[RunSpec]) -> Iterator[tuple[RunSpec, CellResult]]:
         for candidate in cells:
-            try:
-                cancelled = self._context.cancel_check()
-            except (JobCancelled, GenerationFencedError):
-                self._cancel()
-                raise
-            if cancelled:
-                self._cancel()
-                raise JobCancelled("cancelled between research worker cell tasks")
+            self._poll_cancel()
             item = self._ready(candidate)
             losses = 0
             while True:
@@ -394,26 +362,23 @@ class WorkerCellDispatch:
             assert outcome.cell is not None  # only a cancellation delivers without one
             yield candidate, outcome.cell
 
-    def close(self) -> None:
-        worker, self._worker = self._worker, None
-        if worker is not None:
-            worker.close()
-
 
 # ── The pooled adapter: one owner on the shared pool ──────────────────────
 
 
-class PooledCellDispatch:
+class PooledCellDispatch(PooledOwnerDispatch):
     """The cell dispatch as one owner on a worker pool (#3049), grid's twin of ``PooledWorkerDispatch``.
 
     Offers cells up to its window — the permit bound that keeps a whole
     search's candidates from becoming resident execution — and yields each
     outcome as it arrives; the runner persists each cell before pulling the
-    next. A lost lane is that cell's loss: it is re-offered under an
-    advanced task generation within the retry allowance while healthy
-    siblings keep delivering, and a loss past the bound stops the search
-    honestly. A straggler from a superseded re-offer is discarded against
-    the task generation, never persisted.
+    next. The window arithmetic, the epoch fence, the cancellation poll and
+    the budget settlement live in the shared owner base (#3049); this
+    subclass is exactly grid's per-arrival policy: a lost lane's cell is
+    re-offered under an advanced task generation within the retry
+    allowance while healthy siblings keep delivering, a loss past the bound
+    stops the search honestly, and a delivered cancellation re-raises on
+    the runner's terms.
     """
 
     def __init__(
@@ -427,34 +392,20 @@ class PooledCellDispatch:
         on_facts: Callable[[Mapping[str, Any]], None] = lambda facts: None,
         on_capacity_handoff: Callable[[], None] = lambda: None,
     ) -> None:
-        if workers < 1:
-            raise ValueError("a worker pool has at least one lane")
-        self._context = context
+        super().__init__(context, workers=workers, window=window, pool=pool, on_capacity_handoff=on_capacity_handoff)
         self._ready = ready
-        self._worker_count = workers
-        self._window = max(window, workers)
-        self._on_facts = on_facts
-        context.decoded_cache_bytes = pooled_cache_bytes(workers)
-        self._owns_pool = pool is None
-        self._pool = pool or SharedWorkerPool(
-            workers=workers,
-            submission_bound=max(SUBMISSION_FACTOR * workers, self._window),
-            payload_bound_bytes=DEFAULT_PAYLOAD_BOUND_BYTES,
-            result_bound_bytes=DEFAULT_RESULT_BOUND_BYTES,
-        )
-        self._epoch = 0
-        self._epoch_lock = threading.Lock()
-        self._outstanding = 0
-        self._handle: OwnerHandle | None = self._pool.register(
-            context,
-            window=self._window,
-            epoch_of=self._current_epoch,
-            on_capacity_handoff=on_capacity_handoff,
-        )
+        self._on_facts_callback = on_facts
 
-    def _current_epoch(self) -> int:
-        with self._epoch_lock:
-            return self._epoch
+    def _facts_payload(self, ready_width: int, adaptive_wait_ms: int) -> dict[str, Any]:
+        return {
+            **self._pool.facts(),
+            "ready_width": ready_width,
+            "window": self._window,
+            "adaptive_wait_ms": adaptive_wait_ms,
+        }
+
+    def _on_facts(self, payload: dict[str, Any]) -> None:
+        self._on_facts_callback(payload)
 
     def __call__(self, cells: Iterable[RunSpec]) -> Iterator[tuple[RunSpec, CellResult]]:
         owed: dict[str, ReadyCell] = {}
@@ -463,120 +414,37 @@ class PooledCellDispatch:
             item = self._ready(candidate)
             owed[item.key] = item
             candidates[item.key] = candidate
-        with self._epoch_lock:
-            self._epoch += 1
-            epoch = self._epoch
-        submitted: set[str] = set()
         retries: dict[str, int] = {}
-        self._outstanding = 0
-        adaptive_wait_ms = 0
-        self._emit_facts(len(owed), adaptive_wait_ms)
+        epoch, state = self._begin(len(owed))
         try:
-            self._feed(owed, submitted, epoch)
-            while owed:
-                try:
-                    cancelled = self._context.cancel_check()
-                except (JobCancelled, GenerationFencedError):
-                    self._interrupt(epoch)
-                    raise
-                if cancelled:
-                    self._interrupt(epoch)
-                    raise JobCancelled("cancelled between pooled grid cell tasks")
-                waited_at = time.monotonic()
-                try:
-                    key, task_gen, arrival = self._handle.arrived.get(timeout=0.2)
-                except queue.Empty:
-                    adaptive_wait_ms += int((time.monotonic() - waited_at) * 1000)
-                    self._feed(owed, submitted, epoch)
-                    continue
-                item = owed.get(key)
-                if item is None or item.task_gen != task_gen:
-                    logger.warning(
-                        "a pooled worker delivered an outcome the current grid search no longer owes",
-                        extra={"action": "grid_search_pool_straggler_discarded", "params_hash": key},
-                    )
-                    self._handle.consume(key, task_gen)
-                    continue
+            for item, arrival in self._pump(owed, state, epoch):
                 if isinstance(arrival, WorkerLost):
-                    self._handle.consume(key, task_gen)
-                    self._outstanding -= 1
-                    retries[key] = retries.get(key, 0) + 1
-                    if retries[key] > RETRY_ALLOWANCE:
+                    retries[item.key] = retries.get(item.key, 0) + 1
+                    if retries[item.key] > RETRY_ALLOWANCE:
                         raise WorkerLost(
-                            f"grid cell {key[:8]} lost its worker {retries[key]} times; "
+                            f"grid cell {item.key[:8]} lost its worker {retries[item.key]} times; "
                             "the search stops rather than record a cell that never ran"
                         )
-                    owed[key] = replace(item, task_gen=item.task_gen + 1)
-                    submitted.discard(key)
+                    owed[item.key] = replace(item, task_gen=item.task_gen + 1)
+                    state.submitted.discard(item.key)
                     logger.warning(
                         "a pooled research worker was lost with grid cell %s in flight; re-offering under generation %s",
-                        key[:8],
-                        owed[key].task_gen,
-                        extra={"action": "grid_search_cell_reoffered", "params_hash": key},
+                        item.key[:8],
+                        owed[item.key].task_gen,
+                        extra={"action": "grid_search_cell_reoffered", "params_hash": item.key},
                     )
-                    self._feed(owed, submitted, epoch)
-                    continue
-                if isinstance(arrival, BaseException):
-                    self._handle.consume(key, task_gen)
-                    if isinstance(arrival, (JobCancelled, GenerationFencedError)):
-                        self._interrupt(epoch)
-                    else:
-                        with self._epoch_lock:
-                            if self._epoch == epoch:
-                                self._epoch += 1
-                    raise arrival
-                self._handle.consume(key, task_gen)
-                self._outstanding -= 1
-                del owed[key]
-                if arrival.cancelled_by is not None:
+                elif arrival.cancelled_by is not None:
                     self._interrupt(epoch)
                     raise arrival.cancelled_by
-                assert arrival.cell is not None  # only a cancellation delivers without one
-                yield candidates.pop(key), arrival.cell
+                else:
+                    assert arrival.cell is not None  # only a cancellation delivers without one
+                    yield candidates.pop(item.key), arrival.cell
                 # The runner resumed — the cell it took is durable — so the
-                # window opens by one for the next submission.
-                self._feed(owed, submitted, epoch)
+                # window opens by one for the next submission (or the lost
+                # cell's re-offer takes the freed permit).
+                self._feed(owed, state, epoch)
         finally:
-            self._emit_facts(len(owed), adaptive_wait_ms)
-
-    def _feed(self, owed: Mapping[str, ReadyCell], submitted: set[str], epoch: int) -> None:
-        handle = self._handle
-        if handle is None:
-            return
-        for key, item in owed.items():
-            if key in submitted:
-                continue
-            if self._outstanding >= self._window:
-                return
-            if not handle.offer(epoch, item):
-                return
-            submitted.add(key)
-            self._outstanding += 1
-
-    def _interrupt(self, epoch: int) -> None:
-        with self._epoch_lock:
-            if self._epoch == epoch:
-                self._epoch += 1
-        if self._handle is not None:
-            self._handle.interrupt_running()
-
-    def cancel(self) -> None:
-        with self._epoch_lock:
-            self._epoch += 1
-        if self._handle is not None:
-            self._handle.interrupt_running()
-
-    def _emit_facts(self, ready_width: int, adaptive_wait_ms: int) -> None:
-        self._on_facts(
-            {**self._pool.facts(), "ready_width": ready_width, "window": self._window, "adaptive_wait_ms": adaptive_wait_ms}
-        )
-
-    def close(self) -> None:
-        if self._handle is not None:
-            self._handle.close()
-            self._handle = None
-        if self._owns_pool:
-            self._pool.close()
+            self._emit_facts(len(owed), state.adaptive_wait_ms)
 
 
 # ── What the runtime builds (#3049) ───────────────────────────────────────

@@ -538,6 +538,11 @@ def execute(
             skip_params_hashes=frozenset(existing),
         )
     except JobCancelled:
+        # The pre-reconciliation reap (#3065's rule): stop the dispatch's
+        # workers before the terminal writes, so the children never wait out
+        # the ranking read and the fenced finish.
+        if dispatch is not None:
+            dispatch.cancel()
         winner = leader(run_sync(with_connection(repo.list_all_cells, search_id)), spec.measure, min_trades=spec.min_trades)
         _finish(search_id, attempt, "cancelled", winner, True, None)
         raise

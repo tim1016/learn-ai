@@ -328,13 +328,21 @@ def _run_one_task(
     cancel_flag: threading.Event,
     state: dict[str, Any],
 ) -> None:
-    if task.get("kind") is not None:
+    kind = task.get("kind")
+    if kind is not None:
         # A sibling caller's task kind rides the same child (#3049): Grid
         # Search cells carry their own wire and projection. The golden
         # evaluation stays the unmarked default, so existing wires and
-        # fixtures need no migration.
-        from app.research.grid_search.dispatch import run_grid_cell_task
+        # fixtures need no migration. A kind this child does not know is a
+        # version skew — refused as loudly as an identity mismatch, never
+        # answered as a failed run that would persist as evidence.
+        from app.research.grid_search.dispatch import GRID_WIRE_KIND, run_grid_cell_task
 
+        if kind != GRID_WIRE_KIND:
+            out.write(
+                {"type": "identity_refused", "key": task.get("key", "?"), "reason": f"unknown task kind {kind!r}"}
+            )
+            return
         run_grid_cell_task(task, out=out, ask_admission=ask_admission, cancel_flag=cancel_flag, state=state)
         return
 
@@ -846,20 +854,15 @@ def delivered_outcome(item: ReadyEvaluation, message: Mapping[str, Any]) -> Deli
     )
 
 
-class WorkerDispatch:
-    """The :data:`BatchDispatch` a stage's evaluator runs through (#3044, #3045).
+class ChildOwnerDispatch:
+    """The one-child lifecycle both serial dispatches share (#3044, #3049).
 
-    Serial in effect — one worker, one task lane, logical order preserved —
-    with the parent's ``run`` callable deliberately unused: the coordinator
-    never executes and never enters the engine gate. Delivery is lazy: one
-    outcome is yielded after the evaluator consumed its predecessor, so each
-    result is durable before the next evaluation begins (#3045). Child
-    failures arrive as failed metrics (evidence, like any engine failure);
-    a lost worker interrupts the batch for the evaluator's bounded
-    re-admission — the dead child is killed and reaped here, before any
-    replacement exists, and the next dispatch through this same adapter
-    spawns a fresh one with an empty decoded cache, never a second child
-    beside the first (#3045).
+    Owns the child's life — spawn only when alive, replace a between-tasks
+    corpse before the next item runs, cancel and reap promptly, close on
+    every exit — and the between-items cancellation poll. A subclass
+    supplies the wire, the outcome decode and its per-arrival policy; the
+    golden evaluator's answers and Grid Search's cells ride the same
+    lifecycle, never a second child beside the first (#3045).
     """
 
     def __init__(self, context: WorkerDispatchContext) -> None:
@@ -892,26 +895,55 @@ class WorkerDispatch:
             self._worker.cancel()
 
     def cancel(self) -> None:
-        """The evaluator's pre-reconciliation reap (#3065 review): stop the child now."""
+        """The pre-reconciliation reap (#3065 review): stop the child now."""
         self._cancel()
+
+    def _poll_cancel(self) -> None:
+        """The between-items poll: raise-only cancel plus the coordinator fence, child stopped either way (#3045)."""
+        from app.jobs.progress import JobCancelled
+        from app.research.persistence.ownership import GenerationFencedError
+
+        try:
+            cancelled = self._context.cancel_check()
+        except (JobCancelled, GenerationFencedError):
+            # The production polls raise (#3041): the child stops on every
+            # cancellation or fencing path, never only the returning one.
+            self._cancel()
+            raise
+        if cancelled:
+            # A truthy return is a cancel token; nothing persists (#3040's contract).
+            self._cancel()
+            raise JobCancelled("cancelled between research worker tasks")
+
+    def close(self) -> None:
+        worker, self._worker = self._worker, None
+        if worker is not None:
+            worker.close()
+
+
+class WorkerDispatch(ChildOwnerDispatch):
+    """The :data:`BatchDispatch` a stage's evaluator runs through (#3044, #3045).
+
+    Serial in effect — one worker, one task lane, logical order preserved —
+    with the parent's ``run`` callable deliberately unused: the coordinator
+    never executes and never enters the engine gate. Delivery is lazy: one
+    outcome is yielded after the evaluator consumed its predecessor, so each
+    result is durable before the next evaluation begins (#3045). Child
+    failures arrive as failed metrics (evidence, like any engine failure);
+    a lost worker interrupts the batch for the evaluator's bounded
+    re-admission — the dead child is killed and reaped here, before any
+    replacement exists, and the next dispatch through this same adapter
+    spawns a fresh one with an empty decoded cache, never a second child
+    beside the first (#3045). The child lifecycle is the shared serial base's
+    (#3049); this subclass is exactly the evaluator's wire and decode.
+    """
 
     def __call__(self, run, batch):  # BatchDispatch signature; run unused by design
         from app.jobs.progress import JobCancelled
         from app.research.persistence.ownership import GenerationFencedError
 
         for item in batch:
-            try:
-                cancelled = self._context.cancel_check()
-            except (JobCancelled, GenerationFencedError):
-                # The production polls raise (#3041): the child stops on every
-                # cancellation or fencing path, never only the returning one (#3045).
-                self._cancel()
-                raise
-            if cancelled:
-                # A truthy return is a cancel token; the reservations release and
-                # nothing persists (#3040's contract).
-                self._cancel()
-                raise JobCancelled("cancelled between research worker tasks")
+            self._poll_cancel()
             task = task_wire(
                 item,
                 strategy_key=self._context.strategy_key,
@@ -933,11 +965,6 @@ class WorkerDispatch:
                 yield outcome
                 return
             yield outcome
-
-    def close(self) -> None:
-        worker, self._worker = self._worker, None
-        if worker is not None:
-            worker.close()
 
 
 def worker_dispatch_factory(

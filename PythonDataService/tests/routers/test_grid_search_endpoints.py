@@ -396,3 +396,25 @@ async def test_a_runtime_dispatch_runs_cells_through_the_gated_worker(client, la
     assert built["emit_renews_lease"] is False, "in the runtime, only accepted checkpoints renew the lease (#3041)"
     assert built["attempt"] == 1
     assert fake_redis.expires, "the gated run renewed the lease through accepted checkpoints"
+
+
+async def test_a_live_resume_redelivery_joins_the_first_worker_before_any_refusal(client, lake, monkeypatch) -> None:
+    """A transport retry of a live Finish joins the first worker instead of reading NOT_RESUMABLE (#3049)."""
+    _requires_ephemeral_db()
+    job = f"job-resume-redelivery-{id(monkeypatch)}"
+    runs: list[str] = []
+
+    monkeypatch.setattr(grid_search_router, "run_in_thread", lambda job_id, work, **kwargs: runs.append(job_id))
+    monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: True)
+
+    async with client as c:
+        first = await c.post("/api/jobs-internal/grid-search", json={**_body(), "jobId": job})
+        search_id = first.json()["search_id"]
+
+        redelivered = await c.post(
+            "/api/jobs-internal/grid-search", json={"jobId": job, "resumeSearchId": search_id}
+        )
+
+    assert redelivered.status_code == 202, redelivered.text
+    assert redelivered.json() == {"job_id": job, "search_id": search_id, "status": "queued"}
+    assert runs == [job], "the Finish redelivery claimed no second attempt"

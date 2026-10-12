@@ -14,18 +14,20 @@ Validated against: tests/research/grid_search/test_runner.py.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from app.research.grid_search.models import CellResult
 from app.research.sweep.execution import run_each
 from app.research.sweep.grid import RunSpec
 
-if TYPE_CHECKING:
-    # Annotation-only: importing the dispatch here would cycle through the
-    # engine adapter back into this module's service.
-    from app.research.grid_search.dispatch import CellDispatch
+#: What the runtime's dispatch delivers (#3049): each arrival as its
+#: ``(candidate, result)`` pair, in arrival order — this loop persists and
+#: counts as it consumes, so arrival order is free and logical order is the
+#: ranking's. Defined here, beside the parameter it names; the dispatch
+#: module cannot be imported at this module's top (it would cycle through
+#: the engine adapter back into this package's service).
+CellDispatch = Callable[[Iterable[RunSpec]], Iterator[tuple[RunSpec, CellResult]]]
 
 
 @dataclass(frozen=True)
@@ -94,6 +96,11 @@ def run_grid(
             if result.status == "failed":
                 on_cell_failed(spec, result.error or "cell failed")
             _counted(result)
+        # The serial loop's last poll (#1928 review F12): a cancel that lands
+        # while the final cell executes is observed once more after it
+        # persists, so the search records cancelled — never a silent
+        # completed over an acknowledged cancellation.
+        cancel_check()
         return GridRunSummary(
             expected_cells=expected_cells, executed_cells=executed, completed_cells=completed, failed_cells=executed - completed
         )
