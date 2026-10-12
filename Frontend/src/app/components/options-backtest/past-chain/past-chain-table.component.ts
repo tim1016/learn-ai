@@ -36,6 +36,8 @@ export class PastChainTableComponent {
   readonly view = input.required<ChainView>();
   /** The `expiry_ms` that was picked: said back when the date does not list it. */
   readonly expiryMs = input<number | null>(null);
+  /** The chain on screen is the last answer, while the same question is read again. */
+  readonly again = input(false);
   /** The download card offers to fetch what is missing, so the card can point to it. */
   readonly downloadOffered = input(false);
   readonly retry = output();

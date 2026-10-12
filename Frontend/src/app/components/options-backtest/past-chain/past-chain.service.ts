@@ -4,7 +4,7 @@ import { firstValueFrom } from 'rxjs';
 
 import { isRecord } from '../../../api/operator-blocker.types';
 import { refusalBody } from '../../../shared/errors/refusal-body';
-import type { ValidationDetail } from '../options-backtest.service';
+import { readDetail, type ValidationDetail } from '../options-backtest.service';
 import type { ChainDay, ChainExpiry, DownloadAnswer, DownloadRequest } from './past-chain.types';
 
 /** Relative, so the dev proxy can carry the guarded download: it adds the data plane's control secret itself. */
@@ -26,6 +26,12 @@ export interface ExpiryQuery extends DayQuery {
   readonly expiryMs: number;
   readonly atMs: number | null;
   readonly strikes: string | null;
+}
+
+/** Whether two questions are the same one: a read is made again only for a different question, not for a new object that says the same. */
+export function sameExpiryQuery(a: ExpiryQuery | undefined, b: ExpiryQuery | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return a.underlying === b.underlying && a.tradingDateMs === b.tradingDateMs && a.expiryMs === b.expiryMs && a.atMs === b.atMs && a.strikes === b.strikes;
 }
 
 /** The server refused with a reason of its own: its code, its sentence, and the status it came with (400 or 503). */
@@ -122,13 +128,6 @@ function toInvalid(error: unknown): PastChainInvalidError | null {
   const detail: unknown = isRecord(error.error) ? error.error['detail'] : undefined;
   const found = Array.isArray(detail) ? detail.flatMap(readDetail) : [];
   return new PastChainInvalidError(found.length > 0 ? found : [{ loc: [], msg: 'The server did not accept the request.' }]);
-}
-
-function readDetail(entry: unknown): ValidationDetail[] {
-  if (!isRecord(entry)) return [];
-  const { loc, msg } = entry;
-  if (typeof msg !== 'string' || !Array.isArray(loc)) return [];
-  return [{ loc: loc.filter((part): part is string | number => typeof part === 'string' || typeof part === 'number'), msg }];
 }
 
 function toNotAllowed(error: unknown): DownloadNotAllowedError | null {

@@ -38,6 +38,9 @@ export function chosenMinute(text: string, tradingDateMs: number | null, session
   return { kind: 'at', atMs };
 }
 
+/** What the time box says when it holds half a time, or was emptied after a time was typed: it is not read as the close. */
+export const INCOMPLETE_TIME = 'Enter a complete time, hours and minutes. Until you do, the chain keeps the last time it was read for.';
+
 /** An instant as the New York clock minute, through the shared display. */
 function clockOf(ms: number): string {
   return formatTimestampDisplay(ms, { mode: 'et', granularity: 'minute' });

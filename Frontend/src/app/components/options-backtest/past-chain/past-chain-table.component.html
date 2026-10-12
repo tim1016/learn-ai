@@ -2,6 +2,7 @@
 @if (state.kind !== 'no_day') {
   <section class="card" aria-labelledby="ob-chain-title">
     <div class="card__head"><h2 id="ob-chain-title">Chain</h2></div>
+    @if (again()) { <p class="muted" role="status">Reading again. What is shown is the last answer.</p> }
     @if (state.kind === 'no_expiry') {
       <p class="muted" role="status">No expiry is open. Open one above to read its chain.</p>
     } @else if (state.kind === 'blocked') {

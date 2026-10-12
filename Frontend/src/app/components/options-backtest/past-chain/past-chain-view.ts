@@ -43,10 +43,14 @@ export function readStatusOf(status: ResourceStatus): 'idle' | 'loading' | 'erro
   return status === 'error' ? 'error' : 'ready';
 }
 
+/**
+ * The day for a status and the answer to show. An answer that is being read again for the same question is passed in
+ * and shown meanwhile; with none, a read in progress is `loading`.
+ */
 export function dayViewOf(status: ResourceStatus, day: ChainDay | null, problem: ReadProblem | null): DayView {
   const read = readStatusOf(status);
   if (read === 'idle') return { kind: 'pick' };
-  if (read === 'loading') return { kind: 'loading' };
+  if (read === 'loading') return day === null ? { kind: 'loading' } : listingOf(day);
   if (read === 'error' || day === null) return problem === null ? { kind: 'failed', message: 'The listing could not be read.', code: null, canRetry: true } : failedDay(problem);
   return listingOf(day);
 }
@@ -92,14 +96,15 @@ export interface ChainInputs {
   readonly problem: ReadProblem | null;
 }
 
+/** The chain card for what the tab holds: a chain that is being read again for the same question is passed in and shown meanwhile. */
 export function chainViewOf(inputs: ChainInputs): ChainView {
   if (!inputs.dayReady) return { kind: 'no_day' };
   if (!inputs.expiryPicked) return { kind: 'no_expiry' };
   if (inputs.blockedBy !== null) return { kind: 'blocked', control: inputs.blockedBy };
   const read = readStatusOf(inputs.status);
   const chain = inputs.chain;
-  if (read === 'idle' || read === 'loading') return { kind: 'loading' };
   if (chain !== null && read !== 'error') return chainOf(chain);
+  if (read === 'idle' || read === 'loading') return { kind: 'loading' };
   const problem = inputs.problem;
   if (problem === null) return { kind: 'failed', message: 'The chain could not be read.', code: null, canRetry: true };
   // A refusal about a control is said at that control; the table has nothing to show meanwhile.

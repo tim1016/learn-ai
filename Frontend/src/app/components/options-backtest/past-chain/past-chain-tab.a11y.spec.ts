@@ -65,6 +65,18 @@ describe('the Past chain tab for a screen reader', () => {
     expect(await violations()).toEqual([]);
   });
 
+  it('has no violation while a listing is read again after a download, with the tables still on screen', async () => {
+    const pending = deferred<ReturnType<typeof chainDay>>();
+    const day = vi.fn().mockResolvedValueOnce(chainDay()).mockReturnValueOnce(pending.promise);
+    await renderChainTab(fakeChainService(vi, { day, download: vi.fn(async () => downloadAnswer([item('contract', 'SPY261016P00601000', 'fetched')])) }));
+    await openStandardChain();
+    fireEvent.click(screen.getByRole('button', { name: 'Download missing data' }));
+    await screen.findAllByText('Reading again. What is shown is the last answer.');
+
+    expect(await violations()).toEqual([]);
+    pending.resolve(chainDay());
+  });
+
   it('has no violation while a read is going', async () => {
     const pending = deferred<ReturnType<typeof chainDay>>();
     await renderChainTab(fakeChainService(vi, { day: vi.fn(() => pending.promise) }));

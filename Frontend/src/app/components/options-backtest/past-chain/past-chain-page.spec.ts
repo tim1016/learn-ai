@@ -2,7 +2,8 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
-import { reads } from '../testing/page-actions';
+import { lettingGo, openExample, pickDates, reads } from '../testing/page-actions';
+import { fakeService } from '../testing/render-page';
 import type { DownloadAnswer } from './past-chain.types';
 import { deferred } from './testing/deferred';
 import { chainDay, downloadAnswer, item, TRADING_DATE, TRADING_DATE_MS } from './testing/fixtures';
@@ -37,6 +38,23 @@ describe('the Past chain as a tab of the page', () => {
     // Not in the page at all: a bar that were only hidden would be fixed to the window and still be there for the keyboard.
     expect(screen.queryByRole('button', { name: 'Start backtest', hidden: true })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Check data', hidden: true })).toBeNull();
+  });
+
+  it('does not start a backtest from the Shift+Enter shortcut while it is shown, and does not take the key', async () => {
+    const service = fakeService(vi);
+    await renderPageWithChain(vi, fakeChainService(vi), service);
+    await openExample();
+    pickDates('2026-09-14', '2026-09-18');
+    await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Start backtest' }).disabled).toBe(false));
+    openChainTab();
+    await screen.findByRole('heading', { name: 'Past chain' });
+
+    const event = new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true, cancelable: true });
+    document.body.dispatchEvent(event);
+    await lettingGo();
+
+    expect(service.startRun).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
   });
 
   it('is made once and kept: leaving it and coming back finds the date, the expiry and the chain where they were', async () => {

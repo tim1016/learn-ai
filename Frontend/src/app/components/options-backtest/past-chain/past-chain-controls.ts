@@ -12,6 +12,9 @@ export interface ChainControls {
 
 export const NO_CONTROLS: ChainControls = { underlying: '', date: '', time: '', strikes: '' };
 
+/** How long the strikes box waits after a keystroke before it counts as typed. Leaving the box or pressing Enter counts at once. */
+export const STRIKES_PAUSE_MS = 400;
+
 /** What the strikes box says: nothing (the server's own number), a count as the digits typed, or a refusal. */
 export type ChosenStrikes =
   | { readonly kind: 'default' }

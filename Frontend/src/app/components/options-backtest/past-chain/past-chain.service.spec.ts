@@ -4,7 +4,7 @@ import { TestBed } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { dataPlaneControlIntentInterceptor } from '../../../security/data-plane-control-intent.interceptor';
-import { DownloadNotAllowedError, PastChainInvalidError, PastChainRefusedError, PastChainService } from './past-chain.service';
+import { DownloadNotAllowedError, PastChainInvalidError, PastChainRefusedError, PastChainService, sameExpiryQuery, type ExpiryQuery } from './past-chain.service';
 import { chainDay, chainExpiry, downloadAnswer, EXPIRY_MS, TRADING_DATE_MS } from './testing/fixtures';
 
 const BASE = '/api/research/options-backtest/past-chain';
@@ -193,5 +193,29 @@ describe('PastChainService', () => {
       const error = await pending.catch((caught: unknown) => caught);
       expect(error).not.toBeInstanceOf(DownloadNotAllowedError);
     });
+  });
+});
+
+describe('whether two questions about a chain are the same one', () => {
+  const asked: ExpiryQuery = { underlying: 'SPY', tradingDateMs: TRADING_DATE_MS, expiryMs: EXPIRY_MS['2026-10-16'], atMs: null, strikes: null };
+
+  it('is so for another object that says the same, and for two questions not asked at all', () => {
+    expect(sameExpiryQuery(asked, { ...asked })).toBe(true);
+    expect(sameExpiryQuery(undefined, undefined)).toBe(true);
+  });
+
+  it.each([
+    ['underlying', { underlying: 'AAPL' }],
+    ['date', { tradingDateMs: TRADING_DATE_MS + 86_400_000 }],
+    ['expiry', { expiryMs: EXPIRY_MS['2026-10-30'] }],
+    ['time', { atMs: TRADING_DATE_MS + 60_000 }],
+    ['strikes', { strikes: '3' }],
+  ])('is not so when the %s differs', (_name, changes) => {
+    expect(sameExpiryQuery(asked, { ...asked, ...changes })).toBe(false);
+  });
+
+  it('is not so for a question and none', () => {
+    expect(sameExpiryQuery(asked, undefined)).toBe(false);
+    expect(sameExpiryQuery(undefined, asked)).toBe(false);
   });
 });

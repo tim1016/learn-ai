@@ -6,6 +6,7 @@
   <div class="fields">
     <div class="field">
       <app-symbol-picker appearance="field" label="Chain underlying" adjustmentMode="raw" [symbol]="form().underlying().value()" (symbolChange)="form().underlying().value.set($event)" />
+      <p id="ob-chain-underlying-note" class="words">Picking a symbol the lake holds no bars for starts a backfill of its trade bars first, with progress shown here and a way to cancel. The chain's own data is fetched only by Download missing data.</p>
       @if (underlyingProblem(); as message) { <p class="problem" role="alert">{{ message }}</p> }
     </div>
     <div class="field">
@@ -19,15 +20,15 @@
         @if (timeProblem(); as message) {
           <span class="problem" role="alert">{{ message }}</span>
         } @else if (session(); as day) {
-          Empty means the close, <app-timestamp-display [value]="day.closeMs" mode="et" granularity="minute" />
+          Until you type a time, the chain is read at the close, <app-timestamp-display [value]="day.closeMs" mode="et" granularity="minute" />
         } @else {
-          Empty means the close of the session.
+          Until you type a time, the chain is read at the close of the session.
         }
       </p>
     </div>
     <div class="field field--narrow">
       <label for="ob-chain-strikes">Strikes each side of the money</label>
-      <input id="ob-chain-strikes" pInputText type="text" inputmode="numeric" autocomplete="off" [attr.placeholder]="strikesShown()" [formField]="form().strikes" [attr.aria-invalid]="strikesProblem() !== null" aria-describedby="ob-chain-strikes-note" />
+      <input id="ob-chain-strikes" pInputText type="text" inputmode="numeric" autocomplete="off" [attr.placeholder]="strikesShown()" [formField]="form().strikes" (keydown.enter)="commitStrikes()" [attr.aria-invalid]="strikesProblem() !== null" aria-describedby="ob-chain-strikes-note" />
       <p id="ob-chain-strikes-note" class="words">
         @if (strikesProblem(); as message) {
           <span class="problem" role="alert">{{ message }}</span>

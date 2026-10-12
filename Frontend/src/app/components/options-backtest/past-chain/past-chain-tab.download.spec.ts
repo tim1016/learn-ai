@@ -4,10 +4,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { pickSymbol } from '../../../shared/symbol-picker/testing/fake-picker-world';
 import { paragraph, reads } from '../testing/page-actions';
 import { DownloadNotAllowedError, PastChainInvalidError, PastChainRefusedError } from './past-chain.service';
-import type { DownloadAnswer, DownloadRequest } from './past-chain.types';
+import type { ChainDay, ChainExpiry, DownloadAnswer, DownloadRequest } from './past-chain.types';
 import { deferred } from './testing/deferred';
 import { chainDay, chainExpiry, contract, downloadAnswer, EXPIRY_MS, item, side, TRADING_DATE, TRADING_DATE_MS, underlyingPrice } from './testing/fixtures';
-import { assertNewYorkTimes, fakeChainService, openStandardChain, pickDate, renderChainTab } from './testing/render-chain';
+import { assertNewYorkTimes, expiriesTable, fakeChainService, openStandardChain, pickDate, renderChainTab } from './testing/render-chain';
 
 const button = () => screen.getByRole<HTMLButtonElement>('button', { name: 'Download missing data' });
 const call = (thousandths: number, state: Parameters<typeof contract>[0]['state'], standard = true) => contract({ right: 'call', thousandths, state, standard });
@@ -203,6 +203,34 @@ describe('what a download answers', () => {
     expect(chainTableOf().querySelectorAll('app-options-backtest-chain-contract .price').length).toBe(3);
     // The answer stays, so the owner can still read what the click did.
     expect(screen.getByRole('group', { name: 'Download result' })).toBeTruthy();
+  });
+
+  it('keeps the listing and the chain on screen while they are read again, says so quietly, and shows what was fetched when they arrive', async () => {
+    const secondDay = deferred<ChainDay>();
+    const secondChain = deferred<ChainExpiry>();
+    const day = vi.fn().mockResolvedValueOnce(chainDay()).mockReturnValueOnce(secondDay.promise);
+    const expiry = vi.fn().mockResolvedValueOnce(chainWithFiveMissing()).mockReturnValueOnce(secondChain.promise);
+    const service = fakeChainService(vi, { day, expiry, download: vi.fn(async () => answered()) });
+    await renderChainTab(service);
+    await openStandardChain();
+
+    fireEvent.click(button());
+    await waitFor(() => expect(day).toHaveBeenCalledTimes(2));
+
+    expect(expiriesTable()).toBeTruthy();
+    expect(chainTableOf()).toBeTruthy();
+    expect(screen.queryByText('Reading the listing…')).toBeNull();
+    expect(screen.queryByText('Reading the chain…')).toBeNull();
+    expect(screen.getAllByText('Reading again. What is shown is the last answer.')).toHaveLength(2);
+    secondDay.resolve(chainDay());
+    await waitFor(() => expect(expiry).toHaveBeenCalledTimes(2));
+    expect(chainTableOf()).toBeTruthy();
+    expect(screen.queryByText('Reading the chain…')).toBeNull();
+    expect(screen.getAllByText('Reading again. What is shown is the last answer.')).toHaveLength(1);
+    secondChain.resolve(chainExpiry({ calls: side('call', [call(602_000, 'traded'), call(603_000, 'traded')]), puts: side('put', [put(601_000, 'traded')]) }));
+    await waitFor(() => expect(screen.queryByText('Reading again. What is shown is the last answer.')).toBeNull());
+
+    expect(chainTableOf().querySelectorAll('app-options-backtest-chain-contract .price').length).toBe(3);
   });
 
   it('is dropped when the owner picks another date, which it was not about', async () => {

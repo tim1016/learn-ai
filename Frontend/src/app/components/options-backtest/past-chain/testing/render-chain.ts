@@ -44,7 +44,15 @@ export function typeTime(text: string): void {
   fireEvent.input(screen.getByLabelText('Time of day (New York time)'), { target: { value: text } });
 }
 
+/** Types into the strikes box and leaves it, as an owner does: what is typed counts when the box is left. */
 export function typeStrikes(text: string): void {
+  const box = screen.getByLabelText('Strikes each side of the money');
+  fireEvent.input(box, { target: { value: text } });
+  fireEvent.blur(box);
+}
+
+/** Types into the strikes box and stays in it: what is typed counts only after a pause, or when the box is left. */
+export function typeStrikesAndStay(text: string): void {
   fireEvent.input(screen.getByLabelText('Strikes each side of the money'), { target: { value: text } });
 }
 

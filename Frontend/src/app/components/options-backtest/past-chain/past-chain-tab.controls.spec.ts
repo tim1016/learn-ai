@@ -1,12 +1,12 @@
-import { screen, waitFor, within } from '@testing-library/angular';
+import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import { pickSymbol } from '../../../shared/symbol-picker/testing/fake-picker-world';
 import { paragraph, reads } from '../testing/page-actions';
 import { PastChainInvalidError, PastChainRefusedError } from './past-chain.service';
 import type { ExpiryQuery } from './past-chain.service';
-import { chainDay, chainExpiry, EXPIRY_MS, HALF_DAY, HALF_DAY_CLOSE_MS, HALF_DAY_MS, HALF_DAY_OPEN_MS, MINUTE_1545_MS, TRADING_DATE, TRADING_DATE_MS } from './testing/fixtures';
-import { expiriesTable, fakeChainService, openStandardChain, pickDate, renderChainTab, typeStrikes, typeTime } from './testing/render-chain';
+import { chainDay, chainExpiry, HALF_DAY, HALF_DAY_CLOSE_MS, HALF_DAY_MS, HALF_DAY_OPEN_MS, MINUTE_1545_MS, TRADING_DATE, TRADING_DATE_MS } from './testing/fixtures';
+import { chainTable, expiriesTable, fakeChainService, openStandardChain, pickDate, renderChainTab, typeStrikes, typeStrikesAndStay, typeTime } from './testing/render-chain';
 
 const lastExpiryQuery = (service: ReturnType<typeof fakeChainService>): ExpiryQuery => {
   const query = service.expiry.mock.lastCall?.[0];
@@ -21,7 +21,7 @@ describe('the time of day', () => {
     await openStandardChain();
 
     expect(lastExpiryQuery(service).atMs).toBeNull();
-    expect(reads(paragraph(/^Empty means the close/))).toBe('Empty means the close, 16:00 ET');
+    expect(reads(paragraph(/^Until you type a time/))).toBe('Until you type a time, the chain is read at the close, 16:00 ET');
   });
 
   it('is the minute typed, on that New York day, when it is inside the session', async () => {
@@ -37,16 +37,97 @@ describe('the time of day', () => {
     await waitFor(() => expect(reads(paragraph(/^Priced as of/))).toBe('Priced as of 15:45 ET on 2026-10-09'));
   });
 
-  it('goes back to the close when the box is emptied', async () => {
-    const service = fakeChainService(vi);
+  const timeBox = () => screen.getByLabelText('Time of day (New York time)');
+  /** What Chrome holds for `10:--`: no value, and a bad input. The page is told only that the box changed. */
+  function typeHalfATime(): void {
+    Object.defineProperty(timeBox(), 'validity', { value: { badInput: true }, configurable: true });
+    fireEvent.input(timeBox(), { target: { value: '' } });
+  }
+  function finishTheTime(text: string): void {
+    Object.defineProperty(timeBox(), 'validity', { value: { badInput: false }, configurable: true });
+    typeTime(text);
+  }
+  const answeringAtTheTimeAsked = () => fakeChainService(vi, { expiry: vi.fn(async (query: ExpiryQuery) => chainExpiry({ at_ms: query.atMs ?? 0 })) });
+
+  it('is not the close when the box is emptied after a time was typed: nothing is asked, the chain keeps the time it was read for, and the box says to enter one', async () => {
+    const service = answeringAtTheTimeAsked();
+    await renderChainTab(service);
+    await openStandardChain();
+    typeTime('15:45');
+    await waitFor(() => expect(reads(paragraph(/^Priced as of/))).toBe('Priced as of 15:45 ET on 2026-10-09'));
+    const asked = service.expiry.mock.calls.length;
+
+    typeTime('');
+
+    expect((await screen.findAllByRole('alert')).map((alert) => reads(alert))).toContain('Enter a complete time, hours and minutes. Until you do, the chain keeps the last time it was read for.');
+    expect(timeBox().getAttribute('aria-invalid')).toBe('true');
+    await new Promise((done) => setTimeout(done, 30));
+    expect(service.expiry.mock.calls.length).toBe(asked);
+    expect(chainTable()).toBeTruthy();
+    expect(reads(paragraph(/^Priced as of/))).toBe('Priced as of 15:45 ET on 2026-10-09');
+  });
+
+  it('is read again from the time that is then typed, and the box stops saying so', async () => {
+    const service = answeringAtTheTimeAsked();
     await renderChainTab(service);
     await openStandardChain();
     typeTime('15:45');
     await waitFor(() => expect(lastExpiryQuery(service).atMs).toBe(MINUTE_1545_MS));
+    typeTime('');
+    await screen.findAllByRole('alert');
+
+    typeTime('15:46');
+
+    await waitFor(() => expect(lastExpiryQuery(service).atMs).toBe(MINUTE_1545_MS + 60_000));
+    expect(screen.queryByText(/Enter a complete time/)).toBeNull();
+    expect(timeBox().getAttribute('aria-invalid')).toBe('false');
+  });
+
+  it('keeps the last time that could be read, and not one the session refused, when the box is then emptied', async () => {
+    const service = answeringAtTheTimeAsked();
+    await renderChainTab(service);
+    await openStandardChain();
+    typeTime('15:45');
+    await waitFor(() => expect(lastExpiryQuery(service).atMs).toBe(MINUTE_1545_MS));
+    typeTime('16:01');
+    await screen.findByText(/The chain is not read while the time of day holds something it cannot be asked with/);
 
     typeTime('');
 
-    await waitFor(() => expect(lastExpiryQuery(service).atMs).toBeNull());
+    await waitFor(() => expect(reads(paragraph(/^Priced as of/))).toBe('Priced as of 15:45 ET on 2026-10-09'));
+    expect((await screen.findAllByRole('alert')).map((alert) => reads(alert))).toContain('Enter a complete time, hours and minutes. Until you do, the chain keeps the last time it was read for.');
+  });
+
+  it('is not the close when the browser holds half a time either: it keeps the time before it, and says to enter one', async () => {
+    const service = answeringAtTheTimeAsked();
+    await renderChainTab(service);
+    await openStandardChain();
+    typeTime('15:45');
+    await waitFor(() => expect(reads(paragraph(/^Priced as of/))).toBe('Priced as of 15:45 ET on 2026-10-09'));
+    const asked = service.expiry.mock.calls.length;
+
+    typeHalfATime();
+
+    expect((await screen.findAllByRole('alert')).map((alert) => reads(alert))).toContain('Enter a complete time, hours and minutes. Until you do, the chain keeps the last time it was read for.');
+    await new Promise((done) => setTimeout(done, 30));
+    expect(service.expiry.mock.calls.length).toBe(asked);
+    expect(reads(paragraph(/^Priced as of/))).toBe('Priced as of 15:45 ET on 2026-10-09');
+    finishTheTime('15:50');
+    await waitFor(() => expect(lastExpiryQuery(service).atMs).toBe(MINUTE_1545_MS + 5 * 60_000));
+  });
+
+  it('is not the close when half a time is typed before any other: the chain stays as it was read, at the close', async () => {
+    const service = answeringAtTheTimeAsked();
+    await renderChainTab(service);
+    await openStandardChain();
+    const asked = service.expiry.mock.calls.length;
+
+    typeHalfATime();
+
+    expect((await screen.findAllByRole('alert')).map((alert) => reads(alert))).toContain('Enter a complete time, hours and minutes. Until you do, the chain keeps the last time it was read for.');
+    await new Promise((done) => setTimeout(done, 30));
+    expect(service.expiry.mock.calls.length).toBe(asked);
+    expect(chainTable()).toBeTruthy();
   });
 
   it.each([
@@ -75,7 +156,7 @@ describe('the time of day', () => {
     pickDate(HALF_DAY);
     await screen.findByRole('table', { name: /Every expiry the listing held/ });
 
-    expect(reads(paragraph(/^Empty means the close/))).toBe('Empty means the close, 13:00 ET');
+    expect(reads(paragraph(/^Until you type a time/))).toBe('Until you type a time, the chain is read at the close, 13:00 ET');
     typeTime('14:00');
     expect((await screen.findAllByRole('alert')).map((alert) => reads(alert))).toContain('That is after the close. Enter a time from 09:30 ET to 13:00 ET.');
   });
@@ -201,17 +282,97 @@ describe('the strikes each side of the money', () => {
   });
 });
 
+describe('the strikes box being read', () => {
+  const askedWith = (service: ReturnType<typeof fakeChainService>) => service.expiry.mock.calls.map((call) => call[0].strikes);
+
+  it('asks once for what was typed, after a pause: 14 is read for 14 and never for 1', async () => {
+    const service = fakeChainService(vi);
+    await renderChainTab(service);
+    await openStandardChain();
+
+    typeStrikesAndStay('1');
+    await new Promise((done) => setTimeout(done, 100));
+    typeStrikesAndStay('14');
+
+    await waitFor(() => expect(lastExpiryQuery(service).strikes).toBe('14'));
+    expect(askedWith(service)).toEqual([null, '14']);
+  });
+
+  it('asks at once when the box is left', async () => {
+    const service = fakeChainService(vi);
+    await renderChainTab(service);
+    await openStandardChain();
+
+    typeStrikesAndStay('7');
+    expect(askedWith(service)).toEqual([null]);
+    fireEvent.blur(screen.getByLabelText('Strikes each side of the money'));
+
+    await waitFor(() => expect(lastExpiryQuery(service).strikes).toBe('7'), { timeout: 200 });
+  });
+
+  it('asks at once on Enter', async () => {
+    const service = fakeChainService(vi);
+    await renderChainTab(service);
+    await openStandardChain();
+
+    typeStrikesAndStay('9');
+    fireEvent.keyDown(screen.getByLabelText('Strikes each side of the money'), { key: 'Enter' });
+
+    await waitFor(() => expect(lastExpiryQuery(service).strikes).toBe('9'), { timeout: 200 });
+  });
+
+  it('does not refuse half of what is being typed: the refusal is of what was committed', async () => {
+    await renderChainTab(fakeChainService(vi));
+    await openStandardChain();
+
+    typeStrikesAndStay('x');
+
+    expect(screen.queryByText('Enter a whole number of strikes, or leave the box empty.')).toBeNull();
+    expect(await screen.findByText('Enter a whole number of strikes, or leave the box empty.')).toBeTruthy();
+  });
+});
+
 describe('the underlying', () => {
-  it('is read again for the listing when it is changed, and the expiry that is open stays open', async () => {
+  it('is read again for the listing when it is changed, and the expiry that was open is put away, with the date and the time left as they were', async () => {
     const service = fakeChainService(vi);
     const view = await renderChainTab(service);
     await openStandardChain();
+    typeTime('15:45');
+    await waitFor(() => expect(lastExpiryQuery(service).atMs).toBe(MINUTE_1545_MS));
+    const chains = service.expiry.mock.calls.length;
 
     pickSymbol(view.fixture, 'AAPL');
 
     await waitFor(() => expect(service.day).toHaveBeenCalledTimes(2));
     expect(service.day.mock.lastCall?.[0]).toMatchObject({ underlying: 'AAPL', tradingDateMs: TRADING_DATE_MS });
-    await waitFor(() => expect(lastExpiryQuery(service)).toMatchObject({ underlying: 'AAPL', expiryMs: EXPIRY_MS['2026-10-16'] }));
+    expect(await screen.findByText('No expiry is open. Open one above to read its chain.')).toBeTruthy();
+    expect(screen.queryByRole('table', { name: /Calls on the left/ })).toBeNull();
+    expect(within(expiriesTable()).getAllByRole('button', { name: /Show chain/ }).every((button) => button.getAttribute('aria-pressed') === 'false')).toBe(true);
+    expect((screen.getByLabelText('Trading date') as HTMLInputElement).value).toBe(TRADING_DATE);
+    expect((screen.getByLabelText('Time of day (New York time)') as HTMLInputElement).value).toBe('15:45');
+    await new Promise((done) => setTimeout(done, 30));
+    expect(service.expiry.mock.calls.length).toBe(chains);
+  });
+
+  it('does not bring the old expiry back when the first underlying is picked again', async () => {
+    const service = fakeChainService(vi);
+    const view = await renderChainTab(service);
+    await openStandardChain();
+    pickSymbol(view.fixture, 'AAPL');
+    await screen.findByText('No expiry is open. Open one above to read its chain.');
+
+    pickSymbol(view.fixture, 'SPY');
+
+    await waitFor(() => expect(service.day).toHaveBeenCalledTimes(3));
+    expect(await screen.findByText('No expiry is open. Open one above to read its chain.')).toBeTruthy();
+    expect(service.expiry).toHaveBeenCalledTimes(1);
+  });
+
+  it('says what picking a symbol the lake holds no bars for will do, since the chain is fetched by the download and not by the pick', async () => {
+    await renderChainTab(fakeChainService(vi));
+
+    expect(screen.getByText(/Picking a symbol the lake holds no bars for starts a backfill of its trade bars first/)).toBeTruthy();
+    expect(screen.getByText(/The chain's own data is fetched only by Download missing data\./)).toBeTruthy();
   });
 
   it('is asked for a listing only once there is a date', async () => {

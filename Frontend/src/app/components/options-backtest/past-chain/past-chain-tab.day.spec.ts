@@ -23,7 +23,7 @@ describe('the Past chain tab, before a date is picked', () => {
 
     expect(screen.getByRole('combobox', { name: /chain underlying/i })).toBeTruthy();
     expect(reads(screen.getByRole('combobox', { name: /chain underlying/i }))).toContain('AAPL');
-    expect(screen.getByText(/Empty means the close of the session/)).toBeTruthy();
+    expect(screen.getByText(/Until you type a time, the chain is read at the close of the session/)).toBeTruthy();
   });
 });
 

@@ -11,7 +11,13 @@ describe('what a read of the day comes to', () => {
   it('is to pick a date while nothing is asked, and to wait while it is asked', () => {
     expect(dayViewOf('idle', null, null)).toEqual({ kind: 'pick' });
     expect(dayViewOf('loading', null, null)).toEqual({ kind: 'loading' });
-    expect(dayViewOf('reloading', chainDay(), null)).toEqual({ kind: 'loading' });
+  });
+
+  it('keeps showing the listing it was given while it is read again, and says it is loading only when it has none', () => {
+    const day = chainDay();
+
+    expect(dayViewOf('loading', day, null)).toEqual({ kind: 'listed', day });
+    expect(dayViewOf('reloading', day, null)).toEqual({ kind: 'listed', day });
   });
 
   it('is the listing not being stored, its being unreadable with the lake reason, and its holding nothing usable', () => {
@@ -96,6 +102,11 @@ describe('what the read of one expiry comes to', () => {
       state: 'unreadable',
       problem: 'damaged',
     });
+  });
+
+  it('shows the chain it was given while the same chain is read again, and waits only when it has none', () => {
+    expect(chainViewOf({ ...ready, status: 'loading' })).toEqual({ kind: 'shown', chain: chainExpiry() });
+    expect(chainViewOf({ ...ready, status: 'idle' })).toEqual({ kind: 'shown', chain: chainExpiry() });
   });
 
   it('says in words the code of a listing state it does not know, whatever else the answer says of the expiry', () => {

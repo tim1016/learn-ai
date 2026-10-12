@@ -21,6 +21,8 @@ export class PastChainExpiriesComponent {
   readonly view = input.required<DayView>();
   /** The `expiry_ms` of the expiry whose chain is open, which may be one this date does not list. */
   readonly picked = input<number | null>(null);
+  /** The listing on screen is the last answer, while the same question is read again. */
+  readonly again = input(false);
   readonly pick = output<number>();
   readonly retry = output();
 
