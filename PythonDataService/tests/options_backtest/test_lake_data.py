@@ -16,6 +16,11 @@ the reader a run uses. Hand-worked figures:
   1749822030000) closes at 1749822090000, which is 30 000 ms past a whole minute.
 * The underlying's last regular-session bars: the one starting at 15:59:00 (19:59 UTC = 1749844740000) closes at
   20:00:00 = 1749844800000, the one starting at 15:59:30 (1749844770000) closes at 1749844830000, off the minute.
+* The same last minute of a New York date in winter, 2025-01-15 (a Wednesday, EST = UTC-5): midnight is 05:00 UTC.
+  The epoch day of 2025-01-15 is 20103 (2025-01-01 is day 20089, and 14 days on), 20103 * 86 400 000 =
+  1736899200000, plus 18 000 000 is midnight, 1736917200000. The 09:30 open is 34 200 000 ms on, 1736951400000; the bar
+  starting at 23:59 is 86 340 000 ms on, 1737003540000, and closes at 1737003600000, which is midnight of the 16th; the
+  bar starting at 23:58 (1737003480000) closes at 1737003540000, 23:59 on the 15th.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import logging
 import shutil
 import zipfile
 import zlib
@@ -45,7 +51,6 @@ from app.options.contract import OptionContract
 from app.options_backtest.lake_data import (
     _STOCK_FILE_ERRORS,
     LakeRunData,
-    StoredBars,
     StoredListing,
     UnderlyingDayUnreadable,
 )
@@ -58,6 +63,8 @@ from tests.options_backtest._lake import (
     FRIDAY_OPEN_MS,
     MINUTE_MS,
     minute_bar,
+    option_bars_path,
+    option_day_zip,
     raw_root,
     replace_the_stored_file,
     stock_bar,
@@ -121,17 +128,25 @@ async def _read(method, *args):
     return await asyncio.to_thread(method, *args)
 
 
+def _what_the_app_logged(caplog: pytest.LogCaptureFixture) -> list[tuple[str, str]]:
+    """Every record the app wrote, at any level, as (logger, message); asyncio's own debug lines are not the app's."""
+    return [(record.name, record.getMessage()) for record in caplog.records if record.name.startswith("app")]
+
+
 # ── The underlying ───────────────────────────────────────────────────────
 
 
 async def test_the_underlying_is_its_regular_session_bars_named_by_their_close_with_the_hash_of_the_file(
-    fake_catalog: FakeCatalog, tmp_lake: Path
+    fake_catalog: FakeCatalog, tmp_lake: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     path = await store_underlying_day(fake_catalog, tmp_lake, _underlying_bars())
+    caplog.set_level(logging.DEBUG)
+    caplog.clear()
 
     read = await _read(LakeRunData("SPY").underlying_day, FRIDAY)
 
     assert read is not None
+    assert _what_the_app_logged(caplog) == []  # a day with every bar in place is read in silence
     # 09:30 -> 13:31:00, 09:31 -> 13:32:00, and 15:59 -> 20:00:00, the close. The 08:00 print is before the session and
     # the 16:00 print starts at the close: neither is a regular-session bar.
     assert [bar.close_ms for bar in read.value] == [1749821460000, 1749821520000, 1749844800000]
@@ -361,50 +376,98 @@ async def test_a_day_only_the_split_adjusted_tree_holds_is_not_captured(
     assert await _read(LakeRunData("SPY").underlying_day, FRIDAY) is None
 
 
-def _left_out_warnings(caplog: pytest.LogCaptureFixture) -> list[tuple[str, int]]:
-    """Each warning that bars were left out of a read: the instrument it names and how many."""
-    return [
-        (record.instrument, record.left_out)
-        for record in caplog.records
-        if getattr(record, "action", None) == "options_backtest_bars_left_out"
-    ]
+# ── A bar no replay can place makes the day unreadable ─────────────────────
+
+WINTER = date(2025, 1, 15)  # a Wednesday and a full session; EST, so New York midnight is 05:00 UTC
+WINTER_OPEN_MS = 1736951400000
+# (the date, its 09:30 open, the bar starting in the date's last minute, 23:59 New York, and the bar before it, 23:58)
+_LAST_MINUTES = [
+    pytest.param(FRIDAY, FRIDAY_OPEN_MS, 1749873540000, 1749873480000, id="summer"),
+    pytest.param(WINTER, WINTER_OPEN_MS, 1737003540000, 1737003480000, id="winter"),
+]
 
 
-async def test_an_underlying_bar_stamped_off_the_minute_is_left_out_and_counted_and_the_rest_is_kept(
-    fake_catalog: FakeCatalog, tmp_lake: Path, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize(
+    ("offset_ms", "first_start_ms"),
+    [
+        pytest.param(1, 1749844740001, id="a millisecond past the minute"),
+        pytest.param(30_000, 1749844770000, id="half a minute past it"),
+    ],
+)
+async def test_an_underlying_day_with_a_bar_stamped_off_the_minute_is_unreadable_and_hands_nothing_over(
+    offset_ms: int, first_start_ms: int, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
+    # 15:59:00 New York is 1749844740000; the third bar starts offset_ms later and closes off a whole minute.
     await store_underlying_day(
         fake_catalog,
         tmp_lake,
         [
             stock_bar(FRIDAY_OPEN_MS, "600.00", "600.50", "599.75", "600.25"),
             stock_bar(LAST_REGULAR_START_MS, "601.10", "601.20", "601.00", "601.15"),
-            stock_bar(LAST_REGULAR_START_MS + 30_000, "601.15", "601.30", "601.10", "601.20"),
+            stock_bar(LAST_REGULAR_START_MS + offset_ms, "601.15", "601.30", "601.10", "601.20"),
         ],
     )
 
-    read = await _read(LakeRunData("SPY").underlying_day, FRIDAY)
+    with pytest.raises(UnderlyingDayUnreadable) as caught:
+        await _read(LakeRunData("SPY").underlying_day, FRIDAY)
 
-    assert read is not None and isinstance(read.value, StoredBars)
-    # 09:30:00 closes at 13:31:00 and 15:59:00 at 20:00:00; the 15:59:30 bar closes at 20:00:30, off the minute.
-    assert [bar.close_ms for bar in read.value] == [1749821460000, 1749844800000]
-    assert read.value.left_out == 1
-    assert (
-        len(bars_by_close(read.value, trading_date=FRIDAY, what="SPY")) == 2
-    )  # and a replay's reader accepts what is left
-    # It is said, not only counted: one warning, naming the underlying and the one bar.
-    assert _left_out_warnings(caplog) == [("SPY", 1)]
+    message = str(caught.value)
+    assert "SPY" in message and "1 of 3" in message and f"{first_start_ms} ms" in message
+    assert "not on a whole minute" in message
+    assert str(tmp_lake) not in message and ".zip" not in message
 
 
-async def test_a_normal_underlying_day_leaves_nothing_out(
-    fake_catalog: FakeCatalog, tmp_lake: Path, caplog: pytest.LogCaptureFixture
+async def test_an_underlying_day_with_several_bars_off_the_minute_counts_them_all_and_names_the_first(
+    fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
-    await store_underlying_day(fake_catalog, tmp_lake, _underlying_bars())
+    # 09:30:30 (1749821430000) and 15:59:00.001 (1749844740001) are off the minute, 09:30:00 and 15:59:00 are not.
+    await store_underlying_day(
+        fake_catalog,
+        tmp_lake,
+        [
+            stock_bar(FRIDAY_OPEN_MS, "600.00", "600.50", "599.75", "600.25"),
+            stock_bar(FRIDAY_OPEN_MS + 30_000, "600.25", "600.60", "600.20", "600.40"),
+            stock_bar(LAST_REGULAR_START_MS, "601.10", "601.20", "601.00", "601.15"),
+            stock_bar(LAST_REGULAR_START_MS + 1, "601.15", "601.30", "601.10", "601.20"),
+        ],
+    )
 
-    read = await _read(LakeRunData("SPY").underlying_day, FRIDAY)
+    with pytest.raises(UnderlyingDayUnreadable) as caught:
+        await _read(LakeRunData("SPY").underlying_day, FRIDAY)
 
-    assert read is not None and read.value.left_out == 0 and len(read.value) == 3
-    assert _left_out_warnings(caplog) == []
+    message = str(caught.value)
+    assert "2 of 4" in message and "1749821430000 ms" in message and "1749844740001" not in message
+
+
+@pytest.mark.parametrize(("day", "open_ms", "last_start_ms", "before_last_start_ms"), _LAST_MINUTES)
+async def test_an_underlying_bar_that_closes_on_the_next_new_york_date_makes_the_day_unreadable(
+    day: date,
+    open_ms: int,
+    last_start_ms: int,
+    before_last_start_ms: int,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The stock reader keeps the regular session only, so a print at 23:59 in a stock file is never read (as the 08:00
+    # print above is not) and cannot reach this check. The reader is made to hand one over, which is what the check
+    # is for should its filter ever change; the bar starting at 23:59 closes at midnight, which is the next date.
+    await store_underlying_day(
+        fake_catalog, tmp_lake, [stock_bar(open_ms, "600.00", "600.50", "599.75", "600.25")], day=day
+    )
+    real_read_day = LeanMinuteDataReader.read_day
+
+    def with_the_last_minute_of_the_date(self: LeanMinuteDataReader, symbol: str, trading_date: date) -> list:
+        return [*real_read_day(self, symbol, trading_date), stock_bar(last_start_ms, "1.00", "1.00", "1.00", "1.00")]
+
+    monkeypatch.setattr(LeanMinuteDataReader, "read_day", with_the_last_minute_of_the_date)
+
+    with pytest.raises(UnderlyingDayUnreadable) as caught:
+        await _read(LakeRunData("SPY").underlying_day, day)
+
+    message = str(caught.value)
+    assert "SPY" in message and "1 of 2" in message and f"{last_start_ms} ms" in message
+    assert "closes on another New York date" in message
 
 
 # ── The listing ──────────────────────────────────────────────────────────
@@ -478,7 +541,7 @@ async def test_listing_bytes_the_catalog_does_not_admit_are_refused_and_not_read
 
 @respx.mock
 async def test_an_option_day_is_every_stored_bar_named_by_its_close_one_minute_after_its_start_with_exact_prices(
-    fake_catalog: FakeCatalog, tmp_lake: Path
+    fake_catalog: FakeCatalog, tmp_lake: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     await store_listing(_the_option_rows())
     await store_option_day(
@@ -489,10 +552,13 @@ async def test_an_option_day_is_every_stored_bar_named_by_its_close_one_minute_a
             minute_bar(390, 0.90, 0.95, 0.88, 0.92),  # the 16:00 print: stored, handed over, outside the session
         ],
     )
+    caplog.set_level(logging.DEBUG)
+    caplog.clear()
 
     read = await _read(LakeRunData("SPY").option_day, CALL_600, FRIDAY)
 
     assert read is not None
+    assert _what_the_app_logged(caplog) == []  # a day with every bar in place is read in silence
     # The vendor's starts were 13:30:00, 13:31:00 and 20:00:00 UTC; each close is a minute later.
     assert [bar.close_ms for bar in read.value] == [1749821460000, 1749821520000, 1749844860000]
     assert [(bar.open, bar.high, bar.low, bar.close) for bar in read.value] == [
@@ -504,52 +570,110 @@ async def test_an_option_day_is_every_stored_bar_named_by_its_close_one_minute_a
     assert read.sha256 == hashlib.sha256(the_file_of(raw_root(tmp_lake), BARS_PATH_600)).hexdigest()
 
 
-@respx.mock
-async def test_option_bars_no_replay_can_read_are_left_out_and_counted_and_a_bar_a_minute_inside_the_date_is_kept(
-    fake_catalog: FakeCatalog, tmp_lake: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    await store_listing(_the_option_rows())
+async def _an_option_day_holding(starts_ms: list[int], *, day: date = FRIDAY) -> OptionContract:
+    """A call whose stored day holds one bar starting at each of these instants, on a minute or not.
+
+    It is captured the way a day is, with the first bar, and the file is then replaced by one holding all the bars
+    (the capture refuses a vendor bar that is off the minute, but the lake's reader must still meet a file that has one).
+    """
+    contract = OptionContract.of(root="SPY", expiry_date=day, right="call", strike=600)
+    await store_listing([vendor_listing_row(contract)], day=day)
     await store_option_day(
-        CALL_600,
-        [
-            bar_row(0, t=FRIDAY_OPEN_MS, o=1.27, h=1.31, l=1.25, c=1.27, v=10, vw=1.27, n=1),  # 09:30:00
-            bar_row(0, t=1749822030000, o=1.30, h=1.40, l=1.28, c=1.35, v=10, vw=1.35, n=1),  # 10:00:30, off the minute
-            bar_row(0, t=1749873480000, o=0.90, h=0.95, l=0.88, c=0.92, v=10, vw=0.92, n=1),  # 23:58, closes at 23:59
-            bar_row(
-                0, t=1749873540000, o=0.80, h=0.85, l=0.78, c=0.82, v=10, vw=0.82, n=1
-            ),  # 23:59, closes at midnight
-        ],
+        contract, [bar_row(0, t=starts_ms[0], o=1.27, h=1.31, l=1.25, c=1.27, v=10, vw=1.27, n=1)], day=day
+    )
+    return contract
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("offset_ms", "first_start_ms"),
+    [
+        pytest.param(1, 1749822060001, id="a millisecond past the minute"),
+        pytest.param(30_000, 1749822090000, id="half a minute past it"),
+    ],
+)
+async def test_an_option_day_with_a_bar_stamped_off_the_minute_is_unreadable_and_hands_nothing_over(
+    offset_ms: int, first_start_ms: int, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    contract = await _an_option_day_holding([FRIDAY_OPEN_MS])
+    # 09:30 is 1749821400000; 09:40 is ten minutes on, 1749822000000; the third bar starts a minute after that, at
+    # 1749822060000, plus the offset, and closes off a whole minute.
+    starts = [FRIDAY_OPEN_MS, FRIDAY_OPEN_MS + 10 * MINUTE_MS, FRIDAY_OPEN_MS + 11 * MINUTE_MS + offset_ms]
+    replace_the_stored_file(
+        fake_catalog, raw_root(tmp_lake), option_bars_path(contract), option_day_zip(contract, starts), admit=True
     )
 
-    read = await _read(LakeRunData("SPY").option_day, CALL_600, FRIDAY)
+    with pytest.raises(OptionBarsFileError) as caught:
+        await _read(LakeRunData("SPY").option_day, contract, FRIDAY)
 
-    assert read is not None and isinstance(read.value, StoredBars)
-    # 09:30:00 closes at 13:31:00 = 1749821460000 and the 23:58 bar at 23:59 on the 13th = 1749873540000. The 10:00:30 bar
-    # closes 30 000 ms past a minute and the 23:59 bar closes at 1749873600000, midnight, which is the 14th.
-    assert [bar.close_ms for bar in read.value] == [1749821460000, 1749873540000]
-    assert [bar.close for bar in read.value] == [D("1.27"), D("0.92")]
-    assert read.value.left_out == 2
-    assert _left_out_warnings(caplog) == [(CALL_600.occ_symbol, 2)]
-    # The bars a session reads are accepted whole by its own reader, which refuses a session holding a bar of another day.
-    assert list(bars_by_close(read.value, trading_date=FRIDAY, what=CALL_600.occ_symbol)) == [
-        1749821460000,
-        1749873540000,
-    ]
+    message = str(caught.value)
+    assert contract.occ_symbol in message and "1 of 3" in message and f"{first_start_ms} ms" in message
+    assert "not on a whole minute" in message
+    assert str(tmp_lake) not in message and ".zip" not in message
 
 
 @respx.mock
-async def test_a_normal_option_day_leaves_nothing_out_and_a_day_that_never_traded_leaves_nothing_out(
+async def test_an_option_day_with_several_bars_that_cannot_be_placed_counts_them_all_and_names_the_first(
     fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
-    await store_listing(_the_option_rows())
-    await store_option_day(CALL_600, [minute_bar(0, 1.27, 1.31, 1.25, 1.27), minute_bar(390, 0.90, 0.95, 0.88, 0.92)])
-    await store_option_day(CALL_601, [])
+    contract = await _an_option_day_holding([FRIDAY_OPEN_MS])
+    # 09:30:30 (1749821430000) is off the minute, 23:59 (1749873540000) closes on the 14th, 09:31 is in place.
+    starts = [FRIDAY_OPEN_MS, FRIDAY_OPEN_MS + 30_000, FRIDAY_OPEN_MS + MINUTE_MS, 1749873540000]
+    replace_the_stored_file(
+        fake_catalog, raw_root(tmp_lake), option_bars_path(contract), option_day_zip(contract, starts), admit=True
+    )
 
-    busy = await _read(LakeRunData("SPY").option_day, CALL_600, FRIDAY)
-    quiet = await _read(LakeRunData("SPY").option_day, CALL_601, FRIDAY)
+    with pytest.raises(OptionBarsFileError) as caught:
+        await _read(LakeRunData("SPY").option_day, contract, FRIDAY)
 
-    assert busy is not None and len(busy.value) == 2 and busy.value.left_out == 0
-    assert quiet is not None and len(quiet.value) == 0 and quiet.value.left_out == 0
+    message = str(caught.value)
+    assert "2 of 4" in message and "1749821430000 ms" in message and "1749873540000" not in message
+    assert "not on a whole minute" in message
+
+
+@respx.mock
+@pytest.mark.parametrize(("day", "open_ms", "last_start_ms", "before_last_start_ms"), _LAST_MINUTES)
+async def test_an_option_bar_that_closes_on_the_next_new_york_date_makes_the_day_unreadable(
+    day: date, open_ms: int, last_start_ms: int, before_last_start_ms: int, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    contract = await _an_option_day_holding([open_ms], day=day)
+    replace_the_stored_file(
+        fake_catalog,
+        raw_root(tmp_lake),
+        option_bars_path(contract, day),
+        option_day_zip(contract, [open_ms, last_start_ms], day=day),
+        admit=True,
+    )
+
+    with pytest.raises(OptionBarsFileError) as caught:
+        await _read(LakeRunData("SPY").option_day, contract, day)
+
+    message = str(caught.value)
+    assert contract.occ_symbol in message and "1 of 2" in message and f"{last_start_ms} ms" in message
+    assert "closes on another New York date" in message
+
+
+@respx.mock
+@pytest.mark.parametrize(("day", "open_ms", "last_start_ms", "before_last_start_ms"), _LAST_MINUTES)
+async def test_an_option_bar_that_closes_a_minute_before_new_york_midnight_is_in_place_and_the_day_is_read(
+    day: date, open_ms: int, last_start_ms: int, before_last_start_ms: int, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    contract = await _an_option_day_holding([open_ms], day=day)
+    replace_the_stored_file(
+        fake_catalog,
+        raw_root(tmp_lake),
+        option_bars_path(contract, day),
+        option_day_zip(contract, [open_ms, before_last_start_ms], day=day),
+        admit=True,
+    )
+
+    read = await _read(LakeRunData("SPY").option_day, contract, day)
+
+    assert read is not None
+    # Each closes a minute after it starts: 09:31, and 23:59 on the date itself (a minute before its midnight).
+    assert [bar.close_ms for bar in read.value] == [open_ms + MINUTE_MS, before_last_start_ms + MINUTE_MS]
+    # and the reader of a session accepts what is handed over, whole
+    assert len(bars_by_close(read.value, trading_date=day, what=contract.occ_symbol)) == 2
 
 
 @respx.mock

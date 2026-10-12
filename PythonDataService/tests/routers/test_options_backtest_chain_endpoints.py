@@ -49,9 +49,11 @@ from tests.options_backtest._lake import (
     MINUTE_MS,
     StockFetchDouble,
     minute_bar,
+    option_day_zip,
     raw_root,
     replace_the_stored_file,
     stock_bar,
+    stock_day_zip,
     store_listing,
     store_option_day,
     store_underlying_day,
@@ -602,6 +604,24 @@ def _put_a_file_where_the_underlying_was(fake_catalog: FakeCatalog, tmp_lake: Pa
     (raw_root(tmp_lake) / STOCK_PATH).mkdir()
 
 
+def _stamp_a_bar_off_the_minute_on_the_underlying(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    # The stored day has a bar starting at 09:39:30, 1749821400000 + 9 * 60 000 + 30 000 = 1749821970000, which closes
+    # 30 000 ms past a whole minute.
+    bars = [
+        stock_bar(FRIDAY_OPEN_MS, "600.00", "600.50", "599.75", "600.25"),
+        stock_bar(FRIDAY_OPEN_MS + 9 * MINUTE_MS + 30_000, "602.00", "602.50", "601.90", "602.40"),
+    ]
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), STOCK_PATH, stock_day_zip(bars), admit=True)
+
+
+def _stamp_a_bar_off_the_minute_on_call_602(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    # Call 602's stored day has a bar starting at 11:09:30 (minute 99 plus 30 000 ms), which closes off a whole minute.
+    starts = [FRIDAY_OPEN_MS + 4 * MINUTE_MS, FRIDAY_OPEN_MS + 99 * MINUTE_MS + 30_000]
+    replace_the_stored_file(
+        fake_catalog, raw_root(tmp_lake), BARS_PATH_602, option_day_zip(CALLS[602], starts), admit=True
+    )
+
+
 def _replace(path: str, payload: bytes, *, admit: bool):
     def damage(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
         replace_the_stored_file(fake_catalog, raw_root(tmp_lake), path, payload, admit=admit)
@@ -671,6 +691,20 @@ _UNREADABLE_ON_THE_EXPIRY = [
         "SPY250613C00602000",
         "LakeAdmissionError",
         id="bars the catalog does not admit",
+    ),
+    pytest.param(
+        _stamp_a_bar_off_the_minute_on_the_underlying,
+        _underlying_problem,
+        "SPY minute bars",
+        "UnderlyingDayUnreadable",
+        id="an underlying day with a bar off the minute",
+    ),
+    pytest.param(
+        _stamp_a_bar_off_the_minute_on_call_602,
+        _contract_problem,
+        "SPY250613C00602000",
+        "OptionBarsFileError",
+        id="a contract day with a bar off the minute",
     ),
 ]
 
@@ -926,16 +960,24 @@ async def test_a_download_with_the_catalog_down_is_a_503(
     assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_LAKE_CATALOG_UNAVAILABLE"
 
 
+@pytest.mark.parametrize(
+    "spoil",
+    [
+        pytest.param(_replace(STOCK_PATH, _GARBAGE, admit=True), id="a damaged file"),
+        pytest.param(_stamp_a_bar_off_the_minute_on_the_underlying, id="a bar off the minute"),
+    ],
+)
 @respx.mock
 async def test_a_download_that_finds_the_underlying_damaged_says_so_by_what_and_why_and_names_no_file(
-    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path, stock_fetch: StockFetchDouble
+    spoil: Any, client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path, stock_fetch: StockFetchDouble
 ) -> None:
     await _the_lake(fake_catalog, tmp_lake)
-    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), STOCK_PATH, _GARBAGE, admit=True)
+    spoil(fake_catalog, tmp_lake)
 
     async with client as c:
         response = await c.post(f"{PREFIX}/download", json=_download(contracts=[]))
 
+    assert response.status_code == 200, response.text
     underlying = next(i for i in response.json()["items"] if i["kind"] == "underlying")
     assert (underlying["outcome"], underlying["reason"]) == ("failed", "underlying_unreadable")
     assert "SPY minute bars" in underlying["detail"] and "UnderlyingDayUnreadable" in underlying["detail"]

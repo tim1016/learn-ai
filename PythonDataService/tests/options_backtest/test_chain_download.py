@@ -12,7 +12,7 @@ reaches two years back with two days of headroom, reaches 2024-10-14. 2024-06-14
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import date
 from pathlib import Path
 
@@ -51,6 +51,7 @@ from tests.options_backtest._lake import (
     raw_root,
     replace_the_stored_file,
     stock_bar,
+    stock_day_zip,
     store_underlying_day,
     symbol_asked,
     vendor_bars,
@@ -401,15 +402,31 @@ async def test_an_underlying_the_stock_function_cannot_fetch_is_a_failed_item_wi
     assert "could not materialize" in (items[1].detail or "")
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param(lambda: b"admitted, but not a zip", id="a damaged file"),
+        # The second bar starts at 09:31:30, 1749821400000 + 60 000 + 30 000 = 1749821490000, off the minute.
+        pytest.param(
+            lambda: stock_day_zip(
+                [
+                    stock_bar(FRIDAY_OPEN_MS, "600.00", "600.50", "599.75", "600.25"),
+                    stock_bar(FRIDAY_OPEN_MS + MINUTE_MS + 30_000, "600.25", "600.60", "600.20", "600.40"),
+                ]
+            ),
+            id="a bar off the minute",
+        ),
+    ],
+)
 @respx.mock
 async def test_a_damaged_underlying_file_is_reported_and_is_not_fetched_over(
-    fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
+    payload: Callable[[], bytes], fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
 ) -> None:
     vendor_lists(CALL_600)
     await store_underlying_day(
         fake_catalog, tmp_lake, [stock_bar(FRIDAY_OPEN_MS, "600.00", "600.50", "599.75", "600.25")]
     )
-    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), STOCK_PATH, b"admitted, but not a zip", admit=True)
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), STOCK_PATH, payload(), admit=True)
 
     items = await ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[])
 
