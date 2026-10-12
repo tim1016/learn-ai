@@ -33,12 +33,14 @@ describe('the plain-words summary', () => {
     expect(text.indexOf('Sentence for leg call')).toBeLessThan(text.indexOf('THE COSTS SENTENCE'));
   });
 
-  it('says the setup is not complete while it has no legs, and the legs card carries the server’s reason', async () => {
+  it('says the setup is not complete while it has no legs, and the legs card says to add one without an alarm', async () => {
     await renderPage(fakeService(vi));
 
     const summary = await screen.findByRole('region', { name: 'In plain words' });
     await waitFor(() => expect(summary.textContent).toMatch(/not complete/i));
-    expect(within(screen.getByRole('region', { name: 'Legs' })).getByRole('alert').textContent).toMatch(/at least 1 item/);
+    const legs = screen.getByRole('region', { name: 'Legs' });
+    expect(within(legs).getByRole('status')).toBeTruthy();
+    expect(within(legs).queryByRole('alert')).toBeNull();
   });
 
   it('refreshes when the setup changes', async () => {
@@ -114,6 +116,14 @@ describe('a problem lands at its field', () => {
     const second = await screen.findByRole('article', { name: 'Leg 2' });
     await waitFor(() => expect(within(second).getByRole('alert').textContent).toContain('less than or equal to 1000'));
     expect(within(screen.getByRole('article', { name: 'Leg 1' })).queryByRole('alert')).toBeNull();
+  });
+
+  it('on the legs as a whole, once there are legs it can be about', async () => {
+    await renderPage(rejecting({ loc: ['body', 'legs'], msg: 'List should have at most 8 items' }));
+    addLeg();
+
+    const legs = screen.getByRole('region', { name: 'Legs' });
+    await waitFor(() => expect(within(legs).getByRole('alert').textContent).toContain('at most 8 items'));
   });
 
   it('on the stop loss value of a leg', async () => {

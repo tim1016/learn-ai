@@ -23,5 +23,6 @@ export class LegsCardComponent {
   protected readonly maxLegs = MAX_LEGS;
   protected readonly legs = computed(() => this.form().legs().value());
   protected readonly full = computed(() => this.legs().length >= MAX_LEGS);
-  protected readonly legsProblem = computed(() => this.problems().get(FIELD.legs) ?? null);
+  /** With no legs the card already says to add one; the server's reason is shown once there are legs it can be about. */
+  protected readonly legsProblem = computed(() => (this.legs().length === 0 ? null : (this.problems().get(FIELD.legs) ?? null)));
 }
