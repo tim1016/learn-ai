@@ -365,9 +365,16 @@ async def startup_protection_only(
     ``research_job_owners`` table, and this runs unconditionally, early in
     every data-plane startup — a bare query here must not crash-loop the
     process over a table ``ensure_schema`` would have created (regression
-    behind PR #3064's crash loop). A database that cannot be reached or
-    refuses the DDL degrades to no protection, the same as the ``dsn`` being
-    unset: this function's job is informational, never gating.
+    behind PR #3064's crash loop). Only an unreachable database degrades to
+    no protection, the same as the ``dsn`` being unset: this call site awaits
+    the protection callable directly, with no sweep around it, so returning
+    "no protection" for a database that is merely *refusing* the DDL would
+    silently sweep a live research runtime's running jobs as orphaned
+    instead of the caller's intended "could not check, touch nothing" —
+    exactly what :func:`app.jobs.progress.fail_jobs_without_a_worker`
+    guarantees for a *raising* callable. Letting any other Postgres error
+    propagate keeps that guarantee and crash-loops only on a condition that
+    (unlike the missing table) is expected to be transient.
     """
     if not dsn:
         return None
@@ -380,8 +387,8 @@ async def startup_protection_only(
             await ensure_schema(probe)
         finally:
             await probe.close()
-    except (asyncpg.PostgresError, OSError) as exc:
-        logger.warning("research schema could not be ensured for startup protection: %s", exc)
+    except (asyncpg.PostgresConnectionError, OSError) as exc:
+        logger.warning("research schema could not be ensured for startup protection (database unreachable): %s", exc)
         return None
 
     async def protected() -> AbstractSet[str]:

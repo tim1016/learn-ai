@@ -189,6 +189,34 @@ async def test_startup_protection_only_against_a_never_bootstrapped_database_doe
     assert await protected() == set()
 
 
+async def test_startup_protection_only_degrades_on_an_unreachable_database() -> None:
+    """A genuinely unreachable database is the one case this reads as "no
+    protection" — the same legacy behavior as an unset ``dsn``.
+    """
+    assert await ownership.startup_protection_only(dsn="postgresql://postgres:postgres@127.0.0.1:1/nope") is None
+
+
+async def test_startup_protection_only_propagates_a_reachable_databases_other_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reachable database that refuses the schema DDL for any other reason
+    (permissions, a lock timeout) must not be silently read as "no
+    protection": this function's only caller awaits its callable directly,
+    with no sweep wrapped around it, so returning ``None`` here would sweep
+    a live research runtime's running jobs as orphaned instead of leaving
+    them untouched — the guarantee ``fail_jobs_without_a_worker`` gives a
+    *raising* callable.
+    """
+
+    async def _raise_insufficient_privilege(_conn: asyncpg.Connection) -> None:
+        raise asyncpg.InsufficientPrivilegeError("permission denied for schema public")
+
+    monkeypatch.setattr("app.research.persistence.schema.ensure_schema", _raise_insufficient_privilege)
+
+    with pytest.raises(asyncpg.InsufficientPrivilegeError):
+        await ownership.startup_protection_only(dsn=_ephemeral_url())
+
+
 async def test_a_degraded_startup_without_a_database_keeps_the_legacy_lifecycle() -> None:
     authority, _protected = await ownership.startup_authority_and_protection(dsn=None, instance_id="x", role="data-plane")
     assert authority is None and _protected is None
