@@ -438,8 +438,8 @@ async def ensure_option_day_bars(
     ``listing_not_captured``, ``not_listed``. Only then does it claim, reuse-or-refresh on
     a lost claim, reclaim, fetch, validate, encode and publish under the lease. Every
     vendor outcome, a malformed answer included, is a typed failure on the row and none
-    raises. ``now_ms`` fixes the clock for the session and plan rules; it defaults to the
-    wall clock.
+    raises; so is a file that cannot be written (``io_error``). ``now_ms`` fixes the clock
+    for the session and plan rules; it defaults to the wall clock.
 
     Each call proves the contract is listed from that date's stored listing, which it
     reads and parses whole (about a third of a second for a real one). A caller capturing

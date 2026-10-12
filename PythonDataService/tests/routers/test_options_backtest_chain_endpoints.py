@@ -41,6 +41,7 @@ from app.options.contract import OptionContract
 from app.options_backtest import chain_download
 from app.security.data_plane_control import CONTROL_SECRET_ENV_VAR, CONTROL_SECRET_HEADER
 from tests._helpers.fake_lake_catalog import FakeCatalog
+from tests._helpers.option_lake_cases import DISK_FULL_AT_THE_RENAME, install_write_fault
 from tests._helpers.option_vendor import no_trades
 from tests.options_backtest._lake import (
     FRIDAY,
@@ -862,6 +863,32 @@ async def test_a_failure_of_the_vendor_is_an_item_with_a_reason_and_the_request_
         ("SPY250613C00603000", "failed", "not_listed"),
     ]
     assert all(i["detail"] for i in contract_items)
+
+
+@respx.mock
+async def test_a_contract_whose_file_cannot_be_written_is_an_item_failed_with_io_error_and_the_request_still_succeeds(
+    client: httpx.AsyncClient,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    stock_fetch: StockFetchDouble,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vendor_lists(CALLS[602])
+    vendor_bars(lambda symbol: no_trades(symbol))
+    install_write_fault(monkeypatch, DISK_FULL_AT_THE_RENAME, only_bars=True)
+
+    async with client as c:
+        response = await c.post(f"{PREFIX}/download", json=_download(contracts=["SPY250613C00602000"]))
+
+    assert response.status_code == 200, response.text
+    items = response.json()["items"]
+    assert [(i["kind"], i["subject"], i["outcome"], i["reason"]) for i in items] == [
+        ("listing", "SPY", "fetched", None),
+        ("underlying", "SPY", "fetched", None),
+        ("contract", "SPY250613C00602000", "failed", "io_error"),
+    ]
+    # The words say what failed and the system's reason, and name no path on the server's disk.
+    assert "No space left on device" in items[2]["detail"] and str(tmp_lake) not in items[2]["detail"]
 
 
 @respx.mock

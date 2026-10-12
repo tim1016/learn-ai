@@ -45,11 +45,12 @@ import pytest
 import respx
 
 from app.config import settings
-from app.data_lake import catalog_client
+from app.data_lake import atomic, catalog_client
 from app.data_lake import option_bars as option_bars_module
 from app.data_lake import option_lake as option_lake_module
 from app.data_lake import option_listing as option_listing_module
 from app.data_lake.admission import LakeAdmissionError
+from app.data_lake.atomic import AtomicRenameUnsafeError
 from app.data_lake.ensure_data import _minute_trade_dch
 from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes, from_deci_cent, to_deci_cent
 from app.data_lake.option_bars import (
@@ -80,8 +81,12 @@ from app.options.contract import OptionContract
 from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, point_lake_writer_at_tmp
 from tests._helpers.option_lake_cases import (
     CAPTURE_OPENS,
+    DISK_FULL_AT_THE_RENAME,
     HALF_DAY_CLOSE_MS,
+    WRITE_FAULT_WORDS,
+    WRITE_FAULTS,
     complete_row_of_another_provider,
+    install_write_fault,
     one_bar_file,
     pieces_of_the_key_in,
     publish_stale_writer_first_once_both_have_staged,
@@ -1126,6 +1131,110 @@ async def test_a_writer_that_lost_its_lease_and_the_winner_publishing_together_l
     row = fake_catalog.rows[artifact_id]
     assert (row["status"], row["file_sha256"], row["lease_generation"]) == ("complete", winner, 2)
     assert _staged_files(tmp_lake) == []
+
+
+# ── A file that cannot be written fails the row ──────────────────────────
+#
+# The vendor answered and the lake could not keep the answer. The row is failed under the writer's generation as
+# ``io_error``, as a vendor error is; it is not left fetching until its lease runs out, and nothing is raised.
+
+
+@respx.mock
+@pytest.mark.parametrize("kind", WRITE_FAULTS)
+async def test_a_file_that_cannot_be_written_fails_the_row_as_io_error_stores_nothing_and_the_next_ask_stores_the_day(
+    kind: str, fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    route = _mock_vendor()
+    await _list(CONTRACT)  # the listing is stored before the disk fails
+    fault = install_write_fault(monkeypatch, kind)
+
+    failed = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
+
+    assert failed.record is None and failed.failure is not None
+    assert (failed.failure.reason, failed.failure.symbol, failed.failure.attempt_count) == ("io_error", SYMBOL, 1)
+    assert fault.hits == 1
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "io_error", None)
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+    assert await _read() is None
+    # The words name the kind of error and the system's reason, and no path on the server's disk.
+    assert all(word in failed.failure.detail for word in WRITE_FAULT_WORDS[kind])
+    assert str(tmp_lake) not in failed.failure.detail and "/data" not in failed.failure.detail
+
+    fault.clear()
+    stored = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
+
+    # The first ask claimed the row at attempt 1 and the second took the failed row over at attempt 2.
+    assert stored.failure is None and stored.reused is False and stored.record is not None
+    assert route.call_count == 2  # the first answer was not kept, so the vendor was asked again
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["attempt_count"]) == ("complete", 2)
+    day = await _read()
+    assert day is not None and [bar.start_ms for bar in day.bars] == [SESSION_OPEN_MS]
+
+
+@respx.mock
+async def test_a_file_that_keeps_failing_to_be_written_is_asked_three_times_and_then_latches_as_any_failed_row_does(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``io_error`` is not exempt from the retry ceiling (only ``outside_data_plan`` is): the third ask is the last."""
+    route = _mock_vendor()
+    await _list(CONTRACT)
+    fault = install_write_fault(monkeypatch, DISK_FULL_AT_THE_RENAME)
+    reasons = []
+
+    for _ in range(4):
+        result = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
+        assert result.failure is not None
+        reasons.append(result.failure.reason)
+
+    assert reasons == ["io_error", "io_error", "io_error", "fetch_timeout"]
+    assert (route.call_count, fault.hits) == (3, 3)  # the fourth ask neither fetched nor tried to write
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["attempt_count"]) == ("failed", 3)
+
+
+@respx.mock
+async def test_an_outage_of_the_catalog_while_publishing_is_not_a_failed_write_and_is_raised_with_the_row_left_alone(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mock_vendor()
+    await _list(CONTRACT)
+
+    async def down(**kwargs: Any) -> None:
+        raise catalog_client.CatalogUnavailableError("down")
+
+    monkeypatch.setattr(catalog_client, "publish_under_lease", down)
+
+    with pytest.raises(catalog_client.CatalogUnavailableError):
+        await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
+
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"]) == ("fetching", None)
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+
+
+@respx.mock
+async def test_a_writer_that_lost_its_lease_before_its_file_failed_is_told_so_and_does_not_fail_the_new_owners_row(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mock_vendor()
+    await _list(CONTRACT)
+
+    def another_worker_takes_the_row_and_then_the_check_fails(lake_root: Path, staging_root: Path) -> None:
+        [row] = _bar_rows(fake_catalog)
+        row.update(lease_generation=row["lease_generation"] + 1, lease_owner="the-winner")
+        raise AtomicRenameUnsafeError("lake_root and staging_root are on different filesystems (st_dev 1 vs 2)")
+
+    monkeypatch.setattr(atomic, "assert_same_filesystem", another_worker_takes_the_row_and_then_the_check_fails)
+
+    result = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
+
+    assert result.record is None and result.failure is not None and result.failure.reason == "lease_timeout"
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["lease_owner"], row["lease_generation"], row["last_error"]) == (
+        "fetching", "the-winner", 2, None,
+    )
 
 
 # ── A vendor error is a typed failure on the row ─────────────────────────

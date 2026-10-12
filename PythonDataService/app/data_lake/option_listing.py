@@ -415,7 +415,8 @@ async def ensure_option_listing(
     """Capture the contracts listed for ``underlying`` as of ``as_of`` into the lake, or reuse what is there.
 
     Claim, reuse-or-refresh on a lost claim, reclaim, fetch every page, build the
-    file, publish under the lease; a typed failure on every vendor error. The paging is
+    file, publish under the lease; a typed failure on every vendor error and on a file
+    that cannot be written (``io_error``). The paging is
     given :data:`LISTING_FETCH_BUDGET_MS`, inside the lease, and a fetch that runs past it
     ends as a failed row before another page is asked. A listing found complete and reused is
     returned only after the same cleanup of other formats' rows a publish does, because the publish

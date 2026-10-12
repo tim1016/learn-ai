@@ -39,6 +39,7 @@ from app.options_backtest.chain_download import (
 )
 from app.options_backtest.lake_data import LakeRunData
 from tests._helpers.fake_lake_catalog import FakeCatalog
+from tests._helpers.option_lake_cases import DISK_FULL_AT_THE_RENAME, install_write_fault
 from tests._helpers.option_vendor import no_trades, traded
 from tests.options_backtest._lake import (
     BARS_URL,
@@ -480,6 +481,30 @@ async def test_a_listing_captured_and_then_not_readable_fails_the_listing_and_ev
     # The lake's words carry the path of the file on the server; the item names what and the kind of error, not the file.
     assert "/srv" not in detail and ".zip" not in detail
     assert "so no contract of it can be vouched for" in (items[2].detail or "")
+
+
+@respx.mock
+async def test_a_contract_whose_file_cannot_be_written_is_a_failed_item_with_io_error_and_the_rest_is_stored(
+    fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vendor_lists(CALL_600, CALL_601)
+    vendor_bars(lambda symbol: no_trades(symbol))
+    fault = install_write_fault(monkeypatch, DISK_FULL_AT_THE_RENAME, only_bars=True)
+
+    items = await ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[CALL_600, CALL_601])
+
+    assert _summary(items) == [
+        ("listing", "SPY", "fetched", None),
+        ("underlying", "SPY", "fetched", None),
+        ("contract", SYMBOL_600, "failed", "io_error"),
+        ("contract", SYMBOL_601, "failed", "io_error"),
+    ]
+    assert fault.hits == 2
+    # The words say what failed and the system's reason, and name no path on the server's disk.
+    assert all("No space left on device" in (item.detail or "") for item in items[2:])
+    assert all(str(tmp_lake) not in (item.detail or "") for item in items)
+    # Nothing is left fetching: the listing and the underlying's day are complete and the two contract rows are failed.
+    assert sorted(row["status"] for row in fake_catalog.rows.values()) == ["complete", "complete", "failed", "failed"]
 
 
 # ── Requests refused before anything is asked ─────────────────────────────
