@@ -97,6 +97,7 @@ from app.data_lake.types import (
     PriceAdjustmentMode,
 )
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
+from app.utils.background_loop import background_loop
 from app.utils.session_anchors import et_date_at_ms, et_day_end_ms
 
 logger = logging.getLogger(__name__)
@@ -656,13 +657,19 @@ _request_gates: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Sem
 
 
 def vendor_request_gate() -> asyncio.Semaphore:
-    """The one gate on option vendor requests for the loop this runs on: ``async with`` it around a capture.
+    """The one gate on option vendor requests: ``async with`` it around a capture.
 
     Every caller of the process shares the background loop (:mod:`app.utils.background_loop`), so they share one
-    semaphore of ``MAX_VENDOR_REQUESTS_IN_FLIGHT``. A semaphore belongs to the loop that first waits on it, so one is
-    made per loop and dropped with it. Called from a coroutine.
+    semaphore of ``MAX_VENDOR_REQUESTS_IN_FLIGHT``. A semaphore belongs to the loop that first waits on it, so it is
+    made on that loop and dropped with it. Called from a coroutine running on the background loop; on any other loop
+    it raises ``RuntimeError``, since a gate made there would be a second limit of four beside the first.
     """
     loop = asyncio.get_running_loop()
+    if loop is not background_loop():
+        raise RuntimeError(
+            "the vendor request gate belongs to the process's background loop; asked for on another loop it would "
+            "make a second limit of four. Hand the work to that loop (app.utils.background_loop) and ask there."
+        )
     gate = _request_gates.get(loop)
     if gate is None:
         gate = asyncio.Semaphore(MAX_VENDOR_REQUESTS_IN_FLIGHT)

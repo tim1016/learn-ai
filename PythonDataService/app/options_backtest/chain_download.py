@@ -17,10 +17,12 @@ listing does not hold it, so a listing that could not be captured fails every co
 and no contract is tried. What is raised is the caller's mistake (a request refused before anything is asked) and an
 unreachable catalog.
 
-Every capture holds ``option_lake.vendor_request_gate`` while it asks: the one limit of
-``option_lake.MAX_VENDOR_REQUESTS_IN_FLIGHT`` requests in flight for the whole process, which a run's download holds
-too, so a chain download and a run at once do not double it. That gate is one semaphore per event loop, and the
-process's background loop is where a run's download asks, so the captures are handed to that loop and not run on the
+The listing's capture and each contract's hold ``option_lake.vendor_request_gate`` while they ask: the one limit of
+``option_lake.MAX_VENDOR_REQUESTS_IN_FLIGHT`` option requests in flight for the whole process, which a run's download
+holds too, so a chain download and a run at once do not double it. The underlying's fetch does not: it is the stock
+pipeline's, not an option request, and it can take minutes (up to 630 seconds when another worker holds the stock row),
+which a place held for it would take from every option request of the process. That gate is one semaphore on the
+process's background loop, where a run's download asks, so the captures are handed to that loop and not run on the
 caller's.
 
 A caller that cancels the download does not stop a capture that has begun. A capture that has claimed its catalog row
@@ -47,6 +49,8 @@ from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
 from typing import Literal
+
+import anyio
 
 from app.data_lake import catalog_client, option_lake
 from app.data_lake.admission import LakeAdmissionError
@@ -153,18 +157,17 @@ async def _capture_underlying(underlying: str, trading_date: date, now_ms: int |
     )
     if refusal is not None:
         return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.FAILED, refusal.reason, refusal.detail)
-    async with option_lake.vendor_request_gate():
-        try:
-            await asyncio.to_thread(
-                materialize_engine_run,
-                symbol=underlying,
-                start=trading_date,
-                end=trading_date,
-                resolution="minute",
-                price_adjustment_mode="raw",
-            )
-        except (LakeMaterializationError, CallerStoppedWaitingError) as exc:
-            return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.FAILED, "underlying_not_fetched", str(exc))
+    try:
+        await asyncio.to_thread(
+            materialize_engine_run,
+            symbol=underlying,
+            start=trading_date,
+            end=trading_date,
+            resolution="minute",
+            price_adjustment_mode="raw",
+        )
+    except (LakeMaterializationError, CallerStoppedWaitingError) as exc:
+        return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.FAILED, "underlying_not_fetched", str(exc))
     return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.FETCHED, None, None)
 
 
@@ -258,14 +261,18 @@ async def _waited_for(
 
     A task that awaits ``work`` itself and is cancelled cancels it, and that cancels the coroutine on the other loop:
     a capture could stop after it claimed its row and leave it ``fetching`` until the lease runs out. ``asyncio.wait``
-    never cancels what it waits for, so the cancellation stops at this task. It is swallowed, every time it comes (an
-    ASGI server's cancel scope sends one at every checkpoint), until ``work`` is done; the captures are told the caller
-    has gone, so they begin nothing more, and the first cancellation is raised when they have ended.
+    never cancels what it waits for, so the cancellation stops at this task. It is swallowed, every time it comes, until
+    ``work`` is done; the captures are told the caller has gone, so they begin nothing more, and the first cancellation
+    is raised when they have ended. A cancel scope of ``anyio`` (a timeout, a server's scope) sends a cancellation again
+    at every checkpoint, which would end each wait at once and spin the loop for as long as the captures last (up to
+    the underlying's ten minutes), so once the first has been seen the wait is made inside a shielded scope, which
+    that scope does not reach; a cancellation sent to this task itself is still swallowed.
     """
     first_cancellation: asyncio.CancelledError | None = None
     while not work.done():
         try:
-            await asyncio.wait([work])
+            with anyio.CancelScope(shield=first_cancellation is not None):
+                await asyncio.wait([work])
         except asyncio.CancelledError as cancelled:
             first_cancellation = first_cancellation or cancelled
             caller_has_gone.set()
