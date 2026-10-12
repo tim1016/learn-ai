@@ -63,7 +63,7 @@ from app.options_backtest.session_market import MalformedBars
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.research.grid_search.service import window_dates
 from app.utils.background_loop import CallerStoppedWaitingError
-from app.utils.session_anchors import require_schedulable_end
+from app.utils.session_anchors import et_date_at_ms, et_midnight_ms, require_schedulable_end
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -158,13 +158,32 @@ class RunHooks:
     should_stop: Callable[[], bool]
 
 
+def _is_new_york_midnight(ms: int) -> bool:
+    """Whether ``ms`` is the instant a New York day begins. A day is 23 or 25 hours long where the clocks change, so
+    this is asked of the zone and never of a multiple of 24 hours."""
+    return et_midnight_ms(et_date_at_ms(ms)) == ms
+
+
 def sessions_of_range(start_ms: int, end_ms: int) -> tuple[date, ...]:
     """The NYSE sessions of the half-open window ``[start_ms, end_ms)``, as Grid Search reads a window.
 
-    The first date is the New York date of ``start_ms`` and the last is the New York date of the last millisecond
-    before ``end_ms``; the sessions between are the canonical calendar's. A window with none, one that ends past the
-    calendar's reach, or one of more than ``MAX_RANGE_SESSIONS`` sessions is a ``RunRefused``.
+    ``start_ms`` is New York midnight of the first date and ``end_ms`` is New York midnight of the day after the last,
+    as the wire documents them; any other instant is a ``RunRefused``, since reading it as the date it falls on would
+    run a whole session that began before it. The first date is then the New York date of ``start_ms`` and the last is
+    the New York date of the last millisecond before ``end_ms``; the sessions between are the canonical calendar's. A
+    window with none, one that ends past the calendar's reach, or one of more than ``MAX_RANGE_SESSIONS`` sessions is
+    a ``RunRefused``.
     """
+    if not _is_new_york_midnight(start_ms):
+        raise RunRefused(
+            "OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT",
+            "The range must start at midnight in New York. Send the start of its first day as start_ms.",
+        )
+    if not _is_new_york_midnight(end_ms):
+        raise RunRefused(
+            "OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT",
+            "The range must end at midnight in New York. Send the start of the day after its last day as end_ms.",
+        )
     if start_ms >= end_ms:
         raise RunRefused("OPTIONS_BACKTEST_RANGE_EMPTY", "The range must end after it starts.")
     try:

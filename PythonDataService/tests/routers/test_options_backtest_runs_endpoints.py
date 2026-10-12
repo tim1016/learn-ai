@@ -356,21 +356,42 @@ async def test_a_job_id_of_the_shape_the_jobs_boundary_mints_is_accepted(
     assert response.json()["job_id"] == job_id
 
 
-async def test_a_range_that_reaches_a_session_before_the_epoch_is_a_400_and_makes_no_run(
+async def test_a_range_whose_instants_are_not_new_york_midnights_is_a_400_and_makes_no_run_and_no_job(
     client: httpx.AsyncClient, harness: Harness
 ) -> None:
-    # start_ms 0 is 1970-01-01 00:00 UTC, which is 19:00 on 1969-12-31 in New York. That was a trading day, opened
-    # by the calendar at 15:00 UTC (10:00 New York, the exchange's hours then), 9 hours before the epoch: -32,400,000.
-    assert session_window_for_date(date(1969, 12, 31)).open_ms_utc == -32_400_000
+    # Two instants the old reading accepted and read as the dates they fall on: 0, the epoch, which is 19:00 on
+    # 1969-12-31 in New York (a day that began before it), and a start 1 ms after Friday 2026-03-06's midnight
+    # (1 772 773 200 000 + 1). An end a millisecond short of Monday 2026-03-09's midnight (1 773 028 800 000 - 1) is the
+    # third, and a start and an end that are both wrong are refused on the start.
     async with client as c:
-        at_the_epoch = await c.post(JOBS, json=job_body(job_id="e1", start_ms=0, end_ms=5 * 86_400_000))
-        one_ms_in = await c.post(JOBS, json=job_body(job_id="e2", start_ms=1, end_ms=86_400_000))
+        responses = [
+            await c.post(JOBS, json=job_body(job_id="e1", start_ms=0, end_ms=5 * 86_400_000)),
+            await c.post(JOBS, json=job_body(job_id="e2", start_ms=1_772_773_200_001, end_ms=1_773_028_800_000)),
+            await c.post(JOBS, json=job_body(job_id="e3", start_ms=1_772_773_200_000, end_ms=1_773_028_799_999)),
+        ]
 
-    for response in (at_the_epoch, one_ms_in):
+    for response, named in zip(responses, ("start_ms", "start_ms", "end_ms"), strict=True):
         assert response.status_code == 400, response.text
-        assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_RANGE_TOO_EARLY"
-        assert response.json()["detail"]["message"]
+        assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT"
+        assert named in response.json()["detail"]["message"]
     assert harness.store.created == [] and harness.started == []
+
+
+async def test_a_range_that_ends_on_a_day_the_clocks_change_is_accepted(
+    client: httpx.AsyncClient, harness: Harness
+) -> None:
+    # Friday 2026-03-06's midnight to Monday the 9th's (the end of Sunday the 8th, a 23-hour day) and Friday 10-30 to
+    # Monday 11-02's midnight (the end of Sunday 11-01, a 25-hour day): the page's own helpers give these instants, and
+    # each range holds the one session of its Friday.
+    async with client as c:
+        spring = await c.post(JOBS, json=job_body(job_id="s1", start_ms=1_772_773_200_000, end_ms=1_773_028_800_000))
+        autumn = await c.post(JOBS, json=job_body(job_id="s2", start_ms=1_793_332_800_000, end_ms=1_793_595_600_000))
+
+    assert (spring.status_code, autumn.status_code) == (202, 202), (spring.text, autumn.text)
+    assert [new.first_session_open_ms for new in harness.store.created] == [
+        session_window_for_date(date(2026, 3, 6)).open_ms_utc,
+        session_window_for_date(date(2026, 10, 30)).open_ms_utc,
+    ]
 
 
 async def test_a_range_that_starts_on_the_first_new_york_day_of_1970_is_accepted_for_its_first_session_after_the_epoch(
@@ -713,21 +734,47 @@ async def test_check_data_on_a_range_that_cannot_be_run_is_a_400_and_a_body_that
     assert no_setup.status_code == 422 and extra.status_code == 422
 
 
-async def test_check_data_on_a_range_that_reaches_a_session_before_the_epoch_is_a_400_and_reads_nothing(
+async def test_check_data_on_a_range_whose_instants_are_not_new_york_midnights_is_a_400_and_reads_nothing(
     client: httpx.AsyncClient, now_is_monday_afternoon: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def must_not_be_asked(*_args: Any, **_kwargs: Any) -> None:
-        raise AssertionError("a range refused as too early must be refused before anything is read")
+        raise AssertionError("a range refused as not on midnight must be refused before anything is read")
 
     monkeypatch.setattr(runs_router, "check_data", must_not_be_asked)
+    setup = job_body()["setup"]
 
     async with client as c:
-        response = await c.post(
-            f"{PREFIX}/check-data", json={"setup": job_body()["setup"], "start_ms": 0, "end_ms": 5 * 86_400_000}
+        at_the_epoch = await c.post(
+            f"{PREFIX}/check-data", json={"setup": setup, "start_ms": 0, "end_ms": 5 * 86_400_000}
+        )
+        late_start = await c.post(
+            f"{PREFIX}/check-data", json={"setup": setup, "start_ms": 1_772_773_200_001, "end_ms": 1_773_028_800_000}
+        )
+        early_end = await c.post(
+            f"{PREFIX}/check-data", json={"setup": setup, "start_ms": 1_772_773_200_000, "end_ms": 1_773_028_799_999}
         )
 
-    assert response.status_code == 400, response.text
-    assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_RANGE_TOO_EARLY"
+    for response, named in ((at_the_epoch, "start_ms"), (late_start, "start_ms"), (early_end, "end_ms")):
+        assert response.status_code == 400, response.text
+        assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT"
+        assert named in response.json()["detail"]["message"]
+
+
+@respx.mock
+async def test_check_data_answers_for_a_range_that_ends_on_a_day_the_clocks_change(
+    client: httpx.AsyncClient, now_is_monday_afternoon: None, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # Friday 2026-03-06's midnight to the end of Sunday the 8th (Monday's midnight): the Friday is the one session.
+    async with client as c:
+        response = await c.post(
+            f"{PREFIX}/check-data",
+            json={"setup": job_body()["setup"], "start_ms": 1_772_773_200_000, "end_ms": 1_773_028_800_000},
+        )
+
+    assert response.status_code == 200, response.text
+    assert [s["session_open_ms"] for s in response.json()["sessions"]] == [
+        session_window_for_date(date(2026, 3, 6)).open_ms_utc
+    ]
 
 
 async def test_check_data_when_the_catalog_cannot_be_reached_is_a_503_with_a_code(

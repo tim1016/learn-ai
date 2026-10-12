@@ -32,6 +32,16 @@ RUN_ID_MAX = 2**53 - 1
 JOB_ID_MAX_LENGTH = 128
 JOB_ID_PATTERN = r"^[A-Za-z0-9_-]+$"
 
+# What a range's two instants are, as the wire says it: a range that sends any other is a 400 with this code.
+START_MS_RULE = (
+    "New York midnight of the range's first day. Any other instant is refused with a 400 and the code "
+    "OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT."
+)
+END_MS_RULE = (
+    "New York midnight of the day after the range's last day. Any other instant is refused with a 400 and the code "
+    "OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT."
+)
+
 SessionStatusWord = Literal["traded", "no_trade", "skipped", "incomplete"]
 SkipReasonWord = Literal["window_does_not_fit", "underlying_did_not_trade"]
 ExitReasonWord = Literal["stop", "square_off", "exit_time", "marked_not_sold"]
@@ -69,8 +79,8 @@ class OptionsBacktestCheckDataRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     setup: OptionsBacktestSetup
-    start_ms: Ms
-    end_ms: Ms
+    start_ms: Ms = Field(description=START_MS_RULE)
+    end_ms: Ms = Field(description=END_MS_RULE)
 
 
 class OptionsBacktestProblemResponse(BaseModel):
@@ -638,8 +648,8 @@ class OptionsBacktestJobRequest(BaseModel):
 
     job_id: str = Field(min_length=1, max_length=JOB_ID_MAX_LENGTH, pattern=JOB_ID_PATTERN)
     setup: OptionsBacktestSetup
-    start_ms: Ms
-    end_ms: Ms
+    start_ms: Ms = Field(description=START_MS_RULE)
+    end_ms: Ms = Field(description=END_MS_RULE)
     setup_name: Annotated[str, Field(pattern=SETUP_NAME_PATTERN)] | None = None
 
 
