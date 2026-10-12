@@ -36,6 +36,7 @@ APPLIED_VERSION_DIGESTS: dict[int, str] = {
     16: "3daafaddfe68c5ad",
     17: "b179559cd44c2260",
     18: "81e46d16b20848a1",
+    19: "d0a8cb7cc114a7bb",
 }
 
 

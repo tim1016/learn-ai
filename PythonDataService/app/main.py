@@ -71,6 +71,7 @@ from app.routers import (
     monte_carlo,
     news,
     options,
+    options_backtest,
     quantlib_options,
     recency,
     research_divergence,
@@ -1303,6 +1304,7 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(spec_strategy.router, prefix="/api/spec-strategy", tags=["spec-strategy"])
     app.include_router(recency.router, prefix="/api/research/recency", tags=["research-recency"])
     app.include_router(backtest_runs.router, prefix="/api/research/backtest-runs", tags=["research-backtest-runs"])
+    app.include_router(options_backtest.router, prefix="/api/research/options-backtest", tags=["research-options-backtest"])
     # Custom Dark Bright Gates (#2639): saved per strategy on the data plane,
     # which also judges them; writes need the control secret.
     app.include_router(
@@ -1380,6 +1382,12 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     # Internal job orchestration (Redis-backed). Mounted under /api/jobs-internal;
     # the public surface is the .NET /api/jobs facade in Backend/Jobs/JobsApi.cs.
     app.include_router(jobs.router, prefix="/api/jobs-internal", tags=["jobs-internal"])
+    # The Recency Chart's dispatch moved to its own router when it joined the
+    # isolated research runtime (#3051): both this mount and the runtime's
+    # carry it, so the route forwards or executes from one definition.
+    from app.routers import recency_jobs
+
+    app.include_router(recency_jobs.router, prefix="/api/jobs-internal", tags=["jobs-internal"])
     # Edge router carries its own /api/edge prefix.
     app.include_router(edge.router)
     # Live IV30 endpoints (vix-style + parametric) — Step C of IV-ownership plan.

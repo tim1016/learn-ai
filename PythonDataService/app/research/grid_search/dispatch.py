@@ -393,20 +393,11 @@ class PooledCellDispatch(PooledOwnerDispatch):
         on_facts: Callable[[Mapping[str, Any]], None] = lambda facts: None,
         on_capacity_handoff: Callable[[], None] = lambda: None,
     ) -> None:
-        super().__init__(context, workers=workers, window=window, pool=pool, on_capacity_handoff=on_capacity_handoff)
+        super().__init__(
+            context, workers=workers, window=window, pool=pool,
+            on_capacity_handoff=on_capacity_handoff, on_facts=on_facts,
+        )
         self._ready = ready
-        self._on_facts_callback = on_facts
-
-    def _facts_payload(self, ready_width: int, adaptive_wait_ms: int) -> dict[str, Any]:
-        return {
-            **self._pool.facts(),
-            "ready_width": ready_width,
-            "window": self._window,
-            "adaptive_wait_ms": adaptive_wait_ms,
-        }
-
-    def _on_facts(self, payload: dict[str, Any]) -> None:
-        self._on_facts_callback(payload)
 
     def __call__(self, cells: Iterable[RunSpec]) -> Iterator[tuple[RunSpec, CellResult]]:
         owed: dict[str, ReadyCell] = {}

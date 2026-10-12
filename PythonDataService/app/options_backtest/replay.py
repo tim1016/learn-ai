@@ -128,8 +128,9 @@ def replay_session(
 
     ``cash_usd`` is the cash at this session's start; the setup's own starting cash belongs to
     the run, which carries it from one session to the next. ``fee_for`` gives the fee in dollars
-    for each fill, entries and exits alike. Raises ``ValueError`` for a session whose open or
-    close is not on a whole minute: no bar could close at its exit time.
+    for each fill, entries and exits alike; it is also asked for an entry that is then refused for
+    want of cash, since the fee is part of what the entry would cost. Raises ``ValueError`` for a
+    session whose open or close is not on a whole minute: no bar could close at its exit time.
 
     The replay's own arithmetic runs in an exact decimal context: a hundred digits, with ``Inexact``
     trapped, so a figure too long to hold (a bar price of more than about a hundred digits) raises
