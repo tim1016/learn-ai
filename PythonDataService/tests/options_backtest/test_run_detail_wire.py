@@ -8,6 +8,7 @@ and no replay arithmetic decides it.
 from __future__ import annotations
 
 import inspect
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from typing import get_args, get_type_hints
@@ -30,8 +31,8 @@ from app.options_backtest.results import (
     SessionStatus,
 )
 from app.options_backtest.saved_runs import StoredTrade
-from app.options_backtest.session_levels import ChartedFill, LevelKind
-from app.options_backtest.session_series import SeriesReason
+from app.options_backtest.session_levels import ChartedFill, ChartedMark, Level, LevelKind
+from app.options_backtest.session_series import Series, SeriesPoint, SeriesReason
 from app.schemas import options_backtest_run_detail as wire
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -51,14 +52,14 @@ def _sold() -> LegTrade:
         momentum_level=D("5.0000"),
         stop_level=D("4.080"),
         entry_decided_at_ms=OPEN_MS + 600_000,
-        entry=Fill("call", CALL, "buy", 2, 100, OPEN_MS + 660_000, D("5.1"), D("5.10")),
+        entry=Fill("call", CALL, "buy", 2, 100, OPEN_MS + 660_000, D("5.0"), D("5.02")),
         exit_reason=ExitReason.STOP,
         exit_group=3,
         exit_decided_at_ms=OPEN_MS + 1_200_000,
-        exit=Fill("call", CALL, "sell", 2, 100, OPEN_MS + 1_260_000, D("3.9"), D("3.90")),
+        exit=Fill("call", CALL, "sell", 2, 100, OPEN_MS + 1_260_000, D("3.9"), D("3.88")),
         entry_fee_usd=D("1.30"),
         exit_fee_usd=D("1.30"),
-        pnl_usd=D("-242.60"),
+        pnl_usd=D("-230.60"),
     )
 
 
@@ -105,16 +106,16 @@ def test_a_sold_trade_is_sent_with_every_figure_as_the_text_it_was_saved_as_and_
         "momentum_level_usd": "5.0000",
         "stop_level_usd": "4.080",
         "entry_decided_at_ms": OPEN_MS + 600_000,
-        "entry": {"bar_close_ms": OPEN_MS + 660_000, "seen_usd": "5.1", "filled_usd": "5.10"},
+        "entry": {"bar_close_ms": OPEN_MS + 660_000, "seen_usd": "5.0", "filled_usd": "5.02"},
         "exit_reason": "stop",
         "exit_group": 3,
         "exit_decided_at_ms": OPEN_MS + 1_200_000,
         "exit_kind": "sale",
-        "sale": {"bar_close_ms": OPEN_MS + 1_260_000, "seen_usd": "3.9", "filled_usd": "3.90"},
+        "sale": {"bar_close_ms": OPEN_MS + 1_260_000, "seen_usd": "3.9", "filled_usd": "3.88"},
         "mark": None,
         "entry_fee_usd": "1.30",
         "exit_fee_usd": "1.30",
-        "pnl_usd": "-242.60",
+        "pnl_usd": "-230.60",
     }
 
 
@@ -263,3 +264,54 @@ def test_every_instant_is_bounded_by_the_domains_ceiling_every_price_is_text_and
                 assert {o.get("type") for o in options} <= {"string", "null"}, where
             assert not any(o.get("type") == "object" and "$ref" not in o for o in options), f"{where} is a naked dict"
         assert "9223372036854775807" not in str(schema), f"{model.__name__} bounds a field by 2**63 - 1"
+
+
+def test_a_price_of_twenty_six_digits_is_sent_as_those_digits_by_every_model_that_sends_one() -> None:
+    # A float holds about 17 digits: one that crossed a float anywhere would come out as 1234567.1234567891 or so.
+    long = D("1234567.1234567890123456789")
+    text = "1234567.1234567890123456789"
+    trade = replace(
+        _sold(),
+        starting_price=long,
+        momentum_level=long,
+        stop_level=long,
+        entry=Fill("call", CALL, "buy", 2, 100, OPEN_MS + 660_000, long, long),
+        exit=Fill("call", CALL, "sell", 2, 100, OPEN_MS + 1_260_000, long, long),
+        entry_fee_usd=long,
+        exit_fee_usd=long,
+        pnl_usd=long,
+    )
+    marked = replace(_marked(), exit=Mark(OPEN_MS + 6_000_000, long))
+
+    sent_trade = wire.OptionsBacktestTradeResponse.from_stored(StoredTrade(OPEN_MS, 0, trade))
+    sent_mark = wire.OptionsBacktestTradeResponse.from_stored(StoredTrade(OPEN_MS, 0, marked))
+    assert sent_trade.sale is not None and sent_mark.mark is not None
+    assert {
+        sent_trade.starting_price_usd,
+        sent_trade.momentum_level_usd,
+        sent_trade.stop_level_usd,
+        sent_trade.entry.seen_usd,
+        sent_trade.entry.filled_usd,
+        sent_trade.sale.seen_usd,
+        sent_trade.sale.filled_usd,
+        sent_trade.entry_fee_usd,
+        sent_trade.exit_fee_usd,
+        sent_trade.pnl_usd,
+        sent_mark.mark.price_usd,
+    } == {text}
+
+    event = wire.OptionsBacktestEventResponse.from_event(Event(EventKind.ENTRY_FILLED, OPEN_MS, "call", 0, CALL, long))
+    level = wire.OptionsBacktestLevelResponse.from_level(Level(LevelKind.STOP, "call", 0, CALL, long, OPEN_MS, OPEN_MS))
+    fill = wire.OptionsBacktestFillResponse.from_fill(
+        ChartedFill("entry", "call", 0, CALL, 1, OPEN_MS, long, long, None)
+    )
+    mark = wire.OptionsBacktestMarkResponse.from_mark(ChartedMark("call", 0, CALL, OPEN_MS, long))
+    series = wire.OptionsBacktestSeriesResponse.from_series(Series("SPY", None, (SeriesPoint(OPEN_MS, long),), None))
+    assert {
+        event.price_usd,
+        level.price_usd,
+        fill.seen_usd,
+        fill.filled_usd,
+        mark.price_usd,
+        series.points[0].close_usd,
+    } == {text}

@@ -365,3 +365,15 @@ def test_a_comparison_carries_the_underlying_the_differences_and_whether_the_ran
     assert not same_range.ranges_differ
     assert other_range.settings == () and other_range.ranges_differ
     assert (other_range.range_a.sessions_requested, other_range.range_b.last_session_open_ms) == (3, 20)
+
+
+def test_each_runs_extra_sessions_are_counted_for_that_run_when_the_two_runs_are_of_different_lengths() -> None:
+    a = [_line(1, T, "1.00", 1), _line(2, T, "2.00", 1), _line(3, T, "3.00", 1)]
+    b = [_line(3, T, "4.00", 1), _line(4, T, "5.00", 1)]
+
+    found = overlap(a, b)
+
+    # Only session 3 is in both. Run a has 1 and 2 besides: two. Run b has 4 besides: one.
+    assert [shared.session_open_ms for shared in found.shared] == [3]
+    assert (found.only_in_a, found.only_in_b) == (2, 1)
+    assert (found.a.net_profit_usd, found.b.net_profit_usd) == (D("3.00"), D("4.00"))

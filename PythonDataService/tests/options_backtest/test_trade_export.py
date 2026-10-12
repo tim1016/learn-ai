@@ -54,14 +54,14 @@ def _sold() -> StoredTrade:
             momentum_level=D("5.0000"),
             stop_level=D("4.080"),
             entry_decided_at_ms=OPEN_MS + 600_000,
-            entry=Fill("call", CALL, "buy", 2, 100, OPEN_MS + 660_000, D("5.1"), D("5.10")),
+            entry=Fill("call", CALL, "buy", 2, 100, OPEN_MS + 660_000, D("5.0"), D("5.02")),
             exit_reason=ExitReason.STOP,
             exit_group=3,
             exit_decided_at_ms=OPEN_MS + 1_200_000,
-            exit=Fill("call", CALL, "sell", 2, 100, OPEN_MS + 1_260_000, D("3.9"), D("3.90")),
+            exit=Fill("call", CALL, "sell", 2, 100, OPEN_MS + 1_260_000, D("3.9"), D("3.88")),
             entry_fee_usd=D("1.30"),
             exit_fee_usd=D("1.30"),
-            pnl_usd=D("-242.60"),
+            pnl_usd=D("-230.60"),
         ),
     )
 
@@ -121,8 +121,8 @@ def test_a_sold_trade_and_a_marked_one_are_written_cell_for_cell_as_they_were_sa
             + "\r\n"
             # The entry bar closed at 13:41 UTC = 09:41:00 EDT. 500.5 is the strike and 1791403200000 the 16:00 anchor.
             + "1791380460000,2026-10-07 09:41:00,1791379800000,2,call,1,SPY261007C00500500,SPY,call,500.5,1791403200000,"
-            "2,100,4.00,5.0000,4.080,1791380400000,5.1,5.10,stop,3,1791381000000,sale,1791381060000,3.9,3.90,"
-            "1.30,1.30,-242.60"
+            "2,100,4.00,5.0000,4.080,1791380400000,5.0,5.02,stop,3,1791381000000,sale,1791381060000,3.9,3.88,"
+            "1.30,1.30,-230.60"
             + "\r\n"
             # No rule: three empty cells. A mark has no sale: its seen price is empty and its price is the mark.
             + "1791380160000,2026-10-07 09:36:00,1791379800000,0,put,0,SPY261007P00500000,SPY,put,500,1791403200000,"

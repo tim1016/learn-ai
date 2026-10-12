@@ -101,13 +101,15 @@ def _inconsistent(leg_id: str, entry_number: int, what: str) -> SessionRecordInc
 
 
 def _ended_at(leg_id: str, entry_number: int, events: Sequence[Event]) -> int:
-    """When an attempt that never filled ended: the minute it was cancelled or refused for cash."""
+    """When an attempt that never filled ended: the minute it was cancelled or refused for cash. It ends exactly once."""
     endings = [
         event.at_ms for event in events if event.kind in (EventKind.LEG_CANCELLED, EventKind.ENTRY_REFUSED_FOR_CASH)
     ]
-    if not endings:
-        raise _inconsistent(leg_id, entry_number, "it took a starting price, never filled and was never ended")
-    return max(endings)
+    if len(endings) != 1:
+        raise _inconsistent(
+            leg_id, entry_number, f"it took a starting price and never filled, and was ended {len(endings)} times"
+        )
+    return endings[0]
 
 
 def levels_of(setup: OptionsBacktestSetup, outcome: SessionOutcome) -> tuple[Level, ...]:
@@ -164,15 +166,17 @@ def levels_of(setup: OptionsBacktestSetup, outcome: SessionOutcome) -> tuple[Lev
 
 
 def fills_of(trades: Sequence[LegTrade]) -> tuple[ChartedFill, ...]:
-    """Each trade's entry and, when it was sold, its sale: by the bar they filled in, then the trade's place, then entry first."""
-    found: list[tuple[int, int, int, ChartedFill]] = []
-    for place, trade in enumerate(trades):
+    """Each trade's entry and, when it was sold, its sale, by the bar they filled in.
+
+    Fills in one bar come in the order of their trades (the sort is stable and they are added trade by trade), and a
+    trade's sale is always in a later bar than its entry.
+    """
+    found: list[tuple[int, ChartedFill]] = []
+    for trade in trades:
         entry = trade.entry
         found.append(
             (
                 entry.bar_close_ms,
-                place,
-                0,
                 ChartedFill(
                     "entry",
                     trade.leg_id,
@@ -191,8 +195,6 @@ def fills_of(trades: Sequence[LegTrade]) -> tuple[ChartedFill, ...]:
             found.append(
                 (
                     sale.bar_close_ms,
-                    place,
-                    1,
                     ChartedFill(
                         "exit",
                         trade.leg_id,
@@ -206,8 +208,8 @@ def fills_of(trades: Sequence[LegTrade]) -> tuple[ChartedFill, ...]:
                     ),
                 )
             )
-    found.sort(key=lambda each: each[:3])
-    return tuple(each[3] for each in found)
+    found.sort(key=lambda each: each[0])
+    return tuple(fill for _, fill in found)
 
 
 def marks_of(trades: Sequence[LegTrade]) -> tuple[ChartedMark, ...]:

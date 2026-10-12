@@ -191,6 +191,10 @@ async def test_a_leg_marked_and_not_sold_has_no_seen_price_and_its_mark_as_the_e
         marked = not isinstance(trade.exit, Fill)
         assert (row["exit_kind"], row["exit_seen_usd"] == "") == (("mark", True) if marked else ("sale", False))
         assert D(row["exit_price_usd"]) == trade.exit_price and D(row["pnl_usd"]) == trade.pnl_usd
+        # The busy run has slippage, so what was seen and what was filled differ and a swap of the two is seen.
+        assert (D(row["entry_seen_usd"]), D(row["entry_filled_usd"])) == (trade.entry.seen, trade.entry.filled)
+        if not marked:
+            assert D(row["exit_seen_usd"]) == trade.exit.seen
         assert int(row["unix_ts"]) == trade.entry.bar_close_ms
 
 

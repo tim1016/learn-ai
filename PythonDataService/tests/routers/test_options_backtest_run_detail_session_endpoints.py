@@ -8,6 +8,7 @@ route reads the same files back. A minute is "m5": the bar closing five minutes 
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -18,7 +19,7 @@ import pytest
 import respx
 
 from app.lean_sidecar.trading_calendar import session_window_for_date
-from app.options_backtest.results import Mark
+from app.options_backtest.results import EventKind, Fill, Mark
 from app.options_backtest.run import RunResult, run_sessions
 from app.options_backtest.setup import MS_PER_MINUTE, OptionsBacktestSetup
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
@@ -53,6 +54,11 @@ from tests.options_backtest.setup_fixtures import setup_body
 from tests.options_backtest.setup_fixtures import unique as unique
 
 D = Decimal
+
+
+@pytest.fixture(scope="module")
+def scene() -> RunResult:
+    return run_sessions(the_setup(), SESSIONS, fake_data(the_scene()))
 
 
 def _minute_of(at_ms: int, open_ms: int) -> int:
@@ -374,6 +380,21 @@ async def test_the_stored_facts_marks_and_dateless_words_are_served_when_the_lak
     for body in (marked, pick_refused):
         assert body["underlying"]["reason"] == "gone"
         assert all(each["reason"] == "gone" and each["points"] == [] for each in body["contracts"])
+    # Every price seen and price filled, entries and sales, is the saved trade's: slippage made them different.
+    saved_trades = incomplete.outcome.trades
+    assert sorted(
+        (f["kind"], f["leg_id"], f["entry_number"], D(f["seen_usd"]), D(f["filled_usd"])) for f in marked["fills"]
+    ) == sorted(
+        [("entry", t.leg_id, t.entry_number, t.entry.seen, t.entry.filled) for t in saved_trades]
+        + [
+            ("exit", t.leg_id, t.entry_number, t.exit.seen, t.exit.filled)
+            for t in saved_trades
+            if isinstance(t.exit, Fill)
+        ]
+    )
+    assert any(t.entry.seen != t.entry.filled for t in saved_trades), (
+        "the busy run has slippage: seen and filled differ"
+    )
     saved_marks = [t for t in incomplete.outcome.trades if isinstance(t.exit, Mark)]
     assert saved_marks and [
         (m["leg_id"], m["entry_number"], m["contract"], m["bar_close_ms"], D(m["price_usd"])) for m in marked["marks"]
@@ -388,6 +409,32 @@ async def test_the_stored_facts_marks_and_dateless_words_are_served_when_the_lak
     )
     no_date_in(marked)
     no_date_in(pick_refused)
+
+
+async def test_a_stored_session_whose_trades_and_events_disagree_is_a_500_with_a_code_and_the_rest_of_the_run_still_opens(
+    client: httpx.AsyncClient,
+    save_run: SaveRun,
+    scene: RunResult,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    is_the_job_alive: Any,
+) -> None:
+    friday = scene.sessions[2]
+    # The lag leg took a starting price and waited; without its cancellation it never ended, which the replay cannot do.
+    cancelled = next(e for e in friday.outcome.events if e.kind is EventKind.LEG_CANCELLED and e.leg_id == "lag")
+    events = tuple(e for e in friday.outcome.events if e is not cancelled)
+    broken = replace(
+        scene, sessions=(*scene.sessions[:2], replace(friday, outcome=replace(friday.outcome, events=events)))
+    )
+    run_id = await save_run(broken, "disagree")
+
+    response = await _get(client, run_id, FRI_OPEN_MS)
+    other = await _get(client, run_id, THU_OPEN_MS)
+
+    assert response.status_code == 500, response.text
+    assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_STORED_SESSION_INCONSISTENT"
+    assert "lag" in response.json()["detail"]["message"]
+    assert other.status_code == 200
 
 
 # ── What it refuses ──────────────────────────────────────────────────────

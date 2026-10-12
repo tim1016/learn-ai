@@ -40,6 +40,7 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import date
 
+from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.options_backtest.run import RunResult
 from app.options_backtest.saved_runs import RunFailure
 from app.options_backtest.service import RunHooks, execute_run
@@ -55,6 +56,10 @@ SESSIONS = [WED, THU, FRI]
 WED_OPEN_MS = 1_791_379_800_000
 THU_OPEN_MS = WED_OPEN_MS + 86_400_000
 FRI_OPEN_MS = THU_OPEN_MS + 86_400_000
+
+for _day, _open_ms in ((WED, WED_OPEN_MS), (THU, THU_OPEN_MS), (FRI, FRI_OPEN_MS)):
+    # The hand-worked opens above are checked against the calendar when the module loads.
+    assert session_window_for_date(_day).open_ms_utc == _open_ms, _day
 
 CALL_500 = "SPY261007C00500000"
 PUT_500 = "SPY261007P00500000"

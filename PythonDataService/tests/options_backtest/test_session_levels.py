@@ -324,3 +324,30 @@ def test_a_starting_price_on_a_leg_whose_setup_has_no_momentum_rule_cannot_be_dr
 
     with pytest.raises(SessionRecordInconsistent, match="momentum rule"):
         levels_of(without_momentum, friday)
+
+
+def test_a_fill_shows_the_price_seen_and_the_different_price_it_filled_at_after_slippage() -> None:
+    written = setup(leg("call"), slippage="1")
+    market = TableMarket(
+        underlying=steady("500.00"),
+        picks=_picks(("call", CALL)),
+        # Bought at the open of m6, seen 2.00: 2.00 x 1.01 = 2.0200, which is on the step, so it fills at 2.02. Sold at
+        # the open of m61, seen 2.50: 2.50 x 0.99 = 2.475, rounded down to the cent, 2.47.
+        options={CALL: {**flat("2.00", 5, 60), 61: ("2.50", "2.50")}},
+    )
+
+    outcome = replay(written, market)
+
+    assert [(f.kind, f.bar_close_ms, f.seen, f.filled, f.exit_reason) for f in fills_of(outcome.trades)] == [
+        ("entry", at(6), D("2.00"), D("2.02"), None),
+        ("exit", at(61), D("2.50"), D("2.47"), ExitReason.EXIT_TIME),
+    ]
+
+
+def test_an_attempt_that_never_filled_and_was_ended_twice_cannot_be_drawn(scene: RunResult) -> None:
+    outcome = scene.sessions[2].outcome
+    cancelled = next(e for e in outcome.events if e.kind is EventKind.LEG_CANCELLED and e.leg_id == "lag")
+    twice = replace(outcome, events=(*outcome.events, replace(cancelled, at_ms=cancelled.at_ms + 60_000)))
+
+    with pytest.raises(SessionRecordInconsistent, match="lag"):
+        levels_of(scene.setup, twice)
