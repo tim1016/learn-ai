@@ -115,6 +115,18 @@ describe('a chain with a price whose strikes cannot be centred', () => {
     for (const sentence of FALSE_SENTENCES) expect(card()).not.toMatch(sentence);
   });
 
+  it.each([
+    ['calls', chainExpiry({ calls: sideWithoutMoney('call', 4, 0), puts: side('put', [], null) })],
+    ['puts', chainExpiry({ calls: side('call', [], null), puts: sideWithoutMoney('put', 4, 0) })],
+  ])('says the same when only the %s list contracts, none of them standard, and the other side lists none', async (_side, chain) => {
+    await renderUndrawn(chain);
+
+    expect(card()).toContain('No strikes are drawn.');
+    expect(card()).toContain('The underlying has a price, but the server found no standard contract on a side to centre them on.');
+    expect(card()).not.toContain('The server sent no contract in this window.');
+    for (const sentence of FALSE_SENTENCES) expect(card()).not.toMatch(sentence);
+  });
+
   it('says only that the window is empty when the money is there and the window holds nothing', async () => {
     await renderUndrawn(chainExpiry({ calls: side('call', [], 602_000, { listed: 4 }), puts: side('put', [], 602_000, { listed: 4 }) }));
 
