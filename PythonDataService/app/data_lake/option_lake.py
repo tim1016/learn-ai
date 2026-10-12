@@ -33,7 +33,9 @@ not asked:
 
 These are recorded on the claimed row, which is failed and never left fetching:
 
-* ``provider_auth_error``: the vendor refused the key (401); a run should stop.
+* ``provider_auth_error``: the vendor refused the key (401), or the key cannot be sent at all
+  (empty, or holding a space or a character that is not printable ASCII; no request is made); a
+  run should stop.
 * ``provider_entitlement_error``: a 403 that is not the plan-timeframe answer.
 * ``provider_rate_limited``: the vendor said to slow down (429).
 * ``unknown_symbol``: the vendor does not know the ticker (404, or status NOT_FOUND).
@@ -108,6 +110,10 @@ OPTION_PRICE_ADJUSTMENT_MODE: PriceAdjustmentMode = "raw"
 OPTION_HISTORY_YEARS = 2
 #: Days of headroom over the plan's boundary, as ``polygon_fetcher`` keeps for stocks.
 _HISTORY_FLOOR_MARGIN_DAYS = 2
+
+#: The most characters of a failure's text kept on a row. The vendor's body is already cut to 200
+#: by the shared fetcher; this bounds the rest (our own messages) so none can grow without limit.
+MAX_FAILURE_TEXT_CHARS = 1000
 
 #: One staging request id for the whole process, as the stock path shares one per run:
 #: staging leaves its folders behind (nothing sweeps them), so a fresh id per publish
@@ -288,6 +294,17 @@ def vendor_reason(error: PolygonFetchError) -> OptionFailureReason:
     return "provider_api_error"
 
 
+def storable_failure_text(text: str) -> str:
+    """A failure's text as a row can hold it: no NUL, nothing UTF-8 cannot encode, and a bounded length.
+
+    Postgres refuses a NUL in text, and a character no UTF-8 can encode (a lone surrogate from a
+    JSON escape) fails the driver, so a vendor's text carrying either would make recording the
+    failure itself raise and leave the row fetching. At most :data:`MAX_FAILURE_TEXT_CHARS` are kept.
+    """
+    storable = text.replace("\x00", "").encode("utf-8", errors="replace").decode("utf-8")
+    return storable[:MAX_FAILURE_TEXT_CHARS]
+
+
 async def fail_row(
     *,
     artifact_id: int,
@@ -297,7 +314,11 @@ async def fail_row(
     symbol: str,
     trading_date: date,
 ) -> OptionCaptureResult:
-    """Fail the claimed row under its generation (fenced), and answer with the typed failure."""
+    """Fail the claimed row under its generation (fenced), and answer with the typed failure.
+
+    The text is made storable first (:func:`storable_failure_text`), and the answer carries the text stored.
+    """
+    detail = storable_failure_text(detail)
     await catalog_client.fail_artifact(
         artifact_id, reason, detail, worker_id=WORKER_ID, lease_generation=lease_generation
     )

@@ -62,7 +62,12 @@ from app.data_lake.option_bars import (
     parse_option_day_zip,
     read_option_day_bars,
 )
-from app.data_lake.option_lake import option_history_floor
+from app.data_lake.option_lake import (
+    MAX_FAILURE_TEXT_CHARS,
+    fail_row,
+    option_history_floor,
+    storable_failure_text,
+)
 from app.data_lake.option_listing import ensure_option_listing, read_option_listing
 from app.data_lake.path_policy import lake_subpath
 from app.data_lake.polygon_option_bars import PolygonOptionBar
@@ -73,6 +78,8 @@ from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, 
 from tests._helpers.option_lake_cases import (
     CAPTURE_OPENS,
     HALF_DAY_CLOSE_MS,
+    pieces_of_the_key_in,
+    refuse_what_postgres_refuses,
 )
 from tests._helpers.option_vendor import (
     bad_bars_answers,
@@ -1015,6 +1022,93 @@ async def test_a_transport_failure_is_a_provider_api_error(fake_catalog: FakeCat
 
 @respx.mock
 @pytest.mark.parametrize(
+    "key",
+    ["", "  \n", "Zq9xV7wK\u00e9", "Zq9xV7wK Zq9xV7wK", "Zq9xV7wK\x00", "Zq9xV7wK\ud800"],
+    ids=["empty", "only whitespace", "accented letter", "inner space", "nul", "lone surrogate"],
+)
+async def test_a_key_that_cannot_be_sent_fails_the_row_as_an_auth_error_and_leaves_none_fetching(
+    key: str, fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A raw ``UnicodeEncodeError`` once escaped here and left the row ``fetching`` for the length of its lease."""
+    route = _mock_vendor()
+    await _list(CONTRACT)  # stored while the key is good
+    stored = refuse_what_postgres_refuses(monkeypatch)
+    monkeypatch.setattr(settings, "POLYGON_API_KEY", key)
+    caplog.set_level(logging.DEBUG)
+
+    result = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
+
+    assert result.record is None
+    assert result.failure is not None and result.failure.reason == "provider_auth_error"
+    assert "malformed" in result.failure.detail
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "provider_auth_error", None)
+    assert route.call_count == 0  # no request was made
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+    shown = [result.failure.detail, *stored, *(r.getMessage() + repr(r.__dict__) for r in caplog.records)]
+    assert pieces_of_the_key_in(key.strip(), *shown) == set()
+
+
+@respx.mock
+async def test_a_vendor_error_text_with_a_nul_is_stored_without_it_and_the_row_is_failed_not_left_fetching(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The table refuses a NUL, so recording the failure raised and the row stayed ``fetching``."""
+    stored = refuse_what_postgres_refuses(monkeypatch)
+    _mock_vendor(httpx.Response(500, content=b"boom\x00boom"))
+
+    result = await _ensure()
+
+    assert result.failure is not None and result.failure.reason == "provider_api_error"
+    assert "boomboom" in result.failure.detail and "\x00" not in result.failure.detail
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "provider_api_error", None)
+    assert stored == [result.failure.detail]
+
+
+@respx.mock
+async def test_a_vendor_status_with_a_character_no_utf8_holds_is_stored_cleaned_and_the_row_is_failed(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """JSON can spell a lone surrogate (``\\ud800``); the status is echoed into the error text, and the driver cannot encode it."""
+    stored = refuse_what_postgres_refuses(monkeypatch)
+    _mock_vendor(raw_json('{"status":"\\ud800","ticker":"O:' + SYMBOL + '","resultsCount":0}'))
+
+    result = await _ensure()
+
+    assert result.failure is not None and result.failure.reason == "provider_api_error"
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "provider_api_error", None)
+    assert len(stored) == 1 and stored[0] == result.failure.detail
+    stored[0].encode("utf-8")  # storable
+
+
+def test_a_failure_text_loses_its_nuls_is_made_encodable_and_is_cut_to_the_stored_length() -> None:
+    assert storable_failure_text("a\x00b\x00\x00c") == "abc"
+    assert storable_failure_text("x\ud800y") == "x?y"
+    assert storable_failure_text("caf\u00e9 \u2603") == "caf\u00e9 \u2603"  # what UTF-8 holds is kept
+    assert storable_failure_text("x" * (MAX_FAILURE_TEXT_CHARS + 500)) == "x" * MAX_FAILURE_TEXT_CHARS
+    assert storable_failure_text("") == ""
+    assert MAX_FAILURE_TEXT_CHARS > 200  # the vendor's body is cut to 200 elsewhere; this never clips that
+
+
+async def test_fail_row_hands_the_catalog_the_cleaned_text_and_answers_with_it(
+    fake_catalog: FakeCatalog, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stored = refuse_what_postgres_refuses(monkeypatch)
+
+    result = await fail_row(
+        artifact_id=1, lease_generation=1, reason="provider_api_error", detail="bad\x00\ud800" + "y" * 5000,
+        symbol=SYMBOL, trading_date=TRADING_DAY,
+    )
+
+    assert result.failure is not None
+    assert stored == [result.failure.detail] and stored[0].startswith("bad?y")
+    assert len(stored[0]) == MAX_FAILURE_TEXT_CHARS
+
+
+@respx.mock
+@pytest.mark.parametrize(
     ("results", "fragment"),
     [
         ([_bar(0), _bar(0)], "duplicate timestamp"),
@@ -1119,10 +1213,17 @@ async def test_a_price_the_float_route_would_round_the_other_way_is_stored_by_it
 
 
 @respx.mock
+@pytest.mark.parametrize(
+    "configured_key",
+    [SENTINEL_KEY, f"{SENTINEL_KEY}\n", f"  {SENTINEL_KEY}\r\n"],
+    ids=["as typed", "with a trailing newline", "with spaces in front and a crlf behind"],
+)
 async def test_the_key_is_in_no_url_no_log_line_no_error_text_and_no_stored_failure(
-    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    configured_key: str, fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    monkeypatch.setattr(settings, "POLYGON_API_KEY", SENTINEL_KEY)
+    """The key is sent as itself, stripped of the whitespace an ``.env`` line or a copy-paste leaves on it."""
+    monkeypatch.setattr(settings, "POLYGON_API_KEY", configured_key)
     caplog.set_level(logging.INFO)  # the level the app logs at; httpx logs each request's URL there
     failed_with: list[Any] = []
     stored_fail = catalog_client.fail_artifact

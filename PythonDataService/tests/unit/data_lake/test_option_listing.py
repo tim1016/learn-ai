@@ -21,6 +21,7 @@ import csv
 import hashlib
 import io
 import json
+import logging
 import shutil
 import zipfile
 import zlib
@@ -33,6 +34,7 @@ import httpx
 import pytest
 import respx
 
+from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake import option_listing as option_listing_module
 from app.data_lake.admission import LakeAdmissionError
@@ -54,6 +56,8 @@ from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, 
 from tests._helpers.option_lake_cases import (
     CAPTURE_OPENS,
     HALF_DAY_CLOSE_MS,
+    pieces_of_the_key_in,
+    refuse_what_postgres_refuses,
 )
 
 AS_OF = date(2025, 6, 13)
@@ -410,6 +414,81 @@ async def test_a_ticker_listed_once_on_each_of_two_pages_is_still_listed_twice(f
     assert "duplicate" in result.failure.detail
 
 
+def _raw_body(text: str) -> httpx.Response:
+    return httpx.Response(200, content=text.encode(), headers={"content-type": "application/json"})
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "ticker_json",
+    ['"O:SPY250613C00375000\\ud800"', '"O:SPY\\ud800250613C00375000"', '"O:SPY250613C00375000\u00e9"', '"O:SPY250613C00375000\U0001f4c8"'],
+    ids=["a lone surrogate at the end", "a lone surrogate inside", "an accented letter", "an emoji"],
+)
+async def test_a_ticker_that_is_not_ascii_fails_the_listing_as_invalid_and_the_row_is_not_left_fetching(
+    ticker_json: str, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """A lone surrogate (a JSON escape no UTF-8 holds) once escaped the file writer and left the row ``fetching``."""
+    good = json.dumps(STANDARD_ROWS[1])
+    respx.get(CONTRACTS_URL).mock(
+        return_value=_raw_body('{"status":"OK","results":[' + good + ',{"ticker":' + ticker_json + ',"contract_type":"call"}]}')
+    )
+
+    result = await ensure_option_listing("SPY", AS_OF)
+
+    assert result.record is None
+    assert result.failure is not None and result.failure.reason == "validation_failed"
+    assert "no usable ticker" in result.failure.detail
+    [row] = fake_catalog.rows.values()
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "validation_failed", None)
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "second_page_results",
+    ["", '"results":null,', '"results":{},', '"results":"x",', '"results":0,', '"results":false,'],
+    ids=["missing", "null", "an object", "a string", "zero", "false"],
+)
+async def test_a_second_page_with_no_list_of_rows_admits_no_listing_so_a_cut_short_one_is_never_stored_as_whole(
+    second_page_results: str, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """Read as an empty last page, the first page alone became the day's listing and every other contract was "not listed" for good."""
+    respx.get(CONTRACTS_URL, params={"underlying_ticker": "SPY"}).mock(
+        return_value=_page(STANDARD_ROWS[:2], next_url=SECOND_PAGE)
+    )
+    second = respx.get(CONTRACTS_URL, params={"cursor": "page2"}).mock(
+        return_value=_raw_body('{"status":"OK",' + second_page_results + '"request_id":"r"}')
+    )
+
+    failed = await ensure_option_listing("SPY", AS_OF)
+
+    assert failed.record is None
+    assert failed.failure is not None and failed.failure.reason == "provider_api_error"
+    assert "not a list" in failed.failure.detail
+    [row] = fake_catalog.rows.values()
+    assert (row["status"], row["last_error"]) == ("failed", "provider_api_error")
+    assert _lake_files(tmp_lake) == [] and await _read() is None
+
+    second.mock(return_value=_page(STANDARD_ROWS[2:]))
+    retried = await ensure_option_listing("SPY", AS_OF)
+
+    assert retried.failure is None and retried.record is not None and retried.record.row_count == 3
+
+
+@respx.mock
+async def test_a_first_page_with_no_rows_and_a_next_page_admits_no_listing(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    respx.get(CONTRACTS_URL, params={"underlying_ticker": "SPY"}).mock(return_value=_page([], next_url=SECOND_PAGE))
+    second = respx.get(CONTRACTS_URL, params={"cursor": "page2"}).mock(return_value=_page(STANDARD_ROWS))
+
+    result = await ensure_option_listing("SPY", AS_OF)
+
+    assert result.record is None
+    assert result.failure is not None and result.failure.reason == "provider_api_error"
+    assert "empty page with a next page" in result.failure.detail
+    assert second.call_count == 0
+    assert _lake_files(tmp_lake) == []
+
+
 def _raw_page(rows: list[dict[str, Any]]) -> httpx.Response:
     """A page whose ``@@<number>@@`` strings are written as bare JSON numbers, and whose floats may be ``Infinity``/``NaN``."""
     body = json.dumps({"status": "OK", "request_id": "r", "results": rows})
@@ -586,6 +665,62 @@ async def test_each_vendor_error_fails_the_row_with_its_own_reason(
     assert result.failure is not None and result.failure.reason == reason
     [row] = fake_catalog.rows.values()
     assert (row["status"], row["last_error"]) == ("failed", reason)
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "key",
+    ["", "  \n", "Zq9xV7wK\u00e9", "Zq9xV7wK Zq9xV7wK", "Zq9xV7wK\x00", "Zq9xV7wK\ud800"],
+    ids=["empty", "only whitespace", "accented letter", "inner space", "nul", "lone surrogate"],
+)
+async def test_a_key_that_cannot_be_sent_fails_the_listing_row_as_an_auth_error_and_leaves_none_fetching(
+    key: str, fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    route = _mock_one_page(STANDARD_ROWS)
+    stored = refuse_what_postgres_refuses(monkeypatch)
+    monkeypatch.setattr(settings, "POLYGON_API_KEY", key)
+    caplog.set_level(logging.DEBUG)
+
+    result = await ensure_option_listing("SPY", AS_OF)
+
+    assert result.record is None
+    assert result.failure is not None and result.failure.reason == "provider_auth_error"
+    assert "malformed" in result.failure.detail
+    [row] = fake_catalog.rows.values()
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "provider_auth_error", None)
+    assert route.call_count == 0
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+    shown = [result.failure.detail, *stored, *(r.getMessage() + repr(r.__dict__) for r in caplog.records)]
+    assert pieces_of_the_key_in(key.strip(), *shown) == set()
+
+
+@respx.mock
+async def test_a_key_with_a_trailing_newline_captures_a_listing_sent_as_its_stripped_self(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    route = _mock_one_page(STANDARD_ROWS)
+    monkeypatch.setattr(settings, "POLYGON_API_KEY", "sentinel-key-4f9a1c\n")
+
+    result = await ensure_option_listing("SPY", AS_OF)
+
+    assert result.failure is None and result.record is not None
+    assert route.calls[0].request.headers["Authorization"] == "Bearer sentinel-key-4f9a1c"
+
+
+@respx.mock
+async def test_a_vendor_error_text_with_a_nul_is_stored_without_it_and_the_listing_row_is_failed_not_left_fetching(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stored = refuse_what_postgres_refuses(monkeypatch)
+    respx.get(CONTRACTS_URL).mock(return_value=httpx.Response(500, content=b"boom\x00boom"))
+
+    result = await ensure_option_listing("SPY", AS_OF)
+
+    assert result.failure is not None and result.failure.reason == "provider_api_error"
+    assert "boomboom" in result.failure.detail and "\x00" not in result.failure.detail
+    [row] = fake_catalog.rows.values()
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "provider_api_error", None)
+    assert stored == [result.failure.detail]
 
 
 @respx.mock

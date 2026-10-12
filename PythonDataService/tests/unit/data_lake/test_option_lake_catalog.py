@@ -51,6 +51,7 @@ from app.data_lake.polygon_option_bars import PolygonOptionBar
 from app.data_lake.types import ArtifactIdentity
 from app.options.contract import OptionContract
 from tests._helpers.fake_lake_catalog import point_lake_writer_at_tmp
+from tests._helpers.option_lake_cases import pieces_of_the_key_in
 from tests._helpers.option_vendor import bad_bars_answers, no_trades, outside_plan, traded
 
 pytestmark = pytest.mark.asyncio
@@ -379,6 +380,47 @@ async def test_the_vendors_failure_text_is_stored_without_the_key(clean_artifact
     assert "disagrees" in row["ErrorMessage"]
     assert "sentinel-key-4f9a1c" not in repr(dict(row))
     assert all("sentinel-key-4f9a1c" not in str(call.request.url) for call in respx.calls)
+
+
+@respx.mock
+@pytest.mark.parametrize("key", ["", "Zq9xV7wK\u00e9", "Zq9xV7wK Zq9xV7wK"], ids=["empty", "accented letter", "inner space"])
+async def test_a_key_that_cannot_be_sent_is_stored_as_an_auth_failure_without_the_key_and_the_row_is_not_left_fetching(
+    key: str, clean_artifacts, pool, tmp_lake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    route = _mock_bars(_bars_ok([_bar(0)]))
+    await _list(CONTRACT)
+    monkeypatch.setattr(settings, "POLYGON_API_KEY", key)
+
+    result = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
+
+    assert result.failure is not None and result.failure.reason == "provider_auth_error"
+    [row] = await _bar_rows()
+    assert (row["Status"], row["LastError"], row["LeaseOwner"]) == ("failed", "provider_auth_error", None)
+    assert "malformed" in row["ErrorMessage"]
+    assert pieces_of_the_key_in(key.strip(), repr(dict(row))) == set()
+    assert route.call_count == 0
+
+
+@respx.mock
+async def test_a_vendor_text_with_a_nul_is_stored_cleaned_and_the_row_is_failed_on_the_real_table(
+    clean_artifacts, pool, tmp_lake
+) -> None:
+    """The table refuses a NUL in text, so recording the failure raised and the row stayed ``fetching``."""
+    await _list(CONTRACT)
+    _mock_bars(httpx.Response(500, content=b"boom\x00boom"))
+
+    bars = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
+    respx.get(CONTRACTS_URL).mock(return_value=httpx.Response(500, content=b"list\x00ing"))
+    listing = await ensure_option_listing("SPY", date(2025, 6, 12))
+
+    assert bars.failure is not None and bars.failure.reason == "provider_api_error"
+    assert listing.failure is not None and listing.failure.reason == "provider_api_error"
+    [bars_row] = await _bar_rows()
+    assert (bars_row["Status"], bars_row["LastError"], bars_row["LeaseOwner"]) == ("failed", "provider_api_error", None)
+    assert "boomboom" in bars_row["ErrorMessage"] and "\x00" not in bars_row["ErrorMessage"]
+    [june_12] = [r for r in await _rows() if r["ArtifactKind"] == "metadata" and r["Status"] != "complete"]
+    assert (june_12["Status"], june_12["LastError"], june_12["LeaseOwner"]) == ("failed", "provider_api_error", None)
+    assert "listing" in june_12["ErrorMessage"] and "\x00" not in june_12["ErrorMessage"]
 
 
 @respx.mock
