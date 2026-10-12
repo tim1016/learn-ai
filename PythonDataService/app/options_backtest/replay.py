@@ -126,9 +126,10 @@ def replay_session(
 ) -> SessionOutcome:
     """Replay ``setup`` over one session's ``market``, starting with ``cash_usd``.
 
-    ``fee_for`` gives the fee in dollars for each fill, entries and exits alike. Raises
-    ``ValueError`` for a session whose open or close is not on a whole minute: no bar could
-    close at its exit time.
+    ``cash_usd`` is the cash at this session's start; the setup's own starting cash belongs to
+    the run, which carries it from one session to the next. ``fee_for`` gives the fee in dollars
+    for each fill, entries and exits alike. Raises ``ValueError`` for a session whose open or
+    close is not on a whole minute: no bar could close at its exit time.
     """
     if market.session_open_ms % MS_PER_MINUTE or market.session_close_ms % MS_PER_MINUTE:
         raise ValueError("a session opens and closes on a whole minute: bars are named by the minute they close")
