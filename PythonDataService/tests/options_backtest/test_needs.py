@@ -10,7 +10,7 @@ from datetime import date
 
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.options_backtest.needs import SessionNeeds, session_needs
-from app.options_backtest.results import SkipReason
+from app.options_backtest.results import ExitReason, SkipReason
 from app.options_backtest.setup import OptionsBacktestSetup
 from tests.options_backtest._market import after_open, before_close, leg, setup
 from tests.options_backtest._run_data import FRI, HALF_DAY, listing_on, steady, underlying_bars
@@ -20,7 +20,11 @@ STOP_25 = ("percent", "25")
 
 
 def _needs(
-    written: OptionsBacktestSetup, prices: dict[int, str], *, day: date = FRI, strikes: tuple[int, ...] = LADDER
+    written: OptionsBacktestSetup,
+    prices: dict[int, str | tuple[str, str, str, str]],
+    *,
+    day: date = FRI,
+    strikes: tuple[int, ...] = LADDER,
 ) -> SessionNeeds:
     window = session_window_for_date(day)
     return session_needs(
@@ -157,3 +161,41 @@ def test_the_entry_pick_uses_the_underlying_at_the_entry_time_and_no_other_minut
     # Minute 4 is 480.0 (the 490 strike) and minute 6 is 520.0 (520); only minute 5, at 507.6, picks: 505 is 2.6 away
     # and 510 is 2.4 away, so 510.
     assert _read(_needs(setup(leg()), {4: "480.0", 5: "507.6", 6: "520.0"})) == [("call", 510)]
+
+
+def test_the_price_a_pick_is_made_at_is_the_bars_close_and_not_its_open_high_or_low() -> None:
+    # Strikes are 490, 495, ... 520. The entry bar of minute 5 opened at 495.2 (the 495 strike), reached 512.6 (515:
+    # 2.4 away, against 2.6 to 510) and 489.0 (490, the lowest), and closed at 503.1 (505: 1.9 away, against 3.1 to
+    # 500). Only the close, 505, is the underlying's price. The leg cannot come back, so nothing else is picked.
+    entry_bar = ("495.2", "512.6", "489.0", "503.1")
+
+    needs = _needs(setup(leg(stop=STOP_25)), {5: entry_bar})
+
+    assert _read(needs) == [("call", 505)]
+
+
+def test_a_re_entry_minute_is_picked_at_its_bars_close_and_not_its_open_high_or_low() -> None:
+    # The entry at minute 5 is flat at 507.6: 510 (2.4 away, against 2.6 to 505). Minute 6 opened at 497.4 (495: 2.4
+    # away, against 2.6 to 500), reached 509.9 (510) and 492.0 (490: 2.0 away, against 3.0 to 495), and closed at 501.0
+    # (500). A re-entry starting then picks 500, so the needs are 500 and 510 and not 495, 490 or a second 510.
+    prices = {5: "507.6", 6: ("497.4", "509.9", "492.0", "501.0")}
+
+    needs = _needs(setup(leg(stop=STOP_25, reentry=("at_once", 1))), prices)
+
+    assert _read(needs) == [("call", 500), ("call", 510)]
+
+
+def test_a_new_way_to_close_a_leg_must_be_weighed_in_what_a_session_needs() -> None:
+    assert set(ExitReason) == {
+        ExitReason.STOP,
+        ExitReason.SQUARE_OFF,
+        ExitReason.EXIT_TIME,
+        ExitReason.MARKED_NOT_SOLD,
+    }, (
+        "the replay's ways of closing a leg changed. ``needs._can_come_back`` reasons from them: only a stop on the "
+        "leg itself, or a complete square-off with a stop on some leg, closes a leg that can start a re-entry, and "
+        "the contracts a session needs follow from that. A new way to close a leg (a target, a trailing stop) may "
+        "make a leg come back that ``_can_come_back`` says cannot, and then a session's needs are short and the "
+        "run fails. Revisit ``_can_come_back``, extend the property test's generator to the new rule, and then "
+        "change this list."
+    )

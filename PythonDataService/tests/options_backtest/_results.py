@@ -72,8 +72,9 @@ def a_trade(
     )
 
 
-def an_event(kind: EventKind, leg_id: str = "a", reason: str | None = None) -> Event:
-    return Event(kind, 0, leg_id, 0, reason=reason)
+def an_event(kind: EventKind, leg_id: str = "a", reason: str | None = None, entry_number: int = 0) -> Event:
+    """An event of ``kind``; ``entry_number`` is 0 for a leg's first entry and 1 or more for a re-entry."""
+    return Event(kind, 0, leg_id, entry_number, reason=reason)
 
 
 def a_session(
@@ -104,5 +105,19 @@ def a_session(
         cash_before_usd=D(cash_before),
         outcome=outcome,
         cash_after_usd=D(cash_before) + profit,
+        pins=NO_PINS,
+    )
+
+
+def a_session_of(day: date, outcome: SessionOutcome, cash_before: str) -> SessionResult:
+    """A session whose outcome came from a replay, kept as a run keeps it: cash after is cash before plus the profit."""
+    window = session_window_for_date(day)
+    return SessionResult(
+        trading_date=day,
+        session_open_ms=window.open_ms_utc,
+        session_close_ms=window.close_ms_utc,
+        cash_before_usd=D(cash_before),
+        outcome=outcome,
+        cash_after_usd=D(cash_before) + outcome.pnl_usd,
         pins=NO_PINS,
     )

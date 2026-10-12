@@ -1,17 +1,23 @@
-"""A leg prepared once on a date's listing picks exactly as ``pick_contract`` does, at every price.
+"""A leg prepared once on a date's listing picks the contract a plain search for the money comes to.
 
 A run picks at every minute of a session, and ``pick_contract`` regroups the whole listing on each call. The
-prepared form settles the expiry once and takes only the strike at each price. These tests hold the two to the same
-answer, refusals and caller mistakes included, over a sweep of listings, expiry rules, strike rules, rights and
-prices. The dates are checked against the canonical calendar when the module loads.
+prepared form settles the expiry once and takes only the strike at each price, by bisecting the sorted strikes. A
+test that compared it with ``pick_contract`` would compare a function with itself (``pick_contract`` is the two steps
+in a row), so the strike is held to an oracle this file owns: a linear search for the listed strike nearest the
+price, the lower of two as near, and then so many places along the sorted ladder. The remaining tests pin what the
+prepared form promises of its own: where each refusal comes from, that the order a listing arrives in changes
+nothing, and the caller's mistakes. The dates are checked against the canonical calendar when the module loads.
 """
 
 from __future__ import annotations
 
 import random
+from collections import Counter
+from collections.abc import Sequence
 from datetime import date
 from decimal import Decimal
-from functools import cache
+from fractions import Fraction
+from itertools import pairwise
 from typing import Any
 
 import pytest
@@ -55,40 +61,13 @@ def _listing(*contracts: ListedContract, complete: bool = True, as_of: date = _M
     return Listing(underlying="SPY", as_of=as_of, contracts=contracts, complete=complete)
 
 
-# Each listing shape reaches one of the five refusals somewhere in the sweep, and a plain pick elsewhere.
+# The listings the refusals that do not depend on the price are read from.
 _LISTINGS: dict[str, Listing] = {
     "a full chain": _listing(*_contracts(_EXPIRIES)),
     "an incomplete chain": _listing(*_contracts(_EXPIRIES), complete=False),
     "nothing listed": _listing(),
-    "the nearest week listed only as non-standard": _listing(
-        *_contracts((_MONDAY, _WEDNESDAY, _NEXT_FRIDAY, _LAST_FRIDAY)), *_contracts((_FRIDAY,), standard=False)
-    ),
-    "only non-standard contracts": _listing(*_contracts(_EXPIRIES, standard=False)),
     "a Saturday expiry": _listing(*_contracts((_SATURDAY,))),
-    "two strikes": _listing(*_contracts(_EXPIRIES, strikes=(590, 595))),
 }
-
-_EXPIRY_RULES: dict[str, dict[str, Any]] = {
-    "same day": {"kind": "same_day"},
-    "this week": {"kind": "this_week"},
-    "at least 0 days": {"kind": "min_days", "days": 0},
-    "at least 3 days": {"kind": "min_days", "days": 3},
-    "at least 10 days": {"kind": "min_days", "days": 10},
-    "at least 60 days": {"kind": "min_days", "days": 60},
-}
-_STRIKE_RULES: tuple[dict[str, Any], ...] = (
-    {"kind": "atm"},
-    {"kind": "atm_offset", "steps": 1},
-    {"kind": "atm_offset", "steps": -1},
-    {"kind": "atm_offset", "steps": 3},
-    {"kind": "atm_offset", "steps": -3},
-    {"kind": "atm_offset", "steps": 50},
-)
-# Between strikes, on a strike, exactly halfway (the lower strike wins), and off both ends of the ladder.
-_PRICES = tuple(
-    Decimal(price) for price in ("592.5", "592.4999", "590", "579.99", "600.01", "0.01", "10000", "587.5", "588")
-)
-_RIGHTS: tuple[OptionRight, ...] = ("call", "put")
 
 
 def _leg(expiry: dict[str, Any], strike: dict[str, Any], right: OptionRight) -> LegSetup:
@@ -97,44 +76,99 @@ def _leg(expiry: dict[str, Any], strike: dict[str, Any], right: OptionRight) -> 
     )
 
 
-def _prepared_pick(leg: LegSetup, listing: Listing, price: Decimal) -> Picked | PickRefused:
-    prepared = prepare_leg(leg, listing=listing, trading_date=_MONDAY)
-    return prepared if isinstance(prepared, PickRefused) else prepared.pick(price)
+def _strike_by_plain_search(listed: Sequence[Decimal], price: Decimal, steps: int) -> Decimal | None:
+    """The strike a rule means, found the slow way: the nearest listed strike to the price, the lower of two as near,
+    then ``steps`` places along the sorted strikes; None off either end."""
+    ladder = sorted(set(listed))
+    nearest = min(range(len(ladder)), key=lambda at: (abs(Fraction(ladder[at]) - Fraction(price)), ladder[at]))
+    place = nearest + steps
+    return ladder[place] if 0 <= place < len(ladder) else None
 
 
-@cache
-def _sweep(listing_name: str, expiry_name: str) -> tuple[tuple[str, Picked | PickRefused, Picked | PickRefused], ...]:
-    """Every strike rule, right and price on one listing and expiry rule: the case, the direct answer, the prepared one."""
-    listing, expiry = _LISTINGS[listing_name], _EXPIRY_RULES[expiry_name]
-    rows = []
-    for strike in _STRIKE_RULES:
-        for right in _RIGHTS:
-            leg = _leg(expiry, strike, right)
-            for price in _PRICES:
-                direct = pick_contract(leg, listing=listing, trading_date=_MONDAY, underlying_price=price)
-                rows.append((f"{right} {strike} at {price}", direct, _prepared_pick(leg, listing, price)))
-    return tuple(rows)
+def _a_listed_ladder(rng: random.Random) -> list[Decimal]:
+    """Some strikes in no particular order, gaps of one to three units, with repeats on a third of them."""
+    unit = Decimal(rng.choice(["0.5", "1", "2.5", "5"]))
+    strike = Decimal(rng.randint(2, 400)) * unit
+    ladder = [strike]
+    for _ in range(rng.choice([0, 0, 1, 2, 4, 7, 12])):
+        strike += unit * rng.randint(1, 3)
+        ladder.append(strike)
+    if rng.random() < 0.35:
+        ladder += [rng.choice(ladder) for _ in range(rng.randint(1, 3))]
+    rng.shuffle(ladder)
+    return ladder
 
 
-@pytest.mark.parametrize("expiry_name", _EXPIRY_RULES)
-@pytest.mark.parametrize("listing_name", _LISTINGS)
-def test_a_prepared_leg_picks_what_pick_contract_picks_at_every_price(listing_name: str, expiry_name: str) -> None:
-    differing = [case for case, direct, prepared in _sweep(listing_name, expiry_name) if direct != prepared]
-
-    assert not differing, f"{listing_name}, {expiry_name}: the prepared pick differs for {differing[:5]}"
-
-
-def test_the_sweep_reaches_a_pick_and_every_kind_of_refusal() -> None:
-    answers = [
-        direct
-        for listing_name in _LISTINGS
-        for expiry_name in _EXPIRY_RULES
-        for _, direct, _ in _sweep(listing_name, expiry_name)
+def _prices_around(rng: random.Random, ladder: Sequence[Decimal]) -> list[tuple[str, Decimal]]:
+    """Prices on each strike, at each exact middle between two (a tie) and a thousandth either side of it, off both
+    ends, and at random between the ends."""
+    strikes, milli = sorted(set(ladder)), Decimal("0.001")
+    cases = [("on a strike", strike) for strike in strikes]
+    for low, high in pairwise(strikes):
+        middle = (low + high) / 2
+        cases += [("a tie", middle), ("just under a tie", middle - milli), ("just over a tie", middle + milli)]
+    cases += [
+        ("under the ladder", strikes[0] - milli),
+        ("under the ladder", strikes[0] / 2),
+        ("over the ladder", strikes[-1] + milli),
+        ("over the ladder", strikes[-1] * 2),
     ]
+    spread = strikes[-1] - strikes[0]
+    cases += [("between", (strikes[0] + spread * rng.randint(0, 1000) / 1000).quantize(milli)) for _ in range(4)]
+    return [(name, price) for name, price in cases if price > 0]
 
-    refused = {answer.reason for answer in answers if isinstance(answer, PickRefused)}
-    assert refused == set(PickRefusal)
-    assert any(isinstance(answer, Picked) for answer in answers)
+
+def test_the_strike_a_prepared_leg_picks_is_the_one_a_plain_search_for_the_money_comes_to() -> None:
+    rng, seen = random.Random(20261012), Counter[str]()
+    same_day = {"kind": "same_day"}
+    for _ in range(300):
+        listed = _a_listed_ladder(rng)
+        listing = _listing(
+            *(
+                ListedContract(
+                    OptionContract.of(root="SPY", expiry_date=_MONDAY, right="call", strike=strike),
+                    multiplier=100,
+                    standard=True,
+                )
+                for strike in listed
+            )
+        )
+        prices = _prices_around(rng, listed)
+        seen["ladders"] += 1
+        seen["one strike"] += len(set(listed)) == 1
+        seen["repeats"] += len(set(listed)) < len(listed)
+        for steps in (0, 1, -1, 2, -2, 50, -50):
+            prepared = prepare_leg(
+                _leg(same_day, {"kind": "atm"} if steps == 0 else {"kind": "atm_offset", "steps": steps}, "call"),
+                listing=listing,
+                trading_date=_MONDAY,
+            )
+            assert isinstance(prepared, PreparedLeg)
+            for name, price in prices:
+                expected = _strike_by_plain_search(listed, price, steps)
+                picked = prepared.pick(price)
+                where = f"{sorted(set(listed))}, {steps} steps, {name} at {price}"
+                if expected is None:
+                    assert isinstance(picked, PickRefused), where
+                    assert picked.reason is PickRefusal.STRIKE_NOT_LISTED, where
+                    seen["off the ladder by steps"] += 1
+                else:
+                    assert isinstance(picked, Picked), where
+                    assert picked.contract.strike == expected, where
+                seen[name] += 1
+        # The one-call form is the two steps in a row: it answers what the prepared leg does, at one price a ladder.
+        name, price = prices[len(prices) // 2]
+        direct = pick_contract(
+            _leg(same_day, {"kind": "atm"}, "call"), listing=listing, trading_date=_MONDAY, underlying_price=price
+        )
+        assert isinstance(direct, Picked) and direct.contract.strike == _strike_by_plain_search(listed, price, 0)
+    # The sweep is held to its purpose: it reaches every case the bisection could get wrong.
+    assert seen["a tie"] >= 5000
+    assert seen["on a strike"] >= 6000
+    assert seen["just under a tie"] >= 5000 and seen["just over a tie"] >= 5000
+    assert seen["under the ladder"] >= 2500 and seen["over the ladder"] >= 2500
+    assert seen["one strike"] >= 50 and seen["repeats"] >= 60
+    assert seen["off the ladder by steps"] >= 15000
 
 
 def test_the_refusals_that_do_not_need_a_price_come_from_prepare_leg_and_the_strike_refusal_from_the_pick() -> None:
