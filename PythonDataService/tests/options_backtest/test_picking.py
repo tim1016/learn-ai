@@ -26,10 +26,10 @@ from app.options_backtest.picking import (
 from app.options_backtest.setup import (
     AtTheMoney,
     LegSetup,
-    MinDaysExpiry,
-    SameDayExpiry,
+    MinDaysExpiryRule,
+    SameDayExpiryRule,
     StepsFromTheMoney,
-    ThisWeekExpiry,
+    ThisWeekExpiryRule,
 )
 
 _WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
@@ -144,14 +144,14 @@ _PRICE = Decimal("586.00")
 
 
 def test_same_day_is_todays_expiry_when_it_is_listed_and_none_otherwise() -> None:
-    rule = SameDayExpiry(kind="same_day")
+    rule = SameDayExpiryRule(kind="same_day")
 
     assert expiry_for(rule, listed=[_MON, _WED, _FRI], trading_date=_MON) == _MON
     assert expiry_for(rule, listed=[_TUE, _WED, _FRI], trading_date=_MON) is None
 
 
 def test_an_expiry_that_has_already_gone_is_never_chosen() -> None:
-    rule = MinDaysExpiry(kind="min_days", days=0)
+    rule = MinDaysExpiryRule(kind="min_days", days=0)
 
     assert expiry_for(rule, listed=[_MON, _TUE], trading_date=_WED) is None
 
@@ -171,33 +171,33 @@ def test_an_expiry_that_has_already_gone_is_never_chosen() -> None:
 def test_at_least_n_days_is_the_nearest_listed_expiry_that_far_out(days: int, expected: date) -> None:
     listed = [_MON, _WED, _FRI, _NEXT_FRI, _LAST_FRI]
 
-    assert expiry_for(MinDaysExpiry(kind="min_days", days=days), listed=listed, trading_date=_MON) == expected
+    assert expiry_for(MinDaysExpiryRule(kind="min_days", days=days), listed=listed, trading_date=_MON) == expected
 
 
 def test_at_least_n_days_counts_calendar_days_and_not_sessions() -> None:
     """Friday the 24th is eight sessions after Monday the 13th, and eleven days."""
     listed = [_NEXT_FRI]
 
-    assert expiry_for(MinDaysExpiry(kind="min_days", days=11), listed=listed, trading_date=_MON) == _NEXT_FRI
-    assert expiry_for(MinDaysExpiry(kind="min_days", days=12), listed=listed, trading_date=_MON) is None
+    assert expiry_for(MinDaysExpiryRule(kind="min_days", days=11), listed=listed, trading_date=_MON) == _NEXT_FRI
+    assert expiry_for(MinDaysExpiryRule(kind="min_days", days=12), listed=listed, trading_date=_MON) is None
 
 
 def test_this_week_is_the_weeks_last_session_and_skips_a_mid_week_expiry() -> None:
-    rule = ThisWeekExpiry(kind="this_week")
+    rule = ThisWeekExpiryRule(kind="this_week")
 
     assert expiry_for(rule, listed=[_MON, _TUE, _WED, _FRI, _NEXT_FRI], trading_date=_MON) == _FRI
     assert expiry_for(rule, listed=[_TUE, _WED, _NEXT_MON, _NEXT_FRI], trading_date=_MON) == _NEXT_FRI
 
 
 def test_this_week_on_the_weeks_last_session_is_that_session_when_listed() -> None:
-    rule = ThisWeekExpiry(kind="this_week")
+    rule = ThisWeekExpiryRule(kind="this_week")
 
     assert expiry_for(rule, listed=[_FRI, _NEXT_FRI], trading_date=_FRI) == _FRI
     assert expiry_for(rule, listed=[_NEXT_MON, _NEXT_FRI], trading_date=_FRI) == _NEXT_FRI
 
 
 def test_this_week_in_a_week_whose_friday_is_a_holiday_is_the_thursday() -> None:
-    rule = ThisWeekExpiry(kind="this_week")
+    rule = ThisWeekExpiryRule(kind="this_week")
     listed = [_HOLIDAY_WEEK_MON, _HOLIDAY_WEEK_WED, _HOLIDAY_WEEK_THU, _FRI_AFTER_GOOD_FRIDAY]
 
     assert expiry_for(rule, listed=listed, trading_date=_HOLIDAY_WEEK_MON) == _HOLIDAY_WEEK_THU
@@ -205,7 +205,7 @@ def test_this_week_in_a_week_whose_friday_is_a_holiday_is_the_thursday() -> None
 
 
 def test_this_week_does_not_take_a_listed_expiry_on_the_holiday_itself() -> None:
-    rule = ThisWeekExpiry(kind="this_week")
+    rule = ThisWeekExpiryRule(kind="this_week")
 
     assert expiry_for(rule, listed=[_GOOD_FRIDAY, _FRI_AFTER_GOOD_FRIDAY], trading_date=_HOLIDAY_WEEK_WED) == (
         _FRI_AFTER_GOOD_FRIDAY
@@ -214,23 +214,23 @@ def test_this_week_does_not_take_a_listed_expiry_on_the_holiday_itself() -> None
 
 def test_a_weeks_last_session_is_judged_in_the_week_it_belongs_to_and_not_the_next() -> None:
     """Sunday the 19th and Saturday the 18th are in Monday the 13th's week; neither is a session."""
-    rule = ThisWeekExpiry(kind="this_week")
+    rule = ThisWeekExpiryRule(kind="this_week")
 
     assert expiry_for(rule, listed=[_SATURDAY, _NEXT_MON], trading_date=_MON) is None
     assert expiry_for(rule, listed=[_SATURDAY, _NEXT_FRI], trading_date=_MON) == _NEXT_FRI
 
 
 def test_an_expiry_rule_is_blind_to_order_and_repeats_in_what_is_listed() -> None:
-    rule = MinDaysExpiry(kind="min_days", days=3)
+    rule = MinDaysExpiryRule(kind="min_days", days=3)
 
     assert expiry_for(rule, listed=(_NEXT_FRI, _FRI, _FRI, _MON), trading_date=_MON) == _FRI
 
 
 def test_an_expiry_rule_with_nothing_listed_comes_to_none() -> None:
     for rule in (
-        SameDayExpiry(kind="same_day"),
-        ThisWeekExpiry(kind="this_week"),
-        MinDaysExpiry(kind="min_days", days=1),
+        SameDayExpiryRule(kind="same_day"),
+        ThisWeekExpiryRule(kind="this_week"),
+        MinDaysExpiryRule(kind="min_days", days=1),
     ):
         assert expiry_for(rule, listed=[], trading_date=_MON) is None
 

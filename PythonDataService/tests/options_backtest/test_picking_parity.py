@@ -38,10 +38,10 @@ from app.options_backtest.picking import expiry_for, strike_for
 from app.options_backtest.setup import (
     AtTheMoney,
     ExpiryRule,
-    MinDaysExpiry,
-    SameDayExpiry,
+    MinDaysExpiryRule,
+    SameDayExpiryRule,
     StepsFromTheMoney,
-    ThisWeekExpiry,
+    ThisWeekExpiryRule,
 )
 from app.schemas.action_plan import ActionPlan, OptionEntryLeg
 from app.utils.timestamps import to_ms_utc
@@ -144,7 +144,7 @@ def test_the_sweep_covers_the_holiday_weeks_it_is_meant_to() -> None:
 
 @pytest.mark.parametrize("shape", list(_LISTED))
 def test_same_day_agrees_with_the_resolver_on_every_session(shape: str) -> None:
-    answered = _agree_on_every_session(shape, SameDayExpiry(kind="same_day"), {"selector": "same_day"})
+    answered = _agree_on_every_session(shape, SameDayExpiryRule(kind="same_day"), {"selector": "same_day"})
 
     _assert_the_comparison_had_something_to_compare(answered, nothing_to_meet=shape == "nothing")
 
@@ -153,7 +153,7 @@ def test_same_day_agrees_with_the_resolver_on_every_session(shape: str) -> None:
 @pytest.mark.parametrize("shape", list(_LISTED))
 def test_at_least_n_days_agrees_with_the_resolver_on_every_session(shape: str, days: int) -> None:
     answered = _agree_on_every_session(
-        shape, MinDaysExpiry(kind="min_days", days=days), {"selector": "min_dte", "days": days}
+        shape, MinDaysExpiryRule(kind="min_days", days=days), {"selector": "min_dte", "days": days}
     )
 
     _assert_the_comparison_had_something_to_compare(answered, nothing_to_meet=shape == "nothing")
@@ -174,7 +174,7 @@ def test_this_week_agrees_with_the_resolvers_nearest_weekly_except_on_a_weeks_la
 
     answered = _agree_on_every_session(
         shape,
-        ThisWeekExpiry(kind="this_week"),
+        ThisWeekExpiryRule(kind="this_week"),
         {"selector": "nearest_weekly"},
         expected=today_counts_when_it_ends_its_week,
     )

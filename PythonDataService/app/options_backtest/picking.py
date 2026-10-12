@@ -46,11 +46,11 @@ from app.options_backtest.setup import (
     AtTheMoney,
     ExpiryRule,
     LegSetup,
-    MinDaysExpiry,
-    SameDayExpiry,
+    MinDaysExpiryRule,
+    SameDayExpiryRule,
     StepsFromTheMoney,
     StrikeRule,
-    ThisWeekExpiry,
+    ThisWeekExpiryRule,
 )
 
 _THOUSANDTHS_PER_DOLLAR = 1000
@@ -120,11 +120,11 @@ def expiry_for(rule: ExpiryRule, *, listed: Collection[date], trading_date: date
     """
     ahead = sorted({day for day in listed if day >= trading_date})
     match rule:
-        case SameDayExpiry():
+        case SameDayExpiryRule():
             wanted = (day for day in ahead if day == trading_date)
-        case ThisWeekExpiry():
+        case ThisWeekExpiryRule():
             wanted = (day for day in ahead if ends_its_week(day))
-        case MinDaysExpiry():
+        case MinDaysExpiryRule():
             wanted = (day for day in ahead if (day - trading_date).days >= rule.days)
         case _:
             assert_never(rule)
@@ -182,11 +182,11 @@ def _by_expiry(contracts: Iterable[ListedContract]) -> dict[date, dict[int, List
 
 def _expiry_in_words(rule: ExpiryRule, trading_date: date) -> str:
     match rule:
-        case SameDayExpiry():
+        case SameDayExpiryRule():
             return f"an expiry on {trading_date}"
-        case ThisWeekExpiry():
+        case ThisWeekExpiryRule():
             return f"an expiry on or after {trading_date} that is the last session of its week"
-        case MinDaysExpiry():
+        case MinDaysExpiryRule():
             return f"an expiry {rule.days} or more days after {trading_date}"
         case _:
             assert_never(rule)
