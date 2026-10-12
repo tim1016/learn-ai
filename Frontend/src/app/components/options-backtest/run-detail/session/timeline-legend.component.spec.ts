@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 
 import { reads } from '../../testing/page-actions';
-import { buildTimelinePlan, UNPLACEABLE } from '../timeline-plan';
+import { buildTimelinePlan, NO_REASON_GIVEN, UNPLACEABLE } from '../timeline-plan';
 import { CALL_585, PUT_585, SCENE_LEVELS, SERIES_WORDS, sessionDetail, shownSeries, withheldSeries } from '../testing/detail-fixtures';
 import { TimelineLegendComponent } from './timeline-legend.component';
 
@@ -38,6 +38,7 @@ describe('the legend of the chart', () => {
     expect(glyphs).toEqual([
       ['▲', 'var(--chart-series-green)'],
       ['▼', 'var(--chart-series-orange)'],
+      ['●', 'var(--chart-series-sky)'],
       ['▲', 'var(--chart-series-green)'],
       ['■', 'var(--chart-series-purple)'],
     ]);
@@ -47,7 +48,7 @@ describe('the legend of the chart', () => {
     const { container } = await renderLegend();
 
     const decorations = [...container.querySelectorAll('.swatch, .glyph')];
-    expect(decorations.length).toBe(10);
+    expect(decorations.length).toBe(11);
     expect(decorations.every((each) => each.getAttribute('aria-hidden') === 'true')).toBe(true);
   });
 
@@ -74,5 +75,26 @@ describe('what the chart does not draw', () => {
 
     const items = within(screen.getByRole('region', { name: 'Not drawn' })).getAllByRole('listitem');
     expect(items.map((item) => reads(item))).toEqual([`Stop level of SPY Oct 16 '26 585 Call : ${UNPLACEABLE}`]);
+  });
+
+  it('names a withheld underlying through the shared symbol renderer, and keeps plain code for a contract symbol the server sent no parts for', async () => {
+    const { container } = await renderLegend(buildTimelinePlan(sessionDetail({
+      underlying: withheldSeries('SPY', null, 'gone'),
+      contracts: [withheldSeries(CALL_585.symbol, null, 'gone'), shownSeries(PUT_585.symbol, PUT_585, [[3, '1.40'], [4, '1.44']])],
+    })));
+
+    const items = [...container.querySelectorAll('.missing li')];
+    expect(items.length).toBe(2);
+    expect(items[0].querySelector('app-asset-identity')).not.toBeNull();
+    expect(items[0].querySelector('code')).toBeNull();
+    expect(items[1].querySelector('app-asset-identity')).toBeNull();
+    expect(reads(items[1].querySelector('code'))).toBe(CALL_585.symbol);
+  });
+
+  it('never leaves the words of a withheld series empty: the page says that the server gave none', async () => {
+    await renderLegend(buildTimelinePlan(sessionDetail({ underlying: { ...withheldSeries('SPY', null, 'gone'), message: null } })));
+
+    const items = within(screen.getByRole('region', { name: 'Not drawn' })).getAllByRole('listitem');
+    expect(items.map((item) => reads(item))).toEqual([`SPY : Gone ${NO_REASON_GIVEN}`]);
   });
 });

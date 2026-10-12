@@ -15,7 +15,7 @@ import {
 import { createAppChart, formatChartAxisTick } from '../../../../shared/charts/chart-utils';
 import { themeColor } from '../../../../shared/charts/theme-color';
 import { CHART_SERIES_COLOR_TOKENS, type ChartSeriesColorToken } from '../../../../shared/trading-chart/chart-series-color-tokens';
-import { formatTimestampDisplay } from '../../../../shared/timestamp';
+import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 import type { PlanLineStyle, PlanMarker, SeriesPlan, TimelinePlan } from '../timeline-plan';
 
 /** How the chart is made. A spec hands in a fake, so no canvas is needed. */
@@ -26,6 +26,8 @@ export const TIMELINE_COLOURS = new InjectionToken<(host: HTMLElement, cssVar: s
 
 const PANE_HEIGHT_PX = 190;
 const AXIS_HEIGHT_PX = 34;
+/** A minute that traded alone is a line of one point, a stroke a few pixels long; it is drawn as a dot of this radius instead. */
+const LONE_POINT_RADIUS_PX = 3;
 /** Session times are New York times: this is a session view, not the viewer's own clock. */
 const NEW_YORK = 'America/New_York';
 
@@ -135,7 +137,8 @@ export class TimelineChartComponent {
           lineWidth: each.lineWidth,
           lineStyle: LINE_STYLES[each.lineStyle],
           lineVisible: each.lineVisible,
-          pointMarkersVisible: false,
+          pointMarkersVisible: each.pointMarkers,
+          pointMarkersRadius: LONE_POINT_RADIUS_PX,
           crosshairMarkerVisible: false,
           lastValueVisible: false,
           priceLineVisible: false,

@@ -8,7 +8,7 @@ import { runDetail } from '../../testing/run-fixtures';
 import { RunDetailRefusedError } from '../run-detail.service';
 import type { SessionDetail } from '../run-detail.types';
 import {
-  CALL_585, SERIES_WORDS, sessionDetail, shownSeries, skippedSession, TUESDAY_OPEN, WEDNESDAY_OPEN, withheldSeries,
+  CALL_585, CALL_CLOSES, PUT_585, SERIES_WORDS, sessionDetail, shownSeries, skippedSession, TUESDAY_OPEN, WEDNESDAY_OPEN, withheldSeries,
 } from '../testing/detail-fixtures';
 import { fakeRunDetail } from '../testing/fake-run-detail';
 import { renderSession } from '../testing/render-session';
@@ -258,7 +258,7 @@ describe('one day, the chart as text', () => {
     expect(panes).toEqual([
       ['Minute closes (solid line)'],
       ['Minute closes (solid line)', '▲ Bought (up arrow)', '▼ Sold (down arrow)', 'Starting price (dotted line)', 'Momentum level (dashed line)', 'Stop level (long dashes)'],
-      ['Minute closes (solid line)', '▲ Bought (up arrow)', '■ Marked, not sold (square)'],
+      ['Minute closes (solid line)', '● A lone minute with a trade (dot)', '▲ Bought (up arrow)', '■ Marked, not sold (square)'],
     ]);
   });
 });
@@ -266,7 +266,7 @@ describe('one day, the chart as text', () => {
 describe('one day, the chart', () => {
   it('makes one chart for the day, once the day has been read, and hands it every series the plan has', async () => {
     const { chart } = await renderSession(vi, { detail: servedAs(sessionDetail()), request: ASKED });
-    await screen.findByRole('img', { name: /^Minute closes of SPY and 2 contracts/ });
+    await screen.findByRole('img', { name: /^Minute closes of SPY\. Contracts drawn: 2\./ });
     await waitFor(() => expect(chart.series.length).toBe(12));
 
     expect(chart.created.length).toBe(1);
@@ -305,6 +305,16 @@ describe('one day, a series the server withholds', () => {
     expect(new Set(chart.series.map((each) => each.pane))).toEqual(new Set([0, 1]));
   });
 
+  it('still lists the mark of a contract whose series is withheld, among the marks, though no pane of the chart is left to draw it on', async () => {
+    const day = sessionDetail({ contracts: [shownSeries(CALL_585.symbol, CALL_585, CALL_CLOSES), withheldSeries(PUT_585.symbol, PUT_585, 'gone')] });
+    const { chart } = await renderSession(vi, { detail: servedAs(day), request: ASKED });
+    await screen.findByRole('list', { name: 'Panes of the chart, from the top' });
+
+    expect(tableRows('Marks (scrolls sideways)').map((row) => [row[0], row[2], row[5]])).toEqual([['Marked, not sold', 'put, first entry', '$1.25']]);
+    expect(new Set(chart.series.map((each) => each.pane))).toEqual(new Set([0, 1]));
+    expect(screen.getByRole('img').getAttribute('aria-label')).toContain('Marks drawn: 0.');
+  });
+
   it('names the reason through the shared label, and says nothing in the page’s own words for it', async () => {
     await renderSession(vi, { detail: servedAs(withheld('changed')), request: ASKED });
     await screen.findByRole('region', { name: 'Not drawn' });
@@ -338,7 +348,7 @@ describe('one day, a series the server withholds', () => {
     await screen.findByText('No Trade');
 
     expect(screen.getByText('No leg traded on this day.')).toBeTruthy();
-    expect(screen.getByRole('img', { name: /^Minute closes of SPY and 0 contracts/ })).toBeTruthy();
+    expect(screen.getByRole('img', { name: /^Minute closes of SPY\. Contracts drawn: 0\./ })).toBeTruthy();
     expect(new Set(chart.series.map((each) => each.pane))).toEqual(new Set([0]));
   });
 });

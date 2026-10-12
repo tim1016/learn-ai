@@ -48,7 +48,7 @@ describe('the one-day chart, making it', () => {
     await renderChart(fake);
 
     expect(fake.created.length).toBe(1);
-    const element = screen.getByRole('img', { name: /^Minute closes of SPY and 2 contracts/ });
+    const element = screen.getByRole('img', { name: /^Minute closes of SPY\. Contracts drawn: 2\./ });
     expect(fake.created[0].container).toBe(element);
     expect(optionsOf(fake).autoSize).toBe(true);
   });
@@ -169,8 +169,17 @@ describe('the one-day chart, what it hands to the library', () => {
     await renderChart(fake);
 
     for (const each of fake.series) {
-      expect(each.options).toMatchObject({ lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, pointMarkersVisible: false });
+      expect(each.options).toMatchObject({ lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
     }
+  });
+
+  it('marks every point of a line with a dot only where the line is a single point, so a minute that traded alone is seen', async () => {
+    const fake = fakeTimelineChart(vi);
+    await renderChart(fake);
+
+    // The seventh series is the put’s lone minute (the tenth); no other line of the toy day is one point.
+    expect(fake.series.map((each) => each.options['pointMarkersVisible'])).toEqual([false, false, false, false, false, false, true, false, false, false, false, false]);
+    expect(fake.series[6].options['pointMarkersRadius']).toBe(3);
   });
 
   it('hands the markers to the library on the series that hosts them, at the price filled, in words, in the colour and shape of what each is', async () => {

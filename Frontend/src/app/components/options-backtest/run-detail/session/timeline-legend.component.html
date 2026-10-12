@@ -27,7 +27,7 @@
       @for (item of missing(); track item.key) {
         <li>
           @if (item.what; as what) { <strong>{{ what }}</strong> of }
-          @if (contractIn(item); as contract) { <app-option-contract [contract]="contract" /> } @else { <code>{{ item.symbol }}</code> }:
+          @if (contractIn(item); as contract) { <app-option-contract [contract]="contract" /> } @else if (item.ofUnderlying) { <app-asset-identity [symbol]="item.symbol" size="xs" [logo]="false" /> } @else { <code>{{ item.symbol }}</code> }:
           @if (item.reason; as reason) { <span class="reason">{{ reason | receiptLabel }}</span> }
           <span class="message">{{ item.message }}</span>
           @if (item.listedBelow && item.what === null) { <span class="also">Its levels, fills and marks are listed below.</span> }

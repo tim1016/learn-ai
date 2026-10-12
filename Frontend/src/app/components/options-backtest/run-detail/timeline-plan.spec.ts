@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import { CHART_SERIES_ELIGIBLE_TOKENS } from '../../../shared/trading-chart/chart-series-color-tokens';
 import type { PlanPoint, PlanSlot, SeriesPlan } from './timeline-plan';
-import { buildTimelinePlan, NO_MINUTES, UNPLACEABLE } from './timeline-plan';
+import { buildTimelinePlan, NO_MINUTES, NO_REASON_GIVEN, UNPLACEABLE } from './timeline-plan';
 import {
-  at, CALL_585, PUT_585, SCENE_LEVELS, SERIES_WORDS, sessionDetail, shownSeries, skippedSession, withheldSeries,
+  at, CALL_585, CALL_CLOSES, PUT_585, SCENE_LEVELS, SERIES_WORDS, sessionDetail, shownSeries, skippedSession, withheldSeries,
 } from './testing/detail-fixtures';
 
 /** Chart seconds of the close of the bar `minute` minutes after the toy session's open. */
@@ -201,7 +201,7 @@ describe('the plan of a traded day: the legend, pane by pane', () => {
     expect(plan.panes.map((pane) => pane.entries.map((entry) => `${entry.name} (${entry.drawn})`))).toEqual([
       ['Minute closes (solid line)'],
       ['Minute closes (solid line)', 'Bought (up arrow)', 'Sold (down arrow)', 'Starting price (dotted line)', 'Momentum level (dashed line)', 'Stop level (long dashes)'],
-      ['Minute closes (solid line)', 'Bought (up arrow)', 'Marked, not sold (square)'],
+      ['Minute closes (solid line)', 'A lone minute with a trade (dot)', 'Bought (up arrow)', 'Marked, not sold (square)'],
     ]);
   });
 
@@ -213,8 +213,48 @@ describe('the plan of a traded day: the legend, pane by pane', () => {
     expect(entries.filter((entry) => entry.sample === 'marker').every((entry) => entry.glyph !== '')).toBe(true);
   });
 
-  it('is a name for the chart that says what is in it and that the same facts are listed as text', () => {
-    expect(plan.label).toBe('Minute closes of SPY and 2 contracts, with 3 fills, 1 mark and 3 levels. The same facts are listed below as text.');
+  it('is a name for the chart that says what is drawn in it and that the same facts are listed as text', () => {
+    expect(plan.label).toBe('Minute closes of SPY. Contracts drawn: 2. Fills drawn: 3. Marks drawn: 1. Levels drawn: 3. The same facts are listed below as text.');
+  });
+});
+
+describe('the plan of a traded day: a minute that traded alone', () => {
+  const plan = buildTimelinePlan(sessionDetail());
+
+  it('gives a dot to the line of one point and to no line of more, and to nothing that is not a line of minute closes', () => {
+    expect(plan.series.filter((each) => each.pointMarkers).map((each) => [each.role, each.pane, timesOf(each)])).toEqual([['closes', 2, [sec(10)]]]);
+  });
+
+  it('says the dot in the legend of the pane that holds one, and of no other', () => {
+    expect(plan.panes.map((pane) => pane.entries.some((entry) => entry.drawn === 'dot'))).toEqual([false, false, true]);
+    expect(plan.panes[2].entries.find((entry) => entry.drawn === 'dot')).toMatchObject({ name: 'A lone minute with a trade', sample: 'marker', glyph: '●', token: 'series-sky' });
+  });
+});
+
+describe('the name of the chart', () => {
+  it('counts what is drawn and, apart, how much of the day is not, when a contract’s series is withheld', () => {
+    const plan = buildTimelinePlan(sessionDetail({ contracts: [withheldSeries(CALL_585.symbol, CALL_585, 'changed'), shownSeries(PUT_585.symbol, PUT_585, PUT_CLOSES_SHORT)] }));
+
+    // The put is drawn with its purchase and its mark; the call’s series, its two fills and its three levels are not.
+    expect(plan.label).toBe('Minute closes of SPY. Contracts drawn: 1. Fills drawn: 1. Marks drawn: 1. Levels drawn: 0. Not drawn: series 1, fills 2, marks 0, levels 3. The same facts are listed below as text.');
+  });
+
+  it('says that the underlying is not drawn when it is withheld, and counts it among the series not drawn', () => {
+    const plan = buildTimelinePlan(sessionDetail({ underlying: withheldSeries('SPY', null, 'lake_unavailable') }));
+
+    expect(plan.label).toBe('Minute closes; the underlying SPY is not drawn. Contracts drawn: 2. Fills drawn: 3. Marks drawn: 1. Levels drawn: 3. Not drawn: series 1, fills 0, marks 0, levels 0. The same facts are listed below as text.');
+  });
+
+  it('counts a level or a mark the page could not place among those not drawn, not among those drawn', () => {
+    const plan = buildTimelinePlan(sessionDetail({ levels: [SCENE_LEVELS[0], { ...SCENE_LEVELS[2], price_usd: '1e5' }], marks: [{ ...sessionDetail().marks[0], price_usd: 'NaN' }] }));
+
+    expect(plan.label).toBe('Minute closes of SPY. Contracts drawn: 2. Fills drawn: 3. Marks drawn: 0. Levels drawn: 1. Not drawn: series 0, fills 0, marks 1, levels 1. The same facts are listed below as text.');
+  });
+
+  it('names a single contract with a number and a label, and needs no plural for it', () => {
+    const plan = buildTimelinePlan(sessionDetail({ contracts: [shownSeries(CALL_585.symbol, CALL_585, CALL_CLOSES)], levels: [], fills: [], marks: [] }));
+
+    expect(plan.label).toBe('Minute closes of SPY. Contracts drawn: 1. Fills drawn: 0. Marks drawn: 0. Levels drawn: 0. The same facts are listed below as text.');
   });
 });
 
@@ -265,7 +305,7 @@ describe('the plan of a day with a series the server withholds', () => {
     const plan = buildTimelinePlan(sessionDetail({ contracts: [withheldSeries(CALL_585.symbol, CALL_585, 'changed'), shownSeries(PUT_585.symbol, PUT_585, [[3, '1.40'], [4, '1.44']])] }));
 
     expect(plan.panes.map((pane) => pane.caption)).toEqual(['SPY', "SPY Oct 16 '26 585 Put"]);
-    expect(plan.notDrawn).toEqual([{ key: CALL_585.symbol, what: null, symbol: CALL_585.symbol, contract: CALL_585, reason: 'changed', message: SERIES_WORDS.changed, listedBelow: true }]);
+    expect(plan.notDrawn).toEqual([{ key: CALL_585.symbol, what: null, symbol: CALL_585.symbol, ofUnderlying: false, contract: CALL_585, reason: 'changed', message: SERIES_WORDS.changed, listedBelow: true }]);
     expect(plan.series.filter((each) => each.role === 'level')).toEqual([]);
     expect(plan.series.filter((each) => each.role === 'fills').map((host) => host.markers.map((marker) => marker.id))).toEqual([
       ['fill:SPY261016P00585000:put:0:entry', 'mark:SPY261016P00585000:put:0'],
@@ -279,11 +319,32 @@ describe('the plan of a day with a series the server withholds', () => {
     expect([...plan.tips.values()].flat().filter((line) => line.includes('Call'))).toEqual([]);
   });
 
+  it('draws no mark and puts none in a tooltip for a contract whose series is withheld, though the mark is still a fact the day lists', () => {
+    // The put was marked at 1.25 in the tenth minute and not sold. Its series is withheld, so no pane holds a point for the mark to sit on.
+    const plan = buildTimelinePlan(sessionDetail({ contracts: [shownSeries(CALL_585.symbol, CALL_585, CALL_CLOSES), withheldSeries(PUT_585.symbol, PUT_585, 'gone')] }));
+
+    const markers = plan.series.flatMap((each) => each.markers);
+    expect(plan.panes.map((pane) => pane.caption)).toEqual(['SPY', "SPY Oct 16 '26 585 Call"]);
+    expect(markers.filter((marker) => marker.shape === 'square')).toEqual([]);
+    expect(markers.map((marker) => marker.id)).toEqual(['fill:SPY261016C00585000:call:0:entry', 'fill:SPY261016C00585000:call:0:exit']);
+    expect([...plan.tips.values()].flat().filter((line) => line.startsWith('Marked'))).toEqual([]);
+    expect(plan.series.every((each) => each.pane <= 1)).toBe(true);
+    expect(plan.notDrawn.map((each) => [each.symbol, each.listedBelow])).toEqual([[PUT_585.symbol, true]]);
+  });
+
+  it('says in the page’s own words, beside the reason it has, that the server gave no message for a series it withheld', () => {
+    for (const message of [null, '', '   ']) {
+      const plan = buildTimelinePlan(sessionDetail({ underlying: { ...withheldSeries('SPY', null, 'gone'), message } }));
+
+      expect(plan.notDrawn.map((each) => [each.reason, each.message])).toEqual([['gone', NO_REASON_GIVEN]]);
+    }
+  });
+
   it('says the same of every reason, each in its own words', () => {
     for (const reason of ['session_skipped', 'no_pin', 'gone', 'changed', 'not_confirmed', 'unreadable', 'lake_unavailable'] as const) {
       const plan = buildTimelinePlan(sessionDetail({ underlying: withheldSeries('SPY', null, reason) }));
 
-      expect(plan.notDrawn).toEqual([{ key: 'SPY', what: null, symbol: 'SPY', contract: null, reason, message: SERIES_WORDS[reason], listedBelow: false }]);
+      expect(plan.notDrawn).toEqual([{ key: 'SPY', what: null, symbol: 'SPY', ofUnderlying: true, contract: null, reason, message: SERIES_WORDS[reason], listedBelow: false }]);
     }
   });
 
@@ -302,14 +363,14 @@ describe('the plan of a day with a series the server withholds', () => {
     expect(plan.series).toEqual([]);
     expect(plan.panes).toEqual([]);
     expect(plan.tips.size).toBe(0);
-    expect(plan.notDrawn).toEqual([{ key: 'SPY', what: null, symbol: 'SPY', contract: null, reason: 'session_skipped', message: SERIES_WORDS.session_skipped, listedBelow: false }]);
+    expect(plan.notDrawn).toEqual([{ key: 'SPY', what: null, symbol: 'SPY', ofUnderlying: true, contract: null, reason: 'session_skipped', message: SERIES_WORDS.session_skipped, listedBelow: false }]);
     expect(plan.label).toBe('Nothing could be drawn for this day.');
   });
 
   it('draws nothing where a shown series holds no minute, and says so', () => {
     const plan = buildTimelinePlan(sessionDetail({ contracts: [shownSeries(CALL_585.symbol, CALL_585, [])] }));
 
-    expect(plan.notDrawn).toEqual([{ key: CALL_585.symbol, what: null, symbol: CALL_585.symbol, contract: CALL_585, reason: null, message: NO_MINUTES, listedBelow: true }]);
+    expect(plan.notDrawn).toEqual([{ key: CALL_585.symbol, what: null, symbol: CALL_585.symbol, ofUnderlying: false, contract: CALL_585, reason: null, message: NO_MINUTES, listedBelow: true }]);
   });
 
   it('does not draw a series whose minutes are out of order, whose price is not a number, or that repeats a minute, and says so', () => {
