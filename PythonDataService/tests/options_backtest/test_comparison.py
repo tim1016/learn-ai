@@ -22,8 +22,9 @@ from app.options_backtest.comparison import (
     setting_differences,
 )
 from app.options_backtest.results import SessionStatus
-from app.options_backtest.saved_runs import RunHeader, RunRecord, SessionLine
+from app.options_backtest.saved_runs import RunHeader, RunRecord, RunSetupCannotBeRead, SessionLine
 from app.options_backtest.setup import MS_PER_MINUTE
+from tests.options_backtest._headers import THE_REASON, a_header, an_unreadable_header
 from tests.options_backtest.setup_fixtures import leg, setup
 
 D = Decimal
@@ -184,10 +185,6 @@ BASE_ENTRY = {"anchor": "open", "offset_ms": 5 * MS_PER_MINUTE}
                 "10% down from where it stood at the entry time",
             ),
         ),
-        (
-            {"legs": [leg(reentry_on_stop={"kind": "at_once", "count": 2})]},
-            (Setting.LEG_REENTRY, "call", "leg call: re-entry on stop", NOT_SET, "at once, up to 2 times"),
-        ),
     ],
 )
 def test_each_setting_that_differs_is_one_difference_named_as_an_owner_would_with_both_values_in_words(
@@ -197,6 +194,17 @@ def test_each_setting_that_differs_is_one_difference_named_as_an_owner_would_wit
     # And the other way round: the same setting, the two values swapped.
     swapped = (expected[0], expected[1], expected[2], expected[4], expected[3])
     assert _differences(changes, {}) == [swapped]
+
+
+def test_a_re_entry_rule_is_a_difference_in_the_leg_that_gains_it() -> None:
+    # A re-entry needs a stop that can earn it (the setup refuses one without), so both legs carry the same stop.
+    stop = {"kind": "percent", "value": "20"}
+    none = {"legs": [leg(stop_loss=stop)]}
+    once = {"legs": [leg(stop_loss=stop, reentry_on_stop={"kind": "at_once", "count": 2})]}
+
+    assert _differences(none, once) == [
+        (Setting.LEG_REENTRY, "call", "leg call: re-entry on stop", NOT_SET, "at once, up to 2 times")
+    ]
 
 
 def test_one_rule_replaced_by_another_of_the_same_leg_is_one_difference_with_each_in_words() -> None:
@@ -377,3 +385,14 @@ def test_each_runs_extra_sessions_are_counted_for_that_run_when_the_two_runs_are
     assert [shared.session_open_ms for shared in found.shared] == [3]
     assert (found.only_in_a, found.only_in_b) == (2, 1)
     assert (found.a.net_profit_usd, found.b.net_profit_usd) == (D("3.00"), D("4.00"))
+
+
+def test_a_run_whose_stored_setup_can_no_longer_be_read_cannot_have_its_settings_compared() -> None:
+    readable, unreadable = a_header(1), an_unreadable_header(2)
+
+    for first, second in ((readable, unreadable), (unreadable, readable), (unreadable, unreadable)):
+        with pytest.raises(RunSetupCannotBeRead) as caught:
+            compare(first, [], second, [])
+        # The run named is the one whose setup is lost (run 2 in each pair), with its reason beside it.
+        assert str(caught.value) == f"the setup stored with run 2 cannot be read: {THE_REASON}"
+        assert caught.value.reason == THE_REASON

@@ -4,7 +4,7 @@
 ``fail_run`` / ``cancel_run``) and removes every run the test made afterwards. ``conn`` and ``unique`` skip the test
 without a database attested as disposable (``POSTGRES_URL_IS_EPHEMERAL=1``). ``is_the_job_alive`` is what the routes
 are told of a running job; a test sets ``["live"]``, and the default is "cannot tell". ``client`` calls the real app, and
-``no_date_in`` holds that nothing sent names a date: a session is its open in ms.
+``no_date_in`` holds that nothing sent names a date (a session is its open in ms) but the words of an event.
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ from tests.options_backtest.setup_fixtures import unique as unique
 CREATED_AT_MS = 1_791_800_000_000
 PREFIX = "/api/research/options-backtest"
 A_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+AN_EVENT = re.compile(r"\.events\[\d+\]$")
 
 SaveRun = Callable[..., Awaitable[int]]
 
@@ -46,12 +47,18 @@ def client() -> httpx.AsyncClient:
 
 
 def no_date_in(value: Any, path: str = "body") -> None:
-    """Nothing on the wire names a date: a session is its open in ms."""
+    """Nothing on the wire names a date (a session is its open in ms), but the words of an event.
+
+    An event's ``detail`` is the backend's own prose for the owner, stored and served as written, and a refused pick's
+    names the day it looked for. Every other field of every body, including every other string of an event, is held.
+    """
     if isinstance(value, str):
         assert not A_DATE.search(value), f"{path}: {value!r} names a date"
     elif isinstance(value, dict):
         for key, each in value.items():
             no_date_in(key, f"{path}.{key}")
+            if key == "detail" and AN_EVENT.search(path):
+                continue
             no_date_in(each, f"{path}.{key}")
     elif isinstance(value, list):
         for at, each in enumerate(value):

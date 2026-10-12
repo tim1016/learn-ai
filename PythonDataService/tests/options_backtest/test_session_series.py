@@ -13,15 +13,22 @@ writers, so each pin is the sha256 of a real stored file. Hand-worked figures:
   The bar closing at the open (m0) and the two closing after the close are in the lake and are not drawn.
 * Thursday's underlying has no bar at m5: 389 points. Friday's call 500 has bars from m5 to m60: 56 points, 4.00 at m5
   and 4.10 after; its put 495 has the same 56 as Wednesday's.
+
+Every reason a series is not shown has words of its own, held to the reason by ``test_each_reason_has_its_own_words``.
+A file the operating system refuses (a permission, a folder) is ``unreadable`` for a contract as for the underlying, and a
+day holding a bar no session can place is ``unreadable`` too.
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -29,7 +36,10 @@ import respx
 
 from app.data_lake import catalog_client
 from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes
+from app.options.contract import OptionContract
+from app.options_backtest import lake_data
 from app.options_backtest.lake_data import LakeRunData
+from app.options_backtest.results import SessionStatus, SkipReason
 from app.options_backtest.run import run_sessions
 from app.options_backtest.session_result import PinnedDay, SessionPins, SessionResult
 from app.options_backtest.session_series import (
@@ -40,6 +50,7 @@ from app.options_backtest.session_series import (
     contracts_to_chart,
     read_session_series,
 )
+from app.options_backtest.setup import MS_PER_MINUTE, OptionsBacktestSetup
 from tests._helpers.fake_lake_catalog import FakeCatalog
 from tests.options_backtest._detail_scene import (
     CALL_500,
@@ -57,12 +68,16 @@ from tests.options_backtest._detail_scene import (
 )
 from tests.options_backtest._lake import fake_catalog as fake_catalog
 from tests.options_backtest._lake import (
+    option_day_zip,
     raw_root,
     replace_the_stored_file,
+    stock_bar,
+    stock_day_zip,
 )
 from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixed
 from tests.options_backtest._lake import tmp_lake as tmp_lake
-from tests.options_backtest._run_data import fake_data
+from tests.options_backtest._run_data import HALF_DAY, WED, Day, fake_data, steady
+from tests.options_backtest.setup_fixtures import setup_body
 
 D = Decimal
 ET = ZoneInfo("America/New_York")
@@ -217,7 +232,7 @@ async def test_a_contract_file_replaced_by_other_bytes_is_not_served_and_the_res
 
 
 @respx.mock
-async def test_bytes_the_catalog_does_not_admit_are_a_changed_file_for_the_underlying_and_for_a_contract(
+async def test_bytes_the_catalog_does_not_admit_cannot_be_confirmed_for_the_underlying_or_for_a_contract(
     fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
     result = await run_the_scene()
@@ -228,9 +243,11 @@ async def test_bytes_the_catalog_does_not_admit_are_a_changed_file_for_the_under
 
     series = await _series_of(result.sessions[0])
 
+    # Nobody saw these files change: the catalog holds no receipt for the bytes in them, so they cannot be checked against
+    # what the run read. That is not "changed".
     assert _reasons(series) == {
-        "SPY": SeriesReason.CHANGED,
-        CALL_500: SeriesReason.CHANGED,
+        "SPY": SeriesReason.NOT_CONFIRMED,
+        CALL_500: SeriesReason.NOT_CONFIRMED,
         PUT_495: None,
         PUT_500: None,
     }
@@ -355,3 +372,166 @@ def test_every_reason_has_words_and_none_of_them_names_a_date_a_path_or_a_file()
     assert set(SERIES_WORDS) == set(SeriesReason)
     for words in SERIES_WORDS.values():
         assert words and "20" not in words and "/" not in words and ".zip" not in words
+
+
+def test_each_reason_has_its_own_words_which_say_only_what_is_true_of_it() -> None:
+    # Each text is written out against its reason, so two texts swapped, or one reason given another's, fail here.
+    assert {reason.value: words for reason, words in SERIES_WORDS.items()} == {
+        "session_skipped": "This session was skipped, so no bars were read for it.",
+        "no_pin": "The run kept no record of reading these bars, so there is nothing to check them against.",
+        "gone": "The stored bars are no longer in the lake.",
+        "changed": "The stored bars have changed since this run.",
+        "not_confirmed": "The stored bars cannot be confirmed against what this run read.",
+        "unreadable": "The stored bars cannot be read now.",
+        "lake_unavailable": "The lake could not be reached, so the bars cannot be checked against this run now.",
+    }
+    assert len(set(SERIES_WORDS.values())) == len(SeriesReason), "two reasons share their words"
+
+
+# ── A file the operating system refuses, and a day no session can place ──
+
+
+@contextmanager
+def _refused(path: Path) -> Iterator[None]:
+    """``path`` (a file or a folder) with no permission at all; its permissions come back afterwards."""
+    before = path.stat().st_mode & 0o777
+    path.chmod(0)
+    try:
+        yield
+    finally:
+        path.chmod(before)
+
+
+def _the_file_is_refused(path: Path) -> None:
+    with pytest.raises(PermissionError):
+        path.read_bytes()
+
+
+@respx.mock
+async def test_a_contract_file_the_operating_system_refuses_is_unreadable_and_the_rest_still_is(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    result = await run_the_scene()
+    file = raw_root(tmp_lake) / _bars_file(PUT_500)
+
+    with _refused(file):
+        _the_file_is_refused(file)  # the permission took: this run is not one that bypasses it
+        series = await _series_of(result.sessions[0])
+
+    assert _reasons(series) == {"SPY": None, CALL_500: None, PUT_495: None, PUT_500: SeriesReason.UNREADABLE}
+    assert _by_symbol(series)[PUT_500].points == ()
+
+
+@respx.mock
+async def test_a_contract_folder_the_operating_system_refuses_is_unreadable_and_the_rest_still_is(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    result = await run_the_scene()
+    folder = (raw_root(tmp_lake) / _bars_file(PUT_500)).parent
+
+    with _refused(folder):
+        _the_file_is_refused(folder / "20261007_trade.zip")
+        series = await _series_of(result.sessions[0])
+
+    assert _reasons(series) == {"SPY": None, CALL_500: None, PUT_495: None, PUT_500: SeriesReason.UNREADABLE}
+
+
+@respx.mock
+async def test_a_contract_read_that_raises_an_operating_system_error_is_unreadable_and_names_no_path(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = await run_the_scene()
+    real = lake_data.read_option_day_bars
+
+    def refuse_one(contract: OptionContract, *args: Any, **kwargs: Any) -> Any:
+        if contract.occ_symbol == CALL_500:
+            raise PermissionError(13, "Permission denied", "/a/server/path/lake/raw/option/usa/minute/spy/x.zip")
+        return real(contract, *args, **kwargs)
+
+    monkeypatch.setattr(lake_data, "read_option_day_bars", refuse_one)
+
+    series = await _series_of(result.sessions[0])
+
+    assert _reasons(series) == {"SPY": None, CALL_500: SeriesReason.UNREADABLE, PUT_495: None, PUT_500: None}
+    # What reaches the page is the reason's fixed words: the error text, with its path, goes nowhere.
+    assert "/a/server/path" not in SERIES_WORDS[SeriesReason.UNREADABLE]
+
+
+@respx.mock
+async def test_the_underlying_file_the_operating_system_refuses_is_unreadable_too(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    result = await run_the_scene()
+    file = raw_root(tmp_lake) / STOCK_FILE
+
+    with _refused(file):
+        _the_file_is_refused(file)
+        series = await _series_of(result.sessions[0])
+
+    assert _reasons(series) == {"SPY": SeriesReason.UNREADABLE, CALL_500: None, PUT_495: None, PUT_500: None}
+
+
+@respx.mock
+async def test_a_stored_day_holding_a_bar_no_session_can_place_is_an_unreadable_series_for_a_contract_and_the_underlying(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    result = await run_the_scene()
+    # A bar starting half a minute past the minute closes off a whole minute, and the lake reader refuses the whole day.
+    # The stored files are put in place of the captured ones with the catalog's receipt for them, so they read cleanly:
+    # only the bar tells them from a good day. Minute m5 starts at the open plus five minutes.
+    put = OptionContract.from_occ_symbol(PUT_500)
+    off_the_minute = [WED_OPEN_MS + 5 * MS_PER_MINUTE, WED_OPEN_MS + 6 * MS_PER_MINUTE + 30_000]
+    replace_the_stored_file(
+        fake_catalog, raw_root(tmp_lake), _bars_file(PUT_500), option_day_zip(put, off_the_minute, day=WED), admit=True
+    )
+    replace_the_stored_file(
+        fake_catalog,
+        raw_root(tmp_lake),
+        STOCK_FILE,
+        stock_day_zip(
+            [
+                stock_bar(WED_OPEN_MS + MS_PER_MINUTE, "500.20", "500.20", "500.20", "500.20"),
+                stock_bar(WED_OPEN_MS + 2 * MS_PER_MINUTE + 30_000, "500.20", "500.20", "500.20", "500.20"),
+            ],
+            day=WED,
+        ),
+        admit=True,
+    )
+
+    series = await _series_of(result.sessions[0])
+
+    assert _reasons(series) == {
+        "SPY": SeriesReason.UNREADABLE,
+        CALL_500: None,
+        PUT_495: None,
+        PUT_500: SeriesReason.UNREADABLE,
+    }
+    assert series.underlying.points == () and _by_symbol(series)[PUT_500].points == ()
+    assert len(_by_symbol(series)[CALL_500].points) == 55
+
+
+# ── A session skipped on its window read nothing ─────────────────────────
+
+
+async def test_a_session_skipped_on_its_window_has_no_series_and_says_the_session_was_skipped_not_that_a_record_is_missing() -> (
+    None
+):
+    # Entry 190 minutes after the open and exit 30 before the close: 190 to 360 on a full day, 190 to 180 on a half day.
+    written = OptionsBacktestSetup.model_validate(
+        setup_body(
+            entry={"anchor": "open", "offset_ms": 190 * MS_PER_MINUTE},
+            exit={"anchor": "close", "offset_ms": 30 * MS_PER_MINUTE},
+        )
+    )
+    result = run_sessions(written, [HALF_DAY], fake_data({HALF_DAY: Day(underlying=steady("500.20"))}))
+    [session] = result.sessions
+    assert (session.outcome.status, session.outcome.skip_reason) == (
+        SessionStatus.SKIPPED,
+        SkipReason.WINDOW_DOES_NOT_FIT,
+    )
+
+    # Nothing is read for it, so no lake needs to be set up: the series is judged from what the run kept.
+    series = await _series_of(session)
+
+    assert series.contracts == ()
+    assert (series.underlying.reason, series.underlying.points) == (SeriesReason.SESSION_SKIPPED, ())

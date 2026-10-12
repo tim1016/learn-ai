@@ -9,6 +9,9 @@ Hand-worked, over the two sessions they share (Wednesday and Thursday):
   winning session.
 * B: Wednesday made the put's 8.70 in 1 trade and Thursday was skipped (0). So 8.70, 1 trade and 1 winning session.
 * Friday is A's alone: one session only A has. B has none that A lacks.
+
+Run B is also made twice more: over a market with no underlying price at the entry minute on Wednesday, so that run skips
+the session run A traded (the two disagree about one shared session), and with a stored setup that no longer validates.
 """
 
 from __future__ import annotations
@@ -17,12 +20,13 @@ from dataclasses import replace
 from decimal import Decimal
 from typing import Any
 
+import asyncpg
 import httpx
 import pytest
 
 from app.options_backtest.run import RunResult, run_sessions
 from tests.options_backtest._detail_scene import FRI_OPEN_MS, SESSIONS, THU_OPEN_MS, WED_OPEN_MS, the_scene, the_setup
-from tests.options_backtest._run_data import THU, WED, changed, fake_data
+from tests.options_backtest._run_data import THU, WED, changed, fake_data, steady
 from tests.options_backtest._stored_runs import PREFIX, SaveRun
 from tests.options_backtest._stored_runs import client as client
 from tests.options_backtest._stored_runs import is_the_job_alive as is_the_job_alive
@@ -40,6 +44,10 @@ LAG_LEG = (
     "put, 1 contract, expiry same day, strike 1 strike below the money; "
     "momentum 10% down from where it stood at the entry time"
 )
+
+
+A_CREATED_AT_MS = 1_791_800_000_000
+B_CREATED_AT_MS = 1_791_900_000_000
 
 
 @pytest.fixture(scope="module")
@@ -60,8 +68,8 @@ async def _compare(client: httpx.AsyncClient, a: int, b: int) -> httpx.Response:
 async def test_two_runs_are_compared_setting_by_setting_and_on_the_sessions_they_share(
     client: httpx.AsyncClient, save_run: SaveRun, run_a: RunResult, run_b: RunResult, is_the_job_alive: Any
 ) -> None:
-    a = await save_run(run_a, "a", setup_name="three legs")
-    b = await save_run(run_b, "b", setup_name=None)
+    a = await save_run(run_a, "a", setup_name="three legs", created_at_ms=A_CREATED_AT_MS)
+    b = await save_run(run_b, "b", setup_name=None, created_at_ms=B_CREATED_AT_MS)
 
     response = await _compare(client, a, b)
 
@@ -70,6 +78,8 @@ async def test_two_runs_are_compared_setting_by_setting_and_on_the_sessions_they
     assert body["underlying"] == "SPY"
     assert (body["a"]["id"], body["a"]["setup_name"], body["a"]["sessions_requested"]) == (a, "three legs", 3)
     assert (body["b"]["id"], body["b"]["setup_name"], body["b"]["sessions_requested"]) == (b, None, 2)
+    # Each run's own time of making: never the other's.
+    assert (body["a"]["created_at_ms"], body["b"]["created_at_ms"]) == (A_CREATED_AT_MS, B_CREATED_AT_MS)
     assert body["a"]["fee_policy"] == body["b"]["fee_policy"] == "Fees are $0.65 per contract traded."
     # B has only the put leg; A also has call and lag, in A's order. Nothing else differs.
     assert body["setting_differences"] == [
@@ -102,19 +112,6 @@ async def test_two_runs_are_compared_setting_by_setting_and_on_the_sessions_they
     ]
 
 
-async def test_a_run_compared_with_itself_differs_in_nothing_and_shares_every_session(
-    client: httpx.AsyncClient, save_run: SaveRun, run_a: RunResult, is_the_job_alive: Any
-) -> None:
-    a = await save_run(run_a, "alone")
-
-    body = (await _compare(client, a, a)).json()
-
-    assert body["setting_differences"] == [] and body["range_difference"] is None
-    assert (body["overlap"]["shared_sessions"], body["overlap"]["only_in_a"], body["overlap"]["only_in_b"]) == (3, 0, 0)
-    assert body["overlap"]["a"] == body["overlap"]["b"]
-    assert D(body["overlap"]["a"]["net_profit_usd"]) == D("-143.90")
-
-
 async def test_two_runs_of_the_same_setup_over_the_same_range_differ_in_nothing_though_they_are_two_runs(
     client: httpx.AsyncClient, save_run: SaveRun, run_a: RunResult, is_the_job_alive: Any
 ) -> None:
@@ -125,6 +122,93 @@ async def test_two_runs_of_the_same_setup_over_the_same_range_differ_in_nothing_
 
     assert (body["a"]["id"], body["b"]["id"]) == (first, second)
     assert body["setting_differences"] == [] and body["range_difference"] is None
+
+
+async def test_each_run_keeps_its_own_status_and_profit_on_a_session_they_share_whichever_order_they_are_asked_in(
+    client: httpx.AsyncClient, save_run: SaveRun, run_a: RunResult, is_the_job_alive: Any
+) -> None:
+    # Run B has no underlying price at the entry minute (m5) on Wednesday, so it skips the session run A traded.
+    market = the_scene()
+    market[WED] = replace(market[WED], underlying={k: v for k, v in steady("500.20").items() if k != 5})
+    run_b = run_sessions(the_setup(), [WED, THU], fake_data(market))
+    a = await save_run(run_a, "traded")
+    b = await save_run(run_b, "skipped")
+
+    a_then_b = (await _compare(client, a, b)).json()["overlap"]
+    b_then_a = (await _compare(client, b, a)).json()["overlap"]
+
+    # Wednesday: run A traded and lost 143.90, run B was skipped (0). Thursday: both skipped (0).
+    assert [
+        (s["session_open_ms"], s["a_status"], s["b_status"], D(s["a_profit_usd"]), D(s["b_profit_usd"]))
+        for s in a_then_b["sessions"]
+    ] == [
+        (WED_OPEN_MS, "traded", "skipped", D("-143.90"), D("0")),
+        (THU_OPEN_MS, "skipped", "skipped", D("0"), D("0")),
+    ]
+    # Asked the other way round, every pair is the other way round: A is then the skipped run.
+    assert [
+        (s["session_open_ms"], s["a_status"], s["b_status"], D(s["a_profit_usd"]), D(s["b_profit_usd"]))
+        for s in b_then_a["sessions"]
+    ] == [
+        (WED_OPEN_MS, "skipped", "traded", D("0"), D("-143.90")),
+        (THU_OPEN_MS, "skipped", "skipped", D("0"), D("0")),
+    ]
+    assert (D(a_then_b["a"]["net_profit_usd"]), a_then_b["a"]["trades"], a_then_b["a"]["winning_sessions"]) == (
+        D("-143.90"),
+        3,
+        0,
+    )
+    assert (D(a_then_b["b"]["net_profit_usd"]), a_then_b["b"]["trades"], a_then_b["b"]["winning_sessions"]) == (
+        D("0"),
+        0,
+        0,
+    )
+
+
+async def _lose_the_setup(conn: asyncpg.Connection, run_id: int) -> None:
+    await conn.execute(
+        "UPDATE research_options_backtest_runs SET setup_json = setup_json || '{\"lots\": 1}'::jsonb WHERE id = $1",
+        run_id,
+    )
+
+
+async def test_a_run_whose_stored_setup_can_no_longer_be_read_cannot_be_compared_and_the_409_names_it_with_its_reason(
+    client: httpx.AsyncClient, conn: asyncpg.Connection, save_run: SaveRun, run_a: RunResult, is_the_job_alive: Any
+) -> None:
+    healthy = await save_run(run_a, "healthy")
+    lost = await save_run(run_a, "lost")
+    also_lost = await save_run(run_a, "also-lost")
+    await _lose_the_setup(conn, lost)
+    await _lose_the_setup(conn, also_lost)
+
+    as_b = await _compare(client, healthy, lost)
+    as_a = await _compare(client, lost, healthy)
+    both = await _compare(client, lost, also_lost)
+
+    for response in (as_b, as_a, both):
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_RUN_SETUP_CANNOT_BE_READ"
+    # Plain words that name the run, its place, and the reason beside it (here a field the setup no longer has).
+    as_b_message = as_b.json()["detail"]["message"]
+    assert f"the stored setup of run {lost} (b) can no longer be read: lots: " in as_b_message
+    assert str(healthy) not in as_b_message
+    assert f"the stored setup of run {lost} (a) can no longer be read: lots: " in as_a.json()["detail"]["message"]
+    both_message = both.json()["detail"]["message"]
+    assert f"run {lost} (a)" in both_message and f"run {also_lost} (b)" in both_message
+
+
+async def test_a_run_that_is_not_complete_is_named_before_a_run_whose_setup_is_lost(
+    client: httpx.AsyncClient, conn: asyncpg.Connection, save_run: SaveRun, run_a: RunResult, is_the_job_alive: Any
+) -> None:
+    lost = await save_run(run_a, "lost")
+    failed = await save_run(run_a, "failed", end="failed")
+    await _lose_the_setup(conn, lost)
+
+    response = await _compare(client, lost, failed)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_RUN_NOT_COMPLETE"
+    assert f"run {failed} (b) is failed" in response.json()["detail"]["message"]
 
 
 # ── What it refuses ──────────────────────────────────────────────────────

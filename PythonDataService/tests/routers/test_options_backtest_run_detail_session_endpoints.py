@@ -4,21 +4,30 @@ Saved runs live in a real database, so these run only against one attested as di
 (``POSTGRES_URL_IS_EPHEMERAL=1``) and skip without one. The run is made over a lake in a temporary folder
 (``_detail_scene.py``, whose docstring works the figures out), so the pins are the hashes of real stored files and the
 route reads the same files back. A minute is "m5": the bar closing five minutes after the open.
+
+A series that cannot be shown says why in words of its own (held by ``test_session_series.py``). A file the operating system
+refuses is ``unreadable`` as a damaged one is, with the stored facts and the other series served and no path in the answer.
 """
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import asyncpg
 import httpx
 import pytest
 import respx
 
 from app.lean_sidecar.trading_calendar import session_window_for_date
+from app.options.contract import OptionContract
+from app.options_backtest import lake_data
 from app.options_backtest.results import EventKind, Fill, Mark
 from app.options_backtest.run import RunResult, run_sessions
 from app.options_backtest.setup import MS_PER_MINUTE, OptionsBacktestSetup
@@ -41,7 +50,7 @@ from tests.options_backtest._detail_scene import (
     the_setup,
 )
 from tests.options_backtest._lake import fake_catalog as fake_catalog
-from tests.options_backtest._lake import raw_root
+from tests.options_backtest._lake import option_day_zip, raw_root, replace_the_stored_file
 from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixed
 from tests.options_backtest._lake import tmp_lake as tmp_lake
 from tests.options_backtest._run_data import HALF_DAY, Day, fake_data, steady
@@ -247,7 +256,8 @@ async def test_a_series_whose_file_was_deleted_is_not_served_with_its_reason_and
     body = response.json()
     call = next(each for each in body["contracts"] if each["symbol"] == CALL_500)
     assert (call["state"], call["reason"], call["points"]) == ("not_shown", "gone", [])
-    assert call["message"] and call["contract"]["symbol"] == CALL_500
+    assert call["message"] == "The stored bars are no longer in the lake."
+    assert call["contract"]["symbol"] == CALL_500
     # The other series are served, and so is everything stored: trades, events, levels, fills.
     others = [each for each in body["contracts"] if each["symbol"] != CALL_500]
     assert all(each["state"] == "shown" and each["points"] for each in others)
@@ -257,20 +267,162 @@ async def test_a_series_whose_file_was_deleted_is_not_served_with_its_reason_and
 
 
 @respx.mock
-async def test_a_file_the_catalog_no_longer_admits_is_a_changed_series(
+async def test_a_file_the_catalog_no_longer_admits_cannot_be_confirmed_and_is_not_said_to_have_changed(
     client: httpx.AsyncClient, save_run: SaveRun, fake_catalog: FakeCatalog, tmp_lake: Path, is_the_job_alive: Any
 ) -> None:
-    run_id = await save_run(await run_the_scene(), "changed")
+    run_id = await save_run(await run_the_scene(), "unconfirmed")
     (raw_root(tmp_lake) / "equity/usa/minute/spy/20261007_trade.zip").write_bytes(b"changed after its receipt")
 
     body = (await _get(client, run_id, WED_OPEN_MS)).json()
 
+    # Nobody saw the file change: the catalog holds no receipt for its bytes, so they cannot be checked against what the
+    # run read. The words say so, and say nothing of a change.
     assert (body["underlying"]["state"], body["underlying"]["reason"], body["underlying"]["points"]) == (
         "not_shown",
-        "changed",
+        "not_confirmed",
         [],
     )
+    assert body["underlying"]["message"] == "The stored bars cannot be confirmed against what this run read."
     assert all(each["state"] == "shown" for each in body["contracts"])
+
+
+@respx.mock
+async def test_a_file_that_is_another_file_than_the_run_read_is_changed_in_the_words_of_a_change(
+    client: httpx.AsyncClient, save_run: SaveRun, fake_catalog: FakeCatalog, tmp_lake: Path, is_the_job_alive: Any
+) -> None:
+    run_id = await save_run(await run_the_scene(), "changed")
+    put = OptionContract.from_occ_symbol(PUT_500)
+    # The catalog is given a receipt for the new bytes, so they read cleanly: only the run's pin tells them from the old.
+    replace_the_stored_file(
+        fake_catalog,
+        raw_root(tmp_lake),
+        "option/usa/minute/spy/spy261007p00500000/20261007_trade.zip",
+        option_day_zip(put, [WED_OPEN_MS + 5 * MS_PER_MINUTE], day=date(2026, 10, 7)),
+        admit=True,
+    )
+
+    body = (await _get(client, run_id, WED_OPEN_MS)).json()
+
+    changed = next(each for each in body["contracts"] if each["symbol"] == PUT_500)
+    assert (changed["state"], changed["reason"], changed["points"]) == ("not_shown", "changed", [])
+    assert changed["message"] == "The stored bars have changed since this run."
+
+
+@contextmanager
+def _refused(path: Path) -> Iterator[None]:
+    """``path`` (a file or a folder) with no permission at all; its permissions come back afterwards."""
+    before = path.stat().st_mode & 0o777
+    path.chmod(0)
+    try:
+        yield
+    finally:
+        path.chmod(before)
+
+
+def _served_whole_but_for(body: dict[str, Any], unreadable: str) -> None:
+    """Everything stored is served, and every series but ``unreadable`` is shown; that one says why not."""
+    assert (len(body["trades"]), len(body["events"]), len(body["levels"]), len(body["fills"]), len(body["marks"])) == (
+        3,
+        20,
+        8,
+        6,
+        0,
+    )
+    assert body["underlying"]["state"] == "shown"
+    by_symbol = {each["symbol"]: each for each in body["contracts"]}
+    assert sorted(by_symbol) == [CALL_500, PUT_495, PUT_500]
+    for symbol, series in by_symbol.items():
+        if symbol == unreadable:
+            assert (series["state"], series["reason"], series["points"]) == ("not_shown", "unreadable", [])
+            assert series["message"] == "The stored bars cannot be read now."
+        else:
+            assert series["state"] == "shown" and series["points"]
+
+
+@respx.mock
+async def test_a_contract_file_the_operating_system_refuses_is_an_unreadable_series_and_the_session_is_still_served(
+    client: httpx.AsyncClient, save_run: SaveRun, fake_catalog: FakeCatalog, tmp_lake: Path, is_the_job_alive: Any
+) -> None:
+    run_id = await save_run(await run_the_scene(), "refused-file")
+    file = raw_root(tmp_lake) / "option/usa/minute/spy/spy261007c00500000/20261007_trade.zip"
+
+    with _refused(file):
+        with pytest.raises(PermissionError):
+            file.read_bytes()
+        response = await _get(client, run_id, WED_OPEN_MS)
+
+    assert response.status_code == 200, response.text
+    _served_whole_but_for(response.json(), CALL_500)
+    # No server path reaches the page.
+    assert str(tmp_lake) not in response.text and ".zip" not in response.text
+
+
+@respx.mock
+async def test_a_contract_folder_the_operating_system_refuses_is_an_unreadable_series_and_the_session_is_still_served(
+    client: httpx.AsyncClient, save_run: SaveRun, fake_catalog: FakeCatalog, tmp_lake: Path, is_the_job_alive: Any
+) -> None:
+    run_id = await save_run(await run_the_scene(), "refused-folder")
+    folder = raw_root(tmp_lake) / "option/usa/minute/spy/spy261007p00500000"
+
+    with _refused(folder):
+        with pytest.raises(PermissionError):
+            (folder / "20261007_trade.zip").read_bytes()
+        response = await _get(client, run_id, WED_OPEN_MS)
+
+    assert response.status_code == 200, response.text
+    _served_whole_but_for(response.json(), PUT_500)
+    assert str(tmp_lake) not in response.text
+
+
+@respx.mock
+async def test_a_contract_read_that_fails_with_an_operating_system_error_is_an_unreadable_series_with_no_path_in_the_answer(
+    client: httpx.AsyncClient,
+    save_run: SaveRun,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    is_the_job_alive: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = await save_run(await run_the_scene(), "refused-read")
+    real = lake_data.read_option_day_bars
+
+    def refuse_one(contract: OptionContract, *args: Any, **kwargs: Any) -> Any:
+        if contract.occ_symbol == PUT_495:
+            raise PermissionError(13, "Permission denied", "/a/server/path/lake/raw/option/usa/minute/spy/x.zip")
+        return real(contract, *args, **kwargs)
+
+    monkeypatch.setattr(lake_data, "read_option_day_bars", refuse_one)
+
+    response = await _get(client, run_id, WED_OPEN_MS)
+
+    assert response.status_code == 200, response.text
+    _served_whole_but_for(response.json(), PUT_495)
+    assert "/a/server/path" not in response.text and "Permission denied" not in response.text
+
+
+@respx.mock
+async def test_a_stored_day_holding_a_bar_no_session_can_place_is_an_unreadable_series_and_the_stored_facts_are_served(
+    client: httpx.AsyncClient, save_run: SaveRun, fake_catalog: FakeCatalog, tmp_lake: Path, is_the_job_alive: Any
+) -> None:
+    run_id = await save_run(await run_the_scene(), "unplaceable")
+    put = OptionContract.from_occ_symbol(PUT_500)
+    # The second bar starts half a minute past the minute, so it closes off a whole minute and the lake reader refuses
+    # the day. The catalog is given a receipt for the file, so it reads cleanly and only the bar is wrong.
+    replace_the_stored_file(
+        fake_catalog,
+        raw_root(tmp_lake),
+        "option/usa/minute/spy/spy261007p00500000/20261007_trade.zip",
+        option_day_zip(
+            put, [WED_OPEN_MS + 5 * MS_PER_MINUTE, WED_OPEN_MS + 6 * MS_PER_MINUTE + 30_000], day=date(2026, 10, 7)
+        ),
+        admit=True,
+    )
+
+    response = await _get(client, run_id, WED_OPEN_MS)
+
+    assert response.status_code == 200, response.text
+    _served_whole_but_for(response.json(), PUT_500)
+    assert str(tmp_lake) not in response.text
 
 
 # ── Sessions that did not trade ──────────────────────────────────────────
@@ -354,14 +506,16 @@ async def test_a_session_skipped_on_its_window_read_nothing_so_it_has_no_series_
 
     assert (body["status"], body["skip_reason"]) == ("skipped", "window_does_not_fit")
     assert body["session_close_ms"] - body["session_open_ms"] == 210 * MS_PER_MINUTE
-    assert (body["underlying"]["state"], body["underlying"]["reason"]) == ("not_shown", "no_pin")
+    # The session was skipped, so no bars were read for it: the words say that, and not that a record is missing.
+    assert (body["underlying"]["state"], body["underlying"]["reason"]) == ("not_shown", "session_skipped")
+    assert body["underlying"]["message"] == "This session was skipped, so no bars were read for it."
     assert body["underlying"]["points"] == [] and body["contracts"] == []
 
 
 # ── What is stored does not depend on the lake ───────────────────────────
 
 
-async def test_the_stored_facts_marks_and_dateless_words_are_served_when_the_lake_holds_nothing(
+async def test_the_stored_facts_marks_and_words_are_served_as_stored_when_the_lake_holds_nothing(
     client: httpx.AsyncClient,
     save_run: SaveRun,
     fake_catalog: FakeCatalog,
@@ -401,12 +555,12 @@ async def test_the_stored_facts_marks_and_dateless_words_are_served_when_the_lak
     ] == [(t.leg_id, t.entry_number, t.contract.occ_symbol, t.exit.bar_close_ms, t.exit.price) for t in saved_marks]
     assert marked["status"] == "incomplete"
     assert [f["kind"] for f in marked["fills"]].count("exit") == len(marked["trades"]) - len(saved_marks)
-    # The stored words of a refused pick name the day; what is sent says "that day" and no date.
+    # The words of a refused pick are the backend's prose for the owner, stored as written and served as written. They name
+    # the day looked for, and the date stays in them; the rest of the body names none.
     [words] = [e["detail"] for e in pick_refused["events"] if e["detail"]]
-    assert (
-        words
-        == "the strike rule comes off the end of the 4 call strikes listed for that day with the underlying at 499.07"
-    )
+    [stored_words] = [e.detail for e in refused.outcome.events if e.detail]
+    assert words == stored_words
+    assert re.search(r"listed for \d{4}-\d{2}-\d{2} with the underlying at 499.07$", words), words
     no_date_in(marked)
     no_date_in(pick_refused)
 
@@ -435,6 +589,40 @@ async def test_a_stored_session_whose_trades_and_events_disagree_is_a_500_with_a
     assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_STORED_SESSION_INCONSISTENT"
     assert "lag" in response.json()["detail"]["message"]
     assert other.status_code == 200
+
+
+@respx.mock
+async def test_a_session_of_a_run_whose_stored_setup_no_longer_validates_is_served_with_its_series_and_says_why_beside_it(
+    client: httpx.AsyncClient,
+    conn: asyncpg.Connection,
+    save_run: SaveRun,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    is_the_job_alive: Any,
+) -> None:
+    run_id = await save_run(await run_the_scene(), "lost-setup")
+    before = (await _get(client, run_id, WED_OPEN_MS)).json()
+    await conn.execute(
+        "UPDATE research_options_backtest_runs SET setup_json = setup_json || '{\"lots\": 1}'::jsonb WHERE id = $1",
+        run_id,
+    )
+
+    response = await _get(client, run_id, WED_OPEN_MS)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert before["setup_cannot_open_reason"] is None
+    assert body["setup_cannot_open_reason"].startswith("lots: ")
+    # Everything stored is as it was, and so is every series: the underlying is read from the run's own record, not from
+    # the setup. Eight lines become seven: the lag leg took 1.00 and never filled, and its momentum level (0.90) comes from
+    # a rule that is lost. Every other line is a stored figure.
+    for name in ("status", "cash_before_usd", "cash_after_usd", "profit_usd", "trades", "events", "fills", "marks"):
+        assert body[name] == before[name], name
+    assert body["underlying"] == before["underlying"] and body["contracts"] == before["contracts"]
+    assert [(each["kind"], each["leg_id"]) for each in before["levels"] if each not in body["levels"]] == [
+        ("momentum", "lag")
+    ]
+    assert len(body["levels"]) == 7
 
 
 # ── What it refuses ──────────────────────────────────────────────────────

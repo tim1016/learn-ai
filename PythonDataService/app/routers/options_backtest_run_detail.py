@@ -2,8 +2,11 @@
 trade, and two runs side by side.
 
 All reads; nothing here starts, changes or deletes a run. A run that has not completed has no trades or sessions: that
-is a 409 and not an empty answer. The comparison route's path is ``/runs/compare``, which the run service's
-``/runs/{run_id}`` also matches, so this router is mounted before that one (``main.py``).
+is a 409 and not an empty answer. A run whose stored setup no longer validates still answers the trades, the session and
+the export; two runs cannot be compared unless both setups can be read (a 409 that names the run and why).
+
+The comparison route's path is ``/runs/compare``, which the run service's ``/runs/{run_id}`` also matches, so this
+router is mounted before that one (``main.py``).
 """
 
 from __future__ import annotations
@@ -15,21 +18,22 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Path, Query, Response, status
 
 from app.options_backtest.comparison import compare
-from app.options_backtest.lake_data import LakeRunData
 from app.options_backtest.run_detail import (
     LegNotInRun,
     RunNotComplete,
     RunNotFound,
     RunsNotComplete,
     RunsOfDifferentUnderlyings,
+    RunsSetupCannotBeRead,
     SessionNotInRun,
     read_comparison_inputs,
     read_every_trade,
     read_session_record,
     read_trade_page,
 )
-from app.options_backtest.session_levels import SessionRecordInconsistent, fills_of, levels_of, marks_of
-from app.options_backtest.session_series import read_session_series
+from app.options_backtest.session_levels import SessionRecordInconsistent
+from app.options_backtest.session_view import session_view_of
+from app.options_backtest.setup import _LEG_ID_PATTERN as LEG_ID_PATTERN
 from app.options_backtest.trade_export import csv_file_name, trades_csv
 from app.research.persistence import lifecycle
 from app.research.persistence.db import with_connection
@@ -93,7 +97,9 @@ async def list_the_trades(
     session_open_ms: Annotated[
         int | None, Query(ge=0, le=MAX_TIMESTAMP_MS, description="Only this session's trades, by its open.")
     ] = None,
-    leg_id: Annotated[str | None, Query(min_length=1, max_length=32, description="Only this leg's trades.")] = None,
+    # A leg id has the one shape the setup gives it (the setup's own pattern, so the two cannot drift), and nothing else
+    # is looked for in the database: a text with a NUL in it is refused there.
+    leg_id: Annotated[str | None, Query(pattern=LEG_ID_PATTERN, description="Only this leg's trades.")] = None,
     limit: Annotated[int, Query(ge=1, le=TRADES_PAGE_MAX)] = TRADES_PAGE_DEFAULT,
     offset: Annotated[int, Query(ge=0, le=RUN_ID_MAX)] = 0,
 ) -> OptionsBacktestTradesResponse:
@@ -101,7 +107,9 @@ async def list_the_trades(
 
     Paged: ``total`` is every trade that matches, and ``next_offset`` is the ``offset`` that reads the rest (``null``
     on the last page). A session the run did not test, or a leg its setup does not have, is a 404 and not an empty page.
-    A run that is not complete is a 409.
+    A run that is not complete is a 409. A run whose stored setup no longer validates is listed all the same; with no
+    setup to name its legs, a leg filter is answered by the stored trades alone, and an empty page says only that none
+    was stored for that leg.
     """
     try:
         page = await with_connection(
@@ -138,16 +146,14 @@ async def get_the_session(
     The stored facts, trades, events, levels, fills and marks come from the run's own rows. The minute closes of the
     underlying and of each contract the session traded or took a starting price in are read from the lake and shown only
     if the file is the one the run read (its sha256 is the stored pin); a series that cannot be shown says why and the rest
-    is still served. A session the run did not test is a 404; a run that is not complete is a 409.
+    is still served. A session the run did not test is a 404; a run that is not complete is a 409. A run whose stored
+    setup no longer validates is served all the same, with ``setup_cannot_open_reason`` set.
     """
     try:
         record = await with_connection(read_session_record, run_id, session_open_ms, is_live=lifecycle.job_is_live)
+        view = await session_view_of(record)
     except (RunNotFound, RunNotComplete, SessionNotInRun) as exc:
         raise _refusal(exc) from exc
-    session = record.session.result
-    setup = record.header.setup
-    try:
-        levels = levels_of(setup, session.outcome)
     except SessionRecordInconsistent as exc:
         logger.error("a stored session does not agree with itself", extra={"run_id": run_id, "reason": str(exc)})
         raise HTTPException(
@@ -157,17 +163,7 @@ async def get_the_session(
                 "message": f"The stored trades and events of this session do not agree, so it cannot be drawn: {exc}.",
             },
         ) from exc
-    # The lake's readers block on files and on the catalog.
-    series = await asyncio.to_thread(
-        read_session_series, session, underlying=setup.underlying, data=LakeRunData(setup.underlying)
-    )
-    return OptionsBacktestSessionResponse.from_parts(
-        record,
-        series=series,
-        levels=levels,
-        fills=fills_of(session.outcome.trades),
-        marks=marks_of(session.outcome.trades),
-    )
+    return OptionsBacktestSessionResponse.from_view(view)
 
 
 @router.get(
@@ -188,6 +184,10 @@ async def export_the_trades(run_id: RunId) -> Response:
 
     The whole run, however many trades it has: the page size of the trades route does not apply. A run that is not
     complete is a 409.
+
+    ``exit_kind`` tells a leg that was sold (``sale``) from one marked and not sold (``mark``). For a mark,
+    ``exit_price_usd`` is the mark and not a price anything sold at, ``exit_seen_usd`` is empty and ``exit_fee_usd`` is
+    ``0``; a sum of ``exit_price_usd`` over every row therefore mixes sales and marks.
     """
     try:
         trades = await with_connection(read_every_trade, run_id, is_live=lifecycle.job_is_live)
@@ -213,17 +213,16 @@ async def compare_two_runs(
     """Two complete runs of one underlying side by side: every setting that differs, the range if it differs, and, on the
     sessions they share, each run's net profit, trades and winning sessions and the pair of profits of each session.
 
-    Both runs must be complete and trade the same underlying, else a 409 that says which is not and why; a run that does
-    not exist is a 404 naming ``a`` or ``b``. This path is the literal ``/runs/compare``, mounted before the run service's
-    ``/runs/{run_id}``.
+    Both runs must be complete, have a stored setup that can still be read, and trade the same underlying, else a 409
+    that says which is not and why; a run that does not exist is a 404 naming ``a`` or ``b``. This path is the literal
+    ``/runs/compare``, mounted before the run service's ``/runs/{run_id}``.
     """
     try:
         inputs = await with_connection(read_comparison_inputs, a, b, is_live=lifecycle.job_is_live)
     except RunNotFound as exc:
-        role = "a" if exc.run_id == a else "b"
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
-            {"code": "OPTIONS_BACKTEST_RUN_NOT_FOUND", "message": f"No run has the id {exc.run_id} (run {role})."},
+            {"code": "OPTIONS_BACKTEST_RUN_NOT_FOUND", "message": f"No run has the id {exc.run_id} (run {exc.role})."},
         ) from exc
     except RunsNotComplete as exc:
         raise HTTPException(
@@ -231,6 +230,14 @@ async def compare_two_runs(
             {
                 "code": "OPTIONS_BACKTEST_RUN_NOT_COMPLETE",
                 "message": f"Only complete runs can be compared, and {exc}.",
+            },
+        ) from exc
+    except RunsSetupCannotBeRead as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            {
+                "code": "OPTIONS_BACKTEST_RUN_SETUP_CANNOT_BE_READ",
+                "message": f"Runs can be compared only while both stored setups can be read, and {exc}.",
             },
         ) from exc
     except RunsOfDifferentUnderlyings as exc:

@@ -12,6 +12,7 @@ import re
 from decimal import Decimal
 from typing import Any
 
+import asyncpg
 import httpx
 import pytest
 
@@ -278,6 +279,36 @@ async def test_the_trades_can_be_narrowed_to_a_session_and_to_a_leg_and_the_tota
     assert (thursday["total"], thursday["trades"], thursday["next_offset"]) == (0, [], None)
     assert (lag["total"], lag["trades"]) == (0, [])
     assert (one["total"], [t["trade_number"] for t in one["trades"]], one["next_offset"]) == (2, [1], 1)
+
+
+# ── A run whose stored setup no longer validates ─────────────────────────
+
+
+async def test_a_run_whose_stored_setup_no_longer_validates_lists_the_same_trades_and_narrows_them_by_what_was_stored(
+    client: httpx.AsyncClient, conn: asyncpg.Connection, save_run: SaveRun, scene: RunResult, is_the_job_alive: Any
+) -> None:
+    run_id = await save_run(scene, "lost")
+    async with client as c:
+        before = (await c.get(f"{PREFIX}/runs/{run_id}/trades")).json()
+        await conn.execute(
+            "UPDATE research_options_backtest_runs SET setup_json = setup_json || '{\"lots\": 1}'::jsonb WHERE id = $1",
+            run_id,
+        )
+
+        after = await c.get(f"{PREFIX}/runs/{run_id}/trades")
+        calls = (await c.get(f"{PREFIX}/runs/{run_id}/trades", params={"leg_id": "call"})).json()
+        unknown = await c.get(f"{PREFIX}/runs/{run_id}/trades", params={"leg_id": "nope"})
+        wednesday = (await c.get(f"{PREFIX}/runs/{run_id}/trades", params={"session_open_ms": WED_OPEN_MS})).json()
+        no_session = await c.get(f"{PREFIX}/runs/{run_id}/trades", params={"session_open_ms": WED_OPEN_MS + 60_000})
+
+    # Every trade is the stored trade, as it was; the setup was only ever needed to name the legs.
+    assert after.status_code == 200 and after.json() == before
+    assert (calls["total"], [t["trade_number"] for t in calls["trades"]]) == (2, [1, 2])
+    assert unknown.status_code == 200 and (unknown.json()["total"], unknown.json()["trades"]) == (0, [])
+    assert wednesday["total"] == 3
+    # A session the run did not test is still a 404: that needs the stored sessions, not the setup.
+    assert no_session.status_code == 404
+    assert no_session.json()["detail"]["code"] == "OPTIONS_BACKTEST_SESSION_NOT_IN_RUN"
 
 
 # ── What it refuses ──────────────────────────────────────────────────────

@@ -16,13 +16,17 @@ Which series: the underlying, and each contract the session traded or took a sta
 whose close is after the session's open and at or before its close, which is every bar the replay could have read. An
 option prints until 16:15; those bars the replay never read are not drawn.
 
-Reasons a series is not served:
+Reasons a series is not served, each with words of its own that say only what is true of it (``SERIES_WORDS``):
 
-* ``no_pin``: the run kept no hash of it (a session skipped on its window read nothing), so there is nothing to check it
-  against and it is not served unchecked;
+* ``session_skipped``: the session was skipped on its window, so the run read no bars for it and kept nothing to check
+  them against;
+* ``no_pin``: the run kept no hash of this series (a contract the session's pins do not name);
 * ``gone``: the lake no longer holds the file;
-* ``changed``: the file is not the one the run read (another hash, or bytes the lake's catalog does not admit);
-* ``unreadable``: the file is there and is damaged;
+* ``changed``: the file is not the one the run read (its hash is not the pin);
+* ``not_confirmed``: the lake's catalog does not admit the file's bytes (no receipt for them, or one being rebuilt). Nobody
+  saw the file change, and the bytes cannot be checked against what the run read, so it is not said to have changed;
+* ``unreadable``: the file is there and cannot be read: it is damaged, holds a bar no session can place, or the
+  operating system refuses it (permission, an I/O error, a file that vanishes as it is read);
 * ``lake_unavailable``: the lake's catalog could not be asked. This says nothing about the file or the run.
 
 Blocking: it reads files and asks the catalog, so call it from a worker thread.
@@ -41,24 +45,28 @@ from app.data_lake.option_bars import OptionBarsFileError
 from app.options.contract import OptionContract
 from app.options_backtest.data import RunData
 from app.options_backtest.lake_data import UnderlyingDayUnreadable
-from app.options_backtest.results import EventKind, SessionOutcome
+from app.options_backtest.results import EventKind, SessionOutcome, SkipReason
 from app.options_backtest.session_result import SessionResult
 from app.utils.session_anchors import et_date_at_ms
 
 
 class SeriesReason(StrEnum):
+    SESSION_SKIPPED = "session_skipped"
     NO_PIN = "no_pin"
     GONE = "gone"
     CHANGED = "changed"
+    NOT_CONFIRMED = "not_confirmed"
     UNREADABLE = "unreadable"
     LAKE_UNAVAILABLE = "lake_unavailable"
 
 
-# Words for each reason. None names a date, a path or a file: they are shown to the owner as they are.
+# Words for each reason, shown to the owner as they are. None names a date, a path or a file.
 SERIES_WORDS: dict[SeriesReason, str] = {
+    SeriesReason.SESSION_SKIPPED: "This session was skipped, so no bars were read for it.",
     SeriesReason.NO_PIN: "The run kept no record of reading these bars, so there is nothing to check them against.",
     SeriesReason.GONE: "The stored bars are no longer in the lake.",
     SeriesReason.CHANGED: "The stored bars have changed since this run.",
+    SeriesReason.NOT_CONFIRMED: "The stored bars cannot be confirmed against what this run read.",
     SeriesReason.UNREADABLE: "The stored bars cannot be read now.",
     SeriesReason.LAKE_UNAVAILABLE: "The lake could not be reached, so the bars cannot be checked against this run now.",
 }
@@ -109,12 +117,15 @@ def read_session_series(session: SessionResult, *, underlying: str, data: RunDat
     trading_date = et_date_at_ms(session.session_open_ms)
     pins = session.pins
     pinned = {day.contract: day.sha256 for day in pins.option_days}
+    # A session skipped on its window read nothing, so the run pinned nothing: that is not a pin gone missing.
+    skipped = session.outcome.skip_reason is SkipReason.WINDOW_DOES_NOT_FIT
     return SessionSeries(
         underlying=_series(
             session,
             symbol=underlying,
             contract=None,
             pin=pins.underlying_sha256,
+            no_pin=SeriesReason.SESSION_SKIPPED if skipped else SeriesReason.NO_PIN,
             trading_date=trading_date,
             data=data,
         ),
@@ -124,6 +135,7 @@ def read_session_series(session: SessionResult, *, underlying: str, data: RunDat
                 symbol=contract.occ_symbol,
                 contract=contract,
                 pin=pinned.get(contract),
+                no_pin=SeriesReason.NO_PIN,
                 trading_date=trading_date,
                 data=data,
             )
@@ -138,6 +150,7 @@ def _series(
     symbol: str,
     contract: OptionContract | None,
     pin: str | None,
+    no_pin: SeriesReason,
     trading_date: date,
     data: RunData,
 ) -> Series:
@@ -145,14 +158,16 @@ def _series(
         return Series(symbol, contract, (), reason)
 
     if pin is None:
-        return not_shown(SeriesReason.NO_PIN)
+        return not_shown(no_pin)
     try:
         captured = data.underlying_day(trading_date) if contract is None else data.option_day(contract, trading_date)
     except CatalogUnavailableError:
         return not_shown(SeriesReason.LAKE_UNAVAILABLE)
     except LakeAdmissionError:
-        return not_shown(SeriesReason.CHANGED)
-    except (UnderlyingDayUnreadable, OptionBarsFileError):
+        return not_shown(SeriesReason.NOT_CONFIRMED)
+    except (UnderlyingDayUnreadable, OptionBarsFileError, OSError):
+        # OSError: the file or its folder refuses to be read, or vanishes between the lake's check and its read. The
+        # underlying's reader names its own errors; a contract's read lets the operating system's out.
         return not_shown(SeriesReason.UNREADABLE)
     if captured is None:
         return not_shown(SeriesReason.GONE)

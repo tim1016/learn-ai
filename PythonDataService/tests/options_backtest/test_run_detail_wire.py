@@ -17,7 +17,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from app.options.contract import OptionContract
-from app.options_backtest.comparison import Setting
+from app.options_backtest.comparison import Setting, compare
 from app.options_backtest.market import PickRefusal
 from app.options_backtest.results import (
     CancelReason,
@@ -30,11 +30,27 @@ from app.options_backtest.results import (
     Mark,
     SessionStatus,
 )
-from app.options_backtest.saved_runs import StoredTrade
-from app.options_backtest.session_levels import ChartedFill, ChartedMark, Level, LevelKind
-from app.options_backtest.session_series import Series, SeriesPoint, SeriesReason
+from app.options_backtest.run import RunResult, run_sessions
+from app.options_backtest.run_detail import TradePage
+from app.options_backtest.saved_runs import SessionLine, StoredTrade
+from app.options_backtest.session_levels import (
+    ChartedFill,
+    ChartedMark,
+    Level,
+    LevelKind,
+    fills_of,
+    levels_of,
+    marks_of,
+)
+from app.options_backtest.session_series import Series, SeriesPoint, SeriesReason, SessionSeries
+from app.options_backtest.session_view import SessionView
+from app.options_backtest.setup import MS_PER_MINUTE
 from app.schemas import options_backtest_run_detail as wire
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
+from tests.options_backtest._detail_scene import SESSIONS, WED_OPEN_MS, the_scene, the_setup
+from tests.options_backtest._headers import THE_REASON, a_header, a_session_record
+from tests.options_backtest._run_data import fake_data
+from tests.options_backtest._stored_runs import no_date_in
 
 D = Decimal
 OPEN_MS = 1_791_379_800_000
@@ -195,7 +211,7 @@ def test_each_closed_set_on_the_wire_is_exactly_the_members_of_the_enum_it_comes
     assert list(get_args(words)) == members
 
 
-def test_an_event_names_its_contract_by_symbol_and_its_price_as_text_and_says_no_date_in_its_words() -> None:
+def test_an_event_names_its_contract_by_symbol_and_its_price_as_text() -> None:
     event = Event(
         kind=EventKind.PICK_REFUSED,
         at_ms=OPEN_MS + 300_000,
@@ -211,12 +227,29 @@ def test_an_event_names_its_contract_by_symbol_and_its_price_as_text_and_says_no
         wire.OptionsBacktestEventResponse.from_event(priced),
     )
 
-    assert (
-        sent.detail
-        == "the strike rule comes off the end of the 4 call strikes listed for that day with the underlying at 499.07"
-    )
     assert (sent.reason, sent.contract, sent.price_usd) == ("strike_not_listed", None, None)
     assert (sent_priced.contract, sent_priced.price_usd, sent_priced.detail) == ("SPY261007C00500500", "5.10", None)
+
+
+def test_an_events_words_are_served_exactly_as_the_backend_wrote_them_even_when_they_name_a_date() -> None:
+    # The words are the backend's own prose for the owner: stored as written and served as written. A refused pick
+    # names the day it looked for, so the date stays in it, character for character.
+    stored = (
+        "the strike rule comes off the end of the 4 call strikes listed for 2026-10-09 with the underlying at 499.07"
+    )
+    event = Event(
+        kind=EventKind.PICK_REFUSED,
+        at_ms=OPEN_MS + 300_000,
+        leg_id="far",
+        entry_number=0,
+        reason=PickRefusal.STRIKE_NOT_LISTED.value,
+        detail=stored,
+    )
+
+    sent = wire.OptionsBacktestEventResponse.from_event(event)
+
+    assert sent.detail == stored
+    assert sent.detail is not None and "2026-10-09" in sent.detail
 
 
 def test_a_series_is_shown_with_no_reason_or_not_shown_with_a_reason_a_message_and_no_points() -> None:
@@ -315,3 +348,168 @@ def test_a_price_of_twenty_six_digits_is_sent_as_those_digits_by_every_model_tha
         mark.price_usd,
         series.points[0].close_usd,
     } == {text}
+
+
+# ── What the page is sent of one session, of a page of trades, and of two runs compared ──
+#
+# Built by hand from the dataclasses the store fills, with no database: the figures are those of ``_detail_scene.py``,
+# worked in its docstring (Wednesday made 8.70 - 121.30 - 31.30 = -143.90, so the cash went 10,000.00 -> 9,856.10).
+
+
+@pytest.fixture(scope="module")
+def scene() -> RunResult:
+    return run_sessions(the_setup(), SESSIONS, fake_data(the_scene()))
+
+
+def _view(scene: RunResult, at: int) -> SessionView:
+    record = a_session_record(scene, at)
+    outcome = record.session.result.outcome
+    nothing = SessionSeries(underlying=Series("SPY", None, (), SeriesReason.GONE), contracts=())
+    return SessionView(
+        record=record,
+        series=nothing,
+        levels=levels_of(scene.setup, outcome),
+        fills=fills_of(outcome.trades),
+        marks=marks_of(outcome.trades),
+    )
+
+
+def test_a_session_is_sent_with_its_own_cash_its_own_profit_its_own_close_and_its_events_in_the_order_they_happened(
+    scene: RunResult,
+) -> None:
+    sent = wire.OptionsBacktestSessionResponse.from_view(_view(scene, 0))
+
+    # Wednesday: 10,000.00 before, 9,856.10 after, -143.90 of profit; a full day closes 390 minutes after it opens.
+    assert (sent.run_id, sent.session_open_ms, sent.session_close_ms) == (
+        7,
+        WED_OPEN_MS,
+        WED_OPEN_MS + 390 * MS_PER_MINUTE,
+    )
+    assert (sent.status, sent.skip_reason) == ("traded", None)
+    assert (sent.cash_before_usd, sent.cash_after_usd, sent.profit_usd) == ("10000", "9856.10", "-143.90")
+    # The first event is the call leg picking its contract at m5; the last is the put's sale filling at m61.
+    assert [
+        (e.kind, (e.at_ms - WED_OPEN_MS) // MS_PER_MINUTE, e.leg_id) for e in (sent.events[0], sent.events[-1])
+    ] == [
+        ("picked", 5, "call"),
+        ("close_filled", 61, "put"),
+    ]
+    assert len(sent.events) == 20 and len(sent.trades) == 3 and len(sent.levels) == 8 and len(sent.fills) == 6
+    assert sent.setup_cannot_open_reason is None
+
+
+def test_a_session_skipped_for_want_of_an_underlying_price_is_sent_with_the_reason_it_was_skipped_for(
+    scene: RunResult,
+) -> None:
+    sent = wire.OptionsBacktestSessionResponse.from_view(_view(scene, 1))
+
+    assert (sent.status, sent.skip_reason) == ("skipped", "underlying_did_not_trade")
+    assert (sent.cash_before_usd, sent.cash_after_usd, sent.profit_usd) == ("9856.10", "9856.10", "0")
+
+
+def test_a_session_of_a_run_whose_setup_was_lost_says_why_beside_everything_else_it_serves(scene: RunResult) -> None:
+    record = a_session_record(scene, 0, readable=False)
+    outcome = record.session.result.outcome
+    view = SessionView(
+        record=record,
+        series=SessionSeries(underlying=Series("SPY", None, (), SeriesReason.GONE), contracts=()),
+        levels=levels_of(None, outcome),
+        fills=fills_of(outcome.trades),
+        marks=marks_of(outcome.trades),
+    )
+
+    sent = wire.OptionsBacktestSessionResponse.from_view(view)
+
+    assert sent.setup_cannot_open_reason == THE_REASON
+    assert (sent.status, sent.profit_usd, len(sent.trades), len(sent.events)) == ("traded", "-143.90", 3, 20)
+
+
+def test_a_fill_is_sent_with_the_price_seen_apart_from_the_price_it_filled_at() -> None:
+    fill = ChartedFill("entry", "call", 0, CALL, 1, OPEN_MS, D("2.00"), D("2.02"), None)
+
+    sent = wire.OptionsBacktestFillResponse.from_fill(fill)
+
+    assert (sent.seen_usd, sent.filled_usd) == ("2.00", "2.02")
+
+
+def test_a_page_of_trades_says_its_total_where_it_began_and_where_the_rest_begins() -> None:
+    trade = StoredTrade(OPEN_MS, 0, _sold())
+    page = TradePage(run_id=7, total=5, offset=2, limit=2, trades=(trade, StoredTrade(OPEN_MS, 1, _marked())))
+
+    sent = wire.OptionsBacktestTradesResponse.from_page(page)
+
+    # Five trades, this page holds the 3rd and 4th (from offset 2), and the 5th is at offset 4.
+    assert (sent.run_id, sent.total, sent.offset, sent.limit, sent.next_offset) == (7, 5, 2, 2, 4)
+    assert [t.trade_number for t in sent.trades] == [0, 1]
+
+
+def test_two_runs_compared_are_sent_each_with_its_own_record_and_each_shared_session_with_each_runs_own_status() -> (
+    None
+):
+    a = a_header(
+        1,
+        10,
+        50,
+        4,
+        created_at_ms=1_791_800_000_000,
+        setup_name="the first",
+        fee_policy_text="Fees are $0.65 per contract traded.",
+    )
+    b = a_header(
+        2,
+        20,
+        40,
+        2,
+        created_at_ms=1_791_900_000_000,
+        setup_name=None,
+        fee_policy_text="Fees are not charged, so results are before fees.",
+        setup_changes={"slippage_percent": "0.5"},
+    )
+    T, K, S, N = SessionStatus.TRADED, SessionStatus.INCOMPLETE, SessionStatus.SKIPPED, SessionStatus.NO_TRADE
+    # Sessions 20 and 30 are in both runs; 10 is only in a and 40 only in b. The two runs disagree about each shared one.
+    a_lines = [SessionLine(10, T, D("1.00"), 1), SessionLine(20, T, D("-5.50"), 2), SessionLine(30, S, D("0"), 0)]
+    b_lines = [SessionLine(20, S, D("0"), 0), SessionLine(30, K, D("2.25"), 3), SessionLine(40, N, D("0"), 0)]
+
+    sent = wire.OptionsBacktestComparisonResponse.from_comparison(a, b, compare(a, a_lines, b, b_lines))
+
+    # Each run's own record: never the other's, never blank.
+    assert (sent.a.id, sent.a.setup_name, sent.a.created_at_ms, sent.a.fee_policy) == (
+        1,
+        "the first",
+        1_791_800_000_000,
+        "Fees are $0.65 per contract traded.",
+    )
+    assert (sent.b.id, sent.b.setup_name, sent.b.created_at_ms, sent.b.fee_policy) == (
+        2,
+        None,
+        1_791_900_000_000,
+        "Fees are not charged, so results are before fees.",
+    )
+    assert (sent.a.sessions_requested, sent.b.sessions_requested) == (4, 2)
+    # Run a's range is 10 to 50 and b's is 20 to 40, in that order, each with its first before its last.
+    assert sent.range_difference is not None
+    assert (sent.range_difference.a.first_session_open_ms, sent.range_difference.a.last_session_open_ms) == (10, 50)
+    assert (sent.range_difference.b.first_session_open_ms, sent.range_difference.b.last_session_open_ms) == (20, 40)
+    # Shared: 20 (a traded -5.50, b skipped 0) and 30 (a skipped 0, b incomplete 2.25).
+    assert [
+        (s.session_open_ms, s.a_status, s.b_status, s.a_profit_usd, s.b_profit_usd) for s in sent.overlap.sessions
+    ] == [(20, "traded", "skipped", "-5.50", "0"), (30, "skipped", "incomplete", "0", "2.25")]
+    assert (sent.overlap.only_in_a, sent.overlap.only_in_b) == (1, 1)
+
+
+def test_the_guard_that_nothing_sent_names_a_date_lets_through_only_the_words_of_an_event() -> None:
+    names_the_day = "no strike is listed for 2026-10-09"
+    refused = {"events": [{"kind": "pick_refused", "reason": "strike_not_listed", "detail": names_the_day}]}
+
+    no_date_in(refused)  # an event's words are served as written
+    for body in (
+        {"events": [{"kind": "x", "reason": names_the_day}]},  # any other string of an event is held
+        {"events": [{"detail": "fine", "leg_id": names_the_day}]},
+        {"detail": names_the_day},  # a detail that is not an event's is held
+        {"message": names_the_day},
+        {"trades": [{"detail": names_the_day}]},
+        {"events": names_the_day},
+        {names_the_day: 1},  # and so is a key
+    ):
+        with pytest.raises(AssertionError, match="names a date"):
+            no_date_in(body)

@@ -26,7 +26,7 @@ from typing import Any
 
 from app.options_backtest import fills
 from app.options_backtest.describe import fee_policy_sentence
-from app.options_backtest.saved_runs import RunHeader, SessionLine
+from app.options_backtest.saved_runs import RunHeader, RunSetupCannotBeRead, SessionLine
 from app.options_backtest.setup import (
     MS_PER_MINUTE,
     ExpiryRule,
@@ -335,11 +335,20 @@ def _range_of(header: RunHeader) -> RangeOfRun:
     return RangeOfRun(record.first_session_open_ms, record.last_session_open_ms, record.sessions_requested)
 
 
+def _setup_of(header: RunHeader) -> OptionsBacktestSetup:
+    if header.setup is None:
+        raise RunSetupCannotBeRead(header.record.id, header.setup_cannot_open_reason or "")
+    return header.setup
+
+
 def compare(a: RunHeader, a_lines: Sequence[SessionLine], b: RunHeader, b_lines: Sequence[SessionLine]) -> Comparison:
-    """Two complete runs of the same underlying compared: settings, range and the sessions they share."""
+    """Two complete runs of the same underlying compared: settings, range and the sessions they share.
+
+    ``RunSetupCannotBeRead`` when either run's stored setup no longer validates: its settings cannot be compared.
+    """
     return Comparison(
-        underlying=a.setup.underlying,
-        settings=setting_differences(a.setup, b.setup),
+        underlying=a.record.underlying,
+        settings=setting_differences(_setup_of(a), _setup_of(b)),
         range_a=_range_of(a),
         range_b=_range_of(b),
         sessions=overlap(a_lines, b_lines),

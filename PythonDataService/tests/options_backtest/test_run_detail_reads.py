@@ -23,6 +23,7 @@ from app.options_backtest.run_detail import (
     RunNotFound,
     RunsNotComplete,
     RunsOfDifferentUnderlyings,
+    RunsSetupCannotBeRead,
     SessionNotInRun,
     read_comparison_inputs,
     read_every_trade,
@@ -307,3 +308,103 @@ async def test_a_pair_is_refused_for_the_first_missing_run_then_for_every_run_no
     with pytest.raises(RunsOfDifferentUnderlyings) as different:
         await read_comparison_inputs(conn, complete, other, is_live=GONE)
     assert (different.value.a, different.value.b) == ((complete, "SPY"), (other, "QQQ"))
+
+
+# ── Money is read in plain digits ────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "profit", ["1000", "10000", "20000", "100000", "1200000", "99990000", "-10000", "5000.50", "0.10", "0"]
+)
+async def test_a_sessions_stored_profit_is_read_in_plain_digits_as_one_session_and_as_a_line_of_a_comparison(
+    conn: asyncpg.Connection, save_run: SaveRun, scene: RunResult, profit: str
+) -> None:
+    # asyncpg alone returns 10000 as 1E+4. The profit column is set by hand to each awkward figure; the text read back is
+    # the text written.
+    run_id = await save_run(scene, "digits")
+    await conn.execute(
+        "UPDATE research_options_backtest_run_sessions SET profit_usd = $3 WHERE run_id = $1 AND session_open_ms = $2",
+        run_id,
+        WED_OPEN_MS,
+        D(profit),
+    )
+
+    stored = await saved_runs.read_session(conn, run_id, WED_OPEN_MS)
+    lines = await saved_runs.read_session_lines(conn, run_id)
+    record = await read_session_record(conn, run_id, WED_OPEN_MS, is_live=GONE)
+
+    assert stored is not None
+    assert str(stored.profit_usd) == profit
+    assert str(lines[0].profit_usd) == profit and lines[0].session_open_ms == WED_OPEN_MS
+    assert str(record.session.profit_usd) == profit
+
+
+# ── A run whose stored setup no longer validates ─────────────────────────
+
+
+async def _lose_the_setup(conn: asyncpg.Connection, run_id: int) -> None:
+    """A row edited by hand as a later rule would leave it: a field the setup no longer has."""
+    await conn.execute(
+        "UPDATE research_options_backtest_runs SET setup_json = setup_json || '{\"lots\": 1}'::jsonb WHERE id = $1",
+        run_id,
+    )
+
+
+async def test_a_run_whose_stored_setup_no_longer_validates_still_gives_its_trades_its_sessions_and_its_header(
+    conn: asyncpg.Connection, save_run: SaveRun, scene: RunResult
+) -> None:
+    run_id = await save_run(scene, "lost")
+    healthy = await save_run(scene, "healthy")
+    await _lose_the_setup(conn, run_id)
+
+    header = await saved_runs.get_run_header(conn, run_id, is_live=GONE)
+    every = await read_every_trade(conn, run_id, is_live=GONE)
+    page = await read_trade_page(
+        conn, run_id, is_live=GONE, session_open_ms=WED_OPEN_MS, leg_id="call", limit=10, offset=0
+    )
+    record = await read_session_record(conn, run_id, WED_OPEN_MS, is_live=GONE)
+
+    assert header is not None and header.setup is None and header.setup_cannot_open_reason is not None
+    assert "lots" in header.setup_cannot_open_reason
+    assert (header.record.id, header.record.underlying, header.record.status) == (run_id, "SPY", "complete")
+    # Wednesday's three trades; the call leg made two of them (trade numbers 1 and 2).
+    assert len(every) == 3
+    assert (page.total, [each.trade_number for each in page.trades]) == (2, [1, 2])
+    assert record.header.setup is None and record.header.setup_cannot_open_reason == header.setup_cannot_open_reason
+    assert len(record.session.result.outcome.trades) == 3
+    # A neighbour that is healthy is read as ever.
+    neighbour = await saved_runs.get_run_header(conn, healthy, is_live=GONE)
+    assert neighbour is not None and neighbour.setup == scene.setup
+
+
+async def test_with_no_setup_to_name_its_legs_a_leg_filter_is_answered_by_the_stored_trades_alone(
+    conn: asyncpg.Connection, save_run: SaveRun, scene: RunResult
+) -> None:
+    run_id = await save_run(scene, "legs")
+    await _lose_the_setup(conn, run_id)
+
+    # "lag" made no trade and "nope" is no leg at all: with the setup gone the two cannot be told apart, and both are a
+    # page of no stored trade. A leg that made trades is answered as ever.
+    lag = await read_trade_page(conn, run_id, is_live=GONE, session_open_ms=None, leg_id="lag", limit=10, offset=0)
+    nope = await read_trade_page(conn, run_id, is_live=GONE, session_open_ms=None, leg_id="nope", limit=10, offset=0)
+    put = await read_trade_page(conn, run_id, is_live=GONE, session_open_ms=None, leg_id="put", limit=10, offset=0)
+
+    assert (lag.total, lag.trades, nope.total, nope.trades) == (0, (), 0, ())
+    assert (put.total, [each.trade_number for each in put.trades]) == (1, [0])
+
+
+async def test_two_runs_cannot_be_compared_while_either_one_has_lost_its_setup_and_the_one_is_named(
+    conn: asyncpg.Connection, save_run: SaveRun, scene: RunResult
+) -> None:
+    lost = await save_run(scene, "lost")
+    healthy = await save_run(scene, "healthy")
+    await _lose_the_setup(conn, lost)
+
+    with pytest.raises(RunsSetupCannotBeRead) as as_b:
+        await read_comparison_inputs(conn, healthy, lost, is_live=GONE)
+    with pytest.raises(RunsSetupCannotBeRead) as as_a:
+        await read_comparison_inputs(conn, lost, healthy, is_live=GONE)
+
+    assert [(role, run_id) for role, run_id, _ in as_b.value.runs] == [("b", lost)]
+    assert [(role, run_id) for role, run_id, _ in as_a.value.runs] == [("a", lost)]
+    assert "lots" in as_b.value.runs[0][2]

@@ -16,6 +16,7 @@ from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import asyncpg
 import httpx
 import pytest
 
@@ -230,6 +231,23 @@ async def test_a_run_of_four_thousand_trades_is_exported_whole_in_order_and_adds
 
 
 # ── What it refuses ──────────────────────────────────────────────────────
+
+
+async def test_a_run_whose_stored_setup_no_longer_validates_exports_the_same_file(
+    client: httpx.AsyncClient, conn: asyncpg.Connection, save_run: SaveRun, scene: RunResult, is_the_job_alive: Any
+) -> None:
+    run_id = await save_run(scene, "lost")
+    before = await _export(client, run_id)
+    await conn.execute(
+        "UPDATE research_options_backtest_runs SET setup_json = setup_json || '{\"lots\": 1}'::jsonb WHERE id = $1",
+        run_id,
+    )
+
+    after = await _export(client, run_id)
+
+    # A trade is a stored row; the setup is no part of it. The file is the same, byte for byte, and still has its rows.
+    assert after.status_code == 200 and after.content == before.content
+    assert len(_table(after)) == 3
 
 
 async def test_a_run_that_does_not_exist_is_a_404_and_one_that_is_not_complete_is_a_409(

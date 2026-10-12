@@ -639,10 +639,20 @@ async def delete_run(conn: asyncpg.Connection, run_id: int, *, is_live: IsLive) 
 
 @dataclass(frozen=True)
 class RunHeader:
-    """A run's record and the setup it ran, with none of the figures' tables parsed."""
+    """A run's record and the setup it ran, with none of the figures' tables parsed.
+
+    As in ``StoredRun``, a run whose stored setup no longer validates still opens: ``setup`` is ``None`` and
+    ``setup_cannot_open_reason`` says why; exactly one of the two is set. The record (its underlying, its range, its
+    status) is stored apart from the setup and is read all the same.
+    """
 
     record: RunRecord
-    setup: OptionsBacktestSetup
+    setup: OptionsBacktestSetup | None
+    setup_cannot_open_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.setup is None) == (self.setup_cannot_open_reason is None):
+            raise ValueError("a run header has its setup, or the reason it cannot be opened, and not both")
 
 
 @dataclass(frozen=True)
@@ -674,14 +684,20 @@ class SessionLine:
 
 
 async def get_run_header(conn: asyncpg.Connection, run_id: int, *, is_live: IsLive) -> RunHeader | None:
-    """A run's record and setup; ``None`` when there is none. Cheaper than ``get_run`` where no figure is wanted."""
+    """A run's record and setup; ``None`` when there is none. Cheaper than ``get_run`` where no figure is wanted.
+
+    A run whose stored setup no longer validates still has a header, with no setup and the reason (see ``RunHeader``).
+    """
     row = await conn.fetchrow(
         f"SELECT {_RUN_COLUMNS}, setup_json::text AS setup_json FROM research_options_backtest_runs WHERE id = $1",
         run_id,
     )
-    if row is None:
-        return None
-    return RunHeader(record=_record(row, is_live), setup=OptionsBacktestSetup.model_validate_json(row["setup_json"]))
+    return None if row is None else _header(row, is_live)
+
+
+def _header(row: asyncpg.Record, is_live: IsLive) -> RunHeader:
+    saved = read_stored_setup(f"run {row['id']}", row["setup_json"], row["created_at_ms"])
+    return RunHeader(record=_record(row, is_live), setup=saved.setup, setup_cannot_open_reason=saved.cannot_open_reason)
 
 
 async def has_session(conn: asyncpg.Connection, run_id: int, session_open_ms: int) -> bool:
@@ -746,7 +762,11 @@ async def read_session(conn: asyncpg.Connection, run_id: int, session_open_ms: i
     if row is None:
         return None
     trades = await read_trades(conn, run_id, session_open_ms=session_open_ms)
-    return StoredSession(result=_session(row, tuple(stored.trade for stored in trades)), profit_usd=row["profit_usd"])
+    return _stored_session(row, tuple(stored.trade for stored in trades))
+
+
+def _stored_session(row: asyncpg.Record, trades: tuple[LegTrade, ...]) -> StoredSession:
+    return StoredSession(result=_session(row, trades), profit_usd=_money(row["profit_usd"]))
 
 
 async def read_session_lines(conn: asyncpg.Connection, run_id: int) -> tuple[SessionLine, ...]:
@@ -758,10 +778,11 @@ async def read_session_lines(conn: asyncpg.Connection, run_id: int) -> tuple[Ses
         "FROM research_options_backtest_run_sessions s WHERE s.run_id = $1 ORDER BY s.position",
         run_id,
     )
-    return tuple(
-        SessionLine(row["session_open_ms"], SessionStatus(row["status"]), row["profit_usd"], row["trades"])
-        for row in rows
-    )
+    return tuple(_session_line(row) for row in rows)
+
+
+def _session_line(row: asyncpg.Record) -> SessionLine:
+    return SessionLine(row["session_open_ms"], SessionStatus(row["status"]), _money(row["profit_usd"]), row["trades"])
 
 
 # ── The store a worker thread uses ───────────────────────────────────────

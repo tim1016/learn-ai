@@ -12,17 +12,24 @@ An *attempt* is one try of a leg to enter, named by the leg and the entry number
 first re-entry, and so on). An attempt that filled leaves a trade; one that did not (momentum never reached, cancelled,
 refused for cash) leaves events and no trade, so its levels come from its events and the run's setup.
 
-Three kinds of line, each from one instant to another, both ends being minute closes:
+Three kinds of line, each from one instant to another, both ends being minute closes. One rule ends a line that waits:
+**it ends when the thing it waits for happened, whatever came next.**
 
-* ``starting_price``: the premium the leg's momentum is measured from, from the minute it was taken until the attempt
-  ended: for one that filled, the minute whose close reached the momentum level and decided the buy; for one that did
-  not, the minute it was cancelled or refused for cash.
+* ``starting_price``: the premium the leg's momentum is measured from, from the minute it was taken until the buy was
+  decided, which is the minute whose close reached the momentum level (the last such minute, if an order was dropped
+  and the leg waited again). A buy that was decided and then refused for cash ends its lines at that same minute, as
+  one that filled does; the refusal comes a minute later and moves nothing. A leg cancelled before it ever reached the
+  level was waiting until it was cancelled, so its lines end at the cancel.
 * ``momentum``: the premium the leg waits for, between the same two instants.
 * ``stop``: the premium at or below which the position is sold, from the minute it filled (the replay reads the stop
   on that very bar) until the minute the close that sold it was decided: a stop hit, or the exit time.
 
 A stored session that does not agree with itself (a trade with a starting price that no event took, an attempt that
 waited and has no end) is not drawn from a guess: ``SessionRecordInconsistent``. The replay cannot make one.
+
+With no setup (a run whose stored setup no longer validates) every line that comes from a stored figure is still drawn:
+the stops, and each starting price. The momentum line of an attempt that never filled is the only one left out, since
+its level comes from the leg's rule; the lines of one leg that begin together are ordered by the leg's id.
 
 A leg marked and not sold has no sale to draw: it is a mark, the last bar its contract traded in and that bar's close.
 """
@@ -101,21 +108,34 @@ def _inconsistent(leg_id: str, entry_number: int, what: str) -> SessionRecordInc
 
 
 def _ended_at(leg_id: str, entry_number: int, events: Sequence[Event]) -> int:
-    """When an attempt that never filled ended: the minute it was cancelled or refused for cash. It ends exactly once."""
-    endings = [
-        event.at_ms for event in events if event.kind in (EventKind.LEG_CANCELLED, EventKind.ENTRY_REFUSED_FOR_CASH)
-    ]
-    if len(endings) != 1:
+    """When an attempt that never filled stopped waiting for what it was waiting for. It ends exactly once.
+
+    A leg cancelled while it waited waited until the cancel. A buy refused for cash was decided at the last minute whose
+    close reached the momentum level, so that is when its waiting ended, and not the minute of the refusal.
+    """
+    cancelled = [event.at_ms for event in events if event.kind is EventKind.LEG_CANCELLED]
+    refused = [event.at_ms for event in events if event.kind is EventKind.ENTRY_REFUSED_FOR_CASH]
+    if len(cancelled) + len(refused) != 1:
         raise _inconsistent(
-            leg_id, entry_number, f"it took a starting price and never filled, and was ended {len(endings)} times"
+            leg_id,
+            entry_number,
+            f"it took a starting price and never filled, and was ended {len(cancelled) + len(refused)} times",
         )
-    return endings[0]
+    if cancelled:
+        return cancelled[0]
+    decided = [event.at_ms for event in events if event.kind is EventKind.MOMENTUM_HIT]
+    if not decided:
+        raise _inconsistent(leg_id, entry_number, "its buy was refused for cash and momentum was never reached")
+    return max(decided)
 
 
-def levels_of(setup: OptionsBacktestSetup, outcome: SessionOutcome) -> tuple[Level, ...]:
-    """Every line of the session, by the minute it begins, then the leg's place in the setup, the entry, the kind."""
-    legs = {leg.leg_id: leg for leg in setup.legs}
-    place = {leg.leg_id: at for at, leg in enumerate(setup.legs)}
+def levels_of(setup: OptionsBacktestSetup | None, outcome: SessionOutcome) -> tuple[Level, ...]:
+    """Every line of the session, by the minute it begins, then the leg's place in the setup, the entry, the kind.
+
+    ``setup`` is ``None`` for a run whose stored setup no longer validates: see the module docstring.
+    """
+    legs = {} if setup is None else {leg.leg_id: leg for leg in setup.legs}
+    place = {} if setup is None else {leg.leg_id: at for at, leg in enumerate(setup.legs)}
     trade_of = {(trade.leg_id, trade.entry_number): trade for trade in outcome.trades}
     events_of: dict[tuple[str, int], list[Event]] = defaultdict(list)
     for event in outcome.events:
@@ -132,19 +152,26 @@ def levels_of(setup: OptionsBacktestSetup, outcome: SessionOutcome) -> tuple[Lev
             raise _inconsistent(leg_id, entry_number, "its starting price was taken more than once, or not fully")
         trade = trade_of.get((leg_id, entry_number))
         waited.add((leg_id, entry_number))
+        momentum: Decimal | None
         if trade is not None:
             if trade.starting_price != starting_price or trade.momentum_level is None:
                 raise _inconsistent(leg_id, entry_number, "the trade's starting price is not the one that was taken")
             momentum, to_ms = trade.momentum_level, trade.entry_decided_at_ms
         else:
-            rule = legs[leg_id].momentum
-            if rule is None:
-                raise _inconsistent(leg_id, entry_number, "it took a starting price and its leg has no momentum rule")
-            momentum = fills.momentum_level(rule, starting_price=starting_price)
             to_ms = _ended_at(leg_id, entry_number, events)
+            if setup is None:
+                momentum = None
+            else:
+                rule = legs[leg_id].momentum
+                if rule is None:
+                    raise _inconsistent(
+                        leg_id, entry_number, "it took a starting price and its leg has no momentum rule"
+                    )
+                momentum = fills.momentum_level(rule, starting_price=starting_price)
         from_ms = taken[0].at_ms
-        for kind, price in ((LevelKind.STARTING_PRICE, starting_price), (LevelKind.MOMENTUM, momentum)):
-            levels.append(Level(kind, leg_id, entry_number, contract, price, from_ms, to_ms))
+        levels.append(Level(LevelKind.STARTING_PRICE, leg_id, entry_number, contract, starting_price, from_ms, to_ms))
+        if momentum is not None:
+            levels.append(Level(LevelKind.MOMENTUM, leg_id, entry_number, contract, momentum, from_ms, to_ms))
 
     for trade in outcome.trades:
         if trade.starting_price is not None and (trade.leg_id, trade.entry_number) not in waited:
@@ -161,7 +188,15 @@ def levels_of(setup: OptionsBacktestSetup, outcome: SessionOutcome) -> tuple[Lev
                     trade.exit_decided_at_ms,
                 )
             )
-    levels.sort(key=lambda each: (each.from_ms, place[each.leg_id], each.entry_number, _KIND_ORDER[each.kind]))
+    levels.sort(
+        key=lambda each: (
+            each.from_ms,
+            place.get(each.leg_id, 0),
+            each.leg_id,
+            each.entry_number,
+            _KIND_ORDER[each.kind],
+        )
+    )
     return tuple(levels)
 
 

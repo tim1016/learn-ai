@@ -42,6 +42,7 @@ from tests.options_backtest._market import (
     contract,
     flat,
     leg,
+    minute_of,
     picked,
     replay,
     setup,
@@ -221,23 +222,143 @@ def test_a_leg_marked_and_not_sold_is_a_mark_and_its_entry_is_the_only_fill() ->
     )
 
 
-def test_a_buy_refused_for_want_of_cash_ends_the_legs_waiting_at_the_minute_it_was_refused() -> None:
+def test_a_buy_refused_for_want_of_cash_ends_the_legs_waiting_at_the_minute_the_buy_was_decided() -> None:
     written = setup(leg("call", momentum=("percent_up", "10")))
     market = TableMarket(
         underlying=steady("500.00"),
         picks=_picks(("call", CALL)),
         # The starting price at m5 is 2.00, so the level is 2.00 x 1.1 = 2.200. m8 closes at 2.30: reached, the buy is
         # decided. It would fill at the open of m9, 2.30, for 2.30 x 100 = 230.00, and the cash is 100.00: refused at m9.
+        # The leg waited for the level, and the level was reached at m8, so its lines end at m8 as a filled leg's would;
+        # the refusal a minute later moves nothing.
         options={CALL: {5: ("2.00", "2.00"), **flat("2.00", 6, 7), 8: ("2.30", "2.30"), 9: ("2.30", "2.30")}},
     )
 
     outcome = replay(written, market, cash="100")
 
     assert outcome.trades == () and EventKind.ENTRY_REFUSED_FOR_CASH in {e.kind for e in outcome.events}
-    assert _lines(levels_of(written, outcome), at(0)) == [
-        (SP, "call", 0, CALL.occ_symbol, D("2.00"), 5, 9),
-        (MOM, "call", 0, CALL.occ_symbol, D("2.20"), 5, 9),
+    assert [
+        (e.kind, minute_of(e.at_ms))
+        for e in outcome.events
+        if e.kind in (EventKind.MOMENTUM_HIT, EventKind.ENTRY_REFUSED_FOR_CASH)
+    ] == [
+        (EventKind.MOMENTUM_HIT, 8),
+        (EventKind.ENTRY_REFUSED_FOR_CASH, 9),
     ]
+    assert _lines(levels_of(written, outcome), at(0)) == [
+        (SP, "call", 0, CALL.occ_symbol, D("2.00"), 5, 8),
+        (MOM, "call", 0, CALL.occ_symbol, D("2.20"), 5, 8),
+    ]
+
+
+def test_a_buy_that_was_dropped_and_decided_again_before_it_was_refused_for_cash_ends_at_the_last_decision() -> None:
+    written = setup(leg("call", momentum=("percent_up", "10")))
+    market = TableMarket(
+        underlying=steady("500.00"),
+        picks=_picks(("call", CALL)),
+        # Level 2.00 x 1.1 = 2.200. m8 closes at 2.30: decided. The contract does not trade in m9, so the buy is dropped
+        # and the leg waits again. m10 closes at 2.30: decided again. It fills at the open of m11, 2.30, for 230.00
+        # against 100.00 of cash: refused at m11. The waiting ended at the last decision, m10.
+        options={
+            CALL: {
+                5: ("2.00", "2.00"),
+                **flat("2.00", 6, 7),
+                8: ("2.30", "2.30"),
+                10: ("2.30", "2.30"),
+                11: ("2.30", "2.30"),
+            }
+        },
+    )
+
+    outcome = replay(written, market, cash="100")
+
+    assert [
+        e.kind for e in outcome.events if e.kind in (EventKind.ENTRY_DROPPED, EventKind.ENTRY_REFUSED_FOR_CASH)
+    ] == [
+        EventKind.ENTRY_DROPPED,
+        EventKind.ENTRY_REFUSED_FOR_CASH,
+    ]
+    assert _lines(levels_of(written, outcome), at(0)) == [
+        (SP, "call", 0, CALL.occ_symbol, D("2.00"), 5, 10),
+        (MOM, "call", 0, CALL.occ_symbol, D("2.20"), 5, 10),
+    ]
+
+
+def test_a_re_entry_refused_for_want_of_cash_ends_its_lines_at_the_minute_its_buy_was_decided_too() -> None:
+    written = setup(
+        leg("call", stop=("percent", "10"), momentum=("percent_up", "10"), reentry=("on_momentum", 1)),
+    )
+    market = TableMarket(
+        underlying=steady("500.00"),
+        picks=_picks(("call", CALL)),
+        options={
+            CALL: {
+                # First entry: starting price 2.00 at m5, level 2.20; m8 closes 2.30, decided; fills at the open of m9,
+                # 2.30, for 230.00 of the 300.00. Stop 2.30 x 0.9 = 2.070.
+                5: ("2.00", "2.00"),
+                **flat("2.00", 6, 7),
+                8: ("2.30", "2.30"),
+                9: ("2.30", "2.30"),
+                # m10 closes at 2.00, under the stop: sold at the open of m11, 2.00, for 200.00. Cash 70.00 + 200.00 = 270.00.
+                10: ("2.30", "2.00"),
+                # The re-entry begins at m11: its close, 1.50, is the starting price, so the level is 1.50 x 1.1 = 1.650.
+                # m14 closes 1.70, decided; m15 opens at 3.00, so the buy costs 300.00 against 270.00: refused at m15.
+                11: ("2.00", "1.50"),
+                **flat("1.50", 12, 13),
+                14: ("1.50", "1.70"),
+                15: ("3.00", "3.00"),
+            }
+        },
+    )
+
+    outcome = replay(written, market, cash="300")
+
+    assert [(t.entry_number, minute_of(t.entry.bar_close_ms)) for t in outcome.trades] == [(0, 9)]
+    assert [
+        (e.kind, e.entry_number, minute_of(e.at_ms))
+        for e in outcome.events
+        if e.kind is EventKind.ENTRY_REFUSED_FOR_CASH
+    ] == [(EventKind.ENTRY_REFUSED_FOR_CASH, 1, 15)]
+    assert _lines(levels_of(written, outcome), at(0)) == [
+        (SP, "call", 0, CALL.occ_symbol, D("2.00"), 5, 8),
+        (MOM, "call", 0, CALL.occ_symbol, D("2.20"), 5, 8),
+        (STOP, "call", 0, CALL.occ_symbol, D("2.070"), 9, 10),
+        (SP, "call", 1, CALL.occ_symbol, D("1.50"), 11, 14),
+        (MOM, "call", 1, CALL.occ_symbol, D("1.650"), 11, 14),
+    ]
+
+
+def test_a_leg_with_no_momentum_rule_whose_buy_is_refused_for_want_of_cash_waited_for_nothing_and_has_no_line() -> None:
+    written = setup(leg("call"))
+    market = TableMarket(
+        underlying=steady("500.00"),
+        picks=_picks(("call", CALL)),
+        # Decided at the entry time (m5), filled at the open of m6, 2.00, for 200.00 against 100.00 of cash: refused.
+        # No starting price was ever taken, so there is nothing that waited and no line, and nothing to be inconsistent.
+        options={CALL: {5: ("2.00", "2.00"), 6: ("2.00", "2.00")}},
+    )
+
+    outcome = replay(written, market, cash="100")
+
+    assert outcome.trades == () and EventKind.ENTRY_REFUSED_FOR_CASH in {e.kind for e in outcome.events}
+    assert levels_of(written, outcome) == ()
+    assert fills_of(outcome.trades) == () and marks_of(outcome.trades) == ()
+
+
+def test_an_attempt_refused_for_cash_whose_momentum_was_never_reached_cannot_be_drawn() -> None:
+    written = setup(leg("call", momentum=("percent_up", "10")))
+    market = TableMarket(
+        underlying=steady("500.00"),
+        picks=_picks(("call", CALL)),
+        options={CALL: {5: ("2.00", "2.00"), **flat("2.00", 6, 7), 8: ("2.30", "2.30"), 9: ("2.30", "2.30")}},
+    )
+    outcome = replay(written, market, cash="100")
+    without_the_decision = replace(
+        outcome, events=tuple(e for e in outcome.events if e.kind is not EventKind.MOMENTUM_HIT)
+    )
+
+    with pytest.raises(SessionRecordInconsistent, match="momentum was never reached"):
+        levels_of(written, without_the_decision)
 
 
 def test_a_complete_square_off_ends_the_waiting_of_a_leg_that_had_not_bought_at_the_minute_of_the_stop() -> None:
@@ -351,3 +472,53 @@ def test_an_attempt_that_never_filled_and_was_ended_twice_cannot_be_drawn(scene:
 
     with pytest.raises(SessionRecordInconsistent, match="lag"):
         levels_of(scene.setup, twice)
+
+
+# ── A run whose stored setup can no longer be read ───────────────────────
+
+
+def test_with_no_setup_every_line_that_comes_from_a_stored_figure_is_still_drawn_and_only_an_unfilled_momentum_is_not(
+    scene: RunResult,
+) -> None:
+    levels = levels_of(None, scene.sessions[0].outcome)
+
+    # The busy Wednesday as drawn with the setup, less one line: the lag leg took 1.00 and never filled, so its momentum
+    # level (1.00 x 0.9 = 0.90) comes from a rule that is lost. Both filled attempts carry their own momentum levels.
+    assert _lines(levels, WED_OPEN_MS) == [
+        (SP, "call", 0, CALL_500, D("4.00"), 5, 10),
+        (MOM, "call", 0, CALL_500, D("5.00"), 5, 10),
+        (SP, "lag", 0, PUT_495, D("1.00"), 5, 60),
+        (STOP, "call", 0, CALL_500, D("4.08"), 11, 20),
+        (SP, "call", 1, CALL_500, D("3.80"), 21, 30),
+        (MOM, "call", 1, CALL_500, D("4.75"), 21, 30),
+        (STOP, "call", 1, CALL_500, D("3.88"), 31, 60),
+    ]
+    # Friday filled nothing: only the two starting prices, no momentum line at all.
+    assert _lines(levels_of(None, scene.sessions[2].outcome), FRI_OPEN_MS) == [
+        (SP, "call", 0, FRI_CALL_500, D("4.00"), 5, 60),
+        (SP, "lag", 0, FRI_PUT_495, D("1.00"), 5, 60),
+    ]
+
+
+def test_lines_that_begin_together_follow_the_legs_place_in_the_setup_and_with_no_setup_their_ids() -> None:
+    # Two legs that wait for momentum they never get, written b before a. Both take a starting price at m5.
+    b_then_a = setup(leg("b", momentum=("percent_up", "50")), leg("a", "put", momentum=("percent_up", "50")))
+    market = TableMarket(
+        underlying=steady("500.00"),
+        picks=_picks(("b", CALL), ("a", PUT)),
+        # b: 2.00, level 2.00 x 1.5 = 3.000. a: 3.00, level 3.00 x 1.5 = 4.500. Neither is reached; both are cancelled at m60.
+        options={CALL: flat("2.00", 5, 60), PUT: flat("3.00", 5, 60)},
+    )
+
+    outcome = replay(b_then_a, market)
+
+    assert [(each[0], each[1]) for each in _lines(levels_of(b_then_a, outcome), at(0))] == [
+        (SP, "b"),
+        (MOM, "b"),
+        (SP, "a"),
+        (MOM, "a"),
+    ]
+    assert [(each[0], each[1], each[4]) for each in _lines(levels_of(None, outcome), at(0))] == [
+        (SP, "a", D("3.00")),
+        (SP, "b", D("2.00")),
+    ]

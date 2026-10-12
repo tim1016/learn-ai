@@ -15,8 +15,12 @@ over every trade of the run and this writes them all.
 * Every other instant is an integer in a column ending ``_ms``.
 * Money and prices are exact decimal text in plain digits (never an exponent, never through a float), and a column ending
   ``_usd`` is dollars. A figure a trade does not have is an empty cell.
-* ``exit_kind`` is ``sale`` or ``mark``: a leg marked and not sold has no sale, so its ``exit_seen_usd`` is empty and its
-  ``exit_price_usd`` is the mark.
+* ``exit_kind`` is ``sale`` or ``mark``, and it is the only thing that tells a leg that was sold from one that was not.
+  A sale has the bar it filled in (``exit_bar_close_ms``), the price seen in that bar (``exit_seen_usd``), the price it
+  filled at (``exit_price_usd``) and its fee (``exit_fee_usd``). A leg marked and not sold was never sold: its
+  ``exit_price_usd`` is the mark (the close of the last bar its contract traded in), ``exit_seen_usd`` is empty, and
+  ``exit_fee_usd`` is ``0`` because no sale was made. So a sum of ``exit_price_usd`` over every row adds sale prices to
+  marks: add the rows of one ``exit_kind`` at a time.
 """
 
 from __future__ import annotations

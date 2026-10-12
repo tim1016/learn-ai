@@ -9,7 +9,6 @@ inline ``Literal`` of its words and a test holds each to the enum it comes from.
 
 from __future__ import annotations
 
-import re
 from typing import Literal, Self
 
 from pydantic import BaseModel, Field, model_validator
@@ -17,10 +16,11 @@ from pydantic import BaseModel, Field, model_validator
 from app.options.contract import OptionContract, OptionRight
 from app.options_backtest.comparison import Comparison, RangeOfRun, RunTotals, SettingDifference, SharedSession
 from app.options_backtest.results import Event, Fill, Mark
-from app.options_backtest.run_detail import SessionRecord, TradePage
+from app.options_backtest.run_detail import TradePage
 from app.options_backtest.saved_runs import RunHeader, StoredTrade
 from app.options_backtest.session_levels import ChartedFill, ChartedMark, Level
-from app.options_backtest.session_series import SERIES_WORDS, Series, SessionSeries
+from app.options_backtest.session_series import SERIES_WORDS, Series
+from app.options_backtest.session_view import SessionView
 from app.schemas.options_backtest_runs import ExitReasonWord, Ms, SessionStatusWord, SkipReasonWord, exact
 
 TRADES_PAGE_MAX = 5000
@@ -59,7 +59,9 @@ EventReasonWord = Literal[
 LevelKindWord = Literal["starting_price", "momentum", "stop"]
 FillKindWord = Literal["entry", "exit"]
 SeriesStateWord = Literal["shown", "not_shown"]
-SeriesReasonWord = Literal["no_pin", "gone", "changed", "unreadable", "lake_unavailable"]
+SeriesReasonWord = Literal[
+    "session_skipped", "no_pin", "gone", "changed", "not_confirmed", "unreadable", "lake_unavailable"
+]
 SettingWord = Literal[
     "entry_time",
     "exit_time",
@@ -78,8 +80,6 @@ SettingWord = Literal[
     "fees",
     "starting_cash",
 ]
-
-_A_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 class OptionsBacktestContractResponse(BaseModel):
@@ -228,8 +228,8 @@ class OptionsBacktestEventResponse(BaseModel):
 
     ``entry_number`` follows the replay's one rule: an event about a position carries that position's number, and an
     event about an attempt to enter carries the number that entry has or would have. ``detail`` is the one place the
-    replay writes prose (a refused pick says why); with any date in it replaced by "that day", since a session is its
-    open and nothing here names a date.
+    replay writes prose (a refused pick says why). It is the backend's words for the owner, stored and served exactly
+    as written, even when they name a date; nothing else on the wire names one, since a session is its open.
     """
 
     kind: EventKindWord
@@ -252,7 +252,7 @@ class OptionsBacktestEventResponse(BaseModel):
             contract=None if event.contract is None else event.contract.occ_symbol,
             price_usd=None if event.price is None else exact(event.price),
             reason=event.reason,  # type: ignore[arg-type]
-            detail=None if event.detail is None else _A_DATE.sub("that day", event.detail),
+            detail=event.detail,
         )
 
 
@@ -268,9 +268,12 @@ class OptionsBacktestSeriesResponse(BaseModel):
 
     A series is shown only if the file it is read from is the one the run read (its sha256 is the stored pin). Otherwise
     ``reason`` says why and ``message`` says it in words, and there are no points: a saved run is never drawn from
-    changed data. ``no_pin``: the run kept no record of reading it; ``gone``: no longer in the lake; ``changed``: not
-    the file the run read; ``unreadable``: damaged; ``lake_unavailable``: the lake could not be asked, which says nothing
-    of the file.
+    changed data. ``session_skipped``: the session was skipped on its window, so no bars were read for it; ``no_pin``:
+    the run kept no record of reading this one; ``gone``: no longer in the lake; ``changed``: not the file the run read;
+    ``not_confirmed``: the lake's catalog does not admit the file's bytes, so they cannot be checked against what the run
+    read (nobody saw them change); ``unreadable``: the file is there and cannot be read (damaged, a bar no session can
+    place, or refused by the operating system); ``lake_unavailable``: the lake could not be asked, which says nothing of
+    the file.
     """
 
     # The underlying's ticker, or a contract's OCC symbol.
@@ -310,9 +313,11 @@ class OptionsBacktestSeriesResponse(BaseModel):
 class OptionsBacktestLevelResponse(BaseModel):
     """A horizontal line to draw at one price, from ``from_ms`` to ``to_ms`` (both minute closes).
 
-    ``starting_price`` and ``momentum`` belong to a leg waiting on momentum and run from the minute its starting price was
-    taken to the minute the attempt ended (the buy was decided, or the leg was cancelled or refused for cash); ``stop``
-    belongs to a position and runs from the minute it filled to the minute the close that sold it was decided.
+    One rule ends a line that waits: it ends when the thing it waits for happened, whatever came next. ``starting_price``
+    and ``momentum`` belong to a leg waiting on momentum and run from the minute its starting price was taken to the
+    minute the buy was decided (the minute whose close reached the momentum level), whether the buy then filled or was
+    refused for cash; a leg cancelled before it reached the level waited until it was cancelled. ``stop`` belongs to a
+    position and runs from the minute it filled to the minute the close that sold it was decided.
     """
 
     kind: LevelKindWord
@@ -391,6 +396,10 @@ class OptionsBacktestSessionResponse(BaseModel):
     The stored facts (status, cash, profit, ``trades``, ``events``, ``levels``, ``fills``, ``marks``) never depend on the
     lake. The series are read from it and are checked against what the run read; one that cannot be shown says so and
     the rest is still served.
+
+    ``setup_cannot_open_reason`` is set only for a run whose stored setup no longer validates, and says why. Everything
+    stored is served all the same; the one thing missing is the ``momentum`` line of an attempt that never filled,
+    whose level comes from the leg's rule.
     """
 
     run_id: int
@@ -410,17 +419,11 @@ class OptionsBacktestSessionResponse(BaseModel):
     levels: list[OptionsBacktestLevelResponse]
     fills: list[OptionsBacktestFillResponse]
     marks: list[OptionsBacktestMarkResponse]
+    setup_cannot_open_reason: str | None = None
 
     @classmethod
-    def from_parts(
-        cls,
-        record: SessionRecord,
-        *,
-        series: SessionSeries,
-        levels: tuple[Level, ...],
-        fills: tuple[ChartedFill, ...],
-        marks: tuple[ChartedMark, ...],
-    ) -> Self:
+    def from_view(cls, view: SessionView) -> Self:
+        record = view.record
         stored = record.session
         session = stored.result
         outcome = session.outcome
@@ -439,11 +442,12 @@ class OptionsBacktestSessionResponse(BaseModel):
                 for number, trade in enumerate(outcome.trades)
             ],
             events=[OptionsBacktestEventResponse.from_event(event) for event in outcome.events],
-            underlying=OptionsBacktestSeriesResponse.from_series(series.underlying),
-            contracts=[OptionsBacktestSeriesResponse.from_series(each) for each in series.contracts],
-            levels=[OptionsBacktestLevelResponse.from_level(level) for level in levels],
-            fills=[OptionsBacktestFillResponse.from_fill(fill) for fill in fills],
-            marks=[OptionsBacktestMarkResponse.from_mark(mark) for mark in marks],
+            underlying=OptionsBacktestSeriesResponse.from_series(view.series.underlying),
+            contracts=[OptionsBacktestSeriesResponse.from_series(each) for each in view.series.contracts],
+            levels=[OptionsBacktestLevelResponse.from_level(level) for level in view.levels],
+            fills=[OptionsBacktestFillResponse.from_fill(fill) for fill in view.fills],
+            marks=[OptionsBacktestMarkResponse.from_mark(mark) for mark in view.marks],
+            setup_cannot_open_reason=record.header.setup_cannot_open_reason,
         )
 
 
