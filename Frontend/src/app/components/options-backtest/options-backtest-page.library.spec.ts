@@ -153,6 +153,85 @@ describe('deleting', () => {
   });
 });
 
+describe('deleting the setup on screen', () => {
+  it('stops the bar saying it was saved, and clears the name and the highlight', async () => {
+    // The list still lists "Mine" after the delete, as if another tab saved it again: only the highlight can say the form no longer holds it.
+    const list = vi.fn(async () => [...servedExamples(), saved('Mine', 1_000)]);
+    const service = fakeService(vi, { list });
+    await renderPage(service);
+    fireEvent.click(await within(sideList()).findByRole('button', { name: new RegExp(`^${EXAMPLE_ONE_REENTRY}`) }));
+    await screen.findByRole('article', { name: 'Leg 2' });
+    typeInto('Setup name', 'Mine');
+    const save = screen.getByRole('button', { name: 'Save setup' }) as HTMLButtonElement;
+    await waitFor(() => expect(save.disabled).toBe(false));
+    fireEvent.click(save);
+    await within(bar()).findByText(/Saved “Mine”/);
+    await waitFor(() => expect(openButton('Mine').getAttribute('aria-current')).toBe('true'));
+
+    press('Delete setup Mine');
+    press('Delete');
+
+    await waitFor(() => expect(service.remove).toHaveBeenCalledWith('Mine'));
+    await waitFor(() => expect(within(bar()).queryByText(/Saved/)).toBeNull());
+    expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).toBe('');
+    expect(openButton('Mine').getAttribute('aria-current')).toBeNull();
+
+    // Typing the same name again must not bring the old "Saved" back: the setup is no longer saved.
+    typeInto('Setup name', 'Mine');
+    expect(within(bar()).queryByText(/Saved/)).toBeNull();
+  });
+
+  it('leaves a name the owner has since typed over, and the row of the setup that is on screen', async () => {
+    const service = fakeService(vi, { list: vi.fn(async () => [...servedExamples(), saved('Mine', 1_000), saved('Other', 900)]) });
+    await renderPage(service);
+    fireEvent.click(await within(sideList()).findByRole('button', { name: /^Mine/ }));
+    await waitFor(() => expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).toBe('Mine'));
+    typeInto('Setup name', 'A new name');
+
+    press('Delete setup Other');
+    press('Delete');
+
+    await waitFor(() => expect(service.remove).toHaveBeenCalledWith('Other'));
+    expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).toBe('A new name');
+    expect(openButton('Mine').getAttribute('aria-current')).toBe('true');
+  });
+});
+
+describe('a save that finishes after another setup was opened', () => {
+  it('does not re-select its own row, and does not touch the form', async () => {
+    let finishSave: () => void = () => undefined;
+    const mine = saved('Mine', 2_000);
+    const list = vi.fn(async () => [...servedExamples(), mine]);
+    const service = fakeService(vi, {
+      list,
+      save: vi.fn(
+        (name: string) =>
+          new Promise<SavedSetup>((resolve) => {
+            finishSave = () => resolve({ ...mine, name });
+          }),
+      ),
+    });
+    await renderPage(service);
+    fireEvent.click(await within(sideList()).findByRole('button', { name: new RegExp(`^${EXAMPLE_ONE_REENTRY}`) }));
+    await screen.findByRole('article', { name: 'Leg 2' });
+    typeInto('Setup name', 'Mine');
+    const save = screen.getByRole('button', { name: 'Save setup' }) as HTMLButtonElement;
+    await waitFor(() => expect(save.disabled).toBe(false));
+    fireEvent.click(save);
+    await waitFor(() => expect(service.save).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(within(sideList()).getByRole('button', { name: new RegExp(`^${EXAMPLE_NO_REENTRY}`) }));
+    await waitFor(() => expect(openButton(EXAMPLE_NO_REENTRY).getAttribute('aria-current')).toBe('true'));
+    finishSave();
+
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    expect(openButton('Mine').getAttribute('aria-current')).toBeNull();
+    expect(openButton(EXAMPLE_NO_REENTRY).getAttribute('aria-current')).toBe('true');
+    expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).toBe('');
+    expect(within(bar()).queryByText(/Saved/)).toBeNull();
+  });
+});
+
 describe('saving', () => {
   async function renderWithExampleOpen(service = fakeService(vi)) {
     await renderPage(service);

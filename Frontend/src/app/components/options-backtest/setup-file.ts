@@ -1,9 +1,16 @@
 import type { SetupRequest } from './options-backtest.types';
 
+/** A setup is a few kilobytes of JSON. A file over this is not one, and is neither read nor sent. */
+export const MAX_SETUP_FILE_BYTES = 1024 * 1024;
+
 export type SetupFile = { readonly ok: true; readonly json: unknown } | { readonly ok: false; readonly message: string };
 
-/** Reads an import file as JSON. Whether it is a setup is the server's to say. */
+/** Reads an import file as JSON. Whether it is a setup is the server's to say; a file too large to be one is refused unread. */
 export async function readSetupFile(file: File): Promise<SetupFile> {
+  if (file.size > MAX_SETUP_FILE_BYTES) {
+    const megabytes = (file.size / MAX_SETUP_FILE_BYTES).toFixed(1);
+    return { ok: false, message: `That file is ${megabytes} MB. A setup file is a few kilobytes, so one over 1 MB is not read.` };
+  }
   let text: string;
   try {
     text = await file.text();

@@ -122,6 +122,7 @@ export class OptionsBacktestPageComponent {
     return own.size === 0 ? server : new Map([...server, ...own]);
   });
   protected readonly underlyingProblem = computed(() => this.fieldProblems().get(FIELD.underlying) ?? null);
+  protected readonly squareOffProblem = computed(() => this.fieldProblems().get(FIELD.squareOff) ?? null);
 
   // The saved setups.
   private readonly library = resource({ loader: () => this.service.list() });
@@ -141,7 +142,9 @@ export class OptionsBacktestPageComponent {
   protected readonly saveModel = signal({ name: '' });
   protected readonly saveForm = form(this.saveModel);
   protected readonly saving = signal(false);
-  private readonly lastSave = signal<{ readonly stamp: string; readonly status: SaveStatus } | null>(null);
+  private readonly lastSave = signal<{ readonly name: string; readonly stamp: string; readonly status: SaveStatus } | null>(null);
+  /** Counts the times the form was replaced whole, by opening a setup or importing one, so a save that was under way can tell. */
+  private formReplaced = 0;
   private readonly stamp = computed(() => `${this.saveModel().name}\n${JSON.stringify(this.body())}`);
   protected readonly nameProblem = computed(() => {
     const name = this.saveModel().name;
@@ -197,13 +200,18 @@ export class OptionsBacktestPageComponent {
     this.saveModel.set({ name: item.example ? '' : item.name });
     this.loadedName.set(item.name);
     this.importNotice.set(null);
+    this.formReplaced += 1;
   }
 
   protected async remove(name: string): Promise<void> {
     this.deleteProblem.set(null);
     try {
       await this.service.remove(name);
+      // The setup is gone, so nothing may go on saying it was saved, or that the form holds it.
       if (this.loadedName() === name) this.loadedName.set(null);
+      if (this.saveModel().name === name) this.saveModel.set({ name: '' });
+      const last = this.lastSave();
+      if (last?.status.kind === 'saved' && last.name === name) this.lastSave.set(null);
     } catch (error) {
       this.deleteProblem.set(reasonOf(error, 'The setup could not be deleted. Try again.'));
     }
@@ -227,14 +235,16 @@ export class OptionsBacktestPageComponent {
     const name = this.saveModel().name;
     if (body === null || !this.canSave()) return;
     const stamp = this.stamp();
+    const replacedAtStart = this.formReplaced;
     this.saving.set(true);
     try {
       const saved = await this.service.save(name, body);
-      this.lastSave.set({ stamp, status: { kind: 'saved', text: `Saved “${saved.name}”.` } });
-      this.loadedName.set(saved.name);
+      this.lastSave.set({ name: saved.name, stamp, status: { kind: 'saved', text: `Saved “${saved.name}”.` } });
+      // Another setup opened or imported while this was saving is what the form holds now, not this one.
+      if (replacedAtStart === this.formReplaced) this.loadedName.set(saved.name);
       this.library.reload();
     } catch (error) {
-      this.lastSave.set({ stamp, status: { kind: 'refused', text: reasonOf(error, 'The setup could not be saved. Try again.') } });
+      this.lastSave.set({ name, stamp, status: { kind: 'refused', text: reasonOf(error, 'The setup could not be saved. Try again.') } });
     } finally {
       this.saving.set(false);
     }
@@ -267,6 +277,7 @@ export class OptionsBacktestPageComponent {
     this.saveModel.set({ name: '' });
     this.loadedName.set(null);
     this.importNotice.set({ kind: 'loaded', title: `${file.name} was loaded.`, reasons: [] });
+    this.formReplaced += 1;
   }
 }
 

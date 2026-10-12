@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { exampleBody } from './testing/fixtures';
-import { readSetupFile, setupFileBlob, setupFileName } from './setup-file';
+import { MAX_SETUP_FILE_BYTES, readSetupFile, setupFileBlob, setupFileName } from './setup-file';
 
 function textOf(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -55,5 +55,23 @@ describe('reading an import file', () => {
     Object.defineProperty(file, 'text', { value: () => Promise.reject(new Error('permission denied')) });
 
     await expect(readSetupFile(file)).resolves.toEqual({ ok: false, message: 'The file could not be read: permission denied' });
+  });
+
+  it('refuses a file over a megabyte without reading it, and says why', async () => {
+    const file = new File([new Uint8Array(MAX_SETUP_FILE_BYTES + 1)], 'huge.json');
+    const text = vi.fn(async () => '{}');
+    Object.defineProperty(file, 'text', { value: text });
+
+    const read = await readSetupFile(file);
+
+    expect(read).toMatchObject({ ok: false, message: expect.stringContaining('over 1 MB') });
+    expect(text).not.toHaveBeenCalled();
+  });
+
+  it('reads a file of exactly a megabyte', async () => {
+    const file = new File([new Uint8Array(MAX_SETUP_FILE_BYTES)], 'edge.json');
+    Object.defineProperty(file, 'text', { value: async () => '{}' });
+
+    await expect(readSetupFile(file)).resolves.toEqual({ ok: true, json: {} });
   });
 });

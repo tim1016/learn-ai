@@ -169,6 +169,16 @@ describe('a problem lands at its field', () => {
     expect(screen.getByLabelText('Slippage (percent)').getAttribute('aria-invalid')).toBe('true');
   });
 
+  it('on the square-off setting, at the Legwise settings card, tied to the choice', async () => {
+    await renderPage(rejecting({ loc: ['body', 'square_off'], msg: "Input should be 'partial' or 'complete'" }));
+    addLeg();
+
+    const card = within(await screen.findByRole('region', { name: 'Legwise settings' }));
+    const reason = await card.findByText("Input should be 'partial' or 'complete'");
+    expect(reason.getAttribute('role')).toBe('alert');
+    expect(card.getByRole('group', { name: 'Square off' }).getAttribute('aria-describedby')).toBe(reason.id);
+  });
+
   it('and the summary says the setup is not complete, and says plainly that a reason with no field is about the whole setup', async () => {
     await renderPage(rejecting({ loc: ['body'], msg: 'Value error, every leg needs its own id; repeated: call' }));
     addLeg();

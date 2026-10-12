@@ -2,7 +2,9 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { SetupInvalidError } from './options-backtest.service';
-import { EXAMPLE_ONE_REENTRY, exampleBody } from './testing/fixtures';
+import type { SavedSetup } from './options-backtest.types';
+import { EXAMPLE_ONE_REENTRY, exampleBody, servedExamples, servedSaved } from './testing/fixtures';
+import { MAX_SETUP_FILE_BYTES } from './setup-file';
 import { press, typeInto } from './testing/page-actions';
 import { fakeService, renderPage, type FakeDownload } from './testing/render-page';
 
@@ -140,6 +142,55 @@ describe('import', () => {
     const box = notice.closest('[role="alert"]') as HTMLElement;
     expect(within(box).getByText('the entry time must be at least one minute after the open')).toBeTruthy();
     expect(screen.queryByRole('article', { name: 'Leg 1' })).toBeNull();
+  });
+
+  it('refuses a file over a megabyte before it is read or sent, and says why', async () => {
+    const service = fakeService(vi);
+    await renderPage(service, download());
+    await waitFor(() => expect(service.describe).toHaveBeenCalled());
+    const calls = service.describe.mock.calls.length;
+    const read = vi.spyOn(File.prototype, 'text');
+    const huge = new File([new Uint8Array(MAX_SETUP_FILE_BYTES + 1)], 'huge.json', { type: 'application/json' });
+
+    fireEvent.change(chooser(), { target: { files: [huge] } });
+
+    const notice = await screen.findByText(/huge\.json was not loaded/);
+    expect(notice.closest('[role="alert"]')?.textContent).toMatch(/1 MB/);
+    expect(read).not.toHaveBeenCalled();
+    expect(service.describe.mock.calls.length).toBe(calls);
+    read.mockRestore();
+  });
+
+  it('is not undone by a save that finishes afterwards: that save does not re-select its row or name', async () => {
+    let finishSave: () => void = () => undefined;
+    const mine: SavedSetup = servedSaved('Mine', exampleBody());
+    const list = vi.fn(async () => [...servedExamples(), mine]);
+    const service = fakeService(vi, {
+      list,
+      save: vi.fn(
+        (name: string) =>
+          new Promise<SavedSetup>((resolve) => {
+            finishSave = () => resolve({ ...mine, name });
+          }),
+      ),
+    });
+    await renderPage(service, download());
+    await openExample();
+    typeInto('Setup name', 'Mine');
+    const save = screen.getByRole('button', { name: 'Save setup' }) as HTMLButtonElement;
+    await waitFor(() => expect(save.disabled).toBe(false));
+    fireEvent.click(save);
+    await waitFor(() => expect(service.save).toHaveBeenCalledTimes(1));
+
+    chooseFile(JSON.stringify({ ...exampleBody(), underlying: 'AAPL' }), 'other.json');
+    await screen.findByText(/other\.json was loaded/);
+    finishSave();
+
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    const row = await within(sideList()).findByRole('button', { name: /^Mine/ });
+    expect(row.getAttribute('aria-current')).toBeNull();
+    expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('Slippage (percent)') as HTMLInputElement).value).toBe('0.3');
   });
 
   it('says so, and changes nothing, for a file that is not JSON', async () => {
