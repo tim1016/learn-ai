@@ -513,6 +513,17 @@ def test_the_envelope_caps_the_writer_loop_and_refuses_an_oversized_configuratio
         with pytest.raises(RuntimeError, match="research cap"):
             asyncio.run(enforce_connection_envelope())
 
+    # The precondition enforcement pins is startup's: no writer-loop pool
+    # exists before it sizes that loop (the lifespan guarantees the ordering
+    # in production). The daily tier shares one process, and an earlier slow
+    # test may have lazily built that pool at the module ceiling — close it
+    # so the envelope is this loop's first initializer here too.
+    stale = threading.Thread(
+        target=lambda: run_on_background_loop(catalog_client.close_pool(), timeout=5.0), daemon=True
+    )
+    stale.start()
+    stale.join(timeout=5.0)
+
     try:
         # The honest envelope initializes the shared writer loop at the
         # coordination bound minus the authority's own lock connection.

@@ -550,6 +550,26 @@ async def test_a_lane_loss_under_width_keeps_the_books(conn, pool_driver: Driver
 # ── Slow tier: real children, real overlap ────────────────────────────────
 
 
+def _close_writer_loop_catalog_pool() -> None:
+    """Close the writer loop's lazily built catalog pool after a slow test.
+
+    Real-children study persistence rides the shared writer loop, and that
+    loop's first pooled call sizes its pool at the module ceiling. The
+    daily tier runs one process, so a pool left open here would be the
+    writer loop's first initializer ahead of #3047's envelope test later
+    in that order — exactly the pool-at-startup state the lifespan's
+    enforcement ordering exists to prevent.
+    """
+    from app.data_lake import catalog_client
+    from app.utils.background_loop import run_on_background_loop
+
+    closer = threading.Thread(
+        target=lambda: run_on_background_loop(catalog_client.close_pool(), timeout=5.0), daemon=True
+    )
+    closer.start()
+    closer.join(timeout=5.0)
+
+
 @pytest.mark.slow
 @pytest.mark.usefixtures("seeded_lake_catalog")
 async def test_two_real_children_overlap_independent_evaluations(conn, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -667,6 +687,7 @@ async def test_two_real_children_overlap_independent_evaluations(conn, tmp_path:
 
     assert overlaps >= 1, "two real children ran independent evaluations at the same time"
     assert widths[4] < widths[1] * 1.5, "width never made the corpus dramatically slower (transport sanity)"
+    _close_writer_loop_catalog_pool()
 
 
 # ── #3065/#3066 review regressions ─────────────────────────────────────────
@@ -1113,3 +1134,4 @@ async def test_admission_verdicts_batch_with_measured_latency_across_widths(
                 )
     finally:
         stop_admission_batcher()
+        _close_writer_loop_catalog_pool()
