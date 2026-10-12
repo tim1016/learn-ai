@@ -7,6 +7,10 @@ day by ``ensure_option_day_bars`` (handed the listing already read, so it is rea
 ``materialize_engine_run``, which the stock engine uses. The lake decides what to ask the vendor: a thing it holds is
 reused with no request, and this module asks for nothing twice.
 
+The stock pipeline has no gate on a session that is not over: asked for today's bars it stores the minutes so far as
+the whole day, and every later read takes them as that. So the underlying's bars are fetched only for a session the
+lake's own rule (``option_lake.session_refusal``) lets through, the one it applies to the listing and to a contract.
+
 Every outcome is one item and none is raised: ``fetched`` (the lake fetched it now), ``already_stored`` (the lake
 had it) or ``failed`` with the lake's own typed reason. A contract is refused by the lake, with no request, when the
 listing does not hold it, so a listing that could not be captured fails every contract with ``listing_not_captured``
@@ -32,7 +36,7 @@ from datetime import date
 from enum import StrEnum
 from typing import Literal
 
-from app.data_lake import catalog_client
+from app.data_lake import catalog_client, option_lake
 from app.data_lake.admission import LakeAdmissionError
 from app.data_lake.option_bars import ensure_option_day_bars
 from app.data_lake.option_lake import OptionCaptureResult, OptionFailureReason
@@ -116,8 +120,15 @@ async def _capture_listing(
     return item, stored
 
 
-async def _capture_underlying(underlying: str, trading_date: date, gate: asyncio.Semaphore) -> DownloadItem:
-    """The underlying's raw minute bars: left alone when held, fetched by the stock engine's own function when not."""
+async def _capture_underlying(
+    underlying: str, trading_date: date, gate: asyncio.Semaphore, now_ms: int | None
+) -> DownloadItem:
+    """The underlying's raw minute bars: left alone when held, refused when the session is not over, else fetched.
+
+    A fetch is the stock engine's own function. It has no completed-session gate, so the lake's rule for the options of
+    the same session is asked first, and a refusal is the item's reason and words as they are, as for a listing.
+    ``now_ms`` is the clock for that rule; ``None`` is the lake's clock.
+    """
     held_by = LakeRunData(underlying)
     try:
         held = await asyncio.to_thread(held_by.underlying_day, trading_date)
@@ -127,6 +138,11 @@ async def _capture_underlying(underlying: str, trading_date: date, gate: asyncio
         return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.FAILED, "underlying_unreadable", detail)
     if held is not None:
         return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.ALREADY_STORED, None, None)
+    refusal = option_lake.session_refusal(
+        underlying, trading_date, now_ms=option_lake.current_ms() if now_ms is None else now_ms
+    )
+    if refusal is not None:
+        return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.FAILED, refusal.reason, refusal.detail)
     async with gate:
         try:
             await asyncio.to_thread(
@@ -187,6 +203,11 @@ async def ensure_chain_data(
     come before anything is asked. Raises ``catalog_client.CatalogUnavailableError`` when the catalog cannot be
     reached, after the captures in flight have finished, and ``ValueError`` for an underlying the lake cannot hold.
 
+    ``now_ms`` is the clock of the lake's rules for all three captures (a session is taken only once its New York date
+    has passed; the plan's window); ``None`` is the lake's own clock. A session that is not over, or not a session,
+    fails the listing and the underlying with the lake's reason (and so each contract as ``listing_not_captured``),
+    and nothing is asked of the vendor or of the stock engine.
+
     A contract another call is fetching at the same moment comes back ``failed`` with the lake's ``lease_timeout``
     reason: it is not missing, the other request is fetching it (see the module docstring); ask again.
     """
@@ -208,7 +229,7 @@ async def ensure_chain_data(
     # Every capture finishes before an error is raised: none is cancelled halfway through a claim.
     first = await asyncio.gather(
         _capture_listing(underlying, trading_date, gate, now_ms),
-        _capture_underlying(underlying, trading_date, gate),
+        _capture_underlying(underlying, trading_date, gate, now_ms),
         return_exceptions=True,
     )
     _raise_the_first_error(first)

@@ -69,6 +69,10 @@ NEXT_FRIDAY = date(2025, 6, 20)
 NEXT_FRIDAY_ANCHOR_MS = 1750449600000
 MINUTE_10_MS = FRIDAY_OPEN_MS + 10 * MINUTE_MS  # 13:40 UTC
 SATURDAY_MIDNIGHT_MS = 1749873600000
+# 2026-10-12 (a Monday) at New York midnight, 00:00 EDT = 04:00 UTC: 2026-01-01 is day 20454 (20089 + 365), the 12th of
+# October is 284 days on, day 20738, and 20738 * 86 400 000 = 1791763200000 plus four hours (14 400 000). The tests' fixed
+# clock, 1791828000000, is 14 hours later: 14:00 New York that day, so its session has not closed.
+TODAY_MIDNIGHT_MS = 1791777600000
 LISTING_PATH = "option/usa/listing/spy/20250613_contracts.zip"
 STOCK_PATH = "equity/usa/minute/spy/20250613_trade.zip"
 BARS_PATH_602 = "option/usa/minute/spy/spy250613c00602000/20250613_trade.zip"
@@ -389,6 +393,25 @@ async def test_a_date_with_nothing_stored_answers_with_each_thing_missing_named(
     assert (body["listing_state"], body["expiry_listed"], body["tag"]) == ("not_stored", None, None)
     assert body["underlying_price"]["state"] == "not_stored" and body["underlying_price"]["price"] is None
     assert body["calls"]["contracts"] == [] and body["puts"]["contracts"] == []
+
+
+@respx.mock
+async def test_a_download_of_a_session_that_is_not_over_says_why_for_the_listing_and_the_underlying_and_fetches_nothing(
+    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path, stock_fetch: StockFetchDouble
+) -> None:
+    async with client as c:
+        response = await c.post(
+            f"{PREFIX}/download", json={"underlying": "SPY", "trading_date_ms": TODAY_MIDNIGHT_MS}
+        )
+
+    assert response.status_code == 200, response.text
+    items = response.json()["items"]
+    assert [(i["kind"], i["outcome"], i["reason"]) for i in items] == [
+        ("listing", "failed", "session_not_over"),
+        ("underlying", "failed", "session_not_over"),
+    ]
+    assert all(i["detail"] for i in items)
+    assert stock_fetch.calls == []  # and an un-mocked request to the vendor would have failed the test
 
 
 @pytest.mark.parametrize(
