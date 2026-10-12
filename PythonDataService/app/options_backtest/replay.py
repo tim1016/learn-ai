@@ -254,7 +254,7 @@ class _Session:
             fill = self._fill(leg, position.attempt.contract, position.attempt.multiplier, "sell", t, bar)
             fee = self.fee_for(fill)
             self.cash += fills.exit_proceeds(fill.filled, multiplier=fill.multiplier, contracts=fill.contracts, fee=fee)
-            self._record(position, position.close.reason, fill, fee)
+            self._record(position, position.close, position.close.reason, fill, fee)
             self._event(EventKind.CLOSE_FILLED, t, leg, contract=fill.contract, price=fill.filled)
             leg.phase = _Phase.EARNED if position.close.earns_reentry else _Phase.DONE
             leg.position = None
@@ -431,7 +431,9 @@ class _Session:
         for leg in self.legs:
             if leg.phase is _Phase.HELD:
                 position = _position_of(leg)
-                self._record(position, ExitReason.MARKED_NOT_SOLD, position.last_seen, Decimal(0))
+                # The exit time decided a close for every leg still held, so there is one to name.
+                assert position.close is not None
+                self._record(position, position.close, ExitReason.MARKED_NOT_SOLD, position.last_seen, Decimal(0))
                 self._event(
                     EventKind.MARKED_NOT_SOLD,
                     self.close_ms,
@@ -469,8 +471,10 @@ class _Session:
         number = leg.position.entry_number if leg.position is not None else leg.entries_filled
         self.events.append(Event(kind, at_ms, leg.setup.leg_id, number, contract, price, reason, detail))
 
-    def _record(self, position: _Position, reason: ExitReason, leaving: Fill | Mark, exit_fee: Decimal) -> None:
-        entry, attempt, close = position.entry, position.attempt, position.close
+    def _record(
+        self, position: _Position, close: _CloseOrder, reason: ExitReason, leaving: Fill | Mark, exit_fee: Decimal
+    ) -> None:
+        entry, attempt = position.entry, position.attempt
         sold = leaving.filled if isinstance(leaving, Fill) else leaving.price
         self.trades.append(
             LegTrade(
@@ -485,8 +489,8 @@ class _Session:
                 entry_decided_at_ms=position.entry_decided_at_ms,
                 entry=entry,
                 exit_reason=reason,
-                exit_group=None if close is None else close.group,
-                exit_decided_at_ms=None if close is None else close.decided_at_ms,
+                exit_group=close.group,
+                exit_decided_at_ms=close.decided_at_ms,
                 exit=leaving,
                 entry_fee_usd=position.entry_fee,
                 exit_fee_usd=exit_fee,

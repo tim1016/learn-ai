@@ -10,6 +10,7 @@ from decimal import Context, localcontext
 
 import pytest
 
+from app.options_backtest.market import Picked
 from app.options_backtest.results import EventKind, SessionOutcome, SessionStatus
 from tests.options_backtest._market import (
     FULL_CLOSE_MS,
@@ -131,6 +132,21 @@ def test_an_entry_is_checked_against_the_cash_before_the_sales_filling_in_the_sa
     # At minute 11 B costs 130.00 and the cash is 250 - 200 = 50; A's 140.00 comes in after the entries are checked.
     assert [trade.leg_id for trade in outcome.trades] == ["a"]
     assert minutes(outcome, EventKind.ENTRY_REFUSED_FOR_CASH, "b") == [11]
+
+
+def test_the_multiplier_of_the_picked_contract_prices_the_order() -> None:
+    market = TableMarket(
+        underlying=steady("500"),
+        picks={("call", "500"): Picked(CALL, multiplier=10)},
+        options={CALL: {5: ("2.00", "2.00"), 6: ("2.00", "2.00"), **flat("2.10", 7, 61)}},
+    )
+
+    outcome = replay(setup(leg()), market)
+
+    # Bought at 2.00 and sold at 2.10, ten shares to the contract: 0.10 * 10 = 1.00.
+    assert outcome.trades[0].multiplier == 10
+    assert outcome.trades[0].pnl_usd == D("1.00")
+    assert outcome.cash_change_usd == D("1.00")
 
 
 def _a_stop_and_a_re_entry_at_two_contracts() -> TableMarket:

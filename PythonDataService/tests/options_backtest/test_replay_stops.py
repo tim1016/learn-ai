@@ -62,6 +62,29 @@ def test_a_stop_holds_on_a_close_above_its_level_and_sells_at_the_next_open_once
     assert minutes(outcome, EventKind.STOP_HIT) == [8]
 
 
+def test_a_points_stop_sits_that_many_points_below_the_buy_fill_and_is_hit_by_a_close_on_it() -> None:
+    market = TableMarket(
+        underlying=steady("500"),
+        picks=picked(("call", "500", CALL)),
+        options={
+            CALL: {
+                5: ("2.00", "2.00"),
+                6: ("2.00", "2.00"),  # bought at 2.00: a stop of 0.50 points sits at 1.50
+                7: ("2.00", "1.51"),  # holds
+                8: ("1.51", "1.50"),  # a close on the level is a hit
+                9: ("1.45", "1.45"),
+            }
+        },
+    )
+
+    outcome = replay(setup(leg(stop=("points", "0.50"))), market)
+
+    assert [row(trade) for trade in outcome.trades] == [
+        ("call", 0, 6, D("2.00"), D("2.00"), "stop", 9, D("1.45"), D("1.45"))
+    ]
+    assert (outcome.trades[0].stop_level, outcome.trades[0].exit_decided_at_ms) == (D("1.50"), at(8))
+
+
 def test_a_low_below_the_stop_with_a_close_above_it_does_not_sell() -> None:
     market = TableMarket(
         underlying=steady("500"),

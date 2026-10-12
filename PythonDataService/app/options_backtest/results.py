@@ -110,9 +110,9 @@ class LegTrade:
     entry_decided_at_ms: int
     entry: Fill
     exit_reason: ExitReason
-    # Set when a close was decided, even if it never filled.
-    exit_group: int | None
-    exit_decided_at_ms: int | None
+    # The exit group and instant of the close that was decided, even for a leg whose sale never filled.
+    exit_group: int
+    exit_decided_at_ms: int
     exit: Fill | Mark
     entry_fee_usd: Decimal
     # Zero for a leg that was marked, not sold.

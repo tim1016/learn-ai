@@ -189,6 +189,29 @@ def test_a_high_above_the_momentum_level_with_a_close_below_it_does_not_buy() ->
     assert kinds(outcome, "call") == [EventKind.PICKED, EventKind.STARTING_PRICE_TAKEN, EventKind.LEG_CANCELLED]
 
 
+def test_a_momentum_down_leg_buys_once_a_close_falls_to_its_level() -> None:
+    market = TableMarket(
+        underlying=steady("500"),
+        picks=picked(("call", "500", CALL)),
+        options={
+            CALL: {
+                5: ("2.00", "2.00"),  # 25% down from 2.00 is 1.50
+                6: ("2.00", "1.51"),  # short
+                7: ("1.51", "1.50"),  # on the level: an order is decided
+                8: ("1.45", "1.45"),  # and fills at this open
+                **flat("1.45", 9, 61),
+            }
+        },
+    )
+
+    outcome = replay(setup(leg(momentum=("percent_down", "25"))), market)
+
+    assert [row(trade) for trade in outcome.trades] == [
+        ("call", 0, 8, D("1.45"), D("1.45"), "exit_time", 61, D("1.45"), D("1.45"))
+    ]
+    assert outcome.trades[0].momentum_level == D("1.50")
+
+
 @pytest.mark.parametrize(
     ("call_hits", "put_hits", "entered"),
     [
