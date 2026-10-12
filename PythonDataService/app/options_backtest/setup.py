@@ -211,6 +211,17 @@ class OptionsBacktestSetup(BaseModel):
     fees: FeePolicy
     starting_cash_usd: Annotated[Decimal, Field(gt=0, max_digits=14, decimal_places=2)]
 
+    def window_fits(self, *, session_open_ms: int, session_close_ms: int) -> bool:
+        """Whether a session with that open and close can trade this setup.
+
+        An entry is read on a minute's close, so the entry time is at least one minute after the open.
+        The exit's sales fill in the minute after the exit time, so it is at least one minute before the
+        close. And the exit is after the entry. A half day can fail this where a full day passes.
+        """
+        entry_ms = self.entry.at(session_open_ms=session_open_ms, session_close_ms=session_close_ms)
+        exit_ms = self.exit.at(session_open_ms=session_open_ms, session_close_ms=session_close_ms)
+        return session_open_ms + MS_PER_MINUTE <= entry_ms < exit_ms <= session_close_ms - MS_PER_MINUTE
+
     @model_validator(mode="after")
     def _every_leg_has_its_own_id(self) -> OptionsBacktestSetup:
         ids = [leg.leg_id for leg in self.legs]
@@ -221,18 +232,24 @@ class OptionsBacktestSetup(BaseModel):
 
     @model_validator(mode="after")
     def _the_window_can_hold_a_trade(self) -> OptionsBacktestSetup:
-        """Refuse a window no session could trade in, whatever its length.
+        """Refuse the windows that can be seen to fit no session without knowing how long a session is.
 
         An entry is read on a minute's close and fills in the next minute, so the first entry time is one
-        minute after the open and the last exit time one minute before the close. Whether an entry counted
-        from the open comes before an exit counted from the close depends on the session's length, which
-        is the calendar's to say and is checked for each session when it is replayed.
+        minute after the open and the last exit time one minute before the close; the exit comes after
+        the entry, so the last entry time is two minutes before the close and the first exit time two
+        minutes after the open. Whether a time counted from one end falls before a time counted from the
+        other depends on the session's length, which is the calendar's to say: ``window_fits`` asks it of
+        each session when it is replayed.
         """
         entry, exit_ = self.entry, self.exit
         if entry.anchor == "open" and entry.offset_ms < MS_PER_MINUTE:
             raise ValueError("the entry time must be at least one minute after the open")
+        if entry.anchor == "close" and entry.offset_ms < 2 * MS_PER_MINUTE:
+            raise ValueError("the entry time must be at least two minutes before the close, to leave room for the exit")
         if exit_.anchor == "close" and exit_.offset_ms < MS_PER_MINUTE:
             raise ValueError("the exit time must be at least one minute before the close")
+        if exit_.anchor == "open" and exit_.offset_ms < 2 * MS_PER_MINUTE:
+            raise ValueError("the exit time must be at least two minutes after the open, to come after an entry")
         if entry.anchor == exit_.anchor:
             exit_is_later = (
                 exit_.offset_ms > entry.offset_ms if entry.anchor == "open" else exit_.offset_ms < entry.offset_ms

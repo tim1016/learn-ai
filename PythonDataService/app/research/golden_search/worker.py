@@ -284,6 +284,43 @@ def _heartbeat(out: _LockedStdout, cancel_flag: threading.Event) -> None:
         out.write({"type": "alive", "at_ms": now_ms_utc()})
 
 
+def _task_checkpoint(out: _LockedStdout, state: dict[str, Any]) -> Callable[..., None]:
+    """The checkpoint writer every task kind shares: a phase transition on the wire.
+
+    ``cursor_kind``/``cursor`` default to the evaluator's processed-blocks
+    shape; a task kind with its own monotonic cursor (durable completions)
+    passes them per call. Called with the state dict so a sibling runner
+    (#3049) reports through the same channel the gate already trusts.
+    """
+
+    def checkpoint(phase: str, *, cursor_kind: str = "processed_blocks", cursor: int = 0) -> None:
+        out.write(
+            {
+                "type": "checkpoint",
+                "phase": phase,
+                "cursor_kind": cursor_kind,
+                "cursor": cursor,
+                "occurred_at_ms": now_ms_utc(),
+                "transition": True,
+            }
+        )
+
+    return checkpoint
+
+
+def _residency_fields(state: dict[str, Any]) -> dict[str, Any]:
+    # The warm-affinity hint the shared pool's scheduler folds into its
+    # lanes (#3048): what this child newly decoded, and what an eviction
+    # removed — on the result and every failure. The cache's own
+    # counters stay in the child; nothing downstream reads them off the
+    # wire.
+    added, evicted = state["decoded_cache"].take_residency_delta()
+    return {
+        "decoded": [key.__dict__ | {"estimated_bytes": estimated} for key, estimated in added],
+        "evicted": [key.relative_path for key in evicted],
+    }
+
+
 def _run_one_task(
     task: Mapping[str, Any],
     out: _LockedStdout,
@@ -291,33 +328,37 @@ def _run_one_task(
     cancel_flag: threading.Event,
     state: dict[str, Any],
 ) -> None:
+    kind = task.get("kind")
+    if kind is not None:
+        from app.research.grid_search.dispatch import GRID_WIRE_KIND as GRID_KIND
+        from app.research.recency.dispatch import RECENCY_WIRE_KIND as RECENCY_KIND
+
+        # A sibling caller's task kind rides the same child (#3049, #3051):
+        # Grid Search cells and Recency runs carry their own wires and
+        # projections. The golden evaluation stays the unmarked default, so
+        # existing wires and fixtures need no migration. A kind this child
+        # does not know is a version skew — refused as loudly as an identity
+        # mismatch, never answered as a failed run that would persist as
+        # evidence.
+        if kind == GRID_KIND:
+            from app.research.grid_search.dispatch import run_grid_cell_task
+
+            run_grid_cell_task(task, out=out, ask_admission=ask_admission, cancel_flag=cancel_flag, state=state)
+            return
+        if kind == RECENCY_KIND:
+            from app.research.recency.dispatch import run_recency_run_task
+
+            run_recency_run_task(task, out=out, ask_admission=ask_admission, cancel_flag=cancel_flag, state=state)
+            return
+        out.write(
+            {"type": "identity_refused", "key": task.get("key", "?"), "reason": f"unknown task kind {kind!r}"}
+        )
+        return
+
     from app.research.golden_search.protocol import ExecutionAssumptions
 
-    def checkpoint(phase: str) -> None:
-        out.write(
-            {
-                "type": "checkpoint",
-                "phase": phase,
-                "cursor_kind": "processed_blocks",
-                "cursor": 0,
-                "occurred_at_ms": now_ms_utc(),
-                "transition": True,
-            }
-        )
-
+    checkpoint = _task_checkpoint(out, state)
     completed_before = int(state.get("completed", 0))
-
-    def residency_fields() -> dict[str, Any]:
-        # The warm-affinity hint the shared pool's scheduler folds into its
-        # lanes (#3048): what this child newly decoded, and what an eviction
-        # removed — on the result and every failure. The cache's own
-        # counters stay in the child; nothing downstream reads them off the
-        # wire.
-        added, evicted = state["decoded_cache"].take_residency_delta()
-        return {
-            "decoded": [key.__dict__ | {"estimated_bytes": estimated} for key, estimated in added],
-            "evicted": [key.relative_path for key in evicted],
-        }
 
     try:
         request, strategy_key = request_of_wire(task)
@@ -368,18 +409,23 @@ def _run_one_task(
                 "metrics": result.metrics.as_dict(),
                 "detail": result.detail,
                 "curve": [[ms, value] for ms, value in (result.curve or [])] if result.curve is not None else None,
-                **residency_fields(),
+                **_residency_fields(state),
             }
         )
     except BaseException as exc:  # the child's terminal sink: every failure is a delivered answer
         from app.jobs.progress import JobCancelled
 
         if isinstance(exc, JobCancelled):
-            out.write({"type": "failed", "key": task.get("key", "?"), "error": "cancelled", **residency_fields()})
+            out.write({"type": "failed", "key": task.get("key", "?"), "error": "cancelled", **_residency_fields(state)})
             cancel_flag.set()
             return
         out.write(
-            {"type": "failed", "key": str(task.get("key", "?")), "error": f"{type(exc).__name__}: {exc}", **residency_fields()}
+            {
+                "type": "failed",
+                "key": str(task.get("key", "?")),
+                "error": f"{type(exc).__name__}: {exc}",
+                **_residency_fields(state),
+            }
         )
 
 
@@ -781,11 +827,15 @@ def delivered_outcome(item: ReadyEvaluation, message: Mapping[str, Any]) -> Deli
     The serial and pooled adapters translate identical child messages
     identically: a cancelled run delivers the cancellation, a failure is
     evidence like any engine failure, and a result carries its metrics,
-    detail and curve under the item's own fencing.
+    detail and curve under the item's own fencing. A sibling caller's ready
+    item (#3049, Grid Search cells) owns its own wire, so it decodes its own
+    outcome; only the golden evaluation is translated here.
     """
     from app.jobs.progress import JobCancelled
     from app.research.golden_search.selection import Metrics
 
+    if not isinstance(item, ReadyEvaluation):
+        return item.outcome_of(message)
     if message["type"] == "failed" and message.get("error") == "cancelled":
         return DeliveredOutcome(
             key=item.key,
@@ -813,20 +863,15 @@ def delivered_outcome(item: ReadyEvaluation, message: Mapping[str, Any]) -> Deli
     )
 
 
-class WorkerDispatch:
-    """The :data:`BatchDispatch` a stage's evaluator runs through (#3044, #3045).
+class ChildOwnerDispatch:
+    """The one-child lifecycle both serial dispatches share (#3044, #3049).
 
-    Serial in effect — one worker, one task lane, logical order preserved —
-    with the parent's ``run`` callable deliberately unused: the coordinator
-    never executes and never enters the engine gate. Delivery is lazy: one
-    outcome is yielded after the evaluator consumed its predecessor, so each
-    result is durable before the next evaluation begins (#3045). Child
-    failures arrive as failed metrics (evidence, like any engine failure);
-    a lost worker interrupts the batch for the evaluator's bounded
-    re-admission — the dead child is killed and reaped here, before any
-    replacement exists, and the next dispatch through this same adapter
-    spawns a fresh one with an empty decoded cache, never a second child
-    beside the first (#3045).
+    Owns the child's life — spawn only when alive, replace a between-tasks
+    corpse before the next item runs, cancel and reap promptly, close on
+    every exit — and the between-items cancellation poll. A subclass
+    supplies the wire, the outcome decode and its per-arrival policy; the
+    golden evaluator's answers and Grid Search's cells ride the same
+    lifecycle, never a second child beside the first (#3045).
     """
 
     def __init__(self, context: WorkerDispatchContext) -> None:
@@ -859,26 +904,55 @@ class WorkerDispatch:
             self._worker.cancel()
 
     def cancel(self) -> None:
-        """The evaluator's pre-reconciliation reap (#3065 review): stop the child now."""
+        """The pre-reconciliation reap (#3065 review): stop the child now."""
         self._cancel()
+
+    def _poll_cancel(self) -> None:
+        """The between-items poll: raise-only cancel plus the coordinator fence, child stopped either way (#3045)."""
+        from app.jobs.progress import JobCancelled
+        from app.research.persistence.ownership import GenerationFencedError
+
+        try:
+            cancelled = self._context.cancel_check()
+        except (JobCancelled, GenerationFencedError):
+            # The production polls raise (#3041): the child stops on every
+            # cancellation or fencing path, never only the returning one.
+            self._cancel()
+            raise
+        if cancelled:
+            # A truthy return is a cancel token; nothing persists (#3040's contract).
+            self._cancel()
+            raise JobCancelled("cancelled between research worker tasks")
+
+    def close(self) -> None:
+        worker, self._worker = self._worker, None
+        if worker is not None:
+            worker.close()
+
+
+class WorkerDispatch(ChildOwnerDispatch):
+    """The :data:`BatchDispatch` a stage's evaluator runs through (#3044, #3045).
+
+    Serial in effect — one worker, one task lane, logical order preserved —
+    with the parent's ``run`` callable deliberately unused: the coordinator
+    never executes and never enters the engine gate. Delivery is lazy: one
+    outcome is yielded after the evaluator consumed its predecessor, so each
+    result is durable before the next evaluation begins (#3045). Child
+    failures arrive as failed metrics (evidence, like any engine failure);
+    a lost worker interrupts the batch for the evaluator's bounded
+    re-admission — the dead child is killed and reaped here, before any
+    replacement exists, and the next dispatch through this same adapter
+    spawns a fresh one with an empty decoded cache, never a second child
+    beside the first (#3045). The child lifecycle is the shared serial base's
+    (#3049); this subclass is exactly the evaluator's wire and decode.
+    """
 
     def __call__(self, run, batch):  # BatchDispatch signature; run unused by design
         from app.jobs.progress import JobCancelled
         from app.research.persistence.ownership import GenerationFencedError
 
         for item in batch:
-            try:
-                cancelled = self._context.cancel_check()
-            except (JobCancelled, GenerationFencedError):
-                # The production polls raise (#3041): the child stops on every
-                # cancellation or fencing path, never only the returning one (#3045).
-                self._cancel()
-                raise
-            if cancelled:
-                # A truthy return is a cancel token; the reservations release and
-                # nothing persists (#3040's contract).
-                self._cancel()
-                raise JobCancelled("cancelled between research worker tasks")
+            self._poll_cancel()
             task = task_wire(
                 item,
                 strategy_key=self._context.strategy_key,
@@ -900,11 +974,6 @@ class WorkerDispatch:
                 yield outcome
                 return
             yield outcome
-
-    def close(self) -> None:
-        worker, self._worker = self._worker, None
-        if worker is not None:
-            worker.close()
 
 
 def worker_dispatch_factory(
