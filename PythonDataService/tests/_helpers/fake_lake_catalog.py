@@ -192,6 +192,23 @@ class FakeCatalog:
                 return self._record(row)
         return None
 
+    async def select_complete_metadata_artifacts(
+        self, market, symbol, provider, price_adjustment_mode, data_root_id=None
+    ) -> list[ArtifactRecord]:
+        # Root-scoped like the real query: an omitted root is the active one (#1876).
+        root_id = data_root_id if data_root_id is not None else root_identity.active_root_id()
+        return [
+            self._record(row)
+            for row in self.rows.values()
+            if row["artifact_kind"] == "metadata"
+            and row["data_root_id"] == root_id
+            and row["market"] == market
+            and row["symbol"] == symbol
+            and row["provider"] == provider
+            and row["price_adjustment_mode"] == price_adjustment_mode
+            and row["status"] == "complete"
+        ]
+
     async def select_metadata_claim_state(
         self, data_contract_hash: str, data_root_id=None
     ) -> catalog_client.ArtifactClaimState | None:
@@ -332,6 +349,27 @@ class FakeCatalog:
             and (row["status"] == "complete" or (include_previously_published and row.get("file_sha256")))
             and _in_window(row["trading_date"])
         ]
+
+    async def select_complete_minute_bar_symbols(
+        self, market, symbols, data_type, trading_date, *, price_adjustment_mode, provider, data_root_id=None
+    ) -> frozenset[str]:
+        # Root-scoped like the real query: an omitted root is the active one (#1876).
+        root_id = data_root_id if data_root_id is not None else root_identity.active_root_id()
+        wanted = set(symbols)
+        return frozenset(
+            row["symbol"]
+            for row in self.rows.values()
+            if row["artifact_kind"] == "time_series_bars"
+            and row["resolution"] == "minute"
+            and row["data_root_id"] == root_id
+            and row["market"] == market
+            and row["symbol"] in wanted
+            and row["data_type"] == data_type
+            and row["trading_date"] == trading_date
+            and row["price_adjustment_mode"] == price_adjustment_mode
+            and row["provider"] == provider
+            and row["status"] == "complete"
+        )
 
     async def claim_aggregated_bar_artifact(
         self, identity, worker_id, lease_ttl_ms, data_contract_hash, file_path
@@ -580,6 +618,8 @@ FAKE_CATALOG_FUNCTIONS: tuple[str, ...] = (
     "init_pool",
     "claim_metadata_artifact",
     "select_complete_metadata_artifact",
+    "select_complete_metadata_artifacts",
+    "select_complete_minute_bar_symbols",
     "select_metadata_claim_state",
     "mark_metadata_artifacts_stale_for_path",
     "claim_minute_bar",
