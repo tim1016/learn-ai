@@ -38,8 +38,15 @@ import respx
 from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake import option_listing as option_listing_module
+from app.data_lake import polygon_option_contracts as contracts_module
 from app.data_lake.admission import LakeAdmissionError
-from app.data_lake.option_lake import LEASE_TTL_MS, WORKER_ID, HeldLease, publish_option_artifact
+from app.data_lake.option_lake import (
+    LEASE_TTL_MS,
+    LISTING_FETCH_BUDGET_MS,
+    WORKER_ID,
+    HeldLease,
+    publish_option_artifact,
+)
 from app.data_lake.option_listing import (
     OptionListing,
     OptionListingFileError,
@@ -51,15 +58,18 @@ from app.data_lake.option_listing import (
     read_option_listing,
 )
 from app.data_lake.path_policy import lake_subpath
-from app.data_lake.polygon_option_contracts import PolygonOptionContract
+from app.data_lake.polygon_fetcher import _TIMEOUT_S
+from app.data_lake.polygon_option_contracts import _MAX_PAGES, PolygonOptionContract
 from app.data_lake.types import ArtifactIdentity
 from app.options.contract import OptionContract
 from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, point_lake_writer_at_tmp
 from tests._helpers.option_lake_cases import (
     CAPTURE_OPENS,
     HALF_DAY_CLOSE_MS,
+    MovableClock,
     pieces_of_the_key_in,
     refuse_what_postgres_refuses,
+    slow_listing_pages,
 )
 
 AS_OF = date(2025, 6, 13)
@@ -531,6 +541,109 @@ async def test_a_first_page_with_no_rows_and_a_next_page_admits_no_listing(fake_
     assert "empty page with a next page" in result.failure.detail
     assert second.call_count == 0
     assert _lake_files(tmp_lake) == []
+
+
+#: A ``next_url`` that is present and is not a text with something in it, as the JSON text that carries it.
+_MALFORMED_CURSORS = ["false", "0", "[]", "{}", '""', "true", "1"]
+
+
+@respx.mock
+@pytest.mark.parametrize("cursor", _MALFORMED_CURSORS)
+async def test_a_next_url_that_is_not_a_text_with_something_in_it_on_a_later_page_admits_no_listing_so_a_cut_short_one_is_never_stored_as_whole(
+    cursor: str, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """Read as the end, ``false`` or ``0`` stored the pages so far as the whole listing and hid every other contract for good."""
+    respx.get(CONTRACTS_URL, params={"underlying_ticker": "SPY"}).mock(
+        return_value=_page(STANDARD_ROWS[:2], next_url=SECOND_PAGE)
+    )
+    second = respx.get(CONTRACTS_URL, params={"cursor": "page2"}).mock(
+        return_value=_raw_body('{"status":"OK","results":' + json.dumps(STANDARD_ROWS[2:]) + ',"next_url":' + cursor + "}")
+    )
+
+    failed = await ensure_option_listing("SPY", AS_OF)
+
+    assert failed.record is None
+    assert failed.failure is not None and failed.failure.reason == "provider_api_error"
+    [row] = fake_catalog.rows.values()
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "provider_api_error", None)
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == [] and await _read() is None
+
+    second.mock(return_value=_page(STANDARD_ROWS[2:]))
+    retried = await ensure_option_listing("SPY", AS_OF)
+
+    assert retried.failure is None and retried.record is not None and retried.record.row_count == 3
+
+
+@respx.mock
+@pytest.mark.parametrize("cursor", _MALFORMED_CURSORS)
+async def test_a_next_url_that_is_not_a_text_with_something_in_it_on_the_first_page_admits_no_listing(
+    cursor: str, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    respx.get(CONTRACTS_URL).mock(
+        return_value=_raw_body('{"status":"OK","results":' + json.dumps(STANDARD_ROWS) + ',"next_url":' + cursor + "}")
+    )
+
+    failed = await ensure_option_listing("SPY", AS_OF)
+
+    assert failed.record is None
+    assert failed.failure is not None and failed.failure.reason == "provider_api_error"
+    [row] = fake_catalog.rows.values()
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "provider_api_error", None)
+    assert _lake_files(tmp_lake) == [] and await _read() is None
+
+
+def test_a_listings_paging_budget_is_inside_the_lease_by_room_for_a_slow_request_and_the_publish_and_still_reads_the_page_cap() -> None:
+    margin_ms = LEASE_TTL_MS - LISTING_FETCH_BUDGET_MS
+
+    assert 0 < LISTING_FETCH_BUDGET_MS < LEASE_TTL_MS
+    assert margin_ms >= 2 * 1000 * _TIMEOUT_S  # one request that runs to its own timeout, and as long again to build and publish
+    assert LISTING_FETCH_BUDGET_MS >= _MAX_PAGES * 1000  # a listing of the most pages the fetcher reads, at a plodding second a page
+
+
+@respx.mock
+async def test_a_listing_whose_paging_runs_past_its_budget_is_a_failed_row_asks_no_more_pages_and_a_quicker_vendor_later_is_stored(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Four pages of a third of the budget and a second: the budget is gone when page three has been read."""
+    clock = MovableClock()
+    monkeypatch.setattr(contracts_module, "_now_s", clock)
+    budget_s = LISTING_FETCH_BUDGET_MS / 1000
+    route = respx.get(CONTRACTS_URL).mock(
+        side_effect=slow_listing_pages(clock, pages=4, seconds_per_page=budget_s / 3 + 1, contracts_url=CONTRACTS_URL)
+    )
+
+    failed = await ensure_option_listing("SPY", AS_OF)
+
+    assert failed.record is None
+    assert failed.failure is not None and failed.failure.reason == "provider_api_error"
+    assert "page(s)" in failed.failure.detail
+    assert [call.request.url.params.get("cursor") for call in route.calls] == [None, "p1", "p2"]  # no fourth page
+    [row] = fake_catalog.rows.values()
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "provider_api_error", None)
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == [] and await _read() is None
+
+    route.mock(side_effect=slow_listing_pages(clock, pages=4, seconds_per_page=1, contracts_url=CONTRACTS_URL))
+    retried = await ensure_option_listing("SPY", AS_OF)
+
+    assert retried.failure is None and retried.record is not None and retried.record.row_count == 4
+
+
+@respx.mock
+async def test_a_listing_whose_paging_finishes_inside_its_budget_is_stored_whole(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Four pages of a quarter of the budget less a second: all four are asked, and the whole listing is stored."""
+    clock = MovableClock()
+    monkeypatch.setattr(contracts_module, "_now_s", clock)
+    budget_s = LISTING_FETCH_BUDGET_MS / 1000
+    route = respx.get(CONTRACTS_URL).mock(
+        side_effect=slow_listing_pages(clock, pages=4, seconds_per_page=budget_s / 4 - 1, contracts_url=CONTRACTS_URL)
+    )
+
+    result = await ensure_option_listing("SPY", AS_OF)
+
+    assert result.failure is None and result.record is not None and result.record.row_count == 4
+    assert route.call_count == 4
 
 
 def _raw_page(rows: list[dict[str, Any]]) -> httpx.Response:

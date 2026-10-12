@@ -40,7 +40,8 @@ These are recorded on the claimed row, which is failed and never left fetching:
 * ``provider_rate_limited``: the vendor said to slow down (429).
 * ``unknown_symbol``: the vendor does not know the ticker (404, or status NOT_FOUND).
 * ``provider_api_error``: any other trouble with the vendor (a 5xx, a timeout, a body that
-  is not a confirmed well-formed answer); asked again, up to ``MAX_CLAIM_RETRIES`` times.
+  is not a confirmed well-formed answer, a listing whose paging ran past
+  :data:`LISTING_FETCH_BUDGET_MS`); asked again, up to ``MAX_CLAIM_RETRIES`` times.
 * ``provider_no_data`` (listing): the vendor listed no contracts; that is not pinned as a fact.
 * ``validation_failed``: what the vendor sent cannot be stored as a fact (corrupt bars, a
   price the file cannot hold or would store as 0, a listing row with no ticker or a ticker
@@ -125,6 +126,15 @@ _PROCESS_REQUEST_ID = uuid4()
 WORKER_ID = _WORKER_ID
 LEASE_TTL_MS = _LEASE_TTL_MS
 MAX_CLAIM_RETRIES = _MAX_CLAIM_RETRIES
+
+#: What a listing's paging leaves of the lease for everything after its last request. The pages are asked
+#: one after another while the lease stays fixed, and a listing that finishes after its lease is thrown away
+#: at publication. After the last request starts there is still that request (up to its 30 s timeout), building the
+#: file, staging it with an fsync, and the publish itself, so the paging stops this long before the lease ends.
+LISTING_PUBLISH_MARGIN_MS = 60_000
+#: The time a whole listing fetch may take: the lease less the margin above. Past it the fetch ends as a
+#: failed row (``provider_api_error``) before another page is asked, and a later ask tries again.
+LISTING_FETCH_BUDGET_MS = LEASE_TTL_MS - LISTING_PUBLISH_MARGIN_MS
 
 #: ``LastError`` values that are retried however many times they were spent. A day
 #: the vendor says is outside the plan is environmental, not data: the owner upgrading

@@ -1,4 +1,4 @@
-"""Cases the option lake tests share (#3030): when a session may be captured, what a database refuses, a publish race.
+"""Cases the option lake tests share (#3030): when a session may be captured, what a database refuses, a publish race, a slow listing.
 
 Each is here once because more than one test module needs it, and a copy in each
 would be a second place to get a hand-worked figure or a timing wrong.
@@ -14,6 +14,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import asyncpg
+import httpx
 import pytest
 
 from app.data_lake import catalog_client
@@ -115,3 +116,39 @@ def publish_stale_writer_first_once_both_have_staged(monkeypatch: pytest.MonkeyP
                 stale_done.set()
 
     monkeypatch.setattr(catalog_client, "publish_under_lease", ordered)
+
+
+class MovableClock:
+    """A clock a test moves by hand, in seconds: what the listing fetch's budget runs on when the test replaces ``_now_s``."""
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def slow_listing_pages(
+    clock: MovableClock, *, pages: int, seconds_per_page: float, contracts_url: str
+) -> Callable[[httpx.Request], httpx.Response]:
+    """A respx side effect: the listing is ``pages`` pages of one contract each, and every answer takes ``seconds_per_page`` on ``clock``.
+
+    The first request has no cursor and the cursor ``p<k>`` asks for page ``k + 1``, so the number of
+    requests made is the number of pages asked. Contract ``k`` is the SPY call struck at ``375 + k``.
+    """
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        cursor = request.url.params.get("cursor")
+        page = 1 if cursor is None else int(cursor.removeprefix("p")) + 1
+        clock.now += seconds_per_page
+        strike = 375 + page
+        row = {
+            "ticker": f"O:SPY250613C{strike * 1000:08d}", "contract_type": "call", "strike_price": strike,
+            "expiration_date": "2025-06-13", "exercise_style": "american", "shares_per_contract": 100,
+        }
+        body: dict[str, Any] = {"status": "OK", "request_id": "r", "results": [row]}
+        if page < pages:
+            body["next_url"] = f"{contracts_url}?cursor=p{page}"
+        return httpx.Response(200, json=body)
+
+    return answer

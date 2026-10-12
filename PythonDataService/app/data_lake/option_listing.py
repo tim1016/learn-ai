@@ -56,6 +56,7 @@ from app.data_lake.data_contract import data_contract_hash as _dch
 from app.data_lake.lean_writer import _DETERMINISTIC_ZIP_DATE_TIME
 from app.data_lake.option_lake import (
     LEASE_TTL_MS,
+    LISTING_FETCH_BUDGET_MS,
     OPTION_MARKET,
     OPTION_PRICE_ADJUSTMENT_MODE,
     OPTION_PROVIDER,
@@ -399,7 +400,9 @@ async def ensure_option_listing(
     """Capture the contracts listed for ``underlying`` as of ``as_of`` into the lake, or reuse what is there.
 
     Claim, reuse-or-refresh on a lost claim, reclaim, fetch every page, build the
-    file, publish under the lease; a typed failure on every vendor error. The refusals
+    file, publish under the lease; a typed failure on every vendor error. The paging is
+    given :data:`LISTING_FETCH_BUDGET_MS`, inside the lease, and a fetch that runs past it
+    ends as a failed row before another page is asked. The refusals
     that cost no claim come first (``symbol_too_long``, ``not_a_session``,
     ``session_not_over``, which holds until the session's New York date has passed;
     ``option_lake``'s docstring says what each means).
@@ -457,7 +460,9 @@ async def ensure_option_listing(
         )
 
     try:
-        contracts = await fetch_option_contracts(underlying, as_of, settings.POLYGON_API_KEY)
+        contracts = await fetch_option_contracts(
+            underlying, as_of, settings.POLYGON_API_KEY, budget_s=LISTING_FETCH_BUDGET_MS / 1000
+        )
     except PolygonFetchError as e:
         return await fail(vendor_reason(e), str(e))
 
