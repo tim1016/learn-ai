@@ -4,11 +4,16 @@ import { describe, expect, it } from 'vitest';
 import { expectTradingDatesInNewYork, reads } from '../testing/page-actions';
 import type { RunDetail, RunFigures } from '../options-backtest.types';
 import { figures, runBanner, runDetail, runWithoutSetup } from '../testing/run-fixtures';
+import { RunDetailService } from '../run-detail/run-detail.service';
+import { inertRunDetail } from '../run-detail/testing/fake-run-detail';
 import { RunResultComponent } from './run-result.component';
+
+/** The closer look at the trades is not what these specs are about, so it reads nothing. */
+const providers = [{ provide: RunDetailService, useValue: inertRunDetail() }];
 
 async function renderResult(changes: Partial<RunDetail> = {}, figureChanges: Partial<RunFigures> = {}) {
   const run = runDetail({ ...changes, figures: figures(figureChanges) });
-  return render(RunResultComponent, { inputs: { run } });
+  return render(RunResultComponent, { inputs: { run }, providers });
 }
 
 const tile = (name: RegExp | string) => {
@@ -101,7 +106,7 @@ describe('the headline figures', () => {
   });
 
   it('shows the profit factor with the two sums it is of, or says there was no losing trade', async () => {
-    const { rerender } = await render(RunResultComponent, { inputs: { run: runDetail() } });
+    const { rerender } = await render(RunResultComponent, { inputs: { run: runDetail() }, providers });
 
     expect(reads(tile(/^Profit factor/))).toBe('Profit factor gross profit over gross loss 2.612876 rounded to 6 places · $2,000.00 over $765.44');
 
@@ -197,7 +202,7 @@ describe('the slippage tolerance', () => {
 
 describe('a complete run with no figures', () => {
   it('says so rather than showing an empty result', async () => {
-    await render(RunResultComponent, { inputs: { run: runDetail({ figures: null }) } });
+    await render(RunResultComponent, { inputs: { run: runDetail({ figures: null }) }, providers });
 
     expect(screen.getByRole('alert').textContent).toBe('This run is complete but the server sent no figures for it.');
   });
@@ -205,7 +210,7 @@ describe('a complete run with no figures', () => {
 
 describe('a complete run whose setup and banner the server could not open', () => {
   it('still shows its figures, with no banner, rather than failing to draw', async () => {
-    const { container } = await render(RunResultComponent, { inputs: { run: runWithoutSetup() } });
+    const { container } = await render(RunResultComponent, { inputs: { run: runWithoutSetup() }, providers });
 
     expect(screen.queryByRole('note', { name: 'How these figures were made' })).toBeNull();
     expect(container.querySelector('app-options-backtest-run-banner')).toBeNull();

@@ -1,0 +1,7 @@
+<div class="export">
+  <button pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="busy()" [attr.aria-busy]="busy()" [attr.aria-describedby]="noteId" (click)="save()">
+    <i class="pi" [class.pi-download]="!busy()" [class.pi-spin]="busy()" [class.pi-spinner]="busy()" aria-hidden="true"></i><span>{{ busy() ? 'Exporting…' : 'Export trades (CSV)' }}</span>
+  </button>
+  <span [id]="noteId" class="note">The file holds every trade of the run, not only this page, and its readable time column is New York time.</span>
+  @if (problem(); as why) { <p class="problem" role="alert">{{ why }}</p> }
+</div>

@@ -127,7 +127,13 @@ const moneySurfaces = (extension) => [
   // The Options Backtest page shows a run's dollars (#3030): its result and its history, whose names say nothing of money.
   `src/app/components/options-backtest/run/**/*.${extension}`,
   `src/app/components/options-backtest/history/**/*.${extension}`,
+  // The closer look at a run (#3030): every trade, one day, a comparison. Its prices are the server's strings, shown as they came.
+  `src/app/components/options-backtest/run-detail/**/*.${extension}`,
 ];
+
+// The one file that may turn a price string into a number: it places a point on a chart's price axis and prints nothing
+// (see its header). Every other file of the Options Backtest page stays under the money rules above.
+const CHART_GEOMETRY = "src/app/components/options-backtest/run-detail/series-geometry.ts";
 
 export default tseslint.config(
   {
@@ -210,7 +216,7 @@ export default tseslint.config(
   // No money arithmetic, layer 1: everywhere (see the note at the top).
   {
     files: ["src/app/**/*.ts"],
-    ignores: ["**/*.spec.ts"],
+    ignores: ["**/*.spec.ts", CHART_GEOMETRY],
     rules: { "no-restricted-syntax": ["error", ...TS_MONEY_ARITHMETIC] },
   },
   {
@@ -221,7 +227,7 @@ export default tseslint.config(
   // than merge, so each block restates layer 1's selectors.
   {
     files: moneySurfaces("ts"),
-    ignores: ["**/*.spec.ts"],
+    ignores: ["**/*.spec.ts", CHART_GEOMETRY],
     plugins: { "learn-ai": { rules: { "no-money-alias-arithmetic": noMoneyAliasArithmetic } } },
     rules: {
       "no-implicit-coercion": ["error", { boolean: false }],

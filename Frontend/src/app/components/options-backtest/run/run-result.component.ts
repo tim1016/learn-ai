@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 
 import type { RunDetail } from '../options-backtest.types';
+import { RunTradesComponent } from '../run-detail/trades/run-trades.component';
 import { RunBannerComponent } from './run-banner.component';
 import { RunDayTableComponent } from './run-day-table.component';
 import { RunDrawdownComponent } from './run-drawdown.component';
@@ -25,6 +26,7 @@ import { SlippageToleranceComponent } from './slippage-tolerance.component';
     SlippageToleranceComponent,
     RunDayTableComponent,
     RunMonthTableComponent,
+    RunTradesComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './run-result.component.html',

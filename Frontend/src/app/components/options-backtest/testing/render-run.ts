@@ -6,6 +6,8 @@ import { OptionsBacktestService } from '../options-backtest.service';
 import type { RunDetail, RunListItem } from '../options-backtest.types';
 import { RunPanelComponent } from '../run/run-panel.component';
 import { RUN_POLL_MS } from '../run-poll';
+import { RunDetailService } from '../run-detail/run-detail.service';
+import { inertRunDetail, type FakeRunDetail } from '../run-detail/testing/fake-run-detail';
 import { fakeJobs, type FakeJobs } from './fake-jobs';
 import { fakeService, type FakeService } from './render-page';
 import { runDetail } from './run-fixtures';
@@ -27,15 +29,17 @@ export interface RenderedRun {
 export async function renderRunPanel(
   spy: Spy,
   run: RunListItem,
-  options: { service?: FakeService; jobs?: FakeJobs; showSetup?: boolean; polling?: boolean } = {},
+  options: { service?: FakeService; jobs?: FakeJobs; detail?: FakeRunDetail; showSetup?: boolean; polling?: boolean } = {},
 ): Promise<RenderedRun> {
   const service = options.service ?? fakeService(spy);
   const jobs = options.jobs ?? fakeJobs();
+  const detail = options.detail ?? inertRunDetail();
   const view = await render(RunPanelComponent, {
     inputs: { run, showSetup: options.showSetup ?? false },
     providers: [
       { provide: OptionsBacktestService, useValue: service },
       { provide: JobsService, useValue: jobs.service },
+      { provide: RunDetailService, useValue: detail },
       ...(options.polling === true ? [] : [{ provide: RUN_POLL_MS, useValue: 0 }]),
     ],
   });
