@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { SetupRefusedError } from './options-backtest.service';
 import type { SavedSetup } from './options-backtest.types';
 import { formatClockText } from './session-time';
-import { EXAMPLE_NO_REENTRY, EXAMPLE_ONE_REENTRY, exampleBody, noReentryExampleBody, servedExamples, servedSaved, SESSION_CLOCK } from './testing/fixtures';
+import { EXAMPLE_NO_REENTRY, EXAMPLE_ONE_REENTRY, exampleBody, noReentryExampleBody, readBackOf, servedExamples, servedSaved, SESSION_CLOCK } from './testing/fixtures';
 import { choose, flip, press, typeInto } from './testing/page-actions';
 import { fakeService, renderPage } from './testing/render-page';
 
@@ -249,7 +249,7 @@ describe('saving', () => {
     expect(saveButton().disabled).toBe(true);
   });
 
-  it('saves the setup on screen under the name typed, and reads the list again', async () => {
+  it('saves the setup on screen, as the server read it back, under the name typed, and reads the list again', async () => {
     const list = vi.fn(async () => servedExamples());
     const service = await renderWithExampleOpen(fakeService(vi, { list }));
 
@@ -257,7 +257,7 @@ describe('saving', () => {
     await waitFor(() => expect(saveButton().disabled).toBe(false));
     fireEvent.click(saveButton());
 
-    await waitFor(() => expect(service.save).toHaveBeenCalledWith('My straddle', exampleBody()));
+    await waitFor(() => expect(service.save).toHaveBeenCalledWith('My straddle', readBackOf(exampleBody())));
     await within(bar()).findByText(/My straddle/);
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
   });
@@ -314,6 +314,7 @@ describe('saving', () => {
 
     await waitFor(() => expect(service.save).toHaveBeenCalledWith('Edited', expect.objectContaining({ square_off: 'partial' })));
     const sent = service.save.mock.lastCall?.[1];
-    expect(sent?.legs[0]).not.toHaveProperty('stop_loss');
+    // The server reads a rule that is off back as an explicit null.
+    expect(sent?.legs[0]?.stop_loss).toBeNull();
   });
 });

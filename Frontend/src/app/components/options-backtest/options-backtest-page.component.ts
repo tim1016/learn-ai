@@ -16,11 +16,11 @@ import { SideListComponent, type LibraryStatus } from './cards/side-list.compone
 import { SummaryComponent } from './cards/summary.component';
 import { builderProblems, newLegBuilder, withLegAdded, withLegCopied, withLegRemoved } from './leg-draft';
 import { OptionsBacktestService, SetupInvalidError, SetupRefusedError } from './options-backtest.service';
-import type { SavedSetup, SessionClock } from './options-backtest.types';
+import type { SavedSetup, SessionClock, SetupSummary } from './options-backtest.types';
 import { buildSetup } from './setup-build';
 import { draftFromSetup, newSetupDraft, withDefaultTimes, type SetupDraft } from './setup-draft';
-import { acceptedSetup, readSetupFile, setupFileBlob, setupFileName } from './setup-file';
-import { isValidSetupName, SETUP_NAME_RULE } from './setup-name';
+import { readSetupFile, setupFileBlob, setupFileName } from './setup-file';
+import { nameProblem } from './setup-limits';
 import { describeDetail, FIELD, NO_PROBLEMS, type FieldProblems } from './setup-problems';
 import { SetupSummaryChecker } from './setup-summary-checker';
 
@@ -63,6 +63,14 @@ export class OptionsBacktestPageComponent {
 
   /** How long the setup rests, in milliseconds, before it is read back. Specs set 0. */
   readonly describeDebounceMs = input(300);
+
+  /** What the server holds a setup to. Until it is read, or when it cannot be, the page checks none of it and the server judges. */
+  private readonly limitsRead = resource({ loader: () => this.service.limits() });
+  protected readonly limits = computed(() => (this.limitsRead.hasValue() ? this.limitsRead.value() : null));
+  protected readonly limitsProblem = computed(() => {
+    const error: unknown = this.limitsRead.error();
+    return error === undefined ? null : extractServerMessage(error, 'The server did not answer.');
+  });
 
   private readonly clockRead = resource({ loader: () => this.service.sessionClock() });
   /** A full session's open and close. Nothing that holds a time is shown before it is read. */
@@ -109,11 +117,11 @@ export class OptionsBacktestPageComponent {
 
   private readonly checker = new SetupSummaryChecker((body) => this.service.describe(body), () => this.describeDebounceMs());
   protected readonly summary = this.checker.state;
-  /** The body the server has read back, once it has read the one the page holds now: what Save and Export send. */
+  /** The setup as the server read it, once it has read the body the page holds now: what Save, Export and a run send. */
   private readonly readBack = computed(() => {
     const state = this.summary();
     const body = this.body();
-    return state.kind === 'ready' && body !== null && JSON.stringify(state.body) === JSON.stringify(body) ? body : null;
+    return state.kind === 'ready' && body !== null && JSON.stringify(state.body) === JSON.stringify(body) ? state.summary.setup : null;
   });
 
   /** Problems at their fields: the page's own first, then the server's. */
@@ -149,10 +157,7 @@ export class OptionsBacktestPageComponent {
   /** Counts the times the form was replaced whole, by opening a setup or importing one, so a save that was under way can tell. */
   private formReplaced = 0;
   private readonly stamp = computed(() => `${this.saveModel().name}\n${JSON.stringify(this.body())}`);
-  protected readonly nameProblem = computed(() => {
-    const name = this.saveModel().name;
-    return name === '' || isValidSetupName(name) ? null : SETUP_NAME_RULE;
-  });
+  protected readonly nameProblem = computed(() => nameProblem(this.saveModel().name, this.limits()));
   protected readonly canSave = computed(() => this.readBack() !== null && this.saveModel().name !== '' && this.nameProblem() === null && !this.saving());
   /** What the last save said, until the name or the setup changes: then it no longer describes what is on screen. */
   protected readonly saveStatus = computed(() => {
@@ -186,6 +191,10 @@ export class OptionsBacktestPageComponent {
 
   protected retryClock(): void {
     this.clockRead.reload();
+  }
+
+  protected retryLimits(): void {
+    this.limitsRead.reload();
   }
 
   protected retryLibrary(): void {
@@ -222,13 +231,13 @@ export class OptionsBacktestPageComponent {
   }
 
   protected addLeg(): void {
-    if (builderProblems(this.builder()).size === 0) this.draft.update((draft) => withLegAdded(draft, this.builder()));
+    if (builderProblems(this.builder(), this.limits()).size === 0) this.draft.update((draft) => withLegAdded(draft, this.builder(), this.limits()));
   }
 
   /** The copy stands just after its leg; the keyboard goes to it, so the owner lands on what was made. */
   protected copyLeg(legId: string): void {
     const at = this.draft().legs.findIndex((leg) => leg.id === legId);
-    this.draft.update((draft) => withLegCopied(draft, legId));
+    this.draft.update((draft) => withLegCopied(draft, legId, this.limits()));
     if (at >= 0) this.afterRender(() => this.legsCard()?.focusHeading(at + 1));
   }
 
@@ -282,13 +291,15 @@ export class OptionsBacktestPageComponent {
       this.importNotice.set({ kind: 'refused', title: `${file.name} was not loaded.`, reasons: [read.message] });
       return;
     }
+    let described: SetupSummary;
     try {
-      await this.service.describe(read.json);
+      described = await this.service.describe(read.json);
     } catch (error) {
       this.importNotice.set({ kind: 'refused', title: `${file.name} was not loaded: it is not a setup the page can open.`, reasons: reasonsOf(error) });
       return;
     }
-    this.draft.set(draftFromSetup(acceptedSetup(read.json), clock));
+    // The form is made from the setup as the server read the file, so what the file left out is filled in by the server.
+    this.draft.set(draftFromSetup(described.setup, clock));
     this.saveModel.set({ name: '' });
     this.loadedName.set(null);
     this.importNotice.set({ kind: 'loaded', title: `${file.name} was loaded.`, reasons: [] });

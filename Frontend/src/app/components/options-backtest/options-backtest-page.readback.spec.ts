@@ -2,7 +2,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { SavedSetup, SetupRequest, SetupSummary } from './options-backtest.types';
-import { EXAMPLE_ONE_REENTRY, exampleBody, servedSaved } from './testing/fixtures';
+import { EXAMPLE_ONE_REENTRY, exampleBody, readBackOf, servedSaved } from './testing/fixtures';
 import { typeInto } from './testing/page-actions';
 import { fakeService, renderPage, sentencesFor, type FakeDownload } from './testing/render-page';
 
@@ -96,7 +96,7 @@ describe('Save and Export wait for the server to read the setup back', () => {
     expect(service.save).toHaveBeenCalledWith('Mine', expect.objectContaining({ slippage_percent: '0.5' }));
   });
 
-  it('Export does not hand over a setup edited a moment ago, and hands over the one the server read back', async () => {
+  it('Export does not hand over a setup edited a moment ago, and hands over the setup as the server read it back', async () => {
     const files = download();
     const service = fakeService(vi);
     await renderPage(service, files);
@@ -111,9 +111,9 @@ describe('Save and Export wait for the server to read the setup back', () => {
       expect(files.save).toHaveBeenCalledTimes(1);
     });
     const [blob] = files.save.mock.calls[0] ?? [];
-    const readBack = service.describe.mock.lastCall?.[0];
-    expect(blob === undefined ? undefined : await readText(blob)).toBe(`${JSON.stringify(readBack, null, 2)}\n`);
-    expect(readBack).toMatchObject({ slippage_percent: '0.5' });
+    const answer = await service.describe.mock.results.at(-1)?.value;
+    expect(blob === undefined ? undefined : await readText(blob)).toBe(`${JSON.stringify(answer?.setup, null, 2)}\n`);
+    expect(answer?.setup).toMatchObject({ slippage_percent: '0.5' });
   });
 });
 
@@ -150,7 +150,7 @@ describe('saving', () => {
 
     fireEvent.keyDown(nameField(), { key: 'Enter' });
 
-    await waitFor(() => expect(service.save).toHaveBeenCalledWith('My straddle', exampleBody()));
+    await waitFor(() => expect(service.save).toHaveBeenCalledWith('My straddle', readBackOf(exampleBody())));
     expect(service.save).toHaveBeenCalledTimes(1);
   });
 

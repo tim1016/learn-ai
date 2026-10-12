@@ -5,7 +5,6 @@ import {
   contractLine,
   copyOfLeg,
   legFromBuilder,
-  MAX_LEGS,
   newLegBuilder,
   nextLegId,
   withLegAdded,
@@ -13,10 +12,12 @@ import {
   withLegRemoved,
   type LegBuilder,
 } from './leg-draft';
+import type { SetupLimits } from './options-backtest.types';
 import { newSetupDraft } from './setup-draft';
-import { SESSION_CLOCK } from './testing/fixtures';
+import { SERVED_LIMITS, SESSION_CLOCK } from './testing/fixtures';
 
 const builder = (changes: Partial<LegBuilder>): LegBuilder => ({ ...newLegBuilder(), ...changes });
+const problemsOf = (value: LegBuilder, limits: SetupLimits | null = SERVED_LIMITS) => builderProblems(value, limits);
 
 describe('leg ids', () => {
   it('are the leg right, then numbered, so a straddle has the ids the example has', () => {
@@ -42,7 +43,7 @@ describe('leg ids', () => {
 
 describe('the leg builder', () => {
   it('starts as one at-the-money call on the weekly expiry, and can be added', () => {
-    expect(builderProblems(newLegBuilder()).size).toBe(0);
+    expect(problemsOf(newLegBuilder()).size).toBe(0);
     expect(legFromBuilder(newLegBuilder(), [])).toMatchObject({ id: 'call', right: 'call', contracts: 1, expiryKind: 'this_week', strikeKind: 'atm' });
   });
 
@@ -59,35 +60,59 @@ describe('the leg builder', () => {
   });
 
   it.each([['0'], ['1001'], ['1.5'], [''], ['abc'], ['-1']])('does not take %s contracts', (contracts) => {
-    expect([...builderProblems(builder({ contracts })).keys()]).toEqual(['contracts']);
+    expect([...problemsOf(builder({ contracts })).keys()]).toEqual(['contracts']);
   });
 
   it.each([['1'], ['1000'], [' 7 ']])('takes %s contracts', (contracts) => {
-    expect(builderProblems(builder({ contracts })).size).toBe(0);
+    expect(problemsOf(builder({ contracts })).size).toBe(0);
   });
 
   it.each([['-1'], ['731'], [''], ['2.5']])('does not take %s days out', (expiryDays) => {
-    expect([...builderProblems(builder({ expiryKind: 'min_days', expiryDays })).keys()]).toEqual(['expiryDays']);
+    expect([...problemsOf(builder({ expiryKind: 'min_days', expiryDays })).keys()]).toEqual(['expiryDays']);
   });
 
   it.each([['0'], ['730']])('takes %s days out', (expiryDays) => {
-    expect(builderProblems(builder({ expiryKind: 'min_days', expiryDays })).size).toBe(0);
+    expect(problemsOf(builder({ expiryKind: 'min_days', expiryDays })).size).toBe(0);
   });
 
   it('does not read the days while the expiry is another rule', () => {
-    expect(builderProblems(builder({ expiryKind: 'same_day', expiryDays: 'junk' })).size).toBe(0);
+    expect(problemsOf(builder({ expiryKind: 'same_day', expiryDays: 'junk' })).size).toBe(0);
   });
 
   it.each([['0'], ['51'], ['-51'], [''], ['1.5']])('does not take %s steps from the money', (strikeSteps) => {
-    expect([...builderProblems(builder({ strikeKind: 'atm_offset', strikeSteps })).keys()]).toEqual(['strikeSteps']);
+    expect([...problemsOf(builder({ strikeKind: 'atm_offset', strikeSteps })).keys()]).toEqual(['strikeSteps']);
   });
 
   it.each([['1'], ['-1'], ['50'], ['-50']])('takes %s steps from the money', (strikeSteps) => {
-    expect(builderProblems(builder({ strikeKind: 'atm_offset', strikeSteps })).size).toBe(0);
+    expect(problemsOf(builder({ strikeKind: 'atm_offset', strikeSteps })).size).toBe(0);
   });
 
-  it('holds at most eight legs', () => {
-    expect(MAX_LEGS).toBe(8);
+  it('takes its ranges from the limits the server serves, so a changed limit moves them', () => {
+    const tight: SetupLimits = { ...SERVED_LIMITS, max_contracts_per_leg: 5, max_expiry_days: 10, max_strike_steps: 3 };
+
+    expect([...builderProblems(builder({ contracts: '6' }), tight).keys()]).toEqual(['contracts']);
+    expect(builderProblems(builder({ contracts: '5' }), tight).size).toBe(0);
+    expect([...builderProblems(builder({ expiryKind: 'min_days', expiryDays: '11' }), tight).keys()]).toEqual(['expiryDays']);
+    expect(builderProblems(builder({ expiryKind: 'min_days', expiryDays: '10' }), tight).size).toBe(0);
+    expect([...builderProblems(builder({ strikeKind: 'atm_offset', strikeSteps: '-4' }), tight).keys()]).toEqual(['strikeSteps']);
+    expect(builderProblems(builder({ strikeKind: 'atm_offset', strikeSteps: '-3' }), tight).size).toBe(0);
+  });
+
+  it('says the served range in the sentence that refuses a number', () => {
+    const tight: SetupLimits = { ...SERVED_LIMITS, max_contracts_per_leg: 5, max_expiry_days: 10, max_strike_steps: 3 };
+
+    expect(builderProblems(builder({ contracts: '6' }), tight).get('contracts')).toContain('1 to 5');
+    expect(builderProblems(builder({ expiryKind: 'min_days', expiryDays: '11' }), tight).get('expiryDays')).toContain('0 to 10');
+    expect(builderProblems(builder({ strikeKind: 'atm_offset', strikeSteps: '4' }), tight).get('strikeSteps')).toContain('-3 to 3');
+  });
+
+  it('checks only that a number is a whole number while the limits are not known, and leaves the range to the server', () => {
+    expect(builderProblems(builder({ contracts: '5000' }), null).size).toBe(0);
+    expect(builderProblems(builder({ expiryKind: 'min_days', expiryDays: '9999' }), null).size).toBe(0);
+    expect(builderProblems(builder({ strikeKind: 'atm_offset', strikeSteps: '-999' }), null).size).toBe(0);
+    expect([...builderProblems(builder({ contracts: '1.5' }), null).keys()]).toEqual(['contracts']);
+    expect([...builderProblems(builder({ contracts: '0' }), null).keys()]).toEqual(['contracts']);
+    expect([...builderProblems(builder({ strikeKind: 'atm_offset', strikeSteps: '0' }), null).keys()]).toEqual(['strikeSteps']);
   });
 });
 
@@ -112,33 +137,42 @@ describe('the legs of a setup', () => {
   const base = newSetupDraft(SESSION_CLOCK);
 
   it('grow by the builder’s leg, with an id of their own', () => {
-    const once = withLegAdded(base, newLegBuilder());
-    const twice = withLegAdded(once, builder({ right: 'put' }));
-    const again = withLegAdded(twice, newLegBuilder());
+    const once = withLegAdded(base, newLegBuilder(), SERVED_LIMITS);
+    const twice = withLegAdded(once, builder({ right: 'put' }), SERVED_LIMITS);
+    const again = withLegAdded(twice, newLegBuilder(), SERVED_LIMITS);
 
     expect(ids(again)).toEqual(['call', 'put', 'call_2']);
   });
 
-  it('stop growing at eight, by adding and by copying', () => {
+  it('stop growing at the most legs the server allows, by adding and by copying', () => {
+    const limits: SetupLimits = { ...SERVED_LIMITS, max_legs: 3 };
     let draft = base;
-    for (let count = 0; count < MAX_LEGS + 3; count += 1) draft = withLegAdded(draft, newLegBuilder());
+    for (let count = 0; count < 6; count += 1) draft = withLegAdded(draft, newLegBuilder(), limits);
 
-    expect(draft.legs).toHaveLength(MAX_LEGS);
-    expect(withLegCopied(draft, 'call')).toBe(draft);
+    expect(draft.legs).toHaveLength(3);
+    expect(withLegCopied(draft, 'call', limits)).toBe(draft);
+  });
+
+  it('go on growing past eight while the limits are not known: the server judges', () => {
+    let draft = base;
+    for (let count = 0; count < 10; count += 1) draft = withLegAdded(draft, newLegBuilder(), null);
+
+    expect(draft.legs).toHaveLength(10);
+    expect(withLegCopied(draft, 'call', null).legs).toHaveLength(11);
   });
 
   it('take a copy just after the leg it came from', () => {
-    const draft = withLegAdded(withLegAdded(base, newLegBuilder()), builder({ right: 'put' }));
+    const draft = withLegAdded(withLegAdded(base, newLegBuilder(), SERVED_LIMITS), builder({ right: 'put' }), SERVED_LIMITS);
 
-    expect(ids(withLegCopied(draft, 'call'))).toEqual(['call', 'call_2', 'put']);
+    expect(ids(withLegCopied(draft, 'call', SERVED_LIMITS))).toEqual(['call', 'call_2', 'put']);
   });
 
   it('leave a copy of a leg that is not there as it was', () => {
-    expect(withLegCopied(base, 'nope')).toBe(base);
+    expect(withLegCopied(base, 'nope', SERVED_LIMITS)).toBe(base);
   });
 
   it('lose a leg by its id, and the others keep theirs', () => {
-    const draft = withLegAdded(withLegAdded(base, newLegBuilder()), builder({ right: 'put' }));
+    const draft = withLegAdded(withLegAdded(base, newLegBuilder(), SERVED_LIMITS), builder({ right: 'put' }), SERVED_LIMITS);
 
     expect(ids(withLegRemoved(draft, 'call'))).toEqual(['put']);
   });

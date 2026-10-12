@@ -2,11 +2,11 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { SetupInvalidError } from './options-backtest.service';
-import type { SavedSetup } from './options-backtest.types';
-import { EXAMPLE_ONE_REENTRY, exampleBody, servedExamples, servedSaved } from './testing/fixtures';
+import type { SavedSetup, SetupRequest } from './options-backtest.types';
+import { EXAMPLE_ONE_REENTRY, exampleBody, readBackOf, servedExamples, servedSaved, summaryFor } from './testing/fixtures';
 import { MAX_SETUP_FILE_BYTES } from './setup-file';
 import { press, typeInto } from './testing/page-actions';
-import { fakeService, renderPage, type FakeDownload } from './testing/render-page';
+import { fakeService, renderPage, sentencesFor, type FakeDownload } from './testing/render-page';
 
 function readText(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -47,7 +47,7 @@ describe('export', () => {
     expect(exportButton().disabled).toBe(true);
   });
 
-  it('downloads exactly the body the routes accept, named for the setup', async () => {
+  it('downloads the setup as the server read it back, which is what the routes accept, named for the setup', async () => {
     const files = download();
     await renderPage(fakeService(vi), files);
     await openExample();
@@ -61,8 +61,8 @@ describe('export', () => {
     expect(filename).toBe('My straddle.json');
     expect(blob?.type).toBe('application/json');
     const text = blob === undefined ? undefined : await readText(blob);
-    expect(text).toBe(`${JSON.stringify(exampleBody(), null, 2)}\n`);
-    expect(JSON.parse(text ?? '')).toEqual(exampleBody());
+    expect(text).toBe(`${JSON.stringify(readBackOf(exampleBody()), null, 2)}\n`);
+    expect(JSON.parse(text ?? '')).toEqual(readBackOf(exampleBody()));
   });
 
   it('is named for the underlying when the setup has no name yet', async () => {
@@ -102,6 +102,34 @@ describe('import', () => {
     expect(screen.getByText(/straddle\.json was loaded/)).toBeTruthy();
   });
 
+  it('loads a number the file wrote for a decimal as the digits the server read back', async () => {
+    await renderPage(fakeService(vi), download());
+
+    chooseFile(JSON.stringify({ ...exampleBody(), slippage_percent: 0.25, starting_cash_usd: 5000, fees: { kind: 'per_contract', per_contract_usd: 0.65 } }));
+
+    await screen.findByRole('article', { name: 'Leg 2' });
+    expect((screen.getByLabelText('Slippage (percent)') as HTMLInputElement).value).toBe('0.25');
+    expect((screen.getByLabelText('Cash') as HTMLInputElement).value).toBe('5000');
+    expect((screen.getByLabelText('Dollars per contract') as HTMLInputElement).value).toBe('0.65');
+  });
+
+  it('loads what the file left out from the server’s read-back, and fills in no default of its own', async () => {
+    const { slippage_percent: _slippage, price_step_usd: _step, version: _version, ...bare } = exampleBody();
+    const service = fakeService(vi, {
+      describe: vi.fn(async (body: unknown) => {
+        const read = sentencesFor(body as SetupRequest);
+        return { ...read, setup: { ...read.setup, slippage_percent: '0.42' } };
+      }),
+    });
+    await renderPage(service, download());
+
+    chooseFile(JSON.stringify(bare));
+
+    await screen.findByRole('article', { name: 'Leg 2' });
+    expect((screen.getByLabelText('Slippage (percent)') as HTMLInputElement).value).toBe('0.42');
+    expect(screen.getByText(/straddle\.json was loaded/)).toBeTruthy();
+  });
+
   it('reads the times of an imported file back as clock times', async () => {
     await renderPage(fakeService(vi), download());
 
@@ -117,7 +145,7 @@ describe('import', () => {
         if ((body as { underlying?: string }).underlying === 'bad') {
           throw new SetupInvalidError([{ loc: ['body', 'legs', 0, 'contracts'], msg: 'Input should be at most 1000' }, { loc: ['body', 'square_off'], msg: 'Input should be partial or complete' }]);
         }
-        return { window: 'w', legs: [], square_off: 's', costs: 'c', notices: [] };
+        return summaryFor('w');
       }),
     });
     await renderPage(service, download());

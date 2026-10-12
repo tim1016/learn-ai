@@ -1,0 +1,10 @@
+// The server writes each block as a list of sentences and the page sets them as written, so what makes it readable is the setting:
+// a line of about 75 characters, room between the blocks, and each leg's block visibly its own.
+:host { display: block; min-width: 0; }
+p { margin: 0; }
+.blocks { display: grid; gap: var(--space-4); font-size: var(--fs-sm); }
+.block, .notice { max-width: 75ch; line-height: 1.55; text-wrap: pretty; }
+.block { display: grid; gap: var(--space-1); }
+.legs { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
+.block--leg { padding: var(--space-3) var(--space-4); background: var(--bg-elevated); border-inline-start: 3px solid var(--accent); border-radius: var(--radius); }
+.notice { border: 1px solid var(--warn); border-radius: var(--radius); background: var(--warn-soft); padding: var(--space-2) var(--space-3); color: var(--text-primary); }

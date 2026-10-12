@@ -5,7 +5,9 @@ import { InputText } from 'primeng/inputtext';
 
 import { EXPIRY_CHOICES, EXPIRY_HINTS, RIGHT_CHOICES, STRIKE_CHOICES } from '../choices';
 import { PillChoiceComponent } from '../controls/pill-choice.component';
-import { builderProblems, MAX_LEGS, type BuilderField, type LegBuilder } from '../leg-draft';
+import { builderProblems, type BuilderField, type LegBuilder } from '../leg-draft';
+import type { SetupLimits } from '../options-backtest.types';
+import { legsFull } from '../setup-limits';
 
 /**
  * One row that reads left to right: Buy, call or put, contracts, expiry,
@@ -23,17 +25,19 @@ export class LegBuilderCardComponent {
   readonly form = input.required<FieldTree<LegBuilder>>();
   /** How many legs the setup holds now. */
   readonly legCount = input.required<number>();
+  /** What the server allows; null while it is not known, and then the server judges. */
+  readonly limits = input<SetupLimits | null>(null);
   readonly add = output();
 
   protected readonly rights = RIGHT_CHOICES;
   protected readonly expiries = EXPIRY_CHOICES;
   protected readonly strikes = STRIKE_CHOICES;
-  protected readonly maxLegs = MAX_LEGS;
+  protected readonly maxLegs = computed(() => this.limits()?.max_legs ?? null);
 
   protected readonly builder = computed(() => this.form()().value());
-  protected readonly problems = computed(() => builderProblems(this.builder()));
+  protected readonly problems = computed(() => builderProblems(this.builder(), this.limits()));
   protected readonly expiryHint = computed(() => EXPIRY_HINTS[this.builder().expiryKind]);
-  protected readonly full = computed(() => this.legCount() >= MAX_LEGS);
+  protected readonly full = computed(() => legsFull(this.legCount(), this.limits()));
   protected readonly canAdd = computed(() => !this.full() && this.problems().size === 0);
 
   private readonly addButton = viewChild.required('addButton', { read: ElementRef<HTMLButtonElement> });

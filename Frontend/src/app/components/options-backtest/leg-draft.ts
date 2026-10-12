@@ -1,17 +1,10 @@
-import type { ExpiryKind, OptionRight, StrikeKind } from './options-backtest.types';
+import type { ExpiryKind, OptionRight, SetupLimits, StrikeKind } from './options-backtest.types';
 import type { LegDraft, SetupDraft } from './setup-draft';
+import { legsFull } from './setup-limits';
 import { wholeNumber } from './typed-text';
 
-/**
- * What a setup may hold, mirrored from the setup schema (`setup.py`). The
- * server still judges every body; these are here because a leg's contract
- * cannot be edited once the leg is added, so the builder says what is out of
- * range before the leg exists rather than after.
- */
-export const MAX_LEGS = 8;
-const MAX_CONTRACTS = 1000;
-const MAX_EXPIRY_DAYS = 730;
-const MAX_STRIKE_STEPS = 50;
+/** The largest whole number the page reads where the server's limit is not known; the server judges the rest. */
+const NO_UPPER_LIMIT = Number.MAX_SAFE_INTEGER;
 
 /** The leg builder's row, as typed. */
 export interface LegBuilder {
@@ -29,34 +22,43 @@ export function newLegBuilder(): LegBuilder {
   return { right: 'call', contracts: '1', expiryKind: 'this_week', expiryDays: '1', strikeKind: 'atm', strikeSteps: '1' };
 }
 
-/** Why the row cannot be added as a leg, by field; empty when it can. */
-export function builderProblems(builder: LegBuilder): ReadonlyMap<BuilderField, string> {
+/**
+ * Why the row cannot be added as a leg, by field; empty when it can. A leg's
+ * contract cannot be edited once the leg is added, so the builder says what is
+ * out of range before the leg exists. The ranges are the server's own
+ * (`limits`); without them only the shape of a whole number is checked.
+ */
+export function builderProblems(builder: LegBuilder, limits: SetupLimits | null): ReadonlyMap<BuilderField, string> {
   const problems = new Map<BuilderField, string>();
-  if (wholeNumber(builder.contracts, 1, MAX_CONTRACTS) === null) {
-    problems.set('contracts', `Enter a whole number of contracts, 1 to ${MAX_CONTRACTS}.`);
+  const maxContracts = limits?.max_contracts_per_leg;
+  if (wholeNumber(builder.contracts, 1, maxContracts ?? NO_UPPER_LIMIT) === null) {
+    problems.set('contracts', `Enter a whole number of contracts, ${maxContracts === undefined ? '1 or more' : `1 to ${maxContracts}`}.`);
   }
-  if (builder.expiryKind === 'min_days' && wholeNumber(builder.expiryDays, 0, MAX_EXPIRY_DAYS) === null) {
-    problems.set('expiryDays', `Enter a whole number of days, 0 to ${MAX_EXPIRY_DAYS}.`);
+  const maxDays = limits?.max_expiry_days;
+  if (builder.expiryKind === 'min_days' && wholeNumber(builder.expiryDays, 0, maxDays ?? NO_UPPER_LIMIT) === null) {
+    problems.set('expiryDays', `Enter a whole number of days, ${maxDays === undefined ? '0 or more' : `0 to ${maxDays}`}.`);
   }
   if (builder.strikeKind === 'atm_offset') {
-    const steps = wholeNumber(builder.strikeSteps, -MAX_STRIKE_STEPS, MAX_STRIKE_STEPS);
+    const maxSteps = limits?.max_strike_steps;
+    const steps = wholeNumber(builder.strikeSteps, maxSteps === undefined ? -NO_UPPER_LIMIT : -maxSteps, maxSteps ?? NO_UPPER_LIMIT);
     if (steps === null || steps === 0) {
-      problems.set('strikeSteps', `Enter a whole number of steps, -${MAX_STRIKE_STEPS} to ${MAX_STRIKE_STEPS}, other than 0. For none, choose At the money.`);
+      const range = maxSteps === undefined ? 'other than 0' : `-${maxSteps} to ${maxSteps}, other than 0`;
+      problems.set('strikeSteps', `Enter a whole number of steps, ${range}. For none, choose At the money.`);
     }
   }
   return problems;
 }
 
-/** The leg a row makes, with every rule off. Call only when `builderProblems` is empty. */
+/** The leg a row makes, with every rule off. Call only when `builderProblems` is empty, which has checked every range. */
 export function legFromBuilder(builder: LegBuilder, takenIds: readonly string[]): LegDraft {
   return {
     id: nextLegId(builder.right, takenIds),
     right: builder.right,
-    contracts: wholeNumber(builder.contracts, 1, MAX_CONTRACTS) ?? 1,
+    contracts: wholeNumber(builder.contracts, 1, NO_UPPER_LIMIT) ?? 1,
     expiryKind: builder.expiryKind,
-    expiryDays: builder.expiryKind === 'min_days' ? (wholeNumber(builder.expiryDays, 0, MAX_EXPIRY_DAYS) ?? 0) : 0,
+    expiryDays: builder.expiryKind === 'min_days' ? (wholeNumber(builder.expiryDays, 0, NO_UPPER_LIMIT) ?? 0) : 0,
     strikeKind: builder.strikeKind,
-    strikeSteps: builder.strikeKind === 'atm_offset' ? (wholeNumber(builder.strikeSteps, -MAX_STRIKE_STEPS, MAX_STRIKE_STEPS) ?? 0) : 0,
+    strikeSteps: builder.strikeKind === 'atm_offset' ? (wholeNumber(builder.strikeSteps, -NO_UPPER_LIMIT, NO_UPPER_LIMIT) ?? 0) : 0,
     stopLossOn: false,
     stopLossKind: 'percent',
     stopLossValue: '',
@@ -109,15 +111,15 @@ function plural(count: number, noun: string): string {
 }
 
 /** The setup with the builder's leg added; unchanged at the limit. Call only when `builderProblems` is empty. */
-export function withLegAdded(draft: SetupDraft, builder: LegBuilder): SetupDraft {
-  if (draft.legs.length >= MAX_LEGS) return draft;
+export function withLegAdded(draft: SetupDraft, builder: LegBuilder, limits: SetupLimits | null): SetupDraft {
+  if (legsFull(draft.legs.length, limits)) return draft;
   return { ...draft, legs: [...draft.legs, legFromBuilder(builder, draft.legs.map((leg) => leg.id))] };
 }
 
 /** The setup with a copy of the leg placed just after it; unchanged at the limit. */
-export function withLegCopied(draft: SetupDraft, legId: string): SetupDraft {
+export function withLegCopied(draft: SetupDraft, legId: string, limits: SetupLimits | null): SetupDraft {
   const at = draft.legs.findIndex((leg) => leg.id === legId);
-  if (at < 0 || draft.legs.length >= MAX_LEGS) return draft;
+  if (at < 0 || legsFull(draft.legs.length, limits)) return draft;
   const copy = copyOfLeg(draft.legs[at], draft.legs.map((leg) => leg.id));
   return { ...draft, legs: [...draft.legs.slice(0, at + 1), copy, ...draft.legs.slice(at + 1)] };
 }

@@ -2,9 +2,8 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import { MAX_LEGS } from './leg-draft';
 import { formatClockText } from './session-time';
-import { exampleBody, noReentryExampleBody, SESSION_CLOCK } from './testing/fixtures';
+import { exampleBody, noReentryExampleBody, SERVED_LIMITS, SESSION_CLOCK } from './testing/fixtures';
 import { addLeg, choose, flip, inLeg, isDisabled, legCard, press, typeInto } from './testing/page-actions';
 import { fakeService, renderPage } from './testing/render-page';
 import type { LegRequest, SetupRequest } from './options-backtest.types';
@@ -226,16 +225,16 @@ describe('copying and deleting legs', () => {
     expect(screen.queryByRole('article', { name: 'Leg 2' })).toBeNull();
   });
 
-  it('holds at most eight legs: Add leg and Copy stop there, and a deletion frees them', async () => {
+  it('holds at most as many legs as the server allows: Add leg and Copy stop there, and a deletion frees them', async () => {
     const service = fakeService(vi);
     await renderPage(service);
 
-    for (let count = 0; count < MAX_LEGS; count += 1) addLeg();
+    for (let count = 0; count < SERVED_LIMITS.max_legs; count += 1) addLeg();
 
-    await waitFor(() => expect(lastBody(service).legs).toHaveLength(MAX_LEGS));
+    await waitFor(() => expect(lastBody(service).legs).toHaveLength(SERVED_LIMITS.max_legs));
     expect(isDisabled(screen.getByRole('button', { name: 'Add leg' }))).toBe(true);
     expect(isDisabled(screen.getByRole('button', { name: 'Copy Leg 1' }))).toBe(true);
-    expect(screen.getByText(/at most 8 legs/i)).toBeTruthy();
+    expect(screen.getByText(`A setup holds at most ${SERVED_LIMITS.max_legs} legs. Delete one to add another.`)).toBeTruthy();
 
     press('Delete Leg 8');
 

@@ -5,8 +5,9 @@ import type {
   MomentumKind,
   OptionRight,
   ReentryKind,
+  ServedLeg,
+  ServedSetup,
   SessionClock,
-  SetupRequest,
   SquareOff,
   StopLossKind,
   StrikeKind,
@@ -110,8 +111,12 @@ export function withDefaultTimes(draft: SetupDraft, clock: SessionClock): SetupD
   };
 }
 
-/** A served or imported setup as a draft, its times turned back into clock times with the served clock. */
-export function draftFromSetup(setup: SetupRequest, clock: SessionClock): SetupDraft {
+/**
+ * A setup as the server read it (the answer of `describe`, or a listed or
+ * saved one) as a draft, its times turned back into clock times with the
+ * served clock. The server has filled every default, so none is filled here.
+ */
+export function draftFromSetup(setup: ServedSetup, clock: SessionClock): SetupDraft {
   const base = newSetupDraft(clock);
   const entryClock = clockTextOf(setup.entry, clock);
   const exitClock = clockTextOf(setup.exit, clock);
@@ -131,11 +136,11 @@ export function draftFromSetup(setup: SetupRequest, clock: SessionClock): SetupD
     },
     squareOff: setup.square_off,
     legs: setup.legs.map(legFromSetup),
-    slippage: String(setup.slippage_percent ?? DEFAULT_SLIPPAGE),
-    priceStep: String(setup.price_step_usd ?? DEFAULT_PRICE_STEP),
+    slippage: setup.slippage_percent ?? '',
+    priceStep: setup.price_step_usd ?? '',
     feeKind: setup.fees.kind,
-    perContractFee: setup.fees.per_contract_usd == null ? '' : String(setup.fees.per_contract_usd),
-    cash: String(setup.starting_cash_usd),
+    perContractFee: setup.fees.per_contract_usd ?? '',
+    cash: setup.starting_cash_usd,
   };
 }
 
@@ -145,7 +150,7 @@ function heldAnchor(role: 'entry' | 'exit' | 'noReentry', clock: string, anchor:
   return anchorFor(role, minute) === anchor ? null : { clock, anchor };
 }
 
-function legFromSetup(leg: SetupRequest['legs'][number]): LegDraft {
+function legFromSetup(leg: ServedLeg): LegDraft {
   return {
     id: leg.leg_id,
     right: leg.right,
@@ -156,10 +161,10 @@ function legFromSetup(leg: SetupRequest['legs'][number]): LegDraft {
     strikeSteps: leg.strike.kind === 'atm_offset' ? leg.strike.steps : 0,
     stopLossOn: leg.stop_loss != null,
     stopLossKind: leg.stop_loss?.kind ?? 'percent',
-    stopLossValue: leg.stop_loss == null ? '' : String(leg.stop_loss.value),
+    stopLossValue: leg.stop_loss?.value ?? '',
     momentumOn: leg.momentum != null,
     momentumKind: leg.momentum?.kind ?? 'percent_up',
-    momentumValue: leg.momentum == null ? '' : String(leg.momentum.value),
+    momentumValue: leg.momentum?.value ?? '',
     reentryOn: leg.reentry_on_stop != null,
     reentryKind: leg.reentry_on_stop?.kind ?? 'at_once',
     reentryCount: leg.reentry_on_stop == null ? '1' : String(leg.reentry_on_stop.count),

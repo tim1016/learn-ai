@@ -1,7 +1,7 @@
 <section class="legs" aria-labelledby="ob-legs-title">
   <div class="card__head">
     <h2 id="ob-legs-title">Legs</h2>
-    <span class="hint">{{ legs().length }} of {{ maxLegs }}</span>
+    <span class="hint">{{ legs().length }}@if (maxLegs() !== null) { of {{ maxLegs() }}}</span>
   </div>
   @if (legs().length === 0) { <p class="hint" role="status">No legs yet. Choose a contract in the leg builder and press Add leg.</p> }
   @if (legsProblem(); as message) { <p class="problem" role="alert">{{ message }}</p> }

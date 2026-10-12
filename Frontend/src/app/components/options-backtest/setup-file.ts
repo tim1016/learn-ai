@@ -25,17 +25,7 @@ export async function readSetupFile(file: File): Promise<SetupFile> {
   }
 }
 
-/**
- * A body the server has just accepted as a setup, typed as one. The only way
- * an imported file becomes a draft: the schema is Python's, and the page keeps
- * no second validator of it.
- */
-export function acceptedSetup(json: unknown): SetupRequest {
-  // The describe route validated this exact value against the setup schema a moment ago.
-  return json as SetupRequest;
-}
-
-/** The export file's bytes: exactly the body the routes accept. */
+/** The export file's bytes: the setup as the server read it, which is exactly what the routes accept. */
 export function setupFileBlob(body: SetupRequest): Blob {
   return new Blob([`${JSON.stringify(body, null, 2)}\n`], { type: 'application/json' });
 }

@@ -6,7 +6,7 @@ import { draftFromSetup, newSetupDraft, type LegDraft, type SetupDraft } from '.
 import { formatClockText } from './session-time';
 import { legKey } from './setup-problems';
 import { EXAMPLE_NO_REENTRY, EXAMPLE_ONE_REENTRY, exampleBody, minutes, noReentryExampleBody, SESSION_CLOCK, servedExamples } from './testing/fixtures';
-import type { SetupRequest } from './options-backtest.types';
+import type { ServedSetup, SetupRequest } from './options-backtest.types';
 
 const { open_minute_et: OPEN, close_minute_et: CLOSE } = SESSION_CLOCK;
 
@@ -270,18 +270,21 @@ describe('opening a served setup and sending it back', () => {
     expect(draft.legs.map((leg) => leg.id)).toEqual(['call', 'put']);
   });
 
-  it('reads numbers an imported file holds for decimals as the digits they are written with', () => {
-    const imported: SetupRequest = { ...exampleBody(), slippage_percent: 0.25, starting_cash_usd: 5000, fees: { kind: 'per_contract', per_contract_usd: 0.65 } };
+  it('leaves a decimal the served setup lacks empty, with its problem, and fills in no default of its own', () => {
+    const { slippage_percent: _slippage, price_step_usd: _step, ...bare } = exampleBody();
 
-    const body = built(draftFromSetup(imported, SESSION_CLOCK));
+    const draft = draftFromSetup(bare, SESSION_CLOCK);
 
-    expect(body).toMatchObject({ slippage_percent: '0.25', starting_cash_usd: '5000', fees: { kind: 'per_contract', per_contract_usd: '0.65' } });
+    expect(draft).toMatchObject({ slippage: '', priceStep: '' });
+    expect(problemsOf(draft).has('slippage')).toBe(true);
   });
 
-  it('fills what an imported file leaves out with the server defaults', () => {
-    const { slippage_percent: _slippage, price_step_usd: _step, version: _version, ...bare } = exampleBody();
+  it('reads every decimal as the text the server served it as', () => {
+    const served: ServedSetup = { ...exampleBody(), slippage_percent: '0.25', starting_cash_usd: '5000.50', fees: { kind: 'per_contract', per_contract_usd: '0.65' } };
 
-    expect(built(draftFromSetup(bare, SESSION_CLOCK))).toMatchObject({ version: 1, slippage_percent: '0.3', price_step_usd: '0.01' });
+    const body = built(draftFromSetup(served, SESSION_CLOCK));
+
+    expect(body).toMatchObject({ slippage_percent: '0.25', starting_cash_usd: '5000.50', fees: { kind: 'per_contract', per_contract_usd: '0.65' } });
   });
 
   it('keeps a time anchored the way the file had it while it is untouched, and applies the page rule once it is typed over', () => {

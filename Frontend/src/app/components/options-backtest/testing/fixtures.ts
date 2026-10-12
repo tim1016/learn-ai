@@ -1,4 +1,4 @@
-import type { SavedSetup, ServedLeg, ServedSetup, SessionClock, SessionTimeWire, SetupSummary } from '../options-backtest.types';
+import type { SavedSetup, ServedLeg, ServedSetup, SessionClock, SessionTimeWire, SetupLimits, SetupRequest, SetupSummary } from '../options-backtest.types';
 
 export const MS_PER_MINUTE = 60_000;
 
@@ -89,6 +89,41 @@ export function servedSaved(name: string, setup: ServedSetup, savedAtMs = 1_760_
   };
 }
 
+/** What the server holds a setup to, as `GET /limits` serves it. */
+export const SERVED_LIMITS: SetupLimits = {
+  max_legs: 8,
+  max_contracts_per_leg: 1000,
+  max_reentries_per_leg: 20,
+  max_strike_steps: 50,
+  max_expiry_days: 730,
+  max_range_sessions: 1300,
+  setup_name: {
+    pattern: '^[A-Za-z0-9](?:[A-Za-z0-9 _.,()-]{0,78}[A-Za-z0-9_.,()-])?$',
+    sentence: 'A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), starting with a letter or a digit and not ending with a space.',
+  },
+};
+
+/**
+ * The setup as the server reads a body back: every default filled in, a number written as the text it would be,
+ * every unset rule an explicit null. It differs from the page's own body in exactly those ways, so a spec can tell
+ * which of the two a call carries.
+ */
+export function readBackOf(body: SetupRequest): ServedSetup {
+  return asServed({
+    ...body,
+    version: 1,
+    slippage_percent: String(body.slippage_percent ?? '0.3'),
+    price_step_usd: String(body.price_step_usd ?? '0.01'),
+    starting_cash_usd: String(body.starting_cash_usd),
+    fees: { kind: body.fees.kind, per_contract_usd: body.fees.per_contract_usd == null ? null : String(body.fees.per_contract_usd) },
+    legs: body.legs.map((leg) => ({
+      ...leg,
+      stop_loss: leg.stop_loss == null ? null : { kind: leg.stop_loss.kind, value: String(leg.stop_loss.value) },
+      momentum: leg.momentum == null ? null : { kind: leg.momentum.kind, value: String(leg.momentum.value) },
+    })),
+  });
+}
+
 export function summaryFor(text: string): SetupSummary {
-  return { window: `${text} window.`, legs: [], square_off: `${text} square off.`, costs: `${text} costs.`, notices: [] };
+  return { window: [`${text} window.`], legs: [], square_off: [`${text} square off.`], costs: [`${text} costs.`], notices: [], setup: exampleBody() };
 }

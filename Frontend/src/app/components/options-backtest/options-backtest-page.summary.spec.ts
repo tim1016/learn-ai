@@ -15,8 +15,8 @@ describe('the plain-words summary', () => {
     const service = fakeService(vi, {
       describe: vi.fn(async (body: unknown) => ({
         ...sentencesFor(body as SetupRequest),
-        window: 'THE WINDOW SENTENCE',
-        costs: 'THE COSTS SENTENCE',
+        window: ['THE WINDOW SENTENCE'],
+        costs: ['THE COSTS SENTENCE'],
         notices: ['THE NOTICE'],
       })),
     });
@@ -33,10 +33,19 @@ describe('the plain-words summary', () => {
     expect(text.indexOf('Sentence for leg call')).toBeLessThan(text.indexOf('THE COSTS SENTENCE'));
   });
 
-  it('sets each block as the one string it came as, and each leg’s block as a list item of its own', async () => {
-    const window = 'Trades SPY. Each fill is moved 0.3% against you, then rounded. A stop later than 15:00 earns no re-entry.';
+  it('puts every sentence on a line of its own, as served and in order, and each leg’s sentences in a box of its own', async () => {
+    const window = ['Trades SPY.', 'Each fill is moved 0.3% against you, then rounded.', 'A stop later than 15:00 earns no re-entry.'];
+    const costs = ['Cash is 10000.', 'Fees are not charged.'];
     const service = fakeService(vi, {
-      describe: vi.fn(async (body: unknown) => ({ ...sentencesFor(body as SetupRequest), window })),
+      describe: vi.fn(async (body: unknown) => {
+        const read = sentencesFor(body as SetupRequest);
+        return {
+          ...read,
+          window,
+          costs,
+          legs: read.legs.map((leg) => ({ leg_id: leg.leg_id, sentences: [`First of ${leg.leg_id}.`, `Second of ${leg.leg_id}.`] })),
+        };
+      }),
     });
     await renderPage(service);
 
@@ -44,10 +53,14 @@ describe('the plain-words summary', () => {
     addLeg('Put');
 
     const summary = await screen.findByRole('region', { name: 'In plain words' });
-    const block = await within(summary).findByText(window);
-    expect(block.tagName).toBe('P');
+    for (const sentence of [...window, ...costs]) expect((await within(summary).findByText(sentence)).tagName).toBe('P');
+    const lines = [...summary.querySelectorAll('p.sentence')].map((line) => line.textContent);
+    expect(lines).toEqual([...window, 'First of call.', 'Second of call.', 'First of put.', 'Second of put.', 'Square off is partial.', ...costs]);
     const legs = within(summary).getAllByRole('listitem');
-    expect(legs.map((leg) => leg.textContent)).toEqual(['Sentence for leg call.', 'Sentence for leg put.']);
+    expect(legs.map((leg) => [...leg.querySelectorAll('p')].map((line) => line.textContent))).toEqual([
+      ['First of call.', 'Second of call.'],
+      ['First of put.', 'Second of put.'],
+    ]);
   });
 
   it('says the setup is not complete while it has no legs, and the legs card says to add one without an alarm', async () => {
@@ -88,9 +101,9 @@ describe('the plain-words summary', () => {
     await waitFor(() => expect(answers).toHaveLength(2));
     typeInto('Slippage (percent)', '0.5');
     await waitFor(() => expect(answers).toHaveLength(3));
-    answers[2]?.resolve({ ...sentencesFor(answers[2].body), window: 'NEWEST' });
-    answers[1]?.resolve({ ...sentencesFor(answers[1].body), window: 'MIDDLE' });
-    answers[0]?.resolve({ ...sentencesFor(answers[0].body), window: 'OLDEST' });
+    answers[2]?.resolve({ ...sentencesFor(answers[2].body), window: ['NEWEST'] });
+    answers[1]?.resolve({ ...sentencesFor(answers[1].body), window: ['MIDDLE'] });
+    answers[0]?.resolve({ ...sentencesFor(answers[0].body), window: ['OLDEST'] });
 
     await screen.findByText('NEWEST');
     await new Promise((resolve) => setTimeout(resolve, 0));

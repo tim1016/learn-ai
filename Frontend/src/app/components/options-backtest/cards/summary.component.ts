@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 
 import type { SummaryState } from '../setup-summary-checker';
+import { SetupSentencesComponent } from './setup-sentences.component';
 
 /**
  * The setup in plain sentences, exactly as the server wrote them (the page
@@ -9,6 +10,7 @@ import type { SummaryState } from '../setup-summary-checker';
  */
 @Component({
   selector: 'app-options-backtest-summary',
+  imports: [SetupSentencesComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './summary.component.html',
   styleUrls: ['../options-backtest-card.scss', './summary.component.scss'],

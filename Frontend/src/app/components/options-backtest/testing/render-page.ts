@@ -6,28 +6,30 @@ import { FileDownloadService } from '../../../shared/file/file-download.service'
 import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
 import { OptionsBacktestPageComponent } from '../options-backtest-page.component';
 import { OptionsBacktestService, SetupInvalidError } from '../options-backtest.service';
-import type { SavedSetup, SessionClock, SetupRequest, SetupSummary } from '../options-backtest.types';
-import { SESSION_CLOCK, servedExamples } from './fixtures';
+import type { SavedSetup, SessionClock, SetupLimits, SetupRequest, SetupSummary } from '../options-backtest.types';
+import { readBackOf, SERVED_LIMITS, SESSION_CLOCK, servedExamples } from './fixtures';
 
 /** The `vi` of the spec that calls: a shared helper never imports vitest itself. */
 type Spy = Pick<typeof Vi, 'fn'>;
 
 export interface FakeService {
   sessionClock: Mock<() => Promise<SessionClock>>;
+  limits: Mock<() => Promise<SetupLimits>>;
   describe: Mock<(body: unknown) => Promise<SetupSummary>>;
   list: Mock<() => Promise<SavedSetup[]>>;
   save: Mock<(name: string, setup: SetupRequest) => Promise<SavedSetup>>;
   remove: Mock<(name: string) => Promise<void>>;
 }
 
-/** The sentences a body gets in a spec; a stand-in for the server's own wording, which no spec pins. */
+/** The sentences a body gets in a spec, and the setup as read back; a stand-in for the server's own wording, which no spec pins. */
 export function sentencesFor(body: SetupRequest): SetupSummary {
   return {
-    window: `Window for ${body.underlying}.`,
-    legs: body.legs.map((leg) => ({ leg_id: leg.leg_id, text: `Sentence for leg ${leg.leg_id}.` })),
-    square_off: `Square off is ${body.square_off}.`,
-    costs: `Costs start from ${body.starting_cash_usd}.`,
+    window: [`Window for ${body.underlying}.`],
+    legs: body.legs.map((leg) => ({ leg_id: leg.leg_id, sentences: [`Sentence for leg ${leg.leg_id}.`] })),
+    square_off: [`Square off is ${body.square_off}.`],
+    costs: [`Costs start from ${body.starting_cash_usd}.`],
     notices: [],
+    setup: readBackOf(body),
   };
 }
 
@@ -66,6 +68,7 @@ function wholeSetupRefusal(setup: SetupRequest): string | null {
 export function fakeService(spy: Spy, changes: Partial<FakeService> = {}): FakeService {
   return {
     sessionClock: spy.fn(async () => SESSION_CLOCK),
+    limits: spy.fn(async () => SERVED_LIMITS),
     describe: spy.fn(async (body: unknown) => {
       const setup = body as SetupRequest;
       if (setup.legs.length === 0) {
@@ -92,7 +95,8 @@ export interface FakeDownload {
   save: Mock<(blob: Blob, filename: string) => void>;
 }
 
-export async function renderPage(service: FakeService, download?: FakeDownload) {
+/** `settled: false` returns as soon as the page is up, for a spec whose fake never answers (a read that is still going). */
+export async function renderPage(service: FakeService, download?: FakeDownload, options: { settled?: boolean } = {}) {
   const view = await render(OptionsBacktestPageComponent, {
     inputs: { describeDebounceMs: 0 },
     providers: [
@@ -102,5 +106,7 @@ export async function renderPage(service: FakeService, download?: FakeDownload) 
     ],
   });
   await screen.findByRole('heading', { name: 'Entry settings' });
+  // The limits and the saved setups are read by now, so a spec starts from a page that knows them.
+  if (options.settled !== false) await view.fixture.whenStable();
   return view;
 }

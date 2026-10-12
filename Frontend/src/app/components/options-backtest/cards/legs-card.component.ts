@@ -1,8 +1,9 @@
 import { ChangeDetectionStrategy, Component, computed, input, output, viewChildren } from '@angular/core';
 import type { FieldTree } from '@angular/forms/signals';
 
-import { MAX_LEGS } from '../leg-draft';
+import type { SetupLimits } from '../options-backtest.types';
 import type { SetupDraft } from '../setup-draft';
+import { legsFull } from '../setup-limits';
 import { FIELD, NO_PROBLEMS, type FieldProblems } from '../setup-problems';
 import { LegCardComponent } from './leg-card.component';
 
@@ -17,6 +18,8 @@ import { LegCardComponent } from './leg-card.component';
 export class LegsCardComponent {
   readonly form = input.required<FieldTree<SetupDraft>>();
   readonly problems = input<FieldProblems>(NO_PROBLEMS);
+  /** What the server allows; null while it is not known, and then the server judges. */
+  readonly limits = input<SetupLimits | null>(null);
   readonly legCopied = output<string>();
   readonly legRemoved = output<string>();
 
@@ -32,9 +35,9 @@ export class LegsCardComponent {
     this.cards()[position]?.focusHeading();
   }
 
-  protected readonly maxLegs = MAX_LEGS;
+  protected readonly maxLegs = computed(() => this.limits()?.max_legs ?? null);
   protected readonly legs = computed(() => this.form().legs().value());
-  protected readonly full = computed(() => this.legs().length >= MAX_LEGS);
+  protected readonly full = computed(() => legsFull(this.legs().length, this.limits()));
   /** With no legs the card already says to add one; the server's reason is shown once there are legs it can be about. */
   protected readonly legsProblem = computed(() => (this.legs().length === 0 ? null : (this.problems().get(FIELD.legs) ?? null)));
 }

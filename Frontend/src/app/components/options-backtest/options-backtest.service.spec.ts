@@ -3,8 +3,9 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { TestBed } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { JobsService } from '../../services/jobs.service';
 import { OptionsBacktestService, SetupInvalidError, SetupRefusedError } from './options-backtest.service';
-import { exampleBody } from './testing/fixtures';
+import { exampleBody, summaryFor } from './testing/fixtures';
 
 const BASE = '/api/research/options-backtest';
 
@@ -13,7 +14,9 @@ describe('OptionsBacktestService', () => {
   let http: HttpTestingController;
 
   beforeEach(() => {
-    TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient(), provideHttpClientTesting(), { provide: JobsService, useValue: {} }],
+    });
     service = TestBed.inject(OptionsBacktestService);
     http = TestBed.inject(HttpTestingController);
   });
@@ -29,11 +32,11 @@ describe('OptionsBacktestService', () => {
   it('posts the body it is given, untouched, to describe', async () => {
     const pending = service.describe(exampleBody());
     const request = http.expectOne(`${BASE}/setups/describe`);
-    request.flush({ window: 'w', legs: [], square_off: 's', costs: 'c', notices: [] });
+    request.flush(summaryFor('w'));
 
     expect(request.request.method).toBe('POST');
     expect(request.request.body).toEqual(exampleBody());
-    await expect(pending).resolves.toMatchObject({ window: 'w' });
+    await expect(pending).resolves.toMatchObject({ window: ['w window.'], setup: exampleBody() });
   });
 
   it('turns a 422 into the server reasons, with where each one is', async () => {
