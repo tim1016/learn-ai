@@ -55,8 +55,9 @@ from tests.options_backtest.setup_fixtures import leg, setup
 # 2026-10-12 14:00 New York.
 NOW_MS = 1791828000000
 SPY_500_CALL = OptionContract.of(root="SPY", expiry_date=WED, right="call", strike=500)
-# The stage of the phase a request belongs to, and the switch of the fake vendor that holds it.
+# The stage of the phase a request belongs to, the switch of the fake vendor that holds it, and the hook that says it came.
 HOLDS = {"underlying": "stock_release", "listing": "listing_release", "contracts": "option_release"}
+ON_REQUEST = {"underlying": "on_stock_request", "listing": "on_listing_request", "contracts": "on_option_request"}
 
 
 def the_money_call() -> Any:
@@ -101,6 +102,7 @@ async def test_two_runs_at_once_share_the_one_limit_of_four_requests_in_flight(
     fake_catalog: FakeCatalog, tmp_lake: Path, quick: None
 ) -> None:
     vendor = Vendor({WED: ladder_day(), THU: ladder_day()}, option_latency_s=0.15)
+    vendor.hold_the_first(4)  # four are in flight together on any machine; the rest overlap as the latency lets them
     vendor.mount()
 
     await asyncio.gather(_run([WED]), _run([THU]))
@@ -718,7 +720,7 @@ async def test_a_request_that_never_comes_back_is_cancelled_after_the_grace_and_
             await _run([WED], should_stop=moment.is_here)
         # The cancel is delivered on the background loop some time after the thread that sent it has moved on, and the
         # vendor may not answer before it has been: wait until the four requests have been cut off.
-        await _happens(vendor.when_nothing_is_in_flight(), "the cut-off of the four requests")
+        await _happens(vendor.when_every_request_has_ended(), "the cut-off of the four requests")
     finally:
         never.set()
     await _happens(the_batch_ends, "the end of the batch")
@@ -766,17 +768,29 @@ def _pace(fake: FakeTime) -> Pace:
     return Pace(now=fake.now, wait_for=fake.wait_for)
 
 
+def _hold_the_stage(vendor: Vendor, stage: str) -> tuple[threading.Event, FakeTime]:
+    """The vendor holds the requests of ``stage`` until the event returned is set, and the fake clock starts at the
+    first of them: the stages before it take as many slices as the machine needs and do not use the clock up."""
+    release, asked = threading.Event(), threading.Event()
+    setattr(vendor, HOLDS[stage], release)
+    setattr(vendor, ON_REQUEST[stage], lambda *_arguments: asked.set())
+    return release, FakeTime(starts_when=asked)
+
+
 @pytest.mark.parametrize("stage", ["underlying", "listing", "contracts"])
 @respx.mock
 async def test_a_stage_that_takes_ten_minutes_asks_whether_to_stop_at_least_every_thirty_seconds(
-    stage: str, fake_catalog: FakeCatalog, tmp_lake: Path
+    stage: str, fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The listing's own limit is ten minutes, the time this stage is held for, and a limit met at the moment the vendor
+    # answers is a different test (the wait that runs out). The limits are put out of the way: an hour.
+    for limit in ("_UNDERLYING_TIMEOUT_SECONDS", "_LISTING_TIMEOUT_SECONDS", "_CONTRACTS_TIMEOUT_SECONDS"):
+        monkeypatch.setattr(fetching, limit, 3600.0)
     vendor = Vendor({WED: ladder_day()})
     vendor.mount()
     if stage != "underlying":
         await _store_the_underlying_and_the_listing(listing=stage == "contracts")
-    release, fake = threading.Event(), FakeTime()
-    setattr(vendor, HOLDS[stage], release)
+    release, fake = _hold_the_stage(vendor, stage)
     fake.release_at(600, release)
 
     report = await _run([WED], should_stop=fake.stop_at(10_000), pace=_pace(fake))
@@ -796,8 +810,7 @@ async def test_a_stop_asked_in_any_stage_is_heard_within_one_poll_and_ends_the_p
     vendor.mount()
     if stage != "underlying":
         await _store_the_underlying_and_the_listing(listing=stage == "contracts")
-    release, fake = threading.Event(), FakeTime()
-    setattr(vendor, HOLDS[stage], release)
+    release, fake = _hold_the_stage(vendor, stage)
     asked = fake.stop_at(100)
 
     def stop_and_let_what_is_in_flight_finish() -> bool:
@@ -824,8 +837,7 @@ async def test_a_request_that_never_comes_back_is_given_a_minute_after_the_stop_
     vendor.mount()
     if stage != "underlying":
         await _store_the_underlying_and_the_listing(listing=stage == "contracts")
-    never, fake = threading.Event(), FakeTime()
-    setattr(vendor, HOLDS[stage], never)
+    never, fake = _hold_the_stage(vendor, stage)
 
     try:
         with pytest.raises(DownloadStopped):
@@ -833,6 +845,10 @@ async def test_a_request_that_never_comes_back_is_given_a_minute_after_the_stop_
         # The underlying's chunk cannot be told to stop and is let go at once; the others are given the grace.
         grace = 0 if stage == "underlying" else fetching.STOP_GRACE_SECONDS
         assert 100 + grace <= fake.at <= 100 + grace + fetching.STOP_POLL_SECONDS
+        if stage != "underlying":
+            # The cancel reaches the request on the background loop after this thread has moved on; the vendor answers
+            # only once it has, so that a request cut off is not answered (and its file written) after the test.
+            await _happens(vendor.when_every_request_has_ended(), "the cut-off of the request")
     finally:
         never.set()
 

@@ -165,6 +165,7 @@ async def test_at_most_four_contract_requests_are_in_flight_at_once(fake_catalog
         strikes=tuple(range(496, 505)),
     )
     vendor = Vendor({WED: day}, option_latency_s=0.05)
+    vendor.hold_the_first(4)  # four are in flight together on any machine; the other four wait for a place
     vendor.mount()
 
     await _fetch(eight_legs, [WED])

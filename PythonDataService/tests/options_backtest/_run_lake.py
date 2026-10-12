@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import re
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from concurrent.futures import Future
 from concurrent.futures import wait as wait_for_futures
 from dataclasses import dataclass, field
@@ -40,6 +40,24 @@ _OPTION_BARS_PATH = re.compile(r"/v2/aggs/ticker/O:(?P<symbol>[A-Z0-9]+)/range/1
 _STOCK_BARS_PATH = re.compile(r"/v2/aggs/ticker/(?P<symbol>[A-Z.]+)/range/1/minute/(?P<day>\d{4}-\d{2}-\d{2})/.*")
 _OPTION_BARS_URL = r"https://api\.polygon\.io/v2/aggs/ticker/O:[A-Z0-9]+/range/1/minute/.*"
 _STOCK_BARS_URL = r"https://api\.polygon\.io/v2/aggs/ticker/[A-Z.]+/range/1/minute/\d{4}-\d{2}-\d{2}/.*"
+
+
+def _counted(
+    handler: Callable[[Any, httpx.Request], Awaitable[httpx.Response]],
+) -> Callable[[Any, httpx.Request], Awaitable[httpx.Response]]:
+    """Count a handler's requests while they are open (see ``Vendor.when_every_request_has_ended``)."""
+
+    async def counted(self: Any, request: httpx.Request) -> httpx.Response:
+        self._open_requests += 1
+        try:
+            return await handler(self, request)
+        finally:
+            self._open_requests -= 1
+            if self._open_requests == 0:
+                for over in self._over_events:
+                    over.set()
+
+    return counted
 
 
 @dataclass
@@ -70,8 +88,10 @@ class Vendor:
     # A hook run when an option request arrives, to cancel a run mid-download.
     on_option_request: Callable[[str], None] | None = None
     on_listing_request: Callable[[date], None] | None = None
+    on_stock_request: Callable[[date], None] | None = None
     _in_flight_events: list[tuple[int, threading.Event]] = field(default_factory=list, init=False, repr=False)
-    _idle_events: list[threading.Event] = field(default_factory=list, init=False, repr=False)
+    _open_requests: int = field(default=0, init=False, repr=False)
+    _over_events: list[threading.Event] = field(default_factory=list, init=False, repr=False)
 
     def when_in_flight(self, count: int) -> threading.Event:
         """An event the stand-in sets the moment ``count`` option requests are in flight at once, never by the clock.
@@ -86,17 +106,31 @@ class Vendor:
             reached.set()
         return reached
 
-    def when_nothing_is_in_flight(self) -> threading.Event:
-        """An event the stand-in sets the moment no option request is in flight, because each was answered or cut off.
+    def hold_the_first(self, count: int, *, for_at_most: float = 10.0) -> None:
+        """Answer no option request until ``count`` are in flight together.
 
-        Asked for while requests are held, it is how a test learns that a cancel has reached them, which is delivered on
-        the background loop some time after the thread that asked for it has moved on.
+        A test of the most requests in flight at once then sees that many however slowly the requests arrive, and the
+        requests go on to overlap as the test sets them up to. If they never are ``count``, they are let go after
+        ``for_at_most`` seconds, so that a fault shows as a count that is wrong and not as a hang.
         """
-        left = threading.Event()
-        self._idle_events.append(left)
-        if self.in_flight == 0:
-            left.set()
-        return left
+        everyone_is_here = self.when_in_flight(count)
+        opens_it_anyway = threading.Timer(for_at_most, everyone_is_here.set)
+        opens_it_anyway.daemon = True
+        opens_it_anyway.start()
+        self.option_release = everyone_is_here
+
+    def when_every_request_has_ended(self) -> threading.Event:
+        """An event the stand-in sets the moment no request of any kind is open, because each was answered or cut off.
+
+        Asked for while requests are held, it is how a test learns that a cancel has reached them: the cancel is
+        delivered on the background loop some time after the thread that sent it has moved on, and a vendor let answer
+        before it has been would answer requests that were meant to be cut off.
+        """
+        over = threading.Event()
+        self._over_events.append(over)
+        if self._open_requests == 0:
+            over.set()
+        return over
 
     def mount(self) -> None:
         mock_launcher()
@@ -117,6 +151,7 @@ class Vendor:
         while release is not None and not release.is_set():
             await asyncio.sleep(0.002)
 
+    @_counted
     async def _listing(self, request: httpx.Request) -> httpx.Response:
         self._log(request)
         day = date.fromisoformat(request.url.params["as_of"])
@@ -139,6 +174,7 @@ class Vendor:
         ]
         return httpx.Response(200, json={"request_id": "r", "status": "OK", "results": rows})
 
+    @_counted
     async def _option_bars(self, request: httpx.Request) -> httpx.Response:
         self._log(request)
         match = _OPTION_BARS_PATH.fullmatch(request.url.path)
@@ -168,16 +204,16 @@ class Vendor:
             return traded(symbol, [_option_row(day, minute, series[minute]) for minute in sorted(series)])
         finally:
             self.in_flight -= 1
-            if self.in_flight == 0:
-                for left in self._idle_events:
-                    left.set()
 
+    @_counted
     async def _stock_bars(self, request: httpx.Request) -> httpx.Response:
         self._log(request)
         match = _STOCK_BARS_PATH.fullmatch(request.url.path)
         assert match is not None
         day = date.fromisoformat(match["day"])
         self.stock_requests.append(day)
+        if self.on_stock_request is not None:
+            self.on_stock_request(day)
         await self._held_until(self.stock_release)
         if day in self.stock_errors:
             return httpx.Response(self.stock_errors[day], json={"status": "ERROR"})
@@ -225,14 +261,20 @@ class FakeTime:
     ``wait_for(future, seconds)`` does not wait: it moves the clock on by those seconds, sets any event that was
     due by then (``release_at``), and gives the work on the other thread a few real milliseconds to react. A phase
     that takes ten minutes of fake time therefore takes a second or two, and ``polls`` shows when it asked to stop.
+
+    Each wait gives the other thread a few real milliseconds and moves the clock on, so the stages of the phase that
+    come before the one under test would use up as many fake seconds as the machine takes slices to do their work.
+    With ``starts_when``, the clock stands still until that event is set (the vendor's first request of the stage under
+    test, held), and the stage under test begins at fake second 0 on any machine.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, starts_when: threading.Event | None = None) -> None:
         # Real seconds each wait gives the other thread; a test raises it where it needs the work to finish first.
         self.real_seconds_per_wait = 0.02
         self.at = 0.0
         self.polls: list[float] = []
         self._due: list[tuple[float, threading.Event]] = []
+        self._starts_when = starts_when
 
     def now(self) -> float:
         return self.at
@@ -241,10 +283,11 @@ class FakeTime:
         self._due.append((seconds, event))
 
     def wait_for(self, future: Future[object], seconds: float) -> None:
-        self.at += seconds
-        for due, event in self._due:
-            if self.at >= due:
-                event.set()
+        if self._starts_when is None or self._starts_when.is_set():
+            self.at += seconds
+            for due, event in self._due:
+                if self.at >= due:
+                    event.set()
         wait_for_futures([future], timeout=self.real_seconds_per_wait)
 
     def stop_at(self, seconds: float) -> Callable[[], bool]:
