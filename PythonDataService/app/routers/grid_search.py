@@ -266,15 +266,16 @@ async def start_grid_search_job(req: GridSearchJobRequest) -> dict[str, Any]:
     if req.resume_search_id:
         row = await _load(req.resume_search_id)
         _refuse_if_owned(row)
+        if row.job_id == req.job_id and row.status in records.STORED_LIVE_STATUSES:
+            # A redelivery of a live dispatch joins the first worker before
+            # any resume refusal can call it unresumable — the attempt is
+            # never claimed twice (#3049).
+            records.require_live_redelivery(req.job_id, noun=NOUN)
+            return {"job_id": req.job_id, "search_id": row.id, "status": "queued"}
         refusal = await to_thread.run_sync(partial(_resume_refusal, row, live=records.liveness(row), verify_data=True))
         if refusal is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": "NOT_RESUMABLE", "message": refusal})
         search_id = row.id
-        if row.job_id == req.job_id and row.status in records.STORED_LIVE_STATUSES:
-            # A redelivery of a live dispatch joins the first worker; the
-            # attempt is never claimed twice (#3049).
-            records.require_live_redelivery(req.job_id, noun=NOUN)
-            return {"job_id": req.job_id, "search_id": search_id, "status": "queued"}
         await records.stamp_research_dispatch(job_id=req.job_id, kind="grid_search", record_id=search_id)
     else:
         # A fresh launch is idempotent under its job id: a search already
