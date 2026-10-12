@@ -39,6 +39,9 @@ _QUANT = Decimal(1)  # round to integer after scaling
 # (which LEAN's GetDecimal misreads) is refused, as int() refused it before.
 _VOLUME_COLUMN = re.compile(r"(0|[1-9][0-9]*)(\.[0-9]*[1-9])?")
 
+# What the writer writes for a bar's start and for each price: digits and nothing else.
+_UNSIGNED_INTEGER = re.compile(r"[0-9]+")
+
 # ZIP archive epoch — pinned so two runs with identical inputs produce
 # byte-identical zips. ZipFile default is "now", which would break the
 # data_availability_hash determinism gate.
@@ -182,6 +185,26 @@ def parse_volume(text: str) -> Decimal:
     if _VOLUME_COLUMN.fullmatch(text) is None:
         raise ValueError(f"volume {text!r} is not a whole or plain decimal share count")
     return Decimal(text)
+
+
+def parse_minute_trade_row(line: str) -> tuple[int, int, int, int, int, Decimal]:
+    """Decode one row of a minute-trade file: the inverse of a row :func:`build_minute_trade_zip_bytes` writes.
+
+    A row is ``start,open,high,low,close,volume``: the start in milliseconds after New York midnight and the four
+    prices in ten-thousandths of a dollar, each as digits and nothing else, then the volume as :func:`parse_volume`
+    reads it. Returns the start, the four prices and the volume. It accepts exactly what the writer writes, and
+    anything else is a ``ValueError``: a row of another width, an empty line, a sign, a space, a decimal point, an
+    underscore or an exponent in a number. The stock reader (``lean_format._parse_csv_bytes``) skips a row of another
+    width and an empty line, and reads some of the other forms (``Decimal`` takes ``NaN``, ``1.5`` and ``+5``).
+    """
+    columns = line.split(",")
+    if len(columns) != 6:
+        raise ValueError(f"expected 6 columns, found {len(columns)}")
+    *numbers, volume = columns
+    if any(_UNSIGNED_INTEGER.fullmatch(text) is None for text in numbers):
+        raise ValueError("the start and the four prices must be whole numbers")
+    start, open_, high, low, close = (int(text) for text in numbers)
+    return start, open_, high, low, close, parse_volume(volume)
 
 
 def _ms_since_midnight_et(bar_start_et: datetime) -> int:

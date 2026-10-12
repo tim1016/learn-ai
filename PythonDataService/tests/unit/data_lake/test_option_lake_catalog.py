@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import os
+import zipfile
 from datetime import date
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
@@ -37,6 +39,7 @@ from app.data_lake import option_bars as option_bars_module
 from app.data_lake import option_lake as option_lake_module
 from app.data_lake import option_listing as option_listing_module
 from app.data_lake.option_bars import (
+    OptionBarsFileError,
     captured_option_days,
     ensure_option_day_bars,
     option_minute_trade_dch,
@@ -671,6 +674,37 @@ async def test_a_writer_whose_lease_was_taken_while_it_fetched_publishes_nothing
     assert (row["Status"], row["LeaseOwner"], row["LeaseGeneration"]) == ("fetching", "the-winner", 2)
     assert row["FileSha256"] is None
     assert [p for p in (tmp_lake / "lake" / "raw").rglob("*.zip") if "minute" in p.parts] == []  # no bars file; the listing's is there
+
+
+@respx.mock
+async def test_a_stored_day_with_a_bar_off_the_minute_is_fetched_again_and_not_reused_on_the_real_table(
+    clean_artifacts, pool, tmp_lake
+) -> None:
+    route = _mock_bars(_bars_ok([_bar(0)]))
+    first = await _ensure()
+    assert first.record is not None
+    # 34 200 001 ms after midnight is 09:30:00.001, a millisecond past the open; the file gets the receipt that admits it.
+    member = "20250613_spy250613c00600000_minute_trade.csv"
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(member, "34200001,12700,13100,12500,12700,12\n")
+    off_the_minute = buffer.getvalue()
+    (tmp_lake / "lake" / "raw" / first.record.file_path).write_bytes(off_the_minute)
+    await _sql(
+        'UPDATE "DataLakeArtifacts" SET "FileSha256" = $2, "FileSizeBytes" = $3 WHERE "Id" = $1',
+        first.record.id, hashlib.sha256(off_the_minute).hexdigest(), len(off_the_minute),
+    )
+
+    with pytest.raises(OptionBarsFileError):
+        await asyncio.to_thread(read_option_day_bars, CONTRACT, TRADING_DAY)
+    again = await _ensure()
+
+    assert again.failure is None and again.reused is False and again.record is not None
+    assert route.call_count == 2
+    healed = await asyncio.to_thread(read_option_day_bars, CONTRACT, TRADING_DAY)
+    assert healed is not None and [bar.start_ms for bar in healed.bars] == [SESSION_OPEN_MS]
+    [row] = await _bar_rows()
+    assert (row["Status"], row["LeaseGeneration"], row["FileSha256"]) == ("complete", 2, again.record.file_sha256)
 
 
 # ── A listing row on the real table ──────────────────────────────────────

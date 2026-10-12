@@ -2001,14 +2001,51 @@ def test_no_single_damaged_byte_or_cut_of_a_written_file_escapes_as_anything_but
         "34200000,12700,13100,12500,12700,12\n34200000,12700,13100,12500,12700,12\n",  # a start repeated
         "34260000,12700,13100,12500,12700,12\n34200000,12700,13100,12500,12700,12\n",  # starts out of order
         "86400000,12700,13100,12500,12700,12\n",  # the first millisecond of the next date
+        "34200001,12700,13100,12500,12700,12\n",  # 09:30:00.001, a millisecond past the minute
+        "34230000,12700,13100,12500,12700,12\n",  # 09:30:30, half a minute past it
+        "34259999,12700,13100,12500,12700,12\n",  # 09:30:59.999, a millisecond short of 09:31
     ],
-    ids=["zero price", "zero close", "low above high", "high below open", "low above open", "repeated start", "out of order", "next date"],
+    ids=[
+        "zero price", "zero close", "low above high", "high below open", "low above open", "repeated start", "out of order",
+        "next date", "a millisecond past the minute", "half a minute past it", "a millisecond short of the next minute",
+    ],
 )
 def test_a_stored_day_whose_bars_break_the_rules_of_a_stored_day_is_refused(body: str) -> None:
     with pytest.raises(OptionBarsFileError) as caught:
         parse_option_day_zip(_zip(MEMBER, body), SYMBOL, TRADING_DAY)
 
     assert isinstance(caught.value.__cause__, ValueError)
+
+
+def test_a_stored_start_off_the_minute_is_refused_naming_the_first_such_bar_and_its_instant() -> None:
+    """The rule is the ingest's, asked of a stored day: the first bar off the minute is named by its index and start.
+
+    The open is 1749821400000 ms (09:30 EDT). The rows start 0, 60 000, 120 001 and 180 001 ms after it: the first two are
+    on a minute, the third is 09:32:00.001 = 1749821400000 + 120 001 = 1749821520001, and the fourth is off too.
+    """
+    body = (
+        "34200000,12700,13100,12500,12700,12\n34260000,12700,13100,12500,12700,12\n"
+        "34320001,12700,13100,12500,12700,12\n34380001,12700,13100,12500,12700,12\n"
+    )
+
+    with pytest.raises(OptionBarsFileError) as caught:
+        parse_option_day_zip(_zip(MEMBER, body), SYMBOL, TRADING_DAY)
+
+    message = str(caught.value)
+    assert "bar[2] t_ms=1749821520001" in message and "bar[3]" not in message
+    assert "does not start on a whole minute" in message
+
+
+def test_a_stored_day_whose_every_start_is_on_a_minute_is_read_with_all_its_bars() -> None:
+    """The same file as above with the offsets taken out reads whole: the rule refuses only an off-minute start."""
+    body = (
+        "34200000,12700,13100,12500,12700,12\n34260000,12700,13100,12500,12700,12\n"
+        "34320000,12700,13100,12500,12700,12\n34380000,12700,13100,12500,12700,12\n"
+    )
+
+    bars = parse_option_day_zip(_zip(MEMBER, body), SYMBOL, TRADING_DAY)
+
+    assert [bar.start_ms for bar in bars] == [1749821400000, 1749821460000, 1749821520000, 1749821580000]
 
 
 def _replace_the_stored_file(fake_catalog: FakeCatalog, tmp_lake: Path, record_id: int, payload: bytes) -> None:
@@ -2042,6 +2079,28 @@ async def test_an_admitted_file_that_is_no_zip_or_breaks_the_rules_of_a_stored_d
         assert healed is not None and len(healed.bars) == 1, name
 
     assert route.call_count == 1 + len(mangled)
+
+
+@respx.mock
+async def test_a_stored_day_with_a_bar_off_the_minute_is_unreadable_and_a_download_fetches_it_again_and_does_not_call_it_stored(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """One rule for a stored day: what the reader refuses the reuse gate refuses too, so the day can be repaired."""
+    route = _mock_vendor()
+    first = await _ensure()
+    assert first.record is not None and route.call_count == 1
+    # 34 200 001 ms after midnight is 09:30:00.001, a millisecond past the open.
+    _replace_the_stored_file(fake_catalog, tmp_lake, first.record.id, _zip(MEMBER, "34200001,12700,13100,12500,12700,12\n"))
+
+    with pytest.raises(OptionBarsFileError):
+        await _read()
+    again = await _ensure()
+
+    assert again.failure is None and again.reused is False and again.record is not None
+    assert route.call_count == 2  # the vendor was asked again: the stored day was not taken for a good one
+    healed = await _read()
+    assert healed is not None and [bar.start_ms for bar in healed.bars] == [SESSION_OPEN_MS]
+    assert healed.sha256 == again.record.file_sha256
 
 
 # ── A price that would be stored as zero fails the day ───────────────────

@@ -43,11 +43,12 @@ import respx
 from app.data_lake import catalog_client
 from app.data_lake.admission import LakeAdmissionError
 from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes
-from app.data_lake.option_bars import OptionBarsFileError
+from app.data_lake.option_bars import OptionBar, OptionBarsFileError, OptionDayBars
 from app.data_lake.option_listing import OptionListingFileError
 from app.engine.data.availability import check_availability
 from app.engine.data.lean_format import LeanMinuteDataReader, write_lean_day_zip
 from app.options.contract import OptionContract
+from app.options_backtest import lake_data as lake_data_module
 from app.options_backtest.lake_data import (
     _STOCK_FILE_ERRORS,
     LakeRunData,
@@ -603,28 +604,37 @@ async def test_an_option_day_with_a_bar_stamped_off_the_minute_is_unreadable_and
         fake_catalog, raw_root(tmp_lake), option_bars_path(contract), option_day_zip(contract, starts), admit=True
     )
 
+    # The lake's own parser of a stored option day refuses a start off the minute, naming the first such bar (index 2).
     with pytest.raises(OptionBarsFileError) as caught:
         await _read(LakeRunData("SPY").option_day, contract, FRIDAY)
 
     message = str(caught.value)
-    assert contract.occ_symbol in message and "1 of 3" in message and f"{first_start_ms} ms" in message
-    assert "not on a whole minute" in message
+    assert contract.occ_symbol in message and "bar[2]" in message and f"t_ms={first_start_ms}" in message
+    assert "does not start on a whole minute" in message
     assert str(tmp_lake) not in message and ".zip" not in message
 
 
-@respx.mock
-async def test_an_option_day_with_several_bars_that_cannot_be_placed_counts_them_all_and_names_the_first(
-    fake_catalog: FakeCatalog, tmp_lake: Path
+async def test_the_readers_own_guard_for_the_close_still_counts_option_bars_it_cannot_place_should_the_lake_hand_over_one(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    contract = await _an_option_day_holding([FRIDAY_OPEN_MS])
-    # 09:30:30 (1749821430000) is off the minute, 23:59 (1749873540000) closes on the 14th, 09:31 is in place.
+    # The lake's parser refuses a start off the minute (above), so a stored option day cannot reach this check with one;
+    # it stays as the reader's own guard for the close, and a double of the lake's read shows it still counts and names.
+    # 09:30:30 (1749821430000) is off the minute, 23:59 (1749873540000) closes on the 14th, 09:30 and 09:31 are in place.
     starts = [FRIDAY_OPEN_MS, FRIDAY_OPEN_MS + 30_000, FRIDAY_OPEN_MS + MINUTE_MS, 1749873540000]
-    replace_the_stored_file(
-        fake_catalog, raw_root(tmp_lake), option_bars_path(contract), option_day_zip(contract, starts), admit=True
+    bars = tuple(
+        OptionBar(start_ms=start_ms, open=D("1.27"), high=D("1.31"), low=D("1.25"), close=D("1.27"), volume=D(10))
+        for start_ms in starts
+    )
+    monkeypatch.setattr(
+        lake_data_module,
+        "read_option_day_bars",
+        lambda contract, day, **kwargs: OptionDayBars(
+            contract_symbol=contract.occ_symbol, trading_date=day, bars=bars, sha256="0" * 64
+        ),
     )
 
     with pytest.raises(OptionBarsFileError) as caught:
-        await _read(LakeRunData("SPY").option_day, contract, FRIDAY)
+        await _read(LakeRunData("SPY").option_day, CALL_600, FRIDAY)
 
     message = str(caught.value)
     assert "2 of 4" in message and "1749821430000 ms" in message and "1749873540000" not in message

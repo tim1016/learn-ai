@@ -124,6 +124,7 @@ def _named_by_close(
         # The one place a stored start becomes a close.
         close_ms = bar.start_ms + MS_PER_MINUTE
         if close_ms % MS_PER_MINUTE:
+            # The lake's parser of an option day already refuses an off-minute start; the stock reader does not.
             why = "is not on a whole minute"
         elif et_date_at_ms(close_ms) != trading_date:
             why = "closes on another New York date"
