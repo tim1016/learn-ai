@@ -22656,7 +22656,7 @@ export interface components {
          * @description One run, opened: the setup it ran, the banner facts and, when it is complete, every figure. Not its trades.
          */
         OptionsBacktestRunDetailResponse: {
-            banner: components["schemas"]["OptionsBacktestFillsBannerResponse"];
+            banner?: components["schemas"]["OptionsBacktestFillsBannerResponse"] | null;
             /** Calendar Identity */
             calendar_identity: string;
             /** Calendar Package Version */
@@ -22680,7 +22680,9 @@ export interface components {
             last_session_open_ms: number;
             /** Sessions Requested */
             sessions_requested: number;
-            setup: components["schemas"]["OptionsBacktestSetup-Output"];
+            setup?: components["schemas"]["OptionsBacktestSetup-Output"] | null;
+            /** Setup Cannot Open Reason */
+            setup_cannot_open_reason?: string | null;
             /** Setup Name */
             setup_name?: string | null;
             /** Slippage */

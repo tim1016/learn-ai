@@ -4,14 +4,10 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
-from datetime import date
 from typing import Any
 
 from app.options_backtest import run_json
-from app.options_backtest.run_json import record_of
 from tests.options_backtest._a_run import a_busy_run, what_the_busy_run_reaches
-from tests.options_backtest._market import OPEN_MS
 
 
 def _no_float_anywhere(value: Any) -> None:
@@ -72,32 +68,3 @@ def test_every_session_s_events_and_pins_come_back_as_they_went() -> None:
             run_json.pins_from_json(session.pins.underlying_sha256, session.pins.listing_sha256, days) == session.pins
         )
         _no_float_anywhere(events)
-
-
-@dataclass(frozen=True)
-class _RecordWithADate:
-    session_open_ms: int
-    trading_date: date | None = None
-
-
-@dataclass(frozen=True)
-class _RecordWithTwo:
-    peak_session_open_ms: int | None
-    trough_session_open_ms: int
-    peak_date: date | None = None
-    trough_date: date | None = None
-
-
-@dataclass(frozen=True)
-class _RecordWithNone:
-    session_open_ms: int
-
-
-def test_a_record_that_still_carries_a_date_gets_the_new_york_date_of_the_open_and_one_that_does_not_gets_nothing() -> (
-    None
-):
-    # OPEN_MS is 09:30 New York on 2026-10-09, which is 13:30 UTC the same day; a half day later in the year is 14:30 UTC.
-    assert record_of(_RecordWithADate, session_open_ms=OPEN_MS).trading_date == date(2026, 10, 9)
-    two = record_of(_RecordWithTwo, peak_session_open_ms=None, trough_session_open_ms=OPEN_MS)
-    assert (two.peak_date, two.trough_date) == (None, date(2026, 10, 9))
-    assert record_of(_RecordWithNone, session_open_ms=OPEN_MS) == _RecordWithNone(OPEN_MS)

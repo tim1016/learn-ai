@@ -16,17 +16,36 @@ import json
 import re
 from datetime import date
 from decimal import Decimal
-from typing import get_args
+from typing import get_args, get_type_hints
 
 import pytest
+from pydantic import ValidationError
 
 from app.lean_sidecar.trading_calendar import session_window_for_date
-from app.options_backtest.data_check import DataKind, ProblemCode, SessionVerdict
+from app.options_backtest.data_check import (
+    NOT_YET_KNOWN,
+    ContractNeeds,
+    DataKind,
+    ProblemCode,
+    SessionCheck,
+    SessionVerdict,
+)
 from app.options_backtest.market import PickRefusal
 from app.options_backtest.results import ExitReason, SessionStatus, SkipReason
 from app.options_backtest.run import RunResult, run_sessions
-from app.options_backtest.saved_runs import FailureItem, Headline, RunFailure, RunFigures, RunRecord, StoredRun
-from app.options_backtest.statistics import Ratio
+from app.options_backtest.saved_runs import (
+    FailureItem,
+    Headline,
+    PresentedStatus,
+    RunFailure,
+    RunFigures,
+    RunRecord,
+    StoredRun,
+    StoredStatus,
+)
+from app.options_backtest.setup import FeePolicy
+from app.options_backtest.statistics import Drawdown, Ratio
+from app.research.persistence.schema import DDL_V20
 from app.schemas import options_backtest_runs as wire
 from tests.options_backtest._run_data import fake_data
 from tests.options_backtest.test_service import SESSION_OF_THE_RANGE, THU, TUE, the_scene, the_setup
@@ -85,7 +104,16 @@ def _stored(result: RunResult, *, status: str = "complete") -> StoredRun:
         (wire.VerdictWord, [member.value for member in SessionVerdict]),
         (wire.ProblemCodeWord, [member.value for member in ProblemCode]),
         (wire.MissingWord, [member.value for member in DataKind]),
-        (wire.RunStatusWord, ["running", "complete", "failed", "cancelled", "interrupted"]),
+        # The three words that are literals where they are made, not enums: each is read from the type that makes it.
+        (
+            wire.OptionsBacktestFillsBannerResponse.model_fields["fee_policy_kind"].annotation,
+            list(get_args(get_type_hints(FeePolicy)["kind"])),
+        ),
+        (
+            wire.OptionsBacktestDrawdownResponse.model_fields["measured_at"].annotation,
+            list(get_args(get_type_hints(Drawdown)["measured_at"])),
+        ),
+        (wire.RunStatusWord, list(get_args(PresentedStatus))),
     ],
 )
 def test_each_closed_set_on_the_wire_is_exactly_the_members_of_the_enum_it_comes_from(
@@ -94,7 +122,101 @@ def test_each_closed_set_on_the_wire_is_exactly_the_members_of_the_enum_it_comes
     assert list(get_args(words)) == members
 
 
+def test_the_status_a_run_is_presented_with_is_the_four_the_table_stores_and_interrupted() -> None:
+    stored_in_the_table = re.search(r"status\s+TEXT NOT NULL CHECK \(status IN \(([^)]*)\)\)", DDL_V20[0])
+    assert stored_in_the_table is not None
+    in_the_table = [word.strip().strip("'") for word in stored_in_the_table.group(1).split(",")]
+
+    assert in_the_table == list(get_args(StoredStatus))
+    assert list(get_args(PresentedStatus)) == [*in_the_table, "interrupted"]
+
+
+def test_the_contract_state_of_a_session_is_known_exactly_when_the_check_counted_them() -> None:
+    # The two words name the two states of ``ContractNeeds.known``, which is a yes or a no and cannot gain a third.
+    assert list(get_args(wire.OptionsBacktestContractNeedsResponse.model_fields["state"].annotation)) == [
+        "known",
+        "not_yet_known",
+    ]
+
+    def checked(needs: ContractNeeds) -> wire.OptionsBacktestSessionCheckResponse:
+        return wire.OptionsBacktestSessionCheckResponse.from_session(
+            SessionCheck(
+                session_open_ms=1,
+                session_close_ms=2,
+                verdict=SessionVerdict.NEEDS_DOWNLOAD,
+                skip=None,
+                missing=(),
+                contracts=needs,
+                problems=(),
+                notes=(),
+            )
+        )
+
+    assert checked(ContractNeeds(needed=6, missing=4)).contracts.model_dump() == {
+        "state": "known",
+        "needed": 6,
+        "missing": 4,
+    }
+    assert checked(ContractNeeds(needed=0, missing=0)).contracts.state == "known"
+    assert checked(NOT_YET_KNOWN).contracts.model_dump() == {"state": "not_yet_known", "needed": None, "missing": None}
+
+
 # ── One complete run ─────────────────────────────────────────────────────
+
+
+def test_a_run_whose_setup_cannot_be_read_is_sent_with_its_figures_the_reason_and_no_banner(result: RunResult) -> None:
+    stored = _stored(result)
+    unreadable = StoredRun(
+        record=stored.record,
+        setup=None,
+        figures=stored.figures,
+        setup_cannot_open_reason="lots: Extra inputs are not permitted",
+    )
+
+    detail = wire.OptionsBacktestRunDetailResponse.from_stored(unreadable)
+
+    assert detail.setup is None and detail.setup_cannot_open_reason == "lots: Extra inputs are not permitted"
+    assert detail.banner is None
+    assert detail.figures is not None and detail.figures.net_profit_usd == "-69.25"
+    assert detail.fee_policy == "Fees are $0.65 per contract traded." and detail.headline is not None
+
+
+def test_a_run_carries_its_setup_and_its_banner_together_or_the_reason_it_has_neither(result: RunResult) -> None:
+    readable = wire.OptionsBacktestRunDetailResponse.from_stored(_stored(result)).model_dump()
+    stored = _stored(result)
+    unreadable = wire.OptionsBacktestRunDetailResponse.from_stored(
+        StoredRun(stored.record, None, stored.figures, setup_cannot_open_reason="why")
+    ).model_dump()
+    wire.OptionsBacktestRunDetailResponse.model_validate(readable)
+    wire.OptionsBacktestRunDetailResponse.model_validate(unreadable)
+
+    for broken in (
+        {**readable, "setup_cannot_open_reason": "why"},  # the setup and a reason why it is not there
+        {**readable, "setup": None},  # neither the setup nor a reason
+        {**readable, "banner": None},  # a setup without the banner that states what it says
+        {**unreadable, "banner": readable["banner"]},  # a banner without a setup to state it from
+        {**unreadable, "setup_cannot_open_reason": None},  # neither
+    ):
+        with pytest.raises(ValidationError):
+            wire.OptionsBacktestRunDetailResponse.model_validate(broken)
+    with pytest.raises(ValueError):
+        StoredRun(stored.record, stored.setup, stored.figures, setup_cannot_open_reason="why")
+    with pytest.raises(ValueError):
+        StoredRun(stored.record, None, stored.figures)
+
+
+def test_the_setup_a_run_carries_has_its_money_in_plain_digits_however_it_was_spelled(result: RunResult) -> None:
+    # A setup spelled 1e5 holds Decimal("1E+5"), which a model would send as "1E+5". It is a hundred thousand dollars.
+    stored = _stored(result)
+    spelled_in_exponent_form = result.setup.model_copy(update={"starting_cash_usd": Decimal("1E+5")})
+    assert str(spelled_in_exponent_form.starting_cash_usd) == "1E+5"
+
+    detail = wire.OptionsBacktestRunDetailResponse.from_stored(
+        StoredRun(stored.record, spelled_in_exponent_form, stored.figures)
+    )
+
+    assert detail.model_dump(mode="json")["setup"]["starting_cash_usd"] == "100000"
+    assert detail.setup is not None and detail.setup.starting_cash_usd == Decimal("100000")
 
 
 def test_the_figures_are_exact_strings_and_rates_come_in_three_parts_with_one_rounded(result: RunResult) -> None:

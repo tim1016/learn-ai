@@ -40350,7 +40350,9 @@
             "type": "integer"
           },
           "job_id": {
+            "maxLength": 128,
             "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
             "title": "Job Id",
             "type": "string"
           },
@@ -40615,7 +40617,14 @@
         "description": "One run, opened: the setup it ran, the banner facts and, when it is complete, every figure. Not its trades.",
         "properties": {
           "banner": {
-            "$ref": "#/components/schemas/OptionsBacktestFillsBannerResponse"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionsBacktestFillsBannerResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "calendar_identity": {
             "title": "Calendar Identity",
@@ -40705,7 +40714,25 @@
             "type": "integer"
           },
           "setup": {
-            "$ref": "#/components/schemas/OptionsBacktestSetup-Output"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionsBacktestSetup-Output"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "setup_cannot_open_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setup Cannot Open Reason"
           },
           "setup_name": {
             "anyOf": [
@@ -40763,8 +40790,6 @@
           "fee_policy",
           "calendar_identity",
           "calendar_package_version",
-          "setup",
-          "banner",
           "slippage"
         ],
         "title": "OptionsBacktestRunDetailResponse",
@@ -79668,6 +79693,8 @@
             "schema": {
               "anyOf": [
                 {
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9_-]+$",
                   "type": "string"
                 },
                 {

@@ -9,17 +9,14 @@ Validated against: tests/options_backtest/test_run_json.py, and the exact round 
   tests/options_backtest/test_saved_runs.py.
 
 No float and no date is anywhere in it: a session is identified by its open in ``int64 ms UTC`` and by nothing else.
-Reading raises ``KeyError`` or ``ValueError`` for JSON that is not what this module writes.
-
-Until the run core's records lose the dates they still carry beside a session's open (``trading_date``, ``peak_date``,
-``trough_date``), ``record_of`` is the one place that makes them again, from the open, when a record is built; once they
-are gone it adds nothing and is only ``cls(**fields)``.
+Every field here that holds a time is an integer of milliseconds. The one place a date can appear, in words, is an
+event's ``detail`` (see ``events_to_json``). Reading raises ``KeyError`` or ``ValueError`` for JSON that is not what
+this module writes.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import fields as dataclass_fields
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any
@@ -30,7 +27,6 @@ from app.options_backtest.results import Event, EventKind, ExitReason, SessionSt
 from app.options_backtest.run import SlippagePoint, SlippageTolerance
 from app.options_backtest.session_result import PinnedDay, SessionPins
 from app.options_backtest.statistics import DayRow, Drawdown, MonthRow, Ratio, RunSummary
-from app.utils.session_anchors import et_date_at_ms
 
 Json = dict[str, Any]
 
@@ -45,24 +41,6 @@ def _optional_decimal(text: str | None) -> Decimal | None:
 
 def _optional_text(value: Decimal | None) -> str | None:
     return None if value is None else str(value)
-
-
-# The dates a run-core record may still carry, and the open each is the New York date of.
-_DATE_FIELD_OF = {
-    "trading_date": "session_open_ms",
-    "peak_date": "peak_session_open_ms",
-    "trough_date": "trough_session_open_ms",
-}
-
-
-def record_of[R](cls: type[R], **given: Any) -> R:
-    """``cls(**given)``, with any date field the record still has made from the session open it goes with."""
-    wanted = {field.name for field in dataclass_fields(cls)}  # type: ignore[arg-type]
-    for date_field, open_field in _DATE_FIELD_OF.items():
-        if date_field in wanted:
-            opened = given[open_field]
-            given[date_field] = None if opened is None else et_date_at_ms(opened)
-    return cls(**given)
 
 
 # ── Rates ────────────────────────────────────────────────────────────────
@@ -111,8 +89,7 @@ def _drawdown_from_json(data: Json | None) -> Drawdown | None:
         return None
     ratio = _ratio_from_json(data["fall_ratio"])
     assert ratio is not None  # a drawdown always has its ratio
-    return record_of(
-        Drawdown,
+    return Drawdown(
         peak_equity_usd=Decimal(data["peak_equity_usd"]),
         trough_equity_usd=Decimal(data["trough_equity_usd"]),
         fall_usd=Decimal(data["fall_usd"]),
@@ -138,8 +115,7 @@ def _day_to_json(day: DayRow) -> Json:
 
 
 def _day_from_json(data: Json) -> DayRow:
-    return record_of(
-        DayRow,
+    return DayRow(
         session_open_ms=data["session_open_ms"],
         status=SessionStatus(data["status"]),
         skip_reason=None if data["skip_reason"] is None else SkipReason(data["skip_reason"]),
@@ -315,6 +291,8 @@ def tolerance_from_json(data: Json) -> SlippageTolerance:
 
 
 def events_to_json(events: Sequence[Event]) -> list[Json]:
+    # ``detail`` is prose the backend wrote for the owner (the picker's sentence for a refused pick may name the day a
+    # contract is listed for). It is stored as written and is not a time value: the times of an event are ``at_ms``.
     return [
         {
             "kind": event.kind.value,
@@ -331,6 +309,7 @@ def events_to_json(events: Sequence[Event]) -> list[Json]:
 
 
 def events_from_json(data: Sequence[Json]) -> tuple[Event, ...]:
+    # ``detail`` comes back, and is to be served, exactly as it was written: prose for the owner, never re-derived.
     return tuple(
         Event(
             kind=EventKind(event["kind"]),
