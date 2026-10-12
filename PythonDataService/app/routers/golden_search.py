@@ -531,11 +531,15 @@ def _gated_stage_work(req: GoldenSearchJobRequest):
 
 
 def _runtime_dispatch_factory(*, on_checkpoint, cancel_check, emit) -> Callable[[Any], Any]:
-    """The dispatch the runtime executes through: one worker, or the configured bounded pool (#3046).
+    """The dispatch the runtime executes through: one worker, or the shared bounded pool (#3046, #3048).
 
     ``RESEARCH_WORKER_COUNT`` is the deployment's opt-in width — one is
-    exactly the serial runtime #3044 shipped — and the pool's scheduling
-    facts ride the existing log channel until their visual refinement.
+    exactly the serial runtime #3044 shipped — and every wider dispatch is
+    an owner on the process's one shared pool, where round-robin fairness,
+    the global submission bound and warm-lane affinity live. A capacity
+    handoff renews the lease exactly as a checkpoint does (#3048): both
+    are real coordinator transitions. The pool's scheduling facts ride the
+    existing log channel until their visual refinement.
     """
     from app.research.golden_search.worker import worker_dispatch_factory
 
@@ -544,10 +548,43 @@ def _runtime_dispatch_factory(*, on_checkpoint, cancel_check, emit) -> Callable[
     if workers < 2:
         return worker_dispatch_factory(on_checkpoint=on_checkpoint, cancel_check=cancel_check)
     from app.research.golden_search.pool import DispatchFacts, worker_pool_factory
+    from app.research.golden_search.shared_pool import SUBMISSION_FACTOR, shared_worker_pool
+
+    pool = shared_worker_pool(
+        workers=workers,
+        submission_bound=SUBMISSION_FACTOR * workers,
+        payload_bound_bytes=settings.RESEARCH_POOL_PAYLOAD_BOUND_BYTES,
+        result_bound_bytes=settings.RESEARCH_POOL_RESULT_BOUND_BYTES,
+    )
 
     def on_facts(facts: DispatchFacts) -> None:
         emit.log(f"research worker pool: {facts.as_dict()}")
 
     return worker_pool_factory(
-        on_checkpoint=on_checkpoint, cancel_check=cancel_check, on_facts=on_facts, workers=workers, window=window
+        on_checkpoint=on_checkpoint,
+        cancel_check=cancel_check,
+        on_facts=on_facts,
+        workers=workers,
+        window=window,
+        pool=pool,
+        on_capacity_handoff=on_checkpoint,
     )
+
+
+@jobs_router.post("/pool/drain", status_code=status.HTTP_200_OK)
+async def drain_research_worker_pool() -> dict[str, Any]:
+    """The operator's capacity handoff (#3048 AC 10): stop assignments, finish or interrupt, reap.
+
+    A drain stops new assignments, waits bounded for owned work to
+    complete, interrupts what cannot, and reaps the children — the
+    capacity change (a restart at the new profile) finds no orphans and
+    no running pool. On a process with no shared pool it reports that
+    honestly instead of pretending.
+    """
+
+    from app.research.golden_search.shared_pool import drain_shared_pool
+
+    facts = drain_shared_pool()
+    if facts is None:
+        return {"drained": False, "reason": "no shared worker pool in this process"}
+    return {"drained": True, **facts}

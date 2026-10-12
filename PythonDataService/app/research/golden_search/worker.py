@@ -306,6 +306,17 @@ def _run_one_task(
         )
 
     completed_before = int(state.get("completed", 0))
+
+    def residency_fields() -> dict[str, Any]:
+        # The warm-affinity hint and cache accounting the shared pool's
+        # scheduler reports (#3048): what this child newly decoded, and its
+        # counters at this task's end — on the result and every failure.
+        delta = state["decoded_cache"].take_residency_delta()
+        return {
+            "decoded": [key.__dict__ | {"estimated_bytes": estimated} for key, estimated in delta],
+            "cache": state["decoded_cache"].metrics(),
+        }
+
     try:
         request, strategy_key = request_of_wire(task)
         if state["identity"] != _expected_identity(task):
@@ -355,16 +366,19 @@ def _run_one_task(
                 "metrics": result.metrics.as_dict(),
                 "detail": result.detail,
                 "curve": [[ms, value] for ms, value in (result.curve or [])] if result.curve is not None else None,
+                **residency_fields(),
             }
         )
     except BaseException as exc:  # the child's terminal sink: every failure is a delivered answer
         from app.jobs.progress import JobCancelled
 
         if isinstance(exc, JobCancelled):
-            out.write({"type": "failed", "key": task.get("key", "?"), "error": "cancelled"})
+            out.write({"type": "failed", "key": task.get("key", "?"), "error": "cancelled", **residency_fields()})
             cancel_flag.set()
             return
-        out.write({"type": "failed", "key": str(task.get("key", "?")), "error": f"{type(exc).__name__}: {exc}"})
+        out.write(
+            {"type": "failed", "key": str(task.get("key", "?")), "error": f"{type(exc).__name__}: {exc}", **residency_fields()}
+        )
 
 
 def _expected_identity(task: Mapping[str, Any]) -> dict[str, Any]:
@@ -446,6 +460,14 @@ class ResearchWorker:
     forever.
     """
 
+    # The per-task relay (#3048), as class defaults so a partially built
+    # worker (tests stub past __init__) still reads its context live: a
+    # shared lane points these at each item's owner before it runs; unset,
+    # the spawn context's live attributes answer, exactly the pre-relay
+    # behavior a late context swap relies on.
+    _task_cancel_check: Callable[[], object] | None = None
+    _task_on_checkpoint: Callable[[Mapping[str, Any]], None] | None = None
+
     def __init__(self, context: WorkerDispatchContext) -> None:
         self._context = context
         self._lock = threading.Lock()
@@ -461,6 +483,23 @@ class ResearchWorker:
 
         self._verdicts = ThreadPoolExecutor(max_workers=2, thread_name_prefix="admission-verdicts")
         self._spawn()
+
+    def begin_task(
+        self,
+        *,
+        cancel_check: Callable[[], object] | None = None,
+        on_checkpoint: Callable[[Mapping[str, Any]], None] | None = None,
+    ) -> None:
+        """Point this child's cancellation poll and checkpoint relay at one owner (#3048).
+
+        Switched before the task line is sent. The pipe's own ordering makes
+        the switch safe: every checkpoint of the previous task is drained
+        before its result — the message that wakes ``run_task`` — so a late
+        relay can never reach the next owner.
+        """
+        with self._arrived:
+            self._task_cancel_check = cancel_check
+            self._task_on_checkpoint = on_checkpoint
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -532,7 +571,8 @@ class ResearchWorker:
                     self._verdicts.submit(self._answer_admission, message)
                 elif kind == "checkpoint":
                     self._progress_signal.set()
-                    self._context.on_checkpoint(message)
+                    relay = self._task_on_checkpoint or self._context.on_checkpoint
+                    relay(message)
                 elif kind == "alive":
                     self._alive_signal.set()
                 elif kind == "identity_refused":
@@ -664,7 +704,7 @@ class ResearchWorker:
             if now - last_fence_poll >= FENCE_POLL_INTERVAL_S:
                 last_fence_poll = now
                 try:
-                    cancelled = self._context.cancel_check()
+                    cancelled = (self._task_cancel_check or self._context.cancel_check)()
                 except (JobCancelled, GenerationFencedError):
                     # The child stops here, not when its task returns (#3065
                     # review): a fenced generation's lease must stop renewing.

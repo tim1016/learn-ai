@@ -205,6 +205,10 @@ class DecodedArtifactCache:
         # Content digests currently resident, for duplicate-residency honesty:
         # the same bytes admitted under two roots hold twice in this process.
         self._digest_residency: dict[str, int] = {}
+        # Keys already handed out by ``take_residency_delta``: a key reports
+        # once when it becomes resident, and again if it is evicted and
+        # re-decoded — the delta must stay a delta, not a census (#3048).
+        self._reported: set[ArtifactKey] = set()
 
     def get_or_decode(self, key: ArtifactKey, decode: Callable[[], list[TradeBar]]) -> list[TradeBar]:
         """Return ``key``'s bars, decoding through ``decode`` only on a miss.
@@ -251,6 +255,20 @@ class DecodedArtifactCache:
         self._refresh_residency()
         return self._metrics.as_dict()
 
+    def take_residency_delta(self) -> list[tuple[ArtifactKey, int]]:
+        """Entries newly resident since the last take — the warm-affinity hint (#3048).
+
+        The shared pool's scheduler uses this to prefer a lane whose child
+        already holds an artifact's decode. A stale hint — the entry was
+        evicted after it reported — costs one re-decode and nothing else:
+        admission stays per-read whatever a hint claimed, so residency is
+        never correctness. Evicted keys report again on re-decode, keeping
+        the hint honest after turnover.
+        """
+        delta = [(key, entry.estimated_bytes) for key, entry in self._entries.items() if key not in self._reported]
+        self._reported.update(key for key, _ in delta)
+        return delta
+
     def _store(self, key: ArtifactKey, bars: list[TradeBar], estimated: int) -> None:
         self._entries[key] = _Entry(bars=tuple(bars), estimated_bytes=estimated)
         self._digest_residency[key.content_digest] = self._digest_residency.get(key.content_digest, 0) + 1
@@ -264,6 +282,7 @@ class DecodedArtifactCache:
             if victim is None:
                 return
             self._entries.pop(victim)
+            self._reported.discard(victim)
             self._metrics.evictions += 1
             remaining = self._digest_residency.get(victim.content_digest, 0) - 1
             if remaining > 0:

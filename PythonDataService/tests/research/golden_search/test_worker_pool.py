@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import queue
 import random
 import threading
 import time
@@ -27,6 +28,7 @@ import pytest
 
 from app.research.golden_search import pool as pool_module
 from app.research.golden_search import service
+from app.research.golden_search import shared_pool as shared_pool_module
 from app.research.golden_search.evaluator import WorkerLost
 from app.research.golden_search.selection import Metrics
 from app.research.golden_search.worker import WorkerDispatchContext
@@ -78,6 +80,12 @@ class _FakeChild:
         self.closed = False
         self.lost: str | None = None
         self.execute: Callable[[dict[str, Any]], dict[str, Any]] = lambda task: _gap_message(task)
+        self.relays: list[tuple[object, object]] = []
+
+    def begin_task(self, *, cancel_check=None, on_checkpoint=None) -> None:
+        # The shared lane points the child's cancellation poll and checkpoint
+        # relay at each item's owner before it runs (#3048).
+        self.relays.append((cancel_check, on_checkpoint))
 
     def run_task(self, task: dict[str, Any]) -> dict[str, Any]:
         self.tasks.append(task)
@@ -91,6 +99,39 @@ class _FakeChild:
 
     def close(self) -> None:
         self.closed = True
+
+
+def _crafted_item(gap: float, *, key: str = "k" * 64, task_gen: int = 1):
+    """A ready evaluation whose start marker is neutralized, for driving the dispatch contract directly.
+
+    The evaluator's persistence seams are process-global monkeypatches, so
+    a second owner on another thread exercises its dispatch — not a second
+    evaluator — when a test needs concurrent owners.
+    """
+    from datetime import date as date_of
+
+    from app.research.golden_search.evaluator import EvaluationRequest
+    from app.research.golden_search.evaluator import ReadyEvaluation as _ReadyEvaluation
+
+    class _Markerless(_ReadyEvaluation):
+        def begin(self) -> None:
+            pass
+
+    return _Markerless(
+        key=key,
+        attempt=1,
+        task_gen=task_gen,
+        request=EvaluationRequest(
+            point={"symbol": "SPY", "gap": gap},
+            point_hash="p" * 64,
+            window=JAN,
+            warmup_from=date_of(2024, 12, 30),
+            scenario=None,
+            detail=False,
+            stage="search",
+            fold_index=None,
+        ),
+    )
 
 
 def _gap_message(task: dict[str, Any]) -> dict[str, Any]:
@@ -144,8 +185,13 @@ def _wire_pool(
     window: int,
     execute: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     on_facts: Callable[[pool_module.DispatchFacts], None] = lambda facts: None,
+    pool: shared_pool_module.SharedWorkerPool | None = None,
 ) -> tuple[pool_module.PooledWorkerDispatch, list[_FakeChild], _Intervals]:
-    """Spawn the real pool over fake children; every child runs ``execute`` under interval tracking."""
+    """Spawn the real pool over fake children; every child runs ``execute`` under interval tracking.
+
+    ``pool`` binds this dispatch as a sibling owner on an existing shared
+    pool (#3048) instead of building a private one.
+    """
     children: list[_FakeChild] = []
     intervals = _Intervals()
 
@@ -167,9 +213,9 @@ def _wire_pool(
 
         return run
 
-    monkeypatch.setattr(pool_module, "ResearchWorker", spawn)
+    monkeypatch.setattr(shared_pool_module, "ResearchWorker", spawn)
     dispatch = pool_module.PooledWorkerDispatch(
-        WorkerDispatchContext(**CONTEXT), workers=workers, window=window, on_facts=on_facts
+        WorkerDispatchContext(**CONTEXT), workers=workers, window=window, on_facts=on_facts, pool=pool
     )
     return dispatch, children, intervals
 
@@ -338,35 +384,87 @@ def test_a_straggler_from_an_interrupted_dispatch_never_counts_or_records_twice(
     assert discarded, "the straggler's discard is explicit, not silent"
 
 
-def test_cancellation_between_pooled_tasks_stops_every_child(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cancellation_between_pooled_tasks_stops_only_this_owners_children(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3046's prompt stop, narrowed to the shared pool (#3048): an interrupted
+    dispatch stops the children running *its* items — a sibling owner's lanes
+    are not its to stop — and its queued items die at take time instead."""
     from app.jobs.progress import JobCancelled
 
     armed = threading.Event()
+    release_blocking = threading.Event()
+    sibling_started = threading.Event()
+    children: list[_FakeChild] = []
+    sibling_gap = 0.3
 
-    def execute(task: dict[str, Any]) -> dict[str, Any]:
-        message = _gap_message(task)
-        armed.set()  # cancellation arrives once execution has begun, not before dispatch
-        return message
+    def spawn(context: WorkerDispatchContext) -> _FakeChild:
+        child = _FakeChild(context)
 
-    dispatch, children, _ = _wire_pool(monkeypatch, workers=2, window=2, execute=execute)
+        def execute(task: dict[str, Any]) -> dict[str, Any]:
+            # One shared spawn serves every owner's lane: the sibling's item
+            # parks its own child; the interrupted owner's items arm the
+            # cancellation and park theirs.
+            if float(task["point"]["gap"]) == sibling_gap:
+                sibling_started.set()
+            else:
+                armed.set()
+            assert release_blocking.wait(timeout=5.0), "a parked child stayed mid-run"
+            return _gap_message(task)
 
-    def cancelled() -> None:
-        if armed.is_set():
-            raise JobCancelled("cancelled by the owner")
+        child.execute = execute
+        children.append(child)
+        return child
 
-    dispatch._context.cancel_check = cancelled
+    monkeypatch.setattr(shared_pool_module, "ResearchWorker", spawn)
+    pool = shared_pool_module.SharedWorkerPool(
+        workers=3, submission_bound=6,
+        payload_bound_bytes=shared_pool_module.DEFAULT_PAYLOAD_BOUND_BYTES,
+        result_bound_bytes=shared_pool_module.DEFAULT_RESULT_BOUND_BYTES,
+    )
+    dispatch = pool_module.PooledWorkerDispatch(WorkerDispatchContext(**CONTEXT), workers=3, window=3, pool=pool)
+    sibling = pool_module.PooledWorkerDispatch(
+        WorkerDispatchContext(**{**CONTEXT, "job_id": "job-sibling"}), workers=3, window=3, pool=pool
+    )
+    sibling_done: queue.SimpleQueue[list[Any]] = queue.SimpleQueue()
+
+    def run_sibling() -> None:
+        # The sibling drives its dispatch's own contract — the evaluator's
+        # persistence seams are process-global monkeypatches, so a second
+        # evaluator on another thread would cross-wire the bridges.
+        sibling_item = _crafted_item(sibling_gap)
+        sibling_done.put(list(sibling(None, [sibling_item])))
+
     try:
+        # The sibling takes its lane first, so the interrupted owner's items
+        # land on the other two and the blast radius is observable per child.
+        sibling_thread = threading.Thread(target=run_sibling, daemon=True)
+        sibling_thread.start()
+        assert sibling_started.wait(timeout=5.0), "the sibling owner genuinely served its own item meanwhile"
+
+        def cancelled() -> None:
+            if armed.is_set():
+                raise JobCancelled("cancelled by the owner")
+
+        dispatch._context.cancel_check = cancelled
         bridge = _ReservationBridge(limit=10)
         evaluator = _seamed_evaluator(monkeypatch, _EngineSpy(), bridge)
         evaluator.dispatch = dispatch
         with pytest.raises(JobCancelled):
-            evaluator.evaluate([_point(0.1), _point(0.2), _point(0.3)], window=JAN, stage="search")
-        assert any(child.closed for child in children), "the children were told to stop"
-        every = {_key_of(evaluator, _point(gap)) for gap in (0.1, 0.2, 0.3)}
+            evaluator.evaluate([_point(0.1), _point(0.2), _point(0.4)], window=JAN, stage="search")
+        stopped = [child for child in children if child.closed]
+        assert stopped, "a child running this owner's item was told to stop"
+        assert len(stopped) < len(children), "the sibling owner's child was left running"
+        every = {_key_of(evaluator, _point(gap)) for gap in (0.1, 0.2, 0.4)}
         # Whatever arrived before the cancellation is durable; the rest released.
         assert set(bridge.released) == every - set(bridge.completed)
     finally:
+        release_blocking.set()
+        sibling_thread.join(timeout=5.0)
         dispatch.close()
+        sibling.close()
+    sibling_outcomes = sibling_done.get(timeout=5.0)
+    assert [outcome.key for outcome in sibling_outcomes] and sibling_outcomes[0].lost_reason is None, (
+        "the sibling's item completed on its own lane"
+    )
 
 
 def test_the_pool_publishes_its_scheduling_facts(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -412,7 +510,7 @@ def test_a_loss_with_queued_work_recovers_without_lane_death(monkeypatch: pytest
         assert bridge.rows[_key_of(evaluator, _point(0.1))]["retries"] == 1, "only the lost in-flight run spent a retry"
         assert all(bridge.rows[_key_of(evaluator, _point(gap / 10))]["retries"] == 0 for gap in range(2, 7))
     finally:
-        assert all(lane.is_alive() for lane in dispatch._lanes), "no lane died on the stale queue"
+        assert all(lane.is_alive() for lane in dispatch._pool._threads), "no lane died on the stale queue"
         started = time.monotonic()
         dispatch.close()
         assert time.monotonic() - started < 5.0, "close after an interrupted dispatch returns promptly"
@@ -473,7 +571,7 @@ def _landscape_pool(
         child.execute = execute
         return child
 
-    monkeypatch.setattr(pool_module, "ResearchWorker", spawn)
+    monkeypatch.setattr(shared_pool_module, "ResearchWorker", spawn)
     return pool_module.PooledWorkerDispatch(WorkerDispatchContext(**{**CONTEXT, "strategy_key": "ema_crossover_signal"}), workers=workers, window=window)
 
 
@@ -523,6 +621,65 @@ async def test_a_whole_study_through_the_pool_matches_the_serial_reference(conn,
         )
         assert record is not None and record["has_payload"], f"fit {fit['key']}: the exam's detail evidence survived the pool"
     assert point_hash is not None
+
+
+async def test_two_concurrent_studies_share_one_pool_and_match_the_serial_books(
+    conn, pool_driver: Driver, pool_symbol: str, monkeypatch
+) -> None:
+    """#3048's core sharing evidence: two studies interleaved through one pool of lanes keep the serial schedule.
+
+    Both studies land exactly where the serial FakeEngine reference lands —
+    same winner, same rounds, same consumed count, no retry spent — with
+    every dispatch an owner on one shared pool and capacity handoffs
+    observed for both.
+    """
+    reference = await pool_driver.advance(await pool_driver.lock(pool_symbol), "continue")
+
+    def spawn(context: WorkerDispatchContext) -> _FakeChild:
+        child = _FakeChild(context)
+        child.execute = lambda task: _landscape_message(task)
+        return child
+
+    monkeypatch.setattr(shared_pool_module, "ResearchWorker", spawn)
+    shared = shared_pool_module.SharedWorkerPool(
+        workers=2,
+        submission_bound=4,
+        payload_bound_bytes=shared_pool_module.DEFAULT_PAYLOAD_BOUND_BYTES,
+        result_bound_bytes=shared_pool_module.DEFAULT_RESULT_BOUND_BYTES,
+    )
+    handoffs: list[str] = []
+    built: list[pool_module.PooledWorkerDispatch] = []
+
+    def factory(context: WorkerDispatchContext) -> pool_module.PooledWorkerDispatch:
+        dispatch = pool_module.PooledWorkerDispatch(
+            context, workers=2, window=2, pool=shared,
+            on_capacity_handoff=lambda: handoffs.append(context.job_id),
+        )
+        built.append(dispatch)
+        return dispatch
+
+    rows = [await pool_driver.lock(pool_symbol), await pool_driver.lock(pool_symbol)]
+    outcomes = [await pool_driver.command(row, "continue") for row in rows]
+    try:
+        await asyncio.gather(*(pool_driver.run(outcome, dispatch_factory=factory) for outcome in outcomes))
+    finally:
+        for dispatch in built:
+            dispatch.close()
+        shared.close()
+
+    for row in rows:
+        done = await service.get_row(row.id)
+        assert done.state == reference.state == "awaiting_validation"
+        assert done.consumed_evaluations == reference.consumed_evaluations
+        assert done.results["search"]["procedure"] == reference.results["search"]["procedure"], (
+            "interleaved sharing changed neither study's search"
+        )
+        assert done.results["search"]["counts"] == reference.results["search"]["counts"]
+        assert done.results["recent"]["counts"] == reference.results["recent"]["counts"]
+        assert await conn.fetchval(
+            "SELECT MAX(retries) FROM research_golden_search_evaluations WHERE study_id = $1", row.id
+        ) == 0, "interleaving never charged a retry"
+    assert len(handoffs) >= 2, "both owners saw capacity handoffs"
 
 
 async def test_a_lane_loss_under_width_keeps_the_books(conn, pool_driver: Driver, pool_symbol: str, monkeypatch) -> None:
@@ -781,7 +938,7 @@ def test_spawn_failure_keeps_the_lanes_alive_and_bounds_by_the_allowance(monkeyp
     def broken_spawn(context: WorkerDispatchContext) -> _FakeChild:
         raise WorkerLost("the research worker failed to start: no interpreter in the lane")
 
-    monkeypatch.setattr(pool_module, "ResearchWorker", broken_spawn)
+    monkeypatch.setattr(shared_pool_module, "ResearchWorker", broken_spawn)
     dispatch = pool_module.PooledWorkerDispatch(WorkerDispatchContext(**CONTEXT), workers=2, window=4)
     try:
         bridge = _ReservationBridge(limit=20)
@@ -791,7 +948,7 @@ def test_spawn_failure_keeps_the_lanes_alive_and_bounds_by_the_allowance(monkeyp
         with pytest.raises(WorkerLost, match="failed to start"):
             evaluator.evaluate([_point(0.1), _point(0.2), _point(0.3)], window=JAN, stage="search")
 
-        assert all(lane.is_alive() for lane in dispatch._lanes), "no lane died on a spawn failure"
+        assert all(lane.is_alive() for lane in dispatch._pool._threads), "no lane died on a spawn failure"
     finally:
         started = time.monotonic()
         dispatch.close()
@@ -809,10 +966,12 @@ def test_a_child_spawning_as_the_pool_closes_is_killed_not_published(monkeypatch
     def spawn(context: WorkerDispatchContext) -> _FakeChild:
         child = _FakeChild(context)
         children.append(child)
-        dispatch._closing.set()  # the pool closes while this child is still starting
+        # The pool closes while this child is still starting: invisible to
+        # close()'s snapshot, so the lane must own the kill.
+        dispatch._pool._closing = True
         return child
 
-    monkeypatch.setattr(pool_module, "ResearchWorker", spawn)
+    monkeypatch.setattr(shared_pool_module, "ResearchWorker", spawn)
     dispatch = pool_module.PooledWorkerDispatch(WorkerDispatchContext(**CONTEXT), workers=1, window=2)
     try:
         item = ReadyEvaluation(
@@ -830,15 +989,17 @@ def test_a_child_spawning_as_the_pool_closes_is_killed_not_published(monkeypatch
                 fold_index=None,
             ),
         )
-        dispatch._run_one(0, item)
+        entry = shared_pool_module._Entry(owner=dispatch._handle._state, epoch=dispatch._current_epoch(), item=item)
+        dispatch._pool._run_assignment(dispatch._pool._lanes[0], entry)
 
-        _key, _task_gen, arrival = dispatch._arrived.get(timeout=1.0)
-        assert isinstance(arrival, WorkerLost), "the closing is reported as the item's loss"
+        _key, _task_gen, arrival = dispatch._handle.arrived.get(timeout=1.0)
+        from app.jobs.progress import JobCancelled as _JobCancelled
+        assert isinstance(arrival, _JobCancelled), "the closing cancels the item home — a live owner unwinds, it does not re-admit forever"
         assert children[0].closed, "the runaway child was killed before it could begin"
-        assert dispatch._arrived.empty(), "exactly one answer, for exactly one item"
+        assert dispatch._handle.arrived.empty(), "exactly one answer, for exactly one item"
     finally:
         dispatch.close()
-    assert dispatch._slots[0] is None, "the corpse was never published to the slot"
+    assert dispatch._pool._lanes[0].worker is None, "the corpse was never published to the slot"
 
 
 def test_a_delivered_cancellation_reaps_the_children_before_release_reconciliation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -851,10 +1012,19 @@ def test_a_delivered_cancellation_reaps_the_children_before_release_reconciliati
     from app.jobs.progress import JobCancelled
 
     events: list[str] = []
+    release_blocking = threading.Event()
 
     def spawn(context: WorkerDispatchContext) -> _FakeChild:
         child = _FakeChild(context)
-        child.execute = lambda task: {"type": "failed", "key": task["key"], "error": "cancelled"}
+
+        def execute(task: dict[str, Any]) -> dict[str, Any]:
+            if float(task["point"]["gap"]) == 0.1:
+                return {"type": "failed", "key": task["key"], "error": "cancelled"}
+            # A sibling item stays mid-run so the reap has a live child to stop.
+            assert release_blocking.wait(timeout=5.0), "the mid-run child outlived its owner's cancellation"
+            return {"type": "failed", "key": task["key"], "error": "cancelled"}
+
+        child.execute = execute
 
         def cancel() -> None:
             child.closed = True
@@ -863,7 +1033,7 @@ def test_a_delivered_cancellation_reaps_the_children_before_release_reconciliati
         child.cancel = cancel
         return child
 
-    monkeypatch.setattr(pool_module, "ResearchWorker", spawn)
+    monkeypatch.setattr(shared_pool_module, "ResearchWorker", spawn)
     dispatch = pool_module.PooledWorkerDispatch(WorkerDispatchContext(**CONTEXT), workers=2, window=2)
 
     class _SlowReleaseBridge(_ReservationBridge):
@@ -880,6 +1050,7 @@ def test_a_delivered_cancellation_reaps_the_children_before_release_reconciliati
         with pytest.raises(JobCancelled):
             evaluator.evaluate([_point(0.1), _point(0.2), _point(0.3)], window=JAN, stage="search")
     finally:
+        release_blocking.set()
         dispatch.close()
 
     assert "child-stopped" in events, "the children were told to stop"
@@ -930,7 +1101,7 @@ def test_a_child_dead_between_tasks_is_replaced_before_the_next_marker(monkeypat
         child.run_task = run_task
         return child
 
-    monkeypatch.setattr(pool_module, "ResearchWorker", spawn)
+    monkeypatch.setattr(shared_pool_module, "ResearchWorker", spawn)
     dispatch = pool_module.PooledWorkerDispatch(WorkerDispatchContext(**CONTEXT), workers=1, window=2)
     try:
         engine, bridge = _EngineSpy(), _ReservationBridge(limit=10)
@@ -1137,3 +1308,139 @@ async def test_admission_verdicts_batch_with_measured_latency_across_widths(
     finally:
         stop_admission_batcher()
         _close_writer_loop_catalog_pool()
+
+
+@pytest.mark.slow
+@pytest.mark.usefixtures("seeded_lake_catalog")
+async def test_two_studies_share_real_children_lanes_fairly(conn, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3048's sharing with real spawned children: two studies interleave on one pool's lanes.
+
+    Both studies complete their batches with the serial answers, each study
+    is served by a real child, the two studies' evaluations genuinely
+    overlap on the shared lanes, and both owners saw capacity handoffs —
+    evidence of fair sharing, not a serialized pass-through.
+    """
+    from datetime import date as date_of
+    from uuid import UUID
+
+    from app.config import settings
+    from app.data_lake.root_identity import init_empty_root
+    from app.lean_sidecar.trading_calendar import expected_sessions
+    from app.research.golden_search.evaluator import EvaluationCapability, StudyEvaluator
+    from app.research.sweep.identity import resolve_code_identity
+    from app.utils.session_anchors import et_midnight_ms
+    from tests._helpers.lake_fixture import seed_lake_minute_day
+
+    symbol = "SPY"
+    base = tmp_path / "shared-root"
+    init_empty_root(base, UUID(int=3048))
+    lake = base / "lake" / "polygon_split_adjusted"
+    lake.mkdir(parents=True)
+    manifest: dict[str, str] = {}
+    for day in expected_sessions(date_of(2024, 12, 2), date_of(2025, 2, 28)):
+        trade, _quote = seed_lake_minute_day(lake, symbol, day)
+        manifest[trade.relative_to(lake).as_posix()] = hashlib.sha256(trade.read_bytes()).hexdigest()
+        companion = trade.with_name(trade.name + ".adjustment.json")
+        if companion.exists():
+            manifest[companion.relative_to(lake).as_posix()] = hashlib.sha256(companion.read_bytes()).hexdigest()
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(base))
+    monkeypatch.setenv("LEAN_DATA_WRITE_ROOT", str(base))
+
+    studies = ["share-real-a-" + unique_symbol().lower(), "share-real-b-" + unique_symbol().lower()]
+    for study in studies:
+        await conn.execute(
+            """
+            INSERT INTO research_golden_search_studies (
+                id, strategy_key, symbol, state, status, attempt, created_at_ms, updated_at_ms,
+                protocol_json, protocol_hash, receipt_json, budget_cap
+            ) VALUES ($1, 'sma_crossover', 'SPY', 'search_running', 'running', 1, 1, 1, '{}'::jsonb, 'h', '{}'::jsonb, 100)
+            """,
+            study,
+        )
+
+    window = (et_midnight_ms(date_of(2025, 1, 2)), et_midnight_ms(date_of(2025, 2, 3)))
+    resolved = resolve_code_identity()
+    identity = {"source_digest": resolved.source_digest, "environment_digest": resolved.environment_digest, "digest_scheme": resolved.digest_scheme}
+
+    from app.research.golden_search.worker import ResearchWorker
+
+    runs: list[tuple[str, int, float, float]] = []
+    run_task = ResearchWorker.run_task
+
+    def timed_run_task(self: ResearchWorker, task: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        started = time.monotonic()
+        try:
+            return run_task(self, task, **kwargs)
+        finally:
+            runs.append((str(task["key"])[:12], id(self), started, time.monotonic()))
+
+    monkeypatch.setattr(ResearchWorker, "run_task", timed_run_task)
+
+    handoffs: list[str] = []
+    shared = shared_pool_module.SharedWorkerPool(
+        workers=2,
+        submission_bound=4,
+        payload_bound_bytes=shared_pool_module.DEFAULT_PAYLOAD_BOUND_BYTES,
+        result_bound_bytes=shared_pool_module.DEFAULT_RESULT_BOUND_BYTES,
+    )
+    dispatches: list[pool_module.PooledWorkerDispatch] = []
+    evaluators: list[StudyEvaluator] = []
+    for study, job in zip(studies, ("job-share-a", "job-share-b"), strict=True):
+        context = WorkerDispatchContext(
+            strategy_key="sma_crossover",
+            execution={"fill_mode": "next_bar_open", "commission_per_order": 0.0, "slippage_per_share": 0.0, "initial_cash": 50_000.0},
+            manifest=manifest,
+            identity=identity,
+            job_id=job,
+            generation=1,
+        )
+        dispatches.append(
+            pool_module.PooledWorkerDispatch(
+                context, workers=2, window=2, pool=shared, on_capacity_handoff=lambda job=job: handoffs.append(job)
+            )
+        )
+        evaluators.append(
+            StudyEvaluator(
+                study_id=study,
+                attempt=1,
+                strategy_key="sma_crossover",
+                context_digest="shared-real",
+                run_up_sessions=1,
+                capability=EvaluationCapability(allowed=(window,)),
+                budget_limit=100,
+                execute=lambda request: None,
+                dispatch=dispatches[-1],
+            )
+        )
+
+    points = [
+        {"symbol": "SPY", "short_window": short, "long_window": long, "resolution_minutes": 1}
+        for short, long in ((2, 3), (2, 5), (3, 5), (3, 8))
+    ]
+    results: dict[str, list[Any]] = {}
+
+    def evaluate(study: str, evaluator: StudyEvaluator) -> None:
+        results[study] = evaluator.evaluate([dict(point) for point in points], window=window, stage="search")
+
+    try:
+        threads = [threading.Thread(target=evaluate, args=(study, evaluator), daemon=True) for study, evaluator in zip(studies, evaluators, strict=True)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=240.0)
+    finally:
+        for dispatch in dispatches:
+            dispatch.close()
+        shared.close()
+        _close_writer_loop_catalog_pool()
+
+    for study in studies:
+        metrics = results[study]
+        assert metrics and all(m.status == "completed" for m in metrics), f"{study}: every shared-pool evaluation completed"
+
+    workers_used = {run[1] for run in runs}
+    assert len(workers_used) >= 2, "real distinct children served the shared lanes"
+    assert len(handoffs) >= 2, "both owners saw capacity handoffs while sharing"
+    assert any(a[1] != b[1] and a[2] < b[3] and b[2] < a[3] for a in runs for b in runs), (
+        "the studies' evaluations genuinely overlapped on the shared lanes"
+    )
