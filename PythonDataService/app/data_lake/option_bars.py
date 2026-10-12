@@ -268,8 +268,9 @@ async def captured_option_days(symbols: Collection[str], trading_date: date) -> 
 
     A symbol is an OCC symbol as ``OptionContract.occ_symbol`` writes it, without the vendor's
     ``O:``. A day captured with no trades has a complete row and is named too; a complete row of
-    another provider for the same symbol and date is not. This answers only "is there a complete row": it reads no file, so a complete row whose file has since
-    gone, or whose file is damaged, is still named, and the reader is the judge of "readable"
+    another provider for the same symbol and date is not. This answers only "is there a complete
+    row": it reads no file, so a complete row whose file has since gone, or whose file is
+    damaged, is still named, and the reader is the judge of "readable"
     (:func:`read_option_day_bars`: ``None`` for a file that is gone, ``OptionBarsFileError``
     for a damaged one, ``LakeAdmissionError`` for bytes the catalog does not admit). It needs
     the catalog reachable (``catalog_client.CatalogUnavailableError`` otherwise) and nothing

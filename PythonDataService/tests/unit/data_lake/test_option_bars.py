@@ -2114,7 +2114,7 @@ async def test_the_smallest_price_that_rounds_up_to_one_ten_thousandth_is_stored
 async def test_a_bar_whose_low_or_high_is_out_of_place_by_less_than_a_float_holds_fails_the_day_naming_the_relation(
     prices: dict[str, str], named: str, as_floats: tuple[str, str], fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
-    """The first case is the review's: open 1.0 and low 1.0000000000000001. As floats they are one number, and the float gate passed the bar."""
+    """Open 1.0 and low 1.0000000000000001 are one number as floats, so the float gate alone passed such a bar and it was published."""
     assert float(as_floats[0]) == float(as_floats[1])  # the premise: the hairline is gone once the prices are floats
     _mock_vendor(_one_price_bars(**prices))
 

@@ -13,9 +13,9 @@ sorted by the vendor's ticker so the same listing always makes the same bytes:
 the ticker, call or put, the strike in thousandths of a dollar, the expiry as
 ``expiry_ms`` (the expiry date's 16:00 New York anchor in epoch milliseconds, the one
 way an expiry is held, ADR 0022 (i)), the exercise style, the shares per contract, and
-whether the vendor listed additional underlyings. No date is written as text inside the file. Whether a contract is *standard* is not
-stored: it is a rule applied when the file is read, so the rule can change
-without a refetch.
+whether the vendor listed additional underlyings. No date is written as text inside the
+file. Whether a contract is *standard* is not stored: it is a rule applied when the file
+is read, so the rule can change without a refetch.
 
 Every row the vendor sends with a ticker is kept. A field the vendor left out or
 wrote as something the file cannot hold (a strike that is not a finite number
@@ -90,8 +90,9 @@ OPTION_LISTING_ENDPOINT = "v3/reference/options/contracts"
 #: recipe, so a new format is a new catalog row: capturing a date again under it
 #: publishes over the old file and stales the old format's row for that file
 #: (``mark_metadata_artifacts_stale_for_path``, run again whenever the new row is found
-#: complete). A date not captured again keeps its old row and file until it is. Format 1 wrote the expiry as a ``YYYYMMDD`` text in a
-#: column named ``expiry``; format 2 writes ``expiry_ms``.
+#: complete). A date not captured again keeps its old row and file until it is. Format 1
+#: wrote the expiry as a ``YYYYMMDD`` text in a column named ``expiry``; format 2 writes
+#: ``expiry_ms``.
 OPTION_LISTING_FILE_FORMAT = 2
 _HEADER = (
     "ticker",
