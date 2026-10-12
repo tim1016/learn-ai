@@ -87,10 +87,19 @@ export class PastChainTabComponent implements OnInit {
 
   // What the time and strikes boxes hold, as something that can be sent or as the reason it cannot.
   private readonly typedMinute = computed(() => chosenMinute(this.model().time, this.tradingDateMs(), this.session()));
-  // Half a time (the browser holds no value for it) or a box emptied after a time was typed is not the close: it is no time.
+  // Half a time: the browser holds no value for it, and the form says so as a parse error.
+  private readonly timeHalfTyped = computed(() => this.controls.time().errors().some((each) => each.kind === 'parse'));
+  // Whether the box has ever held something, whole or half. `dirty()` is not that: the form marks a field dirty whenever it reads
+  // the box, and a browser has it read the empty box when it is first drawn, so an untouched box would look emptied.
+  private readonly timeEverHeld = linkedSignal<{ text: string; half: boolean }, boolean>({
+    source: () => ({ text: this.model().time, half: this.timeHalfTyped() }),
+    computation: (now, previous) => (previous?.value ?? false) || now.half || now.text.trim() !== '',
+  });
+  // Half a time or a box emptied after it held one is not the close: it is no time. A box that never held one is the close.
   private readonly timeIncomplete = computed(() => {
-    const field = this.controls.time();
-    return field.errors().some((each) => each.kind === 'parse') || (field.dirty() && this.model().time.trim() === '');
+    // Read at every change, whatever half a time says, so that the record has seen each text the box held.
+    const held = this.timeEverHeld();
+    return this.timeHalfTyped() || (held && this.model().time.trim() === '');
   });
   // The last time that could be read: the chain keeps to it while the box holds none.
   private readonly lastValidTime = linkedSignal<{ text: string; usable: boolean }, string>({

@@ -47,7 +47,65 @@ describe('the time of day', () => {
     Object.defineProperty(timeBox(), 'validity', { value: { badInput: false }, configurable: true });
     typeTime(text);
   }
+  /**
+   * What Chrome does when the box is first drawn. An empty box is valid, so the form directive's own style starts an
+   * animation on it, the directive hears that start and reads the box, and the read marks the field dirty though nothing
+   * was typed. jsdom runs no animation, so a spec sends the event itself.
+   */
+  function theBrowserReadsTheBoxOnFirstOpen(): void {
+    const started = new Event('animationstart');
+    Object.defineProperty(started, 'animationName', { value: 'ng-valid' });
+    timeBox().dispatchEvent(started);
+  }
   const answeringAtTheTimeAsked = () => fakeChainService(vi, { expiry: vi.fn(async (query: ExpiryQuery) => chainExpiry({ at_ms: query.atMs ?? 0 })) });
+
+  it('is the close, with no problem shown, when the browser has only read the empty box on first open and nothing was typed', async () => {
+    const service = fakeChainService(vi);
+    const view = await renderChainTab(service);
+
+    theBrowserReadsTheBoxOnFirstOpen();
+    await view.fixture.whenStable();
+    await openStandardChain();
+
+    expect(screen.queryByText(/Enter a complete time/)).toBeNull();
+    expect(timeBox().getAttribute('aria-invalid')).toBe('false');
+    expect(lastExpiryQuery(service).atMs).toBeNull();
+    expect(reads(paragraph(/^Until you type a time/))).toBe('Until you type a time, the chain is read at the close, 16:00 ET');
+  });
+
+  it('is still not the close when the box is emptied after a time was typed, though the browser also read it empty on first open', async () => {
+    const service = answeringAtTheTimeAsked();
+    const view = await renderChainTab(service);
+    theBrowserReadsTheBoxOnFirstOpen();
+    await view.fixture.whenStable();
+    await openStandardChain();
+    typeTime('15:45');
+    await waitFor(() => expect(reads(paragraph(/^Priced as of/))).toBe('Priced as of 15:45 ET on 2026-10-09'));
+    const asked = service.expiry.mock.calls.length;
+
+    typeTime('');
+
+    expect((await screen.findAllByRole('alert')).map((alert) => reads(alert))).toContain('Enter a complete time, hours and minutes. Until you do, the chain keeps the last time it was read for.');
+    expect(timeBox().getAttribute('aria-invalid')).toBe('true');
+    await new Promise((done) => setTimeout(done, 30));
+    expect(service.expiry.mock.calls.length).toBe(asked);
+    expect(reads(paragraph(/^Priced as of/))).toBe('Priced as of 15:45 ET on 2026-10-09');
+  });
+
+  it('is still not the close when the box that held half a time is then emptied: half a time was in it, so it was not left alone', async () => {
+    const service = answeringAtTheTimeAsked();
+    await renderChainTab(service);
+    await openStandardChain();
+    const asked = service.expiry.mock.calls.length;
+    typeHalfATime();
+    await screen.findAllByRole('alert');
+
+    finishTheTime('');
+
+    expect((await screen.findAllByRole('alert')).map((alert) => reads(alert))).toContain('Enter a complete time, hours and minutes. Until you do, the chain keeps the last time it was read for.');
+    await new Promise((done) => setTimeout(done, 30));
+    expect(service.expiry.mock.calls.length).toBe(asked);
+  });
 
   it('is not the close when the box is emptied after a time was typed: nothing is asked, the chain keeps the time it was read for, and the box says to enter one', async () => {
     const service = answeringAtTheTimeAsked();
