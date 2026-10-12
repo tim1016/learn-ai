@@ -230,6 +230,25 @@ describe('a problem lands at its field', () => {
     expect(screen.getByLabelText('Slippage (percent)').getAttribute('aria-invalid')).toBe('true');
   });
 
+  it('on the instrument, for an underlying of six letters, which the server now refuses', async () => {
+    const service = fakeService(vi, {
+      list: vi.fn(async () => [servedSaved('Six letters', { ...exampleBody(), underlying: 'ABCDEF' })]),
+      describe: vi.fn(async (body: unknown) => {
+        const setup = body as SetupRequest;
+        if (setup.underlying.length > 5) throw new SetupInvalidError([{ loc: ['body', 'underlying'], msg: "String should match pattern '^[A-Z]{1,5}$'" }]);
+        return sentencesFor(setup);
+      }),
+    });
+    await renderPage(service);
+
+    fireEvent.click(await within(screen.getByRole('complementary', { name: 'Saved setups' })).findByRole('button', { name: /^Six letters/ }));
+
+    const instrument = screen.getByRole('region', { name: 'Instrument' });
+    const reason = await within(instrument).findByText("String should match pattern '^[A-Z]{1,5}$'");
+    expect(reason.getAttribute('role')).toBe('alert');
+    expect(service.describe.mock.calls.map(([body]) => (body as SetupRequest).underlying)).toContain('ABCDEF');
+  });
+
   it('on the square-off setting, at the Legwise settings card, tied to the choice', async () => {
     await renderPage(rejecting({ loc: ['body', 'square_off'], msg: "Input should be 'partial' or 'complete'" }));
     addLeg();

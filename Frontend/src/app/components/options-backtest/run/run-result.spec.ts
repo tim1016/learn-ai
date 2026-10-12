@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { expectTradingDatesInNewYork, reads } from '../testing/page-actions';
 import type { RunDetail, RunFigures } from '../options-backtest.types';
-import { figures, runDetail } from '../testing/run-fixtures';
+import { figures, runBanner, runDetail, runWithoutSetup } from '../testing/run-fixtures';
 import { RunResultComponent } from './run-result.component';
 
 async function renderResult(changes: Partial<RunDetail> = {}, figureChanges: Partial<RunFigures> = {}) {
@@ -18,7 +18,7 @@ const tile = (name: RegExp | string) => {
 
 describe('the banner', () => {
   it('says the fills are simulated from trade prices, bid and ask are not available, the slippage and price step assumed, and the fees in the server’s words', async () => {
-    await renderResult({ banner: { ...runDetail().banner, fee_policy: 'Fees were set by the owner at 0.65 a contract.', slippage_percent: '0.45', price_step_usd: '0.05' } });
+    await renderResult({ banner: runBanner({ fee_policy: 'Fees were set by the owner at 0.65 a contract.', slippage_percent: '0.45', price_step_usd: '0.05' }) });
 
     const banner = screen.getByRole('note', { name: 'How these figures were made' });
 
@@ -40,7 +40,7 @@ describe('the banner', () => {
   });
 
   it('says what the server says, whichever way the flags point', async () => {
-    await renderResult({ banner: { ...runDetail().banner, fills_are_simulated_from_trade_prices: false, bid_and_ask_are_available: true } });
+    await renderResult({ banner: runBanner({ fills_are_simulated_from_trade_prices: false, bid_and_ask_are_available: true }) });
 
     expect(screen.getByText('Fills are not simulated from trade prices.')).toBeTruthy();
     expect(screen.getByText('Bid and ask are available.')).toBeTruthy();
@@ -200,5 +200,17 @@ describe('a complete run with no figures', () => {
     await render(RunResultComponent, { inputs: { run: runDetail({ figures: null }) } });
 
     expect(screen.getByRole('alert').textContent).toBe('This run is complete but the server sent no figures for it.');
+  });
+});
+
+describe('a complete run whose setup and banner the server could not open', () => {
+  it('still shows its figures, with no banner, rather than failing to draw', async () => {
+    const { container } = await render(RunResultComponent, { inputs: { run: runWithoutSetup() } });
+
+    expect(screen.queryByRole('note', { name: 'How these figures were made' })).toBeNull();
+    expect(container.querySelector('app-options-backtest-run-banner')).toBeNull();
+    expect(reads(tile('Net profit'))).toBe('Net profit $1,234.56');
+    expect(screen.getByRole('region', { name: 'Sessions' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'By month' })).toBeTruthy();
   });
 });

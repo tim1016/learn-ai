@@ -265,6 +265,22 @@ describe('when the server will not start the backtest', () => {
     await waitFor(() => expect(screen.queryByText('No trading session falls in that range.')).toBeNull());
   });
 
+  it('shows a range that reaches before 1970 at the dates in the server’s words, starts no run, and leaves Start free', async () => {
+    const setup = scriptedRun(vi, {
+      startRun: vi.fn(async () => {
+        throw new RunRefusedError('OPTIONS_BACKTEST_RANGE_TOO_EARLY', 'The range reaches a trading day before 1970, which a run cannot be asked for. Start the range later.', 400);
+      }),
+    });
+    await readyToStart(setup);
+
+    fireEvent.click(startButton());
+
+    const reason = await within(screen.getByRole('region', { name: 'Duration' })).findByText('The range reaches a trading day before 1970, which a run cannot be asked for. Start the range later.');
+    expect(reason.getAttribute('role')).toBe('alert');
+    expect(screen.queryByRole('region', { name: 'Backtest run' })).toBeNull();
+    expect(startButton().disabled).toBe(false);
+  });
+
   it('says plainly when the backtest could not be started for another reason, and lets it be started again', async () => {
     let down = true;
     const setup = scriptedRun(vi);

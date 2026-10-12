@@ -33,8 +33,8 @@
   @if (showSetup()) {
     <section class="setup" aria-label="The setup this run used">
       <h3>The setup this run used</h3>
-      @if (setupWords(); as words) { <app-options-backtest-setup-sentences [summary]="words" /> } @else if (setupProblem(); as why) { <p class="problem" role="status">{{ why }}</p> }
-      <button pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="detail() === null" (click)="use()"><i class="pi pi-upload" aria-hidden="true"></i><span>Use this setup</span></button>
+      @if (setupWords(); as words) { <app-options-backtest-setup-sentences [summary]="words" /> } @else if (setupProblem(); as why) { <p class="problem" role="status">{{ why }}</p> } @else if (noSetupWhy(); as why) { <p class="problem" role="status">{{ why }}</p> }
+      <button pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="!canUseSetup()" (click)="use()"><i class="pi pi-upload" aria-hidden="true"></i><span>Use this setup</span></button>
     </section>
   }
 </section>

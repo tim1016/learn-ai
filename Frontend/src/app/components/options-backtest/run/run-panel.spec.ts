@@ -7,7 +7,7 @@ import type { RunDetail, RunListItem, RunStatus } from '../options-backtest.type
 import { fakeJobs, type FakeJobs } from '../testing/fake-jobs';
 import { expectTradingDatesInNewYork, lettingGo, reads } from '../testing/page-actions';
 import { fakeService, type FakeService } from '../testing/render-page';
-import { runDetail, runItem } from '../testing/run-fixtures';
+import { runDetail, runItem, runWithoutSetup, SETUP_CANNOT_OPEN_REASON } from '../testing/run-fixtures';
 import { RunPanelComponent } from './run-panel.component';
 
 async function renderRun(run: RunListItem, options: { service?: FakeService; jobs?: FakeJobs; showSetup?: boolean } = {}) {
@@ -67,6 +67,28 @@ describe('a run that is going', () => {
     jobs.emit('job-7', { type: 'job.phase', phase: 'saving', friendly: 'Saving the run' });
     expect(await screen.findByText('Saving the run')).toBeTruthy();
     expect(screen.queryByText(/of \d+ sessions/)).toBeNull();
+  });
+
+  it('shows the server’s two lines, one when a download starts to wait for another request and one when it ends, while the count does not move', async () => {
+    const service = fakeService(vi);
+    readsAs(service, going());
+    const jobs = fakeJobs();
+    jobs.register('job-7');
+    await renderRun(runItem(), { service, jobs });
+    jobs.emit('job-7', { type: 'job.phase', phase: 'downloading_data', friendly: 'Fetching the market data the run is missing' });
+    jobs.emit('job-7', { type: 'job.progress', current: 2, total: 5, unit: 'sessions' });
+    jobs.emit('job-7', { type: 'job.log', message: 'Fetched the listing for session 2 of 5.' });
+    await screen.findByText('Fetched the listing for session 2 of 5.');
+
+    jobs.emit('job-7', { type: 'job.log', message: 'Waiting for data another request is already fetching.' });
+
+    expect(await screen.findByText('Waiting for data another request is already fetching.')).toBeTruthy();
+    expect(screen.queryByText('Fetched the listing for session 2 of 5.')).toBeNull();
+    expect(screen.getByText('2 of 5 sessions')).toBeTruthy();
+    jobs.emit('job-7', { type: 'job.log', message: 'The other request has finished; carrying on.' });
+    expect(await screen.findByText('The other request has finished; carrying on.')).toBeTruthy();
+    expect(screen.queryByText('Waiting for data another request is already fetching.')).toBeNull();
+    expect(screen.getByText('2 of 5 sessions')).toBeTruthy();
   });
 
   it('announces the phase to a screen reader and not the count', async () => {
@@ -365,5 +387,37 @@ describe('a run that is over, opened later', () => {
     await screen.findByRole('region', { name: 'Headline figures' });
     expect(service.describe).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: 'Use this setup' })).toBeNull();
+  });
+});
+
+describe('a run whose setup the server cannot open', () => {
+  it('shows the figures and no banner, says why in the server’s words, asks nothing to describe a setup that is not there, and cannot be used', async () => {
+    const service = fakeService(vi);
+    readsAs(service, runWithoutSetup());
+    const { view } = await renderRun(runItem({ status: 'complete' }), { service, showSetup: true });
+    const used: unknown[] = [];
+    view.fixture.componentInstance.useSetup.subscribe((setup) => used.push(setup));
+
+    const section = await screen.findByRole('region', { name: 'The setup this run used' });
+    expect(await within(section).findByText(SETUP_CANNOT_OPEN_REASON)).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Headline figures' })).toBeTruthy();
+    expect(screen.queryByRole('note', { name: 'How these figures were made' })).toBeNull();
+    const use = within(section).getByRole<HTMLButtonElement>('button', { name: 'Use this setup' });
+    expect(use.disabled).toBe(true);
+    use.click();
+    await lettingGo();
+    expect(service.describe).not.toHaveBeenCalled();
+    expect(used).toEqual([]);
+  });
+
+  it('says nothing about a setup, and offers none, until the run has been read', async () => {
+    const service = fakeService(vi);
+    service.run.mockImplementation(() => new Promise<RunDetail>(() => undefined));
+
+    await renderRun(runItem({ status: 'complete' }), { service, showSetup: true });
+
+    const section = screen.getByRole('region', { name: 'The setup this run used' });
+    expect(within(section).getByRole<HTMLButtonElement>('button', { name: 'Use this setup' }).disabled).toBe(true);
+    expect(within(section).queryByText(SETUP_CANNOT_OPEN_REASON)).toBeNull();
   });
 });

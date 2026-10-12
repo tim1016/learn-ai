@@ -1,5 +1,5 @@
 import { sessionOpenMs } from '../../../shared/date-picker/testing/fake-trading-calendar';
-import type { DayRow, MonthRow, RunDetail, RunFigures, RunListItem, SlippagePoint, ServedSetup } from '../options-backtest.types';
+import type { DayRow, MonthRow, RunBanner, RunDetail, RunFigures, RunListItem, SlippagePoint, ServedSetup } from '../options-backtest.types';
 import { exampleBody } from './fixtures';
 
 /**
@@ -142,6 +142,27 @@ export const LADDER: SlippagePoint[] = [
   { slippage_percent: '0.6', is_setups_own: false, net_profit_usd: '-12.34', trades: 11, traded_sessions: 8, winning_sessions: 3 },
 ];
 
+export function runBanner(changes: Partial<RunBanner> = {}): RunBanner {
+  return {
+    fills_are_simulated_from_trade_prices: true,
+    bid_and_ask_are_available: false,
+    slippage_percent: '0.3',
+    price_step_usd: '0.01',
+    fee_policy_kind: 'not_charged',
+    fee_per_contract_usd: null,
+    fee_policy: 'Fees are not charged.',
+    ...changes,
+  };
+}
+
+/** Why the server cannot open a run's setup, in its words (the setup was stored by an older version of the rules). */
+export const SETUP_CANNOT_OPEN_REASON = 'This run’s setup can no longer be opened: the stored setup breaks a rule that came in after it was saved.';
+
+/** A run whose setup the server cannot open: the figures are there, the banner and the setup are not, and the reason is. */
+export function runWithoutSetup(changes: Partial<RunDetail> = {}): RunDetail {
+  return runDetail({ setup: null, banner: null, setup_cannot_open_reason: SETUP_CANNOT_OPEN_REASON, ...changes });
+}
+
 export function runDetail(changes: Partial<RunDetail> = {}): RunDetail {
   const setup: ServedSetup = exampleBody();
   return {
@@ -149,15 +170,8 @@ export function runDetail(changes: Partial<RunDetail> = {}): RunDetail {
     calendar_identity: 'NYSE',
     calendar_package_version: '5.1.0',
     setup,
-    banner: {
-      fills_are_simulated_from_trade_prices: true,
-      bid_and_ask_are_available: false,
-      slippage_percent: '0.3',
-      price_step_usd: '0.01',
-      fee_policy_kind: 'not_charged',
-      fee_per_contract_usd: null,
-      fee_policy: 'Fees are not charged.',
-    },
+    setup_cannot_open_reason: null,
+    banner: runBanner(),
     figures: figures(),
     slippage: LADDER,
     slippage_tolerance: { highest_profitable_percent: '0.3', first_unprofitable_percent: '0.6', nothing_traded: false },

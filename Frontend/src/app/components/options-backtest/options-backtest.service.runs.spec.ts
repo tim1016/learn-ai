@@ -9,6 +9,7 @@ import { SERVED_LIMITS, exampleBody } from './testing/fixtures';
 
 const BASE = '/api/research/options-backtest';
 const REFUSAL = { code: 'OPTIONS_BACKTEST_RANGE_TOO_LONG', message: 'That range holds more sessions than a run takes.' };
+const TOO_EARLY = { code: 'OPTIONS_BACKTEST_RANGE_TOO_EARLY', message: 'The range reaches a trading day before 1970, which a run cannot be asked for. Start the range later.' };
 
 describe('OptionsBacktestService, the run routes', () => {
   let service: OptionsBacktestService;
@@ -48,6 +49,15 @@ describe('OptionsBacktestService, the run routes', () => {
     const error = await pending.catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(RunRefusedError);
     expect(error).toMatchObject({ code: REFUSAL.code, message: REFUSAL.message, status });
+  });
+
+  it('reads the 400 for a range that reaches before 1970 on check data as a refusal with the server’s own code and message', async () => {
+    const pending = service.checkData(exampleBody(), -3_600_000, 2_000);
+    http.expectOne(`${BASE}/check-data`).flush({ detail: TOO_EARLY }, { status: 400, statusText: 'Bad Request' });
+
+    const error = await pending.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(RunRefusedError);
+    expect(error).toMatchObject({ ...TOO_EARLY, status: 400 });
   });
 
   it('lists the runs, only the one job’s when asked, and only as many as asked for', async () => {
@@ -135,6 +145,17 @@ describe('starting a run', () => {
 
     expect(error).toBeInstanceOf(RunRefusedError);
     expect(error).toMatchObject({ code: REFUSAL.code, message: REFUSAL.message });
+  });
+
+  it('reads the 400 for a range that reaches before 1970, as the jobs boundary forwards it, with the server’s own code and message', async () => {
+    serviceWith(async () => {
+      throw new HttpErrorResponse({ status: 400, error: { detail: JSON.stringify({ detail: TOO_EARLY }) } });
+    });
+
+    const error = await service.startRun(request).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(RunRefusedError);
+    expect(error).toMatchObject({ ...TOO_EARLY, status: 400 });
   });
 
   it('leaves a failure that is no refusal as it was', async () => {

@@ -8,7 +8,7 @@ import type { RunListItem } from '../options-backtest.types';
 import { fakeJobs, type FakeJobs } from '../testing/fake-jobs';
 import { expectTradingDatesInNewYork, lettingGo, press, reads } from '../testing/page-actions';
 import { fakeService, type FakeService } from '../testing/render-page';
-import { runDetail, runItem } from '../testing/run-fixtures';
+import { runDetail, runItem, runWithoutSetup, SETUP_CANNOT_OPEN_REASON } from '../testing/run-fixtures';
 import { sessionOpenMs } from '../../../shared/date-picker/testing/fake-trading-calendar';
 import { HistoryTabComponent } from './history-tab.component';
 
@@ -136,6 +136,24 @@ describe('opening a run', () => {
     expect(await screen.findByRole('region', { name: 'Headline figures' })).toBeTruthy();
     expect(await screen.findByText('Window for SPY.')).toBeTruthy();
     expect(service.describe).toHaveBeenCalledWith(runDetail().setup);
+  });
+
+  it('opens a complete run whose setup the server cannot open: the figures, the reason in the server’s words, and no way to use the setup', async () => {
+    const service = fakeService(vi, { runs: vi.fn(async () => RUNS), run: vi.fn(async () => runWithoutSetup({ ...COMPLETE })) });
+    const { view } = await renderHistory({ service });
+    const used: unknown[] = [];
+    view.fixture.componentInstance.useSetup.subscribe((setup) => used.push(setup));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open run 30' }));
+
+    expect(await screen.findByRole('region', { name: 'Headline figures' })).toBeTruthy();
+    expect(await screen.findByText(SETUP_CANNOT_OPEN_REASON)).toBeTruthy();
+    const use = screen.getByRole<HTMLButtonElement>('button', { name: 'Use this setup' });
+    expect(use.disabled).toBe(true);
+    use.click();
+    await lettingGo();
+    expect(service.describe).not.toHaveBeenCalled();
+    expect(used).toEqual([]);
   });
 
   it('shows why a failed run failed, and each item with its session’s date', async () => {

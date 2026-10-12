@@ -5,7 +5,7 @@ import { fakeJobs } from './testing/fake-jobs';
 import { exampleBody } from './testing/fixtures';
 import { dateFields, lettingGo, openExample, pickDates, press, typeInto } from './testing/page-actions';
 import { fakeService, renderPage } from './testing/render-page';
-import { runDetail, runItem } from './testing/run-fixtures';
+import { runDetail, runItem, runWithoutSetup, SETUP_CANNOT_OPEN_REASON } from './testing/run-fixtures';
 
 const tab = (name: string) => screen.getByRole('tab', { name });
 const showHistory = () => fireEvent.click(tab('History'));
@@ -126,6 +126,27 @@ describe('Use this setup', () => {
     expect(dateFields()).toEqual({ from: '2026-09-14', to: '2026-09-18' });
     expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).toBe('');
     expect(within(screen.getByRole('complementary', { name: 'Saved setups' })).getAllByRole('button').filter((button) => button.getAttribute('aria-current') === 'true')).toHaveLength(0);
+  });
+
+  it('cannot be pressed for a run whose setup the server could not open: it says why, and the form is not touched', async () => {
+    const service = fakeService(vi, { runs: vi.fn(async () => [COMPLETE]), run: vi.fn(async () => runWithoutSetup({ ...COMPLETE })) });
+    await renderPage(service);
+    typeInto('Slippage (percent)', '0.45');
+    showHistory();
+    fireEvent.click(await screen.findByRole('button', { name: 'Open run 30' }));
+    await screen.findByText(SETUP_CANNOT_OPEN_REASON);
+    const describedBefore = service.describe.mock.calls.length;
+
+    const use = screen.getByRole<HTMLButtonElement>('button', { name: 'Use this setup' });
+    use.click();
+    await lettingGo();
+
+    expect(use.disabled).toBe(true);
+    expect(tab('History').getAttribute('aria-selected')).toBe('true');
+    expect(service.describe.mock.calls.length).toBe(describedBefore);
+    expect(service.describe.mock.calls.every(([body]) => body !== null)).toBe(true);
+    showBacktest();
+    expect((screen.getByLabelText('Slippage (percent)') as HTMLInputElement).value).toBe('0.45');
   });
 
   it('starts a run under no name, because the saved setup of that name may have changed since', async () => {

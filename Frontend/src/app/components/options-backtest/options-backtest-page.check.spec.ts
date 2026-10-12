@@ -349,6 +349,21 @@ describe('when Check data does not give an answer', () => {
     await waitFor(() => expect(screen.queryByText(/A run takes at most 1300 sessions/)).toBeNull());
   });
 
+  it('shows a range that reaches before 1970 at the dates in the server’s words, as it shows the other refused ranges', async () => {
+    const service = fakeService(vi, {
+      checkData: vi.fn(async () => {
+        throw new RunRefusedError('OPTIONS_BACKTEST_RANGE_TOO_EARLY', 'The range reaches a trading day before 1970, which a run cannot be asked for. Start the range later.', 400);
+      }),
+    });
+    await readyToCheck(service);
+
+    fireEvent.click(checkButton());
+
+    const reason = await within(screen.getByRole('region', { name: 'Duration' })).findByText('The range reaches a trading day before 1970, which a run cannot be asked for. Start the range later.');
+    expect(reason.getAttribute('role')).toBe('alert');
+    expect(screen.queryByRole('region', { name: 'Check data' })).toBeNull();
+  });
+
   it('says the server’s reason in the panel when the catalog cannot be asked, and asks again on request', async () => {
     let down = true;
     const service = fakeService(vi, {

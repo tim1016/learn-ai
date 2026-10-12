@@ -1,4 +1,4 @@
-<app-options-backtest-run-banner [banner]="run().banner" />
+@if (run().banner; as banner) { <app-options-backtest-run-banner [banner]="banner" /> }
 @if (run().figures; as figures) {
   <app-options-backtest-run-headline [figures]="figures" />
   <app-options-backtest-run-drawdown [figures]="figures" />

@@ -68,13 +68,21 @@ export class RunPanelComponent {
 
   // The setup the run used, in the server's sentences, for a run opened from History.
   private readonly setupRead = resource({
-    params: () => (this.showSetup() ? this.detail()?.setup : undefined),
+    params: () => (this.showSetup() ? (this.detail()?.setup ?? undefined) : undefined),
     loader: ({ params }) => this.service.describe(params),
   });
   protected readonly setupWords = computed<SetupSummary | null>(() => (this.setupRead.hasValue() ? this.setupRead.value() : null));
   protected readonly setupProblem = computed(() =>
     this.setupRead.error() === undefined ? null : 'The setup of this run could not be put into words. You can still use it.',
   );
+
+  protected readonly canUseSetup = computed(() => this.detail()?.setup != null);
+  /** Why a run that was read has no setup the page can open, in the server's words; null while the run has one or is not yet read. */
+  protected readonly noSetupWhy = computed(() => {
+    const detail = this.detail();
+    if (detail === null || detail.setup != null) return null;
+    return detail.setup_cannot_open_reason ?? 'The server did not send the setup this run used.';
+  });
 
   private readonly heading = viewChild<ElementRef<HTMLElement>>('heading');
   private reloadedFor: string | null = null;
@@ -144,7 +152,7 @@ export class RunPanelComponent {
 
   protected use(): void {
     const setup = this.detail()?.setup;
-    if (setup !== undefined) this.useSetup.emit(setup);
+    if (setup != null) this.useSetup.emit(setup);
   }
 
   private jobEnded(): void {
