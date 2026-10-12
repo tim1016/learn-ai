@@ -39,12 +39,14 @@ from app.options_backtest.fetching import DownloadFailed, ensure_run_data
 from app.options_backtest.lake_check import LakeCheckData
 from app.utils.background_loop import run_on_background_loop
 from tests._helpers.fake_lake_catalog import FakeCatalog
+from tests._helpers.option_lake_cases import DISK_FULL_AT_THE_RENAME, install_write_fault
 from tests.options_backtest._lake import NOW_2026_10_12_MS, raw_root, replace_the_stored_file
 from tests.options_backtest._lake import fake_catalog as fake_catalog
 from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixed
 from tests.options_backtest._lake import tmp_lake as tmp_lake
 from tests.options_backtest._run_data import THU, WED, Day, flat, steady
 from tests.options_backtest._run_lake import Vendor, ladder_day
+from tests.options_backtest._words import assert_plain
 from tests.options_backtest.setup_fixtures import leg, setup
 from tests.unit.data_lake.test_option_lake_catalog import clean_artifacts as clean_artifacts
 from tests.unit.data_lake.test_option_lake_catalog import pool as pool
@@ -207,6 +209,8 @@ THE_REASONS = (
     "provider_api_error",
     "provider_no_data",
     "validation_failed",
+    # A file that could not be written: a failed publish ends the row with it, and it is asked again like any failure.
+    "io_error",
 )
 ATTEMPTS_SPENT = (1, 2, 3, 4)
 A_RECIPE_THE_LAKE_HAS_SINCE_REPLACED = "a-recipe-the-lake-has-since-replaced"
@@ -369,7 +373,7 @@ async def test_the_underlyings_day_is_called_a_try_again_exactly_when_the_real_c
     [(kind, other) for kind in THE_KINDS for other in (False, True) if not (kind == "a listing" and other)],
 )
 @pytest.mark.parametrize("attempts", (2, 3))
-@pytest.mark.parametrize("reason", ("provider_api_error", "outside_data_plan"))
+@pytest.mark.parametrize("reason", ("provider_api_error", "outside_data_plan", "io_error"))
 @respx.mock
 async def test_on_the_real_table_each_kind_of_row_is_called_a_try_again_exactly_when_the_real_capture_asks_again(
     kind: str, reason: str, attempts: int, other_recipe: bool, clean_artifacts: None, pool: None, tmp_lake: Path
@@ -382,6 +386,44 @@ async def test_on_the_real_table_each_kind_of_row_is_called_a_try_again_exactly_
     await _the_check_and_the_lake_agree(
         kind, _RealRows(), vendor, reason=reason, attempts=attempts, other_recipe=other_recipe
     )
+
+
+@respx.mock
+async def test_a_contract_day_the_lake_could_not_write_is_recorded_as_io_error_and_asked_again_until_three_tries_are_spent(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The failure here is not written into the row by the test: the publish meets a full disk, as it does in a process,
+    # and the lake ends the claimed row itself. Asks 1 and 2 leave a try, the third spends the last (three in all), and
+    # the fourth is answered by the lake without a vendor request, which is what the check says of the third.
+    vendor = Vendor(_scene(WED))
+    vendor.mount()
+    await _store_the_underlying_and_the_listing()
+    fault = install_write_fault(monkeypatch, DISK_FULL_AT_THE_RENAME, only_bars=True)
+    thing = DataThing(DataKind.CONTRACTS, CALL_500)
+
+    for asks in (1, 2, 3):
+        result = await ensure_option_day_bars(CALL_500, WED, listed_under="SPY", now_ms=NOW_2026_10_12_MS)
+        assert result.failure is not None and result.failure.reason == "io_error"
+
+        recorded = await _recorded(thing, WED)
+        checked = (await asyncio.to_thread(_sessions_check)).sessions[0]
+
+        assert recorded == RecordedFailure(reason="io_error", will_be_asked_again=asks < 3)
+        if asks < 3:
+            assert checked.verdict is SessionVerdict.NEEDS_DOWNLOAD
+            assert any("could not read or write its files" in note and "(io_error)" in note for note in checked.notes)
+        else:
+            assert checked.verdict is SessionVerdict.CANNOT_BE_TESTED
+            [problem] = checked.problems
+            assert (problem.code, problem.lake_reason) == (ProblemCode.LAKE_HOLDS_A_FAILURE, "io_error")
+            assert "could not read or write its files" in problem.message
+            assert_plain(problem.message)
+
+    asked = vendor.vendor_requests
+    fourth = await ensure_option_day_bars(CALL_500, WED, listed_under="SPY", now_ms=NOW_2026_10_12_MS)
+
+    assert fourth.failure is not None and fourth.failure.reason == "fetch_timeout"
+    assert (vendor.vendor_requests, fault.hits) == (asked, 3), "the fourth ask made no request and no write"
 
 
 def _sessions_check(day: date = WED) -> DataCheck:
