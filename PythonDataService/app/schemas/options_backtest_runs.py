@@ -14,18 +14,23 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.options_backtest.data_check import DataCheck, Problem, SessionCheck, SessionVerdict, TestableStretch
 from app.options_backtest.saved_runs import FailureItem, Headline, RunFailure, RunRecord, StoredRun
 from app.options_backtest.saved_setups import SETUP_NAME_PATTERN
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.options_backtest.statistics import DayRow, Drawdown, MonthRow, Ratio, RunSummary
+from app.schemas.options_backtest import served_setup
 from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_day_end_ms, et_midnight_ms
 
 Ms = Annotated[int, Field(ge=0, le=MAX_TIMESTAMP_MS)]
 # A run's id is the database's; it stays within what a browser holds exactly.
 RUN_ID_MAX = 2**53 - 1
+# The id the jobs boundary mints for a job is a GUID (36 characters of hex and dashes). A job id, in a request body or
+# in the history's filter, is 1 to 128 of letters, digits, "-" and "_": nothing a database or a Redis key can refuse.
+JOB_ID_MAX_LENGTH = 128
+JOB_ID_PATTERN = r"^[A-Za-z0-9_-]+$"
 
 SessionStatusWord = Literal["traded", "no_trade", "skipped", "incomplete"]
 SkipReasonWord = Literal["window_does_not_fit", "underlying_did_not_trade"]
@@ -553,12 +558,25 @@ class OptionsBacktestRunDetailResponse(OptionsBacktestRunListItemResponse):
 
     calendar_identity: str
     calendar_package_version: str
-    setup: OptionsBacktestSetup
-    banner: OptionsBacktestFillsBannerResponse
+    # The setup the run was made with, read again with today's rules. A run whose stored setup no longer validates still
+    # opens, as a saved setup does: ``setup`` is ``None`` and ``setup_cannot_open_reason`` says why. Exactly one of the
+    # two is set. The ``banner`` states what the setup says of fills and fees, so it is set exactly when the setup is;
+    # the fee policy in words is on the run itself (``fee_policy``) either way, and so are the figures.
+    setup: OptionsBacktestSetup | None = None
+    setup_cannot_open_reason: str | None = None
+    banner: OptionsBacktestFillsBannerResponse | None = None
     figures: OptionsBacktestRunFiguresResponse | None = None
     # The whole run replayed at each slippage on the ladder, lowest first; empty unless the run is complete.
     slippage: list[OptionsBacktestSlippagePointResponse]
     slippage_tolerance: OptionsBacktestSlippageToleranceResponse | None = None
+
+    @model_validator(mode="after")
+    def _either_the_setup_or_why_not(self) -> Self:
+        if (self.setup is None) == (self.setup_cannot_open_reason is None):
+            raise ValueError("a run carries its setup, or the reason it cannot be opened, and not both")
+        if (self.banner is None) != (self.setup is None):
+            raise ValueError("a run carries its banner exactly when it carries its setup")
+        return self
 
     @classmethod
     def from_stored(cls, stored: StoredRun) -> Self:
@@ -569,8 +587,11 @@ class OptionsBacktestRunDetailResponse(OptionsBacktestRunListItemResponse):
             **listed.model_dump(),
             calendar_identity=stored.record.calendar_identity,
             calendar_package_version=stored.record.calendar_package_version,
-            setup=setup,
-            banner=OptionsBacktestFillsBannerResponse(
+            setup=None if setup is None else served_setup(setup),
+            setup_cannot_open_reason=stored.setup_cannot_open_reason,
+            banner=None
+            if setup is None
+            else OptionsBacktestFillsBannerResponse(
                 fills_are_simulated_from_trade_prices=True,
                 bid_and_ask_are_available=False,
                 slippage_percent=exact(setup.slippage_percent),
@@ -615,7 +636,7 @@ class OptionsBacktestJobRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    job_id: str = Field(min_length=1)
+    job_id: str = Field(min_length=1, max_length=JOB_ID_MAX_LENGTH, pattern=JOB_ID_PATTERN)
     setup: OptionsBacktestSetup
     start_ms: Ms
     end_ms: Ms

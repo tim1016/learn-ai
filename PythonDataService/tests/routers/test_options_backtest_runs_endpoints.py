@@ -9,7 +9,9 @@ neighbours. Hand-worked figures are in ``tests/options_backtest/test_service.py`
 from __future__ import annotations
 
 import asyncio
+import random
 import re
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
@@ -26,7 +28,7 @@ from httpx import ASGITransport
 from app.data_lake.catalog_client import CatalogUnavailableError
 from app.jobs.phases import JOB_PHASES
 from app.jobs.progress import JobCancelled
-from app.lean_sidecar.trading_calendar import session_window_for_date
+from app.lean_sidecar.trading_calendar import expected_sessions, session_window_for_date
 from app.main import app
 from app.options_backtest import service
 from app.options_backtest.fetching import ensure_run_data
@@ -236,10 +238,59 @@ async def test_a_range_longer_than_a_run_takes_is_a_400_naming_the_limit(
     assert "at most 3" in response.json()["detail"]["message"]
 
 
+async def test_the_most_sessions_a_range_may_hold_is_the_limit_served_a_range_of_that_many_runs_and_one_more_does_not(
+    client: httpx.AsyncClient, harness: Harness
+) -> None:
+    async with client as c:
+        limit = (await c.get(f"{PREFIX}/limits")).json()["max_range_sessions"]
+        # More than limit + 1 sessions, all in the past: the sessions of nearly seven years.
+        sessions = expected_sessions(date(2019, 1, 2), date(2025, 12, 31))
+        assert len(sessions) > limit + 1
+        at_the_limit = await c.post(
+            JOBS,
+            json=job_body(
+                job_id="limit-1", start_ms=et_midnight_ms(sessions[0]), end_ms=et_day_end_ms(sessions[limit - 1])
+            ),
+        )
+        one_more = await c.post(
+            JOBS,
+            json=job_body(
+                job_id="limit-2", start_ms=et_midnight_ms(sessions[0]), end_ms=et_day_end_ms(sessions[limit])
+            ),
+        )
+        check_one_more = await c.post(
+            f"{PREFIX}/check-data",
+            json={
+                "setup": job_body()["setup"],
+                "start_ms": et_midnight_ms(sessions[0]),
+                "end_ms": et_day_end_ms(sessions[limit]),
+            },
+        )
+
+    assert at_the_limit.status_code == 202, at_the_limit.text
+    assert [new.sessions_requested for new in harness.store.created] == [limit]
+    for refused in (one_more, check_one_more):
+        assert refused.status_code == 400, refused.text
+        assert refused.json()["detail"]["code"] == "OPTIONS_BACKTEST_RANGE_TOO_LONG"
+    assert len(harness.store.created) == 1
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
         pytest.param(lambda body: body.update(job_id=""), id="empty-job-id"),
+        pytest.param(lambda body: body.update(job_id="a\u0000b"), id="a-nul-in-the-job-id"),
+        pytest.param(lambda body: body.update(job_id="a" * 129), id="a-job-id-of-129-characters"),
+        pytest.param(
+            lambda body: body.update(
+                job_id="".join(random.Random(1).choices("abcdefghijklmnopqrstuvwxyz012345", k=20_000))
+            ),
+            id="a-job-id-of-20000-random-characters",
+        ),
+        pytest.param(lambda body: body.update(job_id="a b"), id="a-space-in-the-job-id"),
+        pytest.param(lambda body: body.update(job_id="a/b"), id="a-slash-in-the-job-id"),
+        pytest.param(lambda body: body.update(job_id="abc\n"), id="a-line-break-ends-the-job-id"),
+        pytest.param(lambda body: body.update(job_id="caf\u00e9"), id="a-letter-outside-ascii-in-the-job-id"),
         pytest.param(lambda body: body.pop("job_id"), id="no-job-id"),
         pytest.param(lambda body: body.pop("setup"), id="no-setup"),
         pytest.param(lambda body: body["setup"].update(legs=[]), id="setup-without-legs"),
@@ -262,6 +313,50 @@ async def test_a_body_that_is_not_a_run_request_is_a_422_before_anything_is_made
 
     assert response.status_code == 422
     assert harness.store.created == [] and harness.started == []
+
+
+@pytest.mark.parametrize("job_id", [str(uuid.UUID(int=0xA1B2C3D4E5F60718293A4B5C6D7E8F90)), "a", "A_b-9", "x" * 128])
+async def test_a_job_id_of_the_shape_the_jobs_boundary_mints_is_accepted(
+    client: httpx.AsyncClient, harness: Harness, job_id: str
+) -> None:
+    async with client as c:
+        response = await c.post(JOBS, json=job_body(job_id=job_id))
+
+    assert response.status_code == 202, response.text
+    assert response.json()["job_id"] == job_id
+
+
+async def test_a_range_that_reaches_a_session_before_the_epoch_is_a_400_and_makes_no_run(
+    client: httpx.AsyncClient, harness: Harness
+) -> None:
+    # start_ms 0 is 1970-01-01 00:00 UTC, which is 19:00 on 1969-12-31 in New York. That was a trading day, opened
+    # by the calendar at 15:00 UTC (10:00 New York, the exchange's hours then), 9 hours before the epoch: -32,400,000.
+    assert session_window_for_date(date(1969, 12, 31)).open_ms_utc == -32_400_000
+    async with client as c:
+        at_the_epoch = await c.post(JOBS, json=job_body(job_id="e1", start_ms=0, end_ms=5 * 86_400_000))
+        one_ms_in = await c.post(JOBS, json=job_body(job_id="e2", start_ms=1, end_ms=86_400_000))
+
+    for response in (at_the_epoch, one_ms_in):
+        assert response.status_code == 400, response.text
+        assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_RANGE_TOO_EARLY"
+        assert response.json()["detail"]["message"]
+    assert harness.store.created == [] and harness.started == []
+
+
+async def test_a_range_that_starts_on_the_first_new_york_day_of_1970_is_accepted_for_its_first_session_after_the_epoch(
+    client: httpx.AsyncClient, harness: Harness
+) -> None:
+    # 1970-01-01 was a holiday, so New York midnight of it is not a session and the first session is Friday 1970-01-02,
+    # opened at 15:00 UTC: 1 day + 15 hours = 24 h + 15 h = 39 h = 39 x 3,600,000 = 140,400,000 ms.
+    async with client as c:
+        response = await c.post(
+            JOBS,
+            json=job_body(start_ms=et_midnight_ms(date(1970, 1, 1)), end_ms=et_day_end_ms(date(1970, 1, 2))),
+        )
+
+    assert response.status_code == 202, response.text
+    [new] = harness.store.created
+    assert new.first_session_open_ms == 140_400_000 == new.last_session_open_ms
 
 
 async def test_a_job_that_already_has_a_run_is_a_409_and_starts_no_second_worker(
@@ -457,6 +552,23 @@ async def test_check_data_on_a_range_that_cannot_be_run_is_a_400_and_a_body_that
     assert no_setup.status_code == 422 and extra.status_code == 422
 
 
+async def test_check_data_on_a_range_that_reaches_a_session_before_the_epoch_is_a_400_and_reads_nothing(
+    client: httpx.AsyncClient, now_is_monday_afternoon: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def must_not_be_asked(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("a range refused as too early must be refused before anything is read")
+
+    monkeypatch.setattr(runs_router, "check_data", must_not_be_asked)
+
+    async with client as c:
+        response = await c.post(
+            f"{PREFIX}/check-data", json={"setup": job_body()["setup"], "start_ms": 0, "end_ms": 5 * 86_400_000}
+        )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_RANGE_TOO_EARLY"
+
+
 async def test_check_data_when_the_catalog_cannot_be_reached_is_a_503_with_a_code(
     client: httpx.AsyncClient, now_is_monday_afternoon: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -514,6 +626,65 @@ async def stored_runs(conn: asyncpg.Connection, unique: str):  # type: ignore[no
 
     yield make
     await conn.execute("DELETE FROM research_options_backtest_runs WHERE job_id LIKE $1", f"%-{unique}")
+
+
+@pytest.mark.parametrize(
+    "job_id",
+    [
+        "%00",
+        "a%00b",
+        "x" * 129,
+        "a%20b",
+        "a%2Fb",
+        "abc%0A",
+        "%C3%A9",
+        "%EF%BF%BD",
+        "".join(random.Random(2).choices("abcdef0123456789", k=20_000)),
+    ],
+)
+async def test_a_job_id_to_filter_by_that_cannot_be_one_is_a_422_before_anything_is_asked_of_the_database(
+    client: httpx.AsyncClient, job_id: str
+) -> None:
+    async with client as c:
+        response = await c.get(f"{PREFIX}/runs?job_id={job_id}")
+
+    assert response.status_code == 422, response.text[:200]
+
+
+@pytest.mark.parametrize("limit", ["0", "-1", "1001", "1000000", "99999999999999999999", "abc", "1.5", ""])
+async def test_a_history_limit_outside_1_to_1000_is_a_422(client: httpx.AsyncClient, limit: str) -> None:
+    async with client as c:
+        response = await c.get(f"{PREFIX}/runs?limit={limit}")
+
+    assert response.status_code == 422, response.text[:200]
+
+
+async def test_the_history_gives_at_most_the_limit_asked_200_when_none_is_asked_and_1000_at_the_most(
+    client: httpx.AsyncClient, conn: asyncpg.Connection, unique: str, is_the_job_alive: Any
+) -> None:
+    # 1,001 cancelled runs of this test's own, made in one statement; ids come in the order of the series.
+    await conn.execute(
+        """
+        INSERT INTO research_options_backtest_runs (
+            created_at_ms, finished_at_ms, job_id, status, setup_json, underlying, first_session_open_ms,
+            last_session_open_ms, sessions_requested, fee_policy_text, calendar_identity, calendar_package_version
+        )
+        SELECT 1000 + n, 2000 + n, 'many-' || n || '-' || $1, 'cancelled', '{}'::jsonb, 'SPY', 5, 5, 1, 'x', 'NYSE', '1'
+          FROM generate_series(1, 1001) AS n
+        """,
+        unique,
+    )
+    try:
+        async with client as c:
+            default = await c.get(f"{PREFIX}/runs")
+            smallest = await c.get(f"{PREFIX}/runs?limit=1")
+            largest = await c.get(f"{PREFIX}/runs?limit=1000")
+    finally:
+        await conn.execute("DELETE FROM research_options_backtest_runs WHERE job_id LIKE $1", f"many-%-{unique}")
+
+    # Other tests' runs may sit above these (they are newer); what is asked for is what comes, and never more.
+    assert (default.status_code, smallest.status_code, largest.status_code) == (200, 200, 200)
+    assert (len(default.json()), len(smallest.json()), len(largest.json())) == (200, 1, 1000)
 
 
 async def test_the_history_is_newest_first_and_a_job_finds_its_run(
@@ -579,6 +750,34 @@ async def test_a_run_that_failed_opens_with_why_and_no_figures(
     }
 
 
+async def test_a_run_whose_stored_setup_no_longer_validates_opens_with_its_figures_no_setup_and_the_reason(
+    client: httpx.AsyncClient, conn: asyncpg.Connection, stored_runs: Any, is_the_job_alive: Any
+) -> None:
+    healthy = await stored_runs("healthy")
+    stale = await stored_runs("stale")
+    # Edited by hand, as a later rule would leave it: a field the setup no longer has.
+    await conn.execute(
+        "UPDATE research_options_backtest_runs SET setup_json = setup_json || '{\"lots\": 1}'::jsonb WHERE id = $1",
+        stale,
+    )
+
+    async with client as c:
+        opened = await c.get(f"{PREFIX}/runs/{stale}")
+        fine = await c.get(f"{PREFIX}/runs/{healthy}")
+        history = await c.get(f"{PREFIX}/runs", params={"limit": 1000})
+
+    assert opened.status_code == 200, opened.text
+    body = opened.json()
+    assert body["setup"] is None and "lots" in body["setup_cannot_open_reason"]
+    assert body["banner"] is None, "the banner states what the setup says of fills and fees"
+    assert body["status"] == "complete" and body["fee_policy"] == "Fees are $0.65 per contract traded."
+    assert body["figures"]["net_profit_usd"] == "-69.25" and body["slippage"][0]["net_profit_usd"] == "-63.25"
+    assert body["headline"]["trades"] == 3
+    assert fine.json()["setup"]["underlying"] == "SPY" and fine.json()["setup_cannot_open_reason"] is None
+    assert fine.json()["banner"]["bid_and_ask_are_available"] is False
+    assert history.status_code == 200 and {stale, healthy} <= {row["id"] for row in history.json()}
+
+
 async def test_a_running_run_reads_interrupted_when_its_job_is_gone_and_running_when_that_cannot_be_told(
     client: httpx.AsyncClient, stored_runs: Any, is_the_job_alive: dict[str, bool | None]
 ) -> None:
@@ -592,7 +791,23 @@ async def test_a_running_run_reads_interrupted_when_its_job_is_gone_and_running_
     assert statuses == {"alive": "running", "gone": "interrupted", "cannot tell": "running"}
 
 
-@pytest.mark.parametrize("run_id", ["0", "-3", "abc", str(2**53)])
+@pytest.mark.parametrize(
+    "run_id",
+    [
+        "0",
+        "-3",
+        "abc",
+        str(2**53),
+        str(2**63 - 1),
+        str(2**63),
+        "99999999999999999999999",
+        "1.5",
+        "1e3",
+        "%00",
+        "%20",
+        "%EF%BF%BD",
+    ],
+)
 async def test_a_run_id_that_cannot_be_one_is_a_422(client: httpx.AsyncClient, run_id: str) -> None:
     async with client as c:
         got = await c.get(f"{PREFIX}/runs/{run_id}")
