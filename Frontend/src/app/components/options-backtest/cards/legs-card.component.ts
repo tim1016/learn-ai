@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input, output, viewChildren } from '@angular/core';
 import type { FieldTree } from '@angular/forms/signals';
 
 import { MAX_LEGS } from '../leg-draft';
@@ -19,6 +19,18 @@ export class LegsCardComponent {
   readonly problems = input<FieldProblems>(NO_PROBLEMS);
   readonly legCopied = output<string>();
   readonly legRemoved = output<string>();
+
+  private readonly cards = viewChildren(LegCardComponent);
+
+  /** Puts the keyboard on the delete control of the leg at that position, if there is one. */
+  focusDelete(position: number): void {
+    this.cards()[position]?.focusDelete();
+  }
+
+  /** Puts the keyboard on the heading of the leg at that position, if there is one. */
+  focusHeading(position: number): void {
+    this.cards()[position]?.focusHeading();
+  }
 
   protected readonly maxLegs = MAX_LEGS;
   protected readonly legs = computed(() => this.form().legs().value());

@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, ElementRef, input, output, viewChild } from '@angular/core';
 import { FormField, type FieldTree } from '@angular/forms/signals';
 import { ButtonModule } from 'primeng/button';
 import { InputText } from 'primeng/inputtext';
@@ -44,16 +44,46 @@ export class LegCardComponent {
   protected readonly line = computed(() => contractLine(this.leg()));
   protected readonly reasonId = computed(() => `ob-${this.leg().id}-reentry-reason`);
   protected readonly unavailableReentry = computed<readonly ReentryKind[]>(() => (this.leg().momentumOn ? [] : ['on_momentum']));
-  protected readonly contractProblems = computed(() => this.problemsAt(CONTRACT_FIELDS));
-  protected readonly stopLossProblems = computed(() => this.problemsAt(['stopLoss', 'stopLossValue']));
-  protected readonly momentumProblems = computed(() => this.problemsAt(['momentum', 'momentumValue']));
-  protected readonly reentryProblems = computed(() => this.problemsAt(['reentry', 'reentryCount']));
+  protected readonly contractProblem = computed(() => this.problemsAt(CONTRACT_FIELDS));
+  protected readonly stopLossProblem = computed(() => this.problemsAt(['stopLoss', 'stopLossValue']));
+  protected readonly momentumProblem = computed(() => this.problemsAt(['momentum', 'momentumValue']));
+  protected readonly reentryProblem = computed(() => this.problemsAt(['reentry', 'reentryCount']));
+  /** The re-entry choice is described by why on momentum is unavailable, and by what is wrong with the re-entry. */
+  protected readonly reentryKindDescribedBy = computed(() =>
+    [this.leg().momentumOn ? null : this.reasonId(), this.reentryProblem() === null ? null : this.problemId('reentry')].flatMap((id) => id ?? []).join(' ') || null,
+  );
+
+  private readonly heading = viewChild.required('heading', { read: ElementRef<HTMLElement> });
+  private readonly deleteButton = viewChild.required('deleteButton', { read: ElementRef<HTMLElement> });
+
+  /** Puts the keyboard on this leg, for a screen reader to say which one it is. */
+  focusHeading(): void {
+    this.heading().nativeElement.focus();
+  }
+
+  /** Puts the keyboard on this leg's delete control, where the one deleted just before it stood. */
+  focusDelete(): void {
+    this.deleteButton().nativeElement.focus();
+  }
+
+  /** The id of the line that says what is wrong with one of the leg's parts. */
+  protected problemId(part: 'contract' | 'stop' | 'momentum' | 'reentry'): string {
+    return `ob-${this.leg().id}-${part}-problem`;
+  }
+
+  /** `aria-describedby` for a part's fields: its problem, when it has one. */
+  protected describedByProblem(part: 'stop' | 'momentum' | 'reentry'): string | null {
+    const message = part === 'stop' ? this.stopLossProblem() : part === 'momentum' ? this.momentumProblem() : this.reentryProblem();
+    return message === null ? null : this.problemId(part);
+  }
 
   protected problem(field: LegField): string | null {
     return this.problems().get(legKey(this.leg().id, field)) ?? null;
   }
 
-  private problemsAt(fields: readonly LegField[]): string[] {
-    return fields.flatMap((field) => this.problem(field) ?? []);
+  /** What is wrong at those fields, as one line; null when nothing is. */
+  private problemsAt(fields: readonly LegField[]): string | null {
+    const messages = fields.flatMap((field) => this.problem(field) ?? []);
+    return messages.length === 0 ? null : messages.join(' ');
   }
 }

@@ -1,6 +1,8 @@
 // The server writes each block as one string and the page sets it as written, so what makes it readable is the setting:
 // a line of about 75 characters, room between the blocks, and each leg's block visibly its own.
-.card div[aria-live] { display: grid; gap: var(--space-4); font-size: var(--fs-sm); }
+.status { font-size: var(--fs-sm); color: var(--text-secondary); }
+.status--bad { color: var(--bear); }
+.blocks { display: grid; gap: var(--space-4); font-size: var(--fs-sm); }
 .block, .notice { max-width: 75ch; line-height: 1.55; text-wrap: pretty; }
 .legs { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
 .block--leg { padding: var(--space-3) var(--space-4); background: var(--bg-elevated); border-inline-start: 3px solid var(--accent); border-radius: var(--radius); }

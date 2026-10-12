@@ -1,11 +1,11 @@
-import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, ElementRef, input, output, viewChild } from '@angular/core';
 import { FormField, type FieldTree } from '@angular/forms/signals';
 import { ButtonModule } from 'primeng/button';
 import { InputText } from 'primeng/inputtext';
 
 import { EXPIRY_CHOICES, EXPIRY_HINTS, RIGHT_CHOICES, STRIKE_CHOICES } from '../choices';
 import { PillChoiceComponent } from '../controls/pill-choice.component';
-import { builderProblems, MAX_LEGS, type LegBuilder } from '../leg-draft';
+import { builderProblems, MAX_LEGS, type BuilderField, type LegBuilder } from '../leg-draft';
 
 /**
  * One row that reads left to right: Buy, call or put, contracts, expiry,
@@ -35,4 +35,23 @@ export class LegBuilderCardComponent {
   protected readonly expiryHint = computed(() => EXPIRY_HINTS[this.builder().expiryKind]);
   protected readonly full = computed(() => this.legCount() >= MAX_LEGS);
   protected readonly canAdd = computed(() => !this.full() && this.problems().size === 0);
+
+  private readonly addButton = viewChild.required('addButton', { read: ElementRef<HTMLButtonElement> });
+  private readonly contractsInput = viewChild.required('contracts', { read: ElementRef<HTMLInputElement> });
+
+  /** Puts the keyboard on Add leg, or on the first field when something there must be put right before a leg can be added. */
+  focusAdd(): void {
+    const add = this.addButton().nativeElement;
+    (add.disabled ? this.contractsInput().nativeElement : add).focus();
+  }
+
+  /** The id of the line that says what is wrong with one of the row's fields. */
+  protected problemId(field: BuilderField): string {
+    return `ob-builder-problem-${field}`;
+  }
+
+  /** `aria-describedby` for a field: its problem, when it has one. */
+  protected describedBy(field: BuilderField): string | null {
+    return this.problems().has(field) ? this.problemId(field) : null;
+  }
 }

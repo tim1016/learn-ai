@@ -29,17 +29,30 @@ export class SummaryComponent {
     const state = this.state();
     return state.kind === 'invalid' ? state.problems.other : [];
   });
-  protected readonly checking = computed(() => this.state().kind === 'checking');
-  protected readonly incomplete = computed(() => {
-    const kind = this.state().kind;
-    return kind === 'idle' || kind === 'invalid';
-  });
-  /** What is missing is at the fields, unless the server's only reasons are about the setup as a whole. */
-  protected readonly incompleteText = computed(() => {
+  /**
+   * The one line a screen reader is told about: it is the status of the
+   * summary (being read, read, not complete, not read) and nothing of the
+   * summary's own text, which would otherwise be read out again at every
+   * pause in the editing.
+   */
+  protected readonly statusText = computed(() => {
     const state = this.state();
-    const atTheFields = state.kind !== 'invalid' || state.problems.fields.size > 0;
-    return atTheFields
-      ? 'This setup is not complete. The fields marked above say what is missing.'
-      : 'This setup is not complete. The problem is about the setup as a whole; it is listed below.';
+    switch (state.kind) {
+      case 'checking':
+        return 'Reading the setup back…';
+      case 'ready':
+        return state.summary.notices.length > 0 ? 'The server has read this setup back. Read its notices first.' : 'The server has read this setup back.';
+      case 'failed':
+        return state.message;
+      case 'invalid':
+        // What is missing is at the fields, unless the server's only reasons are about the setup as a whole.
+        return state.problems.fields.size > 0
+          ? NOT_COMPLETE_AT_FIELDS
+          : 'This setup is not complete. The problem is about the setup as a whole; it is listed below.';
+      case 'idle':
+        return NOT_COMPLETE_AT_FIELDS;
+    }
   });
 }
+
+const NOT_COMPLETE_AT_FIELDS = 'This setup is not complete. The fields marked above say what is missing.';

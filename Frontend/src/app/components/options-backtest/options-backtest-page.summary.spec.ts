@@ -117,6 +117,54 @@ describe('the plain-words summary', () => {
   });
 });
 
+describe('what a screen reader is told about the summary', () => {
+  const summaryRegion = () => screen.findByRole('region', { name: 'In plain words' });
+
+  it('is its status, and never the summary text', async () => {
+    await renderPage(fakeService(vi));
+    addLeg();
+
+    const summary = await summaryRegion();
+    const sentence = await within(summary).findByText('Sentence for leg call.');
+    const status = within(summary).getByRole('status');
+
+    expect(status.getAttribute('aria-live')).toBe('polite');
+    expect(status.textContent).toMatch(/read this setup back/i);
+    expect(status.textContent).not.toContain('Sentence for leg call');
+    expect(sentence.closest('[aria-live], [role="status"], [role="alert"]')).toBeNull();
+    expect(summary.querySelectorAll('[aria-live]')).toHaveLength(1);
+  });
+
+  it('says while the setup is being read back', async () => {
+    await renderPage(fakeService(vi, { describe: vi.fn(() => new Promise<SetupSummary>(() => undefined)) }));
+    addLeg();
+
+    const status = within(await summaryRegion()).getByRole('status');
+
+    await waitFor(() => expect(status.textContent).toMatch(/reading the setup back/i));
+  });
+
+  it('says when the setup is not complete', async () => {
+    await renderPage(fakeService(vi));
+
+    const status = within(await summaryRegion()).getByRole('status');
+
+    await waitFor(() => expect(status.textContent).toMatch(/not complete/i));
+  });
+
+  it('says when the read failed, and keeps the way to try again outside it', async () => {
+    await renderPage(fakeService(vi, { describe: vi.fn(async () => Promise.reject(new Error('offline'))) }));
+    addLeg();
+
+    const summary = await summaryRegion();
+    const retry = await within(summary).findByRole('button', { name: 'Try again' });
+    const status = within(summary).getByRole('status');
+
+    expect(status.textContent?.trim()).not.toBe('');
+    expect(status.contains(retry)).toBe(false);
+  });
+});
+
 describe('a problem lands at its field', () => {
   const rejecting = (...details: { loc: (string | number)[]; msg: string }[]) =>
     fakeService(vi, {

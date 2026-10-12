@@ -101,7 +101,7 @@ describe('opening a setup', () => {
     await screen.findByRole('article', { name: 'Leg 2' });
     expect((screen.getByRole('switch', { name: 'No re-entry after' }) as HTMLInputElement).checked).toBe(false);
     for (const leg of [1, 2]) {
-      expect((screen.getByRole('switch', { name: `Leg ${leg} re-entry on stop loss` }) as HTMLInputElement).checked).toBe(false);
+      expect((screen.getByRole('switch', { name: `Leg ${leg} re-entry on SL` }) as HTMLInputElement).checked).toBe(false);
       expect((screen.getByRole('switch', { name: `Leg ${leg} stop loss` }) as HTMLInputElement).checked).toBe(true);
       expect((screen.getByRole('switch', { name: `Leg ${leg} simple momentum` }) as HTMLInputElement).checked).toBe(true);
     }

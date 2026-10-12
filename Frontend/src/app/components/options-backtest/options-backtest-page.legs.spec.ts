@@ -47,7 +47,7 @@ describe('building a setup', () => {
       typeInto(`Leg ${leg} stop loss value`, '25');
       flip(`Leg ${leg} simple momentum`);
       typeInto(`Leg ${leg} momentum value`, '25');
-      flip(`Leg ${leg} re-entry on stop loss`);
+      flip(`Leg ${leg} re-entry on SL`);
     }
 
     await waitFor(() => expect(service.describe).toHaveBeenLastCalledWith(exampleBody()));
@@ -128,7 +128,7 @@ describe('a leg’s three rules', () => {
     await renderPage(service);
     addLeg();
 
-    flip('Leg 1 re-entry on stop loss');
+    flip('Leg 1 re-entry on SL');
     typeInto('Leg 1 re-entries', '3');
 
     await waitFor(() => expect(lastLeg(service)).toMatchObject({ reentry_on_stop: { kind: 'at_once', count: 3 } }));
@@ -141,7 +141,7 @@ describe('a leg’s three rules', () => {
     for (const field of ['Leg 1 stop loss value', 'Leg 1 momentum value', 'Leg 1 re-entries']) {
       expect(isDisabled(screen.getByLabelText(field))).toBe(true);
     }
-    for (const rule of ['Leg 1 stop loss', 'Leg 1 simple momentum', 'Leg 1 re-entry on stop loss']) {
+    for (const rule of ['Leg 1 stop loss', 'Leg 1 simple momentum', 'Leg 1 re-entry on SL']) {
       expect((screen.getByRole('switch', { name: rule }) as HTMLInputElement).checked).toBe(false);
     }
   });
@@ -153,7 +153,7 @@ describe('re-entering on momentum', () => {
   it('cannot be chosen while the leg has no momentum rule, and the page says why', async () => {
     await renderPage(fakeService(vi));
     addLeg();
-    flip('Leg 1 re-entry on stop loss');
+    flip('Leg 1 re-entry on SL');
 
     expect(within(reentryKind()).getByRole<HTMLInputElement>('radio', { name: 'On momentum' }).disabled).toBe(true);
     const reasonId = reentryKind().getAttribute('aria-describedby');
@@ -169,7 +169,7 @@ describe('re-entering on momentum', () => {
     typeInto('Leg 1 stop loss value', '20');
     flip('Leg 1 simple momentum');
     typeInto('Leg 1 momentum value', '10');
-    flip('Leg 1 re-entry on stop loss');
+    flip('Leg 1 re-entry on SL');
 
     const onMomentum = within(reentryKind()).getByRole<HTMLInputElement>('radio', { name: 'On momentum' });
     expect(onMomentum.disabled).toBe(false);
@@ -185,7 +185,7 @@ describe('re-entering on momentum', () => {
     addLeg();
     flip('Leg 1 simple momentum');
     typeInto('Leg 1 momentum value', '10');
-    flip('Leg 1 re-entry on stop loss');
+    flip('Leg 1 re-entry on SL');
     fireEvent.click(within(reentryKind()).getByRole('radio', { name: 'On momentum' }));
     await waitFor(() => expect(lastLeg(service)).toMatchObject({ reentry_on_stop: { kind: 'on_momentum' } }));
     const calls = service.describe.mock.calls.length;

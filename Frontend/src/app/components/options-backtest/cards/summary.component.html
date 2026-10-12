@@ -1,22 +1,18 @@
 <section class="card" aria-labelledby="ob-summary-title">
   <div class="card__head"><h2 id="ob-summary-title">In plain words</h2></div>
-  <div aria-live="polite">
-    @if (checking()) { <p class="hint" role="status">Reading the setup back…</p> }
-    @if (incomplete()) { <p class="hint" role="status">{{ incompleteText() }}</p> }
-    @if (failure(); as message) {
-      <p class="problem" role="alert">{{ message }}</p>
-      <button type="button" class="again" (click)="retry.emit()">Try again</button>
-    }
-    @if (summary(); as text) {
-      @for (notice of text.notices; track notice) { <p class="notice" role="status">{{ notice }}</p> }
+  <p class="status" role="status" aria-live="polite" [class.status--bad]="failure() !== null">{{ statusText() }}</p>
+  @if (failure() !== null) { <button type="button" class="again" (click)="retry.emit()">Try again</button> }
+  @if (summary(); as text) {
+    <div class="blocks">
+      @for (notice of text.notices; track notice) { <p class="notice">{{ notice }}</p> }
       <p class="block">{{ text.window }}</p>
       <ul class="legs">
         @for (leg of text.legs; track leg.leg_id) { <li class="block block--leg">{{ leg.text }}</li> }
       </ul>
       <p class="block">{{ text.square_off }}</p>
       <p class="block">{{ text.costs }}</p>
-    }
-  </div>
+    </div>
+  }
   @if (otherProblems().length > 0) {
     <p id="ob-whole-setup" class="problem">These problems are about the setup as a whole, or a part this page has no field for:</p>
     <ul class="sentences" aria-labelledby="ob-whole-setup">

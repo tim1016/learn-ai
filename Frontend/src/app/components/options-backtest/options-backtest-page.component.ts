@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, input, linkedSignal, resource, signal, untracked } from '@angular/core';
+import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, Injector, input, linkedSignal, resource, signal, untracked, viewChild } from '@angular/core';
 import { applyEach, disabled, form } from '@angular/forms/signals';
 import { ButtonModule } from 'primeng/button';
 
@@ -59,6 +59,7 @@ interface ImportNotice {
 export class OptionsBacktestPageComponent {
   private readonly service = inject(OptionsBacktestService);
   private readonly download = inject(FileDownloadService);
+  private readonly injector = inject(Injector);
 
   /** How long the setup rests, in milliseconds, before it is read back. Specs set 0. */
   readonly describeDebounceMs = input(300);
@@ -91,6 +92,8 @@ export class OptionsBacktestPageComponent {
       disabled(leg.reentryCount, { when: ({ valueOf }) => !valueOf(leg.reentryOn) });
     });
   });
+  private readonly legsCard = viewChild(LegsCardComponent);
+  private readonly legBuilderCard = viewChild(LegBuilderCardComponent);
   protected readonly builder = signal(newLegBuilder());
   protected readonly builderForm = form(this.builder);
 
@@ -222,12 +225,24 @@ export class OptionsBacktestPageComponent {
     if (builderProblems(this.builder()).size === 0) this.draft.update((draft) => withLegAdded(draft, this.builder()));
   }
 
+  /** The copy stands just after its leg; the keyboard goes to it, so the owner lands on what was made. */
   protected copyLeg(legId: string): void {
+    const at = this.draft().legs.findIndex((leg) => leg.id === legId);
     this.draft.update((draft) => withLegCopied(draft, legId));
+    if (at >= 0) this.afterRender(() => this.legsCard()?.focusHeading(at + 1));
   }
 
+  /** The keyboard goes to where the deleted leg stood: the next leg's delete control, else the last one's, else Add leg. */
   protected removeLeg(legId: string): void {
+    const at = this.draft().legs.findIndex((leg) => leg.id === legId);
     this.draft.update((draft) => withLegRemoved(draft, legId));
+    const left = this.draft().legs.length;
+    if (at < 0) return;
+    this.afterRender(() => (left === 0 ? this.legBuilderCard()?.focusAdd() : this.legsCard()?.focusDelete(Math.min(at, left - 1))));
+  }
+
+  private afterRender(move: () => void): void {
+    afterNextRender(move, { injector: this.injector });
   }
 
   protected async save(): Promise<void> {
