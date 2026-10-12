@@ -141,7 +141,13 @@ def _wire_size(task: dict[str, Any]) -> int:
 
 @dataclass
 class _Entry:
-    """One owner's offered item inside the pool — submitted task state, never a candidate definition."""
+    """One owner's offered item inside the pool — submitted task state, never a candidate definition.
+
+    ``item`` is whatever ready item the owning adapter offered: golden's
+    ``ReadyEvaluation`` or a sibling caller's (Grid Search cells, #3049) —
+    anything with a unique ``key``, a ``task_gen``, a ``begin()`` and its
+    own ``as_wire()``.
+    """
 
     owner: _OwnerState
     epoch: int
@@ -298,7 +304,7 @@ class SharedWorkerPool:
 
     # -- the owner-side seams ------------------------------------------------
 
-    def _offer(self, owner: _OwnerState, epoch: int, item: ReadyEvaluation) -> bool:
+    def _offer(self, owner: _OwnerState, epoch: int, item: Any) -> bool:
         with self._state_changed:
             if self._closing or self._draining or owner.closed:
                 return False
@@ -644,9 +650,11 @@ class SharedWorkerPool:
     @staticmethod
     def _arrival_size(arrival: DeliveredOutcome | BaseException) -> int:
         try:
-            if isinstance(arrival, DeliveredOutcome):
-                return len(json.dumps(arrival.__dict__, default=str, separators=(",", ":")))
-            return 1024
+            if isinstance(arrival, BaseException):
+                return 1024
+            # Any delivered outcome dataclass — golden's or a sibling
+            # caller's (#3049) — is sized by its fields, never trusted.
+            return len(json.dumps(arrival.__dict__, default=str, separators=(",", ":")))
         except (TypeError, ValueError):
             return 4096
 
@@ -816,10 +824,14 @@ class SharedWorkerPool:
 
 # The wire an owner's item carries to whichever lane runs it: the child is
 # generic, so the wire — not the spawn — binds strategy, execution, manifest
-# and sealed identity to the run (#3048).
+# and sealed identity to the run (#3048). The golden evaluation is wired
+# from the owner's context; a sibling caller's ready item (#3049, Grid
+# Search cells) carries its own wire on the item.
 
 
 def entry_wire(owner: _OwnerState, item: ReadyEvaluation) -> dict[str, Any]:
+    if not isinstance(item, ReadyEvaluation):
+        return item.as_wire()
     context = owner.context
     return task_wire(item, strategy_key=context.strategy_key, execution=context.execution,
                      manifest=context.manifest, identity=context.identity)

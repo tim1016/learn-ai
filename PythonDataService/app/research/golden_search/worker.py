@@ -284,6 +284,43 @@ def _heartbeat(out: _LockedStdout, cancel_flag: threading.Event) -> None:
         out.write({"type": "alive", "at_ms": now_ms_utc()})
 
 
+def _task_checkpoint(out: _LockedStdout, state: dict[str, Any]) -> Callable[..., None]:
+    """The checkpoint writer every task kind shares: a phase transition on the wire.
+
+    ``cursor_kind``/``cursor`` default to the evaluator's processed-blocks
+    shape; a task kind with its own monotonic cursor (durable completions)
+    passes them per call. Called with the state dict so a sibling runner
+    (#3049) reports through the same channel the gate already trusts.
+    """
+
+    def checkpoint(phase: str, *, cursor_kind: str = "processed_blocks", cursor: int = 0) -> None:
+        out.write(
+            {
+                "type": "checkpoint",
+                "phase": phase,
+                "cursor_kind": cursor_kind,
+                "cursor": cursor,
+                "occurred_at_ms": now_ms_utc(),
+                "transition": True,
+            }
+        )
+
+    return checkpoint
+
+
+def _residency_fields(state: dict[str, Any]) -> dict[str, Any]:
+    # The warm-affinity hint the shared pool's scheduler folds into its
+    # lanes (#3048): what this child newly decoded, and what an eviction
+    # removed — on the result and every failure. The cache's own
+    # counters stay in the child; nothing downstream reads them off the
+    # wire.
+    added, evicted = state["decoded_cache"].take_residency_delta()
+    return {
+        "decoded": [key.__dict__ | {"estimated_bytes": estimated} for key, estimated in added],
+        "evicted": [key.relative_path for key in evicted],
+    }
+
+
 def _run_one_task(
     task: Mapping[str, Any],
     out: _LockedStdout,
@@ -291,33 +328,20 @@ def _run_one_task(
     cancel_flag: threading.Event,
     state: dict[str, Any],
 ) -> None:
+    if task.get("kind") is not None:
+        # A sibling caller's task kind rides the same child (#3049): Grid
+        # Search cells carry their own wire and projection. The golden
+        # evaluation stays the unmarked default, so existing wires and
+        # fixtures need no migration.
+        from app.research.grid_search.dispatch import run_grid_cell_task
+
+        run_grid_cell_task(task, out=out, ask_admission=ask_admission, cancel_flag=cancel_flag, state=state)
+        return
+
     from app.research.golden_search.protocol import ExecutionAssumptions
 
-    def checkpoint(phase: str) -> None:
-        out.write(
-            {
-                "type": "checkpoint",
-                "phase": phase,
-                "cursor_kind": "processed_blocks",
-                "cursor": 0,
-                "occurred_at_ms": now_ms_utc(),
-                "transition": True,
-            }
-        )
-
+    checkpoint = _task_checkpoint(out, state)
     completed_before = int(state.get("completed", 0))
-
-    def residency_fields() -> dict[str, Any]:
-        # The warm-affinity hint the shared pool's scheduler folds into its
-        # lanes (#3048): what this child newly decoded, and what an eviction
-        # removed — on the result and every failure. The cache's own
-        # counters stay in the child; nothing downstream reads them off the
-        # wire.
-        added, evicted = state["decoded_cache"].take_residency_delta()
-        return {
-            "decoded": [key.__dict__ | {"estimated_bytes": estimated} for key, estimated in added],
-            "evicted": [key.relative_path for key in evicted],
-        }
 
     try:
         request, strategy_key = request_of_wire(task)
@@ -368,18 +392,23 @@ def _run_one_task(
                 "metrics": result.metrics.as_dict(),
                 "detail": result.detail,
                 "curve": [[ms, value] for ms, value in (result.curve or [])] if result.curve is not None else None,
-                **residency_fields(),
+                **_residency_fields(state),
             }
         )
     except BaseException as exc:  # the child's terminal sink: every failure is a delivered answer
         from app.jobs.progress import JobCancelled
 
         if isinstance(exc, JobCancelled):
-            out.write({"type": "failed", "key": task.get("key", "?"), "error": "cancelled", **residency_fields()})
+            out.write({"type": "failed", "key": task.get("key", "?"), "error": "cancelled", **_residency_fields(state)})
             cancel_flag.set()
             return
         out.write(
-            {"type": "failed", "key": str(task.get("key", "?")), "error": f"{type(exc).__name__}: {exc}", **residency_fields()}
+            {
+                "type": "failed",
+                "key": str(task.get("key", "?")),
+                "error": f"{type(exc).__name__}: {exc}",
+                **_residency_fields(state),
+            }
         )
 
 
@@ -781,11 +810,15 @@ def delivered_outcome(item: ReadyEvaluation, message: Mapping[str, Any]) -> Deli
     The serial and pooled adapters translate identical child messages
     identically: a cancelled run delivers the cancellation, a failure is
     evidence like any engine failure, and a result carries its metrics,
-    detail and curve under the item's own fencing.
+    detail and curve under the item's own fencing. A sibling caller's ready
+    item (#3049, Grid Search cells) owns its own wire, so it decodes its own
+    outcome; only the golden evaluation is translated here.
     """
     from app.jobs.progress import JobCancelled
     from app.research.golden_search.selection import Metrics
 
+    if not isinstance(item, ReadyEvaluation):
+        return item.outcome_of(message)
     if message["type"] == "failed" and message.get("error") == "cancelled":
         return DeliveredOutcome(
             key=item.key,

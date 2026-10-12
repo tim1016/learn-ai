@@ -59,9 +59,10 @@ def refuse_forwarded_research_dispatch(noun: str) -> None:
 
     ADR 0077: in ``RESEARCH_EXECUTION_MODE=research`` the API never starts a
     research thread — execution belongs to the isolated runtime. Golden
-    Search is forwarded today; grid and walk-forward join it in later
-    #3034 slices, and until then their dispatches fail loudly here rather
-    than silently running unisolated, unstamped work on the forwarding API.
+    Search (#3043) and Grid Search (#3049) are forwarded today; walk-forward
+    and Recency join them in later #3034 slices, and until then their
+    dispatches fail loudly here rather than silently running unisolated,
+    unstamped work on the forwarding API.
     """
     if research_forwarding_enabled() and not is_research_runtime():
         raise HTTPException(
@@ -100,22 +101,76 @@ async def forward_golden_search_job(payload: dict[str, Any]) -> dict[str, Any]:
     API should surface: the runtime's own refusals pass through with their
     status and reason; a transport failure with no durable binding is a 502.
     """
-
-    base = _require_runtime_url()
-    secret = settings.DATA_PLANE_CONTROL_SECRET.strip()
     try:
-        async with build_internal_client(timeout_s=FORWARD_TIMEOUT_S) as client:
-            response = await client.post(
-                f"{base}/api/jobs-internal/golden-search",
-                json=payload,
-                headers={CONTROL_SECRET_HEADER: secret},
-            )
+        response = await _post_runtime_dispatch("/api/jobs-internal/golden-search", payload)
     except httpx.HTTPError as exc:
         return await _reconcile_after_transport_failure(payload, exc)
+    return _answer_of(response)
+
+
+async def forward_grid_search_job(payload: dict[str, Any]) -> dict[str, Any]:
+    """Hand one grid-search dispatch to the research runtime (#3049); reconcile on transport failure.
+
+    Same contract as the golden hop: the runtime's refusals pass through,
+    and a transport failure is reconciled against the durable search row
+    before the API answers — a timeout is not a refusal, but silence with
+    no live binding is a 502, never a quiet second search.
+    """
+    try:
+        response = await _post_runtime_dispatch("/api/jobs-internal/grid-search", payload)
+    except httpx.HTTPError as exc:
+        return await _reconcile_grid_after_transport_failure(payload, exc)
+    return _answer_of(response)
+
+
+async def _post_runtime_dispatch(path: str, payload: dict[str, Any]) -> httpx.Response:
+    """One authenticated hop to the runtime's internal dispatch surface."""
+    base = _require_runtime_url()
+    secret = settings.DATA_PLANE_CONTROL_SECRET.strip()
+    async with build_internal_client(timeout_s=FORWARD_TIMEOUT_S) as client:
+        return await client.post(f"{base}{path}", json=payload, headers={CONTROL_SECRET_HEADER: secret})
+
+
+def _answer_of(response: httpx.Response) -> dict[str, Any]:
     if response.status_code == status.HTTP_202_ACCEPTED:
         return response.json()
-    detail = _detail_of(response)
-    raise HTTPException(status_code=response.status_code, detail=detail)
+    raise HTTPException(status_code=response.status_code, detail=_detail_of(response))
+
+
+async def _grid_job_binding(job_id: str) -> str | None:
+    """The search id a job is bound to, if any — the durable evidence a grid reconcile reads (#3049)."""
+
+    from app.research.grid_search import repository as repo
+    from app.research.persistence.db import with_connection
+
+    bound = await with_connection(repo.list_searches, job_id=job_id, limit=1)
+    return bound[0].id if bound else None
+
+
+async def _reconcile_grid_after_transport_failure(payload: dict[str, Any], exc: Exception) -> dict[str, Any]:
+    """A grid dispatch's timeout is not a refusal: ask the durable row what actually happened (#3049).
+
+    The runtime binds the search to the job before any cell runs, so a
+    binding plus a held lease is durable evidence a live worker took the
+    dispatch — this call joins the original acceptance, naming the search
+    the runtime created. Anything less refuses with the transport error.
+    """
+    from app.research.persistence import lifecycle
+
+    job_id = str(payload.get("job_id", ""))
+    bound = await _grid_job_binding(job_id)
+    if bound is not None and lifecycle.job_is_live(job_id) is True:
+        logger.warning(
+            "research runtime transport failed after a live worker took the grid dispatch; joining the original dispatch (%s)",
+            exc,
+            exc_info=True,
+        )
+        return {"job_id": job_id, "search_id": bound, "status": "queued"}
+    logger.error("research runtime grid dispatch failed without a live worker on the job: %s", exc, exc_info=True)
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail=f"the research runtime did not accept the grid dispatch ({type(exc).__name__}); no search attempt started",
+    )
 
 
 def _detail_of(response: httpx.Response) -> Any:

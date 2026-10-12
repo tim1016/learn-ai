@@ -490,7 +490,8 @@ def execute(
     search_id: str,
     *,
     job_id: str | None,
-    execute_cell: Callable[[RunSpec], CellResult],
+    execute_cell: Callable[[RunSpec], CellResult] | None = None,
+    cell_dispatch_factory: Callable[[SearchRow, GridSearchSpec, int, str | None], Any] | None = None,
     cancel_check: Callable[[], object] = lambda: None,
     on_phase: Callable[[str], None] = lambda phase: None,
     on_progress: Callable[[int, int], None] = lambda done, total: None,
@@ -498,10 +499,16 @@ def execute(
 ) -> ExecutionOutcome:
     """Run (or Finish) a launched search on the calling worker thread.
 
-    ``execute_cell`` turns one candidate into a cell result; production passes
-    ``engine_adapter.default_execute_cell(row, spec)`` and tests a fake, so
-    this module never touches the engine HTTP layer.
+    Exactly one executor is given. ``execute_cell`` turns one candidate into
+    a cell result in this process — the local mode and tests; production
+    passes ``engine_adapter.default_execute_cell(row, spec)``. A
+    ``cell_dispatch_factory`` (#3049) builds the research runtime's dispatch
+    from the claimed attempt instead, running cells through spawned workers;
+    persistence, ranking and terminal status stay here either way, so this
+    module never touches the engine HTTP layer.
     """
+    if (execute_cell is None) == (cell_dispatch_factory is None):
+        raise ValueError("execute takes exactly one executor: execute_cell or cell_dispatch_factory")
     row, spec = load_search(search_id)
     attempt = run_sync(with_connection(repo.claim_attempt, search_id, job_id=job_id))
     on_phase("preflight")
@@ -515,11 +522,15 @@ def execute(
         run_sync(with_connection(repo.write_cells, search_id, attempt, [cell]))
 
     on_phase("running")
+    dispatch = None
+    if cell_dispatch_factory is not None:
+        dispatch = cell_dispatch_factory(row, spec, attempt, job_id)
     try:
         summary = run_grid(
             candidates,
             expected_cells=row.expected_cells,
             execute_cell=execute_cell,
+            dispatch=dispatch,
             persist=_persist,
             cancel_check=cancel_check,
             on_progress=on_progress,
@@ -536,6 +547,12 @@ def execute(
     except Exception as exc:
         _finish(search_id, attempt, "failed", None, True, f"{type(exc).__name__}: {exc}")
         raise
+    finally:
+        # Every exit path releases the runtime's workers: the dispatch has
+        # already interrupted its lanes on the cancellation paths, so the
+        # children never wait out the terminal writes above (#3049).
+        if dispatch is not None:
+            dispatch.close()
 
     on_phase("ranking")
     cells = run_sync(with_connection(repo.list_all_cells, search_id))

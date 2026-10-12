@@ -16,10 +16,16 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from app.research.grid_search.models import CellResult
 from app.research.sweep.execution import run_each
 from app.research.sweep.grid import RunSpec
+
+if TYPE_CHECKING:
+    # Annotation-only: importing the dispatch here would cycle through the
+    # engine adapter back into this module's service.
+    from app.research.grid_search.dispatch import CellDispatch
 
 
 @dataclass(frozen=True)
@@ -34,12 +40,13 @@ def run_grid(
     candidates: Iterable[RunSpec],
     *,
     expected_cells: int,
-    execute_cell: Callable[[RunSpec], CellResult],
     persist: Callable[[CellResult], None],
     cancel_check: Callable[[], object] = lambda: None,
     on_progress: Callable[[int, int], None] = lambda done, total: None,
     on_cell_failed: Callable[[RunSpec, str], None] = lambda spec, message: None,
     skip_params_hashes: frozenset[str] = frozenset(),
+    execute_cell: Callable[[RunSpec], CellResult] | None = None,
+    dispatch: CellDispatch | None = None,
 ) -> GridRunSummary:
     """Execute every candidate not already persisted, persisting each cell as it completes.
 
@@ -48,7 +55,16 @@ def run_grid(
     as done so the bar reflects the whole search, not the remainder. A cell is
     counted and let go once persisted: each carries its daily equity, and a
     full search of them is not held in memory.
+
+    Exactly one executor is given: ``execute_cell`` runs cells in this
+    process, one at a time (the local mode and tests); ``dispatch`` (#3049)
+    runs them through the research runtime's workers — cells overlap, each
+    arrival is persisted as it is consumed, and the counts, skip set and
+    cancellation contract are identical. Arrival order is free; the
+    completion timestamps differ, the ranked results never do.
     """
+    if (execute_cell is None) == (dispatch is None):
+        raise ValueError("run_grid takes exactly one executor: execute_cell or dispatch")
     done = len(skip_params_hashes)
     executed = completed = 0
     on_progress(done, expected_cells)
@@ -64,12 +80,24 @@ def run_grid(
             on_cell_failed(spec, result.error or "cell failed")
         return result
 
-    remaining = (spec for spec in candidates if spec.params_hash not in skip_params_hashes)
-    for result in run_each(remaining, _executed, cancel_check=cancel_check, on_error=_failed):
+    def _counted(result: CellResult) -> None:
+        nonlocal done, executed, completed
         done += 1
         on_progress(done, expected_cells)
         persist(result)
         executed += 1
         completed += result.status == "completed"
+
+    remaining = (spec for spec in candidates if spec.params_hash not in skip_params_hashes)
+    if dispatch is not None:
+        for spec, result in dispatch(remaining):
+            if result.status == "failed":
+                on_cell_failed(spec, result.error or "cell failed")
+            _counted(result)
+        return GridRunSummary(
+            expected_cells=expected_cells, executed_cells=executed, completed_cells=completed, failed_cells=executed - completed
+        )
+    for result in run_each(remaining, _executed, cancel_check=cancel_check, on_error=_failed):
+        _counted(result)
 
     return GridRunSummary(expected_cells=expected_cells, executed_cells=executed, completed_cells=completed, failed_cells=executed - completed)
