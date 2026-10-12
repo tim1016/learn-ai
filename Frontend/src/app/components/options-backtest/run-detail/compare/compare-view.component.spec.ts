@@ -130,7 +130,7 @@ describe('comparing two runs, the sessions they share', () => {
     await screen.findByRole('region', { name: 'Sessions both runs tested' });
 
     expect(reads(screen.getByRole('region', { name: 'Sessions both runs tested' }).querySelector('p'))).toBe(
-      'Sessions in both runs: 3. Only in run A: 1. Only in run B: 0. The figures below are for the shared sessions only.',
+      'Sessions in both runs: 3. Sessions only in run A: 1. Sessions only in run B: 0. The figures below are for the shared sessions only.',
     );
   });
 
@@ -180,7 +180,7 @@ describe('comparing two runs, the sessions they share', () => {
 
     expect(await screen.findByText('The two runs have no session in common, so there is nothing to set side by side.')).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'Each shared session (scrolls sideways)' })).toBeNull();
-    expect(reads(screen.getByRole('region', { name: 'Sessions both runs tested' }).querySelector('p'))).toBe('Sessions in both runs: 0. Only in run A: 5. Only in run B: 5.');
+    expect(reads(screen.getByRole('region', { name: 'Sessions both runs tested' }).querySelector('p'))).toBe('Sessions in both runs: 0. Sessions only in run A: 5. Sessions only in run B: 5.');
   });
 });
 
