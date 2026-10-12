@@ -127,6 +127,8 @@ const moneySurfaces = (extension) => [
   // The Options Backtest page shows a run's dollars (#3030): its result and its history, whose names say nothing of money.
   `src/app/components/options-backtest/run/**/*.${extension}`,
   `src/app/components/options-backtest/history/**/*.${extension}`,
+  // The Past chain tab shows option prices and strikes as the server wrote them (#3030).
+  `src/app/components/options-backtest/past-chain/**/*.${extension}`,
 ];
 
 export default tseslint.config(
