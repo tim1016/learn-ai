@@ -278,7 +278,7 @@ A run is never a result in part. It is made `running` when its job is accepted a
 
 The database refuses figures on a run that is not complete. A running run whose job is gone reads back as **interrupted**. A running run whose job may still be alive cannot be deleted.
 
-A run **pins** what it read. For each session it stores the sha256 of the underlying's day, of the listing and of each contract's day. It stores the calendar's identity and package version. The pins let data that changed later be told from the data the run read. A saved run's trades are stored and are never recomputed from the lake, so changed data cannot rewrite one.
+A run **pins** what it read. For each session it stores the sha256 of the underlying's day, of the listing and of each contract's day. It stores the calendar's identity and package version. The pins let data that changed later be told from the data the run read. A saved run's trades are stored and are never recomputed from the lake, so changed data cannot rewrite one. Anything later shown from the lake for a saved run is checked against these pins first (decision 24).
 
 *Rejected:* the stock run store with a result-kind marker.
 
@@ -317,6 +317,23 @@ US stock and ETF tickers are at most five letters. A six-letter root makes a con
 A setup is kept by name in the research store, as the JSON it was sent. It is validated again on every read. A setup that an older rule accepted and the current rule refuses is listed as one that cannot be opened, with the reason, and is never dropped. Two examples ship and cannot be overwritten or deleted: the #3030 strategy without a re-entry rule and with one, so the owner's comparison is two runs.
 
 The setup routes touch no account and need no data-plane control secret. The past chain's download spends vendor requests and writes the lake, as `/api/data-lake/ensure-data` does, so it carries the secret too. The two past-chain reads need none.
+
+### 24. A saved run is read back from what was stored
+
+*Whose:* the owner's for a run reopened from what was stored, two runs compared on the sessions both hold with every differing setting listed, and an export of every trade (#3030). The rest was made for the owner.
+
+Reading a saved run closely (its trades, one session for a timeline, an export, a comparison) starts, changes and deletes nothing, and recomputes no figure the run reports.
+
+- The trades, events, levels, fills and marks of a session come from the rows stored with the run and never depend on the lake. An event's words are served exactly as stored. A stored session whose trades and events disagree is not drawn from a guess: it answers a 500 with a code of its own, and the rest of the run still opens.
+- A timeline's price series are the one thing read from the lake now. A series is shown only when its file's hash is the one the run pinned (decision 19). Otherwise it is not shown, and the answer says why, in words of its own for each reason: the session was skipped, the run kept no pin, the file is gone, the file changed, the lake's catalog cannot vouch for the bytes, the file cannot be read, or the catalog cannot be asked. Each series is judged on its own. A catalog outage says nothing about a file or a run, so it is a reason on the series and not a failure of the answer. Bytes the catalog cannot vouch for are not called changed, because nobody saw them change.
+- A filter that names nothing is refused, not answered with nothing. A session the run did not test, or a leg its setup does not have, is a 404. An empty page would read as "that session made no trade".
+- A run whose stored setup can no longer be read (decision 23) still answers its trades, a session and the export from stored rows. A session then leaves out only the momentum level of an attempt that never filled, which needs the leg's rule, and says so. A leg filter is answered from the stored trades alone, so an unknown leg gives an empty page. A comparison refuses such a run.
+- The export holds every trade, never a page, with `unix_ts` first and one readable New York time column beside it (ADR 0022 amendment (f)).
+- Two complete runs of one underlying are compared on the sessions both hold. Every setting that differs is listed, in the words a setup's description uses: one set of phrases writes both. Each run's totals are sums of its stored per-session figures over the shared sessions only.
+
+Why. The lake moves on: a file can change, be replaced or go. A saved run that followed it would not be the same run each time it is opened. Reading from what was stored keeps the run as it was, and the pin check keeps a series drawn from the lake from passing for the data the run read.
+
+*Rejected:* recomputing a saved run's trades from the lake.
 
 ## What this does not decide
 
