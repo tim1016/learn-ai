@@ -59,10 +59,10 @@ def refuse_forwarded_research_dispatch(noun: str) -> None:
 
     ADR 0077: in ``RESEARCH_EXECUTION_MODE=research`` the API never starts a
     research thread — execution belongs to the isolated runtime. Golden
-    Search (#3043) and Grid Search (#3049) are forwarded today; walk-forward
-    and Recency join them in later #3034 slices, and until then their
-    dispatches fail loudly here rather than silently running unisolated,
-    unstamped work on the forwarding API.
+    Search (#3043), Grid Search (#3049) and the Walk-Forward Study (#3050)
+    are forwarded today; Recency joins them in a later #3034 slice, and
+    until then its dispatches fail loudly here rather than silently running
+    unisolated, unstamped work on the forwarding API.
     """
     if research_forwarding_enabled() and not is_research_runtime():
         raise HTTPException(
@@ -170,6 +170,50 @@ async def _reconcile_grid_after_transport_failure(payload: dict[str, Any], exc: 
     raise HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY,
         detail=f"the research runtime did not accept the grid dispatch ({type(exc).__name__}); no search attempt started",
+    )
+
+
+async def forward_walk_forward_study_job(payload: dict[str, Any]) -> dict[str, Any]:
+    """Hand one walk-forward-study dispatch to the research runtime (#3050); reconcile on transport failure.
+
+    Same contract as the grid hop: the runtime's refusals pass through, and
+    a transport failure is reconciled against the durable study row before
+    the API answers.
+    """
+    try:
+        response = await _post_runtime_dispatch("/api/jobs-internal/walk-forward-study", payload)
+    except httpx.HTTPError as exc:
+        return await _reconcile_walk_forward_after_transport_failure(payload, exc)
+    return _answer_of(response)
+
+
+async def _walk_forward_job_binding(job_id: str) -> str | None:
+    """The study id a job is bound to, if any — the durable evidence a study reconcile reads (#3050)."""
+
+    from app.research.persistence.db import with_connection
+    from app.research.walk_forward_study import repository as repo
+
+    bound = await with_connection(repo.list_studies, job_id=job_id, limit=1)
+    return bound[0].id if bound else None
+
+
+async def _reconcile_walk_forward_after_transport_failure(payload: dict[str, Any], exc: Exception) -> dict[str, Any]:
+    """A study dispatch's timeout is not a refusal: ask the durable row what actually happened (#3050)."""
+    from app.research.persistence import lifecycle
+
+    job_id = str(payload.get("job_id", ""))
+    bound = await _walk_forward_job_binding(job_id)
+    if bound is not None and lifecycle.job_is_live(job_id) is True:
+        logger.warning(
+            "research runtime transport failed after a live worker took the study dispatch; joining the original dispatch (%s)",
+            exc,
+            exc_info=True,
+        )
+        return {"job_id": job_id, "study_id": bound, "status": "queued"}
+    logger.error("research runtime study dispatch failed without a live worker on the job: %s", exc, exc_info=True)
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail=f"the research runtime did not accept the study dispatch ({type(exc).__name__}); no study attempt started",
     )
 
 

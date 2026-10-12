@@ -353,3 +353,79 @@ async def test_status_presentation_and_resume_refusals(conn, lake: Path, monkeyp
     assert refusal(live=False, identity=identity) is None
     moved = replace(identity, source_digest="0" * 64)
     assert "code changed" in (refusal(live=False, identity=moved) or "")
+
+
+# ── The research runtime's dispatch seam (#3050) ─────────────────────────
+
+
+def _fake_dispatch_factory(sharpes: dict = SHARPES, *, events: list) -> Callable:
+    """One dispatch per sweep, recording (phase, fold) order, closes, and arrival identity."""
+
+    def factory(row: SearchRow, spec: GridSearchSpec, attempt: int, job_id) -> Callable:
+        assert row.owner.kind == "walk_forward" and row.owner.fold_index is not None
+        events.append(("dispatch", row.owner.phase, row.owner.fold_index))
+
+        class _SweepDispatch:
+            def __call__(self, cells):
+                for candidate in cells:
+                    key = (row.owner.phase, row.owner.fold_index, candidate.params["short_window"])
+                    events.append(("cell", *key))
+                    yield candidate, CellResult(
+                        params_hash=candidate.params_hash,
+                        params=dict(candidate.params),
+                        status="completed",
+                        total_trades=4,
+                        sharpe_ratio=sharpes[key],
+                        total_return_pct=1.0,
+                        net_profit=10.0,
+                    )
+
+            def close(self) -> None:
+                events.append(("close", row.owner.phase, row.owner.fold_index))
+
+        return _SweepDispatch()
+
+    return factory
+
+
+async def test_a_dispatched_study_matches_the_serial_study_with_one_closed_dispatch_per_sweep(conn, lake: Path) -> None:
+    serial_id = await _launch(lake)
+    serial = await asyncio.to_thread(service.execute, serial_id, job_id=(await repo.get_study(conn, serial_id)).job_id, cell_executor=_fake_factory(), roots=[lake])
+
+    events: list = []
+    dispatched_id = await _launch(lake)
+    dispatched = await asyncio.to_thread(
+        service.execute,
+        dispatched_id,
+        job_id=(await repo.get_study(conn, dispatched_id)).job_id,
+        cell_dispatch_factory=_fake_dispatch_factory(events=events),
+        roots=[lake],
+    )
+
+    serial_row = await repo.get_study(conn, serial_id)
+    dispatched_row = await repo.get_study(conn, dispatched_id)
+    assert serial_row is not None and dispatched_row is not None
+    assert dispatched.status == serial.status == "completed"
+    assert [f.winner_params for f in dispatched_row.folds] == [f.winner_params for f in serial_row.folds]
+    assert [f.train_sharpe for f in dispatched_row.folds] == [f.train_sharpe for f in serial_row.folds]
+    assert [f.test_sharpe for f in dispatched_row.folds] == [f.test_sharpe for f in serial_row.folds]
+    assert dispatched_row.verdict == serial_row.verdict, "the pooled study reaches the serial verdict"
+
+    order = [event[:3] for event in events if event[0] in ("dispatch", "close")]
+    assert order == [
+        ("dispatch", "train", 0), ("close", "train", 0),
+        ("dispatch", "test", 0), ("close", "test", 0),
+        ("dispatch", "train", 1), ("close", "train", 1),
+        ("dispatch", "test", 1), ("close", "test", 1),
+    ], "folds stay sequential: train, select, test — and each sweep's dispatch closes before the next"
+
+
+async def test_execute_takes_exactly_one_executor() -> None:
+    # The check fires before anything is loaded or claimed, so no record is needed.
+    with pytest.raises(ValueError, match="exactly one executor"):
+        await asyncio.to_thread(service.execute, "study-none", job_id="job-none")
+    with pytest.raises(ValueError, match="exactly one executor"):
+        await asyncio.to_thread(
+            service.execute, "study-none", job_id="job-none",
+            cell_executor=_fake_factory(), cell_dispatch_factory=_fake_dispatch_factory(events=[]),
+        )
