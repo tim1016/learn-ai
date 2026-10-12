@@ -30,9 +30,12 @@ underlying, the bars of the regular session. In both, every bar must be one a re
 plus a minute) is on a whole minute and falls on the trading date's New York date. The lake stores a bar whose start
 is anywhere inside the date, so it can hold one stamped off the minute or starting in the last minute of the date, and
 ``session_market.bars_by_close`` refuses a session that holds one, as a whole. So a day with such a bar is unreadable,
-as a damaged file is: the read raises the kind's own error (``UnderlyingDayUnreadable``, ``OptionBarsFileError``) and
-hands nothing over. A series run without that bar would have a minute missing, one a stop could have been hit in, and
-nothing in its result would say so; nothing is left out or repaired.
+as a damaged file is: the read raises the kind's own error (``UnderlyingDayUnreadable``, ``OptionBarsFileError``; for
+bars that cannot be placed, its subclass ``UnderlyingBarsCannotBePlaced`` or ``OptionBarsCannotBePlaced``) and hands
+nothing over. A series run without that bar would have a minute missing, one a stop could have been hit in, and
+nothing in its result would say so; nothing is left out or repaired. For an option the lake's own parser of a stored day
+refuses a start off a whole minute before this reader looks (``option_bars.parse_option_day_zip``), so what this
+reader's own guard is left to catch there is a close on another New York date.
 
 Every answer carries the sha256 of the exact bytes that were decoded. A damaged file, a file the catalog does not
 admit and an unreachable catalog are errors and never ``None``: ``OptionBarsFileError`` and ``OptionListingFileError``
@@ -58,7 +61,7 @@ from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
 from app.data_lake.lean_writer import parse_minute_trade_row
 from app.data_lake.option_bars import OptionBar, OptionBarsFileError, read_option_day_bars
 from app.data_lake.option_lake import option_read_root, zip_member_bytes
-from app.data_lake.option_listing import read_option_listing
+from app.data_lake.option_listing import OptionListing, read_option_listing
 from app.data_lake.types import is_lake_addressable_symbol
 
 # What the stock reader lets out for a file it cannot decode, as ``check_availability`` reports an unreadable file by. It
@@ -83,12 +86,49 @@ class UnderlyingDayUnreadable(ValueError):
     """
 
 
+class UnderlyingBarsCannotBePlaced(UnderlyingDayUnreadable):
+    """The underlying's file reads, and a bar in it cannot be put in a session (see the module docstring)."""
+
+
+class OptionBarsCannotBePlaced(OptionBarsFileError):
+    """A contract's file reads, and a bar in it cannot be put in a session (see the module docstring)."""
+
+
+# A day with a bar that cannot be placed is unreadable as a damaged file is, and every caller that handles one handles
+# these. For a contract's day they differ in one thing: the lake's parser of a stored day, which its reuse gate and its
+# reader both run, accepts a day whose only fault is a close on another New York date, so the lake holds it as good and a
+# download never fetches it again; a caller that tells the owner "it will be fetched again" of an unreadable contract
+# day must not say it of this. Every other refusal of a contract's day is that parser's, and its reuse gate refuses it
+# too. For the underlying the class says what is wrong with the bars and nothing of a download: whether one replaces
+# the day is the stock capture's gate to say (``LakeCheckData.download_replaces_the_underlying``).
+BARS_CANNOT_BE_PLACED = (UnderlyingBarsCannotBePlaced, OptionBarsCannotBePlaced)
+
+
 @dataclass(frozen=True)
 class StoredListing(Listing):
     """A ``Listing`` read from the lake, which also says how many of its stored rows are not in it."""
 
     # Stored rows with no parsed contract (an adjusted root, a ticker that disagrees with its row) or no share count.
     rows_left_out: int = 0
+
+
+def captured_listing_of(stored: OptionListing) -> Captured[StoredListing]:
+    """The picker's listing, and the hash to pin, of a listing the lake holds."""
+    contracts = tuple(
+        ListedContract(contract=row.contract, multiplier=row.shares_per_contract, standard=row.standard)
+        for row in stored.rows
+        if row.contract is not None and row.shares_per_contract is not None
+    )
+    return Captured(
+        value=StoredListing(
+            underlying=stored.underlying,
+            as_of=stored.as_of,
+            contracts=contracts,
+            complete=True,
+            rows_left_out=len(stored.rows) - len(contracts),
+        ),
+        sha256=stored.sha256,
+    )
 
 
 class _AdmittedBytes:
@@ -219,9 +259,19 @@ class LakeRunData:
             bars,
             trading_date,
             subject=f"the stored {self._underlying} minute bars for {trading_date.isoformat()}",
-            unreadable=UnderlyingDayUnreadable,
+            unreadable=UnderlyingBarsCannotBePlaced,
         )
         return Captured(value=named, sha256=hashlib.sha256(admitted.payload).hexdigest())
+
+    def stored_listing(self, trading_date: date) -> OptionListing | None:
+        """The stored listing as the lake holds it, or ``None`` when none is stored.
+
+        For a caller that needs the lake's own listing (to hand it to a capture, which proves a contract is listed
+        from it) as well as the picker's: read it once here and make the picker's of it with
+        ``captured_listing_of``. Raises as ``listing`` does.
+        """
+        _require_a_worker_thread()
+        return read_option_listing(self._underlying, trading_date, lake_root=self._lake_root)
 
     def listing(self, trading_date: date) -> Captured[StoredListing] | None:
         """The stored listing of the underlying as of ``trading_date``, or ``None`` when none is stored.
@@ -232,25 +282,8 @@ class LakeRunData:
         ``LakeAdmissionError`` and ``CatalogUnavailableError`` as the lake does, and ``RuntimeError`` off a worker
         thread.
         """
-        _require_a_worker_thread()
-        stored = read_option_listing(self._underlying, trading_date, lake_root=self._lake_root)
-        if stored is None:
-            return None
-        contracts = tuple(
-            ListedContract(contract=row.contract, multiplier=row.shares_per_contract, standard=row.standard)
-            for row in stored.rows
-            if row.contract is not None and row.shares_per_contract is not None
-        )
-        return Captured(
-            value=StoredListing(
-                underlying=stored.underlying,
-                as_of=stored.as_of,
-                contracts=contracts,
-                complete=True,
-                rows_left_out=len(stored.rows) - len(contracts),
-            ),
-            sha256=stored.sha256,
-        )
+        stored = self.stored_listing(trading_date)
+        return None if stored is None else captured_listing_of(stored)
 
     def option_day(self, contract: OptionContract, trading_date: date) -> Captured[tuple[MinuteBar, ...]] | None:
         """One contract's stored bars on ``trading_date``; ``None`` when not captured, empty when it never traded.
@@ -268,6 +301,6 @@ class LakeRunData:
             stored.bars,
             trading_date,
             subject=f"the stored bars of {contract.occ_symbol} for {trading_date.isoformat()}",
-            unreadable=OptionBarsFileError,
+            unreadable=OptionBarsCannotBePlaced,
         )
         return Captured(value=named, sha256=stored.sha256)

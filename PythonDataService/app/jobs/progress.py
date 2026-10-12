@@ -304,9 +304,13 @@ class ProgressEmitter:
         self._patch_state(status="running", started_at=str(int(time.time() * 1000)))
         self._emit("job.started", {})
 
-    def phase(self, name: str) -> None:
+    def phase(self, name: str, *, friendly: str | None = None) -> None:
+        """Enter a phase. ``friendly`` is the plain label a page shows for it; the event carries it only when given."""
         self._patch_state(phase=name)
-        self._emit("job.phase", {"phase": name})
+        payload: dict[str, Any] = {"phase": name}
+        if friendly is not None:
+            payload["friendly"] = friendly
+        self._emit("job.phase", payload)
 
     def progress(
         self,

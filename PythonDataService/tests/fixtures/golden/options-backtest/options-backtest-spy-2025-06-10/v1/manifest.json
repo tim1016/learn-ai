@@ -1,0 +1,87 @@
+{
+ "requests": [
+  {
+   "file": "spy_minute_2025-06-10.json",
+   "method": "GET",
+   "path": "/v2/aggs/ticker/SPY/range/1/minute/2025-06-10/2025-06-10",
+   "query": {
+    "adjusted": "false",
+    "sort": "asc",
+    "limit": "50000"
+   },
+   "http_status": 200,
+   "sha256": "76af64d90531097701dac3ad5c51430c799ecbc66b59777d34bfebe91c21bb7e",
+   "bytes": 79683
+  },
+  {
+   "file": "spy_contracts_as_of_2025-06-10_expiring_2025-06-13.json",
+   "method": "GET",
+   "path": "/v3/reference/options/contracts",
+   "query": {
+    "underlying_ticker": "SPY",
+    "as_of": "2025-06-10",
+    "expiration_date": "2025-06-13",
+    "limit": "1000"
+   },
+   "http_status": 200,
+   "sha256": "c3bcf4830d98c940c94db094bda430e5ce16185cf90997d18324422ea8215448",
+   "bytes": 71965
+  },
+  {
+   "file": "O_SPY250613C00600000_minute_2025-06-10.json",
+   "method": "GET",
+   "path": "/v2/aggs/ticker/O:SPY250613C00600000/range/1/minute/2025-06-10/2025-06-10",
+   "query": {
+    "adjusted": "false",
+    "sort": "asc",
+    "limit": "50000"
+   },
+   "http_status": 200,
+   "sha256": "35ab5fe951a2d249b81a7c9a77ede4fbc304a13e735173627582e1177330d1b3",
+   "bytes": 31406
+  },
+  {
+   "file": "O_SPY250613P00600000_minute_2025-06-10.json",
+   "method": "GET",
+   "path": "/v2/aggs/ticker/O:SPY250613P00600000/range/1/minute/2025-06-10/2025-06-10",
+   "query": {
+    "adjusted": "false",
+    "sort": "asc",
+    "limit": "50000"
+   },
+   "http_status": 200,
+   "sha256": "e63935edf79762227b3357ca78c072c6478466b54ab5a02dc4d8bda81be96a15",
+   "bytes": 32370
+  },
+  {
+   "file": "O_SPY250613C00680000_minute_2025-06-10.json",
+   "method": "GET",
+   "path": "/v2/aggs/ticker/O:SPY250613C00680000/range/1/minute/2025-06-10/2025-06-10",
+   "query": {
+    "adjusted": "false",
+    "sort": "asc",
+    "limit": "50000"
+   },
+   "http_status": 200,
+   "sha256": "5790fffb36d62076c333e96c8fe4cdd596cdf7f0bb22131264735f118bfb0e05",
+   "bytes": 144
+  }
+ ],
+ "facts": {
+  "trading_date": "2025-06-10",
+  "expiry": "2025-06-13",
+  "underlying_close_at_0935_new_york": "600.375",
+  "underlying_bar_start_ms": 1749562440000,
+  "atm_call_strike": "600",
+  "atm_put_strike": "600",
+  "contracts": {
+   "atm_call": "O:SPY250613C00600000",
+   "atm_put": "O:SPY250613P00600000",
+   "highest_call": "O:SPY250613C00680000"
+  },
+  "listing_has_next_url": false,
+  "listing_rows": 316,
+  "call_strikes": 158,
+  "put_strikes": 158
+ }
+}

@@ -46,7 +46,11 @@ _NAME = re.compile(SETUP_NAME_PATTERN)
 
 # How many validation errors a "cannot be opened" reason spells out.
 _REASON_ERRORS = 5
-_REASON_PROBLEM_CHARS = 200
+# The longest sentence the setup's own rules can give is 217 characters: its place, then the re-entry rule's sentence
+# about a leg whose id is 32 letters long. So a sentence that is the setup's own is never cut. One that is longer names
+# something the owner stored of any size (an extra field, an unknown rule kind), and is cut at a word and marked.
+_REASON_PROBLEM_CHARS = 240
+_CUT = " …"
 
 
 class InvalidSetupName(ValueError):
@@ -197,13 +201,23 @@ def _reason(error: ValidationError) -> str:
 
     The value stored for a field the setup has is never printed. The name of an unknown rule kind or of an extra
     field is: pydantic puts it in the location or in the message, and it is what tells the owner which part of
-    the setup to look at. Each problem is cut to a line's length, so a stored name of any size stays readable.
+    the setup to look at. A problem longer than a line is cut at a word and marked, so a stored name of any size
+    stays readable and no sentence of the setup's own loses its end.
     """
     problems = error.errors(include_url=False, include_input=False, include_context=False)
     shown = [
-        f"{'.'.join(str(part) for part in problem['loc']) or 'setup'}: {problem['msg']}"[:_REASON_PROBLEM_CHARS]
+        _within_a_line(f"{'.'.join(str(part) for part in problem['loc']) or 'setup'}: {problem['msg']}")
         for problem in problems[:_REASON_ERRORS]
     ]
     if len(problems) > _REASON_ERRORS:
         shown.append(f"and {len(problems) - _REASON_ERRORS} more")
     return "; ".join(shown)
+
+
+def _within_a_line(problem: str) -> str:
+    """``problem`` whole if it fits a line, else cut at the last space that fits (the line's end if none) and marked."""
+    if len(problem) <= _REASON_PROBLEM_CHARS:
+        return problem
+    # One character more than fits, so that a space just past the line's end counts as a word boundary.
+    kept = problem[: _REASON_PROBLEM_CHARS + 1].rpartition(" ")[0] or problem[:_REASON_PROBLEM_CHARS]
+    return kept + _CUT

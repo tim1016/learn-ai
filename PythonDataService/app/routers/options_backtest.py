@@ -1,7 +1,7 @@
 """The Options Backtest page's setup routes (#3030).
 
 ``GET /session-clock`` is a full session's open and close, from the calendar.
-``POST /setups/describe`` says a setup in plain sentences. ``GET /setups``
+``POST /setups/describe`` says a setup in plain sentences. ``GET /limits`` is what a setup and a range may be. ``GET /setups``
 lists the shipped examples and the saved setups, ``PUT /setups/{name}`` saves
 one and ``DELETE /setups/{name}`` removes one. Nothing here runs a backtest.
 """
@@ -14,13 +14,25 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Path, Response, status
 
 from app.options_backtest import saved_setups
+from app.options_backtest.chain_download import MAX_CONTRACTS_PER_DOWNLOAD
 from app.options_backtest.describe import describe_setup
+from app.options_backtest.limits import MAX_RANGE_SESSIONS
+from app.options_backtest.past_chain import MAX_STRIKES_EACH_SIDE
 from app.options_backtest.saved_setups import SETUP_NAME_PATTERN, SETUP_NAME_RULE, ExampleSetupError
 from app.options_backtest.session_clock import SessionClock, full_session_clock
-from app.options_backtest.setup import OptionsBacktestSetup
+from app.options_backtest.setup import (
+    MAX_CONTRACTS,
+    MAX_EXPIRY_DAYS,
+    MAX_LEGS,
+    MAX_REENTRIES,
+    MAX_STRIKE_STEPS,
+    OptionsBacktestSetup,
+)
 from app.research.persistence.db import with_connection
 from app.schemas.options_backtest import (
+    OptionsBacktestLimitsResponse,
     OptionsBacktestRefusalBody,
+    OptionsBacktestSetupNameRuleResponse,
     SavedSetupResponse,
     SessionClockResponse,
     SetupDescriptionResponse,
@@ -47,9 +59,26 @@ async def get_session_clock() -> SessionClockResponse:
 
 @router.post("/setups/describe", response_model=SetupDescriptionResponse)
 async def describe(setup: OptionsBacktestSetup) -> SetupDescriptionResponse:
-    """The setup in sentences. A setup that does not validate is the standard 422 with its field errors."""
+    """The setup in sentences, and the setup as the server read it. A setup that does not validate is the standard 422."""
     description = describe_setup(setup, full_session=await _full_session_clock())
-    return SetupDescriptionResponse.from_description(description)
+    return SetupDescriptionResponse.from_description(setup, description)
+
+
+@router.get("/limits", response_model=OptionsBacktestLimitsResponse)
+async def get_limits() -> OptionsBacktestLimitsResponse:
+    """What a setup may hold (legs, contracts, re-entries, strike steps, expiry days), what a name may be, and how long a range may be."""
+    # The two past-chain caps are the numbers the past-chain routes enforce, read from where they enforce them.
+    return OptionsBacktestLimitsResponse(
+        max_legs=MAX_LEGS,
+        max_contracts_per_leg=MAX_CONTRACTS,
+        max_reentries_per_leg=MAX_REENTRIES,
+        max_strike_steps=MAX_STRIKE_STEPS,
+        max_expiry_days=MAX_EXPIRY_DAYS,
+        max_range_sessions=MAX_RANGE_SESSIONS,
+        max_strikes_each_side=MAX_STRIKES_EACH_SIDE,
+        max_contracts_per_download=MAX_CONTRACTS_PER_DOWNLOAD,
+        setup_name=OptionsBacktestSetupNameRuleResponse(pattern=SETUP_NAME_PATTERN, sentence=SETUP_NAME_RULE),
+    )
 
 
 @router.get("/setups", response_model=list[SavedSetupResponse])

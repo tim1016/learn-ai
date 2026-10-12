@@ -17,13 +17,14 @@ from typing import Annotated, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.options.contract import MAX_STRIKE_THOUSANDTHS, OptionContract
-from app.options_backtest.chain_download import DownloadItem, DownloadReason
+from app.options_backtest.chain_download import DownloadItem, DownloadReason, FetchRefusal
 from app.options_backtest.classification import ExpiryTag
 from app.options_backtest.past_chain import ChainContract, ChainDay, ChainExpiry, ChainSession, ChainSide
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
-# The same shape the setup's underlying has: an OCC root of one to six letters.
-UNDERLYING_PATTERN = r"^[A-Z]{1,6}$"
+# The same shape the setup's underlying has: one to five letters, since a six-letter root makes a contract symbol the
+# lake's catalog cannot store.
+UNDERLYING_PATTERN = r"^[A-Z]{1,5}$"
 DOLLARS_PATTERN = r"^[0-9]+(\.[0-9]+)?$"
 
 TimestampMs = Annotated[int, Field(ge=0, le=MAX_TIMESTAMP_MS)]
@@ -77,6 +78,23 @@ class PastChainExpirySummary(BaseModel):
     standard_puts: Count
 
 
+class PastChainFetchRefusal(BaseModel):
+    """Why the lake will not fetch this session's data now: the rule a download asks, before it claims anything."""
+
+    reason: Literal["not_a_session", "session_not_over"] = Field(
+        description=(
+            "The lake's own reason code: `not_a_session` for a date the exchange had no session on, and "
+            "`session_not_over` for a session whose New York date has not passed, which is taken from the next "
+            "New York midnight."
+        )
+    )
+    words: str = Field(description="Plain words for the reason, to be shown as they are.")
+
+    @classmethod
+    def from_refusal(cls, refusal: FetchRefusal) -> Self:
+        return cls(reason=refusal.reason, words=refusal.words)  # type: ignore[arg-type]
+
+
 class PastChainDayResponse(BaseModel):
     """What the listing of one underlying held on one trading date."""
 
@@ -91,9 +109,16 @@ class PastChainDayResponse(BaseModel):
     rows_left_out_unusable: Count
     # Listed contracts expiring before the trading date; a listing as of a date holds none.
     rows_left_out_expired: Count
+    fetch_refusal: PastChainFetchRefusal | None = Field(
+        default=None,
+        description=(
+            "Set when the lake would fetch nothing for this session now, by the rule a download asks: the reason "
+            "and its plain words. Null when it would. A page offers no download for a session that has one."
+        ),
+    )
 
     @classmethod
-    def from_day(cls, day: ChainDay) -> Self:
+    def from_day(cls, day: ChainDay, refusal: FetchRefusal | None = None) -> Self:
         return cls(
             underlying=day.underlying,
             session_open_ms=day.session.open_ms,
@@ -113,6 +138,7 @@ class PastChainDayResponse(BaseModel):
             ],
             rows_left_out_unusable=day.rows_left_out_unusable,
             rows_left_out_expired=day.rows_left_out_expired,
+            fetch_refusal=None if refusal is None else PastChainFetchRefusal.from_refusal(refusal),
         )
 
 

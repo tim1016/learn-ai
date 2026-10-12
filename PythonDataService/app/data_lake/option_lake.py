@@ -66,6 +66,7 @@ import io
 import logging
 import lzma
 import time
+import weakref
 import zipfile
 import zlib
 from collections.abc import Awaitable, Callable
@@ -78,7 +79,7 @@ from uuid import uuid4
 from app.data_lake import catalog_client
 from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
 from app.data_lake.atomic import ArtifactLeaseLostError, AtomicRenameUnsafeError, publish_artifact
-from app.data_lake.ensure_data import _LEASE_TTL_MS, _MAX_CLAIM_RETRIES, _WORKER_ID
+from app.data_lake.ensure_data import _LEASE_TTL_MS, _MAX_CLAIM_RETRIES, _WORKER_ID, _minute_trade_dch
 from app.data_lake.path_policy import lake_root_for, resolve_lake_root, resolve_staging_root
 from app.data_lake.polygon_fetcher import (
     PolygonAuthError,
@@ -96,6 +97,7 @@ from app.data_lake.types import (
     PriceAdjustmentMode,
 )
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
+from app.utils.background_loop import background_loop
 from app.utils.session_anchors import et_date_at_ms, et_day_end_ms
 
 logger = logging.getLogger(__name__)
@@ -599,3 +601,77 @@ async def stored_file_still_reads(
         )
         return False
     return True
+
+
+def failed_row_is_asked_again(
+    state: catalog_client.ArtifactClaimState,
+    *,
+    data_contract_hash: str,
+    exempt_errors: frozenset[str] = NOT_LATCHED_ERRORS,
+) -> bool:
+    """Would the lake fetch this failed row again on the next capture, rather than answer ``fetch_timeout``?
+
+    Pure: it reads the row's claim state and makes no claim, no vendor request and no catalog call. It is the Python
+    statement of the steal in :func:`catalog_client.steal_or_retry_minute_bar`, which a capture reaches through
+    :func:`claim_or_take_over` with this module's ``MAX_CLAIM_RETRIES`` and ``NOT_LATCHED_ERRORS``. A failed row is
+    asked again when any one of three things holds:
+
+    * it has spent fewer than ``MAX_CLAIM_RETRIES`` attempts;
+    * its last error is in ``exempt_errors``, which are retried however often they were spent;
+    * it was recorded under another data contract than ``data_contract_hash`` (the recipe the caller will fetch
+      under): a budget spent under a recipe since replaced does not count.
+
+    ``data_contract_hash`` is the recipe the capture of that kind of row runs under (``option_minute_trade_dch()``
+    for a contract's day, ``option_listing_dch(...)`` for a listing, :func:`stock_day_is_asked_again` for the
+    underlying's days). A row that is not ``failed`` is no question for this function: a ``ValueError``.
+    """
+    if state.status != "failed":
+        raise ValueError(f"only a failed row is asked about, this one is {state.status!r}")
+    return (
+        state.attempt_count < MAX_CLAIM_RETRIES
+        or state.last_error in exempt_errors
+        or state.data_contract_hash != data_contract_hash
+    )
+
+
+def stock_day_is_asked_again(state: catalog_client.ArtifactClaimState, trading_date: date) -> bool:
+    """:func:`failed_row_is_asked_again` for a raw stock minute day, which the stock capture fetches.
+
+    The stock capture (``ensure_data._process_minute_trade_artifact``) reclaims with no exempt errors, and a raw
+    day is captured under the recipe ``_minute_trade_dch("raw", None, ...)`` writes for that date.
+    """
+    return failed_row_is_asked_again(
+        state,
+        data_contract_hash=_minute_trade_dch("raw", None, trading_date=trading_date),
+        exempt_errors=frozenset(),
+    )
+
+
+#: The most vendor requests for option data one process has in flight at once, however many runs it is serving.
+#: Callers that fetch many contract days (a run's download, the past chain's) hold :func:`vendor_request_gate`
+#: around each capture, so the limit is the process's and never one run's. The capture functions do not take it
+#: themselves: a single ask is never delayed by other people's batches.
+MAX_VENDOR_REQUESTS_IN_FLIGHT = 4
+
+_request_gates: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = weakref.WeakKeyDictionary()
+
+
+def vendor_request_gate() -> asyncio.Semaphore:
+    """The one gate on option vendor requests: ``async with`` it around a capture.
+
+    Every caller of the process shares the background loop (:mod:`app.utils.background_loop`), so they share one
+    semaphore of ``MAX_VENDOR_REQUESTS_IN_FLIGHT``. A semaphore belongs to the loop that first waits on it, so it is
+    made on that loop and dropped with it. Called from a coroutine running on the background loop; on any other loop
+    it raises ``RuntimeError``, since a gate made there would be a second limit of four beside the first.
+    """
+    loop = asyncio.get_running_loop()
+    if loop is not background_loop():
+        raise RuntimeError(
+            "the vendor request gate belongs to the process's background loop; asked for on another loop it would "
+            "make a second limit of four. Hand the work to that loop (app.utils.background_loop) and ask there."
+        )
+    gate = _request_gates.get(loop)
+    if gate is None:
+        gate = asyncio.Semaphore(MAX_VENDOR_REQUESTS_IN_FLIGHT)
+        _request_gates[loop] = gate
+    return gate

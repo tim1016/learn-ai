@@ -1,0 +1,585 @@
+"""Check data: which sessions of a range a run could test, from what is already stored (#3030).
+
+Formula: none. For each session of a range the answer is one of
+    ready              everything the session can need is stored, or the session is skipped and needs nothing
+    needs_download     it can be tested once data is fetched, and what is missing is named
+    cannot_be_tested   with every plain reason
+Reference: the run's own order of work (``run_sessions``): a session whose window does not fit reads nothing; any
+  other reads the underlying's day and the listing, then the contracts ``session_needs`` names. The check asks the
+  same questions in the same order, so it and the run cannot disagree about what a session needs.
+Canonical implementation: this file.
+Validated against: tests/options_backtest/test_data_check.py.
+
+Nothing is fetched and no vendor is asked. The lake decides, and this file restates none of its rules: whether a
+session is too old for the plan (``option_lake.plan_window_refusal``), whether its data is final yet
+(``option_lake.session_refusal``), and whether the fee model prices a date (``fees.estimated_fees_available``). What
+is stored is read the way the run reads it, through ``RunData``, so "stored" here means "the run could read it".
+The contracts a session needs are known only once its underlying day and its listing are stored; until then the
+answer says so, and gives no number. For the same reason the plan's floor and the settle rule are asked of every
+session whose window fits, before its underlying is read: a session the underlying did not trade at the entry time in
+needs no contract and would be skipped, but is refused here when it is older than the plan or not over yet, since that
+cannot be known without the data the check is not allowed to wait for. That is the conservative side.
+
+A recorded failure is something the lake wrote down when it last tried to fetch a thing. The lake asks again on a
+download until a row has spent its attempts, so a recorded failure makes a session ``cannot_be_tested`` only when the
+lake will not ask again; otherwise the session needs a download, and the note says the last try failed and why. Whether
+the lake will ask again is the lake's to say (``option_lake.failed_row_is_asked_again``); ``lake_check`` asks it.
+
+A stored day this feature cannot use. The reader refuses a file that is there and cannot be used (``lake_data``), and
+the check must not promise a fetch the lake will not make, nor refuse a day the lake would repair. What a download does
+with it is decided by the lake's own gate for that kind of file, not by the reader that refused it; a day the gate
+rejects is ``needs_download`` with a note that it "will be fetched again", and one the gate passes is
+``cannot_be_tested`` with ``stored_data_is_malformed``. Each row below was checked against a real download
+(``tests/options_backtest/test_unreadable_days.py``; a listing, and a contract day or listing the catalog does not admit,
+also in ``test_lake_check.py``):
+
+    A stored day that                                  A download      Decided by                      Check data says
+    -------------------------------------------------  --------------  ------------------------------  -----------------
+    contract: is damaged in any way the lake's parser  fetches it      ``option_bars.parse_option_     needs_download
+      refuses (not a zip, a bad row, a minute twice,   again           day_zip``, which the reuse
+      a start off a whole minute, bytes the catalog                    gate and the reader both run
+      does not admit)
+    contract: has a bar that closes on another New     keeps it        the same parser accepts it      cannot_be_tested
+      York date (the parser accepts it)                                (``OptionBarsCannotBePlaced``)
+    listing: is damaged or not admitted                fetches it      ``option_listing``'s parser,    needs_download
+                                                       again           run by the reuse gate and the
+                                                                       reader
+    underlying: fails the stock capture's gate (not a  fetches it      ``ensure_data.check_stored_     needs_download
+      zip, a row with fewer than six columns or a      again           minute_day``, asked through
+      number the stock gate cannot parse, a minute                     ``LakeCheckData``
+      twice, a price of zero, a member with no date,
+      bytes the catalog does not admit)
+    underlying: passes that gate and this reader       keeps it        the same gate passes it         cannot_be_tested
+      still refuses it (a bar off a whole minute, a
+      row of more than six columns, an empty line, a
+      number written ``+5``, an empty zip, a second
+      member, another symbol in the member's name)
+    underlying: a corrupt compressed stream            does not        the gate does not handle the    cannot_be_tested
+                                                       replace it:     error, so the capture stops
+                                                       the capture     with it
+                                                       stops
+
+The gate is the one the stock capture runs on a stored day it is about to reuse, so a download of the underlying keeps
+exactly what the check calls ``cannot_be_tested``. A run is never told to fetch what its download keeps: it fails
+``DATA_UNREADABLE`` and names the session by its open (``service``).
+
+No sentence here names a date. A session is identified by its open in ms beside the sentence, and a thing the lake
+could not fetch is named by what it is (the underlying's bars, the contract listing, a contract's bars) and described by
+a short plain phrase for the lake's reason code (``LAKE_REASON_WORDS``), never by text the lake or the vendor wrote,
+which can hold a date, raw JSON or a file path.
+
+Check data can take long on a long range, so it reports a session at a time and asks after each whether to stop
+(``on_session`` and ``should_stop``): a job that polls once a session keeps its lease alive and can be cancelled.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from datetime import date
+from enum import StrEnum
+from typing import Protocol
+
+from app.data_lake.admission import LakeAdmissionError
+from app.data_lake.option_bars import OptionBarsFileError
+from app.data_lake.option_lake import option_history_floor, plan_window_refusal, session_refusal
+from app.data_lake.option_listing import OptionListingFileError
+from app.lean_sidecar.trading_calendar import session_window_for_date
+from app.options.contract import OptionContract
+from app.options_backtest.data import Captured, RunData
+from app.options_backtest.fees import estimated_fees_available
+from app.options_backtest.lake_data import BARS_CANNOT_BE_PLACED, UnderlyingDayUnreadable
+from app.options_backtest.market import MinuteBar
+from app.options_backtest.needs import session_needs
+from app.options_backtest.results import SkipReason
+from app.options_backtest.session_market import MalformedBars, bars_by_close
+from app.options_backtest.setup import OptionsBacktestSetup
+from app.utils.session_anchors import et_date_at_ms
+
+
+class SessionVerdict(StrEnum):
+    READY = "ready"
+    NEEDS_DOWNLOAD = "needs_download"
+    CANNOT_BE_TESTED = "cannot_be_tested"
+
+
+class ProblemCode(StrEnum):
+    """Why a session cannot be tested. A session can have several."""
+
+    # The session is older than the options plan reaches (the lake says so).
+    OLDER_THAN_THE_DATA_PLAN = "older_than_the_data_plan"
+    # The session's data is not final yet, so the lake will not take it (the lake says so).
+    SESSION_DATA_NOT_FINAL = "session_data_not_final"
+    NO_PUBLISHED_FEE_RATES = "no_published_fee_rates"
+    # The lake wrote down a failure for something the session needs and will not try it again.
+    LAKE_HOLDS_A_FAILURE = "lake_holds_a_failure"
+    # A stored day the run cannot use and a download would not replace (the module docstring says which days).
+    STORED_DATA_IS_MALFORMED = "stored_data_is_malformed"
+
+
+class DataKind(StrEnum):
+    """A thing a download can bring."""
+
+    UNDERLYING_BARS = "underlying_bars"
+    LISTING = "listing"
+    CONTRACTS = "contracts"
+
+
+@dataclass(frozen=True)
+class DataThing:
+    """One stored thing of one session: the underlying's day, the listing, or one contract's day."""
+
+    kind: DataKind
+    contract: OptionContract | None = None
+
+
+@dataclass(frozen=True)
+class RecordedFailure:
+    """What the lake wrote down the last time it failed to fetch a thing."""
+
+    reason: str
+    # False when the row has spent its attempts and the lake refuses to ask again.
+    will_be_asked_again: bool
+
+
+class CheckableData(RunData, Protocol):
+    """What the check reads: everything a run reads, the lake's record of failures, and what a download would do with
+    a stored underlying day the reader refuses. Reads only; no vendor call."""
+
+    def recorded_failure(self, thing: DataThing, trading_date: date) -> RecordedFailure | None: ...
+
+    def download_replaces_the_underlying(self, trading_date: date) -> bool: ...
+
+
+@dataclass(frozen=True)
+class Problem:
+    code: ProblemCode
+    message: str
+    # The lake's own reason code, when the problem is a failure it recorded.
+    lake_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class ContractNeeds:
+    """How many contract days a session needs and how many are not stored; ``None`` while that is not yet known."""
+
+    needed: int | None
+    missing: int | None
+
+    @property
+    def known(self) -> bool:
+        return self.needed is not None
+
+
+NOT_YET_KNOWN = ContractNeeds(needed=None, missing=None)
+
+
+@dataclass(frozen=True)
+class SessionCheck:
+    """One session of a range, checked. A session is identified by its open in ms."""
+
+    session_open_ms: int
+    session_close_ms: int
+    verdict: SessionVerdict
+    # Set on a ready session that the replay will skip, and says which rule skips it.
+    skip: SkipReason | None
+    # What a download must bring; empty unless the verdict is ``needs_download``.
+    missing: tuple[DataKind, ...]
+    contracts: ContractNeeds
+    # Set when, and only when, the verdict is ``cannot_be_tested``.
+    problems: tuple[Problem, ...]
+    # Plain words about anything else worth knowing: a damaged stored file, an earlier try that failed.
+    notes: tuple[str, ...]
+
+    @property
+    def trading_date(self) -> date:
+        """The New York date of the session's open. Derived, never stored or sent."""
+        return et_date_at_ms(self.session_open_ms)
+
+    @property
+    def testable(self) -> bool:
+        return self.verdict is not SessionVerdict.CANNOT_BE_TESTED
+
+
+@dataclass(frozen=True)
+class TestableStretch:
+    """A run of consecutive sessions of the range that can all be tested, to offer as a new range."""
+
+    __test__ = False  # not a pytest class
+
+    first_session_open_ms: int
+    last_session_open_ms: int
+    sessions: int
+
+    @property
+    def first(self) -> date:
+        return et_date_at_ms(self.first_session_open_ms)
+
+    @property
+    def last(self) -> date:
+        return et_date_at_ms(self.last_session_open_ms)
+
+
+@dataclass(frozen=True)
+class DataCheck:
+    sessions: tuple[SessionCheck, ...]
+    # The first date the options plan serves minute bars for, as of the check.
+    option_prices_from: date
+
+    def count(self, verdict: SessionVerdict) -> int:
+        return sum(1 for session in self.sessions if session.verdict is verdict)
+
+    @property
+    def first_testable(self) -> SessionCheck | None:
+        return next((session for session in self.sessions if session.testable), None)
+
+    @property
+    def last_testable(self) -> SessionCheck | None:
+        return next((session for session in reversed(self.sessions) if session.testable), None)
+
+    @property
+    def longest_testable_stretch(self) -> TestableStretch | None:
+        """The longest unbroken run of testable sessions; of two as long, the earlier."""
+        best: tuple[int, int] | None = None  # (start index, length)
+        start = None
+        for at, session in enumerate((*self.sessions, None)):
+            if session is not None and session.testable:
+                start = at if start is None else start
+                continue
+            if start is not None and (best is None or at - start > best[1]):
+                best = (start, at - start)
+            start = None
+        if best is None:
+            return None
+        first, last = self.sessions[best[0]], self.sessions[best[0] + best[1] - 1]
+        return TestableStretch(
+            first_session_open_ms=first.session_open_ms,
+            last_session_open_ms=last.session_open_ms,
+            sessions=best[1],
+        )
+
+
+# A stored file that is there and is not usable. Whether a download fetches it again is the module docstring's table.
+STORED_FILE_ERRORS = (LakeAdmissionError, OptionListingFileError, OptionBarsFileError, UnderlyingDayUnreadable)
+
+SESSION_DATA_NOT_FINAL_WORDS = "The session's data is not final yet; it can be fetched from the next New York day."
+_OLDER_THAN_THE_PLAN = "This session is older than the data plan reaches, so option prices for it cannot be fetched."
+
+# A short plain phrase for each reason code the lake, or this run's download, can give for a thing it did not bring in.
+# "that day" points at the session named beside the sentence by its open; no phrase names a date, a number of minutes
+# or a rule's wording. A test holds that every code the lake can give has a phrase here.
+LAKE_REASON_WORDS: dict[str, str] = {
+    # What the vendor answered.
+    "provider_auth_error": "the data vendor refused the API key, which has to be corrected before anything is fetched",
+    "provider_entitlement_error": "the data plan does not include this data",
+    "provider_rate_limited": "the data vendor asked us to slow down",
+    "provider_api_error": "the data vendor did not answer properly",
+    "provider_no_data": "the data vendor had no data to give",
+    "unknown_symbol": "the data vendor does not know this ticker",
+    "validation_failed": "what the vendor sent broke the rules of a bar or of a listing and could not be stored",
+    "outside_data_plan": "the data plan does not reach that far back",
+    # Refused before any request was made.
+    "session_not_over": "the session's data is not final yet; it can be fetched from the next New York day",
+    "not_a_session": "the exchange was closed that day",
+    "symbol_too_long": "the contract's name is too long for the lake to store",
+    "listing_not_captured": "the contract listing for that day is not in the lake",
+    "not_listed": "the contract is not in that day's contract listing",
+    # The lake's own bookkeeping.
+    "lease_timeout": "another request was holding it",
+    "fetch_timeout": "the lake has already tried as often as it will",
+    "io_error": "the lake could not read or write its files",
+    "launcher_unreachable": "the service the lake needs for the exchange calendar could not be reached",
+    "unsupported_resolution": "the lake does not hold bars of that size",
+    "unsupported_artifact_kind": "the lake does not hold that kind of data",
+    "corp_action_revision_mismatch": "the stock's corporate actions changed while it was being fetched",
+    "data_contract_mismatch": "what is stored was made under other rules than this run uses",
+    "internal_error": "the lake hit an error of its own",
+    "session_not_produced": "the lake's calendar and the run's calendar disagree about this session",
+    "run_aborted": "the lake stopped before it got to it",
+    # This run's download phase.
+    "underlying_bars_not_materialized": "the underlying's minute bars could not be fetched",
+    "not_in_the_lake": "it is still not in the lake after it was fetched",
+    "another_request_still_fetching": "another request was still fetching it when this run stopped waiting",
+    "took_too_long": "it took longer than the run waits",
+}
+_NO_WORDS_FOR_THE_REASON = "the lake gave a reason this run has no plain words for"
+
+
+def lake_reason_words(reason: str) -> str:
+    """The plain phrase for a lake reason code, with no date in it. A code with no phrase gets a general one."""
+    return LAKE_REASON_WORDS.get(reason, _NO_WORDS_FOR_THE_REASON)
+
+
+def _ignore_progress(_done: int, _total: int) -> None:
+    return None
+
+
+def _never_stop() -> bool:
+    return False
+
+
+class CheckStopped(Exception):
+    """The check was asked to stop. ``sessions_done`` sessions had been checked."""
+
+    def __init__(self, sessions_done: int) -> None:
+        self.sessions_done = sessions_done
+        super().__init__(f"the check was stopped after {sessions_done} sessions")
+
+
+def check_data(
+    setup: OptionsBacktestSetup,
+    sessions: Sequence[date],
+    *,
+    now_ms: int,
+    data: CheckableData,
+    on_session: Callable[[int, int], None] = _ignore_progress,
+    should_stop: Callable[[], bool] = _never_stop,
+) -> DataCheck:
+    """Check each of ``sessions`` (NYSE sessions, in date order) for ``setup``, as of the instant ``now_ms``.
+
+    Reads what is stored through ``data`` and asks the lake nothing that costs a claim or a vendor request. Blocking:
+    call it from a worker thread. ``should_stop()`` is asked before each session (a yes raises ``CheckStopped``) and
+    ``on_session(done, total)`` is called after each, so a caller can report progress and keep a job alive.
+    """
+    checked: list[SessionCheck] = []
+    for done, day in enumerate(sessions):
+        if should_stop():
+            raise CheckStopped(done)
+        checked.append(_check_session(setup, day, now_ms=now_ms, data=data))
+        on_session(done + 1, len(sessions))
+    return DataCheck(sessions=tuple(checked), option_prices_from=option_history_floor(et_date_at_ms(now_ms)))
+
+
+@dataclass(frozen=True)
+class _Outline:
+    """The open and close of the session being checked, which builds its ``SessionCheck``."""
+
+    open_ms: int
+    close_ms: int
+
+    def result(
+        self,
+        verdict: SessionVerdict,
+        *,
+        skip: SkipReason | None = None,
+        missing: tuple[DataKind, ...] = (),
+        contracts: ContractNeeds = NOT_YET_KNOWN,
+        problems: tuple[Problem, ...] = (),
+        notes: tuple[str, ...] = (),
+    ) -> SessionCheck:
+        return SessionCheck(self.open_ms, self.close_ms, verdict, skip, missing, contracts, problems, notes)
+
+
+def _check_session(setup: OptionsBacktestSetup, day: date, *, now_ms: int, data: CheckableData) -> SessionCheck:
+    window = session_window_for_date(day)
+    outline = _Outline(window.open_ms_utc, window.close_ms_utc)
+    problems: list[Problem] = []
+    # The run refuses an estimated fee for any session of the range before it reads anything, a skipped one too.
+    if setup.fees.kind == "estimated" and not estimated_fees_available(day):
+        problems.append(
+            Problem(
+                ProblemCode.NO_PUBLISHED_FEE_RATES,
+                "Estimated fees cannot be priced on this date: the published option fee rates do not reach it. "
+                "Choose a fee per contract, or no fee, or start later.",
+            )
+        )
+
+    if not setup.window_fits(session_open_ms=window.open_ms_utc, session_close_ms=window.close_ms_utc):
+        # A skipped session reads nothing, so what the lake would say of its data does not matter.
+        if problems:
+            return outline.result(SessionVerdict.CANNOT_BE_TESTED, problems=tuple(problems))
+        return outline.result(SessionVerdict.READY, skip=SkipReason.WINDOW_DOES_NOT_FIT, contracts=ContractNeeds(0, 0))
+
+    problems.extend(_lake_refusals(setup.underlying, day, now_ms=now_ms))
+    if problems:
+        return outline.result(SessionVerdict.CANNOT_BE_TESTED, problems=tuple(problems))
+    return _inspect_what_is_stored(setup, day, outline, data)
+
+
+def _lake_refusals(underlying: str, day: date, *, now_ms: int) -> list[Problem]:
+    refusals: list[Problem] = []
+    if session_refusal(underlying, day, now_ms=now_ms) is not None:
+        refusals.append(Problem(ProblemCode.SESSION_DATA_NOT_FINAL, SESSION_DATA_NOT_FINAL_WORDS))
+    if plan_window_refusal(underlying, day, now_ms=now_ms) is not None:
+        refusals.append(Problem(ProblemCode.OLDER_THAN_THE_DATA_PLAN, _OLDER_THAN_THE_PLAN))
+    return refusals
+
+
+class _KeptUnusable(Exception):
+    """A stored day the run cannot use and a download would not replace; ``cause`` is the error that refused it."""
+
+    def __init__(self, cause: Exception) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+
+
+# What a stored day can be refused with: the reader's errors, and bars it reads and the market would refuse.
+_UNUSABLE = (*STORED_FILE_ERRORS, MalformedBars)
+# What the rules of a bar refuse. Any other refusal is of the file's form.
+_BREAKS_THE_RULES_OF_A_BAR = (MalformedBars, *BARS_CANNOT_BE_PLACED)
+
+
+def _stored[T](
+    read: Callable[[], T | None], what: str, notes: list[str], *, replaced: Callable[[Exception], bool]
+) -> T | None:
+    """A read that answers ``None`` for a file that is not there and for one that is there, unusable and replaced.
+
+    A day the run cannot use is either fetched again by a download (``replaced`` says so of the error that refused it:
+    the module docstring's table) or kept by the lake as it is. The first is a note and a day to download; the second
+    is ``_KeptUnusable``, for the caller to call malformed, and is never promised a fetch.
+    """
+    try:
+        return read()
+    except _UNUSABLE as exc:
+        if not replaced(exc):
+            raise _KeptUnusable(exc) from exc
+        notes.append(f"The stored {what} cannot be read ({type(exc).__name__}) and will be fetched again.")
+        return None
+
+
+def _a_contract_day_replaced(exc: Exception) -> bool:
+    """The lake's parser of a contract's day is the reuse gate's too, so it refuses what a download fetches again;
+    what it accepts and the reader still refuses (a close on another day) the lake holds as good."""
+    return not isinstance(exc, _BREAKS_THE_RULES_OF_A_BAR)
+
+
+def _the_underlying_as_the_run_reads_it(data: CheckableData, day: date) -> Captured[Sequence[MinuteBar]] | None:
+    stored = data.underlying_day(day)
+    if stored is not None:
+        bars_by_close(stored.value, trading_date=day, what="the underlying")
+    return stored
+
+
+def _a_contract_day_as_the_run_reads_it(
+    data: CheckableData, contract: OptionContract, day: date
+) -> Captured[Sequence[MinuteBar]] | None:
+    stored = data.option_day(contract, day)
+    if stored is not None:
+        bars_by_close(stored.value, trading_date=day, what=contract.occ_symbol)
+    return stored
+
+
+def _inspect_what_is_stored(
+    setup: OptionsBacktestSetup, day: date, outline: _Outline, data: CheckableData
+) -> SessionCheck:
+    notes: list[str] = []
+    try:
+        underlying = _stored(
+            lambda: _the_underlying_as_the_run_reads_it(data, day),
+            "underlying bars",
+            notes,
+            replaced=lambda _exc: data.download_replaces_the_underlying(day),
+        )
+    except _KeptUnusable as kept:
+        return _malformed(outline, "the underlying", kept.cause)
+    listing = _stored(lambda: data.listing(day), "contract listing", notes, replaced=lambda _exc: True)
+    absent = [
+        (DataKind.UNDERLYING_BARS, underlying is None),
+        (DataKind.LISTING, listing is None),
+    ]
+    missing = [kind for kind, is_absent in absent if is_absent]
+    if underlying is None or listing is None:
+        return _what_a_download_must_bring(day, missing, data, notes, outline, contracts=NOT_YET_KNOWN)
+
+    needs = session_needs(
+        setup,
+        trading_date=day,
+        session_open_ms=outline.open_ms,
+        session_close_ms=outline.close_ms,
+        underlying=tuple(underlying.value),
+        listing=listing.value,
+    )
+    if needs.skip_reason is not None:
+        return outline.result(
+            SessionVerdict.READY, skip=needs.skip_reason, contracts=ContractNeeds(0, 0), notes=tuple(notes)
+        )
+
+    absent_contracts: list[OptionContract] = []
+    for contract in sorted(needs.contracts, key=lambda each: each.occ_symbol):
+        try:
+            stored = _stored(
+                lambda c=contract: _a_contract_day_as_the_run_reads_it(data, c, day),
+                f"bars of {contract.occ_symbol}",
+                notes,
+                replaced=_a_contract_day_replaced,
+            )
+        except _KeptUnusable as kept:
+            return _malformed(outline, contract.occ_symbol, kept.cause)
+        if stored is None:
+            absent_contracts.append(contract)
+    contracts = ContractNeeds(needed=len(needs.contracts), missing=len(absent_contracts))
+    if not absent_contracts:
+        return outline.result(SessionVerdict.READY, contracts=contracts, notes=tuple(notes))
+    return _what_a_download_must_bring(
+        day, [DataKind.CONTRACTS], data, notes, outline, contracts=contracts, absent=absent_contracts
+    )
+
+
+def _malformed(outline: _Outline, what: str, cause: Exception) -> SessionCheck:
+    """A stored day the run cannot use and a download would not replace. What the fault was, and on which day, is not said."""
+    if isinstance(cause, _BREAKS_THE_RULES_OF_A_BAR):
+        message = (
+            f"The stored bars of {what} break the rules of a bar (a minute twice or out of order, a bar not on a "
+            "whole minute, a price of zero or less, or bars of another day), so the run cannot use them, and a "
+            "download does not replace them."
+        )
+    else:
+        message = (
+            f"The stored file of {what} is not in the form the lake writes (a row of the wrong width, an empty "
+            "line, a number written another way, or an archive that does not hold the day's one file), so the run "
+            "cannot use it, and a download does not replace it."
+        )
+    return outline.result(
+        SessionVerdict.CANNOT_BE_TESTED, problems=(Problem(ProblemCode.STORED_DATA_IS_MALFORMED, message),)
+    )
+
+
+def _what_a_download_must_bring(
+    day: date,
+    missing: list[DataKind],
+    data: CheckableData,
+    notes: list[str],
+    outline: _Outline,
+    *,
+    contracts: ContractNeeds,
+    absent: Sequence[OptionContract] = (),
+) -> SessionCheck:
+    """``needs_download`` for the missing things, unless the lake has written one down as a failure it will not retry."""
+    things = [
+        DataThing(kind) if kind is not DataKind.CONTRACTS else DataThing(kind, contract)
+        for kind in missing
+        for contract in (absent if kind is DataKind.CONTRACTS else (None,))
+    ]
+    refused: list[Problem] = []
+    for thing in things:
+        failure = data.recorded_failure(thing, day)
+        if failure is None:
+            continue
+        label = _label(thing)
+        why = f"{lake_reason_words(failure.reason)} ({failure.reason})"
+        if failure.will_be_asked_again:
+            notes.append(f"The last try to fetch {label} failed: {why}. It will be asked for again.")
+        else:
+            refused.append(
+                Problem(
+                    ProblemCode.LAKE_HOLDS_A_FAILURE,
+                    f"The lake gave up fetching {label}: {why}. It will not try again.",
+                    lake_reason=failure.reason,
+                )
+            )
+    if refused:
+        return outline.result(
+            SessionVerdict.CANNOT_BE_TESTED, problems=tuple(refused), contracts=contracts, notes=tuple(notes)
+        )
+    return outline.result(
+        SessionVerdict.NEEDS_DOWNLOAD, missing=tuple(missing), contracts=contracts, notes=tuple(notes)
+    )
+
+
+def _label(thing: DataThing) -> str:
+    if thing.kind is DataKind.UNDERLYING_BARS:
+        return "the underlying's bars"
+    if thing.kind is DataKind.LISTING:
+        return "the contract listing"
+    assert thing.contract is not None  # a contracts thing always names its contract
+    return f"the bars of {thing.contract.occ_symbol}"

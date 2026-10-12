@@ -46,6 +46,15 @@ STRIKES = tuple(range(488, 513))
 LAST_GENERATED_MINUTE = 75
 
 
+def _random_stop(rng: random.Random) -> dict[str, Any]:
+    return rng.choice(
+        [
+            {"kind": "percent", "value": str(rng.choice([8, 15, 30]))},
+            {"kind": "points", "value": rng.choice(["0.05", "0.20"])},
+        ]
+    )
+
+
 def _random_leg(rng: random.Random, index: int) -> dict[str, Any]:
     has_momentum = rng.random() < 0.5
     written: dict[str, Any] = {
@@ -58,12 +67,7 @@ def _random_leg(rng: random.Random, index: int) -> dict[str, Any]:
         "strike": rng.choice([{"kind": "atm"}, {"kind": "atm_offset", "steps": rng.choice([-3, -1, 1, 2])}]),
     }
     if rng.random() < 0.75:
-        written["stop_loss"] = rng.choice(
-            [
-                {"kind": "percent", "value": str(rng.choice([8, 15, 30]))},
-                {"kind": "points", "value": rng.choice(["0.05", "0.20"])},
-            ]
-        )
+        written["stop_loss"] = _random_stop(rng)
     if has_momentum:
         written["momentum"] = rng.choice(
             [
@@ -76,6 +80,9 @@ def _random_leg(rng: random.Random, index: int) -> dict[str, Any]:
     if rng.random() < 0.65:
         kind = "on_momentum" if has_momentum and rng.random() < 0.5 else "at_once"
         written["reentry_on_stop"] = {"kind": kind, "count": rng.randint(1, 3)}
+        # A setup that gives a leg a re-entry rule no stop can reach is refused, so the leg gets a stop of its own.
+        if "stop_loss" not in written:
+            written["stop_loss"] = _random_stop(rng)
     return written
 
 

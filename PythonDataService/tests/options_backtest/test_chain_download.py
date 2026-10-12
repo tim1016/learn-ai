@@ -12,32 +12,40 @@ reaches two years back with two days of headroom, reaches 2024-10-14. 2024-06-14
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Sequence
+import threading
+from collections.abc import Callable, Coroutine, Sequence
 from datetime import date
 from pathlib import Path
+from typing import Any
 
+import anyio
 import httpx
 import pytest
 import respx
 
-from app.data_lake import catalog_client
+from app.data_lake import catalog_client, option_lake
 from app.data_lake import option_bars as option_bars_module
 from app.data_lake.admission import LakeAdmissionError
+from app.data_lake.option_lake import MAX_VENDOR_REQUESTS_IN_FLIGHT, vendor_request_gate
 from app.data_lake.option_listing import OptionListingFileError
 from app.data_lake.run_materialization import LakeMaterializationError
+from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.options.contract import OptionContract
 from app.options_backtest import chain_download
 from app.options_backtest.chain_download import (
     MAX_CONTRACTS_PER_DOWNLOAD,
-    MAX_REQUESTS_IN_FLIGHT,
     ContractNotOfExpiry,
     DownloadItem,
     ItemKind,
     Outcome,
     TooManyContracts,
     ensure_chain_data,
+    fetch_refusal,
 )
+from app.options_backtest.data_check import lake_reason_words
+from app.options_backtest.fetching import ensure_run_data
 from app.options_backtest.lake_data import LakeRunData
+from app.utils.background_loop import background_loop
 from tests._helpers.fake_lake_catalog import FakeCatalog
 from tests._helpers.option_lake_cases import DISK_FULL_AT_THE_RENAME, install_write_fault
 from tests._helpers.option_vendor import no_trades, traded
@@ -62,8 +70,12 @@ from tests.options_backtest._lake import (
 from tests.options_backtest._lake import fake_catalog as fake_catalog
 from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixed
 from tests.options_backtest._lake import tmp_lake as tmp_lake
+from tests.options_backtest._run_data import THU, WED
+from tests.options_backtest._run_lake import Vendor, eight_legs_setup, ladder_day
 
 STOCK_PATH = "equity/usa/minute/spy/20250613_trade.zip"
+# 2026-10-12 14:00 New York.
+NOW_MS = 1791828000000
 
 
 def _call(strike: int, day: date = FRIDAY) -> OptionContract:
@@ -311,7 +323,9 @@ async def test_a_date_that_is_not_a_session_asks_the_stock_engine_for_nothing_an
         ("listing", "SPY", "failed", "not_a_session"),
         ("underlying", "SPY", "failed", "not_a_session"),
     ]
-    assert stock_fetch_that_must_not_run.calls == []  # and an un-mocked request to the vendor would have failed the test
+    assert (
+        stock_fetch_that_must_not_run.calls == []
+    )  # and an un-mocked request to the vendor would have failed the test
     assert items[1].detail and items[1].detail == items[0].detail
 
 
@@ -338,9 +352,7 @@ async def test_an_underlying_already_held_is_reported_stored_even_while_its_sess
         fake_catalog, tmp_lake, [stock_bar(FRIDAY_OPEN_MS, "600.00", "600.50", "599.75", "600.25")]
     )
 
-    items = await ensure_chain_data(
-        "SPY", FRIDAY, expiry=None, contracts=[], now_ms=FRIDAY_OPEN_MS + 60 * MINUTE_MS
-    )
+    items = await ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[], now_ms=FRIDAY_OPEN_MS + 60 * MINUTE_MS)
 
     assert items[1].outcome is Outcome.ALREADY_STORED and items[1].reason is None
     assert stock_fetch_that_must_not_run.calls == []
@@ -510,6 +522,10 @@ async def test_a_contract_whose_file_cannot_be_written_is_a_failed_item_with_io_
 
 # ── A download that is cancelled finishes what it started ─────────────────
 
+# The captures run on the process's background loop, so the vendor's answers (mocked, and awaited by the lake's HTTP
+# client) are awaited there too, and the test's loop is another. What a test holds the vendor with is therefore a
+# ``threading.Event`` polled on the background loop, never an ``asyncio.Event`` of the test's loop.
+
 
 async def _until(condition: Callable[[], bool]) -> None:
     for _ in range(500):
@@ -519,26 +535,69 @@ async def _until(condition: Callable[[], bool]) -> None:
     raise AssertionError("the captures never reached the vendor")
 
 
+async def _held_until(release: threading.Event) -> None:
+    """Wait, on the loop the vendor's answer is awaited on, until the test sets ``release``."""
+    while not release.is_set():
+        await asyncio.sleep(0.002)
+
+
 def _statuses(fake_catalog: FakeCatalog) -> list[str]:
-    return sorted(row["status"] for row in fake_catalog.rows.values())
+    # A snapshot: the captures add rows from another thread.
+    return sorted(row["status"] for row in list(fake_catalog.rows.values()))
+
+
+class SlowBars:
+    """The vendor's answer to every contract's bars: held until ``release`` is set, then ``latency`` seconds more."""
+
+    def __init__(self) -> None:
+        self.release = threading.Event()
+        self.latency = 0.0
+        self.asked: list[str] = []
+        self.in_flight = 0
+        self.peak = 0
+        self._together = 0
+
+    def hold_the_first(self, count: int, *, for_at_most: float = 10.0) -> None:
+        """Answer none until ``count`` are in flight together, so a count of the most in flight at once sees that many
+        however slowly the requests arrive. If they never are, they are let go after ``for_at_most`` seconds, so a
+        fault shows as a count that is wrong and not as a hang."""
+        self.release = threading.Event()
+        self._together = count
+        opens_it_anyway = threading.Timer(for_at_most, self.release.set)
+        opens_it_anyway.daemon = True
+        opens_it_anyway.start()
+
+    async def __call__(self, request: httpx.Request) -> httpx.Response:
+        symbol = symbol_asked(request)
+        self.asked.append(symbol)
+        self.in_flight += 1
+        self.peak = max(self.peak, self.in_flight)
+        if self._together and self.in_flight >= self._together:
+            self.release.set()
+        try:
+            await _held_until(self.release)
+            await asyncio.sleep(self.latency)
+        finally:
+            self.in_flight -= 1
+        return no_trades(symbol)
 
 
 @respx.mock
 async def test_a_download_cancelled_while_the_listing_is_fetched_finishes_the_listing_and_the_underlying_then_ends_cancelled(
     fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
 ) -> None:
-    release = asyncio.Event()
-    listing_asked = asyncio.Event()
+    release = threading.Event()
+    listing_asked = threading.Event()
 
     async def listing_after_release(request: httpx.Request) -> httpx.Response:
         listing_asked.set()
-        await release.wait()
+        await _held_until(release)
         return httpx.Response(200, json={"request_id": "r", "status": "OK", "results": [vendor_listing_row(CALL_600)]})
 
     respx.get(CONTRACTS_URL).mock(side_effect=listing_after_release)
     bars_route = vendor_bars(lambda symbol: no_trades(symbol))
     download = asyncio.create_task(ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[CALL_600]))
-    await asyncio.wait_for(listing_asked.wait(), timeout=5)
+    await _until(listing_asked.is_set)
     assert "fetching" in _statuses(fake_catalog)  # the listing holds its claimed row and waits on the vendor
 
     download.cancel()
@@ -550,8 +609,10 @@ async def test_a_download_cancelled_while_the_listing_is_fetched_finishes_the_li
 
     assert ended_before_the_listing_did is False
     assert download.cancelled()
-    # Two rows, the listing and the underlying's day, and both ran to their end; the contracts were never started.
+    # Two rows, the listing and the underlying's day, and both ran to their end (the listing reads back); the contract
+    # was never started, because it had not begun when the download was cancelled.
     assert _statuses(fake_catalog) == ["complete", "complete"]
+    assert (await asyncio.to_thread(LakeRunData("SPY").listing, FRIDAY)) is not None
     assert bars_route.call_count == 0
 
 
@@ -561,23 +622,16 @@ async def test_a_download_cancelled_while_contracts_are_fetched_finishes_each_on
     cancels: int, fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
 ) -> None:
     vendor_lists(CALL_600, CALL_601)
-    release = asyncio.Event()
-    asked: list[str] = []
-
-    async def bars_after_release(request: httpx.Request) -> httpx.Response:
-        asked.append(symbol_asked(request))
-        await release.wait()
-        return no_trades(symbol_asked(request))
-
-    respx.get(url__regex=BARS_URL).mock(side_effect=bars_after_release)
+    bars = SlowBars()
+    respx.get(url__regex=BARS_URL).mock(side_effect=bars)
     download = asyncio.create_task(ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[CALL_600, CALL_601]))
-    await _until(lambda: len(asked) == 2)  # both contracts hold their claimed rows and wait on the vendor
+    await _until(lambda: len(bars.asked) == 2)  # both contracts hold their claimed rows and wait on the vendor
 
     for _ in range(cancels):
         download.cancel()
         await asyncio.sleep(0.05)
     ended_before_the_contracts_did = download.done()
-    release.set()
+    bars.release.set()
     with pytest.raises(asyncio.CancelledError):
         await download
 
@@ -585,6 +639,171 @@ async def test_a_download_cancelled_while_contracts_are_fetched_finishes_each_on
     assert download.cancelled()
     # Four rows, the listing, the underlying's day and the two contracts; each ran to its end and none is left fetching.
     assert _statuses(fake_catalog) == ["complete", "complete", "complete", "complete"]
+
+
+@respx.mock
+async def test_a_download_cancelled_while_captures_wait_for_a_place_at_the_gate_ends_every_one_and_frees_every_place(
+    fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
+) -> None:
+    # Six contracts and four places: four captures hold a place and wait on the vendor, two wait at the gate. The
+    # download is cancelled then. Every capture ends, the two that waited included, so there are eight rows, the listing,
+    # the underlying's day and six contracts, all complete, and six requests for bars (4 held + 2 that got a place after).
+    # Then a second download of eight other contracts, each request taking 0.05 s, gets all four places: it has
+    # eight contracts to ask for and the most in flight at once is four. A place the first download kept would show as three.
+    first_six = [_call(600 + n) for n in range(6)]
+    next_eight = [_call(610 + n) for n in range(8)]
+    vendor_lists(*first_six, *next_eight)
+    bars = SlowBars()
+    respx.get(url__regex=BARS_URL).mock(side_effect=bars)
+    download = asyncio.create_task(ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=first_six))
+    await _until(lambda: len(bars.asked) == MAX_VENDOR_REQUESTS_IN_FLIGHT)
+
+    download.cancel()
+    await asyncio.sleep(0.1)
+    waited = (download.done(), len(bars.asked))
+    bars.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await download
+
+    assert MAX_VENDOR_REQUESTS_IN_FLIGHT == 4
+    assert waited == (False, 4), "two captures still waited for a place, and the download had not ended"
+    assert download.cancelled()
+    assert _statuses(fake_catalog) == ["complete"] * 8
+    assert len(bars.asked) == 6
+
+    bars.peak, bars.latency = 0, 0.05
+    bars.hold_the_first(4)
+    items = await ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=next_eight)
+
+    assert bars.peak == 4, "a place the cancelled download kept would leave three"
+    assert [item.outcome for item in items[2:]] == [Outcome.FETCHED] * 8
+
+
+@respx.mock
+async def test_an_error_the_captures_meet_after_the_download_was_cancelled_is_logged_and_the_download_ends_cancelled(
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    materializer: StockFetchDouble,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    claimed, release = threading.Event(), threading.Event()
+
+    async def down_once_released(*args: object, **kwargs: object) -> int:
+        claimed.set()
+        await _held_until(release)
+        raise catalog_client.CatalogUnavailableError("down")
+
+    monkeypatch.setattr(catalog_client, "claim_metadata_artifact", down_once_released)
+    vendor_lists(CALL_600)
+    download = asyncio.create_task(ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[CALL_600]))
+    await _until(claimed.is_set)
+
+    download.cancel()
+    await asyncio.sleep(0.05)
+    release.set()
+    with caplog.at_level("WARNING"), pytest.raises(asyncio.CancelledError):
+        await download
+
+    assert download.cancelled(), "the caller was cancelled, so it ends cancelled and not with the outage"
+    [record] = [r for r in caplog.records if getattr(r, "action", "") == "chain_download_error_after_cancel"]
+    assert record.error_type == "CatalogUnavailableError"
+    # The underlying's fetch ran to its end beside the listing that failed.
+    assert len(materializer.calls) == 1
+
+
+@respx.mock
+async def test_a_download_cancelled_before_its_first_capture_begins_captures_nothing(
+    fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The captures wait for the loop's catalog pool before the first of them is asked. The download is cancelled while
+    # that pool is being made, so by the time it is, the caller has gone and the listing and the underlying, which had
+    # not begun, never do: no request for the listing, no fetch of the underlying, no row.
+    reached, release = threading.Event(), threading.Event()
+    made_pool = catalog_client.init_pool
+
+    async def slow_pool() -> None:
+        reached.set()
+        await _held_until(release)
+        await made_pool()
+
+    monkeypatch.setattr(catalog_client, "init_pool", slow_pool)
+    listing_route = vendor_lists(CALL_600)
+    download = asyncio.create_task(ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[CALL_600]))
+    await _until(reached.is_set)
+
+    download.cancel()
+    await asyncio.sleep(0.05)
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await download
+
+    assert (listing_route.call_count, len(materializer.calls), _statuses(fake_catalog)) == (0, 0, [])
+
+
+async def test_a_cancel_scope_that_cancels_again_at_every_checkpoint_does_not_make_the_wait_spin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The captures take 0.3 s. A scope of anyio sends a cancellation at every checkpoint of the task it holds, so each
+    # wait ends at once and a loop that only swallows them goes round tens of thousands of times in that 0.3 s (42 209
+    # in 1.5 s when it was measured). The wait is entered twice: once to meet the first cancellation, once shielded
+    # from the scope for the rest (the bound allows one more). The captures end first, and the first cancellation is
+    # raised after them.
+    loop = asyncio.get_running_loop()
+    work: asyncio.Future[tuple[DownloadItem, ...]] = loop.create_future()
+    loop.call_later(0.3, work.set_result, ())
+    caller_has_gone = threading.Event()
+    waits = 0
+    wait = asyncio.wait
+
+    async def counted_wait(*args: Any, **kwargs: Any) -> Any:
+        nonlocal waits
+        waits += 1
+        return await wait(*args, **kwargs)
+
+    monkeypatch.setattr(chain_download.asyncio, "wait", counted_wait)
+    cancelled = False
+
+    with anyio.CancelScope() as scope:
+        scope.cancel()
+        try:
+            await chain_download._waited_for(work, caller_has_gone)
+        except asyncio.CancelledError:
+            cancelled = True
+
+    assert cancelled and work.done() and caller_has_gone.is_set()
+    assert waits <= 3
+
+
+# ── Why the lake would fetch nothing for a session ───────────────────────
+# The lake takes a session's option data from the New York midnight after its date. Friday 2025-06-13 is taken from
+# Saturday's midnight, 2025-06-14 00:00 EDT = 04:00 UTC = 1 749 873 600 000 ms.
+TAKEN_FROM_MS = 1749873600000
+
+
+def test_a_session_is_refused_until_the_millisecond_the_lake_takes_it_and_not_after() -> None:
+    before = fetch_refusal("SPY", FRIDAY, now_ms=TAKEN_FROM_MS - 1)
+    at_it = fetch_refusal("SPY", FRIDAY, now_ms=TAKEN_FROM_MS)
+
+    assert before is not None and before.reason == "session_not_over"
+    assert before.words == lake_reason_words("session_not_over")
+    assert at_it is None
+
+
+def test_a_date_that_is_not_a_session_is_refused_as_that_whatever_the_clock_says() -> None:
+    # 2025-06-14 is a Saturday.
+    refusal = fetch_refusal("SPY", date(2025, 6, 14), now_ms=TAKEN_FROM_MS * 2)
+
+    assert refusal is not None and refusal.reason == "not_a_session"
+    assert refusal.words == lake_reason_words("not_a_session")
+
+
+def test_the_lakes_clock_is_the_one_asked_when_none_is_given(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The tests' clock is fixed at 2026-10-12 14:00 New York, so a session long over is taken and today's is not.
+    assert fetch_refusal("SPY", FRIDAY) is None
+    assert fetch_refusal("SPY", date(2026, 10, 12)) is not None
+    monkeypatch.setattr(option_lake, "current_ms", lambda: TAKEN_FROM_MS - 1)
+    assert fetch_refusal("SPY", FRIDAY) is not None
 
 
 # ── Requests refused before anything is asked ─────────────────────────────
@@ -650,43 +869,161 @@ async def test_no_more_than_four_requests_are_in_flight_and_four_are(
 ) -> None:
     contracts = [_call(500 + n) for n in range(12)]
     vendor_lists(*contracts)
-    in_flight = 0
-    peak = 0
-
-    async def slow_answer(request: httpx.Request) -> httpx.Response:
-        nonlocal in_flight, peak
-        in_flight += 1
-        peak = max(peak, in_flight)
-        await asyncio.sleep(0.02)
-        in_flight -= 1
-        return no_trades(symbol_asked(request))
-
-    respx.get(url__regex=BARS_URL).mock(side_effect=slow_answer)
+    bars = SlowBars()
+    bars.hold_the_first(4)
+    bars.latency = 0.02
+    respx.get(url__regex=BARS_URL).mock(side_effect=bars)
 
     items = await ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=contracts)
 
-    assert MAX_REQUESTS_IN_FLIGHT == 4 and peak == 4
+    assert MAX_VENDOR_REQUESTS_IN_FLIGHT == 4 and bars.peak == 4
     assert all(item.outcome is Outcome.FETCHED for item in items)
 
 
 @respx.mock
-async def test_the_underlyings_fetch_waits_for_a_free_place_among_the_requests_in_flight(
+async def test_a_chain_download_and_a_run_at_once_share_the_one_limit_of_four_requests_in_flight(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # The run asks for the eight contract days of Wednesday (a call at each strike from 496 to 504 but the money, 500),
+    # and the chain download for the eight of Thursday: sixteen requests in all, each taking 0.4 seconds, and four
+    # places. The chain starts when the run's first request reaches the vendor, so its listing and its contracts meet
+    # the run's two waves of four. With the one limit the most in flight is four. With a limit of four each it would be
+    # eight, the chain's four beside the run's. The chain is awaited here, on the test's loop, as the route awaits it on
+    # the server's, and the run goes where a job's goes.
+    run_asked = threading.Event()
+    vendor = Vendor({WED: ladder_day(), THU: ladder_day()}, option_latency_s=0.4)
+    vendor.on_option_request = lambda _symbol: run_asked.set()
+    vendor.hold_the_first(4)  # the run's first four are in flight together on any machine
+    vendor.mount()
+    thursday_calls = [
+        OptionContract.of(root="SPY", expiry_date=THU, right="call", strike=strike)
+        for strike in (496, 497, 498, 499, 501, 502, 503, 504)
+    ]
+
+    async def the_chain_download() -> tuple[DownloadItem, ...]:
+        await asyncio.to_thread(run_asked.wait, 20)
+        return await ensure_chain_data("SPY", THU, expiry=THU, contracts=thursday_calls)
+
+    report, items = await asyncio.gather(
+        asyncio.to_thread(ensure_run_data, eight_legs_setup(), [WED], now_ms=NOW_MS, should_stop=lambda: False),
+        the_chain_download(),
+    )
+
+    assert MAX_VENDOR_REQUESTS_IN_FLIGHT == 4
+    assert (vendor.peak_in_flight, len(vendor.option_requests)) == (4, 16), "two limits of four would peak at eight"
+    assert report.option_days_fetched == 8
+    assert [item.outcome for item in items] == [Outcome.FETCHED] * 10  # the listing, the underlying and the eight
+
+
+def _on_the_background_loop[T](coroutine: Coroutine[Any, Any, T]) -> asyncio.Future[T]:
+    """The coroutine run on the process's background loop, where the vendor request gate lives, to await here."""
+    return asyncio.wrap_future(asyncio.run_coroutine_threadsafe(coroutine, background_loop()))
+
+
+async def _take_every_place_at_the_gate() -> None:
+    gate = vendor_request_gate()
+    for _ in range(MAX_VENDOR_REQUESTS_IN_FLIGHT):
+        await gate.acquire()
+
+
+async def _give_back_places_at_the_gate(places: int) -> None:
+    for _ in range(places):
+        vendor_request_gate().release()
+
+
+async def test_the_vendor_request_gate_is_made_on_the_background_loop_only() -> None:
+    # The test's own loop is not the background loop: a gate asked for here would be a second limit of four.
+    with pytest.raises(RuntimeError, match="background loop"):
+        vendor_request_gate()
+
+    async def asked_twice() -> bool:
+        return vendor_request_gate() is vendor_request_gate()
+
+    assert await _on_the_background_loop(asked_twice()) is True
+
+
+@respx.mock
+async def test_the_underlyings_fetch_does_not_wait_for_a_place_among_the_option_requests_in_flight(
     fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
 ) -> None:
-    # One call fetches the listing and the underlying together and only then the contracts, so the fetch of the
-    # underlying never meets four contract requests; the place it takes is the rule that it is one of the requests
-    # counted, and is shown here with every place taken.
-    gate = asyncio.Semaphore(1)
-    await gate.acquire()
-    fetch = asyncio.create_task(chain_download._capture_underlying("SPY", FRIDAY, gate, None))
+    # Every place of the process's gate is taken by option requests. The underlying's fetch is the stock pipeline's and
+    # not an option request, so it goes ahead at once: one fetch, in far less than the five seconds it is given.
+    await _on_the_background_loop(_take_every_place_at_the_gate())
+    try:
+        item = await asyncio.wait_for(
+            _on_the_background_loop(chain_download._capture_underlying("SPY", FRIDAY, None)), 5
+        )
+    finally:
+        await _on_the_background_loop(_give_back_places_at_the_gate(MAX_VENDOR_REQUESTS_IN_FLIGHT))
 
-    await asyncio.sleep(0.2)
-    waited = (fetch.done(), len(materializer.calls))
-    gate.release()
-    item = await fetch
+    assert (item.outcome, len(materializer.calls)) == (Outcome.FETCHED, 1)
+
+
+class _HeldStockFetch(StockFetchDouble):
+    """The stock fetch of the underlying, held on its thread until ``release`` is set."""
+
+    def __init__(self, fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+        super().__init__(fake_catalog, tmp_lake)
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def __call__(self, **arguments: Any) -> Any:
+        self.started.set()
+        assert self.release.wait(30), "the test never let the fetch go"
+        return super().__call__(**arguments)
+
+
+@respx.mock
+async def test_four_option_requests_can_be_in_flight_beside_a_fetch_of_the_underlying(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # One download is held in the fetch of its underlying (2025-06-13). A second download, for 2025-06-12 whose
+    # underlying is stored, asks for eight contracts at 0.05 s each. All four places are free for it, because the
+    # held fetch holds none: four are in flight at once. A fetch that held a place would leave it three.
+    held = _HeldStockFetch(fake_catalog, tmp_lake)
+    monkeypatch.setattr(chain_download, "materialize_engine_run", held)
+    thursday = date(2025, 6, 12)
+    open_ms = session_window_for_date(thursday).open_ms_utc
+    await store_underlying_day(
+        fake_catalog, tmp_lake, [stock_bar(open_ms, "600.00", "600.50", "599.75", "600.25")], day=thursday
+    )
+    eight = [_call(500 + n) for n in range(8)]
+    vendor_lists(*eight)
+    bars = SlowBars()
+    bars.hold_the_first(4)
+    bars.latency = 0.05
+    respx.get(url__regex=BARS_URL).mock(side_effect=bars)
+    held_download = asyncio.create_task(ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[]))
+    await _until(held.started.is_set)
+
+    try:
+        items = await ensure_chain_data("SPY", thursday, expiry=None, contracts=eight)
+    finally:
+        held.release.set()
+    await held_download
+
+    assert bars.peak == 4
+    assert [item.outcome for item in items[2:]] == [Outcome.FETCHED] * 8
+
+
+@respx.mock
+async def test_the_listings_capture_waits_for_a_free_place_among_the_requests_in_flight(
+    fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
+) -> None:
+    # Every place of the process's gate is taken; the listing is one of the requests counted, so it waits for one.
+    listing_route = vendor_lists(CALL_600)
+    await _on_the_background_loop(_take_every_place_at_the_gate())
+    try:
+        capture = _on_the_background_loop(chain_download._capture_listing("SPY", FRIDAY, None))
+        await asyncio.sleep(0.2)
+        waited = (capture.done(), listing_route.call_count)
+        await _on_the_background_loop(_give_back_places_at_the_gate(1))
+        item, listing = await asyncio.wait_for(capture, 5)
+    finally:
+        await _on_the_background_loop(_give_back_places_at_the_gate(MAX_VENDOR_REQUESTS_IN_FLIGHT - 1))
 
     assert waited == (False, 0)
-    assert (item.outcome, len(materializer.calls)) == (Outcome.FETCHED, 1)
+    assert (item.outcome, listing_route.call_count, listing is not None) == (Outcome.FETCHED, 1, True)
 
 
 @respx.mock
@@ -726,7 +1063,37 @@ async def test_an_unreachable_catalog_is_raised_after_the_other_capture_has_fini
 
 
 @respx.mock
-async def test_the_catalog_pool_of_the_calling_loop_is_made_before_the_first_capture_touches_the_catalog(
+async def test_an_error_in_the_contracts_stage_reaches_the_caller_after_the_other_contracts_have_ended(
+    fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Three contracts. The catalog goes away for the 601 call, whose capture fails before it asks; the 600 and 602 calls
+    # take 0.3 s at the vendor. The caller gets the outage, and gets it only when those two have ended: four rows, the
+    # listing, the underlying's day and the two contracts, all complete and none fetching. The 601 call is not in an
+    # answer that drops it silently: there is no answer.
+    vendor_lists(CALL_600, CALL_601, CALL_602)
+
+    async def slow_answer(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.3)
+        return no_trades(symbol_asked(request))
+
+    respx.get(url__regex=BARS_URL).mock(side_effect=slow_answer)
+    capture = chain_download.ensure_option_day_bars
+
+    async def down_for_the_601_call(contract: OptionContract, *args: Any, **kwargs: Any) -> Any:
+        if contract.occ_symbol == SYMBOL_601:
+            raise catalog_client.CatalogUnavailableError("down")
+        return await capture(contract, *args, **kwargs)
+
+    monkeypatch.setattr(chain_download, "ensure_option_day_bars", down_for_the_601_call)
+
+    with pytest.raises(catalog_client.CatalogUnavailableError):
+        await ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[CALL_600, CALL_601, CALL_602])
+
+    assert _statuses(fake_catalog) == ["complete"] * 4
+
+
+@respx.mock
+async def test_the_catalog_pool_of_the_loop_the_captures_run_on_is_made_before_the_first_capture_touches_the_catalog(
     fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     order: list[str] = []
