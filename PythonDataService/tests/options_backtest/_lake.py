@@ -11,8 +11,9 @@ clock fixture is autouse, so the session and plan rules run on 2026-10-12 and no
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -30,6 +31,7 @@ from app.data_lake.option_bars import ensure_option_day_bars
 from app.data_lake.option_lake import OptionCaptureResult
 from app.data_lake.option_listing import ensure_option_listing
 from app.data_lake.path_policy import LeanMinuteBarPath, lake_subpath
+from app.data_lake.run_materialization import EngineRunMaterialization
 from app.data_lake.types import ArtifactIdentity
 from app.engine.data.lean_format import write_lean_day_zip
 from app.engine.data.trade_bar import TradeBar
@@ -98,10 +100,6 @@ async def store_listing(
     result = await ensure_option_listing(underlying, day)
     assert result.failure is None, result.failure
     return result
-
-
-def vendor_bars(*bars: dict[str, Any]) -> list[dict[str, Any]]:
-    return list(bars)
 
 
 def minute_bar(index: int, o: float, h: float, low: float, c: float, *, volume: int = 10) -> dict[str, Any]:
@@ -185,3 +183,53 @@ def replace_the_stored_file(
 
 def the_file_of(raw: Path, relative_path: str) -> bytes:
     return (raw / relative_path).read_bytes()
+
+
+BARS_URL = r"https://api\.polygon\.io/v2/aggs/ticker/O:[A-Z]+\d{6}[CP]\d{8}/range/1/minute/.*"
+
+
+def symbol_asked(request: httpx.Request) -> str:
+    """The OCC symbol a bars request is for."""
+    return request.url.path.split("/ticker/O:")[1].split("/")[0]
+
+
+def vendor_lists(*contracts: OptionContract, underlying: str = "SPY") -> respx.Route:
+    """Make the vendor answer a listing request with these contracts (it is not requested until a test captures)."""
+    return respx.get(CONTRACTS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "request_id": "r",
+                "status": "OK",
+                "results": [vendor_listing_row(c, underlying=underlying) for c in contracts],
+            },
+        )
+    )
+
+
+def vendor_bars(answer: Callable[[str], httpx.Response]) -> respx.Route:
+    """Make the vendor answer every bars request by the symbol asked for."""
+    return respx.get(url__regex=BARS_URL).mock(side_effect=lambda request: answer(symbol_asked(request)))
+
+
+class StockFetchDouble:
+    """The stock engine's fetch of the underlying's day, as a double: it writes the file and its receipt, and counts."""
+
+    def __init__(self, fake_catalog: FakeCatalog, tmp_lake: Path, error: Exception | None = None) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self._fake_catalog, self._tmp_lake, self._error = fake_catalog, tmp_lake, error
+
+    def __call__(self, **arguments: Any) -> EngineRunMaterialization:
+        self.calls.append(arguments)
+        if self._error is not None:
+            raise self._error
+        bars = [stock_bar(FRIDAY_OPEN_MS, "600.00", "600.50", "599.75", "600.25")]
+        # Called from a worker thread, which has no loop of its own.
+        asyncio.run(
+            store_underlying_day(
+                self._fake_catalog, self._tmp_lake, bars, symbol=arguments["symbol"], day=arguments["start"]
+            )
+        )
+        return EngineRunMaterialization(
+            availability_hash="a-hash", fetched_artifact_count=1, reused_artifact_count=0, incomplete_summary=None
+        )
