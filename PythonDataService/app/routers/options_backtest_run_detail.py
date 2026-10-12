@@ -16,9 +16,12 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Path, Query, Response, status
+from starlette.background import BackgroundTask
+from starlette.responses import StreamingResponse
 
 from app.options_backtest.comparison import compare
 from app.options_backtest.run_detail import (
+    ComparisonInputs,
     LegNotInRun,
     RunNotComplete,
     RunNotFound,
@@ -26,17 +29,17 @@ from app.options_backtest.run_detail import (
     RunsOfDifferentUnderlyings,
     SessionNotInRun,
     TwoRunsSetupCannotBeRead,
+    export_every_trade,
+    read_closely,
     read_comparison_inputs,
-    read_every_trade,
     read_session_record,
     read_trade_page,
 )
 from app.options_backtest.session_levels import SessionRecordInconsistent
 from app.options_backtest.session_view import session_view_of
 from app.options_backtest.setup import LEG_ID_PATTERN
-from app.options_backtest.trade_export import csv_file_name, trades_csv
+from app.options_backtest.trade_export import csv_file_name
 from app.research.persistence import lifecycle
-from app.research.persistence.db import with_connection
 from app.schemas.options_backtest import OptionsBacktestRefusalBody
 from app.schemas.options_backtest_run_detail import (
     TRADES_PAGE_DEFAULT,
@@ -122,7 +125,7 @@ async def list_the_trades(
     was stored for that leg.
     """
     try:
-        page = await with_connection(
+        page = await read_closely(
             read_trade_page,
             run_id,
             is_live=lifecycle.job_is_live,
@@ -160,7 +163,7 @@ async def get_the_session(
     setup no longer validates is served all the same, with ``setup_cannot_open_reason`` set.
     """
     try:
-        record = await with_connection(read_session_record, run_id, session_open_ms, is_live=lifecycle.job_is_live)
+        record = await read_closely(read_session_record, run_id, session_open_ms, is_live=lifecycle.job_is_live)
         view = await session_view_of(record)
     except (RunNotFound, RunNotComplete, SessionNotInRun) as exc:
         raise _refusal(exc) from exc
@@ -200,15 +203,33 @@ async def export_the_trades(run_id: RunId) -> Response:
     ``0``; a sum of ``exit_price_usd`` over every row therefore mixes sales and marks.
     """
     try:
-        trades = await with_connection(read_every_trade, run_id, is_live=lifecycle.job_is_live)
+        export = await read_closely(export_every_trade, run_id, is_live=lifecycle.job_is_live)
     except (RunNotFound, RunNotComplete) as exc:
         raise _refusal(exc) from exc
-    body = await asyncio.to_thread(trades_csv, trades)
-    return Response(
-        content=body,
+    # The file is whole before the answer begins, so a failure while it was written was an error answer and not a 200 with
+    # part of a file. It is closed when the last piece is sent, or when the client stops asking.
+    return StreamingResponse(
+        export.chunks(),
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{csv_file_name(run_id)}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{csv_file_name(run_id)}"',
+            "Content-Length": str(export.size),
+        },
+        background=BackgroundTask(export.close),
     )
+
+
+def _compared(inputs: ComparisonInputs) -> OptionsBacktestComparisonResponse:
+    """The two runs compared, and the answer made of the comparison. Blocking, and pure: it walks every setting, every
+    session and every trade line of both runs, so it is run in a worker thread.
+
+    It touches nothing shared. It reads the frozen headers and lines it is handed and the validated setups in them, and
+    builds new objects; it keeps no state in a module, and has no connection, no event loop and no file. The decimal
+    context is per thread: the totals are summed under a ``localcontext`` of their own, and the words trim a figure
+    (``normalize``) under the thread's default context, which is the loop thread's too, since nothing in the app changes it.
+    """
+    comparison = compare(inputs.a, inputs.a_lines, inputs.b, inputs.b_lines)
+    return OptionsBacktestComparisonResponse.from_comparison(inputs.a, inputs.b, comparison)
 
 
 @router.get(
@@ -228,7 +249,7 @@ async def compare_two_runs(
     ``/runs/compare``, mounted before the run service's ``/runs/{run_id}``.
     """
     try:
-        inputs = await with_connection(read_comparison_inputs, a, b, is_live=lifecycle.job_is_live)
+        inputs = await read_closely(read_comparison_inputs, a, b, is_live=lifecycle.job_is_live)
     except RunNotFound as exc:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
@@ -258,5 +279,4 @@ async def compare_two_runs(
                 "message": f"Only runs of one underlying can be compared: {exc}.",
             },
         ) from exc
-    comparison = compare(inputs.a, inputs.a_lines, inputs.b, inputs.b_lines)
-    return OptionsBacktestComparisonResponse.from_comparison(inputs.a, inputs.b, comparison)
+    return await asyncio.to_thread(_compared, inputs)

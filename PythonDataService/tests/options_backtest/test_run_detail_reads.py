@@ -25,11 +25,13 @@ from app.options_backtest.run_detail import (
     RunsOfDifferentUnderlyings,
     SessionNotInRun,
     TwoRunsSetupCannotBeRead,
+    export_every_trade,
     read_comparison_inputs,
-    read_every_trade,
     read_session_record,
     read_trade_page,
 )
+from app.options_backtest.saved_runs import StoredTrade
+from app.options_backtest.trade_export import trades_csv
 from tests.options_backtest._a_run import a_busy_run
 from tests.options_backtest._detail_scene import (
     FRI_OPEN_MS,
@@ -47,8 +49,6 @@ from tests.options_backtest.setup_fixtures import unique as unique
 from tests.options_backtest.test_saved_runs import _the_same_all_the_way_down
 
 D = Decimal
-ALIVE = lambda _job_id: True  # noqa: E731
-GONE = lambda _job_id: False  # noqa: E731
 
 
 @pytest.fixture(scope="module")
@@ -155,9 +155,7 @@ async def test_a_page_of_trades_says_the_total_and_where_the_rest_begins(
     run_id = await save_run(scene, "page")
 
     async def page(limit: int, offset: int) -> run_detail.TradePage:
-        return await read_trade_page(
-            conn, run_id, is_live=ALIVE, session_open_ms=None, leg_id=None, limit=limit, offset=offset
-        )
+        return await read_trade_page(conn, run_id, session_open_ms=None, leg_id=None, limit=limit, offset=offset)
 
     first = await page(2, 0)
     assert (first.total, len(first.trades), first.next_offset) == (3, 2, 2)
@@ -170,7 +168,7 @@ async def test_a_page_of_trades_says_the_total_and_where_the_rest_begins(
 
 
 async def test_a_run_that_is_missing_or_not_complete_has_no_trades_to_page_and_is_refused_first(
-    conn: asyncpg.Connection, save_run: SaveRun, scene: RunResult
+    conn: asyncpg.Connection, save_run: SaveRun, scene: RunResult, unique: str
 ) -> None:
     running = await save_run(scene, "running", end="running")
     failed = await save_run(scene, "failed", end="failed")
@@ -179,19 +177,18 @@ async def test_a_run_that_is_missing_or_not_complete_has_no_trades_to_page_and_i
     wrong = {"session_open_ms": 1, "leg_id": "nope", "limit": 10, "offset": 0}
 
     with pytest.raises(RunNotFound):
-        await read_trade_page(conn, 2**52, is_live=GONE, **wrong)
+        await read_trade_page(conn, 2**52, **wrong)
     for run_id, status in ((failed, "failed"), (cancelled, "cancelled")):
         with pytest.raises(RunNotComplete) as caught:
-            await read_trade_page(conn, run_id, is_live=GONE, **wrong)
+            await read_trade_page(conn, run_id, **wrong)
         assert caught.value.status == status
+    # A run stored as running is refused as running whether or not its job is alive: the read does not ask. It names the
+    # job (the run's own, "running-" and the test's tag) so that whoever says the words can ask after the connection is gone.
     with pytest.raises(RunNotComplete) as caught:
-        await read_trade_page(conn, running, is_live=ALIVE, **wrong)
-    assert caught.value.status == "running"
-    with pytest.raises(RunNotComplete) as caught:
-        await read_trade_page(conn, running, is_live=GONE, **wrong)
-    assert caught.value.status == "interrupted"
+        await read_trade_page(conn, running, **wrong)
+    assert (caught.value.status, caught.value.job_id) == ("running", f"running-{unique}")
     with pytest.raises(RunNotComplete):
-        await read_every_trade(conn, failed, is_live=GONE)
+        await export_every_trade(conn, failed)
 
 
 async def test_a_session_the_run_did_not_test_and_a_leg_it_does_not_have_are_refused_and_not_answered_with_nothing(
@@ -201,29 +198,38 @@ async def test_a_session_the_run_did_not_test_and_a_leg_it_does_not_have_are_ref
     ask = {"limit": 10, "offset": 0}
 
     with pytest.raises(SessionNotInRun) as no_session:
-        await read_trade_page(conn, run_id, is_live=GONE, session_open_ms=WED_OPEN_MS + 1, leg_id=None, **ask)
+        await read_trade_page(conn, run_id, session_open_ms=WED_OPEN_MS + 1, leg_id=None, **ask)
     assert (no_session.value.run_id, no_session.value.session_open_ms) == (run_id, WED_OPEN_MS + 1)
     with pytest.raises(LegNotInRun) as no_leg:
-        await read_trade_page(conn, run_id, is_live=GONE, session_open_ms=None, leg_id="nope", **ask)
+        await read_trade_page(conn, run_id, session_open_ms=None, leg_id="nope", **ask)
     assert no_leg.value.leg_id == "nope"
     # A session that was tested and made no trade, and a leg the setup has that made none, are answers: empty pages.
-    quiet = await read_trade_page(conn, run_id, is_live=GONE, session_open_ms=THU_OPEN_MS, leg_id=None, **ask)
-    idle = await read_trade_page(conn, run_id, is_live=GONE, session_open_ms=None, leg_id="lag", **ask)
+    quiet = await read_trade_page(conn, run_id, session_open_ms=THU_OPEN_MS, leg_id=None, **ask)
+    idle = await read_trade_page(conn, run_id, session_open_ms=None, leg_id="lag", **ask)
     assert (quiet.total, quiet.trades) == (0, ())
     assert (idle.total, idle.trades) == (0, ())
 
 
-async def test_every_trade_of_a_run_is_read_with_no_limit(
-    conn: asyncpg.Connection, save_run: SaveRun, busy: RunResult
+def _the_file(export: run_detail.TradesExport) -> bytes:
+    """What an export holds, read back and closed; its ``size`` is the number of bytes it holds."""
+    data = export.spool.read()
+    export.close()
+    assert len(data) == export.size
+    return data
+
+
+@pytest.mark.parametrize("batch_rows", [1, 4, 1000])
+async def test_every_trade_of_a_run_is_exported_in_order_with_no_limit_whatever_the_size_of_a_batch(
+    conn: asyncpg.Connection, save_run: SaveRun, busy: RunResult, batch_rows: int
 ) -> None:
     run_id = await save_run(busy, "every")
+    saved = [StoredTrade(at, number, trade) for at, number, trade in _every_trade(busy)]
+    assert len(saved) > 4, "the busy run holds more trades than a batch of 4, or this proves too little"
 
-    everything = await read_every_trade(conn, run_id, is_live=GONE)
+    exported = _the_file(await export_every_trade(conn, run_id, batch_rows=batch_rows))
 
-    assert len(everything) == len(_every_trade(busy))
-    assert [(each.session_open_ms, each.trade_number) for each in everything] == [
-        (at, number) for at, number, _ in _every_trade(busy)
-    ]
+    # The file is the CSV of the trades as they were saved: every one, once, in the order the run recorded them.
+    assert exported == trades_csv(saved)
 
 
 # ── One session, as stored ───────────────────────────────────────────────
@@ -235,7 +241,7 @@ async def test_a_session_reads_back_equal_to_the_one_saved_with_its_trades_event
     run_id = await save_run(busy, "session")
 
     for saved in busy.sessions:
-        record = await read_session_record(conn, run_id, saved.session_open_ms, is_live=GONE)
+        record = await read_session_record(conn, run_id, saved.session_open_ms)
 
         _the_same_all_the_way_down(record.session.result, saved, f"session {saved.session_open_ms}")
         assert record.session.profit_usd == saved.pnl_usd and type(record.session.profit_usd) is Decimal
@@ -249,12 +255,12 @@ async def test_a_session_of_a_run_that_is_missing_or_not_complete_or_that_the_ru
     failed = await save_run(scene, "failed", end="failed")
 
     with pytest.raises(RunNotFound):
-        await read_session_record(conn, 2**52, WED_OPEN_MS + 1, is_live=GONE)
+        await read_session_record(conn, 2**52, WED_OPEN_MS + 1)
     with pytest.raises(RunNotComplete) as caught:
-        await read_session_record(conn, failed, WED_OPEN_MS + 1, is_live=GONE)
+        await read_session_record(conn, failed, WED_OPEN_MS + 1)
     assert caught.value.status == "failed"
     with pytest.raises(SessionNotInRun) as no_session:
-        await read_session_record(conn, complete, WED_OPEN_MS + 1, is_live=GONE)
+        await read_session_record(conn, complete, WED_OPEN_MS + 1)
     assert no_session.value.session_open_ms == WED_OPEN_MS + 1
 
 
@@ -267,8 +273,8 @@ async def test_two_complete_runs_of_one_underlying_are_read_with_the_lines_of_th
     first = await save_run(scene, "first")
     second = await save_run(scene, "second")
 
-    inputs = await read_comparison_inputs(conn, first, second, is_live=GONE)
-    twice = await read_comparison_inputs(conn, first, first, is_live=GONE)
+    inputs = await read_comparison_inputs(conn, first, second)
+    twice = await read_comparison_inputs(conn, first, first)
 
     assert (inputs.a.record.id, inputs.b.record.id) == (first, second)
     assert [line.session_open_ms for line in inputs.a_lines] == [WED_OPEN_MS, THU_OPEN_MS, FRI_OPEN_MS]
@@ -277,7 +283,7 @@ async def test_two_complete_runs_of_one_underlying_are_read_with_the_lines_of_th
 
 
 async def test_a_pair_is_refused_for_the_first_missing_run_then_for_every_run_not_complete_then_for_its_underlyings(
-    conn: asyncpg.Connection, save_run: SaveRun, scene: RunResult
+    conn: asyncpg.Connection, save_run: SaveRun, scene: RunResult, unique: str
 ) -> None:
     complete = await save_run(scene, "complete")
     failed = await save_run(scene, "failed", end="failed")
@@ -294,19 +300,21 @@ async def test_a_pair_is_refused_for_the_first_missing_run_then_for_every_run_no
     )
 
     with pytest.raises(RunNotFound) as missing:
-        await read_comparison_inputs(conn, 2**52, 2**51, is_live=GONE)
+        await read_comparison_inputs(conn, 2**52, 2**51)
     assert missing.value.run_id == 2**52
     with pytest.raises(RunNotFound) as missing_b:
-        await read_comparison_inputs(conn, complete, 2**51, is_live=GONE)
+        await read_comparison_inputs(conn, complete, 2**51)
     assert missing_b.value.run_id == 2**51
     with pytest.raises(RunsNotComplete) as neither:
-        await read_comparison_inputs(conn, failed, running, is_live=GONE)
-    assert neither.value.runs == (("a", failed, "failed"), ("b", running, "interrupted"))
+        await read_comparison_inputs(conn, failed, running)
+    # The read does not ask Redis, so a run stored as running is running here; the words are made after the connection.
+    assert neither.value.runs == (("a", failed, "failed"), ("b", running, "running"))
+    assert neither.value.job_ids == {failed: f"failed-{unique}", running: f"running-{unique}"}
     with pytest.raises(RunsNotComplete) as one:
-        await read_comparison_inputs(conn, complete, failed, is_live=GONE)
+        await read_comparison_inputs(conn, complete, failed)
     assert one.value.runs == (("b", failed, "failed"),)
     with pytest.raises(RunsOfDifferentUnderlyings) as different:
-        await read_comparison_inputs(conn, complete, other, is_live=GONE)
+        await read_comparison_inputs(conn, complete, other)
     assert (different.value.a, different.value.b) == ((complete, "SPY"), (other, "QQQ"))
 
 
@@ -331,7 +339,7 @@ async def test_a_sessions_stored_profit_is_read_in_plain_digits_as_one_session_a
 
     stored = await saved_runs.read_session(conn, run_id, WED_OPEN_MS)
     lines = await saved_runs.read_session_lines(conn, run_id)
-    record = await read_session_record(conn, run_id, WED_OPEN_MS, is_live=GONE)
+    record = await read_session_record(conn, run_id, WED_OPEN_MS)
 
     assert stored is not None
     assert str(stored.profit_usd) == profit
@@ -357,23 +365,21 @@ async def test_a_run_whose_stored_setup_no_longer_validates_still_gives_its_trad
     healthy = await save_run(scene, "healthy")
     await _lose_the_setup(conn, run_id)
 
-    header = await saved_runs.get_run_header(conn, run_id, is_live=GONE)
-    every = await read_every_trade(conn, run_id, is_live=GONE)
-    page = await read_trade_page(
-        conn, run_id, is_live=GONE, session_open_ms=WED_OPEN_MS, leg_id="call", limit=10, offset=0
-    )
-    record = await read_session_record(conn, run_id, WED_OPEN_MS, is_live=GONE)
+    header = await saved_runs.get_run_header(conn, run_id)
+    every = _the_file(await export_every_trade(conn, run_id))
+    page = await read_trade_page(conn, run_id, session_open_ms=WED_OPEN_MS, leg_id="call", limit=10, offset=0)
+    record = await read_session_record(conn, run_id, WED_OPEN_MS)
 
     assert header is not None and header.setup is None and header.setup_cannot_open_reason is not None
     assert "lots" in header.setup_cannot_open_reason
     assert (header.record.id, header.record.underlying, header.record.status) == (run_id, "SPY", "complete")
     # Wednesday's three trades; the call leg made two of them (trade numbers 1 and 2).
-    assert len(every) == 3
+    assert every.count(b"\r\n") == 1 + 3, "the header and Wednesday's three trades"
     assert (page.total, [each.trade_number for each in page.trades]) == (2, [1, 2])
     assert record.header.setup is None and record.header.setup_cannot_open_reason == header.setup_cannot_open_reason
     assert len(record.session.result.outcome.trades) == 3
     # A neighbour that is healthy is read as ever.
-    neighbour = await saved_runs.get_run_header(conn, healthy, is_live=GONE)
+    neighbour = await saved_runs.get_run_header(conn, healthy)
     assert neighbour is not None and neighbour.setup == scene.setup
 
 
@@ -385,9 +391,9 @@ async def test_with_no_setup_to_name_its_legs_a_leg_filter_is_answered_by_the_st
 
     # "lag" made no trade and "nope" is no leg at all: with the setup gone the two cannot be told apart, and both are a
     # page of no stored trade. A leg that made trades is answered as ever.
-    lag = await read_trade_page(conn, run_id, is_live=GONE, session_open_ms=None, leg_id="lag", limit=10, offset=0)
-    nope = await read_trade_page(conn, run_id, is_live=GONE, session_open_ms=None, leg_id="nope", limit=10, offset=0)
-    put = await read_trade_page(conn, run_id, is_live=GONE, session_open_ms=None, leg_id="put", limit=10, offset=0)
+    lag = await read_trade_page(conn, run_id, session_open_ms=None, leg_id="lag", limit=10, offset=0)
+    nope = await read_trade_page(conn, run_id, session_open_ms=None, leg_id="nope", limit=10, offset=0)
+    put = await read_trade_page(conn, run_id, session_open_ms=None, leg_id="put", limit=10, offset=0)
 
     assert (lag.total, lag.trades, nope.total, nope.trades) == (0, (), 0, ())
     assert (put.total, [each.trade_number for each in put.trades]) == (1, [0])
@@ -401,9 +407,9 @@ async def test_two_runs_cannot_be_compared_while_either_one_has_lost_its_setup_a
     await _lose_the_setup(conn, lost)
 
     with pytest.raises(TwoRunsSetupCannotBeRead) as as_b:
-        await read_comparison_inputs(conn, healthy, lost, is_live=GONE)
+        await read_comparison_inputs(conn, healthy, lost)
     with pytest.raises(TwoRunsSetupCannotBeRead) as as_a:
-        await read_comparison_inputs(conn, lost, healthy, is_live=GONE)
+        await read_comparison_inputs(conn, lost, healthy)
 
     assert [(role, run_id) for role, run_id, _ in as_b.value.runs] == [("b", lost)]
     assert [(role, run_id) for role, run_id, _ in as_a.value.runs] == [("a", lost)]

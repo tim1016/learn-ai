@@ -20,9 +20,11 @@ import asyncpg
 import httpx
 import pytest
 
+from app.options_backtest import run_detail
 from app.options_backtest.results import Fill
 from app.options_backtest.run import RunResult, run_sessions
-from app.options_backtest.trade_export import CSV_HEADER
+from app.options_backtest.saved_runs import StoredTrade
+from app.options_backtest.trade_export import CSV_HEADER, trades_csv
 from tests.options_backtest._a_run import a_busy_run
 from tests.options_backtest._big_run import a_big_run
 from tests.options_backtest._detail_scene import (
@@ -228,6 +230,30 @@ async def test_a_run_of_four_thousand_trades_is_exported_whole_in_order_and_adds
         assert row["time_america_new_york"] == datetime.fromtimestamp(int(row["unix_ts"]) / 1000, tz=NEW_YORK).strftime(
             "%Y-%m-%d %H:%M:%S"
         )
+
+
+async def test_a_run_read_three_hundred_trades_at_a_time_and_kept_on_disk_is_the_file_the_trades_as_saved_make(
+    client: httpx.AsyncClient, save_run: SaveRun, is_the_job_alive: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    big = a_big_run(sessions=40, per_session=100)
+    run_id = await save_run(big, "batches")
+    saved = [
+        StoredTrade(s.session_open_ms, at, trade) for s in big.sessions for at, trade in enumerate(s.outcome.trades)
+    ]
+
+    # 4,000 trades, 300 a batch from a cursor on the real database: 13 batches of 300 and one of 100, and the file is some
+    # 850 thousand bytes against 10 thousand kept in memory, so most of it is written to disk and read back to be sent.
+    monkeypatch.setattr(run_detail, "EXPORT_BATCH_ROWS", 300)
+    monkeypatch.setattr(run_detail, "EXPORT_MEMORY_BYTES", 10_000)
+    in_pieces = await _export(client, run_id)
+    monkeypatch.setattr(run_detail, "EXPORT_BATCH_ROWS", 100_000)
+    monkeypatch.setattr(run_detail, "EXPORT_MEMORY_BYTES", 10**9)
+    in_one = await _export(client, run_id)
+
+    assert in_pieces.status_code == in_one.status_code == 200
+    assert in_pieces.content == in_one.content == trades_csv(saved)
+    assert in_pieces.headers["content-length"] == str(len(in_pieces.content))
+    assert len(in_pieces.content) > 10 * 10_000, "the file is far past the memory it was allowed"
 
 
 # ── What it refuses ──────────────────────────────────────────────────────

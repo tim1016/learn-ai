@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime
@@ -325,25 +325,138 @@ async def test_each_series_withheld_as_unreadable_is_logged_once_with_the_kind_o
     assert not any("/a/server/path" in str(vars(record)) for record in warned)
 
 
+def _the_catalog_is_counted(
+    monkeypatch: pytest.MonkeyPatch, *, out_of_reach_for: Callable[[str], bool] = lambda _file: False
+) -> list[str]:
+    """Count every ask of the catalog by the file it is for. The asks ``out_of_reach_for`` names fail as an outage does;
+    the others get the fake catalog's answer."""
+    answers = catalog_client.has_committed_file_receipt
+    asked: list[str] = []
+
+    async def counted(data_root_id: Any, mode: Any, file_path: str, *rest: Any) -> bool:
+        asked.append(file_path)
+        if out_of_reach_for(file_path):
+            raise catalog_client.CatalogUnavailableError("down")
+        return await answers(data_root_id, mode, file_path, *rest)
+
+    monkeypatch.setattr(catalog_client, "has_committed_file_receipt", counted)
+    return asked
+
+
 @respx.mock
-async def test_a_catalog_that_cannot_be_asked_is_the_lakes_fault_and_says_nothing_of_any_file(
+async def test_a_catalog_that_cannot_be_asked_is_asked_once_and_every_series_is_withheld_as_the_lakes_fault(
     fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     result = await run_the_scene()
-
-    async def down(*args: object, **kwargs: object) -> bool:
-        raise catalog_client.CatalogUnavailableError("down")
-
-    monkeypatch.setattr(catalog_client, "has_committed_file_receipt", down)
+    asked = _the_catalog_is_counted(monkeypatch, out_of_reach_for=lambda _file: True)
     (raw_root(tmp_lake) / _bars_file(PUT_495)).unlink()
 
     series = await _series_of(result.sessions[0])
 
-    # A file that is not there is gone whatever the catalog says; every file that is there cannot be judged.
+    # Wednesday has four series, read in this order: SPY, then the call 500, the put 495 and the put 500 by their symbols.
+    # The first ask, for SPY's file, fails; that is the only ask. The three contracts are not read at all, so not even
+    # the put 495, whose file is gone, is said to be: nothing was looked for. Each ask used to wait out the outage.
+    assert asked == [STOCK_FILE]
+    assert _reasons(series) == dict.fromkeys(("SPY", CALL_500, PUT_495, PUT_500), SeriesReason.LAKE_UNAVAILABLE)
+    assert not series.underlying.shown and all(not each.shown and each.points == () for each in series.contracts)
+    assert [each.contract.occ_symbol for each in series.contracts if each.contract] == [CALL_500, PUT_495, PUT_500]
+
+
+@respx.mock
+async def test_a_catalog_that_fails_for_the_third_series_leaves_the_two_before_it_served_and_the_one_after_unasked(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = await run_the_scene()
+    asked = _the_catalog_is_counted(monkeypatch, out_of_reach_for=lambda file: file == _bars_file(PUT_495))
+
+    series = await _series_of(result.sessions[0])
+
+    # The third series read is the put 495 (SPY, call 500, put 495, put 500). SPY and the call 500 were read before the
+    # catalog failed and keep what they got: 390 and 55 points. The put 495's ask is the third and fails; the put 500 is
+    # not asked.
+    assert asked == [STOCK_FILE, _bars_file(CALL_500), _bars_file(PUT_495)]
+    assert _reasons(series) == {
+        "SPY": None,
+        CALL_500: None,
+        PUT_495: SeriesReason.LAKE_UNAVAILABLE,
+        PUT_500: SeriesReason.LAKE_UNAVAILABLE,
+    }
+    assert (len(series.underlying.points), len(_by_symbol(series)[CALL_500].points)) == (390, 55)
+    assert _by_symbol(series)[PUT_500].points == ()
+
+
+@respx.mock
+async def test_a_series_whose_file_is_gone_does_not_stop_the_ones_after_it_being_read(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = await run_the_scene()
+    asked = _the_catalog_is_counted(monkeypatch)
+    (raw_root(tmp_lake) / _bars_file(PUT_495)).unlink()
+
+    series = await _series_of(result.sessions[0])
+
+    # A file that is not there is found out before the catalog is asked, so the put 495 makes no ask; the put 500 after it
+    # is read all the same.
+    assert asked == [STOCK_FILE, _bars_file(CALL_500), _bars_file(PUT_500)]
+    assert _reasons(series) == {"SPY": None, CALL_500: None, PUT_495: SeriesReason.GONE, PUT_500: None}
+    assert len(_by_symbol(series)[PUT_500].points) == 57
+
+
+@respx.mock
+async def test_a_series_not_confirmed_changed_or_unreadable_does_not_stop_the_ones_after_it_being_read(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = await run_the_scene()
+    asked = _the_catalog_is_counted(monkeypatch)
+    raw = raw_root(tmp_lake)
+    replace_the_stored_file(fake_catalog, raw, STOCK_FILE, b"changed after its receipt", admit=False)
+    replace_the_stored_file(fake_catalog, raw, _bars_file(CALL_500), b"admitted, but not a zip", admit=True)
+    other_bars = build_minute_trade_zip_bytes(
+        symbol=PUT_495,
+        trading_date_yyyymmdd="20261007",
+        bars=[
+            MinuteTradeBar(datetime(2026, 10, 7, 9, 30, tzinfo=ET), D("1.05"), D("1.05"), D("1.05"), D("1.05"), D(5))
+        ],
+    )
+    replace_the_stored_file(fake_catalog, raw, _bars_file(PUT_495), other_bars, admit=True)
+
+    series = await _series_of(result.sessions[0])
+
+    # One of each fault, one after the other: only an outage of the catalog itself stops the asking.
+    assert asked == [STOCK_FILE, _bars_file(CALL_500), _bars_file(PUT_495), _bars_file(PUT_500)]
+    assert _reasons(series) == {
+        "SPY": SeriesReason.NOT_CONFIRMED,
+        CALL_500: SeriesReason.UNREADABLE,
+        PUT_495: SeriesReason.CHANGED,
+        PUT_500: None,
+    }
+
+
+@respx.mock
+async def test_a_series_with_no_pin_keeps_its_own_reason_when_the_catalog_is_out_of_reach(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = await run_the_scene()
+    session = result.sessions[0]
+    pins = session.pins
+    # The run kept no hash for the put 495, so there was never anything to ask the catalog about for it.
+    without_it = replace(
+        session,
+        pins=SessionPins(
+            pins.underlying_sha256,
+            pins.listing_sha256,
+            tuple(d for d in pins.option_days if d.contract.occ_symbol != PUT_495),
+        ),
+    )
+    asked = _the_catalog_is_counted(monkeypatch, out_of_reach_for=lambda _file: True)
+
+    series = await _series_of(without_it)
+
+    assert asked == [STOCK_FILE]
     assert _reasons(series) == {
         "SPY": SeriesReason.LAKE_UNAVAILABLE,
         CALL_500: SeriesReason.LAKE_UNAVAILABLE,
-        PUT_495: SeriesReason.GONE,
+        PUT_495: SeriesReason.NO_PIN,
         PUT_500: SeriesReason.LAKE_UNAVAILABLE,
     }
 

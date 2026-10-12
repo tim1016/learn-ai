@@ -12,6 +12,7 @@ from decimal import Decimal
 
 import pytest
 
+from app.options.contract import OptionContract
 from app.options_backtest.results import EventKind, ExitReason, SessionOutcome
 from app.options_backtest.run import RunResult, run_sessions
 from app.options_backtest.session_levels import (
@@ -461,6 +462,53 @@ def test_a_starting_price_taken_twice_or_that_differs_from_the_trades_cannot_be_
     for broken in (twice, other_price):
         with pytest.raises(SessionRecordInconsistent):
             levels_of(scene.setup, broken)
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        "SPY261007P00500000",  # the right: the 500 put, same expiry and strike
+        "SPY261007C00505000",  # the strike: the 505 call
+        "SPY261009C00500000",  # the expiry: the 500 call two days on
+        "QQQ261007C00500000",  # the underlying
+    ],
+)
+def test_a_starting_price_taken_on_another_contract_than_the_trade_is_on_cannot_be_drawn(
+    scene: RunResult, other: str
+) -> None:
+    outcome = scene.sessions[0].outcome
+    first = next(
+        e
+        for e in outcome.events
+        if e.kind is EventKind.STARTING_PRICE_TAKEN and e.leg_id == "call" and e.entry_number == 0
+    )
+    # Wednesday's call leg took 4.00 on the 500 call and its first trade is on the 500 call and stores 4.00. The same
+    # event naming another contract at the same 4.00 agrees with the trade on the price and on nothing else: the lines
+    # would be drawn on that contract and the fills and the stop on the call.
+    the_call = OptionContract.from_occ_symbol(CALL_500)
+    assert (first.contract, first.price) == (the_call, D("4.00"))
+    trade = next(t for t in outcome.trades if (t.leg_id, t.entry_number) == ("call", 0))
+    assert (trade.contract, trade.starting_price) == (the_call, D("4.00"))
+    elsewhere = OptionContract.from_occ_symbol(other)
+    assert elsewhere != the_call
+    on_another = replace(
+        outcome, events=tuple(replace(e, contract=elsewhere) if e is first else e for e in outcome.events)
+    )
+
+    with pytest.raises(SessionRecordInconsistent, match=r"leg 'call', entry 0: .*different contract"):
+        levels_of(scene.setup, on_another)
+
+
+def test_a_starting_price_and_a_trade_on_the_same_contract_are_drawn_as_ever(scene: RunResult) -> None:
+    # Where event and trade agree on the contract and the price, the call leg's first attempt has its starting price and
+    # the level 4.00 x 1.25 = 5.00 from m5 to m10, and the stop 5.10 x 0.8 = 4.08 from m11 to m20.
+    drawn = _lines(levels_of(scene.setup, scene.sessions[0].outcome), WED_OPEN_MS)
+
+    assert [line for line in drawn if line[1:3] == ("call", 0)] == [
+        (SP, "call", 0, CALL_500, D("4.00"), 5, 10),
+        (MOM, "call", 0, CALL_500, D("5.00"), 5, 10),
+        (STOP, "call", 0, CALL_500, D("4.08"), 11, 20),
+    ]
 
 
 def test_a_starting_price_on_a_leg_whose_setup_has_no_momentum_rule_cannot_be_drawn(scene: RunResult) -> None:

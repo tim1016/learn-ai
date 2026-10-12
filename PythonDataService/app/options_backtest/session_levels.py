@@ -24,8 +24,9 @@ Three kinds of line, each from one instant to another, both ends being minute cl
 * ``stop``: the premium at or below which the position is sold, from the minute it filled (the replay reads the stop
   on that very bar) until the minute the close that sold it was decided: a stop hit, or the exit time.
 
-A stored session that does not agree with itself (a trade with a starting price that no event took, an attempt that
-waited and has no end) is not drawn from a guess: ``SessionRecordInconsistent``. The replay cannot make one.
+A stored session that does not agree with itself (a trade with a starting price that no event took, or took on another
+contract or at another price, an attempt that waited and has no end) is not drawn from a guess:
+``SessionRecordInconsistent``. The replay cannot make one.
 
 With no setup (a run whose stored setup no longer validates) every line that comes from a stored figure is still drawn:
 the stops, and each starting price. The momentum line of an attempt that never filled is the only one left out, since
@@ -156,6 +157,13 @@ def levels_of(setup: OptionsBacktestSetup | None, outcome: SessionOutcome) -> tu
         if trade is not None:
             if trade.starting_price != starting_price or trade.momentum_level is None:
                 raise _inconsistent(leg_id, entry_number, "the trade's starting price is not the one that was taken")
+            # The lines are drawn on the event's contract and the fills and the stop on the trade's: they are one.
+            if trade.contract != contract:
+                raise _inconsistent(
+                    leg_id,
+                    entry_number,
+                    "the trade is of a different contract from the one whose starting price was taken",
+                )
             momentum, to_ms = trade.momentum_level, trade.entry_decided_at_ms
         else:
             to_ms = _ended_at(leg_id, entry_number, events)

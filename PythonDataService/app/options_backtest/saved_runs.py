@@ -30,8 +30,9 @@ the caller's ``is_live`` (``lifecycle.job_is_live``), and ``None`` ("cannot tell
 
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -432,17 +433,44 @@ async def cancel_run(conn: asyncpg.Connection, run_id: int, *, finished_at_ms: i
 # ── Reads ────────────────────────────────────────────────────────────────
 
 
-async def list_runs(
-    conn: asyncpg.Connection, *, is_live: IsLive, limit: int = 200, job_id: str | None = None
-) -> tuple[RunRecord, ...]:
-    """Runs newest first, each with its headline figures. ``job_id`` narrows to the run of one job."""
+async def read_run_rows(
+    conn: asyncpg.Connection, *, limit: int = 200, job_id: str | None = None
+) -> tuple[asyncpg.Record, ...]:
+    """The rows of the history, newest first. ``job_id`` narrows to the run of one job. Nothing is asked of Redis."""
     rows = await conn.fetch(
         f"SELECT {_RUN_COLUMNS} FROM research_options_backtest_runs WHERE ($1::text IS NULL OR job_id = $1) "
         "ORDER BY created_at_ms DESC, id DESC LIMIT $2",
         job_id,
         limit,
     )
-    return tuple(_record(row, is_live) for row in rows)
+    return tuple(rows)
+
+
+async def present_runs(rows: Sequence[asyncpg.Record], *, is_live: IsLive) -> tuple[RunRecord, ...]:
+    """The rows as records, each with its headline figures.
+
+    A row stored as ``running`` reads ``interrupted`` once its job is gone, and an interrupted run stays ``running``
+    in the table for good, so a long history holds many. What a job's liveness costs is a blocking round trip to Redis,
+    and this runs on the event loop: so the liveness of every running row's job is read in one call on a worker
+    thread, and not by a call for each row on the loop. The rows are already read, so no database connection is held
+    meanwhile.
+    """
+    running = {row["job_id"] for row in rows if row["status"] == "running"}
+    live = await asyncio.to_thread(liveness_of, running, is_live) if running else {}
+    return tuple(_record(row, live.__getitem__) for row in rows)
+
+
+def liveness_of(job_ids: Iterable[str | None], is_live: IsLive) -> dict[str | None, bool | None]:
+    """Whether each job is alive, asked of ``is_live`` once per job. Blocking (Redis): call it from a worker thread."""
+    return {job_id: is_live(job_id) for job_id in job_ids}
+
+
+async def list_runs(
+    conn: asyncpg.Connection, *, is_live: IsLive, limit: int = 200, job_id: str | None = None
+) -> tuple[RunRecord, ...]:
+    """Runs newest first, each with its headline figures: :func:`read_run_rows` then :func:`present_runs`, for a
+    caller that holds a connection. A route reads the rows under a connection and presents them after it is released."""
+    return await present_runs(await read_run_rows(conn, limit=limit, job_id=job_id), is_live=is_live)
 
 
 async def get_run(conn: asyncpg.Connection, run_id: int, *, is_live: IsLive) -> StoredRun | None:
@@ -683,21 +711,32 @@ class SessionLine:
     trades: int
 
 
-async def get_run_header(conn: asyncpg.Connection, run_id: int, *, is_live: IsLive) -> RunHeader | None:
+async def get_run_header(conn: asyncpg.Connection, run_id: int) -> RunHeader | None:
     """A run's record and setup; ``None`` when there is none. Cheaper than ``get_run`` where no figure is wanted.
 
     A run whose stored setup no longer validates still has a header, with no setup and the reason (see ``RunHeader``).
+
+    Nothing is asked of Redis here: a run stored as ``running`` reads ``running`` whatever its job is doing. Whether the
+    job is alive is a blocking round trip, and this runs on the event loop inside the caller's transaction, so a caller
+    that must say ``interrupted`` asks after it has let the connection go (``run_detail.read_closely``).
     """
     row = await conn.fetchrow(
         f"SELECT {_RUN_COLUMNS}, setup_json::text AS setup_json FROM research_options_backtest_runs WHERE id = $1",
         run_id,
     )
-    return None if row is None else _header(row, is_live)
+    return None if row is None else _header(row)
 
 
-def _header(row: asyncpg.Record, is_live: IsLive) -> RunHeader:
+def _not_asked(_job_id: str | None) -> None:
+    """The liveness of a job nobody asked about: "cannot tell", which leaves a row stored as running ``running``."""
+    return None
+
+
+def _header(row: asyncpg.Record) -> RunHeader:
     saved = read_stored_setup(f"run {row['id']}", row["setup_json"], row["created_at_ms"])
-    return RunHeader(record=_record(row, is_live), setup=saved.setup, setup_cannot_open_reason=saved.cannot_open_reason)
+    return RunHeader(
+        record=_record(row, _not_asked), setup=saved.setup, setup_cannot_open_reason=saved.cannot_open_reason
+    )
 
 
 async def has_session(conn: asyncpg.Connection, run_id: int, session_open_ms: int) -> bool:
@@ -710,6 +749,7 @@ async def has_session(conn: asyncpg.Connection, run_id: int, session_open_ms: in
 
 
 _TRADE_FILTER = "run_id = $1 AND ($2::bigint IS NULL OR session_open_ms = $2) AND ($3::text IS NULL OR leg_id = $3)"
+_TRADE_ORDER = "ORDER BY session_open_ms, trade_number"
 
 
 async def count_trades(
@@ -739,14 +779,41 @@ async def read_trades(
     """
     rows = await conn.fetch(
         f"SELECT * FROM research_options_backtest_run_trades WHERE {_TRADE_FILTER} "
-        "ORDER BY session_open_ms, trade_number LIMIT $4::bigint OFFSET $5::bigint",
+        f"{_TRADE_ORDER} LIMIT $4::bigint OFFSET $5::bigint",
         run_id,
         session_open_ms,
         leg_id,
         limit,
         offset,
     )
-    return tuple(StoredTrade(row["session_open_ms"], row["trade_number"], _trade(row)) for row in rows)
+    return tuple(stored_trades_of(rows))
+
+
+async def read_trade_rows_in_batches(
+    conn: asyncpg.Connection, run_id: int, *, batch_rows: int
+) -> AsyncIterator[list[asyncpg.Record]]:
+    """Every trade row of the run, in the order ``read_trades`` gives, ``batch_rows`` rows at a time.
+
+    The rows come from a server-side cursor, so no more than one batch is ever held: the run's trades are never read
+    whole. A cursor exists only inside a transaction, and the batches are of the snapshot that transaction has, so a
+    caller that opens one at repeatable-read reads a run that does not change between its first batch and its last.
+    """
+    if batch_rows < 1:
+        raise ValueError(f"a batch is at least one row, not {batch_rows}")
+    cursor = await conn.cursor(
+        f"SELECT * FROM research_options_backtest_run_trades WHERE {_TRADE_FILTER} {_TRADE_ORDER}",
+        run_id,
+        None,
+        None,
+    )
+    while rows := await cursor.fetch(batch_rows):
+        yield rows
+
+
+def stored_trades_of(rows: Iterable[asyncpg.Record]) -> Iterator[StoredTrade]:
+    """The trade rows as the trades they store, one at a time and in the order given."""
+    for row in rows:
+        yield StoredTrade(row["session_open_ms"], row["trade_number"], _trade(row))
 
 
 async def read_session(conn: asyncpg.Connection, run_id: int, session_open_ms: int) -> StoredSession | None:

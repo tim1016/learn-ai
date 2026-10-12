@@ -53,8 +53,32 @@ def test_a_run_that_is_not_complete_is_refused_naming_the_status_it_has(status: 
     with pytest.raises(RunNotComplete) as caught:
         require_a_complete_run(7, a_header(7, status=status))
 
-    assert (caught.value.run_id, caught.value.status) == (7, status)
+    assert (caught.value.run_id, caught.value.status, caught.value.job_id) == (7, status, "job-7")
     assert status in str(caught.value)
+
+
+def test_a_run_stored_as_running_names_its_job_and_reads_interrupted_only_once_that_job_is_gone() -> None:
+    refusal = RunNotComplete(7, "running", "job-7")
+
+    assert refusal.running_jobs() == {"job-7"}
+    assert refusal.as_it_reads({"job-7": False}).status == "interrupted"
+    # Alive, and "cannot tell" (None), and an answer that never came, all leave it running.
+    for live in ({"job-7": True}, {"job-7": None}, {}):
+        assert refusal.as_it_reads(live).status == "running"
+    said = refusal.as_it_reads({"job-7": False})
+    assert (said.run_id, said.job_id, str(said)) == (
+        7,
+        "job-7",
+        "run 7 is interrupted, and only a complete run has trades and sessions",
+    )
+
+
+@pytest.mark.parametrize("status", ["failed", "cancelled", "interrupted"])
+def test_a_run_that_is_not_stored_as_running_asks_nothing_and_keeps_the_word_it_has(status: str) -> None:
+    refusal = RunNotComplete(7, status, "job-7")
+
+    assert refusal.running_jobs() == frozenset()
+    assert refusal.as_it_reads({"job-7": False}).status == status
 
 
 def test_a_leg_the_setup_has_is_let_through_one_it_lacks_is_refused_and_no_leg_asks_nothing() -> None:
@@ -128,6 +152,19 @@ def test_every_run_that_is_not_complete_is_named_with_its_place_and_its_status()
     assert only_b.value.runs == (("b", 2, "failed"),)
     assert only_a.value.runs == (("a", 1, "cancelled"),)
     assert both.value.runs == (("a", 1, "running"), ("b", 2, "interrupted"))
+
+
+def test_a_pair_names_the_job_of_each_run_and_only_a_run_stored_as_running_is_said_interrupted() -> None:
+    with pytest.raises(RunsNotComplete) as caught:
+        judge_pair(1, a_header(1, status="running"), 2, a_header(2, status="failed"))
+    refusal = caught.value
+
+    assert refusal.job_ids == {1: "job-1", 2: "job-2"}
+    assert refusal.running_jobs() == {"job-1"}
+    said = refusal.as_it_reads({"job-1": False, "job-2": False})
+    assert said.runs == (("a", 1, "interrupted"), ("b", 2, "failed"))
+    assert str(said) == "run 1 (a) is interrupted; run 2 (b) is failed"
+    assert refusal.as_it_reads({"job-1": True}).runs == (("a", 1, "running"), ("b", 2, "failed"))
 
 
 def test_every_run_whose_stored_setup_is_lost_is_named_with_its_place_and_the_reason_beside_it() -> None:

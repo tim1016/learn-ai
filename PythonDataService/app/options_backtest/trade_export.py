@@ -5,10 +5,14 @@ Reference: ``.claude/rules/temporal-rigor.md`` "Readable time in exported CSVs":
   display-only wall-clock column beside it named for its zone; ``dataset_service.build_csv_bytes``, the repo's other
   export, whose zone naming and wall-clock format are used here and not copied.
 Canonical implementation: this file.
-Validated against: tests/options_backtest/test_trade_export.py.
+Validated against: tests/options_backtest/test_trade_export.py (the cells), tests/options_backtest/test_trade_export_batches.py
+  (the pieces joined are the whole).
 
 The header is fixed. One row per leg trade, in the order the trades route lists them, and never a page: the caller hands
-over every trade of the run and this writes them all.
+over every trade of the run and this writes them all. The bytes can be made whole (``trades_csv``) or in pieces, the
+header (``header_bytes``) and then the rows of each batch of trades (``rows_bytes``); the pieces joined are the whole,
+byte for byte, because a CSV writer keeps nothing between one row and the next. The export route writes the pieces, a
+batch at a time, so that a run of any size is never held whole (``run_detail.export_every_trade``).
 
 * ``unix_ts`` is the entry fill's bar close in ``int64 ms UTC``. ``time_america_new_york`` is that instant as New York
   wall-clock text (``YYYY-MM-DD HH:MM:SS``), for reading; nothing is parsed back from it.
@@ -27,7 +31,7 @@ from __future__ import annotations
 
 import csv
 import io
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from decimal import Decimal
 
 from app.options_backtest.results import Fill
@@ -118,10 +122,23 @@ def _row(stored: StoredTrade) -> list[str | int]:
     ]
 
 
-def trades_csv(trades: Sequence[StoredTrade]) -> bytes:
-    """The header and one row for every trade handed over, as UTF-8 CSV with CRLF row ends (the repo's other export's)."""
+def _csv_bytes(rows: Iterable[Sequence[str | int]]) -> bytes:
+    """The rows as UTF-8 CSV with CRLF row ends (the repo's other export's) and no byte-order mark."""
     buffer = io.StringIO()
-    writer = csv.writer(buffer)
-    writer.writerow(CSV_HEADER)
-    writer.writerows(_row(stored) for stored in trades)
+    csv.writer(buffer).writerows(rows)
     return buffer.getvalue().encode("utf-8")
+
+
+def header_bytes() -> bytes:
+    """The header row."""
+    return _csv_bytes([CSV_HEADER])
+
+
+def rows_bytes(trades: Iterable[StoredTrade]) -> bytes:
+    """One row for every trade handed over, and no header."""
+    return _csv_bytes(_row(stored) for stored in trades)
+
+
+def trades_csv(trades: Iterable[StoredTrade]) -> bytes:
+    """The header and one row for every trade handed over, whole."""
+    return header_bytes() + rows_bytes(trades)
