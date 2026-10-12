@@ -22628,6 +22628,11 @@ export interface components {
          * @description The limits the server holds a setup and a request to, so the page copies none of them.
          */
         OptionsBacktestLimitsResponse: {
+            /**
+             * Max Contracts Per Download
+             * @description The most distinct contracts one download of the past chain takes. A request naming more is refused before anything is fetched.
+             */
+            max_contracts_per_download: number;
             /** Max Contracts Per Leg */
             max_contracts_per_leg: number;
             /** Max Expiry Days */
@@ -22640,6 +22645,11 @@ export interface components {
             max_reentries_per_leg: number;
             /** Max Strike Steps */
             max_strike_steps: number;
+            /**
+             * Max Strikes Each Side
+             * @description The most strikes each side of the money one read of the past chain takes (a window of this many above and below the money strike, for each right). A request for more is refused.
+             */
+            max_strikes_each_side: number;
             setup_name: components["schemas"]["OptionsBacktestSetupNameRuleResponse"];
         };
         /**
@@ -23613,6 +23623,8 @@ export interface components {
         PastChainDayResponse: {
             /** Expiries */
             expiries: components["schemas"]["PastChainExpirySummary"][];
+            /** @description Set when the lake would fetch nothing for this session now, by the rule a download asks: the reason and its plain words. Null when it would. A page offers no download for a session that has one. */
+            fetch_refusal?: components["schemas"]["PastChainFetchRefusal"] | null;
             /** Listing Problem */
             listing_problem: string | null;
             /**
@@ -23750,6 +23762,23 @@ export interface components {
             series: "daily" | "weekly" | "monthly" | "quarterly" | "unknown";
             /** Version */
             version: number;
+        };
+        /**
+         * PastChainFetchRefusal
+         * @description Why the lake will not fetch this session's data now: the rule a download asks, before it claims anything.
+         */
+        PastChainFetchRefusal: {
+            /**
+             * Reason
+             * @description The lake's own reason code: `not_a_session` for a date the exchange had no session on, and `session_not_over` for a session whose New York date has not passed, which is taken from the next New York midnight.
+             * @enum {string}
+             */
+            reason: "not_a_session" | "session_not_over";
+            /**
+             * Words
+             * @description Plain words for the reason, to be shown as they are.
+             */
+            words: string;
         };
         /**
          * PastChainSide

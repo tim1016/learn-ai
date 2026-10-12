@@ -120,11 +120,9 @@ def _read_expiry(underlying: str, trading_date_ms: int, expiry_ms: int, at_ms: i
 
 @router.get("/past-chain/day", response_model=PastChainDayResponse, responses=_REFUSALS)
 async def get_past_chain_day(underlying: Underlying, trading_date_ms: TradingDateMs) -> PastChainDayResponse:
-    """Every expiry the underlying's listing held on the date, tagged, with its calls and puts counted.
-
-    Also whether the lake would fetch anything for the session now (``fetch_refusal``), by the rule a download asks, on
-    the clock a download takes.
-    """
+    """Every expiry the underlying's listing held on the date, tagged, with its calls and puts counted."""
+    # ``fetch_refusal`` is whether the lake would fetch anything for the session now, by the rule a download asks, on
+    # the clock a download takes.
     try:
         day, refusal = await asyncio.to_thread(_read_day, underlying, trading_date_ms)
     except ChainRefusal as exc:

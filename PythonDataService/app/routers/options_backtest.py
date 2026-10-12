@@ -66,11 +66,8 @@ async def describe(setup: OptionsBacktestSetup) -> SetupDescriptionResponse:
 
 @router.get("/limits", response_model=OptionsBacktestLimitsResponse)
 async def get_limits() -> OptionsBacktestLimitsResponse:
-    """What a setup may hold (legs, contracts, re-entries, strike steps, expiry days), what a name may be, and how long a range may be.
-
-    Also what the past chain takes: the most strikes each side of the money one read takes and the most contracts one
-    download takes, each the number the past-chain routes enforce.
-    """
+    """What a setup may hold (legs, contracts, re-entries, strike steps, expiry days), what a name may be, and how long a range may be."""
+    # The two past-chain caps are the numbers the past-chain routes enforce, read from where they enforce them.
     return OptionsBacktestLimitsResponse(
         max_legs=MAX_LEGS,
         max_contracts_per_leg=MAX_CONTRACTS,
