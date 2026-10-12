@@ -22,13 +22,21 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import date
-from typing import Any
+from itertools import pairwise
+from typing import Any, get_args
+
+import pytest
 
 from app.data_lake.option_bars import OptionBarsFileError
-from app.lean_sidecar.trading_calendar import session_window_for_date
+from app.data_lake.option_lake import OptionFailureReason
+from app.data_lake.types import ArtifactFailureReason
+from app.lean_sidecar.trading_calendar import expected_sessions, session_window_for_date
 from app.options.contract import OptionContract
+from app.options_backtest import fetching
 from app.options_backtest.data import Captured
 from app.options_backtest.data_check import (
+    LAKE_REASON_WORDS,
+    CheckStopped,
     ContractNeeds,
     DataCheck,
     DataKind,
@@ -38,6 +46,7 @@ from app.options_backtest.data_check import (
     SessionCheck,
     SessionVerdict,
     check_data,
+    lake_reason_words,
 )
 from app.options_backtest.results import SkipReason
 from app.options_backtest.setup import MS_PER_MINUTE
@@ -53,6 +62,7 @@ from tests.options_backtest._run_data import (
     flat,
     steady,
 )
+from tests.options_backtest._words import assert_plain
 from tests.options_backtest.setup_fixtures import leg, setup
 
 # 2026-10-12 14:00 New York.
@@ -360,6 +370,26 @@ def test_stored_underlying_bars_that_break_the_rules_of_a_bar_cannot_be_tested()
 
     assert session.verdict is SessionVerdict.CANNOT_BE_TESTED
     assert [problem.code for problem in session.problems] == [ProblemCode.STORED_DATA_IS_MALFORMED]
+    [problem] = session.problems
+    assert "the underlying" in problem.message
+    assert_plain(problem.message)
+
+
+def test_stored_option_bars_that_break_the_rules_of_a_bar_cannot_be_tested_and_name_the_contract_but_no_date() -> None:
+    call = contract_on(WED, "call", 500)
+    data = fake_data({WED: _stored()})
+    bars = list(data._options[(call, WED)])
+    data._options[(call, WED)] = (*bars, bars[-1])  # the same minute twice
+
+    session = _only(
+        check_data(setup(legs=[leg(expiry={"kind": "same_day"})]), [WED], now_ms=NOW_MS, data=CheckData(data))
+    )
+
+    assert session.verdict is SessionVerdict.CANNOT_BE_TESTED
+    [problem] = session.problems
+    assert problem.code is ProblemCode.STORED_DATA_IS_MALFORMED
+    assert call.occ_symbol in problem.message
+    assert_plain(problem.message)
 
 
 # ── The testable range ───────────────────────────────────────────────────
@@ -440,16 +470,6 @@ def test_a_range_with_nothing_testable_offers_no_range() -> None:
     assert checked.first_testable is None and checked.last_testable is None
 
 
-def test_the_verdicts_are_counted() -> None:
-    checked = _range(C, R, N, R, C, R, R)
-
-    assert (
-        checked.count(SessionVerdict.READY),
-        checked.count(SessionVerdict.NEEDS_DOWNLOAD),
-        checked.count(SessionVerdict.CANNOT_BE_TESTED),
-    ) == (4, 1, 2)
-
-
 def test_a_session_that_cannot_be_tested_breaks_a_run_of_sessions_even_when_it_is_one_in_a_stored_range() -> None:
     # End to end: Wednesday and Friday are stored, Thursday's listing is missing for good.
     failures = {(DataKind.LISTING, THU, None): _failed("fetch_timeout", again=False)}
@@ -464,3 +484,155 @@ def test_a_session_that_cannot_be_tested_breaks_a_run_of_sessions_even_when_it_i
     assert [session.verdict for session in checked.sessions] == [R, C, R]
     stretch = checked.longest_testable_stretch
     assert stretch is not None and (stretch.first_session_open_ms, stretch.sessions) == (_open(WED), 1)
+
+
+# ── What the words say ───────────────────────────────────────────────────
+
+
+def _every_code(annotation: Any) -> set[str]:
+    codes: set[str] = set()
+    for argument in get_args(annotation):
+        codes |= {argument} if isinstance(argument, str) else _every_code(argument)
+    return codes
+
+
+def test_every_reason_the_lake_or_the_download_can_give_has_plain_words_without_a_date_json_or_path() -> None:
+    codes = (
+        _every_code(ArtifactFailureReason)
+        | _every_code(OptionFailureReason)
+        | {
+            fetching.UNDERLYING_NOT_FETCHED,
+            fetching.NOT_IN_THE_LAKE,
+            fetching.STILL_BEING_FETCHED,
+            fetching.TOOK_TOO_LONG,
+        }
+    )
+
+    assert codes - set(LAKE_REASON_WORDS) == set(), "a reason with no words of its own"
+    for code in sorted(codes):
+        assert_plain(lake_reason_words(code))
+    assert_plain(lake_reason_words("a_reason_the_lake_will_have_in_future"))
+
+
+def test_a_failure_the_lake_recorded_is_told_in_its_reason_code_and_a_plain_phrase_and_never_in_the_lakes_text() -> None:
+    failures = {(DataKind.LISTING, WED, None): _failed("provider_rate_limited", again=False)}
+
+    session = _only(_check({WED: _stored()}, without_listing=(WED,), failures=failures))
+
+    [problem] = session.problems
+    assert "asked us to slow down" in problem.message and "(provider_rate_limited)" in problem.message
+    assert_plain(problem.message)
+
+
+def test_a_failure_the_lake_will_try_again_is_told_the_same_way() -> None:
+    failures = {(DataKind.UNDERLYING_BARS, WED, None): _failed("provider_api_error", again=True)}
+
+    session = _only(_check({WED: _stored()}, without_underlying=(WED,), failures=failures))
+
+    [note] = session.notes
+    assert "did not answer properly" in note and "(provider_api_error)" in note
+    assert_plain(note)
+
+
+def test_no_sentence_of_a_check_names_a_date() -> None:
+    estimated = setup(fees={"kind": "estimated"}, legs=[leg(expiry={"kind": "same_day"})])
+    old = date(2024, 10, 11)
+    inside_friday = session_window_for_date(FRI).open_ms_utc + 60 * MS_PER_MINUTE
+    call = contract_on(WED, "call", 500)
+    scenes = [
+        check_data(estimated, [old], now_ms=NOW_MS, data=CheckData(FakeRunData())),
+        _check({FRI: _stored()}, now_ms=inside_friday),
+        _check({WED: _stored()}, damaged=((WED, call.occ_symbol),)),
+        _check(
+            {WED: Day(underlying=steady("500.20"), options={})},
+            failures={(DataKind.CONTRACTS, WED, call.occ_symbol): _failed("fetch_timeout", again=False)},
+        ),
+    ]
+
+    sentences = [
+        text
+        for checked in scenes
+        for session in checked.sessions
+        for text in (*(problem.message for problem in session.problems), *session.notes)
+    ]
+
+    assert len(sentences) >= 5
+    for sentence in sentences:
+        assert_plain(sentence)
+
+
+# ── Progress and stopping ────────────────────────────────────────────────
+
+
+def test_each_session_is_reported_as_it_is_checked_and_a_stop_is_asked_before_each() -> None:
+    reported: list[tuple[int, int]] = []
+    asked: list[int] = []
+    days = {WED: _stored(), THU: _stored(), FRI: _stored()}
+
+    check_data(
+        setup(legs=[leg(expiry={"kind": "same_day"})]),
+        [WED, THU, FRI],
+        now_ms=NOW_MS,
+        data=CheckData(fake_data(days)),
+        on_session=lambda done, total: reported.append((done, total)),
+        should_stop=lambda: bool(asked.append(len(reported))),
+    )
+
+    assert reported == [(1, 3), (2, 3), (3, 3)]
+    assert asked == [0, 1, 2]
+
+
+def test_a_stop_ends_the_check_before_the_next_session_is_read() -> None:
+    data = CheckData(fake_data({WED: _stored(), THU: _stored(), FRI: _stored()}))
+    reported: list[int] = []
+
+    with pytest.raises(CheckStopped) as caught:
+        check_data(
+            setup(legs=[leg(expiry={"kind": "same_day"})]),
+            [WED, THU, FRI],
+            now_ms=NOW_MS,
+            data=data,
+            on_session=lambda done, _total: reported.append(done),
+            should_stop=lambda: len(reported) >= 2,
+        )
+
+    assert caught.value.sessions_done == 2
+    assert ("underlying", FRI) not in data.asked
+
+
+class _SlowData(CheckData):
+    """A lake that takes ten seconds of fake time to read each session, as a catalog with a receipt lookup a file does."""
+
+    def __init__(self, base: FakeRunData, clock: list[float]) -> None:
+        super().__init__(base)
+        self._clock = clock
+
+    def underlying_day(self, trading_date: date) -> Any:
+        self._clock[0] += 10.0
+        return super().underlying_day(trading_date)
+
+
+def test_a_check_that_takes_ten_minutes_asks_whether_to_stop_at_least_every_thirty_seconds() -> None:
+    # Seventy sessions at ten seconds each is over ten minutes. The job's lease lasts five.
+    sessions = list(expected_sessions(date(2026, 7, 1), date(2026, 10, 9)))[:70]
+    clock = [0.0]
+    polled_at: list[float] = []
+    data = _SlowData(fake_data({}), clock)
+
+    def should_stop() -> bool:
+        polled_at.append(clock[0])
+        return False
+
+    check_data(
+        setup(legs=[leg(expiry={"kind": "same_day"})]),
+        sessions,
+        now_ms=NOW_MS,
+        data=data,
+        should_stop=should_stop,
+    )
+
+    marks = [0.0, *polled_at, clock[0]]
+    longest = max(later - earlier for earlier, later in pairwise(marks))
+    assert clock[0] >= 600, "the check took its ten minutes of fake time"
+    assert len(polled_at) == len(sessions)
+    assert longest <= 30

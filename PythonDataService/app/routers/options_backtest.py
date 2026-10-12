@@ -15,8 +15,8 @@ from fastapi import APIRouter, HTTPException, Path, Response, status
 
 from app.options_backtest import saved_setups
 from app.options_backtest.describe import describe_setup
+from app.options_backtest.limits import MAX_RANGE_SESSIONS
 from app.options_backtest.saved_setups import SETUP_NAME_PATTERN, SETUP_NAME_RULE, ExampleSetupError
-from app.options_backtest.service import MAX_RANGE_SESSIONS
 from app.options_backtest.session_clock import SessionClock, full_session_clock
 from app.options_backtest.setup import (
     MAX_CONTRACTS,

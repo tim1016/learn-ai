@@ -1,8 +1,21 @@
 """Options Backtest runs an owner can reopen: their own tables, saved exactly (#3030).
 
 Python owns the tables (``research/persistence/schema.py`` version 20). The functions take a connection, the way
-``saved_setups.py`` does. Money and prices are ``NUMERIC`` and come back as the same ``Decimal``; what is kept as JSON
-(a session's events, the summary tables) holds every ``Decimal`` as its text (``run_json.py``). No float is anywhere.
+``saved_setups.py`` does. Money and prices are ``NUMERIC``; what is kept as JSON (a session's events, the summary
+tables) holds every ``Decimal`` as its text (``run_json.py``). No float is anywhere.
+
+What "reads back equal" promises, for a ``NUMERIC`` column (found out against PostgreSQL 16 and asyncpg):
+
+* The value, always, to the last digit: a number of any size and any number of places comes back equal.
+* The digits as they were written, when the number was written with no positive exponent, which is every price and sum
+  this module is handed: PostgreSQL keeps each digit after the point as written (``0.10`` comes back ``0.10``,
+  ``1234.5600`` comes back ``1234.5600``). asyncpg alone would return a whole number with zeros at its end in exponent
+  form (``10000`` as ``1E+4``, ``100000`` as ``1.0E+5``), so ``_money`` writes that number out in plain digits again.
+* A number written with a positive exponent (``Decimal("1E+4")``, which a setup spelled ``1e4`` makes) comes back as
+  the same number in plain digits (``10000``): PostgreSQL keeps no exponent. The sign of a zero is not kept either
+  (``-0.00`` comes back ``0.00``). These are the only differences, and in each the number is the same.
+
+What is kept as JSON keeps its text exactly, exponent and all, because the text is what is stored.
 
 A run is made ``running`` when its job is accepted. It ends in exactly one of three ways, and only from ``running``:
 
@@ -22,16 +35,19 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
+from itertools import pairwise
 from typing import Any, Literal
 
 import asyncpg
 
+from app.jobs.progress import JOB_LEASE_TTL_SECONDS
 from app.lean_sidecar.trading_calendar import CALENDAR_IDENTITY, CALENDAR_PACKAGE_VERSION
 from app.options.contract import OptionContract
 from app.options_backtest import run_json
 from app.options_backtest.describe import fee_policy_sentence
 from app.options_backtest.results import ExitReason, Fill, LegTrade, Mark, SessionOutcome, SessionStatus, SkipReason
 from app.options_backtest.run import RunResult, SlippagePoint, SlippageTolerance
+from app.options_backtest.saved_setups import read_stored_setup
 from app.options_backtest.session_result import SessionResult
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.options_backtest.statistics import RunSummary
@@ -43,8 +59,11 @@ StoredStatus = Literal["running", "complete", "failed", "cancelled"]
 PresentedStatus = Literal["running", "complete", "failed", "cancelled", "interrupted"]
 IsLive = Callable[[str | None], bool | None]
 
-# How long a worker waits for the one transaction that saves a whole run.
-SAVE_TIMEOUT_SECONDS = 600.0
+# How long the job's thread waits for one of the writes that end a run (the save, the failure, the cancel). The job's
+# lease is renewed when the ``saving`` phase begins and by nothing during the write, and a run whose lease has lapsed
+# reads ``interrupted``, which can be deleted. So a write waits for less than a lease, never as long as one.
+SAVE_LEASE_MARGIN_SECONDS = 60
+SAVE_TIMEOUT_SECONDS = float(JOB_LEASE_TTL_SECONDS - SAVE_LEASE_MARGIN_SECONDS)
 
 _RUN_COLUMNS = """
     id, created_at_ms, finished_at_ms, job_id, status, setup_name, underlying, first_session_open_ms,
@@ -64,6 +83,14 @@ class RunNotRunning(RuntimeError):
 
 class RunDoesNotMatch(ValueError):
     """A result handed to ``complete_run`` is not a result of the run it was handed to."""
+
+
+class RunSetupCannotBeRead(ValueError):
+    """A run's stored setup no longer validates, so its whole ``RunResult`` cannot be rebuilt. ``reason`` says why."""
+
+    def __init__(self, run_id: int, reason: str) -> None:
+        self.reason = reason
+        super().__init__(f"the setup stored with run {run_id} cannot be read: {reason}")
 
 
 @dataclass(frozen=True)
@@ -139,11 +166,21 @@ class RunFigures:
 
 @dataclass(frozen=True)
 class StoredRun:
-    """One run, opened: its record, the setup it ran, and (when complete) its summary, ladder and tolerance."""
+    """One run, opened: its record, the setup it ran, and (when complete) its summary, ladder and tolerance.
+
+    The setup is stored as the JSON it was sent as, and read again with the rules of today. A run whose setup no
+    longer validates still opens, as a saved setup does: ``setup`` is ``None`` and ``setup_cannot_open_reason`` says
+    why; exactly one of the two is set. Its figures are stored apart and are not touched by that.
+    """
 
     record: RunRecord
-    setup: OptionsBacktestSetup
+    setup: OptionsBacktestSetup | None
     figures: RunFigures | None
+    setup_cannot_open_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.setup is None) == (self.setup_cannot_open_reason is None):
+            raise ValueError("a stored run has its setup, or the reason it cannot be opened, and not both")
 
 
 class DeleteOutcome(StrEnum):
@@ -155,6 +192,20 @@ class DeleteOutcome(StrEnum):
 def fee_policy_text(setup: OptionsBacktestSetup) -> str:
     """The fee policy in words, as the headline of the run says it."""
     return fee_policy_sentence(setup.fees)
+
+
+def _money(value: Decimal) -> Decimal:
+    """A ``NUMERIC`` as it was written: asyncpg returns ``10000`` as ``1E+4``, which is put back into plain digits.
+
+    Done in text (``format``) and not by ``quantize``, which refuses a number of more digits than the context holds.
+    """
+    if value.is_finite() and value.as_tuple().exponent > 0:  # type: ignore[operator]
+        return Decimal(format(value, "f"))
+    return value
+
+
+def _optional_money(value: Decimal | None) -> Decimal | None:
+    return None if value is None else _money(value)
 
 
 # ── Writes ───────────────────────────────────────────────────────────────
@@ -191,22 +242,17 @@ async def complete_run(conn: asyncpg.Connection, run_id: int, result: RunResult,
     """Save a finished run's figures, sessions and leg trades in one transaction, and mark it ``complete``.
 
     ``RunNotRunning`` when the run is gone or is not running; ``RunDoesNotMatch`` when the result is not one of this
-    run (another setup, or another number of sessions); nothing is written in either case.
+    run (another setup, or sessions other than the ones it was accepted for); nothing is written in either case.
     """
     async with conn.transaction():
         row = await conn.fetchrow(
-            "SELECT status, setup_json::text AS setup_json, sessions_requested FROM research_options_backtest_runs "
-            "WHERE id = $1 FOR UPDATE",
+            "SELECT status, setup_json::text AS setup_json, sessions_requested, first_session_open_ms, "
+            "last_session_open_ms FROM research_options_backtest_runs WHERE id = $1 FOR UPDATE",
             run_id,
         )
         if row is None or row["status"] != "running":
             raise RunNotRunning(f"run {run_id} is not running")
-        if OptionsBacktestSetup.model_validate_json(row["setup_json"]) != result.setup:
-            raise RunDoesNotMatch(f"the result is of another setup than run {run_id} was accepted with")
-        if len(result.sessions) != row["sessions_requested"]:
-            raise RunDoesNotMatch(
-                f"run {run_id} was accepted for {row['sessions_requested']} sessions and the result has {len(result.sessions)}"
-            )
+        _require_the_runs_own_result(run_id, row, result)
         summary = result.summary
         await conn.execute(
             """
@@ -239,6 +285,28 @@ async def complete_run(conn: asyncpg.Connection, run_id: int, result: RunResult,
                 for number, trade in enumerate(session.outcome.trades)
             ],
         )
+
+
+def _require_the_runs_own_result(run_id: int, row: asyncpg.Record, result: RunResult) -> None:
+    """The result is of this run's setup and of exactly the sessions it was accepted for, or nothing is saved.
+
+    Its sessions are compared by their opens: as many as were requested, from the first open stored to the last, each
+    later than the one before. (The days between are the calendar's; the run row keeps only where they begin and end.)
+    """
+    if OptionsBacktestSetup.model_validate_json(row["setup_json"]) != result.setup:
+        raise RunDoesNotMatch(f"the result is of another setup than run {run_id} was accepted with")
+    opens = [session.session_open_ms for session in result.sessions]
+    if len(opens) != row["sessions_requested"]:
+        raise RunDoesNotMatch(
+            f"run {run_id} was accepted for {row['sessions_requested']} sessions and the result has {len(opens)}"
+        )
+    if opens[0] != row["first_session_open_ms"] or opens[-1] != row["last_session_open_ms"]:
+        raise RunDoesNotMatch(
+            f"the result's sessions run from {opens[0]} to {opens[-1]}, not from {row['first_session_open_ms']} "
+            f"to {row['last_session_open_ms']} that run {run_id} was accepted for"
+        )
+    if any(later <= earlier for earlier, later in pairwise(opens)):
+        raise RunDoesNotMatch(f"the result's sessions are not each later than the one before, as run {run_id}'s are")
 
 
 _INSERT_SESSION = """
@@ -378,7 +446,10 @@ async def list_runs(
 
 
 async def get_run(conn: asyncpg.Connection, run_id: int, *, is_live: IsLive) -> StoredRun | None:
-    """One run with its setup and, when it is complete, its summary, ladder and tolerance; ``None`` when there is none."""
+    """One run with its setup and, when it is complete, its summary, ladder and tolerance; ``None`` when there is none.
+
+    A run whose stored setup no longer validates still opens, with its figures and no setup (see ``StoredRun``).
+    """
     row = await conn.fetchrow(
         f"SELECT {_RUN_COLUMNS}, setup_json::text AS setup_json, summary_json::text AS summary_json, "
         "slippage_json::text AS slippage_json, tolerance_json::text AS tolerance_json "
@@ -394,18 +465,26 @@ async def get_run(conn: asyncpg.Connection, run_id: int, *, is_live: IsLive) -> 
             slippage=run_json.slippage_from_json(json.loads(row["slippage_json"])),
             slippage_tolerance=run_json.tolerance_from_json(json.loads(row["tolerance_json"])),
         )
+    saved = read_stored_setup(f"run {run_id}", row["setup_json"], row["created_at_ms"])
     return StoredRun(
         record=_record(row, is_live),
-        setup=OptionsBacktestSetup.model_validate_json(row["setup_json"]),
+        setup=saved.setup,
         figures=figures,
+        setup_cannot_open_reason=saved.cannot_open_reason,
     )
 
 
 async def read_result(conn: asyncpg.Connection, run_id: int) -> RunResult | None:
-    """The whole result of a complete run, rebuilt field for field; ``None`` for no such run or one not complete."""
+    """The whole result of a complete run, rebuilt field for field; ``None`` for no such run or one not complete.
+
+    ``RunSetupCannotBeRead`` for a complete run whose stored setup no longer validates: a result is not rebuilt
+    without the setup it was made with.
+    """
     stored = await get_run(conn, run_id, is_live=lambda _job_id: False)
     if stored is None or stored.figures is None:
         return None
+    if stored.setup is None:
+        raise RunSetupCannotBeRead(run_id, stored.setup_cannot_open_reason or "")
     session_rows = await conn.fetch(
         "SELECT session_open_ms, session_close_ms, status, skip_reason, cash_before_usd, cash_after_usd, "
         "cash_change_usd, underlying_sha256, listing_sha256, option_days_json::text AS option_days_json, "
@@ -448,8 +527,8 @@ def _record(row: asyncpg.Record, is_live: IsLive) -> RunRecord:
             sessions_traded=row["sessions_traded"],
             trades=row["trades"],
             trades_won=row["trades_won"],
-            net_profit_usd=row["net_profit_usd"],
-            ending_cash_usd=row["ending_cash_usd"],
+            net_profit_usd=_money(row["net_profit_usd"]),
+            ending_cash_usd=_money(row["ending_cash_usd"]),
         )
     return RunRecord(
         id=row["id"],
@@ -471,19 +550,18 @@ def _record(row: asyncpg.Record, is_live: IsLive) -> RunRecord:
 
 
 def _session(row: asyncpg.Record, trades: tuple[LegTrade, ...]) -> SessionResult:
-    return run_json.record_of(
-        SessionResult,
+    return SessionResult(
         session_open_ms=row["session_open_ms"],
         session_close_ms=row["session_close_ms"],
-        cash_before_usd=row["cash_before_usd"],
+        cash_before_usd=_money(row["cash_before_usd"]),
         outcome=SessionOutcome(
             status=SessionStatus(row["status"]),
             skip_reason=None if row["skip_reason"] is None else SkipReason(row["skip_reason"]),
             trades=trades,
             events=run_json.events_from_json(json.loads(row["events_json"])),
-            cash_change_usd=row["cash_change_usd"],
+            cash_change_usd=_money(row["cash_change_usd"]),
         ),
-        cash_after_usd=row["cash_after_usd"],
+        cash_after_usd=_money(row["cash_after_usd"]),
         pins=run_json.pins_from_json(
             row["underlying_sha256"], row["listing_sha256"], json.loads(row["option_days_json"])
         ),
@@ -499,8 +577,8 @@ def _trade(row: asyncpg.Record) -> LegTrade:
         contracts=row["contracts"],
         multiplier=row["multiplier"],
         bar_close_ms=row["entry_bar_close_ms"],
-        seen=row["entry_seen"],
-        filled=row["entry_filled"],
+        seen=_money(row["entry_seen"]),
+        filled=_money(row["entry_filled"]),
     )
     leaving: Fill | Mark
     if row["exit_kind"] == "fill":
@@ -511,29 +589,29 @@ def _trade(row: asyncpg.Record) -> LegTrade:
             contracts=row["contracts"],
             multiplier=row["multiplier"],
             bar_close_ms=row["exit_bar_close_ms"],
-            seen=row["exit_seen"],
-            filled=row["exit_price"],
+            seen=_money(row["exit_seen"]),
+            filled=_money(row["exit_price"]),
         )
     else:
-        leaving = Mark(bar_close_ms=row["exit_bar_close_ms"], price=row["exit_price"])
+        leaving = Mark(bar_close_ms=row["exit_bar_close_ms"], price=_money(row["exit_price"]))
     return LegTrade(
         leg_id=row["leg_id"],
         entry_number=row["entry_number"],
         contract=contract,
         contracts=row["contracts"],
         multiplier=row["multiplier"],
-        starting_price=row["starting_price"],
-        momentum_level=row["momentum_level"],
-        stop_level=row["stop_level"],
+        starting_price=_optional_money(row["starting_price"]),
+        momentum_level=_optional_money(row["momentum_level"]),
+        stop_level=_optional_money(row["stop_level"]),
         entry_decided_at_ms=row["entry_decided_at_ms"],
         entry=entry,
         exit_reason=ExitReason(row["exit_reason"]),
         exit_group=row["exit_group"],
         exit_decided_at_ms=row["exit_decided_at_ms"],
         exit=leaving,
-        entry_fee_usd=row["entry_fee_usd"],
-        exit_fee_usd=row["exit_fee_usd"],
-        pnl_usd=row["pnl_usd"],
+        entry_fee_usd=_money(row["entry_fee_usd"]),
+        exit_fee_usd=_money(row["exit_fee_usd"]),
+        pnl_usd=_money(row["pnl_usd"]),
     )
 
 

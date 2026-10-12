@@ -276,3 +276,142 @@ def test_a_session_fits_a_window_that_leaves_a_minute_to_read_and_a_minute_to_fi
     )
 
     assert setup.window_fits(session_open_ms=_OPEN_MS, session_close_ms=close_ms) is fits
+
+
+# ── An underlying is one to five letters ─────────────────────────────────
+
+
+@pytest.mark.parametrize("underlying", ["A", "SPY", "GOOGL"])
+def test_an_underlying_of_one_to_five_letters_is_taken(underlying: str) -> None:
+    OptionsBacktestSetup.model_validate(_setup(underlying=underlying))
+
+
+@pytest.mark.parametrize("underlying", ["GOOGLE", "ABCDEF", ""])
+def test_an_underlying_of_six_letters_is_refused_since_its_contracts_names_do_not_fit_the_lake(underlying: str) -> None:
+    # A six-letter root makes a contract symbol of 21 characters, one more than the lake's catalog stores.
+    with pytest.raises(ValidationError):
+        OptionsBacktestSetup.model_validate(_setup(underlying=underlying))
+
+
+# ── An entry from the open and an exit from the close ────────────────────
+
+
+@pytest.mark.parametrize(
+    ("entry_minutes", "exit_minutes", "taken"),
+    [
+        (700, 739, True),  # 1,439 minutes: one minute short of a day
+        (700, 740, False),  # 1,440 minutes: a day
+        (1, 1438, True),  # 1,439 minutes
+        (1, 1439, False),  # 1,440 minutes
+        (1439, 1, False),
+        (1439, 2, False),
+        (720, 720, False),
+        (1000, 1000, False),
+    ],
+)
+def test_an_entry_from_the_open_and_an_exit_from_the_close_that_add_up_to_a_day_fit_no_session(
+    entry_minutes: int, exit_minutes: int, taken: bool
+) -> None:
+    written = _setup(
+        entry={"anchor": "open", "offset_ms": entry_minutes * MS_PER_MINUTE},
+        exit={"anchor": "close", "offset_ms": exit_minutes * MS_PER_MINUTE},
+    )
+
+    if taken:
+        OptionsBacktestSetup.model_validate(written)
+    else:
+        with pytest.raises(ValidationError, match="add up to a day"):
+            OptionsBacktestSetup.model_validate(written)
+
+
+def test_an_entry_from_the_close_and_an_exit_from_the_open_are_left_to_each_session_whatever_they_add_up_to() -> None:
+    # Counted that way round the entry is the earlier of the two only when they add up to more than the session, so a
+    # large sum is what lets one fit. The rule above is not about this pair.
+    setup = OptionsBacktestSetup.model_validate(
+        _setup(
+            entry={"anchor": "close", "offset_ms": 300 * MS_PER_MINUTE},
+            exit={"anchor": "open", "offset_ms": 300 * MS_PER_MINUTE},
+        )
+    )
+
+    assert setup.window_fits(session_open_ms=_OPEN_MS, session_close_ms=_CLOSE_MS) is True
+    assert setup.window_fits(session_open_ms=_OPEN_MS, session_close_ms=_HALF_DAY_CLOSE_MS) is False
+
+
+# ── A re-entry rule a stop can reach ─────────────────────────────────────
+
+_STOP = {"kind": "percent", "value": "25"}
+_RE_ENTER = {"kind": "at_once", "count": 1}
+
+
+@pytest.mark.parametrize(
+    ("square_off", "legs", "taken", "reason"),
+    [
+        ("partial", [_leg(reentry_on_stop=_RE_ENTER)], False, "a re-entry rule on a leg with no stop, alone"),
+        ("complete", [_leg(reentry_on_stop=_RE_ENTER)], False, "a re-entry rule on a leg with no stop, alone, complete"),
+        (
+            "partial",
+            [_leg(stop_loss=_STOP, reentry_on_stop=_RE_ENTER)],
+            True,
+            "a leg that can be stopped by its own stop",
+        ),
+        (
+            "complete",
+            [_leg(stop_loss=_STOP, reentry_on_stop=_RE_ENTER)],
+            True,
+            "a leg that can be stopped by its own stop, complete",
+        ),
+        (
+            "partial",
+            [_leg(reentry_on_stop=_RE_ENTER), _leg(leg_id="put", right="put", stop_loss=_STOP)],
+            False,
+            "another leg's stop closes only that leg under a partial square-off",
+        ),
+        (
+            "complete",
+            [_leg(reentry_on_stop=_RE_ENTER), _leg(leg_id="put", right="put", stop_loss=_STOP)],
+            True,
+            "another leg's stop closes this leg too under a complete square-off",
+        ),
+        (
+            "complete",
+            [_leg(reentry_on_stop=_RE_ENTER), _leg(leg_id="put", right="put")],
+            False,
+            "no leg has a stop, complete",
+        ),
+        (
+            "partial",
+            [_leg(reentry_on_stop=_RE_ENTER), _leg(leg_id="put", right="put", reentry_on_stop=_RE_ENTER)],
+            False,
+            "two legs that re-enter and neither can be stopped",
+        ),
+        (
+            "complete",
+            [_leg(reentry_on_stop=_RE_ENTER), _leg(leg_id="put", right="put", stop_loss=_STOP, reentry_on_stop=_RE_ENTER)],
+            True,
+            "the second leg's stop reaches the first, and its own reaches itself",
+        ),
+        ("partial", [_leg(), _leg(leg_id="put", right="put")], True, "no re-entry rule asks for no stop"),
+    ],
+)
+def test_a_leg_with_a_re_entry_rule_needs_a_stop_that_can_reach_it(
+    square_off: str, legs: list[dict[str, Any]], taken: bool, reason: str
+) -> None:
+    written = _setup(square_off=square_off, legs=legs)
+
+    if taken:
+        OptionsBacktestSetup.model_validate(written)
+        return
+    with pytest.raises(ValidationError) as caught:
+        OptionsBacktestSetup.model_validate(written)
+    message = str(caught.value)
+    assert "nothing can stop it out" in message and "give it a stop loss" in message
+
+
+def test_the_two_shipped_examples_still_validate() -> None:
+    from app.options_backtest.saved_setups import EXAMPLE_SETUPS
+
+    assert [example.setup is not None for example in EXAMPLE_SETUPS] == [True, True]
+    for example in EXAMPLE_SETUPS:
+        assert example.setup is not None
+        assert OptionsBacktestSetup.model_validate(example.setup.model_dump(mode="json")) == example.setup

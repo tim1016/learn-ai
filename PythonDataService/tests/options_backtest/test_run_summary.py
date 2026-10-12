@@ -21,7 +21,7 @@ from app.options_backtest.run import RunResult, run_sessions
 from app.options_backtest.setup import FeePolicy
 from app.options_backtest.statistics import Ratio
 from tests.options_backtest._market import leg, setup
-from tests.options_backtest._run_data import FRI, THU, WED, D, Day, changed, fake_data, flat, steady
+from tests.options_backtest._run_data import FRI, OPEN_MS, THU, WED, D, Day, changed, fake_data, flat, steady
 
 MON, TUE = date(2026, 10, 12), date(2026, 10, 13)
 CALL_500 = ("call", 500)
@@ -103,6 +103,8 @@ def test_the_summary_draws_the_drawdown_from_the_peak_to_the_marked_day_and_coun
     summary = _run().summary
 
     # Equity peaks at 10,099.00 on Wednesday (Thursday and Friday leave it there) and ends Monday at 10,078.50.
+    # Wednesday is 2026-10-07 and Monday 2026-10-12: their 09:30 New York opens are 1,791,379,800,000 and
+    # 1,791,811,800,000 ms UTC.
     drawdown = summary.drawdown_by_fraction
     assert drawdown is not None
     assert (drawdown.peak_equity_usd, drawdown.trough_equity_usd, drawdown.fall_usd) == (
@@ -110,7 +112,8 @@ def test_the_summary_draws_the_drawdown_from_the_peak_to_the_marked_day_and_coun
         D("10078.50"),
         D("20.50"),
     )
-    assert (drawdown.peak_date, drawdown.trough_date) == (WED, MON)
+    assert (OPEN_MS[WED], OPEN_MS[MON]) == (1_791_379_800_000, 1_791_811_800_000)
+    assert (drawdown.peak_session_open_ms, drawdown.trough_session_open_ms) == (OPEN_MS[WED], OPEN_MS[MON])
     assert drawdown.fall_ratio == Ratio(D("20.50"), D("10099.00"))
     assert summary.drawdown_by_dollars == drawdown
     # Friday's contract never traded, so its entry was dropped.
@@ -126,12 +129,14 @@ def test_the_summary_draws_the_drawdown_from_the_peak_to_the_marked_day_and_coun
 def test_the_tables_cover_the_five_sessions_and_the_one_month() -> None:
     summary = _run().summary
 
-    assert [(row.trading_date, row.status, row.net_profit_usd) for row in summary.by_day] == [
-        (WED, SessionStatus.TRADED, D("99.00")),
-        (THU, SessionStatus.TRADED, D("0.00")),
-        (FRI, SessionStatus.NO_TRADE, D("0")),
-        (MON, SessionStatus.INCOMPLETE, D("-20.50")),
-        (date(2026, 10, 13), SessionStatus.SKIPPED, D("0")),
+    # The rows are the five sessions, Wed 10-07 to Tue 10-13, each named by its 09:30 New York open in ms UTC (the
+    # table in _run_data.py works each out from its date).
+    assert [(row.session_open_ms, row.status, row.net_profit_usd) for row in summary.by_day] == [
+        (OPEN_MS[WED], SessionStatus.TRADED, D("99.00")),
+        (OPEN_MS[THU], SessionStatus.TRADED, D("0.00")),
+        (OPEN_MS[FRI], SessionStatus.NO_TRADE, D("0")),
+        (OPEN_MS[MON], SessionStatus.INCOMPLETE, D("-20.50")),
+        (OPEN_MS[TUE], SessionStatus.SKIPPED, D("0")),
     ]
     [october] = summary.by_month
     assert (october.year, october.month, october.sessions, october.sessions_traded, october.trades) == (
