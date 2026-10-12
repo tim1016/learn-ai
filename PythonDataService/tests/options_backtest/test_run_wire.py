@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 from datetime import date
+from decimal import Decimal
 from typing import get_args
 
 import pytest
@@ -24,9 +25,12 @@ from app.options_backtest.market import PickRefusal
 from app.options_backtest.results import ExitReason, SessionStatus, SkipReason
 from app.options_backtest.run import RunResult, run_sessions
 from app.options_backtest.saved_runs import FailureItem, Headline, RunFailure, RunFigures, RunRecord, StoredRun
+from app.options_backtest.statistics import Ratio
 from app.schemas import options_backtest_runs as wire
 from tests.options_backtest._run_data import fake_data
 from tests.options_backtest.test_service import SESSION_OF_THE_RANGE, THU, TUE, the_scene, the_setup
+
+D = Decimal
 
 
 @pytest.fixture(scope="module")
@@ -264,3 +268,13 @@ def test_a_decimal_is_written_in_plain_digits_never_in_exponent_form() -> None:
 
     assert wire.exact(Decimal("1E+2")) == "100" and wire.exact(Decimal("0E-8")) == "0.00000000"
     assert wire.exact(Decimal("0.0000001")) == "0.0000001"
+
+
+def test_a_rate_whose_quotient_ends_is_still_given_to_six_places_in_both_kinds_of_rate() -> None:
+    # One half is exact, and the rounded figure is still written to six places: 0.500000.
+    half = Ratio(D("1"), D("2"))
+
+    assert wire.OptionsBacktestRateResponse.from_ratio(half).rounded_to_6_places == "0.500000"
+    assert (
+        wire.OptionsBacktestDollarRateResponse.from_ratio(Ratio(D("1.00"), D("2.00"))).rounded_to_6_places == "0.500000"
+    )

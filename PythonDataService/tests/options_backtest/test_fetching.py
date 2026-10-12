@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 import respx
 
+from app.lean_sidecar.trading_calendar import expected_sessions
 from app.options.contract import OptionContract
 from app.options_backtest import fetching
 from app.options_backtest.fetching import (
@@ -303,3 +304,20 @@ def test_a_stop_before_the_first_chunk_asks_the_lake_for_nothing(monkeypatch: py
         ensure_run_data(_same_day_call(), THREE_SESSIONS, now_ms=NOW_MS, should_stop=lambda: True)
 
     assert calls == []
+
+
+def test_the_underlying_is_asked_for_twenty_five_sessions_at_a_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[date, date]] = []
+    monkeypatch.setattr(
+        fetching,
+        "materialize_engine_run",
+        lambda *, symbol, start, end, resolution, price_adjustment_mode: calls.append((start, end)),
+    )
+    sessions = expected_sessions(date(2026, 8, 3), date(2026, 9, 30))[:26]
+    assert len(sessions) == 26
+
+    with pytest.raises(DownloadStopped):
+        ensure_run_data(_same_day_call(), sessions, now_ms=NOW_MS, should_stop=lambda: len(calls) >= 2)
+
+    # The first twenty-five sessions are one call, the twenty-sixth the next.
+    assert calls == [(sessions[0], sessions[24]), (sessions[25], sessions[25])]

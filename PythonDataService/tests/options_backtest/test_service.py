@@ -431,6 +431,23 @@ async def test_a_cancel_during_the_replay_marks_the_run_cancelled_and_saves_no_p
 
 
 @respx.mock
+async def test_a_cancel_that_comes_during_the_last_session_still_cancels_the_run_before_it_is_saved(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # The replay asks to stop before each session and never after the last, so a cancel that arrives while the last
+    # one is replayed is found only by the check made before the save.
+    Vendor(the_scene()).mount()
+    job, store = Job(), FakeStore()
+    job.on_progress_hook = lambda phase, done, _total: job.stop.set() if (phase, done) == ("replaying", 4) else None
+
+    with pytest.raises(RunCancelled):
+        await _execute(store, job)
+
+    assert store.cancelled == [(7, FINISHED_AT_MS)] and store.completed == []
+    assert "saving" not in job.phases
+
+
+@respx.mock
 async def test_a_stop_that_comes_before_anything_starts_cancels_without_a_check(
     fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
@@ -596,6 +613,12 @@ def test_a_range_of_a_weekend_holds_no_session_and_an_empty_or_reversed_one_is_r
         with pytest.raises(RunRefused) as caught:
             sessions_of_range(start_ms, end_ms)
         assert caught.value.code == code
+
+
+def test_a_range_of_exactly_the_most_sessions_a_run_takes_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(service, "MAX_RANGE_SESSIONS", 4)
+
+    assert len(sessions_of_range(et_midnight_ms(TUE), et_day_end_ms(FRI))) == 4
 
 
 def test_a_range_past_the_calendars_reach_or_longer_than_a_run_takes_is_refused(

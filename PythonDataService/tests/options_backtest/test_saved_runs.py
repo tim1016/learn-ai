@@ -372,6 +372,17 @@ async def test_the_database_itself_refuses_figures_on_a_run_that_is_not_complete
         )
 
 
+async def test_the_database_itself_refuses_a_running_run_with_an_end_time_and_an_ended_run_without_one(
+    conn: asyncpg.Connection, tag: str, result: RunResult
+) -> None:
+    run_id = await create_run(conn, _new(result, tag))
+
+    with pytest.raises(asyncpg.CheckViolationError):
+        await conn.execute("UPDATE research_options_backtest_runs SET finished_at_ms = 5 WHERE id = $1", run_id)
+    with pytest.raises(asyncpg.CheckViolationError):
+        await conn.execute("UPDATE research_options_backtest_runs SET status = 'cancelled' WHERE id = $1", run_id)
+
+
 async def test_one_job_has_one_run(conn: asyncpg.Connection, tag: str, result: RunResult) -> None:
     await create_run(conn, _new(result, tag))
 
