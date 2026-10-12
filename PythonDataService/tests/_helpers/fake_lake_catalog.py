@@ -351,7 +351,7 @@ class FakeCatalog:
         ]
 
     async def select_complete_minute_bar_symbols(
-        self, market, symbols, data_type, trading_date, *, price_adjustment_mode, data_root_id=None
+        self, market, symbols, data_type, trading_date, *, price_adjustment_mode, provider, data_root_id=None
     ) -> frozenset[str]:
         # Root-scoped like the real query: an omitted root is the active one (#1876).
         root_id = data_root_id if data_root_id is not None else root_identity.active_root_id()
@@ -367,6 +367,7 @@ class FakeCatalog:
             and row["data_type"] == data_type
             and row["trading_date"] == trading_date
             and row["price_adjustment_mode"] == price_adjustment_mode
+            and row["provider"] == provider
             and row["status"] == "complete"
         )
 

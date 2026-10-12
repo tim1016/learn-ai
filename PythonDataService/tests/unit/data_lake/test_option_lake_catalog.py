@@ -54,6 +54,7 @@ from app.data_lake.types import ArtifactIdentity
 from app.options.contract import OptionContract
 from tests._helpers.fake_lake_catalog import point_lake_writer_at_tmp
 from tests._helpers.option_lake_cases import (
+    complete_row_of_another_provider,
     one_bar_file,
     pieces_of_the_key_in,
     publish_stale_writer_first_once_both_have_staged,
@@ -309,6 +310,61 @@ async def test_the_captured_contract_days_of_a_date_come_from_one_select_on_the_
 
 
 @respx.mock
+async def test_another_providers_complete_row_with_the_same_file_and_recipe_is_not_reused_for_this_providers_failed_row_on_the_real_table(
+    clean_artifacts, pool, tmp_lake
+) -> None:
+    route = _mock_bars(_bars_ok([_bar(0)]))
+    first = await _ensure()
+    assert first.record is not None
+    await complete_row_of_another_provider(first.record)
+    assert await catalog_client.mark_complete_artifact_failed(first.record.id, "provider_api_error", "gone wrong")
+
+    again = await _ensure()
+
+    assert again.failure is None and again.reused is False
+    assert again.record is not None and again.record.id == first.record.id and again.record.provider == "polygon"
+    assert route.call_count == 2
+    rows = {row["Provider"]: row for row in await _bar_rows()}
+    assert (rows["polygon"]["Status"], rows["alpaca"]["Status"], rows["alpaca"]["LeaseGeneration"]) == ("complete", "complete", 1)
+
+
+@respx.mock
+async def test_another_providers_complete_row_is_never_refreshed_with_this_providers_bytes_on_the_real_table(
+    clean_artifacts, pool, tmp_lake
+) -> None:
+    _mock_bars(_bars_ok([_bar(0)]))
+    first = await _ensure()
+    assert first.record is not None
+    other_id = await complete_row_of_another_provider(first.record, data_contract_hash="0" * 64, file_path="elsewhere/theirs.zip")
+    other_before = next(dict(r) for r in await _bar_rows() if r["Id"] == other_id)
+    assert await catalog_client.mark_complete_artifact_failed(first.record.id, "provider_api_error", "gone wrong")
+
+    again = await _ensure()
+
+    assert again.failure is None and again.record is not None and again.record.id == first.record.id
+    other_after = next(dict(r) for r in await _bar_rows() if r["Id"] == other_id)
+    assert other_after == other_before
+
+
+@respx.mock
+async def test_another_providers_complete_row_is_not_a_captured_option_day_on_the_real_table(
+    clean_artifacts, pool, tmp_lake
+) -> None:
+    _mock_bars(_bars_ok([_bar(0)]))
+    first = await _ensure()
+    assert first.record is not None
+    await complete_row_of_another_provider(first.record)
+    assert await catalog_client.mark_complete_artifact_failed(first.record.id, "provider_api_error", "gone wrong")
+
+    named_with_only_the_others_row = await captured_option_days([SYMBOL], TRADING_DAY)
+    await _ensure()
+    named_with_both = await captured_option_days([SYMBOL], TRADING_DAY)
+
+    assert named_with_only_the_others_row == frozenset()
+    assert named_with_both == frozenset({SYMBOL})
+
+
+@respx.mock
 async def test_a_contract_symbol_of_21_characters_is_refused_before_the_table_could_object(
     clean_artifacts, pool, tmp_lake
 ) -> None:
@@ -530,6 +586,66 @@ async def test_a_complete_row_whose_file_has_gone_is_refreshed_under_a_new_gener
     assert (row["Status"], row["LeaseGeneration"], row["AttemptCount"]) == ("complete", 2, 2)
 
 
+async def _another_worker_takes_the_row() -> None:
+    await _sql(
+        'UPDATE "DataLakeArtifacts" SET "LeaseGeneration" = "LeaseGeneration" + 1, "LeaseOwner" = \'the-winner\''
+        ' WHERE "Status" = \'fetching\''
+    )
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("answer", "would_have_been"),
+    [
+        (lambda: httpx.Response(401, text="no key"), "provider_auth_error"),
+        (lambda: httpx.Response(500, text="boom"), "provider_api_error"),
+        (lambda: _bars_ok([_bar(0, h=1.0)]), "validation_failed"),
+    ],
+    ids=["a 401", "a 500", "corrupt bars"],
+)
+async def test_a_stale_writers_vendor_failure_comes_back_as_lease_lost_and_the_row_is_the_new_owners_on_the_real_table(
+    answer: Any, would_have_been: str, clean_artifacts, pool, tmp_lake
+) -> None:
+    await _list(CONTRACT)
+
+    async def another_worker_takes_the_row_while_the_vendor_answers(request: httpx.Request) -> httpx.Response:
+        await _another_worker_takes_the_row()
+        return answer()
+
+    respx.get(url__regex=rf"https://api\.polygon\.io/v2/aggs/ticker/O:{SYMBOL}/range/1/minute/.*").mock(
+        side_effect=another_worker_takes_the_row_while_the_vendor_answers
+    )
+
+    result = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
+
+    assert result.record is None
+    assert result.failure is not None
+    assert result.failure.reason == "lease_timeout" != would_have_been
+    [row] = await _bar_rows()
+    assert (row["Status"], row["LeaseOwner"], row["LeaseGeneration"], row["LastError"]) == ("fetching", "the-winner", 2, None)
+    assert await catalog_client.fail_artifact(
+        row["Id"], "provider_api_error", "its own", worker_id="the-winner", lease_generation=2
+    )  # the new owner's lease is intact: it can still finish the row
+
+
+@respx.mock
+async def test_a_stale_writers_failure_on_a_listing_comes_back_as_lease_lost_and_the_row_is_the_new_owners_on_the_real_table(
+    clean_artifacts, pool, tmp_lake
+) -> None:
+    async def another_worker_takes_the_row_while_the_vendor_answers(request: httpx.Request) -> httpx.Response:
+        await _another_worker_takes_the_row()
+        return httpx.Response(401, text="no key")
+
+    respx.get(CONTRACTS_URL).mock(side_effect=another_worker_takes_the_row_while_the_vendor_answers)
+
+    result = await ensure_option_listing("SPY", TRADING_DAY)
+
+    assert result.record is None
+    assert result.failure is not None and result.failure.reason == "lease_timeout"
+    [row] = await _rows()
+    assert (row["Status"], row["LeaseOwner"], row["LeaseGeneration"], row["LastError"]) == ("fetching", "the-winner", 2, None)
+
+
 @respx.mock
 async def test_a_writer_whose_lease_was_taken_while_it_fetched_publishes_nothing_under_the_real_row_lock(
     clean_artifacts, pool, tmp_lake, monkeypatch: pytest.MonkeyPatch
@@ -578,6 +694,7 @@ async def test_a_listing_row_is_claimed_published_and_completed_by_the_real_sql(
     listing = await asyncio.to_thread(read_option_listing, "SPY", TRADING_DAY)
     assert listing is not None and listing.sha256 == result.record.file_sha256
     assert [r.standard for r in listing.rows] == [True, True]
+    assert [r.expiry_ms for r in listing.rows] == [1749844800000, 1749844800000]  # 2025-06-13 16:00 EDT, held as the instant
 
 
 @respx.mock
@@ -677,6 +794,36 @@ async def test_a_new_file_format_stales_the_old_formats_row_on_the_real_table(
     rows = {row["Id"]: row for row in await _rows()}
     assert (rows[old.record.id]["Status"], rows[new.record.id]["Status"]) == ("stale", "complete")
     assert rows[old.record.id]["FilePath"] == rows[new.record.id]["FilePath"]
+    assert await captured_listing_dates("SPY", TRADING_DAY, TRADING_DAY) == (TRADING_DAY,)
+
+
+@respx.mock
+async def test_a_listing_published_when_the_cleanup_broke_has_the_old_formats_row_staled_by_the_next_ask_that_reuses_it_on_the_real_table(
+    clean_artifacts, pool, tmp_lake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mock_listing([_listing_row("O:SPY250613C00375000", 375)])
+    old = await ensure_option_listing("SPY", TRADING_DAY)
+    monkeypatch.setattr(option_listing_module, "OPTION_LISTING_FILE_FORMAT", option_listing_module.OPTION_LISTING_FILE_FORMAT + 1)
+    cleanup = catalog_client.mark_metadata_artifacts_stale_for_path
+    broken_once = [True]
+
+    async def breaks_once(*args: Any, **kwargs: Any) -> int:
+        if broken_once:
+            broken_once.pop()
+            raise catalog_client.CatalogUnavailableError("down")
+        return await cleanup(*args, **kwargs)
+
+    monkeypatch.setattr(catalog_client, "mark_metadata_artifacts_stale_for_path", breaks_once)
+    with pytest.raises(catalog_client.CatalogUnavailableError):
+        await ensure_option_listing("SPY", TRADING_DAY)
+    assert old.record is not None
+    assert sorted(row["Status"] for row in await _rows()) == ["complete", "complete"]
+
+    again = await ensure_option_listing("SPY", TRADING_DAY)
+
+    assert again.reused is True and again.record is not None and again.record.id != old.record.id
+    rows = {row["Id"]: row for row in await _rows()}
+    assert (rows[old.record.id]["Status"], rows[again.record.id]["Status"]) == ("stale", "complete")
     assert await captured_listing_dates("SPY", TRADING_DAY, TRADING_DAY) == (TRADING_DAY,)
 
 

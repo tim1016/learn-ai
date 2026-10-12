@@ -81,6 +81,7 @@ from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, 
 from tests._helpers.option_lake_cases import (
     CAPTURE_OPENS,
     HALF_DAY_CLOSE_MS,
+    complete_row_of_another_provider,
     one_bar_file,
     pieces_of_the_key_in,
     publish_stale_writer_first_once_both_have_staged,
@@ -143,6 +144,13 @@ def _mock_vendor(*responses: httpx.Response, contract: str = SYMBOL) -> respx.Ro
     if len(responses) > 1:
         return route.mock(side_effect=list(responses))
     return route.mock(return_value=responses[0] if responses else _ok([_bar(0)], contract))
+
+
+def _mock_vendor_with(side_effect: Any, contract: str = SYMBOL) -> respx.Route:
+    """Answer every ask for the contract by calling ``side_effect(request)``."""
+    return respx.get(url__regex=rf"https://api\.polygon\.io/v2/aggs/ticker/O:{contract}/range/1/minute/.*").mock(
+        side_effect=side_effect
+    )
 
 
 def _listing_row(contract: OptionContract, underlying: str = "SPY") -> dict[str, Any]:
@@ -903,6 +911,65 @@ async def test_a_second_capture_reuses_the_complete_row_without_asking_the_vendo
     assert len(_bar_rows(fake_catalog)) == 1
 
 
+# ── Another provider's row for the same contract-day is not this provider's row ──
+
+
+@respx.mock
+async def test_another_providers_complete_row_with_the_same_file_and_recipe_is_not_reused_for_this_providers_failed_row(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """The lookup after a lost claim took the first complete row of the contract-day, whichever provider's."""
+    route = _mock_vendor()
+    first = await _ensure()
+    assert first.record is not None
+    other_id = await complete_row_of_another_provider(first.record)
+    assert await catalog_client.mark_complete_artifact_failed(first.record.id, "provider_api_error", "gone wrong")
+
+    again = await _ensure()
+
+    assert again.failure is None and again.reused is False
+    assert again.record is not None and again.record.id == first.record.id and again.record.provider == "polygon"
+    assert route.call_count == 2  # asked again for its own row
+    assert fake_catalog.rows[first.record.id]["status"] == "complete"
+    other = fake_catalog.rows[other_id]
+    assert (other["provider"], other["status"], other["lease_generation"]) == ("alpaca", "complete", 1)
+
+
+@respx.mock
+async def test_another_providers_complete_row_is_never_refreshed_with_this_providers_bytes(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """Under another recipe the lookup's row was refreshed and published over: the other provider's artifact held our bytes."""
+    _mock_vendor()
+    first = await _ensure()
+    assert first.record is not None
+    other_id = await complete_row_of_another_provider(first.record, data_contract_hash="0" * 64, file_path="elsewhere/theirs.zip")
+    before = dict(fake_catalog.rows[other_id])
+    assert await catalog_client.mark_complete_artifact_failed(first.record.id, "provider_api_error", "gone wrong")
+
+    again = await _ensure()
+
+    assert again.failure is None and again.record is not None and again.record.id == first.record.id
+    assert fake_catalog.rows[other_id] == before  # not one field of it changed
+    assert fake_catalog.rows[first.record.id]["status"] == "complete"
+
+
+@respx.mock
+async def test_another_providers_complete_row_is_not_a_captured_option_day(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    _mock_vendor()
+    first = await _ensure()
+    assert first.record is not None
+    await complete_row_of_another_provider(first.record)
+    assert await catalog_client.mark_complete_artifact_failed(first.record.id, "provider_api_error", "gone wrong")
+
+    named_with_only_the_others_row = await captured_option_days([SYMBOL], TRADING_DAY)
+    await _ensure()
+    named_with_both = await captured_option_days([SYMBOL], TRADING_DAY)
+
+    assert named_with_only_the_others_row == frozenset()
+    assert named_with_both == frozenset({SYMBOL})
+
+
 @respx.mock
 async def test_a_complete_row_whose_file_has_gone_is_fetched_again(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
     route = _mock_vendor()
@@ -1172,19 +1239,94 @@ def test_a_failure_text_loses_its_nuls_is_made_encodable_and_is_cut_to_the_store
     assert MAX_FAILURE_TEXT_CHARS > 200  # the vendor's body is cut to 200 elsewhere; this never clips that
 
 
+async def _claim_the_contract_day() -> int:
+    """This worker's own claim on the contract-day, at the first generation: the row a capture would fail."""
+    claimed = await catalog_client.claim_minute_bar(
+        identity=ArtifactIdentity(
+            artifact_kind="time_series_bars", market="usa_options", symbol=SYMBOL, trading_date=TRADING_DAY,
+            resolution="minute", data_type="trade", provider="polygon", price_adjustment_mode="raw",
+        ),
+        worker_id=option_lake_module.WORKER_ID, lease_ttl_ms=option_lake_module.LEASE_TTL_MS,
+        data_contract_hash=option_minute_trade_dch(), file_path=RELATIVE_PATH,
+    )
+    assert claimed is not None
+    return claimed
+
+
 async def test_fail_row_hands_the_catalog_the_cleaned_text_and_answers_with_it(
     fake_catalog: FakeCatalog, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     stored = refuse_what_postgres_refuses(monkeypatch)
+    artifact_id = await _claim_the_contract_day()
 
     result = await fail_row(
-        artifact_id=1, lease_generation=1, reason="provider_api_error", detail="bad\x00\ud800" + "y" * 5000,
-        symbol=SYMBOL, trading_date=TRADING_DAY,
+        artifact_id=artifact_id, lease_generation=catalog_client.INITIAL_LEASE_GENERATION, reason="provider_api_error",
+        detail="bad\x00\ud800" + "y" * 5000, symbol=SYMBOL, trading_date=TRADING_DAY,
     )
 
     assert result.failure is not None
     assert stored == [result.failure.detail] and stored[0].startswith("bad?y")
     assert len(stored[0]) == MAX_FAILURE_TEXT_CHARS
+
+
+async def test_a_failure_whose_lease_was_taken_over_is_not_recorded_and_is_answered_as_lease_lost(
+    fake_catalog: FakeCatalog,
+) -> None:
+    artifact_id = await _claim_the_contract_day()
+    fake_catalog.rows[artifact_id].update(lease_generation=2, lease_owner="the-winner")
+
+    result = await fail_row(
+        artifact_id=artifact_id, lease_generation=catalog_client.INITIAL_LEASE_GENERATION, reason="provider_auth_error",
+        detail="no key", symbol=SYMBOL, trading_date=TRADING_DAY,
+    )
+
+    assert result.record is None
+    assert result.failure is not None and result.failure.reason == "lease_timeout"
+    row = fake_catalog.rows[artifact_id]
+    assert (row["status"], row["lease_owner"], row["lease_generation"], row["last_error"]) == ("fetching", "the-winner", 2, None)
+
+
+#: What a writer that lost its lease can meet while it fetches or validates: the answer, and the reason it would have been failed with.
+_STALE_WRITER_MEETS = [
+    ("a 401", lambda: httpx.Response(401, text="no key"), "provider_auth_error"),
+    ("a 403", lambda: httpx.Response(403, text="not entitled"), "provider_entitlement_error"),
+    ("a 429", lambda: httpx.Response(429), "provider_rate_limited"),
+    ("a 404", lambda: httpx.Response(404), "unknown_symbol"),
+    ("a 500", lambda: httpx.Response(500, text="boom"), "provider_api_error"),
+    ("the plan's 403", outside_plan, "outside_data_plan"),
+    ("a malformed answer", lambda: bad_bars_answers(SYMBOL)["bare object"](), "provider_api_error"),
+    ("corrupt bars", lambda: _ok([_bar(0, h=1.0)]), "validation_failed"),
+]
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("answer", "would_have_been"), [(a, r) for _, a, r in _STALE_WRITER_MEETS], ids=[name for name, _, _ in _STALE_WRITER_MEETS]
+)
+async def test_a_stale_writers_vendor_failure_comes_back_as_lease_lost_and_the_row_is_whatever_the_new_owner_makes_it(
+    answer: Any, would_have_been: str, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """A writer whose lease was taken over while it fetched met a failure: it must not report it as the row's."""
+
+    def another_worker_takes_the_row_while_the_vendor_answers(request: httpx.Request) -> httpx.Response:
+        [row] = _bar_rows(fake_catalog)
+        row.update(lease_generation=row["lease_generation"] + 1, lease_owner="the-winner")
+        return answer()
+
+    _mock_vendor_with(another_worker_takes_the_row_while_the_vendor_answers)
+
+    result = await _ensure(now_ms=NOW_2026_10_12_MS)
+
+    assert result.record is None
+    assert result.failure is not None
+    assert result.failure.reason == "lease_timeout" != would_have_been
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["lease_owner"], row["lease_generation"], row["last_error"]) == ("fetching", "the-winner", 2, None)
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+    # the new owner's own lease is intact: it can still finish the row
+    assert await catalog_client.fail_artifact(
+        row["id"], "provider_api_error", "its own", worker_id="the-winner", lease_generation=2
+    )
 
 
 @respx.mock
@@ -1956,3 +2098,68 @@ async def test_the_smallest_price_that_rounds_up_to_one_ten_thousandth_is_stored
     assert day is not None
     assert (day.bars[1].open, day.bars[1].low) == (Decimal("0.0001"), Decimal("0.0001"))
 
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("prices", "named", "as_floats"),
+    [
+        ({"o": "1.0", "h": "1.5", "l": "1.0000000000000001", "c": "1.2"}, "low 1.0000000000000001 > open 1.0", ("1.0", "1.0000000000000001")),
+        ({"o": "1.5", "h": "2.0", "l": "1.20000000000000001", "c": "1.2"}, "low 1.20000000000000001 > close 1.2", ("1.2", "1.20000000000000001")),
+        ({"o": "1.5", "h": "1.49999999999999999", "l": "1.0", "c": "1.2"}, "high 1.49999999999999999 < open 1.5", ("1.5", "1.49999999999999999")),
+        ({"o": "1.0", "h": "1.49999999999999999", "l": "0.9", "c": "1.5"}, "high 1.49999999999999999 < close 1.5", ("1.5", "1.49999999999999999")),
+    ],
+    ids=["low above open", "low above close", "high below open", "high below close"],
+)
+async def test_a_bar_whose_low_or_high_is_out_of_place_by_less_than_a_float_holds_fails_the_day_naming_the_relation(
+    prices: dict[str, str], named: str, as_floats: tuple[str, str], fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """Open 1.0 and low 1.0000000000000001 are one number as floats, so the float gate alone passed such a bar and it was published."""
+    assert float(as_floats[0]) == float(as_floats[1])  # the premise: the hairline is gone once the prices are floats
+    _mock_vendor(_one_price_bars(**prices))
+
+    result = await _ensure()
+
+    assert result.record is None
+    assert result.failure is not None and result.failure.reason == "validation_failed"
+    assert "bar[1]" in result.failure.detail and named in result.failure.detail
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "validation_failed", None)
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+    assert await _read() is None
+
+
+@respx.mock
+async def test_a_low_below_the_open_by_a_hairline_is_in_place_and_the_day_is_stored(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    _mock_vendor(_one_price_bars(o="1.0", h="1.5", l="0.99999999999999999", c="1.2"))
+
+    result = await _ensure()
+
+    assert result.failure is None and result.record is not None
+
+
+@respx.mock
+@pytest.mark.parametrize("price", ["NaN", "Infinity", "-Infinity", "0", "-0.0", "-1.27"])
+async def test_a_bar_with_a_price_that_is_not_finite_and_above_zero_fails_the_day_and_raises_nothing(
+    price: str, fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``Decimal`` NaN cannot be compared, so the price relations must not be asked of it."""
+
+    async def fetch(*args: Any, **kwargs: Any) -> list[PolygonOptionBar]:
+        return [
+            PolygonOptionBar(
+                t_ms=SESSION_OPEN_MS, open=Decimal("1.27"), high=Decimal("1.31"), low=Decimal(price), close=Decimal("1.27"),
+                volume=Decimal(12),
+            )
+        ]
+
+    monkeypatch.setattr(option_bars_module, "fetch_option_minute_bars", fetch)
+
+    result = await _ensure()
+
+    assert result.record is None
+    assert result.failure is not None and result.failure.reason == "validation_failed"
+    assert f"low={Decimal(price)} is not finite and positive" in result.failure.detail
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "validation_failed", None)
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []

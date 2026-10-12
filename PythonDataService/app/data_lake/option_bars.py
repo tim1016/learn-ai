@@ -267,9 +267,10 @@ async def captured_option_days(symbols: Collection[str], trading_date: date) -> 
     """Of these contract symbols, those with a complete minute-bar row for ``trading_date``, from one catalog query.
 
     A symbol is an OCC symbol as ``OptionContract.occ_symbol`` writes it, without the vendor's
-    ``O:``. A day captured with no trades has a complete row and is named too. This answers
-    only "is there a complete row": it reads no file, so a complete row whose file has since
-    gone, or whose file is damaged, is still named, and the reader is the judge of "readable"
+    ``O:``. A day captured with no trades has a complete row and is named too; a complete row of
+    another provider for the same symbol and date is not. This answers only "is there a complete
+    row": it reads no file, so a complete row whose file has since gone, or whose file is
+    damaged, is still named, and the reader is the judge of "readable"
     (:func:`read_option_day_bars`: ``None`` for a file that is gone, ``OptionBarsFileError``
     for a damaged one, ``LakeAdmissionError`` for bytes the catalog does not admit). It needs
     the catalog reachable (``catalog_client.CatalogUnavailableError`` otherwise) and nothing
@@ -279,7 +280,8 @@ async def captured_option_days(symbols: Collection[str], trading_date: date) -> 
     if isinstance(symbols, str):
         raise TypeError("symbols must be a collection of contract symbols, not one string")
     return await catalog_client.select_complete_minute_bar_symbols(
-        OPTION_MARKET, symbols, "trade", trading_date, price_adjustment_mode=OPTION_PRICE_ADJUSTMENT_MODE
+        OPTION_MARKET, symbols, "trade", trading_date, price_adjustment_mode=OPTION_PRICE_ADJUSTMENT_MODE,
+        provider=OPTION_PROVIDER,
     )
 
 
@@ -337,11 +339,43 @@ def _minute_trade_bar(bar: PolygonOptionBar) -> MinuteTradeBar:
     )
 
 
+#: The four relations a bar's prices must not stand in, as (price, comparison, price): the low above the open or the
+#: close, and the high below them. (Keeping all four also keeps the low from being above the high.)
+_PRICE_RELATIONS = (("low", ">", "open"), ("low", ">", "close"), ("high", "<", "open"), ("high", "<", "close"))
+
+
+def _require_exact_price_relations(bars: Sequence[PolygonOptionBar], *, symbol: str, trading_date: date) -> None:
+    """Every price finite and above zero, and the low and high keeping their place, judged on the vendor's exact decimals.
+
+    The publication gate (:func:`_publication_gate_view`) reads floats, and two decimals that differ by
+    less than a float can hold are the same float there: a bar whose low is above its open by a hair would pass
+    it and be published. So this runs first, before any float exists. The first bar that breaks a rule fails
+    the day, named; nothing is repaired or dropped. The relations are checked only once the prices are finite,
+    because a ``Decimal`` NaN cannot be compared and would raise.
+    """
+    for index, bar in enumerate(bars):
+        prices = {"open": bar.open, "high": bar.high, "low": bar.low, "close": bar.close}
+        problems = [f"{name}={price} is not finite and positive" for name, price in prices.items() if not price.is_finite() or price <= 0]
+        if not problems:
+            problems = [
+                f"{first} {prices[first]} {way} {second} {prices[second]}"
+                for first, way, second in _PRICE_RELATIONS
+                if (prices[first] > prices[second] if way == ">" else prices[first] < prices[second])
+            ]
+        if problems:
+            raise CorruptVendorBarsError(
+                f"corrupt vendor minute bars for {symbol} {trading_date.isoformat()}: "
+                f"bar[{index}] t_ms={bar.t_ms}: " + "; ".join(problems)
+            )
+
+
 def _publication_gate_view(bars: Sequence[PolygonOptionBar]) -> list[PolygonBar]:
     """The bars in the shape the lake's publication gate takes.
 
     The gate's checks (finite, positive, high above low, ordered, inside the date) read
     floats; they decide whether to publish and never what is stored. The file is encoded from the decimals.
+    The price rules are judged first on the decimals (:func:`_require_exact_price_relations`); the
+    gate repeats them on floats and adds the ordering and the date.
     """
     return [
         PolygonBar(
@@ -448,7 +482,11 @@ async def ensure_option_day_bars(
             end_trading_date=trading_date,
             price_adjustment_mode=OPTION_PRICE_ADJUSTMENT_MODE,
         )
-        return existing[0] if existing else None
+        # The select does not filter by provider, and a contract-day can hold a complete row of another provider
+        # as well as this one's (a provider is part of the row's identity). Only this provider's row is ours to
+        # reuse or refresh; another's is never taken for it.
+        ours = [record for record in existing if record.provider == OPTION_PROVIDER]
+        return ours[0] if ours else None
 
     async def stored_file_reads(record: ArtifactRecord) -> bool:
         return await stored_file_still_reads(record, rel_path, lambda payload: parse_option_day_zip(payload, symbol, trading_date))
@@ -484,6 +522,7 @@ async def ensure_option_day_bars(
     # contract the stored listing of this date holds, so it was listed and did not trade.
     # That is pinned as a complete artifact with no rows (the stock path fails it).
     try:
+        _require_exact_price_relations(bars, symbol=symbol, trading_date=trading_date)
         assert_publishable_minute_bars(_publication_gate_view(bars), symbol=symbol, trading_date=trading_date)
     except CorruptVendorBarsError as e:
         return await fail("validation_failed", str(e))

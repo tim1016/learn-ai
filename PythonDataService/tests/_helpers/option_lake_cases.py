@@ -1,4 +1,4 @@
-"""Cases the option lake tests share (#3030): when a session may be captured, what a database refuses, a publish race.
+"""Cases the option lake tests share (#3030): when a session may be captured, what a database refuses, a publish race, a slow listing.
 
 Each is here once because more than one test module needs it, and a copy in each
 would be a second place to get a hand-worked figure or a timing wrong.
@@ -14,10 +14,12 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import asyncpg
+import httpx
 import pytest
 
 from app.data_lake import catalog_client
 from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes
+from app.data_lake.types import ArtifactIdentity, ArtifactRecord
 
 # A session's option data may be captured from New York midnight after its date. Each row is a
 # session, its label, and that midnight as epoch ms UTC, worked by hand from the New York offset in
@@ -115,3 +117,65 @@ def publish_stale_writer_first_once_both_have_staged(monkeypatch: pytest.MonkeyP
                 stale_done.set()
 
     monkeypatch.setattr(catalog_client, "publish_under_lease", ordered)
+
+
+class MovableClock:
+    """A clock a test moves by hand, in seconds: what the listing fetch's budget runs on when the test replaces ``_now_s``."""
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def slow_listing_pages(
+    clock: MovableClock, *, pages: int, seconds_per_page: float, contracts_url: str
+) -> Callable[[httpx.Request], httpx.Response]:
+    """A respx side effect: the listing is ``pages`` pages of one contract each, and every answer takes ``seconds_per_page`` on ``clock``.
+
+    The first request has no cursor and the cursor ``p<k>`` asks for page ``k + 1``, so the number of
+    requests made is the number of pages asked. Contract ``k`` is the SPY call struck at ``375 + k``.
+    """
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        cursor = request.url.params.get("cursor")
+        page = 1 if cursor is None else int(cursor.removeprefix("p")) + 1
+        clock.now += seconds_per_page
+        strike = 375 + page
+        row = {
+            "ticker": f"O:SPY250613C{strike * 1000:08d}", "contract_type": "call", "strike_price": strike,
+            "expiration_date": "2025-06-13", "exercise_style": "american", "shares_per_contract": 100,
+        }
+        body: dict[str, Any] = {"status": "OK", "request_id": "r", "results": [row]}
+        if page < pages:
+            body["next_url"] = f"{contracts_url}?cursor=p{page}"
+        return httpx.Response(200, json=body)
+
+    return answer
+
+
+async def complete_row_of_another_provider(
+    record: ArtifactRecord, *, provider: str = "alpaca", data_contract_hash: str | None = None, file_path: str | None = None
+) -> int:
+    """A complete minute-bar row of ``provider`` for the same contract-day as ``record``, on whichever catalog is installed.
+
+    A provider is part of a minute-bar row's identity, so two providers' rows for one contract-day sit side by
+    side. By default the row describes the very same file under the very same recipe, which is the row a reuse
+    would most like to take; ``data_contract_hash`` and ``file_path`` make it a different one.
+    """
+    identity = ArtifactIdentity(
+        artifact_kind="time_series_bars", market=record.market, symbol=record.symbol, trading_date=record.trading_date,
+        resolution="minute", data_type="trade", provider=provider, price_adjustment_mode=record.price_adjustment_mode,
+    )
+    recipe = data_contract_hash or record.data_contract_hash
+    artifact_id = await catalog_client.claim_minute_bar(
+        identity=identity, worker_id="another-worker", lease_ttl_ms=300_000, data_contract_hash=recipe,
+        file_path=file_path or record.file_path,
+    )
+    assert artifact_id is not None
+    assert await catalog_client.complete_artifact(
+        artifact_id, record.row_count, record.first_bar_start_ms, record.last_bar_start_ms, record.file_size_bytes,
+        record.file_sha256, lease_generation=catalog_client.INITIAL_LEASE_GENERATION, data_contract_hash=recipe,
+    )
+    return artifact_id

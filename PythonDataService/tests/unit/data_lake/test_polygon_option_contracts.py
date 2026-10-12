@@ -8,6 +8,7 @@ in a header, never in a URL.
 
 from __future__ import annotations
 
+import json
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -16,6 +17,7 @@ import httpx
 import pytest
 import respx
 
+from app.data_lake import polygon_option_contracts as contracts_module
 from app.data_lake.polygon_fetcher import (
     PolygonAuthError,
     PolygonEntitlementError,
@@ -24,10 +26,12 @@ from app.data_lake.polygon_fetcher import (
 )
 from app.data_lake.polygon_option_contracts import (
     PolygonContractRowError,
+    PolygonListingTimeoutError,
     PolygonOptionContract,
     fetch_option_contracts,
 )
 from app.data_lake.polygon_option_http import PolygonOutsidePlanError
+from tests._helpers.option_lake_cases import MovableClock, slow_listing_pages
 
 SENTINEL_KEY = "sentinel-key-4f9a1c"
 
@@ -512,3 +516,141 @@ async def test_a_page_that_is_not_json_is_an_error() -> None:
 
     with pytest.raises(PolygonFetchError, match="not JSON"):
         await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
+
+
+# ── The end of a listing is a next_url that is absent or null, and nothing else ──
+
+#: Every ``next_url`` that is present and is not a text with something in it. The vendor ends a listing by leaving
+#: the key out or sending null; none of these ends one, and the falsey ones (false, 0, [], {}, "") once did.
+MALFORMED_CURSORS = [
+    "false", "true", "0", "1", "0.0", '""', "[]", f'["{SECOND_PAGE}"]', "{}", '{"cursor":"page2"}',
+]
+CURSOR_IDS = ["false", "true", "zero", "one", "a float zero", "an empty text", "an empty list", "a list of a url", "an empty object", "an object"]
+
+
+def _page_saying(rows: list[dict[str, Any]], next_url_json: str | None) -> httpx.Response:
+    """A page of ``rows`` whose ``next_url`` is written exactly as the JSON text given (the key is left out for ``None``)."""
+    cursor = "" if next_url_json is None else f',"next_url":{next_url_json}'
+    return _body('"results":' + json.dumps(rows) + cursor)
+
+
+@respx.mock
+@pytest.mark.parametrize("cursor", MALFORMED_CURSORS, ids=CURSOR_IDS)
+async def test_a_first_page_whose_next_url_is_not_a_text_with_something_in_it_is_an_error_not_the_end_of_the_listing(
+    cursor: str,
+) -> None:
+    first = respx.get(CONTRACTS_URL).mock(return_value=_page_saying([_row("O:SPY250613C00375000", 375)], cursor))
+
+    with pytest.raises(PolygonFetchError, match="not a URL"):
+        await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
+
+    assert first.call_count == 1
+
+
+@respx.mock
+@pytest.mark.parametrize("cursor", MALFORMED_CURSORS, ids=CURSOR_IDS)
+async def test_a_later_page_whose_next_url_is_not_a_text_with_something_in_it_is_an_error_and_the_pages_before_it_are_not_a_listing(
+    cursor: str,
+) -> None:
+    first = respx.get(CONTRACTS_URL, params={"underlying_ticker": "SPY"}).mock(
+        return_value=_page([_row("O:SPY250613C00375000", 375)], next_url=SECOND_PAGE)
+    )
+    second = respx.get(CONTRACTS_URL, params={"cursor": "page2"}).mock(
+        return_value=_page_saying([_row("O:SPY250613C00376000", 376)], cursor)
+    )
+
+    with pytest.raises(PolygonFetchError, match="not a URL"):
+        await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
+
+    assert (first.call_count, second.call_count) == (1, 1)
+
+
+@respx.mock
+@pytest.mark.parametrize("last", [None, "null"], ids=["left out", "null"])
+async def test_a_next_url_left_out_or_null_ends_the_listing_on_a_first_page_and_on_a_later_one(last: str | None) -> None:
+    respx.get(CONTRACTS_URL, params={"underlying_ticker": "SPY"}).mock(
+        return_value=_page_saying([_row("O:SPY250613C00375000", 375)], last)
+    )
+
+    on_the_first_page = await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
+
+    respx.get(CONTRACTS_URL, params={"underlying_ticker": "SPY"}).mock(
+        return_value=_page([_row("O:SPY250613C00375000", 375)], next_url=SECOND_PAGE)
+    )
+    respx.get(CONTRACTS_URL, params={"cursor": "page2"}).mock(
+        return_value=_page_saying([_row("O:SPY250613C00376000", 376)], last)
+    )
+    on_a_later_page = await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
+
+    assert [c.ticker for c in on_the_first_page] == ["O:SPY250613C00375000"]
+    assert [c.ticker for c in on_a_later_page] == ["O:SPY250613C00375000", "O:SPY250613C00376000"]
+
+
+# ── The whole paging has one deadline ──────────────────────────────────
+
+
+@respx.mock
+async def test_a_paging_that_passes_its_budget_on_page_three_is_a_typed_timeout_that_asks_no_fourth_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each answer takes 100 s of a 250 s budget: the clock is at 300 s when page three is read, so page four is never asked."""
+    clock = MovableClock()
+    monkeypatch.setattr(contracts_module, "_now_s", clock)
+    route = respx.get(CONTRACTS_URL).mock(
+        side_effect=slow_listing_pages(clock, pages=4, seconds_per_page=100, contracts_url=CONTRACTS_URL)
+    )
+
+    with pytest.raises(PolygonListingTimeoutError, match="3 page"):
+        await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY, budget_s=250)
+
+    assert [call.request.url.params.get("cursor") for call in route.calls] == [None, "p1", "p2"]
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("budget_s", "timed_out"), [(100.0, True), (100.5, False)], ids=["spent to the second", "half a second to spare"]
+)
+async def test_a_paging_whose_budget_is_exactly_spent_asks_no_more_pages_and_one_with_time_to_spare_goes_on(
+    budget_s: float, timed_out: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two pages of 100 s each: the second is asked at 100 s after the call, so a budget of 100 s is already gone."""
+    clock = MovableClock()
+    monkeypatch.setattr(contracts_module, "_now_s", clock)
+    route = respx.get(CONTRACTS_URL).mock(
+        side_effect=slow_listing_pages(clock, pages=2, seconds_per_page=100, contracts_url=CONTRACTS_URL)
+    )
+
+    if timed_out:
+        with pytest.raises(PolygonListingTimeoutError):
+            await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY, budget_s=budget_s)
+        assert route.call_count == 1
+    else:
+        contracts = await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY, budget_s=budget_s)
+        assert len(contracts) == 2 and route.call_count == 2
+
+
+@respx.mock
+async def test_a_budget_already_gone_asks_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = MovableClock()
+    monkeypatch.setattr(contracts_module, "_now_s", clock)
+    route = respx.get(CONTRACTS_URL).mock(
+        side_effect=slow_listing_pages(clock, pages=2, seconds_per_page=1, contracts_url=CONTRACTS_URL)
+    )
+
+    with pytest.raises(PolygonListingTimeoutError):
+        await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY, budget_s=0)
+
+    assert route.call_count == 0
+
+
+@respx.mock
+async def test_a_paging_given_no_budget_has_no_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = MovableClock()
+    monkeypatch.setattr(contracts_module, "_now_s", clock)
+    respx.get(CONTRACTS_URL).mock(
+        side_effect=slow_listing_pages(clock, pages=4, seconds_per_page=10**6, contracts_url=CONTRACTS_URL)
+    )
+
+    contracts = await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
+
+    assert len(contracts) == 4
