@@ -38,12 +38,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import io
 import logging
-import lzma
 import re
 import zipfile
-import zlib
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -85,6 +82,7 @@ from app.data_lake.option_lake import (
     refusal_before_claim,
     stored_file_still_reads,
     vendor_reason,
+    zip_member_bytes,
 )
 from app.data_lake.option_listing import OptionListing, read_option_listing
 from app.data_lake.path_policy import OptionMinuteBarPath
@@ -154,18 +152,7 @@ class OptionBarsFileError(ValueError):
 
 def _member_text(payload: bytes, member: str) -> str:
     """The text of the one CSV member a bars file holds; anything else is :class:`OptionBarsFileError`."""
-    try:
-        with zipfile.ZipFile(io.BytesIO(payload)) as zf:
-            names = zf.namelist()
-            raw = zf.read(member) if names == [member] else None
-    except (
-        zipfile.BadZipFile, zlib.error, lzma.LZMAError, EOFError, NotImplementedError, RuntimeError, OSError, ValueError,
-        ArithmeticError,
-    ) as exc:
-        # Not a zip, one with damaged offsets or data, a truncated stream, an unsupported or encrypted member.
-        raise OptionBarsFileError(f"{member}: not a readable bars file ({type(exc).__name__}: {exc})") from exc
-    if raw is None:
-        raise OptionBarsFileError(f"expected one member {member!r}, found {names!r}")
+    raw = zip_member_bytes(payload, member, OptionBarsFileError)
     try:
         return raw.decode("ascii")
     except UnicodeDecodeError as exc:

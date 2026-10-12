@@ -70,6 +70,7 @@ from app.data_lake.option_lake import (
     refusal_before_claim,
     stored_file_still_reads,
     vendor_reason,
+    zip_member_bytes,
 )
 from app.data_lake.path_policy import OptionListingPath
 from app.data_lake.polygon_fetcher import PolygonFetchError
@@ -289,18 +290,23 @@ def _classify(
 
 
 def parse_option_listing_zip(payload: bytes, underlying: str, as_of: date) -> tuple[OptionListingRow, ...]:
-    """The rows in one stored listing; strict, and standard-ness applied here, on read."""
+    """The rows in one stored listing; strict, and standard-ness applied here, on read.
+
+    A file that is not the one this module writes is :class:`OptionListingFileError`, with
+    its cause chained: not a zip, a damaged one, a wrong or extra member, text that is not
+    UTF-8 or not CSV, a wrong header, a row of the wrong shape or with a cell that is no number.
+    """
     expected = _member_name(underlying, as_of)
-    with zipfile.ZipFile(io.BytesIO(payload)) as zf:
-        if zf.namelist() != [expected]:
-            raise OptionListingFileError(f"expected one member {expected!r}, found {zf.namelist()!r}")
-        text = zf.read(expected).decode("utf-8")
-    lines = csv.reader(io.StringIO(text))
-    header = next(lines, None)
+    raw = zip_member_bytes(payload, expected, OptionListingFileError)
+    try:
+        table = list(csv.reader(io.StringIO(raw.decode("utf-8"))))
+    except (UnicodeDecodeError, csv.Error) as exc:
+        raise OptionListingFileError(f"{expected}: the rows are not readable text ({exc})") from exc
+    header = table[0] if table else None
     if header != list(_HEADER):
         raise OptionListingFileError(f"{expected}: unexpected header {header!r}")
     rows: list[OptionListingRow] = []
-    for number, fields in enumerate(lines, start=2):
+    for number, fields in enumerate(table[1:], start=2):
         if len(fields) != len(_HEADER):
             raise OptionListingFileError(f"{expected} line {number}: expected {len(_HEADER)} columns, found {len(fields)}")
         ticker, contract_type, strike_text, expiry_text, style_text, shares_text, additional_text = fields
@@ -309,7 +315,7 @@ def parse_option_listing_zip(payload: bytes, underlying: str, as_of: date) -> tu
             expiry_ms = option_expiry_anchor_ms(datetime.strptime(expiry_text, "%Y%m%d").date()) if expiry_text else None
             shares = int(shares_text) if shares_text else None
             additional = {"0": False, "1": True}[additional_text]
-        except (ValueError, KeyError) as exc:
+        except (ValueError, KeyError, ArithmeticError) as exc:
             raise OptionListingFileError(f"{expected} line {number}: {exc!r}") from exc
         # The writer stores both in lower case; a cell in another case still names the same thing.
         contract_type = contract_type.lower()

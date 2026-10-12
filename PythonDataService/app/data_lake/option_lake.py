@@ -53,9 +53,12 @@ These come from the claim protocol, when nothing was fetched:
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
+import lzma
 import time
 import zipfile
+import zlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -360,6 +363,28 @@ async def claim_or_take_over(
             OptionDataFailure(reclaim.reason, reclaim.detail, symbol, trading_date, attempt_count=reclaim.attempt_count)
         )
     return HeldLease(reclaim.artifact_id, reclaim.lease_generation)
+
+
+def zip_member_bytes(payload: bytes, member: str, error: type[ValueError]) -> bytes:
+    """The bytes of the one member a lake option file holds; any other file raises ``error``, the cause chained.
+
+    A file that is not a zip, a damaged or truncated one, one with an unsupported or encrypted
+    member, and one whose members are not exactly ``[member]`` are the same answer: it is not the
+    file the lake writes. The zip module raises a different error for each kind of damage, and
+    none of them escapes.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as zf:
+            names = zf.namelist()
+            raw = zf.read(member) if names == [member] else None
+    except (
+        zipfile.BadZipFile, zlib.error, lzma.LZMAError, EOFError, NotImplementedError, RuntimeError, OSError, ValueError,
+        ArithmeticError,
+    ) as exc:
+        raise error(f"{member}: not a readable file ({type(exc).__name__}: {exc})") from exc
+    if raw is None:
+        raise error(f"expected one member {member!r}, found {names!r}")
+    return raw
 
 
 def option_read_root(lake_root: Path | None = None) -> Path:

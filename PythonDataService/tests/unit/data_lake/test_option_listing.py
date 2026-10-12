@@ -15,12 +15,14 @@ Hand-worked figures used below:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import csv
 import hashlib
 import io
 import json
 import shutil
 import zipfile
+import zlib
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -919,6 +921,57 @@ def test_a_listing_file_that_is_not_the_one_written_is_refused_on_read() -> None
         parse_option_listing_zip(wrong_header.getvalue(), "SPY", AS_OF)
     with pytest.raises(OptionListingFileError, match="expected one member"):
         parse_option_listing_zip(wrong_member, "QQQ", AS_OF)
+
+
+def _written_listing() -> bytes:
+    return build_option_listing_zip_bytes(
+        "SPY", AS_OF, [_vendor_contract("O:SPY250613C00375000", "375"), _vendor_contract("O:SPY250613C00376000", "376")]
+    )
+
+
+def _listing_zip_of(body: bytes) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(MEMBER, body)
+    return buf.getvalue()
+
+
+_LISTING_HEADER = b"ticker,contract_type,strike_thousandths,expiry,exercise_style,shares_per_contract,additional_underlyings\n"
+
+
+@pytest.mark.parametrize(
+    ("payload", "cause"),
+    [
+        (b"not a zip at all", zipfile.BadZipFile),
+        (b"", zipfile.BadZipFile),
+        (_written_listing()[: len(_written_listing()) // 2], zipfile.BadZipFile),
+        (_written_listing()[:30 + len(MEMBER)] + b"\xff" * 10 + _written_listing()[40 + len(MEMBER):], zlib.error),
+        (_listing_zip_of(_LISTING_HEADER + b"O:SPY250613C00375000,call,375000,20250613,american,100,0\n\xff\xfe"), UnicodeDecodeError),
+        (_listing_zip_of(_LISTING_HEADER + b"O:SPY250613C00375000,call," + b"9" * 200_000 + b",20250613,american,100,0\n"), None),
+        (_listing_zip_of(_LISTING_HEADER + b"O:SPY250613C00375000,call,375000,20251345,american,100,0\n"), ValueError),
+    ],
+    ids=["not a zip", "no bytes", "truncated", "damaged data", "bytes that are not text", "a cell too large for the csv reader", "a date that is no date"],
+)
+def test_a_stored_listing_that_is_not_what_the_lake_writes_is_one_named_error(
+    payload: bytes, cause: type[Exception] | None
+) -> None:
+    """Never a raw ``BadZipFile``, ``zlib.error`` or ``UnicodeDecodeError``: a caller catches one thing."""
+    with pytest.raises(OptionListingFileError) as caught:
+        parse_option_listing_zip(payload, "SPY", AS_OF)
+
+    if cause is not None:
+        assert isinstance(caught.value.__cause__, cause)
+
+
+def test_no_single_damaged_byte_or_cut_of_a_written_listing_escapes_as_anything_but_the_named_error() -> None:
+    written = _written_listing()
+    damaged = [written[:n] for n in range(len(written))]
+    damaged += [written[:i] + bytes([b]) + written[i + 1:] for i in range(len(written)) for b in (0x00, 0xFF)]
+    damaged += [written[:i] + bytes([written[i] ^ (1 << bit)]) + written[i + 1:] for i in range(len(written)) for bit in range(8)]
+
+    for payload in damaged:
+        with contextlib.suppress(OptionListingFileError):  # a damaged byte may leave a listing that still reads; nothing else may happen
+            parse_option_listing_zip(payload, "SPY", AS_OF)
 
 
 # ── Which as-of dates are captured ─────────────────────────────────────

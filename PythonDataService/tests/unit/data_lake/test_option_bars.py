@@ -555,6 +555,38 @@ async def test_a_stored_listing_that_is_not_admitted_is_no_usable_listing_and_no
 
 
 @respx.mock
+@pytest.mark.parametrize("damage", ["cut", "zeros", "garbage deflate", "not text"])
+async def test_a_stored_listing_that_is_admitted_but_damaged_is_no_usable_listing_whatever_the_damage(
+    damage: str, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """The zip module raises a different error for each kind; none of them may escape a capture."""
+    route = _mock_vendor(no_trades(SYMBOL))
+    await _list(CONTRACT)
+    [listing_row] = [row for row in fake_catalog.rows.values() if row["artifact_kind"] == "metadata"]
+    listing_file = _raw_root(tmp_lake) / listing_row["file_path"]
+    written = listing_file.read_bytes()
+    member = "20250613_spy_contracts.csv"
+    damaged = {
+        "cut": written[: len(written) // 2],
+        "zeros": b"\x00" * len(written),
+        "garbage deflate": written[: 30 + len(member)] + b"\xff" * 10 + written[40 + len(member):],
+        "not text": _zip(member, "ticker\n").replace(b"ticker", b"\xff\xfe\xfd\xfc\xfb\xfa"),
+    }[damage]
+    if damage == "garbage deflate":  # the premise: the zip module itself raises zlib.error for this one
+        with pytest.raises(zlib.error):
+            zipfile.ZipFile(io.BytesIO(damaged)).read(member)
+    listing_file.write_bytes(damaged)
+    listing_row["file_sha256"] = hashlib.sha256(damaged).hexdigest()  # admitted: the catalog holds a receipt for these bytes
+    listing_row["file_size_bytes"] = len(damaged)
+
+    result = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
+
+    assert result.record is None
+    assert result.failure is not None and result.failure.reason == "listing_not_captured"
+    assert route.call_count == 0 and _bar_rows(fake_catalog) == []
+
+
+@respx.mock
 async def test_an_outage_of_the_catalog_while_reading_the_listing_is_not_a_verdict_on_it(
     fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
