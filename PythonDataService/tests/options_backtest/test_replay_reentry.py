@@ -10,12 +10,14 @@ from __future__ import annotations
 import pytest
 
 from app.options_backtest.market import PickRefusal, PickRefused
-from app.options_backtest.results import EventKind
+from app.options_backtest.results import EventKind, SessionStatus
 from tests.options_backtest._market import (
+    HALF_CLOSE_MS,
     D,
     TableMarket,
     after_open,
     at,
+    before_close,
     contract,
     flat,
     kinds,
@@ -166,6 +168,69 @@ def test_a_stop_one_minute_after_the_cutoff_earns_none_and_says_so() -> None:
     assert minutes(outcome, EventKind.RE_ENTRY_EARNED) == []
 
 
+def _stopped_at_on_a_half_day(stop_minute: int) -> TableMarket:
+    """The same stop and fresh buy as ``_one_stop_at``, in a session that closes at minute 210."""
+    return TableMarket(
+        underlying=steady("500", 1, 210),
+        picks=picked(("call", "500", CALL)),
+        options={
+            CALL: {
+                **flat("2.00", 5, stop_minute - 1),
+                stop_minute: ("2.00", "1.40"),
+                stop_minute + 1: ("1.40", "1.40"),
+                stop_minute + 2: ("1.50", "1.50"),
+                **flat("1.50", stop_minute + 3, 210),
+            }
+        },
+        session_close_ms=HALF_CLOSE_MS,
+    )
+
+
+def test_a_cutoff_counted_from_the_close_of_a_full_day_lets_a_stop_on_it_re_enter_and_not_one_minute_later() -> None:
+    # 390 - 375 = minute 15.
+    written = setup(leg(stop=STOP_25, reentry=AT_ONCE_1), no_reentry_after=before_close(375))
+
+    on_it = replay(written, _one_stop_at(15))
+    after_it = replay(written, _one_stop_at(16))
+
+    assert [row(trade) for trade in on_it.trades] == [
+        ("call", 0, 6, D("2.00"), D("2.00"), "stop", 16, D("1.40"), D("1.40")),
+        ("call", 1, 17, D("1.50"), D("1.50"), "exit_time", 61, D("1.50"), D("1.50")),
+    ]
+    assert minutes(on_it, EventKind.RE_ENTRY_EARNED) == [15]
+    assert minutes(on_it, EventKind.RE_ENTRY_BLOCKED_BY_CUTOFF) == []
+    assert [row(trade) for trade in after_it.trades] == [
+        ("call", 0, 6, D("2.00"), D("2.00"), "stop", 17, D("1.40"), D("1.40"))
+    ]
+    assert minutes(after_it, EventKind.RE_ENTRY_BLOCKED_BY_CUTOFF) == [16]
+    assert minutes(after_it, EventKind.RE_ENTRY_EARNED) == []
+
+
+def test_a_cutoff_counted_from_the_close_of_a_half_day_is_that_far_before_its_earlier_close() -> None:
+    # The session closes at minute 210: the exit, 10 minutes before it, is minute 200, and the cutoff, 30 minutes
+    # before it, is minute 180. A cutoff counted from the open would be minute 30, or a full day's minute 360.
+    written = setup(leg(stop=STOP_25, reentry=AT_ONCE_1), exit=before_close(10), no_reentry_after=before_close(30))
+
+    on_it = replay(written, _stopped_at_on_a_half_day(180))
+    after_it = replay(written, _stopped_at_on_a_half_day(181))
+
+    # A stop closing at 180 is sold at 181, and its re-entry is decided at 181, bought at 182, and sold by the
+    # exit time: decided at 200, filled at 201.
+    assert [row(trade) for trade in on_it.trades] == [
+        ("call", 0, 6, D("2.00"), D("2.00"), "stop", 181, D("1.40"), D("1.40")),
+        ("call", 1, 182, D("1.50"), D("1.50"), "exit_time", 201, D("1.50"), D("1.50")),
+    ]
+    assert on_it.trades[1].exit_decided_at_ms == at(200)
+    assert minutes(on_it, EventKind.RE_ENTRY_EARNED) == [180]
+    assert minutes(on_it, EventKind.RE_ENTRY_BLOCKED_BY_CUTOFF) == []
+    # A stop closing at 181 is one minute past the cutoff: sold at 182, and no re-entry.
+    assert [row(trade) for trade in after_it.trades] == [
+        ("call", 0, 6, D("2.00"), D("2.00"), "stop", 182, D("1.40"), D("1.40"))
+    ]
+    assert minutes(after_it, EventKind.RE_ENTRY_BLOCKED_BY_CUTOFF) == [181]
+    assert minutes(after_it, EventKind.RE_ENTRY_EARNED) == []
+
+
 def test_under_complete_every_leg_closed_after_the_cutoff_is_blocked_from_re_entering() -> None:
     market = TableMarket(
         underlying=steady("500"),
@@ -246,6 +311,24 @@ def _stopped_twice() -> TableMarket:
             }
         },
     )
+
+
+def test_a_leg_with_no_re_entry_left_is_not_counted_as_blocked_by_the_cutoff_and_one_with_a_re_entry_left_is() -> None:
+    # Stopped at 10, which is before the cutoff at 12, so it earns its re-entry and buys again at 12; stopped
+    # again at 15, which is after the cutoff.
+    spent = replay(setup(leg(stop=STOP_25, reentry=("at_once", 1)), no_reentry_after=after_open(12)), _stopped_twice())
+    one_left = replay(
+        setup(leg(stop=STOP_25, reentry=("at_once", 2)), no_reentry_after=after_open(12)), _stopped_twice()
+    )
+
+    # With a count of one the re-entry is used up by 15: nothing is left for the cutoff to block.
+    assert minutes(spent, EventKind.RE_ENTRY_EARNED) == [10]
+    assert minutes(spent, EventKind.RE_ENTRY_BLOCKED_BY_CUTOFF) == []
+    # With a count of two one is left, and the cutoff is what stops it.
+    assert minutes(one_left, EventKind.RE_ENTRY_EARNED) == [10]
+    assert minutes(one_left, EventKind.RE_ENTRY_BLOCKED_BY_CUTOFF) == [15]
+    # Both took the same two trades.
+    assert [trade.entry_number for trade in spent.trades] == [trade.entry_number for trade in one_left.trades] == [0, 1]
 
 
 def test_with_a_count_of_one_a_second_stop_earns_nothing() -> None:
@@ -509,13 +592,25 @@ def test_the_exit_time_cancels_a_re_entry_that_was_earned_and_not_yet_started(
     market = TableMarket(
         underlying=steady("500"),
         picks=picked(("call", "500", CALL)),
-        options={CALL: {**flat("2.00", 5, 58), 59: ("2.00", "1.40"), sale_minute: (sale_price, sale_price)}},
+        options={
+            CALL: {
+                **flat("2.00", 5, 58),
+                59: ("2.00", "1.40"),  # stopped, and a re-entry is earned
+                sale_minute: (sale_price, sale_price),
+                # The contract trades on after the exit time, so a re-entry wrongly started would buy and be seen.
+                **flat(sale_price, sale_minute + 1, 100),
+            }
+        },
     )
 
     outcome = replay(setup(leg(stop=STOP_25, reentry=AT_ONCE_1)), market)
 
+    assert outcome.status is SessionStatus.TRADED
     assert [row(trade) for trade in outcome.trades] == [
         ("call", 0, 6, D("2.00"), D("2.00"), "stop", sale_minute, D(sale_price), D(sale_price))
     ]
+    # No fresh contract is picked after the entry minute: the re-entry never starts.
+    assert minutes(outcome, EventKind.PICKED) == [5]
+    # The cancelled re-entry would have been entry 1, whether or not its sale had filled by the exit time.
     cancelled = [e for e in outcome.events if e.kind is EventKind.LEG_CANCELLED]
-    assert [(e.at_ms, e.reason) for e in cancelled] == [(at(60), "exit_time")]
+    assert [(e.at_ms, e.reason, e.entry_number) for e in cancelled] == [(at(60), "exit_time", 1)]

@@ -111,6 +111,26 @@ def test_a_window_the_setup_allows_can_still_miss_a_session_and_that_session_is_
     _assert_traded_or_skipped_for_its_window(outcome, fits)
 
 
+@pytest.mark.parametrize(("close_ms", "minutes_before_the_close"), [(FULL_CLOSE_MS, 385), (HALF_CLOSE_MS, 205)])
+def test_an_entry_counted_from_the_close_is_that_far_before_the_close_of_a_full_or_a_half_day(
+    close_ms: int, minutes_before_the_close: int
+) -> None:
+    # 390 - 385 and 210 - 205 are both minute 5, the same entry as the setups above that count 5 from the open.
+    market = TableMarket(
+        underlying=steady("500"),
+        picks=picked(("call", "500", CALL)),
+        options={CALL: flat("2.00", 1, 390)},
+        session_close_ms=close_ms,
+    )
+
+    outcome = replay(setup(leg(), entry=before_close(minutes_before_the_close)), market)
+
+    assert [row(trade) for trade in outcome.trades] == [
+        ("call", 0, 6, D("2.00"), D("2.00"), "exit_time", 61, D("2.00"), D("2.00"))
+    ]
+    assert outcome.trades[0].entry_decided_at_ms == at(5)
+
+
 def test_a_session_where_the_underlying_did_not_trade_at_the_entry_time_is_skipped() -> None:
     market = TableMarket(
         underlying=steady("500", 6),  # nothing closed at minute 5

@@ -7,7 +7,7 @@ expectation is worked by hand and written as a literal.
 from __future__ import annotations
 
 from dataclasses import replace
-from decimal import ROUND_CEILING, Context, Decimal, localcontext
+from decimal import ROUND_CEILING, Context, Decimal, Inexact, localcontext
 
 import pytest
 
@@ -58,6 +58,19 @@ def test_one_entry_the_cash_cannot_cover_is_refused_and_counted() -> None:
     assert [(minute_of(e.at_ms), e.leg_id, e.reason, e.price) for e in refused] == [
         (6, "call", "cash_short", D("2.00"))
     ]
+
+
+def test_a_refused_entry_names_the_price_it_would_have_filled_at_not_the_price_seen() -> None:
+    market = TableMarket(
+        underlying=steady("500"), picks=picked(("call", "500", CALL)), options={CALL: flat("2.57", 5, 61)}
+    )
+
+    # 2.57 * 1.003 = 2.57771, up to 2.58: 258.00 against 257.50 of cash. At the price seen it would have fitted.
+    outcome = replay(setup(leg(), slippage="0.3"), market, cash="257.50")
+
+    assert outcome.trades == ()
+    refused = [event for event in outcome.events if event.kind is EventKind.ENTRY_REFUSED_FOR_CASH]
+    assert [(minute_of(e.at_ms), e.price) for e in refused] == [(6, D("2.58"))]
 
 
 def test_an_entry_costing_exactly_the_cash_is_taken() -> None:
@@ -292,6 +305,28 @@ def test_a_market_that_rounds_what_it_returns_does_not_crash_the_replay() -> Non
         ("call", 0, 6, D("2.00"), D("2.00"), "exit_time", 61, D("2.00"), D("2.00"))
     ]
     assert outcome.trades[0].pnl_usd == D("0.00")
+
+
+def _a_bar_opening_at(digits: int) -> TableMarket:
+    """An option whose bar in the entry fill's minute opens at 2.111..., that many significant digits long."""
+    return TableMarket(
+        underlying=steady("500"),
+        picks=picked(("call", "500", CALL)),
+        options={CALL: {5: ("2.00", "2.00"), 6: ("2." + "1" * (digits - 1), "2.00"), **flat("2.00", 7, 61)}},
+    )
+
+
+def test_a_price_of_eighty_digits_is_held_exactly_and_filled_at_the_next_cent_up() -> None:
+    outcome = replay(setup(leg()), _a_bar_opening_at(80))
+
+    # 2.1111... up to the cent is 2.12; sold at 2.00 in minute 61: (2.00 - 2.12) * 100 = -12.00.
+    assert outcome.trades[0].entry.seen == D("2." + "1" * 79)
+    assert (outcome.trades[0].entry.filled, outcome.trades[0].pnl_usd) == (D("2.12"), D("-12.00"))
+
+
+def test_a_price_too_long_to_hold_exactly_raises_instead_of_being_rounded() -> None:
+    with pytest.raises(Inexact):
+        replay(setup(leg()), _a_bar_opening_at(120))
 
 
 def _rich_session() -> SessionOutcome:

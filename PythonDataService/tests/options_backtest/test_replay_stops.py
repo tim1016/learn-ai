@@ -19,6 +19,7 @@ from tests.options_backtest._market import (
     flat,
     kinds,
     leg,
+    minute_of,
     minutes,
     picked,
     replay,
@@ -246,6 +247,31 @@ def test_the_exit_time_closes_every_open_leg_cancels_the_waiting_and_nothing_ent
     assert minutes(outcome, EventKind.LEG_CANCELLED, "b") == [60]
     cancelled = [e for e in outcome.events if e.kind is EventKind.LEG_CANCELLED]
     assert [(e.leg_id, e.reason, e.entry_number) for e in cancelled] == [("b", "exit_time", 0)]
+
+
+def test_the_legs_the_exit_time_closes_are_one_exit_group_each_with_its_own_exit_time_event() -> None:
+    market = TableMarket(
+        underlying=steady("500"),
+        picks=picked(("a", "500", CALL), ("b", "500", PUT), ("c", "500", CALL_505)),
+        options={
+            CALL: {**flat("2.00", 5, 9), 10: ("2.00", "1.40"), 11: ("1.40", "1.40")},  # A's stop sits at 1.50
+            PUT: flat("3.00", 5, 61),
+            CALL_505: flat("1.00", 5, 61),
+        },
+    )
+
+    outcome = replay(setup(leg("a", "call", stop=STOP_25), leg("b", "put"), leg("c", "call")), market)
+
+    assert [row(trade) for trade in outcome.trades] == [
+        ("a", 0, 6, D("2.00"), D("2.00"), "stop", 11, D("1.40"), D("1.40")),
+        ("b", 0, 6, D("3.00"), D("3.00"), "exit_time", 61, D("3.00"), D("3.00")),
+        ("c", 0, 6, D("1.00"), D("1.00"), "exit_time", 61, D("1.00"), D("1.00")),
+    ]
+    # A's stop is the first group and the exit time is the second, and B and C are in it together.
+    assert [trade.exit_group for trade in outcome.trades] == [1, 2, 2]
+    assert [trade.exit_decided_at_ms for trade in outcome.trades] == [at(10), at(60), at(60)]
+    exit_events = [(e.leg_id, minute_of(e.at_ms)) for e in outcome.events if e.kind is EventKind.EXIT_TIME]
+    assert exit_events == [("b", 60), ("c", 60)]
 
 
 def test_an_entry_decided_just_before_the_exit_time_fills_at_it_and_is_closed_in_the_same_minute() -> None:
