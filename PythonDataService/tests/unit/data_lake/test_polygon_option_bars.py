@@ -121,6 +121,29 @@ async def test_an_empty_results_list_with_a_zero_count_is_also_confirmed_empty()
 
 
 @respx.mock
+async def test_an_answer_that_says_nothing_of_adjusted_is_still_confirmed_and_one_that_says_false_is_the_probed_shape() -> None:
+    """The probed answers carry ``adjusted: false``; the echo is not required, only never true."""
+    body = traded_body(SYMBOL, [bar_row(0)])
+    assert body["adjusted"] is False
+    without_it = {k: v for k, v in body.items() if k != "adjusted"}
+
+    _vendor(httpx.Response(200, json=without_it))
+    assert len(await _fetch()) == 1
+    _vendor(httpx.Response(200, json=body))
+    assert len(await _fetch()) == 1
+
+
+@respx.mock
+async def test_an_answer_that_says_its_bars_are_adjusted_is_an_error_because_the_request_asked_for_raw_ones() -> None:
+    _vendor(httpx.Response(200, json=traded_body(SYMBOL, [bar_row(0)], adjusted=True)))
+
+    with pytest.raises(PolygonFetchError, match="not raw") as raised:
+        await _fetch()
+
+    assert type(raised.value) is PolygonFetchError and raised.value.status_code == 200
+
+
+@respx.mock
 async def test_a_delayed_status_is_a_confirmed_answer() -> None:
     _vendor(httpx.Response(200, json=traded_body(SYMBOL, [bar_row(0)], status="DELAYED")))
 

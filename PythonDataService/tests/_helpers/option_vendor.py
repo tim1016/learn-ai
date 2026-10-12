@@ -100,10 +100,11 @@ def _answer(symbol: str, results: str) -> httpx.Response:
 def bad_bars_answers(symbol: str) -> dict[str, Callable[[], httpx.Response]]:
     """Every 200 answer for ``symbol`` that is not a well-formed one, by a name for the test id.
 
-    Includes the bodies the write-path review drove into the lake (a body that is not
+    Includes the bodies that once escaped the lake as raw errors (a body that is not
     JSON, an empty body, a JSON list or null, ``results`` a dict, a row without ``t``,
     a null row, a non-numeric price) and the bare answers that once pinned a day as
-    "never traded" (``{}``, a status alone, a count the rows do not match).
+    "never traded" (``{}``, a status alone, a count the rows do not match; #3030). The
+    request asks for raw bars, so an answer that says it is adjusted is here too.
     """
     ticker = f"O:{symbol}"
     good_row = bar_row(0)
@@ -141,6 +142,11 @@ def bad_bars_answers(symbol: str) -> dict[str, Callable[[], httpx.Response]]:
         "results null": lambda: httpx.Response(200, json=no_trades_body(symbol, results=None)),
         "results a dict": lambda: httpx.Response(200, json=no_trades_body(symbol, resultsCount=1, results={"t": 1})),
         "results a string": lambda: httpx.Response(200, json=no_trades_body(symbol, resultsCount=1, results="x")),
+        "adjusted true": lambda: httpx.Response(200, json=traded_body(symbol, [good_row], adjusted=True)),
+        "adjusted true on an empty answer": lambda: httpx.Response(200, json=no_trades_body(symbol, adjusted=True)),
+        "adjusted null": lambda: httpx.Response(200, json=traded_body(symbol, [good_row], adjusted=None)),
+        "adjusted the text false": lambda: httpx.Response(200, json=traded_body(symbol, [good_row], adjusted="false")),
+        "adjusted zero": lambda: httpx.Response(200, json=traded_body(symbol, [good_row], adjusted=0)),
         "a next page with bars": lambda: httpx.Response(
             200, json=traded_body(symbol, [good_row], next_url=f"https://api.polygon.io/v2/aggs/ticker/{ticker}?cursor=abc")
         ),

@@ -19,8 +19,10 @@ Polygon is refused before any request, so the header goes nowhere else.
 
 A row the code cannot fully read is kept: the fetcher gives back what it could
 read of it and ``None`` for the rest, and the lake marks the row non-standard.
-Only a row that is not a JSON object, or has no usable ticker, is an error
-(:class:`PolygonContractRowError`), because there is nothing to keep.
+Only a row that is not a JSON object, or has no usable ticker (blank, not text, or
+not ASCII), is an error (:class:`PolygonContractRowError`), because there is nothing to
+keep. Every page must say its rows as a list, and an empty page may not point to a next
+one: the listing is whole or it is an error.
 """
 
 from __future__ import annotations
@@ -102,13 +104,18 @@ async def fetch_option_contracts(underlying: str, as_of: date, api_key: str) -> 
                 client, next_url, params=params if next_url == url else None, api_key=api_key, label=underlying
             )
             require_confirmed_status(payload, underlying, 200)
-            results = payload.get("results") or []
+            # Every page, the last included, says its rows as a list. An underlying with no options answers
+            # ``[]`` (probed 2026-10-12), so a page without one is a degraded answer, and reading it as an
+            # empty last page would store the pages before it as the whole listing.
+            results = payload.get("results")
             if not isinstance(results, list):
                 raise PolygonFetchError(f"Polygon contract results for {underlying} are not a list", 200)
-            out.extend(_contract_from_row(row, underlying) for row in results)
             cursor = payload.get("next_url") or None
             if cursor is not None and not isinstance(cursor, str):
                 raise PolygonFetchError(f"Polygon next page for {underlying} is not a URL", 200)
+            if cursor is not None and not results:
+                raise PolygonFetchError(f"Polygon sent an empty page with a next page for {underlying}", 200)
+            out.extend(_contract_from_row(row, underlying) for row in results)
             next_url = cursor
     logger.info(
         "data_lake.polygon_option_contracts: listing fetched",
@@ -121,8 +128,11 @@ def _contract_from_row(row: Any, underlying: str) -> PolygonOptionContract:
     if not isinstance(row, dict):
         raise PolygonContractRowError(f"Polygon contract row for {underlying} is not a JSON object", 200)
     ticker = row.get("ticker")
-    if not isinstance(ticker, str) or not ticker.strip():
-        raise PolygonContractRowError(f"Polygon contract row for {underlying} has no usable ticker", 200)
+    # ASCII, because a ticker is stored in the listing file and looked up by its text; a real one is plain ASCII.
+    if not isinstance(ticker, str) or not ticker.strip() or not ticker.isascii():
+        raise PolygonContractRowError(
+            f"Polygon contract row for {underlying} has no usable ticker (it must be non-blank ASCII text)", 200
+        )
     return PolygonOptionContract(
         ticker=ticker,
         contract_type=_text_or_none(row.get("contract_type")),
