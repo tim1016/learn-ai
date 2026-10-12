@@ -5,7 +5,7 @@ import { buildSetup } from './setup-build';
 import { draftFromSetup, newSetupDraft, type LegDraft, type SetupDraft } from './setup-draft';
 import { formatClockText } from './session-time';
 import { legKey } from './setup-problems';
-import { exampleBody, minutes, SESSION_CLOCK, servedExamples } from './testing/fixtures';
+import { EXAMPLE_NO_REENTRY, EXAMPLE_ONE_REENTRY, exampleBody, minutes, noReentryExampleBody, SESSION_CLOCK, servedExamples } from './testing/fixtures';
 import type { SetupRequest } from './options-backtest.types';
 
 const { open_minute_et: OPEN, close_minute_et: CLOSE } = SESSION_CLOCK;
@@ -45,15 +45,23 @@ function exampleByHand(): SetupDraft {
   };
 }
 
-describe('building the shipped example by hand', () => {
-  it('produces exactly the example JSON', () => {
+/** The other shipped example: the same legs with no re-entry rule, and no "no re-entry after" time. */
+function noReentryExampleByHand(): SetupDraft {
+  const { legs, ...rest } = exampleByHand();
+  return { ...rest, noReentryOn: false, legs: legs.map((leg) => ({ ...leg, reentryOn: false })) };
+}
+
+describe('building the shipped examples by hand', () => {
+  it('produces exactly the one-re-entry example JSON', () => {
     expect(built(exampleByHand())).toEqual(exampleBody());
   });
 
-  it('produces the other example when the re-entry cutoff is the entry minute', () => {
-    const draft = { ...exampleByHand(), noReentryClock: formatClockText(OPEN + 5) };
+  it('produces exactly the no-re-entry example JSON, with neither the re-entry rule nor the cutoff in it', () => {
+    const body = built(noReentryExampleByHand());
 
-    expect(built(draft)).toEqual(exampleBody(minutes(5, 'open')));
+    expect(body).toEqual(noReentryExampleBody());
+    expect(body).not.toHaveProperty('no_reentry_after');
+    expect(body.legs[0]).not.toHaveProperty('reentry_on_stop');
   });
 });
 
@@ -218,11 +226,14 @@ describe('costs and the other typed numbers', () => {
 });
 
 describe('opening a served setup and sending it back', () => {
-  it.each(servedExamples())('gives back the example it came from: $name', (served) => {
-    const draft = draftFromSetup(served.setup ?? exampleBody(), SESSION_CLOCK);
-    const body = built(draft);
+  it.each([
+    { name: EXAMPLE_NO_REENTRY, sent: noReentryExampleBody() },
+    { name: EXAMPLE_ONE_REENTRY, sent: exampleBody() },
+  ])('gives back the example it came from, as the server lists it with its unset rules null: $name', ({ name, sent }) => {
+    const served = servedExamples().find((example) => example.name === name)?.setup;
+    if (served == null) throw new Error(`The server lists no example named ${name}.`);
 
-    expect(body).toEqual(exampleBody(served.setup?.no_reentry_after ?? undefined));
+    expect(built(draftFromSetup(served, SESSION_CLOCK))).toEqual(sent);
   });
 
   it('keeps the ids of the legs it was given', () => {

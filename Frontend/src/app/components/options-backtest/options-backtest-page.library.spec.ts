@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { SetupRefusedError } from './options-backtest.service';
 import type { SavedSetup } from './options-backtest.types';
 import { formatClockText } from './session-time';
-import { EXAMPLE_NO_REENTRY, EXAMPLE_ONE_REENTRY, exampleBody, servedExamples, servedSaved, SESSION_CLOCK } from './testing/fixtures';
+import { EXAMPLE_NO_REENTRY, EXAMPLE_ONE_REENTRY, exampleBody, noReentryExampleBody, servedExamples, servedSaved, SESSION_CLOCK } from './testing/fixtures';
 import { choose, flip, press, typeInto } from './testing/page-actions';
 import { fakeService, renderPage } from './testing/render-page';
 
@@ -92,12 +92,20 @@ describe('opening a setup', () => {
     expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).toBe('');
   });
 
-  it('opens the other example with its cutoff at the entry minute', async () => {
-    await renderPage(fakeService(vi));
+  it('opens the no-re-entry example with its re-entry rule and its cutoff off, and sends back exactly its JSON', async () => {
+    const service = fakeService(vi);
+    await renderPage(service);
 
     fireEvent.click(await within(sideList()).findByRole('button', { name: new RegExp(`^${EXAMPLE_NO_REENTRY}`) }));
 
-    await waitFor(() => expect((screen.getByLabelText('No re-entry after time') as HTMLInputElement).value).toBe(formatClockText(OPEN + 5)));
+    await screen.findByRole('article', { name: 'Leg 2' });
+    expect((screen.getByRole('switch', { name: 'No re-entry after' }) as HTMLInputElement).checked).toBe(false);
+    for (const leg of [1, 2]) {
+      expect((screen.getByRole('switch', { name: `Leg ${leg} re-entry on stop loss` }) as HTMLInputElement).checked).toBe(false);
+      expect((screen.getByRole('switch', { name: `Leg ${leg} stop loss` }) as HTMLInputElement).checked).toBe(true);
+      expect((screen.getByRole('switch', { name: `Leg ${leg} simple momentum` }) as HTMLInputElement).checked).toBe(true);
+    }
+    await waitFor(() => expect(service.describe).toHaveBeenLastCalledWith(noReentryExampleBody()));
   });
 
   it('puts a saved setup into the form under its own name', async () => {

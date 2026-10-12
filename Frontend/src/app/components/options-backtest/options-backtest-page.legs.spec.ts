@@ -4,12 +4,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { MAX_LEGS } from './leg-draft';
 import { formatClockText } from './session-time';
-import { exampleBody, SESSION_CLOCK } from './testing/fixtures';
+import { exampleBody, noReentryExampleBody, SESSION_CLOCK } from './testing/fixtures';
 import { addLeg, choose, flip, inLeg, isDisabled, legCard, press, typeInto } from './testing/page-actions';
 import { fakeService, renderPage } from './testing/render-page';
 import type { LegRequest, SetupRequest } from './options-backtest.types';
 
-const { open_minute_et: OPEN, close_minute_et: CLOSE } = SESSION_CLOCK;
+const { close_minute_et: CLOSE } = SESSION_CLOCK;
 
 function lastBody(service: ReturnType<typeof fakeService>): SetupRequest {
   const call = service.describe.mock.lastCall;
@@ -53,13 +53,11 @@ describe('building a setup', () => {
     await waitFor(() => expect(service.describe).toHaveBeenLastCalledWith(exampleBody()));
   });
 
-  it('sends the other example when the owner shuts the re-entry door at the entry minute', async () => {
+  it('sends exactly the no-re-entry example when the owner leaves the re-entry rule and the cutoff off', async () => {
     const service = fakeService(vi);
     await renderPage(service);
 
     typeInto('Exit time', formatClockText(CLOSE - 46));
-    flip('No re-entry after');
-    typeInto('No re-entry after time', formatClockText(OPEN + 5));
     choose('Complete');
     addLeg('Call');
     addLeg('Put');
@@ -68,10 +66,11 @@ describe('building a setup', () => {
       typeInto(`Leg ${leg} stop loss value`, '25');
       flip(`Leg ${leg} simple momentum`);
       typeInto(`Leg ${leg} momentum value`, '25');
-      flip(`Leg ${leg} re-entry on stop loss`);
     }
 
-    await waitFor(() => expect(service.describe).toHaveBeenLastCalledWith(exampleBody({ anchor: 'open', offset_ms: 5 * 60_000 })));
+    await waitFor(() => expect(service.describe).toHaveBeenLastCalledWith(noReentryExampleBody()));
+    expect(lastBody(service)).not.toHaveProperty('no_reentry_after');
+    expect(lastLeg(service)).not.toHaveProperty('reentry_on_stop');
   });
 });
 

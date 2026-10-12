@@ -9,8 +9,8 @@ export function minutes(count: number, anchor: SessionTimeWire['anchor']): Sessi
   return { anchor, offset_ms: count * MS_PER_MINUTE };
 }
 
-/** One of the shipped example's legs, as the setup body holds it: every rule on, nothing null. */
-export function exampleLeg(legId: 'call' | 'put'): ServedLeg {
+/** One of the shipped examples' legs, as the setup body holds it: stop loss and momentum on; the re-entry rule only when `reenters`. */
+export function exampleLeg(legId: 'call' | 'put', reenters = true): ServedLeg {
   return {
     leg_id: legId,
     right: legId,
@@ -19,21 +19,21 @@ export function exampleLeg(legId: 'call' | 'put'): ServedLeg {
     strike: { kind: 'atm' },
     stop_loss: { kind: 'percent', value: '25' },
     momentum: { kind: 'percent_up', value: '25' },
-    reentry_on_stop: { kind: 'at_once', count: 1 },
+    ...(reenters ? { reentry_on_stop: { kind: 'at_once', count: 1 } } : {}),
   };
 }
 
 /**
  * The shipped example "SPY premium momentum, one re-entry", in the form the routes accept
- * (`saved_setups.py`). Pass another `no_reentry_after` for the other example.
+ * (`saved_setups.py`): each leg comes back once after a stop, until an hour before the close.
  */
-export function exampleBody(noReentryAfter: SessionTimeWire = minutes(60, 'close')): ServedSetup {
+export function exampleBody(): ServedSetup {
   return {
     version: 1,
     underlying: 'SPY',
     entry: minutes(5, 'open'),
     exit: minutes(46, 'close'),
-    no_reentry_after: noReentryAfter,
+    no_reentry_after: minutes(60, 'close'),
     square_off: 'complete',
     legs: [exampleLeg('call'), exampleLeg('put')],
     slippage_percent: '0.3',
@@ -43,23 +43,40 @@ export function exampleBody(noReentryAfter: SessionTimeWire = minutes(60, 'close
   };
 }
 
-/** A listed example as FastAPI serves it: every optional key is there, null when unset. */
-export function servedExample(name: string, noReentryAfter: SessionTimeWire): SavedSetup {
-  const body = exampleBody(noReentryAfter);
+/**
+ * The shipped example "SPY premium momentum, no re-entry": the same setup with no re-entry rule on its
+ * legs and no "no re-entry after" time, so those keys are not there at all.
+ */
+export function noReentryExampleBody(): ServedSetup {
+  const { no_reentry_after: _cutoff, ...rest } = exampleBody();
+  return { ...rest, legs: [exampleLeg('call', false), exampleLeg('put', false)] };
+}
+
+/** A setup as `GET /setups` serves it: every optional key is there, null when unset. */
+export function asServed(body: ServedSetup): NonNullable<SavedSetup['setup']> {
   return {
-    name,
-    example: true,
-    saved_at_ms: null,
-    cannot_open_reason: null,
-    setup: { ...body, fees: { kind: 'not_charged', per_contract_usd: null } },
+    ...body,
+    no_reentry_after: body.no_reentry_after ?? null,
+    legs: body.legs.map((leg) => ({
+      ...leg,
+      stop_loss: leg.stop_loss ?? null,
+      momentum: leg.momentum ?? null,
+      reentry_on_stop: leg.reentry_on_stop ?? null,
+    })),
+    fees: { kind: body.fees.kind, per_contract_usd: body.fees.per_contract_usd ?? null },
   };
+}
+
+function servedExample(name: string, body: ServedSetup): SavedSetup {
+  return { name, example: true, saved_at_ms: null, cannot_open_reason: null, setup: asServed(body) };
 }
 
 export const EXAMPLE_NO_REENTRY = 'SPY premium momentum, no re-entry';
 export const EXAMPLE_ONE_REENTRY = 'SPY premium momentum, one re-entry';
 
+/** The two listed examples as the server lists them, in its order. */
 export function servedExamples(): SavedSetup[] {
-  return [servedExample(EXAMPLE_NO_REENTRY, minutes(5, 'open')), servedExample(EXAMPLE_ONE_REENTRY, minutes(60, 'close'))];
+  return [servedExample(EXAMPLE_NO_REENTRY, noReentryExampleBody()), servedExample(EXAMPLE_ONE_REENTRY, exampleBody())];
 }
 
 export function servedSaved(name: string, setup: ServedSetup, savedAtMs = 1_760_000_000_000): SavedSetup {
@@ -68,7 +85,7 @@ export function servedSaved(name: string, setup: ServedSetup, savedAtMs = 1_760_
     example: false,
     saved_at_ms: savedAtMs,
     cannot_open_reason: null,
-    setup: { ...setup, fees: { kind: setup.fees.kind, per_contract_usd: setup.fees.per_contract_usd ?? null } },
+    setup: asServed(setup),
   };
 }
 
