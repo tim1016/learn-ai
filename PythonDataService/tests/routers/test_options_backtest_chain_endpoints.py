@@ -14,6 +14,11 @@ The underlying closed at 600.25 in minute 1, at 602.40 in minute 10 (13:40 UTC =
 At minute 10, with the underlying at 602.40, the nearest strike is 602 for both rights (0.40 against 0.60 for 603).
 Call 602 traded at minute 5 (close 3.10, 13:35 UTC = 1749821700000) and at minute 100 (close 2.90, 15:10 UTC =
 1749827400000); call 603 was captured and never traded; call 601 was never captured; put 603 traded at minute 10 (4.40).
+
+The wide scene: standard SPY calls and puts at every dollar from 570 to 639 expiring that Friday, the underlying at 602.40
+at minute 10. The money is 602 (0.40 away, against 0.60 for 603). 14 each side is 588 to 616, 29 strikes a right, 58
+standard contracts; 13 each side is 589 to 615, 27 a right, 54. Non-standard calls (ten shares) at 601.5, 602.5 and 603.5
+all lie inside both windows.
 """
 
 from __future__ import annotations
@@ -28,6 +33,7 @@ import respx
 from httpx import ASGITransport
 
 from app.data_lake import catalog_client
+from app.data_lake.option_listing import OptionListingFileError
 from app.main import app
 from app.options.contract import OptionContract
 from app.options_backtest import chain_download
@@ -61,6 +67,8 @@ NEXT_FRIDAY_ANCHOR_MS = 1750449600000
 MINUTE_10_MS = FRIDAY_OPEN_MS + 10 * MINUTE_MS  # 13:40 UTC
 SATURDAY_MIDNIGHT_MS = 1749873600000
 LISTING_PATH = "option/usa/listing/spy/20250613_contracts.zip"
+STOCK_PATH = "equity/usa/minute/spy/20250613_trade.zip"
+BARS_PATH_602 = "option/usa/minute/spy/spy250613c00602000/20250613_trade.zip"
 
 CALLS = {
     strike: OptionContract.of(root="SPY", expiry_date=FRIDAY, right="call", strike=strike) for strike in (601, 602, 603)
@@ -393,6 +401,14 @@ async def test_a_date_with_nothing_stored_answers_with_each_thing_missing_named(
         pytest.param({"at_ms": FRIDAY_OPEN_MS - 1}, "OPTIONS_BACKTEST_INSTANT_OUTSIDE_SESSION", id="before the open"),
         pytest.param({"at_ms": FRIDAY_CLOSE_MS + 1}, "OPTIONS_BACKTEST_INSTANT_OUTSIDE_SESSION", id="after the close"),
         pytest.param({"at_ms": 0}, "OPTIONS_BACKTEST_INSTANT_OUTSIDE_SESSION", id="the epoch"),
+        pytest.param(
+            {"at_ms": MINUTE_10_MS + 30_000},
+            "OPTIONS_BACKTEST_INSTANT_NOT_ON_A_MINUTE",
+            id="half way through a minute",
+        ),
+        pytest.param(
+            {"at_ms": MINUTE_10_MS + 1}, "OPTIONS_BACKTEST_INSTANT_NOT_ON_A_MINUTE", id="a millisecond past a minute"
+        ),
     ],
 )
 async def test_an_expiry_request_the_page_should_not_have_made_is_refused_with_a_code_and_a_reason(
@@ -450,6 +466,267 @@ async def test_an_expiry_read_with_the_catalog_down_is_a_503(
 
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_LAKE_CATALOG_UNAVAILABLE"
+
+
+@respx.mock
+async def test_an_instant_on_the_next_whole_minute_is_answered_and_the_price_is_the_last_bar_closing_by_it(
+    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    await _the_lake(fake_catalog, tmp_lake)
+
+    async with client as c:
+        response = await c.get(f"{PREFIX}/expiry", params=_expiry_params(at_ms=MINUTE_10_MS + MINUTE_MS))
+
+    # Minute 11 is a whole minute: 602.40 is still the last close (minute 10's bar), with that bar's time.
+    assert response.status_code == 200 and response.json()["at_ms"] == MINUTE_10_MS + MINUTE_MS
+    assert response.json()["underlying_price"]["price_time_ms"] == MINUTE_10_MS
+
+
+@respx.mock
+async def test_the_default_window_is_ten_strikes_each_side_of_the_money(
+    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    await store_underlying_day(
+        fake_catalog,
+        tmp_lake,
+        [stock_bar(FRIDAY_OPEN_MS + 9 * MINUTE_MS, "602.00", "602.50", "601.90", "602.40")],
+    )
+    await store_listing(
+        [
+            vendor_listing_row(OptionContract.of(root="SPY", expiry_date=FRIDAY, right="call", strike=strike))
+            for strike in range(580, 621)
+        ]
+    )
+
+    async with client as c:
+        response = await c.get(f"{PREFIX}/expiry", params=_expiry_params(at_ms=MINUTE_10_MS))
+
+    body = response.json()
+    # Calls at 580 to 620; the money is 602, so ten each side is 592 to 612: 21 contracts.
+    assert body["strikes_each_side"] == 10
+    assert [c["strike_thousandths"] for c in body["calls"]["contracts"]] == [k * 1000 for k in range(592, 613)]
+
+
+@respx.mock
+async def test_the_two_counts_of_rows_left_out_are_each_on_their_own_field(
+    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    yesterday = OptionContract.of(root="SPY", expiry_date=date(2025, 6, 12), right="call", strike=600)
+    adjusted_root = OptionContract.of(root="SPY", expiry_date=FRIDAY, right="call", strike=604)
+    no_share_count = OptionContract.of(root="SPY", expiry_date=FRIDAY, right="call", strike=605)
+    await store_listing(
+        [
+            *(vendor_listing_row(contract) for contract in CALLS.values()),
+            # Expired the day before the trading date: listed, and left out of every count (1).
+            vendor_listing_row(yesterday),
+            # A ticker no contract can be named from (an adjusted root carries a digit) and a row with no share count:
+            # stored, and not turned into contracts (2).
+            vendor_listing_row(adjusted_root, ticker="O:SPY1250613C00604000"),
+            vendor_listing_row(no_share_count, shares_per_contract=None),
+        ]
+    )
+
+    async with client as c:
+        response = await c.get(f"{PREFIX}/day", params={"underlying": "SPY", "trading_date_ms": FRIDAY_MIDNIGHT_MS})
+
+    body = response.json()
+    assert (body["rows_left_out_unusable"], body["rows_left_out_expired"]) == (2, 1)
+    assert [(e["expiry_ms"], e["calls"]) for e in body["expiries"]] == [(FRIDAY_CLOSE_MS, 3)]
+
+
+# ── The first hours of 1970 are the last session of 1969 ──────────────────
+
+
+@pytest.mark.parametrize("trading_date_ms", [0, 17_999_999])
+@respx.mock
+async def test_a_date_in_the_first_hours_of_1970_is_refused_on_all_three_routes_before_anything_is_read_or_fetched(
+    client: httpx.AsyncClient, stock_fetch: StockFetchDouble, trading_date_ms: int
+) -> None:
+    async with client as c:
+        day = await c.get(f"{PREFIX}/day", params={"underlying": "SPY", "trading_date_ms": trading_date_ms})
+        expiry = await c.get(f"{PREFIX}/expiry", params=_expiry_params(trading_date_ms=trading_date_ms))
+        download = await c.post(f"{PREFIX}/download", json=_download(trading_date_ms=trading_date_ms))
+
+    for response in (day, expiry, download):
+        assert response.status_code == 400, response.text
+        assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_NOT_A_SESSION"
+        assert "1969-12-31" in response.json()["detail"]["message"]
+    # No vendor request (an unmocked one fails the test) and no fetch of the underlying.
+    assert stock_fetch.calls == []
+
+
+async def test_the_first_session_after_the_epoch_is_answered(
+    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # 1970-01-02 New York midnight is 104 400 000 ms; the session opens at 10:00 EST = 15:00 UTC = 140 400 000 ms.
+    async with client as c:
+        response = await c.get(f"{PREFIX}/day", params={"underlying": "SPY", "trading_date_ms": 104_400_000})
+
+    assert response.status_code == 200 and response.json()["session_open_ms"] == 140_400_000
+
+
+# ── Nothing on the wire names a file on the server ────────────────────────
+
+_GARBAGE = b"admitted, but not a zip"
+_CHANGED = b"changed after its receipt"
+
+
+def _put_a_file_where_the_underlying_was(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    (raw_root(tmp_lake) / STOCK_PATH).unlink()
+    (raw_root(tmp_lake) / STOCK_PATH).mkdir()
+
+
+def _replace(path: str, payload: bytes, *, admit: bool):
+    def damage(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+        replace_the_stored_file(fake_catalog, raw_root(tmp_lake), path, payload, admit=admit)
+
+    return damage
+
+
+def _listing_problem(body: dict[str, Any]) -> str | None:
+    return body["listing_problem"]
+
+
+def _underlying_problem(body: dict[str, Any]) -> str | None:
+    return body["underlying_price"]["problem"]
+
+
+def _contract_problem(body: dict[str, Any]) -> str | None:
+    return _contracts(body["calls"])[602000]["problem"]
+
+
+# (how the stored file is spoilt, where the problem is on the wire, what it must name, the kind of error it must give)
+_UNREADABLE_ON_THE_EXPIRY = [
+    pytest.param(
+        _replace(LISTING_PATH, _GARBAGE, admit=True),
+        _listing_problem,
+        "SPY listing",
+        "OptionListingFileError",
+        id="a damaged listing",
+    ),
+    pytest.param(
+        _replace(LISTING_PATH, _CHANGED, admit=False),
+        _listing_problem,
+        "SPY listing",
+        "LakeAdmissionError",
+        id="a listing the catalog does not admit",
+    ),
+    pytest.param(
+        _replace(STOCK_PATH, _GARBAGE, admit=True),
+        _underlying_problem,
+        "SPY minute bars",
+        "UnderlyingDayUnreadable",
+        id="a damaged underlying",
+    ),
+    pytest.param(
+        _replace(STOCK_PATH, _CHANGED, admit=False),
+        _underlying_problem,
+        "SPY minute bars",
+        "LakeAdmissionError",
+        id="an underlying the catalog does not admit",
+    ),
+    pytest.param(
+        _put_a_file_where_the_underlying_was,
+        _underlying_problem,
+        "SPY minute bars",
+        "UnderlyingDayUnreadable",
+        id="a directory where the underlying was",
+    ),
+    pytest.param(
+        _replace(BARS_PATH_602, _GARBAGE, admit=True),
+        _contract_problem,
+        "SPY250613C00602000",
+        "OptionBarsFileError",
+        id="damaged bars of a contract",
+    ),
+    pytest.param(
+        _replace(BARS_PATH_602, _CHANGED, admit=False),
+        _contract_problem,
+        "SPY250613C00602000",
+        "LakeAdmissionError",
+        id="bars the catalog does not admit",
+    ),
+]
+
+
+@pytest.mark.parametrize(("damage", "where", "subject", "kind"), _UNREADABLE_ON_THE_EXPIRY)
+@respx.mock
+async def test_what_the_expiry_cannot_read_is_told_on_the_wire_by_what_and_why_and_names_no_file(
+    client: httpx.AsyncClient,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    damage: Any,
+    where: Any,
+    subject: str,
+    kind: str,
+) -> None:
+    await _the_lake(fake_catalog, tmp_lake)
+    damage(fake_catalog, tmp_lake)
+
+    async with client as c:
+        response = await c.get(f"{PREFIX}/expiry", params=_expiry_params(at_ms=MINUTE_10_MS, strikes=1))
+
+    assert response.status_code == 200, response.text
+    problem = where(response.json())
+    assert problem is not None and subject in problem and "2025-06-13" in problem and kind in problem
+    assert str(tmp_lake) not in response.text and ".zip" not in response.text
+
+
+@pytest.mark.parametrize(
+    ("payload", "admit", "kind"),
+    [
+        pytest.param(_GARBAGE, True, "OptionListingFileError", id="a damaged listing"),
+        pytest.param(_CHANGED, False, "LakeAdmissionError", id="a listing the catalog does not admit"),
+    ],
+)
+@respx.mock
+async def test_what_the_day_cannot_read_is_told_on_the_wire_by_what_and_why_and_names_no_file(
+    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path, payload: bytes, admit: bool, kind: str
+) -> None:
+    await store_listing([vendor_listing_row(CALLS[602])])
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), LISTING_PATH, payload, admit=admit)
+
+    async with client as c:
+        response = await c.get(f"{PREFIX}/day", params={"underlying": "SPY", "trading_date_ms": FRIDAY_MIDNIGHT_MS})
+
+    problem = response.json()["listing_problem"]
+    assert response.status_code == 200 and "SPY listing" in problem and "2025-06-13" in problem and kind in problem
+    assert str(tmp_lake) not in response.text and ".zip" not in response.text
+
+
+@pytest.mark.parametrize("route", ["day", "expiry", "download"])
+async def test_a_catalog_that_cannot_be_reached_is_told_without_the_file_it_was_reading(
+    client: httpx.AsyncClient,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    stock_fetch: StockFetchDouble,
+    monkeypatch: pytest.MonkeyPatch,
+    route: str,
+) -> None:
+    with respx.mock:
+        await store_listing([vendor_listing_row(CALLS[602])])
+    # The lake's own message for this: the path of the file it was admitting, then the reason.
+    why = f"{raw_root(tmp_lake)}/{LISTING_PATH}: cannot verify committed lake receipt (OSError)"
+
+    async def down(*args: object, **kwargs: object) -> Any:
+        raise catalog_client.CatalogUnavailableError(why)
+
+    monkeypatch.setattr(catalog_client, "has_committed_file_receipt", down)
+    monkeypatch.setattr(catalog_client, "claim_metadata_artifact", down)
+
+    async with client as c:
+        if route == "day":
+            response = await c.get(f"{PREFIX}/day", params={"underlying": "SPY", "trading_date_ms": FRIDAY_MIDNIGHT_MS})
+        elif route == "expiry":
+            response = await c.get(f"{PREFIX}/expiry", params=_expiry_params())
+        else:
+            with respx.mock:
+                vendor_lists(CALLS[602])
+                response = await c.post(f"{PREFIX}/download", json=_download())
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_LAKE_CATALOG_UNAVAILABLE"
+    assert str(tmp_lake) not in response.text and ".zip" not in response.text
 
 
 # ── POST /past-chain/download ─────────────────────────────────────────────
@@ -621,6 +898,120 @@ async def test_a_download_with_the_catalog_down_is_a_503(
 
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_LAKE_CATALOG_UNAVAILABLE"
+
+
+@respx.mock
+async def test_a_download_that_finds_the_underlying_damaged_says_so_by_what_and_why_and_names_no_file(
+    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path, stock_fetch: StockFetchDouble
+) -> None:
+    await _the_lake(fake_catalog, tmp_lake)
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), STOCK_PATH, _GARBAGE, admit=True)
+
+    async with client as c:
+        response = await c.post(f"{PREFIX}/download", json=_download(contracts=[]))
+
+    underlying = next(i for i in response.json()["items"] if i["kind"] == "underlying")
+    assert (underlying["outcome"], underlying["reason"]) == ("failed", "underlying_unreadable")
+    assert "SPY minute bars" in underlying["detail"] and "UnderlyingDayUnreadable" in underlying["detail"]
+    assert str(tmp_lake) not in response.text and ".zip" not in response.text and stock_fetch.calls == []
+
+
+@respx.mock
+async def test_a_download_whose_listing_cannot_be_read_back_says_so_by_what_and_why_and_names_no_file(
+    client: httpx.AsyncClient,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    stock_fetch: StockFetchDouble,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vendor_lists(CALLS[602])
+    bars = vendor_bars(lambda symbol: no_trades(symbol))
+
+    def damaged(*args: object, **kwargs: object) -> None:
+        raise OptionListingFileError(f"{raw_root(tmp_lake)}/{LISTING_PATH}: expected one member")
+
+    monkeypatch.setattr(chain_download, "read_option_listing", damaged)
+
+    async with client as c:
+        response = await c.post(f"{PREFIX}/download", json=_download(contracts=["SPY250613C00602000"]))
+
+    listing, _, contract = response.json()["items"]
+    assert (listing["outcome"], listing["reason"]) == ("failed", "listing_not_captured")
+    assert "SPY listing" in listing["detail"] and "OptionListingFileError" in listing["detail"]
+    assert contract["reason"] == "listing_not_captured" and bars.call_count == 0
+    assert str(tmp_lake) not in response.text and ".zip" not in response.text
+
+
+# ── A window is the contracts a download takes ────────────────────────────
+
+
+async def _the_wide_lake(fake_catalog: FakeCatalog, tmp_lake: Path, non_standard: tuple[str, ...]) -> None:
+    await store_underlying_day(
+        fake_catalog, tmp_lake, [stock_bar(FRIDAY_OPEN_MS + 9 * MINUTE_MS, "602.00", "602.50", "601.90", "602.40")]
+    )
+    rows = [
+        vendor_listing_row(OptionContract.of(root="SPY", expiry_date=FRIDAY, right=right, strike=strike))
+        for right in ("call", "put")
+        for strike in range(570, 640)
+    ]
+    rows += [
+        vendor_listing_row(
+            OptionContract.of(root="SPY", expiry_date=FRIDAY, right="call", strike=strike), shares_per_contract=10
+        )
+        for strike in non_standard
+    ]
+    await store_listing(rows)
+
+
+@respx.mock
+async def test_the_largest_window_with_non_standard_contracts_inside_it_is_named_and_downloaded_in_one_call(
+    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path, stock_fetch: StockFetchDouble
+) -> None:
+    # 58 standard contracts and the non-standard calls at 602.5 and 603.5: 60, which is what a download takes.
+    await _the_wide_lake(fake_catalog, tmp_lake, ("602.5", "603.5"))
+    bars = vendor_bars(lambda symbol: no_trades(symbol))
+
+    async with client as c:
+        window = await c.get(f"{PREFIX}/expiry", params=_expiry_params(at_ms=MINUTE_10_MS, strikes=14))
+        named = [
+            contract["symbol"]
+            for side in ("calls", "puts")
+            for contract in window.json()[side]["contracts"]
+            if contract["price_state"] == "not_stored"
+        ]
+        download = await c.post(f"{PREFIX}/download", json=_download(contracts=named))
+        after = await c.get(f"{PREFIX}/expiry", params=_expiry_params(at_ms=MINUTE_10_MS, strikes=14))
+
+    assert window.status_code == 200 and len(named) == 60
+    assert download.status_code == 200, download.text
+    items = download.json()["items"]
+    assert [(i["kind"], i["outcome"]) for i in items[:2]] == [
+        ("listing", "already_stored"),
+        ("underlying", "already_stored"),
+    ]
+    assert len(items) == 62 and all(i["outcome"] == "fetched" for i in items[2:])
+    assert bars.call_count == 60
+    assert {c["price_state"] for side in ("calls", "puts") for c in after.json()[side]["contracts"]} == {
+        "did_not_trade"
+    }
+
+
+@respx.mock
+async def test_a_window_over_what_a_download_takes_is_refused_with_its_count_and_a_narrower_one_is_answered(
+    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # The same 58 standard contracts and three non-standard calls inside 588 to 616: 61. At 13 each side, 54 and three.
+    await _the_wide_lake(fake_catalog, tmp_lake, ("601.5", "602.5", "603.5"))
+
+    async with client as c:
+        too_wide = await c.get(f"{PREFIX}/expiry", params=_expiry_params(at_ms=MINUTE_10_MS, strikes=14))
+        narrower = await c.get(f"{PREFIX}/expiry", params=_expiry_params(at_ms=MINUTE_10_MS, strikes=13))
+
+    assert too_wide.status_code == 400
+    assert too_wide.json()["detail"]["code"] == "OPTIONS_BACKTEST_WINDOW_TOO_WIDE"
+    assert "61" in too_wide.json()["detail"]["message"] and "60" in too_wide.json()["detail"]["message"]
+    assert narrower.status_code == 200
+    assert sum(len(narrower.json()[side]["contracts"]) for side in ("calls", "puts")) == 57
 
 
 # ── The published contract ────────────────────────────────────────────────

@@ -4,7 +4,9 @@ Names are snake_case, and every one starts ``PastChain`` so none can meet a mode
 served models of one name make FastAPI rename both). Every temporal value is ``int64 ms UTC``, bounded by
 ``MAX_TIMESTAMP_MS``. A price or a strike is a string of exact dollars, written without an exponent, and a strike is
 also its whole thousandths. Each state is one code of a closed set: the page branches on the code and never parses a
-sentence. The ``problem`` and ``detail`` texts are the lake's own words, to be shown as they are.
+sentence. The ``problem`` text of something unreadable says what could not be read, why in plain words and the kind
+of error in brackets; it names no file. A download item's ``detail`` is the lake's own words for a failure, to be
+shown as they are.
 """
 
 from __future__ import annotations
@@ -173,7 +175,7 @@ class PastChainSide(BaseModel):
             right=side.right,
             listed=side.listed,
             standard_listed=side.standard_listed,
-            at_the_money_strike=None if money is None else dollars(Decimal(money) / 1000),
+            at_the_money_strike=None if side.at_the_money_strike is None else dollars(side.at_the_money_strike),
             at_the_money_strike_thousandths=money,
             contracts=[PastChainContract.from_contract(contract) for contract in side.contracts],
         )
@@ -242,8 +244,13 @@ class PastChainDownloadItem(BaseModel):
     # The underlying's ticker, or the contract's OCC symbol.
     subject: str
     outcome: OutcomeCode
-    # The lake's typed reason, when it failed.
-    reason: DownloadReason | None
+    reason: DownloadReason | None = Field(
+        description=(
+            "The lake's typed reason, when it failed. `lease_timeout` is not missing data: another request is "
+            "fetching the same thing at this moment and it will be stored when that one finishes, so show it as "
+            "'being fetched by another request; ask again' and read the chain again."
+        )
+    )
     detail: str | None
 
     @classmethod

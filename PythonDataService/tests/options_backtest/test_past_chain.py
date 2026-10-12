@@ -15,7 +15,8 @@ minute 390. The calls listed are 598 to 606 in whole dollars, and a non-standard
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import logging
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
@@ -35,7 +36,10 @@ from app.options_backtest.market import MinuteBar
 from app.options_backtest.past_chain import (
     DEFAULT_STRIKES_EACH_SIDE,
     MAX_STRIKES_EACH_SIDE,
+    MAX_WINDOW_CONTRACTS,
+    ChainExpiry,
     ChainSession,
+    InstantNotOnAMinute,
     InstantOutsideSession,
     ListingState,
     NotAContract,
@@ -43,13 +47,14 @@ from app.options_backtest.past_chain import (
     NotASession,
     PriceState,
     UnderlyingState,
+    WindowTooWide,
     chain_session,
     contract_from_symbol,
     describe_day,
     describe_expiry,
     expiry_date_of,
 )
-from app.options_backtest.picking import ListedContract, Listing, pick_contract, strike_for
+from app.options_backtest.picking import ListedContract, pick_contract, strike_for
 from app.options_backtest.setup import AtTheMoney, LegSetup, SameDayExpiryRule
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from tests.options_backtest._run_data import close_ms, open_ms, option_bars, underlying_bars
@@ -93,11 +98,8 @@ def _listed(contract: OptionContract, *, standard: bool = True) -> ListedContrac
     return ListedContract(contract=contract, multiplier=100 if standard else 10, standard=standard)
 
 
-def _listing(*listed: ListedContract, day: date = FRI, left_out: int | None = None) -> Listing:
-    contracts = tuple(listed)
-    if left_out is None:
-        return Listing(underlying="SPY", as_of=day, contracts=contracts, complete=True)
-    return StoredListing(underlying="SPY", as_of=day, contracts=contracts, complete=True, rows_left_out=left_out)
+def _listing(*listed: ListedContract, day: date = FRI, left_out: int = 0) -> StoredListing:
+    return StoredListing(underlying="SPY", as_of=day, contracts=tuple(listed), complete=True, rows_left_out=left_out)
 
 
 class FakeChainData:
@@ -107,7 +109,7 @@ class FakeChainData:
         self,
         *,
         underlying: Sequence[MinuteBar] | None | Exception = None,
-        listing: Listing | None | Exception = None,
+        listing: StoredListing | None | Exception = None,
         options: Mapping[OptionContract, Sequence[MinuteBar] | Exception] | None = None,
     ) -> None:
         self._underlying = underlying
@@ -187,6 +189,34 @@ def test_a_date_beyond_what_the_calendar_can_schedule_is_refused_not_crashed() -
         chain_session(MAX_TIMESTAMP_MS)
 
 
+@pytest.mark.parametrize(
+    "instant_ms", [0, 1, 17_999_999], ids=["the epoch", "a millisecond after it", "the last before 1970 New York"]
+)
+def test_an_instant_in_the_first_hours_of_1970_is_a_session_of_1969_which_this_page_cannot_show(
+    instant_ms: int,
+) -> None:
+    # 1970-01-01 New York midnight (EST, five hours behind UTC) is 05:00 UTC = 5 * 3 600 000 = 18 000 000 ms. Every
+    # instant before it is on 1969-12-31, a Wednesday with a session whose open is 10:00 EST = 15:00 UTC the day before
+    # = -32 400 000 ms, before the epoch: a wire instant is never negative, so it is refused.
+    with pytest.raises(NotASession) as caught:
+        chain_session(instant_ms)
+
+    assert caught.value.code == "OPTIONS_BACKTEST_NOT_A_SESSION"
+    assert "1969-12-31" in str(caught.value) and "1970" in str(caught.value)
+
+
+def test_new_years_day_1970_is_the_calendars_holiday_and_the_next_day_is_the_first_session_this_page_can_show() -> None:
+    with pytest.raises(NotASession, match="holiday"):
+        chain_session(18_000_000)
+
+    # 1970-01-02 New York midnight is 05:00 UTC the next day = 86 400 000 + 18 000 000 = 104 400 000 ms; the session
+    # opens at 10:00 EST (the exchange's hour then) = 15:00 UTC = 86 400 000 + 15 * 3 600 000 = 140 400 000 ms.
+    session = chain_session(104_400_000)
+
+    assert (session.trading_date, session.open_ms) == (date(1970, 1, 2), 140_400_000)
+    assert session.close_ms > session.open_ms
+
+
 def test_an_expiry_is_its_sixteen_hundred_new_york_anchor_and_names_its_date() -> None:
     assert option_expiry_anchor_ms(FRI) == FRI_CLOSE_MS  # 16:00 EDT = 20:00 UTC
     assert expiry_date_of(FRI_CLOSE_MS) == FRI
@@ -234,7 +264,7 @@ def _expiry_of(day: date, strikes: Sequence[int | str], right: OptionRight = "ca
     ]
 
 
-def _the_days_listing() -> Listing:
+def _the_days_listing() -> StoredListing:
     contracts = [
         # Today's: calls at 600, 601, 602 are standard and 603 is not (ten shares); puts at 600 and 601.
         *_expiry_of(MON, [600, 601, 602]),
@@ -300,7 +330,7 @@ def test_rows_the_picker_cannot_use_and_contracts_that_expired_are_counted_apart
     assert day.rows_left_out_expired == 1  # the Friday before the trading date
 
 
-def test_a_plain_listing_has_nothing_left_out_that_it_does_not_know_of() -> None:
+def test_a_listing_that_left_nothing_out_says_none_were_left_out() -> None:
     day = describe_day(
         FakeChainData(listing=_listing(*_expiry_of(FRI, [600]))), underlying="SPY", session=_session(FRI)
     )
@@ -355,7 +385,7 @@ def test_an_unreachable_catalog_is_not_turned_into_a_state() -> None:
 # ── One expiry at one instant ─────────────────────────────────────────────
 
 
-def _the_friday_listing() -> Listing:
+def _the_friday_listing() -> StoredListing:
     calls = [_listed(_call(strike)) for strike in range(598, 607)]
     calls.append(_listed(_call("602.5"), standard=False))
     puts = [_listed(_put(strike)) for strike in (599, 600, 601, 603, 604)]
@@ -793,3 +823,167 @@ def test_nothing_is_read_for_a_contract_outside_the_window() -> None:
 
     asked = [contract.strike_thousandths for kind, contract in data.asked if kind == "option"]
     assert sorted(asked) == [602000, 603000]
+
+
+def test_a_standard_contract_of_another_root_is_not_on_the_ladder_and_does_not_move_the_money_or_the_steps() -> None:
+    other_root = OptionContract.of(root="SPYW", expiry_date=FRI, right="call", strike=602)
+    listing = _listing(_listed(_call(600)), _listed(other_root), _listed(_call(604)))
+    data = FakeChainData(underlying=list(underlying_bars(FRI, {10: "602.10"})), listing=listing)
+
+    chain = _expiry(data, at=close_ms(FRI, 10), n=1)
+
+    # 602.10 is 2.10 from SPY's 600 and 1.90 from its 604, so the money is 604. The SPYW 602 (0.10 away) is not
+    # SPY's: with it on the ladder the money would be 602.
+    assert chain.calls.at_the_money_strike_thousandths == 604000
+    assert {c.contract.occ_symbol: c.steps_from_the_money for c in chain.calls.contracts} == {
+        "SPY261009C00600000": -1,
+        "SPYW261009C00602000": None,
+        "SPY261009C00604000": 0,
+    }
+
+
+def test_the_money_strike_is_in_dollars_as_the_contract_says_it_and_in_thousandths() -> None:
+    chain = _expiry(_friday(), at=close_ms(FRI, 10), n=0)
+
+    # 603 for the puts, and the calls' 602 (602000 thousandths).
+    assert (chain.puts.at_the_money_strike, chain.puts.at_the_money_strike_thousandths) == (D(603), 603000)
+    assert (chain.calls.at_the_money_strike, chain.calls.at_the_money_strike_thousandths) == (D(602), 602000)
+
+
+# ── The window never holds more than a download takes ─────────────────────
+
+
+def _wide_listing(*non_standard: str) -> StoredListing:
+    """Standard calls and puts at every dollar from 570 to 639, and non-standard calls at the strikes named."""
+    standard = [_listed(_call(strike)) for strike in range(570, 640)]
+    standard += [_listed(_put(strike)) for strike in range(570, 640)]
+    return _listing(*standard, *[_listed(_call(strike), standard=False) for strike in non_standard])
+
+
+def _wide(non_standard: tuple[str, ...], n: int) -> tuple[FakeChainData, Callable[[], ChainExpiry]]:
+    data = FakeChainData(underlying=list(underlying_bars(FRI, {10: "602.40"})), listing=_wide_listing(*non_standard))
+    return data, lambda: _expiry(data, at=close_ms(FRI, 10), n=n)
+
+
+def test_the_cap_of_a_window_is_the_number_a_download_takes_and_the_widest_standard_window_is_under_it() -> None:
+    # 14 each side is 29 strikes a right: 2 * (2 * 14 + 1) = 58 standard contracts.
+    assert MAX_WINDOW_CONTRACTS == 60
+    assert 2 * (2 * MAX_STRIKES_EACH_SIDE + 1) == 58 <= MAX_WINDOW_CONTRACTS
+
+
+def test_a_window_of_exactly_the_cap_is_answered_with_its_non_standard_contracts_inside_it() -> None:
+    # Money 602 (0.40 from 602.40, against 0.60 for 603) on both ladders: 14 each side is 588 to 616, 29 strikes a
+    # right, 58 in all. The non-standard calls at 602.5 and 603.5 are inside that range: 60 contracts, the cap.
+    _, ask = _wide(("602.5", "603.5"), 14)
+
+    chain = ask()
+
+    assert (len(chain.calls.contracts), len(chain.puts.contracts)) == (31, 29)
+    assert len(chain.calls.contracts) + len(chain.puts.contracts) == MAX_WINDOW_CONTRACTS
+
+
+def test_a_window_one_over_the_cap_is_refused_before_any_contract_is_read_and_a_narrower_one_is_answered() -> None:
+    # The same 58 standard contracts and three non-standard calls (601.5, 602.5, 603.5), all inside 588 to 616: 61.
+    data, ask = _wide(("601.5", "602.5", "603.5"), 14)
+
+    with pytest.raises(WindowTooWide) as caught:
+        ask()
+
+    assert caught.value.code == "OPTIONS_BACKTEST_WINDOW_TOO_WIDE"
+    assert "61" in str(caught.value) and "60" in str(caught.value)
+    assert [kind for kind, _ in data.asked if kind == "option"] == []  # refused before one file was opened
+
+    # 13 each side is 589 to 615, 27 strikes a right: 54 standard and the same three inside it, 57.
+    narrower = _expiry(data, at=close_ms(FRI, 10), n=13)
+    assert len(narrower.calls.contracts) + len(narrower.puts.contracts) == 57
+
+
+# ── What cannot be read is told without a file ────────────────────────────
+
+_A_PATH = "/srv/lake/raw/option/usa/minute/spy/spy261009c00604000/20261009_trade.zip"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OptionBarsFileError(f"{_A_PATH}: not a readable file (BadZipFile: File is not a zip file)"),
+        LakeAdmissionError(f"{_A_PATH}: no committed catalog receipt for these bytes; retry capture"),
+    ],
+    ids=["a damaged file", "bytes the catalog does not admit"],
+)
+def test_a_contract_that_cannot_be_read_says_which_and_why_in_words_without_the_path(error: Exception) -> None:
+    chain = _expiry(_friday(options={_call(604): error}), at=close_ms(FRI, 10), n=2)
+
+    problem = _by_strike(chain.calls)[604000].problem
+
+    assert problem is not None
+    assert "SPY261009C00604000" in problem and "2026-10-09" in problem and type(error).__name__ in problem
+    assert "/srv" not in problem and ".zip" not in problem
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OptionListingFileError(f"{_A_PATH}: expected one member"),
+        LakeAdmissionError(f"{_A_PATH}: no root identity for committed lake admission"),
+    ],
+    ids=["a damaged file", "bytes the catalog does not admit"],
+)
+def test_a_listing_that_cannot_be_read_says_which_and_why_in_words_without_the_path(error: Exception) -> None:
+    day = describe_day(FakeChainData(listing=error), underlying="SPY", session=_session(FRI))
+    chain = _expiry(_friday(listing=error))
+
+    for problem in (day.listing_problem, chain.listing_problem):
+        assert problem is not None
+        assert "SPY listing" in problem and "2026-10-09" in problem and type(error).__name__ in problem
+        assert "/srv" not in problem and ".zip" not in problem
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        UnderlyingDayUnreadable(
+            f"the stored SPY minute file cannot be decoded (OSError: [Errno 21] Is a directory: '{_A_PATH}')"
+        ),
+        LakeAdmissionError(f"{_A_PATH}: cannot verify committed lake root identity"),
+    ],
+    ids=["a damaged file", "bytes the catalog does not admit"],
+)
+def test_an_underlying_that_cannot_be_read_says_which_and_why_in_words_without_the_path(error: Exception) -> None:
+    quote = _expiry(_friday(underlying=error)).underlying_quote
+
+    assert quote.state is UnderlyingState.UNREADABLE and quote.problem is not None
+    assert (
+        "SPY minute bars" in quote.problem and "2026-10-09" in quote.problem and type(error).__name__ in quote.problem
+    )
+    assert "/srv" not in quote.problem and ".zip" not in quote.problem
+
+
+def test_the_lakes_own_words_for_what_cannot_be_read_go_to_the_log_where_the_path_is_wanted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    error = OptionBarsFileError(f"{_A_PATH}: not a readable file")
+
+    with caplog.at_level(logging.WARNING, logger="app.options_backtest.past_chain"):
+        _expiry(_friday(options={_call(604): error}), at=close_ms(FRI, 10), n=2)
+
+    [record] = [r for r in caplog.records if r.name == "app.options_backtest.past_chain"]
+    assert record.error_type == "OptionBarsFileError" and _A_PATH in record.error  # type: ignore[attr-defined]
+
+
+# ── An instant is the close of a minute ───────────────────────────────────
+
+
+def test_an_instant_off_a_whole_minute_is_refused_with_its_own_code_and_a_whole_minute_is_not() -> None:
+    # 09:30:30 is the open + 30 000 ms: inside the session and half way through the minute whose bar closes at 09:31:00.
+    with pytest.raises(InstantNotOnAMinute) as caught:
+        _expiry(_friday(), at=FRI_OPEN_MS + 30_000)
+
+    assert caught.value.code == "OPTIONS_BACKTEST_INSTANT_NOT_ON_A_MINUTE"
+    assert str(FRI_OPEN_MS + 30_000) in str(caught.value)
+    assert _expiry(_friday(), at=FRI_OPEN_MS + 60_000).at_ms == FRI_OPEN_MS + 60_000
+
+
+def test_a_millisecond_off_the_minute_inside_the_session_is_refused_as_off_a_minute() -> None:
+    with pytest.raises(InstantNotOnAMinute):
+        _expiry(_friday(), at=close_ms(FRI, 10) + 1)

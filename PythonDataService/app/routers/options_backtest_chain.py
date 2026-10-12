@@ -12,6 +12,7 @@ date; an expiry is its 16:00 New York anchor. The reads block, so each runs in a
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -41,6 +42,8 @@ from app.schemas.options_backtest_chain import (
 )
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 _REFUSALS = {
@@ -62,7 +65,14 @@ ExpiryMs = Annotated[
 ]
 InstantMs = Annotated[
     int | None,
-    Query(ge=0, le=MAX_TIMESTAMP_MS, description="An instant within the session; the session's close when absent."),
+    Query(
+        ge=0,
+        le=MAX_TIMESTAMP_MS,
+        description=(
+            "An instant within the session, on a whole minute (a multiple of 60 000 ms); the session's close when "
+            "absent. The price shown is the last bar closing at or before it."
+        ),
+    ),
 ]
 StrikesEachSide = Annotated[
     int, Query(ge=0, le=MAX_STRIKES_EACH_SIDE, description="Strikes shown on each side of the money, for each right.")
@@ -74,11 +84,13 @@ def _refused(error: ChainRefusal) -> HTTPException:
 
 
 def _catalog_is_down(error: CatalogUnavailableError) -> HTTPException:
+    # The error names the file it was reading by its path on the server's disk: that goes to the log, not the wire.
+    logger.warning("the data lake's catalog cannot be reached", extra={"error": str(error)})
     return HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail={
             "code": "OPTIONS_BACKTEST_LAKE_CATALOG_UNAVAILABLE",
-            "message": f"The data lake's catalog cannot be reached, so what is stored cannot be read ({error}).",
+            "message": "The data lake's catalog cannot be reached, so what is stored cannot be read.",
         },
     )
 
@@ -135,9 +147,11 @@ async def get_past_chain_expiry(
 async def post_past_chain_download(request: PastChainDownloadRequest) -> PastChainDownloadResponse:
     """Capture the listing, the underlying's bars and the bars of the contracts named; one item says how each came out.
 
-    A vendor or lake failure is an item with its typed reason and never a failed request. A request the page should not
-    have made (a date with no session, an expiry that is no anchor, a contract that is no OCC symbol or not of the
-    expiry, more than the cap) is refused before anything is asked.
+    A vendor or lake failure is an item with its typed reason and never a failed request. A request the page should
+    not have made (a date with no session, an expiry that is no anchor, a contract that is no OCC symbol or not of the
+    expiry, more than the cap) is refused before anything is asked. A contract that another request is fetching at the
+    same moment is an item that failed with reason ``lease_timeout``: it is not missing; ask again once the other
+    request has finished.
     """
     try:
         session = await asyncio.to_thread(chain_session, request.trading_date_ms)

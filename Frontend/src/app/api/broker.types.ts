@@ -5837,9 +5837,11 @@ export interface paths {
          * Post Past Chain Download
          * @description Capture the listing, the underlying's bars and the bars of the contracts named; one item says how each came out.
          *
-         *     A vendor or lake failure is an item with its typed reason and never a failed request. A request the page should not
-         *     have made (a date with no session, an expiry that is no anchor, a contract that is no OCC symbol or not of the
-         *     expiry, more than the cap) is refused before anything is asked.
+         *     A vendor or lake failure is an item with its typed reason and never a failed request. A request the page should
+         *     not have made (a date with no session, an expiry that is no anchor, a contract that is no OCC symbol or not of the
+         *     expiry, more than the cap) is refused before anything is asked. A contract that another request is fetching at the
+         *     same moment is an item that failed with reason ``lease_timeout``: it is not missing; ask again once the other
+         *     request has finished.
          */
         post: operations["post_past_chain_download_api_research_options_backtest_past_chain_download_post"];
         delete?: never;
@@ -22993,7 +22995,10 @@ export interface components {
              * @enum {string}
              */
             outcome: "fetched" | "already_stored" | "failed";
-            /** Reason */
+            /**
+             * Reason
+             * @description The lake's typed reason, when it failed. `lease_timeout` is not missing data: another request is fetching the same thing at this moment and it will be stored when that one finishes, so show it as 'being fetched by another request; ask again' and read the chain again.
+             */
             reason: ("provider_auth_error" | "provider_entitlement_error" | "provider_rate_limited" | "provider_api_error" | "provider_no_data" | "unknown_symbol" | "validation_failed" | "io_error" | "launcher_unreachable" | "lease_timeout" | "fetch_timeout" | "unsupported_resolution" | "unsupported_artifact_kind" | "corp_action_revision_mismatch" | "data_contract_mismatch" | "internal_error" | "session_not_produced" | "run_aborted") | ("outside_data_plan" | "session_not_over" | "not_a_session" | "symbol_too_long" | "listing_not_captured" | "not_listed") | ("underlying_not_fetched" | "underlying_unreadable") | null;
             /** Subject */
             subject: string;
@@ -40010,7 +40015,7 @@ export interface operations {
                 trading_date_ms: number;
                 /** @description The expiry's anchor: 16:00 New York time on its date. */
                 expiry_ms: number;
-                /** @description An instant within the session; the session's close when absent. */
+                /** @description An instant within the session, on a whole minute (a multiple of 60 000 ms); the session's close when absent. The price shown is the last bar closing at or before it. */
                 at_ms?: number | null;
                 /** @description Strikes shown on each side of the money, for each right. */
                 strikes?: number;

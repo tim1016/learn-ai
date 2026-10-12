@@ -41420,6 +41420,7 @@
                 "type": "null"
               }
             ],
+            "description": "The lake's typed reason, when it failed. `lease_timeout` is not missing data: another request is fetching the same thing at this moment and it will be stored when that one finishes, so show it as 'being fetched by another request; ask again' and read the chain again.",
             "title": "Reason"
           },
           "subject": {
@@ -78712,7 +78713,7 @@
     },
     "/api/research/options-backtest/past-chain/download": {
       "post": {
-        "description": "Capture the listing, the underlying's bars and the bars of the contracts named; one item says how each came out.\n\nA vendor or lake failure is an item with its typed reason and never a failed request. A request the page should not\nhave made (a date with no session, an expiry that is no anchor, a contract that is no OCC symbol or not of the\nexpiry, more than the cap) is refused before anything is asked.",
+        "description": "Capture the listing, the underlying's bars and the bars of the contracts named; one item says how each came out.\n\nA vendor or lake failure is an item with its typed reason and never a failed request. A request the page should\nnot have made (a date with no session, an expiry that is no anchor, a contract that is no OCC symbol or not of the\nexpiry, more than the cap) is refused before anything is asked. A contract that another request is fetching at the\nsame moment is an item that failed with reason ``lease_timeout``: it is not missing; ask again once the other\nrequest has finished.",
         "operationId": "post_past_chain_download_api_research_options_backtest_past_chain_download_post",
         "requestBody": {
           "content": {
@@ -78816,7 +78817,7 @@
             }
           },
           {
-            "description": "An instant within the session; the session's close when absent.",
+            "description": "An instant within the session, on a whole minute (a multiple of 60 000 ms); the session's close when absent. The price shown is the last bar closing at or before it.",
             "in": "query",
             "name": "at_ms",
             "required": false,
@@ -78831,7 +78832,7 @@
                   "type": "null"
                 }
               ],
-              "description": "An instant within the session; the session's close when absent.",
+              "description": "An instant within the session, on a whole minute (a multiple of 60 000 ms); the session's close when absent. The price shown is the last bar closing at or before it.",
               "title": "At Ms"
             }
           },

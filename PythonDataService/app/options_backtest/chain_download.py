@@ -14,7 +14,13 @@ and no contract is tried. What is raised is the caller's mistake (a request refu
 unreachable catalog.
 
 At most ``MAX_REQUESTS_IN_FLIGHT`` captures run at once in one call, and at most ``MAX_CONTRACTS_PER_DOWNLOAD``
-contracts are taken in one call.
+contracts are taken in one call. That is the number of contracts a window of the chain can hold
+(``past_chain.MAX_WINDOW_CONTRACTS``, one constant), so the contracts a window names are one download.
+
+Two calls at once for one date can both want a contract. The lake lets one of them claim it, and the other waits out its
+lease and gives up: that call reports the contract ``failed`` with the lake's ``lease_timeout`` reason. Nothing is
+missing and nothing is asked of the vendor twice; the other request is fetching it, and it is stored when that one
+finishes. A caller shows it as "being fetched by another request; ask again" and reads the chain again.
 """
 
 from __future__ import annotations
@@ -41,13 +47,13 @@ from app.data_lake.types import is_lake_addressable_symbol
 from app.options.contract import OptionContract
 from app.options.expiry import option_expiry_anchor_ms
 from app.options_backtest.lake_data import LakeRunData, UnderlyingDayUnreadable
-from app.options_backtest.past_chain import ChainRefusal
+from app.options_backtest.past_chain import MAX_WINDOW_CONTRACTS, ChainRefusal, unreadable_problem
 from app.utils.background_loop import CallerStoppedWaitingError
 
 # Vendor requests in flight at once in one call. The listing and the underlying each count as one.
 MAX_REQUESTS_IN_FLIGHT = 4
-# Contracts one call takes. A full window of the chain (58 contracts at the widest) fits in one call.
-MAX_CONTRACTS_PER_DOWNLOAD = 60
+# Contracts one call takes: as many as a window of the chain can hold, so the contracts a window names are one download.
+MAX_CONTRACTS_PER_DOWNLOAD = MAX_WINDOW_CONTRACTS
 
 DownloadReason = OptionFailureReason | Literal["underlying_not_fetched", "underlying_unreadable"]
 
@@ -98,14 +104,14 @@ async def _capture_listing(
     item = _item_of(ItemKind.LISTING, underlying, result)
     if item.outcome is Outcome.FAILED:
         return item, None
+    what = f"the {underlying} listing for {trading_date.isoformat()}"
     try:
         stored = await asyncio.to_thread(read_option_listing, underlying, trading_date)
-        why = "the lake no longer holds the file it just reported"
+        detail = f"{what} was reported stored, and the lake no longer holds it"
     except (LakeAdmissionError, OptionListingFileError) as exc:
         stored = None
-        why = f"{type(exc).__name__}: {exc}"
+        detail = unreadable_problem(what, exc)
     if stored is None:
-        detail = f"the {underlying} listing for {trading_date.isoformat()} is stored but is not usable: {why}"
         return DownloadItem(ItemKind.LISTING, underlying, Outcome.FAILED, "listing_not_captured", detail), None
     return item, stored
 
@@ -117,13 +123,8 @@ async def _capture_underlying(underlying: str, trading_date: date, gate: asyncio
         held = await asyncio.to_thread(held_by.underlying_day, trading_date)
     except (LakeAdmissionError, UnderlyingDayUnreadable) as exc:
         # Repairing a damaged stock file is the stock side's job; nothing here knows the pipeline would heal it.
-        return DownloadItem(
-            ItemKind.UNDERLYING,
-            underlying,
-            Outcome.FAILED,
-            "underlying_unreadable",
-            f"{type(exc).__name__}: {exc}",
-        )
+        detail = unreadable_problem(f"the {underlying} minute bars for {trading_date.isoformat()}", exc)
+        return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.FAILED, "underlying_unreadable", detail)
     if held is not None:
         return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.ALREADY_STORED, None, None)
     async with gate:
@@ -185,6 +186,9 @@ async def ensure_chain_data(
     of its own. More than ``MAX_CONTRACTS_PER_DOWNLOAD`` distinct contracts is ``TooManyContracts``. Both refusals
     come before anything is asked. Raises ``catalog_client.CatalogUnavailableError`` when the catalog cannot be
     reached, after the captures in flight have finished, and ``ValueError`` for an underlying the lake cannot hold.
+
+    A contract another call is fetching at the same moment comes back ``failed`` with the lake's ``lease_timeout``
+    reason: it is not missing, the other request is fetching it (see the module docstring); ask again.
     """
     named = _distinct(contracts)
     if len(named) > MAX_CONTRACTS_PER_DOWNLOAD:

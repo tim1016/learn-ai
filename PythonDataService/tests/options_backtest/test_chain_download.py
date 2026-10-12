@@ -22,6 +22,8 @@ import respx
 
 from app.data_lake import catalog_client
 from app.data_lake import option_bars as option_bars_module
+from app.data_lake.admission import LakeAdmissionError
+from app.data_lake.option_listing import OptionListingFileError
 from app.data_lake.run_materialization import LakeMaterializationError
 from app.options.contract import OptionContract
 from app.options_backtest import chain_download
@@ -36,7 +38,6 @@ from app.options_backtest.chain_download import (
     ensure_chain_data,
 )
 from app.options_backtest.lake_data import LakeRunData
-from app.options_backtest.past_chain import MAX_STRIKES_EACH_SIDE
 from tests._helpers.fake_lake_catalog import FakeCatalog
 from tests._helpers.option_vendor import no_trades, traded
 from tests.options_backtest._lake import (
@@ -324,6 +325,54 @@ async def test_a_damaged_underlying_file_is_reported_and_is_not_fetched_over(
     assert materializer.calls == []
 
 
+@pytest.mark.parametrize(
+    "read_back",
+    [
+        pytest.param(
+            OptionListingFileError("/srv/lake/raw/option/usa/listing/spy/20250613_contracts.zip: bad"), id="damaged"
+        ),
+        pytest.param(
+            LakeAdmissionError("/srv/lake/raw/option/usa/listing/spy/20250613_contracts.zip: no receipt"),
+            id="not admitted",
+        ),
+        pytest.param(None, id="gone"),
+    ],
+)
+@respx.mock
+async def test_a_listing_captured_and_then_not_readable_fails_the_listing_and_every_contract_and_asks_for_no_bars(
+    read_back: Exception | None,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    materializer: StockFetchDouble,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vendor_lists(CALL_600, CALL_601)
+    bars_route = vendor_bars(lambda symbol: no_trades(symbol))
+
+    def read_listing(*args: object, **kwargs: object) -> None:
+        if read_back is not None:
+            raise read_back
+
+    monkeypatch.setattr(chain_download, "read_option_listing", read_listing)
+
+    items = await ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[CALL_600, CALL_601])
+
+    assert _summary(items) == [
+        ("listing", "SPY", "failed", "listing_not_captured"),
+        ("underlying", "SPY", "fetched", None),
+        ("contract", SYMBOL_600, "failed", "listing_not_captured"),
+        ("contract", SYMBOL_601, "failed", "listing_not_captured"),
+    ]
+    assert bars_route.call_count == 0
+    detail = items[0].detail or ""
+    assert "SPY listing" in detail and "2025-06-13" in detail
+    if read_back is not None:
+        assert type(read_back).__name__ in detail
+    # The lake's words carry the path of the file on the server; the item names what and the kind of error, not the file.
+    assert "/srv" not in detail and ".zip" not in detail
+    assert "so no contract of it can be vouched for" in (items[2].detail or "")
+
+
 # ── Requests refused before anything is asked ─────────────────────────────
 
 
@@ -378,11 +427,6 @@ async def test_an_underlying_the_lake_cannot_hold_is_refused(
     assert materializer.calls == []
 
 
-def test_a_full_window_of_the_chain_is_one_download() -> None:
-    # Both rights, the money and the cap's strikes each side of it.
-    assert 2 * (2 * MAX_STRIKES_EACH_SIDE + 1) <= MAX_CONTRACTS_PER_DOWNLOAD
-
-
 # ── Concurrency and outages ───────────────────────────────────────────────
 
 
@@ -409,6 +453,44 @@ async def test_no_more_than_four_requests_are_in_flight_and_four_are(
 
     assert MAX_REQUESTS_IN_FLIGHT == 4 and peak == 4
     assert all(item.outcome is Outcome.FETCHED for item in items)
+
+
+@respx.mock
+async def test_the_underlyings_fetch_waits_for_a_free_place_among_the_requests_in_flight(
+    fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
+) -> None:
+    # One call fetches the listing and the underlying together and only then the contracts, so the fetch of the
+    # underlying never meets four contract requests; the place it takes is the rule that it is one of the requests
+    # counted, and is shown here with every place taken.
+    gate = asyncio.Semaphore(1)
+    await gate.acquire()
+    fetch = asyncio.create_task(chain_download._capture_underlying("SPY", FRIDAY, gate))
+
+    await asyncio.sleep(0.2)
+    waited = (fetch.done(), len(materializer.calls))
+    gate.release()
+    item = await fetch
+
+    assert waited == (False, 0)
+    assert (item.outcome, len(materializer.calls)) == (Outcome.FETCHED, 1)
+
+
+@respx.mock
+async def test_the_clock_the_caller_gives_is_the_one_the_contract_capture_uses_for_the_data_plan(
+    fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
+) -> None:
+    vendor_lists(CALL_600)
+    bars_route = vendor_bars(lambda symbol: no_trades(symbol))
+    # Two years after the fixed clock (2026-10-12 14:00 New York = 1 791 828 000 000 ms): 365 days to 2027-10-12 and 366
+    # to 2028-10-12 (it holds 29 February 2028), 731 * 86 400 000 = 63 158 400 000 ms, so 1 854 986 400 000. The plan
+    # then reaches back to 2026-10-14, and 2025-06-13 is before it; at the fixed clock it is well inside.
+    two_years_on = 1_854_986_400_000
+
+    items = await ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[CALL_600], now_ms=two_years_on)
+
+    assert (items[0].kind, items[0].outcome) == (ItemKind.LISTING, Outcome.FETCHED)  # a listing has no plan floor
+    assert (items[2].outcome, items[2].reason) == (Outcome.FAILED, "outside_data_plan")
+    assert bars_route.call_count == 0
 
 
 @respx.mock
