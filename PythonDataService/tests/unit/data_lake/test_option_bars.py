@@ -25,14 +25,17 @@ capture here first stores that listing the way a real one is stored.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import io
 import logging
 import zipfile
-from datetime import date
+import zlib
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -45,12 +48,11 @@ from app.data_lake import option_lake as option_lake_module
 from app.data_lake import option_listing as option_listing_module
 from app.data_lake.admission import LakeAdmissionError
 from app.data_lake.ensure_data import _minute_trade_dch
-from app.data_lake.lean_writer import to_deci_cent
+from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes, from_deci_cent, to_deci_cent
 from app.data_lake.option_bars import (
     OptionBar,
     OptionBarsFileError,
     OptionDayBars,
-    decode_deci_cent,
     ensure_option_day_bars,
     option_minute_trade_dch,
     parse_option_day_zip,
@@ -1197,7 +1199,7 @@ def test_an_option_files_recipe_is_not_either_of_the_stock_recipes() -> None:
 
 @pytest.mark.parametrize("price", ["0.0001", "0.01", "1.27", "4.35", "99.9999", "1234.5678"])
 def test_every_price_on_the_ten_thousandth_grid_survives_the_round_trip_exactly(price: str) -> None:
-    assert decode_deci_cent(to_deci_cent(Decimal(price))) == Decimal(price)
+    assert from_deci_cent(to_deci_cent(Decimal(price))) == Decimal(price)
 
 
 def _zip(member: str, body: str) -> bytes:
@@ -1222,16 +1224,30 @@ def test_a_well_formed_file_reads_to_its_bars() -> None:
 
 
 @pytest.mark.parametrize(
-    "body",
+    ("body", "line"),
     [
-        "34200000,12700,13100,12500,12700\n",  # five columns
-        "34200000,1.27,13100,12500,12700,12\n",  # a price that is not an integer count of ten-thousandths
-        "09:30,12700,13100,12500,12700,12\n",  # a time that is not milliseconds
-        "34200000,12700,13100,12500,12700,1e3\n",  # a volume the writer never writes
+        ("34200000,12700,13100,12500,12700\n", 1),  # five columns
+        ("34200000,1.27,13100,12500,12700,12\n", 1),  # a price that is not an integer count of ten-thousandths
+        ("09:30,12700,13100,12500,12700,12\n", 1),  # a time that is not milliseconds
+        ("34200000,12700,13100,12500,12700,1e3\n", 1),  # a volume the writer never writes
+        ("34200000,12700,13100,12500,12700,12\n\n", 2),  # a blank line after the last row
+        ("\n34200000,12700,13100,12500,12700,12\n", 1),  # a blank line before the first
+        ("34200000,12700,13100,12500,12700,12\n\n34260000,12700,13100,12500,12700,12\n", 2),  # and between
+        (" 34200000,12700,13100,12500,12700,12\n", 1),  # padding the writer never writes
+        ("34200000,+12700,13100,12500,12700,12\n", 1),  # a sign
+        ("34200000,1_2700,13100,12500,12700,12\n", 1),  # an underscore Python would accept
+        ("34200000,-12700,13100,12500,12700,12\n", 1),  # a negative price
+        ("-60000,12700,13100,12500,12700,12\n", 1),  # a negative start
+        ("34200000," + "9" * 5000 + ",13100,12500,12700,12\n", 1),  # more digits than an integer will be made of
+        ("9" * 30 + ",12700,13100,12500,12700,12\n", 1),  # a start past the end of the calendar
+    ],
+    ids=[
+        "five columns", "decimal point", "clock time", "exponent volume", "blank after", "blank before", "blank between",
+        "padding", "plus sign", "underscore", "negative price", "negative start", "5000 digits", "start past the calendar",
     ],
 )
-def test_a_malformed_row_is_an_error_not_a_skipped_bar(body: str) -> None:
-    with pytest.raises(OptionBarsFileError, match="line 1"):
+def test_a_malformed_row_is_an_error_not_a_skipped_bar(body: str, line: int) -> None:
+    with pytest.raises(OptionBarsFileError, match=f"line {line}"):
         parse_option_day_zip(_zip(MEMBER, body), SYMBOL, TRADING_DAY)
 
 
@@ -1267,4 +1283,179 @@ def test_a_file_with_a_member_besides_the_one_it_should_hold_is_refused(extra_fi
 
     with pytest.raises(OptionBarsFileError, match="expected one member"):
         parse_option_day_zip(buf.getvalue(), SYMBOL, TRADING_DAY)
+
+
+def _written_file() -> bytes:
+    """A real two-bar file, as the lake writes one."""
+    et = ZoneInfo("America/New_York")
+    bars = [
+        MinuteTradeBar(
+            bar_start_et=datetime(2025, 6, 13, 9, 30 + i, tzinfo=et), open=Decimal("1.27"), high=Decimal("1.31"),
+            low=Decimal("1.25"), close=Decimal("1.27"), volume=Decimal(12),
+        )
+        for i in range(2)
+    ]
+    return build_minute_trade_zip_bytes(SYMBOL, "20250613", bars)
+
+
+def _empty_zip() -> bytes:
+    buf = io.BytesIO()
+    zipfile.ZipFile(buf, "w").close()
+    return buf.getvalue()
+
+
+def _zip_of_bytes(body: bytes) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(MEMBER, body)
+    return buf.getvalue()
+
+
+def _flipped(payload: bytes, index: int) -> bytes:
+    return payload[:index] + bytes([payload[index] ^ 0xFF]) + payload[index + 1:]
+
+
+@pytest.mark.parametrize(
+    ("payload", "cause"),
+    [
+        (b"not a zip at all", zipfile.BadZipFile),
+        (b"", zipfile.BadZipFile),
+        (_written_file()[: len(_written_file()) // 2], zipfile.BadZipFile),
+        (_flipped(_written_file(), 60), (zipfile.BadZipFile, zlib.error)),  # a byte of the compressed rows
+        (_zip_of_bytes(b"34200000,12700,13100,12500,12700,12\n\xff\xfe"), UnicodeDecodeError),
+        (_zip_of_bytes("34200000,12700,13100,12500,12700,12\n\u00e9".encode()), UnicodeDecodeError),
+        (_empty_zip(), None),
+    ],
+    ids=["not a zip", "no bytes", "truncated", "damaged data", "bytes that are not text", "letters beyond ASCII", "no member"],
+)
+def test_a_stored_file_that_is_not_what_the_lake_writes_is_one_named_error_with_its_cause_chained(
+    payload: bytes, cause: type[Exception] | tuple[type[Exception], ...] | None
+) -> None:
+    """Never a raw ``BadZipFile`` or ``UnicodeDecodeError``: a caller catches one thing."""
+    with pytest.raises(OptionBarsFileError) as caught:
+        parse_option_day_zip(payload, SYMBOL, TRADING_DAY)
+
+    if cause is not None:
+        assert isinstance(caught.value.__cause__, cause)
+
+
+def test_no_single_damaged_byte_or_cut_of_a_written_file_escapes_as_anything_but_the_named_error() -> None:
+    """Every cut, every byte zeroed or set, every bit flipped: the zip module has raised four other kinds of error for these."""
+    written = _written_file()
+    damaged = [written[:n] for n in range(len(written))]
+    damaged += [written[:i] + bytes([b]) + written[i + 1:] for i in range(len(written)) for b in (0x00, 0xFF)]
+    damaged += [written[:i] + bytes([written[i] ^ (1 << bit)]) + written[i + 1:] for i in range(len(written)) for bit in range(8)]
+
+    for payload in damaged:
+        with contextlib.suppress(OptionBarsFileError):  # a damaged byte may leave a file that still reads; nothing else may happen
+            parse_option_day_zip(payload, SYMBOL, TRADING_DAY)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "34200000,0,0,0,0,1\n",  # a price of zero
+        "34200000,12700,13100,12500,0,12\n",  # a close of zero
+        "34200000,12700,12500,13100,12700,12\n",  # the low above the high
+        "34200000,12700,12600,12500,12700,12\n",  # the high below the open
+        "34200000,12700,13100,12800,12700,12\n",  # the low above the open
+        "34200000,12700,13100,12500,12700,12\n34200000,12700,13100,12500,12700,12\n",  # a start repeated
+        "34260000,12700,13100,12500,12700,12\n34200000,12700,13100,12500,12700,12\n",  # starts out of order
+        "86400000,12700,13100,12500,12700,12\n",  # the first millisecond of the next date
+    ],
+    ids=["zero price", "zero close", "low above high", "high below open", "low above open", "repeated start", "out of order", "next date"],
+)
+def test_a_stored_day_whose_bars_break_the_rules_of_a_stored_day_is_refused(body: str) -> None:
+    with pytest.raises(OptionBarsFileError) as caught:
+        parse_option_day_zip(_zip(MEMBER, body), SYMBOL, TRADING_DAY)
+
+    assert isinstance(caught.value.__cause__, ValueError)
+
+
+def _replace_the_stored_file(fake_catalog: FakeCatalog, tmp_lake: Path, record_id: int, payload: bytes) -> None:
+    """Put other bytes in the day's file and give them the receipt, so the catalog admits them."""
+    row = fake_catalog.rows[record_id]
+    (_raw_root(tmp_lake) / row["file_path"]).write_bytes(payload)
+    row["file_sha256"] = hashlib.sha256(payload).hexdigest()
+    row["file_size_bytes"] = len(payload)
+
+
+@respx.mock
+async def test_an_admitted_file_that_is_no_zip_or_breaks_the_rules_of_a_stored_day_is_the_named_error_on_read_and_is_fetched_again(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    route = _mock_vendor()
+    first = await _ensure()
+    assert first.record is not None
+    mangled = {
+        "not a zip": b"admitted, but not a zip",
+        "a zero price": _zip(MEMBER, "34200000,0,0,0,0,1\n"),
+    }
+
+    for name, payload in mangled.items():
+        _replace_the_stored_file(fake_catalog, tmp_lake, first.record.id, payload)
+        with pytest.raises(OptionBarsFileError):
+            await _read()
+        again = await _ensure()  # the reuse gate reads the file too: it does not hold, so the day is captured again
+
+        assert again.failure is None and again.reused is False, name
+        healed = await _read()
+        assert healed is not None and len(healed.bars) == 1, name
+
+    assert route.call_count == 1 + len(mangled)
+
+
+# ── A price that would be stored as zero fails the day ───────────────────
+
+
+def _one_price_bars(**prices: str) -> httpx.Response:
+    """A two-bar answer: the second bar's prices are the given ones (any left out are 1.27 and the second bar's own)."""
+    first = f'{{"t":{SESSION_OPEN_MS},"o":1.27,"h":1.31,"l":1.25,"c":1.27,"v":3}}'
+    fields = {"o": "1.27", "h": "1.31", "l": "1.25", "c": "1.27", **prices}
+    cells = ",".join(f'"{name}":{value}' for name, value in fields.items())
+    second = f'{{"t":{SESSION_OPEN_MS + MINUTE_MS},{cells},"v":3}}'
+    return raw_json(f'{{"status":"OK","ticker":"O:{SYMBOL}","resultsCount":2,"results":[{first},{second}]}}')
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("prices", "named"),
+    [
+        ({"o": "0.00004", "h": "0.00004", "l": "0.00004", "c": "0.00004"}, "open=0.00004"),
+        ({"l": "0.00004"}, "low=0.00004"),
+        ({"o": "0.00004", "l": "0.00004"}, "open=0.00004"),
+        ({"c": "0.00004", "l": "0.00004"}, "low=0.00004"),  # the first of the offenders, in open, high, low, close order
+    ],
+    ids=["every price", "the low alone", "open and low", "close and low"],
+)
+async def test_a_vendor_price_so_small_it_rounds_to_a_stored_zero_fails_the_day_naming_the_bar(
+    prices: dict[str, str], named: str, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """The file holds ten-thousandths: 0.00004 is stored as 0, and every reader is told every price is above zero."""
+    _mock_vendor(_one_price_bars(**prices))
+
+    result = await _ensure()
+
+    assert result.record is None
+    assert result.failure is not None and result.failure.reason == "validation_failed"
+    assert "bar[1]" in result.failure.detail and named in result.failure.detail
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "validation_failed", None)
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+    assert await _read() is None
+
+
+@respx.mock
+async def test_the_smallest_price_that_rounds_up_to_one_ten_thousandth_is_stored_and_reads_back_as_that(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """0.00005 is half a ten-thousandth, which rounds up (half-up) to 1 tick: the edge of the refusal above."""
+    _mock_vendor(_one_price_bars(o="0.00005", h="0.00005", l="0.00005", c="0.00005"))
+
+    result = await _ensure()
+    day = await _read()
+
+    assert result.failure is None
+    assert day is not None
+    assert (day.bars[1].open, day.bars[1].low) == (Decimal("0.0001"), Decimal("0.0001"))
 

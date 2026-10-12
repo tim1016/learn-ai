@@ -16,14 +16,15 @@ bar-for-bar over prices that actually exercise it.
 from __future__ import annotations
 
 import io
+import random
 import zipfile
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import ROUND_DOWN, Context, Decimal, localcontext
 from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes, to_deci_cent
+from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes, from_deci_cent, to_deci_cent
 from app.engine.data.lean_format import write_lean_day_zip
 from app.engine.data.trade_bar import TradeBar
 from app.utils.timestamps import to_ms_utc
@@ -135,3 +136,51 @@ def _csv_rows(zip_bytes: bytes) -> list[str]:
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
         body = zf.read(zf.namelist()[0]).decode("ascii")
     return [line for line in body.split("\n") if line]
+
+
+@pytest.mark.parametrize("price", ["0.0001", "1.27", "99.9999", "12345.6789", "900719925474.0993"])
+def test_from_deci_cent_is_the_exact_inverse_of_to_deci_cent(price: str) -> None:
+    assert from_deci_cent(to_deci_cent(Decimal(price))) == Decimal(price)
+
+
+def test_from_deci_cent_is_the_exact_inverse_for_any_integer_to_deci_cent_can_hold() -> None:
+    rng = random.Random(20261012)
+    for _ in range(5_000):
+        ticks = rng.randrange(0, 10 ** rng.randrange(1, 25))
+
+        assert to_deci_cent(from_deci_cent(ticks)) == ticks
+
+
+def test_from_deci_cent_names_the_digits_of_any_integer_however_many_it_has() -> None:
+    for ticks in (10**40 + 12345, 7 * 10**77 + 1, 2**200 + 1):
+        assert from_deci_cent(ticks) == Decimal(f"{ticks}E-4")  # built from the text: no division, no context
+    assert from_deci_cent(-12700) == Decimal("-1.27")
+
+
+def test_from_deci_cent_is_written_the_way_the_stock_readers_division_writes_it() -> None:
+    """The stock readers compute ``Decimal(text) / Decimal(10000)``: same value, same trailing zeros, same ``str``."""
+    rng = random.Random(7)
+    for ticks in [0, 1, 5, 50, 500, 5000, 10_000, 12_700, 20_000, 120_000] + [rng.randrange(0, 10**12) for _ in range(2_000)]:
+        stock = Decimal(ticks) / Decimal(10000)
+
+        assert from_deci_cent(ticks).as_tuple() == stock.as_tuple()
+        assert str(from_deci_cent(ticks)) == str(stock)
+
+
+@pytest.mark.parametrize(
+    "caller",
+    [Context(prec=6), Context(prec=1), Context(prec=6, Emax=3, Emin=-3), Context(prec=28, rounding=ROUND_DOWN)],
+    ids=["six digits", "one digit", "a narrow exponent range", "rounding down"],
+)
+def test_from_deci_cent_is_exact_whatever_decimal_context_the_caller_runs_in(caller: Context) -> None:
+    """123456789 ticks is 12345.6789; the plain division under six digits would say 12345.7."""
+    with localcontext(caller):
+        assert from_deci_cent(123456789) == Decimal("12345.6789")
+        assert from_deci_cent(9007199254740993) == Decimal("900719925474.0993")
+
+
+@pytest.mark.parametrize("not_an_int", [1.5, 12700.0, "12700", Decimal(12700), True, None])
+def test_from_deci_cent_refuses_anything_but_an_integer(not_an_int: object) -> None:
+    with pytest.raises(TypeError):
+        from_deci_cent(not_an_int)  # type: ignore[arg-type]
+

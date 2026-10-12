@@ -35,7 +35,10 @@ import asyncio
 import hashlib
 import io
 import logging
+import lzma
+import re
 import zipfile
+import zlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -46,9 +49,19 @@ from zoneinfo import ZoneInfo
 from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
-from app.data_lake.bar_validation import CorruptVendorBarsError, assert_publishable_minute_bars
+from app.data_lake.bar_validation import (
+    CorruptVendorBarsError,
+    assert_publishable_minute_bars,
+    assert_publishable_stored_minute_bars,
+)
 from app.data_lake.data_contract import data_contract_hash as _dch
-from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes, parse_volume
+from app.data_lake.lean_writer import (
+    MinuteTradeBar,
+    build_minute_trade_zip_bytes,
+    from_deci_cent,
+    parse_volume,
+    to_deci_cent,
+)
 from app.data_lake.option_lake import (
     LEASE_TTL_MS,
     OPTION_MARKET,
@@ -79,7 +92,8 @@ from app.utils.timestamps import to_ms_utc
 logger = logging.getLogger(__name__)
 
 _ET = ZoneInfo("America/New_York")
-_DECI_CENTS_PER_DOLLAR = Decimal(10_000)
+#: A bar's start and its four prices as the file writes them: digits and nothing else.
+_UNSIGNED_INTEGER = re.compile(r"[0-9]+")
 
 
 def option_minute_trade_dch() -> str:
@@ -132,35 +146,48 @@ class OptionBarsFileError(ValueError):
     """A stored option-bars file is not the file this module writes."""
 
 
-def decode_deci_cent(ticks: int) -> Decimal:
-    """A stored price, as the exact decimal it names.
+def _member_text(payload: bytes, member: str) -> str:
+    """The text of the one CSV member a bars file holds; anything else is :class:`OptionBarsFileError`."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as zf:
+            names = zf.namelist()
+            raw = zf.read(member) if names == [member] else None
+    except (
+        zipfile.BadZipFile, zlib.error, lzma.LZMAError, EOFError, NotImplementedError, RuntimeError, OSError, ValueError,
+        ArithmeticError,
+    ) as exc:
+        # Not a zip, one with damaged offsets or data, a truncated stream, an unsupported or encrypted member.
+        raise OptionBarsFileError(f"{member}: not a readable bars file ({type(exc).__name__}: {exc})") from exc
+    if raw is None:
+        raise OptionBarsFileError(f"expected one member {member!r}, found {names!r}")
+    try:
+        return raw.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise OptionBarsFileError(f"{member}: the rows are not plain text ({exc})") from exc
 
-    Formula: price = ticks / 10 000, where ticks is an integer count of ten-thousandths of a dollar
-    Reference: LEAN's scale factor 1/10 000 (``TradeBar._scaleFactor`` in Common/Data/Market/TradeBar.cs),
-      as written by ``lean_writer.to_deci_cent``
-    Canonical implementation: this file, for option bars; the stock reader divides by the same scale
-      inline in ``app/engine/data/lean_format._parse_csv_bytes``
-    Validated against: tests/unit/data_lake/test_option_bars.py::test_a_premium_of_1_27_reads_back_as_the_exact_decimal_1_27
-      and ::test_every_price_on_the_ten_thousandth_grid_survives_the_round_trip_exactly
 
-    Decimal division of an integer by 10 000 is exact (a quotient with at most four decimal places), so
-    no price passes through a float on the way out.
-    """
-    return Decimal(ticks) / _DECI_CENTS_PER_DOLLAR
+def _stored_bar(bar: OptionBar) -> MinuteTradeBar:
+    return MinuteTradeBar(
+        bar_start_et=_bar_start_et(bar.start_ms), open=bar.open, high=bar.high, low=bar.low, close=bar.close,
+        volume=bar.volume,
+    )
 
 
 def parse_option_day_zip(payload: bytes, contract_symbol: str, trading_date: date) -> tuple[OptionBar, ...]:
     """The bars in one stored session file; strict, where the stock reader deliberately skips a bad row.
 
     The file must hold exactly the one CSV member this module writes, named for this
-    contract and date; every row must have six well-formed columns. A file that is
-    anything else is :class:`OptionBarsFileError`, never a shorter list of bars.
+    contract and date, of plain text with six columns in every row: the start and the
+    four prices as digits, then the volume. Its bars must also obey the rules a stored
+    day obeys (``bar_validation.assert_publishable_stored_minute_bars``): every price
+    above zero, the low and the high bracketing the open and the close, starts strictly
+    increasing and inside the date. A file that is anything else, a zip that is not
+    one, bytes that are not text and a blank line included, is :class:`OptionBarsFileError`
+    with its cause chained, never a shorter list of bars and never a raw ``zipfile`` or
+    decoding error.
     """
     expected = f"{trading_date:%Y%m%d}_{contract_symbol.lower()}_minute_trade.csv"
-    with zipfile.ZipFile(io.BytesIO(payload)) as zf:
-        if zf.namelist() != [expected]:
-            raise OptionBarsFileError(f"expected one member {expected!r}, found {zf.namelist()!r}")
-        text = zf.read(expected).decode("ascii")
+    text = _member_text(payload, expected)
     midnight = datetime(trading_date.year, trading_date.month, trading_date.day, tzinfo=_ET)
     bars: list[OptionBar] = []
     for number, line in enumerate(text.splitlines(), start=1):
@@ -168,13 +195,21 @@ def parse_option_day_zip(payload: bytes, contract_symbol: str, trading_date: dat
         if len(columns) != 6:
             raise OptionBarsFileError(f"{expected} line {number}: expected 6 columns, found {len(columns)}")
         start_text, *price_texts, volume_text = columns
+        if any(_UNSIGNED_INTEGER.fullmatch(t) is None for t in (start_text, *price_texts)):
+            raise OptionBarsFileError(f"{expected} line {number}: the start and the four prices must be whole numbers")
         try:
             start_ms = to_ms_utc(midnight + timedelta(milliseconds=int(start_text)))
-            open_, high, low, close = (decode_deci_cent(int(t)) for t in price_texts)
+            open_, high, low, close = (from_deci_cent(int(t)) for t in price_texts)
             volume = parse_volume(volume_text)
-        except ValueError as exc:
+        except (ValueError, ArithmeticError) as exc:  # a start past the calendar's end is an OverflowError
             raise OptionBarsFileError(f"{expected} line {number}: {exc}") from exc
         bars.append(OptionBar(start_ms=start_ms, open=open_, high=high, low=low, close=close, volume=volume))
+    try:
+        assert_publishable_stored_minute_bars(
+            [_stored_bar(bar) for bar in bars], symbol=contract_symbol, trading_date=trading_date
+        )
+    except CorruptVendorBarsError as exc:
+        raise OptionBarsFileError(f"{expected}: the stored bars break the rules of a stored day: {exc}") from exc
     return tuple(bars)
 
 
@@ -281,6 +316,22 @@ def _publication_gate_view(bars: Sequence[PolygonOptionBar]) -> list[PolygonBar]
     ]
 
 
+def _require_prices_above_zero_on_the_grid(bars: Sequence[PolygonOptionBar]) -> None:
+    """A positive price under half a ten-thousandth of a dollar would be stored as 0; the file never holds one.
+
+    The publication gate judges the vendor's number. The file holds it rounded onto the
+    ten-thousandth grid (``to_deci_cent``), and every reader is told every price is above zero.
+    """
+    for index, bar in enumerate(bars):
+        for name in ("open", "high", "low", "close"):
+            price = getattr(bar, name)
+            if to_deci_cent(price) == 0:
+                raise ValueError(
+                    f"bar[{index}] t_ms={bar.t_ms}: {name}={price} is under half a ten-thousandth of a dollar "
+                    "and would be stored as 0"
+                )
+
+
 async def ensure_option_day_bars(
     contract: OptionContract, trading_date: date, *, listed_under: str, now_ms: int | None = None
 ) -> OptionCaptureResult:
@@ -382,6 +433,7 @@ async def ensure_option_day_bars(
         return await fail("validation_failed", str(e))
 
     try:
+        _require_prices_above_zero_on_the_grid(bars)
         payload = build_minute_trade_zip_bytes(
             symbol=symbol,
             trading_date_yyyymmdd=trading_date.strftime("%Y%m%d"),
