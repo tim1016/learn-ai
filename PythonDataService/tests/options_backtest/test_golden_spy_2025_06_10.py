@@ -22,7 +22,8 @@ Times (all New York, EDT = UTC-4 in June, so 09:30 is 13:30 UTC):
 * The contracts expire on Friday 2025-06-13 at 16:00 New York = 20:00 UTC = 1749844800000 (day 20 252 x 86 400 s +
   20 h). That Friday is the last session of the week of Monday 2025-06-09 to Friday 2025-06-13, all five of them sessions.
 
-The recorded files, counted with ``grep -c`` on the raw bytes and checked against the ``resultsCount`` each file states:
+The recorded files, counted as the number of objects in the ``results`` array of each body (each body is one line, so
+``grep -c`` would say 1) and checked against the ``resultsCount`` each body states:
 SPY 830 bars (390 of them in the regular session, one for every minute from 09:30 to 15:59), the listing 316
 contracts (158 calls, 158 puts, every one American, 100 shares, expiring 2025-06-13), ``O:SPY250613C00600000`` 389
 bars, ``O:SPY250613P00600000`` 400 bars, ``O:SPY250613C00680000`` none (``resultsCount: 0`` and no ``results`` key).
@@ -35,7 +36,7 @@ import hashlib
 import json
 import re
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -54,7 +55,7 @@ from app.options_backtest.lake_data import LakeRunData
 from app.options_backtest.market import MinuteBar
 from app.options_backtest.results import Event, EventKind, ExitReason, Fill, LegTrade, SessionStatus
 from app.options_backtest.run import RunResult, run_sessions
-from app.options_backtest.session_market import ContractDayNotLoaded, DayMarket
+from app.options_backtest.session_result import SessionResult
 from app.options_backtest.setup import (
     AtTheMoney,
     FeePolicy,
@@ -80,7 +81,7 @@ EXPIRY = date(2025, 6, 13)
 CALL_600 = OptionContract.of(root="SPY", expiry_date=EXPIRY, right="call", strike=600)
 PUT_600 = OptionContract.of(root="SPY", expiry_date=EXPIRY, right="put", strike=600)
 CALL_680 = OptionContract.of(root="SPY", expiry_date=EXPIRY, right="call", strike=680)
-# Not in the listing: the vendor never listed a 999 strike (``grep -c C00999000`` on the recorded listing says 0).
+# Not in the listing: no object of the recorded listing's ``results`` has the ticker O:SPY250613C00999000.
 CALL_999 = OptionContract.of(root="SPY", expiry_date=EXPIRY, right="call", strike=999)
 
 # The request path of each recorded answer, and the file that holds the bytes the vendor answered with.
@@ -101,10 +102,14 @@ RECORDED_FILES = {
 # for the whole listing as of the date.
 BARS_QUERY = {"adjusted": "false", "sort": "asc", "limit": "50000"}
 LISTING_QUERY = {"underlying_ticker": "SPY", "as_of": "2025-06-10", "limit": "1000"}
+# The key the lake's fetchers hold in these tests (the suite's lake fixture sets it), as the bearer token they must send.
+THE_KEY = "test-key"
 
 STORED_STOCK_FILE = "equity/usa/minute/spy/20250610_trade.zip"
 STORED_LISTING_FILE = "option/usa/listing/spy/20250610_contracts.zip"
 STORED_CALL_600_FILE = "option/usa/minute/spy/spy250613c00600000/20250610_trade.zip"
+STORED_PUT_600_FILE = "option/usa/minute/spy/spy250613p00600000/20250610_trade.zip"
+STORED_CALL_680_FILE = "option/usa/minute/spy/spy250613c00680000/20250610_trade.zip"
 
 
 def recorded(name: str) -> bytes:
@@ -117,6 +122,24 @@ def recorded_rows(name: str) -> list[dict]:
     return body["results"]
 
 
+def the_recorded_answer(path: str) -> Callable[[httpx.Request], httpx.Response]:
+    """The vendor's recorded bytes for ``path``, after checking how the request carried the key.
+
+    The option fetchers send the key in an ``Authorization: Bearer`` header and never in a URL, so every request for
+    the listing or for an option's bars must hold that header and no ``apiKey`` in its query. The key is the one the
+    suite's lake fixture gives the settings (``tests/_helpers/fake_lake_catalog.py``). The stock pipeline's request for the
+    underlying is not checked: that older fetcher puts the key in the URL, which is known and not part of this fixture.
+    """
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        if path != STOCK_PATH:
+            assert request.headers.get("authorization") == f"Bearer {THE_KEY}", f"the key is not in the header of {path}"
+            assert "apikey" not in {param.lower() for param in request.url.params}, f"the key is in the URL of {path}"
+        return httpx.Response(200, content=recorded(RECORDED_FILES[path]), headers={"content-type": "application/json"})
+
+    return answer
+
+
 @pytest.fixture
 def the_vendor() -> Iterator[respx.MockRouter]:
     """The vendor, answering each recorded request with the recorded bytes. A request for any other path fails.
@@ -124,18 +147,19 @@ def the_vendor() -> Iterator[respx.MockRouter]:
     The LEAN launcher the stock pipeline asks for the exchange calendar is served by the suite's stand-in.
     """
     with respx.mock(assert_all_called=False) as router:
-        for path, name in RECORDED_FILES.items():
-            router.get(host="api.polygon.io", path=path).mock(
-                return_value=httpx.Response(200, content=recorded(name), headers={"content-type": "application/json"})
-            )
+        for path in RECORDED_FILES:
+            router.get(host="api.polygon.io", path=path).mock(side_effect=the_recorded_answer(path))
         router.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(side_effect=launcher_responder())
         yield router
 
 
 def requests_to_the_vendor(router: respx.MockRouter) -> list[tuple[str, dict[str, str]]]:
-    """Each request made to Polygon, as its path and its query (the stock pipeline's key left out, as a key is no fact)."""
+    """Each request made to Polygon, as its path and its query (the stock request's key left out, as a key is no fact)."""
     return [
-        (call.request.url.path, {k: v for k, v in call.request.url.params.items() if k != "apiKey"})
+        (
+            call.request.url.path,
+            {k: v for k, v in call.request.url.params.items() if call.request.url.path != STOCK_PATH or k != "apiKey"},
+        )
         for call in router.calls
         if call.request.url.host == "api.polygon.io"
     ]
@@ -147,6 +171,12 @@ def stored_rows(tmp_lake: Path, captured: OptionCaptureResult) -> list[str]:
     with zipfile.ZipFile(raw_root(tmp_lake) / captured.record.file_path) as archive:
         [member] = archive.namelist()
         return archive.read(member).decode("ascii").splitlines()
+
+
+def catalog_row(fake_catalog: FakeCatalog, file_path: str) -> dict:
+    """The one row the catalog holds for the stored file at ``file_path``."""
+    [row] = [row for row in fake_catalog.rows.values() if row["file_path"] == file_path]
+    return row
 
 
 @dataclass(frozen=True)
@@ -198,7 +228,7 @@ async def test_the_listing_is_captured_whole_by_the_lakes_own_function_and_asked
     assert requests_to_the_vendor(the_vendor) == [(LISTING_PATH, LISTING_QUERY)]
     listing = await off_the_loop(read_option_listing, "SPY", TRADING_DATE)
     assert listing is not None
-    # 316 tickers in the recorded body (grep -c), 158 of them calls and 158 puts.
+    # 316 objects in the recorded body's ``results``, 158 of them calls and 158 puts.
     assert len(listing.rows) == 316
     assert sum(row.contract_type == "call" for row in listing.rows) == 158
     assert sum(row.contract_type == "put" for row in listing.rows) == 158
@@ -256,8 +286,8 @@ async def test_a_contract_that_never_traded_is_stored_as_a_captured_empty_day_be
 
     never_traded = stored.days[CALL_680]
     # The vendor said: status OK, the ticker, ``resultsCount: 0`` and no ``results`` key. The contract is in the listing
-    # the lake holds for the date (``grep`` finds ``O:SPY250613C00680000`` once in it), so the lake pins "listed, did
-    # not trade": a complete row with no bars.
+    # the lake holds for the date (the recorded listing's ``results`` holds ``O:SPY250613C00680000`` exactly once), so the
+    # lake pins "listed, did not trade": a complete row with no bars.
     assert never_traded.failure is None and never_traded.record is not None
     assert never_traded.record.row_count == 0
     day = await off_the_loop(read_option_day_bars, CALL_680, TRADING_DATE)
@@ -265,13 +295,38 @@ async def test_a_contract_that_never_traded_is_stored_as_a_captured_empty_day_be
     assert day.bars == ()
 
 
-async def test_the_same_empty_answer_for_a_contract_the_listing_does_not_hold_is_refused_and_nothing_is_stored(
+async def test_the_catalog_row_of_each_stored_day_counts_its_bars_and_dates_the_first_and_the_last(
+    the_vendor: respx.MockRouter, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    stored = await capture_the_recording()
+
+    # What each recorded body holds, counted as the objects of its ``results`` and read off the ``t`` of its first and last:
+    # the call 389 bars from t = 1749562200000 (09:30 New York) to t = 1749586380000 (16:13); the put 400 bars from the
+    # same first to t = 1749586440000 (16:14); the call struck at 680 has no ``results`` key, so no bar. The capture returns a
+    # record and writes a catalog row, and both must say so.
+    for contract, file_path, count, first, last in (
+        (CALL_600, STORED_CALL_600_FILE, 389, 1749562200000, 1749586380000),
+        (PUT_600, STORED_PUT_600_FILE, 400, 1749562200000, 1749586440000),
+    ):
+        record = stored.days[contract].record
+        assert record is not None
+        row = catalog_row(fake_catalog, file_path)
+        assert (record.row_count, record.first_bar_start_ms, record.last_bar_start_ms) == (count, first, last)
+        assert (row["row_count"], row["first_bar_start_ms"], row["last_bar_start_ms"]) == (count, first, last)
+    never_traded = stored.days[CALL_680].record
+    assert never_traded is not None
+    assert never_traded.row_count == 0
+    assert catalog_row(fake_catalog, STORED_CALL_680_FILE)["row_count"] == 0
+
+
+async def test_a_contract_the_stored_listing_does_not_hold_is_refused_before_the_vendor_is_asked_and_nothing_is_stored(
     the_vendor: respx.MockRouter, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
     await capture_the_recording()
     rows_before = {key: dict(row) for key, row in fake_catalog.rows.items()}
     files_before = sorted(path.name for path in raw_root(tmp_lake).rglob("*") if path.is_file())
-    # An empty answer shaped like the recorded one with only the contract's strike changed, for a strike never listed.
+    # A trap for the ticker the listing does not hold: were the vendor asked, this would answer (the recorded empty body
+    # with only the strike in its ticker changed). The lake must refuse on its listing first, so the route is never called.
     empty_for_999 = recorded(RECORDED_FILES[CALL_680_PATH]).replace(b"C00680000", b"C00999000")
     path_999 = "/v2/aggs/ticker/O:SPY250613C00999000/range/1/minute/2025-06-10/2025-06-10"
     route = the_vendor.get(host="api.polygon.io", path=path_999).mock(
@@ -394,16 +449,10 @@ async def test_a_contract_that_never_traded_reads_as_captured_and_empty_and_neve
     never_traded = await off_the_loop(data.option_day, CALL_680, TRADING_DATE)
     never_asked = await off_the_loop(data.option_day, CALL_999, TRADING_DATE)
 
+    # The vendor's empty answer for a listed contract reads back as a day that was captured and had no bar; a contract
+    # whose day was never asked for reads back as nothing held at all.
     assert never_traded is not None and never_traded.value == ()
     assert never_asked is None
-    # Through the run core's market, an empty day is a contract that did not trade in any minute; a contract whose day was
-    # never loaded is a bug to see and raises.
-    listing = await off_the_loop(data.listing, TRADING_DATE)
-    assert listing is not None
-    market = DayMarket(TRADING_DATE, underlying=(), listing=listing.value, option_days={CALL_680: never_traded.value})
-    assert market.option_bar(CALL_680, 1749562560000) is None
-    with pytest.raises(ContractDayNotLoaded):
-        market.option_bar(CALL_999, 1749562560000)
 
 
 async def test_the_reader_gives_the_listing_whole_and_the_hash_of_each_file_it_read_the_same_twice(
@@ -452,6 +501,7 @@ EXIT_1200_MS = 9_000_000
 def a_setup(
     *,
     right: OptionRight = "call",
+    contracts: int = 1,
     strike: StrikeRule | None = None,
     entry_ms_after_open: int = ENTRY_0935_MS,
     exit_ms_after_open: int = EXIT_1000_MS,
@@ -465,7 +515,7 @@ def a_setup(
             LegSetup(
                 leg_id="leg",
                 right=right,
-                contracts=1,
+                contracts=contracts,
                 expiry=ThisWeekExpiryRule(kind="this_week"),
                 strike=strike if strike is not None else AtTheMoney(kind="atm"),
             ),
@@ -480,6 +530,30 @@ def sale_of(trade: LegTrade) -> Fill:
     """The sale a trade left by (a trade left at the session's close is marked, not sold)."""
     assert isinstance(trade.exit, Fill), "the leg was sold, not marked"
     return trade.exit
+
+
+# The fixture's answer key, ``expected.json``: the figures of each traded scene below, worked by hand from the recorded
+# bytes and written down once more beside the recording. The scenes assert the same figures as literals; this check
+# keeps the file the fixture registers as its output true to the run.
+ANSWER_KEY = json.loads((RECORDING / "expected.json").read_bytes())["scenes"]
+
+
+def the_figures(session: SessionResult) -> tuple[str, int, Decimal, Decimal, Decimal, Decimal]:
+    """The contract, the contract count, the buy, the sale, the profit and the ending cash of a session's one trade."""
+    [trade] = session.outcome.trades
+    return (
+        f"O:{trade.contract.occ_symbol}",
+        trade.contracts,
+        trade.entry.filled,
+        sale_of(trade).filled,
+        trade.pnl_usd,
+        session.cash_after_usd,
+    )
+
+
+def the_answer_key(scene: str) -> tuple[str, int, Decimal, Decimal, Decimal, Decimal]:
+    key = ANSWER_KEY[scene]
+    return (key["contract"], key["contracts"], D(key["bought_at"]), D(key["sold_at"]), D(key["profit_usd"]), D(key["ending_cash_usd"]))
 
 
 async def the_run(setup: OptionsBacktestSetup) -> RunResult:
@@ -527,12 +601,34 @@ async def test_one_at_the_money_call_is_bought_at_0936s_open_and_sold_at_1001s_o
     assert (session.cash_before_usd, session.cash_after_usd) == (D("10000.00"), D("10004.00"))
     assert (session.outcome.cash_change_usd, session.outcome.pnl_usd) == (D("4.00"), D("4.00"))
     assert (result.summary.net_profit_usd, result.summary.ending_cash_usd) == (D("4.00"), D("10004.00"))
+    assert the_figures(session) == the_answer_key("main_call")
     # What was read is what was stored: each pin is the sha256 of the stored file's bytes, hashed here.
     root = raw_root(tmp_lake)
     pinned = {pin.contract: pin.sha256 for pin in session.pins.option_days}
     assert pinned == {CALL_600: hashlib.sha256((root / STORED_CALL_600_FILE).read_bytes()).hexdigest()}
     assert session.pins.listing_sha256 == hashlib.sha256((root / STORED_LISTING_FILE).read_bytes()).hexdigest()
     assert session.pins.underlying_sha256 == hashlib.sha256((root / STORED_STOCK_FILE).read_bytes()).hexdigest()
+
+
+async def test_three_contracts_cost_and_return_three_times_the_money_of_one_for_exactly_the_hand_worked_profit(
+    the_vendor: respx.MockRouter, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # The main trade with three contracts: the same contract, bought at the same 4.05 (the open of the bar stamped 09:35)
+    # and sold at the same 4.09 (the open of the bar stamped 10:00). It costs 4.05 x 100 x 3 = 1215.00, leaving 10000.00 -
+    # 1215.00 = 8785.00, and brings in 4.09 x 100 x 3 = 1227.00: cash 8785.00 + 1227.00 = 10012.00. Profit =
+    # (4.09 - 4.05) x 100 x 3 = 0.04 x 300 = 12.00.
+    await capture_the_recording()
+
+    result = await the_run(a_setup(contracts=3))
+
+    [session] = result.sessions
+    [trade] = session.outcome.trades
+    assert (trade.contracts, trade.multiplier) == (3, 100)
+    assert (trade.entry.filled, sale_of(trade).filled) == (D("4.05"), D("4.09"))
+    assert trade.pnl_usd == D("12.00")
+    assert (session.cash_before_usd, session.cash_after_usd) == (D("10000.00"), D("10012.00"))
+    assert result.summary.net_profit_usd == D("12.00")
+    assert the_figures(session) == the_answer_key("three_contracts")
 
 
 async def test_one_at_the_money_put_is_bought_and_sold_at_the_same_minutes_for_exactly_the_hand_worked_loss(
@@ -552,6 +648,7 @@ async def test_one_at_the_money_put_is_bought_and_sold_at_the_same_minutes_for_e
     assert (trade.entry.seen, trade.entry.filled, sale_of(trade).filled) == (D("3.37"), D("3.37"), D("3.15"))
     assert trade.pnl_usd == D("-22.00")
     assert session.cash_after_usd == D("9978.00")
+    assert the_figures(session) == the_answer_key("put")
 
 
 async def test_an_exit_whose_next_minute_has_no_bar_sells_at_the_open_of_the_next_minute_that_has_one(
@@ -575,6 +672,7 @@ async def test_an_exit_whose_next_minute_has_no_bar_sells_at_the_open_of_the_nex
     assert (sale_of(trade).seen, sale_of(trade).filled) == (D("4.40"), D("4.40"))
     assert trade.pnl_usd == D("35.00")
     assert session.cash_after_usd == D("10035.00")
+    assert the_figures(session) == the_answer_key("exit_into_a_gap")
 
 
 async def test_one_strike_below_the_money_is_counted_from_the_strike_nearest_the_price_and_not_from_the_one_below_it(
@@ -597,6 +695,7 @@ async def test_one_strike_below_the_money_is_counted_from_the_strike_nearest_the
     assert (trade.entry.filled, sale_of(trade).filled) == (D("4.19"), D("4.09"))
     assert trade.pnl_usd == D("-10.00")
     assert session.cash_after_usd == D("9990.00")
+    assert the_figures(session) == the_answer_key("one_strike_below_the_money")
 
 
 async def test_a_price_exactly_between_two_strikes_picks_the_lower_one(
@@ -618,6 +717,7 @@ async def test_a_price_exactly_between_two_strikes_picks_the_lower_one(
     assert (trade.entry.filled, sale_of(trade).filled) == (D("4.07"), D("4.09"))
     assert trade.pnl_usd == D("2.00")
     assert session.cash_after_usd == D("10002.00")
+    assert the_figures(session) == the_answer_key("a_tie")
 
 
 # ── e. A wanted contract with nothing to fill from ────────────────────────────────────────────────────────────
