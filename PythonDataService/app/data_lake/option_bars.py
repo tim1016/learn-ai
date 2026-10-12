@@ -22,8 +22,10 @@ step by step. Four things differ, all on purpose:
 * A session before the plan's rolling window is ``outside_data_plan``, a failure
   of its own that a caller can tell from an outage; it is refused before any claim,
   and a day at the edge of the window is told so by the vendor's 403.
-* A session that is not over (``OPTION_SESSION_SETTLE_MS`` after its close) is
-  refused before any claim.
+* A session is captured only once its New York calendar date has passed
+  (``option_lake.option_capture_opens_ms``): earlier it is refused before any claim, because
+  the vendor's data is delayed and an empty answer stored too early would be a permanent wrong
+  "never traded".
 * The vendor's digits go to the stored integer as decimals, never through a float.
 
 ``read_option_day_bars`` reads only bytes the catalog admits, so it needs the catalog

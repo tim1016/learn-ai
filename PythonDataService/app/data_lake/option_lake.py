@@ -20,7 +20,8 @@ not asked:
 
 * ``symbol_too_long``: the symbol has more characters than the catalog's Symbol column holds.
 * ``not_a_session``: the exchange was closed that day.
-* ``session_not_over``: the session closed less than ``OPTION_SESSION_SETTLE_MS`` ago.
+* ``session_not_over``: the session's New York calendar date has not passed yet
+  (:func:`option_capture_opens_ms`).
 * ``outside_data_plan``: the plan's rolling window does not reach the session; a bars
   session before ``option_history_floor`` is refused before any claim, and a day at the
   edge the vendor's own 403 names (bars or listing) is recorded on the row, asked again
@@ -87,7 +88,7 @@ from app.data_lake.types import (
     PriceAdjustmentMode,
 )
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
-from app.utils.session_anchors import et_date_at_ms
+from app.utils.session_anchors import et_date_at_ms, et_day_end_ms
 
 logger = logging.getLogger(__name__)
 
@@ -97,11 +98,6 @@ OPTION_PROVIDER = "polygon"
 #: Option prices are the trades as they printed; there is nothing to adjust, and
 #: the row's mode must equal the lake root's directory name for admission.
 OPTION_PRICE_ADJUSTMENT_MODE: PriceAdjustmentMode = "raw"
-
-#: A session is taken only this long after its scheduled close. The vendor's
-#: data runs 15 minutes behind, and SPY options print until 16:15 New York,
-#: 15 minutes after the calendar's close; 30 minutes covers both (#3030).
-OPTION_SESSION_SETTLE_MS = 30 * 60 * 1000
 
 #: How many years back the owner's options plan serves minute bars. It comes from a
 #: probe of the owner's plan on 2026-10-12: a session of 2024-10-11 answered 403
@@ -215,23 +211,32 @@ def symbol_refusal(symbol: str, trading_date: date) -> OptionDataFailure | None:
     return None
 
 
-def session_refusal(symbol: str, trading_date: date, *, now_ms: int) -> OptionDataFailure | None:
-    """A session that is not over is never fetched or admitted, and no claim is made for it.
+def option_capture_opens_ms(trading_date: date) -> int:
+    """The first instant a session's option data may be captured: New York midnight after the session's date.
 
-    "Over" is the canonical calendar's close for that date (an early close counts
-    as its own close) plus :data:`OPTION_SESSION_SETTLE_MS`.
+    The vendor's data runs behind and its late prints are unmeasured, and an empty answer stored
+    too early is a permanent wrong "never traded" (#3030); so a session is taken only once its New
+    York calendar date has passed, whatever time it closed (an early close follows the same rule).
+    The canonical calendar gives the session's close, the New York zone gives the date it falls on
+    and the midnight that ends it, so a day the clocks change is never a fixed offset out.
+    Raises ``LookupError`` for a day that is not a session.
     """
+    return et_day_end_ms(et_date_at_ms(session_close_ms_utc(trading_date)))
+
+
+def session_refusal(symbol: str, trading_date: date, *, now_ms: int) -> OptionDataFailure | None:
+    """A session whose New York date has not passed is never fetched or admitted, and no claim is made for it."""
     try:
-        close_ms = session_close_ms_utc(trading_date)
+        opens_ms = option_capture_opens_ms(trading_date)
     except LookupError:
         return OptionDataFailure(
             "not_a_session", f"{trading_date.isoformat()} is not a NYSE session", symbol, trading_date
         )
-    if now_ms < close_ms + OPTION_SESSION_SETTLE_MS:
+    if now_ms < opens_ms:
         return OptionDataFailure(
             "session_not_over",
-            f"{trading_date.isoformat()} closed at {close_ms}; options data is taken "
-            f"{OPTION_SESSION_SETTLE_MS // 60_000} minutes after the close, and it is {now_ms}",
+            f"{trading_date.isoformat()} is not over in New York yet; its option data is taken from "
+            f"New York midnight after it, {opens_ms}, and it is {now_ms}",
             symbol,
             trading_date,
         )

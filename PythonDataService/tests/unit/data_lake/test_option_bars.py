@@ -8,6 +8,8 @@ Hand-worked figures used below:
 
 * 2025-06-13 is a full Friday session. Its open, 09:30 EDT, is 13:30 UTC =
   1749821400000 ms, and its close, 16:00 EDT, is 20:00 UTC = 1749844800000 ms.
+* A session's option data may be captured from New York midnight after its date: for 2025-06-13 that
+  is 00:00 EDT on the 14th = 04:00 UTC = 1749873600000 ms (the close plus 8 hours).
 * 09:30 is 34 200 000 ms after midnight, New York time, which is what the zip
   stores as a bar's start. A premium of 1.27 is stored as 12700 ten-thousandths.
 * 2025-11-28 (the day after Thanksgiving) closes at 13:00 EST = 18:00 UTC =
@@ -68,6 +70,10 @@ from app.data_lake.types import ArtifactIdentity
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.options.contract import OptionContract
 from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, point_lake_writer_at_tmp
+from tests._helpers.option_lake_cases import (
+    CAPTURE_OPENS,
+    HALF_DAY_CLOSE_MS,
+)
 from tests._helpers.option_vendor import (
     bad_bars_answers,
     bar_row,
@@ -735,46 +741,64 @@ def test_the_plan_floor_is_two_years_back_plus_the_two_days_the_lake_composes_in
 
 
 @respx.mock
-async def test_a_session_that_closed_under_thirty_minutes_ago_is_refused_and_nothing_is_claimed(
-    fake_catalog: FakeCatalog, tmp_lake: Path
+@pytest.mark.parametrize(("session", "opens_ms"), [(day, ms) for _, day, ms in CAPTURE_OPENS], ids=[label for label, _, _ in CAPTURE_OPENS])
+async def test_a_session_is_refused_until_new_york_midnight_after_it_and_taken_from_that_midnight(
+    session: date, opens_ms: int, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
-    route = _mock_vendor()
+    """One millisecond before the midnight that ends the session's New York date is refused; the midnight is taken.
 
-    result = await ensure_option_day_bars(
-        CONTRACT, TRADING_DAY, listed_under="SPY", now_ms=SESSION_CLOSE_MS + 30 * MINUTE_MS - 1
-    )
+    The days around both clock changes would each be an hour out under a fixed offset, and the two half
+    days show an early close changes nothing about the rule.
+    """
+    contract = OptionContract.of(root="SPY", expiry_date=session, right="call", strike=600)
+    route = _mock_vendor(_ok([_bar(t=session_open_ms_utc(session))], contract.occ_symbol), contract=contract.occ_symbol)
 
-    assert result.record is None
-    assert result.failure is not None
-    assert result.failure.reason == "session_not_over"
+    too_early = await ensure_option_day_bars(contract, session, listed_under="SPY", now_ms=opens_ms - 1)
+
+    assert too_early.record is None
+    assert too_early.failure is not None and too_early.failure.reason == "session_not_over"
     assert route.call_count == 0
-    assert fake_catalog.rows == {}
+    assert fake_catalog.rows == {}  # refused before any claim
     assert _lake_files(tmp_lake) == []
 
+    on_time = await _ensure(contract, session, now_ms=opens_ms)
 
-@respx.mock
-async def test_a_session_thirty_minutes_after_the_close_is_taken(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
-    route = _mock_vendor()
-
-    result = await _ensure(now_ms=SESSION_CLOSE_MS + 30 * MINUTE_MS)
-
-    assert result.failure is None and result.record is not None
-    assert route.call_count == 1
-
-
-@respx.mock
-async def test_an_early_close_is_judged_by_its_own_close_not_by_four_oclock(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
-    day = date(2025, 11, 28)
-    open_ms, close_ms = 1764340200000, 1764352800000  # 09:30 EST, 13:00 EST
-    contract = OptionContract.of(root="SPY", expiry_date=day, right="call", strike=600)
-    route = _mock_vendor(_ok([_bar(t=open_ms)], "SPY251128C00600000"), contract="SPY251128C00600000")
-
-    early = await ensure_option_day_bars(contract, day, listed_under="SPY", now_ms=close_ms + 30 * MINUTE_MS - 1)
-    on_time = await _ensure(contract, day, now_ms=close_ms + 30 * MINUTE_MS)
-
-    assert early.failure is not None and early.failure.reason == "session_not_over"
     assert on_time.failure is None and on_time.record is not None
     assert route.call_count == 1
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("session", "close_ms"),
+    [(TRADING_DAY, SESSION_CLOSE_MS), *HALF_DAY_CLOSE_MS.items()],
+    ids=["a full day", "a half day in november", "a half day in july"],
+)
+async def test_thirty_minutes_after_the_close_is_no_longer_a_time_to_capture_on_a_full_day_or_a_half_day(
+    session: date, close_ms: int, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    contract = OptionContract.of(root="SPY", expiry_date=session, right="call", strike=600)
+    route = _mock_vendor(contract=contract.occ_symbol)
+
+    at_the_old_time = await ensure_option_day_bars(contract, session, listed_under="SPY", now_ms=close_ms + 30 * MINUTE_MS)
+    that_evening = await ensure_option_day_bars(contract, session, listed_under="SPY", now_ms=close_ms + 6 * 60 * MINUTE_MS)
+
+    assert at_the_old_time.failure is not None and at_the_old_time.failure.reason == "session_not_over"
+    assert that_evening.failure is not None and that_evening.failure.reason == "session_not_over"
+    assert route.call_count == 0 and fake_catalog.rows == {}
+
+
+@respx.mock
+async def test_the_session_of_a_date_that_is_today_in_new_york_is_refused_even_when_it_is_already_the_next_day_in_utc(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """21:00 New York on 2025-06-13 is already 01:00 UTC on the 14th; the session's date has not passed."""
+    route = _mock_vendor()
+    nine_pm_in_new_york = SESSION_CLOSE_MS + 60 * MINUTE_MS
+
+    result = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY", now_ms=nine_pm_in_new_york)
+
+    assert result.failure is not None and result.failure.reason == "session_not_over"
+    assert route.call_count == 0 and fake_catalog.rows == {}
 
 
 @respx.mock
@@ -1039,7 +1063,7 @@ async def test_a_price_the_file_cannot_hold_fails_the_row_and_raises_nothing(
 async def test_a_vendor_answer_that_is_not_well_formed_fails_the_row_and_raises_nothing(
     name: str, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
-    """Every body the review drove in: a caller looping over contracts must get a result for each, and no row may stay fetching."""
+    """Every body that is not well formed: a caller looping over contracts must get a result for each, and no row may stay fetching."""
     route = _mock_vendor(bad_bars_answers(SYMBOL)[name]())
 
     result = await _ensure()  # returns; nothing escapes

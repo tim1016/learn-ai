@@ -8,8 +8,9 @@ Hand-worked figures used below:
 * A strike in dollars is stored in thousandths: 375 -> 375000, 452.5 -> 452500.
 * The expiry is stored as ``YYYYMMDD``: 2025-06-13 -> ``20250613``.
 * ``O:SPY250613C00375000`` is the SPY call struck at 375 expiring 2025-06-13.
-* 2025-06-13 closes at 20:00 UTC = 1749844800000 ms; a listing is taken 30
-  minutes after that, like a session's bars.
+* 2025-06-13 closes at 20:00 UTC = 1749844800000 ms. A listing is taken, like a session's
+  bars, only from New York midnight after its date: 00:00 EDT on the 14th = 04:00 UTC =
+  1749873600000 ms (``tests/_helpers/option_lake_cases.py`` holds the other dates, by hand).
 """
 
 from __future__ import annotations
@@ -50,6 +51,10 @@ from app.data_lake.polygon_option_contracts import PolygonOptionContract
 from app.data_lake.types import ArtifactIdentity
 from app.options.contract import OptionContract
 from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, point_lake_writer_at_tmp
+from tests._helpers.option_lake_cases import (
+    CAPTURE_OPENS,
+    HALF_DAY_CLOSE_MS,
+)
 
 AS_OF = date(2025, 6, 13)
 SESSION_CLOSE_MS = 1749844800000
@@ -617,18 +622,43 @@ async def test_a_403_that_names_the_data_timeframe_is_outside_the_plan_for_a_lis
 
 
 @respx.mock
-async def test_a_listing_for_a_session_that_closed_under_thirty_minutes_ago_is_refused(
-    fake_catalog: FakeCatalog, tmp_lake: Path
+@pytest.mark.parametrize(("session", "opens_ms"), [(day, ms) for _, day, ms in CAPTURE_OPENS], ids=[label for label, _, _ in CAPTURE_OPENS])
+async def test_a_listing_is_refused_until_new_york_midnight_after_its_session_and_taken_from_that_midnight(
+    session: date, opens_ms: int, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
+    """The rule a session's bars follow: one millisecond before the midnight is refused, the midnight is taken."""
     route = _mock_one_page(STANDARD_ROWS)
 
-    refused = await ensure_option_listing("SPY", AS_OF, now_ms=SESSION_CLOSE_MS + 30 * MINUTE_MS - 1)
-    allowed = await ensure_option_listing("SPY", AS_OF, now_ms=SESSION_CLOSE_MS + 30 * MINUTE_MS)
+    refused = await ensure_option_listing("SPY", session, now_ms=opens_ms - 1)
 
+    assert refused.record is None
     assert refused.failure is not None and refused.failure.reason == "session_not_over"
+    assert route.call_count == 0 and fake_catalog.rows == {}  # refused before any claim
+
+    allowed = await ensure_option_listing("SPY", session, now_ms=opens_ms)
+
     assert allowed.failure is None and allowed.record is not None
     assert route.call_count == 1
     assert len(fake_catalog.rows) == 1  # only the allowed ask made a row
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("session", "close_ms"),
+    [(AS_OF, SESSION_CLOSE_MS), *HALF_DAY_CLOSE_MS.items()],
+    ids=["a full day", "a half day in november", "a half day in july"],
+)
+async def test_thirty_minutes_after_the_close_is_no_longer_a_time_to_capture_a_listing(
+    session: date, close_ms: int, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    route = _mock_one_page(STANDARD_ROWS)
+
+    at_the_old_time = await ensure_option_listing("SPY", session, now_ms=close_ms + 30 * MINUTE_MS)
+    that_evening = await ensure_option_listing("SPY", session, now_ms=close_ms + 6 * 60 * MINUTE_MS)
+
+    assert at_the_old_time.failure is not None and at_the_old_time.failure.reason == "session_not_over"
+    assert that_evening.failure is not None and that_evening.failure.reason == "session_not_over"
+    assert route.call_count == 0 and fake_catalog.rows == {}
 
 
 @respx.mock
