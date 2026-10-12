@@ -3,13 +3,13 @@
   <p class="code">{{ failure().code | receiptLabel }}</p>
   @if (groups().length > 0) {
     <ul class="groups" aria-label="What failed">
-      @for (group of groups(); track group.code) {
+      @for (group of groups(); track group.code; let position = $index) {
         <li>
-          <button type="button" class="group" [attr.aria-expanded]="isOpen(group)" [attr.aria-controls]="listId(group)" (click)="toggle(group)">
+          <button type="button" class="group" [attr.aria-expanded]="isOpen(group)" [attr.aria-controls]="listId(position)" (click)="toggle(group)">
             {{ group.code | receiptLabel }} · Items: {{ group.items.length }}
           </button>
           @if (isOpen(group)) {
-            <ul class="items" [id]="listId(group)">
+            <ul class="items" [id]="listId(position)">
               @for (item of group.items; track $index) {
                 @let session = item.session_open_ms ?? null;
                 <li>
