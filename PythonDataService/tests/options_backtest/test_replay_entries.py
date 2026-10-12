@@ -175,6 +175,12 @@ def test_momentum_buys_at_the_next_opening_price_with_slippage_never_at_the_trig
     assert (trade.starting_price, trade.momentum_level) == (D("2.00"), D("2.50"))
     assert (trade.entry_decided_at_ms, trade.pnl_usd) == (at(7), D("-7.00"))  # (2.54 - 2.61) * 100
     assert minutes(outcome, EventKind.MOMENTUM_HIT) == [7]
+    # The starting price and the hit are the bars' closes (2.00 and 2.50), not their opens (1.95 and 2.49).
+    prices = [(e.kind, minute_of(e.at_ms), e.price) for e in outcome.events if e.price is not None]
+    assert prices[:2] == [
+        (EventKind.STARTING_PRICE_TAKEN, 5, D("2.00")),
+        (EventKind.MOMENTUM_HIT, 7, D("2.50")),
+    ]
 
 
 def test_slippage_of_a_third_of_a_percent_buys_2_57_at_2_58_and_sells_1_87_at_1_86() -> None:

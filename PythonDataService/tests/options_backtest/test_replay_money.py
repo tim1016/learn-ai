@@ -186,7 +186,9 @@ def test_fees_are_charged_on_every_fill_re_entries_included_and_profit_plus_cash
     assert [t.pnl_usd for t in outcome.trades] == [D("-146.60"), D("13.40")]
     # Cash: -517.30 + 370.70 - 303.30 + 316.70.
     assert outcome.cash_change_usd == D("-133.20")
-    assert outcome.cash_change_usd == sum((t.pnl_usd for t in outcome.trades), start=D(0))
+    # Both trips were sold, so no leg is worth anything at a mark and the profit is the cash that moved.
+    assert (outcome.pnl_usd, outcome.marked_value_usd) == (D("-133.20"), D("0"))
+    assert outcome.pnl_usd == outcome.cash_change_usd + outcome.marked_value_usd
 
 
 def test_the_money_does_not_depend_on_the_ambient_decimal_precision() -> None:
@@ -198,6 +200,40 @@ def test_the_money_does_not_depend_on_the_ambient_decimal_precision() -> None:
 
     assert [t.pnl_usd for t in outcome.trades] == [D("-146.60"), D("13.40")]
     assert outcome.cash_change_usd == D("-133.20")
+
+
+def test_a_leg_marked_not_sold_is_in_the_profit_and_the_marked_value_and_not_in_the_cash_that_moved() -> None:
+    market = TableMarket(
+        underlying=steady("500"),
+        picks={("call", "500"): Picked(CALL, multiplier=10)},
+        options={CALL: {**flat("2.00", 5, 49), 50: ("2.00", "1.75")}},  # and never again: no sale can fill
+    )
+
+    outcome = replay(setup(leg(contracts=3)), market, fee_for=fee_per_contract("0.65"))
+
+    # Three contracts of ten shares, bought at 2.00 with a fee of 0.65 * 3 = 1.95: 60.00 + 1.95 = 61.95 out, none back.
+    assert outcome.cash_change_usd == D("-61.95")
+    # Marked at 1.75: worth 1.75 * 10 * 3 = 52.50. Profit (1.75 - 2.00) * 30 - 1.95 = -9.45.
+    assert outcome.marked_value_usd == D("52.50")
+    assert outcome.pnl_usd == D("-9.45")
+    assert outcome.pnl_usd == outcome.cash_change_usd + outcome.marked_value_usd
+
+
+def test_cash_can_end_below_zero_by_the_fee_of_a_sale_that_fills_at_nothing() -> None:
+    market = TableMarket(
+        underlying=steady("500"), picks=picked(("call", "500", CALL)), options={CALL: flat("0.01", 5, 61)}
+    )
+
+    outcome = replay(setup(leg(), slippage="0.3"), market, cash="2.65", fee_for=fee_per_contract("0.65"))
+
+    # Bought: 0.01 * 1.003 = 0.01003, up to 0.02; 0.02 * 100 + 0.65 = 2.65, exactly the cash, so it is taken.
+    # Sold: 0.01 * 0.997 = 0.00997, down to 0.00; 0.00 * 100 - 0.65 = -0.65 comes in, and the sale is not refused.
+    assert [row(trade) for trade in outcome.trades] == [
+        ("call", 0, 6, D("0.01"), D("0.02"), "exit_time", 61, D("0.01"), D("0.00"))
+    ]
+    assert outcome.trades[0].pnl_usd == D("-3.30")  # (0.00 - 0.02) * 100 - 0.65 - 0.65
+    assert outcome.cash_change_usd == D("-3.30")  # -2.65 out, -0.65 back
+    assert D("2.65") + outcome.cash_change_usd == D("-0.65")
 
 
 def _sale_fee_rounded_up_to_the_cent(fill: Fill) -> Decimal:

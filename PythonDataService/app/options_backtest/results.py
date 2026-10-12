@@ -9,11 +9,12 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from enum import StrEnum
 from typing import Literal
 
 from app.options.contract import OptionContract
+from app.options_backtest import fills
 
 
 class SessionStatus(StrEnum):
@@ -45,8 +46,11 @@ class CancelReason(StrEnum):
     EXIT_TIME = "exit_time"
 
 
-# The reason an entry was refused for want of cash.
-CASH_SHORT = "cash_short"
+class EntryRefusal(StrEnum):
+    """Why an entry that found a bar was refused."""
+
+    # The cost of every entry filling in that minute, fees included, was more than the cash on hand.
+    CASH_SHORT = "cash_short"
 
 
 class EventKind(StrEnum):
@@ -129,9 +133,33 @@ class LegTrade:
 class Event:
     """One thing that happened, for a one-day timeline.
 
-    ``price`` is the figure the event is about: the starting price taken, the close that reached a
-    level, the price a fill filled at, or a mark. ``reason`` and ``detail`` say why where there is a
-    reason: ``detail`` is words an owner can read.
+    ``entry_number`` follows one rule, as ``LegTrade.entry_number`` counts: 0 for a leg's first entry,
+    1 for its first re-entry, and so on.
+
+    - An event about a position (``entry_filled``, ``stop_hit``, ``squared_off``, ``exit_time``,
+      ``close_filled``, ``marked_not_sold``) carries that position's entry number.
+    - An event about an attempt to enter (``picked``, ``pick_refused``, ``starting_price_taken``,
+      ``no_starting_price``, ``momentum_hit``, ``entry_dropped``, ``entry_refused_for_cash``,
+      ``re_entry_earned``, ``re_entry_blocked_by_cutoff``, ``re_entry_lost``, ``leg_cancelled``)
+      carries the number that entry has or would have had.
+
+    So a stop of entry 0 that earns a re-entry is ``stop_hit`` 0 and ``re_entry_earned`` 1; a re-entry
+    cancelled at the exit time is 1 whether or not the sale that earned it had filled; a first entry
+    cancelled while it waited is 0.
+
+    ``price`` is the figure the event is about:
+
+    - ``starting_price_taken``: the starting price, the close of the picked contract's bar closing at that
+      instant. The momentum level the leg then waits for is ``fills.momentum_level(rule, starting_price=price)``
+      with the leg's momentum rule: a leg that waited and never entered has no trade to carry it.
+    - ``momentum_hit`` and ``stop_hit``: the close of the bar that reached the level.
+    - ``entry_filled`` and ``close_filled``: the price the order filled at.
+    - ``entry_refused_for_cash``: the price the entry would have filled at.
+    - ``marked_not_sold``: the mark.
+
+    ``reason`` is a plain ``str``, the ``value`` of the enum it comes from: ``pick_refused`` takes
+    ``PickRefusal``, ``entry_refused_for_cash`` takes ``EntryRefusal``, ``leg_cancelled`` takes
+    ``CancelReason``. No other event has one. ``detail`` is words an owner can read, where there are any.
     """
 
     kind: EventKind
@@ -146,14 +174,43 @@ class Event:
 
 @dataclass(frozen=True)
 class SessionOutcome:
-    """One session replayed: its trades, what happened, and the cash that moved."""
+    """One session replayed: its trades, what happened, and the cash that moved.
+
+    ``cash_change_usd`` counts only cash that moved, so a leg marked, not sold, has paid out and not been
+    paid back. ``pnl_usd`` counts that leg at its mark, and ``marked_value_usd`` is the difference:
+    ``pnl_usd == cash_change_usd + marked_value_usd``, to the cent, on every outcome. A caller that carries
+    cash from one session to the next carries ``cash_change_usd``, and reports ``pnl_usd``.
+
+    Only an entry is checked against the cash. A sale is never refused and its fee is paid even when it
+    fills at nothing, so the cash at the session's end (the start plus ``cash_change_usd``) can be below zero
+    by a closing fee.
+    """
 
     status: SessionStatus
     skip_reason: SkipReason | None
     trades: tuple[LegTrade, ...]
     events: tuple[Event, ...]
-    # Cash at the end less cash at the start. A leg marked, not sold, has paid out and not been paid back.
+    # Cash at the end less cash at the start.
     cash_change_usd: Decimal
+
+    @property
+    def pnl_usd(self) -> Decimal:
+        """The sum of the trades' profit, a leg marked, not sold, counted at its mark."""
+        with localcontext(fills.EXACT):
+            return sum((trade.pnl_usd for trade in self.trades), start=Decimal(0))
+
+    @property
+    def marked_value_usd(self) -> Decimal:
+        """What the legs marked, not sold, are worth at their marks: zero when none is."""
+        with localcontext(fills.EXACT):
+            return sum(
+                (
+                    fills.order_value(trade.exit_price, multiplier=trade.multiplier, contracts=trade.contracts)
+                    for trade in self.trades
+                    if trade.exit_reason is ExitReason.MARKED_NOT_SOLD
+                ),
+                start=Decimal(0),
+            )
 
     @property
     def exit_counts(self) -> dict[ExitReason, int]:

@@ -60,6 +60,8 @@ def test_a_stop_holds_on_a_close_above_its_level_and_sells_at_the_next_open_once
     assert (trade.stop_level, trade.exit_group, trade.exit_decided_at_ms) == (D("1.935"), 1, at(8))
     assert trade.pnl_usd == D("-67.00")  # (1.91 - 2.58) * 100
     assert minutes(outcome, EventKind.STOP_HIT) == [8]
+    # The stop event carries the close that reached the level (1.93), not that bar's open (1.94).
+    assert [e.price for e in outcome.events if e.kind is EventKind.STOP_HIT] == [D("1.93")]
 
 
 def test_a_points_stop_sits_that_many_points_below_the_buy_fill_and_is_hit_by_a_close_on_it() -> None:
@@ -182,6 +184,9 @@ def test_under_complete_one_legs_stop_closes_the_other_and_cancels_a_leg_still_w
     assert outcome.exit_counts == {ExitReason.STOP: 1, ExitReason.SQUARE_OFF: 1}
     assert minutes(outcome, EventKind.LEG_CANCELLED, "c") == [10]
     assert minutes(outcome, EventKind.MOMENTUM_HIT) == []
+    # C is said to be cancelled by the square-off, not by the exit time, and it is its first entry that never came.
+    cancelled = [e for e in outcome.events if e.kind is EventKind.LEG_CANCELLED]
+    assert [(e.leg_id, e.reason, e.entry_number) for e in cancelled] == [("c", "square_off", 0)]
 
 
 def test_under_partial_one_legs_stop_leaves_the_other_leg_and_the_waiting_leg_to_carry_on() -> None:
@@ -239,6 +244,8 @@ def test_the_exit_time_closes_every_open_leg_cancels_the_waiting_and_nothing_ent
     assert (outcome.trades[0].exit_group, outcome.trades[0].exit_decided_at_ms) == (1, at(60))
     assert kinds(outcome, "b") == [EventKind.PICKED, EventKind.STARTING_PRICE_TAKEN, EventKind.LEG_CANCELLED]
     assert minutes(outcome, EventKind.LEG_CANCELLED, "b") == [60]
+    cancelled = [e for e in outcome.events if e.kind is EventKind.LEG_CANCELLED]
+    assert [(e.leg_id, e.reason, e.entry_number) for e in cancelled] == [("b", "exit_time", 0)]
 
 
 def test_an_entry_decided_just_before_the_exit_time_fills_at_it_and_is_closed_in_the_same_minute() -> None:
@@ -337,7 +344,9 @@ def test_a_leg_never_sold_by_the_close_is_marked_at_its_last_seen_close_and_the_
     assert marked.pnl_usd == D("-25.00")  # (1.75 - 2.00) * 100
     # A bought for 200 and was not paid back; B was bought for 300 and sold for 300.
     assert outcome.cash_change_usd == D("-200.00")
-    assert outcome.cash_change_usd + D("175.00") == marked.pnl_usd + outcome.trades[1].pnl_usd
+    # A's mark is worth 1.75 * 100 = 175.00. The profit is A's -25.00 and B's 0.00, and it is the cash plus the mark.
+    assert (outcome.pnl_usd, outcome.marked_value_usd) == (D("-25.00"), D("175.00"))
+    assert outcome.pnl_usd == outcome.cash_change_usd + outcome.marked_value_usd
     assert outcome.exit_counts == {ExitReason.MARKED_NOT_SOLD: 1, ExitReason.EXIT_TIME: 1}
     marked_events = [e for e in outcome.events if e.kind is EventKind.MARKED_NOT_SOLD]
     assert [(e.leg_id, e.at_ms, e.price) for e in marked_events] == [("a", FULL_CLOSE_MS, D("1.75"))]

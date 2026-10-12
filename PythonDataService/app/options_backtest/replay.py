@@ -29,15 +29,15 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Context, Decimal, getcontext, localcontext
-from enum import Enum, auto
+from enum import Enum, StrEnum, auto
 from typing import Literal
 
 from app.options.contract import OptionContract
 from app.options_backtest import fills
 from app.options_backtest.market import MinuteBar, Picked, PickRefused, SessionMarket
 from app.options_backtest.results import (
-    CASH_SHORT,
     CancelReason,
+    EntryRefusal,
     Event,
     EventKind,
     ExitReason,
@@ -226,7 +226,13 @@ class _Session:
             if entry is None:
                 self._drop_entry(leg, t)
             elif refused:
-                self._event(EventKind.ENTRY_REFUSED_FOR_CASH, t, leg, price=entry.fill.filled, reason=CASH_SHORT)
+                self._event(
+                    EventKind.ENTRY_REFUSED_FOR_CASH,
+                    t,
+                    leg,
+                    price=entry.fill.filled,
+                    reason=EntryRefusal.CASH_SHORT,
+                )
                 leg.phase = _Phase.DONE
             else:
                 self._open(leg, t, entry)
@@ -243,7 +249,7 @@ class _Session:
         attempt = _attempt_of(leg)
         fill, fee = taken.fill, taken.fee
         rule = leg.setup.stop_loss
-        leg.position = _Position(
+        position = _Position(
             attempt=attempt,
             entry_number=leg.entries_filled,
             entry=fill,
@@ -255,9 +261,10 @@ class _Session:
         if leg.entries_filled > 0:
             leg.reentries_left -= 1
         leg.entries_filled += 1
+        leg.position = position
         leg.phase = _Phase.HELD
         self.cash -= taken.cost
-        self._event(EventKind.ENTRY_FILLED, t, leg, contract=fill.contract, price=fill.filled)
+        self._event(EventKind.ENTRY_FILLED, t, leg, position=position, contract=fill.contract, price=fill.filled)
 
     def _fill_closes(self, t: int) -> None:
         for leg in self.legs:
@@ -271,7 +278,7 @@ class _Session:
             fee = self._fee(fill)
             self.cash += fills.exit_proceeds(fill.filled, multiplier=fill.multiplier, contracts=fill.contracts, fee=fee)
             self._record(position, position.close, position.close.reason, fill, fee)
-            self._event(EventKind.CLOSE_FILLED, t, leg, contract=fill.contract, price=fill.filled)
+            self._event(EventKind.CLOSE_FILLED, t, leg, position=position, contract=fill.contract, price=fill.filled)
             leg.phase = _Phase.EARNED if position.close.earns_reentry else _Phase.DONE
             leg.position = None
 
@@ -314,7 +321,7 @@ class _Session:
                 if position.close is None:
                     group = self._next_group() if group is None else group
                     position.close = _CloseOrder(ExitReason.EXIT_TIME, group, t, earns_reentry=False)
-                    self._event(EventKind.EXIT_TIME, t, leg, contract=position.attempt.contract)
+                    self._event(EventKind.EXIT_TIME, t, leg, position=position, contract=position.attempt.contract)
                 elif position.close.earns_reentry:
                     # Its sale is still to fill; the re-entry it earned never starts.
                     self._event(EventKind.LEG_CANCELLED, t, leg, reason=CancelReason.EXIT_TIME)
@@ -340,10 +347,17 @@ class _Session:
                     continue
                 if (bar := hit.get(leg.setup.leg_id)) is not None:
                     reason = ExitReason.STOP
-                    self._event(EventKind.STOP_HIT, t, leg, contract=position.attempt.contract, price=bar.close)
+                    self._event(
+                        EventKind.STOP_HIT,
+                        t,
+                        leg,
+                        position=position,
+                        contract=position.attempt.contract,
+                        price=bar.close,
+                    )
                 elif complete:
                     reason = ExitReason.SQUARE_OFF
-                    self._event(EventKind.SQUARED_OFF, t, leg, contract=position.attempt.contract)
+                    self._event(EventKind.SQUARED_OFF, t, leg, position=position, contract=position.attempt.contract)
                 else:
                     continue
                 position.close = _CloseOrder(reason, group, t, earns_reentry=self._earns_reentry(leg, t))
@@ -405,7 +419,7 @@ class _Session:
         """Pick a contract for the leg's next attempt at ``t``; then buy at once or start waiting for momentum."""
         picked = self._pick(leg.setup, t, underlying)
         if isinstance(picked, PickRefused):
-            self._event(EventKind.PICK_REFUSED, t, leg, reason=picked.reason.value, detail=picked.detail)
+            self._event(EventKind.PICK_REFUSED, t, leg, reason=picked.reason, detail=picked.detail)
             leg.phase = _Phase.DONE
             self._lose_reentry(leg, t)
             return
@@ -454,6 +468,7 @@ class _Session:
                     EventKind.MARKED_NOT_SOLD,
                     self.close_ms,
                     leg,
+                    position=position,
                     contract=position.attempt.contract,
                     price=position.last_seen.price,
                 )
@@ -497,13 +512,17 @@ class _Session:
         at_ms: int,
         leg: _Leg,
         *,
+        position: _Position | None = None,
         contract: OptionContract | None = None,
         price: Decimal | None = None,
-        reason: str | None = None,
+        reason: StrEnum | None = None,
         detail: str | None = None,
     ) -> None:
-        number = leg.position.entry_number if leg.position is not None else leg.entries_filled
-        self.events.append(Event(kind, at_ms, leg.setup.leg_id, number, contract, price, reason, detail))
+        """Record an event. One about a position names it. One about an attempt to enter does not, and carries
+        the number that entry has or would have: the entries the leg has filled so far."""
+        number = leg.entries_filled if position is None else position.entry_number
+        why = None if reason is None else reason.value
+        self.events.append(Event(kind, at_ms, leg.setup.leg_id, number, contract, price, why, detail))
 
     def _record(
         self, position: _Position, close: _CloseOrder, reason: ExitReason, leaving: Fill | Mark, exit_fee: Decimal
