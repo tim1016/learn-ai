@@ -408,13 +408,19 @@ class SharedWorkerPool:
                         return
                     lane.signal.wait(timeout=_LANE_POLL_S)
                     if not lane.assignments:
-                        # An idle pool produces no scheduler events, so the
-                        # lane's own poll is where a paused pool notices
-                        # memory pressure receding — waiting owners recover
-                        # without an external nudge (#3048 review).
-                        self._probe_pressure_recovery()
-                entry = lane.assignments.popleft()
+                        break  # idle: re-probe pressure recovery below, lock-free
+                entry = lane.assignments.popleft() if lane.assignments else None
                 closing_now = self._closing
+            if entry is None:
+                # An idle pool produces no scheduler events, so the lane's
+                # own poll is where a paused pool notices memory pressure
+                # receding — waiting owners recover without an external
+                # nudge. Strictly outside the lane's condition lock: the
+                # probe takes the pool lock, and taking it under a lane
+                # lock would invert the pool→lane order every scheduler
+                # path follows (#3048 review).
+                self._probe_pressure_recovery()
+                continue
             if closing_now:
                 self._cancel_entry_home(entry)
                 continue
@@ -441,12 +447,12 @@ class SharedWorkerPool:
     def _cancel_entry_home(self, entry: _Entry) -> None:
         """Settle an entry the closing pool will never run — or has killed — and cancel it home (#3048 AC 10).
 
-        One invariant for every closing path, assigned-but-unbegun and
-        killed-in-flight alike: the entry's budget returns here (its
-        recorded result bytes too, when a delivery had charged them),
-        in-flight drops, and a live owner receives the cancellation its
-        evaluator can unwind — never a re-admission into a closed pool,
-        never a silent drop.
+        One invariant for every closing path — pending orphans,
+        assigned-but-unbegun entries, and close-killed in-flight items
+        alike: the entry's budget returns here (its recorded result bytes
+        too, when a delivery had charged them), and a live owner receives
+        the cancellation its evaluator can unwind — never a re-admission
+        into a closed pool, never a silent drop.
         """
         from app.jobs.progress import JobCancelled
 

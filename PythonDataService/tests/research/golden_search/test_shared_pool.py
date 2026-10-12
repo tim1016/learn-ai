@@ -304,20 +304,20 @@ def test_memory_pressure_pauses_assignments_without_dropping_work(monkeypatch: p
         assert pool._lanes[0].current is None and not pool._lanes[0].assignments, "no assignment under pressure"
         assert pool.facts()["memory_pressured"] is True
 
-        state["current"] = 50  # recovered: the queued item is assigned
-        pool._pressure_at = 0.0  # the probe caches for five seconds; recover now
-        with owner._pool._state_changed:
-            owner._pool._schedule_locked()
-        deadline = time.monotonic() + 2.0
+        state["current"] = 50  # recovered: nothing external nudges the pool
+        # The lane's own idle poll re-probes (the pressure cache holds five
+        # seconds), so recovery is observed with every lane idle — the
+        # liveness the review demanded, with no hand-cranked scheduler and
+        # no direct pressure_at reset.
+        deadline = time.monotonic() + 9.0
         outcome = None
         while time.monotonic() < deadline:
             try:
-                outcome = owner.arrived.get(timeout=0.1)
+                outcome = owner.arrived.get(timeout=0.5)
                 break
             except queue.Empty:
-                with owner._pool._state_changed:
-                    owner._pool._schedule_locked()
-        assert outcome is not None, "the paused item ran once pressure receded"
+                continue
+        assert outcome is not None, "the paused item ran once pressure receded on an idle pool"
         owner.consume(outcome[0], outcome[1])
     finally:
         owner.close()
@@ -434,7 +434,9 @@ def test_the_runtime_factorys_handoff_renews_through_the_checkpoint_relay(monkey
 
     monkeypatch.setattr(settings, "RESEARCH_WORKER_COUNT", 2)
     monkeypatch.setattr(settings, "RESEARCH_DISPATCH_WINDOW", 2)
-    _pool(monkeypatch, workers=2)
+    # The factory builds the process singleton itself; the test only needs
+    # its children faked — no private pool, no leaked lane threads.
+    monkeypatch.setattr(shared_pool_module, "ResearchWorker", lambda context: _FakeChild(context))
     try:
         factory = router._runtime_dispatch_factory(
             on_checkpoint=on_checkpoint, cancel_check=lambda: None, emit=SimpleNamespace(log=lambda line: None)
