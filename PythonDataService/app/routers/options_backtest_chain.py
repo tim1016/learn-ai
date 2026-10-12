@@ -7,6 +7,9 @@ what those two need: the listing, the underlying's bars and the bars of the cont
 
 The trading date and the expiry arrive apart and neither moves the other. A trading date is any instant on its New York
 date; an expiry is its 16:00 New York anchor. The reads block, so each runs in a worker thread.
+
+The two reads are open, like the other lake reads: they ask the vendor for nothing. The download spends vendor requests
+and writes the lake, as ``POST /api/data-lake/ensure-data`` does, and carries the data plane's control secret as it does.
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ import asyncio
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.data_lake.catalog_client import CatalogUnavailableError
 from app.options_backtest.chain_download import ensure_chain_data
@@ -40,6 +43,7 @@ from app.schemas.options_backtest_chain import (
     PastChainDownloadResponse,
     PastChainExpiryResponse,
 )
+from app.security.data_plane_control import require_data_plane_control_secret
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 logger = logging.getLogger(__name__)
@@ -143,15 +147,21 @@ async def get_past_chain_expiry(
     return PastChainExpiryResponse.from_expiry(chain, expiry_ms)
 
 
-@router.post("/past-chain/download", response_model=PastChainDownloadResponse, responses=_REFUSALS)
+@router.post(
+    "/past-chain/download",
+    response_model=PastChainDownloadResponse,
+    responses=_REFUSALS,
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
 async def post_past_chain_download(request: PastChainDownloadRequest) -> PastChainDownloadResponse:
     """Capture the listing, the underlying's bars and the bars of the contracts named; one item says how each came out.
 
-    A vendor or lake failure is an item with its typed reason and never a failed request. A request the page should
-    not have made (a date with no session, an expiry that is no anchor, a contract that is no OCC symbol or not of the
-    expiry, more than the cap) is refused before anything is asked. A contract that another request is fetching at the
-    same moment is an item that failed with reason ``lease_timeout``: it is not missing; ask again once the other
-    request has finished.
+    Needs the data plane's control secret (the ``X-Data-Plane-Control-Secret`` header), as it spends vendor requests
+    and writes the lake. A vendor or lake failure is an item with its typed reason and never a failed request. A
+    request the page should not have made (a date with no session, an expiry that is no anchor, a contract that is no
+    OCC symbol or not of the expiry, more than the cap) is refused before anything is asked. A contract that another
+    request is fetching at the same moment is an item that failed with reason ``lease_timeout``: it is not missing; ask
+    again once the other request has finished.
     """
     try:
         session = await asyncio.to_thread(chain_session, request.trading_date_ms)

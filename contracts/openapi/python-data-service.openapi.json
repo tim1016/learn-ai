@@ -78713,8 +78713,26 @@
     },
     "/api/research/options-backtest/past-chain/download": {
       "post": {
-        "description": "Capture the listing, the underlying's bars and the bars of the contracts named; one item says how each came out.\n\nA vendor or lake failure is an item with its typed reason and never a failed request. A request the page should\nnot have made (a date with no session, an expiry that is no anchor, a contract that is no OCC symbol or not of the\nexpiry, more than the cap) is refused before anything is asked. A contract that another request is fetching at the\nsame moment is an item that failed with reason ``lease_timeout``: it is not missing; ask again once the other\nrequest has finished.",
+        "description": "Capture the listing, the underlying's bars and the bars of the contracts named; one item says how each came out.\n\nNeeds the data plane's control secret (the ``X-Data-Plane-Control-Secret`` header), as it spends vendor requests\nand writes the lake. A vendor or lake failure is an item with its typed reason and never a failed request. A\nrequest the page should not have made (a date with no session, an expiry that is no anchor, a contract that is no\nOCC symbol or not of the expiry, more than the cap) is refused before anything is asked. A contract that another\nrequest is fetching at the same moment is an item that failed with reason ``lease_timeout``: it is not missing; ask\nagain once the other request has finished.",
         "operationId": "post_past_chain_download_api_research_options_backtest_past_chain_download_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {

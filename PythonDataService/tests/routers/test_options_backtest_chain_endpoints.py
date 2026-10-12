@@ -32,11 +32,14 @@ import pytest
 import respx
 from httpx import ASGITransport
 
+from app.broker.fleet.errors import DataPlaneControlSecretRefused, FleetControlPlaneNotInstalled
+from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake.option_listing import OptionListingFileError
 from app.main import app
 from app.options.contract import OptionContract
 from app.options_backtest import chain_download
+from app.security.data_plane_control import CONTROL_SECRET_ENV_VAR, CONTROL_SECRET_HEADER
 from tests._helpers.fake_lake_catalog import FakeCatalog
 from tests._helpers.option_vendor import no_trades
 from tests.options_backtest._lake import (
@@ -1014,6 +1017,85 @@ async def test_a_window_over_what_a_download_takes_is_refused_with_its_count_and
     assert sum(len(narrower.json()[side]["contracts"]) for side in ("calls", "puts")) == 57
 
 
+# ── The download needs the data plane's control secret ────────────────────
+
+_SECRET = "test-control-secret"
+
+
+@pytest.fixture
+def secret_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The deployed posture: a secret is configured and the local-development opt-out is off."""
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", _SECRET)
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+
+
+@pytest.mark.parametrize("headers", [{}, {CONTROL_SECRET_HEADER: "wrong"}], ids=["no secret", "a wrong secret"])
+@respx.mock
+async def test_the_download_without_the_control_secret_is_refused_as_the_lakes_fetch_route_is_and_fetches_nothing(
+    client: httpx.AsyncClient, stock_fetch: StockFetchDouble, secret_is_required: None, headers: dict[str, str]
+) -> None:
+    async with client as c:
+        refused = await c.post(f"{PREFIX}/download", json=_download(), headers=headers)
+        lakes_refusal = await c.post("/api/data-lake/ensure-data", json={}, headers=headers)
+
+    assert refused.status_code == 403
+    assert refused.json()["reason"] == DataPlaneControlSecretRefused.reason
+    assert CONTROL_SECRET_HEADER in refused.json()["message"] and "detail" not in refused.json()
+    # The very refusal the lake's own fetch route gives, body for body.
+    assert (lakes_refusal.status_code, lakes_refusal.json()) == (refused.status_code, refused.json())
+    # Nothing was fetched: no stock fetch, and a vendor request would have failed the test (nothing is mocked).
+    assert stock_fetch.calls == []
+
+
+@respx.mock
+async def test_the_download_with_the_control_secret_runs(
+    client: httpx.AsyncClient, stock_fetch: StockFetchDouble, secret_is_required: None
+) -> None:
+    vendor_lists(CALLS[602])
+    vendor_bars(lambda symbol: no_trades(symbol))
+
+    async with client as c:
+        response = await c.post(
+            f"{PREFIX}/download",
+            json=_download(contracts=["SPY250613C00602000"]),
+            headers={CONTROL_SECRET_HEADER: _SECRET},
+        )
+
+    assert response.status_code == 200, response.text
+    assert [(i["kind"], i["outcome"]) for i in response.json()["items"]] == [
+        ("listing", "fetched"),
+        ("underlying", "fetched"),
+        ("contract", "fetched"),
+    ]
+
+
+async def test_the_download_fails_closed_when_no_secret_is_configured_and_the_opt_out_is_off(
+    client: httpx.AsyncClient, stock_fetch: StockFetchDouble, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "")
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+
+    async with client as c:
+        response = await c.post(f"{PREFIX}/download", json=_download())
+
+    assert response.status_code == 503
+    assert response.json()["reason"] == FleetControlPlaneNotInstalled.reason
+    assert CONTROL_SECRET_ENV_VAR in response.json()["message"] and stock_fetch.calls == []
+
+
+@respx.mock
+async def test_the_two_reads_need_no_secret_even_when_one_is_required_for_the_download(
+    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path, secret_is_required: None
+) -> None:
+    await _the_lake(fake_catalog, tmp_lake)
+
+    async with client as c:
+        day = await c.get(f"{PREFIX}/day", params={"underlying": "SPY", "trading_date_ms": FRIDAY_MIDNIGHT_MS})
+        expiry = await c.get(f"{PREFIX}/expiry", params=_expiry_params(at_ms=MINUTE_10_MS))
+
+    assert (day.status_code, expiry.status_code) == (200, 200)
+
+
 # ── The published contract ────────────────────────────────────────────────
 
 PAST_CHAIN_MODELS = {
@@ -1044,6 +1126,18 @@ def test_the_three_routes_are_served_under_the_setup_routes_prefix() -> None:
 
     assert set(paths[f"{PREFIX}/day"]) == {"get"} and set(paths[f"{PREFIX}/expiry"]) == {"get"}
     assert set(paths[f"{PREFIX}/download"]) == {"post"}
+
+
+def test_only_the_download_operation_publishes_the_control_secret_header() -> None:
+    paths = app.openapi()["paths"]
+
+    def headers(path: str, method: str) -> set[str]:
+        return {
+            parameter["name"] for parameter in paths[path][method].get("parameters", []) if parameter["in"] == "header"
+        }
+
+    assert headers(f"{PREFIX}/download", "post") == {CONTROL_SECRET_HEADER}
+    assert headers(f"{PREFIX}/day", "get") == set() and headers(f"{PREFIX}/expiry", "get") == set()
 
 
 def test_the_routes_publish_the_refusal_body_the_setup_routes_already_use() -> None:
