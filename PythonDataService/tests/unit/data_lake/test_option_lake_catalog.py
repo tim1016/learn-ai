@@ -33,6 +33,8 @@ import respx
 from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake import option_bars as option_bars_module
+from app.data_lake import option_lake as option_lake_module
+from app.data_lake import option_listing as option_listing_module
 from app.data_lake.option_bars import ensure_option_day_bars, option_minute_trade_dch, read_option_day_bars
 from app.data_lake.option_listing import (
     captured_listing_dates,
@@ -62,6 +64,17 @@ def _postgres_url() -> str:
     if not url:
         pytest.skip("POSTGRES_URL not configured")
     return url
+
+
+@pytest.fixture(autouse=True)
+def _the_clock_is_fixed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every capture without its own ``now_ms`` runs on 2026-10-12, the day the plan's floor was probed.
+
+    The plan floor moves forward with the calendar, so a test that asked for 2025-06-13 against the
+    real clock would be refused as outside the plan from 2027-06-12 on.
+    """
+    for module in (option_lake_module, option_bars_module, option_listing_module):
+        monkeypatch.setattr(module, "current_ms", lambda: NOW_2026_10_12_MS)
 
 
 @pytest.fixture
@@ -444,8 +457,6 @@ async def test_a_row_with_nothing_but_a_ticker_is_stored_on_the_real_table_with_
 async def test_a_new_file_format_stales_the_old_formats_row_on_the_real_table(
     clean_artifacts, pool, tmp_lake, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from app.data_lake import option_listing as option_listing_module
-
     _mock_listing([_listing_row("O:SPY250613C00375000", 375)])
     old = await ensure_option_listing("SPY", TRADING_DAY)
     monkeypatch.setattr(option_listing_module, "OPTION_LISTING_FILE_FORMAT", option_listing_module.OPTION_LISTING_FILE_FORMAT + 1)
