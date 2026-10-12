@@ -11,7 +11,7 @@ Search surface by their search ids.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import partial
 from typing import Any
 
@@ -216,26 +216,74 @@ async def delete_walk_forward_study(study_id: str) -> Response:
 
 @jobs_router.post("/walk-forward-study", status_code=status.HTTP_202_ACCEPTED)
 async def start_walk_forward_study_job(req: WalkForwardStudyJobRequest) -> dict[str, Any]:
-    """Launch (or Finish) a study on a worker thread. Returns 202 once the record is durable."""
-    from app.services.research_runtime_client import refuse_forwarded_research_dispatch
+    """Launch (or Finish) a study. Returns 202 once the record is durable and a worker holds it.
 
-    # Research mode never runs this on the API (#3043, ADR 0077): refuse
-    # before any durable record exists, loudly, until the forwarding slice lands.
-    refuse_forwarded_research_dispatch("walk-forward study")
+    In research mode the API forwards the dispatch and never prepares,
+    stamps or starts a thread: the runtime prepares the study, and each
+    fold's sweeps run their cells through the shared research workers
+    under the checkpoint lease (#3050). Here — the local mode, or this
+    process being the runtime — the study runs on a worker thread exactly
+    as before.
+    """
+    from app.services.research_runtime_client import (
+        forward_walk_forward_study_job,
+        is_research_runtime,
+        research_forwarding_enabled,
+    )
+
+    if research_forwarding_enabled() and not is_research_runtime():
+        return await forward_walk_forward_study_job(req.model_dump(mode="json"))
+
+    # Refused authority must never bind (#3042): the check runs before any
+    # durable record exists.
     await records.refuse_unauthorized_dispatch()
     if req.resume_study_id:
         row = await _load(req.resume_study_id)
+        if row.job_id == req.job_id and row.status in records.STORED_LIVE_STATUSES:
+            # A redelivery of a live dispatch joins the first worker before
+            # any resume refusal can call it unresumable — the attempt is
+            # never claimed twice (#3050).
+            records.require_live_redelivery(req.job_id, noun=NOUN)
+            return {"job_id": req.job_id, "study_id": row.id, "status": "queued"}
         refusal = await to_thread.run_sync(partial(_resume_refusal, row, live=records.liveness(row), verify_data=True))
         if refusal is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": "NOT_RESUMABLE", "message": refusal})
         study_id = row.id
+        await records.stamp_research_dispatch(job_id=req.job_id, kind="walk_forward", record_id=study_id)
     else:
+        # A fresh launch is idempotent under its job id: a study already
+        # bound to it is a redelivery, never a second study (#3050).
+        bound = await with_connection(repo.list_studies, job_id=req.job_id, limit=1)
+        if bound:
+            records.require_live_redelivery(req.job_id, noun=NOUN)
+            return {"job_id": req.job_id, "study_id": bound[0].id, "status": "queued"}
         try:
             record = await to_thread.run_sync(partial(service.prepare_launch, to_study_spec(req), job_id=req.job_id))
         except GridSearchRefusal as exc:
             raise records.refused(exc) from exc
-        created = await service.create(record)
-        study_id = created.id
+        study_id = record.id
+        # The stamp precedes the durable row (#3042's lesson, grid's order):
+        # a stamp refusal strands nothing, a create failure retries as a
+        # fresh dispatch.
+        await records.stamp_research_dispatch(job_id=req.job_id, kind="walk_forward", record_id=study_id)
+        await service.create(record)
+
+    runtime_executes = is_research_runtime()
+    work = _gated_study_work(req, study_id) if runtime_executes else _local_study_work(req, study_id)
+    run_in_thread(
+        req.job_id,
+        work,
+        thread_name=f"walk-forward-study-{req.job_id[:8]}",
+        cancel_check_every_n=1,
+        # In the runtime, emits renew nothing — only accepted checkpoints
+        # keep the lease alive (#3041).
+        emit_renews_lease=not runtime_executes,
+    )
+    return {"job_id": req.job_id, "study_id": study_id, "status": "queued"}
+
+
+def _local_study_work(req: WalkForwardStudyJobRequest, study_id: str) -> Callable[[ProgressEmitter, CancellationCheck], dict[str, Any]]:
+    """The local-mode worker: the study behind the runner's emit-and-cancel checks, cells in this process."""
 
     def work(emit: ProgressEmitter, cancel: CancellationCheck) -> dict[str, Any]:
         outcome = service.execute(
@@ -247,8 +295,52 @@ async def start_walk_forward_study_job(req: WalkForwardStudyJobRequest) -> dict[
             on_progress=lambda done, total: emit.progress(done, total, unit="backtests"),
             on_log=emit.log,
         )
-        return {"study_id": outcome.study_id, "status": outcome.status, "verdict": outcome.verdict.as_dict() if outcome.verdict else None}
+        return _outcome_response(outcome)
 
-    await records.stamp_research_dispatch(job_id=req.job_id, kind="walk_forward", record_id=study_id)
-    run_in_thread(req.job_id, work, thread_name=f"walk-forward-study-{req.job_id[:8]}", cancel_check_every_n=1)
-    return {"job_id": req.job_id, "study_id": study_id, "status": "queued"}
+    return work
+
+
+def _gated_study_work(req: WalkForwardStudyJobRequest, study_id: str) -> Callable[[ProgressEmitter, CancellationCheck], dict[str, Any]]:
+    """The research runtime's study worker: the folds under the checkpoint lease contract (#3041, #3050).
+
+    The folds stay strictly sequential — train, select, test, then the next
+    fold — exactly as the local mode runs them; what the runtime changes is
+    only where each sweep's ready cells compute. One dispatch per sweep
+    joins the shared pool as its own owner, so a study never holds capacity
+    its dependencies cannot use yet.
+    """
+    from app.jobs.checkpoints import GatedLease
+    from app.research.grid_search.dispatch import runtime_cell_dispatch
+    from app.research.persistence import ownership
+
+    def work(emit: ProgressEmitter, _runner_cancel: CancellationCheck) -> dict[str, Any]:
+        authority = ownership.process_authority()
+        if authority is None:
+            # The startup claim is fail-closed, so this is an authority lost
+            # mid-run: the generation is dead and its lease must not renew.
+            raise RuntimeError("research runtime worker without coordinator authority; the generation is fenced")
+        lease = GatedLease(req.job_id, task_id="study", authority=authority)
+        outcome = service.execute(
+            study_id,
+            job_id=req.job_id,
+            cell_dispatch_factory=lambda row, spec, attempt, job_id: runtime_cell_dispatch(
+                row,
+                spec,
+                attempt=attempt,
+                job_id=job_id,
+                on_checkpoint=lease.child_checkpoint,
+                cancel_check=lease.fenced_cancel,
+                on_log=emit.log,
+            ),
+            cancel_check=lease.fenced_cancel,
+            on_phase=lambda phase: (emit.phase(phase), lease.phase(phase)),
+            on_progress=lambda done, total: (emit.progress(done, total, unit="backtests"), lease.completion(done, total)),
+            on_log=emit.log,
+        )
+        return _outcome_response(outcome)
+
+    return work
+
+
+def _outcome_response(outcome: service.StudyOutcome) -> dict[str, Any]:
+    return {"study_id": outcome.study_id, "status": outcome.status, "verdict": outcome.verdict.as_dict() if outcome.verdict else None}

@@ -286,3 +286,108 @@ async def test_an_unidentifiable_environment_refuses_without_hiding_the_detail(
         assert refused.status_code == 400, refused.text
         assert refused.json()["detail"]["code"] == "ENVIRONMENT_UNIDENTIFIABLE"
         assert "cannot identify its installed Python libraries" in refused.json()["detail"]["message"]
+
+
+# ── Idempotent dispatch and the runtime's gated worker (#3050) ───────────
+
+
+async def test_a_live_redelivery_joins_the_first_worker_and_never_claims_twice(client, lake, monkeypatch) -> None:
+    _requires_ephemeral_db()
+    job = f"job-wf-redelivery-{id(monkeypatch)}"
+    runs: list[str] = []
+    stamps: list[str] = []
+
+    monkeypatch.setattr(study_router, "run_in_thread", lambda job_id, work, **kwargs: runs.append(job_id))
+
+    async def spy_stamp(*, job_id, kind, record_id):
+        stamps.append(job_id)
+
+    monkeypatch.setattr(study_router.records, "stamp_research_dispatch", spy_stamp)
+    monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: True)
+
+    async with client as c:
+        first = await c.post("/api/jobs-internal/walk-forward-study", json={**_body(), "jobId": job})
+        assert first.status_code == 202, first.text
+        study_id = first.json()["study_id"]
+
+        redelivered = await c.post("/api/jobs-internal/walk-forward-study", json={**_body(), "jobId": job})
+        resume_redelivered = await c.post("/api/jobs-internal/walk-forward-study", json={"jobId": job, "resumeStudyId": study_id})
+
+    assert redelivered.status_code == 202 and redelivered.json()["study_id"] == study_id
+    assert resume_redelivered.status_code == 202 and resume_redelivered.json()["study_id"] == study_id
+    assert runs == [job], "exactly one worker, however often the transport retries"
+    assert stamps == [job]
+
+
+async def test_a_runtime_dispatch_runs_the_folds_through_the_gated_worker(client, lake, monkeypatch) -> None:
+    _requires_ephemeral_db()
+    import asyncio
+    from types import SimpleNamespace
+
+    import app.jobs.progress as progress_module
+    from app.research.grid_search import dispatch as grid_dispatch_module
+    from app.research.persistence import ownership
+    from tests.jobs.conftest import _FakeRedis
+
+    job = f"job-wf-runtime-{id(monkeypatch)}"
+    built: dict[str, object] = {}
+    fake_redis = _FakeRedis()
+
+    monkeypatch.setattr(progress_module, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr(lifecycle, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr(ownership, "process_authority", lambda: SimpleNamespace(boot_generation=1, connected=True))
+    monkeypatch.setenv("RESEARCH_RUNTIME", "1")
+
+    def fake_runtime_cell_dispatch(row, spec, *, attempt, job_id, on_checkpoint, cancel_check, on_log=None, pool=None):
+        built.setdefault("sweeps", []).append((row.owner.fold_index, row.owner.phase))
+
+        def run(cells):
+            on_checkpoint({"phase": "search", "cursor_kind": "durable_completions", "cursor": 1})
+            favourite = 3.0 if row.owner.fold_index == 0 else 2.0
+            for candidate in cells:
+                sharpe = (2.0 if candidate.params["short_window"] == favourite else 0.5) * (0.8 if row.owner.phase == "test" else 1.0)
+                yield candidate, CellResult(
+                    params_hash=candidate.params_hash,
+                    params=dict(candidate.params),
+                    status="completed",
+                    total_trades=3,
+                    sharpe_ratio=sharpe,
+                    total_return_pct=1.0,
+                    net_profit=5.0,
+                )
+
+        return run
+
+    monkeypatch.setattr(grid_dispatch_module, "runtime_cell_dispatch", fake_runtime_cell_dispatch)
+
+    def fake_run_in_thread(job_id, work, **kwargs):
+        built["emit_renews_lease"] = kwargs.get("emit_renews_lease")
+
+        class _Emit:
+            def phase(self, phase):
+                pass
+
+            def progress(self, done, total, unit=None):
+                pass
+
+            def log(self, message):
+                pass
+
+        class _Cancel:
+            def raise_if_cancelled(self):
+                return None
+
+        built["outcome"] = asyncio.to_thread(work, _Emit(), _Cancel())
+
+    monkeypatch.setattr(study_router, "run_in_thread", fake_run_in_thread)
+    monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: True)
+
+    async with client as c:
+        launched = await c.post("/api/jobs-internal/walk-forward-study", json={**_body(), "jobId": job})
+        assert launched.status_code == 202, launched.text
+        outcome = await built["outcome"]
+
+    assert outcome["status"] == "completed" and outcome["verdict"] is not None
+    assert built["sweeps"] == [(0, "train"), (0, "test"), (1, "train"), (1, "test")], "folds stay sequential in the runtime"
+    assert built["emit_renews_lease"] is False, "in the runtime, only accepted checkpoints renew the lease (#3041)"
+    assert fake_redis.expires, "the gated study renewed the lease through accepted checkpoints"

@@ -259,9 +259,10 @@ app = FastAPI(
     title="learn-ai Research Runtime",
     description=(
         "Owns research job execution for the deployment (PRD #3034): the "
-        "existing serial Golden Search stage, dispatched by the API across "
-        "the internal boundary. Progress, results and cancellation ride the "
-        "shared job store exactly as before."
+        "Golden Search stage, Grid Search cells and Walk-Forward Study "
+        "sweeps, dispatched by the API across the internal boundary. "
+        "Progress, results and cancellation ride the shared job store "
+        "exactly as before."
     ),
     version=RUNTIME_VERSION,
     lifespan=_lifespan,
@@ -274,6 +275,25 @@ app = FastAPI(
 # mounts rely on network placement alone.
 app.include_router(
     golden_search.jobs_router,
+    prefix="/api/jobs-internal",
+    tags=["jobs-internal"],
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
+# Grid Search joins the runtime's dispatch surface (#3049): the same
+# authenticated boundary, the same shared pool and admission service, its
+# own cells and persistence contract. The Walk-Forward Study follows
+# (#3050): its folds stay sequential, each sweep's cells dispatch through
+# the same workers.
+from app.routers import grid_search, walk_forward_study  # noqa: E402
+
+app.include_router(
+    grid_search.jobs_router,
+    prefix="/api/jobs-internal",
+    tags=["jobs-internal"],
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
+app.include_router(
+    walk_forward_study.jobs_router,
     prefix="/api/jobs-internal",
     tags=["jobs-internal"],
     dependencies=[Depends(require_data_plane_control_secret)],
