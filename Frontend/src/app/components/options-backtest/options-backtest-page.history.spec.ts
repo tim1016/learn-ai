@@ -15,11 +15,11 @@ const startButton = () => screen.queryByRole<HTMLButtonElement>('button', { name
 
 const COMPLETE = runItem({ id: 30, job_id: 'job-30', status: 'complete', setup_name: 'Straddle', headline: { sessions_tested: 10, sessions_traded: 8, trades: 12, trades_won: 7, net_profit_usd: '1234.56', ending_cash_usd: '11234.56' } });
 
-describe('the two tabs', () => {
-  it('are Backtest and History, and Backtest is the one shown', async () => {
+describe('the tabs', () => {
+  it('are Backtest, History and Past chain, and Backtest is the one shown', async () => {
     await renderPage(fakeService(vi));
 
-    expect(screen.getAllByRole('tab').map((each) => each.textContent?.trim())).toEqual(['Backtest', 'History']);
+    expect(screen.getAllByRole('tab').map((each) => each.textContent?.trim())).toEqual(['Backtest', 'History', 'Past chain']);
     expect(tab('Backtest').getAttribute('aria-selected')).toBe('true');
     expect(screen.getByRole('heading', { name: 'Entry settings' })).toBeTruthy();
   });

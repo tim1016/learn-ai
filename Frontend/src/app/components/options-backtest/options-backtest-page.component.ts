@@ -20,6 +20,7 @@ import { LegwiseCardComponent } from './cards/legwise-card.component';
 import { SideListComponent, type LibraryStatus } from './cards/side-list.component';
 import { SummaryComponent } from './cards/summary.component';
 import { HistoryTabComponent } from './history/history-tab.component';
+import { PastChainTabComponent } from './past-chain/past-chain-tab.component';
 import { RunPanelComponent } from './run/run-panel.component';
 import { DataCheckFlow } from './data-check-flow';
 import { NO_DATES, rangeInstants, rangeOfStretch, type RangeChange } from './duration';
@@ -36,7 +37,7 @@ import { nameProblem } from './setup-limits';
 import { describeDetail, FIELD, NO_PROBLEMS, type FieldProblems } from './setup-problems';
 import { SetupSummaryChecker } from './setup-summary-checker';
 
-export type OptionsBacktestTab = 'backtest' | 'history';
+export type OptionsBacktestTab = 'backtest' | 'history' | 'chain';
 
 /** What an import said: it was loaded, or the reasons it was not. Nothing changes when it was not. */
 interface ImportNotice {
@@ -76,6 +77,7 @@ interface ImportNotice {
     SummaryComponent,
     RunPanelComponent,
     HistoryTabComponent,
+    PastChainTabComponent,
     BottomBarComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -312,7 +314,7 @@ export class OptionsBacktestPageComponent {
   }
 
   protected setTab(tab: string | number | undefined): void {
-    if (tab === 'backtest' || tab === 'history') this.activeTab.set(tab);
+    if (tab === 'backtest' || tab === 'history' || tab === 'chain') this.activeTab.set(tab);
   }
 
   /** The owner chose Use this setup on a run in History: the form takes that setup, under no name, and the Backtest tab is shown. */

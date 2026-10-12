@@ -10,6 +10,7 @@
     <p-tablist>
       <p-tab value="backtest"><i class="pi pi-sliders-h" aria-hidden="true"></i> Backtest</p-tab>
       <p-tab value="history"><i class="pi pi-history" aria-hidden="true"></i> History</p-tab>
+      <p-tab value="chain"><i class="pi pi-list" aria-hidden="true"></i> Past chain</p-tab>
     </p-tablist>
     <p-tabpanels>
       <p-tabpanel value="backtest">
@@ -69,6 +70,11 @@
       <p-tabpanel value="history" lazy>
         <ng-template #content>
           <app-options-backtest-history [active]="activeTab() === 'history'" (useSetup)="useRunSetup($event)" (deleted)="launch.forget($event)" />
+        </ng-template>
+      </p-tabpanel>
+      <p-tabpanel value="chain" lazy>
+        <ng-template #content>
+          <app-options-backtest-past-chain [startingUnderlying]="draft().underlying" />
         </ng-template>
       </p-tabpanel>
     </p-tabpanels>
