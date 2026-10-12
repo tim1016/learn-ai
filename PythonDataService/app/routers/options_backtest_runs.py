@@ -144,7 +144,8 @@ async def list_the_runs(
     ] = None,
 ) -> list[OptionsBacktestRunListItemResponse]:
     """The history, newest first, each run with its headline figures. A running run whose job is gone reads ``interrupted``."""
-    records = await with_connection(saved_runs.list_runs, is_live=lifecycle.job_is_live, limit=limit, job_id=job_id)
+    rows = await with_connection(saved_runs.read_run_rows, limit=limit, job_id=job_id)
+    records = await saved_runs.present_runs(rows, is_live=lifecycle.job_is_live)
     return [OptionsBacktestRunListItemResponse.from_record(record) for record in records]
 
 

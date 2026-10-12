@@ -13,6 +13,7 @@ import json
 import logging
 import random
 import re
+import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -935,6 +936,102 @@ async def test_check_data_when_the_catalog_does_not_answer_in_time_is_the_same_5
     assert answers["too slow"].status_code == 503
     assert answers["too slow"].json() == answers["unreachable"].json()
     assert answers["too slow"].json()["detail"]["code"] == "OPTIONS_BACKTEST_DATA_CATALOG_UNAVAILABLE"
+
+
+# ── The history reads the liveness of its running jobs once, off the loop ─
+
+
+def _a_row(run_id: int, status: str, job_id: str) -> dict[str, Any]:
+    """A row of the runs table as the history reads it, with nothing of its figures: running, cancelled or failed."""
+    return {
+        "id": run_id,
+        "created_at_ms": 1_791_800_000_000 + run_id,
+        "finished_at_ms": None if status == "running" else 1_791_800_000_000 + run_id + 5,
+        "job_id": job_id,
+        "status": status,
+        "setup_name": None,
+        "underlying": "SPY",
+        "first_session_open_ms": 1_791_379_800_000,
+        "last_session_open_ms": 1_791_552_600_000,
+        "sessions_requested": 4,
+        "fee_policy_text": "No fees are charged.",
+        "calendar_identity": "NYSE",
+        "calendar_package_version": "x",
+        "failure_code": "DOWNLOAD_FAILED" if status == "failed" else None,
+        "failure_reason": "The data could not be fetched." if status == "failed" else None,
+        "failure_detail_json": "[]" if status == "failed" else None,
+        "sessions_tested": None,
+        "sessions_traded": None,
+        "trades": None,
+        "trades_won": None,
+        "net_profit_usd": None,
+        "ending_cash_usd": None,
+    }
+
+
+async def test_the_history_reads_the_liveness_of_all_its_running_jobs_in_one_worker_thread_call_after_the_connection_is_let_go(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Six rows, newest first: four stored as running (jobs 6, 5, 3 and 2), one cancelled, one failed. Redis says job 6 is
+    # alive, jobs 5 and 2 gone, and cannot tell for job 3. Only a job that is gone turns a running row into
+    # interrupted, so the rows read: running, interrupted, cancelled, running, interrupted, failed. Four jobs are
+    # asked, once each, all on one worker thread that is not the loop's, in one hop to it, and with no connection held.
+    table = (
+        _a_row(6, "running", "job-6"),
+        _a_row(5, "running", "job-5"),
+        _a_row(4, "cancelled", "job-4"),
+        _a_row(3, "running", "job-3"),
+        _a_row(2, "running", "job-2"),
+        _a_row(1, "failed", "job-1"),
+    )
+    answers = {"job-6": True, "job-5": False, "job-3": None, "job-2": False}
+    connection_is_held = False
+    asked: list[tuple[str | None, int, bool]] = []
+    hops = 0
+    this_thread = threading.get_ident()
+    real_to_thread = asyncio.to_thread
+
+    async def a_connection(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        nonlocal connection_is_held
+        connection_is_held = True
+        try:
+            return await fn(None, *args, **kwargs)
+        finally:
+            connection_is_held = False
+
+    async def the_rows(_conn: Any, *, limit: int, job_id: str | None) -> tuple[dict[str, Any], ...]:
+        return table
+
+    def is_live(job_id: str | None) -> bool | None:
+        asked.append((job_id, threading.get_ident(), connection_is_held))
+        return answers[job_id or ""]
+
+    async def counted_to_thread(fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
+        nonlocal hops
+        hops += 1
+        return await real_to_thread(fn, *args, **kwargs)
+
+    monkeypatch.setattr(runs_router, "with_connection", a_connection)
+    monkeypatch.setattr(runs_router.saved_runs, "read_run_rows", the_rows)
+    monkeypatch.setattr(lifecycle, "job_is_live", is_live)
+    monkeypatch.setattr(asyncio, "to_thread", counted_to_thread)
+
+    async with client as c:
+        response = await c.get(f"{PREFIX}/runs")
+
+    assert response.status_code == 200, response.text
+    assert [(run["id"], run["status"]) for run in response.json()] == [
+        (6, "running"),
+        (5, "interrupted"),
+        (4, "cancelled"),
+        (3, "running"),
+        (2, "interrupted"),
+        (1, "failed"),
+    ]
+    assert sorted(job for job, _, _ in asked) == ["job-2", "job-3", "job-5", "job-6"]
+    [worker] = {thread for _, thread, _ in asked}
+    assert worker != this_thread and hops == 1
+    assert not any(held for _, _, held in asked)
 
 
 # ── The history, one run, delete: on a real database ─────────────────────
