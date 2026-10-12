@@ -9,6 +9,9 @@ __pycache__
 *.md
 notebooks/
 trained_models/
+# Local scratch output (benchmark dumps, one-off drivers). Nothing in an image
+# reads it, and one large dump left here makes every build ship it to the VM.
+tmp/
 # Exclude test data from the build context (it's large and not needed
 # at runtime) but keep the golden-fixture manifest — it's read at runtime
 # by GET /api/golden-fixtures (see app/routers/golden_fixtures.py).
