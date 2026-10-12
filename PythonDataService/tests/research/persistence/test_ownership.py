@@ -9,6 +9,8 @@ generation, and legacy rows keep today's lifecycle.
 from __future__ import annotations
 
 import asyncio
+import os
+from urllib.parse import urlsplit, urlunsplit
 
 import asyncpg
 import pytest
@@ -167,6 +169,24 @@ async def test_abandoned_generations_are_enumerable_for_the_research_restart(con
     finally:
         await authority.release()
         await _clear_jobs(conn, "job-old", "job-new")
+
+
+async def test_startup_protection_only_against_a_never_bootstrapped_database_does_not_crash(
+    scratch_db: asyncpg.Connection,
+) -> None:
+    """A deployment's Postgres that has never run the research schema has no
+    ``research_job_owners`` table; the forwarding sweep's protection lookup
+    must ensure the schema itself rather than crash the data plane's startup
+    over it (regression: PR #3064 called ``protected_job_ids`` straight off
+    a bare connection, so a never-bootstrapped live database crash-looped
+    the whole process on ``UndefinedTableError``).
+    """
+    name = await scratch_db.fetchval("SELECT current_database()")
+    dsn = urlunsplit(urlsplit(os.environ["POSTGRES_URL"])._replace(path=f"/{name}"))
+
+    protected = await ownership.startup_protection_only(dsn=dsn)
+    assert protected is not None
+    assert await protected() == set()
 
 
 async def test_a_degraded_startup_without_a_database_keeps_the_legacy_lifecycle() -> None:

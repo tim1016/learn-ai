@@ -359,8 +359,29 @@ async def startup_protection_only(
     authority — the isolated runtime owns it — but its startup sweep still
     must not close the live runtime's jobs. This reads the same protection
     without claiming anything or touching process state.
+
+    Ensures the research schema first, exactly as :func:`startup_authority_and_protection`
+    does: a deployment whose database has never run it has no
+    ``research_job_owners`` table, and this runs unconditionally, early in
+    every data-plane startup — a bare query here must not crash-loop the
+    process over a table ``ensure_schema`` would have created (regression
+    behind PR #3064's crash loop). A database that cannot be reached or
+    refuses the DDL degrades to no protection, the same as the ``dsn`` being
+    unset: this function's job is informational, never gating.
     """
     if not dsn:
+        return None
+
+    from app.research.persistence.schema import ensure_schema
+
+    try:
+        probe = await asyncpg.connect(dsn)
+        try:
+            await ensure_schema(probe)
+        finally:
+            await probe.close()
+    except (asyncpg.PostgresError, OSError) as exc:
+        logger.warning("research schema could not be ensured for startup protection: %s", exc)
         return None
 
     async def protected() -> AbstractSet[str]:
