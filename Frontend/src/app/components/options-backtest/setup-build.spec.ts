@@ -85,7 +85,7 @@ describe('a new setup', () => {
     expect(newSetupDraft(null)).toMatchObject({ entryClock: '', exitClock: '', noReentryClock: '' });
   });
 
-  it('builds a body the server can read, without legs, from its defaults', () => {
+  it('builds the body of a new setup, with no legs yet, from its defaults', () => {
     const body = built(newSetupDraft(SESSION_CLOCK));
 
     expect(body).toMatchObject({ version: 1, entry: minutes(5, 'open'), exit: minutes(15, 'close'), legs: [], price_step_usd: '0.01' });

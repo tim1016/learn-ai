@@ -62,7 +62,3 @@ export const FEE_CHOICES: readonly Choice<FeeKind>[] = [
   { value: 'per_contract', label: 'Per contract' },
   { value: 'estimated', label: 'Estimated' },
 ];
-
-export function labelOf<T extends string>(choices: readonly Choice<T>[], value: T): string {
-  return choices.find((choice) => choice.value === value)?.label ?? value;
-}

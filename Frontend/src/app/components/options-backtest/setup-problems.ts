@@ -41,8 +41,6 @@ export interface SetupProblems {
   readonly other: readonly string[];
 }
 
-export const NO_SETUP_PROBLEMS: SetupProblems = { fields: NO_PROBLEMS, other: [] };
-
 /**
  * The server's field errors, placed at the fields they name. `legIds` are the
  * ids of the legs of the body that was sent, because `loc` counts legs by
