@@ -95,7 +95,7 @@ export function contractLine(leg: LegDraft): string {
 
 function expiryText(leg: LegDraft): string {
   if (leg.expiryKind === 'same_day') return 'Expires the same day';
-  if (leg.expiryKind === 'this_week') return 'Expires this week';
+  if (leg.expiryKind === 'this_week') return 'Weekly expiry';
   return `Expires at least ${plural(leg.expiryDays, 'day')} out`;
 }
 

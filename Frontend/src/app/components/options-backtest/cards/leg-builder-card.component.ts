@@ -3,7 +3,7 @@ import { FormField, type FieldTree } from '@angular/forms/signals';
 import { ButtonModule } from 'primeng/button';
 import { InputText } from 'primeng/inputtext';
 
-import { EXPIRY_CHOICES, RIGHT_CHOICES, STRIKE_CHOICES } from '../choices';
+import { EXPIRY_CHOICES, EXPIRY_HINTS, RIGHT_CHOICES, STRIKE_CHOICES } from '../choices';
 import { PillChoiceComponent } from '../controls/pill-choice.component';
 import { builderProblems, MAX_LEGS, type LegBuilder } from '../leg-draft';
 
@@ -32,6 +32,7 @@ export class LegBuilderCardComponent {
 
   protected readonly builder = computed(() => this.form()().value());
   protected readonly problems = computed(() => builderProblems(this.builder()));
+  protected readonly expiryHint = computed(() => EXPIRY_HINTS[this.builder().expiryKind]);
   protected readonly full = computed(() => this.legCount() >= MAX_LEGS);
   protected readonly canAdd = computed(() => !this.full() && this.problems().size === 0);
 }

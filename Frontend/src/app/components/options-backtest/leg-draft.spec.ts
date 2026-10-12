@@ -41,7 +41,7 @@ describe('leg ids', () => {
 });
 
 describe('the leg builder', () => {
-  it('starts as one at-the-money call expiring this week, and can be added', () => {
+  it('starts as one at-the-money call on the weekly expiry, and can be added', () => {
     expect(builderProblems(newLegBuilder()).size).toBe(0);
     expect(legFromBuilder(newLegBuilder(), [])).toMatchObject({ id: 'call', right: 'call', contracts: 1, expiryKind: 'this_week', strikeKind: 'atm' });
   });
@@ -93,7 +93,7 @@ describe('the leg builder', () => {
 
 describe('the contract line', () => {
   it('reads left to right as the builder does', () => {
-    expect(contractLine(legFromBuilder(newLegBuilder(), []))).toBe('Buy · 1 contract · Call · Expires this week · At the money');
+    expect(contractLine(legFromBuilder(newLegBuilder(), []))).toBe('Buy · 1 contract · Call · Weekly expiry · At the money');
   });
 
   it('says days and steps with their signs as words', () => {

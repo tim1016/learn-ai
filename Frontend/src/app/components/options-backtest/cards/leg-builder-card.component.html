@@ -12,7 +12,7 @@
     </div>
     <div class="field">
       <span>Expiry</span>
-      <app-options-backtest-pill-choice [formField]="form().expiryKind" [options]="expiries" label="Expiry" />
+      <app-options-backtest-pill-choice [formField]="form().expiryKind" [options]="expiries" label="Expiry" describedBy="ob-expiry-hint" />
     </div>
     @if (builder().expiryKind === 'min_days') {
       <div class="field field--narrow">
@@ -32,6 +32,7 @@
     }
     <button pButton type="button" class="add" [disabled]="!canAdd()" (click)="add.emit()"><i class="pi pi-plus" aria-hidden="true"></i><span>Add leg</span></button>
   </div>
+  <p id="ob-expiry-hint" class="hint">{{ expiryHint() }}</p>
   @for (problem of problems().values(); track problem) { <p class="problem" role="alert">{{ problem }}</p> }
   @if (full()) { <p class="hint" role="status">A setup holds at most {{ maxLegs }} legs. Delete one to add another.</p> }
 </section>

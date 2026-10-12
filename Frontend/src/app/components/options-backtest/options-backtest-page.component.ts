@@ -161,6 +161,14 @@ export class OptionsBacktestPageComponent {
   // Import and export.
   protected readonly importNotice = signal<ImportNotice | null>(null);
   protected readonly canExport = computed(() => this.readBack() !== null);
+  /** Why Export waits, until it can go: the setup is not complete, or the server has not read it back yet. */
+  protected readonly exportWhy = computed(() => {
+    if (this.readBack() !== null) return null;
+    const kind = this.summary().kind;
+    return this.body() === null || kind === 'idle' || kind === 'invalid'
+      ? 'Export is available once the setup is complete.'
+      : 'Export is available once the server has read the setup back.';
+  });
 
   constructor() {
     effect(() => {

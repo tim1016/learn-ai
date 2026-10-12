@@ -1,6 +1,7 @@
 <app-page-header title="Options Backtest" icon="pi-sliders-h">
   <button slot="actions" pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="clock() === null" (click)="chooser.click()"><i class="pi pi-upload" aria-hidden="true"></i><span>Import setup</span></button>
-  <button slot="actions" pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="!canExport()" (click)="exportSetup()"><i class="pi pi-download" aria-hidden="true"></i><span>Export setup</span></button>
+  <button slot="actions" pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="!canExport()" [attr.aria-describedby]="exportWhy() === null ? null : 'ob-export-why'" [attr.title]="exportWhy()" (click)="exportSetup()"><i class="pi pi-download" aria-hidden="true"></i><span>Export setup</span></button>
+  @if (exportWhy(); as why) { <span slot="actions" id="ob-export-why" class="export-why">{{ why }}</span> }
 </app-page-header>
 <input #chooser hidden type="file" accept=".json,application/json" aria-label="Setup file to import" (change)="importFile($event)" />
 
