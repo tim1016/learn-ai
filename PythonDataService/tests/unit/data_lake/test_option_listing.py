@@ -18,8 +18,10 @@ import asyncio
 import csv
 import hashlib
 import io
+import json
 import zipfile
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -130,8 +132,6 @@ def _csv_rows(payload: bytes) -> tuple[list[str], list[list[str]]]:
 
 
 def _vendor_contract(ticker: str, strike: str, **overrides: Any) -> PolygonOptionContract:
-    from decimal import Decimal
-
     fields: dict[str, Any] = {
         "ticker": ticker,
         "contract_type": "call",
@@ -356,12 +356,20 @@ async def test_a_listing_with_no_contracts_is_not_pinned_as_a_fact(fake_catalog:
     ("rows", "fragment"),
     [
         ([STANDARD_ROWS[0], STANDARD_ROWS[0]], "duplicate"),
-        ([_row("O:SPY250613C00375000", 375.0005)], "thousandths"),  # finer than the symbol can write
-        ([_row("O:SPY250613C00375000", 375, expiration_date="2025-13-45")], "expiration_date"),
-        ([_row("O:SPY250613C00375000", 375, shares_per_contract=100.5)], "shares_per_contract"),
+        ([_row("O:SPY250613C00375000", 375), _row("SPY250613C00375000", 375)], "duplicate"),  # O:X and X are one ticker
+        ([_row("SPY250613C00375000", 375), _row("O:SPY250613C00375000", 375)], "duplicate"),
+        ([STANDARD_ROWS[1], None], "not a JSON object"),
+        ([STANDARD_ROWS[1], "O:SPY250613C00375000"], "not a JSON object"),
+        ([STANDARD_ROWS[1], ["O:SPY250613C00375000"]], "not a JSON object"),
+        ([STANDARD_ROWS[1], 375], "not a JSON object"),
+        ([STANDARD_ROWS[1], {k: v for k, v in STANDARD_ROWS[0].items() if k != "ticker"}], "no usable ticker"),
+        ([STANDARD_ROWS[1], _row("", 375)], "no usable ticker"),
+        ([STANDARD_ROWS[1], _row("   ", 375)], "no usable ticker"),
+        ([STANDARD_ROWS[1], _row(None, 375)], "no usable ticker"),  # type: ignore[arg-type]
+        ([STANDARD_ROWS[1], _row(375, 375)], "no usable ticker"),  # type: ignore[arg-type]
     ],
 )
-async def test_a_row_the_file_cannot_hold_fails_the_capture_naming_it(
+async def test_a_row_that_is_no_object_or_has_no_ticker_or_repeats_one_fails_the_whole_listing_as_invalid(
     rows: list[dict[str, Any]], fragment: str, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
     _mock_one_page(rows)
@@ -373,7 +381,139 @@ async def test_a_row_the_file_cannot_hold_fails_the_capture_naming_it(
     assert fragment in result.failure.detail
     [row] = fake_catalog.rows.values()
     assert (row["status"], row["last_error"]) == ("failed", "validation_failed")
-    assert _lake_files(tmp_lake) == []
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+
+
+@respx.mock
+async def test_a_ticker_listed_once_on_each_of_two_pages_is_still_listed_twice(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    _mock_two_pages([STANDARD_ROWS[0]], [_row("SPY250613C00375000", 375)])
+
+    result = await ensure_option_listing("SPY", AS_OF)
+
+    assert result.failure is not None and result.failure.reason == "validation_failed"
+    assert "duplicate" in result.failure.detail
+
+
+def _raw_page(rows: list[dict[str, Any]]) -> httpx.Response:
+    """A page whose ``@@<number>@@`` strings are written as bare JSON numbers, and whose floats may be ``Infinity``/``NaN``."""
+    body = json.dumps({"status": "OK", "request_id": "r", "results": rows})
+    for token in ("1e400", "1e999999999", "1e-9"):
+        body = body.replace(f'"@@{token}@@"', token)
+    return httpx.Response(200, content=body.encode(), headers={"content-type": "application/json"})
+
+
+def _junk(field: str, value: Any) -> dict[str, Any]:
+    """The probed standard row with one field changed; ``_MISSING`` takes the key out."""
+    row = _row("O:SPY250613C00375000", 375)
+    if value is _MISSING:
+        del row[field]
+    else:
+        row[field] = value
+    return row
+
+
+_MISSING = object()
+#: field -> (the file's column, the attribute a read-back row has it in, what an unreadable one reads back as)
+_COLUMNS = {
+    "contract_type": (1, "contract_type", ""),
+    "strike_price": (2, "strike_thousandths", None),
+    "expiration_date": (3, "expiry_ms", None),
+    "exercise_style": (4, "exercise_style", None),
+    "shares_per_contract": (5, "shares_per_contract", None),
+}
+_UNREADABLE = [
+    ("strike_price", _MISSING), ("strike_price", None), ("strike_price", 0), ("strike_price", -5), ("strike_price", 0.0),
+    ("strike_price", "375"), ("strike_price", True), ("strike_price", [375]), ("strike_price", float("inf")),
+    ("strike_price", float("-inf")), ("strike_price", float("nan")), ("strike_price", 375.0005),
+    ("strike_price", "@@1e400@@"), ("strike_price", "@@1e999999999@@"), ("strike_price", "@@1e-9@@"),
+    ("shares_per_contract", _MISSING), ("shares_per_contract", None), ("shares_per_contract", 0), ("shares_per_contract", -100),
+    ("shares_per_contract", 100.5), ("shares_per_contract", "100"), ("shares_per_contract", True),
+    ("shares_per_contract", float("inf")), ("shares_per_contract", float("nan")),
+    ("shares_per_contract", "@@1e400@@"), ("shares_per_contract", "@@1e999999999@@"),
+    ("contract_type", _MISSING), ("contract_type", None), ("contract_type", ""), ("contract_type", "other"), ("contract_type", 7),
+    ("exercise_style", _MISSING), ("exercise_style", None), ("exercise_style", ""), ("exercise_style", "weird"), ("exercise_style", 7),
+    ("expiration_date", _MISSING), ("expiration_date", None), ("expiration_date", ""), ("expiration_date", "2025-13-45"),
+    ("expiration_date", "20250613"), ("expiration_date", "2025-6-13"), ("expiration_date", 20250613),
+    ("expiration_date", "2025-06-13T00:00:00"), ("expiration_date", "٢٠٢٥-٠٦-١٣"),
+]
+
+
+@respx.mock
+@pytest.mark.parametrize(("field", "value"), _UNREADABLE, ids=[f"{f}={'missing' if v is _MISSING else v!r}" for f, v in _UNREADABLE])
+async def test_a_field_the_file_cannot_hold_is_stored_empty_and_the_row_is_kept_and_not_standard(
+    field: str, value: Any, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    other = _row("O:SPY250613C00376000", 376)
+    _mock_one_page_raw([_junk(field, value), other])
+
+    result = await ensure_option_listing("SPY", AS_OF)
+
+    assert result.failure is None and result.record is not None  # it never fails the listing, and nothing escapes
+    assert result.record.row_count == 2
+    column, attribute, empty = _COLUMNS[field]
+    _, cells = _csv_rows((_raw_root(tmp_lake) / RELATIVE_PATH).read_bytes())
+    kept = next(row for row in cells[1:] if row[0] == "O:SPY250613C00375000")
+    assert kept[column] == ""
+    listing = await _read()
+    assert listing is not None
+    by_ticker = {row.ticker: row for row in listing.rows}
+    assert getattr(by_ticker["O:SPY250613C00375000"], attribute) == empty
+    assert by_ticker["O:SPY250613C00375000"].standard is False
+    assert by_ticker["O:SPY250613C00376000"].standard is True  # its neighbour is untouched
+
+
+def _mock_one_page_raw(rows: list[dict[str, Any]]) -> respx.Route:
+    return respx.get(CONTRACTS_URL).mock(return_value=_raw_page(rows))
+
+
+@respx.mock
+async def test_a_row_with_nothing_but_a_ticker_is_kept_with_every_other_cell_empty(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    _mock_one_page([{"ticker": "O:SPY250613C00375000"}])
+
+    result = await ensure_option_listing("SPY", AS_OF)
+
+    assert result.failure is None and result.record is not None
+    _, cells = _csv_rows((_raw_root(tmp_lake) / RELATIVE_PATH).read_bytes())
+    assert cells[1] == ["O:SPY250613C00375000", "", "", "", "", "", "0"]
+    listing = await _read()
+    assert listing is not None
+    [row] = listing.rows
+    assert (row.contract_type, row.strike_thousandths, row.expiry_ms, row.exercise_style, row.shares_per_contract) == (
+        "", None, None, None, None,
+    )
+    assert row.standard is False and row.contract is None
+
+
+@respx.mock
+async def test_a_standard_row_exactly_as_the_vendor_sends_it_is_stored_whole_and_standard(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    """The probed row: nine keys, and no ``additional_underlyings``. Absent means none."""
+    probed = {
+        "cfi": "OCASPS", "contract_type": "call", "exercise_style": "american", "expiration_date": "2025-06-13",
+        "primary_exchange": "BATO", "shares_per_contract": 100, "strike_price": 375, "ticker": "O:SPY250613C00375000",
+        "underlying_ticker": "SPY",
+    }
+    assert "additional_underlyings" not in probed
+    _mock_one_page([probed])
+
+    await ensure_option_listing("SPY", AS_OF)
+
+    listing = await _read()
+    assert listing is not None
+    [row] = listing.rows
+    assert row.has_additional_underlyings is False and row.standard is True
+    assert (row.strike_thousandths, row.exercise_style, row.shares_per_contract) == (375000, "american", 100)
+
+
+@respx.mock
+async def test_a_value_in_another_case_is_read_as_the_value_it_names(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    _mock_one_page([_row("O:SPY250613C00375000", 375, contract_type="CALL", exercise_style="American")])
+
+    await ensure_option_listing("SPY", AS_OF)
+
+    listing = await _read()
+    assert listing is not None
+    [row] = listing.rows
+    assert (row.contract_type, row.exercise_style, row.standard) == ("call", "american", True)
 
 
 @respx.mock
@@ -408,6 +548,24 @@ async def test_reference_data_has_no_rolling_window_so_an_old_403_is_a_real_enti
     result = await ensure_option_listing("SPY", date(2024, 6, 14), now_ms=1791828000000)
 
     assert result.failure is not None and result.failure.reason == "provider_entitlement_error"
+
+
+@respx.mock
+async def test_a_403_that_names_the_data_timeframe_is_outside_the_plan_for_a_listing_too_and_is_asked_again(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """The vendor's own word, whatever the date; and, like a session's bars, never latched into a timeout."""
+    route = respx.get(CONTRACTS_URL).mock(
+        return_value=httpx.Response(
+            403,
+            json={"status": "NOT_AUTHORIZED", "request_id": "r", "message": "Your plan doesn't include this data timeframe. Please upgrade your plan at https://polygon.io/pricing"},
+        )
+    )
+
+    results = [await ensure_option_listing("SPY", AS_OF) for _ in range(5)]
+
+    assert [r.failure.reason for r in results if r.failure is not None] == ["outside_data_plan"] * 5
+    assert route.call_count == 5
 
 
 # ── Refusals cost no claim ──────────────────────────────────────────────
@@ -540,6 +698,44 @@ def test_a_listings_identity_is_its_provider_endpoint_underlying_and_date() -> N
     assert len(base) == 64
 
 
+# ── A new file format stales the old format's row ───────────────────────
+
+
+@respx.mock
+async def test_capturing_a_date_again_under_a_new_file_format_leaves_one_complete_row_for_its_file(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    respx.get(CONTRACTS_URL, params={"as_of": "2025-06-12"}).mock(return_value=_page(STANDARD_ROWS))
+    respx.get(CONTRACTS_URL, params={"as_of": "2025-06-13"}).mock(return_value=_page(STANDARD_ROWS))
+    other_date = await ensure_option_listing("SPY", date(2025, 6, 12))
+    old = await ensure_option_listing("SPY", AS_OF)
+    monkeypatch.setattr(option_listing_module, "OPTION_LISTING_FILE_FORMAT", option_listing_module.OPTION_LISTING_FILE_FORMAT + 1)
+
+    new = await ensure_option_listing("SPY", AS_OF)
+
+    assert old.record is not None and new.record is not None and other_date.record is not None
+    assert new.record.id != old.record.id  # a new recipe is a new row, not the old one rebuilt
+    assert fake_catalog.rows[old.record.id]["status"] == "stale"
+    assert fake_catalog.rows[new.record.id]["status"] == "complete"
+    complete_for_the_file = [
+        row for row in fake_catalog.rows.values() if row["file_path"] == RELATIVE_PATH and row["status"] == "complete"
+    ]
+    assert len(complete_for_the_file) == 1
+    assert fake_catalog.rows[other_date.record.id]["status"] == "complete"  # another date's file is another file
+
+
+@respx.mock
+async def test_a_listing_asked_for_again_under_the_same_format_keeps_its_row_complete(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    _mock_one_page(STANDARD_ROWS)
+    first = await ensure_option_listing("SPY", AS_OF)
+    (_raw_root(tmp_lake) / RELATIVE_PATH).unlink()
+
+    again = await ensure_option_listing("SPY", AS_OF)  # the file went, so the same row is refreshed and published again
+
+    assert first.record is not None and again.record is not None and again.record.id == first.record.id
+    assert fake_catalog.rows[again.record.id]["status"] == "complete"
+
+
 # ── Reading is only through admission ───────────────────────────────────
 
 
@@ -572,9 +768,18 @@ def test_building_the_file_refuses_a_duplicate_ticker_rather_than_dropping_one()
         build_option_listing_zip_bytes("SPY", AS_OF, [contract, contract])
 
 
-def test_a_strike_finer_than_a_thousandth_is_refused_not_rounded() -> None:
-    with pytest.raises(OptionListingFileError, match="thousandths"):
-        build_option_listing_zip_bytes("SPY", AS_OF, [_vendor_contract("O:SPY250613C00375000", "375.0005")])
+def test_building_the_file_treats_o_x_and_x_as_one_ticker() -> None:
+    with pytest.raises(OptionListingFileError, match="duplicate"):
+        build_option_listing_zip_bytes(
+            "SPY", AS_OF, [_vendor_contract("O:SPY250613C00375000", "375"), _vendor_contract("SPY250613C00375000", "375")]
+        )
+
+
+def test_a_strike_finer_than_a_thousandth_is_stored_empty_not_rounded() -> None:
+    payload = build_option_listing_zip_bytes("SPY", AS_OF, [_vendor_contract("O:SPY250613C00375000", "375.0005")])
+
+    _, rows = _csv_rows(payload)
+    assert rows[1][2] == ""
 
 
 def test_a_listing_file_that_is_not_the_one_written_is_refused_on_read() -> None:

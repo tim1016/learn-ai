@@ -9,40 +9,46 @@ ten-thousandths of a dollar. The vendor stamps a bar with its start and the
 lake keeps that; turning a start into a close is the replay's one conversion.
 
 ``ensure_option_day_bars`` mirrors ``ensure_data._process_minute_trade_artifact``
-step by step. Three things differ, all on purpose:
+step by step. Four things differ, all on purpose:
 
 * A contract that was listed and never traded that session gets an empty answer
   from the vendor. That is a fact, not a failure: it is published as a complete
-  artifact with zero rows, so it is pinned and never asked for again.
+  artifact with zero rows, so it is pinned and never asked for again. But the vendor
+  gives the same empty answer for a contract that never existed, one that expired,
+  and a day with no session, so an empty answer proves nothing by itself. The day is
+  captured only for a contract the stored listing of the same date holds
+  (``listed_under`` names whose listing), and only from a well-formed answer
+  (``polygon_option_bars``).
 * A session before the plan's rolling window is ``outside_data_plan``, a failure
-  of its own that a caller can tell from an outage and that is not retried to
-  exhaustion.
+  of its own that a caller can tell from an outage; it is refused before any claim,
+  and a day at the edge of the window is told so by the vendor's 403.
 * A session that is not over (``OPTION_SESSION_SETTLE_MS`` after its close) is
   refused before any claim.
+* The vendor's digits go to the stored integer as decimals, never through a float.
 
 ``read_option_day_bars`` reads only bytes the catalog admits.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import logging
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
 from zoneinfo import ZoneInfo
 
 from app.config import settings
 from app.data_lake import catalog_client
-from app.data_lake.admission import read_committed_bytes
+from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
 from app.data_lake.bar_validation import CorruptVendorBarsError, assert_publishable_minute_bars
 from app.data_lake.data_contract import data_contract_hash as _dch
-from app.data_lake.ensure_data import _polygon_bar_to_minute_trade_bar
-from app.data_lake.lean_writer import build_minute_trade_zip_bytes, parse_volume
+from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes, parse_volume
 from app.data_lake.option_lake import (
     LEASE_TTL_MS,
     OPTION_MARKET,
@@ -55,14 +61,18 @@ from app.data_lake.option_lake import (
     claim_or_take_over,
     current_ms,
     fail_row,
+    plan_window_refusal,
     publish_option_artifact,
     refusal_before_claim,
     stored_file_still_reads,
     vendor_reason,
 )
+from app.data_lake.option_listing import read_option_listing
 from app.data_lake.path_policy import OptionMinuteBarPath, resolve_lake_root
-from app.data_lake.polygon_fetcher import PolygonFetchError, fetch_minute_trade_aggregates
-from app.data_lake.types import ArtifactIdentity, ArtifactRecord
+from app.data_lake.polygon_fetcher import PolygonBar, PolygonFetchError
+from app.data_lake.polygon_option_bars import PolygonOptionBar, fetch_option_minute_bars
+from app.data_lake.polygon_option_http import OPTION_TICKER_PREFIX
+from app.data_lake.types import ArtifactIdentity, ArtifactRecord, is_lake_addressable_symbol
 from app.options.contract import OptionContract
 from app.utils.timestamps import to_ms_utc
 
@@ -203,19 +213,100 @@ def read_option_day_bars(
     )
 
 
+async def _listing_refusal(
+    listed_under: str, symbol: str, trading_date: date
+) -> OptionDataFailure | None:
+    """Does the stored listing of ``listed_under`` for ``trading_date`` hold the contract? A refusal if not.
+
+    Read through the catalog's admission, like any reader of the lake. A listing that is
+    there but not admitted or not readable is no usable listing: it is refused as not
+    captured, and capturing the listing again repairs it. An outage of the catalog
+    is not a verdict on the listing and propagates.
+    """
+    try:
+        listing = await asyncio.to_thread(read_option_listing, listed_under, trading_date)
+    except (LakeAdmissionError, OSError, zipfile.BadZipFile, ValueError) as exc:
+        return OptionDataFailure(
+            "listing_not_captured",
+            f"the stored listing of {listed_under} for {trading_date.isoformat()} is not admitted or does not read "
+            f"({type(exc).__name__}); capture the listing again",
+            symbol,
+            trading_date,
+        )
+    if listing is None:
+        return OptionDataFailure(
+            "listing_not_captured",
+            f"no listing of {listed_under} is stored for {trading_date.isoformat()}; capture it first",
+            symbol,
+            trading_date,
+        )
+    if symbol not in {row.ticker.removeprefix(OPTION_TICKER_PREFIX) for row in listing.rows}:
+        return OptionDataFailure(
+            "not_listed",
+            f"{symbol} is not in the {listed_under} listing stored for {trading_date.isoformat()}",
+            symbol,
+            trading_date,
+        )
+    return None
+
+
+def _bar_start_et(t_ms: int) -> datetime:
+    return (datetime.fromtimestamp(0, tz=UTC) + timedelta(milliseconds=t_ms)).astimezone(_ET)
+
+
+def _minute_trade_bar(bar: PolygonOptionBar) -> MinuteTradeBar:
+    """The vendor's decimals as the lake's bar type, with no float on the way."""
+    return MinuteTradeBar(
+        bar_start_et=_bar_start_et(bar.t_ms),
+        open=bar.open,
+        high=bar.high,
+        low=bar.low,
+        close=bar.close,
+        volume=bar.volume,
+    )
+
+
+def _publication_gate_view(bars: Sequence[PolygonOptionBar]) -> list[PolygonBar]:
+    """The bars in the shape the lake's publication gate takes.
+
+    The gate's checks (finite, positive, high above low, ordered, inside the date) read
+    floats; they decide whether to publish and never what is stored. The file is encoded from the decimals.
+    """
+    return [
+        PolygonBar(
+            t_ms=b.t_ms, open=float(b.open), high=float(b.high), low=float(b.low), close=float(b.close),
+            volume=b.volume, vwap=float(b.close), n=0,
+        )
+        for b in bars
+    ]
+
+
 async def ensure_option_day_bars(
-    contract: OptionContract, trading_date: date, *, now_ms: int | None = None
+    contract: OptionContract, trading_date: date, *, listed_under: str, now_ms: int | None = None
 ) -> OptionCaptureResult:
     """Capture one contract's session into the lake, or reuse what is there.
 
-    Claim, reuse-or-refresh on a lost claim, reclaim, fetch, validate, encode,
-    publish under the lease; a typed failure on every vendor error. ``now_ms`` fixes
-    the clock for the "is the session over" rule and the plan's window; it defaults
-    to the wall clock.
+    ``listed_under`` is the underlying whose listing holds the contract (a contract's
+    OCC root is not always its underlying's ticker: ``BRK.B`` options are ``BRKB...``).
+    Before any claim and any vendor call it refuses, as a typed failure and with no row:
+    a symbol the catalog cannot hold (``symbol_too_long``), a day with no session
+    (``not_a_session``), a session not yet over (``session_not_over``), a session older
+    than the plan reaches (``outside_data_plan``), a date whose listing of that underlying
+    is not stored (``listing_not_captured``), and a contract that listing does not hold
+    (``not_listed``). Only then does it claim, reuse-or-refresh on a lost claim, reclaim,
+    fetch, validate, encode and publish under the lease. Every vendor outcome, a malformed
+    answer included, is a typed failure on the row and none raises. ``now_ms`` fixes the
+    clock for the session and plan rules; it defaults to the wall clock.
     """
+    if not is_lake_addressable_symbol(listed_under):
+        raise ValueError(f"listed_under must be an upper-case ticker, got {listed_under!r}")
     symbol = contract.occ_symbol
     now = now_ms if now_ms is not None else current_ms()
-    refusal = refusal_before_claim(symbol, trading_date, now_ms=now)
+    refusal = refusal_before_claim(symbol, trading_date, now_ms=now) or plan_window_refusal(
+        symbol, trading_date, now_ms=now
+    )
+    if refusal is None:
+        refusal = await _listing_refusal(listed_under, symbol, trading_date)
     if refusal is not None:
         return OptionCaptureResult.failed(refusal)
 
@@ -278,37 +369,36 @@ async def ensure_option_day_bars(
         )
 
     try:
-        polygon_bars = await fetch_minute_trade_aggregates(
-            symbol=f"O:{symbol}",
-            start=trading_date,
-            end=trading_date,
-            api_key=settings.POLYGON_API_KEY,
-            adjusted=False,
-        )
+        bars = await fetch_option_minute_bars(symbol, trading_date, settings.POLYGON_API_KEY)
     except PolygonFetchError as e:
-        return await fail(vendor_reason(e, trading_date, now_ms=now), str(e))
+        return await fail(vendor_reason(e), str(e))
 
-    # No bars is not a failure here: the contract was listed and did not trade, and
-    # that is pinned as a complete artifact with no rows (the stock path fails it).
+    # No bars is a fact here, not a failure: the vendor confirmed an empty answer for a
+    # contract the stored listing of this date holds, so it was listed and did not trade.
+    # That is pinned as a complete artifact with no rows (the stock path fails it).
     try:
-        assert_publishable_minute_bars(polygon_bars, symbol=symbol, trading_date=trading_date)
+        assert_publishable_minute_bars(_publication_gate_view(bars), symbol=symbol, trading_date=trading_date)
     except CorruptVendorBarsError as e:
         return await fail("validation_failed", str(e))
 
-    payload = build_minute_trade_zip_bytes(
-        symbol=symbol,
-        trading_date_yyyymmdd=trading_date.strftime("%Y%m%d"),
-        bars=[_polygon_bar_to_minute_trade_bar(b) for b in polygon_bars],
-    )
+    try:
+        payload = build_minute_trade_zip_bytes(
+            symbol=symbol,
+            trading_date_yyyymmdd=trading_date.strftime("%Y%m%d"),
+            bars=[_minute_trade_bar(b) for b in bars],
+        )
+    except (ArithmeticError, ValueError) as e:
+        # A price or volume the file cannot hold (the gate passes any finite positive number).
+        return await fail("validation_failed", f"the bars of {symbol} {trading_date.isoformat()} cannot be written: {e}")
     # The publication functions take plain ints for the first and last bar start.
     # A session with no bars records 0 and 0, as the metadata rows do; the row count says there are none.
-    first_bar_ms = polygon_bars[0].t_ms if polygon_bars else 0
-    last_bar_ms = polygon_bars[-1].t_ms if polygon_bars else 0
+    first_bar_ms = bars[0].t_ms if bars else 0
+    last_bar_ms = bars[-1].t_ms if bars else 0
     published = await publish_option_artifact(
         payload=payload,
         rel_path=rel_path,
         lease=held,
-        row_count=len(polygon_bars),
+        row_count=len(bars),
         first_bar_start_ms=first_bar_ms,
         last_bar_start_ms=last_bar_ms,
         data_contract_hash=dch,
@@ -320,7 +410,7 @@ async def ensure_option_day_bars(
 
     logger.info(
         "data_lake.option_bars: session captured",
-        extra={"action": "option_day_captured", "symbol": symbol, "trading_date": trading_date.isoformat(), "rows": len(polygon_bars)},
+        extra={"action": "option_day_captured", "symbol": symbol, "trading_date": trading_date.isoformat(), "rows": len(bars)},
     )
     return OptionCaptureResult(
         record=ArtifactRecord(
@@ -336,7 +426,7 @@ async def ensure_option_day_bars(
             data_contract_hash=dch,
             file_path=str(rel_path),
             file_sha256=published,
-            row_count=len(polygon_bars),
+            row_count=len(bars),
             first_bar_start_ms=first_bar_ms,
             last_bar_start_ms=last_bar_ms,
             file_size_bytes=len(payload),
@@ -345,4 +435,3 @@ async def ensure_option_day_bars(
         failure=None,
         reused=False,
     )
-

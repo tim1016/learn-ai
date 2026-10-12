@@ -177,6 +177,30 @@ async def test_no_log_line_holds_the_key_even_at_the_apps_info_level(caplog: pyt
 
 
 @respx.mock
+@pytest.mark.parametrize(
+    "answer",
+    [
+        httpx.Response(401, json={"status": "ERROR"}),
+        outside_plan(),
+        httpx.Response(429),
+        httpx.Response(500, text="boom"),
+        httpx.Response(200, text="<html>maintenance</html>"),
+        httpx.Response(200, json=no_trades_body(SYMBOL, resultsCount=5)),
+        httpx.ReadTimeout("timed out"),
+        httpx.ConnectError("[Errno 61] Connection refused"),
+    ],
+    ids=["401", "outside plan", "429", "500", "not json", "count mismatch", "timeout", "refused"],
+)
+async def test_no_error_text_holds_the_key(answer: httpx.Response | Exception) -> None:
+    _vendor(answer)
+
+    with pytest.raises(PolygonFetchError) as raised:
+        await _fetch()
+
+    assert SENTINEL_KEY not in str(raised.value) and SENTINEL_KEY not in repr(raised.value)
+
+
+@respx.mock
 async def test_a_redirect_is_an_error_and_the_key_is_not_sent_to_where_it_points() -> None:
     _vendor(httpx.Response(302, headers={"location": "https://elsewhere.example/steal"}))
     elsewhere = respx.get("https://elsewhere.example/steal").mock(return_value=traded(SYMBOL, [bar_row(0)]))

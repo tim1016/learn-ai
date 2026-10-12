@@ -41,6 +41,8 @@ from app.data_lake.polygon_fetcher import (
     PolygonRateLimitedError,
     PolygonUnknownSymbolError,
 )
+from app.data_lake.polygon_option_contracts import PolygonContractRowError
+from app.data_lake.polygon_option_http import PolygonOutsidePlanError
 from app.data_lake.types import (
     MAX_SYMBOL_LENGTH,
     ArtifactFailureReason,
@@ -64,29 +66,46 @@ OPTION_PRICE_ADJUSTMENT_MODE: PriceAdjustmentMode = "raw"
 #: 15 minutes after the calendar's close; 30 minutes covers both (#3030).
 OPTION_SESSION_SETTLE_MS = 30 * 60 * 1000
 
-#: How far back the owner's options plan serves minute bars (probed 2026-10-12:
-#: 2024-10-11 answered NOT_AUTHORIZED, 2024-10-14 answered with bars). The
-#: window rolls forward every day, so what is fetched must be kept.
+#: How many years back the owner's options plan serves minute bars. It comes from a
+#: probe of the owner's plan on 2026-10-12: a session of 2024-10-11 answered 403
+#: NOT_AUTHORIZED ("this data timeframe") and 2024-10-14 answered with bars. The
+#: window rolls forward every day, so what is fetched must be kept. When the plan
+#: changes, probe a session near the new boundary and change this one number; the
+#: floor below and every refusal that rests on it follow.
 OPTION_HISTORY_YEARS = 2
 #: Days of headroom over the plan's boundary, as ``polygon_fetcher`` keeps for stocks.
 _HISTORY_FLOOR_MARGIN_DAYS = 2
+
+#: One staging request id for the whole process, as the stock path shares one per run:
+#: staging leaves its folders behind (nothing sweeps them), so a fresh id per publish
+#: would leave a new set of folders for every file. A publish stages under its lease
+#: generation (``attempt_<generation>``), so two writers of one file in this process,
+#: the winner and a writer that lost its lease, never stage to the same path.
+_PROCESS_REQUEST_ID = uuid4()
 
 WORKER_ID = _WORKER_ID
 LEASE_TTL_MS = _LEASE_TTL_MS
 MAX_CLAIM_RETRIES = _MAX_CLAIM_RETRIES
 
 #: ``LastError`` values that are retried however many times they were spent. A day
-#: outside the plan is environmental, not data: the owner upgrading the plan clears
-#: it, so it must not latch into a terminal ``fetch_timeout`` after three asks.
+#: the vendor says is outside the plan is environmental, not data: the owner upgrading
+#: the plan clears it, so it must not latch into a terminal ``fetch_timeout`` after
+#: three asks. Only a day at the edge of the floor reaches the vendor to be told so
+#: (an older one is refused before any claim). The exemption lasts while the row's last
+#: error is this one: a transient failure after the plan changed, on a row already asked
+#: three times or more, spends the ceiling and ends as ``fetch_timeout``, because every
+#: ask counts as an attempt and the shared reclaim has no reset for it.
 NOT_LATCHED_ERRORS = frozenset({"outside_data_plan"})
 
 OptionFailureReason = (
     ArtifactFailureReason
     | Literal[
-        "outside_data_plan",  # the vendor's rolling window does not reach this session
+        "outside_data_plan",  # the plan's rolling window does not reach this session (our floor, or the vendor's 403)
         "session_not_over",  # the session closed under OPTION_SESSION_SETTLE_MS ago
         "not_a_session",  # the exchange was closed that day
         "symbol_too_long",  # more characters than the catalog's Symbol column holds
+        "listing_not_captured",  # no usable stored listing of that underlying for that date
+        "not_listed",  # the stored listing of that date does not hold the contract
     ]
 )
 
@@ -134,8 +153,9 @@ def option_history_floor(today: date) -> date:
 
     Two years back, with the two days of headroom ``polygon_history_floor`` keeps
     over the stock plan's five: the boundary day itself is excluded, and a window
-    composed just before an ET midnight must still be inside it. A 403 for an older
-    session is the rolling window, not a missing entitlement.
+    composed just before an ET midnight must still be inside it. A session older
+    than this is refused before any claim (:func:`plan_window_refusal`); a day at
+    the edge is left to the vendor, whose 403 says whether the plan reaches it.
     """
     try:
         anniversary = today.replace(year=today.year - OPTION_HISTORY_YEARS)
@@ -185,22 +205,39 @@ def refusal_before_claim(symbol: str, trading_date: date, *, now_ms: int) -> Opt
     return symbol_refusal(symbol, trading_date) or session_refusal(symbol, trading_date, now_ms=now_ms)
 
 
-def vendor_reason(
-    error: PolygonFetchError, trading_date: date, *, now_ms: int, plan_window: bool = True
-) -> OptionFailureReason:
+def plan_window_refusal(symbol: str, trading_date: date, *, now_ms: int) -> OptionDataFailure | None:
+    """A session older than the plan reaches is refused before any claim, with no vendor call.
+
+    Minute bars are windowed; the contract listing is reference data that reaches back
+    before the price floor, so only the bars path asks this. Asking the vendor for such a
+    day would only be told no, and a row for it would pile up attempts for nothing.
+    """
+    floor = option_history_floor(et_date_at_ms(now_ms))
+    if trading_date < floor:
+        return OptionDataFailure(
+            "outside_data_plan",
+            f"{trading_date.isoformat()} is before {floor.isoformat()}, the oldest session the options plan serves",
+            symbol,
+            trading_date,
+        )
+    return None
+
+
+def vendor_reason(error: PolygonFetchError) -> OptionFailureReason:
     """The typed reason for a vendor error.
 
-    A 403 for a session older than the plan's rolling window is ``outside_data_plan``
-    when ``plan_window`` says the data is windowed (minute bars are; the contract
-    listing is reference data and reaches back before the price floor, so a 403
-    there is a real entitlement problem whatever the date).
+    A 403 is ``outside_data_plan`` only when the vendor's own body says the plan does
+    not include this data timeframe; any other 403 is a real entitlement problem. The
+    date alone never decides it.
     """
     if isinstance(error, PolygonAuthError):
         return "provider_auth_error"
+    if isinstance(error, PolygonOutsidePlanError):
+        return "outside_data_plan"
     if isinstance(error, PolygonEntitlementError):
-        if plan_window and trading_date < option_history_floor(et_date_at_ms(now_ms)):
-            return "outside_data_plan"
         return "provider_entitlement_error"
+    if isinstance(error, PolygonContractRowError):
+        return "validation_failed"
     if isinstance(error, PolygonRateLimitedError):
         return "provider_rate_limited"
     if isinstance(error, PolygonUnknownSymbolError):
@@ -331,9 +368,9 @@ async def publish_option_artifact(
             lake_root=lake_root,
             staging_root=staging_root,
             rel_lake_path=rel_path,
-            request_id=uuid4(),
+            request_id=_PROCESS_REQUEST_ID,
             worker_id=WORKER_ID,
-            attempt=1,
+            attempt=lease.lease_generation,
             artifact_id=lease.artifact_id,
             lease_generation=lease.lease_generation,
             row_count=row_count,

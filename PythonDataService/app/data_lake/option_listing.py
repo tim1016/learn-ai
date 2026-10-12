@@ -16,6 +16,14 @@ vendor listed additional underlyings. Whether a contract is *standard* is not
 stored: it is a rule applied when the file is read, so the rule can change
 without a refetch.
 
+Every row the vendor sends with a ticker is kept. A field the vendor left out or
+wrote as something the file cannot hold (a strike that is not a finite number
+above zero or finer than a thousandth, a share count that is not a finite whole
+number above zero, a type that is not call or put, a style it does not know, a
+date that is not a date) is stored empty, and a row with an empty field is never
+standard. Only a row that is not a JSON object or has no ticker, and a ticker
+listed twice, fail the listing.
+
 A listing is admitted only if it is whole: the fetcher either returns every
 page or raises, and an empty answer is refused, not pinned.
 """
@@ -26,11 +34,12 @@ import csv
 import hashlib
 import io
 import logging
+import re
 import zipfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
-from itertools import pairwise
+from decimal import Decimal
 from pathlib import Path
 
 from app.config import settings
@@ -58,6 +67,7 @@ from app.data_lake.option_lake import (
 from app.data_lake.path_policy import OptionListingPath, resolve_lake_root
 from app.data_lake.polygon_fetcher import PolygonFetchError
 from app.data_lake.polygon_option_contracts import PolygonOptionContract, fetch_option_contracts
+from app.data_lake.polygon_option_http import OPTION_TICKER_PREFIX
 from app.data_lake.types import ArtifactIdentity, ArtifactRecord, is_lake_addressable_symbol
 from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc
 from app.options.contract import OptionContract, strike_thousandths
@@ -66,7 +76,11 @@ from app.options.expiry import option_expiry_anchor_ms
 logger = logging.getLogger(__name__)
 
 OPTION_LISTING_ENDPOINT = "v3/reference/options/contracts"
-#: Bump when the file's columns or encoding change, so old rows are rebuilt under the new recipe.
+#: Bump when the file's columns or encoding change. The format is part of a listing's
+#: recipe, so a new format is a new catalog row: capturing a date again under it
+#: publishes over the old file and stales the old format's row for that file
+#: (``mark_metadata_artifacts_stale_for_path``). A date not captured again keeps its
+#: old row and file until it is.
 OPTION_LISTING_FILE_FORMAT = 1
 _HEADER = (
     "ticker",
@@ -79,7 +93,12 @@ _HEADER = (
 )
 _STANDARD_EXERCISE_STYLE = "american"
 _STANDARD_SHARES_PER_CONTRACT = 100
-_VENDOR_TICKER_PREFIX = "O:"
+_CONTRACT_TYPES = frozenset({"call", "put"})
+_EXERCISE_STYLES = frozenset({"american", "european", "bermudan"})
+_VENDOR_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+#: A share count has fewer digits than this; one with more is no share count (and is
+#: not turned into an integer, which a huge exponent would make very large).
+_MAX_SHARE_DIGITS = 18
 
 
 def option_listing_dch(underlying: str, as_of: date) -> str:
@@ -103,15 +122,17 @@ class OptionListingRow:
     """One listed contract, as the file holds it, plus whether it is standard.
 
     ``expiry_ms`` is the expiry date's 16:00 New York anchor (ADR 0022 (i)).
-    ``contract`` is the :class:`OptionContract` the ticker names, set only when the
-    ticker parses and agrees with the row's own type, strike and expiry; ``standard``
-    is the rule in :func:`_classify`, and a standard row always has a contract.
+    ``contract_type`` is empty, and ``strike_thousandths`` and ``expiry_ms`` are
+    ``None``, when the vendor's value could not be stored. ``contract`` is the
+    :class:`OptionContract` the ticker names, set only when the ticker parses and
+    agrees with the row's own type, strike and expiry; ``standard`` is the rule in
+    :func:`_classify`, and a standard row always has a contract.
     """
 
     ticker: str
     contract_type: str
-    strike_thousandths: int
-    expiry_ms: int
+    strike_thousandths: int | None
+    expiry_ms: int | None
     exercise_style: str | None
     shares_per_contract: int | None
     has_additional_underlyings: bool
@@ -142,30 +163,54 @@ def _occ_root(underlying: str) -> str:
     return underlying.replace(".", "")
 
 
+def _normal_ticker(ticker: str) -> str:
+    """A ticker as the catalog writes a contract: without the vendor's ``O:``."""
+    return ticker.removeprefix(OPTION_TICKER_PREFIX)
+
+
+def _strike_cell(strike: Decimal | None) -> str:
+    if strike is None or not strike.is_finite() or strike <= 0:
+        return ""
+    try:
+        return str(strike_thousandths(strike))
+    except ValueError:  # finer than a thousandth, or not an everyday size
+        return ""
+
+
+def _expiry_cell(text: str | None) -> str:
+    if text is None or _VENDOR_DATE.fullmatch(text) is None:
+        return ""
+    try:
+        expiry = date.fromisoformat(text)
+        option_expiry_anchor_ms(expiry)  # the reader computes this; a date it could not anchor is not storable
+    except (ValueError, OverflowError):
+        return ""
+    return f"{expiry.year:04d}{expiry.month:02d}{expiry.day:02d}"
+
+
+def _shares_cell(shares: Decimal | None) -> str:
+    if (
+        shares is None
+        or not shares.is_finite()
+        or shares <= 0
+        or shares.adjusted() >= _MAX_SHARE_DIGITS
+        or shares != shares.to_integral_value()
+    ):
+        return ""
+    return str(int(shares))
+
+
 def _csv_line(contract: PolygonOptionContract) -> list[str]:
-    ticker = contract.ticker
-    try:
-        strike = strike_thousandths(contract.strike)
-    except ValueError as exc:
-        raise OptionListingFileError(f"{ticker}: strike_price is not in whole thousandths of a dollar: {exc}") from exc
-    try:
-        expiry = date.fromisoformat(contract.expiration_date)
-    except ValueError as exc:
-        raise OptionListingFileError(f"{ticker}: expiration_date {contract.expiration_date!r} is not a date") from exc
-    shares = ""
-    if contract.shares_per_contract is not None:
-        if contract.shares_per_contract != contract.shares_per_contract.to_integral_value():
-            raise OptionListingFileError(
-                f"{ticker}: shares_per_contract {contract.shares_per_contract} is not a whole number"
-            )
-        shares = str(int(contract.shares_per_contract))
+    """One contract as the file's cells; a value the file cannot hold is an empty cell, and never raises."""
+    contract_type = (contract.contract_type or "").lower()
+    exercise_style = (contract.exercise_style or "").lower()
     return [
-        ticker,
-        contract.contract_type.lower(),
-        str(strike),
-        f"{expiry:%Y%m%d}",
-        (contract.exercise_style or "").lower(),
-        shares,
+        contract.ticker,
+        contract_type if contract_type in _CONTRACT_TYPES else "",
+        _strike_cell(contract.strike),
+        _expiry_cell(contract.expiration_date),
+        exercise_style if exercise_style in _EXERCISE_STYLES else "",
+        _shares_cell(contract.shares_per_contract),
         "1" if contract.has_additional_underlyings else "0",
     ]
 
@@ -173,14 +218,17 @@ def _csv_line(contract: PolygonOptionContract) -> list[str]:
 def build_option_listing_zip_bytes(underlying: str, as_of: date, contracts: Sequence[PolygonOptionContract]) -> bytes:
     """The listing's file. Deterministic: the same contracts, in any order, make the same bytes.
 
-    Nothing is repaired: a duplicate ticker, a strike finer than a thousandth, an
-    expiry that is not a date or a share count that is not whole raises
-    :class:`OptionListingFileError` naming the ticker, and no file is made.
+    A value the file cannot hold is stored empty, not repaired and not fatal. A
+    ticker listed twice (``O:X`` and ``X`` are the same ticker) raises
+    :class:`OptionListingFileError` naming it, and no file is made.
     """
+    seen: set[str] = set()
+    for contract in contracts:
+        key = _normal_ticker(contract.ticker)
+        if key in seen:
+            raise OptionListingFileError(f"duplicate ticker {contract.ticker} in the listing")
+        seen.add(key)
     lines = sorted((_csv_line(c) for c in contracts), key=lambda line: line[0])
-    for earlier, later in pairwise(lines):
-        if earlier[0] == later[0]:
-            raise OptionListingFileError(f"duplicate ticker {earlier[0]} in the listing")
     text = io.StringIO()
     writer = csv.writer(text, lineterminator="\n")
     writer.writerow(_HEADER)
@@ -199,8 +247,8 @@ def _classify(
     underlying: str,
     ticker: str,
     contract_type: str,
-    strike: int,
-    expiry_ms: int,
+    strike: int | None,
+    expiry_ms: int | None,
     exercise_style: str | None,
     shares: int | None,
     additional: bool,
@@ -213,7 +261,7 @@ def _classify(
     digit) or one that names another contract than its row keeps the row, unnamed.
     """
     try:
-        named = OptionContract.from_occ_symbol(ticker.removeprefix(_VENDOR_TICKER_PREFIX))
+        named = OptionContract.from_occ_symbol(_normal_ticker(ticker))
     except ValueError:
         return False, None
     if named.right != contract_type or named.strike_thousandths != strike or named.expiry_ms != expiry_ms:
@@ -244,8 +292,8 @@ def parse_option_listing_zip(payload: bytes, underlying: str, as_of: date) -> tu
             raise OptionListingFileError(f"{expected} line {number}: expected {len(_HEADER)} columns, found {len(fields)}")
         ticker, contract_type, strike_text, expiry_text, style_text, shares_text, additional_text = fields
         try:
-            strike = int(strike_text)
-            expiry_ms = option_expiry_anchor_ms(datetime.strptime(expiry_text, "%Y%m%d").date())
+            strike = int(strike_text) if strike_text else None
+            expiry_ms = option_expiry_anchor_ms(datetime.strptime(expiry_text, "%Y%m%d").date()) if expiry_text else None
             shares = int(shares_text) if shares_text else None
             additional = {"0": False, "1": True}[additional_text]
         except (ValueError, KeyError) as exc:
@@ -362,7 +410,7 @@ async def ensure_option_listing(
     try:
         contracts = await fetch_option_contracts(underlying, as_of, settings.POLYGON_API_KEY)
     except PolygonFetchError as e:
-        return await fail(vendor_reason(e, as_of, now_ms=now, plan_window=False), str(e))
+        return await fail(vendor_reason(e), str(e))
 
     # An empty listing cannot be told from a vendor that answered nothing, and a
     # pinned empty chain would hide every contract of that date from then on.
@@ -386,6 +434,13 @@ async def ensure_option_listing(
     )
     if isinstance(published, OptionDataFailure):
         return OptionCaptureResult.failed(published)
+    # A listing recipe of another file format has its own row for this same file; it no longer describes it.
+    await catalog_client.mark_metadata_artifacts_stale_for_path(
+        data_root_id=identity.data_root_id,
+        price_adjustment_mode=OPTION_PRICE_ADJUSTMENT_MODE,
+        file_path=str(rel_path),
+        keep_artifact_id=held.artifact_id,
+    )
 
     logger.info(
         "data_lake.option_listing: listing captured",
