@@ -43002,7 +43002,7 @@
             "type": "integer"
           },
           "underlying": {
-            "pattern": "^[A-Z]{1,6}$",
+            "pattern": "^[A-Z]{1,5}$",
             "title": "Underlying",
             "type": "string"
           }
@@ -80330,13 +80330,13 @@
         "operationId": "get_past_chain_day_api_research_options_backtest_past_chain_day_get",
         "parameters": [
           {
-            "description": "The underlying's ticker, one to six letters.",
+            "description": "The underlying's ticker, one to five letters.",
             "in": "query",
             "name": "underlying",
             "required": true,
             "schema": {
-              "description": "The underlying's ticker, one to six letters.",
-              "pattern": "^[A-Z]{1,6}$",
+              "description": "The underlying's ticker, one to five letters.",
+              "pattern": "^[A-Z]{1,5}$",
               "title": "Underlying",
               "type": "string"
             }
@@ -80489,13 +80489,13 @@
         "operationId": "get_past_chain_expiry_api_research_options_backtest_past_chain_expiry_get",
         "parameters": [
           {
-            "description": "The underlying's ticker, one to six letters.",
+            "description": "The underlying's ticker, one to five letters.",
             "in": "query",
             "name": "underlying",
             "required": true,
             "schema": {
-              "description": "The underlying's ticker, one to six letters.",
-              "pattern": "^[A-Z]{1,6}$",
+              "description": "The underlying's ticker, one to five letters.",
+              "pattern": "^[A-Z]{1,5}$",
               "title": "Underlying",
               "type": "string"
             }

@@ -40685,7 +40685,7 @@ export interface operations {
     get_past_chain_day_api_research_options_backtest_past_chain_day_get: {
         parameters: {
             query: {
-                /** @description The underlying's ticker, one to six letters. */
+                /** @description The underlying's ticker, one to five letters. */
                 underlying: string;
                 /** @description Any instant on the New York trading date; the page sends its midnight. */
                 trading_date_ms: number;
@@ -40790,7 +40790,7 @@ export interface operations {
     get_past_chain_expiry_api_research_options_backtest_past_chain_expiry_get: {
         parameters: {
             query: {
-                /** @description The underlying's ticker, one to six letters. */
+                /** @description The underlying's ticker, one to five letters. */
                 underlying: string;
                 /** @description Any instant on the New York trading date; the page sends its midnight. */
                 trading_date_ms: number;

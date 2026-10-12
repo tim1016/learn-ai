@@ -56,7 +56,7 @@ _REFUSALS = {
 }
 
 Underlying = Annotated[
-    str, Query(pattern=UNDERLYING_PATTERN, description="The underlying's ticker, one to six letters.")
+    str, Query(pattern=UNDERLYING_PATTERN, description="The underlying's ticker, one to five letters.")
 ]
 TradingDateMs = Annotated[
     int,
