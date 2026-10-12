@@ -5824,6 +5824,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/options-backtest/check-data": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check The Data
+         * @description Which sessions of the range can be tested, from what is already stored. Nothing is fetched to answer.
+         *
+         *     Reads files and asks the lake's catalog, so it runs in a worker thread. A range that cannot be run is a 400.
+         */
+        post: operations["check_the_data_api_research_options_backtest_check_data_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/options-backtest/limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Limits
+         * @description What a setup may hold (legs, contracts, re-entries, strike steps, expiry days), what a name may be, and how long a range may be.
+         */
+        get: operations["get_limits_api_research_options_backtest_limits_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/options-backtest/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List The Runs
+         * @description The history, newest first, each run with its headline figures. A running run whose job is gone reads ``interrupted``.
+         */
+        get: operations["list_the_runs_api_research_options_backtest_runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/options-backtest/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get The Run
+         * @description One run: its status, the setup it ran, the banner facts, and when it is complete every figure. Not its trades.
+         */
+        get: operations["get_the_run_api_research_options_backtest_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete The Run
+         * @description Delete a run with its sessions and trades. None by that id is a 404; a run that is still running is a 409.
+         */
+        delete: operations["delete_the_run_api_research_options_backtest_runs__run_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/options-backtest/session-clock": {
         parameters: {
             query?: never;
@@ -5875,7 +5961,7 @@ export interface paths {
         put?: never;
         /**
          * Describe
-         * @description The setup in sentences. A setup that does not validate is the standard 422 with its field errors.
+         * @description The setup in sentences, and the setup as the server read it. A setup that does not validate is the standard 422.
          */
         post: operations["describe_api_research_options_backtest_setups_describe_post"];
         delete?: never;
@@ -19938,8 +20024,8 @@ export interface components {
         LegDescriptionResponse: {
             /** Leg Id */
             leg_id: string;
-            /** Text */
-            text: string;
+            /** Sentences */
+            sentences: string[];
         };
         /**
          * LegDiagnostic
@@ -22291,6 +22377,153 @@ export interface components {
             unit_label: string;
         };
         /**
+         * OptionsBacktestCheckDataRequest
+         * @description A setup and the half-open range ``[start_ms, end_ms)`` to check: New York midnight of the first date to the
+         *     New York midnight after the last, as Grid Search's window is.
+         */
+        OptionsBacktestCheckDataRequest: {
+            /** End Ms */
+            end_ms: number;
+            setup: components["schemas"]["OptionsBacktestSetup-Input"];
+            /** Start Ms */
+            start_ms: number;
+        };
+        /**
+         * OptionsBacktestContractNeedsResponse
+         * @description How many contract days a session needs and how many are not stored. ``not_yet_known`` while the session's
+         *     underlying day or listing is not stored, and both counts are then ``None``.
+         */
+        OptionsBacktestContractNeedsResponse: {
+            /** Missing */
+            missing?: number | null;
+            /** Needed */
+            needed?: number | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "known" | "not_yet_known";
+        };
+        /**
+         * OptionsBacktestDataCheckResponse
+         * @description Which sessions of a range can be tested, from what is already stored. Nothing was fetched to answer.
+         */
+        OptionsBacktestDataCheckResponse: {
+            counts: components["schemas"]["OptionsBacktestDataCountsResponse"];
+            /** First Testable Session Open Ms */
+            first_testable_session_open_ms?: number | null;
+            /** Last Testable Session Open Ms */
+            last_testable_session_open_ms?: number | null;
+            longest_testable_stretch?: components["schemas"]["OptionsBacktestTestableStretchResponse"] | null;
+            /** Option Prices From Ms */
+            option_prices_from_ms: number;
+            /** Sessions */
+            sessions: components["schemas"]["OptionsBacktestSessionCheckResponse"][];
+        };
+        /** OptionsBacktestDataCountsResponse */
+        OptionsBacktestDataCountsResponse: {
+            /** Cannot Be Tested */
+            cannot_be_tested: number;
+            /** Needs Download */
+            needs_download: number;
+            /** Ready */
+            ready: number;
+        };
+        /**
+         * OptionsBacktestDayRowResponse
+         * @description One session of the by-day table. Won, lost and break-even count trades, not sessions.
+         */
+        OptionsBacktestDayRowResponse: {
+            /** Fees Usd */
+            fees_usd: string;
+            /** Net Profit Usd */
+            net_profit_usd: string;
+            /** Session Open Ms */
+            session_open_ms: number;
+            /** Skip Reason */
+            skip_reason?: ("window_does_not_fit" | "underlying_did_not_trade") | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "traded" | "no_trade" | "skipped" | "incomplete";
+            /** Trades */
+            trades: number;
+            /** Trades Break Even */
+            trades_break_even: number;
+            /** Trades Lost */
+            trades_lost: number;
+            /** Trades Won */
+            trades_won: number;
+        };
+        /**
+         * OptionsBacktestDollarRateResponse
+         * @description A rate of two sums of dollars: the numerator and the denominator, and the quotient rounded to six places.
+         */
+        OptionsBacktestDollarRateResponse: {
+            /** Denominator Usd */
+            denominator_usd: string;
+            /** Numerator Usd */
+            numerator_usd: string;
+            /** Rounded To 6 Places */
+            rounded_to_6_places: string;
+        };
+        /**
+         * OptionsBacktestDrawdownResponse
+         * @description The largest fall of equity from its running peak, measured at the end of each session.
+         */
+        OptionsBacktestDrawdownResponse: {
+            fall_ratio: components["schemas"]["OptionsBacktestDollarRateResponse"];
+            /** Fall Usd */
+            fall_usd: string;
+            /**
+             * Measured At
+             * @constant
+             */
+            measured_at: "session_end";
+            /** Peak Equity Usd */
+            peak_equity_usd: string;
+            /** Peak Session Open Ms */
+            peak_session_open_ms?: number | null;
+            /** Trough Equity Usd */
+            trough_equity_usd: string;
+            /** Trough Session Open Ms */
+            trough_session_open_ms: number;
+        };
+        /** OptionsBacktestExitCountResponse */
+        OptionsBacktestExitCountResponse: {
+            /** Count */
+            count: number;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "stop" | "square_off" | "exit_time" | "marked_not_sold";
+        };
+        /**
+         * OptionsBacktestFillsBannerResponse
+         * @description The facts the result's banner states: how fills were made and what they cost.
+         */
+        OptionsBacktestFillsBannerResponse: {
+            /** Bid And Ask Are Available */
+            bid_and_ask_are_available: boolean;
+            /** Fee Per Contract Usd */
+            fee_per_contract_usd?: string | null;
+            /** Fee Policy */
+            fee_policy: string;
+            /**
+             * Fee Policy Kind
+             * @enum {string}
+             */
+            fee_policy_kind: "estimated" | "per_contract" | "not_charged";
+            /** Fills Are Simulated From Trade Prices */
+            fills_are_simulated_from_trade_prices: boolean;
+            /** Price Step Usd */
+            price_step_usd: string;
+            /** Slippage Percent */
+            slippage_percent: string;
+        };
+        /**
          * OptionsBacktestJobAcceptedResponse
          * @description The run exists, ``running``, and a worker holds it.
          */
@@ -22323,6 +22556,87 @@ export interface components {
             /** Start Ms */
             start_ms: number;
         };
+        /**
+         * OptionsBacktestLimitsResponse
+         * @description The limits the server holds a setup and a request to, so the page copies none of them.
+         */
+        OptionsBacktestLimitsResponse: {
+            /** Max Contracts Per Leg */
+            max_contracts_per_leg: number;
+            /** Max Expiry Days */
+            max_expiry_days: number;
+            /** Max Legs */
+            max_legs: number;
+            /** Max Range Sessions */
+            max_range_sessions: number;
+            /** Max Reentries Per Leg */
+            max_reentries_per_leg: number;
+            /** Max Strike Steps */
+            max_strike_steps: number;
+            setup_name: components["schemas"]["OptionsBacktestSetupNameRuleResponse"];
+        };
+        /**
+         * OptionsBacktestMonthRowResponse
+         * @description The sessions of one New York calendar month the run covered.
+         */
+        OptionsBacktestMonthRowResponse: {
+            /** Fees Usd */
+            fees_usd: string;
+            /** Month */
+            month: number;
+            /** Net Profit Usd */
+            net_profit_usd: string;
+            /** Sessions */
+            sessions: number;
+            /** Sessions By Status */
+            sessions_by_status: components["schemas"]["OptionsBacktestSessionStatusCountResponse"][];
+            /** Sessions Traded */
+            sessions_traded: number;
+            /** Trades */
+            trades: number;
+            /** Trades Break Even */
+            trades_break_even: number;
+            /** Trades Lost */
+            trades_lost: number;
+            /** Trades Won */
+            trades_won: number;
+            /** Year */
+            year: number;
+        };
+        /** OptionsBacktestPickRefusalCountResponse */
+        OptionsBacktestPickRefusalCountResponse: {
+            /** Count */
+            count: number;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "chain_incomplete" | "expiry_not_listed" | "expiry_not_a_session" | "strike_not_listed" | "not_standard";
+        };
+        /** OptionsBacktestProblemResponse */
+        OptionsBacktestProblemResponse: {
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "older_than_the_data_plan" | "session_data_not_final" | "no_published_fee_rates" | "lake_holds_a_failure" | "stored_data_is_malformed";
+            /** Lake Reason */
+            lake_reason?: string | null;
+            /** Message */
+            message: string;
+        };
+        /**
+         * OptionsBacktestRateResponse
+         * @description A rate of two counts: the numerator and the denominator, and the quotient rounded half-even to six places.
+         */
+        OptionsBacktestRateResponse: {
+            /** Denominator */
+            denominator: string;
+            /** Numerator */
+            numerator: string;
+            /** Rounded To 6 Places */
+            rounded_to_6_places: string;
+        };
         /** OptionsBacktestRefusal */
         OptionsBacktestRefusal: {
             /** Code */
@@ -22336,6 +22650,223 @@ export interface components {
          */
         OptionsBacktestRefusalBody: {
             detail: components["schemas"]["OptionsBacktestRefusal"];
+        };
+        /**
+         * OptionsBacktestRunDetailResponse
+         * @description One run, opened: the setup it ran, the banner facts and, when it is complete, every figure. Not its trades.
+         */
+        OptionsBacktestRunDetailResponse: {
+            banner: components["schemas"]["OptionsBacktestFillsBannerResponse"];
+            /** Calendar Identity */
+            calendar_identity: string;
+            /** Calendar Package Version */
+            calendar_package_version: string;
+            /** Created At Ms */
+            created_at_ms: number;
+            failure?: components["schemas"]["OptionsBacktestRunFailureResponse"] | null;
+            /** Fee Policy */
+            fee_policy: string;
+            figures?: components["schemas"]["OptionsBacktestRunFiguresResponse"] | null;
+            /** Finished At Ms */
+            finished_at_ms?: number | null;
+            /** First Session Open Ms */
+            first_session_open_ms: number;
+            headline?: components["schemas"]["OptionsBacktestRunHeadlineResponse"] | null;
+            /** Id */
+            id: number;
+            /** Job Id */
+            job_id: string;
+            /** Last Session Open Ms */
+            last_session_open_ms: number;
+            /** Sessions Requested */
+            sessions_requested: number;
+            setup: components["schemas"]["OptionsBacktestSetup-Output"];
+            /** Setup Name */
+            setup_name?: string | null;
+            /** Slippage */
+            slippage: components["schemas"]["OptionsBacktestSlippagePointResponse"][];
+            slippage_tolerance?: components["schemas"]["OptionsBacktestSlippageToleranceResponse"] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "complete" | "failed" | "cancelled" | "interrupted";
+            /** Underlying */
+            underlying: string;
+        };
+        /**
+         * OptionsBacktestRunFailureItemResponse
+         * @description One thing that failed: a session (by its open) or the run as a whole (``None``).
+         */
+        OptionsBacktestRunFailureItemResponse: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /** Session Open Ms */
+            session_open_ms?: number | null;
+        };
+        /**
+         * OptionsBacktestRunFailureResponse
+         * @description Why a run failed: a code to branch on, a plain reason, and the list of what failed.
+         */
+        OptionsBacktestRunFailureResponse: {
+            /** Code */
+            code: string;
+            /** Items */
+            items: components["schemas"]["OptionsBacktestRunFailureItemResponse"][];
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * OptionsBacktestRunFiguresResponse
+         * @description Every figure of a complete run, each named for what it counts. A trade is one leg round trip.
+         */
+        OptionsBacktestRunFiguresResponse: {
+            /** By Day */
+            by_day: components["schemas"]["OptionsBacktestDayRowResponse"][];
+            /** By Month */
+            by_month: components["schemas"]["OptionsBacktestMonthRowResponse"][];
+            daily_win_rate?: components["schemas"]["OptionsBacktestRateResponse"] | null;
+            drawdown_by_dollars?: components["schemas"]["OptionsBacktestDrawdownResponse"] | null;
+            drawdown_by_fraction?: components["schemas"]["OptionsBacktestDrawdownResponse"] | null;
+            /** Ending Cash Usd */
+            ending_cash_usd: string;
+            /** Entries Dropped */
+            entries_dropped: number;
+            /** Entries Refused For Cash */
+            entries_refused_for_cash: number;
+            /** Exits By Reason */
+            exits_by_reason: components["schemas"]["OptionsBacktestExitCountResponse"][];
+            /** Gross Loss Usd */
+            gross_loss_usd: string;
+            /** Gross Profit Usd */
+            gross_profit_usd: string;
+            /** Legs Without A Starting Price */
+            legs_without_a_starting_price: number;
+            /** Net Profit Usd */
+            net_profit_usd: string;
+            /** Picks Refused By Reason */
+            picks_refused_by_reason: components["schemas"]["OptionsBacktestPickRefusalCountResponse"][];
+            profit_factor?: components["schemas"]["OptionsBacktestDollarRateResponse"] | null;
+            /** Re Entries Blocked By Cutoff */
+            re_entries_blocked_by_cutoff: number;
+            /** Re Entries Lost */
+            re_entries_lost: number;
+            /** Sessions Break Even */
+            sessions_break_even: number;
+            /** Sessions Incomplete */
+            sessions_incomplete: number;
+            /** Sessions Losing */
+            sessions_losing: number;
+            /** Sessions No Trade */
+            sessions_no_trade: number;
+            /** Sessions Profitable */
+            sessions_profitable: number;
+            /** Sessions Skipped */
+            sessions_skipped: number;
+            /** Sessions Tested */
+            sessions_tested: number;
+            /** Sessions Traded */
+            sessions_traded: number;
+            /** Sessions Without Momentum */
+            sessions_without_momentum: number;
+            /** Skipped By Reason */
+            skipped_by_reason: components["schemas"]["OptionsBacktestSkipCountResponse"][];
+            /** Slippage Paid Usd */
+            slippage_paid_usd: string;
+            /** Starting Cash Usd */
+            starting_cash_usd: string;
+            /** Total Fees Usd */
+            total_fees_usd: string;
+            trade_win_rate?: components["schemas"]["OptionsBacktestRateResponse"] | null;
+            /** Trades */
+            trades: number;
+            /** Trades Break Even */
+            trades_break_even: number;
+            /** Trades Lost */
+            trades_lost: number;
+            /** Trades Won */
+            trades_won: number;
+        };
+        /** OptionsBacktestRunHeadlineResponse */
+        OptionsBacktestRunHeadlineResponse: {
+            /** Ending Cash Usd */
+            ending_cash_usd: string;
+            /** Net Profit Usd */
+            net_profit_usd: string;
+            /** Sessions Tested */
+            sessions_tested: number;
+            /** Sessions Traded */
+            sessions_traded: number;
+            /** Trades */
+            trades: number;
+            /** Trades Won */
+            trades_won: number;
+        };
+        /**
+         * OptionsBacktestRunListItemResponse
+         * @description A run in the history. ``interrupted`` is how a running run reads when its job is gone.
+         */
+        OptionsBacktestRunListItemResponse: {
+            /** Created At Ms */
+            created_at_ms: number;
+            failure?: components["schemas"]["OptionsBacktestRunFailureResponse"] | null;
+            /** Fee Policy */
+            fee_policy: string;
+            /** Finished At Ms */
+            finished_at_ms?: number | null;
+            /** First Session Open Ms */
+            first_session_open_ms: number;
+            headline?: components["schemas"]["OptionsBacktestRunHeadlineResponse"] | null;
+            /** Id */
+            id: number;
+            /** Job Id */
+            job_id: string;
+            /** Last Session Open Ms */
+            last_session_open_ms: number;
+            /** Sessions Requested */
+            sessions_requested: number;
+            /** Setup Name */
+            setup_name?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "complete" | "failed" | "cancelled" | "interrupted";
+            /** Underlying */
+            underlying: string;
+        };
+        /** OptionsBacktestSessionCheckResponse */
+        OptionsBacktestSessionCheckResponse: {
+            contracts: components["schemas"]["OptionsBacktestContractNeedsResponse"];
+            /** Missing */
+            missing: ("underlying_bars" | "listing" | "contracts")[];
+            /** Notes */
+            notes: string[];
+            /** Problems */
+            problems: components["schemas"]["OptionsBacktestProblemResponse"][];
+            /** Session Close Ms */
+            session_close_ms: number;
+            /** Session Open Ms */
+            session_open_ms: number;
+            /** Skip */
+            skip?: ("window_does_not_fit" | "underlying_did_not_trade") | null;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "ready" | "needs_download" | "cannot_be_tested";
+        };
+        /** OptionsBacktestSessionStatusCountResponse */
+        OptionsBacktestSessionStatusCountResponse: {
+            /** Count */
+            count: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "traded" | "no_trade" | "skipped" | "incomplete";
         };
         /**
          * OptionsBacktestSetup
@@ -22410,6 +22941,72 @@ export interface components {
              * @constant
              */
             version?: 1;
+        };
+        /**
+         * OptionsBacktestSetupNameRuleResponse
+         * @description What a setup name may be: the pattern the server checks, and the rule in a sentence for the owner.
+         */
+        OptionsBacktestSetupNameRuleResponse: {
+            /** Pattern */
+            pattern: string;
+            /** Sentence */
+            sentence: string;
+        };
+        /** OptionsBacktestSkipCountResponse */
+        OptionsBacktestSkipCountResponse: {
+            /** Count */
+            count: number;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "window_does_not_fit" | "underlying_did_not_trade";
+        };
+        /**
+         * OptionsBacktestSlippagePointResponse
+         * @description The whole run replayed at one slippage.
+         */
+        OptionsBacktestSlippagePointResponse: {
+            /** Is Setups Own */
+            is_setups_own: boolean;
+            /** Net Profit Usd */
+            net_profit_usd: string;
+            /** Slippage Percent */
+            slippage_percent: string;
+            /** Traded Sessions */
+            traded_sessions: number;
+            /** Trades */
+            trades: number;
+            /** Winning Sessions */
+            winning_sessions: number;
+        };
+        /**
+         * OptionsBacktestSlippageToleranceResponse
+         * @description How much slippage the result survives, read off the ladder it was replayed at.
+         */
+        OptionsBacktestSlippageToleranceResponse: {
+            /** First Unprofitable Percent */
+            first_unprofitable_percent?: string | null;
+            /** Highest Profitable Percent */
+            highest_profitable_percent?: string | null;
+            /** Nothing Traded */
+            nothing_traded: boolean;
+        };
+        /**
+         * OptionsBacktestTestableStretchResponse
+         * @description A run of consecutive sessions that can all be tested, with the range to ask for to run just them.
+         */
+        OptionsBacktestTestableStretchResponse: {
+            /** End Ms */
+            end_ms: number;
+            /** First Session Open Ms */
+            first_session_open_ms: number;
+            /** Last Session Open Ms */
+            last_session_open_ms: number;
+            /** Sessions */
+            sessions: number;
+            /** Start Ms */
+            start_ms: number;
         };
         /**
          * OptionsChainSnapshotRequest
@@ -25419,19 +26016,23 @@ export interface components {
         };
         /**
          * SetupDescriptionResponse
-         * @description A setup in plain sentences. The page shows them as they are and never rebuilds them.
+         * @description A setup in plain sentences, and the setup as the server read it.
+         *
+         *     Each block is a list of whole sentences, one to an item, built as a list: the page shows them as they are and never
+         *     splits or rebuilds them. ``setup`` is the setup normalised, with every default filled, as a run would be given it.
          */
         SetupDescriptionResponse: {
             /** Costs */
-            costs: string;
+            costs: string[];
             /** Legs */
             legs: components["schemas"]["LegDescriptionResponse"][];
             /** Notices */
             notices: string[];
+            setup: components["schemas"]["OptionsBacktestSetup-Output"];
             /** Square Off */
-            square_off: string;
+            square_off: string[];
             /** Window */
-            window: string;
+            window: string[];
         };
         /**
          * ShadowActivationOutcome
@@ -39727,6 +40328,199 @@ export interface operations {
                     "application/json": {
                         [key: string]: components["schemas"]["IndicatorInfo"][];
                     };
+                };
+            };
+        };
+    };
+    check_the_data_api_research_options_backtest_check_data_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OptionsBacktestCheckDataRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestDataCheckResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+        };
+    };
+    get_limits_api_research_options_backtest_limits_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestLimitsResponse"];
+                };
+            };
+        };
+    };
+    list_the_runs_api_research_options_backtest_runs_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                /** @description The job that made the run, to find the run just started. */
+                job_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRunListItemResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_the_run_api_research_options_backtest_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The run's id, from the history. */
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRunDetailResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_the_run_api_research_options_backtest_runs__run_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The run's id, from the history. */
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

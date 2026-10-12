@@ -1,7 +1,8 @@
 """A setup in plain sentences, for the owner to read before pressing Start (#3030).
 
-One block of sentences for the window, one per leg, one for square-off and
-one for costs. A rule that is switched off is not mentioned. Each time is said
+One list of sentences for the window, one for each leg, one for square-off and
+one for costs, each built a sentence at a time (never one string cut up), and the
+page shows every sentence as it is. A rule that is switched off is not mentioned. Each time is said
 as a distance from the open or the close and as the New York clock time on a
 full session, so a setup that holds its distance on a half day is read for the
 usual day. The entry and exit times are when a rule is read: an order fills at
@@ -34,17 +35,17 @@ class LegDescription:
     """One leg, in a sentence or two."""
 
     leg_id: str
-    text: str
+    sentences: tuple[str, ...]
 
 
 @dataclass(frozen=True)
 class SetupDescription:
     """A setup in sentences. ``notices`` holds what the owner should read first, and is empty for a setup that looks sound."""
 
-    window: str
+    window: tuple[str, ...]
     legs: tuple[LegDescription, ...]
-    square_off: str
-    costs: str
+    square_off: tuple[str, ...]
+    costs: tuple[str, ...]
     notices: tuple[str, ...]
 
 
@@ -52,14 +53,14 @@ def describe_setup(setup: OptionsBacktestSetup, *, full_session: SessionClock) -
     """``setup`` in sentences, with its times read against the clock of a full session."""
     return SetupDescription(
         window=_window(setup, full_session),
-        legs=tuple(LegDescription(leg_id=leg.leg_id, text=_leg(leg)) for leg in setup.legs),
+        legs=tuple(LegDescription(leg_id=leg.leg_id, sentences=_leg(leg)) for leg in setup.legs),
         square_off=_square_off(setup),
         costs=_costs(setup),
         notices=_notices(setup, full_session),
     )
 
 
-def _window(setup: OptionsBacktestSetup, clock: SessionClock) -> str:
+def _window(setup: OptionsBacktestSetup, clock: SessionClock) -> tuple[str, ...]:
     sentences = [
         f"Trades {setup.underlying}.",
         f"The entry is read {_time(setup.entry, clock)}.",
@@ -71,11 +72,9 @@ def _window(setup: OptionsBacktestSetup, clock: SessionClock) -> str:
         "At the exit, whatever is open is sold, legs still waiting are cancelled and nothing more is bought.",
     ]
     if setup.no_reentry_after is not None:
-        sentences.append(
-            f"A stop hit later than {_time(setup.no_reentry_after, clock, at='')} earns no re-entry. "
-            "First entries are not affected."
-        )
-    return " ".join(sentences)
+        sentences.append(f"A stop hit later than {_time(setup.no_reentry_after, clock, at='')} earns no re-entry.")
+        sentences.append("First entries are not affected.")
+    return tuple(sentences)
 
 
 def _notices(setup: OptionsBacktestSetup, clock: SessionClock) -> tuple[str, ...]:
@@ -125,7 +124,7 @@ def _on_a_full_day(minute: int, clock: SessionClock) -> str:
     return f"{minute // 60:02d}:{minute % 60:02d} on a full day"
 
 
-def _leg(leg: LegSetup) -> str:
+def _leg(leg: LegSetup) -> tuple[str, ...]:
     sentences = [f"Leg {leg.leg_id}: buys {_what_is_bought(leg)} {_expiry(leg.expiry)}.", _when_it_buys(leg.momentum)]
     if leg.stop_loss is not None:
         sentences.append(
@@ -133,7 +132,7 @@ def _leg(leg: LegSetup) -> str:
         )
     if leg.reentry_on_stop is not None:
         sentences.append(_reentry(leg.reentry_on_stop))
-    return " ".join(sentences)
+    return tuple(sentences)
 
 
 def _what_is_bought(leg: LegSetup) -> str:
@@ -188,22 +187,22 @@ def _reentry(rule: ReentryOnStop) -> str:
     return f"{fresh}, takes a new starting premium from it and waits for momentum again, {times}."
 
 
-def _square_off(setup: OptionsBacktestSetup) -> str:
+def _square_off(setup: OptionsBacktestSetup) -> tuple[str, ...]:
     if setup.square_off == "partial":
-        return "Square off is partial: a stop closes only the leg that was stopped."
+        return ("Square off is partial: a stop closes only the leg that was stopped.",)
     return (
         "Square off is complete: a stop closes every open leg and cancels legs still waiting for momentum, "
-        "which stay cancelled for the day."
+        "which stay cancelled for the day.",
     )
 
 
-def _costs(setup: OptionsBacktestSetup) -> str:
+def _costs(setup: OptionsBacktestSetup) -> tuple[str, ...]:
     step = _dollars(setup.price_step_usd)
     if setup.slippage_percent == 0:
         fills = f"No slippage is applied; fills are still rounded against you to {step}."
     else:
         fills = f"Each fill is moved {_plain(setup.slippage_percent)}% against you, then rounded against you to {step}."
-    return f"{fills} {_fees(setup.fees)} Starting cash is {_dollars(setup.starting_cash_usd)}."
+    return (fills, *_fees(setup.fees), f"Starting cash is {_dollars(setup.starting_cash_usd)}.")
 
 
 def fee_policy_sentence(fees: FeePolicy) -> str:
@@ -216,10 +215,10 @@ def fee_policy_sentence(fees: FeePolicy) -> str:
     return "Fees are not charged, so results are before fees."
 
 
-def _fees(fees: FeePolicy) -> str:
+def _fees(fees: FeePolicy) -> tuple[str, ...]:
     if fees.kind == "estimated":
-        return f"{fee_policy_sentence(fees)} A session from before those rates exist cannot be run with this choice."
-    return fee_policy_sentence(fees)
+        return (fee_policy_sentence(fees), "A session from before those rates exist cannot be run with this choice.")
+    return (fee_policy_sentence(fees),)
 
 
 def _minutes(minutes: int) -> str:

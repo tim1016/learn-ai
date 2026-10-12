@@ -53,11 +53,15 @@ def _before_close_time(minutes: int) -> dict[str, Any]:
 
 def _leg_text(**changes: Any) -> str:
     [leg] = describe_setup(_setup(legs=[_leg(**changes)]), full_session=_CLOCK).legs
-    return leg.text
+    return " ".join(leg.sentences)
 
 
 def _window(**changes: Any) -> str:
-    return describe_setup(_setup(**changes), full_session=_CLOCK).window
+    return " ".join(describe_setup(_setup(**changes), full_session=_CLOCK).window)
+
+
+def _costs(**changes: Any) -> str:
+    return " ".join(describe_setup(_setup(**changes), full_session=_CLOCK).costs)
 
 
 def test_the_window_gives_each_time_as_a_distance_and_as_the_clock_on_a_full_day() -> None:
@@ -203,8 +207,8 @@ def test_every_leg_gets_one_sentence_that_names_it() -> None:
     ).legs
 
     assert [leg.leg_id for leg in legs] == ["call", "put"]
-    assert re.search(r"\b1 at-the-money call\b", legs[0].text)
-    assert re.search(r"\b3 at-the-money puts\b", legs[1].text)
+    assert re.search(r"\b1 at-the-money call\b", " ".join(legs[0].sentences))
+    assert re.search(r"\b3 at-the-money puts\b", " ".join(legs[1].sentences))
 
 
 @pytest.mark.parametrize(
@@ -309,15 +313,15 @@ def test_a_re_entry_picks_a_fresh_contract_and_says_how_it_comes_back_and_how_ma
 
 
 def test_square_off_says_what_one_stop_closes() -> None:
-    partial = describe_setup(_setup(square_off="partial"), full_session=_CLOCK).square_off
-    complete = describe_setup(_setup(square_off="complete"), full_session=_CLOCK).square_off
+    partial = " ".join(describe_setup(_setup(square_off="partial"), full_session=_CLOCK).square_off)
+    complete = " ".join(describe_setup(_setup(square_off="complete"), full_session=_CLOCK).square_off)
 
     assert "only" in partial and "every" not in partial
     assert "every" in complete and "only" not in complete
 
 
 def test_costs_say_the_slippage_the_price_step_the_cash_and_the_fee_policy() -> None:
-    costs = describe_setup(_setup(slippage_percent="0.3000", price_step_usd="0.05"), full_session=_CLOCK).costs
+    costs = _costs(slippage_percent="0.3000", price_step_usd="0.05")
 
     assert "0.3%" in costs
     assert "0.05" in costs
@@ -334,12 +338,12 @@ def test_costs_say_the_slippage_the_price_step_the_cash_and_the_fee_policy() -> 
     ],
 )
 def test_each_fee_policy_is_named(fees: dict[str, Any], said: str) -> None:
-    assert said in describe_setup(_setup(fees=fees), full_session=_CLOCK).costs
+    assert said in _costs(fees=fees)
 
 
 def test_estimated_fees_say_they_need_published_rates_and_which_sessions_cannot_run_without_them() -> None:
-    estimated = describe_setup(_setup(fees={"kind": "estimated"}), full_session=_CLOCK).costs
-    not_charged = describe_setup(_setup(), full_session=_CLOCK).costs
+    estimated = _costs(fees={"kind": "estimated"})
+    not_charged = _costs()
 
     assert "published option fee rates" in estimated and "before those rates exist" in estimated
     assert "cannot be run" in estimated
@@ -349,7 +353,7 @@ def test_estimated_fees_say_they_need_published_rates_and_which_sessions_cannot_
 
 
 def test_no_slippage_is_said_as_no_slippage_not_as_a_zero_percent_move() -> None:
-    costs = describe_setup(_setup(slippage_percent="0"), full_session=_CLOCK).costs
+    costs = _costs(slippage_percent="0")
 
     assert "0%" not in costs
     assert "no slippage" in costs.lower()
@@ -358,12 +362,59 @@ def test_no_slippage_is_said_as_no_slippage_not_as_a_zero_percent_move() -> None
 def test_the_example_named_no_re_entry_says_nothing_of_re_entry_and_the_other_one_says_it() -> None:
     no_re_entry, one_re_entry = (describe_setup(example.setup, full_session=_CLOCK) for example in EXAMPLE_SETUPS)
 
-    assert "re-entry" not in no_re_entry.window
-    assert all("After a stop" not in leg.text for leg in no_re_entry.legs)
-    assert "earns no re-entry" in one_re_entry.window and _before_close(60) in one_re_entry.window
-    assert all(re.search(r"buys it at once, up to 1 time\b", leg.text) for leg in one_re_entry.legs)
+    assert "re-entry" not in " ".join(no_re_entry.window)
+    assert all("After a stop" not in " ".join(leg.sentences) for leg in no_re_entry.legs)
+    assert "earns no re-entry" in " ".join(one_re_entry.window) and _before_close(60) in " ".join(one_re_entry.window)
+    assert all(re.search(r"buys it at once, up to 1 time\b", " ".join(leg.sentences)) for leg in one_re_entry.legs)
 
 
 def test_both_examples_fit_a_full_day() -> None:
     for example in EXAMPLE_SETUPS:
         assert describe_setup(example.setup, full_session=_CLOCK).notices == ()
+
+
+def _every_sentence(setup: Any) -> list[str]:
+    described = describe_setup(setup, full_session=_CLOCK)
+    return [
+        *described.window,
+        *(sentence for leg in described.legs for sentence in leg.sentences),
+        *described.square_off,
+        *described.costs,
+        *described.notices,
+    ]
+
+
+def test_each_block_is_a_list_of_whole_sentences_one_to_an_item() -> None:
+    busy = _setup(
+        no_reentry_after=_before_close_time(60),
+        fees={"kind": "estimated"},
+        legs=[
+            _leg(
+                momentum={"kind": "percent_up", "value": "25"},
+                stop_loss={"kind": "percent", "value": "25"},
+                reentry_on_stop={"kind": "on_momentum", "count": 2},
+            )
+        ],
+    )
+    unsound = _setup(entry=_after_open_time(_SESSION_MINUTES + 1))
+
+    for written in (busy, unsound):
+        sentences = _every_sentence(written)
+        assert sentences
+        for sentence in sentences:
+            assert sentence.endswith(".") and sentence == sentence.strip(), sentence
+            # A full stop followed by a space would be a second sentence in the item.
+            assert ". " not in sentence, sentence
+
+
+def test_the_blocks_have_the_sentences_the_setup_gives_rise_to_and_no_more() -> None:
+    plain = describe_setup(_setup(), full_session=_CLOCK)
+    cutoff = describe_setup(_setup(no_reentry_after=_before_close_time(60)), full_session=_CLOCK)
+    estimated = describe_setup(_setup(fees={"kind": "estimated"}), full_session=_CLOCK)
+
+    # The window: trades, entry, exit, early close, fills, dropped buy, the exit; the cutoff adds two more.
+    assert len(plain.window) == 7 and len(cutoff.window) == 9
+    # A plain leg: what it buys, and when it buys. Square off: one. Costs: fills, fees, cash; estimated adds one.
+    assert [len(leg.sentences) for leg in plain.legs] == [2]
+    assert len(plain.square_off) == 1
+    assert len(plain.costs) == 3 and len(estimated.costs) == 4

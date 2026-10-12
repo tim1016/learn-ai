@@ -16,28 +16,43 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import asyncpg
 import httpx
 import pytest
 import respx
 from httpx import ASGITransport
 
+from app.data_lake.catalog_client import CatalogUnavailableError
 from app.jobs.phases import JOB_PHASES
 from app.jobs.progress import JobCancelled
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.main import app
 from app.options_backtest import service
-from app.options_backtest.run import RunResult
-from app.options_backtest.saved_runs import DuplicateJob, NewRun, RunFailure
+from app.options_backtest.fetching import ensure_run_data
+from app.options_backtest.run import RunResult, run_sessions
+from app.options_backtest.saved_runs import (
+    DuplicateJob,
+    FailureItem,
+    NewRun,
+    RunFailure,
+    complete_run,
+    create_run,
+    fail_run,
+)
 from app.options_backtest.service import RunFailedError
+from app.research.persistence import lifecycle
 from app.routers import options_backtest_runs as runs_router
 from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_day_end_ms, et_midnight_ms
 from tests._helpers.fake_lake_catalog import FakeCatalog
 from tests.options_backtest._lake import fake_catalog as fake_catalog
 from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixed
 from tests.options_backtest._lake import tmp_lake as tmp_lake
+from tests.options_backtest._run_data import fake_data
 from tests.options_backtest._run_lake import Vendor
+from tests.options_backtest.setup_fixtures import conn as conn
 from tests.options_backtest.setup_fixtures import leg, setup_body
-from tests.options_backtest.test_service import FRI, NOW_MS, TUE, the_scene
+from tests.options_backtest.setup_fixtures import unique as unique
+from tests.options_backtest.test_service import FRI, NOW_MS, SESSION_OF_THE_RANGE, THU, TUE, WED, the_scene, the_setup
 
 PREFIX = "/api/research/options-backtest"
 JOBS = "/api/jobs-internal/options-backtest"
@@ -340,3 +355,284 @@ async def test_a_failed_run_fails_the_job_with_the_plain_reason(
     assert "cannot be tested" in str(caught.value) and "2024-10-11" in str(caught.value)
     [(_, failure, _)] = harness.store.failed
     assert failure.code == "SESSIONS_CANNOT_BE_TESTED"
+
+
+# ── Check data ───────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def now_is_monday_afternoon(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runs_router, "now_ms_utc", lambda: NOW_MS)
+
+
+def check_body(first: date, last: date, **changes: Any) -> dict[str, Any]:
+    return {
+        "setup": job_body()["setup"],
+        "start_ms": et_midnight_ms(first),
+        "end_ms": et_day_end_ms(last),
+        **changes,
+    }
+
+
+@respx.mock
+async def test_check_data_says_for_each_session_what_is_stored_what_is_missing_and_what_can_be_tested(
+    client: httpx.AsyncClient, now_is_monday_afternoon: None, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # Wednesday and Thursday are fetched; Tuesday and Friday are not.
+    Vendor(the_scene()).mount()
+    await asyncio.to_thread(ensure_run_data, the_setup(), [WED, THU], now_ms=NOW_MS, should_stop=lambda: False)
+
+    async with client as c:
+        response = await c.post(f"{PREFIX}/check-data", json=check_body(TUE, FRI))
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["option_prices_from_ms"] == et_midnight_ms(date(2024, 10, 14))
+    assert [(s["session_open_ms"], s["verdict"], s["missing"]) for s in body["sessions"]] == [
+        (session_window_for_date(TUE).open_ms_utc, "needs_download", ["underlying_bars", "listing"]),
+        (session_window_for_date(WED).open_ms_utc, "ready", []),
+        (session_window_for_date(THU).open_ms_utc, "ready", []),
+        (session_window_for_date(FRI).open_ms_utc, "needs_download", ["underlying_bars", "listing"]),
+    ]
+    tuesday, wednesday = body["sessions"][0], body["sessions"][1]
+    assert tuesday["contracts"] == {"state": "not_yet_known", "needed": None, "missing": None}
+    assert wednesday["contracts"] == {"state": "known", "needed": 1, "missing": 0}
+    assert body["counts"] == {"ready": 2, "needs_download": 2, "cannot_be_tested": 0}
+    assert body["first_testable_session_open_ms"] == session_window_for_date(TUE).open_ms_utc
+    assert body["last_testable_session_open_ms"] == session_window_for_date(FRI).open_ms_utc
+    # All four can be tested (a session that needs a download can be), so the run available is the whole range, and
+    # the pair of instants to ask for it is the range's own.
+    assert body["longest_testable_stretch"] == {
+        "start_ms": et_midnight_ms(TUE),
+        "end_ms": et_day_end_ms(FRI),
+        "first_session_open_ms": session_window_for_date(TUE).open_ms_utc,
+        "last_session_open_ms": session_window_for_date(FRI).open_ms_utc,
+        "sessions": 4,
+    }
+
+
+@respx.mock
+async def test_check_data_gives_each_reason_a_session_cannot_be_tested_and_the_range_that_can(
+    client: httpx.AsyncClient, now_is_monday_afternoon: None, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # Thursday 2024-10-10 and Friday 2024-10-11 are older than the plan reaches (the floor is 2024-10-14, a Monday).
+    first, last = date(2024, 10, 10), date(2024, 10, 14)
+
+    async with client as c:
+        response = await c.post(f"{PREFIX}/check-data", json=check_body(first, last))
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [s["verdict"] for s in body["sessions"]] == ["cannot_be_tested", "cannot_be_tested", "needs_download"]
+    for refused in body["sessions"][:2]:
+        assert [problem["code"] for problem in refused["problems"]] == ["older_than_the_data_plan"]
+    assert body["counts"] == {"ready": 0, "needs_download": 1, "cannot_be_tested": 2}
+    stretch = body["longest_testable_stretch"]
+    assert (stretch["start_ms"], stretch["end_ms"], stretch["sessions"]) == (
+        et_midnight_ms(last),
+        et_day_end_ms(last),
+        1,
+    )
+    assert body["first_testable_session_open_ms"] == body["last_testable_session_open_ms"]
+
+
+async def test_check_data_on_a_range_that_cannot_be_run_is_a_400_and_a_body_that_is_not_one_a_422(
+    client: httpx.AsyncClient, now_is_monday_afternoon: None
+) -> None:
+    async with client as c:
+        reversed_range = await c.post(f"{PREFIX}/check-data", json=check_body(FRI, TUE))
+        no_setup = await c.post(f"{PREFIX}/check-data", json={"start_ms": 1, "end_ms": 2})
+        extra = await c.post(f"{PREFIX}/check-data", json=check_body(TUE, FRI, job_id="x"))
+
+    assert reversed_range.status_code == 400
+    assert reversed_range.json()["detail"]["code"] == "OPTIONS_BACKTEST_RANGE_EMPTY"
+    assert no_setup.status_code == 422 and extra.status_code == 422
+
+
+async def test_check_data_when_the_catalog_cannot_be_reached_is_a_503_with_a_code(
+    client: httpx.AsyncClient, now_is_monday_afternoon: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def down(*_args: Any, **_kwargs: Any) -> None:
+        raise CatalogUnavailableError("down")
+
+    monkeypatch.setattr(runs_router, "check_data", down)
+
+    async with client as c:
+        response = await c.post(f"{PREFIX}/check-data", json=check_body(TUE, FRI))
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_DATA_CATALOG_UNAVAILABLE"
+
+
+# ── The history, one run, delete: on a real database ─────────────────────
+
+
+@pytest.fixture
+def is_the_job_alive(monkeypatch: pytest.MonkeyPatch) -> dict[str, bool | None]:
+    """What the routes are told of every running job; a test sets it. The default is 'cannot tell'."""
+    answers: dict[str, bool | None] = {"live": None}
+    monkeypatch.setattr(lifecycle, "job_is_live", lambda _job_id: answers["live"])
+    return answers
+
+
+@pytest.fixture
+async def stored_runs(conn: asyncpg.Connection, unique: str):  # type: ignore[no-untyped-def]
+    """Make runs the way the job route and the worker do, and remove every one this test made."""
+    result = run_sessions(the_setup(), SESSION_OF_THE_RANGE, fake_data(the_scene()))
+
+    async def make(name: str, end: str = "complete", created_at_ms: int = 1_791_800_000_000) -> int:
+        run_id = await create_run(
+            conn,
+            NewRun(
+                job_id=f"{name}-{unique}",
+                created_at_ms=created_at_ms,
+                setup=result.setup,
+                setup_name="the example",
+                first_session_open_ms=result.sessions[0].session_open_ms,
+                last_session_open_ms=result.sessions[-1].session_open_ms,
+                sessions_requested=len(result.sessions),
+            ),
+        )
+        if end == "complete":
+            await complete_run(conn, run_id, result, finished_at_ms=created_at_ms + 5)
+        elif end == "failed":
+            await fail_run(
+                conn,
+                run_id,
+                RunFailure("DOWNLOAD_FAILED", "The data could not be fetched.", (FailureItem(None, "x", "y"),)),
+                finished_at_ms=created_at_ms + 5,
+            )
+        return run_id
+
+    yield make
+    await conn.execute("DELETE FROM research_options_backtest_runs WHERE job_id LIKE $1", f"%-{unique}")
+
+
+async def test_the_history_is_newest_first_and_a_job_finds_its_run(
+    client: httpx.AsyncClient, conn: asyncpg.Connection, unique: str, stored_runs: Any, is_the_job_alive: Any
+) -> None:
+    older = await stored_runs("older", created_at_ms=1_791_800_000_000)
+    newer = await stored_runs("newer", end="failed", created_at_ms=1_791_800_000_100)
+
+    async with client as c:
+        everything = await c.get(f"{PREFIX}/runs", params={"limit": 1000})
+        one_job = await c.get(f"{PREFIX}/runs", params={"job_id": f"older-{unique}"})
+
+    assert everything.status_code == 200, everything.text
+    mine = [row for row in everything.json() if row["job_id"].endswith(unique)]
+    assert [(row["id"], row["status"]) for row in mine] == [(newer, "failed"), (older, "complete")]
+    complete = mine[1]
+    assert complete["headline"] == {
+        "sessions_tested": 4,
+        "sessions_traded": 3,
+        "trades": 3,
+        "trades_won": 1,
+        "net_profit_usd": "-69.25",
+        "ending_cash_usd": "9930.75",
+    }
+    assert complete["failure"] is None and complete["setup_name"] == "the example"
+    assert mine[0]["headline"] is None and mine[0]["failure"]["code"] == "DOWNLOAD_FAILED"
+    assert [row["id"] for row in one_job.json()] == [older]
+
+
+async def test_a_run_opens_with_its_banner_figures_and_ladder_and_no_trades(
+    client: httpx.AsyncClient, stored_runs: Any, is_the_job_alive: Any
+) -> None:
+    run_id = await stored_runs("opened")
+
+    async with client as c:
+        response = await c.get(f"{PREFIX}/runs/{run_id}")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "complete" and body["id"] == run_id
+    assert body["banner"]["fills_are_simulated_from_trade_prices"] is True
+    assert body["banner"]["bid_and_ask_are_available"] is False
+    assert body["figures"]["net_profit_usd"] == "-69.25" and body["figures"]["trades"] == 3
+    assert body["slippage"][0]["slippage_percent"] == "0" and body["slippage"][0]["net_profit_usd"] == "-63.25"
+    assert body["slippage_tolerance"]["first_unprofitable_percent"] == "0"
+    assert body["setup"]["underlying"] == "SPY"
+    assert "trades" not in body and "events" not in body
+
+
+async def test_a_run_that_failed_opens_with_why_and_no_figures(
+    client: httpx.AsyncClient, stored_runs: Any, is_the_job_alive: Any
+) -> None:
+    run_id = await stored_runs("failed", end="failed")
+
+    async with client as c:
+        body = (await c.get(f"{PREFIX}/runs/{run_id}")).json()
+
+    assert body["status"] == "failed" and body["figures"] is None and body["slippage"] == []
+    assert body["failure"] == {
+        "code": "DOWNLOAD_FAILED",
+        "reason": "The data could not be fetched.",
+        "items": [{"session_open_ms": None, "code": "x", "message": "y"}],
+    }
+
+
+async def test_a_running_run_reads_interrupted_when_its_job_is_gone_and_running_when_that_cannot_be_told(
+    client: httpx.AsyncClient, stored_runs: Any, is_the_job_alive: dict[str, bool | None]
+) -> None:
+    run_id = await stored_runs("stuck", end="running")
+    statuses = {}
+    async with client as c:
+        for name, answer in (("alive", True), ("gone", False), ("cannot tell", None)):
+            is_the_job_alive["live"] = answer
+            statuses[name] = (await c.get(f"{PREFIX}/runs/{run_id}")).json()["status"]
+
+    assert statuses == {"alive": "running", "gone": "interrupted", "cannot tell": "running"}
+
+
+@pytest.mark.parametrize("run_id", ["0", "-3", "abc", str(2**53)])
+async def test_a_run_id_that_cannot_be_one_is_a_422(client: httpx.AsyncClient, run_id: str) -> None:
+    async with client as c:
+        got = await c.get(f"{PREFIX}/runs/{run_id}")
+        deleted = await c.delete(f"{PREFIX}/runs/{run_id}")
+
+    assert got.status_code == 422 and deleted.status_code == 422
+
+
+async def test_no_such_run_is_a_404_with_a_code(
+    client: httpx.AsyncClient, conn: asyncpg.Connection, is_the_job_alive: Any
+) -> None:
+    missing = 2**52
+
+    async with client as c:
+        got = await c.get(f"{PREFIX}/runs/{missing}")
+        deleted = await c.delete(f"{PREFIX}/runs/{missing}")
+
+    for response in (got, deleted):
+        assert response.status_code == 404
+        assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_RUN_NOT_FOUND"
+
+
+async def test_a_run_is_deleted_with_a_204_and_is_then_gone(
+    client: httpx.AsyncClient, stored_runs: Any, is_the_job_alive: Any
+) -> None:
+    run_id = await stored_runs("doomed")
+
+    async with client as c:
+        deleted = await c.delete(f"{PREFIX}/runs/{run_id}")
+        after = await c.get(f"{PREFIX}/runs/{run_id}")
+
+    assert deleted.status_code == 204 and deleted.content == b""
+    assert after.status_code == 404
+
+
+async def test_a_run_still_running_is_a_409_and_one_whose_job_is_gone_can_be_deleted(
+    client: httpx.AsyncClient, stored_runs: Any, is_the_job_alive: dict[str, bool | None]
+) -> None:
+    run_id = await stored_runs("busy", end="running")
+
+    async with client as c:
+        is_the_job_alive["live"] = True
+        refused = await c.delete(f"{PREFIX}/runs/{run_id}")
+        is_the_job_alive["live"] = None
+        unsure = await c.delete(f"{PREFIX}/runs/{run_id}")
+        is_the_job_alive["live"] = False
+        gone = await c.delete(f"{PREFIX}/runs/{run_id}")
+
+    assert refused.status_code == 409 and unsure.status_code == 409
+    assert refused.json()["detail"]["code"] == "OPTIONS_BACKTEST_RUN_IS_RUNNING"
+    assert gone.status_code == 204

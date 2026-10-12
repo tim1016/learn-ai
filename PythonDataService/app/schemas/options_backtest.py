@@ -34,28 +34,54 @@ class SessionClockResponse(BaseModel):
 
 class LegDescriptionResponse(BaseModel):
     leg_id: str
-    text: str
+    sentences: list[str]
 
 
 class SetupDescriptionResponse(BaseModel):
-    """A setup in plain sentences. The page shows them as they are and never rebuilds them."""
+    """A setup in plain sentences, and the setup as the server read it.
 
-    window: str
+    Each block is a list of whole sentences, one to an item, built as a list: the page shows them as they are and never
+    splits or rebuilds them. ``setup`` is the setup normalised, with every default filled, as a run would be given it.
+    """
+
+    setup: OptionsBacktestSetup
+    window: list[str]
     legs: list[LegDescriptionResponse]
-    square_off: str
-    costs: str
+    square_off: list[str]
+    costs: list[str]
     # What the owner should read first; empty for a setup that looks sound.
     notices: list[str]
 
     @classmethod
-    def from_description(cls, description: SetupDescription) -> Self:
+    def from_description(cls, setup: OptionsBacktestSetup, description: SetupDescription) -> Self:
         return cls(
-            window=description.window,
-            legs=[LegDescriptionResponse(leg_id=leg.leg_id, text=leg.text) for leg in description.legs],
-            square_off=description.square_off,
-            costs=description.costs,
+            setup=setup,
+            window=list(description.window),
+            legs=[LegDescriptionResponse(leg_id=leg.leg_id, sentences=list(leg.sentences)) for leg in description.legs],
+            square_off=list(description.square_off),
+            costs=list(description.costs),
             notices=list(description.notices),
         )
+
+
+class OptionsBacktestSetupNameRuleResponse(BaseModel):
+    """What a setup name may be: the pattern the server checks, and the rule in a sentence for the owner."""
+
+    pattern: str
+    sentence: str
+
+
+class OptionsBacktestLimitsResponse(BaseModel):
+    """The limits the server holds a setup and a request to, so the page copies none of them."""
+
+    max_legs: int
+    max_contracts_per_leg: int
+    max_reentries_per_leg: int
+    max_strike_steps: int
+    max_expiry_days: int
+    # The most trading days one run, or one check, may name.
+    max_range_sessions: int
+    setup_name: OptionsBacktestSetupNameRuleResponse
 
 
 class SavedSetupResponse(BaseModel):
