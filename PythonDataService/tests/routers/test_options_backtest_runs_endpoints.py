@@ -45,6 +45,7 @@ from app.options_backtest.saved_runs import (
 from app.options_backtest.service import RunFailedError
 from app.research.persistence import lifecycle
 from app.routers import options_backtest_runs as runs_router
+from app.utils.background_loop import CallerStoppedWaitingError
 from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_day_end_ms, et_midnight_ms
 from tests._helpers.fake_lake_catalog import FakeCatalog
 from tests.options_backtest._lake import fake_catalog as fake_catalog
@@ -582,6 +583,27 @@ async def test_check_data_when_the_catalog_cannot_be_reached_is_a_503_with_a_cod
 
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_DATA_CATALOG_UNAVAILABLE"
+
+
+async def test_check_data_when_the_catalog_does_not_answer_in_time_is_the_same_503_as_when_it_cannot_be_reached(
+    client: httpx.AsyncClient, now_is_monday_afternoon: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    answers = {}
+    async with client as c:
+        for name, error in (
+            ("unreachable", CatalogUnavailableError("down")),
+            ("too slow", CallerStoppedWaitingError("still running on the background-loop after 60.0s")),
+        ):
+
+            def fails(*_args: Any, error: Exception = error, **_kwargs: Any) -> None:
+                raise error
+
+            monkeypatch.setattr(runs_router, "check_data", fails)
+            answers[name] = await c.post(f"{PREFIX}/check-data", json=check_body(TUE, FRI))
+
+    assert answers["too slow"].status_code == 503
+    assert answers["too slow"].json() == answers["unreachable"].json()
+    assert answers["too slow"].json()["detail"]["code"] == "OPTIONS_BACKTEST_DATA_CATALOG_UNAVAILABLE"
 
 
 # ── The history, one run, delete: on a real database ─────────────────────

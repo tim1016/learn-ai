@@ -46,6 +46,7 @@ import pytest
 import respx
 from httpx import ASGITransport
 
+from app.data_lake import catalog_client
 from app.main import app
 from app.options.contract import OptionContract
 from app.options_backtest.data_check import DataCheck, DataKind, ProblemCode, SessionVerdict, check_data
@@ -465,6 +466,24 @@ async def test_a_download_does_not_replace_an_underlying_day_whose_compressed_st
 
     assert vendor.vendor_requests == asked
     assert (await asyncio.to_thread(LakeCheckData("SPY").download_replaces_the_underlying, THU)) is False
+
+
+@respx.mock
+async def test_a_catalog_outage_while_asking_what_a_download_would_do_with_the_underlying_is_raised_and_is_no_answer(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The stock capture's gate reads the stored file through the lake's admission, which asks the catalog for the file's
+    # receipt. With the catalog gone at that read the lake's error is a RuntimeError, which a damaged zip can raise too;
+    # it must not be taken for a fault of the file (the day would be called malformed because the catalog went away).
+    await a_lake_that_holds_both_sessions()
+
+    async def down(*args: object, **kwargs: object) -> bool:
+        raise catalog_client.CatalogUnavailableError("the catalog is down")
+
+    monkeypatch.setattr(catalog_client, "has_committed_file_receipt", down)
+
+    with pytest.raises(catalog_client.CatalogUnavailableError):
+        await asyncio.to_thread(LakeCheckData("SPY").download_replaces_the_underlying, THU)
 
 
 @respx.mock

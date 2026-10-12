@@ -88,7 +88,8 @@ class LakeCheckData(LakeRunData):
         admit its bytes. That gate is not this feature's reader, so a day this reader refuses may pass it, and then
         the download keeps it. A corrupt compressed stream is neither: it stops the capture with the error, so the
         download does not replace it either. Reads the file and asks the catalog, so a worker thread; ``True`` also for
-        a day that is not stored at all (nothing to keep).
+        a day that is not stored at all (nothing to keep). Raises ``CatalogUnavailableError`` when the catalog cannot be
+        asked, which says nothing of the file.
         """
         relative = LeanMinuteBarPath(
             market="usa", symbol=self._underlying, trading_date=trading_date, data_type="trade"
@@ -99,6 +100,10 @@ class LakeCheckData(LakeRunData):
             )
         except (*STORED_MINUTE_DAY_ERRORS, LakeAdmissionError):
             return True
+        except catalog_client.CatalogUnavailableError:
+            # An outage is an answer to nothing: it is a ``RuntimeError``, which the next clause would call a fault of
+            # the file, and the day would be called malformed because the catalog went away between two reads of it.
+            raise
         except _STOPS_THE_STOCK_CAPTURE:
             return False
         return False

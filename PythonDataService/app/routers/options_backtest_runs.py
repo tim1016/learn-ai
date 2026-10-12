@@ -43,6 +43,7 @@ from app.schemas.options_backtest_runs import (
     OptionsBacktestRunListItemResponse,
     exact,
 )
+from app.utils.background_loop import CallerStoppedWaitingError
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -101,7 +102,8 @@ async def check_the_data(body: OptionsBacktestCheckDataRequest) -> OptionsBackte
         checked = await asyncio.to_thread(
             check_data, body.setup, sessions, now_ms=now_ms_utc(), data=LakeCheckData(body.setup.underlying)
         )
-    except CatalogUnavailableError as exc:
+    except (CatalogUnavailableError, CallerStoppedWaitingError) as exc:
+        # A catalog that does not answer in time is as out of reach as one that cannot be connected to.
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
