@@ -25,6 +25,7 @@ from app.options_backtest.picking import (
 )
 from app.options_backtest.setup import (
     AtTheMoney,
+    ExpiryRule,
     LegSetup,
     MinDaysExpiryRule,
     SameDayExpiryRule,
@@ -51,7 +52,8 @@ def _closed(year: int, month: int, day: int, weekday: str) -> date:
     return found
 
 
-# A plain October week, then the weeks after it.
+# A plain October week, then the weeks after it. Friday the 10th is the week before, already gone.
+_PREV_FRI = _session(2025, 10, 10, "Fri")
 _MON = _session(2025, 10, 13, "Mon")
 _TUE = _session(2025, 10, 14, "Tue")
 _WED = _session(2025, 10, 15, "Wed")
@@ -150,10 +152,23 @@ def test_same_day_is_todays_expiry_when_it_is_listed_and_none_otherwise() -> Non
     assert expiry_for(rule, listed=[_TUE, _WED, _FRI], trading_date=_MON) is None
 
 
-def test_an_expiry_that_has_already_gone_is_never_chosen() -> None:
-    rule = MinDaysExpiryRule(kind="min_days", days=0)
+@pytest.mark.parametrize(
+    "rule",
+    [
+        pytest.param(SameDayExpiryRule(kind="same_day"), id="same day"),
+        pytest.param(ThisWeekExpiryRule(kind="this_week"), id="this week"),
+        pytest.param(MinDaysExpiryRule(kind="min_days", days=0), id="at least no days"),
+    ],
+)
+def test_an_expiry_that_has_already_gone_is_never_chosen(rule: ExpiryRule) -> None:
+    """Friday the 10th ended its week and is listed, but it is before Monday the 13th: nothing is left to choose."""
+    assert expiry_for(rule, listed=[_PREV_FRI], trading_date=_MON) is None
 
-    assert expiry_for(rule, listed=[_MON, _TUE], trading_date=_WED) is None
+
+def test_this_week_passes_over_the_week_that_has_gone_to_the_one_that_is_here() -> None:
+    rule = ThisWeekExpiryRule(kind="this_week")
+
+    assert expiry_for(rule, listed=[_PREV_FRI, _FRI], trading_date=_MON) == _FRI
 
 
 @pytest.mark.parametrize(

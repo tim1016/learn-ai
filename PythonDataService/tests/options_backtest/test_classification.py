@@ -13,8 +13,6 @@ import pytest
 
 from app.lean_sidecar.trading_calendar import is_trading_day
 from app.options_backtest.classification import (
-    CLASSIFICATION_VERSION,
-    FIRST_TAGGED_TRADING_DATE,
     ExpirySeries,
     ExpiryTag,
     last_session_of_month,
@@ -95,10 +93,6 @@ _THIRD_FRIDAY_BEFORE_THE_FLOOR = _third_friday(2024, 9, 20)
 
 def _tag(expiry: date, trading_date: date) -> ExpiryTag:
     return tag_expiry(expiry, trading_date=trading_date, listed=[expiry])
-
-
-def test_the_floor_is_the_first_of_october_2024() -> None:
-    assert FIRST_TAGGED_TRADING_DATE == _FLOOR
 
 
 @pytest.mark.parametrize(
@@ -234,6 +228,84 @@ def test_the_floor_day_itself_is_tagged() -> None:
     assert _tag(_FRI_AFTER_THE_FLOOR, _FLOOR).series is ExpirySeries.WEEKLY
 
 
+# ---- What the owner reads beside a tag ------------------------------------------
+
+_THE_FLOOR_DAY = _FLOOR.isoformat()
+
+
+@pytest.mark.parametrize(
+    ("trading_date", "expiry", "series", "says", "never_says"),
+    [
+        pytest.param(
+            _MON_BEFORE,
+            _FRI_THIRD,
+            ExpirySeries.MONTHLY,
+            ("third Friday",),
+            ("closed", "quarter", "week", "not a session", _THE_FLOOR_DAY),
+            id="monthly on its Friday",
+        ),
+        pytest.param(
+            _MON_OF_GOOD_FRIDAY_WEEK,
+            _THU_BEFORE_GOOD_FRIDAY,
+            ExpirySeries.MONTHLY,
+            ("third Friday", "session before", "closed"),
+            ("quarter", "week", "not a session", _THE_FLOOR_DAY),
+            id="monthly moved to the session before a closed Friday",
+        ),
+        pytest.param(
+            _MON_BEFORE_Q1_2025_END,
+            _Q1_2025_END,
+            ExpirySeries.QUARTERLY,
+            ("quarter",),
+            ("Friday", "closed", "week", "not a session", _THE_FLOOR_DAY),
+            id="quarterly",
+        ),
+        pytest.param(
+            _MON_BEFORE,
+            _FRI_NEXT,
+            ExpirySeries.WEEKLY,
+            ("last session", "week"),
+            ("Friday", "closed", "quarter", "not", _THE_FLOOR_DAY),
+            id="weekly",
+        ),
+        pytest.param(
+            _MON_BEFORE,
+            _WED,
+            ExpirySeries.DAILY,
+            ("not", "last", "week"),
+            ("Friday", "closed", "quarter", "not a session", _THE_FLOOR_DAY),
+            id="daily",
+        ),
+        pytest.param(
+            _MON_BEFORE,
+            _SAT,
+            ExpirySeries.UNKNOWN,
+            ("not a session",),
+            ("Friday", "closed", "quarter", "week", _THE_FLOOR_DAY),
+            id="not a session",
+        ),
+        pytest.param(
+            _DAY_BEFORE_THE_FLOOR,
+            _FRI_AFTER_THE_FLOOR,
+            ExpirySeries.UNKNOWN,
+            (_THE_FLOOR_DAY,),
+            ("Friday", "closed", "quarter", "week", "not a session"),
+            id="before the floor",
+        ),
+    ],
+)
+def test_the_words_beside_a_tag_name_the_rule_that_decided_it_and_no_other(
+    trading_date: date, expiry: date, series: ExpirySeries, says: tuple[str, ...], never_says: tuple[str, ...]
+) -> None:
+    tag = _tag(expiry, trading_date)
+
+    assert tag.series is series
+    for word in says:
+        assert word in tag.evidence, f"{tag.evidence!r} does not say {word!r}"
+    for word in never_says:
+        assert word not in tag.evidence, f"{tag.evidence!r} says {word!r}, which is another rule's"
+
+
 # ---- Expiring today ------------------------------------------------------------
 
 
@@ -272,11 +344,6 @@ def test_an_expiry_after_the_trading_date_does_not_expire_today_and_counts_calen
     tag = _tag(_FRI_NEXT, _MON_BEFORE)
 
     assert (tag.expires_today, tag.days_to_expiry) == (False, 11)
-
-
-def test_a_tag_carries_the_version_of_the_rules_that_made_it() -> None:
-    assert CLASSIFICATION_VERSION == 1
-    assert _tag(_FRI_THIRD, _MON_BEFORE).version == CLASSIFICATION_VERSION
 
 
 # ---- What the listing is for ---------------------------------------------------

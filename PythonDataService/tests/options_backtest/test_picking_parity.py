@@ -5,7 +5,7 @@ picks on its own types. These tests run both on the same inputs so the two canno
 
 Expiry rules are compared through ``expiry_a_rule_comes_to``, over every session of two years and several
 shapes of what is listed. The strike rules are compared through ``resolve_contracts``, whose money and step
-helpers are private, over a small chain that every contract has a usable quote in.
+helpers are private, over a small chain that every contract has a usable quote in, for calls and for puts.
 """
 
 from __future__ import annotations
@@ -13,12 +13,13 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from itertools import pairwise
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from app.lean_sidecar.trading_calendar import expected_sessions
-from app.options.contract import OptionContract
+from app.options.contract import OptionContract, OptionRight
 from app.options.expiry import option_expiry_anchor_ms
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
 from app.options.resolver import (
@@ -182,6 +183,28 @@ def test_this_week_agrees_with_the_resolvers_nearest_weekly_except_on_a_weeks_la
     _assert_the_comparison_had_something_to_compare(answered, nothing_to_meet=shape in _NEVER_MET_BY_THIS_WEEK)
 
 
+def test_on_a_weeks_last_session_this_week_is_today_and_the_resolvers_nearest_weekly_is_the_next_weeks() -> None:
+    """The one place the two differ, pinned on both sides.
+
+    Today and the next week's last session are both listed. The backtest's setup counts today, so "this week"
+    is today. A bot's ``nearest_weekly`` is strictly after the decision's date, so it is the next week's.
+    """
+    ours = ThisWeekExpiryRule(kind="this_week")
+    leg = _leg_with({"selector": "nearest_weekly"})
+    week_ends = sorted(_LAST_SESSION_OF_WEEK)
+    compared = 0
+    for today, next_week_end in pairwise(week_ends):
+        if today not in _TRADING_DATES:
+            continue
+        listed = [today, next_week_end]
+
+        assert expiry_for(ours, listed=listed, trading_date=today) == today, f"backtest, {today}"
+        assert expiry_a_rule_comes_to(leg, listed, today) == next_week_end, f"resolver, {today}"
+        compared += 1
+
+    assert compared > len(_TRADING_DATES) // 10, f"only {compared} week ends were compared"
+
+
 # ---- Strike rules --------------------------------------------------------------
 
 _TRADING_DAY = date(2025, 10, 13)
@@ -205,14 +228,17 @@ def _held(bid: str, ask: str, received_ms: int) -> HeldQuote:
     )
 
 
-def _resolver_strike(price: str, strike_rule: dict[str, object]) -> int | None:
-    """The strike, in thousandths, that the resolver picks for a call at ``strike_rule``, or None when it refuses."""
+_RIGHTS: tuple[OptionRight, ...] = ("call", "put")
+
+
+def _resolver_strike(price: str, strike_rule: dict[str, object], right: OptionRight) -> int | None:
+    """The strike, in thousandths, that the resolver picks for ``right`` at ``strike_rule``, or None when it refuses."""
     selected_ms = _at(_TRADING_DAY, 10, 31, 2)
     received_ms = selected_ms - 400
     money = Decimal(price)
     listings, watched = [], {}
     for strike in _STRIKES:
-        contract = OptionContract.of(root="SPY", expiry_date=_EXPIRY, right="call", strike=strike)
+        contract = OptionContract.of(root="SPY", expiry_date=_EXPIRY, right=right, strike=strike)
         listings.append(Listing(contract, multiplier=100, shares_delivered=100, exercise="american"))
         watched[contract.occ_symbol] = WatchedContract(_held("3.00", "3.04", received_ms), vendor_delta=None)
     leg = {
@@ -220,7 +246,7 @@ def _resolver_strike(price: str, strike_rule: dict[str, object]) -> int | None:
         "instrument": {"kind": "option", "underlying": "SPY"},
         "position": "long",
         "qty_ratio": 1,
-        "right": "call",
+        "right": right,
         "strike": strike_rule,
         "expiry": {"selector": "absolute", "expiration_ms": option_expiry_anchor_ms(_EXPIRY)},
     }
@@ -249,20 +275,26 @@ _PRICES = ["585.00", "587.50", "587.49", "587.51", "582.50", "569.00", "650.00",
 _LADDER = tuple(strike * 1000 for strike in _STRIKES)
 
 
+@pytest.mark.parametrize("right", _RIGHTS)
 @pytest.mark.parametrize("price", _PRICES)
-def test_at_the_money_agrees_with_the_resolver_including_the_lower_of_two_as_near(price: str) -> None:
+def test_at_the_money_agrees_with_the_resolver_including_the_lower_of_two_as_near(
+    price: str, right: OptionRight
+) -> None:
     ours = strike_for(AtTheMoney(kind="atm"), ladder_thousandths=_LADDER, underlying_price=Decimal(price))
-    theirs = _resolver_strike(price, {"selector": "atm"})
+    theirs = _resolver_strike(price, {"selector": "atm"}, right)
 
     assert ours == theirs
 
 
+@pytest.mark.parametrize("right", _RIGHTS)
 @pytest.mark.parametrize("steps", [-9, -3, -1, 1, 2, 3, 7, 9])
 @pytest.mark.parametrize("price", _PRICES)
-def test_steps_from_the_money_agree_with_the_resolver_including_off_the_end(price: str, steps: int) -> None:
+def test_steps_from_the_money_agree_with_the_resolver_including_off_the_end(
+    price: str, steps: int, right: OptionRight
+) -> None:
     ours = strike_for(
         StepsFromTheMoney(kind="atm_offset", steps=steps), ladder_thousandths=_LADDER, underlying_price=Decimal(price)
     )
-    theirs = _resolver_strike(price, {"selector": "atm_offset", "offset": steps})
+    theirs = _resolver_strike(price, {"selector": "atm_offset", "offset": steps}, right)
 
     assert ours == theirs
