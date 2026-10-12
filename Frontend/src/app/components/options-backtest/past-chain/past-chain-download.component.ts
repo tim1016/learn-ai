@@ -11,8 +11,8 @@ import type { DownloadItem } from './past-chain.types';
 /**
  * "Download missing data": one button that says in words what it will fetch, busy while it runs, and then every item of
  * the answer with its outcome as the server gave it. A failed item names the lake's reason and the lake's own words;
- * nothing is hidden, and a failure that is only "being fetched by another request" is said to be that. When the session
- * is not over there is nothing to offer and the card says so.
+ * nothing is hidden, and a failure that is only "being fetched by another request" is said to be that. When the lake
+ * will fetch nothing for the date there is no plan, so there is nothing to offer here: the day's card says why.
  */
 @Component({
   selector: 'app-options-backtest-past-chain-download',
@@ -25,8 +25,6 @@ export class PastChainDownloadComponent {
   /** What is missing on screen, or null when nothing is. */
   readonly plan = input<DownloadPlan | null>(null);
   readonly state = input.required<DownloadState>();
-  /** The server would not fetch this date's data yet: the session is not over. */
-  readonly notOver = input(false);
   readonly start = output();
 
   private readonly result = viewChild<ElementRef<HTMLElement>>('result');
@@ -40,8 +38,8 @@ export class PastChainDownloadComponent {
     const state = this.state();
     return state.kind === 'answered' ? outcomeCounts(state.answer) : null;
   });
-  /** Whether the card has anything to say: an offer, a download going or answered, or the session not being over. */
-  protected readonly shown = computed(() => this.plan() !== null || this.state().kind !== 'idle' || this.notOver());
+  /** Whether the card has anything to say: an offer, or a download going or answered. */
+  protected readonly shown = computed(() => this.plan() !== null || this.state().kind !== 'idle');
 
   /** Puts the keyboard on the result, where the owner is when the button they pressed has gone busy or gone away. */
   focusResult(): void {

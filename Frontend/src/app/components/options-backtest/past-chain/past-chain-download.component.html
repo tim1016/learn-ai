@@ -1,10 +1,8 @@
 @if (shown()) {
   <section class="card" aria-labelledby="ob-chain-download-title">
     <div class="card__head"><h2 id="ob-chain-download-title">Download missing data</h2></div>
-    @if (notOver()) {
-      <p role="status">The session is not over yet, so its data cannot be fetched until the next New York day.</p>
-    } @else if (plan() !== null) {
-      <p id="ob-chain-download-words" class="words">Fetches {{ words() }}.</p>
+    @if (plan() !== null) {
+      <p id="ob-chain-download-words" class="words">{{ words() }}</p>
       <button pButton type="button" class="go" [disabled]="busy()" [attr.aria-busy]="busy()" aria-describedby="ob-chain-download-words" (click)="start.emit()"><i class="pi pi-download" aria-hidden="true"></i><span>Download missing data</span></button>
       @if (busy()) { <p class="words" role="status">Downloading. The server finishes what it has begun even if you leave this tab.</p> }
     }

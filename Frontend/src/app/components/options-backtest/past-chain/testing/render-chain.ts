@@ -2,6 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/angular';
 import type { Mock, vi as Vi } from 'vitest';
 
 import { fakePickerWorld } from '../../../../shared/symbol-picker/testing/fake-picker-world';
+import type { SetupLimits } from '../../options-backtest.types';
 import { PastChainTabComponent } from '../past-chain-tab.component';
 import { PastChainService, type DayQuery, type ExpiryQuery } from '../past-chain.service';
 import type { ChainDay, ChainExpiry, DownloadAnswer, DownloadRequest } from '../past-chain.types';
@@ -26,9 +27,9 @@ export function fakeChainService(spy: Spy, changes: Partial<FakeChainService> = 
   };
 }
 
-export async function renderChainTab(service: FakeChainService, startingUnderlying = 'SPY') {
+export async function renderChainTab(service: FakeChainService, startingUnderlying = 'SPY', limits: SetupLimits | null = null) {
   const view = await render(PastChainTabComponent, {
-    inputs: { startingUnderlying },
+    inputs: { startingUnderlying, limits },
     providers: [...fakePickerWorld().providers, { provide: PastChainService, useValue: service }],
   });
   await view.fixture.whenStable();

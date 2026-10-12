@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { NOT_A_SESSION, type ReadProblem } from './past-chain-problems';
 import type { ChainContract, ChainDay, ChainExpiry, UnderlyingPrice } from './past-chain.types';
-import { bodyOf, cellOf, chainViewOf, dayViewOf, downloadPlan, downloadRequest, outcomeCounts, planWords, readStatusOf, sessionNotOver, sessionOf, strikeRows, underlyingViewOf, type ChainInputs } from './past-chain-view';
+import { bodyOf, cellOf, chainViewOf, dayViewOf, downloadPlan, downloadRequest, outcomeCounts, planWords, readStatusOf, sessionOf, strikeRows, underlyingViewOf, type ChainInputs } from './past-chain-view';
 import { chainDay, chainExpiry, contract, downloadAnswer, EXPIRY_MS, item, side, sideWithoutMoney, SESSION_CLOSE_MS, SESSION_OPEN_MS, TRADING_DATE_MS, underlyingPrice } from './testing/fixtures';
 
 const problem = (changes: Partial<ReadProblem> = {}): ReadProblem => ({ message: 'the server said so', code: 'CODE', control: 'area', canRetry: false, ...changes });
@@ -396,7 +396,7 @@ describe('what a download would fetch', () => {
   });
 
   it('is the listing when it is not stored, and the underlying is then not known to be missing', () => {
-    expect(downloadPlan(chainDay({ listing_state: 'not_stored', expiries: [] }), null)).toEqual({ listing: true, underlying: 'unknown', contracts: [] });
+    expect(downloadPlan(chainDay({ listing_state: 'not_stored', expiries: [] }), null)).toEqual({ listing: true, underlying: 'unknown', contracts: [], remaining: 0, callTakes: null });
   });
 
   it('is not offered for a listing that is stored but cannot be read, nor for contracts whose prices cannot be read', () => {
@@ -408,7 +408,7 @@ describe('what a download would fetch', () => {
   it('is the underlying bars when the chain says they are not stored', () => {
     const chain = { ...allStored(), underlying_price: underlyingPrice({ state: 'not_stored', price: null, price_time_ms: null }) };
 
-    expect(downloadPlan(chainDay(), chain)).toEqual({ listing: false, underlying: 'missing', contracts: [] });
+    expect(downloadPlan(chainDay(), chain)).toEqual({ listing: false, underlying: 'missing', contracts: [], remaining: 0, callTakes: null });
   });
 
   it('is exactly the contracts on screen whose prices are not stored, calls then puts, by the symbols the server gave', () => {
@@ -421,6 +421,56 @@ describe('what a download would fetch', () => {
       listing: false,
       underlying: 'held',
       contracts: ['SPY261016C00602000', 'SPY261016C00603000', 'SPY261016P00601000', 'SPY261016P00604000'],
+      remaining: 0,
+      callTakes: null,
+    });
+  });
+
+  describe('when the server has said how many contracts one call takes', () => {
+    const fiveMissing = chainExpiry({
+      calls: side('call', [missing('call', 601_000), missing('call', 602_000), missing('call', 603_000)]),
+      puts: side('put', [missing('put', 601_000), missing('put', 602_000)]),
+    });
+
+    it('names the first as many as one call takes, calls then puts, as the server gave them, and counts those left for another press', () => {
+      expect(downloadPlan(chainDay(), fiveMissing, 3)).toEqual({
+        listing: false,
+        underlying: 'held',
+        contracts: ['SPY261016C00601000', 'SPY261016C00602000', 'SPY261016C00603000'],
+        remaining: 2,
+        callTakes: 3,
+      });
+    });
+
+    it('names all of them, and none are left, when one call takes as many as are missing or more', () => {
+      expect(downloadPlan(chainDay(), fiveMissing, 5)).toMatchObject({ remaining: 0, callTakes: 5 });
+      expect(downloadPlan(chainDay(), fiveMissing, 5)?.contracts.length).toBe(5);
+      expect(downloadPlan(chainDay(), fiveMissing, 60)).toMatchObject({ remaining: 0, callTakes: 60 });
+    });
+
+    it('takes one contract at a time when one call takes one, and leaves the rest', () => {
+      expect(downloadPlan(chainDay(), fiveMissing, 1)).toMatchObject({ contracts: ['SPY261016C00601000'], remaining: 4 });
+    });
+
+    it('takes a limit that cannot be right (none, or less than one) for no limit, and names every contract', () => {
+      expect(downloadPlan(chainDay(), fiveMissing, 0)).toMatchObject({ remaining: 0, callTakes: null });
+      expect(downloadPlan(chainDay(), fiveMissing, 0)?.contracts.length).toBe(5);
+    });
+  });
+
+  describe('when the lake will fetch nothing for the session yet', () => {
+    const refused = { reason: 'session_not_over', words: 'The session of 2026-10-09 is not over in New York yet.' } as const;
+
+    it('offers nothing, whatever is missing: not the listing, not the underlying, not a contract', () => {
+      const chain = chainExpiry({ calls: side('call', [missing('call', 602_000)]), puts: side('put', []), underlying_price: underlyingPrice({ state: 'not_stored', price: null, price_time_ms: null }) });
+
+      expect(downloadPlan(chainDay({ listing_state: 'not_stored', expiries: [], fetch_refusal: refused }), chain)).toBeNull();
+      expect(downloadPlan(chainDay({ fetch_refusal: refused }), chain, 60)).toBeNull();
+    });
+
+    it('is offered as before when the refusal is null or absent', () => {
+      expect(downloadPlan(chainDay({ listing_state: 'not_stored', expiries: [], fetch_refusal: null }), null)).not.toBeNull();
+      expect(downloadPlan(chainDay({ listing_state: 'not_stored', expiries: [] }), null)).not.toBeNull();
     });
   });
 
@@ -431,17 +481,23 @@ describe('what a download would fetch', () => {
     expect(downloadPlan(chainDay(), chain)?.contracts).toEqual(['SPY261016C00650000']);
   });
 
-  it('says in words what it will fetch', () => {
-    expect(planWords({ listing: true, underlying: 'missing', contracts: ['a', 'b', 'c'] })).toBe("the listing, the underlying's bars and 3 contracts");
-    expect(planWords({ listing: false, underlying: 'held', contracts: ['a'] })).toBe('1 contract');
-    expect(planWords({ listing: false, underlying: 'missing', contracts: ['a', 'b'] })).toBe("the underlying's bars and 2 contracts");
-    expect(planWords({ listing: true, underlying: 'unknown', contracts: [] })).toBe("the listing and the underlying's bars if they are missing");
-    expect(planWords({ listing: true, underlying: 'held', contracts: [] })).toBe('the listing');
-    expect(planWords({ listing: false, underlying: 'held', contracts: [] })).toBe('nothing');
+  it('says in words what it will fetch: the listing and the bars as a list, the contracts as a label and a number', () => {
+    const base = { remaining: 0, callTakes: null };
+    expect(planWords({ ...base, listing: true, underlying: 'missing', contracts: ['a', 'b', 'c'] })).toBe("Fetches the listing and the underlying's bars. Contracts to fetch: 3.");
+    expect(planWords({ ...base, listing: false, underlying: 'held', contracts: ['a'] })).toBe('Contracts to fetch: 1.');
+    expect(planWords({ ...base, listing: false, underlying: 'missing', contracts: ['a', 'b'] })).toBe("Fetches the underlying's bars. Contracts to fetch: 2.");
+    expect(planWords({ ...base, listing: true, underlying: 'unknown', contracts: [] })).toBe("Fetches the listing and the underlying's bars if they are missing.");
+    expect(planWords({ ...base, listing: true, underlying: 'held', contracts: [] })).toBe('Fetches the listing.');
+    expect(planWords({ ...base, listing: false, underlying: 'held', contracts: [] })).toBe('Nothing is missing.');
+  });
+
+  it('says how many contracts one call takes when it knows, and how many will still be missing after this call', () => {
+    expect(planWords({ listing: false, underlying: 'held', contracts: ['a', 'b'], remaining: 0, callTakes: 60 })).toBe('Contracts to fetch: 2. The most contracts one call takes: 60.');
+    expect(planWords({ listing: false, underlying: 'held', contracts: ['a', 'b'], remaining: 3, callTakes: 2 })).toBe('Contracts to fetch in this call: 2. Still missing after it: 3. Press again for them. The most contracts one call takes: 2.');
   });
 
   it('is a request of the underlying, the trading date, and the contracts, with the expiry only to check them against', () => {
-    const plan = { listing: false, underlying: 'held' as const, contracts: ['SPY261016C00602000'] };
+    const plan = { listing: false, underlying: 'held' as const, contracts: ['SPY261016C00602000'], remaining: 0, callTakes: null };
 
     expect(downloadRequest(plan, 'SPY', TRADING_DATE_MS, EXPIRY_MS['2026-10-16'])).toEqual({
       underlying: 'SPY',
@@ -452,7 +508,7 @@ describe('what a download would fetch', () => {
   });
 
   it('names no expiry when it names no contract', () => {
-    const request = downloadRequest({ listing: true, underlying: 'unknown', contracts: [] }, 'SPY', TRADING_DATE_MS, EXPIRY_MS['2026-10-16']);
+    const request = downloadRequest({ listing: true, underlying: 'unknown', contracts: [], remaining: 0, callTakes: null }, 'SPY', TRADING_DATE_MS, EXPIRY_MS['2026-10-16']);
 
     expect(request).toEqual({ underlying: 'SPY', trading_date_ms: TRADING_DATE_MS, contracts: [] });
     expect('expiry_ms' in request).toBe(false);
@@ -460,17 +516,6 @@ describe('what a download would fetch', () => {
 });
 
 describe('what an answer of a download comes to', () => {
-  it('says the session is not over when the lake refused any item for that reason', () => {
-    expect(sessionNotOver(downloadAnswer([item('listing', 'SPY', 'failed', 'session_not_over', 'not over')]))).toBe(true);
-    expect(sessionNotOver(downloadAnswer([item('listing', 'SPY', 'fetched'), item('underlying', 'SPY', 'failed', 'provider_rate_limited')]))).toBe(false);
-  });
-
-  it('says the session is not over when one item among others says so', () => {
-    const answer = downloadAnswer([item('listing', 'SPY', 'fetched'), item('underlying', 'SPY', 'failed', 'session_not_over', 'not over'), item('contract', 'SPY261016C00602000', 'failed', 'provider_no_data')]);
-
-    expect(sessionNotOver(answer)).toBe(true);
-  });
-
   it('counts the items by how each came out', () => {
     const answer = downloadAnswer([
       item('listing', 'SPY', 'fetched'),

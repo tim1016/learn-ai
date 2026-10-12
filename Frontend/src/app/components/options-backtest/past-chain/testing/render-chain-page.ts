@@ -11,6 +11,8 @@ import { OptionsBacktestService } from '../../options-backtest.service';
 import { RUN_POLL_MS } from '../../run-poll';
 import { fakeJobs } from '../../testing/fake-jobs';
 import { fakeService, type FakeService } from '../../testing/render-page';
+import { RunDetailService } from '../../run-detail/run-detail.service';
+import { inertRunDetail } from '../../run-detail/testing/fake-run-detail';
 import { PastChainService } from '../past-chain.service';
 import type { FakeChainService } from './render-chain';
 
@@ -28,6 +30,7 @@ export async function renderPageWithChain(spy: Spy, chain: FakeChainService, ser
       { provide: RUN_POLL_MS, useValue: 0 },
       { provide: OptionsBacktestService, useValue: service },
       { provide: JobsService, useValue: fakeJobs().service },
+      { provide: RunDetailService, useValue: inertRunDetail() },
       { provide: PastChainService, useValue: chain },
     ],
   });

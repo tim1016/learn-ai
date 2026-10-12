@@ -74,7 +74,7 @@
       </p-tabpanel>
       <p-tabpanel value="chain" lazy>
         <ng-template #content>
-          <app-options-backtest-past-chain [startingUnderlying]="draft().underlying" />
+          <app-options-backtest-past-chain [startingUnderlying]="draft().underlying" [limits]="limits()" />
         </ng-template>
       </p-tabpanel>
     </p-tabpanels>

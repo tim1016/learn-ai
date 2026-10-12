@@ -31,6 +31,8 @@ export class PastChainControlsComponent {
   readonly session = input<SessionBounds | null>(null);
   /** The number of strikes the server used last, from its answer: what an empty box means. */
   readonly strikesShown = input<number | null>(null);
+  /** The most strikes each side the server takes, as digits, once the page has its limits. */
+  readonly mostStrikes = input<string | null>(null);
 
   /** Enter in the strikes box counts what is typed at once, as leaving the box does. */
   protected commitStrikes(): void {

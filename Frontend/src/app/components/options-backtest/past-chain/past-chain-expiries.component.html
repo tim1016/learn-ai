@@ -2,6 +2,12 @@
 <section class="card" aria-labelledby="ob-chain-expiries-title">
   <div class="card__head"><h2 id="ob-chain-expiries-title">Expiries listed that day</h2></div>
   @if (again()) { <p class="muted" role="status">Reading again. What is shown is the last answer.</p> }
+  @if (refusal(); as why) {
+    <div class="refusal" role="status">
+      <p>{{ why.words }}</p>
+      <p class="code">{{ why.reason | receiptLabel }}</p>
+    </div>
+  }
   @if (day.kind === 'pick') {
     <p class="muted" role="status">Pick an underlying and a trading date to read the listing of that day.</p>
   } @else if (day.kind === 'loading') {

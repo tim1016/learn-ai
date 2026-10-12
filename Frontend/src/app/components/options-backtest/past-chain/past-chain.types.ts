@@ -10,6 +10,8 @@ export type ExpirySummary = Schemas['PastChainExpirySummary'];
 export type ExpiryTag = Schemas['PastChainExpiryTag'];
 export type TagSeries = ExpiryTag['series'];
 export type ListingState = ChainDay['listing_state'];
+/** Why the lake would fetch nothing for the session now, in its own words; absent or null when it would fetch. */
+export type FetchRefusal = NonNullable<ChainDay['fetch_refusal']>;
 
 /** One expiry at one instant of a session. */
 export type ChainExpiry = Schemas['PastChainExpiryResponse'];

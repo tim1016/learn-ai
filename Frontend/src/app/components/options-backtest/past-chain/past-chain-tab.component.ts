@@ -2,7 +2,7 @@ import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyR
 import { debounce, form } from '@angular/forms/signals';
 
 import { PastChainControlsComponent } from './past-chain-controls.component';
-import { chosenStrikes, NO_CONTROLS, STRIKES_PAUSE_MS, type ChainControls } from './past-chain-controls';
+import { chosenStrikes, mostStrikesText, NO_CONTROLS, STRIKES_PAUSE_MS, type ChainControls } from './past-chain-controls';
 import { PastChainDownloadComponent } from './past-chain-download.component';
 import { ChainDownloadFlow } from './past-chain-download-flow';
 import { PastChainExpiriesComponent } from './past-chain-expiries.component';
@@ -10,8 +10,9 @@ import { heldAnswer } from './past-chain-held';
 import { readProblemOf, type ControlName, type ReadProblem } from './past-chain-problems';
 import { PastChainTableComponent } from './past-chain-table.component';
 import { chosenMinute, INCOMPLETE_TIME, tradingDateMsOf } from './past-chain-time';
-import { chainViewOf, dayViewOf, downloadPlan, downloadRequest, sessionNotOver, sessionOf } from './past-chain-view';
+import { chainViewOf, dayViewOf, downloadPlan, downloadRequest, sessionOf } from './past-chain-view';
 import { PastChainService, sameExpiryQuery, type ExpiryQuery } from './past-chain.service';
+import type { SetupLimits } from '../options-backtest.types';
 import type { ChainDay, ChainExpiry } from './past-chain.types';
 
 /**
@@ -39,6 +40,8 @@ export class PastChainTabComponent implements OnInit {
 
   /** The setup's underlying at the moment the tab was first opened. Later changes of it are not followed. */
   readonly startingUnderlying = input.required<string>();
+  /** What the server holds a read and a download to; null until the page has them, and the server then judges alone. */
+  readonly limits = input<SetupLimits | null>(null);
 
   protected readonly model = signal<ChainControls>(NO_CONTROLS);
   // The strikes box is read once for what was typed: after a pause, when it is left, or on Enter.
@@ -99,7 +102,9 @@ export class PastChainTabComponent implements OnInit {
     const lastValid = this.lastValidTime();
     return this.timeIncomplete() ? chosenMinute(lastValid, this.tradingDateMs(), this.session()) : this.typedMinute();
   });
-  private readonly strikes = computed(() => chosenStrikes(this.model().strikes));
+  /** The most strikes each side the server takes, once the page has its limits. */
+  protected readonly mostStrikes = computed(() => mostStrikesText(this.limits()));
+  private readonly strikes = computed(() => chosenStrikes(this.model().strikes, this.mostStrikes()));
   private readonly unsendable = computed<ControlName | null>(() => {
     if (this.minute().kind === 'refused') return 'time';
     return this.strikes().kind === 'refused' ? 'strikes' : null;
@@ -172,14 +177,11 @@ export class PastChainTabComponent implements OnInit {
   // The download.
   private readonly downloader = new ChainDownloadFlow((request) => this.service.download(request));
   protected readonly downloadState = this.downloader.state;
-  /** The lake would not fetch this underlying's date: its session is not over. Said by the lake's answer, for this date only. */
-  protected readonly notOver = computed(() => {
-    const state = this.downloader.state();
-    return state.kind === 'answered' && state.asked.underlying === this.underlying() && state.asked.tradingDateMs === this.tradingDateMs() && sessionNotOver(state.answer);
-  });
-  protected readonly plan = computed(() => downloadPlan(this.day(), this.chain()));
+  /** Why the lake will fetch nothing for this date yet, in its own words, as the day's answer says it. */
+  protected readonly refusal = computed(() => this.shownDay()?.fetch_refusal ?? null);
+  protected readonly plan = computed(() => downloadPlan(this.day(), this.chain(), this.limits()?.max_contracts_per_download ?? null));
   /** The download card offers to fetch what is missing, so the chain can point to it. */
-  protected readonly downloadOffered = computed(() => this.plan() !== null && !this.notOver());
+  protected readonly downloadOffered = computed(() => this.plan() !== null);
   private readonly downloadCard = viewChild(PastChainDownloadComponent);
 
   constructor() {

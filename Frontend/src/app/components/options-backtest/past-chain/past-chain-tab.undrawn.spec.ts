@@ -1,9 +1,9 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
+import { screen, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import { paragraph, reads } from '../testing/page-actions';
 import type { ChainExpiry, UnderlyingPrice } from './past-chain.types';
-import { chainExpiry, contract, SESSION_OPEN_MS, side, sideWithoutMoney, underlyingPrice } from './testing/fixtures';
+import { chainDay, chainExpiry, contract, SESSION_OPEN_MS, side, sideWithoutMoney, underlyingPrice } from './testing/fixtures';
 import { chainTable, fakeChainService, openChainCard, openStandardChain, pickDate, renderChainTab } from './testing/render-chain';
 
 /** What the server sends when the underlying has no price at the instant: no money strike, no contract on either side, and the counts it still knows. */
@@ -70,23 +70,18 @@ describe('a chain whose underlying has no price at that time', () => {
     expect(screen.queryByRole('button', { name: 'Download missing data' })).toBeNull();
   });
 
-  it('does not point to a download that the lake has refused until the session is over', async () => {
+  it('does not point to a download while the lake will fetch nothing for the session, which the day’s answer says', async () => {
     const chain = withoutMoney({ state: 'not_stored' });
-    const service = fakeChainService(vi, {
-      expiry: vi.fn(async () => chain),
-      download: vi.fn(async () => ({ underlying: 'SPY', session_open_ms: SESSION_OPEN_MS, session_close_ms: SESSION_OPEN_MS, items: [{ kind: 'underlying' as const, subject: 'SPY', outcome: 'failed' as const, reason: 'session_not_over' as const, detail: 'not over' }] })),
-    });
+    const refusal = { reason: 'session_not_over', words: 'The session of 2026-10-09 is not over in New York yet.' } as const;
+    const service = fakeChainService(vi, { expiry: vi.fn(async () => chain), day: vi.fn(async () => chainDay({ fetch_refusal: refusal })) });
     await renderChainTab(service);
-    await openChainCard();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Download missing data' }));
-    await screen.findByText(/The session is not over yet/);
-    // The listing and the chain are read again after a download; the card is judged once they are back.
-    await waitFor(() => expect(service.expiry).toHaveBeenCalledTimes(2));
-    await new Promise((done) => setTimeout(done, 30));
+    await openChainCard();
 
     expect(card()).toContain('No strikes are drawn.');
     expect(card()).not.toContain('Download missing data above');
+    expect(screen.queryByRole('button', { name: 'Download missing data' })).toBeNull();
+    expect(screen.getByText(refusal.words)).toBeTruthy();
   });
 
   it('says the code of an underlying state it does not know, in words, and not that the contracts are missing', async () => {

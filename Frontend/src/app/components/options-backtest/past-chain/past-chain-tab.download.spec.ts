@@ -4,12 +4,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { pickSymbol } from '../../../shared/symbol-picker/testing/fake-picker-world';
 import { paragraph, reads } from '../testing/page-actions';
 import { DownloadNotAllowedError, PastChainInvalidError, PastChainRefusedError } from './past-chain.service';
-import type { ChainDay, ChainExpiry, DownloadAnswer, DownloadRequest } from './past-chain.types';
+import type { SetupLimits } from '../options-backtest.types';
+import { SERVED_LIMITS } from '../testing/fixtures';
+import type { ChainDay, ChainExpiry, DownloadAnswer, DownloadRequest, FetchRefusal } from './past-chain.types';
 import { deferred } from './testing/deferred';
 import { chainDay, chainExpiry, contract, downloadAnswer, EXPIRY_MS, item, side, TRADING_DATE, TRADING_DATE_MS, underlyingPrice } from './testing/fixtures';
 import { assertNewYorkTimes, expiriesTable, fakeChainService, openStandardChain, pickDate, renderChainTab } from './testing/render-chain';
 
 const button = () => screen.getByRole<HTMLButtonElement>('button', { name: 'Download missing data' });
+/** What the card says it will fetch: the paragraph the button is described by. */
+const words = () => reads(document.getElementById('ob-chain-download-words'));
 const call = (thousandths: number, state: Parameters<typeof contract>[0]['state'], standard = true) => contract({ right: 'call', thousandths, state, standard });
 const put = (thousandths: number, state: Parameters<typeof contract>[0]['state']) => contract({ right: 'put', thousandths, state });
 
@@ -44,25 +48,25 @@ describe('what the download offers', () => {
     pickDate(TRADING_DATE);
 
     await screen.findByRole('button', { name: 'Download missing data' });
-    expect(reads(paragraph(/^Fetches/))).toBe("Fetches the listing and the underlying's bars if they are missing.");
+    expect(words()).toBe("Fetches the listing and the underlying's bars if they are missing.");
   });
 
   it('is exactly the contracts on screen whose prices are not stored, and says how many', async () => {
     await openChainOf();
 
-    expect(reads(paragraph(/^Fetches/))).toBe('Fetches 5 contracts.');
+    expect(words()).toBe('Contracts to fetch: 5.');
   });
 
-  it('says one contract in the singular', async () => {
+  it('says one contract with a label and a number, which needs no plural', async () => {
     await openChainOf(chainExpiry());
 
-    expect(reads(paragraph(/^Fetches/))).toBe('Fetches 1 contract.');
+    expect(words()).toBe('Contracts to fetch: 1.');
   });
 
   it('is the underlying bars too when the chain says they are not stored', async () => {
     await openChainOf(chainExpiry({ underlying_price: underlyingPrice({ state: 'not_stored', price: null, price_time_ms: null }) }));
 
-    expect(reads(paragraph(/^Fetches/))).toBe("Fetches the underlying's bars and 1 contract.");
+    expect(words()).toBe("Fetches the underlying's bars. Contracts to fetch: 1.");
   });
 
   it('is the underlying bars alone when they are the only thing missing', async () => {
@@ -73,7 +77,7 @@ describe('what the download offers', () => {
     });
     await openChainOf(stored);
 
-    expect(reads(paragraph(/^Fetches/))).toBe("Fetches the underlying's bars.");
+    expect(words()).toBe("Fetches the underlying's bars.");
   });
 });
 
@@ -392,48 +396,177 @@ describe('a download that finishes after the tab is gone', () => {
   });
 });
 
-describe('a session that is not over yet', () => {
-  const notOver = () =>
-    downloadAnswer([
-      item('listing', 'SPY', 'failed', 'session_not_over', '2026-10-09 is not over in New York yet; its option data is taken from New York midnight after it, 1791604800000, and it is 1791528000000'),
-      item('underlying', 'SPY', 'failed', 'session_not_over', '2026-10-09 is not over in New York yet; its option data is taken from New York midnight after it, 1791604800000, and it is 1791528000000'),
-    ]);
+describe('a session the lake will fetch nothing for yet', () => {
+  const REFUSAL: FetchRefusal = { reason: 'session_not_over', words: '2026-10-09 is not over in New York yet; its option data is taken from New York midnight after it, 1791604800000, and it is 1791528000000.' };
+  const refusedDay = (changes: Partial<ChainDay> = {}) => chainDay({ fetch_refusal: REFUSAL, ...changes });
+  const dayCard = () => within(screen.getByRole('region', { name: 'Expiries listed that day' }));
 
-  async function renderNotOver() {
-    const day = vi.fn(async () => chainDay({ listing_state: 'not_stored', expiries: [] }));
-    const service = fakeChainService(vi, { day, download: vi.fn(async () => notOver()) });
+  it('is the lake’s own words where the day is shown, its code in words under them, and nothing to press', async () => {
+    const service = fakeChainService(vi, { day: vi.fn(async () => refusedDay({ listing_state: 'not_stored', expiries: [] })) });
     await renderChainTab(service);
+
     pickDate(TRADING_DATE);
-    fireEvent.click(await screen.findByRole('button', { name: 'Download missing data' }));
-    await screen.findByText('The session is not over yet, so its data cannot be fetched until the next New York day.');
-    return service;
-  }
 
-  it('is said in words once the lake has refused for that reason, with nothing left to press and the lake own sentence kept', async () => {
-    await renderNotOver();
-
+    expect(await dayCard().findByText(REFUSAL.words)).toBeTruthy();
+    expect(dayCard().getByText('Session Not Over')).toBeTruthy();
+    expect(dayCard().getByText('The listing for this date is not stored.')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Download missing data' })).toBeNull();
-    expect(screen.getAllByText(/is not over in New York yet/).length).toBe(2);
-    expect(screen.getAllByText('Session Not Over').length).toBe(2);
+    expect(screen.queryByRole('heading', { name: 'Download missing data' })).toBeNull();
+    expect(screen.queryByText(/until the next New York day/)).toBeNull();
   });
 
-  it('is said when only some of the items say so, as well as when all do', async () => {
-    const mixed = downloadAnswer([item('listing', 'SPY', 'fetched'), item('underlying', 'SPY', 'failed', 'session_not_over', 'not over'), item('contract', 'SPY261016C00602000', 'failed', 'provider_no_data', 'none')]);
-    const day = vi.fn(async () => chainDay({ listing_state: 'not_stored', expiries: [] }));
-    await renderChainTab(fakeChainService(vi, { day, download: vi.fn(async () => mixed) }));
+  it('is said with the expiries when the listing is stored, and the contracts missing on screen are not offered either', async () => {
+    const service = fakeChainService(vi, { day: vi.fn(async () => refusedDay()), expiry: vi.fn(async () => chainWithFiveMissing()) });
+    await renderChainTab(service);
+    await openStandardChain();
+
+    expect(dayCard().getByText(REFUSAL.words)).toBeTruthy();
+    expect(dayCard().getByRole('table', { name: /Every expiry the listing held/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Download missing data' })).toBeNull();
+  });
+
+  it('shows a code the page does not know through the shared label, with the lake’s words as it sent them', async () => {
+    const unknown = { reason: 'quota_exceeded' as FetchRefusal['reason'], words: 'The vendor has no quota left today, so nothing is fetched until it resets.' };
+    const service = fakeChainService(vi, { day: vi.fn(async () => chainDay({ fetch_refusal: unknown })) });
+    await renderChainTab(service);
+
     pickDate(TRADING_DATE);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Download missing data' }));
-
-    expect(await screen.findByText('The session is not over yet, so its data cannot be fetched until the next New York day.')).toBeTruthy();
+    expect(await dayCard().findByText(unknown.words)).toBeTruthy();
+    expect(dayCard().getByText('Quota Exceeded')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Download missing data' })).toBeNull();
   });
 
-  it('is only said of that date: another date offers the download again', async () => {
-    await renderNotOver();
+  it.each([
+    ['null', chainDay({ listing_state: 'not_stored', expiries: [], fetch_refusal: null })],
+    ['absent', chainDay({ listing_state: 'not_stored', expiries: [] })],
+  ])('changes nothing when the day’s refusal is %s: the download is offered and the card says nothing of one', async (_name, day) => {
+    await renderChainTab(fakeChainService(vi, { day: vi.fn(async () => day) }));
+
+    pickDate(TRADING_DATE);
+
+    expect(await screen.findByRole('button', { name: 'Download missing data' })).toBeTruthy();
+    expect(dayCard().queryByText('Session Not Over')).toBeNull();
+    expect(document.querySelector('.refusal')).toBeNull();
+  });
+
+  it('is only said of that date: another date, whose day carries none, offers the download again', async () => {
+    const day = vi.fn(async (query: { tradingDateMs: number }) => (query.tradingDateMs === TRADING_DATE_MS ? refusedDay({ listing_state: 'not_stored', expiries: [] }) : chainDay({ listing_state: 'not_stored', expiries: [] })));
+    await renderChainTab(fakeChainService(vi, { day }));
+    pickDate(TRADING_DATE);
+    await dayCard().findByText(REFUSAL.words);
 
     pickDate('2026-10-12');
 
     expect(await screen.findByRole('button', { name: 'Download missing data' })).toBeTruthy();
-    expect(screen.queryByText(/The session is not over yet/)).toBeNull();
+    expect(dayCard().queryByText(REFUSAL.words)).toBeNull();
+  });
+
+  it('is no longer learned from a download that was refused: the items are listed as the lake gave them and the page adds no sentence of its own', async () => {
+    const notOver = downloadAnswer([
+      item('listing', 'SPY', 'failed', 'session_not_over', REFUSAL.words),
+      item('underlying', 'SPY', 'failed', 'session_not_over', REFUSAL.words),
+    ]);
+    const day = vi.fn(async () => chainDay({ listing_state: 'not_stored', expiries: [] }));
+    await renderChainTab(fakeChainService(vi, { day, download: vi.fn(async () => notOver) }));
+    pickDate(TRADING_DATE);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Download missing data' }));
+
+    const result = await screen.findByRole('group', { name: 'Download result' });
+    expect(within(result).getAllByText(REFUSAL.words).length).toBe(2);
+    expect(within(result).getAllByText('Session Not Over').length).toBe(2);
+    expect(screen.queryByText(/The session is not over yet, so its data cannot be fetched/)).toBeNull();
+    expect(await screen.findByRole('button', { name: 'Download missing data' })).toBeTruthy();
+  });
+});
+
+describe('a download of more contracts than one call takes', () => {
+  const LIMITS: SetupLimits = { ...SERVED_LIMITS, max_contracts_per_download: 2 };
+  // Five contracts are missing, in the server’s order: calls, then puts.
+  const ORDER = ['SPY261016C00602000', 'SPY261016C00603000', 'SPY261016C00606000', 'SPY261016P00601000', 'SPY261016P00603000'];
+  const state = (stored: ReadonlySet<string>, symbol: string) => (stored.has(symbol) ? 'traded' : 'not_stored');
+
+  /** The chain of the five, with those a download has fetched now stored. */
+  function chainAfter(stored: ReadonlySet<string>) {
+    return chainExpiry({
+      calls: side('call', [call(601_000, 'traded'), call(602_000, state(stored, ORDER[0])), call(603_000, state(stored, ORDER[1])), call(606_000, state(stored, ORDER[2]), false)]),
+      puts: side('put', [put(601_000, state(stored, ORDER[3])), put(602_000, 'traded'), put(603_000, state(stored, ORDER[4]))]),
+    });
+  }
+
+  async function openFive() {
+    const stored = new Set<string>();
+    const service = fakeChainService(vi, {
+      expiry: vi.fn(async () => chainAfter(stored)),
+      download: vi.fn(async (request: DownloadRequest) => {
+        const named = request.contracts ?? [];
+        named.forEach((symbol) => stored.add(symbol));
+        return downloadAnswer(named.map((symbol) => item('contract', symbol, 'fetched')));
+      }),
+    });
+    await renderChainTab(service, 'SPY', LIMITS);
+    await openStandardChain();
+    return service;
+  }
+  const sentTo = (service: Awaited<ReturnType<typeof openFive>>, call: number) => service.download.mock.calls[call]?.[0]?.contracts;
+
+  it('says how many one call takes and how many will still be missing after this one', async () => {
+    await openFive();
+
+    expect(words()).toBe('Contracts to fetch in this call: 2. Still missing after it: 3. Press again for them. The most contracts one call takes: 2.');
+  });
+
+  it('sends one call for one press, with the first it takes, in the server’s order, and the next press the next ones', async () => {
+    const service = await openFive();
+
+    fireEvent.click(button());
+    await waitFor(() => expect(service.download).toHaveBeenCalledTimes(1));
+    expect(sentTo(service, 0)).toEqual([ORDER[0], ORDER[1]]);
+    await waitFor(() => expect(words()).toBe('Contracts to fetch in this call: 2. Still missing after it: 1. Press again for them. The most contracts one call takes: 2.'));
+    fireEvent.click(button());
+
+    await waitFor(() => expect(service.download).toHaveBeenCalledTimes(2));
+    expect(sentTo(service, 1)).toEqual([ORDER[2], ORDER[3]]);
+    await waitFor(() => expect(words()).toBe('Contracts to fetch: 1. The most contracts one call takes: 2.'));
+    fireEvent.click(button());
+    await waitFor(() => expect(service.download).toHaveBeenCalledTimes(3));
+    expect(sentTo(service, 2)).toEqual([ORDER[4]]);
+  });
+
+  it('never asks for the rest by itself: after a call has been answered and the chain read again, no other call is made until the button is pressed', async () => {
+    const service = await openFive();
+
+    fireEvent.click(button());
+    await waitFor(() => expect(service.download).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(words()).toContain('Still missing after it: 1'));
+    await new Promise((done) => setTimeout(done, 80));
+
+    expect(service.download).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers nothing more once every contract is stored', async () => {
+    const service = await openFive();
+    for (const [count, left] of [[1, 'Still missing after it: 1'], [2, 'Contracts to fetch: 1']] as const) {
+      fireEvent.click(button());
+      await waitFor(() => expect(service.download).toHaveBeenCalledTimes(count));
+      await waitFor(() => expect(words()).toContain(left));
+    }
+
+    fireEvent.click(button());
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Download missing data' })).toBeNull());
+    expect(service.download).toHaveBeenCalledTimes(3);
+  });
+
+  it('names every contract on screen, and says nothing of a limit, while the server’s limits are not known', async () => {
+    const service = fakeChainService(vi, { expiry: vi.fn(async () => chainWithFiveMissing()) });
+    await renderChainTab(service, 'SPY', null);
+    await openStandardChain();
+
+    expect(words()).toBe('Contracts to fetch: 5.');
+    fireEvent.click(button());
+    await waitFor(() => expect(service.download).toHaveBeenCalledTimes(1));
+    expect(service.download.mock.calls[0]?.[0]?.contracts?.length).toBe(5);
   });
 });

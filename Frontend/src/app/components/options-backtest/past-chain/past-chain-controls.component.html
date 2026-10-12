@@ -33,7 +33,7 @@
         @if (strikesProblem(); as message) {
           <span class="problem" role="alert">{{ message }}</span>
         } @else {
-          Empty means the server's own number.
+          Empty means the server's own number.@if (mostStrikes(); as most) { The most it takes: {{ most }}. }
         }
       </p>
     </div>

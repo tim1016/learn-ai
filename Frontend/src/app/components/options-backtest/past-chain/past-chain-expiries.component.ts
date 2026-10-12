@@ -4,6 +4,7 @@ import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import { ExpiryTagComponent } from './expiry-tag.component';
 import type { DayView } from './past-chain-view';
+import type { FetchRefusal } from './past-chain.types';
 
 /**
  * What the listing held on the picked date: its state in words when there is nothing to list (not a trading day, not
@@ -19,6 +20,8 @@ import type { DayView } from './past-chain-view';
 })
 export class PastChainExpiriesComponent {
   readonly view = input.required<DayView>();
+  /** Why the lake will fetch nothing for this date yet, in its own words; null when it would fetch. */
+  readonly refusal = input<FetchRefusal | null>(null);
   /** The `expiry_ms` of the expiry whose chain is open, which may be one this date does not list. */
   readonly picked = input<number | null>(null);
   /** The listing on screen is the last answer, while the same question is read again. */

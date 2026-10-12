@@ -192,15 +192,13 @@ describe('the Past chain tab for a screen reader', () => {
     expect(await violations()).toEqual([]);
   });
 
-  it('has no violation when the session is not over', async () => {
+  it('has no violation when the lake will fetch nothing for the session yet', async () => {
     const service = fakeChainService(vi, {
-      day: vi.fn(async () => chainDay({ listing_state: 'not_stored', expiries: [] })),
-      download: vi.fn(async () => downloadAnswer([item('listing', 'SPY', 'failed', 'session_not_over', 'not over')])),
+      day: vi.fn(async () => chainDay({ listing_state: 'not_stored', expiries: [], fetch_refusal: { reason: 'session_not_over', words: 'The session is not over in New York yet.' } })),
     });
     await renderChainTab(service);
     pickDate('2026-10-09');
-    fireEvent.click(await screen.findByRole('button', { name: 'Download missing data' }));
-    await screen.findByText(/The session is not over yet/);
+    await screen.findByText('The session is not over in New York yet.');
 
     expect(await violations()).toEqual([]);
   });

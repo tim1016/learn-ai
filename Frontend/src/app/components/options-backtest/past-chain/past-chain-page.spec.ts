@@ -7,7 +7,7 @@ import { fakeService } from '../testing/render-page';
 import type { DownloadAnswer } from './past-chain.types';
 import { deferred } from './testing/deferred';
 import { chainDay, downloadAnswer, item, TRADING_DATE, TRADING_DATE_MS } from './testing/fixtures';
-import { fakeChainService, pickDate, showChain } from './testing/render-chain';
+import { fakeChainService, pickDate, showChain, typeStrikes } from './testing/render-chain';
 import { renderPageWithChain, symbolPickers } from './testing/render-chain-page';
 
 const tab = (name: string) => screen.getByRole('tab', { name });
@@ -55,6 +55,25 @@ describe('the Past chain as a tab of the page', () => {
 
     expect(service.startRun).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(false);
+  });
+
+  it('is handed the server’s limits by the page, as the setup’s cards are: the strikes box says the most it takes and refuses a larger count', async () => {
+    const service = fakeService(vi);
+    const chain = fakeChainService(vi);
+    await renderPageWithChain(vi, chain, service);
+    openChainTab();
+    await screen.findByRole('heading', { name: 'Past chain' });
+    pickDate(TRADING_DATE);
+    await screen.findByRole('table', { name: /Every expiry the listing held/ });
+    showChain('2026-10-16');
+    await screen.findByRole('table', { name: /Calls on the left/ });
+
+    expect(service.limits).toHaveBeenCalled();
+    await waitFor(() => expect(reads(document.getElementById('ob-chain-strikes-note'))).toBe("Empty means the server's own number. The most it takes: 14."));
+    typeStrikes('15');
+
+    expect((await screen.findAllByRole('alert')).map((alert) => reads(alert))).toContain('Strikes each side of the money: the most the server takes is 14. Enter 14 or fewer, or leave the box empty.');
+    expect(chain.expiry.mock.calls.map((call) => call[0].strikes)).not.toContain('15');
   });
 
   it('is made once and kept: leaving it and coming back finds the date, the expiry and the chain where they were', async () => {

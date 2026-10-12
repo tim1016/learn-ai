@@ -308,34 +308,64 @@ export function underlyingViewOf(price: UnderlyingPrice): UnderlyingView {
 
 // ---- The download -------------------------------------------------------------------------------
 
-/** What a download would fetch. `underlying` is `unknown` while no chain has been read: the server then looks at it itself. */
+/** What one press of the button would fetch. `underlying` is `unknown` while no chain has been read: the server then looks at it itself. */
 export interface DownloadPlan {
   readonly listing: boolean;
   readonly underlying: 'missing' | 'unknown' | 'held';
-  /** The OCC symbols of the contracts on screen whose prices are not stored, as the server served them. */
+  /**
+   * The OCC symbols this call names: the contracts on screen whose prices are not stored, as the server served them,
+   * and at most as many as one call takes. The rest are `remaining` and need another press.
+   */
   readonly contracts: readonly string[];
+  /** How many contracts on screen are missing beyond the ones this call names. */
+  readonly remaining: number;
+  /** The most contracts one call takes, once the server's limits are known; null before. */
+  readonly callTakes: number | null;
 }
 
-/** The plan for what is on screen, or null when nothing on screen is missing. */
-export function downloadPlan(day: ChainDay | null, chain: ChainExpiry | null): DownloadPlan | null {
-  if (day === null) return null;
+/**
+ * The plan for what is on screen, or null when nothing on screen is missing, or when the lake has said it will fetch
+ * nothing for this session yet (the day's `fetch_refusal`): then there is nothing to offer. `callTakes` is the server's
+ * own limit; with none the page names every contract missing on screen and the server judges the count.
+ */
+export function downloadPlan(day: ChainDay | null, chain: ChainExpiry | null, callTakes: number | null = null): DownloadPlan | null {
+  if (day === null || day.fetch_refusal != null) return null;
   const listing = day.listing_state === 'not_stored';
   const underlying = chain === null ? 'unknown' : chain.underlying_price.state === 'not_stored' ? 'missing' : 'held';
-  const contracts = chain === null ? [] : [...chain.calls.contracts, ...chain.puts.contracts].filter((each) => each.price_state === 'not_stored').map((each) => each.symbol);
-  if (!listing && underlying !== 'missing' && contracts.length === 0) return null;
-  return { listing, underlying, contracts };
+  const missing = chain === null ? [] : [...chain.calls.contracts, ...chain.puts.contracts].filter((each) => each.price_state === 'not_stored').map((each) => each.symbol);
+  if (!listing && underlying !== 'missing' && missing.length === 0) return null;
+  const takes = callTakes !== null && callTakes >= 1 ? callTakes : null;
+  return {
+    listing,
+    underlying,
+    contracts: takes === null ? missing : missing.slice(0, takes),
+    remaining: takes === null ? 0 : missing.slice(takes).length,
+    callTakes: takes,
+  };
 }
 
-/** What the button says it will fetch, in words. */
+/**
+ * What the button says it will fetch, in words: the listing and the bars as a list, the contracts as a label and a
+ * number (never a noun the page would have to make plural), and, when more are missing than one call takes, how many
+ * will still be missing after this one.
+ */
 export function planWords(plan: DownloadPlan): string {
   const parts: string[] = [];
   if (plan.listing) parts.push('the listing');
   if (plan.underlying === 'missing') parts.push("the underlying's bars");
   if (plan.underlying === 'unknown') parts.push("the underlying's bars if they are missing");
-  if (plan.contracts.length > 0) parts.push(`${plan.contracts.length} ${plan.contracts.length === 1 ? 'contract' : 'contracts'}`);
+  const sentences: string[] = [];
   const last = parts.pop();
-  if (last === undefined) return 'nothing';
-  return parts.length === 0 ? last : `${parts.join(', ')} and ${last}`;
+  if (last !== undefined) sentences.push(`Fetches ${parts.length === 0 ? last : `${parts.join(', ')} and ${last}`}.`);
+  if (plan.contracts.length > 0) {
+    sentences.push(
+      plan.remaining === 0
+        ? `Contracts to fetch: ${plan.contracts.length}.`
+        : `Contracts to fetch in this call: ${plan.contracts.length}. Still missing after it: ${plan.remaining}. Press again for them.`,
+    );
+    if (plan.callTakes !== null) sentences.push(`The most contracts one call takes: ${plan.callTakes}.`);
+  }
+  return sentences.length === 0 ? 'Nothing is missing.' : sentences.join(' ');
 }
 
 /** The request for a plan. The expiry rides along only to let the server check the contracts against it. */
@@ -344,11 +374,6 @@ export function downloadRequest(plan: DownloadPlan, underlying: string, tradingD
   return withContracts
     ? { underlying, trading_date_ms: tradingDateMs, expiry_ms: expiryMs, contracts: [...plan.contracts] }
     : { underlying, trading_date_ms: tradingDateMs, contracts: [...plan.contracts] };
-}
-
-/** Whether the lake refused any item because the session is not over yet. */
-export function sessionNotOver(answer: DownloadAnswer): boolean {
-  return answer.items.some((each) => each.reason === 'session_not_over');
 }
 
 /** How many items of an answer came out each way, for the line above the list. */
