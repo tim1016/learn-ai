@@ -132,14 +132,19 @@ async def test_a_second_run_over_the_same_range_asks_the_vendor_for_nothing(
     assert (report.option_days_fetched, report.option_days_reused) == (0, 3)
 
 
-@respx.mock
-async def test_a_session_whose_window_does_not_fit_fetches_nothing(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
-    # Enter 205 minutes after the open, leave 10 before the close: fine on a full day, not on the 13:00 half day.
-    late = setup(
+def _too_late_for_a_half_day() -> Any:
+    """Enter 205 minutes after the open, leave 10 before the close: fine on a full day (390 minutes), not on the 13:00
+    half day (210 minutes: the exit comes at minute 200, before the entry at minute 205)."""
+    return setup(
         entry={"anchor": "open", "offset_ms": 205 * MS_PER_MINUTE},
         exit={"anchor": "close", "offset_ms": 10 * MS_PER_MINUTE},
         legs=[leg(expiry={"kind": "same_day"})],
     )
+
+
+@respx.mock
+async def test_a_session_whose_window_does_not_fit_fetches_nothing(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    late = _too_late_for_a_half_day()
     vendor = Vendor(_scene(THU))  # the half day is not in the scene: asking for it would be a KeyError
     vendor.mount()
 
@@ -535,6 +540,86 @@ async def test_a_range_of_finished_sessions_is_asked_of_the_stock_pipeline_in_on
 
     assert asked == [(WED, FRI)] and report.sessions_prepared == 3
     assert sorted(vendor.stock_requests) == THREE_SESSIONS
+
+
+# ── A session the run skips is in no request to the stock pipeline ───────
+# The stock pipeline fetches every session from the first date of a request to its last. Thursday 2025-11-27 is
+# Thanksgiving, so the calendar's sessions from Wednesday the 26th to Tuesday December 2nd are the 26th, Friday the 28th
+# (a half day: it closes at 13:00), Monday December 1st and Tuesday December 2nd. The setup that is too late for a half
+# day needs the 26th, the 1st and the 2nd and skips the 28th, so the fetch for the underlying is not one request from
+# the 26th to the 1st, which would hold the 28th, but one for the 26th and one for the 1st and 2nd.
+
+NOV_26 = date(2025, 11, 26)
+HALF_DAY_2025 = date(2025, 11, 28)
+DEC_1 = date(2025, 12, 1)
+DEC_2 = date(2025, 12, 2)
+AROUND_THE_HALF_DAY = [NOV_26, HALF_DAY_2025, DEC_1, DEC_2]
+
+
+def _record_the_requests_to_the_stock_pipeline(monkeypatch: pytest.MonkeyPatch) -> list[tuple[date, date]]:
+    asked: list[tuple[date, date]] = []
+    real = fetching.materialize_engine_run
+
+    def delegating(*, symbol: str, start: date, end: date, **kwargs: Any) -> Any:
+        asked.append((start, end))
+        return real(symbol=symbol, start=start, end=end, **kwargs)
+
+    monkeypatch.setattr(fetching, "materialize_engine_run", delegating)
+    return asked
+
+
+@respx.mock
+async def test_a_session_the_run_skips_between_two_it_needs_is_in_no_request_for_the_underlying_and_the_counts_stay_true(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vendor = Vendor(_scene(NOV_26, DEC_1, DEC_2))  # the half day is not in the scene: asking for it would be a KeyError
+    vendor.mount()
+    asked = _record_the_requests_to_the_stock_pipeline(monkeypatch)
+    lines: list[str] = []
+
+    report, progress = await _fetch(_too_late_for_a_half_day(), AROUND_THE_HALF_DAY, on_log=lines.append)
+
+    assert asked == [(NOV_26, NOV_26), (DEC_1, DEC_2)]
+    assert sorted(vendor.stock_requests) == [NOV_26, DEC_1, DEC_2]
+    # Three of the four sessions are needed: three are brought in, the progress counts all four, and the log speaks of
+    # the three that are fetched.
+    assert report.sessions_prepared == 3 and progress == [(1, 4), (2, 4), (3, 4), (4, 4)]
+    assert [line for line in lines if "minute bars" in line] == [
+        "Fetching SPY minute bars for sessions 1 to 3 of 3.",
+        "SPY minute bars are in the lake for 3 of 3 sessions.",
+    ]
+
+
+@respx.mock
+async def test_a_failure_of_the_stock_pipeline_that_could_only_come_from_a_session_the_run_skips_does_not_fail_the_run(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # The vendor would fail the half day's bars (500), and nothing the run needs is on the half day.
+    vendor = Vendor(_scene(NOV_26, HALF_DAY_2025, DEC_1, DEC_2), stock_errors={HALF_DAY_2025: 500})
+    vendor.mount()
+
+    report, _ = await _fetch(_too_late_for_a_half_day(), AROUND_THE_HALF_DAY)
+
+    assert report.sessions_prepared == 3
+    assert HALF_DAY_2025 not in vendor.stock_requests
+
+
+@respx.mock
+async def test_a_chunk_is_cut_only_where_it_holds_a_skipped_session_and_each_stretch_is_one_request(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Chunks of two needed sessions over the four sessions above: the needed are the 26th, December 1st and 2nd, so the
+    # chunks are [26th, 1st] and [2nd]. The first is cut at the half day, into (26th, 26th) and (1st, 1st); the second is
+    # (2nd, 2nd). A chunk of sessions that follow one another is one request, as it was.
+    vendor = Vendor(_scene(NOV_26, DEC_1, DEC_2))
+    vendor.mount()
+    asked = _record_the_requests_to_the_stock_pipeline(monkeypatch)
+    monkeypatch.setattr(fetching, "UNDERLYING_CHUNK_SESSIONS", 2)
+
+    report, _ = await _fetch(_too_late_for_a_half_day(), AROUND_THE_HALF_DAY)
+
+    assert asked == [(NOV_26, NOV_26), (DEC_1, DEC_1), (DEC_2, DEC_2)]
+    assert report.sessions_prepared == 3
 
 
 # ── What the phase breaks when it is broken ──────────────────────────────
