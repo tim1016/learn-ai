@@ -5,6 +5,9 @@ with stops, momentum, both kinds of re-entry, both square-off modes, cutoffs, ca
 slippage values) a market records every contract the replay asks ``option_bar`` about. Each one must be in the set
 ``session_needs`` gave before one option bar was read. A failing seed is printed with its setup, so it can be replayed.
 
+Each session is then replayed again on the market a run builds (``DayMarket``) holding only the needed contracts, and
+must give an equal outcome: a contract it was not handed would raise.
+
 The sessions are generated to reach the cases that make a set too small, not only to be many: legs that stop out and
 re-enter at fresh strikes as the underlying walks across the ladder. The last test makes sure they did.
 """
@@ -26,6 +29,7 @@ from app.options_backtest.needs import session_needs
 from app.options_backtest.picking import Listing, pick_contract
 from app.options_backtest.replay import replay_session
 from app.options_backtest.results import EventKind, SessionOutcome, SessionStatus
+from app.options_backtest.session_market import DayMarket
 from app.options_backtest.setup import LegSetup, OptionsBacktestSetup
 from tests.options_backtest._market import after_open, before_close
 from tests.options_backtest._run_data import HALF_DAY, D, close_ms, listing_on
@@ -184,12 +188,23 @@ def _check_one_seed(seed: int, seen: _Seen) -> None:
     )
     market = _RecordingMarket(day, listing, {bar.close_ms: bar.close for bar in underlying}, seed)
     where = f"seed {seed}: {json.dumps(setup_at_zero.model_dump(mode='json'))}"
+    # What the real market a run builds does when it holds only the needed contracts: the same outcome, or it raises
+    # ``ContractDayNotLoaded`` for the first contract it was asked for and was not handed.
+    needed_only = DayMarket(
+        day,
+        underlying=underlying,
+        listing=listing,
+        option_days={contract: tuple(_premiums(seed, day, contract).values()) for contract in needs.contracts},
+    )
     for slippage in SLIPPAGES:
         written = OptionsBacktestSetup.model_validate(
             {**setup_at_zero.model_dump(mode="python"), "slippage_percent": slippage}
         )
         outcome = replay_session(written, market, cash_usd=written.starting_cash_usd, fee_for=_no_fee)
         assert outcome.skip_reason == needs.skip_reason, f"{where}: the replay skipped for {outcome.skip_reason}"
+        assert outcome == replay_session(written, needed_only, cash_usd=written.starting_cash_usd, fee_for=_no_fee), (
+            f"{where}: at slippage {slippage} the needed contracts alone give another outcome"
+        )
         if slippage == "0":
             _count(outcome, seen)
     missing = market.asked - needs.contracts
