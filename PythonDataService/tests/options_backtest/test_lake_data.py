@@ -361,8 +361,17 @@ async def test_a_day_only_the_split_adjusted_tree_holds_is_not_captured(
     assert await _read(LakeRunData("SPY").underlying_day, FRIDAY) is None
 
 
+def _left_out_warnings(caplog: pytest.LogCaptureFixture) -> list[tuple[str, int]]:
+    """Each warning that bars were left out of a read: the instrument it names and how many."""
+    return [
+        (record.instrument, record.left_out)
+        for record in caplog.records
+        if getattr(record, "action", None) == "options_backtest_bars_left_out"
+    ]
+
+
 async def test_an_underlying_bar_stamped_off_the_minute_is_left_out_and_counted_and_the_rest_is_kept(
-    fake_catalog: FakeCatalog, tmp_lake: Path
+    fake_catalog: FakeCatalog, tmp_lake: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     await store_underlying_day(
         fake_catalog,
@@ -383,14 +392,19 @@ async def test_an_underlying_bar_stamped_off_the_minute_is_left_out_and_counted_
     assert (
         len(bars_by_close(read.value, trading_date=FRIDAY, what="SPY")) == 2
     )  # and a replay's reader accepts what is left
+    # It is said, not only counted: one warning, naming the underlying and the one bar.
+    assert _left_out_warnings(caplog) == [("SPY", 1)]
 
 
-async def test_a_normal_underlying_day_leaves_nothing_out(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+async def test_a_normal_underlying_day_leaves_nothing_out(
+    fake_catalog: FakeCatalog, tmp_lake: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     await store_underlying_day(fake_catalog, tmp_lake, _underlying_bars())
 
     read = await _read(LakeRunData("SPY").underlying_day, FRIDAY)
 
     assert read is not None and read.value.left_out == 0 and len(read.value) == 3
+    assert _left_out_warnings(caplog) == []
 
 
 # ── The listing ──────────────────────────────────────────────────────────
@@ -492,7 +506,7 @@ async def test_an_option_day_is_every_stored_bar_named_by_its_close_one_minute_a
 
 @respx.mock
 async def test_option_bars_no_replay_can_read_are_left_out_and_counted_and_a_bar_a_minute_inside_the_date_is_kept(
-    fake_catalog: FakeCatalog, tmp_lake: Path
+    fake_catalog: FakeCatalog, tmp_lake: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     await store_listing(_the_option_rows())
     await store_option_day(
@@ -515,6 +529,7 @@ async def test_option_bars_no_replay_can_read_are_left_out_and_counted_and_a_bar
     assert [bar.close_ms for bar in read.value] == [1749821460000, 1749873540000]
     assert [bar.close for bar in read.value] == [D("1.27"), D("0.92")]
     assert read.value.left_out == 2
+    assert _left_out_warnings(caplog) == [(CALL_600.occ_symbol, 2)]
     # The bars a session reads are accepted whole by its own reader, which refuses a session holding a bar of another day.
     assert list(bars_by_close(read.value, trading_date=FRIDAY, what=CALL_600.occ_symbol)) == [
         1749821460000,

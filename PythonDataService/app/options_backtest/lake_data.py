@@ -22,12 +22,14 @@ Three reads, one per kind of stored file:
 * ``option_day``: one contract's stored bars. ``None`` is a day not captured; no bars is a day captured on which the
   contract did not trade.
 
-Bars, for the underlying and for an option. Every stored bar is handed over, any hour of the date (an option prints
-until 16:15), except a bar whose close is not on a whole minute or falls on another New York date than the trading
-date's: one that starts in the last minute of a date, or is stamped off the minute. The lake stores such a bar (its
+Bars. For an option every stored bar of the date is handed over, any hour (an option prints until 16:15); for the
+underlying, the bars of the regular session. In both, a bar is left out when its close is not on a whole minute or
+falls on another New York date than the trading date's: one that starts in the last minute of a date, or is stamped
+off the minute. The lake stores such a bar (its
 rule is only that the start lies inside the date) and ``session_market.bars_by_close`` refuses a session that holds
-one, as a whole. No replay can read it, as its close is outside every session or on no minute, so it is left out, and
-``StoredBars.left_out`` counts the bars left out. A day on which nothing is left out says ``left_out == 0``. (For the
+one, as a whole. No replay can read it, as its close is outside every session or on no minute, so it is left out,
+``StoredBars.left_out`` counts the bars left out, and a warning is logged naming the instrument and the count. A day
+on which nothing is left out says ``left_out == 0`` and logs nothing. (For the
 underlying, whether the day is held is decided before any bar is left out, so a held day all of whose bars are left
 out is held and empty.)
 
@@ -46,6 +48,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -69,7 +72,9 @@ from app.options_backtest.data import Captured
 from app.options_backtest.market import MinuteBar
 from app.options_backtest.picking import ListedContract, Listing
 from app.options_backtest.setup import MS_PER_MINUTE
-from app.utils.session_anchors import et_date_at_ms
+from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
+
+logger = logging.getLogger(__name__)
 
 
 class UnderlyingDayUnreadable(ValueError):
@@ -118,10 +123,11 @@ def _require_a_worker_thread() -> None:
     )
 
 
-def _named_by_close(stored: Sequence[OptionBar | TradeBar], trading_date: date) -> StoredBars:
+def _named_by_close(stored: Sequence[OptionBar | TradeBar], trading_date: date, *, instrument: str) -> StoredBars:
     """The stored bars as ``MinuteBar``s named by their close, less any that no replay could read.
 
-    A bar whose close is not on a whole minute or is not on ``trading_date`` (New York) is left out and counted.
+    A bar whose close is not on a whole minute or is not on ``trading_date`` (New York) is left out, counted, and
+    said in a warning that names ``instrument``.
     """
     kept: list[MinuteBar] = []
     for bar in stored:
@@ -130,7 +136,19 @@ def _named_by_close(stored: Sequence[OptionBar | TradeBar], trading_date: date) 
         if close_ms % MS_PER_MINUTE or et_date_at_ms(close_ms) != trading_date:
             continue
         kept.append(MinuteBar(close_ms=close_ms, open=bar.open, high=bar.high, low=bar.low, close=bar.close))
-    return StoredBars(kept, left_out=len(stored) - len(kept))
+    left_out = len(stored) - len(kept)
+    if left_out:
+        logger.warning(
+            "stored bars left out of a backtest read",
+            extra={
+                "action": "options_backtest_bars_left_out",
+                "instrument": instrument,
+                "trading_date_ms": et_midnight_ms(trading_date),
+                "left_out": left_out,
+                "stored": len(stored),
+            },
+        )
+    return StoredBars(kept, left_out=left_out)
 
 
 class LakeRunData:
@@ -171,7 +189,10 @@ class LakeRunData:
             ) from exc
         if admitted.payload is None or not bars:
             return None
-        return Captured(value=_named_by_close(bars, trading_date), sha256=hashlib.sha256(admitted.payload).hexdigest())
+        return Captured(
+            value=_named_by_close(bars, trading_date, instrument=self._underlying),
+            sha256=hashlib.sha256(admitted.payload).hexdigest(),
+        )
 
     def listing(self, trading_date: date) -> Captured[StoredListing] | None:
         """The stored listing of the underlying as of ``trading_date``, or ``None`` when none is stored.
@@ -213,4 +234,6 @@ class LakeRunData:
         stored = read_option_day_bars(contract, trading_date, lake_root=self._lake_root)
         if stored is None:
             return None
-        return Captured(value=_named_by_close(stored.bars, trading_date), sha256=stored.sha256)
+        return Captured(
+            value=_named_by_close(stored.bars, trading_date, instrument=contract.occ_symbol), sha256=stored.sha256
+        )
