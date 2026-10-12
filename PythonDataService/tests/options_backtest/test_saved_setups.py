@@ -71,19 +71,39 @@ def test_two_examples_ship_and_both_are_the_strategy_the_page_started_from() -> 
             assert leg.expiry.kind == "this_week" and leg.strike.kind == "atm"
             assert (leg.momentum.kind, leg.momentum.value) == ("percent_up", Decimal(25))
             assert (leg.stop_loss.kind, leg.stop_loss.value) == ("percent", Decimal(25))
-            assert (leg.reentry_on_stop.kind, leg.reentry_on_stop.count) == ("at_once", 1)
 
 
-def test_the_two_examples_differ_only_in_how_late_a_stop_can_still_re_enter() -> None:
-    no_re_entry, one_re_entry = (example.setup for example in EXAMPLE_SETUPS)
+def test_the_example_named_no_re_entry_has_no_re_entry_rule_and_no_cutoff() -> None:
+    no_re_entry = EXAMPLE_SETUPS[0].setup
 
-    # "No re-entry" closes the door at the entry minute itself, so a stop never earns one.
-    assert (no_re_entry.no_reentry_after.anchor, no_re_entry.no_reentry_after.offset_ms) == ("open", 5 * MS_PER_MINUTE)
+    assert no_re_entry.no_reentry_after is None
+    assert all(leg.reentry_on_stop is None for leg in no_re_entry.legs)
+
+
+def test_the_example_named_one_re_entry_re_enters_once_at_once_until_an_hour_before_the_close() -> None:
+    one_re_entry = EXAMPLE_SETUPS[1].setup
+
     assert (one_re_entry.no_reentry_after.anchor, one_re_entry.no_reentry_after.offset_ms) == (
         "close",
         60 * MS_PER_MINUTE,
     )
-    assert no_re_entry.model_copy(update={"no_reentry_after": one_re_entry.no_reentry_after}) == one_re_entry
+    for leg in one_re_entry.legs:
+        assert (leg.reentry_on_stop.kind, leg.reentry_on_stop.count) == ("at_once", 1)
+
+
+def test_the_two_examples_differ_only_in_their_re_entry_rules() -> None:
+    no_re_entry, one_re_entry = (example.setup for example in EXAMPLE_SETUPS)
+
+    came_back = no_re_entry.model_copy(
+        update={
+            "no_reentry_after": one_re_entry.no_reentry_after,
+            "legs": tuple(
+                leg.model_copy(update={"reentry_on_stop": other.reentry_on_stop})
+                for leg, other in zip(no_re_entry.legs, one_re_entry.legs, strict=True)
+            ),
+        }
+    )
+    assert came_back == one_re_entry
 
 
 async def test_an_example_cannot_be_saved_over_or_deleted() -> None:

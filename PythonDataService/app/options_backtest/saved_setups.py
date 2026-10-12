@@ -74,7 +74,7 @@ def is_valid_setup_name(name: str) -> bool:
 # ── The shipped examples ──────────────────────────────────────────────────
 
 
-def _premium_momentum_leg(leg_id: str, right: OptionRight) -> LegSetup:
+def _premium_momentum_leg(leg_id: str, right: OptionRight, *, re_enters: bool) -> LegSetup:
     return LegSetup(
         leg_id=leg_id,
         right=right,
@@ -83,18 +83,21 @@ def _premium_momentum_leg(leg_id: str, right: OptionRight) -> LegSetup:
         strike=AtTheMoney(kind="atm"),
         stop_loss=StopLoss(kind="percent", value=Decimal(25)),
         momentum=Momentum(kind="percent_up", value=Decimal(25)),
-        reentry_on_stop=ReentryOnStop(kind="at_once", count=1),
+        reentry_on_stop=ReentryOnStop(kind="at_once", count=1) if re_enters else None,
     )
 
 
-def _spy_premium_momentum(*, no_reentry_after: SessionTime) -> OptionsBacktestSetup:
+def _spy_premium_momentum(*, no_reentry_after: SessionTime | None, re_enters: bool) -> OptionsBacktestSetup:
     return OptionsBacktestSetup(
         underlying="SPY",
         entry=SessionTime(anchor="open", offset_ms=5 * MS_PER_MINUTE),
         exit=SessionTime(anchor="close", offset_ms=46 * MS_PER_MINUTE),
         no_reentry_after=no_reentry_after,
         square_off="complete",
-        legs=(_premium_momentum_leg("call", "call"), _premium_momentum_leg("put", "put")),
+        legs=(
+            _premium_momentum_leg("call", "call", re_enters=re_enters),
+            _premium_momentum_leg("put", "put", re_enters=re_enters),
+        ),
         slippage_percent=Decimal("0.3"),
         fees=FeePolicy(kind="not_charged"),
         starting_cash_usd=Decimal(10000),
@@ -105,16 +108,15 @@ def _example(name: str, setup: OptionsBacktestSetup) -> SavedSetup:
     return SavedSetup(name=name, example=True, saved_at_ms=None, setup=setup, cannot_open_reason=None)
 
 
-# The strategy the PRD started from, twice: with the door to re-entry shut at the entry minute, so a stop never
-# earns one, and with it open until an hour before the close.
+# The strategy #3030 started from, twice: with no re-entry rule on its legs, and with each leg coming back once
+# after a stop until an hour before the close.
 EXAMPLE_SETUPS: tuple[SavedSetup, ...] = (
-    _example(
-        "SPY premium momentum, no re-entry",
-        _spy_premium_momentum(no_reentry_after=SessionTime(anchor="open", offset_ms=5 * MS_PER_MINUTE)),
-    ),
+    _example("SPY premium momentum, no re-entry", _spy_premium_momentum(no_reentry_after=None, re_enters=False)),
     _example(
         "SPY premium momentum, one re-entry",
-        _spy_premium_momentum(no_reentry_after=SessionTime(anchor="close", offset_ms=60 * MS_PER_MINUTE)),
+        _spy_premium_momentum(
+            no_reentry_after=SessionTime(anchor="close", offset_ms=60 * MS_PER_MINUTE), re_enters=True
+        ),
     ),
 )
 _EXAMPLE_BY_NAME = {example.name: example for example in EXAMPLE_SETUPS}
