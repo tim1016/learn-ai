@@ -973,6 +973,7 @@ DDL_V20: tuple[str, ...] = (
         cash_before_usd   NUMERIC NOT NULL,
         cash_after_usd    NUMERIC NOT NULL,
         cash_change_usd   NUMERIC NOT NULL,
+        profit_usd        NUMERIC NOT NULL,
         underlying_sha256 TEXT NULL,
         listing_sha256    TEXT NULL,
         option_days_json  JSONB NOT NULL,

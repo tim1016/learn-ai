@@ -24,7 +24,7 @@ import pytest
 from pydantic import BaseModel
 
 from app.options_backtest import saved_runs
-from app.options_backtest.results import Fill, LegTrade
+from app.options_backtest.results import Fill, LegTrade, SessionStatus
 from app.options_backtest.run import RunResult
 from app.options_backtest.saved_runs import (
     DeleteOutcome,
@@ -530,6 +530,48 @@ async def test_a_run_still_running_is_not_deleted_unless_its_job_is_gone(
     assert await get_run(conn, run_id, is_live=ALIVE) is None
 
 
+async def test_a_session_stores_its_own_profit_and_it_differs_from_its_cash_change_where_a_leg_was_marked_not_sold(
+    conn: asyncpg.Connection, tag: str, result: RunResult
+) -> None:
+    # The view of one session and the comparison of two runs read a session's profit from its row. The profit counts a
+    # leg marked, not sold, at its mark; the cash change counts only the cash that moved. Each is worked out by hand
+    # from the busy run's fills and marks, a trade being (exit - entry) x 100 x contracts - its two fees.
+    #
+    # Session 1, every leg sold, so the two are one number: far 1 x (1.76 - 1.72) x 100 - 0.65 - 0.65 = 2.70; put
+    # 2 x (3.80 - 4.30) x 100 - 1.30 - 1.30 = -102.60; the put again 2 x (3.32 - 3.90) x 100 - 1.30 - 1.30 = -118.60.
+    # Together -218.50, a loss.
+    #
+    # Session 2, two legs marked and not sold, so the two differ. Profit: far, marked at 3.23 after 3.25, is
+    # (3.23 - 3.25) x 100 - 0.65 = -2.65; the put, sold at 0.27 after 0.09, is (0.27 - 0.09) x 200 - 1.30 - 1.30 =
+    # 33.40; the call, marked at 3.94 after 4.23, is (3.94 - 4.23) x 100 - 0.65 = -29.65; together 1.10. Cash change:
+    # far paid out 3.25 x 100 + 0.65 = 325.65, the call 4.23 x 100 + 0.65 = 423.65, and the put netted +33.40, so
+    # -325.65 - 423.65 + 33.40 = -715.90. The two marks are worth 3.23 x 100 + 3.94 x 100 = 717.00, and
+    # -715.90 + 717.00 = 1.10.
+    #
+    # Session 3, every leg sold: 9.40 - 29.30 + 71.40 - 21.30 - 86.60 = -56.40, a loss, in both.
+    # Sessions 4 and 5 are skipped and moved nothing: 0 and 0.
+    assert result.sessions[1].status is SessionStatus.INCOMPLETE, "the busy run has no leg marked, or this proves less"
+    run_id = await _complete(conn, result, tag)
+
+    rows = await conn.fetch(
+        "SELECT session_open_ms, profit_usd, cash_change_usd FROM research_options_backtest_run_sessions "
+        "WHERE run_id = $1 ORDER BY position",
+        run_id,
+    )
+
+    opens = [session.session_open_ms for session in result.sessions]
+    assert [
+        (row["session_open_ms"], str(saved_runs._money(row["profit_usd"])), str(saved_runs._money(row["cash_change_usd"])))
+        for row in rows
+    ] == [
+        (opens[0], "-218.50", "-218.50"),
+        (opens[1], "1.10", "-715.90"),
+        (opens[2], "-56.40", "-56.40"),
+        (opens[3], "0", "0"),
+        (opens[4], "0", "0"),
+    ]
+
+
 # ── Money reads back as it was written ───────────────────────────────────
 
 
@@ -972,8 +1014,8 @@ async def test_a_session_is_skipped_exactly_when_it_has_a_skip_reason(
     run_id = await create_run(conn, _new(result, tag))
     insert = (
         "INSERT INTO research_options_backtest_run_sessions (run_id, session_open_ms, position, session_close_ms, status, "
-        "skip_reason, cash_before_usd, cash_after_usd, cash_change_usd, option_days_json, events_json) "
-        "VALUES ($1, 1, 0, 2, $2, $3, 0, 0, 0, '[]', '[]')"
+        "skip_reason, cash_before_usd, cash_after_usd, cash_change_usd, profit_usd, option_days_json, events_json) "
+        "VALUES ($1, 1, 0, 2, $2, $3, 0, 0, 0, 0, '[]', '[]')"
     )
 
     for status, reason in (("skipped", None), ("traded", "window_does_not_fit"), ("no_trade", "x")):
@@ -1032,8 +1074,8 @@ async def test_two_sessions_of_one_run_cannot_share_a_position(
     run_id = await create_run(conn, _new(result, tag))
     insert = (
         "INSERT INTO research_options_backtest_run_sessions (run_id, session_open_ms, position, session_close_ms, status, "
-        "cash_before_usd, cash_after_usd, cash_change_usd, option_days_json, events_json) "
-        "VALUES ($1, $2, $3, 9, 'traded', 0, 0, 0, '[]', '[]')"
+        "cash_before_usd, cash_after_usd, cash_change_usd, profit_usd, option_days_json, events_json) "
+        "VALUES ($1, $2, $3, 9, 'traded', 0, 0, 0, 0, '[]', '[]')"
     )
     await conn.execute(insert, run_id, 1, 0)
 

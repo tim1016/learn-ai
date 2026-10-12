@@ -308,8 +308,8 @@ def _require_the_runs_own_result(run_id: int, row: asyncpg.Record, result: RunRe
 _INSERT_SESSION = """
     INSERT INTO research_options_backtest_run_sessions (
         run_id, session_open_ms, position, session_close_ms, status, skip_reason, cash_before_usd, cash_after_usd,
-        cash_change_usd, underlying_sha256, listing_sha256, option_days_json, events_json
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb)
+        cash_change_usd, profit_usd, underlying_sha256, listing_sha256, option_days_json, events_json
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb)
 """
 
 _INSERT_TRADE = """
@@ -337,6 +337,7 @@ def _session_row(run_id: int, position: int, session: SessionResult) -> tuple[An
         session.cash_before_usd,
         session.cash_after_usd,
         outcome.cash_change_usd,
+        outcome.pnl_usd,
         session.pins.underlying_sha256,
         session.pins.listing_sha256,
         json.dumps(run_json.option_days_to_json(session.pins)),
