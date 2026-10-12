@@ -78,6 +78,12 @@ class Momentum(BaseModel):
     kind: Literal["percent_up", "percent_down", "points_up", "points_down"]
     value: _Positive
 
+    @model_validator(mode="after")
+    def _a_fall_in_percent_leaves_something(self) -> Momentum:
+        if self.kind == "percent_down" and self.value >= 100:
+            raise ValueError("a momentum fall in percent must be under 100: a premium cannot fall to nothing or below")
+        return self
+
 
 class ReentryOnStop(BaseModel):
     """How a leg comes back after a stop, and how many times in one session."""
@@ -211,4 +217,26 @@ class OptionsBacktestSetup(BaseModel):
         repeated = sorted({leg_id for leg_id in ids if ids.count(leg_id) > 1})
         if repeated:
             raise ValueError(f"every leg needs its own id; repeated: {', '.join(repeated)}")
+        return self
+
+    @model_validator(mode="after")
+    def _the_window_can_hold_a_trade(self) -> OptionsBacktestSetup:
+        """Refuse a window no session could trade in, whatever its length.
+
+        An entry is read on a minute's close and fills in the next minute, so the first entry time is one
+        minute after the open and the last exit time one minute before the close. Whether an entry counted
+        from the open comes before an exit counted from the close depends on the session's length, which
+        is the calendar's to say and is checked for each session when it is replayed.
+        """
+        entry, exit_ = self.entry, self.exit
+        if entry.anchor == "open" and entry.offset_ms < MS_PER_MINUTE:
+            raise ValueError("the entry time must be at least one minute after the open")
+        if exit_.anchor == "close" and exit_.offset_ms < MS_PER_MINUTE:
+            raise ValueError("the exit time must be at least one minute before the close")
+        if entry.anchor == exit_.anchor:
+            exit_is_later = (
+                exit_.offset_ms > entry.offset_ms if entry.anchor == "open" else exit_.offset_ms < entry.offset_ms
+            )
+            if not exit_is_later:
+                raise ValueError("the exit time must be after the entry time")
         return self
