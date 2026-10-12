@@ -9,6 +9,7 @@
   "/api/research/golden-qualifications",
   "/api/research/golden-search",
   "/api/research/golden-validations",
+  "/api/research/options-backtest/past-chain",
   "/api/strategy-gates",
   "/api/strategy-validation"
  ],

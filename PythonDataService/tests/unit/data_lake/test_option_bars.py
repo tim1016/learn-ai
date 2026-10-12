@@ -2138,6 +2138,68 @@ async def test_a_low_below_the_open_by_a_hairline_is_in_place_and_the_day_is_sto
     assert result.failure is None and result.record is not None
 
 
+# ── A bar that does not start on a whole minute fails the day ─────────────
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "offset_ms",
+    [1, 30_000, 59_999],
+    ids=["a millisecond past the minute", "half a minute past it", "a millisecond short of the next"],
+)
+async def test_a_vendor_bar_that_does_not_start_on_a_whole_minute_fails_the_day_naming_the_bar(
+    offset_ms: int, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """A bar is named by its close, its start plus a minute, so a start between two minutes closes on no minute.
+
+    The second bar starts offset_ms past 09:31, which is 1749821400000 + 60 000 = 1749821460000.
+    """
+    off_the_minute = SESSION_OPEN_MS + MINUTE_MS + offset_ms
+    _mock_vendor(_ok([_bar(0), _bar(1, t=off_the_minute)]))
+
+    result = await _ensure()
+
+    assert result.record is None
+    assert result.failure is not None and result.failure.reason == "validation_failed"
+    assert "bar[1]" in result.failure.detail and f"t_ms={off_the_minute}" in result.failure.detail
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "validation_failed", None)
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+    assert await _read() is None
+
+
+@respx.mock
+async def test_the_first_of_several_bars_off_the_minute_is_the_one_named(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    """Bar 1 starts a millisecond past 09:31 (1749821460001) and bar 2 half a minute past 09:32 (1749821550000)."""
+    _mock_vendor(
+        _ok([_bar(0), _bar(1, t=SESSION_OPEN_MS + MINUTE_MS + 1), _bar(2, t=SESSION_OPEN_MS + 2 * MINUTE_MS + 30_000)])
+    )
+
+    result = await _ensure()
+
+    assert result.failure is not None and result.failure.reason == "validation_failed"
+    assert "bar[1] t_ms=1749821460001" in result.failure.detail and "bar[2]" not in result.failure.detail
+
+
+@respx.mock
+async def test_a_day_failed_for_a_bar_off_the_minute_is_asked_again_and_a_corrected_answer_is_stored(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """The failure is the row's like any corrupt answer: within its attempts the vendor is asked again."""
+    route = _mock_vendor(_ok([_bar(0), _bar(1, t=SESSION_OPEN_MS + MINUTE_MS + 30_000)]), _ok([_bar(0), _bar(1)]))
+
+    first = await _ensure()
+    second = await _ensure()
+
+    assert first.failure is not None and first.failure.reason == "validation_failed"
+    assert second.failure is None and second.record is not None and second.record.row_count == 2
+    assert route.call_count == 2
+    day = await _read()
+    # Every bar on a whole minute is stored as it was sent: 09:30 and 09:31.
+    assert day is not None and [bar.start_ms for bar in day.bars] == [SESSION_OPEN_MS, SESSION_OPEN_MS + MINUTE_MS]
+    assert [row["status"] for row in _bar_rows(fake_catalog)] == ["complete"]
+
+
 @respx.mock
 @pytest.mark.parametrize("price", ["NaN", "Infinity", "-Infinity", "0", "-0.0", "-1.27"])
 async def test_a_bar_with_a_price_that_is_not_finite_and_above_zero_fails_the_day_and_raises_nothing(
