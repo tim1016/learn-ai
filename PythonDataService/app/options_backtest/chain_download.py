@@ -17,9 +17,12 @@ listing does not hold it, so a listing that could not be captured fails every co
 and no contract is tried. What is raised is the caller's mistake (a request refused before anything is asked) and an
 unreachable catalog.
 
-At most ``MAX_REQUESTS_IN_FLIGHT`` captures run at once in one call, and at most ``MAX_CONTRACTS_PER_DOWNLOAD``
-contracts are taken in one call. That is the number of contracts a window of the chain can hold
-(``past_chain.MAX_WINDOW_CONTRACTS``, one constant), so the contracts a window names are one download.
+Every capture holds ``option_lake.vendor_request_gate`` while it asks, the one limit of
+``option_lake.MAX_VENDOR_REQUESTS_IN_FLIGHT`` requests in flight for the whole process, which a run's download holds too:
+a chain download and a run at once do not double it. That gate is one semaphore per event loop, and the process's
+background loop is where a run's download asks, so the captures are handed to that loop and not run on the caller's.
+At most ``MAX_CONTRACTS_PER_DOWNLOAD`` contracts are taken in one call. That is the number of contracts a window of the
+chain can hold (``past_chain.MAX_WINDOW_CONTRACTS``, one constant), so the contracts a window names are one download.
 
 Two calls at once for one date can both want a contract. The lake lets one of them claim it, and the other waits out its
 lease and gives up: that call reports the contract ``failed`` with the lake's ``lease_timeout`` reason. Nothing is
@@ -52,10 +55,8 @@ from app.options.contract import OptionContract
 from app.options.expiry import option_expiry_anchor_ms
 from app.options_backtest.lake_data import LakeRunData, UnderlyingDayUnreadable
 from app.options_backtest.past_chain import MAX_WINDOW_CONTRACTS, ChainRefusal, unreadable_problem
-from app.utils.background_loop import CallerStoppedWaitingError
+from app.utils.background_loop import CallerStoppedWaitingError, background_loop
 
-# Vendor requests in flight at once in one call. The listing and the underlying each count as one.
-MAX_REQUESTS_IN_FLIGHT = 4
 # Contracts one call takes: as many as a window of the chain can hold, so the contracts a window names are one download.
 MAX_CONTRACTS_PER_DOWNLOAD = MAX_WINDOW_CONTRACTS
 
@@ -100,10 +101,10 @@ def _item_of(kind: ItemKind, subject: str, result: OptionCaptureResult) -> Downl
 
 
 async def _capture_listing(
-    underlying: str, trading_date: date, gate: asyncio.Semaphore, now_ms: int | None
+    underlying: str, trading_date: date, now_ms: int | None
 ) -> tuple[DownloadItem, OptionListing | None]:
     """The listing, captured or reused, and read once so each contract capture can be handed it."""
-    async with gate:
+    async with option_lake.vendor_request_gate():
         result = await ensure_option_listing(underlying, trading_date, now_ms=now_ms)
     item = _item_of(ItemKind.LISTING, underlying, result)
     if item.outcome is Outcome.FAILED:
@@ -120,9 +121,7 @@ async def _capture_listing(
     return item, stored
 
 
-async def _capture_underlying(
-    underlying: str, trading_date: date, gate: asyncio.Semaphore, now_ms: int | None
-) -> DownloadItem:
+async def _capture_underlying(underlying: str, trading_date: date, now_ms: int | None) -> DownloadItem:
     """The underlying's raw minute bars: left alone when held, refused when the session is not over, else fetched.
 
     A fetch is the stock engine's own function. It has no completed-session gate, so the lake's rule for the options of
@@ -143,7 +142,7 @@ async def _capture_underlying(
     )
     if refusal is not None:
         return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.FAILED, refusal.reason, refusal.detail)
-    async with gate:
+    async with option_lake.vendor_request_gate():
         try:
             await asyncio.to_thread(
                 materialize_engine_run,
@@ -163,10 +162,9 @@ async def _capture_contract(
     underlying: str,
     trading_date: date,
     listing: OptionListing,
-    gate: asyncio.Semaphore,
     now_ms: int | None,
 ) -> DownloadItem:
-    async with gate:
+    async with option_lake.vendor_request_gate():
         result = await ensure_option_day_bars(
             contract, trading_date, listed_under=underlying, listing=listing, now_ms=now_ms
         )
@@ -223,13 +221,23 @@ async def ensure_chain_data(
             raise ContractNotOfExpiry(f"these contracts do not expire on {expiry.isoformat()}: {', '.join(strangers)}")
     if not is_lake_addressable_symbol(underlying):
         raise ValueError(f"the underlying must be an upper-case ticker the lake can hold, got {underlying!r}")
+    # The vendor limit is a semaphore of one event loop, and the loop a run's download asks on is the process's
+    # background loop; the server's own loop would count a second four. So the captures run there, and this waits.
+    return await asyncio.wrap_future(
+        asyncio.run_coroutine_threadsafe(_capture(underlying, trading_date, named, now_ms), background_loop())
+    )
+
+
+async def _capture(
+    underlying: str, trading_date: date, named: Sequence[OptionContract], now_ms: int | None
+) -> tuple[DownloadItem, ...]:
+    """The captures of ``ensure_chain_data``, on the background loop: the listing and the underlying, then the contracts."""
     # The catalog's pool belongs to the loop that made it, and the lake's capture functions do not make one.
     await catalog_client.init_pool()
-    gate = asyncio.Semaphore(MAX_REQUESTS_IN_FLIGHT)
     # Every capture finishes before an error is raised: none is cancelled halfway through a claim.
     first = await asyncio.gather(
-        _capture_listing(underlying, trading_date, gate, now_ms),
-        _capture_underlying(underlying, trading_date, gate, now_ms),
+        _capture_listing(underlying, trading_date, now_ms),
+        _capture_underlying(underlying, trading_date, now_ms),
         return_exceptions=True,
     )
     _raise_the_first_error(first)
@@ -251,7 +259,7 @@ async def ensure_chain_data(
             ),
         )
     contract_outcomes = await asyncio.gather(
-        *(_capture_contract(contract, underlying, trading_date, listing, gate, now_ms) for contract in named),
+        *(_capture_contract(contract, underlying, trading_date, listing, now_ms) for contract in named),
         return_exceptions=True,
     )
     _raise_the_first_error(contract_outcomes)

@@ -12,6 +12,7 @@ reaches two years back with two days of headroom, reaches 2024-10-14. 2024-06-14
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import Callable, Sequence
 from datetime import date
 from pathlib import Path
@@ -23,13 +24,13 @@ import respx
 from app.data_lake import catalog_client
 from app.data_lake import option_bars as option_bars_module
 from app.data_lake.admission import LakeAdmissionError
+from app.data_lake.option_lake import MAX_VENDOR_REQUESTS_IN_FLIGHT, vendor_request_gate
 from app.data_lake.option_listing import OptionListingFileError
 from app.data_lake.run_materialization import LakeMaterializationError
 from app.options.contract import OptionContract
 from app.options_backtest import chain_download
 from app.options_backtest.chain_download import (
     MAX_CONTRACTS_PER_DOWNLOAD,
-    MAX_REQUESTS_IN_FLIGHT,
     ContractNotOfExpiry,
     DownloadItem,
     ItemKind,
@@ -37,6 +38,7 @@ from app.options_backtest.chain_download import (
     TooManyContracts,
     ensure_chain_data,
 )
+from app.options_backtest.fetching import ensure_run_data
 from app.options_backtest.lake_data import LakeRunData
 from tests._helpers.fake_lake_catalog import FakeCatalog
 from tests._helpers.option_vendor import no_trades, traded
@@ -60,8 +62,12 @@ from tests.options_backtest._lake import (
 from tests.options_backtest._lake import fake_catalog as fake_catalog
 from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixed
 from tests.options_backtest._lake import tmp_lake as tmp_lake
+from tests.options_backtest._run_data import THU, WED
+from tests.options_backtest._run_lake import Vendor, eight_legs_setup, ladder_day
 
 STOCK_PATH = "equity/usa/minute/spy/20250613_trade.zip"
+# 2026-10-12 14:00 New York.
+NOW_MS = 1791828000000
 
 
 def _call(strike: int, day: date = FRIDAY) -> OptionContract:
@@ -560,8 +566,42 @@ async def test_no_more_than_four_requests_are_in_flight_and_four_are(
 
     items = await ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=contracts)
 
-    assert MAX_REQUESTS_IN_FLIGHT == 4 and peak == 4
+    assert MAX_VENDOR_REQUESTS_IN_FLIGHT == 4 and peak == 4
     assert all(item.outcome is Outcome.FETCHED for item in items)
+
+
+@respx.mock
+async def test_a_chain_download_and_a_run_at_once_share_the_one_limit_of_four_requests_in_flight(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # The run asks for the eight contract days of Wednesday (a call at each strike from 496 to 504 but the money, 500),
+    # and the chain download for the eight of Thursday: sixteen requests in all, each taking 0.4 seconds, and four
+    # places. The chain starts when the run's first request reaches the vendor, so its listing and its contracts meet
+    # the run's two waves of four. With the one limit the most in flight is four. With a limit of four each it would be
+    # eight, the chain's four beside the run's. The chain is awaited here, on the test's loop, as the route awaits it on
+    # the server's, and the run goes where a job's goes.
+    run_asked = threading.Event()
+    vendor = Vendor({WED: ladder_day(), THU: ladder_day()}, option_latency_s=0.4)
+    vendor.on_option_request = lambda _symbol: run_asked.set()
+    vendor.mount()
+    thursday_calls = [
+        OptionContract.of(root="SPY", expiry_date=THU, right="call", strike=strike)
+        for strike in (496, 497, 498, 499, 501, 502, 503, 504)
+    ]
+
+    async def the_chain_download() -> tuple[DownloadItem, ...]:
+        await asyncio.to_thread(run_asked.wait, 20)
+        return await ensure_chain_data("SPY", THU, expiry=THU, contracts=thursday_calls)
+
+    report, items = await asyncio.gather(
+        asyncio.to_thread(ensure_run_data, eight_legs_setup(), [WED], now_ms=NOW_MS, should_stop=lambda: False),
+        the_chain_download(),
+    )
+
+    assert MAX_VENDOR_REQUESTS_IN_FLIGHT == 4
+    assert (vendor.peak_in_flight, len(vendor.option_requests)) == (4, 16), "two limits of four would peak at eight"
+    assert report.option_days_fetched == 8
+    assert [item.outcome for item in items] == [Outcome.FETCHED] * 10  # the listing, the underlying and the eight
 
 
 @respx.mock
@@ -570,10 +610,11 @@ async def test_the_underlyings_fetch_waits_for_a_free_place_among_the_requests_i
 ) -> None:
     # One call fetches the listing and the underlying together and only then the contracts, so the fetch of the
     # underlying never meets four contract requests; the place it takes is the rule that it is one of the requests
-    # counted, and is shown here with every place taken.
-    gate = asyncio.Semaphore(1)
-    await gate.acquire()
-    fetch = asyncio.create_task(chain_download._capture_underlying("SPY", FRIDAY, gate, None))
+    # counted, and is shown here with every place of the process's gate taken.
+    gate = vendor_request_gate()
+    for _ in range(MAX_VENDOR_REQUESTS_IN_FLIGHT):
+        await gate.acquire()
+    fetch = asyncio.create_task(chain_download._capture_underlying("SPY", FRIDAY, None))
 
     await asyncio.sleep(0.2)
     waited = (fetch.done(), len(materializer.calls))
@@ -621,7 +662,7 @@ async def test_an_unreachable_catalog_is_raised_after_the_other_capture_has_fini
 
 
 @respx.mock
-async def test_the_catalog_pool_of_the_calling_loop_is_made_before_the_first_capture_touches_the_catalog(
+async def test_the_catalog_pool_of_the_loop_the_captures_run_on_is_made_before_the_first_capture_touches_the_catalog(
     fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     order: list[str] = []
