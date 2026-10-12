@@ -204,16 +204,7 @@ export default tseslint.config(
   },
   {
     files: ["**/*.html"],
-    extends: [
-      ...angular.configs.templateRecommended,
-      ...angular.configs.templateAccessibility,
-    ],
-    rules: {
-      // Accessibility — downgraded to warn for this trading dashboard
-      "@angular-eslint/template/label-has-associated-control": "warn",
-      "@angular-eslint/template/click-events-have-key-events": "warn",
-      "@angular-eslint/template/interactive-supports-focus": "warn",
-    },
+    extends: [...angular.configs.templateRecommended],
   },
   // No money arithmetic, layer 1: everywhere (see the note at the top).
   {

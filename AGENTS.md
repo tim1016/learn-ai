@@ -97,6 +97,13 @@ ordering across unrelated domains.
 - Two things stay even when nothing reads or calls them: money trails (orders, fills, fees, cash, positions, P&L, receipts, transactions) and validated volatility and options math (a test proves its numbers). Their routes and plumbing still go when dead. Clerk stores are never deleted or moved.
 - An opt-in feature that no checked-in config turns on is not dead.
 
+## Accessibility
+
+**Owner decision, 2026-10-12: accessibility bugs are out of scope — development
+speed wins.** Treat ARIA, contrast, focus and keyboard findings as non-defects:
+skip them in fixes, issues and reviews. The template a11y lint preset stays off
+in `Frontend/eslint.config.mjs`.
+
 ## Hard rules
 
 - Never commit secrets, API keys, or connection strings. `.env` files only.
