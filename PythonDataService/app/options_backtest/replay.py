@@ -196,8 +196,8 @@ class _Session:
 
     def _minute(self, t: int) -> None:
         self._fill_entries(t)
-        self._fill_closes(t)
         bars = self._read_held_bars(t)
+        self._fill_closes(t, bars)
         if t == self.exit_ms:
             self._exit_time(t)
         elif t < self.exit_ms and not self._stops(t, bars):
@@ -266,12 +266,12 @@ class _Session:
         self.cash -= taken.cost
         self._event(EventKind.ENTRY_FILLED, t, leg, position=position, contract=fill.contract, price=fill.filled)
 
-    def _fill_closes(self, t: int) -> None:
+    def _fill_closes(self, t: int, bars: dict[str, MinuteBar | None]) -> None:
         for leg in self.legs:
             if leg.phase is not _Phase.HELD:
                 continue
             position = _position_of(leg)
-            bar = self._option_bar(position.attempt.contract, t)
+            bar = bars[leg.setup.leg_id]
             if position.close is None or bar is None:
                 continue
             fill = self._fill(leg, position.attempt.contract, position.attempt.multiplier, "sell", t, bar)
@@ -300,7 +300,8 @@ class _Session:
         )
 
     def _read_held_bars(self, t: int) -> dict[str, MinuteBar | None]:
-        """Every held leg's bar closing at ``t``, read once: it is the last close seen and the stop's price."""
+        """Every held leg's bar closing at ``t``, read once: it prices a close that is due, is the last close
+        seen, and is the bar a stop is read on."""
         bars: dict[str, MinuteBar | None] = {}
         for leg in self.legs:
             if leg.phase is _Phase.HELD:
@@ -374,6 +375,8 @@ class _Session:
                 continue
             position = _position_of(leg)
             bar = bars.get(leg.setup.leg_id)
+            # A leg with a close pending and a bar this minute was just sold by the fill step, so ``close is None``
+            # always holds here today. It stays because it states the rule: a leg already being closed is not stopped.
             if (
                 position.close is None
                 and position.stop_level is not None
