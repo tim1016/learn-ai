@@ -211,6 +211,17 @@ class OptionsBacktestSetup(BaseModel):
     fees: FeePolicy
     starting_cash_usd: Annotated[Decimal, Field(gt=0, max_digits=14, decimal_places=2)]
 
+    def window_fits(self, *, session_open_ms: int, session_close_ms: int) -> bool:
+        """Whether a session with that open and close can trade this setup.
+
+        An entry is read on a minute's close, so the entry time is at least one minute after the open.
+        The exit's sales fill in the minute after the exit time, so it is at least one minute before the
+        close. And the exit is after the entry. A half day can fail this where a full day passes.
+        """
+        entry_ms = self.entry.at(session_open_ms=session_open_ms, session_close_ms=session_close_ms)
+        exit_ms = self.exit.at(session_open_ms=session_open_ms, session_close_ms=session_close_ms)
+        return session_open_ms + MS_PER_MINUTE <= entry_ms < exit_ms <= session_close_ms - MS_PER_MINUTE
+
     @model_validator(mode="after")
     def _every_leg_has_its_own_id(self) -> OptionsBacktestSetup:
         ids = [leg.leg_id for leg in self.legs]
