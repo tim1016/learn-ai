@@ -409,10 +409,10 @@ async def test_the_worker_runs_the_service_and_reports_the_phases_and_progress_t
     listed = [phase.id for phase in JOB_PHASES["options_backtest"]]
     assert emitter.phases == ["checking_data", "downloading_data", "replaying", "saving"]
     assert [listed.index(phase) for phase in emitter.phases] == sorted(listed.index(phase) for phase in emitter.phases)
-    # Progress is counted in sessions: four fetched, then four replayed.
+    # Progress is counted in sessions: four checked, four fetched, then four replayed.
     assert [value for kind, value in emitter.events if kind == "progress"] == [
         (n, 4, "sessions") for n in (1, 2, 3, 4)
-    ] * 2
+    ] * 3
     # Net profit -52.65 + 36.70 - 53.30 = -69.25 over four sessions and three trades (test_service.py works it out).
     assert result == {
         "run_id": 41,
