@@ -23,6 +23,7 @@ import asyncpg
 import pytest
 from pydantic import BaseModel
 
+from app.options_backtest import saved_runs
 from app.options_backtest.results import Fill, LegTrade
 from app.options_backtest.run import RunResult
 from app.options_backtest.saved_runs import (
@@ -632,6 +633,70 @@ async def test_every_money_column_reads_back_as_the_digits_it_was_written_never_
     assert [(where, str(value)) for where, value in fields_read] == [(where, reads) for where, _ in fields_read]
     assert (str(opened.record.headline.net_profit_usd), str(opened.record.headline.ending_cash_usd)) == (reads, reads)
     assert all(value == Decimal(written) for _, value in fields_read)
+
+
+def _as_asyncpg_returns_it(value: Any) -> Any:
+    """A whole number with zeros at its end in the exponent form asyncpg gives a NUMERIC: 10000 as 1E+4."""
+    if isinstance(value, Decimal) and value.is_finite() and value != 0 and value.as_tuple().exponent == 0:
+        return value.normalize()
+    return value
+
+
+def _columns_of(statement: str) -> list[str]:
+    columns = re.search(r"\((.*?)\)\s*VALUES", statement, re.S)
+    assert columns is not None
+    return [name.strip() for name in columns.group(1).split(",")]
+
+
+@pytest.mark.parametrize(
+    ("value", "reads"),
+    [(Decimal(10000), "10000"), (Decimal("1" + "0" * 40), "1" + "0" * 40)],
+)
+def test_a_row_as_asyncpg_returns_it_is_read_with_every_number_in_plain_digits_and_needs_no_database(
+    value: Decimal, reads: str
+) -> None:
+    # This one gates the reading of a row on every pull request, where the tests that need a database do not run. The
+    # rows are what the store writes for the busy run with every money set to ``value``, each number turned into the
+    # form asyncpg returns it in (1E+4, and 1E+40), which the probe in the store's docstring found.
+    busy = _with_every_stored_money_set_to(a_busy_run(), value)
+    sessions = []
+    for session in busy.sessions:
+        session_row = dict(
+            zip(
+                _columns_of(saved_runs._INSERT_SESSION),
+                (_as_asyncpg_returns_it(each) for each in saved_runs._session_row(1, 0, session)),
+                strict=True,
+            )
+        )
+        trade_rows = [
+            dict(
+                zip(
+                    _columns_of(saved_runs._INSERT_TRADE),
+                    (
+                        _as_asyncpg_returns_it(each)
+                        for each in saved_runs._trade_row(1, session.session_open_ms, n, trade)
+                    ),
+                    strict=True,
+                )
+            )
+            for n, trade in enumerate(session.outcome.trades)
+        ]
+        assert str(session_row["cash_before_usd"]) == str(_as_asyncpg_returns_it(value)) != reads
+        sessions.append(saved_runs._session(session_row, tuple(saved_runs._trade(row) for row in trade_rows)))
+    record_row = {
+        "id": 1, "created_at_ms": 1, "finished_at_ms": 2, "job_id": "j", "status": "complete", "setup_name": None,
+        "underlying": "SPY", "first_session_open_ms": 1, "last_session_open_ms": 2, "sessions_requested": 5,
+        "fee_policy_text": "x", "calendar_identity": "NYSE", "calendar_package_version": "1", "failure_code": None,
+        "failure_reason": None, "failure_detail_json": None, "sessions_tested": 5, "sessions_traded": 3,
+        "trades": 3, "trades_won": 1, "net_profit_usd": _as_asyncpg_returns_it(value),
+        "ending_cash_usd": _as_asyncpg_returns_it(value),
+    }  # fmt: skip
+    headline = saved_runs._record(record_row, lambda _job_id: None).headline
+
+    texts = [(where, str(each)) for where, each in _stored_money(replace(busy, sessions=tuple(sessions)))]
+    assert len(texts) > 100
+    assert texts == [(where, reads) for where, _ in texts]
+    assert headline is not None and (str(headline.net_profit_usd), str(headline.ending_cash_usd)) == (reads, reads)
 
 
 async def test_a_run_saved_with_the_awkward_figures_of_a_real_one_reads_back_with_the_same_text_in_every_money_column(
