@@ -641,3 +641,103 @@ def test_the_runtime_mounts_the_grid_dispatch_surface() -> None:
     paths = {getattr(route, "path", None) for route in runtime_app.routes}
     assert "/api/jobs-internal/golden-search" in paths
     assert "/api/jobs-internal/grid-search" in paths
+
+
+# ── The walk-forward dispatch joins the boundary (#3050) ──────────────────
+
+
+WF_PAYLOAD = {
+    "job_id": "job-wf-1",
+    "strategy_key": "sma_crossover",
+    "symbol": "SPY",
+    "param_ranges": {"short_window": {"type": "value_list", "values": [2, 3]}},
+    "start_ms": 1735689600000,
+    "end_ms": 1738368000000,
+    "training_months": 1,
+    "test_months": 1,
+}
+
+
+async def test_a_forwarded_walk_forward_acceptance_passes_through(research_mode, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.research_runtime_client import forward_walk_forward_study_job
+
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "sec")
+    with respx.mock(base_url="http://127.0.0.1:8000") as mock:
+        route = mock.post("/api/jobs-internal/walk-forward-study").mock(
+            return_value=httpx.Response(202, json={"job_id": "job-wf-1", "study_id": "study-runtime", "status": "queued"})
+        )
+        answer = await forward_walk_forward_study_job(dict(WF_PAYLOAD))
+    assert answer == {"job_id": "job-wf-1", "study_id": "study-runtime", "status": "queued"}
+    assert route.calls.last.request.headers["X-Data-Plane-Control-Secret"] == "sec"
+
+
+async def test_a_walk_forward_timeout_after_acceptance_joins_the_original_dispatch(
+    research_mode, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.research.persistence import lifecycle
+    from app.services.research_runtime_client import forward_walk_forward_study_job
+
+    async def _bound_to_this(job_id):
+        return "study-1"
+
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "sec")
+    monkeypatch.setattr(client, "_walk_forward_job_binding", _bound_to_this)
+    monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: True)
+    with respx.mock(base_url="http://127.0.0.1:8000") as mock:
+        mock.post("/api/jobs-internal/walk-forward-study").mock(side_effect=httpx.ConnectTimeout("boom"))
+        answer = await forward_walk_forward_study_job(dict(WF_PAYLOAD))
+    assert answer == {"job_id": WF_PAYLOAD["job_id"], "study_id": "study-1", "status": "queued"}
+
+
+async def test_a_walk_forward_timeout_without_a_live_binding_is_a_refusal(
+    research_mode, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fastapi import HTTPException
+
+    from app.services.research_runtime_client import forward_walk_forward_study_job
+
+    async def _unbound(job_id):
+        return None
+
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "sec")
+    monkeypatch.setattr(client, "_walk_forward_job_binding", _unbound)
+    with respx.mock(base_url="http://127.0.0.1:8000") as mock:
+        mock.post("/api/jobs-internal/walk-forward-study").mock(side_effect=httpx.ConnectTimeout("boom"))
+        with pytest.raises(HTTPException) as thrown:
+            await forward_walk_forward_study_job(dict(WF_PAYLOAD))
+    assert thrown.value.status_code == 502 and "did not accept" in str(thrown.value.detail)
+
+
+async def test_walk_forward_forwarding_mode_never_prepares_or_runs_a_local_thread(
+    research_mode, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fastapi import FastAPI
+
+    from app.routers import walk_forward_study as router_module
+    from app.routers.walk_forward_study import jobs_router
+
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "sec")
+
+    async def fake_forward(payload):
+        return {"job_id": payload["job_id"], "study_id": "study-runtime", "status": "queued"}
+
+    def no_local(*args, **kwargs):
+        raise AssertionError("the forwarding API must not prepare, stamp or run a study (#3050)")
+
+    monkeypatch.setattr(client, "forward_walk_forward_study_job", fake_forward)
+    monkeypatch.setattr(router_module.service, "prepare_launch", no_local)
+    monkeypatch.setattr(router_module, "run_in_thread", no_local)
+
+    app = FastAPI()
+    app.include_router(jobs_router, prefix="/api/jobs-internal")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as http:
+        response = await http.post("/api/jobs-internal/walk-forward-study", json=WF_PAYLOAD)
+    assert response.status_code == 202 and response.json()["study_id"] == "study-runtime"
+
+
+def test_the_runtime_mounts_the_walk_forward_dispatch_surface() -> None:
+    from app.research_runtime import app as runtime_app
+
+    paths = {getattr(route, "path", None) for route in runtime_app.routes}
+    assert "/api/jobs-internal/walk-forward-study" in paths
