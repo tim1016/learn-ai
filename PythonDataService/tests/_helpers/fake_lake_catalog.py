@@ -192,6 +192,23 @@ class FakeCatalog:
                 return self._record(row)
         return None
 
+    async def select_complete_metadata_artifacts(
+        self, market, symbol, provider, price_adjustment_mode, data_root_id=None
+    ) -> list[ArtifactRecord]:
+        # Root-scoped like the real query: an omitted root is the active one (#1876).
+        root_id = data_root_id if data_root_id is not None else root_identity.active_root_id()
+        return [
+            self._record(row)
+            for row in self.rows.values()
+            if row["artifact_kind"] == "metadata"
+            and row["data_root_id"] == root_id
+            and row["market"] == market
+            and row["symbol"] == symbol
+            and row["provider"] == provider
+            and row["price_adjustment_mode"] == price_adjustment_mode
+            and row["status"] == "complete"
+        ]
+
     async def select_metadata_claim_state(
         self, data_contract_hash: str, data_root_id=None
     ) -> catalog_client.ArtifactClaimState | None:
@@ -580,6 +597,7 @@ FAKE_CATALOG_FUNCTIONS: tuple[str, ...] = (
     "init_pool",
     "claim_metadata_artifact",
     "select_complete_metadata_artifact",
+    "select_complete_metadata_artifacts",
     "select_metadata_claim_state",
     "mark_metadata_artifacts_stale_for_path",
     "claim_minute_bar",

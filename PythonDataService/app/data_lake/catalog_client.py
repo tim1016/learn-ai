@@ -273,6 +273,66 @@ async def select_complete_metadata_artifact(
     )
 
 
+async def select_complete_metadata_artifacts(
+    market: str,
+    symbol: str,
+    provider: str,
+    price_adjustment_mode: str,
+    data_root_id: UUID | None = None,
+) -> list[ArtifactRecord]:
+    """Every complete metadata row of one symbol under one market, provider and mode, in one query.
+
+    A metadata row is identified by its ``DataContractHash`` alone and carries no
+    queryable date, so a caller that wants "which dates are held" (the option
+    listings, one per underlying and as-of date) reads all of an underlying's rows
+    here and matches the hashes it can recompute, instead of asking once per date.
+    Root-scoped like ``select_complete_metadata_artifact`` (issue #1876).
+    """
+    root_id = _resolve_data_root_id(data_root_id)
+    query = """
+        SELECT "Id", "ArtifactKind", "Market", "Symbol", "TradingDate",
+               "Resolution", "DataType", "Provider", "PriceAdjustmentMode",
+               "DataContractHash", "CorpActionRevision", "FilePath",
+               COALESCE("FileSha256", '') AS file_sha256,
+               "RowCount", "FirstBarStartMs", "LastBarStartMs", "FileSizeBytes",
+               "DataRootId"
+          FROM "DataLakeArtifacts"
+         WHERE "ArtifactKind" = 'metadata'
+           AND "Market" = $1
+           AND "Symbol" = $2
+           AND "Provider" = $3
+           AND "PriceAdjustmentMode" = $4
+           AND "DataRootId" = $5
+           AND "Status" = 'complete'
+         ORDER BY "Id"
+    """
+    async with connection() as conn:
+        rows = await conn.fetch(query, market, symbol, provider, price_adjustment_mode, root_id)
+    return [
+        ArtifactRecord(
+            id=r["Id"],
+            artifact_kind=r["ArtifactKind"],
+            market=r["Market"],
+            symbol=r["Symbol"],
+            trading_date=r["TradingDate"],
+            resolution=r["Resolution"],
+            data_type=r["DataType"],
+            provider=r["Provider"],
+            price_adjustment_mode=r["PriceAdjustmentMode"],
+            data_contract_hash=r["DataContractHash"],
+            corporate_action_version=r["CorpActionRevision"],
+            file_path=r["FilePath"],
+            file_sha256=r["file_sha256"],
+            row_count=r["RowCount"],
+            first_bar_start_ms=r["FirstBarStartMs"],
+            last_bar_start_ms=r["LastBarStartMs"],
+            file_size_bytes=r["FileSizeBytes"],
+            data_root_id=r["DataRootId"],
+        )
+        for r in rows
+    ]
+
+
 async def scope_verified_legacy_metadata(
     artifact_id: int, data_root_id: UUID, price_adjustment_mode: str,
     file_path: str, file_sha256: str, file_size_bytes: int,

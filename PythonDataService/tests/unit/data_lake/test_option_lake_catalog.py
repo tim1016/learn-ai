@@ -1,0 +1,404 @@
+"""Option bars and option listings against the real catalog table (#3030).
+
+Live-Postgres tests, in the style of ``test_catalog_write_ops.py``: they skip
+when ``POSTGRES_URL`` is unset, and the ``clean_artifacts`` fixture truncates
+``DataLakeArtifacts`` (so ``POSTGRES_URL_IS_EPHEMERAL=1`` must attest the
+database is disposable). The table is created by a .NET migration the machine
+this was written on cannot run; it was loaded from a schema-only dump of the
+dev table into a throwaway ``postgres:16``.
+
+They run the real capture and read functions with the vendor faked by
+``respx``, so a row is claimed, published under its lease and completed by the
+real SQL, and every CHECK constraint on the table sees an option row and a
+listing row. The in-memory twins are ``test_option_bars.py`` and
+``test_option_listing.py``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+from datetime import date
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+
+import asyncpg
+import httpx
+import pytest
+import respx
+
+from app.config import settings
+from app.data_lake import catalog_client
+from app.data_lake import option_bars as option_bars_module
+from app.data_lake.option_bars import ensure_option_day_bars, option_minute_trade_dch, read_option_day_bars
+from app.data_lake.option_listing import (
+    captured_listing_dates,
+    ensure_option_listing,
+    option_listing_dch,
+    read_option_listing,
+)
+from app.data_lake.polygon_fetcher import PolygonBar
+from app.data_lake.types import ArtifactIdentity
+from app.options.contract import OptionContract
+from tests._helpers.fake_lake_catalog import point_lake_writer_at_tmp
+
+pytestmark = pytest.mark.asyncio
+
+TRADING_DAY = date(2025, 6, 13)
+SESSION_OPEN_MS = 1749821400000
+MINUTE_MS = 60_000
+NOW_2026_10_12_MS = 1791828000000
+CONTRACT = OptionContract.of(root="SPY", expiry_date=date(2025, 6, 13), right="call", strike=600)
+SYMBOL = "SPY250613C00600000"
+CONTRACTS_URL = "https://api.polygon.io/v3/reference/options/contracts"
+
+
+def _postgres_url() -> str:
+    url = settings.POSTGRES_URL or os.getenv("POSTGRES_URL", "")
+    if not url:
+        pytest.skip("POSTGRES_URL not configured")
+    return url
+
+
+@pytest.fixture
+async def clean_artifacts():
+    """Truncate DataLakeArtifacts before+after each test."""
+    for after in (False, True):
+        conn = await asyncpg.connect(_postgres_url())
+        try:
+            await conn.execute('TRUNCATE TABLE "DataLakeArtifacts" RESTART IDENTITY CASCADE')
+        finally:
+            await conn.close()
+        if not after:
+            yield
+
+
+@pytest.fixture
+async def pool():
+    await catalog_client.close_pool()
+    await catalog_client.init_pool()
+    yield
+    await catalog_client.close_pool()
+
+
+@pytest.fixture
+def tmp_lake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    return point_lake_writer_at_tmp(tmp_path, monkeypatch)
+
+
+async def _rows() -> list[asyncpg.Record]:
+    conn = await asyncpg.connect(_postgres_url())
+    try:
+        return await conn.fetch('SELECT * FROM "DataLakeArtifacts" ORDER BY "Id"')
+    finally:
+        await conn.close()
+
+
+async def _sql(statement: str, *args: Any) -> None:
+    conn = await asyncpg.connect(_postgres_url())
+    try:
+        await conn.execute(statement, *args)
+    finally:
+        await conn.close()
+
+
+def _bar(index: int = 0, **overrides: Any) -> dict[str, Any]:
+    bar = {"v": 12, "vw": 1.27, "o": 1.27, "h": 1.31, "l": 1.25, "c": 1.27, "t": SESSION_OPEN_MS + index * MINUTE_MS, "n": 3}
+    bar.update(overrides)
+    return bar
+
+
+def _bars_ok(results: list[dict[str, Any]]) -> httpx.Response:
+    return httpx.Response(200, json={"ticker": f"O:{SYMBOL}", "status": "OK", "resultsCount": len(results), "results": results})
+
+
+def _mock_bars(response: httpx.Response, *, contract: str = SYMBOL) -> respx.Route:
+    return respx.get(url__regex=rf"https://api\.polygon\.io/v2/aggs/ticker/O:{contract}/range/1/minute/.*").mock(
+        return_value=response
+    )
+
+
+def _listing_row(ticker: str, strike: int, **overrides: Any) -> dict[str, Any]:
+    row = {
+        "ticker": ticker, "underlying_ticker": "SPY", "contract_type": "call", "strike_price": strike,
+        "expiration_date": "2025-06-13", "exercise_style": "american", "shares_per_contract": 100,
+    }
+    row.update(overrides)
+    return row
+
+
+def _mock_listing(rows: list[dict[str, Any]]) -> respx.Route:
+    return respx.get(CONTRACTS_URL).mock(return_value=httpx.Response(200, json={"status": "OK", "results": rows}))
+
+
+# ── An option row on the real table ──────────────────────────────────────
+
+
+@respx.mock
+async def test_an_option_row_is_claimed_published_and_completed_by_the_real_sql(clean_artifacts, pool, tmp_lake) -> None:
+    _mock_bars(_bars_ok([_bar(0), _bar(1, o=1.30, h=1.40, l=1.28, c=1.35, v=40)]))
+
+    result = await ensure_option_day_bars(CONTRACT, TRADING_DAY)
+
+    assert result.failure is None and result.record is not None
+    [row] = await _rows()
+    assert (row["ArtifactKind"], row["Market"], row["Symbol"], row["TradingDate"]) == (
+        "time_series_bars", "usa_options", SYMBOL, TRADING_DAY,
+    )
+    assert (row["Resolution"], row["DataType"], row["Provider"], row["PriceAdjustmentMode"]) == (
+        "minute", "trade", "polygon", "raw",
+    )
+    assert row["Status"] == "complete"
+    assert (row["RowCount"], row["FirstBarStartMs"], row["LastBarStartMs"]) == (2, SESSION_OPEN_MS, SESSION_OPEN_MS + MINUTE_MS)
+    assert row["FileSha256"] == result.record.file_sha256
+    assert row["DataContractHash"].strip() == option_minute_trade_dch()
+    assert row["LeaseOwner"] is None and row["LeaseGeneration"] == 1
+    assert row["FilePath"] == "option/usa/minute/spy/spy250613c00600000/20250613_trade.zip"
+
+
+@respx.mock
+async def test_a_completed_day_reads_back_through_the_real_admission(clean_artifacts, pool, tmp_lake) -> None:
+    _mock_bars(_bars_ok([_bar(0), _bar(1, o=0.29, h=0.29, l=0.29, c=0.29, v=1)]))
+    result = await ensure_option_day_bars(CONTRACT, TRADING_DAY)
+
+    day = await asyncio.to_thread(read_option_day_bars, CONTRACT, TRADING_DAY)
+
+    assert day is not None and result.record is not None
+    assert day.sha256 == result.record.file_sha256
+    assert [bar.close for bar in day.bars] == [Decimal("1.27"), Decimal("0.29")]
+    assert [bar.start_ms for bar in day.bars] == [SESSION_OPEN_MS, SESSION_OPEN_MS + MINUTE_MS]
+
+
+@respx.mock
+async def test_a_second_claim_for_the_same_contract_and_day_is_refused_but_other_keys_are_not(
+    clean_artifacts, pool, tmp_lake
+) -> None:
+    def identity(symbol: str = SYMBOL, day: date = TRADING_DAY, market: str = "usa_options") -> ArtifactIdentity:
+        return ArtifactIdentity(
+            artifact_kind="time_series_bars", market=market, symbol=symbol, trading_date=day, resolution="minute",
+            data_type="trade", provider="polygon", price_adjustment_mode="raw",
+        )
+
+    async def claim(who: str, ident: ArtifactIdentity) -> int | None:
+        return await catalog_client.claim_minute_bar(
+            identity=ident, worker_id=who, lease_ttl_ms=300_000, data_contract_hash=option_minute_trade_dch(),
+            file_path="x.zip",
+        )
+
+    first = await claim("w-1", identity())
+    second = await claim("w-2", identity())
+    another_day = await claim("w-1", identity(day=date(2025, 6, 12)))
+    another_contract = await claim("w-1", identity(symbol="SPY250613C00601000"))
+    same_symbol_in_the_stock_market = await claim("w-1", identity(market="usa"))
+
+    assert first is not None and second is None
+    assert another_day is not None and another_contract is not None
+    # The market is part of the key: the stock tree and the option tree never collide.
+    assert same_symbol_in_the_stock_market is not None
+
+
+@respx.mock
+async def test_a_contract_that_never_traded_completes_with_zero_rows_and_reads_back_as_captured(
+    clean_artifacts, pool, tmp_lake
+) -> None:
+    route = _mock_bars(httpx.Response(200, json={"ticker": f"O:{SYMBOL}", "status": "OK", "queryCount": 0, "resultsCount": 0}))
+
+    result = await ensure_option_day_bars(CONTRACT, TRADING_DAY)
+    again = await ensure_option_day_bars(CONTRACT, TRADING_DAY)
+
+    assert result.failure is None and result.record is not None
+    [row] = await _rows()
+    assert row["Status"] == "complete"
+    assert (row["RowCount"], row["FirstBarStartMs"], row["LastBarStartMs"]) == (0, 0, 0)
+    assert row["FileSha256"] == result.record.file_sha256 and row["FileSizeBytes"] == result.record.file_size_bytes
+    assert again.reused is True and route.call_count == 1
+    captured = await asyncio.to_thread(read_option_day_bars, CONTRACT, TRADING_DAY)
+    never = await asyncio.to_thread(read_option_day_bars, CONTRACT, date(2025, 6, 12))
+    assert captured is not None and captured.bars == ()
+    assert never is None
+
+
+@respx.mock
+async def test_a_contract_symbol_of_21_characters_is_refused_before_the_table_could_object(
+    clean_artifacts, pool, tmp_lake
+) -> None:
+    long_contract = OptionContract.of(root="ABCDEF", expiry_date=date(2025, 6, 13), right="call", strike=600)
+    ident = ArtifactIdentity(
+        artifact_kind="time_series_bars", market="usa_options", symbol=long_contract.occ_symbol, trading_date=TRADING_DAY,
+        resolution="minute", data_type="trade", provider="polygon", price_adjustment_mode="raw",
+    )
+
+    result = await ensure_option_day_bars(long_contract, TRADING_DAY)
+
+    assert result.failure is not None and result.failure.reason == "symbol_too_long"
+    assert await _rows() == []
+    # The refusal is not caution for its own sake: the column really is varchar(20).
+    with pytest.raises(asyncpg.StringDataRightTruncationError):
+        await catalog_client.claim_minute_bar(
+            identity=ident, worker_id="w", lease_ttl_ms=1000, data_contract_hash=option_minute_trade_dch(), file_path="x.zip"
+        )
+
+
+@respx.mock
+async def test_a_failed_day_outside_the_plan_is_asked_again_each_time_on_the_real_retry_sql(
+    clean_artifacts, pool, tmp_lake
+) -> None:
+    old_contract = OptionContract.of(root="SPY", expiry_date=date(2024, 10, 18), right="call", strike=580)
+    route = _mock_bars(
+        httpx.Response(403, json={"status": "NOT_AUTHORIZED", "message": "Your plan doesn't include this data timeframe."}),
+        contract="SPY241018C00580000",
+    )
+
+    reasons = [
+        (await ensure_option_day_bars(old_contract, date(2024, 10, 11), now_ms=NOW_2026_10_12_MS)).failure
+        for _ in range(5)
+    ]
+
+    assert [f.reason for f in reasons if f is not None] == ["outside_data_plan"] * 5
+    [row] = await _rows()
+    assert (row["Status"], row["LastError"], row["AttemptCount"]) == ("failed", "outside_data_plan", 5)
+    assert route.call_count == 5
+
+
+@respx.mock
+async def test_a_complete_row_whose_file_has_gone_is_refreshed_under_a_new_generation(clean_artifacts, pool, tmp_lake) -> None:
+    route = _mock_bars(_bars_ok([_bar(0)]))
+    first = await ensure_option_day_bars(CONTRACT, TRADING_DAY)
+    assert first.record is not None
+    (tmp_lake / "lake" / "raw" / first.record.file_path).unlink()
+
+    again = await ensure_option_day_bars(CONTRACT, TRADING_DAY)
+
+    assert again.failure is None and again.reused is False and route.call_count == 2
+    [row] = await _rows()
+    assert (row["Status"], row["LeaseGeneration"], row["AttemptCount"]) == ("complete", 2, 2)
+
+
+@respx.mock
+async def test_a_writer_whose_lease_was_taken_while_it_fetched_publishes_nothing_under_the_real_row_lock(
+    clean_artifacts, pool, tmp_lake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fetch_then_lose_the_lease(*args: Any, **kwargs: Any) -> list[PolygonBar]:
+        await _sql('UPDATE "DataLakeArtifacts" SET "LeaseGeneration" = "LeaseGeneration" + 1, "LeaseOwner" = \'the-winner\'')
+        return [PolygonBar(t_ms=SESSION_OPEN_MS, open=1.27, high=1.31, low=1.25, close=1.27, volume=Decimal(12), vwap=1.27, n=3)]
+
+    monkeypatch.setattr(option_bars_module, "fetch_minute_trade_aggregates", fetch_then_lose_the_lease)
+
+    result = await ensure_option_day_bars(CONTRACT, TRADING_DAY)
+
+    assert result.record is None and result.failure is not None and result.failure.reason == "lease_timeout"
+    [row] = await _rows()
+    assert (row["Status"], row["LeaseOwner"], row["LeaseGeneration"]) == ("fetching", "the-winner", 2)
+    assert row["FileSha256"] is None
+    assert [p for p in (tmp_lake / "lake" / "raw").rglob("*.zip")] == []
+
+
+# ── A listing row on the real table ──────────────────────────────────────
+
+
+@respx.mock
+async def test_a_listing_row_is_claimed_published_and_completed_by_the_real_sql(clean_artifacts, pool, tmp_lake) -> None:
+    _mock_listing([_listing_row("O:SPY250613C00375000", 375), _listing_row("O:SPY250613P00400000", 400, contract_type="put")])
+
+    result = await ensure_option_listing("SPY", TRADING_DAY)
+
+    assert result.failure is None and result.record is not None
+    [row] = await _rows()
+    assert (row["ArtifactKind"], row["Market"], row["Symbol"], row["Provider"], row["PriceAdjustmentMode"]) == (
+        "metadata", "usa_options", "SPY", "polygon", "raw",
+    )
+    assert (row["TradingDate"], row["Resolution"], row["DataType"]) == (None, None, None)
+    assert (row["Status"], row["RowCount"]) == ("complete", 2)
+    assert row["DataContractHash"].strip() == option_listing_dch("SPY", TRADING_DAY)
+    assert row["FileSha256"] == result.record.file_sha256
+    listing = await asyncio.to_thread(read_option_listing, "SPY", TRADING_DAY)
+    assert listing is not None and listing.sha256 == result.record.file_sha256
+    assert [r.standard for r in listing.rows] == [True, True]
+
+
+@respx.mock
+async def test_a_second_claim_for_the_same_listing_is_refused(clean_artifacts, pool, tmp_lake) -> None:
+    _mock_listing([_listing_row("O:SPY250613C00375000", 375)])
+    captured = await ensure_option_listing("SPY", TRADING_DAY)
+    identity = ArtifactIdentity(
+        artifact_kind="metadata", market="usa_options", symbol="SPY", provider="polygon", price_adjustment_mode="raw"
+    )
+
+    second = await catalog_client.claim_metadata_artifact(
+        identity=identity, worker_id="w-2", lease_ttl_ms=300_000,
+        data_contract_hash=option_listing_dch("SPY", TRADING_DAY), file_path="x.zip",
+    )
+    other_day = await catalog_client.claim_metadata_artifact(
+        identity=identity, worker_id="w-2", lease_ttl_ms=300_000,
+        data_contract_hash=option_listing_dch("SPY", date(2025, 6, 12)), file_path="y.zip",
+    )
+
+    assert captured.record is not None
+    assert second is None
+    assert other_day is not None
+
+
+@respx.mock
+async def test_the_captured_listing_dates_come_from_the_real_table_in_one_select(clean_artifacts, pool, tmp_lake) -> None:
+    respx.get(CONTRACTS_URL, params={"as_of": "2025-06-12"}).mock(
+        return_value=httpx.Response(200, json={"status": "OK", "results": [_listing_row("O:SPY250613C00375000", 375)]})
+    )
+    respx.get(CONTRACTS_URL, params={"as_of": "2025-06-13"}).mock(
+        return_value=httpx.Response(200, json={"status": "OK", "results": [_listing_row("O:SPY250613C00375000", 375)]})
+    )
+    respx.get(CONTRACTS_URL, params={"as_of": "2025-06-16"}).mock(return_value=httpx.Response(500, text="boom"))
+    for day in (date(2025, 6, 12), date(2025, 6, 13), date(2025, 6, 16)):
+        await ensure_option_listing("SPY", day)
+
+    captured = await captured_listing_dates("SPY", date(2025, 6, 11), date(2025, 6, 20))
+    nothing_for_another_underlying = await captured_listing_dates("QQQ", date(2025, 6, 11), date(2025, 6, 20))
+
+    assert captured == (date(2025, 6, 12), date(2025, 6, 13))
+    assert nothing_for_another_underlying == ()
+
+
+# ── Neither kind of row shows up in a stock answer ───────────────────────
+
+
+@respx.mock
+async def test_option_and_listing_rows_stay_out_of_every_stock_answer_the_catalog_gives(clean_artifacts, pool, tmp_lake) -> None:
+    # One real stock row, so the stock answers are not empty for the wrong reason.
+    stock = ArtifactIdentity(
+        artifact_kind="time_series_bars", market="usa", symbol="SPY", trading_date=TRADING_DAY, resolution="minute",
+        data_type="trade", provider="polygon", price_adjustment_mode="raw",
+    )
+    stock_id = await catalog_client.claim_minute_bar(
+        identity=stock, worker_id="w", lease_ttl_ms=300_000, data_contract_hash="a" * 64, file_path="equity/x.zip"
+    )
+    assert stock_id is not None
+    assert await catalog_client.complete_artifact(
+        stock_id, 390, SESSION_OPEN_MS, SESSION_OPEN_MS + 389 * MINUTE_MS, 1000, "b" * 64,
+        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
+    )
+    _mock_bars(_bars_ok([_bar(0)]))
+    _mock_listing([_listing_row("O:SPY250613C00375000", 375)])
+    assert (await ensure_option_day_bars(CONTRACT, TRADING_DAY)).record is not None
+    assert (await ensure_option_listing("SPY", TRADING_DAY)).record is not None
+
+    stock_totals = await catalog_client.select_storage_totals_by_kind("usa")
+    stock_spans = await catalog_client.select_symbol_coverage_spans("usa")
+    stock_revisions = await catalog_client.select_symbol_revision_counts("usa", "raw", "trade", date(2020, 1, 1))
+    stock_coverage_of_the_contract = await catalog_client.select_artifact_coverage(
+        "usa", SYMBOL, "trade", "polygon", "raw", TRADING_DAY, TRADING_DAY
+    )
+    stock_minute_bars = await catalog_client.select_coverage_minute_bars(
+        "usa", SYMBOL, "trade", TRADING_DAY, TRADING_DAY, price_adjustment_mode="raw"
+    )
+
+    assert [(t.artifact_kind, t.resolution, t.artifact_count) for t in stock_totals] == [("time_series_bars", "minute", 1)]
+    assert [(s.symbol, s.artifact_count) for s in stock_spans] == [("SPY", 1)]
+    assert [(r.symbol, r.session_count) for r in stock_revisions] == [("SPY", 1)]
+    assert stock_coverage_of_the_contract == [] and stock_minute_bars == []
+    # The same questions about the option market see the option rows, and only those.
+    option_totals = await catalog_client.select_storage_totals_by_kind("usa_options")
+    option_spans = await catalog_client.select_symbol_coverage_spans("usa_options")
+    assert sorted((t.artifact_kind, t.resolution, t.artifact_count) for t in option_totals) == [
+        ("metadata", None, 1), ("time_series_bars", "minute", 1),
+    ]
+    assert [(s.symbol, s.artifact_count) for s in option_spans] == [(SYMBOL, 1)]
