@@ -1,6 +1,6 @@
 <section class="card" aria-labelledby="ob-check-title">
   <div class="card__head">
-    <h2 id="ob-check-title">Check data</h2>
+    <h2 #heading id="ob-check-title" tabindex="-1">Check data</h2>
     <button pButton type="button" size="small" severity="secondary" [text]="true" (click)="dismissed.emit()"><i class="pi pi-times" aria-hidden="true"></i><span>Dismiss</span></button>
   </div>
   @if (state().kind === 'checking') { <p class="words" role="status">Checking which sessions can be tested…</p> }
@@ -11,7 +11,7 @@
   @if (ready(); as check) {
     <p class="words">Checked <app-timestamp-display [value]="check.asked.start_ms" mode="date-et" granularity="date" /> – <app-timestamp-display [value]="lastDayAskedMs()" mode="date-et" granularity="date" /></p>
     <p class="words">The answer is read from what is already stored. Nothing was downloaded.</p>
-    @if (stale()) { <p class="stale" role="status">The setup or the dates have changed since this check. Check data again.</p> }
+    @if (stale()) { <p class="stale" role="status">The setup or the dates have changed since this check, or a backtest has started. Check data again.</p> }
     <dl class="counts">
       @for (verdict of verdicts; track verdict) { <div><dt>{{ verdict | receiptLabel }}</dt><dd>{{ check.answer.counts[verdict] }}</dd></div> }
     </dl>

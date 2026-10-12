@@ -1,13 +1,24 @@
-<div class="failure" role="alert">
-  <p class="reason">{{ failure().reason }}</p>
+<div class="failure">
+  <p class="reason" role="alert">{{ failure().reason }}</p>
   <p class="code">{{ failure().code | receiptLabel }}</p>
-  @if (failure().items.length > 0) {
-    <ul class="items" aria-label="What failed">
-      @for (item of failure().items; track $index) {
-        @let session = item.session_open_ms ?? null;
+  @if (groups().length > 0) {
+    <ul class="groups" aria-label="What failed">
+      @for (group of groups(); track group.code) {
         <li>
-          @if (session !== null) { <app-timestamp-display [value]="session" mode="date-et" granularity="date" /> } @else { <span>The run as a whole</span> }
-          – {{ item.message }}
+          <button type="button" class="group" [attr.aria-expanded]="isOpen(group)" [attr.aria-controls]="listId(group)" (click)="toggle(group)">
+            {{ group.code | receiptLabel }} · {{ group.items.length }} {{ group.items.length === 1 ? 'item' : 'items' }}
+          </button>
+          @if (isOpen(group)) {
+            <ul class="items" [id]="listId(group)">
+              @for (item of group.items; track $index) {
+                @let session = item.session_open_ms ?? null;
+                <li>
+                  @if (session !== null) { <app-timestamp-display [value]="session" mode="date-et" granularity="date" /> } @else { <span>The run as a whole</span> }
+                  – {{ item.message }}
+                </li>
+              }
+            </ul>
+          }
         </li>
       }
     </ul>

@@ -1,13 +1,18 @@
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
+import { JobsService } from '../../services/jobs.service';
 import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
 import { OptionsBacktestPageComponent } from './options-backtest-page.component';
 import { OptionsBacktestService } from './options-backtest.service';
+import { RUN_POLL_MS } from './run-poll';
 import type { SessionClock } from './options-backtest.types';
 import { SESSION_CLOCK } from './testing/fixtures';
 import { press } from './testing/page-actions';
+import { fakeJobs } from './testing/fake-jobs';
 import { fakeService } from './testing/render-page';
+import { runItem } from './testing/run-fixtures';
+import { goingDetail } from './testing/run-script';
 
 describe('before the session clock is read', () => {
   it('shows nothing that holds a time while it is being read', async () => {
@@ -61,5 +66,31 @@ describe('before the session clock is read', () => {
     fireEvent.click(within(side).getByRole('button', { name: /^SPY premium momentum, no re-entry/ }));
 
     await screen.findByRole('article', { name: 'Leg 1' });
+  });
+});
+
+describe('a backtest that is going, when the session clock cannot be read', () => {
+  it('still shows the backtest and its Cancel, since the run does not depend on the clock', async () => {
+    const jobs = fakeJobs();
+    jobs.register('job-7');
+    jobs.emit('job-7', { type: 'job.phase', phase: 'replaying', friendly: 'Replaying each session' });
+    const service = fakeService(vi, {
+      sessionClock: vi.fn(async () => {
+        throw new Error('data plane down');
+      }),
+      runs: vi.fn(async () => [runItem()]),
+      run: vi.fn(async () => goingDetail()),
+    });
+
+    await render(OptionsBacktestPageComponent, {
+      inputs: { describeDebounceMs: 0 },
+      providers: [...fakePickerWorld().providers, { provide: OptionsBacktestService, useValue: service }, { provide: JobsService, useValue: jobs.service }, { provide: RUN_POLL_MS, useValue: 0 }],
+    });
+
+    await screen.findByText(/could not be read/i);
+    const run = await screen.findByRole('region', { name: 'Backtest run' });
+    expect(within(run).getByText('Replaying each session')).toBeTruthy();
+    expect(within(run).getByRole('button', { name: 'Cancel' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Entry settings' })).toBeNull();
   });
 });

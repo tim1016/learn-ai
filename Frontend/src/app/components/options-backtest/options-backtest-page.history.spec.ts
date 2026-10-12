@@ -6,6 +6,7 @@ import { exampleBody } from './testing/fixtures';
 import { dateFields, lettingGo, openExample, pickDates, press, typeInto } from './testing/page-actions';
 import { fakeService, renderPage } from './testing/render-page';
 import { runDetail, runItem, runWithoutSetup, SETUP_CANNOT_OPEN_REASON } from './testing/run-fixtures';
+import { scriptedRun } from './testing/run-script';
 
 const tab = (name: string) => screen.getByRole('tab', { name });
 const showHistory = () => fireEvent.click(tab('History'));
@@ -158,5 +159,37 @@ describe('Use this setup', () => {
     await waitFor(() => expect(service.startRun).toHaveBeenCalledTimes(1));
     expect(service.startRun.mock.calls[0]?.[0].setup_name).toBeNull();
     expect(service.startRun.mock.calls[0]?.[0].setup).toMatchObject({ underlying: 'AAPL', slippage_percent: '0.45' });
+  });
+});
+
+describe('deleting the run the Backtest tab shows', () => {
+  it('takes it off the Backtest tab, and leaves the tab alone when another run is deleted', async () => {
+    const setup = scriptedRun(vi);
+    setup.service.run.mockResolvedValue(runDetail());
+    await renderPage(setup.service, undefined, { jobs: setup.jobs });
+    await openExample();
+    pickDates('2026-09-14', '2026-09-18');
+    await waitFor(() => expect(startButton()?.disabled).toBe(false));
+    fireEvent.click(startButton() as HTMLButtonElement);
+    await screen.findByRole('region', { name: 'Backtest run' });
+    setup.jobs.emit('job-1', { type: 'job.completed', result_url: '/x' });
+    await screen.findByRole('region', { name: 'Headline figures' });
+    setup.service.runs.mockResolvedValue([runItem({ id: 8, job_id: 'job-8', status: 'complete' }), runItem({ id: 7, status: 'complete' })]);
+    showHistory();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete run 8' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }));
+    await waitFor(() => expect(setup.service.deleteRun).toHaveBeenCalledWith(8));
+    showBacktest();
+    expect(screen.getByRole('region', { name: 'Headline figures' })).toBeTruthy();
+
+    showHistory();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete run 7' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }));
+    await waitFor(() => expect(setup.service.deleteRun).toHaveBeenCalledWith(7));
+    showBacktest();
+
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Headline figures' })).toBeNull());
+    expect(screen.queryByRole('region', { name: 'Backtest run' })).toBeNull();
   });
 });

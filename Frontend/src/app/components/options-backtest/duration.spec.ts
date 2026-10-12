@@ -41,6 +41,24 @@ describe('the two instants of a range', () => {
     expect(1_762_232_400_000 - 1_761_883_200_000).toBe(4 * 86_400_000 + 3_600_000);
   });
 
+  it('ends on the day the clocks go forward (Sunday the 8th of March 2026) at the midnight after it, which is 23 hours on, not 24', () => {
+    // Start: Friday 2026-03-06 00:00 EST = 05:00 UTC on day 20,518. End: Monday 2026-03-09 00:00 EDT = 04:00 UTC on day 20,521.
+    // Midnight of the 8th is 05:00 UTC on day 20,520, and a day later in the clock's own terms is 04:00 UTC on day 20,521, an hour earlier than 24 hours on.
+    expect(rangeInstants({ from: '2026-03-06', to: '2026-03-08' })).toEqual({
+      start_ms: 20_518 * 86_400_000 + 5 * 3_600_000,
+      end_ms: 20_521 * 86_400_000 + 4 * 3_600_000,
+    });
+  });
+
+  it('ends on the day the clocks go back (Sunday the 1st of November 2026) at the midnight after it, which is 25 hours on, not 24', () => {
+    // Start: Friday 2026-10-30 00:00 EDT = 04:00 UTC on day 20,756. End: Monday 2026-11-02 00:00 EST = 05:00 UTC on day 20,759.
+    // Midnight of the 1st is 04:00 UTC on day 20,758, and 24 hours on would be 04:00 UTC on day 20,759, an hour before the midnight.
+    expect(rangeInstants({ from: '2026-10-30', to: '2026-11-01' })).toEqual({
+      start_ms: 20_756 * 86_400_000 + 4 * 3_600_000,
+      end_ms: 20_759 * 86_400_000 + 5 * 3_600_000,
+    });
+  });
+
   it('is one day wide for one date: the start is the date, the end the midnight after it', () => {
     const one = rangeInstants({ from: '2026-09-14', to: '2026-09-14' });
 

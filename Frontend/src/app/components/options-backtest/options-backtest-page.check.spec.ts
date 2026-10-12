@@ -8,6 +8,7 @@ import type { DataCheck, DataProblem, SessionCheck } from './options-backtest.ty
 import { dataCheck, sessionCheck } from './testing/fixtures';
 import { checkButton, dateFields, expectTradingDatesInNewYork, lettingGo, openExample, paragraph, pickDates, press, reads, typeInto } from './testing/page-actions';
 import { fakeService, renderPage, type FakeService } from './testing/render-page';
+import { scriptedRun } from './testing/run-script';
 
 const panel = () => screen.getByRole('region', { name: 'Check data' });
 
@@ -284,6 +285,71 @@ describe('an answer that no longer describes the setup or the dates', () => {
     typeInto('Slippage (percent)', '0.3');
 
     await waitFor(() => expect(screen.queryByText(/have changed since this check/)).toBeNull());
+  });
+});
+
+describe('an answer, once the setup the server read back is a different one', () => {
+  it('still says so after the server has read the changed setup back, not only while it is reading it', async () => {
+    await readyToCheck();
+    await runCheck();
+
+    typeInto('Slippage (percent)', '0.4');
+    await screen.findByText(/have changed since this check/);
+    await waitFor(() => expect(checkButton().disabled).toBe(false));
+    for (let settled = 0; settled < 5; settled += 1) await lettingGo();
+
+    expect(screen.queryByText(/have changed since this check/)).not.toBeNull();
+  });
+
+  it('says so once a backtest has started, because its download changes what is stored', async () => {
+    const setup = scriptedRun(vi);
+    await renderPage(setup.service, undefined, { jobs: setup.jobs });
+    await openExample();
+    pickDates('2026-09-14', '2026-09-18');
+    await waitFor(() => expect(checkButton().disabled).toBe(false));
+    await runCheck();
+    expect(screen.queryByText(/have changed since this check/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start backtest' }));
+
+    expect(await screen.findByText(/a backtest has started/)).toBeTruthy();
+    expect(screen.getByText(/have changed since this check/)).toBeTruthy();
+    expect(panel()).toBeTruthy();
+  });
+
+  it('is current again when it is asked afresh after the backtest has started', async () => {
+    const setup = scriptedRun(vi);
+    await renderPage(setup.service, undefined, { jobs: setup.jobs });
+    await openExample();
+    pickDates('2026-09-14', '2026-09-18');
+    await waitFor(() => expect(checkButton().disabled).toBe(false));
+    await runCheck();
+    fireEvent.click(screen.getByRole('button', { name: 'Start backtest' }));
+    await screen.findByText(/a backtest has started/);
+
+    fireEvent.click(checkButton());
+
+    await waitFor(() => expect(screen.queryByText(/have changed since this check/)).toBeNull());
+    expect(setup.service.checkData).toHaveBeenCalledTimes(2);
+  });
+
+  it('is not made stale by a backtest the server refused to start', async () => {
+    const setup = scriptedRun(vi, {
+      startRun: vi.fn(async () => {
+        throw new RunRefusedError('OPTIONS_BACKTEST_RANGE_HAS_NO_SESSION', 'No trading session falls in that range.', 400);
+      }),
+    });
+    await renderPage(setup.service, undefined, { jobs: setup.jobs });
+    await openExample();
+    pickDates('2026-09-14', '2026-09-18');
+    await waitFor(() => expect(checkButton().disabled).toBe(false));
+    await runCheck();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start backtest' }));
+    await screen.findByText('No trading session falls in that range.');
+    await lettingGo();
+
+    expect(screen.queryByText(/have changed since this check/)).toBeNull();
   });
 });
 

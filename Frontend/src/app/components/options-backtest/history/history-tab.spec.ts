@@ -1,17 +1,14 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
+import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
-import { JobsService } from '../../../services/jobs.service';
-import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
-import { OptionsBacktestService, RunRefusedError } from '../options-backtest.service';
-import { RUN_POLL_MS } from '../run-poll';
+import { RunRefusedError } from '../options-backtest.service';
 import type { RunListItem } from '../options-backtest.types';
 import { fakeJobs, type FakeJobs } from '../testing/fake-jobs';
 import { expectTradingDatesInNewYork, lettingGo, press, reads } from '../testing/page-actions';
 import { fakeService, type FakeService } from '../testing/render-page';
+import { renderHistoryTab } from '../testing/render-history';
 import { runDetail, runItem, runWithoutSetup, SETUP_CANNOT_OPEN_REASON } from '../testing/run-fixtures';
 import { sessionOpenMs } from '../../../shared/date-picker/testing/fake-trading-calendar';
-import { HistoryTabComponent } from './history-tab.component';
 
 const HEADLINE = { sessions_tested: 10, sessions_traded: 8, trades: 12, trades_won: 7, net_profit_usd: '1234.56', ending_cash_usd: '11234.56' };
 
@@ -23,13 +20,7 @@ const INTERRUPTED = runItem({ id: 27, job_id: 'job-27', status: 'interrupted' })
 const RUNS = [RUNNING, COMPLETE, FAILED, CANCELLED, INTERRUPTED];
 
 async function renderHistory(options: { service?: FakeService; jobs?: FakeJobs; active?: boolean } = {}) {
-  const service = options.service ?? fakeService(vi, { runs: vi.fn(async () => RUNS) });
-  const jobs = options.jobs ?? fakeJobs();
-  const view = await render(HistoryTabComponent, {
-    inputs: { active: options.active ?? true },
-    providers: [...fakePickerWorld().providers, { provide: OptionsBacktestService, useValue: service }, { provide: JobsService, useValue: jobs.service }, { provide: RUN_POLL_MS, useValue: 0 }],
-  });
-  return { view, service, jobs };
+  return renderHistoryTab(vi, { service: options.service ?? fakeService(vi, { runs: vi.fn(async () => RUNS) }), jobs: options.jobs, active: options.active });
 }
 
 const rowFor = (id: number) => screen.getByRole('button', { name: `Open run ${id}` }).closest('tr') as HTMLElement;
@@ -164,9 +155,10 @@ describe('opening a run', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Open run 29' }));
 
     const alert = await screen.findByRole('alert');
-    expect(within(alert).getByText('Some sessions have no data.')).toBeTruthy();
-    expect(reads(within(alert).getByRole('listitem'))).toBe('2026-09-15 – No listing was stored.');
-    expectTradingDatesInNewYork(alert);
+    expect(reads(alert)).toBe('Some sessions have no data.');
+    const failed = screen.getByRole('list', { name: 'What failed' });
+    expect(reads(failed)).toBe('Listing · 1 item 2026-09-15 – No listing was stored.');
+    expectTradingDatesInNewYork(failed);
   });
 
   it.each([
@@ -313,5 +305,84 @@ describe('deleting a run', () => {
     press('Confirm delete');
 
     await waitFor(() => expect(screen.queryByText('Not now.')).toBeNull());
+  });
+});
+
+describe('deleting a run, and the keyboard', () => {
+  const without = (id: number) => RUNS.filter((run) => run.id !== id);
+
+  async function deleteWithTheKeyboard(id: number, listAfter: RunListItem[]) {
+    const reads = [RUNS, listAfter];
+    const service = fakeService(vi, { runs: vi.fn(async () => reads.shift() ?? listAfter) });
+    await renderHistory({ service });
+    await screen.findByRole('button', { name: `Open run ${id}` });
+    press(`Delete run ${id}`);
+    screen.getByRole<HTMLButtonElement>('button', { name: 'Confirm delete' }).focus();
+    press('Confirm delete');
+    return service;
+  }
+
+  it('goes to the Open button of the run that now stands where the deleted one stood', async () => {
+    await deleteWithTheKeyboard(30, without(30));
+
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open run 29' })));
+  });
+
+  it('goes to the last run when the one deleted was the last', async () => {
+    await deleteWithTheKeyboard(27, without(27));
+
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open run 28' })));
+  });
+
+  it('goes to the heading of the list when no run is left', async () => {
+    const service = fakeService(vi, { runs: vi.fn().mockResolvedValueOnce([COMPLETE]).mockResolvedValue([]) });
+    await renderHistory({ service });
+    await screen.findByRole('button', { name: 'Open run 30' });
+    press('Delete run 30');
+    screen.getByRole<HTMLButtonElement>('button', { name: 'Confirm delete' }).focus();
+
+    press('Confirm delete');
+
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Runs' })));
+  });
+
+  it('goes to the Open button of the same run when the server would not delete it', async () => {
+    const service = fakeService(vi, {
+      runs: vi.fn(async () => RUNS),
+      deleteRun: vi.fn(async () => {
+        throw new RunRefusedError('OPTIONS_BACKTEST_RUN_IS_RUNNING', 'That run is still going. Cancel it first.', 409);
+      }),
+    });
+    await renderHistory({ service });
+    await screen.findByRole('button', { name: 'Open run 31' });
+    press('Delete run 31');
+    screen.getByRole<HTMLButtonElement>('button', { name: 'Confirm delete' }).focus();
+
+    press('Confirm delete');
+
+    await screen.findByText('That run is still going. Cancel it first.');
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open run 31' })));
+  });
+
+  it('tells the page which run was deleted, and tells it of none that was refused', async () => {
+    const refused = new RunRefusedError('OPTIONS_BACKTEST_RUN_IS_RUNNING', 'That run is still going.', 409);
+    const service = fakeService(vi, {
+      runs: vi.fn(async () => RUNS),
+      deleteRun: vi.fn(async (id: number) => {
+        if (id === 31) throw refused;
+      }),
+    });
+    const { view } = await renderHistory({ service });
+    const deleted: number[] = [];
+    view.fixture.componentInstance.deleted.subscribe((id) => deleted.push(id));
+    await screen.findByRole('button', { name: 'Open run 31' });
+
+    press('Delete run 31');
+    press('Confirm delete');
+    await screen.findByText('That run is still going.');
+    press('Delete run 30');
+    press('Confirm delete');
+
+    await waitFor(() => expect(deleted).toEqual([30]));
   });
 });

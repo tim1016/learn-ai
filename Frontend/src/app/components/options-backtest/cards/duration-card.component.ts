@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, ElementRef, input, output, viewChild } from '@angular/core';
 
 import { DateRangePickerComponent, type DateRange } from '../../../shared/date-picker';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
@@ -26,6 +26,13 @@ export class DurationCardComponent {
   /** Set when the page changed the range on the owner's click (Run available dates). */
   readonly rangeChange = input<RangeChange | null>(null);
   readonly changed = output<DateRange>();
+
+  private readonly heading = viewChild.required('heading', { read: ElementRef<HTMLElement> });
+
+  /** Puts the keyboard on the card's heading, where the owner is when the answer of Check data is closed. */
+  focusHeading(): void {
+    this.heading().nativeElement.focus();
+  }
 
   protected readonly bounds = computed(() => priceBounds(this.optionPricesFromMs()));
   protected readonly quickRanges = OFFERED_RANGES;

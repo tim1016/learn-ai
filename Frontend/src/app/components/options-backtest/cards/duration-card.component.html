@@ -1,5 +1,5 @@
 <section class="card" aria-labelledby="ob-duration-title">
-  <div class="card__head"><h2 id="ob-duration-title">Duration</h2></div>
+  <div class="card__head"><h2 #heading id="ob-duration-title" tabindex="-1">Duration</h2></div>
   <app-date-range-picker label="Backtest dates" [from]="range().from" [to]="range().to" [bounds]="bounds()" [ranges]="quickRanges" (changed)="changed.emit($event)" />
   <p id="ob-prices-from" class="words">
     @if (optionPricesFromMs(); as from) {

@@ -158,15 +158,17 @@ export class OptionsBacktestService {
 
   /**
    * Starts the run as a `options_backtest` job and resolves to the job id once
-   * the server has made the run's record. A range the server refuses starts
-   * no job and comes back as a `RunRefusedError` with the server's message.
+   * the server has made the run's record. A range the server refuses (400)
+   * starts no job and comes back as a `RunRefusedError` with the server's
+   * message; so does any other refusal that carries the server's code and message.
    */
   async startRun(request: RunStartRequest): Promise<string> {
     try {
       return await this.jobs.startJob('options_backtest', { ...request });
     } catch (error) {
       const refusal = toJobRefusal(error);
-      throw refusal === null ? error : new RunRefusedError(refusal.refusal.code, refusal.refusal.message, 400);
+      if (refusal !== null) throw new RunRefusedError(refusal.refusal.code, refusal.refusal.message, 400);
+      throw toStartRefusal(error) ?? error;
     }
   }
 
@@ -201,6 +203,30 @@ function readDetail(entry: unknown): ValidationDetail[] {
 function toRefusal(error: unknown): SetupRefusedError | null {
   const refusal = readRefusal(error, SETUP_REFUSALS);
   return refusal === null ? null : new SetupRefusedError(refusal.code, refusal.message, refusal.status);
+}
+
+/**
+ * A refusal of the job route other than a bad range (the run is already known, the data plane is down), with the
+ * server's own code and message, wherever the jobs boundary put them: in the body, or as the text of a `detail`.
+ */
+function toStartRefusal(error: unknown): RunRefusedError | null {
+  if (!(error instanceof HttpErrorResponse)) return null;
+  const body = refusalBody(error) ?? forwardedBody(error);
+  if (body === null || typeof body['code'] !== 'string' || typeof body['message'] !== 'string') return null;
+  return new RunRefusedError(body['code'], body['message'], error.status);
+}
+
+/** The data plane's JSON body, which the jobs boundary forwards as the text of a ProblemDetails `detail`. */
+function forwardedBody(error: HttpErrorResponse): Record<string, unknown> | null {
+  const detail: unknown = isRecord(error.error) ? error.error['detail'] : undefined;
+  if (typeof detail !== 'string') return null;
+  try {
+    const parsed: unknown = JSON.parse(detail);
+    const inner = isRecord(parsed) ? parsed['detail'] : undefined;
+    return isRecord(inner) ? inner : null;
+  } catch {
+    return null;
+  }
 }
 
 function toRunRefusal(error: unknown): RunRefusedError | null {

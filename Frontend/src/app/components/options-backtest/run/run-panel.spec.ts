@@ -133,6 +133,38 @@ describe('a run that is going', () => {
     expect(asked.disabled).toBe(true);
   });
 
+  it('puts the keyboard on the run’s heading when Cancel, which has it, is asked for and goes dead', async () => {
+    const service = fakeService(vi);
+    readsAs(service, going());
+    const jobs = fakeJobs();
+    jobs.register('job-7');
+    await renderRun(runItem(), { service, jobs });
+    const cancel = await screen.findByRole<HTMLButtonElement>('button', { name: 'Cancel' });
+    cancel.focus();
+    expect(document.activeElement).toBe(cancel);
+
+    cancel.click();
+
+    await screen.findByRole('button', { name: 'Cancel asked for' });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Backtest run' })));
+  });
+
+  it('leaves the keyboard where it is when Cancel is pressed with a pointer and it was elsewhere', async () => {
+    const service = fakeService(vi);
+    readsAs(service, going());
+    const jobs = fakeJobs();
+    jobs.register('job-7');
+    await renderRun(runItem(), { service, jobs });
+    const cancel = await screen.findByRole<HTMLButtonElement>('button', { name: 'Cancel' });
+    document.body.focus();
+
+    cancel.click();
+
+    await screen.findByRole('button', { name: 'Cancel asked for' });
+    await lettingGo();
+    expect(document.activeElement).not.toBe(screen.getByRole('heading', { name: 'Backtest run' }));
+  });
+
   it('says the cancel could not be asked for, and lets it be asked again', async () => {
     const service = fakeService(vi);
     readsAs(service, going());
@@ -159,6 +191,7 @@ describe('a run that is going', () => {
     jobs.emit('job-7', { type: 'job.cancelled', reason: 'Cancelled by the owner.' });
 
     expect(await screen.findByText('The run was cancelled. Nothing was saved.')).toBeTruthy();
+    expect(screen.queryByText(/You asked to cancel/)).toBeNull();
     expect(screen.queryByRole('button', { name: /Cancel/ })).toBeNull();
     expect(updated.map((detail) => detail.status)).toEqual(['cancelled']);
   });
@@ -225,11 +258,13 @@ describe('a run that is going', () => {
     jobs.emit('job-7', { type: 'job.failed', code: 'RunFailedError', message: failure.reason });
 
     const alert = await screen.findByRole('alert');
-    expect(within(alert).getByText('The market data for some sessions could not be fetched.')).toBeTruthy();
-    expect(within(alert).getByText('Download Failed')).toBeTruthy();
-    const items = within(alert).getAllByRole('listitem').map((item) => reads(item));
-    expect(items).toEqual(['2026-09-14 – The vendor refused the listing.', 'The run as a whole – The run stopped early.']);
-    expectTradingDatesInNewYork(alert);
+    expect(reads(alert)).toBe('The market data for some sessions could not be fetched.');
+    const failed = screen.getByRole('region', { name: 'Backtest run' });
+    expect(within(failed).getByText('Download Failed')).toBeTruthy();
+    expect(reads(screen.getByRole('list', { name: 'What failed' }))).toBe(
+      'Listing · 1 item 2026-09-14 – The vendor refused the listing. Internal · 1 item The run as a whole – The run stopped early.',
+    );
+    expectTradingDatesInNewYork(screen.getByRole('list', { name: 'What failed' }));
   });
 
   it('finds a job that this tab was not told of, and follows it', async () => {
@@ -317,6 +352,16 @@ describe('a run that is over, opened later', () => {
     await renderRun(runItem({ status }), { service });
 
     expect(await screen.findByText(words)).toBeTruthy();
+  });
+
+  it('says that a failed run failed, and that the server did not say why, when it sent no reason', async () => {
+    const service = fakeService(vi);
+    readsAs(service, runDetail({ status: 'failed', failure: null, figures: null, slippage: [], slippage_tolerance: null, headline: null }));
+
+    await renderRun(runItem({ status: 'failed', failure: null }), { service });
+
+    expect(await screen.findByText('The run failed, and the server did not say why.')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('says what the run was: the underlying, the dates in New York dates, the sessions asked for, and the name it ran under', async () => {

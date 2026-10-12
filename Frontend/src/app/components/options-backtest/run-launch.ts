@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { computed, DestroyRef, signal } from '@angular/core';
 
 import { RecordPoller } from '../../shared/research-record/record-poller';
@@ -15,6 +16,8 @@ export interface RunApi {
 export interface LaunchProblem {
   readonly kind: 'not_started' | 'record_unread' | 'unchecked';
   readonly message: string;
+  /** The server's own code for a refusal, to be shown through the label helper; null when the server gave none. */
+  readonly code: string | null;
 }
 
 /**
@@ -37,6 +40,9 @@ export class RunLaunch {
   readonly refusal = this.refused.asReadonly();
   private readonly failed = signal<LaunchProblem | null>(null);
   readonly problem = this.failed.asReadonly();
+  /** How many backtests this page has started: a run's download changes what is stored, so an answer of Check data is older than it. */
+  private readonly begun = signal(0);
+  readonly runsStarted = this.begun.asReadonly();
   readonly busy = computed(() => this.under() || this.startedJob() !== null || this.shown()?.status === 'running');
 
   private readonly poller: RecordPoller;
@@ -64,11 +70,12 @@ export class RunLaunch {
       jobId = await this.api.startRun(request);
     } catch (error) {
       this.under.set(false);
-      if (error instanceof RunRefusedError) this.refused.set(error.message);
-      else this.failed.set({ kind: 'not_started', message: extractServerMessage(error, 'The backtest could not be started. Try again.') });
+      if (error instanceof RunRefusedError && error.status === 400) this.refused.set(error.message);
+      else this.failed.set(notStarted(error));
       return;
     }
     // From here the job is going. No failure to find its record may say it was not started, or free Start.
+    this.begun.update((count) => count + 1);
     this.startedJob.set(jobId);
     this.under.set(false);
     await this.find(jobId);
@@ -77,13 +84,14 @@ export class RunLaunch {
   /** On coming back to the page: shows the run that is going, if one is, instead of leaving Start free to begin another. */
   async takeUp(): Promise<void> {
     if (this.busy()) return;
+    if (this.failed()?.kind === 'unchecked') this.failed.set(null);
     const generation = this.generation;
     let runs: RunListItem[];
     try {
       runs = await this.api.runs({});
     } catch (error) {
       if (generation === this.generation) {
-        this.failed.set({ kind: 'unchecked', message: `Whether a backtest is already running could not be checked: ${extractServerMessage(error, 'the history did not answer')}.` });
+        this.failed.set({ kind: 'unchecked', message: `Whether a backtest is already running could not be checked: ${extractServerMessage(error, 'the history did not answer')}.`, code: null });
       }
       return;
     }
@@ -98,6 +106,11 @@ export class RunLaunch {
 
   clearRefusal(): void {
     this.refused.set(null);
+  }
+
+  /** A run was deleted, in History: if it is the one on screen, it is gone from the server and must not stay on this page. */
+  forget(id: number): void {
+    if (this.shown()?.id === id) this.shown.set(null);
   }
 
   /** Looks for the record of the run a job made; when it is not there, or cannot be read, says so and looks again in a few seconds. */
@@ -118,7 +131,18 @@ export class RunLaunch {
       return;
     }
     const reason = why === null ? '' : ` (${why})`;
-    this.failed.set({ kind: 'record_unread', message: `The backtest was started, but its record cannot be read yet${reason}. The page will look again.` });
+    this.failed.set({ kind: 'record_unread', message: `The backtest was started, but its record cannot be read yet${reason}. The page will look again.`, code: null });
     this.poller.schedule(this.lookAgainMs, () => void this.find(jobId));
   }
+}
+
+/**
+ * Why a start failed, in the server's own words and code when it gave any. "Try again" is said only when trying again
+ * can cure it: the network or the server (a 5xx). A refusal that is the owner's to fix, or a state that will not change
+ * (a run already known, a setup the server will not take), is not.
+ */
+function notStarted(error: unknown): LaunchProblem {
+  const curable = error instanceof RunRefusedError ? error.status >= 500 : !(error instanceof HttpErrorResponse) || error.status === 0 || error.status >= 500;
+  if (error instanceof RunRefusedError) return { kind: 'not_started', message: curable ? `${error.message} Try again.` : error.message, code: error.code };
+  return { kind: 'not_started', message: curable ? 'The backtest could not be started. Try again.' : 'The server did not accept the backtest.', code: null };
 }

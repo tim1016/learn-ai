@@ -21,7 +21,7 @@
       @if (detail(); as done) { <app-options-backtest-run-result [run]="done" /> } @else if (readProblem() === null) { <p class="words" role="status">Reading the result…</p> }
     }
     @case ('failed') {
-      @if (failure(); as why) { <app-options-backtest-run-failure [failure]="why" /> }
+      @if (failure(); as why) { <app-options-backtest-run-failure [failure]="why" /> } @else { <p class="words" role="status">The run failed, and the server did not say why.</p> }
     }
     @case ('cancelled') { <p class="words" role="status">The run was cancelled. Nothing was saved.</p> }
     @case ('interrupted') { <p class="words" role="status">This run did not finish, and its job is gone. It saved no result.</p> }

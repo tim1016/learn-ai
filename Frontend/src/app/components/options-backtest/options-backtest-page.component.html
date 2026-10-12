@@ -43,15 +43,6 @@
               <app-options-backtest-legs-card [form]="setupForm" [problems]="fieldProblems()" [limits]="limits()" (legCopied)="copyLeg($event)" (legRemoved)="removeLeg($event)" />
               <app-options-backtest-costs-card [form]="setupForm" [problems]="fieldProblems()" />
               <app-options-backtest-duration-card [range]="range()" [optionPricesFromMs]="pricesFromMs()" [problem]="rangeProblem()" [rangeChange]="rangeNote()" (changed)="rangeChanged($event)" />
-              @if (check().kind !== 'idle') {
-                <app-options-backtest-data-check-panel [state]="check()" [stale]="checkIsStale()" (dismissed)="dismissCheck()" (retry)="checkData()" (useStretch)="useStretch($event)" />
-              }
-              <app-options-backtest-summary [state]="summary()" (retry)="retrySummary()" />
-              @if (launch.starting()) { <p class="notice" role="status">Starting the backtest…</p> }
-              @if (launch.problem(); as problem) {
-                <div class="notice" [class.notice--error]="problem.kind !== 'record_unread'" [attr.role]="problem.kind === 'record_unread' ? 'status' : 'alert'"><p>{{ problem.message }}</p></div>
-              }
-              @if (launch.current(); as run) { <app-options-backtest-run-panel [run]="run" (updated)="launch.update($event)" /> }
             } @else if (clockProblem(); as problem) {
               <div class="notice notice--error" role="alert">
                 <p>{{ problem }}</p>
@@ -60,6 +51,13 @@
             } @else {
               <p class="notice" role="status">Reading the session times…</p>
             }
+            @if (check().kind !== 'idle') {
+              <app-options-backtest-data-check-panel [state]="check()" [stale]="checkIsStale()" (dismissed)="dismissCheck()" (retry)="checkData()" (useStretch)="useStretch($event)" />
+            }
+            @if (clock() !== null) { <app-options-backtest-summary [state]="summary()" (retry)="retrySummary()" /> }
+            @if (launch.starting()) { <p class="notice" role="status">Starting the backtest…</p> }
+            @if (launch.problem(); as problem) { <app-options-backtest-launch-notice [problem]="problem" (retry)="launch.takeUp()" /> }
+            @if (launch.current(); as run) { <app-options-backtest-run-panel [run]="run" (updated)="launch.update($event)" /> }
           </div>
         </div>
         @if (activeTab() === 'backtest') {
@@ -70,7 +68,7 @@
       </p-tabpanel>
       <p-tabpanel value="history" lazy>
         <ng-template #content>
-          <app-options-backtest-history [active]="activeTab() === 'history'" (useSetup)="useRunSetup($event)" />
+          <app-options-backtest-history [active]="activeTab() === 'history'" (useSetup)="useRunSetup($event)" (deleted)="launch.forget($event)" />
         </ng-template>
       </p-tabpanel>
     </p-tabpanels>

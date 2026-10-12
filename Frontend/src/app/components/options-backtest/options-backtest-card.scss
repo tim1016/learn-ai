@@ -7,6 +7,7 @@ p { margin: 0; }
 .card { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: var(--radius); padding: var(--space-4) var(--space-5); min-width: 0; }
 .card__head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; }
 .card h2 { margin: 0; font-size: var(--fs-md); font-weight: var(--fw-semi); }
+.card h2:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hint { color: var(--text-secondary); font-size: var(--fs-sm); }
 .fields { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-4) var(--space-5); }
 .field { display: grid; gap: var(--space-1); font-size: var(--fs-sm); color: var(--text-secondary); align-content: start; min-width: 0; }

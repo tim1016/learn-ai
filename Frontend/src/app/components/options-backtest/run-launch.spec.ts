@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { DestroyRef, inject } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -106,7 +107,7 @@ describe('starting a run', () => {
 
     await launch.start(REQUEST);
 
-    expect(launch.problem()).toEqual({ kind: 'not_started', message: 'The backtest could not be started. Try again.' });
+    expect(launch.problem()).toEqual({ kind: 'not_started', message: 'The backtest could not be started. Try again.', code: null });
     expect(launch.refusal()).toBeNull();
     expect(launch.busy()).toBe(false);
   });
@@ -128,6 +129,48 @@ describe('starting a run', () => {
 
     expect(launch.refusal()).toBeNull();
     expect(launch.current()).not.toBeNull();
+  });
+});
+
+describe('when the server will not start the backtest, other than for its range', () => {
+  const failing = (error: unknown) => launchOf(api({ startRun: vi.fn(async () => Promise.reject(error)) }));
+
+  it('shows a refusal in the server’s own words and with its code, and does not say to try again, for a refusal trying again cannot cure', async () => {
+    const launch = failing(new RunRefusedError('OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN', 'A run was already made for this job.', 409));
+
+    await launch.start(REQUEST);
+
+    expect(launch.problem()).toEqual({ kind: 'not_started', message: 'A run was already made for this job.', code: 'OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN' });
+    expect(launch.refusal()).toBeNull();
+    expect(launch.busy()).toBe(false);
+  });
+
+  it('says to try again, after the server’s own words, for a refusal of the server being unable (a 5xx)', async () => {
+    const launch = failing(new RunRefusedError('OPTIONS_BACKTEST_DATA_CATALOG_UNAVAILABLE', 'The data catalog cannot be asked right now.', 503));
+
+    await launch.start(REQUEST);
+
+    expect(launch.problem()).toEqual({ kind: 'not_started', message: 'The data catalog cannot be asked right now. Try again.', code: 'OPTIONS_BACKTEST_DATA_CATALOG_UNAVAILABLE' });
+  });
+
+  it.each([
+    ['a network failure', new HttpErrorResponse({ status: 0 })],
+    ['a server error with no refusal in it', new HttpErrorResponse({ status: 502, error: 'bad gateway' })],
+    ['a failure that is no HTTP answer at all', new Error('the jobs service is down')],
+  ])('says to try again for %s, which trying again can cure', async (_case, error) => {
+    const launch = failing(error);
+
+    await launch.start(REQUEST);
+
+    expect(launch.problem()).toEqual({ kind: 'not_started', message: 'The backtest could not be started. Try again.', code: null });
+  });
+
+  it('does not say to try again for a 4xx the server gave no reason for, and does not repeat a body it cannot read', async () => {
+    const launch = failing(new HttpErrorResponse({ status: 422, error: { detail: JSON.stringify({ detail: [{ loc: ['body'], msg: 'nope' }] }) } }));
+
+    await launch.start(REQUEST);
+
+    expect(launch.problem()).toEqual({ kind: 'not_started', message: 'The server did not accept the backtest.', code: null });
   });
 });
 
@@ -271,7 +314,19 @@ describe('coming back to the page', () => {
 
     await launch.takeUp();
 
-    expect(launch.problem()).toEqual({ kind: 'unchecked', message: 'Whether a backtest is already running could not be checked: the history did not answer.' });
+    expect(launch.problem()).toEqual({ kind: 'unchecked', message: 'Whether a backtest is already running could not be checked: the history did not answer.', code: null });
+  });
+
+  it('forgets that it could not check when it is asked again, and shows the run that is going when the history answers', async () => {
+    const answers = [Promise.reject(new Error('offline')), Promise.resolve([going])];
+    const launch = launchOf(api({ runs: vi.fn(() => answers.shift() ?? Promise.resolve([])) }));
+    await launch.takeUp();
+    expect(launch.problem()?.kind).toBe('unchecked');
+
+    await launch.takeUp();
+
+    expect(launch.problem()).toBeNull();
+    expect(launch.current()).toEqual(going);
   });
 
   it('does not replace a run the owner has started while the history was being read', async () => {

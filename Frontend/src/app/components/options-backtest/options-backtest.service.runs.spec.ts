@@ -158,6 +158,29 @@ describe('starting a run', () => {
     expect(error).toMatchObject({ ...TOO_EARLY, status: 400 });
   });
 
+  it.each([
+    ['as the text of a detail, which is how the jobs boundary forwards it', () => new HttpErrorResponse({ status: 409, error: { detail: JSON.stringify({ detail: { code: 'OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN', message: 'A run was already made for this job.' } }) } })],
+    ['as the body of the answer', () => new HttpErrorResponse({ status: 409, error: { detail: { code: 'OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN', message: 'A run was already made for this job.' } } })],
+  ])('reads a refusal that is not about the range, with its own status, code and message, %s', async (_how, error) => {
+    serviceWith(async () => {
+      throw error();
+    });
+
+    const refused = await service.startRun(request).catch((caught: unknown) => caught);
+
+    expect(refused).toBeInstanceOf(RunRefusedError);
+    expect(refused).toMatchObject({ code: 'OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN', message: 'A run was already made for this job.', status: 409 });
+  });
+
+  it('leaves a 422 as it was, whose detail is a list of what is wrong and has no code of the server’s to show', async () => {
+    const failure = new HttpErrorResponse({ status: 422, error: { detail: JSON.stringify({ detail: [{ loc: ['body', 'setup'], msg: 'nope' }] }) } });
+    serviceWith(async () => {
+      throw failure;
+    });
+
+    await expect(service.startRun(request)).rejects.toBe(failure);
+  });
+
   it('leaves a failure that is no refusal as it was', async () => {
     serviceWith(async () => {
       throw new HttpErrorResponse({ status: 502, error: 'bad gateway' });

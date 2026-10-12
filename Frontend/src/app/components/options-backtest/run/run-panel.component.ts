@@ -47,6 +47,7 @@ export class RunPanelComponent {
   private readonly service = inject(OptionsBacktestService);
   private readonly jobs = inject(JobsService);
   private readonly injector = inject(Injector);
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   private readonly pollMs = inject(RUN_POLL_MS);
   private readonly poller = new RecordPoller(inject(DestroyRef));
 
@@ -155,6 +156,8 @@ export class RunPanelComponent {
 
   protected async cancel(): Promise<void> {
     this.cancelProblem.set(null);
+    // The button that was pressed is disabled once the cancel is asked for, and a disabled button takes no more keys: the keyboard moves to the run.
+    if (this.host.nativeElement.contains(document.activeElement)) this.focusHeading();
     this.cancelling.set(true);
     try {
       await this.jobs.cancelJob(this.run().job_id);

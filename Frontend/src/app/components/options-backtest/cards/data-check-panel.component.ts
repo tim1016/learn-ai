@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, ElementRef, input, output, viewChild } from '@angular/core';
 import { ButtonModule } from 'primeng/button';
 
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
@@ -29,6 +29,13 @@ export class DataCheckPanelComponent {
   readonly dismissed = output();
   readonly retry = output();
   readonly useStretch = output<TestableStretch>();
+
+  private readonly heading = viewChild.required('heading', { read: ElementRef<HTMLElement> });
+
+  /** Puts the keyboard on the panel's heading, where the answer has just come in. */
+  focusHeading(): void {
+    this.heading().nativeElement.focus();
+  }
 
   /** The three verdicts, each the key of its count in the answer. */
   protected readonly verdicts: readonly (keyof DataCheck['counts'])[] = ['ready', 'needs_download', 'cannot_be_tested'];

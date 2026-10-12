@@ -15,6 +15,7 @@ import { EntryCardComponent } from './cards/entry-card.component';
 import { InstrumentCardComponent } from './cards/instrument-card.component';
 import { LegBuilderCardComponent } from './cards/leg-builder-card.component';
 import { LegsCardComponent } from './cards/legs-card.component';
+import { LaunchNoticeComponent } from './cards/launch-notice.component';
 import { LegwiseCardComponent } from './cards/legwise-card.component';
 import { SideListComponent, type LibraryStatus } from './cards/side-list.component';
 import { SummaryComponent } from './cards/summary.component';
@@ -26,6 +27,7 @@ import { builderProblems, newLegBuilder, withLegAdded, withLegCopied, withLegRem
 import { OptionsBacktestService, SetupInvalidError, SetupRefusedError } from './options-backtest.service';
 import type { SavedSetup, ServedSetup, SessionClock, SetupSummary, TestableStretch } from './options-backtest.types';
 import { RunLaunch } from './run-launch';
+import { RunNameTracker } from './run-name';
 import { RUN_POLL_MS } from './run-poll';
 import { buildSetup } from './setup-build';
 import { draftFromSetup, newSetupDraft, withDefaultTimes, type SetupDraft } from './setup-draft';
@@ -70,6 +72,7 @@ interface ImportNotice {
     CostsCardComponent,
     DurationCardComponent,
     DataCheckPanelComponent,
+    LaunchNoticeComponent,
     SummaryComponent,
     RunPanelComponent,
     HistoryTabComponent,
@@ -174,17 +177,19 @@ export class OptionsBacktestPageComponent {
   // Starting a run, and the run on screen.
   protected readonly launch = new RunLaunch({ startRun: (request) => this.service.startRun(request), runs: (query) => this.service.runs(query) }, inject(DestroyRef), inject(RUN_POLL_MS));
   private readonly runPanel = viewChild(RunPanelComponent);
+  private readonly checkPanel = viewChild(DataCheckPanelComponent);
+  private readonly durationCard = viewChild(DurationCardComponent);
 
   // Check data.
   private readonly checkFlow = new DataCheckFlow((setup, startMs, endMs) => this.service.checkData(setup, startMs, endMs));
   protected readonly check = this.checkFlow.state;
   protected readonly pricesFromMs = this.checkFlow.pricesFromMs;
   protected readonly rangeProblem = computed(() => this.checkFlow.refusal() ?? this.launch.refusal());
-  /** What a check would be asked with now, and a stamp to tell whether an answer still describes it. */
+  /** What a check would be asked with now, and a stamp to tell whether an answer still describes it: the setup, the dates, and how many backtests have started since. */
   private readonly asking = computed(() => {
     const setup = this.readBack();
     const range = this.instants();
-    return setup === null || range === null ? null : { setup, range, stamp: JSON.stringify([setup, range]) };
+    return setup === null || range === null ? null : { setup, range, stamp: JSON.stringify([setup, range, this.launch.runsStarted()]) };
   });
   protected readonly checkIsStale = computed(() => {
     const state = this.check();
@@ -203,14 +208,11 @@ export class OptionsBacktestPageComponent {
     const error: unknown = this.library.error();
     return error === undefined ? null : extractServerMessage(error, 'The saved setups could not be read.');
   });
-  protected readonly loadedName = signal<string | null>(null);
-  /** The body of the setup as it was when it was loaded or last saved under `loadedName`. */
-  private readonly loadedBody = signal<string | null>(null);
+  /** The name of the setup that was opened or last saved, and the rule for the name a run is recorded under. */
+  private readonly names = new RunNameTracker();
+  protected readonly loadedName = this.names.name;
   /** The name a run is recorded under: the loaded or saved setup's name, but only while the setup on screen is still that one. */
-  private readonly runName = computed(() => {
-    const name = this.loadedName();
-    return name !== null && this.loadedBody() === JSON.stringify(this.body()) ? name : null;
-  });
+  private readonly runName = computed(() => this.names.nameFor(JSON.stringify(this.body())));
   protected readonly deleteProblem = signal<string | null>(null);
 
   // Saving.
@@ -218,8 +220,6 @@ export class OptionsBacktestPageComponent {
   protected readonly saveForm = form(this.saveModel);
   protected readonly saving = signal(false);
   private readonly lastSave = signal<{ readonly name: string; readonly stamp: string; readonly status: SaveStatus } | null>(null);
-  /** Counts the times the form was replaced whole, by opening a setup or importing one, so a save that was under way can tell. */
-  private formReplaced = 0;
   private readonly stamp = computed(() => `${this.saveModel().name}\n${JSON.stringify(this.body())}`);
   protected readonly nameProblem = computed(() => nameProblem(this.saveModel().name, this.limits()));
   protected readonly canSave = computed(() => this.readBack() !== null && this.saveModel().name !== '' && this.nameProblem() === null && !this.saving());
@@ -271,13 +271,17 @@ export class OptionsBacktestPageComponent {
     this.launch.clearRefusal();
   }
 
+  /** Asks which sessions can be tested; the answer lands away from the bar that asked, so the keyboard goes to its heading. */
   protected checkData(): void {
     const asking = this.asking();
-    if (asking !== null && this.canCheck()) void this.checkFlow.run(asking.setup, asking.range, asking.stamp);
+    if (asking === null || !this.canCheck()) return;
+    void this.checkFlow.run(asking.setup, asking.range, asking.stamp).then(() => this.afterRender(() => this.checkPanel()?.focusHeading()));
   }
 
+  /** The panel closes with the focused Dismiss in it, so the keyboard goes to the card of the dates it was about. */
   protected dismissCheck(): void {
     this.checkFlow.dismiss();
+    this.afterRender(() => this.durationCard()?.focusHeading());
   }
 
   /** The owner chose Run available dates: the range becomes the longest stretch that can be tested, and the page says so. */
@@ -317,9 +321,8 @@ export class OptionsBacktestPageComponent {
     if (clock === null) return;
     this.draft.set(draftFromSetup(setup, clock));
     this.saveModel.set({ name: '' });
-    this.loadedName.set(null);
+    this.names.clear();
     this.importNotice.set({ kind: 'loaded', title: 'The setup of that run was loaded. The dates were not changed.', reasons: [] });
-    this.formReplaced += 1;
     this.activeTab.set('backtest');
   }
 
@@ -345,10 +348,8 @@ export class OptionsBacktestPageComponent {
     const opened = draftFromSetup(item.setup, clock);
     this.draft.set(opened);
     this.saveModel.set({ name: item.example ? '' : item.name });
-    this.loadedName.set(item.name);
-    this.loadedBody.set(bodyJsonOf(opened, clock));
+    this.names.set(item.name, bodyJsonOf(opened, clock));
     this.importNotice.set(null);
-    this.formReplaced += 1;
   }
 
   protected async remove(name: string): Promise<void> {
@@ -356,7 +357,7 @@ export class OptionsBacktestPageComponent {
     try {
       await this.service.remove(name);
       // The setup is gone, so nothing may go on saying it was saved, or that the form holds it.
-      if (this.loadedName() === name) this.loadedName.set(null);
+      if (this.names.name() === name) this.names.clear();
       if (this.saveModel().name === name) this.saveModel.set({ name: '' });
       const last = this.lastSave();
       if (last?.status.kind === 'saved' && last.name === name) this.lastSave.set(null);
@@ -396,16 +397,13 @@ export class OptionsBacktestPageComponent {
     if (body === null || !this.canSave()) return;
     const stamp = this.stamp();
     const savedBody = JSON.stringify(this.body());
-    const replacedAtStart = this.formReplaced;
+    const replacedAtStart = this.names.replacements;
     this.saving.set(true);
     try {
       const saved = await this.service.save(name, body);
       this.lastSave.set({ name: saved.name, stamp, status: { kind: 'saved', text: `Saved “${saved.name}”.` } });
       // Another setup opened or imported while this was saving is what the form holds now, not this one.
-      if (replacedAtStart === this.formReplaced) {
-        this.loadedName.set(saved.name);
-        this.loadedBody.set(savedBody);
-      }
+      if (replacedAtStart === this.names.replacements) this.names.set(saved.name, savedBody);
       this.library.reload();
     } catch (error) {
       this.lastSave.set({ name, stamp, status: { kind: 'refused', text: reasonOf(error, 'The setup could not be saved. Try again.') } });
@@ -441,9 +439,8 @@ export class OptionsBacktestPageComponent {
     // The form is made from the setup as the server read the file, so what the file left out is filled in by the server.
     this.draft.set(draftFromSetup(described.setup, clock));
     this.saveModel.set({ name: '' });
-    this.loadedName.set(null);
+    this.names.clear();
     this.importNotice.set({ kind: 'loaded', title: `${file.name} was loaded.`, reasons: [] });
-    this.formReplaced += 1;
   }
 }
 

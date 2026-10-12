@@ -185,6 +185,16 @@ describe('the shortcut, Shift+Enter', () => {
     expect(setup.service.startRun).toHaveBeenCalledTimes(1);
   });
 
+  it('takes the key when it starts a backtest, so that a button that has the focus is not pressed as well', async () => {
+    await readyToStart();
+    const event = new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true, cancelable: true });
+
+    document.body.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    await screen.findByRole('region', { name: 'Backtest run' });
+  });
+
   it('does nothing while the backtest cannot be started', async () => {
     const service = fakeService(vi);
     await renderPage(service);
@@ -281,6 +291,23 @@ describe('when the server will not start the backtest', () => {
     expect(startButton().disabled).toBe(false);
   });
 
+  it('shows a refusal that is not about the range in the server’s words with its code, says nothing of trying again, and leaves Start free', async () => {
+    const setup = scriptedRun(vi, {
+      startRun: vi.fn(async () => {
+        throw new RunRefusedError('OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN', 'A run was already made for this job.', 409);
+      }),
+    });
+    await readyToStart(setup);
+
+    fireEvent.click(startButton());
+
+    const notice = (await screen.findByText('A run was already made for this job.')).closest('[role="alert"]') as HTMLElement;
+    expect(reads(notice)).toBe('A run was already made for this job. Options Backtest Job Already Has A Run');
+    expect(within(notice).queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(screen.queryByText(/Try again/)).toBeNull();
+    expect(startButton().disabled).toBe(false);
+  });
+
   it('says plainly when the backtest could not be started for another reason, and lets it be started again', async () => {
     let down = true;
     const setup = scriptedRun(vi);
@@ -345,6 +372,23 @@ describe('coming back to the page while a backtest is going', () => {
   });
 });
 
+describe('when the page cannot tell whether a backtest is going', () => {
+  it('offers to ask again, and shows the backtest that is going once the history answers', async () => {
+    const jobs = fakeJobs();
+    jobs.register('job-9');
+    const runs = [Promise.reject(new Error('offline')), Promise.resolve([runItem({ id: 9, job_id: 'job-9' })])];
+    const service = fakeService(vi, { runs: vi.fn(() => runs.shift() ?? Promise.resolve([])), run: vi.fn(async () => going()) });
+    await renderPage(service, undefined, { jobs });
+    const notice = (await screen.findByText(/Whether a backtest is already running could not be checked/)).closest('[role="alert"]') as HTMLElement;
+
+    press('Try again');
+
+    expect(await screen.findByRole('region', { name: 'Backtest run' })).toBeTruthy();
+    expect(screen.queryByText(/could not be checked/)).toBeNull();
+    expect(notice.isConnected).toBe(false);
+  });
+});
+
 describe('a backtest from start to end', () => {
   it('shows the result when it completes, and lets another be started', async () => {
     const setup = scriptedRun(vi);
@@ -376,8 +420,8 @@ describe('a backtest from start to end', () => {
     setup.jobs.emit('job-1', { type: 'job.failed', code: 'RunFailedError', message: failure.reason });
 
     const alert = await screen.findByRole('alert');
-    expect(within(alert).getByText('Some sessions have no data to replay.')).toBeTruthy();
-    expect(reads(within(alert).getByRole('listitem'))).toBe('2026-09-14 – No listing was stored.');
+    expect(reads(alert)).toBe('Some sessions have no data to replay.');
+    expect(reads(screen.getByRole('list', { name: 'What failed' }))).toBe('Listing · 1 item 2026-09-14 – No listing was stored.');
     await waitFor(() => expect(startButton().disabled).toBe(false));
   });
 
@@ -393,6 +437,7 @@ describe('a backtest from start to end', () => {
     setup.jobs.emit('job-1', { type: 'job.cancelled', reason: 'Cancelled.' });
 
     expect(await within(panel).findByText('The run was cancelled. Nothing was saved.')).toBeTruthy();
+    expect(within(panel).queryByText(/You asked to cancel/)).toBeNull();
     await waitFor(() => expect(startButton().disabled).toBe(false));
   });
 

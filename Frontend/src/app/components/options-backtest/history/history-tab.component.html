@@ -3,7 +3,7 @@
     <button pButton type="button" size="small" severity="secondary" [text]="true" (click)="close()"><i class="pi pi-arrow-left" aria-hidden="true"></i><span>Back to the runs</span></button>
     <app-options-backtest-run-panel [run]="run" [showSetup]="true" (useSetup)="useSetup.emit($event)" />
   } @else {
-    <h2>Runs</h2>
+    <h2 #heading tabindex="-1">Runs</h2>
     @if (deleteProblem(); as why) { <p class="problem" role="alert">{{ why }}</p> }
     @if (listProblem(); as why) {
       <p class="problem" role="alert">{{ why }}</p>
