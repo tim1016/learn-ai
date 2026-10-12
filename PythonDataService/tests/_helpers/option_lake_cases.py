@@ -19,6 +19,7 @@ import pytest
 
 from app.data_lake import catalog_client
 from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes
+from app.data_lake.types import ArtifactIdentity, ArtifactRecord
 
 # A session's option data may be captured from New York midnight after its date. Each row is a
 # session, its label, and that midnight as epoch ms UTC, worked by hand from the New York offset in
@@ -152,3 +153,29 @@ def slow_listing_pages(
         return httpx.Response(200, json=body)
 
     return answer
+
+
+async def complete_row_of_another_provider(
+    record: ArtifactRecord, *, provider: str = "alpaca", data_contract_hash: str | None = None, file_path: str | None = None
+) -> int:
+    """A complete minute-bar row of ``provider`` for the same contract-day as ``record``, on whichever catalog is installed.
+
+    A provider is part of a minute-bar row's identity, so two providers' rows for one contract-day sit side by
+    side. By default the row describes the very same file under the very same recipe, which is the row a reuse
+    would most like to take; ``data_contract_hash`` and ``file_path`` make it a different one.
+    """
+    identity = ArtifactIdentity(
+        artifact_kind="time_series_bars", market=record.market, symbol=record.symbol, trading_date=record.trading_date,
+        resolution="minute", data_type="trade", provider=provider, price_adjustment_mode=record.price_adjustment_mode,
+    )
+    recipe = data_contract_hash or record.data_contract_hash
+    artifact_id = await catalog_client.claim_minute_bar(
+        identity=identity, worker_id="another-worker", lease_ttl_ms=300_000, data_contract_hash=recipe,
+        file_path=file_path or record.file_path,
+    )
+    assert artifact_id is not None
+    assert await catalog_client.complete_artifact(
+        artifact_id, record.row_count, record.first_bar_start_ms, record.last_bar_start_ms, record.file_size_bytes,
+        record.file_sha256, lease_generation=catalog_client.INITIAL_LEASE_GENERATION, data_contract_hash=recipe,
+    )
+    return artifact_id

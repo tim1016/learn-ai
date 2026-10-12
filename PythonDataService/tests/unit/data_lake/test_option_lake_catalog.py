@@ -54,6 +54,7 @@ from app.data_lake.types import ArtifactIdentity
 from app.options.contract import OptionContract
 from tests._helpers.fake_lake_catalog import point_lake_writer_at_tmp
 from tests._helpers.option_lake_cases import (
+    complete_row_of_another_provider,
     one_bar_file,
     pieces_of_the_key_in,
     publish_stale_writer_first_once_both_have_staged,
@@ -306,6 +307,61 @@ async def test_the_captured_contract_days_of_a_date_come_from_one_select_on_the_
     assert named == frozenset({traded_contract.occ_symbol, quiet_contract.occ_symbol})
     assert named_on_another_date == frozenset()
     assert named_when_asked_about_none == frozenset()
+
+
+@respx.mock
+async def test_another_providers_complete_row_with_the_same_file_and_recipe_is_not_reused_for_this_providers_failed_row_on_the_real_table(
+    clean_artifacts, pool, tmp_lake
+) -> None:
+    route = _mock_bars(_bars_ok([_bar(0)]))
+    first = await _ensure()
+    assert first.record is not None
+    await complete_row_of_another_provider(first.record)
+    assert await catalog_client.mark_complete_artifact_failed(first.record.id, "provider_api_error", "gone wrong")
+
+    again = await _ensure()
+
+    assert again.failure is None and again.reused is False
+    assert again.record is not None and again.record.id == first.record.id and again.record.provider == "polygon"
+    assert route.call_count == 2
+    rows = {row["Provider"]: row for row in await _bar_rows()}
+    assert (rows["polygon"]["Status"], rows["alpaca"]["Status"], rows["alpaca"]["LeaseGeneration"]) == ("complete", "complete", 1)
+
+
+@respx.mock
+async def test_another_providers_complete_row_is_never_refreshed_with_this_providers_bytes_on_the_real_table(
+    clean_artifacts, pool, tmp_lake
+) -> None:
+    _mock_bars(_bars_ok([_bar(0)]))
+    first = await _ensure()
+    assert first.record is not None
+    other_id = await complete_row_of_another_provider(first.record, data_contract_hash="0" * 64, file_path="elsewhere/theirs.zip")
+    other_before = next(dict(r) for r in await _bar_rows() if r["Id"] == other_id)
+    assert await catalog_client.mark_complete_artifact_failed(first.record.id, "provider_api_error", "gone wrong")
+
+    again = await _ensure()
+
+    assert again.failure is None and again.record is not None and again.record.id == first.record.id
+    other_after = next(dict(r) for r in await _bar_rows() if r["Id"] == other_id)
+    assert other_after == other_before
+
+
+@respx.mock
+async def test_another_providers_complete_row_is_not_a_captured_option_day_on_the_real_table(
+    clean_artifacts, pool, tmp_lake
+) -> None:
+    _mock_bars(_bars_ok([_bar(0)]))
+    first = await _ensure()
+    assert first.record is not None
+    await complete_row_of_another_provider(first.record)
+    assert await catalog_client.mark_complete_artifact_failed(first.record.id, "provider_api_error", "gone wrong")
+
+    named_with_only_the_others_row = await captured_option_days([SYMBOL], TRADING_DAY)
+    await _ensure()
+    named_with_both = await captured_option_days([SYMBOL], TRADING_DAY)
+
+    assert named_with_only_the_others_row == frozenset()
+    assert named_with_both == frozenset({SYMBOL})
 
 
 @respx.mock

@@ -81,6 +81,7 @@ from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, 
 from tests._helpers.option_lake_cases import (
     CAPTURE_OPENS,
     HALF_DAY_CLOSE_MS,
+    complete_row_of_another_provider,
     one_bar_file,
     pieces_of_the_key_in,
     publish_stale_writer_first_once_both_have_staged,
@@ -901,6 +902,65 @@ async def test_a_second_capture_reuses_the_complete_row_without_asking_the_vendo
     assert second.reused is True and second.failure is None
     assert second.record == first.record
     assert len(_bar_rows(fake_catalog)) == 1
+
+
+# ── Another provider's row for the same contract-day is not this provider's row ──
+
+
+@respx.mock
+async def test_another_providers_complete_row_with_the_same_file_and_recipe_is_not_reused_for_this_providers_failed_row(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """The lookup after a lost claim took the first complete row of the contract-day, whichever provider's."""
+    route = _mock_vendor()
+    first = await _ensure()
+    assert first.record is not None
+    other_id = await complete_row_of_another_provider(first.record)
+    assert await catalog_client.mark_complete_artifact_failed(first.record.id, "provider_api_error", "gone wrong")
+
+    again = await _ensure()
+
+    assert again.failure is None and again.reused is False
+    assert again.record is not None and again.record.id == first.record.id and again.record.provider == "polygon"
+    assert route.call_count == 2  # asked again for its own row
+    assert fake_catalog.rows[first.record.id]["status"] == "complete"
+    other = fake_catalog.rows[other_id]
+    assert (other["provider"], other["status"], other["lease_generation"]) == ("alpaca", "complete", 1)
+
+
+@respx.mock
+async def test_another_providers_complete_row_is_never_refreshed_with_this_providers_bytes(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """Under another recipe the lookup's row was refreshed and published over: the other provider's artifact held our bytes."""
+    _mock_vendor()
+    first = await _ensure()
+    assert first.record is not None
+    other_id = await complete_row_of_another_provider(first.record, data_contract_hash="0" * 64, file_path="elsewhere/theirs.zip")
+    before = dict(fake_catalog.rows[other_id])
+    assert await catalog_client.mark_complete_artifact_failed(first.record.id, "provider_api_error", "gone wrong")
+
+    again = await _ensure()
+
+    assert again.failure is None and again.record is not None and again.record.id == first.record.id
+    assert fake_catalog.rows[other_id] == before  # not one field of it changed
+    assert fake_catalog.rows[first.record.id]["status"] == "complete"
+
+
+@respx.mock
+async def test_another_providers_complete_row_is_not_a_captured_option_day(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    _mock_vendor()
+    first = await _ensure()
+    assert first.record is not None
+    await complete_row_of_another_provider(first.record)
+    assert await catalog_client.mark_complete_artifact_failed(first.record.id, "provider_api_error", "gone wrong")
+
+    named_with_only_the_others_row = await captured_option_days([SYMBOL], TRADING_DAY)
+    await _ensure()
+    named_with_both = await captured_option_days([SYMBOL], TRADING_DAY)
+
+    assert named_with_only_the_others_row == frozenset()
+    assert named_with_both == frozenset({SYMBOL})
 
 
 @respx.mock

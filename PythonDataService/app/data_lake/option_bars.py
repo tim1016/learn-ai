@@ -267,8 +267,8 @@ async def captured_option_days(symbols: Collection[str], trading_date: date) -> 
     """Of these contract symbols, those with a complete minute-bar row for ``trading_date``, from one catalog query.
 
     A symbol is an OCC symbol as ``OptionContract.occ_symbol`` writes it, without the vendor's
-    ``O:``. A day captured with no trades has a complete row and is named too. This answers
-    only "is there a complete row": it reads no file, so a complete row whose file has since
+    ``O:``. A day captured with no trades has a complete row and is named too; a complete row of
+    another provider for the same symbol and date is not. This answers only "is there a complete row": it reads no file, so a complete row whose file has since
     gone, or whose file is damaged, is still named, and the reader is the judge of "readable"
     (:func:`read_option_day_bars`: ``None`` for a file that is gone, ``OptionBarsFileError``
     for a damaged one, ``LakeAdmissionError`` for bytes the catalog does not admit). It needs
@@ -279,7 +279,8 @@ async def captured_option_days(symbols: Collection[str], trading_date: date) -> 
     if isinstance(symbols, str):
         raise TypeError("symbols must be a collection of contract symbols, not one string")
     return await catalog_client.select_complete_minute_bar_symbols(
-        OPTION_MARKET, symbols, "trade", trading_date, price_adjustment_mode=OPTION_PRICE_ADJUSTMENT_MODE
+        OPTION_MARKET, symbols, "trade", trading_date, price_adjustment_mode=OPTION_PRICE_ADJUSTMENT_MODE,
+        provider=OPTION_PROVIDER,
     )
 
 
@@ -448,7 +449,11 @@ async def ensure_option_day_bars(
             end_trading_date=trading_date,
             price_adjustment_mode=OPTION_PRICE_ADJUSTMENT_MODE,
         )
-        return existing[0] if existing else None
+        # The select does not filter by provider, and a contract-day can hold a complete row of another provider
+        # as well as this one's (a provider is part of the row's identity). Only this provider's row is ours to
+        # reuse or refresh; another's is never taken for it.
+        ours = [record for record in existing if record.provider == OPTION_PROVIDER]
+        return ours[0] if ours else None
 
     async def stored_file_reads(record: ArtifactRecord) -> bool:
         return await stored_file_still_reads(record, rel_path, lambda payload: parse_option_day_zip(payload, symbol, trading_date))
