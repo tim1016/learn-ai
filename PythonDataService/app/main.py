@@ -1341,6 +1341,13 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
         dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
     )
     app.include_router(golden_search.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
+    # Options Backtest runs (#3030): Check data, the history, and the job that makes a run.
+    from app.routers import options_backtest_runs
+
+    app.include_router(
+        options_backtest_runs.router, prefix="/api/research/options-backtest", tags=["research-options-backtest"]
+    )
+    app.include_router(options_backtest_runs.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
     app.include_router(indicator_reliability.router, prefix="/api/research", tags=["research"])
     app.include_router(return_distribution.router, prefix="/api/research", tags=["research"])
     # Research-pipeline walk-forward (Phase C). Registered BEFORE

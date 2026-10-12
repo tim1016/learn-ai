@@ -47,6 +47,8 @@ public static class JobsApi
         // Golden Search (#2696): runs one study stage that a guarded study command
         // authorized; Python checks the echoed stage token. This row is transport only.
         ["golden_search"] = "/api/jobs-internal/golden-search",
+        // Options Backtest (#3030): Python owns the run and its saved rows; this row is transport only.
+        ["options_backtest"] = "/api/jobs-internal/options-backtest",
         // The data-lake backfill worker lives on the data-lake router rather
         // than /api/jobs-internal/*; it accepts the same caller-minted job_id
         // this method injects below, so the framework (state, events, cancel,

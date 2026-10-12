@@ -4852,6 +4852,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs-internal/options-backtest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Options Backtest Job
+         * @description Accept a run: 202 once its row is made and a worker holds it. A bad range is a 400 and no job.
+         */
+        post: operations["start_options_backtest_job_api_jobs_internal_options_backtest_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs-internal/pool/drain": {
         parameters: {
             query?: never;
@@ -22270,6 +22290,39 @@ export interface components {
             /** Unit Label */
             unit_label: string;
         };
+        /**
+         * OptionsBacktestJobAcceptedResponse
+         * @description The run exists, ``running``, and a worker holds it.
+         */
+        OptionsBacktestJobAcceptedResponse: {
+            /** Job Id */
+            job_id: string;
+            /** Run Id */
+            run_id: number;
+            /**
+             * Status
+             * @constant
+             */
+            status: "queued";
+        };
+        /**
+         * OptionsBacktestJobRequest
+         * @description Body of ``POST /api/jobs-internal/options-backtest``: the setup, the half-open range, and the minted job id.
+         *
+         *     The range is ``[start_ms, end_ms)`` as Grid Search's window is: New York midnight of the first date to New York
+         *     midnight after the last. ``setup_name`` is the name the setup was saved under, when it was started from one.
+         */
+        OptionsBacktestJobRequest: {
+            /** End Ms */
+            end_ms: number;
+            /** Job Id */
+            job_id: string;
+            setup: components["schemas"]["OptionsBacktestSetup-Input"];
+            /** Setup Name */
+            setup_name?: string | null;
+            /** Start Ms */
+            start_ms: number;
+        };
         /** OptionsBacktestRefusal */
         OptionsBacktestRefusal: {
             /** Code */
@@ -37480,6 +37533,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_options_backtest_job_api_jobs_internal_options_backtest_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OptionsBacktestJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestJobAcceptedResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
                 };
             };
             /** @description Validation Error */

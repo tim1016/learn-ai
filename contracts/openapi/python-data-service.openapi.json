@@ -39927,6 +39927,78 @@
         "title": "OptionWholeNumberTerm",
         "type": "object"
       },
+      "OptionsBacktestJobAcceptedResponse": {
+        "description": "The run exists, ``running``, and a worker holds it.",
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "run_id": {
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Run Id",
+            "type": "integer"
+          },
+          "status": {
+            "const": "queued",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "job_id",
+          "run_id",
+          "status"
+        ],
+        "title": "OptionsBacktestJobAcceptedResponse",
+        "type": "object"
+      },
+      "OptionsBacktestJobRequest": {
+        "additionalProperties": false,
+        "description": "Body of ``POST /api/jobs-internal/options-backtest``: the setup, the half-open range, and the minted job id.\n\nThe range is ``[start_ms, end_ms)`` as Grid Search's window is: New York midnight of the first date to New York\nmidnight after the last. ``setup_name`` is the name the setup was saved under, when it was started from one.",
+        "properties": {
+          "end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "job_id": {
+            "minLength": 1,
+            "title": "Job Id",
+            "type": "string"
+          },
+          "setup": {
+            "$ref": "#/components/schemas/OptionsBacktestSetup-Input"
+          },
+          "setup_name": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9 _.,()-]{0,78}[A-Za-z0-9_.,()-])?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setup Name"
+          },
+          "start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "job_id",
+          "setup",
+          "start_ms",
+          "end_ms"
+        ],
+        "title": "OptionsBacktestJobRequest",
+        "type": "object"
+      },
       "OptionsBacktestRefusal": {
         "properties": {
           "code": {
@@ -74131,6 +74203,68 @@
           }
         },
         "summary": "Start Lean Engine Run Job",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
+    "/api/jobs-internal/options-backtest": {
+      "post": {
+        "description": "Accept a run: 202 once its row is made and a worker holds it. A bad range is a 400 and no job.",
+        "operationId": "start_options_backtest_job_api_jobs_internal_options_backtest_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OptionsBacktestJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestJobAcceptedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Options Backtest Job",
         "tags": [
           "jobs-internal"
         ]
