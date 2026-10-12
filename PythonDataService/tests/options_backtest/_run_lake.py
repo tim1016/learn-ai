@@ -13,21 +13,26 @@ from __future__ import annotations
 
 import asyncio
 import re
+import threading
 from collections.abc import Callable, Mapping
+from concurrent.futures import Future
+from concurrent.futures import wait as wait_for_futures
 from dataclasses import dataclass, field
 from datetime import date
+from itertools import pairwise
 from typing import Any
 
 import httpx
 import respx
 
 from app.options.contract import OptionContract
-from app.options_backtest.setup import MS_PER_MINUTE
+from app.options_backtest.setup import MS_PER_MINUTE, OptionsBacktestSetup
 from tests._helpers.fake_lake_catalog import mock_launcher
 from tests._helpers.option_vendor import no_trades, traded
 from tests._helpers.option_vendor import outside_plan as outside_the_plan
 from tests.options_backtest._lake import CONTRACTS_URL, vendor_listing_row
-from tests.options_backtest._run_data import Day, open_ms
+from tests.options_backtest._run_data import Day, flat, open_ms, steady
+from tests.options_backtest.setup_fixtures import leg, setup
 
 # respx hands a named group to the side effect as a keyword; the handlers read the request, so the mounts use
 # patterns without names and the handlers read the path with these.
@@ -45,6 +50,11 @@ class Vendor:
     underlying: str = "SPY"
     # Seconds each option-bars request takes, so requests overlap and the most in flight can be seen.
     option_latency_s: float = 0.0
+    listing_latency_s: float = 0.0
+    # A request of that kind is not answered until its event is set, so a test decides how long a phase takes.
+    option_release: threading.Event | None = None
+    listing_release: threading.Event | None = None
+    stock_release: threading.Event | None = None
     # Contracts whose bars request is answered with a status (a symbol -> HTTP status), for a failure mid-download.
     option_errors: dict[str, int] = field(default_factory=dict)
     # Contracts whose request is answered "outside the plan".
@@ -59,6 +69,7 @@ class Vendor:
     peak_in_flight: int = 0
     # A hook run when an option request arrives, to cancel a run mid-download.
     on_option_request: Callable[[str], None] | None = None
+    on_listing_request: Callable[[date], None] | None = None
 
     def mount(self) -> None:
         mock_launcher()
@@ -73,10 +84,21 @@ class Vendor:
     def _log(self, request: httpx.Request) -> None:
         self.requests.append(str(request.url))
 
+    @staticmethod
+    async def _held_until(release: threading.Event | None) -> None:
+        # The event is a threading one, since the request is made on the background loop and the test is not on it.
+        while release is not None and not release.is_set():
+            await asyncio.sleep(0.002)
+
     async def _listing(self, request: httpx.Request) -> httpx.Response:
         self._log(request)
         day = date.fromisoformat(request.url.params["as_of"])
         self.listing_requests.append(day)
+        if self.on_listing_request is not None:
+            self.on_listing_request(day)
+        await self._held_until(self.listing_release)
+        if self.listing_latency_s:
+            await asyncio.sleep(self.listing_latency_s)
         if day in self.listing_errors:
             return httpx.Response(self.listing_errors[day], json={"status": "ERROR"})
         scene_day = self.scene[day]
@@ -101,6 +123,7 @@ class Vendor:
         try:
             if self.on_option_request is not None:
                 self.on_option_request(symbol)
+            await self._held_until(self.option_release)
             if self.option_latency_s:
                 await asyncio.sleep(self.option_latency_s)
             if symbol in self.outside_plan:
@@ -122,6 +145,7 @@ class Vendor:
         assert match is not None
         day = date.fromisoformat(match["day"])
         self.stock_requests.append(day)
+        await self._held_until(self.stock_release)
         if day in self.stock_errors:
             return httpx.Response(self.stock_errors[day], json={"status": "ERROR"})
         prices = self.scene[day].underlying
@@ -160,3 +184,65 @@ def _option_row(day: date, minute: int, prices: tuple[str, ...]) -> dict[str, An
         "t": open_ms(day) + (minute - 1) * MS_PER_MINUTE,
         "n": 1,
     }
+
+
+class FakeTime:
+    """A clock a test controls, for the download phase's waits (``fetching.Pace``).
+
+    ``wait_for(future, seconds)`` does not wait: it moves the clock on by those seconds, sets any event that was
+    due by then (``release_at``), and gives the work on the other thread a few real milliseconds to react. A phase
+    that takes ten minutes of fake time therefore takes a second or two, and ``polls`` shows when it asked to stop.
+    """
+
+    def __init__(self) -> None:
+        # Real seconds each wait gives the other thread; a test raises it where it needs the work to finish first.
+        self.real_seconds_per_wait = 0.02
+        self.at = 0.0
+        self.polls: list[float] = []
+        self._due: list[tuple[float, threading.Event]] = []
+
+    def now(self) -> float:
+        return self.at
+
+    def release_at(self, seconds: float, event: threading.Event) -> None:
+        self._due.append((seconds, event))
+
+    def wait_for(self, future: Future[object], seconds: float) -> None:
+        self.at += seconds
+        for due, event in self._due:
+            if self.at >= due:
+                event.set()
+        wait_for_futures([future], timeout=self.real_seconds_per_wait)
+
+    def stop_at(self, seconds: float) -> Callable[[], bool]:
+        """A ``should_stop`` that records when it is asked and says yes from ``seconds`` on."""
+
+        def should_stop() -> bool:
+            self.polls.append(self.at)
+            return self.at >= seconds
+
+        return should_stop
+
+    def longest_gap_between_polls(self) -> float:
+        marks = [0.0, *self.polls, self.at]
+        return max(later - earlier for earlier, later in pairwise(marks))
+
+
+def eight_legs_setup(*, steps: tuple[int, ...] = (-4, -3, -2, -1, 1, 2, 3, 4)) -> OptionsBacktestSetup:
+    """One same-day call per step from the money (500): the strikes 496 to 504 less 500 itself, so a session needs
+    one contract for each step: with the default eight steps, eight contracts."""
+    return setup(
+        legs=[
+            leg(leg_id=f"leg_{n}", expiry={"kind": "same_day"}, strike={"kind": "atm_offset", "steps": step})
+            for n, step in enumerate(steps)
+        ]
+    )
+
+
+def ladder_day() -> Day:
+    """A day whose underlying closes at 500.20, with a call at every strike from 496 to 504 trading all session."""
+    return Day(
+        underlying=steady("500.20"),
+        options={("call", strike): flat("1.00", 1, 390) for strike in range(496, 505)},
+        strikes=tuple(range(496, 505)),
+    )
