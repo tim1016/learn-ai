@@ -5798,6 +5798,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/options-backtest/session-clock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session Clock
+         * @description A full session's open and close as minutes past New York midnight, from the calendar.
+         */
+        get: operations["get_session_clock_api_research_options_backtest_session_clock_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/options-backtest/setups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Setups
+         * @description The two shipped examples, then the saved setups, newest first. One that cannot be opened says why.
+         */
+        get: operations["list_setups_api_research_options_backtest_setups_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/options-backtest/setups/describe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Describe
+         * @description The setup in sentences. A setup that does not validate is the standard 422 with its field errors.
+         */
+        post: operations["describe_api_research_options_backtest_setups_describe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/options-backtest/setups/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Save Setup
+         * @description Save the setup under the name, replacing what was saved under it. An example's name is a 409.
+         */
+        put: operations["save_setup_api_research_options_backtest_setups__name__put"];
+        post?: never;
+        /**
+         * Delete Setup
+         * @description Delete the saved setup. None by that name is a 404, and an example's name is a 409.
+         */
+        delete: operations["delete_setup_api_research_options_backtest_setups__name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/recency/hero": {
         parameters: {
             query?: never;
@@ -7586,6 +7670,17 @@ export interface components {
             symbol: string | null;
             /** Trading Date */
             trading_date: string | null;
+        };
+        /**
+         * AtTheMoney
+         * @description The listed strike nearest the underlying's price; the lower one when two are as near.
+         */
+        AtTheMoney: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "atm";
         };
         /**
          * AtmOffsetStrike
@@ -13201,6 +13296,32 @@ export interface components {
             timespan?: "minute" | "hour" | "day";
             /** To Date */
             to_date: string;
+        };
+        /**
+         * FeePolicy
+         * @description How a run charges fees. An unknown fee is never a zero: ``not_charged`` says so in the result.
+         */
+        "FeePolicy-Input": {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "estimated" | "per_contract" | "not_charged";
+            /** Per Contract Usd */
+            per_contract_usd?: number | string | null;
+        };
+        /**
+         * FeePolicy
+         * @description How a run charges fees. An unknown fee is never a zero: ``not_charged`` says so in the result.
+         */
+        "FeePolicy-Output": {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "estimated" | "per_contract" | "not_charged";
+            /** Per Contract Usd */
+            per_contract_usd?: string | null;
         };
         /**
          * FeedContinuityEventView
@@ -19787,6 +19908,13 @@ export interface components {
              */
             win_rate?: number;
         };
+        /** LegDescriptionResponse */
+        LegDescriptionResponse: {
+            /** Leg Id */
+            leg_id: string;
+            /** Text */
+            text: string;
+        };
         /**
          * LegDiagnostic
          * @description Phase 1.1: per-leg current theoretical value and Greeks at request spot.
@@ -19838,6 +19966,50 @@ export interface components {
              * @default 0
              */
             tolerance_dollars?: number;
+        };
+        /**
+         * LegSetup
+         * @description One bought option leg: how its contract is picked and the rules it carries.
+         */
+        "LegSetup-Input": {
+            /** Contracts */
+            contracts: number;
+            /** Expiry */
+            expiry: components["schemas"]["SameDayExpiryRule"] | components["schemas"]["ThisWeekExpiryRule"] | components["schemas"]["MinDaysExpiryRule"];
+            /** Leg Id */
+            leg_id: string;
+            momentum?: components["schemas"]["Momentum-Input"] | null;
+            reentry_on_stop?: components["schemas"]["ReentryOnStop"] | null;
+            /**
+             * Right
+             * @enum {string}
+             */
+            right: "call" | "put";
+            stop_loss?: components["schemas"]["StopLoss-Input"] | null;
+            /** Strike */
+            strike: components["schemas"]["AtTheMoney"] | components["schemas"]["StepsFromTheMoney"];
+        };
+        /**
+         * LegSetup
+         * @description One bought option leg: how its contract is picked and the rules it carries.
+         */
+        "LegSetup-Output": {
+            /** Contracts */
+            contracts: number;
+            /** Expiry */
+            expiry: components["schemas"]["SameDayExpiryRule"] | components["schemas"]["ThisWeekExpiryRule"] | components["schemas"]["MinDaysExpiryRule"];
+            /** Leg Id */
+            leg_id: string;
+            momentum?: components["schemas"]["Momentum-Output"] | null;
+            reentry_on_stop?: components["schemas"]["ReentryOnStop"] | null;
+            /**
+             * Right
+             * @enum {string}
+             */
+            right: "call" | "put";
+            stop_loss?: components["schemas"]["StopLoss-Output"] | null;
+            /** Strike */
+            strike: components["schemas"]["AtTheMoney"] | components["schemas"]["StepsFromTheMoney"];
         };
         /**
          * LiveEnvelopePayload
@@ -20294,6 +20466,19 @@ export interface components {
          */
         MarketStatusSource: "ibkr.market_data.status" | "alpaca.stock_data.status";
         /**
+         * MinDaysExpiryRule
+         * @description The nearest listed expiry at least this many calendar days after the trading date.
+         */
+        MinDaysExpiryRule: {
+            /** Days */
+            days: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "min_days";
+        };
+        /**
          * MinDteExpiry
          * @description The nearest listed expiry at least ``days`` calendar days out.
          */
@@ -20347,6 +20532,32 @@ export interface components {
              * @enum {string}
              */
             state: "ready" | "working" | "blocked" | "off_duty" | "retired";
+        };
+        /**
+         * Momentum
+         * @description Buy a leg only once its premium has moved this far from where it stood at the entry time.
+         */
+        "Momentum-Input": {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "percent_up" | "percent_down" | "points_up" | "points_down";
+            /** Value */
+            value: number | string;
+        };
+        /**
+         * Momentum
+         * @description Buy a leg only once its premium has moved this far from where it stood at the entry time.
+         */
+        "Momentum-Output": {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "percent_up" | "percent_down" | "points_up" | "points_down";
+            /** Value */
+            value: string;
         };
         /**
          * MoneyParts
@@ -22052,6 +22263,94 @@ export interface components {
             range_reason: string | null;
             /** Unit Label */
             unit_label: string;
+        };
+        /** OptionsBacktestRefusal */
+        OptionsBacktestRefusal: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+        };
+        /**
+         * OptionsBacktestRefusalBody
+         * @description The 404 and 409 body: FastAPI wraps an ``HTTPException`` detail as ``{"detail": ...}``.
+         */
+        OptionsBacktestRefusalBody: {
+            detail: components["schemas"]["OptionsBacktestRefusal"];
+        };
+        /**
+         * OptionsBacktestSetup
+         * @description One options backtest setup, as it is saved, replayed and compared.
+         */
+        "OptionsBacktestSetup-Input": {
+            entry: components["schemas"]["SessionTime"];
+            exit: components["schemas"]["SessionTime"];
+            fees: components["schemas"]["FeePolicy-Input"];
+            /** Legs */
+            legs: components["schemas"]["LegSetup-Input"][];
+            no_reentry_after?: components["schemas"]["SessionTime"] | null;
+            /**
+             * Price Step Usd
+             * @default 0.01
+             */
+            price_step_usd?: number | string;
+            /**
+             * Slippage Percent
+             * @default 0.3
+             */
+            slippage_percent?: number | string;
+            /**
+             * Square Off
+             * @enum {string}
+             */
+            square_off: "partial" | "complete";
+            /** Starting Cash Usd */
+            starting_cash_usd: number | string;
+            /** Underlying */
+            underlying: string;
+            /**
+             * Version
+             * @default 1
+             * @constant
+             */
+            version?: 1;
+        };
+        /**
+         * OptionsBacktestSetup
+         * @description One options backtest setup, as it is saved, replayed and compared.
+         */
+        "OptionsBacktestSetup-Output": {
+            entry: components["schemas"]["SessionTime"];
+            exit: components["schemas"]["SessionTime"];
+            fees: components["schemas"]["FeePolicy-Output"];
+            /** Legs */
+            legs: components["schemas"]["LegSetup-Output"][];
+            no_reentry_after?: components["schemas"]["SessionTime"] | null;
+            /**
+             * Price Step Usd
+             * @default 0.01
+             */
+            price_step_usd?: string;
+            /**
+             * Slippage Percent
+             * @default 0.3
+             */
+            slippage_percent?: string;
+            /**
+             * Square Off
+             * @enum {string}
+             */
+            square_off: "partial" | "complete";
+            /** Starting Cash Usd */
+            starting_cash_usd: string;
+            /** Underlying */
+            underlying: string;
+            /**
+             * Version
+             * @default 1
+             * @constant
+             */
+            version?: 1;
         };
         /**
          * OptionsChainSnapshotRequest
@@ -23898,6 +24197,19 @@ export interface components {
             stuck_since_ms?: number | null;
         };
         /**
+         * ReentryOnStop
+         * @description How a leg comes back after a stop, and how many times in one session.
+         */
+        ReentryOnStop: {
+            /** Count */
+            count: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "at_once" | "on_momentum";
+        };
+        /**
          * RefusedFlattenPricing
          * @description No flatten can be sent now; ``available_at_ms`` is when one can, if the clock is why.
          */
@@ -24778,6 +25090,17 @@ export interface components {
             selector: "same_day";
         };
         /**
+         * SameDayExpiryRule
+         * @description The expiry on the trading date itself.
+         */
+        SameDayExpiryRule: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "same_day";
+        };
+        /**
          * SanitizationSummary
          * @description Row-count evidence emitted by aggregate sanitization.
          */
@@ -24807,6 +25130,21 @@ export interface components {
             summary: components["schemas"]["SanitizationSummary"];
             /** Ticker */
             ticker: string;
+        };
+        /**
+         * SavedSetupResponse
+         * @description One listed setup. Exactly one of ``setup`` and ``cannot_open_reason`` is set; an example has no ``saved_at_ms``.
+         */
+        SavedSetupResponse: {
+            /** Cannot Open Reason */
+            cannot_open_reason?: string | null;
+            /** Example */
+            example: boolean;
+            /** Name */
+            name: string;
+            /** Saved At Ms */
+            saved_at_ms?: number | null;
+            setup?: components["schemas"]["OptionsBacktestSetup-Output"] | null;
         };
         /**
          * SealedBotProgram
@@ -24970,6 +25308,29 @@ export interface components {
             /** Staged Revision */
             staged_revision: number | null;
         };
+        /**
+         * SessionClockResponse
+         * @description A full session's open and close, from the calendar, as minutes past New York midnight.
+         */
+        SessionClockResponse: {
+            /** Close Minute Et */
+            close_minute_et: number;
+            /** Open Minute Et */
+            open_minute_et: number;
+        };
+        /**
+         * SessionTime
+         * @description A minute of a session, as its distance after the open or before the close.
+         */
+        SessionTime: {
+            /**
+             * Anchor
+             * @enum {string}
+             */
+            anchor: "open" | "close";
+            /** Offset Ms */
+            offset_ms: number;
+        };
         /** SetHoldings */
         SetHoldings: {
             /** Fraction */
@@ -24996,6 +25357,22 @@ export interface components {
             explanation: string;
             /** Label */
             label: string;
+        };
+        /**
+         * SetupDescriptionResponse
+         * @description A setup in plain sentences. The page shows them as they are and never rebuilds them.
+         */
+        SetupDescriptionResponse: {
+            /** Costs */
+            costs: string;
+            /** Legs */
+            legs: components["schemas"]["LegDescriptionResponse"][];
+            /** Notices */
+            notices: string[];
+            /** Square Off */
+            square_off: string;
+            /** Window */
+            window: string;
         };
         /**
          * ShadowActivationOutcome
@@ -25541,6 +25918,19 @@ export interface components {
             station_id: "SIGNAL" | "INTENT" | "SUBMIT_GATE" | "BROKER_ACK" | "FILL" | "RECONCILED";
         };
         /**
+         * StepsFromTheMoney
+         * @description A listed strike this many listed strikes above (positive) or below (negative) the money.
+         */
+        StepsFromTheMoney: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "atm_offset";
+            /** Steps */
+            steps: number;
+        };
+        /**
          * StockEntryLeg
          * @description Stock ``ActionEntity`` — Slice 1B.
          */
@@ -25604,6 +25994,32 @@ export interface components {
             todays_change_percent?: number | null;
             /** Updated */
             updated?: number | null;
+        };
+        /**
+         * StopLoss
+         * @description Sell a leg once its premium has fallen this far below what was paid for it.
+         */
+        "StopLoss-Input": {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "percent" | "points";
+            /** Value */
+            value: number | string;
+        };
+        /**
+         * StopLoss
+         * @description Sell a leg once its premium has fallen this far below what was paid for it.
+         */
+        "StopLoss-Output": {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "percent" | "points";
+            /** Value */
+            value: string;
         };
         /**
          * StopRunRequest
@@ -26750,6 +27166,17 @@ export interface components {
             state: "TRADABLE" | "HALTED" | "UNKNOWN" | "NOT_REPORTED";
             /** Symbol */
             symbol: string;
+        };
+        /**
+         * ThisWeekExpiryRule
+         * @description The nearest listed expiry, today's included, that falls on the last session of its week.
+         */
+        ThisWeekExpiryRule: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "this_week";
         };
         /**
          * TimeInForce
@@ -39190,6 +39617,172 @@ export interface operations {
                     "application/json": {
                         [key: string]: components["schemas"]["IndicatorInfo"][];
                     };
+                };
+            };
+        };
+    };
+    get_session_clock_api_research_options_backtest_session_clock_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionClockResponse"];
+                };
+            };
+        };
+    };
+    list_setups_api_research_options_backtest_setups_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedSetupResponse"][];
+                };
+            };
+        };
+    };
+    describe_api_research_options_backtest_setups_describe_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OptionsBacktestSetup-Input"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupDescriptionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_setup_api_research_options_backtest_setups__name__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), starting with a letter or a digit and not ending with a space. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OptionsBacktestSetup-Input"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedSetupResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_setup_api_research_options_backtest_setups__name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), starting with a letter or a digit and not ending with a space. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
