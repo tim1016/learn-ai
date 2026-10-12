@@ -45,6 +45,7 @@ from app.data_lake.option_listing import OptionListingFileError
 from app.engine.run_gate import one_backtest_in_flight
 from app.lean_sidecar.trading_calendar import expected_sessions, session_window_for_date
 from app.options_backtest.data_check import (
+    STORED_FILE_ERRORS,
     CheckStopped,
     DataCheck,
     SessionVerdict,
@@ -54,7 +55,7 @@ from app.options_backtest.data_check import (
 from app.options_backtest.fees import FeeRateNotPublished
 from app.options_backtest.fetching import DownloadFailed, DownloadStopped, ensure_run_data
 from app.options_backtest.lake_check import LakeCheckData
-from app.options_backtest.lake_data import LakeRunData, UnderlyingDayUnreadable
+from app.options_backtest.lake_data import BARS_CANNOT_BE_PLACED, LakeRunData, UnderlyingDayUnreadable
 from app.options_backtest.limits import MAX_RANGE_SESSIONS
 from app.options_backtest.run import RunResult, RunStopped, SessionDataMissing, run_sessions
 from app.options_backtest.saved_runs import FailureItem, RunFailure
@@ -84,6 +85,9 @@ DATA_CATALOG_UNAVAILABLE = "DATA_CATALOG_UNAVAILABLE"
 SAVE_TIMED_OUT = "SAVE_TIMED_OUT"
 INTERNAL_ERROR = "INTERNAL_ERROR"
 
+# The code of the item a DATA_UNREADABLE failure carries for the session it was on.
+STORED_DATA_UNREADABLE = "stored_data_unreadable"
+
 
 class RunRefused(ValueError):
     """The request is a client mistake. ``code`` is for a page to branch on, the message for the owner."""
@@ -112,6 +116,18 @@ class SaveTimedOut(Exception):
     def __init__(self, run_id: int) -> None:
         self.run_id = run_id
         super().__init__(f"saving run {run_id} took longer than the run waits")
+
+
+class StoredDayUnreadable(Exception):
+    """A stored day a session needs cannot be used. ``session`` is the session the phase was on, if it is known.
+
+    ``cause`` is the error behind it: a file that cannot be read, or bars that break the rules of a bar.
+    """
+
+    def __init__(self, session: date | None, cause: Exception) -> None:
+        self.session = session
+        self.cause = cause
+        super().__init__("a stored day a session needs cannot be used")
 
 
 class SessionsCannotBeTested(Exception):
@@ -251,13 +267,17 @@ def _work(
 
     _stop_if_asked(hooks)
     hooks.on_phase(PHASE_DOWNLOADING_DATA)
-    report = ensure_run_data(
-        setup,
+    report = _naming_the_session(
         sessions,
-        now_ms=now_ms,
-        on_progress=hooks.on_progress,
-        should_stop=hooks.should_stop,
-        on_log=hooks.on_log,
+        hooks,
+        lambda progress: ensure_run_data(
+            setup,
+            sessions,
+            now_ms=now_ms,
+            on_progress=progress,
+            should_stop=hooks.should_stop,
+            on_log=hooks.on_log,
+        ),
     )
     hooks.on_log(
         f"Brought in {report.listings_fetched} listings and {report.option_days_fetched} contract days "
@@ -276,13 +296,37 @@ def _replay(setup: OptionsBacktestSetup, sessions: Sequence[date], hooks: RunHoo
 
     with one_backtest_in_flight(on_wait=lambda: hooks.on_phase(PHASE_WAITING_FOR_ENGINE), while_waiting=while_waiting):
         hooks.on_phase(PHASE_REPLAYING)
-        return run_sessions(
-            setup,
+        return _naming_the_session(
             sessions,
-            LakeRunData(setup.underlying),
-            on_session=lambda done, total, _day: hooks.on_progress(done, total),
-            should_stop=hooks.should_stop,
+            hooks,
+            lambda progress: run_sessions(
+                setup,
+                sessions,
+                LakeRunData(setup.underlying),
+                on_session=lambda done, total, _day: progress(done, total),
+                should_stop=hooks.should_stop,
+            ),
         )
+
+
+def _naming_the_session[T](
+    sessions: Sequence[date], hooks: RunHooks, phase: Callable[[Callable[[int, int], None]], T]
+) -> T:
+    """Run a phase that reports each session done; if it meets a stored day it cannot use, say which session it was on.
+
+    A phase reports a session after it has finished it, so the one it was on is the one after the last reported.
+    """
+    finished = 0
+
+    def progress(done: int, total: int) -> None:
+        nonlocal finished
+        finished = done
+        hooks.on_progress(done, total)
+
+    try:
+        return phase(progress)
+    except (*STORED_FILE_ERRORS, MalformedBars) as exc:
+        raise StoredDayUnreadable(sessions[finished] if finished < len(sessions) else None, exc) from exc
 
 
 def _stop_if_asked(hooks: RunHooks) -> None:
@@ -344,17 +388,27 @@ def _fee_rate_not_published(exc: FeeRateNotPublished) -> RunFailure:
     )
 
 
+_BARS_BREAK_THE_RULES = (
+    "Stored bars the run needs break the rules of a bar (a minute twice or out of order, a bar not on a whole minute, "
+    "a price of zero or less, or bars of another day), so it cannot use them."
+)
+
+
 def _bars_break_the_rules(_exc: MalformedBars) -> RunFailure:
-    return RunFailure(
-        DATA_UNREADABLE,
-        "Stored bars the run needs break the rules of a bar (a minute twice or out of order, a price of zero or less, "
-        "or bars of another day), so it cannot use them. Nothing was saved.",
-    )
+    return RunFailure(DATA_UNREADABLE, f"{_BARS_BREAK_THE_RULES} Nothing was saved.")
 
 
 def _stored_file_cannot_be_read(exc: Exception) -> RunFailure:
     return RunFailure(
         DATA_UNREADABLE, f"A stored file the run needs cannot be read ({type(exc).__name__}). Nothing was saved."
+    )
+
+
+def _stored_day_cannot_be_used(exc: StoredDayUnreadable) -> RunFailure:
+    """The failure of the error behind it, with the session it was on named by its open."""
+    failure = failure_of(exc.cause)
+    return RunFailure(
+        failure.code, failure.reason, (FailureItem(_opened(exc.session), STORED_DATA_UNREADABLE, failure.reason),)
     )
 
 
@@ -385,7 +439,8 @@ _BUILDERS: tuple[tuple[type[Exception] | tuple[type[Exception], ...], Callable[[
     (DownloadFailed, _download_failed),
     (SessionDataMissing, _session_data_missing),
     (FeeRateNotPublished, _fee_rate_not_published),
-    (MalformedBars, _bars_break_the_rules),
+    (StoredDayUnreadable, _stored_day_cannot_be_used),
+    ((MalformedBars, *BARS_CANNOT_BE_PLACED), _bars_break_the_rules),
     (
         (LakeAdmissionError, OptionBarsFileError, OptionListingFileError, UnderlyingDayUnreadable),
         _stored_file_cannot_be_read,

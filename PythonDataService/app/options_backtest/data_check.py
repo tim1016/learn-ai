@@ -50,7 +50,7 @@ from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.options.contract import OptionContract
 from app.options_backtest.data import RunData
 from app.options_backtest.fees import estimated_fees_available
-from app.options_backtest.lake_data import UnderlyingDayUnreadable
+from app.options_backtest.lake_data import BARS_CANNOT_BE_PLACED, UnderlyingDayUnreadable
 from app.options_backtest.needs import session_needs
 from app.options_backtest.results import SkipReason
 from app.options_backtest.session_market import MalformedBars, bars_by_close
@@ -364,9 +364,15 @@ def _lake_refusals(underlying: str, day: date, *, now_ms: int) -> list[Problem]:
 
 
 def _stored[T](read: Callable[[], T | None], what: str, notes: list[str]) -> T | None:
-    """A read that answers ``None`` for a file that is not there and for one that is there and unusable."""
+    """A read that answers ``None`` for a file that is not there and for one that is there and unusable.
+
+    A day with a bar no session can place is neither: the lake holds it as good and will not fetch it again, so it
+    passes through for the caller to call malformed and is never promised a fetch.
+    """
     try:
         return read()
+    except BARS_CANNOT_BE_PLACED:
+        raise
     except STORED_FILE_ERRORS as exc:
         notes.append(f"The stored {what} cannot be read ({type(exc).__name__}) and will be fetched again.")
         return None
@@ -376,7 +382,10 @@ def _inspect_what_is_stored(
     setup: OptionsBacktestSetup, day: date, outline: _Outline, data: CheckableData
 ) -> SessionCheck:
     notes: list[str] = []
-    underlying = _stored(lambda: data.underlying_day(day), "underlying bars", notes)
+    try:
+        underlying = _stored(lambda: data.underlying_day(day), "underlying bars", notes)
+    except BARS_CANNOT_BE_PLACED:
+        return _malformed(outline, "the underlying")
     listing = _stored(lambda: data.listing(day), "contract listing", notes)
     absent = [
         (DataKind.UNDERLYING_BARS, underlying is None),
@@ -405,7 +414,10 @@ def _inspect_what_is_stored(
 
     absent_contracts: list[OptionContract] = []
     for contract in sorted(needs.contracts, key=lambda each: each.occ_symbol):
-        stored = _stored(lambda c=contract: data.option_day(c, day), f"bars of {contract.occ_symbol}", notes)
+        try:
+            stored = _stored(lambda c=contract: data.option_day(c, day), f"bars of {contract.occ_symbol}", notes)
+        except BARS_CANNOT_BE_PLACED:
+            return _malformed(outline, contract.occ_symbol)
         if stored is None:
             absent_contracts.append(contract)
             continue
@@ -424,8 +436,8 @@ def _inspect_what_is_stored(
 def _malformed(outline: _Outline, what: str) -> SessionCheck:
     """Stored bars that break the rules of a bar. What the rule broken was, and on which day, is not said."""
     message = (
-        f"The stored bars of {what} break the rules of a bar (a minute twice or out of order, a price of zero or "
-        "less, or bars of another day), so the run cannot use them."
+        f"The stored bars of {what} break the rules of a bar (a minute twice or out of order, a bar not on a whole "
+        "minute, a price of zero or less, or bars of another day), so the run cannot use them."
     )
     return outline.result(
         SessionVerdict.CANNOT_BE_TESTED, problems=(Problem(ProblemCode.STORED_DATA_IS_MALFORMED, message),)

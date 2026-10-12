@@ -696,14 +696,14 @@ _UNREADABLE_ON_THE_EXPIRY = [
         _stamp_a_bar_off_the_minute_on_the_underlying,
         _underlying_problem,
         "SPY minute bars",
-        "UnderlyingDayUnreadable",
+        "UnderlyingBarsCannotBePlaced",
         id="an underlying day with a bar off the minute",
     ),
     pytest.param(
         _stamp_a_bar_off_the_minute_on_call_602,
         _contract_problem,
         "SPY250613C00602000",
-        "OptionBarsFileError",
+        "OptionBarsCannotBePlaced",
         id="a contract day with a bar off the minute",
     ),
 ]
@@ -961,15 +961,22 @@ async def test_a_download_with_the_catalog_down_is_a_503(
 
 
 @pytest.mark.parametrize(
-    "spoil",
+    ("spoil", "kind"),
     [
-        pytest.param(_replace(STOCK_PATH, _GARBAGE, admit=True), id="a damaged file"),
-        pytest.param(_stamp_a_bar_off_the_minute_on_the_underlying, id="a bar off the minute"),
+        pytest.param(_replace(STOCK_PATH, _GARBAGE, admit=True), "UnderlyingDayUnreadable", id="a damaged file"),
+        pytest.param(
+            _stamp_a_bar_off_the_minute_on_the_underlying, "UnderlyingBarsCannotBePlaced", id="a bar off the minute"
+        ),
     ],
 )
 @respx.mock
 async def test_a_download_that_finds_the_underlying_damaged_says_so_by_what_and_why_and_names_no_file(
-    spoil: Any, client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path, stock_fetch: StockFetchDouble
+    spoil: Any,
+    kind: str,
+    client: httpx.AsyncClient,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    stock_fetch: StockFetchDouble,
 ) -> None:
     await _the_lake(fake_catalog, tmp_lake)
     spoil(fake_catalog, tmp_lake)
@@ -980,7 +987,7 @@ async def test_a_download_that_finds_the_underlying_damaged_says_so_by_what_and_
     assert response.status_code == 200, response.text
     underlying = next(i for i in response.json()["items"] if i["kind"] == "underlying")
     assert (underlying["outcome"], underlying["reason"]) == ("failed", "underlying_unreadable")
-    assert "SPY minute bars" in underlying["detail"] and "UnderlyingDayUnreadable" in underlying["detail"]
+    assert "SPY minute bars" in underlying["detail"] and kind in underlying["detail"]
     assert str(tmp_lake) not in response.text and ".zip" not in response.text and stock_fetch.calls == []
 
 

@@ -27,8 +27,9 @@ underlying, the bars of the regular session. In both, every bar must be one a re
 plus a minute) is on a whole minute and falls on the trading date's New York date. The lake stores a bar whose start
 is anywhere inside the date, so it can hold one stamped off the minute or starting in the last minute of the date, and
 ``session_market.bars_by_close`` refuses a session that holds one, as a whole. So a day with such a bar is unreadable,
-as a damaged file is: the read raises the kind's own error (``UnderlyingDayUnreadable``, ``OptionBarsFileError``) and
-hands nothing over. A series run without that bar would have a minute missing, one a stop could have been hit in, and
+as a damaged file is: the read raises the kind's own error (``UnderlyingDayUnreadable``, ``OptionBarsFileError``; for
+bars that cannot be placed, its subclass ``UnderlyingBarsCannotBePlaced`` or ``OptionBarsCannotBePlaced``) and hands
+nothing over. A series run without that bar would have a minute missing, one a stop could have been hit in, and
 nothing in its result would say so; nothing is left out or repaired.
 
 Every answer carries the sha256 of the exact bytes that were decoded. A damaged file, a file the catalog does not
@@ -73,6 +74,20 @@ from app.utils.session_anchors import et_date_at_ms
 
 class UnderlyingDayUnreadable(ValueError):
     """The underlying's stored minute file is there and cannot be decoded; the stock reader's error is the cause."""
+
+
+class UnderlyingBarsCannotBePlaced(UnderlyingDayUnreadable):
+    """The underlying's file reads, and a bar in it cannot be put in a session (see the module docstring)."""
+
+
+class OptionBarsCannotBePlaced(OptionBarsFileError):
+    """A contract's file reads, and a bar in it cannot be put in a session (see the module docstring)."""
+
+
+# A day with a bar that cannot be placed is unreadable as a damaged file is, and every caller that handles one handles
+# these. They differ in one thing: the lake holds such a day as good and never fetches it again, so a caller that tells
+# the owner "it will be fetched again" of an unreadable day must not say it of these.
+BARS_CANNOT_BE_PLACED = (UnderlyingBarsCannotBePlaced, OptionBarsCannotBePlaced)
 
 
 @dataclass(frozen=True)
@@ -197,7 +212,7 @@ class LakeRunData:
             bars,
             trading_date,
             subject=f"the stored {self._underlying} minute bars for {trading_date.isoformat()}",
-            unreadable=UnderlyingDayUnreadable,
+            unreadable=UnderlyingBarsCannotBePlaced,
         )
         return Captured(value=named, sha256=hashlib.sha256(admitted.payload).hexdigest())
 
@@ -239,6 +254,6 @@ class LakeRunData:
             stored.bars,
             trading_date,
             subject=f"the stored bars of {contract.occ_symbol} for {trading_date.isoformat()}",
-            unreadable=OptionBarsFileError,
+            unreadable=OptionBarsCannotBePlaced,
         )
         return Captured(value=named, sha256=stored.sha256)
