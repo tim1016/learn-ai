@@ -12,9 +12,12 @@ export interface RunApi {
   runs(query: RunQuery): Promise<RunListItem[]>;
 }
 
-/** Something the owner must be told about a run that is not on screen: a start that failed, a record not found yet, a check that could not be made. */
+/**
+ * Something the owner must be told about a run that is not on screen: a start the server refused, a start whose answer did
+ * not come clearly (the job may have been accepted), a record not found yet, a check that could not be made.
+ */
 export interface LaunchProblem {
-  readonly kind: 'not_started' | 'record_unread' | 'unchecked';
+  readonly kind: 'not_started' | 'start_unanswered' | 'record_unread' | 'unchecked';
   readonly message: string;
   /** The server's own code for a refusal, to be shown through the label helper; null when the server gave none. */
   readonly code: string | null;
@@ -137,12 +140,15 @@ export class RunLaunch {
 }
 
 /**
- * Why a start failed, in the server's own words and code when it gave any. "Try again" is said only when trying again
- * can cure it: the network or the server (a 5xx). A refusal that is the owner's to fix, or a state that will not change
- * (a run already known, a setup the server will not take), is not.
+ * Why a start failed. The server's refusal (a 4xx, or its own coded refusal) says nothing was started, in its own words
+ * and code when it gave any; "Try again" is added only to a coded refusal of the server being unable (a 5xx). Anything
+ * else (no answer at all, a server or gateway error with no refusal in it, an answer that cannot be read, a failure
+ * that is no HTTP answer) does not say whether the job was accepted before the answer was lost: Start is free, and the
+ * owner is sent to History before starting it again. The job's id is made by the jobs boundary, not by this page, so
+ * the run cannot be looked up before the answer.
  */
 function notStarted(error: unknown): LaunchProblem {
-  const curable = error instanceof RunRefusedError ? error.status >= 500 : !(error instanceof HttpErrorResponse) || error.status === 0 || error.status >= 500;
-  if (error instanceof RunRefusedError) return { kind: 'not_started', message: curable ? `${error.message} Try again.` : error.message, code: error.code };
-  return { kind: 'not_started', message: curable ? 'The backtest could not be started. Try again.' : 'The server did not accept the backtest.', code: null };
+  if (error instanceof RunRefusedError) return { kind: 'not_started', message: error.status >= 500 ? `${error.message} Try again.` : error.message, code: error.code };
+  if (error instanceof HttpErrorResponse && error.status >= 400 && error.status < 500) return { kind: 'not_started', message: 'The server did not accept the backtest.', code: null };
+  return { kind: 'start_unanswered', message: 'The page did not get a clear answer to starting the backtest, so it may have started. Look in History before starting it again.', code: null };
 }
