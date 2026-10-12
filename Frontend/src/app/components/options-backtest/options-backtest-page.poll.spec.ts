@@ -91,3 +91,43 @@ describe('Start comes free when the record says the backtest is over', () => {
     await waitFor(() => expect(startButton().disabled).toBe(false));
   });
 });
+
+describe('once the job has started, not finding its run never says the backtest was not started, and never frees Start', () => {
+  const shiftEnter = () => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true, cancelable: true }));
+
+  it.each([
+    ['cannot be read', () => Promise.reject(new Error('offline'))],
+    ['is not in the list yet', () => Promise.resolve([])],
+  ])('when the record %s', async (_case, firstLookup) => {
+    const setup = scriptedRun(vi);
+    let lookups = 0;
+    setup.service.runs.mockImplementation(async (query) => {
+      if (query?.jobId === undefined) return [];
+      lookups += 1;
+      return lookups === 1 ? firstLookup() : [runItem({ job_id: 'job-1' })];
+    });
+    await renderPage(setup.service, undefined, { jobs: setup.jobs, polling: true });
+    await openExample();
+    pickDates('2026-09-14', '2026-09-18');
+    await waitFor(() => expect(startButton().disabled).toBe(false));
+
+    fireEvent.click(startButton());
+    const notice = await screen.findByText(/The backtest was started, but its record cannot be read yet/);
+
+    expect(screen.queryByText(/could not be started/)).toBeNull();
+    expect(notice.closest('[role="status"]')).not.toBeNull();
+    expect(startButton().disabled).toBe(true);
+    expect(screen.getByText('A backtest is already running.')).toBeTruthy();
+    fireEvent.click(startButton());
+    shiftEnter();
+    shiftEnter();
+    await after(1_000);
+    expect(setup.service.startRun).toHaveBeenCalledTimes(1);
+
+    await after(POLL_MS);
+    expect(await screen.findByRole('region', { name: 'Backtest run' })).toBeTruthy();
+    expect(screen.queryByText(/The backtest was started, but its record/)).toBeNull();
+    expect(startButton().disabled).toBe(true);
+    expect(setup.service.startRun).toHaveBeenCalledTimes(1);
+  });
+});

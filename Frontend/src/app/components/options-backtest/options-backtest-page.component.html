@@ -48,7 +48,9 @@
               }
               <app-options-backtest-summary [state]="summary()" (retry)="retrySummary()" />
               @if (launch.starting()) { <p class="notice" role="status">Starting the backtest…</p> }
-              @if (launch.problem(); as why) { <div class="notice notice--error" role="alert"><p>{{ why }}</p></div> }
+              @if (launch.problem(); as problem) {
+                <div class="notice" [class.notice--error]="problem.kind !== 'record_unread'" [attr.role]="problem.kind === 'record_unread' ? 'status' : 'alert'"><p>{{ problem.message }}</p></div>
+              }
               @if (launch.current(); as run) { <app-options-backtest-run-panel [run]="run" (updated)="launch.update($event)" /> }
             } @else if (clockProblem(); as problem) {
               <div class="notice notice--error" role="alert">

@@ -26,6 +26,7 @@ import { builderProblems, newLegBuilder, withLegAdded, withLegCopied, withLegRem
 import { OptionsBacktestService, SetupInvalidError, SetupRefusedError } from './options-backtest.service';
 import type { SavedSetup, ServedSetup, SessionClock, SetupSummary, TestableStretch } from './options-backtest.types';
 import { RunLaunch } from './run-launch';
+import { RUN_POLL_MS } from './run-poll';
 import { buildSetup } from './setup-build';
 import { draftFromSetup, newSetupDraft, withDefaultTimes, type SetupDraft } from './setup-draft';
 import { readSetupFile, setupFileBlob, setupFileName } from './setup-file';
@@ -171,7 +172,7 @@ export class OptionsBacktestPageComponent {
   protected readonly rangeNote = signal<RangeChange | null>(null);
 
   // Starting a run, and the run on screen.
-  protected readonly launch = new RunLaunch({ startRun: (request) => this.service.startRun(request), runs: (query) => this.service.runs(query) });
+  protected readonly launch = new RunLaunch({ startRun: (request) => this.service.startRun(request), runs: (query) => this.service.runs(query) }, inject(DestroyRef), inject(RUN_POLL_MS));
   private readonly runPanel = viewChild(RunPanelComponent);
 
   // Check data.
