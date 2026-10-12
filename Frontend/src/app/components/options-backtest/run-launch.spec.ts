@@ -216,6 +216,27 @@ describe('a job that started, whose run cannot be found yet', () => {
   });
 });
 
+describe('a look for the record that is still on its way when the page goes', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('is not followed by another look', async () => {
+    let answer: (runs: RunListItem[]) => void = () => undefined;
+    const service = api({ runs: vi.fn(() => new Promise<RunListItem[]>((resolve) => (answer = resolve))) });
+    const gone: (() => void)[] = [];
+    const launch = new RunLaunch(service, { onDestroy: (callback: () => void) => (gone.push(callback), () => undefined) } as unknown as DestroyRef, 3_000);
+
+    const starting = launch.start(REQUEST);
+    await vi.advanceTimersByTimeAsync(0);
+    for (const callback of gone) callback();
+    answer([]);
+    await starting;
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(service.runs).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('coming back to the page', () => {
   const going = runItem({ id: 9, job_id: 'job-9' });
 
