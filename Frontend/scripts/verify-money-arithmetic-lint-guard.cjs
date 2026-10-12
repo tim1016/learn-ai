@@ -29,7 +29,14 @@ const MONEY_SURFACES = [
   // The Options Backtest page shows a run's dollars from its run and history folders (#3030); no file there is named for money.
   "src/app/components/options-backtest/run/run-headline.component",
   "src/app/components/options-backtest/history/history-tab.component",
+  // The closer look at a run (#3030): trades, one day and a comparison, from the run-detail folder.
+  "src/app/components/options-backtest/run-detail/trades/trade-table.component",
+  "src/app/components/options-backtest/run-detail/session/session-view.component",
 ];
+
+// The one file of the Options Backtest page that may turn a price string into a number, for a chart's price axis (#3030).
+const CHART_GEOMETRY = "src/app/components/options-backtest/run-detail/series-geometry";
+const COERCION_OF_A_PRICE = "export const axisPrice = (point: { close_usd: string }) => Number(point.close_usd);";
 
 /** Shapes that must be refused everywhere. */
 const REFUSED_ANYWHERE = [
@@ -79,6 +86,15 @@ const ALLOWED = [
   // A broker-authored number (a quote, not a `*_usd` string) may still be
   // formatted by a numeric pipe away from the money surfaces.
   [ANYWHERE, "html", "<p>{{ quote.bid | currency: 'USD' }}</p>"],
+  // The chart's geometry file is read by nothing in the money lint: it makes the numbers a price axis needs.
+  [CHART_GEOMETRY, "ts", COERCION_OF_A_PRICE],
+];
+
+/** Files beside the geometry file that must still refuse the same coercion: the exclusion is for one file, not the folder. */
+const NOT_EXCLUDED = [
+  "src/app/components/options-backtest/run-detail/timeline-plan",
+  "src/app/components/options-backtest/run-detail/session/timeline-chart.component",
+  "src/app/components/options-backtest/run-detail/series-geometry.extra",
 ];
 
 async function moneyMessages(eslint, file, extension, code) {
@@ -105,6 +121,9 @@ async function main() {
       await expectRefused(file, extension, code);
     }
   }
+  for (const file of NOT_EXCLUDED) {
+    await expectRefused(file, "ts", COERCION_OF_A_PRICE);
+  }
   for (const [file, extension, code] of ALLOWED) {
     const messages = await moneyMessages(eslint, file, extension, code);
     if (messages.length > 0) {
@@ -118,7 +137,8 @@ async function main() {
   }
   console.log(
     `money arithmetic lint guard passed (${REFUSED_ANYWHERE.length} shapes everywhere, `
-      + `${REFUSED_ON_MONEY_SURFACES.length} on ${MONEY_SURFACES.length} money surfaces, ${ALLOWED.length} allowed)`,
+      + `${REFUSED_ON_MONEY_SURFACES.length} on ${MONEY_SURFACES.length} money surfaces, ${ALLOWED.length} allowed, `
+      + `${NOT_EXCLUDED.length} files beside the chart geometry file still refused)`,
   );
 }
 

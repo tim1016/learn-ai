@@ -1,5 +1,5 @@
 import type { OptionContract } from '../../../shared/option-contract/option-contract.component';
-import type { LevelKind, SessionFill, TradeContract } from './run-detail.types';
+import type { LevelKind, SessionDetail, SessionFill, TradeContract } from './run-detail.types';
 
 /**
  * A contract as the shared renderer takes it, made from the fields the server sent (its OCC symbol, underlying, right,
@@ -13,6 +13,18 @@ export function contractOf(contract: TradeContract): OptionContract {
     right: contract.right,
     strike: contract.strike_usd,
   };
+}
+
+/**
+ * The contracts of a day by OCC symbol, with the parts the server sent for each (from the day's trades and the series it
+ * charts). Events, levels, fills and marks name a contract by its symbol alone, and this is how they are read in words
+ * without the page ever taking a symbol apart.
+ */
+export function knownContracts(session: SessionDetail): ReadonlyMap<string, TradeContract> {
+  const known = new Map<string, TradeContract>();
+  for (const trade of session.trades) known.set(trade.contract.symbol, trade.contract);
+  for (const series of session.contracts) if (series.contract != null) known.set(series.contract.symbol, series.contract);
+  return known;
 }
 
 /**

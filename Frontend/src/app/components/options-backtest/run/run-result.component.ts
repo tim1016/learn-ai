@@ -1,6 +1,8 @@
-import { ChangeDetectionStrategy, Component, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, input, signal } from '@angular/core';
 
 import type { RunDetail } from '../options-backtest.types';
+import type { DayRequest } from '../run-detail/day-request';
+import { SessionViewComponent } from '../run-detail/session/session-view.component';
 import { RunTradesComponent } from '../run-detail/trades/run-trades.component';
 import { RunBannerComponent } from './run-banner.component';
 import { RunDayTableComponent } from './run-day-table.component';
@@ -27,6 +29,7 @@ import { SlippageToleranceComponent } from './slippage-tolerance.component';
     RunDayTableComponent,
     RunMonthTableComponent,
     RunTradesComponent,
+    SessionViewComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './run-result.component.html',
@@ -34,4 +37,6 @@ import { SlippageToleranceComponent } from './slippage-tolerance.component';
 })
 export class RunResultComponent {
   readonly run = input.required<RunDetail>();
+  /** The day the owner last asked to look at, from a trade or from the table of days. */
+  protected readonly day = signal<DayRequest | null>(null);
 }

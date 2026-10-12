@@ -17,11 +17,11 @@ describe('the by-day table', () => {
     await render(RunDayTableComponent, { inputs: { rows: DAY_ROWS } });
 
     expect(bodyRows().map((row) => reads(row))).toEqual([
-      '2026-09-14 Traded 2 2 0 0 $150.25 $2.60',
-      '2026-09-15 Traded 4 1 3 0 -$62.40 $5.20',
-      '2026-09-16 No Trade 0 0 0 0 $0.00 $0.00',
-      '2026-09-17 Skipped Window Does Not Fit 0 0 0 0 $0.00 $0.00',
-      '2026-09-18 Traded 6 4 1 1 $1,146.71 $39.00',
+      '2026-09-14 Traded 2 2 0 0 $150.25 $2.60 Look at',
+      '2026-09-15 Traded 4 1 3 0 -$62.40 $5.20 Look at',
+      '2026-09-16 No Trade 0 0 0 0 $0.00 $0.00 Look at',
+      '2026-09-17 Skipped Window Does Not Fit 0 0 0 0 $0.00 $0.00 Look at',
+      '2026-09-18 Traded 6 4 1 1 $1,146.71 $39.00 Look at',
     ]);
   });
 
@@ -29,6 +29,17 @@ describe('the by-day table', () => {
     await render(RunDayTableComponent, { inputs: { rows: DAY_ROWS } });
 
     expectTradingDatesInNewYork(document.body);
+  });
+
+  it('offers each day to look at closely, named by the day, and tells who asked and which day', async () => {
+    const asked: { openMs: number; origin: HTMLElement | null }[] = [];
+    await render(RunDayTableComponent, { inputs: { rows: DAY_ROWS }, on: { openDay: (request: { openMs: number; origin: HTMLElement | null }) => asked.push(request) } });
+
+    const buttons = screen.getAllByRole('button', { name: /^Look at / });
+    expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual(['Look at 2026-09-14', 'Look at 2026-09-15', 'Look at 2026-09-16', 'Look at 2026-09-17', 'Look at 2026-09-18']);
+    fireEvent.click(buttons[3]);
+
+    expect(asked).toEqual([{ openMs: sessionOpenMs('2026-09-17'), origin: buttons[3] }]);
   });
 
   it('starts in date order and sorts by a whole-number column when its heading is pressed, both ways', async () => {
@@ -78,7 +89,7 @@ describe('the by-day table', () => {
     await render(RunDayTableComponent, { inputs: { rows: DAY_ROWS } });
 
     expect(screen.getByRole('region', { name: 'By day' })).toBeTruthy();
-    expect(screen.getAllByRole('columnheader').map((cell) => reads(cell))).toEqual(['Date', 'Status', 'Skipped because', 'Trades', 'Won', 'Lost', 'Break-even', 'Net profit', 'Fees']);
+    expect(screen.getAllByRole('columnheader').map((cell) => reads(cell))).toEqual(['Date', 'Status', 'Skipped because', 'Trades', 'Won', 'Lost', 'Break-even', 'Net profit', 'Fees', 'Look at the day']);
   });
 });
 

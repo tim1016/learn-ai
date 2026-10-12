@@ -1,0 +1,38 @@
+@if (panes().length > 0) {
+  <section class="legend" aria-label="What the chart shows">
+    <h4>What the chart shows</h4>
+    <ol class="panes" aria-label="Panes of the chart, from the top">
+      @for (pane of panes(); track pane.key) {
+        <li>
+          <span class="who">
+            @if (contractIn(pane); as contract) { <app-option-contract [contract]="contract" /> } @else { <app-asset-identity [symbol]="pane.symbol" size="xs" [logo]="false" /> }
+          </span>
+          <ul class="entries">
+            @for (entry of pane.entries; track entry.key) {
+              <li>
+                @if (entry.sample === 'line') { <span class="swatch" aria-hidden="true" [attr.data-line]="entry.lineStyle" [style.border-top-color]="entry.css"></span> } @else { <span class="glyph" aria-hidden="true" [style.color]="entry.css">{{ entry.glyph }}</span> }
+                {{ entry.name }} ({{ entry.drawn }})
+              </li>
+            }
+          </ul>
+        </li>
+      }
+    </ol>
+  </section>
+}
+@if (missing().length > 0) {
+  <section class="missing" aria-label="Not drawn">
+    <h4>Not drawn</h4>
+    <ul>
+      @for (item of missing(); track item.key) {
+        <li>
+          @if (item.what; as what) { <strong>{{ what }}</strong> of }
+          @if (contractIn(item); as contract) { <app-option-contract [contract]="contract" /> } @else { <code>{{ item.symbol }}</code> }:
+          @if (item.reason; as reason) { <span class="reason">{{ reason | receiptLabel }}</span> }
+          <span class="message">{{ item.message }}</span>
+          @if (item.listedBelow && item.what === null) { <span class="also">Its levels, fills and marks are listed below.</span> }
+        </li>
+      }
+    </ul>
+  </section>
+}

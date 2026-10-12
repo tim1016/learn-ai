@@ -12,6 +12,7 @@
         <th scope="col" class="num" pSortableColumn="trades_break_even">Break-even<p-sort-icon field="trades_break_even" /></th>
         <th scope="col" class="num">Net profit</th>
         <th scope="col" class="num">Fees</th>
+        <th scope="col"><span class="sr-only">Look at the day</span></th>
       </tr>
     </ng-template>
     <ng-template #body let-row>
@@ -25,6 +26,7 @@
         <td class="num">{{ row.trades_break_even }}</td>
         <td class="num">{{ row.net_profit_usd | authoredUsd }}</td>
         <td class="num">{{ row.fees_usd | authoredUsd }}</td>
+        <td><button type="button" class="look" [attr.aria-label]="openLabel(row.session_open_ms)" (click)="ask(row.session_open_ms, $event)">Look at</button></td>
       </tr>
     </ng-template>
   </p-table>

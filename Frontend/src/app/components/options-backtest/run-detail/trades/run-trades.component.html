@@ -28,7 +28,7 @@
     @if (shown.trades.length === 0) {
       <p class="muted" role="status">{{ filtered() ? 'No trade matches these filters.' : 'This run made no trades.' }}</p>
     } @else {
-      <app-options-backtest-trade-table caption="Leg trades" [trades]="shown.trades" [canOpenDay]="false" />
+      <app-options-backtest-trade-table caption="Leg trades" [trades]="shown.trades" (openDay)="openDay.emit($event)" />
     }
     <nav class="pager" aria-label="Pages of trades">
       @if (where(); as place) { <p class="where" role="status">{{ place }}</p> }

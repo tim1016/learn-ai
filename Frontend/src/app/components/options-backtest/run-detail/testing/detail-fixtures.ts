@@ -1,6 +1,6 @@
 import { etMidnightMs } from '../../../../shared/date/et-midnight';
 import { sessionOpenMs } from '../../../../shared/date-picker/testing/fake-trading-calendar';
-import type { LegTrade, TradeContract, TradesPage } from '../run-detail.types';
+import type { LegTrade, SeriesReason, SessionDetail, SessionEvent, SessionFill, SessionLevel, SessionMark, SessionSeries, TradeContract, TradesPage } from '../run-detail.types';
 
 /**
  * A small scene made by hand, the way the server serves one. Tuesday 2026-09-15 opens at 09:30 New York time; a minute
@@ -140,4 +140,143 @@ export function tradesPage(changes: Partial<TradesPage> = {}): TradesPage {
     trades,
     ...changes,
   };
+}
+
+// ── One day ───────────────────────────────────────────────────────────────
+
+/** The server's words for each reason it withholds a series (`SERIES_WORDS`), so a spec shows them as they are. */
+export const SERIES_WORDS: Readonly<Record<SeriesReason, string>> = {
+  session_skipped: 'This session was skipped, so no bars were read for it.',
+  no_pin: 'The run kept no record of reading these bars, so there is nothing to check them against.',
+  gone: 'The stored bars are no longer in the lake.',
+  changed: 'The stored bars have changed since this run.',
+  not_confirmed: 'The stored bars cannot be confirmed against what this run read.',
+  unreadable: 'The stored bars cannot be read now.',
+  lake_unavailable: 'The lake could not be reached, so the bars cannot be checked against this run now.',
+};
+
+/** The minutes after the open at which a series has a point, and the close there. */
+type Closes = readonly (readonly [minute: number, close: string])[];
+
+export function shownSeries(symbol: string, contract: TradeContract | null, closes: Closes): SessionSeries {
+  return {
+    symbol,
+    contract,
+    state: 'shown',
+    reason: null,
+    message: null,
+    points: closes.map(([minute, close]) => ({ at_ms: at(minute), close_usd: close })),
+  };
+}
+
+export function withheldSeries(symbol: string, contract: TradeContract | null, reason: SeriesReason): SessionSeries {
+  return { symbol, contract, state: 'not_shown', reason, message: SERIES_WORDS[reason], points: [] };
+}
+
+/** SPY across the toy session of twelve minutes: it did not print in the seventh. */
+export const SPY_CLOSES: Closes = [
+  [1, '585.10'], [2, '585.20'], [3, '585.15'], [4, '585.30'], [5, '585.25'], [6, '585.40'],
+  [8, '585.55'], [9, '585.50'], [10, '585.45'], [11, '585.60'], [12, '585.65'],
+];
+/** The call did not trade in the fifth and sixth minutes: two runs of minutes, not one. */
+export const CALL_CLOSES: Closes = [
+  [2, '2.00'], [3, '2.10'], [4, '2.20'], [7, '2.50'], [8, '2.60'], [9, '2.30'], [10, '1.85'], [11, '1.80'], [12, '1.90'],
+];
+/** The put traded in four minutes running, then once, three minutes later. */
+export const PUT_CLOSES: Closes = [[3, '1.40'], [4, '1.44'], [5, '1.45'], [6, '1.50'], [10, '1.25']];
+
+/** The put as the toy session traded it: no rules, two contracts bought in the fourth minute and marked in the tenth. */
+export function sceneMarkedPut(): LegTrade {
+  return markedTrade({
+    trade_number: 1,
+    starting_price_usd: null,
+    momentum_level_usd: null,
+    entry_decided_at_ms: at(3),
+    entry: { bar_close_ms: at(4), seen_usd: '1.40', filled_usd: '1.42' },
+    exit_decided_at_ms: at(11),
+    mark: { bar_close_ms: at(10), price_usd: '1.25' },
+    entry_fee_usd: '1.30',
+    pnl_usd: '-35.30',
+  });
+}
+
+export function event(minute: number, changes: Partial<SessionEvent> & Pick<SessionEvent, 'kind'>): SessionEvent {
+  return { at_ms: at(minute), leg_id: 'call', entry_number: 0, contract: null, price_usd: null, reason: null, detail: null, ...changes };
+}
+
+export const SCENE_EVENTS: readonly SessionEvent[] = [
+  event(1, { kind: 'picked', contract: CALL_585.symbol }),
+  event(1, { kind: 'picked', leg_id: 'put', contract: PUT_585.symbol }),
+  event(1, { kind: 'pick_refused', leg_id: 'wing', reason: 'strike_not_listed', detail: 'No 590 call was listed for 2026-10-09 with a trade that day.' }),
+  event(2, { kind: 'starting_price_taken', contract: CALL_585.symbol, price_usd: '2.00' }),
+  event(4, { kind: 'entry_filled', leg_id: 'put', contract: PUT_585.symbol, price_usd: '1.42' }),
+  event(7, { kind: 'momentum_hit', contract: CALL_585.symbol, price_usd: '2.50' }),
+  event(8, { kind: 'entry_filled', contract: CALL_585.symbol, price_usd: '2.57' }),
+  event(10, { kind: 'stop_hit', contract: CALL_585.symbol, price_usd: '1.85' }),
+  event(11, { kind: 'close_filled', contract: CALL_585.symbol, price_usd: '1.82' }),
+  event(11, { kind: 're_entry_earned', entry_number: 1 }),
+  event(11, { kind: 'exit_time', leg_id: 'put', contract: PUT_585.symbol, reason: 'exit_time' }),
+  event(12, { kind: 'marked_not_sold', leg_id: 'put', contract: PUT_585.symbol, price_usd: '1.25' }),
+];
+
+export const SCENE_LEVELS: readonly SessionLevel[] = [
+  { kind: 'starting_price', leg_id: 'call', entry_number: 0, contract: CALL_585.symbol, price_usd: '2.00', from_ms: at(2), to_ms: at(7) },
+  { kind: 'momentum', leg_id: 'call', entry_number: 0, contract: CALL_585.symbol, price_usd: '2.50', from_ms: at(2), to_ms: at(7) },
+  { kind: 'stop', leg_id: 'call', entry_number: 0, contract: CALL_585.symbol, price_usd: '1.93', from_ms: at(8), to_ms: at(10) },
+];
+
+export const SCENE_FILLS: readonly SessionFill[] = [
+  { kind: 'entry', leg_id: 'put', entry_number: 0, contract: PUT_585.symbol, contracts: 2, bar_close_ms: at(4), seen_usd: '1.40', filled_usd: '1.42', exit_reason: null },
+  { kind: 'entry', leg_id: 'call', entry_number: 0, contract: CALL_585.symbol, contracts: 1, bar_close_ms: at(8), seen_usd: '2.55', filled_usd: '2.57', exit_reason: null },
+  { kind: 'exit', leg_id: 'call', entry_number: 0, contract: CALL_585.symbol, contracts: 1, bar_close_ms: at(11), seen_usd: '1.84', filled_usd: '1.82', exit_reason: 'stop' },
+];
+
+export const SCENE_MARKS: readonly SessionMark[] = [
+  { leg_id: 'put', entry_number: 0, contract: PUT_585.symbol, bar_close_ms: at(10), price_usd: '1.25' },
+];
+
+/**
+ * The toy session of twelve minutes (Tuesday 2026-09-15, 09:30 to 09:42 New York time), a traded day: a call bought on
+ * momentum in the eighth minute and stopped out in the eleventh, a put bought in the fourth and marked, not sold.
+ * Profit: the call lost 76.30 (75.00 and 1.30 of fees) and the put 35.30 (34.00 and 1.30), so the day lost 111.60 and
+ * cash went from 10000.00 to 9888.40. The page shows each of these from its own field.
+ */
+export function sessionDetail(changes: Partial<SessionDetail> = {}): SessionDetail {
+  return {
+    run_id: 7,
+    session_open_ms: TUESDAY_OPEN,
+    session_close_ms: at(12),
+    status: 'traded',
+    skip_reason: null,
+    cash_before_usd: '10000.00',
+    cash_after_usd: '9888.40',
+    profit_usd: '-111.60',
+    trades: [stoppedTrade(), sceneMarkedPut()],
+    events: [...SCENE_EVENTS],
+    underlying: shownSeries('SPY', null, SPY_CLOSES),
+    contracts: [shownSeries(CALL_585.symbol, CALL_585, CALL_CLOSES), shownSeries(PUT_585.symbol, PUT_585, PUT_CLOSES)],
+    levels: [...SCENE_LEVELS],
+    fills: [...SCENE_FILLS],
+    marks: [...SCENE_MARKS],
+    setup_cannot_open_reason: null,
+    ...changes,
+  };
+}
+
+/** A session that was skipped on its window: the stored facts, no trades, and no series, each withheld with a reason. */
+export function skippedSession(changes: Partial<SessionDetail> = {}): SessionDetail {
+  return sessionDetail({
+    status: 'skipped',
+    skip_reason: 'window_does_not_fit',
+    cash_after_usd: '10000.00',
+    profit_usd: '0.00',
+    trades: [],
+    events: [],
+    underlying: withheldSeries('SPY', null, 'session_skipped'),
+    contracts: [],
+    levels: [],
+    fills: [],
+    marks: [],
+    ...changes,
+  });
 }
