@@ -3,8 +3,8 @@ import { TableModule } from 'primeng/table';
 
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
-import { formatTimestampDisplay, TimestampDisplayComponent } from '../../../shared/timestamp';
-import type { DayRequest } from '../run-detail/day-request';
+import { TimestampDisplayComponent } from '../../../shared/timestamp';
+import { dayRequestFrom, lookAtLabel, type DayRequest } from '../run-detail/day-request';
 import type { DayRow } from '../options-backtest.types';
 
 /**
@@ -26,11 +26,9 @@ export class RunDayTableComponent {
   readonly openDay = output<DayRequest>();
 
   /** The name of the control that opens a day: it says which day, because the table holds many. */
-  protected openLabel(openMs: number): string {
-    return `Look at ${formatTimestampDisplay(openMs, { mode: 'date-et', granularity: 'date' })}`;
-  }
+  protected readonly openLabel = lookAtLabel;
 
   protected ask(openMs: number, event: Event): void {
-    this.openDay.emit({ openMs, origin: event.currentTarget instanceof HTMLElement ? event.currentTarget : null });
+    this.openDay.emit(dayRequestFrom(openMs, event));
   }
 }

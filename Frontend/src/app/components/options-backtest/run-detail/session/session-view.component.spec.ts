@@ -450,8 +450,12 @@ describe('one day, the keyboard', () => {
     await waitFor(() => expect(document.activeElement).toBe(heading()));
   });
 
-  it('does not take the keyboard when the owner picks a day with the picker', async () => {
-    await renderSession(vi, { detail: servedAs(sessionDetail()) });
+  it('does not take the keyboard when the view appears with no day asked for, nor when the owner picks a day with the picker', async () => {
+    const { view } = await renderSession(vi, { detail: servedAs(sessionDetail()) });
+    await view.fixture.whenStable();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Nothing asked for a day, so nothing may move the keyboard: not when the view mounts.
+    expect(document.activeElement).toBe(document.body);
     const picker = screen.getByRole('combobox', { name: 'Day' });
     picker.focus();
 

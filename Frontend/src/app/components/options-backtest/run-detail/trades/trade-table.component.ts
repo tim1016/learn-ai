@@ -4,8 +4,8 @@ import { ChangeDetectionStrategy, Component, computed, input, output } from '@an
 import { AuthoredUsdPipe } from '../../../../shared/pipes/authored-usd.pipe';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { OptionContractComponent, type OptionContract } from '../../../../shared/option-contract/option-contract.component';
-import { formatTimestampDisplay, TimestampDisplayComponent } from '../../../../shared/timestamp';
-import type { DayRequest } from '../day-request';
+import { TimestampDisplayComponent } from '../../../../shared/timestamp';
+import { dayRequestFrom, lookAtLabel, type DayRequest } from '../day-request';
 import type { LegTrade } from '../run-detail.types';
 import { attemptWords, contractOf } from '../words';
 
@@ -47,11 +47,11 @@ export class TradeTableComponent {
       trade,
       contract: contractOf(trade.contract),
       attempt: attemptWords(trade.entry_number),
-      openLabel: `Look at ${formatTimestampDisplay(trade.session_open_ms, { mode: 'date-et', granularity: 'date' })}, leg ${trade.leg_id}, ${attemptWords(trade.entry_number)}`,
+      openLabel: `${lookAtLabel(trade.session_open_ms)}, leg ${trade.leg_id}, ${attemptWords(trade.entry_number)}`,
     })),
   );
 
   protected ask(openMs: number, event: Event): void {
-    this.openDay.emit({ openMs, origin: event.currentTarget instanceof HTMLElement ? event.currentTarget : null });
+    this.openDay.emit(dayRequestFrom(openMs, event));
   }
 }

@@ -4,6 +4,7 @@ import { firstValueFrom } from 'rxjs';
 
 import { isRecord } from '../../../api/operator-blocker.types';
 import { refusalBody } from '../../../shared/errors/refusal-body';
+import { readDetail } from '../options-backtest.service';
 import type { CsvDownload, RunComparison, SessionDetail, TradeQuery, TradesPage } from './run-detail.types';
 
 const BASE = '/api/research/options-backtest';
@@ -11,6 +12,8 @@ const BASE = '/api/research/options-backtest';
 const REFUSALS: readonly number[] = [404, 409, 500];
 /** What a file is called when the server named none. */
 export const UNNAMED_EXPORT = 'options-backtest-trades.csv';
+/** The server sent no code of its own with a 422 (a parameter it will not take); this stands for it. */
+const INVALID_REQUEST = 'HTTP_422';
 
 /**
  * The server refused with a reason of its own: no such run (404), the run is not complete (409), the session or the
@@ -83,18 +86,57 @@ export class RunDetailService {
   }
 }
 
-/** The file name in a `Content-Disposition` header (`attachment; filename="x.csv"`); null when it names none that is safe to use. */
+/**
+ * The file name in a `Content-Disposition` header, read as RFC 6266 says: `filename*` (RFC 8187, the form for a name that
+ * is not plain ASCII) is the name when the header holds both, and `filename` is the way back when it holds only that or
+ * when the starred name cannot be used. Only UTF-8 is read in the starred form, the one charset RFC 8187 allows. A name
+ * that is empty, holds a path separator or a control character, or cannot be decoded is not trusted; with none left the
+ * caller names the file.
+ */
 export function filenameOf(header: string | null): string | null {
   if (header === null) return null;
+  return safeName(starredName(header)) ?? safeName(plainName(header));
+}
+
+function plainName(header: string): string {
   const found = /filename="([^"]+)"|filename=([^;\s"][^;\s]*)/i.exec(header);
-  const name = (found?.[1] ?? found?.[2] ?? '').trim();
-  return name === '' || /[\\/]/.test(name) ? null : name;
+  return found?.[1] ?? found?.[2] ?? '';
+}
+
+/** `filename*=UTF-8'language'percent-encoded-bytes`, decoded. */
+function starredName(header: string): string {
+  const found = /filename\*\s*=\s*UTF-8'[A-Za-z0-9-]*'([A-Za-z0-9!#$&+.^_`|~%-]+)/i.exec(header);
+  if (found === null) return '';
+  try {
+    return decodeURIComponent(found[1]);
+  } catch (malformed) {
+    // A percent sign that starts no byte, or bytes that are not UTF-8: not a name, so the plain one is looked for.
+    if (malformed instanceof URIError) return '';
+    throw malformed;
+  }
+}
+
+function safeName(name: string): string | null {
+  const trimmed = name.trim();
+  const hasControl = [...trimmed].some((character) => character.charCodeAt(0) < 32);
+  return trimmed === '' || hasControl || /[\\/]/.test(trimmed) ? null : trimmed;
 }
 
 function toRefusal(error: unknown): RunDetailRefusedError | null {
-  if (!(error instanceof HttpErrorResponse) || !REFUSALS.includes(error.status)) return null;
+  if (!(error instanceof HttpErrorResponse)) return null;
+  if (error.status === 422) return invalidRequest(error);
+  if (!REFUSALS.includes(error.status)) return null;
   const body = refusalBody(error);
   return refusalFrom(body, error.status);
+}
+
+/** A 422 is FastAPI's `{detail: [{loc, msg}]}` for a parameter it will not take: its first message, naming the parameter it is about. */
+function invalidRequest(error: HttpErrorResponse): RunDetailRefusedError | null {
+  const detail: unknown = isRecord(error.error) ? error.error['detail'] : undefined;
+  const first = Array.isArray(detail) ? detail.flatMap(readDetail).at(0) : undefined;
+  if (first === undefined) return null;
+  const parameter = first.loc.at(-1);
+  return new RunDetailRefusedError(INVALID_REQUEST, typeof parameter === 'string' ? `${parameter}: ${first.msg}` : first.msg, 422);
 }
 
 function refusalFrom(body: Record<string, unknown> | null, status: number): RunDetailRefusedError | null {

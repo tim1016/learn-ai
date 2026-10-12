@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { filenameOf, RunDetailRefusedError, RunDetailService } from './run-detail.service';
 import { tradesPage, TUESDAY_OPEN } from './testing/detail-fixtures';
-import { ensureBlobText, textOf } from './testing/blob-text';
+import { bytesOf, ensureBlobText, textOf } from './testing/blob-text';
 
 const BASE = '/api/research/options-backtest';
 const REFUSAL = { code: 'OPTIONS_BACKTEST_RUN_NOT_COMPLETE', message: 'Run 7 is running. Only a complete run has trades and sessions.' };
@@ -84,6 +84,28 @@ describe('RunDetailService, the trades route', () => {
     expect(error).toMatchObject({ code, message, status });
   });
 
+  it('reads a leg no leg can be named as the server’s own first message, with the parameter it is about, and not as a failure it has no words for', async () => {
+    const message = "String should match pattern '^[a-z0-9_]{1,32}$'";
+    const pending = service.trades(7, { legId: 'Call' });
+    http.expectOne((req) => req.url === `${BASE}/runs/7/trades`).flush(
+      { detail: [{ type: 'string_pattern_mismatch', loc: ['query', 'leg_id'], msg: message, input: 'Call' }, { type: 'x', loc: ['query', 'limit'], msg: 'a second one', input: 1 }] },
+      { status: 422, statusText: 'Unprocessable Entity' },
+    );
+
+    const error = await pending.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(RunDetailRefusedError);
+    expect(error).toMatchObject({ message: `leg_id: ${message}`, status: 422 });
+  });
+
+  it('lets a 422 that is not in the shape of a parameter’s refusal pass through as it came', async () => {
+    const pending = service.trades(7, { legId: 'Call' });
+    http.expectOne((req) => req.url === `${BASE}/runs/7/trades`).flush({ detail: 'nope' }, { status: 422, statusText: 'Unprocessable Entity' });
+
+    const error = await pending.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(HttpErrorResponse);
+    expect(error).not.toBeInstanceOf(RunDetailRefusedError);
+  });
+
   it('lets a failure that is not a refusal pass through as it came', async () => {
     const pending = service.trades(7);
     http.expectOne((req) => req.url === `${BASE}/runs/7/trades`).flush('down', { status: 503, statusText: 'Service Unavailable' });
@@ -153,6 +175,18 @@ describe('RunDetailService, the export', () => {
     expect(await textOf(file.blob)).toBe('unix_ts,time_america_new_york\r\n1,2\r\n');
   });
 
+  it('hands back the very bytes the server sent even when they are not text, so the file is never decoded and written again', async () => {
+    // A byte-order mark, bytes that are no UTF-8 (0xff 0xfe, a lone 0x80, 0xc3 0x28) and a NUL: reading this as text and writing it again changes every one.
+    const sent = new Uint8Array([0xef, 0xbb, 0xbf, 0x75, 0x6e, 0x69, 0x78, 0x0d, 0x0a, 0xff, 0xfe, 0x80, 0x00, 0xc3, 0x28]);
+    const body = new Blob([sent], { type: 'text/csv' });
+    const pending = service.tradesCsv(7);
+    http.expectOne(`${BASE}/runs/7/trades.csv`).flush(body, { headers: { 'Content-Disposition': 'attachment; filename="options-backtest-run-7-trades.csv"' } });
+
+    const file = await pending;
+    expect([...(await bytesOf(file.blob))]).toEqual([...sent]);
+    expect(file.blob).toBe(body);
+  });
+
   it('gives no name when the server named none, and the caller then chooses one', async () => {
     const pending = service.tradesCsv(7);
     http.expectOne(`${BASE}/runs/7/trades.csv`).flush(new Blob(['x']));
@@ -187,6 +221,15 @@ describe('the file name in a Content-Disposition header', () => {
     ['attachment; filename=trades.csv', 'trades.csv'],
     ['attachment; filename=trades.csv; size=10', 'trades.csv'],
     ['ATTACHMENT; FILENAME="Run 7.csv"', 'Run 7.csv'],
+    // RFC 6266 / RFC 8187: the starred form, percent-encoded UTF-8, is the name when the header holds it.
+    ["attachment; filename*=UTF-8''run%207.csv", 'run 7.csv'],
+    ["attachment; filename*=utf-8'en'r%C3%A9sum%C3%A9.csv", 'résumé.csv'],
+    ['attachment; filename="fallback.csv"; filename*=UTF-8\'\'real%20name.csv', 'real name.csv'],
+    ["attachment; filename*=UTF-8''real%20name.csv; filename=\"fallback.csv\"", 'real name.csv'],
+    // A starred name that cannot be used leaves the plain one to be read.
+    ['attachment; filename="fallback.csv"; filename*=UTF-8\'\'bad%E0%A4%A.csv', 'fallback.csv'],
+    ['attachment; filename="fallback.csv"; filename*=UTF-8\'\'..%2F..%2Fetc%2Fpasswd', 'fallback.csv'],
+    ['attachment; filename="fallback.csv"; filename*=ISO-8859-1\'\'caf%E9.csv', 'fallback.csv'],
   ])('reads %s', (header, name) => {
     expect(filenameOf(header)).toBe(name);
   });
@@ -198,6 +241,10 @@ describe('the file name in a Content-Disposition header', () => {
     ['attachment; filename=""'],
     ['attachment; filename="../../etc/passwd"'],
     ['attachment; filename="a\\b.csv"'],
+    ["attachment; filename*=UTF-8''..%2F..%2Fetc%2Fpasswd"],
+    ["attachment; filename*=UTF-8''a%00b.csv"],
+    ["attachment; filename*=UTF-8''bad%E0%A4%A.csv"],
+    ["attachment; filename*=ISO-8859-1''caf%E9.csv"],
   ])('gives no name for %s: nothing to trust', (header) => {
     expect(filenameOf(header)).toBeNull();
   });
