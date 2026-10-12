@@ -108,8 +108,8 @@ class FakeChainData:
     def __init__(
         self,
         *,
-        underlying: Sequence[MinuteBar] | None | Exception = None,
-        listing: StoredListing | None | Exception = None,
+        underlying: Sequence[MinuteBar] | Exception | None = None,
+        listing: StoredListing | Exception | None = None,
         options: Mapping[OptionContract, Sequence[MinuteBar] | Exception] | None = None,
     ) -> None:
         self._underlying = underlying
