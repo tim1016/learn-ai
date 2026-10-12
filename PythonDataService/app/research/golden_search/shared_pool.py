@@ -151,8 +151,9 @@ class _OwnerState:
     ``pending`` holds offered-but-unassigned entries; the owner-side
     adapter keeps future candidate definitions to itself and tops this up
     only within its own window, so the pool never sees a study's whole
-    budget as resident state. ``settled`` maps a delivered key to the bytes
-    its consumption must give back.
+    budget as resident state. ``settled`` maps a delivered identity —
+    ``(key, task_gen)``, because a re-admitted twin shares its key — to
+    the bytes its consumption must give back.
     """
 
     context: WorkerDispatchContext
@@ -161,8 +162,7 @@ class _OwnerState:
     on_capacity_handoff: Callable[[], None]
     handle: OwnerHandle | None = None
     pending: deque[_Entry] = field(default_factory=deque)
-    settled: dict[str, tuple[int, int]] = field(default_factory=dict)
-    submitted: int = 0  # offered and not yet consumed, this owner
+    settled: dict[tuple[str, int], tuple[int, int]] = field(default_factory=dict)
     in_flight: int = 0  # assigned to a lane and not yet delivered
     manifest_paths: frozenset[str] = field(default_factory=frozenset)
     closed: bool = False
@@ -183,7 +183,6 @@ class _Lane:
     # child, and one present may since have been evicted — and either way
     # costs at most one re-decode: residency is a hint, never admission.
     resident: dict[str, int] = field(default_factory=dict)
-    cache_snapshot: dict[str, int] = field(default_factory=dict)
 
     def residency_overlap(self, paths: frozenset[str]) -> int:
         return sum(1 for path in paths if path in self.resident)
@@ -208,9 +207,9 @@ class OwnerHandle:
         """
         return self._pool._offer(self._state, epoch, item)
 
-    def consume(self, key: str) -> None:
+    def consume(self, key: str, task_gen: int) -> None:
         """Settle one consumed outcome's bytes and wake the scheduler for the freed budget."""
-        self._pool._consume(self._state, key)
+        self._pool._consume(self._state, key, task_gen)
 
     def interrupt_running(self) -> None:
         """Stop the children running this owner's items — the pre-reconciliation reap."""
@@ -301,16 +300,20 @@ class SharedWorkerPool:
             if self._payload_bytes + entry.payload_bytes > self._payload_bound_bytes:
                 return False
             owner.pending.append(entry)
-            owner.submitted += 1
             self._submitted_total += 1
             self._payload_bytes += entry.payload_bytes
             self._schedule_locked()
             return True
 
-    def _consume(self, owner: _OwnerState, key: str) -> None:
+    def _consume(self, owner: _OwnerState, key: str, task_gen: int) -> None:
         with self._state_changed:
-            payload, result = owner.settled.pop(key, (0, 0))
-            owner.submitted = max(owner.submitted - 1, 0)
+            settled = owner.settled.pop((key, task_gen), None)
+            if settled is None:
+                # The pool already settled this identity — a closing
+                # cancellation, most often. Consuming it again would spend
+                # budget the bound never held (#3048 review).
+                return
+            payload, result = settled
             self._submitted_total = max(self._submitted_total - 1, 0)
             self._payload_bytes = max(self._payload_bytes - payload, 0)
             self._result_bytes = max(self._result_bytes - result, 0)
@@ -319,10 +322,23 @@ class SharedWorkerPool:
 
     def _settle_locked(self, entry: _Entry) -> None:
         """Return an entry's budget when no consumption ever will — stale, closed or orphaned."""
-        owner = entry.owner
-        owner.submitted = max(owner.submitted - 1, 0)
         self._submitted_total = max(self._submitted_total - 1, 0)
         self._payload_bytes = max(self._payload_bytes - entry.payload_bytes, 0)
+        self._state_changed.notify_all()
+
+    def _release_settled_locked(self, owner: _OwnerState) -> None:
+        """Give back every delivered-but-unconsumed outcome's bytes — deregistration's flush (#3048 review).
+
+        The pool settles at delivery time only when the owner is already
+        closed; an owner that closes with arrivals queued — every stage
+        exit with an exception in flight — settles here instead, so the
+        process-lifetime budget never wedges on dead dispatches.
+        """
+        for payload, result in owner.settled.values():
+            self._submitted_total = max(self._submitted_total - 1, 0)
+            self._payload_bytes = max(self._payload_bytes - payload, 0)
+            self._result_bytes = max(self._result_bytes - result, 0)
+        owner.settled.clear()
         self._state_changed.notify_all()
 
     def _deregister(self, owner: _OwnerState) -> None:
@@ -331,6 +347,7 @@ class SharedWorkerPool:
             for entry in list(owner.pending):
                 owner.pending.remove(entry)
                 self._settle_locked(entry)
+            self._release_settled_locked(owner)
             self._owners = [existing for existing in self._owners if existing is not owner]
             if self._owners:
                 self._ring = self._ring % len(self._owners)
@@ -390,14 +407,16 @@ class SharedWorkerPool:
                     if self._closing:
                         return
                     lane.signal.wait(timeout=_LANE_POLL_S)
+                    if not lane.assignments:
+                        # An idle pool produces no scheduler events, so the
+                        # lane's own poll is where a paused pool notices
+                        # memory pressure receding — waiting owners recover
+                        # without an external nudge (#3048 review).
+                        self._probe_pressure_recovery()
                 entry = lane.assignments.popleft()
                 closing_now = self._closing
             if closing_now:
-                # Assigned but never begun: answer through the cancellation
-                # path — a live owner's evaluator unwinds and releases
-                # instead of re-admitting into a pool that is closing, or
-                # waiting on an arrival that will never come (#3048).
-                self._answer_closing(entry)
+                self._cancel_entry_home(entry)
                 continue
             try:
                 self._run_assignment(lane, entry)
@@ -419,25 +438,38 @@ class SharedWorkerPool:
                 self._state_changed.notify_all()
                 self._schedule_locked()
 
-    def _answer_closing(self, entry: _Entry) -> None:
-        """Settle an entry the closing pool will never run and cancel it home (#3048 AC 10).
+    def _cancel_entry_home(self, entry: _Entry) -> None:
+        """Settle an entry the closing pool will never run — or has killed — and cancel it home (#3048 AC 10).
 
-        A drain interrupts owned work through the cancellation path — the
-        evaluator unwinds, releases what it reserved, and the operator's
-        capacity change leaves honest records, never a hung dispatch.
+        One invariant for every closing path, assigned-but-unbegun and
+        killed-in-flight alike: the entry's budget returns here (its
+        recorded result bytes too, when a delivery had charged them),
+        in-flight drops, and a live owner receives the cancellation its
+        evaluator can unwind — never a re-admission into a closed pool,
+        never a silent drop.
         """
         from app.jobs.progress import JobCancelled
 
         with self._state_changed:
             owner = entry.owner
             owner.in_flight = max(owner.in_flight - 1, 0)
-            self._settle_locked(entry)
-            closed = owner.closed
+            _payload, result = owner.settled.pop((entry.item.key, entry.item.task_gen), (0, 0))
+            self._submitted_total = max(self._submitted_total - 1, 0)
+            self._payload_bytes = max(self._payload_bytes - entry.payload_bytes, 0)
+            self._result_bytes = max(self._result_bytes - result, 0)
+            self._state_changed.notify_all()
+            owner_closed = owner.closed
         handle = owner.handle
-        if not closed and handle is not None:
+        if not owner_closed and handle is not None:
             handle.arrived.put(
                 (entry.item.key, entry.item.task_gen, JobCancelled("the research worker pool is closing; retry the dispatch"))
             )
+
+    def _probe_pressure_recovery(self) -> None:
+        """The idle pool's own re-probe: schedule again once pressure recedes (#3048 review)."""
+        with self._state_changed:
+            if self._pressured and not self._closing and not self._memory_pressure_locked():
+                self._schedule_locked()
 
     def _run_assignment(self, lane: _Lane, entry: _Entry) -> None:
         owner = entry.owner
@@ -450,7 +482,7 @@ class SharedWorkerPool:
         worker = self._slot_worker(lane)
         if worker is None:
             if self._closing:
-                self._answer_closing(entry)
+                self._cancel_entry_home(entry)
                 return
             try:
                 worker = self._spawn(owner.context)
@@ -468,11 +500,11 @@ class SharedWorkerPool:
                     lane.worker = worker
             if runaway:
                 # Startup is invisible to close()'s snapshot, so this lane
-                # owns killing the child it just grew (#3066 review) — and
-                # the cancellation is answered outside the pool lock, which
-                # the guard above still holds.
+                # owns killing the child it just grew (#3066 review); the
+                # cancellation home is answered by the helper, under its
+                # own lock acquisition once the guard above has released.
                 worker.close()
-                self._answer_closing(entry)
+                self._cancel_entry_home(entry)
                 return
         lane.current = entry
         worker.begin_task(cancel_check=owner.context.cancel_check, on_checkpoint=owner.context.on_checkpoint)
@@ -488,6 +520,12 @@ class SharedWorkerPool:
             with self._state_changed:
                 if lane.worker is worker:
                     lane.worker = None
+            if self._closing:
+                # close() killed this child mid-run: a cancellation home,
+                # not a loss — the evaluator unwinds instead of re-admitting
+                # into a pool that refuses offers (#3048 review).
+                self._cancel_entry_home(entry)
+                return
             self._deliver(lane, entry, WorkerLost("a pooled research worker died with a task in flight"))
             return
         except BaseException as exc:
@@ -516,14 +554,17 @@ class SharedWorkerPool:
             return worker
 
     def _record_residency(self, lane: _Lane, message: dict[str, Any]) -> None:
-        """Fold a child's reported decode delta into this lane's warm hints (#3048)."""
-        for artifact in message.get("decoded") or []:
-            path = artifact.get("relative_path")
-            if path:
-                lane.resident[path] = int(artifact.get("estimated_bytes", 0))
-        lane.cache_snapshot.update(
-            {name: value for name, value in (message.get("cache") or {}).items() if isinstance(value, int)}
-        )
+        """Fold a child's reported decode delta into this lane's warm hints (#3048).
+
+        Under the pool lock: ``facts()`` iterates the same dict from
+        evaluator threads, and an unsynchronized insert during that
+        iteration is a crash, not a hint (#3048 review).
+        """
+        with self._state_changed:
+            for artifact in message.get("decoded") or []:
+                path = artifact.get("relative_path")
+                if path:
+                    lane.resident[path] = int(artifact.get("estimated_bytes", 0))
 
     def _deliver(self, lane: _Lane, entry: _Entry, arrival: DeliveredOutcome | BaseException) -> None:
         """Deliver one outcome to its owner under the result-byte bound's backpressure.
@@ -545,7 +586,7 @@ class SharedWorkerPool:
                 return
             if not self._closing:
                 self._result_bytes += result_bytes
-                owner.settled[entry.item.key] = (entry.payload_bytes, result_bytes)
+                owner.settled[(entry.item.key, entry.item.task_gen)] = (entry.payload_bytes, result_bytes)
         handle = owner.handle
         if handle is not None:
             handle.arrived.put((entry.item.key, entry.item.task_gen, arrival))
@@ -615,16 +656,8 @@ class SharedWorkerPool:
             orphaned = [entry for owner in self._owners for entry in owner.pending]
             for owner in self._owners:
                 owner.pending.clear()
-            for entry in orphaned:
-                self._settle_locked(entry)
         for entry in orphaned:
-            handle = entry.owner.handle
-            if not entry.owner.closed and handle is not None:
-                from app.jobs.progress import JobCancelled
-
-                handle.arrived.put(
-                    (entry.item.key, entry.item.task_gen, JobCancelled("the research worker pool is closing; retry the dispatch"))
-                )
+            self._cancel_entry_home(entry)
         for lane in self._lanes:
             with lane.signal:
                 lane.signal.notify_all()
@@ -734,8 +767,12 @@ def entry_wire(owner: _OwnerState, item: ReadyEvaluation) -> dict[str, Any]:
 
 # The process-lifetime singleton the runtime's dispatch factory binds to
 # (#3048): one pool per process, created at the first factory build, closed
-# by the lifespan (and by the operator's drain route).
+# by the lifespan (and by the operator's drain route). An operator's drain
+# also latches: a drained process refuses to recreate the pool, because
+# "stops new admissions" must hold past the very next study — the capacity
+# change is the restart the drain exists to permit.
 _SHARED_POOL: SharedWorkerPool | None = None
+_SHARED_POOL_DRAINED = False
 _SHARED_POOL_LOCK = threading.Lock()
 
 
@@ -749,6 +786,8 @@ def shared_worker_pool(
     """The process's one shared pool; a second configuration is a capacity change, which requires drain."""
     global _SHARED_POOL
     with _SHARED_POOL_LOCK:
+        if _SHARED_POOL_DRAINED:
+            raise PoolDrainingError("drained by the operator; restart at the new profile (#3048)")
         if _SHARED_POOL is None:
             _SHARED_POOL = SharedWorkerPool(
                 workers=workers,
@@ -780,13 +819,15 @@ def drain_shared_pool(*, wait_s: float = 60.0) -> dict[str, Any] | None:
     """The operator's drain of the process's shared pool (#3048 AC 10).
 
     Stops new assignments, waits bounded for owned work to complete,
-    interrupts what cannot, reaps the children, and clears the singleton —
-    the capacity change (a restart at the new profile) finds no orphans
-    and no running pool.
+    interrupts what cannot, reaps the children, clears the singleton and
+    latches it drained — the capacity change (a restart at the new
+    profile) finds no orphans, no running pool, and no quiet recreation.
     """
-    global _SHARED_POOL
+    global _SHARED_POOL, _SHARED_POOL_DRAINED
     with _SHARED_POOL_LOCK:
         pool, _SHARED_POOL = _SHARED_POOL, None
+        if pool is not None:
+            _SHARED_POOL_DRAINED = True
     if pool is None:
         return None
     return pool.drain(wait_s=wait_s)

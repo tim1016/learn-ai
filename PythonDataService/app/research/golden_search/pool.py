@@ -192,7 +192,7 @@ class PooledWorkerDispatch:
                         "a pooled worker delivered an outcome the current batch no longer owes",
                         extra={"action": "golden_search_pool_straggler_discarded", "evaluation_key": key},
                     )
-                    self._handle.consume(key)
+                    self._handle.consume(key, task_gen)
                     continue
                 del owed[key]
                 if isinstance(arrival, WorkerLost):
@@ -202,7 +202,7 @@ class PooledWorkerDispatch:
                     # delivering — a supersession would spend their begun rows'
                     # retry allowance and discard their results as stragglers,
                     # timing a fabricated failure into the search.
-                    self._handle.consume(key)
+                    self._handle.consume(key, task_gen)
                     self._outstanding -= 1
                     consumed.add(key)
                     yield DeliveredOutcome(
@@ -219,7 +219,11 @@ class PooledWorkerDispatch:
                     # take time, so a lane freed during the recovery cannot begin a
                     # run nobody owes anymore. The process-control errors stop the
                     # healthy siblings too, now, not at stage teardown (#3065
-                    # review); every other terminal answer leaves them to it.
+                    # review); every other terminal answer leaves them to it. The
+                    # delivery's budget settles here too — a raised terminal
+                    # answer still consumed a slot the process-lifetime pool
+                    # must see returned (#3048 review).
+                    self._handle.consume(key, task_gen)
                     if isinstance(arrival, (JobCancelled, GenerationFencedError)):
                         self._interrupt(epoch)
                     else:
@@ -227,7 +231,7 @@ class PooledWorkerDispatch:
                             if self._epoch == epoch:
                                 self._epoch += 1
                     raise arrival
-                self._handle.consume(key)
+                self._handle.consume(key, task_gen)
                 self._outstanding -= 1
                 consumed.add(key)
                 yield arrival

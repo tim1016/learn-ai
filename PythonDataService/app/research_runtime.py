@@ -240,9 +240,13 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         schema_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await schema_task
+        # The pool's children are the admission batcher's consumers: close
+        # them first, or a child's in-flight verdict recreates the batcher
+        # the line below just stopped (#3048 review). Both block (kill and
+        # reap), so neither runs on the event loop.
+        await asyncio.to_thread(close_shared_pool)
         batcher.close()
         stop_admission_batcher()
-        close_shared_pool()
         from app.research.persistence import ownership
 
         held = ownership.process_authority()

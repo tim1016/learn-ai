@@ -20,6 +20,7 @@ from typing import Any
 
 import pytest
 
+from app.research.golden_search import pool as pool_module
 from app.research.golden_search import shared_pool as shared_pool_module
 from app.research.golden_search import worker as worker_module
 from app.research.golden_search.shared_pool import PoolDrainingError, SharedWorkerPool
@@ -164,7 +165,7 @@ def test_a_warm_lane_is_preferred_and_never_idles_a_sibling(monkeypatch: pytest.
     try:
         assert owner.offer(1, _crafted_item(0.1))
         item = owner.arrived.get(timeout=5.0)
-        owner.consume(item[0])
+        owner.consume(item[0], item[1])
         warm_lane = next(lane.index for lane in pool._lanes if lane.resident)
         assert warm_lane == 0, "the deterministic tie-break sends the first item to the lowest lane"
 
@@ -172,7 +173,7 @@ def test_a_warm_lane_is_preferred_and_never_idles_a_sibling(monkeypatch: pytest.
         # never idled waiting for a warmer busy lane.
         assert owner.offer(1, _crafted_item(0.2))
         second = owner.arrived.get(timeout=5.0)
-        owner.consume(second[0])
+        owner.consume(second[0], second[1])
         tasks_per_child = [len(child.tasks) for child in children]
         assert tasks_per_child == [2], f"the warm lane served both items and no cold child spawned: {tasks_per_child}"
         facts = pool.facts()
@@ -198,14 +199,14 @@ def test_duplicate_residency_across_lanes_is_reported(monkeypatch: pytest.Monkey
         for gap, owner in ((0.1, first), (0.2, first)):
             assert owner.offer(1, _crafted_item(gap))
             outcome = owner.arrived.get(timeout=5.0)
-            owner.consume(outcome[0])
+            owner.consume(outcome[0], outcome[1])
         # The second owner's item lands on the other lane (the first is warm
         # only for the first owner's manifest — identical here, so affinity
         # prefers lane 0; force the duplicate by giving the second owner its
         # own item after lane 0 is busy).
         assert second.offer(1, _crafted_item(0.9))
         outcome = second.arrived.get(timeout=5.0)
-        second.consume(outcome[0])
+        second.consume(outcome[0], outcome[1])
         facts = pool.facts()
         assert facts["resident_paths"] >= 1
     finally:
@@ -229,9 +230,10 @@ def test_the_submission_bound_spans_owners_and_the_payload_bound_refuses(monkeyp
         assert not second.offer(1, _crafted_item(0.9)), "the bound spans owners, not per-owner windows"
         assert pool.facts()["submitted_unconsumed"] == 3
 
-        # Consumption frees the budget for any owner.
-        first.consume(_crafted_item(0.1).key)
-        assert second.offer(1, _crafted_item(0.9)), "a consumed outcome freed budget for the other owner"
+        # A dead dispatch's deregistration frees the budget for any owner:
+        # offered-but-never-delivered entries settle at close, not consume.
+        first.close()
+        assert second.offer(1, _crafted_item(0.9)), "the closed owner's budget freed for the other owner"
     finally:
         first.close()
         second.close()
@@ -316,7 +318,7 @@ def test_memory_pressure_pauses_assignments_without_dropping_work(monkeypatch: p
                 with owner._pool._state_changed:
                     owner._pool._schedule_locked()
         assert outcome is not None, "the paused item ran once pressure receded"
-        owner.consume(outcome[0])
+        owner.consume(outcome[0], outcome[1])
     finally:
         owner.close()
         pool.close()
@@ -356,7 +358,7 @@ def test_drain_refuses_new_owners_finishes_owned_work_and_closes(monkeypatch: py
     def consume_arrivals() -> None:
         outcome = owner.arrived.get(timeout=5.0)
         arrived.put(outcome)
-        owner.consume(outcome[0])
+        owner.consume(outcome[0], outcome[1])
 
     consumer = threading.Thread(target=consume_arrivals, daemon=True)
     consumer.start()
@@ -400,3 +402,90 @@ def test_the_drain_route_reports_and_clears_the_singleton(monkeypatch: pytest.Mo
         assert shared_pool_module._SHARED_POOL is None, "the capacity change finds no singleton holding lanes"
     finally:
         shared.close()
+        _reset_shared_singleton()
+
+
+def _reset_shared_singleton() -> None:
+    """Tests that touch the process singleton leave it clean for the next test."""
+    with shared_pool_module._SHARED_POOL_LOCK:
+        pool = shared_pool_module._SHARED_POOL
+        shared_pool_module._SHARED_POOL = None
+        shared_pool_module._SHARED_POOL_DRAINED = False
+    if pool is not None:
+        pool.close()
+
+
+def test_the_runtime_factorys_handoff_renews_through_the_checkpoint_relay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3048 review M1: the production wiring renews through a checkpoint message, never a bare call.
+
+    The factory binds the gate's message-taking relay; a zero-arg handoff
+    call used to raise TypeError as the first item's terminal answer, after
+    its begin marker — invisible to tests that only wired zero-arg lambdas.
+    """
+    from types import SimpleNamespace
+
+    from app.config import settings
+    from app.routers import golden_search as router
+
+    checkpoints: list[dict] = []
+
+    def on_checkpoint(message: dict) -> None:
+        checkpoints.append(message)
+
+    monkeypatch.setattr(settings, "RESEARCH_WORKER_COUNT", 2)
+    monkeypatch.setattr(settings, "RESEARCH_DISPATCH_WINDOW", 2)
+    _pool(monkeypatch, workers=2)
+    try:
+        factory = router._runtime_dispatch_factory(
+            on_checkpoint=on_checkpoint, cancel_check=lambda: None, emit=SimpleNamespace(log=lambda line: None)
+        )
+        dispatch = factory(worker_module.WorkerDispatchContext(**CONTEXT))
+        outcomes = list(dispatch(None, [_crafted_item(0.1)]))
+        assert outcomes and outcomes[0].lost_reason is None, "the item completed — no TypeError as its answer"
+        assert any(c.get("cursor_kind") == "fair_queue_advancement" for c in checkpoints), (
+            f"the handoff renewed through the gated relay: {checkpoints}"
+        )
+        dispatch.close()
+    finally:
+        _reset_shared_singleton()
+
+
+def test_a_terminal_answer_returns_its_budget_to_the_process_lifetime_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3048 review M2: a raised terminal arrival settles its bytes; the pool never wedges on dead dispatches."""
+
+    def execute(task: dict[str, Any]) -> dict[str, Any]:
+        raise RuntimeError("a store fence refused the begin")
+
+    pool, _ = _pool(monkeypatch, workers=1, execute=execute)
+    dispatch = pool_module.PooledWorkerDispatch(worker_module.WorkerDispatchContext(**CONTEXT), workers=1, window=2, pool=pool)
+    try:
+        with pytest.raises(RuntimeError, match="store fence"):
+            list(dispatch(None, [_crafted_item(0.1)]))
+        facts = pool.facts()
+        assert facts["submitted_unconsumed"] == 0 and facts["payload_bytes"] == 0, (
+            f"the terminal arrival's budget returned: {facts}"
+        )
+    finally:
+        dispatch.close()
+    facts = pool.facts()
+    assert facts["submitted_unconsumed"] == 0 and facts["result_bytes"] == 0, "close flushed what remained"
+
+
+def test_an_operators_drain_latches_the_singleton_against_recreation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3048 review M5-minor: a drained process refuses to quietly rebuild the pool (#3048 AC 10)."""
+    shared_pool_module.shared_worker_pool(
+        workers=1, submission_bound=2,
+        payload_bound_bytes=shared_pool_module.DEFAULT_PAYLOAD_BOUND_BYTES,
+        result_bound_bytes=shared_pool_module.DEFAULT_RESULT_BOUND_BYTES,
+    )
+    try:
+        drained = shared_pool_module.drain_shared_pool(wait_s=1.0)
+        assert drained is not None and drained["closing"] is True
+        with pytest.raises(shared_pool_module.PoolDrainingError, match="restart"):
+            shared_pool_module.shared_worker_pool(
+                workers=1, submission_bound=2,
+                payload_bound_bytes=shared_pool_module.DEFAULT_PAYLOAD_BOUND_BYTES,
+                result_bound_bytes=shared_pool_module.DEFAULT_RESULT_BOUND_BYTES,
+            )
+    finally:
+        _reset_shared_singleton()

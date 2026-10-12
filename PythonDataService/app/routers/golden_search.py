@@ -560,6 +560,19 @@ def _runtime_dispatch_factory(*, on_checkpoint, cancel_check, emit) -> Callable[
     def on_facts(facts: DispatchFacts) -> None:
         emit.log(f"research worker pool: {facts.as_dict()}")
 
+    def on_capacity_handoff() -> None:
+        # A handoff is real advancement (#3048): the scheduler moved this
+        # waiting owner into execution, and the begin marker under it is
+        # the durable transition. Renewed through the same gated checkpoint
+        # relay the child's own progress rides — a message, not a bare call.
+        on_checkpoint(
+            {
+                "phase": "scheduling",
+                "cursor_kind": "fair_queue_advancement",
+                "cursor": 1,
+            }
+        )
+
     return worker_pool_factory(
         on_checkpoint=on_checkpoint,
         cancel_check=cancel_check,
@@ -567,7 +580,7 @@ def _runtime_dispatch_factory(*, on_checkpoint, cancel_check, emit) -> Callable[
         workers=workers,
         window=window,
         pool=pool,
-        on_capacity_handoff=on_checkpoint,
+        on_capacity_handoff=on_capacity_handoff,
     )
 
 
@@ -579,12 +592,14 @@ async def drain_research_worker_pool() -> dict[str, Any]:
     complete, interrupts what cannot, and reaps the children — the
     capacity change (a restart at the new profile) finds no orphans and
     no running pool. On a process with no shared pool it reports that
-    honestly instead of pretending.
+    honestly instead of pretending. The wait and the reaping run off the
+    event loop: a probe or a progress poll must never freeze behind them.
     """
+    import asyncio
 
     from app.research.golden_search.shared_pool import drain_shared_pool
 
-    facts = drain_shared_pool()
+    facts = await asyncio.to_thread(drain_shared_pool)
     if facts is None:
         return {"drained": False, "reason": "no shared worker pool in this process"}
     return {"drained": True, **facts}

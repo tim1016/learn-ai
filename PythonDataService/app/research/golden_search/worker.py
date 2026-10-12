@@ -308,13 +308,13 @@ def _run_one_task(
     completed_before = int(state.get("completed", 0))
 
     def residency_fields() -> dict[str, Any]:
-        # The warm-affinity hint and cache accounting the shared pool's
-        # scheduler reports (#3048): what this child newly decoded, and its
-        # counters at this task's end — on the result and every failure.
+        # The warm-affinity hint the shared pool's scheduler folds into its
+        # lanes (#3048): what this child newly decoded — on the result and
+        # every failure. The cache's own counters stay in the child; nothing
+        # downstream reads them off the wire.
         delta = state["decoded_cache"].take_residency_delta()
         return {
             "decoded": [key.__dict__ | {"estimated_bytes": estimated} for key, estimated in delta],
-            "cache": state["decoded_cache"].metrics(),
         }
 
     try:
