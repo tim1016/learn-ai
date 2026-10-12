@@ -12,6 +12,7 @@ import asyncio
 from datetime import date
 from pathlib import Path
 
+import pytest
 import respx
 
 from app.data_lake.option_bars import ensure_option_day_bars
@@ -28,6 +29,8 @@ from tests.options_backtest._lake import tmp_lake as tmp_lake
 from tests.options_backtest._run_data import THU, WED, Day, flat, steady
 from tests.options_backtest._run_lake import Vendor
 from tests.options_backtest.setup_fixtures import leg, setup
+from tests.unit.data_lake.test_option_lake_catalog import clean_artifacts as clean_artifacts
+from tests.unit.data_lake.test_option_lake_catalog import pool as pool
 
 THE_FLOOR_DAY = date(2024, 10, 14)
 
@@ -131,3 +134,43 @@ async def test_a_day_the_plan_does_not_reach_is_asked_again_however_often_it_was
     recorded = await _recorded(DataThing(DataKind.CONTRACTS, call), THE_FLOOR_DAY)
 
     assert recorded == RecordedFailure(reason="outside_data_plan", will_be_asked_again=True)
+
+
+# ── On the real catalog table ────────────────────────────────────────────
+# The twins of the tests above, against the real SQL. They skip without a database attested as disposable, and the
+# catalog table must exist (it is created by a .NET migration; see test_option_lake_catalog.py).
+
+
+@respx.mock
+async def test_on_the_real_table_a_failed_listing_contract_day_and_stock_day_are_each_found_by_their_own_identity(
+    clean_artifacts: None, pool: None, tmp_lake: Path
+) -> None:
+    call = OptionContract.of(root="SPY", expiry_date=WED, right="call", strike=500)
+    vendor = Vendor(
+        _scene(WED, THU), option_errors={call.occ_symbol: 500}, listing_errors={THU: 503}, stock_errors={THU: 500}
+    )
+    vendor.mount()
+    # Wednesday's listing is stored whole, so its contract can be asked for and can fail; Thursday's listing fails.
+    assert (await ensure_option_listing("SPY", WED, now_ms=NOW_2026_10_12_MS)).failure is None
+    assert (await ensure_option_day_bars(call, WED, listed_under="SPY", now_ms=NOW_2026_10_12_MS)).failure is not None
+    assert (await ensure_option_listing("SPY", THU, now_ms=NOW_2026_10_12_MS)).failure is not None
+    with pytest.raises(DownloadFailed):
+        await asyncio.to_thread(
+            ensure_run_data,
+            setup(legs=[leg(expiry={"kind": "same_day"})]),
+            [THU],
+            now_ms=NOW_2026_10_12_MS,
+            should_stop=lambda: False,
+        )
+
+    contract_day = await _recorded(DataThing(DataKind.CONTRACTS, call), WED)
+    listing_stored = await _recorded(LISTING, WED)
+    listing_failed = await _recorded(LISTING, THU)
+    stock_failed = await _recorded(DataThing(DataKind.UNDERLYING_BARS), THU)
+    stock_never_asked = await _recorded(DataThing(DataKind.UNDERLYING_BARS), WED)
+
+    assert contract_day == RecordedFailure(reason="provider_api_error", will_be_asked_again=True)
+    assert listing_stored is None, "a listing fetched whole has no failure"
+    assert listing_failed is not None and listing_failed.reason == "provider_api_error"
+    assert stock_failed is not None and stock_failed.reason == "provider_api_error"
+    assert stock_never_asked is None
