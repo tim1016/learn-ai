@@ -15,7 +15,8 @@ Every outcome is one item and none is raised: ``fetched`` (the lake fetched it n
 had it) or ``failed`` with the lake's own typed reason. A contract is refused by the lake, with no request, when the
 listing does not hold it, so a listing that could not be captured fails every contract with ``listing_not_captured``
 and no contract is tried. What is raised is the caller's mistake (a request refused before anything is asked) and an
-unreachable catalog.
+unreachable catalog. A caller that cancels the download is waited out: the captures in flight run to their end, so none
+leaves a claimed row fetching, and then the cancellation is raised.
 
 At most ``MAX_REQUESTS_IN_FLIGHT`` captures run at once in one call, and at most ``MAX_CONTRACTS_PER_DOWNLOAD``
 contracts are taken in one call. That is the number of contracts a window of the chain can hold
@@ -30,7 +31,8 @@ finishes. A caller shows it as "being fetched by another request; ask again" and
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+import contextlib
+from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
@@ -181,6 +183,26 @@ def _distinct(contracts: Sequence[OptionContract]) -> list[OptionContract]:
     return list(first.values())
 
 
+async def _gathered_to_the_end[T](*captures: Awaitable[T]) -> list[T | BaseException]:
+    """Run the captures together and give back every outcome, an error as a value; none is stopped before its end.
+
+    A capture that has claimed its catalog row must reach its publish or its failure, or the row stays ``fetching``
+    until its lease runs out. ``return_exceptions`` keeps one capture's error from stopping the others, but a plain
+    ``gather`` cancelled by its caller cancels every capture it holds (a client that hangs up cancels the task that is
+    waiting). So the work is shielded: the caller's cancellation does not reach it. The caller is then still
+    waiting, and for as long as it takes, a further cancellation of it included, before the cancellation that stopped
+    it is raised again, so the download ends cancelled once nothing it started is left running.
+    """
+    work = asyncio.gather(*captures, return_exceptions=True)
+    try:
+        return await asyncio.shield(work)
+    except asyncio.CancelledError:
+        while not work.done():
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.shield(work)
+        raise
+
+
 def _raise_the_first_error(outcomes: Sequence[object]) -> None:
     for outcome in outcomes:
         if isinstance(outcome, BaseException):
@@ -210,6 +232,9 @@ async def ensure_chain_data(
 
     A contract another call is fetching at the same moment comes back ``failed`` with the lake's ``lease_timeout``
     reason: it is not missing, the other request is fetching it (see the module docstring); ask again.
+
+    Cancelling the call does not cancel a capture: the gather it waits on is shielded, the captures started run to their
+    end (a row is completed or failed, never left fetching), and the cancellation is raised once they have.
     """
     named = _distinct(contracts)
     if len(named) > MAX_CONTRACTS_PER_DOWNLOAD:
@@ -226,11 +251,10 @@ async def ensure_chain_data(
     # The catalog's pool belongs to the loop that made it, and the lake's capture functions do not make one.
     await catalog_client.init_pool()
     gate = asyncio.Semaphore(MAX_REQUESTS_IN_FLIGHT)
-    # Every capture finishes before an error is raised: none is cancelled halfway through a claim.
-    first = await asyncio.gather(
+    # Every capture finishes before an error is raised or a cancellation is: none is stopped halfway through a claim.
+    first = await _gathered_to_the_end(
         _capture_listing(underlying, trading_date, gate, now_ms),
         _capture_underlying(underlying, trading_date, gate, now_ms),
-        return_exceptions=True,
     )
     _raise_the_first_error(first)
     (listing_item, listing), underlying_item = first  # type: ignore[misc]
@@ -250,9 +274,8 @@ async def ensure_chain_data(
                 for contract in named
             ),
         )
-    contract_outcomes = await asyncio.gather(
-        *(_capture_contract(contract, underlying, trading_date, listing, gate, now_ms) for contract in named),
-        return_exceptions=True,
+    contract_outcomes = await _gathered_to_the_end(
+        *(_capture_contract(contract, underlying, trading_date, listing, gate, now_ms) for contract in named)
     )
     _raise_the_first_error(contract_outcomes)
     return (listing_item, underlying_item, *(item for item in contract_outcomes if isinstance(item, DownloadItem)))

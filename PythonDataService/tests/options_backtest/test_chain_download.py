@@ -56,6 +56,7 @@ from tests.options_backtest._lake import (
     store_underlying_day,
     symbol_asked,
     vendor_bars,
+    vendor_listing_row,
     vendor_lists,
 )
 from tests.options_backtest._lake import fake_catalog as fake_catalog
@@ -505,6 +506,85 @@ async def test_a_contract_whose_file_cannot_be_written_is_a_failed_item_with_io_
     assert all(str(tmp_lake) not in (item.detail or "") for item in items)
     # Nothing is left fetching: the listing and the underlying's day are complete and the two contract rows are failed.
     assert sorted(row["status"] for row in fake_catalog.rows.values()) == ["complete", "complete", "failed", "failed"]
+
+
+# ── A download that is cancelled finishes what it started ─────────────────
+
+
+async def _until(condition: Callable[[], bool]) -> None:
+    for _ in range(500):
+        if condition():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("the captures never reached the vendor")
+
+
+def _statuses(fake_catalog: FakeCatalog) -> list[str]:
+    return sorted(row["status"] for row in fake_catalog.rows.values())
+
+
+@respx.mock
+async def test_a_download_cancelled_while_the_listing_is_fetched_finishes_the_listing_and_the_underlying_then_ends_cancelled(
+    fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
+) -> None:
+    release = asyncio.Event()
+    listing_asked = asyncio.Event()
+
+    async def listing_after_release(request: httpx.Request) -> httpx.Response:
+        listing_asked.set()
+        await release.wait()
+        return httpx.Response(200, json={"request_id": "r", "status": "OK", "results": [vendor_listing_row(CALL_600)]})
+
+    respx.get(CONTRACTS_URL).mock(side_effect=listing_after_release)
+    bars_route = vendor_bars(lambda symbol: no_trades(symbol))
+    download = asyncio.create_task(ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[CALL_600]))
+    await asyncio.wait_for(listing_asked.wait(), timeout=5)
+    assert "fetching" in _statuses(fake_catalog)  # the listing holds its claimed row and waits on the vendor
+
+    download.cancel()
+    await asyncio.sleep(0.1)
+    ended_before_the_listing_did = download.done()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await download
+
+    assert ended_before_the_listing_did is False
+    assert download.cancelled()
+    # Two rows, the listing and the underlying's day, and both ran to their end; the contracts were never started.
+    assert _statuses(fake_catalog) == ["complete", "complete"]
+    assert bars_route.call_count == 0
+
+
+@pytest.mark.parametrize("cancels", [1, 2], ids=["cancelled once", "cancelled again while it waits"])
+@respx.mock
+async def test_a_download_cancelled_while_contracts_are_fetched_finishes_each_one_then_ends_cancelled(
+    cancels: int, fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
+) -> None:
+    vendor_lists(CALL_600, CALL_601)
+    release = asyncio.Event()
+    asked: list[str] = []
+
+    async def bars_after_release(request: httpx.Request) -> httpx.Response:
+        asked.append(symbol_asked(request))
+        await release.wait()
+        return no_trades(symbol_asked(request))
+
+    respx.get(url__regex=BARS_URL).mock(side_effect=bars_after_release)
+    download = asyncio.create_task(ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[CALL_600, CALL_601]))
+    await _until(lambda: len(asked) == 2)  # both contracts hold their claimed rows and wait on the vendor
+
+    for _ in range(cancels):
+        download.cancel()
+        await asyncio.sleep(0.05)
+    ended_before_the_contracts_did = download.done()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await download
+
+    assert ended_before_the_contracts_did is False
+    assert download.cancelled()
+    # Four rows, the listing, the underlying's day and the two contracts; each ran to its end and none is left fetching.
+    assert _statuses(fake_catalog) == ["complete", "complete", "complete", "complete"]
 
 
 # ── Requests refused before anything is asked ─────────────────────────────
