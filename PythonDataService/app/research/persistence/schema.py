@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import asyncpg
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 # Arbitrary but fixed: serializes concurrent first-use across FastAPI's loop
 # and the worker loop so CREATE IF NOT EXISTS never races itself.
 _ADVISORY_LOCK_KEY = 0x1926_0001
@@ -903,6 +903,126 @@ DDL_V19: tuple[str, ...] = (
     """,
 )
 
+# Saved Options Backtest runs (#3030): their own tables, not the stock run store, whose rows Golden Search counts as
+# use of a symbol's data, whose money is float and whose trades have no contract. Money and prices are NUMERIC with no
+# scale of its own, so what was computed in exact decimals is read back as the same decimals. Every instant is ms UTC
+# under the same ceiling as the setups table.
+#
+# A run is never a result in part: the figures exist exactly when the run is complete (one transaction writes them with
+# its sessions and trades), and a failure's reason exists exactly when it failed. ``trading_date`` is not stored; it is
+# the New York date of the session's open. Deleting a run takes its sessions and their trades with it.
+DDL_V20: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS research_options_backtest_runs (
+        id                        BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        created_at_ms             BIGINT NOT NULL CHECK (created_at_ms >= 0 AND created_at_ms <= 253402300799999),
+        finished_at_ms            BIGINT NULL CHECK (finished_at_ms >= 0 AND finished_at_ms <= 253402300799999),
+        job_id                    TEXT NOT NULL,
+        status                    TEXT NOT NULL CHECK (status IN ('running', 'complete', 'failed', 'cancelled')),
+        setup_name                TEXT NULL,
+        setup_json                JSONB NOT NULL,
+        underlying                TEXT NOT NULL,
+        first_session_open_ms     BIGINT NOT NULL CHECK (first_session_open_ms >= 0 AND first_session_open_ms <= 253402300799999),
+        last_session_open_ms      BIGINT NOT NULL CHECK (last_session_open_ms >= first_session_open_ms AND last_session_open_ms <= 253402300799999),
+        sessions_requested        INTEGER NOT NULL CHECK (sessions_requested > 0),
+        fee_policy_text           TEXT NOT NULL,
+        calendar_identity         TEXT NOT NULL,
+        calendar_package_version  TEXT NOT NULL,
+        failure_code              TEXT NULL,
+        failure_reason            TEXT NULL,
+        failure_detail_json       JSONB NULL,
+        summary_json              JSONB NULL,
+        slippage_json             JSONB NULL,
+        tolerance_json            JSONB NULL,
+        sessions_tested           INTEGER NULL,
+        sessions_traded           INTEGER NULL,
+        trades                    INTEGER NULL,
+        trades_won                INTEGER NULL,
+        net_profit_usd            NUMERIC NULL,
+        ending_cash_usd           NUMERIC NULL,
+        CONSTRAINT uq_research_options_backtest_runs_job UNIQUE (job_id),
+        CONSTRAINT ck_research_options_backtest_runs_finished CHECK ((status = 'running') = (finished_at_ms IS NULL)),
+        CONSTRAINT ck_research_options_backtest_runs_failure CHECK (
+            (status = 'failed' AND failure_code IS NOT NULL AND failure_reason IS NOT NULL)
+            OR (status <> 'failed' AND failure_code IS NULL AND failure_reason IS NULL AND failure_detail_json IS NULL)
+        ),
+        CONSTRAINT ck_research_options_backtest_runs_figures CHECK (
+            (status = 'complete'
+                AND summary_json IS NOT NULL AND slippage_json IS NOT NULL AND tolerance_json IS NOT NULL
+                AND sessions_tested IS NOT NULL AND sessions_traded IS NOT NULL AND trades IS NOT NULL
+                AND trades_won IS NOT NULL AND net_profit_usd IS NOT NULL AND ending_cash_usd IS NOT NULL)
+            OR (status <> 'complete'
+                AND summary_json IS NULL AND slippage_json IS NULL AND tolerance_json IS NULL
+                AND sessions_tested IS NULL AND sessions_traded IS NULL AND trades IS NULL
+                AND trades_won IS NULL AND net_profit_usd IS NULL AND ending_cash_usd IS NULL)
+        )
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_research_options_backtest_runs_newest
+        ON research_options_backtest_runs (created_at_ms DESC, id DESC)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS research_options_backtest_run_sessions (
+        run_id            BIGINT NOT NULL REFERENCES research_options_backtest_runs (id) ON DELETE CASCADE,
+        session_open_ms   BIGINT NOT NULL CHECK (session_open_ms >= 0 AND session_open_ms <= 253402300799999),
+        position          INTEGER NOT NULL CHECK (position >= 0),
+        session_close_ms  BIGINT NOT NULL CHECK (session_close_ms >= session_open_ms AND session_close_ms <= 253402300799999),
+        status            TEXT NOT NULL CHECK (status IN ('traded', 'no_trade', 'skipped', 'incomplete')),
+        skip_reason       TEXT NULL,
+        cash_before_usd   NUMERIC NOT NULL,
+        cash_after_usd    NUMERIC NOT NULL,
+        cash_change_usd   NUMERIC NOT NULL,
+        profit_usd        NUMERIC NOT NULL,
+        underlying_sha256 TEXT NULL,
+        listing_sha256    TEXT NULL,
+        option_days_json  JSONB NOT NULL,
+        events_json       JSONB NOT NULL,
+        PRIMARY KEY (run_id, session_open_ms),
+        CONSTRAINT uq_research_options_backtest_run_sessions_position UNIQUE (run_id, position),
+        CONSTRAINT ck_research_options_backtest_run_sessions_skip CHECK ((status = 'skipped') = (skip_reason IS NOT NULL))
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS research_options_backtest_run_trades (
+        run_id               BIGINT NOT NULL,
+        session_open_ms      BIGINT NOT NULL,
+        trade_number         INTEGER NOT NULL CHECK (trade_number >= 0),
+        leg_id               TEXT NOT NULL,
+        entry_number         INTEGER NOT NULL CHECK (entry_number >= 0),
+        contract             TEXT NOT NULL,
+        contracts            INTEGER NOT NULL CHECK (contracts > 0),
+        multiplier           INTEGER NOT NULL CHECK (multiplier > 0),
+        starting_price       NUMERIC NULL,
+        momentum_level       NUMERIC NULL,
+        stop_level           NUMERIC NULL,
+        entry_decided_at_ms  BIGINT NOT NULL,
+        entry_side           TEXT NOT NULL CHECK (entry_side IN ('buy', 'sell')),
+        entry_bar_close_ms   BIGINT NOT NULL,
+        entry_seen           NUMERIC NOT NULL,
+        entry_filled         NUMERIC NOT NULL,
+        exit_reason          TEXT NOT NULL,
+        exit_group           INTEGER NOT NULL,
+        exit_decided_at_ms   BIGINT NOT NULL,
+        exit_kind            TEXT NOT NULL CHECK (exit_kind IN ('fill', 'mark')),
+        exit_side            TEXT NULL CHECK (exit_side IN ('buy', 'sell')),
+        exit_bar_close_ms    BIGINT NOT NULL,
+        exit_seen            NUMERIC NULL,
+        exit_price           NUMERIC NOT NULL,
+        entry_fee_usd        NUMERIC NOT NULL,
+        exit_fee_usd         NUMERIC NOT NULL,
+        pnl_usd              NUMERIC NOT NULL,
+        PRIMARY KEY (run_id, session_open_ms, trade_number),
+        FOREIGN KEY (run_id, session_open_ms)
+            REFERENCES research_options_backtest_run_sessions (run_id, session_open_ms) ON DELETE CASCADE,
+        CONSTRAINT ck_research_options_backtest_run_trades_exit CHECK (
+            (exit_kind = 'fill' AND exit_side IS NOT NULL AND exit_seen IS NOT NULL)
+            OR (exit_kind = 'mark' AND exit_side IS NULL AND exit_seen IS NULL)
+        )
+    )
+    """,
+)
+
 VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (1, DDL_V1),
     (2, DDL_V2),
@@ -923,6 +1043,7 @@ VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (17, DDL_V17),
     (18, DDL_V18),
     (19, DDL_V19),
+    (20, DDL_V20),
 )
 
 

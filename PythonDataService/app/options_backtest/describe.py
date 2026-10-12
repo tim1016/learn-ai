@@ -206,16 +206,20 @@ def _costs(setup: OptionsBacktestSetup) -> str:
     return f"{fills} {_fees(setup.fees)} Starting cash is {_dollars(setup.starting_cash_usd)}."
 
 
-def _fees(fees: FeePolicy) -> str:
+def fee_policy_sentence(fees: FeePolicy) -> str:
+    """The fee policy in one sentence, for the setup's costs and for the headline of a run."""
     # The policy names a per-contract fee for the per-contract kind and for no other.
     if fees.per_contract_usd is not None:
         return f"Fees are {_dollars(fees.per_contract_usd)} per contract traded."
     if fees.kind == "estimated":
-        return (
-            "Fees are estimated from published option fee rates. "
-            "A session from before those rates exist cannot be run with this choice."
-        )
+        return "Fees are estimated from published option fee rates."
     return "Fees are not charged, so results are before fees."
+
+
+def _fees(fees: FeePolicy) -> str:
+    if fees.kind == "estimated":
+        return f"{fee_policy_sentence(fees)} A session from before those rates exist cannot be run with this choice."
+    return fee_policy_sentence(fees)
 
 
 def _minutes(minutes: int) -> str:
