@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from functools import lru_cache
 
-from app.lean_sidecar.trading_calendar import expected_sessions, is_trading_day
+from app.lean_sidecar.trading_calendar import expected_sessions
 
 _DAYS_IN_A_WEEK = 7
 
@@ -35,8 +35,12 @@ def sessions_of_week(day: date) -> tuple[date, ...]:
 
 
 def is_session(day: date) -> bool:
-    """Whether the calendar has a session on ``day``."""
-    return is_trading_day(day)
+    """Whether the calendar has a session on ``day``.
+
+    The calendar's own ``is_trading_day`` gives the same answer and derives its schedule afresh on every
+    call; a pick asks this of one date at every minute of a session, so it is answered from the kept week.
+    """
+    return day in sessions_of_week(day)
 
 
 def ends_its_week(day: date) -> bool:
