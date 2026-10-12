@@ -51,6 +51,10 @@ def run_in_thread(
     cancel_check_every_n: int = 1,
     thread_name: str | None = None,
     emit_renews_lease: bool = True,
+    # Ordinary-progress coalescing (#3052): the pooled research jobs opt in
+    # at one second, so worker checkpoint traffic cannot flood the stream.
+    # Zero keeps the legacy serial contract — every tick is one event.
+    progress_min_interval_s: float = 0.0,
 ) -> threading.Thread:
     """Spawn a daemon thread that runs ``work(emitter, cancel_check)``.
 
@@ -70,7 +74,7 @@ def run_in_thread(
     it cares about test determinism; production callers fire-and-forget.
     """
 
-    emitter = ProgressEmitter(job_id, renews_lease=emit_renews_lease)
+    emitter = ProgressEmitter(job_id, renews_lease=emit_renews_lease, progress_min_interval_s=progress_min_interval_s)
     cancel = CancellationCheck(job_id, check_every_n=cancel_check_every_n)
     acquire_lease(job_id)
 

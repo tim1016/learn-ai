@@ -58,6 +58,7 @@
     <div class="actions">
       @if (d.failure_reason) { <p class="refusal">{{ d.failure_reason }}</p> }
       <span class="spacer"></span>
+      <app-waiting-badge [jobId]="d.job_id" />
       <app-record-controls [running]="running()" [resumable]="d.resumable" [resumeRefusal]="d.resume_refusal" [incomplete]="d.incomplete" [busy]="busy()" deletePrompt="Delete this study and its sweeps?" cancelAndDeletePrompt="Cancel and delete this study and its sweeps?" (cancelRequested)="cancel()" (finishRequested)="finish()" (deleteConfirmed)="delete()" />
     </div>
 
