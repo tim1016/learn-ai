@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import os
+import zipfile
 from datetime import date
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
@@ -37,6 +39,7 @@ from app.data_lake import option_bars as option_bars_module
 from app.data_lake import option_lake as option_lake_module
 from app.data_lake import option_listing as option_listing_module
 from app.data_lake.option_bars import (
+    OptionBarsFileError,
     captured_option_days,
     ensure_option_day_bars,
     option_minute_trade_dch,
@@ -54,7 +57,9 @@ from app.data_lake.types import ArtifactIdentity
 from app.options.contract import OptionContract
 from tests._helpers.fake_lake_catalog import point_lake_writer_at_tmp
 from tests._helpers.option_lake_cases import (
+    DISK_FULL_AT_THE_RENAME,
     complete_row_of_another_provider,
+    install_write_fault,
     one_bar_file,
     pieces_of_the_key_in,
     publish_stale_writer_first_once_both_have_staged,
@@ -673,6 +678,64 @@ async def test_a_writer_whose_lease_was_taken_while_it_fetched_publishes_nothing
     assert [p for p in (tmp_lake / "lake" / "raw").rglob("*.zip") if "minute" in p.parts] == []  # no bars file; the listing's is there
 
 
+@respx.mock
+async def test_a_stored_day_with_a_bar_off_the_minute_is_fetched_again_and_not_reused_on_the_real_table(
+    clean_artifacts, pool, tmp_lake
+) -> None:
+    route = _mock_bars(_bars_ok([_bar(0)]))
+    first = await _ensure()
+    assert first.record is not None
+    # 34 200 001 ms after midnight is 09:30:00.001, a millisecond past the open; the file gets the receipt that admits it.
+    member = "20250613_spy250613c00600000_minute_trade.csv"
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(member, "34200001,12700,13100,12500,12700,12\n")
+    off_the_minute = buffer.getvalue()
+    (tmp_lake / "lake" / "raw" / first.record.file_path).write_bytes(off_the_minute)
+    await _sql(
+        'UPDATE "DataLakeArtifacts" SET "FileSha256" = $2, "FileSizeBytes" = $3 WHERE "Id" = $1',
+        first.record.id, hashlib.sha256(off_the_minute).hexdigest(), len(off_the_minute),
+    )
+
+    with pytest.raises(OptionBarsFileError):
+        await asyncio.to_thread(read_option_day_bars, CONTRACT, TRADING_DAY)
+    again = await _ensure()
+
+    assert again.failure is None and again.reused is False and again.record is not None
+    assert route.call_count == 2
+    healed = await asyncio.to_thread(read_option_day_bars, CONTRACT, TRADING_DAY)
+    assert healed is not None and [bar.start_ms for bar in healed.bars] == [SESSION_OPEN_MS]
+    [row] = await _bar_rows()
+    assert (row["Status"], row["LeaseGeneration"], row["FileSha256"]) == ("complete", 2, again.record.file_sha256)
+
+
+@respx.mock
+async def test_a_file_that_cannot_be_written_fails_the_row_as_io_error_and_the_next_ask_stores_the_day_on_the_real_table(
+    clean_artifacts, pool, tmp_lake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rename fails inside the catalog's publication: it rolls back, and the writer fails its own row under its generation."""
+    route = _mock_bars(_bars_ok([_bar(0)]))
+    await _list(CONTRACT)
+    fault = install_write_fault(monkeypatch, DISK_FULL_AT_THE_RENAME)
+
+    failed = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
+
+    assert failed.record is None and failed.failure is not None and failed.failure.reason == "io_error"
+    assert fault.hits == 1
+    [row] = await _bar_rows()
+    assert (row["Status"], row["LastError"], row["LeaseOwner"], row["FileSha256"]) == ("failed", "io_error", None, None)
+    assert "No space left on device" in row["ErrorMessage"] and str(tmp_lake) not in row["ErrorMessage"]
+    assert [p for p in (tmp_lake / "lake" / "raw").rglob("*.zip") if "minute" in p.parts] == []
+    assert [p for p in (tmp_lake / "staging").rglob("*") if p.is_file()] == []
+
+    fault.clear()
+    stored = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
+
+    assert stored.failure is None and stored.reused is False and route.call_count == 2
+    [row] = await _bar_rows()
+    assert (row["Status"], row["AttemptCount"], row["LeaseGeneration"]) == ("complete", 2, 2)
+
+
 # ── A listing row on the real table ──────────────────────────────────────
 
 
@@ -778,6 +841,30 @@ async def test_a_row_with_nothing_but_a_ticker_is_stored_on_the_real_table_with_
     listing = await asyncio.to_thread(read_option_listing, "SPY", TRADING_DAY)
     assert listing is not None
     assert [(r.ticker, r.standard) for r in listing.rows] == [("O:SPY250613C00375000", False), ("O:SPY250613C00376000", True)]
+
+
+@respx.mock
+async def test_a_listing_file_that_cannot_be_written_fails_the_row_as_io_error_and_the_next_ask_stores_it_on_the_real_table(
+    clean_artifacts, pool, tmp_lake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    route = _mock_listing([_listing_row("O:SPY250613C00375000", 375), _listing_row("O:SPY250613P00400000", 400, contract_type="put")])
+    fault = install_write_fault(monkeypatch, DISK_FULL_AT_THE_RENAME)
+
+    failed = await ensure_option_listing("SPY", TRADING_DAY)
+
+    assert failed.record is None and failed.failure is not None and failed.failure.reason == "io_error"
+    [row] = await _rows()
+    assert (row["Status"], row["LastError"], row["LeaseOwner"], row["FileSha256"]) == ("failed", "io_error", None, None)
+    assert "No space left on device" in row["ErrorMessage"] and str(tmp_lake) not in row["ErrorMessage"]
+
+    fault.clear()
+    stored = await ensure_option_listing("SPY", TRADING_DAY)
+
+    assert stored.failure is None and stored.reused is False and route.call_count == 2
+    [row] = await _rows()
+    assert (row["Status"], row["AttemptCount"], row["LeaseGeneration"]) == ("complete", 2, 2)
+    listing = await asyncio.to_thread(read_option_listing, "SPY", TRADING_DAY)
+    assert listing is not None and len(listing.rows) == 2
 
 
 @respx.mock

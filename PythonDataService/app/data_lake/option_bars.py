@@ -9,7 +9,7 @@ ten-thousandths of a dollar. The vendor stamps a bar with its start and the
 lake keeps that; turning a start into a close is the replay's one conversion.
 
 ``ensure_option_day_bars`` mirrors ``ensure_data._process_minute_trade_artifact``
-step by step. Four things differ, all on purpose:
+step by step. Five things differ, all on purpose:
 
 * A contract that was listed and never traded that session gets an empty answer
   from the vendor. That is a fact, not a failure: it is published as a complete
@@ -27,6 +27,12 @@ step by step. Four things differ, all on purpose:
   the vendor's data is delayed and an empty answer stored too early would be a permanent wrong
   "never traded".
 * The vendor's digits go to the stored integer as decimals, never through a float.
+* Every bar must start on a whole minute (:func:`_require_whole_minute_starts`). A bar is named by its
+  close, its start plus a minute, and a start between two minutes gives a close on no minute, which
+  no replay can place in a session. The stock path does not check this; for an option the answer
+  fails the day, like any other corrupt vendor answer, and a stored day holding such a bar is
+  refused by the parser that reads it (:func:`parse_option_day_zip`), the reuse gate's included, so a
+  download takes such a day as unreadable and fetches it again.
 
 ``read_option_day_bars`` reads only bytes the catalog admits, so it needs the catalog
 reachable, the lake root's identity marker and a thread with no running event loop
@@ -41,7 +47,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import re
 import zipfile
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
@@ -63,7 +68,7 @@ from app.data_lake.lean_writer import (
     MinuteTradeBar,
     build_minute_trade_zip_bytes,
     from_deci_cent,
-    parse_volume,
+    parse_minute_trade_row,
     to_deci_cent,
 )
 from app.data_lake.option_lake import (
@@ -98,8 +103,7 @@ from app.utils.timestamps import to_ms_utc
 logger = logging.getLogger(__name__)
 
 _ET = ZoneInfo("America/New_York")
-#: A bar's start and its four prices as the file writes them: digits and nothing else.
-_UNSIGNED_INTEGER = re.compile(r"[0-9]+")
+_MS_PER_MINUTE = 60_000
 
 
 def option_minute_trade_dch() -> str:
@@ -172,30 +176,26 @@ def parse_option_day_zip(payload: bytes, contract_symbol: str, trading_date: dat
     """The bars in one stored session file; strict, where the stock reader deliberately skips a bad row.
 
     The file must hold exactly the one CSV member this module writes, named for this
-    contract and date, of plain text with six columns in every row: the start and the
-    four prices as digits, then the volume. Its bars must also obey the rules a stored
-    day obeys (``bar_validation.assert_publishable_stored_minute_bars``): every price
-    above zero, the low and the high bracketing the open and the close, starts strictly
-    increasing and inside the date. A file that is anything else, a zip that is not
-    one, bytes that are not text and a blank line included, is :class:`OptionBarsFileError`
-    with its cause chained, never a shorter list of bars and never a raw ``zipfile`` or
-    decoding error.
+    contract and date, of plain text where every row is one the lake writes
+    (``lean_writer.parse_minute_trade_row``: six columns, the start and the four prices as
+    digits, then the volume). Its bars must also obey the rules a stored day obeys
+    (``bar_validation.assert_publishable_stored_minute_bars``): every price above zero, the
+    low and the high bracketing the open and the close, starts strictly increasing and
+    inside the date; and the rule of an option day, that every start is on a whole minute
+    (:func:`_require_whole_minute_starts`), so no bar of a stored day is named by a close
+    on no minute. A file that is anything else, a zip that is not one, bytes that are not
+    text and a blank line included, is :class:`OptionBarsFileError` with its cause chained,
+    never a shorter list of bars and never a raw ``zipfile`` or decoding error.
     """
     expected = f"{trading_date:%Y%m%d}_{contract_symbol.lower()}_minute_trade.csv"
     text = _member_text(payload, expected)
     midnight = datetime(trading_date.year, trading_date.month, trading_date.day, tzinfo=_ET)
     bars: list[OptionBar] = []
     for number, line in enumerate(text.splitlines(), start=1):
-        columns = line.split(",")
-        if len(columns) != 6:
-            raise OptionBarsFileError(f"{expected} line {number}: expected 6 columns, found {len(columns)}")
-        start_text, *price_texts, volume_text = columns
-        if any(_UNSIGNED_INTEGER.fullmatch(t) is None for t in (start_text, *price_texts)):
-            raise OptionBarsFileError(f"{expected} line {number}: the start and the four prices must be whole numbers")
         try:
-            start_ms = to_ms_utc(midnight + timedelta(milliseconds=int(start_text)))
-            open_, high, low, close = (from_deci_cent(int(t)) for t in price_texts)
-            volume = parse_volume(volume_text)
+            since_midnight_ms, *deci_cents, volume = parse_minute_trade_row(line)
+            start_ms = to_ms_utc(midnight + timedelta(milliseconds=since_midnight_ms))
+            open_, high, low, close = (from_deci_cent(ticks) for ticks in deci_cents)
         except (ValueError, ArithmeticError) as exc:  # a start past the calendar's end is an OverflowError
             raise OptionBarsFileError(f"{expected} line {number}: {exc}") from exc
         bars.append(OptionBar(start_ms=start_ms, open=open_, high=high, low=low, close=close, volume=volume))
@@ -203,6 +203,7 @@ def parse_option_day_zip(payload: bytes, contract_symbol: str, trading_date: dat
         assert_publishable_stored_minute_bars(
             [_stored_bar(bar) for bar in bars], symbol=contract_symbol, trading_date=trading_date
         )
+        _require_whole_minute_starts([bar.start_ms for bar in bars], symbol=contract_symbol, trading_date=trading_date)
     except CorruptVendorBarsError as exc:
         raise OptionBarsFileError(f"{expected}: the stored bars break the rules of a stored day: {exc}") from exc
     return tuple(bars)
@@ -369,6 +370,23 @@ def _require_exact_price_relations(bars: Sequence[PolygonOptionBar], *, symbol: 
             )
 
 
+def _require_whole_minute_starts(starts_ms: Sequence[int], *, symbol: str, trading_date: date) -> None:
+    """Every bar starts on a whole minute; the first that does not fails the day, named by its index and start.
+
+    The one rule for an option day, asked of the vendor's bars before they are stored and of a stored day when it is
+    read (:func:`parse_option_day_zip`, which the reuse gate reads through too). The publication gate checks the order
+    and the date of the starts, not that a start is a minute and not between two, and the file stores a start as it
+    came. A bar is named by its close, its start plus a minute, so a start off the minute gives a close on no minute,
+    and no replay can place the bar in a session. Nothing is repaired or dropped.
+    """
+    for index, start_ms in enumerate(starts_ms):
+        if start_ms % _MS_PER_MINUTE:
+            raise CorruptVendorBarsError(
+                f"corrupt vendor minute bars for {symbol} {trading_date.isoformat()}: "
+                f"bar[{index}] t_ms={start_ms}: does not start on a whole minute"
+            )
+
+
 def _publication_gate_view(bars: Sequence[PolygonOptionBar]) -> list[PolygonBar]:
     """The bars in the shape the lake's publication gate takes.
 
@@ -420,8 +438,8 @@ async def ensure_option_day_bars(
     ``listing_not_captured``, ``not_listed``. Only then does it claim, reuse-or-refresh on
     a lost claim, reclaim, fetch, validate, encode and publish under the lease. Every
     vendor outcome, a malformed answer included, is a typed failure on the row and none
-    raises. ``now_ms`` fixes the clock for the session and plan rules; it defaults to the
-    wall clock.
+    raises; so is a file that cannot be written (``io_error``). ``now_ms`` fixes the clock
+    for the session and plan rules; it defaults to the wall clock.
 
     Each call proves the contract is listed from that date's stored listing, which it
     reads and parses whole (about a third of a second for a real one). A caller capturing
@@ -524,6 +542,7 @@ async def ensure_option_day_bars(
     try:
         _require_exact_price_relations(bars, symbol=symbol, trading_date=trading_date)
         assert_publishable_minute_bars(_publication_gate_view(bars), symbol=symbol, trading_date=trading_date)
+        _require_whole_minute_starts([bar.t_ms for bar in bars], symbol=symbol, trading_date=trading_date)
     except CorruptVendorBarsError as e:
         return await fail("validation_failed", str(e))
 

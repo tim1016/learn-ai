@@ -130,12 +130,38 @@ def test_unsafe_control_routes_declare_data_plane_guard_dependency() -> None:
 
     assert unsafe_routes
     assert ("/api/broker/connect", ["POST"], True) in unsafe_routes
+    assert ("/api/research/options-backtest/past-chain/download", ["POST"], True) in unsafe_routes
     assert (
         "/api/accounts/{account_id}/transactions/external-orders/{external_order_id}/acknowledge",
         ["POST"],
         True,
     ) in unsafe_routes
     assert all(has_guard for _path, _methods, has_guard in unsafe_routes)
+
+
+def test_only_the_past_chain_download_is_a_guarded_control_route_of_the_options_backtest() -> None:
+    """The download spends vendor requests and writes the lake, so it carries the secret; its two reads and the
+    setup routes beside them (which write nothing the vendor or the lake holds) are not control routes, so the
+    manifest names the ``past-chain`` prefix and not the whole ``options-backtest`` one."""
+    options_backtest = "/api/research/options-backtest"
+    chain = {
+        route.path: (sorted(_unsafe_methods(route)), _has_control_guard(route))
+        for route in _api_routes()
+        if route.path.startswith(f"{options_backtest}/past-chain")
+    }
+    setups = [
+        route
+        for route in _api_routes()
+        if route.path.startswith(options_backtest) and not route.path.startswith(f"{options_backtest}/past-chain")
+    ]
+
+    assert chain == {
+        f"{options_backtest}/past-chain/day": ([], False),
+        f"{options_backtest}/past-chain/expiry": ([], False),
+        f"{options_backtest}/past-chain/download": (["POST"], True),
+    }
+    assert setups
+    assert not any(_is_manifest_control_route(route) for route in setups)
 
 
 def test_guarded_control_routes_are_declared_in_shared_manifest() -> None:

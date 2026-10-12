@@ -66,7 +66,10 @@ from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, 
 from tests._helpers.option_lake_cases import (
     CAPTURE_OPENS,
     HALF_DAY_CLOSE_MS,
+    WRITE_FAULT_WORDS,
+    WRITE_FAULTS,
     MovableClock,
+    install_write_fault,
     pieces_of_the_key_in,
     refuse_what_postgres_refuses,
     slow_listing_pages,
@@ -1112,6 +1115,39 @@ async def test_a_writer_that_lost_its_lease_publishes_nothing_and_does_not_fail_
     [row] = fake_catalog.rows.values()
     assert row["status"] == "fetching" and row["lease_owner"] == "the-winner"
     assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+
+
+@respx.mock
+@pytest.mark.parametrize("kind", WRITE_FAULTS)
+async def test_a_listing_file_that_cannot_be_written_fails_the_row_as_io_error_stores_nothing_and_the_next_ask_stores_it(
+    kind: str, fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    route = _mock_one_page(STANDARD_ROWS)
+    fault = install_write_fault(monkeypatch, kind)
+
+    failed = await ensure_option_listing("SPY", AS_OF)
+
+    assert failed.record is None and failed.failure is not None
+    assert (failed.failure.reason, failed.failure.symbol, failed.failure.attempt_count) == ("io_error", "SPY", 1)
+    assert fault.hits == 1
+    [row] = fake_catalog.rows.values()
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "io_error", None)
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+    assert await _read() is None
+    # The words name the kind of error and the system's reason, and no path on the server's disk.
+    assert all(word in failed.failure.detail for word in WRITE_FAULT_WORDS[kind])
+    assert str(tmp_lake) not in failed.failure.detail and "/data" not in failed.failure.detail
+
+    fault.clear()
+    stored = await ensure_option_listing("SPY", AS_OF)
+
+    # The first ask claimed the row at attempt 1 and the second took the failed row over at attempt 2.
+    assert stored.failure is None and stored.reused is False and stored.record is not None
+    assert route.call_count == 2  # the first answer was not kept, so the vendor was asked again
+    [row] = fake_catalog.rows.values()
+    assert (row["status"], row["attempt_count"]) == ("complete", 2)
+    listing = await _read()
+    assert listing is not None and len(listing.rows) == 3
 
 
 def test_a_listings_identity_is_its_provider_endpoint_underlying_and_date() -> None:

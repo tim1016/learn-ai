@@ -45,11 +45,12 @@ import pytest
 import respx
 
 from app.config import settings
-from app.data_lake import catalog_client
+from app.data_lake import atomic, catalog_client
 from app.data_lake import option_bars as option_bars_module
 from app.data_lake import option_lake as option_lake_module
 from app.data_lake import option_listing as option_listing_module
 from app.data_lake.admission import LakeAdmissionError
+from app.data_lake.atomic import AtomicRenameUnsafeError
 from app.data_lake.ensure_data import _minute_trade_dch
 from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes, from_deci_cent, to_deci_cent
 from app.data_lake.option_bars import (
@@ -80,8 +81,12 @@ from app.options.contract import OptionContract
 from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, point_lake_writer_at_tmp
 from tests._helpers.option_lake_cases import (
     CAPTURE_OPENS,
+    DISK_FULL_AT_THE_RENAME,
     HALF_DAY_CLOSE_MS,
+    WRITE_FAULT_WORDS,
+    WRITE_FAULTS,
     complete_row_of_another_provider,
+    install_write_fault,
     one_bar_file,
     pieces_of_the_key_in,
     publish_stale_writer_first_once_both_have_staged,
@@ -1128,6 +1133,110 @@ async def test_a_writer_that_lost_its_lease_and_the_winner_publishing_together_l
     assert _staged_files(tmp_lake) == []
 
 
+# ── A file that cannot be written fails the row ──────────────────────────
+#
+# The vendor answered and the lake could not keep the answer. The row is failed under the writer's generation as
+# ``io_error``, as a vendor error is; it is not left fetching until its lease runs out, and nothing is raised.
+
+
+@respx.mock
+@pytest.mark.parametrize("kind", WRITE_FAULTS)
+async def test_a_file_that_cannot_be_written_fails_the_row_as_io_error_stores_nothing_and_the_next_ask_stores_the_day(
+    kind: str, fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    route = _mock_vendor()
+    await _list(CONTRACT)  # the listing is stored before the disk fails
+    fault = install_write_fault(monkeypatch, kind)
+
+    failed = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
+
+    assert failed.record is None and failed.failure is not None
+    assert (failed.failure.reason, failed.failure.symbol, failed.failure.attempt_count) == ("io_error", SYMBOL, 1)
+    assert fault.hits == 1
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "io_error", None)
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+    assert await _read() is None
+    # The words name the kind of error and the system's reason, and no path on the server's disk.
+    assert all(word in failed.failure.detail for word in WRITE_FAULT_WORDS[kind])
+    assert str(tmp_lake) not in failed.failure.detail and "/data" not in failed.failure.detail
+
+    fault.clear()
+    stored = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
+
+    # The first ask claimed the row at attempt 1 and the second took the failed row over at attempt 2.
+    assert stored.failure is None and stored.reused is False and stored.record is not None
+    assert route.call_count == 2  # the first answer was not kept, so the vendor was asked again
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["attempt_count"]) == ("complete", 2)
+    day = await _read()
+    assert day is not None and [bar.start_ms for bar in day.bars] == [SESSION_OPEN_MS]
+
+
+@respx.mock
+async def test_a_file_that_keeps_failing_to_be_written_is_asked_three_times_and_then_latches_as_any_failed_row_does(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``io_error`` is not exempt from the retry ceiling (only ``outside_data_plan`` is): the third ask is the last."""
+    route = _mock_vendor()
+    await _list(CONTRACT)
+    fault = install_write_fault(monkeypatch, DISK_FULL_AT_THE_RENAME)
+    reasons = []
+
+    for _ in range(4):
+        result = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
+        assert result.failure is not None
+        reasons.append(result.failure.reason)
+
+    assert reasons == ["io_error", "io_error", "io_error", "fetch_timeout"]
+    assert (route.call_count, fault.hits) == (3, 3)  # the fourth ask neither fetched nor tried to write
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["attempt_count"]) == ("failed", 3)
+
+
+@respx.mock
+async def test_an_outage_of_the_catalog_while_publishing_is_not_a_failed_write_and_is_raised_with_the_row_left_alone(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mock_vendor()
+    await _list(CONTRACT)
+
+    async def down(**kwargs: Any) -> None:
+        raise catalog_client.CatalogUnavailableError("down")
+
+    monkeypatch.setattr(catalog_client, "publish_under_lease", down)
+
+    with pytest.raises(catalog_client.CatalogUnavailableError):
+        await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
+
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"]) == ("fetching", None)
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+
+
+@respx.mock
+async def test_a_writer_that_lost_its_lease_before_its_file_failed_is_told_so_and_does_not_fail_the_new_owners_row(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mock_vendor()
+    await _list(CONTRACT)
+
+    def another_worker_takes_the_row_and_then_the_check_fails(lake_root: Path, staging_root: Path) -> None:
+        [row] = _bar_rows(fake_catalog)
+        row.update(lease_generation=row["lease_generation"] + 1, lease_owner="the-winner")
+        raise AtomicRenameUnsafeError("lake_root and staging_root are on different filesystems (st_dev 1 vs 2)")
+
+    monkeypatch.setattr(atomic, "assert_same_filesystem", another_worker_takes_the_row_and_then_the_check_fails)
+
+    result = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
+
+    assert result.record is None and result.failure is not None and result.failure.reason == "lease_timeout"
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["lease_owner"], row["lease_generation"], row["last_error"]) == (
+        "fetching", "the-winner", 2, None,
+    )
+
+
 # ── A vendor error is a typed failure on the row ─────────────────────────
 
 
@@ -2001,14 +2110,51 @@ def test_no_single_damaged_byte_or_cut_of_a_written_file_escapes_as_anything_but
         "34200000,12700,13100,12500,12700,12\n34200000,12700,13100,12500,12700,12\n",  # a start repeated
         "34260000,12700,13100,12500,12700,12\n34200000,12700,13100,12500,12700,12\n",  # starts out of order
         "86400000,12700,13100,12500,12700,12\n",  # the first millisecond of the next date
+        "34200001,12700,13100,12500,12700,12\n",  # 09:30:00.001, a millisecond past the minute
+        "34230000,12700,13100,12500,12700,12\n",  # 09:30:30, half a minute past it
+        "34259999,12700,13100,12500,12700,12\n",  # 09:30:59.999, a millisecond short of 09:31
     ],
-    ids=["zero price", "zero close", "low above high", "high below open", "low above open", "repeated start", "out of order", "next date"],
+    ids=[
+        "zero price", "zero close", "low above high", "high below open", "low above open", "repeated start", "out of order",
+        "next date", "a millisecond past the minute", "half a minute past it", "a millisecond short of the next minute",
+    ],
 )
 def test_a_stored_day_whose_bars_break_the_rules_of_a_stored_day_is_refused(body: str) -> None:
     with pytest.raises(OptionBarsFileError) as caught:
         parse_option_day_zip(_zip(MEMBER, body), SYMBOL, TRADING_DAY)
 
     assert isinstance(caught.value.__cause__, ValueError)
+
+
+def test_a_stored_start_off_the_minute_is_refused_naming_the_first_such_bar_and_its_instant() -> None:
+    """The rule is the ingest's, asked of a stored day: the first bar off the minute is named by its index and start.
+
+    The open is 1749821400000 ms (09:30 EDT). The rows start 0, 60 000, 120 001 and 180 001 ms after it: the first two are
+    on a minute, the third is 09:32:00.001 = 1749821400000 + 120 001 = 1749821520001, and the fourth is off too.
+    """
+    body = (
+        "34200000,12700,13100,12500,12700,12\n34260000,12700,13100,12500,12700,12\n"
+        "34320001,12700,13100,12500,12700,12\n34380001,12700,13100,12500,12700,12\n"
+    )
+
+    with pytest.raises(OptionBarsFileError) as caught:
+        parse_option_day_zip(_zip(MEMBER, body), SYMBOL, TRADING_DAY)
+
+    message = str(caught.value)
+    assert "bar[2] t_ms=1749821520001" in message and "bar[3]" not in message
+    assert "does not start on a whole minute" in message
+
+
+def test_a_stored_day_whose_every_start_is_on_a_minute_is_read_with_all_its_bars() -> None:
+    """The same file as above with the offsets taken out reads whole: the rule refuses only an off-minute start."""
+    body = (
+        "34200000,12700,13100,12500,12700,12\n34260000,12700,13100,12500,12700,12\n"
+        "34320000,12700,13100,12500,12700,12\n34380000,12700,13100,12500,12700,12\n"
+    )
+
+    bars = parse_option_day_zip(_zip(MEMBER, body), SYMBOL, TRADING_DAY)
+
+    assert [bar.start_ms for bar in bars] == [1749821400000, 1749821460000, 1749821520000, 1749821580000]
 
 
 def _replace_the_stored_file(fake_catalog: FakeCatalog, tmp_lake: Path, record_id: int, payload: bytes) -> None:
@@ -2042,6 +2188,28 @@ async def test_an_admitted_file_that_is_no_zip_or_breaks_the_rules_of_a_stored_d
         assert healed is not None and len(healed.bars) == 1, name
 
     assert route.call_count == 1 + len(mangled)
+
+
+@respx.mock
+async def test_a_stored_day_with_a_bar_off_the_minute_is_unreadable_and_a_download_fetches_it_again_and_does_not_call_it_stored(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """One rule for a stored day: what the reader refuses the reuse gate refuses too, so the day can be repaired."""
+    route = _mock_vendor()
+    first = await _ensure()
+    assert first.record is not None and route.call_count == 1
+    # 34 200 001 ms after midnight is 09:30:00.001, a millisecond past the open.
+    _replace_the_stored_file(fake_catalog, tmp_lake, first.record.id, _zip(MEMBER, "34200001,12700,13100,12500,12700,12\n"))
+
+    with pytest.raises(OptionBarsFileError):
+        await _read()
+    again = await _ensure()
+
+    assert again.failure is None and again.reused is False and again.record is not None
+    assert route.call_count == 2  # the vendor was asked again: the stored day was not taken for a good one
+    healed = await _read()
+    assert healed is not None and [bar.start_ms for bar in healed.bars] == [SESSION_OPEN_MS]
+    assert healed.sha256 == again.record.file_sha256
 
 
 # ── A price that would be stored as zero fails the day ───────────────────
@@ -2136,6 +2304,68 @@ async def test_a_low_below_the_open_by_a_hairline_is_in_place_and_the_day_is_sto
     result = await _ensure()
 
     assert result.failure is None and result.record is not None
+
+
+# ── A bar that does not start on a whole minute fails the day ─────────────
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "offset_ms",
+    [1, 30_000, 59_999],
+    ids=["a millisecond past the minute", "half a minute past it", "a millisecond short of the next"],
+)
+async def test_a_vendor_bar_that_does_not_start_on_a_whole_minute_fails_the_day_naming_the_bar(
+    offset_ms: int, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """A bar is named by its close, its start plus a minute, so a start between two minutes closes on no minute.
+
+    The second bar starts offset_ms past 09:31, which is 1749821400000 + 60 000 = 1749821460000.
+    """
+    off_the_minute = SESSION_OPEN_MS + MINUTE_MS + offset_ms
+    _mock_vendor(_ok([_bar(0), _bar(1, t=off_the_minute)]))
+
+    result = await _ensure()
+
+    assert result.record is None
+    assert result.failure is not None and result.failure.reason == "validation_failed"
+    assert "bar[1]" in result.failure.detail and f"t_ms={off_the_minute}" in result.failure.detail
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "validation_failed", None)
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+    assert await _read() is None
+
+
+@respx.mock
+async def test_the_first_of_several_bars_off_the_minute_is_the_one_named(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    """Bar 1 starts a millisecond past 09:31 (1749821460001) and bar 2 half a minute past 09:32 (1749821550000)."""
+    _mock_vendor(
+        _ok([_bar(0), _bar(1, t=SESSION_OPEN_MS + MINUTE_MS + 1), _bar(2, t=SESSION_OPEN_MS + 2 * MINUTE_MS + 30_000)])
+    )
+
+    result = await _ensure()
+
+    assert result.failure is not None and result.failure.reason == "validation_failed"
+    assert "bar[1] t_ms=1749821460001" in result.failure.detail and "bar[2]" not in result.failure.detail
+
+
+@respx.mock
+async def test_a_day_failed_for_a_bar_off_the_minute_is_asked_again_and_a_corrected_answer_is_stored(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """The failure is the row's like any corrupt answer: within its attempts the vendor is asked again."""
+    route = _mock_vendor(_ok([_bar(0), _bar(1, t=SESSION_OPEN_MS + MINUTE_MS + 30_000)]), _ok([_bar(0), _bar(1)]))
+
+    first = await _ensure()
+    second = await _ensure()
+
+    assert first.failure is not None and first.failure.reason == "validation_failed"
+    assert second.failure is None and second.record is not None and second.record.row_count == 2
+    assert route.call_count == 2
+    day = await _read()
+    # Every bar on a whole minute is stored as it was sent: 09:30 and 09:31.
+    assert day is not None and [bar.start_ms for bar in day.bars] == [SESSION_OPEN_MS, SESSION_OPEN_MS + MINUTE_MS]
+    assert [row["status"] for row in _bar_rows(fake_catalog)] == ["complete"]
 
 
 @respx.mock

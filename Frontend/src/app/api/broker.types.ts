@@ -5804,6 +5804,73 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/options-backtest/past-chain/day": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Past Chain Day
+         * @description Every expiry the underlying's listing held on the date, tagged, with its calls and puts counted.
+         */
+        get: operations["get_past_chain_day_api_research_options_backtest_past_chain_day_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/options-backtest/past-chain/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Past Chain Download
+         * @description Capture the listing, the underlying's bars and the bars of the contracts named; one item says how each came out.
+         *
+         *     Needs the data plane's control secret (the ``X-Data-Plane-Control-Secret`` header), as it spends vendor requests
+         *     and writes the lake. A vendor or lake failure is an item with its typed reason and never a failed request. A
+         *     request the page should not have made (a date with no session, an expiry that is no anchor, a contract that is no
+         *     OCC symbol or not of the expiry, more than the cap) is refused before anything is asked. A contract that another
+         *     request is fetching at the same moment is an item that failed with reason ``lease_timeout``: it is not missing; ask
+         *     again once the other request has finished.
+         */
+        post: operations["post_past_chain_download_api_research_options_backtest_past_chain_download_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/options-backtest/past-chain/expiry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Past Chain Expiry
+         * @description One expiry at one instant: the underlying's price, the money, and the contracts around it with their prices.
+         */
+        get: operations["get_past_chain_expiry_api_research_options_backtest_past_chain_expiry_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/options-backtest/session-clock": {
         parameters: {
             query?: never;
@@ -22861,6 +22928,216 @@ export interface components {
             objective?: "sharpe_ratio";
         };
         /**
+         * PastChainContract
+         * @description One listed contract and the price it last traded at by the instant, or the plain reason it has none.
+         */
+        PastChainContract: {
+            /** Price */
+            price: string | null;
+            /**
+             * Price State
+             * @enum {string}
+             */
+            price_state: "traded" | "did_not_trade" | "not_stored" | "unreadable";
+            /** Price Time Ms */
+            price_time_ms: number | null;
+            /** Problem */
+            problem: string | null;
+            /** Standard */
+            standard: boolean;
+            /** Steps From The Money */
+            steps_from_the_money: number | null;
+            /** Strike */
+            strike: string;
+            /** Strike Thousandths */
+            strike_thousandths: number;
+            /** Symbol */
+            symbol: string;
+        };
+        /**
+         * PastChainDayResponse
+         * @description What the listing of one underlying held on one trading date.
+         */
+        PastChainDayResponse: {
+            /** Expiries */
+            expiries: components["schemas"]["PastChainExpirySummary"][];
+            /** Listing Problem */
+            listing_problem: string | null;
+            /**
+             * Listing State
+             * @enum {string}
+             */
+            listing_state: "stored" | "not_stored" | "unreadable";
+            /** Rows Left Out Expired */
+            rows_left_out_expired: number;
+            /** Rows Left Out Unusable */
+            rows_left_out_unusable: number;
+            /** Session Close Ms */
+            session_close_ms: number;
+            /** Session Open Ms */
+            session_open_ms: number;
+            /** Underlying */
+            underlying: string;
+        };
+        /**
+         * PastChainDownloadItem
+         * @description One thing the download was for, and how it came out.
+         */
+        PastChainDownloadItem: {
+            /** Detail */
+            detail: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "listing" | "underlying" | "contract";
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "fetched" | "already_stored" | "failed";
+            /**
+             * Reason
+             * @description The lake's typed reason, when it failed. `lease_timeout` is not missing data: another request is fetching the same thing at this moment and it will be stored when that one finishes, so show it as 'being fetched by another request; ask again' and read the chain again.
+             */
+            reason: ("provider_auth_error" | "provider_entitlement_error" | "provider_rate_limited" | "provider_api_error" | "provider_no_data" | "unknown_symbol" | "validation_failed" | "io_error" | "launcher_unreachable" | "lease_timeout" | "fetch_timeout" | "unsupported_resolution" | "unsupported_artifact_kind" | "corp_action_revision_mismatch" | "data_contract_mismatch" | "internal_error" | "session_not_produced" | "run_aborted") | ("outside_data_plan" | "session_not_over" | "not_a_session" | "symbol_too_long" | "listing_not_captured" | "not_listed") | ("underlying_not_fetched" | "underlying_unreadable") | null;
+            /** Subject */
+            subject: string;
+        };
+        /**
+         * PastChainDownloadRequest
+         * @description What to capture into the lake for one trading date. Contracts are named by OCC symbol.
+         */
+        PastChainDownloadRequest: {
+            /** Contracts */
+            contracts?: string[];
+            /** Expiry Ms */
+            expiry_ms?: number | null;
+            /** Trading Date Ms */
+            trading_date_ms: number;
+            /** Underlying */
+            underlying: string;
+        };
+        /**
+         * PastChainDownloadResponse
+         * @description Every item of a download: the listing, the underlying, then each contract named, in that order.
+         */
+        PastChainDownloadResponse: {
+            /** Items */
+            items: components["schemas"]["PastChainDownloadItem"][];
+            /** Session Close Ms */
+            session_close_ms: number;
+            /** Session Open Ms */
+            session_open_ms: number;
+            /** Underlying */
+            underlying: string;
+        };
+        /**
+         * PastChainExpiryResponse
+         * @description One expiry at one instant of a session: the underlying's price, the money, and strikes around it.
+         */
+        PastChainExpiryResponse: {
+            /** At Ms */
+            at_ms: number;
+            calls: components["schemas"]["PastChainSide"];
+            /** Expiry Listed */
+            expiry_listed: boolean | null;
+            /** Expiry Ms */
+            expiry_ms: number;
+            /** Listing Problem */
+            listing_problem: string | null;
+            /**
+             * Listing State
+             * @enum {string}
+             */
+            listing_state: "stored" | "not_stored" | "unreadable";
+            puts: components["schemas"]["PastChainSide"];
+            /** Session Close Ms */
+            session_close_ms: number;
+            /** Session Open Ms */
+            session_open_ms: number;
+            /** Strikes Each Side */
+            strikes_each_side: number;
+            tag: components["schemas"]["PastChainExpiryTag"] | null;
+            /** Underlying */
+            underlying: string;
+            underlying_price: components["schemas"]["PastChainUnderlyingPrice"];
+        };
+        /**
+         * PastChainExpirySummary
+         * @description One expiry the listing holds: its tag, and how many calls and puts it lists and how many are standard.
+         */
+        PastChainExpirySummary: {
+            /** Calls */
+            calls: number;
+            /** Expiry Ms */
+            expiry_ms: number;
+            /** Puts */
+            puts: number;
+            /** Standard Calls */
+            standard_calls: number;
+            /** Standard Puts */
+            standard_puts: number;
+            tag: components["schemas"]["PastChainExpiryTag"];
+        };
+        /**
+         * PastChainExpiryTag
+         * @description The series an expiry date belongs to, and which rule decided it.
+         */
+        PastChainExpiryTag: {
+            /** Days To Expiry */
+            days_to_expiry: number;
+            /** Evidence */
+            evidence: string;
+            /** Expires Today */
+            expires_today: boolean;
+            /**
+             * Series
+             * @enum {string}
+             */
+            series: "daily" | "weekly" | "monthly" | "quarterly" | "unknown";
+            /** Version */
+            version: number;
+        };
+        /**
+         * PastChainSide
+         * @description The calls, or the puts, of one expiry: how many are listed, the money, and the strikes around it.
+         */
+        PastChainSide: {
+            /** At The Money Strike */
+            at_the_money_strike: string | null;
+            /** At The Money Strike Thousandths */
+            at_the_money_strike_thousandths: number | null;
+            /** Contracts */
+            contracts: components["schemas"]["PastChainContract"][];
+            /** Listed */
+            listed: number;
+            /**
+             * Right
+             * @enum {string}
+             */
+            right: "call" | "put";
+            /** Standard Listed */
+            standard_listed: number;
+        };
+        /**
+         * PastChainUnderlyingPrice
+         * @description The underlying's price at the instant: the close of its last bar by then, with that bar's close time.
+         */
+        PastChainUnderlyingPrice: {
+            /** Price */
+            price: string | null;
+            /** Price Time Ms */
+            price_time_ms: number | null;
+            /** Problem */
+            problem: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "priced" | "no_bar_yet" | "not_stored" | "unreadable";
+        };
+        /**
          * PayoffPoint
          * @description Single point on the payoff curve.
          */
@@ -39623,6 +39900,169 @@ export interface operations {
                     "application/json": {
                         [key: string]: components["schemas"]["IndicatorInfo"][];
                     };
+                };
+            };
+        };
+    };
+    get_past_chain_day_api_research_options_backtest_past_chain_day_get: {
+        parameters: {
+            query: {
+                /** @description The underlying's ticker, one to six letters. */
+                underlying: string;
+                /** @description Any instant on the New York trading date; the page sends its midnight. */
+                trading_date_ms: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PastChainDayResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+        };
+    };
+    post_past_chain_download_api_research_options_backtest_past_chain_download_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PastChainDownloadRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PastChainDownloadResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+        };
+    };
+    get_past_chain_expiry_api_research_options_backtest_past_chain_expiry_get: {
+        parameters: {
+            query: {
+                /** @description The underlying's ticker, one to six letters. */
+                underlying: string;
+                /** @description Any instant on the New York trading date; the page sends its midnight. */
+                trading_date_ms: number;
+                /** @description The expiry's anchor: 16:00 New York time on its date. */
+                expiry_ms: number;
+                /** @description An instant within the session, on a whole minute (a multiple of 60 000 ms); the session's close when absent. The price shown is the last bar closing at or before it. */
+                at_ms?: number | null;
+                /** @description Strikes shown on each side of the money, for each right. */
+                strikes?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PastChainExpiryResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
                 };
             };
         };

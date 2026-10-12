@@ -41177,6 +41177,662 @@
         "title": "ParameterSearchConfig",
         "type": "object"
       },
+      "PastChainContract": {
+        "description": "One listed contract and the price it last traded at by the instant, or the plain reason it has none.",
+        "properties": {
+          "price": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price"
+          },
+          "price_state": {
+            "enum": [
+              "traded",
+              "did_not_trade",
+              "not_stored",
+              "unreadable"
+            ],
+            "title": "Price State",
+            "type": "string"
+          },
+          "price_time_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Time Ms"
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem"
+          },
+          "standard": {
+            "title": "Standard",
+            "type": "boolean"
+          },
+          "steps_from_the_money": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps From The Money"
+          },
+          "strike": {
+            "pattern": "^[0-9]+(\\.[0-9]+)?$",
+            "title": "Strike",
+            "type": "string"
+          },
+          "strike_thousandths": {
+            "maximum": 99999999.0,
+            "minimum": 1.0,
+            "title": "Strike Thousandths",
+            "type": "integer"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "strike",
+          "strike_thousandths",
+          "standard",
+          "steps_from_the_money",
+          "price_state",
+          "price",
+          "price_time_ms",
+          "problem"
+        ],
+        "title": "PastChainContract",
+        "type": "object"
+      },
+      "PastChainDayResponse": {
+        "description": "What the listing of one underlying held on one trading date.",
+        "properties": {
+          "expiries": {
+            "items": {
+              "$ref": "#/components/schemas/PastChainExpirySummary"
+            },
+            "title": "Expiries",
+            "type": "array"
+          },
+          "listing_problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing Problem"
+          },
+          "listing_state": {
+            "enum": [
+              "stored",
+              "not_stored",
+              "unreadable"
+            ],
+            "title": "Listing State",
+            "type": "string"
+          },
+          "rows_left_out_expired": {
+            "minimum": 0.0,
+            "title": "Rows Left Out Expired",
+            "type": "integer"
+          },
+          "rows_left_out_unusable": {
+            "minimum": 0.0,
+            "title": "Rows Left Out Unusable",
+            "type": "integer"
+          },
+          "session_close_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Session Close Ms",
+            "type": "integer"
+          },
+          "session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Session Open Ms",
+            "type": "integer"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          }
+        },
+        "required": [
+          "underlying",
+          "session_open_ms",
+          "session_close_ms",
+          "listing_state",
+          "listing_problem",
+          "expiries",
+          "rows_left_out_unusable",
+          "rows_left_out_expired"
+        ],
+        "title": "PastChainDayResponse",
+        "type": "object"
+      },
+      "PastChainDownloadItem": {
+        "description": "One thing the download was for, and how it came out.",
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "kind": {
+            "enum": [
+              "listing",
+              "underlying",
+              "contract"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "fetched",
+              "already_stored",
+              "failed"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "provider_auth_error",
+                  "provider_entitlement_error",
+                  "provider_rate_limited",
+                  "provider_api_error",
+                  "provider_no_data",
+                  "unknown_symbol",
+                  "validation_failed",
+                  "io_error",
+                  "launcher_unreachable",
+                  "lease_timeout",
+                  "fetch_timeout",
+                  "unsupported_resolution",
+                  "unsupported_artifact_kind",
+                  "corp_action_revision_mismatch",
+                  "data_contract_mismatch",
+                  "internal_error",
+                  "session_not_produced",
+                  "run_aborted"
+                ],
+                "type": "string"
+              },
+              {
+                "enum": [
+                  "outside_data_plan",
+                  "session_not_over",
+                  "not_a_session",
+                  "symbol_too_long",
+                  "listing_not_captured",
+                  "not_listed"
+                ],
+                "type": "string"
+              },
+              {
+                "enum": [
+                  "underlying_not_fetched",
+                  "underlying_unreadable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The lake's typed reason, when it failed. `lease_timeout` is not missing data: another request is fetching the same thing at this moment and it will be stored when that one finishes, so show it as 'being fetched by another request; ask again' and read the chain again.",
+            "title": "Reason"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "subject",
+          "outcome",
+          "reason",
+          "detail"
+        ],
+        "title": "PastChainDownloadItem",
+        "type": "object"
+      },
+      "PastChainDownloadRequest": {
+        "additionalProperties": false,
+        "description": "What to capture into the lake for one trading date. Contracts are named by OCC symbol.",
+        "properties": {
+          "contracts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Contracts",
+            "type": "array"
+          },
+          "expiry_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expiry Ms"
+          },
+          "trading_date_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Trading Date Ms",
+            "type": "integer"
+          },
+          "underlying": {
+            "pattern": "^[A-Z]{1,6}$",
+            "title": "Underlying",
+            "type": "string"
+          }
+        },
+        "required": [
+          "underlying",
+          "trading_date_ms"
+        ],
+        "title": "PastChainDownloadRequest",
+        "type": "object"
+      },
+      "PastChainDownloadResponse": {
+        "description": "Every item of a download: the listing, the underlying, then each contract named, in that order.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PastChainDownloadItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "session_close_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Session Close Ms",
+            "type": "integer"
+          },
+          "session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Session Open Ms",
+            "type": "integer"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          }
+        },
+        "required": [
+          "underlying",
+          "session_open_ms",
+          "session_close_ms",
+          "items"
+        ],
+        "title": "PastChainDownloadResponse",
+        "type": "object"
+      },
+      "PastChainExpiryResponse": {
+        "description": "One expiry at one instant of a session: the underlying's price, the money, and strikes around it.",
+        "properties": {
+          "at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "At Ms",
+            "type": "integer"
+          },
+          "calls": {
+            "$ref": "#/components/schemas/PastChainSide"
+          },
+          "expiry_listed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expiry Listed"
+          },
+          "expiry_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Expiry Ms",
+            "type": "integer"
+          },
+          "listing_problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing Problem"
+          },
+          "listing_state": {
+            "enum": [
+              "stored",
+              "not_stored",
+              "unreadable"
+            ],
+            "title": "Listing State",
+            "type": "string"
+          },
+          "puts": {
+            "$ref": "#/components/schemas/PastChainSide"
+          },
+          "session_close_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Session Close Ms",
+            "type": "integer"
+          },
+          "session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Session Open Ms",
+            "type": "integer"
+          },
+          "strikes_each_side": {
+            "minimum": 0.0,
+            "title": "Strikes Each Side",
+            "type": "integer"
+          },
+          "tag": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PastChainExpiryTag"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          },
+          "underlying_price": {
+            "$ref": "#/components/schemas/PastChainUnderlyingPrice"
+          }
+        },
+        "required": [
+          "underlying",
+          "session_open_ms",
+          "session_close_ms",
+          "expiry_ms",
+          "at_ms",
+          "strikes_each_side",
+          "listing_state",
+          "listing_problem",
+          "expiry_listed",
+          "tag",
+          "underlying_price",
+          "calls",
+          "puts"
+        ],
+        "title": "PastChainExpiryResponse",
+        "type": "object"
+      },
+      "PastChainExpirySummary": {
+        "description": "One expiry the listing holds: its tag, and how many calls and puts it lists and how many are standard.",
+        "properties": {
+          "calls": {
+            "minimum": 0.0,
+            "title": "Calls",
+            "type": "integer"
+          },
+          "expiry_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Expiry Ms",
+            "type": "integer"
+          },
+          "puts": {
+            "minimum": 0.0,
+            "title": "Puts",
+            "type": "integer"
+          },
+          "standard_calls": {
+            "minimum": 0.0,
+            "title": "Standard Calls",
+            "type": "integer"
+          },
+          "standard_puts": {
+            "minimum": 0.0,
+            "title": "Standard Puts",
+            "type": "integer"
+          },
+          "tag": {
+            "$ref": "#/components/schemas/PastChainExpiryTag"
+          }
+        },
+        "required": [
+          "expiry_ms",
+          "tag",
+          "calls",
+          "puts",
+          "standard_calls",
+          "standard_puts"
+        ],
+        "title": "PastChainExpirySummary",
+        "type": "object"
+      },
+      "PastChainExpiryTag": {
+        "description": "The series an expiry date belongs to, and which rule decided it.",
+        "properties": {
+          "days_to_expiry": {
+            "minimum": 0.0,
+            "title": "Days To Expiry",
+            "type": "integer"
+          },
+          "evidence": {
+            "title": "Evidence",
+            "type": "string"
+          },
+          "expires_today": {
+            "title": "Expires Today",
+            "type": "boolean"
+          },
+          "series": {
+            "enum": [
+              "daily",
+              "weekly",
+              "monthly",
+              "quarterly",
+              "unknown"
+            ],
+            "title": "Series",
+            "type": "string"
+          },
+          "version": {
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "series",
+          "version",
+          "evidence",
+          "expires_today",
+          "days_to_expiry"
+        ],
+        "title": "PastChainExpiryTag",
+        "type": "object"
+      },
+      "PastChainSide": {
+        "description": "The calls, or the puts, of one expiry: how many are listed, the money, and the strikes around it.",
+        "properties": {
+          "at_the_money_strike": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At The Money Strike"
+          },
+          "at_the_money_strike_thousandths": {
+            "anyOf": [
+              {
+                "maximum": 99999999.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At The Money Strike Thousandths"
+          },
+          "contracts": {
+            "items": {
+              "$ref": "#/components/schemas/PastChainContract"
+            },
+            "title": "Contracts",
+            "type": "array"
+          },
+          "listed": {
+            "minimum": 0.0,
+            "title": "Listed",
+            "type": "integer"
+          },
+          "right": {
+            "enum": [
+              "call",
+              "put"
+            ],
+            "title": "Right",
+            "type": "string"
+          },
+          "standard_listed": {
+            "minimum": 0.0,
+            "title": "Standard Listed",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "right",
+          "listed",
+          "standard_listed",
+          "at_the_money_strike",
+          "at_the_money_strike_thousandths",
+          "contracts"
+        ],
+        "title": "PastChainSide",
+        "type": "object"
+      },
+      "PastChainUnderlyingPrice": {
+        "description": "The underlying's price at the instant: the close of its last bar by then, with that bar's close time.",
+        "properties": {
+          "price": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9]+(\\.[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price"
+          },
+          "price_time_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Time Ms"
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem"
+          },
+          "state": {
+            "enum": [
+              "priced",
+              "no_bar_yet",
+              "not_stored",
+              "unreadable"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "price",
+          "price_time_ms",
+          "problem"
+        ],
+        "title": "PastChainUnderlyingPrice",
+        "type": "object"
+      },
       "PayoffPoint": {
         "description": "Single point on the payoff curve.",
         "properties": {
@@ -77973,6 +78629,291 @@
         "summary": "List Indicators",
         "tags": [
           "research"
+        ]
+      }
+    },
+    "/api/research/options-backtest/past-chain/day": {
+      "get": {
+        "description": "Every expiry the underlying's listing held on the date, tagged, with its calls and puts counted.",
+        "operationId": "get_past_chain_day_api_research_options_backtest_past_chain_day_get",
+        "parameters": [
+          {
+            "description": "The underlying's ticker, one to six letters.",
+            "in": "query",
+            "name": "underlying",
+            "required": true,
+            "schema": {
+              "description": "The underlying's ticker, one to six letters.",
+              "pattern": "^[A-Z]{1,6}$",
+              "title": "Underlying",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Any instant on the New York trading date; the page sends its midnight.",
+            "in": "query",
+            "name": "trading_date_ms",
+            "required": true,
+            "schema": {
+              "description": "Any instant on the New York trading date; the page sends its midnight.",
+              "maximum": 253402300799999,
+              "minimum": 0,
+              "title": "Trading Date Ms",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PastChainDayResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Past Chain Day",
+        "tags": [
+          "research-options-backtest"
+        ]
+      }
+    },
+    "/api/research/options-backtest/past-chain/download": {
+      "post": {
+        "description": "Capture the listing, the underlying's bars and the bars of the contracts named; one item says how each came out.\n\nNeeds the data plane's control secret (the ``X-Data-Plane-Control-Secret`` header), as it spends vendor requests\nand writes the lake. A vendor or lake failure is an item with its typed reason and never a failed request. A\nrequest the page should not have made (a date with no session, an expiry that is no anchor, a contract that is no\nOCC symbol or not of the expiry, more than the cap) is refused before anything is asked. A contract that another\nrequest is fetching at the same moment is an item that failed with reason ``lease_timeout``: it is not missing; ask\nagain once the other request has finished.",
+        "operationId": "post_past_chain_download_api_research_options_backtest_past_chain_download_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PastChainDownloadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PastChainDownloadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Post Past Chain Download",
+        "tags": [
+          "research-options-backtest"
+        ]
+      }
+    },
+    "/api/research/options-backtest/past-chain/expiry": {
+      "get": {
+        "description": "One expiry at one instant: the underlying's price, the money, and the contracts around it with their prices.",
+        "operationId": "get_past_chain_expiry_api_research_options_backtest_past_chain_expiry_get",
+        "parameters": [
+          {
+            "description": "The underlying's ticker, one to six letters.",
+            "in": "query",
+            "name": "underlying",
+            "required": true,
+            "schema": {
+              "description": "The underlying's ticker, one to six letters.",
+              "pattern": "^[A-Z]{1,6}$",
+              "title": "Underlying",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Any instant on the New York trading date; the page sends its midnight.",
+            "in": "query",
+            "name": "trading_date_ms",
+            "required": true,
+            "schema": {
+              "description": "Any instant on the New York trading date; the page sends its midnight.",
+              "maximum": 253402300799999,
+              "minimum": 0,
+              "title": "Trading Date Ms",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The expiry's anchor: 16:00 New York time on its date.",
+            "in": "query",
+            "name": "expiry_ms",
+            "required": true,
+            "schema": {
+              "description": "The expiry's anchor: 16:00 New York time on its date.",
+              "maximum": 253402300799999,
+              "minimum": 0,
+              "title": "Expiry Ms",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "An instant within the session, on a whole minute (a multiple of 60 000 ms); the session's close when absent. The price shown is the last bar closing at or before it.",
+            "in": "query",
+            "name": "at_ms",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 253402300799999,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "An instant within the session, on a whole minute (a multiple of 60 000 ms); the session's close when absent. The price shown is the last bar closing at or before it.",
+              "title": "At Ms"
+            }
+          },
+          {
+            "description": "Strikes shown on each side of the money, for each right.",
+            "in": "query",
+            "name": "strikes",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "description": "Strikes shown on each side of the money, for each right.",
+              "maximum": 14,
+              "minimum": 0,
+              "title": "Strikes",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PastChainExpiryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Past Chain Expiry",
+        "tags": [
+          "research-options-backtest"
         ]
       }
     },

@@ -72,6 +72,7 @@ from app.routers import (
     news,
     options,
     options_backtest,
+    options_backtest_chain,
     quantlib_options,
     recency,
     research_divergence,
@@ -1305,6 +1306,9 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(recency.router, prefix="/api/research/recency", tags=["research-recency"])
     app.include_router(backtest_runs.router, prefix="/api/research/backtest-runs", tags=["research-backtest-runs"])
     app.include_router(options_backtest.router, prefix="/api/research/options-backtest", tags=["research-options-backtest"])
+    app.include_router(
+        options_backtest_chain.router, prefix="/api/research/options-backtest", tags=["research-options-backtest"]
+    )
     # Custom Dark Bright Gates (#2639): saved per strategy on the data plane,
     # which also judges them; writes need the control secret.
     app.include_router(
