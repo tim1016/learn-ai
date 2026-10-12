@@ -145,6 +145,35 @@ describe('a run that is going', () => {
     expect(updated.map((detail) => detail.status)).toEqual(['complete']);
   });
 
+  it('says the cancel came too late when the run finished and was saved all the same', async () => {
+    const service = fakeService(vi);
+    readsAs(service, going(), runDetail());
+    const jobs = fakeJobs();
+    jobs.register('job-7');
+    await renderRun(runItem(), { service, jobs });
+    jobs.emit('job-7', { type: 'job.phase', phase: 'saving', friendly: 'Saving the run' });
+    screen.getByRole('button', { name: 'Cancel' }).click();
+    await screen.findByRole('button', { name: 'Cancel asked for' });
+
+    jobs.emit('job-7', { type: 'job.completed', result_url: '/x' });
+
+    expect(await screen.findByText('You asked to cancel, but the run had already finished and was saved.')).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'Headline figures' })).toBeTruthy();
+  });
+
+  it('does not say the cancel came too late for a run nobody asked to cancel', async () => {
+    const service = fakeService(vi);
+    readsAs(service, going(), runDetail());
+    const jobs = fakeJobs();
+    jobs.register('job-7');
+    await renderRun(runItem(), { service, jobs });
+
+    jobs.emit('job-7', { type: 'job.completed', result_url: '/x' });
+
+    await screen.findByRole('region', { name: 'Headline figures' });
+    expect(screen.queryByText(/You asked to cancel/)).toBeNull();
+  });
+
   it('shows why a run failed and each thing that failed, when the job fails', async () => {
     const failure = {
       code: 'DOWNLOAD_FAILED',

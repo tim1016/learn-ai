@@ -43,9 +43,11 @@ interface ImportNotice {
 }
 
 /**
- * The Options Backtest page (#3030), part one: build a setup, read it back in
- * plain words, save it, reopen it, delete it, export it to a file and import it
- * from one. The page owns every signal; the cards only show a slice of the
+ * The Options Backtest page (#3030): build a setup, read it back in plain
+ * words, save it, reopen it, delete it, export it to a file and import it from
+ * one; pick the dates, check which sessions can be tested, start a backtest,
+ * watch it, cancel it and read its result; and, on a second tab, reopen any
+ * past run. The page owns every signal; the cards only show a slice of the
  * form and say what the owner meant.
  */
 @Component({

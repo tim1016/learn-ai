@@ -10,6 +10,9 @@
     <li>{{ run().sessions_requested }} sessions requested</li>
     <li>Started <app-timestamp-display [value]="run().created_at_ms" mode="local" /></li>
   </ul>
+  @if (cancelling() && status() === 'complete') {
+    <p class="words" role="status">You asked to cancel, but the run had already finished and was saved.</p>
+  }
   @switch (status()) {
     @case ('running') {
       <app-options-backtest-job-progress [view]="progress()" [cancelling]="cancelling()" [cancelProblem]="cancelProblem()" (cancelRequested)="cancel()" />

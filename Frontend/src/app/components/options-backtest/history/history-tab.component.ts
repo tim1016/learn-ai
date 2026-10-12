@@ -1,4 +1,4 @@
-import { afterNextRender, ChangeDetectionStrategy, Component, computed, effect, inject, Injector, input, output, resource, signal, untracked, viewChild } from '@angular/core';
+import { afterNextRender, ChangeDetectionStrategy, Component, computed, effect, ElementRef, inject, Injector, input, output, resource, signal, untracked, viewChild } from '@angular/core';
 import { ButtonModule } from 'primeng/button';
 
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
@@ -29,6 +29,7 @@ import { RunPanelComponent } from '../run/run-panel.component';
 export class HistoryTabComponent {
   private readonly service = inject(OptionsBacktestService);
   private readonly injector = inject(Injector);
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
 
   /** Whether the tab is the one on show; the list is read again each time it becomes so. */
   readonly active = input(true);
@@ -61,9 +62,12 @@ export class HistoryTabComponent {
     afterNextRender(() => this.panel()?.focusHeading(), { injector: this.injector });
   }
 
+  /** Back to the list, with the keyboard on the Open button of the run that was open, so the owner does not start again from the top. */
   protected close(): void {
+    const id = this.opened()?.id;
     this.opened.set(null);
     this.list.reload();
+    afterNextRender(() => this.host.nativeElement.querySelector<HTMLElement>(`button[aria-label="Open run ${id}"]`)?.focus(), { injector: this.injector });
   }
 
   protected async remove(id: number): Promise<void> {

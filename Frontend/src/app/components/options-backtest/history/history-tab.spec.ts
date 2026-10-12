@@ -177,6 +177,17 @@ describe('opening a run', () => {
     expect(service.runs.mock.calls.length).toBe(before + 1);
   });
 
+  it('puts the keyboard back on the Open button of the run, when the owner goes back to the list', async () => {
+    const service = fakeService(vi, { runs: vi.fn(async () => RUNS), run: vi.fn(async () => runDetail({ ...COMPLETE })) });
+    await renderHistory({ service });
+    fireEvent.click(await screen.findByRole('button', { name: 'Open run 30' }));
+    await screen.findByRole('region', { name: 'Headline figures' });
+
+    press('Back to the runs');
+
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open run 30' })));
+  });
+
   it('puts the keyboard on the run it opened', async () => {
     const service = fakeService(vi, { runs: vi.fn(async () => RUNS), run: vi.fn(async () => runDetail({ ...COMPLETE })) });
     await renderHistory({ service });
