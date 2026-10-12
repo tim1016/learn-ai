@@ -1,0 +1,54 @@
+{
+  "trading_date": "2025-06-10",
+  "starting_cash_usd": "10000.00",
+  "scenes": {
+    "main_call": {
+      "contract": "O:SPY250613C00600000",
+      "contracts": 1,
+      "bought_at": "4.05",
+      "sold_at": "4.09",
+      "profit_usd": "4.00",
+      "ending_cash_usd": "10004.00"
+    },
+    "three_contracts": {
+      "contract": "O:SPY250613C00600000",
+      "contracts": 3,
+      "bought_at": "4.05",
+      "sold_at": "4.09",
+      "profit_usd": "12.00",
+      "ending_cash_usd": "10012.00"
+    },
+    "put": {
+      "contract": "O:SPY250613P00600000",
+      "contracts": 1,
+      "bought_at": "3.37",
+      "sold_at": "3.15",
+      "profit_usd": "-22.00",
+      "ending_cash_usd": "9978.00"
+    },
+    "exit_into_a_gap": {
+      "contract": "O:SPY250613C00600000",
+      "contracts": 1,
+      "bought_at": "4.05",
+      "sold_at": "4.40",
+      "profit_usd": "35.00",
+      "ending_cash_usd": "10035.00"
+    },
+    "one_strike_below_the_money": {
+      "contract": "O:SPY250613C00600000",
+      "contracts": 1,
+      "bought_at": "4.19",
+      "sold_at": "4.09",
+      "profit_usd": "-10.00",
+      "ending_cash_usd": "9990.00"
+    },
+    "a_tie": {
+      "contract": "O:SPY250613C00600000",
+      "contracts": 1,
+      "bought_at": "4.07",
+      "sold_at": "4.09",
+      "profit_usd": "2.00",
+      "ending_cash_usd": "10002.00"
+    }
+  }
+}

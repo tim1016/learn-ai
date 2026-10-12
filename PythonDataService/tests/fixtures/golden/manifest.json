@@ -2424,7 +2424,7 @@
       "canonical_callable": "ensure_option_listing, ensure_option_day_bars, LakeRunData, run_sessions",
       "reference": {
         "kind": "hand_computed",
-        "oracle": "A trade worked out by hand (arithmetic on recorded prices) from the vendor's own answers, in the test's comments and asserted as literals; no figure is computed by the code under test.",
+        "oracle": "A trade worked out by hand (arithmetic on recorded prices) from the vendor's own answers, in the test's comments and asserted as literals, and written down once more in expected.json; no figure is computed by the code under test.",
         "citation": "Polygon (Massive) REST API answers recorded 2026-10-12, see the fixture attribution; the rules applied are the owner's, in https://github.com/tim1016/learn-ai/issues/3030."
       },
       "market_input": {
@@ -2442,7 +2442,7 @@
       "versions": {
         "1": {
           "input": "manifest.json",
-          "output": "attribution.md",
+          "output": "expected.json",
           "attribution": "attribution.md",
           "content_sha256": {
             "manifest.json": "ba59d8e6269dd82f2cbd12221ffab34bb703fd30e8a27c53835a0ef1099d6bdd",
@@ -2451,8 +2451,9 @@
             "O_SPY250613C00600000_minute_2025-06-10.json": "8eb81993f83fe643071eb0afa30eafc912352e2258be4759d679f82a4fff3652",
             "O_SPY250613P00600000_minute_2025-06-10.json": "4dd9f4acdb9100759defb168d128a58dd77fed1f21c41ff1ebcd0b7da3966eb4",
             "O_SPY250613C00680000_minute_2025-06-10.json": "c7d35d96756fe55aab8cf3d4f74ca816ca9e35adc4fd400368b518232afd6a84",
-            "regenerate.py": "d9b28a34a3237ae3c682105be2adbbdd4d5f4b4ad192bc5705bd5335ab7172a0",
-            "attribution.md": "2dd31d18c99044ed58593ee788a4431a8d3e40b6cffc8c4266a3933a33c57460"
+            "expected.json": "0488d82a06ec1d11ec6d6ec8b5dd5e5f1862560dca96a58cf2f2c5fb42ec8325",
+            "regenerate.py": "fd1ace60e001184fa20958898aaf5414f3f047ccc080818f83e172ec9328759c",
+            "attribution.md": "a458e9174d75175fa6c8b3a04ea223d62c994d502e92ba00b98297e50d4bf23d"
           },
           "file_sha256": {
             "manifest.json": "d750acf49b44b53f7711c2123df486b3d8868e0065a69a8339ddc1edcbd37bb6",
@@ -2461,8 +2462,9 @@
             "O_SPY250613C00600000_minute_2025-06-10.json": "35ab5fe951a2d249b81a7c9a77ede4fbc304a13e735173627582e1177330d1b3",
             "O_SPY250613P00600000_minute_2025-06-10.json": "e63935edf79762227b3357ca78c072c6478466b54ab5a02dc4d8bda81be96a15",
             "O_SPY250613C00680000_minute_2025-06-10.json": "5790fffb36d62076c333e96c8fe4cdd596cdf7f0bb22131264735f118bfb0e05",
-            "regenerate.py": "d9b28a34a3237ae3c682105be2adbbdd4d5f4b4ad192bc5705bd5335ab7172a0",
-            "attribution.md": "2dd31d18c99044ed58593ee788a4431a8d3e40b6cffc8c4266a3933a33c57460"
+            "expected.json": "c804084e54abe6df6ff4f1cdec0ed2e82c3aada8757d31a10a20698b8168753e",
+            "regenerate.py": "fd1ace60e001184fa20958898aaf5414f3f047ccc080818f83e172ec9328759c",
+            "attribution.md": "a458e9174d75175fa6c8b3a04ea223d62c994d502e92ba00b98297e50d4bf23d"
           }
         }
       },

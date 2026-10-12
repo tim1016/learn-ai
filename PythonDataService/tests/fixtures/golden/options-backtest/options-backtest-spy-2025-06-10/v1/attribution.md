@@ -21,7 +21,11 @@ body it answered with.
 
 Each body is exactly what the vendor sent: never re-saved through a JSON library, never reformatted. `manifest.json` here is
 the recording's own manifest (the request list, the sha256 of each body, and a few `facts` the recording script found).
-`regenerate.py` is the script that made all six files.
+`expected.json` is the answer key: the figures of each traded scene in the test, worked by hand from these bodies (see below).
+`regenerate.py` is a tidied version of the script that made `manifest.json` and the five bodies, and **it has not been run in
+this form**. The recording itself was made on 2026-10-12 by the original script, which sent the same requests (the same paths
+and queries, the key in the same header) and wrote the same manifest fields. What ties these files to that recording is the sha256
+of each body in `manifest.json`, which the golden registry holds the files to.
 
 ## Regeneration
 
@@ -29,8 +33,9 @@ the recording's own manifest (the request list, the sha256 of each body, and a f
 POLYGON_API_KEY=<key> python tests/fixtures/golden/options-backtest/options-backtest-spy-2025-06-10/v1/regenerate.py <an empty folder>
 ```
 
-Read-only (`GET` only), key from the environment, sent in a header, never printed or written. It is fixture paperwork: no
-test and no CI job runs it.
+Read-only (`GET` only), key from the environment (stripped of surrounding whitespace), sent in a header, never printed or
+written, and in no error text it raises. It is fixture paperwork: no test and no CI job runs it, and it has not been run in this
+tidied form (above), so run it into an empty folder and read the result before trusting it.
 
 Regenerating makes a **new** recording, not these bytes again: the vendor's `request_id` differs on every call, and its data
 for a past day can be revised. The hand-worked figures in `tests/options_backtest/test_golden_spy_2025_06_10.py` would have to
@@ -87,13 +92,19 @@ no re-entry, no slippage, no fee; 10 000.00 of cash.
    10:00: `o 4.09`. Sold at 4.09, bringing in 409.00.
 4. Profit = (4.09 − 4.05) x 100 x 1 = **4.00**. Cash 10 000.00 − 405.00 + 409.00 = **10 004.00**.
 
-Three more figures are worked the same way in the test: the at-the-money put at the same minutes (3.37 in, 3.15 out, −22.00); an exit
-decided at 11:28, whose next two minutes have no call bar, selling at the open of the first minute that has one (4.40, profit
-35.00); and an entry decided at 11:28 into a minute the call did not trade, which is dropped with no money moved.
+More scenes are worked the same way in the test, and their figures are in `expected.json`: the same trade with three contracts
+(1215.00 in, 1227.00 out, profit 12.00); the at-the-money put at the same minutes (3.37 in, 3.15 out, −22.00); an exit decided at
+11:28, whose next two minutes have no call bar, selling at the open of the first minute that has one (4.40, profit 35.00); an entry
+one strike below the money at 09:37 (4.19 in, profit −10.00); and an entry at 09:58, when the underlying closes exactly between two
+strikes, which takes the lower (4.07 in, profit 2.00). One more is asserted in the test only: an entry decided at 11:28 into a minute
+the call did not trade, which is dropped with no money moved.
 
 ## What this fixture does not prove
 
 - **The paging of a whole listing** (above): one page only.
+- **Rounding to a price step.** No recorded price is finer than one cent (the options) or four decimals (the underlying), so
+  rounding a price to the option price step, or to the lake's grid of ten-thousandths of a dollar, is not exercised by this
+  fixture, and a break in either would not show here.
 - **The stock pipeline's reading of every kind of vendor answer.** It reads this one session; fractional volume (since
   2026-02-23), an adjusted request, a split day and a day with a halt are not here.
 - **The lake against a real Postgres catalog.** The catalog in the test is the suite's in-memory stand-in.

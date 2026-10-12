@@ -1,13 +1,19 @@
 """Record the vendor's real answers for the golden fixture ``options-backtest-spy-2025-06-10`` (#3030).
 
-Fixture paperwork: run by hand, never by a test or by CI. It is the script that made ``manifest.json`` and the five bodies
-beside it on 2026-10-12. Running it records a NEW fixture (the vendor's ``request_id`` differs on every call and its data
-may have been revised), so the hand-worked figures in ``tests/options_backtest/test_golden_spy_2025_06_10.py`` must be
-worked again from the new bytes before it is registered; see ``attribution.md``.
+Fixture paperwork: run by hand, never by a test or by CI. This is a tidied version of the script that made
+``manifest.json`` and the five bodies beside it on 2026-10-12, and it has not been run in this form. The recording itself
+was made that day by the original script, which sent the same requests (the same paths and queries) and wrote the same
+manifest fields; the sha256 of each body in ``manifest.json`` is what ties the files here to that recording. Running this
+script records a NEW fixture (the vendor's ``request_id`` differs on every call and its data may have been revised), so
+the hand-worked figures in ``tests/options_backtest/test_golden_spy_2025_06_10.py`` and ``expected.json`` must be worked
+again from the new bytes before it is registered; see ``attribution.md``.
 
-Read-only: every request is a ``GET``. The key is read from the environment, sent in an ``Authorization`` header, and never
-printed, logged or written; it is in no URL, so it is in no recorded request. Each body is saved exactly as received, and
-``manifest.json`` lists the request each file answers (method, path, query) with the sha256 and size of its bytes.
+Read-only: every request is a ``GET``. The key is read from the environment and stripped of surrounding whitespace, sent
+in an ``Authorization`` header built once from the stripped key, and never printed, logged or written; it is in no URL, so
+it is in no recorded request. No error this script raises holds the key: a failed request is reported by its path and its
+status (or, with no answer, the kind of error), and the library's own error text, which can quote a header, is dropped.
+Each body is saved exactly as received, and ``manifest.json`` lists the request each file answers (method, path, query)
+with the sha256 and size of its bytes.
 
     POLYGON_API_KEY=<key> python regenerate.py <an empty folder to write into>
 
@@ -19,8 +25,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -37,6 +44,17 @@ NEW_YORK = ZoneInfo("America/New_York")
 # The decision is taken on the bar that closes at 09:35 New York, which the vendor stamps with its start, 09:34.
 DECISION_BAR_START = datetime(2025, 6, 10, 9, 34, tzinfo=NEW_YORK)
 MINUTE_BARS_QUERY: dict[str, object] = {"adjusted": "false", "sort": "asc", "limit": 50_000}
+# What a key may hold to ride in a header: printable ASCII and no space. Anything else is refused before a request, because
+# the HTTP library's error text for a bad header value quotes the value.
+SENDABLE_KEY = re.compile(r"[\x21-\x7e]+")
+
+
+def key_from_environment() -> str:
+    """``POLYGON_API_KEY`` without surrounding whitespace, or an error that says nothing of its value."""
+    key = os.environ["POLYGON_API_KEY"].strip()
+    if SENDABLE_KEY.fullmatch(key) is None:
+        raise ValueError("POLYGON_API_KEY is empty, or holds a space or a character that is not printable ASCII")
+    return key
 
 
 @dataclass
@@ -44,14 +62,19 @@ class Recorder:
     """Saves each answer's body byte for byte and keeps the manifest entry for it."""
 
     client: httpx.Client
-    key: str
+    key: str = field(repr=False)
     out: Path
 
     def __post_init__(self) -> None:
         self.entries: list[dict[str, Any]] = []
+        self.headers = {"Authorization": f"Bearer {self.key}"}
 
     def save(self, name: str, path: str, params: dict[str, object]) -> Any:
-        response = self.client.get(f"{BASE_URL}{path}", params=params, headers={"Authorization": f"Bearer {self.key}"})
+        try:
+            response = self.client.get(f"{BASE_URL}{path}", params=params, headers=self.headers)
+        except httpx.HTTPError as error:
+            # The library's text can quote the header it refused; name the path and the kind of failure only.
+            raise RuntimeError(f"the request for {path} failed ({type(error).__name__}); nothing was saved") from None
         body = response.content
         if self.key.encode() in body:
             raise RuntimeError(f"the answer to {path} contains the key; nothing was saved")
@@ -82,7 +105,7 @@ def occ_ticker(right: str, strike: Decimal) -> str:
 
 
 def main(out: Path) -> dict[str, Any]:
-    key = os.environ["POLYGON_API_KEY"]
+    key = key_from_environment()
     day = TRADING_DATE.isoformat()
     out.mkdir(parents=True, exist_ok=True)
     with httpx.Client(timeout=TIMEOUT_S) as client:
