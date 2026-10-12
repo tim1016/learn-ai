@@ -7,8 +7,9 @@ Formula: with ``S`` the sessions the canonical calendar has between a Monday and
 Reference: ``app/lean_sidecar/trading_calendar.py``, the calendar; and ``app/options/resolver.py``, whose
   ``_ends_its_week`` is the same fact for bots.
 Canonical implementation: this file for the backtest; ``app/options/resolver.py`` for bots.
-Validated against: tests/options_backtest/test_picking_parity.py (the resolver and this file on every session
-  of two years), and tests/options_backtest/test_picking.py and test_classification.py (holiday weeks).
+Validated against: tests/options_backtest/test_sessions.py (every date of four years against the calendar's
+  own list of sessions), tests/options_backtest/test_picking_parity.py (the resolver and this file on every
+  session of two years), and tests/options_backtest/test_picking.py and test_classification.py (holiday weeks).
 
 Both ``picking.py`` and ``classification.py`` read these facts and neither reads the other. A week is read from
 the calendar once and kept, so asking about every date of a long listing is not a calendar read for each.

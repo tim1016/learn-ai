@@ -20,4 +20,3 @@ def test_a_date_is_a_session_exactly_when_the_calendar_has_one() -> None:
 
     assert on_the_calendar
     assert {day for day in _every_day() if is_session(day)} == on_the_calendar
-
