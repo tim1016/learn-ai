@@ -261,14 +261,15 @@ async def test_a_contract_that_never_traded_completes_with_zero_rows_and_reads_b
 
 @respx.mock
 async def test_the_captured_contract_days_of_a_date_come_from_one_select_on_the_real_table(clean_artifacts, pool, tmp_lake) -> None:
-    traded_contract, quiet_contract, failing_contract, fetching_contract, stock_only = (
-        OptionContract.of(root="SPY", expiry_date=date(2025, 6, 13), right="call", strike=strike) for strike in (600, 601, 602, 603, 604)
+    traded_contract, quiet_contract, failing_contract, fetching_contract, stock_only, not_asked = (
+        OptionContract.of(root="SPY", expiry_date=date(2025, 6, 13), right="call", strike=strike) for strike in (600, 601, 602, 603, 604, 605)
     )
-    await _list(traded_contract, quiet_contract, failing_contract, fetching_contract)
+    await _list(traded_contract, quiet_contract, failing_contract, fetching_contract, not_asked)
     _mock_bars(_bars_ok([_bar(0)]), contract=traded_contract.occ_symbol)
+    _mock_bars(_bars_ok([_bar(0)], not_asked.occ_symbol), contract=not_asked.occ_symbol)
     _mock_bars(no_trades(quiet_contract.occ_symbol), contract=quiet_contract.occ_symbol)
     _mock_bars(httpx.Response(500, text="boom"), contract=failing_contract.occ_symbol)
-    for contract in (traded_contract, quiet_contract, failing_contract):
+    for contract in (traded_contract, quiet_contract, failing_contract, not_asked):
         await ensure_option_day_bars(contract, TRADING_DAY, listed_under="SPY")
     assert await catalog_client.claim_minute_bar(
         identity=ArtifactIdentity(
@@ -294,7 +295,7 @@ async def test_the_captured_contract_days_of_a_date_come_from_one_select_on_the_
     named_on_another_date = await captured_option_days(asked, date(2025, 6, 12))
     named_when_asked_about_none = await captured_option_days([], TRADING_DAY)
 
-    # complete with trades, and complete with none; not failed, not still fetching, and not a stock-market row
+    # complete with trades, and complete with none; not failed, not still fetching, not a stock-market row, not one left out of the question
     assert named == frozenset({traded_contract.occ_symbol, quiet_contract.occ_symbol})
     assert named_on_another_date == frozenset()
     assert named_when_asked_about_none == frozenset()

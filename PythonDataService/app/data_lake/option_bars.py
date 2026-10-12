@@ -284,8 +284,11 @@ async def captured_option_days(symbols: Collection[str], trading_date: date) -> 
     (:func:`read_option_day_bars`: ``None`` for a file that is gone, ``OptionBarsFileError``
     for a damaged one, ``LakeAdmissionError`` for bytes the catalog does not admit). It needs
     the catalog reachable (``catalog_client.CatalogUnavailableError`` otherwise) and nothing
-    else, no marker and no thread. An empty ``symbols`` asks nothing and names nothing.
+    else, no marker and no thread. An empty ``symbols`` asks nothing and names nothing; a single
+    string is a ``TypeError`` (its letters would be asked about, and the answer would be "none").
     """
+    if isinstance(symbols, str):
+        raise TypeError("symbols must be a collection of contract symbols, not one string")
     return await catalog_client.select_complete_minute_bar_symbols(
         OPTION_MARKET, symbols, "trade", trading_date, price_adjustment_mode=OPTION_PRICE_ADJUSTMENT_MODE
     )

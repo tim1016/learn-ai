@@ -1296,6 +1296,11 @@ async def test_only_the_symbols_asked_about_are_named(fake_catalog: FakeCatalog,
     assert await captured_option_days({CONTRACT.occ_symbol}, TRADING_DAY) == frozenset({CONTRACT.occ_symbol})
 
 
+async def test_one_symbol_given_as_a_string_is_a_mistake_and_not_an_answer_of_none(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    with pytest.raises(TypeError, match="not one string"):
+        await captured_option_days(SYMBOL, TRADING_DAY)  # type: ignore[arg-type]
+
+
 async def test_naming_no_symbols_asks_the_catalog_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     def no_connection() -> None:
         raise AssertionError("an empty question reached the catalog")

@@ -21,8 +21,6 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import (
-    MAX_EMAX,
-    MIN_EMIN,
     ROUND_HALF_UP,
     Context,
     Decimal,
@@ -145,8 +143,6 @@ def from_deci_cent(ticks: int) -> Decimal:
         raise TypeError(f"deci-cent decoding needs an int, got {type(ticks).__name__}")
     exact = Context(
         prec=ticks.bit_length() // 3 + 2,  # more digits than the integer can have: floor(bits * log10(2)) + 1
-        Emin=MIN_EMIN,
-        Emax=MAX_EMAX,
         traps=[Inexact, InvalidOperation, Overflow, DivisionByZero],
     )
     return exact.divide(Decimal(ticks), _PRICE_SCALE)
