@@ -90,7 +90,9 @@ class ReentryOnStop(BaseModel):
     count: Annotated[int, Field(strict=True, ge=1, le=MAX_REENTRIES)]
 
 
-class SameDayExpiry(BaseModel):
+# The three expiry rules are named apart from a bot plan's (``app/schemas/action_plan.py``): two served
+# models of one name make FastAPI rename both in the published contract.
+class SameDayExpiryRule(BaseModel):
     """The expiry on the trading date itself."""
 
     model_config = _Model
@@ -98,7 +100,7 @@ class SameDayExpiry(BaseModel):
     kind: Literal["same_day"]
 
 
-class ThisWeekExpiry(BaseModel):
+class ThisWeekExpiryRule(BaseModel):
     """The nearest listed expiry, today's included, that falls on the last session of its week."""
 
     model_config = _Model
@@ -106,7 +108,7 @@ class ThisWeekExpiry(BaseModel):
     kind: Literal["this_week"]
 
 
-class MinDaysExpiry(BaseModel):
+class MinDaysExpiryRule(BaseModel):
     """The nearest listed expiry at least this many calendar days after the trading date."""
 
     model_config = _Model
@@ -115,7 +117,7 @@ class MinDaysExpiry(BaseModel):
     days: Annotated[int, Field(strict=True, ge=0, le=MAX_EXPIRY_DAYS)]
 
 
-ExpiryRule = Annotated[SameDayExpiry | ThisWeekExpiry | MinDaysExpiry, Discriminator("kind")]
+ExpiryRule = Annotated[SameDayExpiryRule | ThisWeekExpiryRule | MinDaysExpiryRule, Discriminator("kind")]
 
 
 class AtTheMoney(BaseModel):
