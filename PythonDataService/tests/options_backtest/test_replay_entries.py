@@ -7,10 +7,12 @@ the open of minute ``k + 1``, and the setups here enter at minute 5 and leave at
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from app.options_backtest.market import PickRefusal, PickRefused
-from app.options_backtest.results import EventKind, SessionStatus, SkipReason
+from app.options_backtest.results import EventKind, SessionOutcome, SessionStatus, SkipReason
 from tests.options_backtest._market import (
     FULL_CLOSE_MS,
     HALF_CLOSE_MS,
@@ -39,12 +41,9 @@ PUT = contract("put", "500")
 @pytest.mark.parametrize(
     ("entry_minute", "exit_minute", "fits"),
     [
-        (0, 60, False),  # the open's own minute has no closed bar to read yet
         (1, 60, True),  # one minute after the open, to the second
         (5, 389, True),  # one minute before the close, to the second
         (5, 390, False),  # an exit at the close has no next minute to fill in
-        (60, 60, False),  # one instant cannot be both
-        (61, 60, False),  # leaving before entering
         (60, 61, True),
     ],
 )
@@ -57,6 +56,10 @@ def test_a_window_fits_only_between_a_minute_after_the_open_and_a_minute_before_
 
     outcome = replay(setup(leg(), entry=after_open(entry_minute), exit=after_open(exit_minute)), market)
 
+    _assert_traded_or_skipped_for_its_window(outcome, fits)
+
+
+def _assert_traded_or_skipped_for_its_window(outcome: SessionOutcome, fits: bool) -> None:
     if fits:
         assert outcome.skip_reason is None
         assert outcome.status is SessionStatus.TRADED
@@ -68,6 +71,44 @@ def test_a_window_fits_only_between_a_minute_after_the_open_and_a_minute_before_
             (),
             D(0),
         )
+
+
+@pytest.mark.parametrize(
+    ("entry", "exit_", "close_ms", "fits"),
+    [
+        # An entry counted from the open and an exit counted from the close: minute 190 to minute 360 of a full
+        # session, minute 190 to minute 180 of one that closes at minute 210.
+        (after_open(190), before_close(30), FULL_CLOSE_MS, True),
+        (after_open(190), before_close(30), HALF_CLOSE_MS, False),  # leaving before entering
+        (after_open(180), before_close(30), HALF_CLOSE_MS, False),  # one instant cannot be both
+        (after_open(179), before_close(30), HALF_CLOSE_MS, True),  # minute 179 to minute 180
+        # An entry counted from the close, 210 minutes before it: minute 180 of a full session, the open itself
+        # (minute 0) of a half day, and one minute earlier is before the open.
+        (before_close(210), before_close(1), FULL_CLOSE_MS, True),
+        (before_close(210), before_close(1), HALF_CLOSE_MS, False),  # the open's own minute has no closed bar to read
+        (before_close(211), before_close(1), HALF_CLOSE_MS, False),  # a minute before the open
+        (before_close(209), before_close(1), HALF_CLOSE_MS, True),  # minute 1 to minute 209
+        # An exit counted from the open, 210 minutes after it: minute 210 of a full session, the close itself of a
+        # half day, and one minute later is after the close.
+        (after_open(5), after_open(210), FULL_CLOSE_MS, True),
+        (after_open(5), after_open(210), HALF_CLOSE_MS, False),  # an exit at the close has no next minute to fill in
+        (after_open(5), after_open(211), HALF_CLOSE_MS, False),  # a minute after the close
+        (after_open(5), after_open(209), HALF_CLOSE_MS, True),  # one minute before the close, to the second
+    ],
+)
+def test_a_window_the_setup_allows_can_still_miss_a_session_and_that_session_is_skipped(
+    entry: dict[str, Any], exit_: dict[str, Any], close_ms: int, fits: bool
+) -> None:
+    market = TableMarket(
+        underlying=steady("500"),
+        picks=picked(("call", "500", CALL)),
+        options={CALL: flat("2.00", 1, 390)},
+        session_close_ms=close_ms,
+    )
+
+    outcome = replay(setup(leg(), entry=entry, exit=exit_), market)
+
+    _assert_traded_or_skipped_for_its_window(outcome, fits)
 
 
 def test_a_session_where_the_underlying_did_not_trade_at_the_entry_time_is_skipped() -> None:
@@ -107,21 +148,6 @@ def test_a_half_day_keeps_the_exit_a_set_distance_before_its_earlier_close() -> 
     ]
     assert full.trades[0].exit_decided_at_ms == FULL_CLOSE_MS - 46 * 60_000
     assert half.trades[0].exit_decided_at_ms == HALF_CLOSE_MS - 46 * 60_000
-
-
-def test_a_window_that_fits_a_full_day_can_miss_a_half_day() -> None:
-    # Enter at minute 190, leave 30 minutes before the close: minute 360 of a full day, minute 180 of a half day.
-    written = setup(leg(), entry=after_open(190), exit=before_close(30))
-    market = TableMarket(
-        underlying=steady("500"),
-        picks=picked(("call", "500", CALL)),
-        options={CALL: flat("2.00", 1, 390)},
-        session_close_ms=HALF_CLOSE_MS,
-    )
-
-    outcome = replay(written, market)
-
-    assert outcome.skip_reason is SkipReason.WINDOW_DOES_NOT_FIT
 
 
 def test_momentum_buys_at_the_next_opening_price_with_slippage_never_at_the_trigger_level() -> None:

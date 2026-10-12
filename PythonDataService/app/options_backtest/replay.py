@@ -11,9 +11,9 @@ Validated against: tests/options_backtest/test_replay_*.py, whose expectations a
 Setup and one session's market data in; every decision, fill and trade out. It reads no
 network, clock, database or randomness, and the same inputs give an equal outcome.
 
-A minute bar is named by its close. A rule is read on a bar's close, and an order it decides
-at ``t`` fills at the open of the bar closing at ``t + 60 s``. Inside one minute close ``t``
-the order is always:
+A minute bar is named by its close: the bar closing at ``t`` holds the trades in
+``[t - 60 s, t)``. A rule is read on a bar's close, and an order it decides at ``t`` fills at
+the open of the bar closing at ``t + 60 s``. Inside one minute close ``t`` the order is always:
 
 1. fills that are due (entries, then closes);
 2. the exit time, or else the stops and their square-off;
@@ -165,7 +165,7 @@ class _Session:
         self.groups = 0
 
     def run(self) -> SessionOutcome:
-        if not self.open_ms + MS_PER_MINUTE <= self.entry_ms < self.exit_ms <= self.close_ms - MS_PER_MINUTE:
+        if not self.setup.window_fits(session_open_ms=self.open_ms, session_close_ms=self.close_ms):
             return _skipped(SkipReason.WINDOW_DOES_NOT_FIT)
         underlying = self.market.underlying_close(self.entry_ms)
         if underlying is None:
