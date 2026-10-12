@@ -27,7 +27,7 @@ from app.options_backtest.data_check import check_data
 from app.options_backtest.lake_check import LakeCheckData
 from app.options_backtest.run import RunResult
 from app.options_backtest.saved_runs import DbRunStore, DeleteOutcome, DuplicateJob, NewRun, RunFailure
-from app.options_backtest.service import RunCancelled, RunHooks, RunRefused
+from app.options_backtest.service import INTERNAL_ERROR, RunCancelled, RunFailedError, RunHooks, RunRefused
 from app.research.persistence import lifecycle
 from app.research.persistence.db import with_connection
 from app.schemas.options_backtest import OptionsBacktestRefusalBody
@@ -221,10 +221,17 @@ async def start_options_backtest_job(req: OptionsBacktestJobRequest) -> OptionsB
 
 def _worker(
     run_id: int, req: OptionsBacktestJobRequest, sessions: tuple[date, ...], store: service.RunStore
-) -> Callable[[ProgressEmitter, CancellationCheck], dict[str, Any]]:
-    """The job's work: the service behind the runner's emit-and-cancel checks, progress counted in sessions."""
+) -> Callable[[ProgressEmitter, CancellationCheck], dict[str, Any] | None]:
+    """The job's work: the service behind the runner's emit-and-cancel checks, progress counted in sessions.
 
-    def work(emit: ProgressEmitter, cancel: CancellationCheck) -> dict[str, Any]:
+    A run that ends in a way the service explains is not an error of the job. A cancelled one ends the job cancelled
+    (the runner logs that at info). A failed one, whose reason the service has composed and recorded, ends the job
+    failed with the run's own code and reason and one info line, and no traceback: the work has then sent its own
+    terminal event, so it returns ``None``. What is left for the runner's error path, with its traceback, is an
+    exception nobody expected (the run's ``INTERNAL_ERROR`` among them).
+    """
+
+    def work(emit: ProgressEmitter, cancel: CancellationCheck) -> dict[str, Any] | None:
         hooks = RunHooks(
             on_phase=lambda phase: emit.phase(phase, friendly=friendly_phase("options_backtest", phase)),
             on_progress=lambda done, total: emit.progress(done, total, unit="sessions"),
@@ -235,6 +242,17 @@ def _worker(
             result = service.execute_run(run_id=run_id, setup=req.setup, sessions=sessions, store=store, hooks=hooks)
         except RunCancelled as exc:
             raise JobCancelled(str(exc)) from exc
+        except RunFailedError as exc:
+            if exc.failure.code == INTERNAL_ERROR:
+                raise
+            logger.info(
+                "options backtest run %d failed: %s",
+                run_id,
+                exc.failure.code,
+                extra={"action": "options_backtest_run_failed", "run_id": run_id, "code": exc.failure.code},
+            )
+            emit.failed(code=exc.failure.code, message=exc.failure.reason)
+            return None
         return _job_result(run_id, result)
 
     return work
