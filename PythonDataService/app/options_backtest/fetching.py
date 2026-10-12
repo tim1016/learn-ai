@@ -21,13 +21,21 @@ Order. The underlying's bars are asked for in chunks of ``UNDERLYING_CHUNK_SESSI
 the first session in it, so the progress counts sessions from the start; then, for each session, its listing and its
 contracts. The stock pipeline that fetches the underlying has no gate on a session that is not over: asked for one, it
 stores the minutes so far as the whole day. Check data refuses such a session first, but this phase is a function of its
-own, so before a chunk is asked for the lake's own rule (``option_lake.session_refusal``) is asked of each session in it,
-and a refused one is a ``DownloadFailed`` with the lake's reason and the pipeline is not called for the chunk.
+own, so before a chunk is asked for, the lake's own rule (``option_lake.session_refusal``) is asked of each session in
+it, and a refused one is a ``DownloadFailed`` with the lake's reason and the pipeline is not called for the chunk.
 
 Limits on the vendor. At most ``MAX_VENDOR_REQUESTS_IN_FLIGHT`` option requests are in flight in the whole process:
 every capture here holds ``option_lake.vendor_request_gate``, which every run and the past chain's download share, so
 two runs at once do not double it. A day another request is fetching right now is not a failure: the capture waits and
 asks again for up to ``OTHER_REQUEST_WAIT_SECONDS``, and only then is it ``another_request_still_fetching``.
+
+Saying so. While a capture waits for a day another request is fetching nothing else moves: the phase, the progress and
+the log stay as they were, and a healthy run would look hung for as long as six minutes. The captures run on the
+background loop and do not call the job's log hook, so each batch keeps a count of the captures that are waiting on
+another request (``_Batch``), changed only where a capture decides to wait and where it carries on. The job's own
+thread reads it once a slice and writes ``WAITING_FOR_ANOTHER_REQUEST`` when it goes from none to some, and
+``THE_OTHER_REQUEST_FINISHED`` when it goes back to none, so a wait is said once and its end once. A capture that gives
+up, is stopped or meets another failure is not carrying on and stays counted, so a run that fails never says it goes on.
 
 Liveness. The job's lease is renewed only by an emit or a stop poll, so no wait here is longer than
 ``STOP_POLL_SECONDS`` without asking ``should_stop``. A yes while contract requests are in flight lets those finish
@@ -86,6 +94,10 @@ _LISTING_TIMEOUT_SECONDS = 600.0
 _CONTRACTS_TIMEOUT_SECONDS = 1800.0
 _UNDERLYING_TIMEOUT_SECONDS = 700.0
 _CATALOG_QUESTION_TIMEOUT_SECONDS = 120.0
+
+# The two lines the job's log gets about a wait for another request: no date, no contract, no count that could go stale.
+WAITING_FOR_ANOTHER_REQUEST = "Waiting for data another request is already fetching."
+THE_OTHER_REQUEST_FINISHED = "The other request has finished; carrying on."
 
 # The reasons this phase gives beside the lake's own. ``data_check.LAKE_REASON_WORDS`` has plain words for each.
 UNDERLYING_NOT_FETCHED = "underlying_bars_not_materialized"
@@ -198,6 +210,31 @@ def ensure_run_data(
     ).run(sessions, on_progress)
 
 
+class _Batch:
+    """What a piece of work on the background loop shares with the thread waiting for it.
+
+    A stop the thread sets and the coroutine reads, and how many of its captures are waiting for another request. The
+    count is changed on the loop and read on the thread, so it is held under a lock.
+    """
+
+    def __init__(self) -> None:
+        self.stop = threading.Event()
+        self._lock = threading.Lock()
+        self._waiting = 0
+
+    def begins_to_wait(self) -> None:
+        with self._lock:
+            self._waiting += 1
+
+    def carries_on(self) -> None:
+        with self._lock:
+            self._waiting -= 1
+
+    def is_waiting(self) -> bool:
+        with self._lock:
+            return self._waiting > 0
+
+
 class _Download:
     """One run of the phase: what it reads with, what it counts, and how it waits."""
 
@@ -261,7 +298,7 @@ class _Download:
             name="options-backtest-underlying",
         )
         try:
-            self._wait(future, stop=None, give_up_after=_UNDERLYING_TIMEOUT_SECONDS, session=None, what=what)
+            self._wait(future, batch=None, give_up_after=_UNDERLYING_TIMEOUT_SECONDS, session=None, what=what)
         except LakeMaterializationError as exc:
             raise DownloadFailed(session=None, what=what, reason=UNDERLYING_NOT_FETCHED, detail=str(exc)) from exc
         except CallerStoppedWaitingError as exc:
@@ -274,7 +311,7 @@ class _Download:
         underlying = self._setup.underlying
         listing_what = f"the {underlying} option listing"
         listed = self._on_the_loop(
-            lambda stop: _capture_listing(underlying, day, self._now_ms, stop),
+            lambda batch: _capture_listing(underlying, day, self._now_ms, batch),
             give_up_after=_LISTING_TIMEOUT_SECONDS,
             session=day,
             what=listing_what,
@@ -327,7 +364,7 @@ class _Download:
         """The contracts whose day is not stored: the lake is asked once, and a captured day must also read."""
         symbols = [contract.occ_symbol for contract in contracts]
         captured = self._on_the_loop(
-            lambda _stop: _which_are_captured(symbols, day),
+            lambda _batch: _which_are_captured(symbols, day),
             give_up_after=_CATALOG_QUESTION_TIMEOUT_SECONDS,
             session=day,
             what="the list of stored contract days",
@@ -346,7 +383,7 @@ class _Download:
     def _capture_contracts(self, contracts: Sequence[OptionContract], day: date, stored: OptionListing) -> None:
         underlying = self._setup.underlying
         outcomes = self._on_the_loop(
-            lambda stop: _capture_contract_days(contracts, day, underlying, stored, self._now_ms, stop),
+            lambda batch: _capture_contract_days(contracts, day, underlying, stored, self._now_ms, batch),
             give_up_after=_CONTRACTS_TIMEOUT_SECONDS,
             session=day,
             what=f"the bars of {len(contracts)} contracts",
@@ -377,7 +414,7 @@ class _Download:
 
     def _on_the_loop[T](
         self,
-        make: Callable[[threading.Event], Coroutine[Any, Any, T]],
+        make: Callable[[_Batch], Coroutine[Any, Any, T]],
         *,
         give_up_after: float,
         session: date | None,
@@ -385,35 +422,49 @@ class _Download:
     ) -> T:
         """Run a coroutine on the process's background loop and wait for it, as :meth:`_wait` does.
 
-        ``make`` is handed the event the coroutine reads to know it has been told to stop.
+        ``make`` is handed the batch: the event the coroutine reads to know it has been told to stop, and the count of
+        its captures that are waiting for another request.
         """
-        stop = threading.Event()
-        future = asyncio.run_coroutine_threadsafe(make(stop), background_loop())
-        return self._wait(future, stop=stop, give_up_after=give_up_after, session=session, what=what)
+        batch = _Batch()
+        future = asyncio.run_coroutine_threadsafe(make(batch), background_loop())
+        return self._wait(future, batch=batch, give_up_after=give_up_after, session=session, what=what)
+
+    def _say_if_waiting_changed(self, batch: _Batch, said_waiting: bool) -> bool:
+        """Write the line for a wait that has begun or ended since the last look; return whether one is going on."""
+        waiting = batch.is_waiting()
+        if waiting and not said_waiting:
+            self._log(WAITING_FOR_ANOTHER_REQUEST)
+        elif said_waiting and not waiting:
+            self._log(THE_OTHER_REQUEST_FINISHED)
+        return waiting
 
     def _wait[T](
         self,
         future: Future[T],
         *,
-        stop: threading.Event | None,
+        batch: _Batch | None,
         give_up_after: float,
         session: date | None,
         what: str,
     ) -> T:
         """The result of ``future``, waiting in slices of ``STOP_POLL_SECONDS`` and asking after each whether to stop.
 
-        A yes, or ``give_up_after`` seconds gone, sets ``stop`` (the coroutine starts no more requests and ends once
-        those in flight have), and the wait goes on for ``STOP_GRACE_SECONDS`` more, after which the future is
-        cancelled as a last resort. A work with no ``stop`` (the underlying's chunk) is abandoned at once. A yes then
+        A yes, or ``give_up_after`` seconds gone, sets the batch's stop (the coroutine starts no more requests and ends
+        once those in flight have), and the wait goes on for ``STOP_GRACE_SECONDS`` more, after which the future is
+        cancelled as a last resort. A work with no batch (the underlying's chunk) is abandoned at once. A yes then
         raises ``DownloadStopped``; a wait that ran out raises ``DownloadFailed``. Whatever the future raised on its
-        own propagates.
+        own propagates. After each slice the log is told if the batch has begun to wait for another request or has
+        stopped waiting.
         """
         deadline = self._pace.now() + give_up_after
-        grace = STOP_GRACE_SECONDS if stop is not None else 0.0
+        grace = STOP_GRACE_SECONDS if batch is not None else 0.0
         told_at: float | None = None
         stopped = False
+        said_waiting = False
         while True:
             self._pace.wait_for(future, STOP_POLL_SECONDS)
+            if batch is not None:
+                said_waiting = self._say_if_waiting_changed(batch, said_waiting)
             if future.done():
                 break
             now = self._pace.now()
@@ -422,8 +473,8 @@ class _Download:
                 if not stopped and now < deadline:
                     continue
                 told_at = now
-                if stop is not None:
-                    stop.set()
+                if batch is not None:
+                    batch.stop.set()
             if now - told_at >= grace:
                 break
         if told_at is None:
@@ -466,12 +517,12 @@ class _ContractOutcome:
 
 
 async def _capture_listing(
-    underlying: str, day: date, now_ms: int, stop: threading.Event
+    underlying: str, day: date, now_ms: int, batch: _Batch
 ) -> OptionCaptureResult | None:
     """The listing's capture; ``None`` when the phase was told to stop before it was asked."""
     await catalog_client.init_pool()
     return await _ask_until_nobody_else_is_fetching(
-        lambda: ensure_option_listing(underlying, day, now_ms=now_ms), stop=stop
+        lambda: ensure_option_listing(underlying, day, now_ms=now_ms), batch=batch
     )
 
 
@@ -486,7 +537,7 @@ async def _capture_contract_days(
     underlying: str,
     stored: OptionListing,
     now_ms: int,
-    stop: threading.Event,
+    batch: _Batch,
 ) -> list[_ContractOutcome]:
     """Capture each contract's day through the process's request gate; none starts once one failed or stop is set."""
     await catalog_client.init_pool()
@@ -497,7 +548,7 @@ async def _capture_contract_days(
         try:
             result = await _ask_until_nobody_else_is_fetching(
                 lambda: ensure_option_day_bars(contract, day, listed_under=underlying, listing=stored, now_ms=now_ms),
-                stop=stop,
+                batch=batch,
                 halt=lambda: broken,
             )
         except Exception as exc:  # carried to the thread that raises it; the others stop starting
@@ -512,25 +563,35 @@ async def _capture_contract_days(
 async def _ask_until_nobody_else_is_fetching(
     ask: Callable[[], Coroutine[Any, Any, OptionCaptureResult]],
     *,
-    stop: threading.Event,
+    batch: _Batch,
     halt: Callable[[], bool] = lambda: False,
 ) -> OptionCaptureResult | None:
     """``ask()`` under the process's request gate; ``None`` when it was not asked because the phase had to stop.
 
     The lake answers ``lease_timeout`` while another worker holds the row it wants. That is not a failure yet: the
     gate is let go, the capture waits ``OTHER_REQUEST_POLL_SECONDS`` and asks again, until
-    ``OTHER_REQUEST_WAIT_SECONDS`` have passed, when the last ``lease_timeout`` is returned.
+    ``OTHER_REQUEST_WAIT_SECONDS`` have passed, when the last ``lease_timeout`` is returned. The batch counts the
+    capture as waiting from the first ``lease_timeout`` until an ask succeeds; one that gives up, is stopped or meets
+    another failure stays counted, since the run is not carrying on.
     """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + OTHER_REQUEST_WAIT_SECONDS
+    waiting = False
     while True:
-        if stop.is_set() or halt():
+        if batch.stop.is_set() or halt():
             return None
         async with vendor_request_gate():
-            if stop.is_set() or halt():
+            if batch.stop.is_set() or halt():
                 return None
             result = await ask()
         failure = result.failure
-        if failure is None or failure.reason != "lease_timeout" or loop.time() >= deadline:
+        if failure is None or failure.reason != "lease_timeout":
+            if waiting and failure is None:
+                batch.carries_on()
             return result
+        if loop.time() >= deadline:
+            return result
+        if not waiting:
+            batch.begins_to_wait()
+            waiting = True
         await asyncio.sleep(OTHER_REQUEST_POLL_SECONDS)

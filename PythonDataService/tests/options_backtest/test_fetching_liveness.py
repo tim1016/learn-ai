@@ -43,6 +43,7 @@ from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixe
 from tests.options_backtest._lake import tmp_lake as tmp_lake
 from tests.options_backtest._run_data import THU, WED
 from tests.options_backtest._run_lake import FakeTime, Vendor, eight_legs_setup, ladder_day
+from tests.options_backtest._words import assert_plain
 from tests.options_backtest.setup_fixtures import leg, setup
 
 # 2026-10-12 14:00 New York.
@@ -58,9 +59,16 @@ def the_money_call() -> Any:
 
 
 async def _run(
-    sessions: list[date], *, should_stop: Any = lambda: False, pace: Pace | None = None, setup: Any = None
+    sessions: list[date],
+    *,
+    should_stop: Any = lambda: False,
+    pace: Pace | None = None,
+    setup: Any = None,
+    on_log: Any = None,
 ) -> Any:
-    extra = {} if pace is None else {"pace": pace}
+    extra: dict[str, Any] = {} if pace is None else {"pace": pace}
+    if on_log is not None:
+        extra["on_log"] = on_log
     return await asyncio.to_thread(
         ensure_run_data,
         setup or eight_legs_setup(),
@@ -206,6 +214,158 @@ async def test_a_listing_another_request_holds_until_the_wait_runs_out_fails_say
     assert (caught.value.session, caught.value.reason) == (WED, "another_request_still_fetching")
     assert "listing" in caught.value.what
     assert vendor.listing_requests == [] and vendor.option_requests == []
+
+
+# ── A wait for another request is said, once ─────────────────────────────
+# While a capture waits for a day another request is fetching, nothing else moves: the phase and the progress stay as
+# they were. So the log says so when a wait begins and when it ends, once each, however many slices it lasts and however
+# many captures wait. The words are the owner's to read: no date, no contract, no count that could go stale.
+
+WAITING = "Waiting for data another request is already fetching."
+FINISHED = "The other request has finished; carrying on."
+ANOTHER_WORKER = "another-worker"
+
+
+def _the_500_call(day: date) -> OptionContract:
+    return OptionContract.of(root="SPY", expiry_date=day, right="call", strike=500)
+
+
+async def _another_worker_holds(fake_catalog: FakeCatalog, what: str, day: date) -> None:
+    if what == "a listing":
+        claimed = await fake_catalog.claim_metadata_artifact(
+            ArtifactIdentity(
+                artifact_kind="metadata",
+                market="usa_options",
+                symbol="SPY",
+                provider="polygon",
+                price_adjustment_mode="raw",
+            ),
+            ANOTHER_WORKER,
+            600_000,
+            option_listing_dch("SPY", day),
+            f"option/usa/listing/spy/{day:%Y%m%d}_contracts.zip",
+        )
+        assert claimed is not None
+        return
+    await _hold_the_row_as_another_worker(
+        fake_catalog,
+        ArtifactIdentity(
+            artifact_kind="time_series_bars",
+            market="usa_options",
+            symbol=_the_500_call(day).occ_symbol,
+            trading_date=day,
+            resolution="minute",
+            data_type="trade",
+            provider="polygon",
+            price_adjustment_mode="raw",
+        ),
+        option_minute_trade_dch(),
+    )
+
+
+def _let_go_of_what_another_worker_holds(fake_catalog: FakeCatalog) -> None:
+    """The other request is over: the first row it held is failed, once, and the lake takes the day over."""
+    held = [row for row in fake_catalog.rows.values() if row["lease_owner"] == ANOTHER_WORKER]
+    assert held, "nothing was held"
+    held[0].update(status="failed", last_error="provider_api_error", lease_owner=None, lease_expires_at_ms=None)
+
+
+async def _store_the_underlying_and_the_listing_of(*days: date, listing: bool) -> None:
+    await asyncio.to_thread(
+        materialize_engine_run,
+        symbol="SPY",
+        start=days[0],
+        end=days[-1],
+        resolution="minute",
+        price_adjustment_mode="raw",
+    )
+    if listing:
+        for day in days:
+            await ensure_option_listing("SPY", day, now_ms=NOW_MS)
+
+
+WHAT_IS_HELD = pytest.mark.parametrize("what", ["a contract day", "a listing"])
+
+
+@WHAT_IS_HELD
+@respx.mock
+async def test_a_wait_for_another_requests_fetch_is_said_once_when_it_begins_and_once_when_it_ends_and_the_run_completes(
+    what: str, fake_catalog: FakeCatalog, tmp_lake: Path, quick: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vendor = Vendor({WED: ladder_day()})
+    vendor.mount()
+    await _store_the_underlying_and_the_listing_of(WED, listing=what == "a contract day")
+    await _another_worker_holds(fake_catalog, what, WED)
+    monkeypatch.setattr(fetching, "OTHER_REQUEST_WAIT_SECONDS", 20.0)
+    lines: list[str] = []
+
+    def on_log(line: str) -> None:
+        lines.append(line)
+        if line == WAITING:
+            _let_go_of_what_another_worker_holds(fake_catalog)  # the other request finishes once the wait is said
+
+    report = await _run([WED], setup=the_money_call(), on_log=on_log)
+
+    assert [line for line in lines if line in (WAITING, FINISHED)] == [WAITING, FINISHED]
+    assert report.sessions_prepared == 1 and (report.listings_fetched, report.option_days_fetched) == (
+        (1, 1) if what == "a listing" else (0, 1)
+    )
+    assert_plain(WAITING)
+    assert_plain(FINISHED)
+
+
+@respx.mock
+async def test_a_second_wait_later_in_the_same_run_says_the_first_line_again_and_no_line_repeats_within_a_wait(
+    fake_catalog: FakeCatalog, tmp_lake: Path, quick: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vendor = Vendor({WED: ladder_day(), THU: ladder_day()})
+    vendor.mount()
+    await _store_the_underlying_and_the_listing_of(WED, THU, listing=True)
+    await _another_worker_holds(fake_catalog, "a contract day", WED)
+    await _another_worker_holds(fake_catalog, "a contract day", THU)
+    monkeypatch.setattr(fetching, "OTHER_REQUEST_WAIT_SECONDS", 20.0)
+    lines: list[str] = []
+
+    def on_log(line: str) -> None:
+        lines.append(line)
+        if line == WAITING:
+            _let_go_of_what_another_worker_holds(fake_catalog)
+
+    await _run([WED, THU], setup=the_money_call(), on_log=on_log)
+
+    # Wednesday's wait, then Thursday's: four lines, and each pair in order.
+    assert [line for line in lines if line in (WAITING, FINISHED)] == [WAITING, FINISHED, WAITING, FINISHED]
+
+
+@respx.mock
+async def test_a_run_that_never_waits_for_another_request_says_nothing_about_one(
+    fake_catalog: FakeCatalog, tmp_lake: Path, quick: None
+) -> None:
+    Vendor({WED: ladder_day()}, option_latency_s=0.15).mount()
+    lines: list[str] = []
+
+    await _run([WED], on_log=lines.append)
+
+    assert lines, "the phase says what it is doing"
+    assert WAITING not in lines and FINISHED not in lines
+
+
+@WHAT_IS_HELD
+@respx.mock
+async def test_a_wait_that_runs_out_says_it_began_once_and_never_that_the_run_carries_on(
+    what: str, fake_catalog: FakeCatalog, tmp_lake: Path, quick: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    Vendor({WED: ladder_day()}).mount()
+    await _store_the_underlying_and_the_listing_of(WED, listing=what == "a contract day")
+    await _another_worker_holds(fake_catalog, what, WED)
+    monkeypatch.setattr(fetching, "OTHER_REQUEST_WAIT_SECONDS", 0.5)
+    lines: list[str] = []
+
+    with pytest.raises(DownloadFailed) as caught:
+        await _run([WED], setup=the_money_call(), on_log=lines.append)
+
+    assert caught.value.reason == "another_request_still_fetching"
+    assert [line for line in lines if line in (WAITING, FINISHED)] == [WAITING]
 
 
 # ── A phase that has stopped asks for nothing more ───────────────────────
