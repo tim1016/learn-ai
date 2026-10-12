@@ -10,6 +10,8 @@ any rule for when a session's data is final. Hand-worked figures:
   496 to 499 and 501 to 504, so a session needs eight contracts. The vendor may be asked for at most four at once.
 * The first failing contract of a batch of eight, with four allowed in flight: the first four requests start
   together, the first of them fails when its answer comes, and the other four never start. Four requests, not eight.
+* The captured days. Eight contracts are stored; then three of them are the only ones a later run needs and the other
+  five are new: the lake is asked once which are captured, and only the five are captured, five requests.
 """
 
 from __future__ import annotations
@@ -23,11 +25,12 @@ from typing import Any
 import pytest
 import respx
 
-from app.lean_sidecar.trading_calendar import expected_sessions
+from app.data_lake import option_bars
+from app.data_lake.catalog_client import CatalogUnavailableError
+from app.data_lake.option_lake import MAX_VENDOR_REQUESTS_IN_FLIGHT
 from app.options.contract import OptionContract
 from app.options_backtest import fetching
 from app.options_backtest.fetching import (
-    MAX_VENDOR_REQUESTS_IN_FLIGHT,
     DownloadFailed,
     DownloadStopped,
     ensure_run_data,
@@ -36,15 +39,18 @@ from app.options_backtest.lake_data import LakeRunData
 from app.options_backtest.setup import MS_PER_MINUTE
 from tests._helpers.fake_lake_catalog import FakeCatalog
 from tests.options_backtest._lake import fake_catalog as fake_catalog
+from tests.options_backtest._lake import raw_root, replace_the_stored_file
 from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixed
 from tests.options_backtest._lake import tmp_lake as tmp_lake
 from tests.options_backtest._run_data import FRI, HALF_DAY, THU, WED, Day, flat, steady
-from tests.options_backtest._run_lake import Vendor
+from tests.options_backtest._run_lake import Vendor, eight_legs_setup, ladder_day
+from tests.options_backtest._words import assert_plain
 from tests.options_backtest.setup_fixtures import leg, setup
 
 # 2026-10-12 14:00 New York.
 NOW_MS = 1791828000000
 D = Decimal
+TUE = date(2026, 10, 6)
 SPY_500_CALL = ("call", 500)
 THREE_SESSIONS = [WED, THU, FRI]
 
@@ -274,24 +280,36 @@ async def test_a_stop_between_sessions_ends_the_phase_and_asks_for_no_more(
     assert vendor.listing_requests == [WED]
 
 
-def test_the_underlying_is_asked_for_in_chunks_of_sessions_each_with_its_own_stop_check(
-    monkeypatch: pytest.MonkeyPatch,
+@respx.mock
+async def test_the_underlying_is_asked_for_in_chunks_each_just_before_the_first_session_in_it(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls: list[tuple[date, date]] = []
-    monkeypatch.setattr(
-        fetching,
-        "materialize_engine_run",
-        lambda *, symbol, start, end, resolution, price_adjustment_mode: calls.append((start, end)),
-    )
+    # Five sessions in chunks of two: [Mon, Tue], [Wed, Thu], [Fri]. A chunk is asked for when the phase reaches its
+    # first session, so the progress counts sessions from the start and a failure at the third fetches no more bars.
+    monday = date(2026, 10, 5)
+    five = [monday, TUE, WED, THU, FRI]
+    vendor = Vendor(_scene(*five))
+    vendor.mount()
+    real = fetching.materialize_engine_run
+
+    def asked_for(*, symbol: str, start: date, end: date, **kwargs: Any) -> Any:
+        vendor.requests.append(f"CHUNK {start} {end}")
+        return real(symbol=symbol, start=start, end=end, **kwargs)
+
+    monkeypatch.setattr(fetching, "materialize_engine_run", asked_for)
     monkeypatch.setattr(fetching, "UNDERLYING_CHUNK_SESSIONS", 2)
-    five = [date(2026, 10, 5), date(2026, 10, 6), WED, THU, FRI]
 
-    with pytest.raises(DownloadStopped) as caught:
-        # Stop once all three chunks are asked for: at the first session.
-        ensure_run_data(_same_day_call(), five, now_ms=NOW_MS, should_stop=lambda: len(calls) >= 3)
+    await _fetch(_same_day_call(), five)
 
-    assert calls == [(date(2026, 10, 5), date(2026, 10, 6)), (WED, THU), (FRI, FRI)]
-    assert caught.value.sessions_done == 0
+    marks = [
+        (request, "listing" if "contracts" in request else "chunk" if request.startswith("CHUNK") else "other")
+        for request in vendor.requests
+    ]
+    chunk_marks = [request for request, kind in marks if kind == "chunk"]
+    assert chunk_marks == [f"CHUNK {monday} {TUE}", f"CHUNK {WED} {THU}", f"CHUNK {FRI} {FRI}"]
+    # The sessions' listings were asked for in date order, and no listing is asked for before its chunk.
+    kinds_in_order = [kind for _, kind in marks if kind in ("chunk", "listing")]
+    assert kinds_in_order == ["chunk", "listing", "listing", "chunk", "listing", "listing", "chunk", "listing"]
 
 
 def test_a_stop_before_the_first_chunk_asks_the_lake_for_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -306,18 +324,180 @@ def test_a_stop_before_the_first_chunk_asks_the_lake_for_nothing(monkeypatch: py
     assert calls == []
 
 
-def test_the_underlying_is_asked_for_twenty_five_sessions_at_a_time(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[date, date]] = []
-    monkeypatch.setattr(
-        fetching,
-        "materialize_engine_run",
-        lambda *, symbol, start, end, resolution, price_adjustment_mode: calls.append((start, end)),
-    )
-    sessions = expected_sessions(date(2026, 8, 3), date(2026, 9, 30))[:26]
-    assert len(sessions) == 26
+# ── What the phase breaks when it is broken ──────────────────────────────
 
-    with pytest.raises(DownloadStopped):
-        ensure_run_data(_same_day_call(), sessions, now_ms=NOW_MS, should_stop=lambda: len(calls) >= 2)
 
-    # The first twenty-five sessions are one call, the twenty-sixth the next.
-    assert calls == [(sessions[0], sessions[24]), (sessions[25], sessions[25])]
+@respx.mock
+async def test_the_listing_is_read_once_for_a_session_and_handed_to_every_contract_capture(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A capture proves its contract is listed from the stored listing. Handed the listing it reads nothing; left to
+    # itself it reads and parses the whole listing for each of the eight contracts.
+    reads: list[date] = []
+    real_read = option_bars.read_option_listing
+
+    def counted(underlying: str, day: date, **kwargs: Any) -> Any:
+        reads.append(day)
+        return real_read(underlying, day, **kwargs)
+
+    monkeypatch.setattr(option_bars, "read_option_listing", counted)
+    Vendor({WED: ladder_day()}).mount()
+
+    await _fetch(eight_legs_setup(), [WED])
+
+    assert reads == []
+
+
+@respx.mock
+async def test_the_requests_go_underlying_then_listing_then_contracts_and_contracts_in_symbol_order(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    vendor = Vendor({WED: ladder_day(), THU: ladder_day()}, option_latency_s=0.05)
+    vendor.mount()
+
+    await _fetch(eight_legs_setup(), [WED, THU])
+
+    def kind(request: str) -> str:
+        return "contract" if "/O:" in request else "listing" if "contracts" in request else "stock"
+
+    order = [kind(request) for request in vendor.requests]
+    assert order == ["stock", "stock", "listing", *["contract"] * 8, "listing", *["contract"] * 8]
+    # Wednesday's contracts: the first four to be asked are the first four in symbol order.
+    wednesday = [symbol for symbol in vendor.option_requests if symbol.startswith("SPY261007")]
+    assert sorted(wednesday[:4]) == sorted(wednesday)[:4]
+    assert len(wednesday) == 8
+
+
+@respx.mock
+async def test_an_error_inside_a_batch_of_contracts_stops_the_phase_and_is_not_swallowed(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The catalog stops answering as the third contract of eight is asked for. The phase must end with that error: a
+    # phase that ended as if it had succeeded would leave the replay to find a gap.
+    real = fetching.ensure_option_day_bars
+
+    async def the_catalog_goes_down(contract: OptionContract, *args: Any, **kwargs: Any) -> Any:
+        if contract.occ_symbol == "SPY261007C00498000":
+            raise CatalogUnavailableError("the catalog is down")
+        return await real(contract, *args, **kwargs)
+
+    monkeypatch.setattr(fetching, "ensure_option_day_bars", the_catalog_goes_down)
+    Vendor({WED: ladder_day()}, option_latency_s=0.05).mount()
+
+    with pytest.raises(CatalogUnavailableError):
+        await _fetch(eight_legs_setup(), [WED])
+
+
+@respx.mock
+async def test_an_underlying_still_missing_after_its_fetch_is_a_failure_naming_the_session(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The lake said nothing went wrong and holds no bars: the phase may not go on to read a day that is not there.
+    monkeypatch.setattr(fetching, "materialize_engine_run", lambda **kwargs: None)
+    vendor = Vendor(_scene(WED))
+    vendor.mount()
+
+    with pytest.raises(DownloadFailed) as caught:
+        await _fetch(_same_day_call(), [WED])
+
+    assert (caught.value.session, caught.value.reason) == (WED, "not_in_the_lake")
+    assert "SPY" in caught.value.what
+    assert vendor.option_requests == []
+
+
+@respx.mock
+async def test_a_fully_stored_session_asks_the_lake_to_capture_nothing_and_the_vendor_nothing(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vendor = Vendor({WED: ladder_day()})
+    vendor.mount()
+    await _fetch(eight_legs_setup(), [WED])
+    captures: list[str] = []
+    real = fetching.ensure_option_day_bars
+
+    async def counted(contract: OptionContract, *args: Any, **kwargs: Any) -> Any:
+        captures.append(contract.occ_symbol)
+        return await real(contract, *args, **kwargs)
+
+    monkeypatch.setattr(fetching, "ensure_option_day_bars", counted)
+    asked = vendor.vendor_requests
+
+    report, _ = await _fetch(eight_legs_setup(), [WED])
+
+    assert captures == [], "the lake was asked once which days are stored, and had nothing left to capture"
+    assert vendor.vendor_requests == asked
+    assert (report.option_days_fetched, report.option_days_reused) == (0, 8)
+
+
+@respx.mock
+async def test_only_the_contract_days_not_stored_are_captured(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vendor = Vendor({WED: ladder_day()})
+    vendor.mount()
+    # Three of the eight are stored: the strikes 496, 497 and 498.
+    await _fetch(eight_legs_setup(steps=(-4, -3, -2)), [WED])
+    assert len(vendor.option_requests) == 3
+    captures: list[str] = []
+    real = fetching.ensure_option_day_bars
+
+    async def counted(contract: OptionContract, *args: Any, **kwargs: Any) -> Any:
+        captures.append(contract.occ_symbol)
+        return await real(contract, *args, **kwargs)
+
+    monkeypatch.setattr(fetching, "ensure_option_day_bars", counted)
+
+    report, _ = await _fetch(eight_legs_setup(), [WED])
+
+    assert len(captures) == 5 and len(vendor.option_requests) == 3 + 5
+    assert not {"SPY261007C00496000", "SPY261007C00497000", "SPY261007C00498000"} & set(captures)
+    assert (report.option_days_fetched, report.option_days_reused) == (5, 3)
+
+
+@respx.mock
+async def test_a_day_the_catalog_names_as_captured_whose_file_does_not_read_is_captured_again(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The check said such a file "will be fetched again", and the replay would fail on it: so the phase repairs it.
+    vendor = Vendor({WED: ladder_day()})
+    vendor.mount()
+    await _fetch(eight_legs_setup(steps=(-4, -3)), [WED])
+    [damaged] = [row for row in fake_catalog.rows.values() if row["symbol"] == "SPY261007C00496000"]
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), damaged["file_path"], b"not a zip file", admit=False)
+    asked = len(vendor.option_requests)
+
+    report, _ = await _fetch(eight_legs_setup(steps=(-4, -3)), [WED])
+
+    assert len(vendor.option_requests) == asked + 1, "only the damaged day was fetched again"
+    assert (report.option_days_fetched, report.option_days_reused) == (1, 1)
+    contract = OptionContract.of(root="SPY", expiry_date=WED, right="call", strike=496)
+    assert await asyncio.to_thread(LakeRunData("SPY").option_day, contract, WED) is not None
+
+
+def test_a_download_failure_names_what_failed_and_no_date_in_its_own_text() -> None:
+    failure = DownloadFailed(session=WED, what="the bars of SPY261007C00500000", reason="x", detail="2026-10-07 y")
+
+    assert str(failure) == "the bars of SPY261007C00500000 could not be fetched (x)"
+
+
+@respx.mock
+async def test_the_underlying_fetch_says_what_it_is_doing_while_the_progress_is_still_at_nothing(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The underlying is the first thing fetched and the longest wait, and progress is counted in sessions from after
+    # it. The job's log says which sessions' bars are being fetched and when they are in, with no date.
+    monkeypatch.setattr(fetching, "UNDERLYING_CHUNK_SESSIONS", 2)
+    Vendor(_scene(*THREE_SESSIONS)).mount()
+    lines: list[str] = []
+
+    await _fetch(_same_day_call(), THREE_SESSIONS, on_log=lines.append)
+
+    underlying = [line for line in lines if "minute bars" in line]
+    assert underlying == [
+        "Fetching SPY minute bars for sessions 1 to 2 of 3.",
+        "SPY minute bars are in the lake for 2 of 3 sessions.",
+        "Fetching SPY minute bars for sessions 3 to 3 of 3.",
+        "SPY minute bars are in the lake for 3 of 3 sessions.",
+    ]
+    for line in lines:
+        assert_plain(line)
