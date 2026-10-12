@@ -1,0 +1,20 @@
+// The Past chain tab (#3030): what its cards add to the page's card look (`../options-backtest-card.scss`).
+.muted { color: var(--text-secondary); font-size: var(--fs-sm); }
+.again { justify-self: start; background: none; border: 1px solid var(--border-strong); color: var(--text-secondary); border-radius: var(--radius); padding: var(--space-1) var(--space-3); font: inherit; font-size: var(--fs-sm); cursor: pointer; }
+.again:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.code { font-size: var(--fs-xs); color: var(--text-secondary); }
+.table-wrap { overflow-x: auto; width: 100%; max-width: 100%; }
+.rows { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
+.rows th, .rows td { padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border-light); text-align: left; vertical-align: top; font-weight: var(--fw-regular); }
+.rows thead th { color: var(--text-secondary); position: sticky; top: 0; background: var(--bg-surface); }
+.rows .num { text-align: right; font-variant-numeric: tabular-nums; }
+.rows caption { text-align: left; padding: var(--space-2) 0; color: var(--text-secondary); font-size: var(--fs-sm); caption-side: top; }
+.rows tbody th { white-space: nowrap; }
+// A pill always carries its word. An unknown series is drawn dashed, so the difference is not colour alone.
+.pill { display: inline-block; border: 1px solid var(--border-strong); border-radius: var(--radius-pill); padding: 0 var(--space-2); font-size: var(--fs-xs); }
+.pill[data-series='unknown'] { border-style: dashed; color: var(--text-secondary); }
+.badge { display: inline-block; border: 1px solid var(--warn); color: var(--warn); border-radius: var(--radius-pill); padding: 0 var(--space-2); font-size: var(--fs-xs); margin-inline-start: var(--space-1); }
+.evidence { display: block; color: var(--text-secondary); font-size: var(--fs-xxs); }
+.rows tr.picked { background: var(--accent-faint); }
+.left-out { display: grid; gap: var(--space-1); }
+.left-out ul { margin: 0; padding-left: var(--space-5); }

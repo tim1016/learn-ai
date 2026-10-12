@@ -1,0 +1,10 @@
+.head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-3); }
+.strip { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-3); font-size: var(--fs-sm); }
+.price { font-weight: var(--fw-semi); font-variant-numeric: tabular-nums; }
+.when, .state { color: var(--text-secondary); }
+.state--bad { color: var(--bear-text); }
+.why { color: var(--text-secondary); font-size: var(--fs-xxs); }
+.chain th.strike { text-align: center; white-space: nowrap; }
+.chain tr.money { background: var(--accent-faint); }
+.mark { display: block; font-size: var(--fs-xxs); color: var(--accent-text); font-weight: var(--fw-regular); }
+.chain thead th:nth-child(2) { text-align: center; }
