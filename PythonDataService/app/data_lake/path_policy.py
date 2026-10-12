@@ -18,6 +18,7 @@ Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 5
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path, PurePosixPath
@@ -33,6 +34,9 @@ MetadataKind = Literal["market_hours", "symbol_properties", "interest_rate"]
 
 _LAKE_DIR = "lake"
 _STAGING_DIR = "staging"
+# Option data sits beside the equity tree, never inside it (#3030).
+_OPTION_ROOT = PurePosixPath("option") / "usa"
+_OPTION_SEGMENT = re.compile(r"[A-Za-z][A-Za-z0-9.]*")
 # The closed set of directory names a lake root may have. Mirrors
 # ``types.PriceAdjustmentMode``; restated as a runtime value because this
 # module turns the mode into a filesystem path and a typing Literal does not
@@ -224,6 +228,53 @@ class LeanMinuteBarPath:
             / self.symbol.lower()
             / f"{self.trading_date.strftime('%Y%m%d')}_{self.data_type}.zip"
         )
+
+
+def _require_option_segment(segment: str) -> None:
+    """Refuse a name that could leave its folder: it starts with a letter and holds only letters, digits and dots."""
+    if not _OPTION_SEGMENT.fullmatch(segment):
+        raise ValueError(f"{segment!r} cannot be a path segment: letters, digits and dots, starting with a letter")
+
+
+@dataclass(frozen=True)
+class OptionMinuteBarPath:
+    """One option contract's minute trade bars for one session (#3030).
+
+    The contract has its own folder under its underlying's, so a session's
+    file is named by the date alone and the contract symbol is never parsed
+    out of a file name. The zip inside is the one a stock's minute trades use.
+    """
+
+    underlying: str
+    contract_symbol: str
+    trading_date: date
+
+    def __post_init__(self) -> None:
+        _require_option_segment(self.underlying)
+        _require_option_segment(self.contract_symbol)
+
+    def relative_path(self) -> PurePosixPath:
+        return (
+            _OPTION_ROOT
+            / "minute"
+            / self.underlying.lower()
+            / self.contract_symbol.lower()
+            / f"{self.trading_date.strftime('%Y%m%d')}_trade.zip"
+        )
+
+
+@dataclass(frozen=True)
+class OptionListingPath:
+    """The contracts listed for one underlying as of one trading date (#3030)."""
+
+    underlying: str
+    as_of: date
+
+    def __post_init__(self) -> None:
+        _require_option_segment(self.underlying)
+
+    def relative_path(self) -> PurePosixPath:
+        return _OPTION_ROOT / "listing" / self.underlying.lower() / f"{self.as_of.strftime('%Y%m%d')}_contracts.zip"
 
 
 @dataclass(frozen=True)

@@ -1341,6 +1341,13 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
         dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
     )
     app.include_router(golden_search.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
+    # Options Backtest runs (#3030): Check data, the history, and the job that makes a run.
+    from app.routers import options_backtest_runs
+
+    app.include_router(
+        options_backtest_runs.router, prefix="/api/research/options-backtest", tags=["research-options-backtest"]
+    )
+    app.include_router(options_backtest_runs.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
     app.include_router(indicator_reliability.router, prefix="/api/research", tags=["research"])
     app.include_router(return_distribution.router, prefix="/api/research", tags=["research"])
     # Research-pipeline walk-forward (Phase C). Registered BEFORE
@@ -1382,6 +1389,12 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     # Internal job orchestration (Redis-backed). Mounted under /api/jobs-internal;
     # the public surface is the .NET /api/jobs facade in Backend/Jobs/JobsApi.cs.
     app.include_router(jobs.router, prefix="/api/jobs-internal", tags=["jobs-internal"])
+    # The Recency Chart's dispatch moved to its own router when it joined the
+    # isolated research runtime (#3051): both this mount and the runtime's
+    # carry it, so the route forwards or executes from one definition.
+    from app.routers import recency_jobs
+
+    app.include_router(recency_jobs.router, prefix="/api/jobs-internal", tags=["jobs-internal"])
     # Edge router carries its own /api/edge prefix.
     app.include_router(edge.router)
     # Live IV30 endpoints (vix-style + parametric) — Step C of IV-ownership plan.

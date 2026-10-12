@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import partial
 from typing import Any
@@ -82,6 +82,14 @@ def validate_launch(
     commission_per_order: float,
 ) -> ValidatedLaunch:
     """The canonical grid plus its exact run count, or :class:`RecencyLaunchRejected` (ceiling, ranges, rules)."""
+    # A strategy may appear once: two entries with the same key would expand
+    # onto overlapping (symbol, strategy, params_hash) identities, which the
+    # durable record collapses — the serial loop runs both runs, but a
+    # dispatched launch cannot tell them apart, and the terminal
+    # reconciliation would then refuse the launch it finished (#3051 review).
+    duplicated = sorted({key for key in (s.strategy_key for s in strategies) if sum(1 for s in strategies if s.strategy_key == key) > 1})
+    if duplicated:
+        raise RecencyLaunchRejected(f"each strategy may appear once; duplicate entries: {', '.join(duplicated)}")
     try:
         # The ceiling is checked eagerly by expand_grid; a range the grid
         # language refuses only when it materialises (a step the floats
@@ -139,20 +147,37 @@ def window_date(ms: int) -> str:
     return ms_to_et_date_string(ms)
 
 
+def engine_request_over(
+    run_spec: RunSpec,
+    *,
+    window: Mapping[str, int],
+    execution: Mapping[str, Any],
+) -> EngineBacktestRequest:
+    """One run's engine call from its wire-shaped parts: the window's ms bounds and the frozen execution.
+
+    The in-process executor and the research worker's child build the
+    identical request from the same fields (#3051), so a dispatched run and
+    a locally executed one are the same numbers.
+    """
+    return EngineBacktestRequest(
+        strategy_name=run_spec.strategy_key,
+        params={**run_spec.params, "symbol": run_spec.symbol},
+        from_date=window_date(int(window["start_ms"])),
+        to_date=window_date(int(window["end_ms"])),
+        fill_mode=str(execution["fill_mode"]),
+        commission_per_order=float(execution["commission_per_order"]),
+    )
+
+
 def _execute_backtest(
     run_spec: RunSpec, config: RecencyLaunchConfig, *, cancel_check: Callable[[], object] = lambda: None
 ) -> Any:
-    params = {**run_spec.params, "symbol": run_spec.symbol}
-    request = EngineBacktestRequest(
-        strategy_name=run_spec.strategy_key,
-        params=params,
-        from_date=window_date(config.window_start_ms),
-        to_date=window_date(config.window_end_ms),
-        fill_mode=config.fill_mode,
-        commission_per_order=config.commission_per_order,
-    )
     return execute_engine_backtest(
-        request=request,
+        request=engine_request_over(
+            run_spec,
+            window={"start_ms": config.window_start_ms, "end_ms": config.window_end_ms},
+            execution={"fill_mode": config.fill_mode, "commission_per_order": config.commission_per_order},
+        ),
         on_phase=lambda phase: None,
         on_log=lambda message: None,
         # The run may queue behind another process-wide backtest before it
@@ -230,32 +255,54 @@ def run_launch(
     emit: ProgressEmitter,
     cancel: CancellationCheck,
     execute_backtest: Callable[[RunSpec, RecencyLaunchConfig], Any] | None = None,
+    run_dispatch_factory: Callable[[RecencyLaunchConfig, int], Any] | None = None,
+    on_phase: Callable[[str], None] | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
     """The worker body: claim the launch's next attempt, run the grid (skipping
     what the durable record already holds), persist each run, record the
     launch's terminal state, return the summary.
 
-    ``execute_backtest`` defaults to the real engine call wired to *this* job's
-    cancellation check, so a run still queued behind another process-wide
-    backtest can be cancelled before it starts (#1957). A test injects a plain
-    ``(run_spec, config)`` fake and nothing else changes.
+    Exactly one executor is given. ``execute_backtest`` defaults to the real
+    engine call wired to *this* job's cancellation check, so a run still
+    queued behind another process-wide backtest can be cancelled before it
+    starts (#1957); a test injects a plain ``(run_spec, config)`` fake. A
+    ``run_dispatch_factory`` (#3051) builds the research runtime's dispatch
+    from the claimed attempt instead, running independent runs through the
+    shared workers; snapshots, deduplication and terminal accounting stay
+    here either way.
     """
-    execute = execute_backtest or partial(_execute_backtest, cancel_check=cancel.raise_if_cancelled)
+    if run_dispatch_factory is not None and execute_backtest is not None:
+        raise ValueError("run_launch takes exactly one executor: execute_backtest or run_dispatch_factory")
+    if run_dispatch_factory is None and execute_backtest is None:
+        # The local mode's default: the real engine call wired to this job's
+        # cancellation check, so a queued run can be cancelled before it
+        # starts (#1957).
+        execute_backtest = partial(_execute_backtest, cancel_check=cancel.raise_if_cancelled)
     # Claim before any write (#1938): a fresh launch takes attempt 1 under
     # its own id, a resume the next generation under the new job id. A hung
     # predecessor's writes are refused from here on.
     attempt = _claim_launch(config.launch_id, emit.job_id)
+    dispatch = run_dispatch_factory(config, attempt) if run_dispatch_factory is not None else None
+
+    def _reap() -> None:
+        # The pre-reconciliation reap (#3065's rule): stop the workers before
+        # the abort-state write, so the children never wait out the record.
+        if dispatch is not None:
+            dispatch.cancel()
+
     skip = _recorded_cells(config.launch_id)
     if skip:
         emit.log(f"resume: {len(skip)} of {grid_size(config.strategies, config.symbols)} runs already recorded; running the rest")
     try:
         summary = run_recency(
             config,
-            execute_backtest_fn=execute,
+            execute_backtest_fn=execute_backtest,
+            dispatch=dispatch,
             persist_fn=partial(_persist, attempt=attempt),
             strategy_code_version_fn=lambda strategy_key: resolved_code_revision(),
-            on_phase=emit.phase,
-            on_progress=lambda done, total: emit.progress(done, total, unit="runs"),
+            on_phase=on_phase or emit.phase,
+            on_progress=on_progress or (lambda done, total: emit.progress(done, total, unit="runs")),
             on_run_failed=lambda run_spec, message: emit.log(
                 f"run failed: {run_spec.symbol}/{run_spec.strategy_key} ({run_spec.params_hash[:8]}): {message}", level="warning"
             ),
@@ -264,11 +311,16 @@ def run_launch(
             skip_identities=skip,
         )
     except JobCancelled:
+        _reap()
         record_abort_state(config.launch_id, "CANCELLED", attempt=attempt)
         raise
     except Exception:
+        _reap()
         record_abort_state(config.launch_id, "FAILED", attempt=attempt)
         raise
+    finally:
+        if dispatch is not None:
+            dispatch.close()
     record_terminal_status(
         summary.launch_id,
         "COMPLETED" if summary.failed_runs == 0 else "FAILED",

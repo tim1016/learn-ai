@@ -37,6 +37,7 @@ APPLIED_VERSION_DIGESTS: dict[int, str] = {
     17: "b179559cd44c2260",
     18: "81e46d16b20848a1",
     19: "d0a8cb7cc114a7bb",
+    20: "abdb4001eee7b388",
 }
 
 
@@ -351,3 +352,43 @@ async def test_version_18_gives_recorded_evaluations_a_generation_and_a_start_ma
     )
     # Generation 0, never started: the safe direction — a legacy pending row re-runs without spending a retry.
     assert (row["task_gen"], row["started_at_ms"]) == (0, None)
+
+
+_OPTION_RUN_TABLES = [
+    "research_options_backtest_run_sessions",
+    "research_options_backtest_run_trades",
+    "research_options_backtest_runs",
+]
+
+
+async def _option_run_tables(conn: asyncpg.Connection) -> list[str]:
+    rows = await conn.fetch(
+        "SELECT tablename FROM pg_tables WHERE tablename LIKE 'research_options_backtest_run%' ORDER BY tablename"
+    )
+    return [row["tablename"] for row in rows]
+
+
+async def test_version_20_gives_an_empty_database_the_three_option_run_tables(scratch_db: asyncpg.Connection) -> None:
+    await ensure_schema(scratch_db)
+
+    assert await _option_run_tables(scratch_db) == _OPTION_RUN_TABLES
+    versions = await scratch_db.fetch("SELECT version FROM research_schema_migrations ORDER BY version")
+    assert [row["version"] for row in versions] == list(range(1, SCHEMA_VERSION + 1))
+
+
+async def test_version_20_arrives_on_top_of_version_19_and_leaves_a_saved_setup_alone(scratch_db: asyncpg.Connection) -> None:
+    """Stage a database that recorded version 19 and never saw 20: the setups table has a row, the run tables are absent."""
+    await ensure_schema(scratch_db)
+    for table in _OPTION_RUN_TABLES:
+        await scratch_db.execute(f"DROP TABLE {table} CASCADE")
+    await scratch_db.execute("DELETE FROM research_schema_migrations WHERE version = 20")
+    await scratch_db.execute(
+        "INSERT INTO research_options_backtest_setups (name, setup_json, saved_at_ms) VALUES ('kept', '{}'::jsonb, 5)"
+    )
+    assert await _option_run_tables(scratch_db) == []
+
+    await ensure_schema(scratch_db)
+
+    assert await _option_run_tables(scratch_db) == _OPTION_RUN_TABLES
+    assert await scratch_db.fetchval("SELECT saved_at_ms FROM research_options_backtest_setups WHERE name = 'kept'") == 5
+    assert await scratch_db.fetchval("SELECT max(version) FROM research_schema_migrations") == 20

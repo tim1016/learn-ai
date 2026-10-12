@@ -119,3 +119,26 @@ def test_a_range_the_floats_cannot_resolve_is_rejected_at_preflight_not_in_the_w
             fill_mode="signal_bar_close",
             commission_per_order=1.0,
         )
+
+
+def test_duplicate_strategy_keys_are_refused() -> None:
+    """Two entries for one strategy expand onto overlapping cell identities a dispatched launch cannot tell apart (#3051)."""
+    import pytest as _pytest
+
+    from app.research.recency.service import RecencyLaunchRejected, validate_launch
+    from app.research.sweep.grid import StrategyGridConfig, ValueListRange
+
+    with _pytest.raises(RecencyLaunchRejected, match="duplicate entries: sma_crossover"):
+        validate_launch(
+            launch_id="launch-dup",
+            strategies=[
+                StrategyGridConfig(strategy_key="sma_crossover", param_ranges={"x": ValueListRange((1.0,))}),
+                StrategyGridConfig(strategy_key="sma_crossover", param_ranges={"y": ValueListRange((2.0,))}),
+            ],
+            symbols=["SPY"],
+            window_start_ms=0,
+            window_end_ms=1,
+            data_policy="polygon-adjusted-regular-minute",
+            fill_mode="signal_bar_close",
+            commission_per_order=0.0,
+        )

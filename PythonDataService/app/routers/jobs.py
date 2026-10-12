@@ -24,16 +24,16 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import asdict
-from typing import Annotated, Any, Literal
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
 from fastapi.encoders import jsonable_encoder
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 from app.jobs import cache as result_cache
 from app.jobs.phases import friendly as friendly_phase
-from app.jobs.progress import CancellationCheck, JobCancelled, ProgressEmitter
+from app.jobs.progress import JobCancelled, ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.models.requests import DatasetGenerationRequest
 from app.research.batch_runner import (
@@ -41,19 +41,10 @@ from app.research.batch_runner import (
     run_cross_sectional_study,
 )
 from app.research.config import ResearchConfig
-from app.research.persistence import lifecycle
-from app.research.recency import service as recency_service
 from app.research.runner import run_feature_research
 from app.research.signal.config import SignalConfig
 from app.research.signal.engine import run_signal_engine
-from app.research.sweep.grid import (
-    LowHighStepRange,
-    StrategyGridConfig,
-    ValueListRange,
-)
-from app.routers.research_records import require_live_redelivery
 from app.schemas.engine_backtest import EngineBacktestRequest
-from app.schemas.http_errors import ErrorDetailResponse
 from app.schemas.ticker_request import (
     MultiTickerRequest,
     TickerRequest,
@@ -61,7 +52,6 @@ from app.schemas.ticker_request import (
 from app.services.dataset_service import RunCancelledError
 from app.services.engine_backtest_service import execute_engine_backtest
 from app.services.polygon_client import PolygonClientService
-from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -175,58 +165,6 @@ class EngineBacktestJobRequest(_CamelCaseModel):
 
     job_id: str = Field(..., min_length=1)
     backtest: dict[str, Any] = Field(default_factory=dict)
-
-
-class ValueListRangeRequest(_CamelCaseModel):
-    type: Literal["value_list"] = "value_list"
-    values: list[float] = Field(min_length=1)
-
-
-class LowHighStepRangeRequest(_CamelCaseModel):
-    type: Literal["low_high_step"] = "low_high_step"
-    low: float
-    high: float
-    step: float
-
-
-ParamRangeRequest = Annotated[
-    ValueListRangeRequest | LowHighStepRangeRequest,
-    Field(discriminator="type"),
-]
-
-
-class StrategyGridConfigRequest(_CamelCaseModel):
-    strategy_key: str = Field(..., min_length=1)
-    param_ranges: dict[str, ParamRangeRequest] = Field(default_factory=dict)
-
-
-class RecencyChartSpecRequest(_CamelCaseModel):
-    """One Recency launch's grid and window, as sent at launch and stored in the durable row.
-
-    Each parameter's range is either an explicit value list or an
-    inclusive low/high/step sweep — the discriminated
-    ``type`` field lets one dict carry either shape per parameter.
-    """
-
-    strategies: list[StrategyGridConfigRequest] = Field(min_length=1)
-    symbols: list[str] = Field(min_length=1)
-    window_start_ms: int = Field(le=MAX_TIMESTAMP_MS)
-    window_end_ms: int = Field(le=MAX_TIMESTAMP_MS)
-    data_policy: str = "polygon-adjusted-regular-minute"
-    fill_mode: str = "signal_bar_close"
-    commission_per_order: float = 0.0
-
-
-class RecencyChartJobRequest(RecencyChartSpecRequest):
-    """Body of POST /api/jobs-internal/recency-chart.
-
-    On a resume (#1938, ``resume_launch_id`` set) the spec fields are
-    ignored and the stored configuration governs — a client resends the
-    stored request it read from the launch, as Grid Search's Finish does.
-    """
-
-    job_id: str = Field(..., min_length=1)
-    resume_launch_id: str | None = None
 
 
 class LeanEngineRunJobRequest(_CamelCaseModel):
@@ -461,126 +399,6 @@ async def start_engine_backtest_job(req: EngineBacktestJobRequest) -> dict:
     # makes that visible, and needs a check that actually reads Redis.
     run_in_thread(req.job_id, work, thread_name=f"engine-{req.job_id[:8]}", cancel_check_every_n=1)
     return {"job_id": req.job_id, "status": "queued"}
-
-
-def _range_request_to_grid_range(req: ValueListRangeRequest | LowHighStepRangeRequest) -> ValueListRange | LowHighStepRange:
-    if isinstance(req, ValueListRangeRequest):
-        return ValueListRange(tuple(req.values))
-    return LowHighStepRange(low=req.low, high=req.high, step=req.step)
-
-
-def _grid_configs(req: RecencyChartSpecRequest) -> list[StrategyGridConfig]:
-    return [
-        StrategyGridConfig(strategy_key=s.strategy_key, param_ranges={name: _range_request_to_grid_range(r) for name, r in s.param_ranges.items()})
-        for s in req.strategies
-    ]
-
-
-@router.post(
-    "/recency-chart",
-    status_code=status.HTTP_202_ACCEPTED,
-    responses={
-        status.HTTP_404_NOT_FOUND: {
-            "model": ErrorDetailResponse,
-            "description": "A resume named a launch that does not exist.",
-        },
-        status.HTTP_409_CONFLICT: {
-            "model": ErrorDetailResponse,
-            "description": "A redelivered job_id whose configuration differs or whose job is no longer running, or a resume of a launch that may not be resumed.",
-        },
-        status.HTTP_503_SERVICE_UNAVAILABLE: {
-            "model": ErrorDetailResponse,
-            "description": "The job store cannot say whether a redelivered job is still running.",
-        },
-    },
-)
-async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
-    """Validate, make the launch durable, and run the Recency Chart sweep on a worker thread. Returns 202.
-
-    A malformed or oversized grid (D11) is refused before anything is written;
-    the launch row exists before the worker starts (D20); a redelivered
-    ``job_id`` is acknowledged without a second worker while the first still
-    holds the job, and refused (409) once that job is closed or if the
-    configuration differs. A resume (#1938) instead names an existing launch:
-    the new job id is bound to the durable record by the worker's claim, the
-    recorded cells are skipped, and the spec fields are ignored — the stored
-    configuration governs.
-    Everything after the HTTP boundary is ``app.research.recency.service``.
-    """
-    if req.resume_launch_id is not None:
-        launch_row = await recency_service.load_launch(req.resume_launch_id)
-        if launch_row is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"code": "RECENCY_LAUNCH_NOT_FOUND", "message": f"RecencyLaunch {req.resume_launch_id} not found"},
-            )
-        # Ask Redis only when the answer can change the refusal (a RUNNING launch).
-        live = lifecycle.job_is_live(launch_row.job_id) if launch_row.status == "RUNNING" else False
-        refusal = recency_service.resume_refusal(launch_row, live=live)
-        if refusal is not None:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": "NOT_RESUMABLE", "message": refusal})
-        try:
-            stored = RecencyChartSpecRequest.model_validate_json(launch_row.config_json)
-        except ValidationError as exc:
-            # The stored row no longer parses (a request bound tightened since
-            # the launch, e.g. the ADR 0022 (g) ceiling); it cannot run as recorded.
-            reasons = "; ".join(f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in exc.errors())
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={"code": "NOT_RESUMABLE", "message": f"the stored launch configuration no longer validates: {reasons}"},
-            ) from exc
-        try:
-            launch = recency_service.validate_launch(
-                launch_id=launch_row.launch_id,
-                strategies=_grid_configs(stored),
-                symbols=stored.symbols,
-                window_start_ms=stored.window_start_ms,
-                window_end_ms=stored.window_end_ms,
-                data_policy=stored.data_policy,
-                fill_mode=stored.fill_mode,
-                commission_per_order=stored.commission_per_order,
-            )
-        except recency_service.RecencyLaunchRejected as exc:
-            # The stored configuration no longer validates (the grid rules
-            # tightened since the launch); it cannot run as recorded.
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": "NOT_RESUMABLE", "message": str(exc)}) from exc
-    else:
-        strategies = _grid_configs(req)
-        try:
-            # A new launch runs, stores and fingerprints the canonical name
-            # (#2599). The resume above never does this: it keeps the stored
-            # spelling, the one its recorded cells were fingerprinted under.
-            req = req.model_copy(update={"fill_mode": recency_service.canonical_fill_mode(req.fill_mode)})
-            launch = recency_service.validate_launch(
-                launch_id=req.job_id,
-                strategies=strategies,
-                symbols=req.symbols,
-                window_start_ms=req.window_start_ms,
-                window_end_ms=req.window_end_ms,
-                data_policy=req.data_policy,
-                fill_mode=req.fill_mode,
-                commission_per_order=req.commission_per_order,
-            )
-        except recency_service.RecencyLaunchRejected as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        try:
-            created = await recency_service.create_launch(launch, request=req.model_dump(mode="json", exclude={"job_id"}))
-        except recency_service.RecencyLaunchConflict as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-        if not created:
-            # A redelivery: never a second thread beside the first worker, and never a replay of a closed
-            # job through its old transport record (that is a resume, accepted via ``resume_launch_id``).
-            require_live_redelivery(req.job_id, noun="Recency launch")
-            return {"job_id": req.job_id, "launch_id": req.job_id, "status": "queued"}
-
-    def work(emit: ProgressEmitter, cancel: CancellationCheck) -> dict:
-        return recency_service.run_launch(launch.config, emit=emit, cancel=cancel)
-
-    from app.routers import research_records as records
-
-    await records.stamp_research_dispatch(job_id=req.job_id, kind="recency", record_id=launch.config.launch_id)
-    run_in_thread(req.job_id, work, thread_name=f"recency-{req.job_id[:8]}", cancel_check_every_n=1)
-    return {"job_id": req.job_id, "launch_id": launch.config.launch_id, "status": "queued"}
 
 
 @router.post("/lean-engine-run", status_code=status.HTTP_202_ACCEPTED)

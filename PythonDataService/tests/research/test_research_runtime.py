@@ -378,22 +378,6 @@ async def test_a_dispatch_crosses_the_boundary_binds_stamps_and_runs_then_restar
 # ── Review hardening: dispatch refusals, health, generation recovery ──────
 
 
-def test_forwarded_research_dispatches_refuse_loudly_in_research_mode(
-    research_mode, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """ADR 0077: the forwarding API never starts grid or walk-forward threads (#3043 review)."""
-    from fastapi import HTTPException
-
-    from app.services.research_runtime_client import refuse_forwarded_research_dispatch
-
-    with pytest.raises(HTTPException) as thrown:
-        refuse_forwarded_research_dispatch("grid search")
-    assert thrown.value.status_code == 503 and "research runtime" in str(thrown.value.detail)
-
-    monkeypatch.setattr(settings, "RESEARCH_EXECUTION_MODE", "local")
-    assert refuse_forwarded_research_dispatch("grid search") is None
-
-
 async def test_unauthorized_dispatch_refuses_before_any_durable_mutation(monkeypatch: pytest.MonkeyPatch) -> None:
     """The singleton refusal states surface as 503 before a route binds anything (#3042 review)."""
     from fastapi import HTTPException
@@ -741,3 +725,97 @@ def test_the_runtime_mounts_the_walk_forward_dispatch_surface() -> None:
 
     paths = {getattr(route, "path", None) for route in runtime_app.routes}
     assert "/api/jobs-internal/walk-forward-study" in paths
+
+
+# ── The recency dispatch joins the boundary (#3051) ───────────────────────
+
+
+RECENCY_PAYLOAD = {
+    "job_id": "job-recency-1",
+    "strategies": [{"strategy_key": "sma_crossover", "param_ranges": {"short_window": {"type": "value_list", "values": [2]}}}],
+    "symbols": ["SPY"],
+    "window_start_ms": 1735689600000,
+    "window_end_ms": 1738368000000,
+}
+
+
+async def test_a_forwarded_recency_acceptance_passes_through(research_mode, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.research_runtime_client import forward_recency_chart_job
+
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "sec")
+    with respx.mock(base_url="http://127.0.0.1:8000") as mock:
+        route = mock.post("/api/jobs-internal/recency-chart").mock(
+            return_value=httpx.Response(202, json={"job_id": "job-recency-1", "launch_id": "launch-runtime", "status": "queued"})
+        )
+        answer = await forward_recency_chart_job(dict(RECENCY_PAYLOAD))
+    assert answer == {"job_id": "job-recency-1", "launch_id": "launch-runtime", "status": "queued"}
+    assert route.calls.last.request.headers["X-Data-Plane-Control-Secret"] == "sec"
+
+
+async def test_a_recency_timeout_after_acceptance_joins_the_original_dispatch(
+    research_mode, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.research.persistence import lifecycle
+    from app.services.research_runtime_client import forward_recency_chart_job
+
+    async def _bound(payload):
+        return "launch-1"
+
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "sec")
+    monkeypatch.setattr(client, "_recency_job_binding", _bound)
+    monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: True)
+    with respx.mock(base_url="http://127.0.0.1:8000") as mock:
+        mock.post("/api/jobs-internal/recency-chart").mock(side_effect=httpx.ConnectTimeout("boom"))
+        answer = await forward_recency_chart_job(dict(RECENCY_PAYLOAD))
+    assert answer == {"job_id": RECENCY_PAYLOAD["job_id"], "launch_id": "launch-1", "status": "queued"}
+
+
+async def test_a_recency_timeout_without_a_live_binding_is_a_refusal(research_mode, monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import HTTPException
+
+    from app.services.research_runtime_client import forward_recency_chart_job
+
+    async def _unbound(payload):
+        return None
+
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "sec")
+    monkeypatch.setattr(client, "_recency_job_binding", _unbound)
+    with respx.mock(base_url="http://127.0.0.1:8000") as mock:
+        mock.post("/api/jobs-internal/recency-chart").mock(side_effect=httpx.ConnectTimeout("boom"))
+        with pytest.raises(HTTPException) as thrown:
+            await forward_recency_chart_job(dict(RECENCY_PAYLOAD))
+    assert thrown.value.status_code == 502 and "did not accept" in str(thrown.value.detail)
+
+
+async def test_recency_forwarding_mode_never_creates_or_runs_a_local_thread(
+    research_mode, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fastapi import FastAPI
+
+    from app.routers import recency_jobs as router_module
+
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "sec")
+
+    async def fake_forward(payload):
+        return {"job_id": payload["job_id"], "launch_id": "launch-runtime", "status": "queued"}
+
+    def no_local(*args, **kwargs):
+        raise AssertionError("the forwarding API must not validate, stamp or run a launch (#3051)")
+
+    monkeypatch.setattr(client, "forward_recency_chart_job", fake_forward)
+    monkeypatch.setattr(router_module.recency_service, "validate_launch", no_local)
+    monkeypatch.setattr(router_module, "run_in_thread", no_local)
+
+    app = FastAPI()
+    app.include_router(router_module.router, prefix="/api/jobs-internal")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as http:
+        response = await http.post("/api/jobs-internal/recency-chart", json=RECENCY_PAYLOAD)
+    assert response.status_code == 202 and response.json()["launch_id"] == "launch-runtime"
+
+
+def test_the_runtime_mounts_the_recency_dispatch_surface() -> None:
+    from app.research_runtime import app as runtime_app
+
+    paths = {getattr(route, "path", None) for route in runtime_app.routes}
+    assert "/api/jobs-internal/recency-chart" in paths

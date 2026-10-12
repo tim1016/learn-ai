@@ -20,7 +20,15 @@ import re
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import (
+    ROUND_HALF_UP,
+    Context,
+    Decimal,
+    DivisionByZero,
+    Inexact,
+    InvalidOperation,
+    Overflow,
+)
 
 # LEAN's price scale factor: prices on disk are multiplied by 10_000.
 _PRICE_SCALE = Decimal(10_000)
@@ -109,6 +117,35 @@ def to_deci_cent(price: Decimal) -> int:
     if price < 0:
         raise ValueError(f"deci-cent encoding refuses negative price: {price}")
     return int((price * _PRICE_SCALE).quantize(_QUANT, rounding=ROUND_HALF_UP))
+
+
+def from_deci_cent(ticks: int) -> Decimal:
+    """Decode our on-disk integer to the exact price it names — the inverse of :func:`to_deci_cent`.
+    **Canonical for this repo's option bars.**
+
+    Formula: ``ticks / 10_000``, where ``ticks`` is a whole number of ten-thousandths of a dollar.
+    Reference: LEAN's scale factor (``TradeBar._scaleFactor = 1/10000m`` in
+      ``Common/Data/Market/TradeBar.cs``), the same grid ``to_deci_cent`` encodes onto.
+    Canonical implementation: this function. The stock readers still divide by the same scale
+      inline (``app.engine.data.lean_format._parse_csv_bytes`` and ``_parse_daily_csv_bytes``, and
+      ``app.data_lake.derived_daily``); moving them here is a separate change.
+    Validated against: ``tests/unit/data_lake/test_deci_cent_canonical.py``
+      (``test_from_deci_cent_is_the_exact_inverse_of_to_deci_cent`` and
+      ``test_from_deci_cent_is_exact_whatever_decimal_context_the_caller_runs_in``).
+
+    The quotient has the digits of ``ticks`` and four more decimal places, so a precision of that
+    many digits makes the division exact for any integer a file can hold. It is computed in a
+    context of its own, never the caller's: a caller's precision, exponent range or traps cannot
+    change the answer, and an inexact result would raise rather than round. The sign is the
+    caller's business (``to_deci_cent`` refuses a negative price; a reader checks what it read).
+    """
+    if isinstance(ticks, bool) or not isinstance(ticks, int):
+        raise TypeError(f"deci-cent decoding needs an int, got {type(ticks).__name__}")
+    exact = Context(
+        prec=ticks.bit_length() // 3 + 2,  # more digits than the integer can have: floor(bits * log10(2)) + 1
+        traps=[Inexact, InvalidOperation, Overflow, DivisionByZero],
+    )
+    return exact.divide(Decimal(ticks), _PRICE_SCALE)
 
 
 def format_volume(volume: Decimal | int) -> str:

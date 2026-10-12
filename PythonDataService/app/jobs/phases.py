@@ -141,11 +141,23 @@ GOLDEN_SEARCH_PHASES: tuple[Phase, ...] = (
     Phase("proof", "Building the proof and publishing the version", 2),
 )
 
+# ── Options Backtest (#3030) ────────────────────────────────────────────
+# ``waiting_for_engine`` is reported only when the engine's run gate is already held by another backtest. Progress
+# in the two long phases is counted in sessions.
+OPTIONS_BACKTEST_PHASES: tuple[Phase, ...] = (
+    Phase("checking_data", "Checking which sessions can be tested", 1),
+    Phase("downloading_data", "Fetching the market data the run is missing", 8),
+    Phase("waiting_for_engine", "Waiting for the backtest already running", 1),
+    Phase("replaying", "Replaying each session", 6),
+    Phase("saving", "Saving the run", 1),
+)
+
 
 JOB_PHASES: dict[str, tuple[Phase, ...]] = {
     "grid_search": GRID_SEARCH_PHASES,
     "walk_forward_study": WALK_FORWARD_STUDY_PHASES,
     "golden_search": GOLDEN_SEARCH_PHASES,
+    "options_backtest": OPTIONS_BACKTEST_PHASES,
     "cross_sectional": CROSS_SECTIONAL_PHASES,
     "feature_research": FEATURE_RESEARCH_PHASES,
     "signal_engine": SIGNAL_ENGINE_PHASES,
