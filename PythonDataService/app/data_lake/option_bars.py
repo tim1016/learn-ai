@@ -338,11 +338,43 @@ def _minute_trade_bar(bar: PolygonOptionBar) -> MinuteTradeBar:
     )
 
 
+#: The four relations a bar's prices must not stand in, as (price, comparison, price): the low above the open or the
+#: close, and the high below them. (Keeping all four also keeps the low from being above the high.)
+_PRICE_RELATIONS = (("low", ">", "open"), ("low", ">", "close"), ("high", "<", "open"), ("high", "<", "close"))
+
+
+def _require_exact_price_relations(bars: Sequence[PolygonOptionBar], *, symbol: str, trading_date: date) -> None:
+    """Every price finite and above zero, and the low and high keeping their place, judged on the vendor's exact decimals.
+
+    The publication gate (:func:`_publication_gate_view`) reads floats, and two decimals that differ by
+    less than a float can hold are the same float there: a bar whose low is above its open by a hair would pass
+    it and be published. So this runs first, before any float exists. The first bar that breaks a rule fails
+    the day, named; nothing is repaired or dropped. The relations are checked only once the prices are finite,
+    because a ``Decimal`` NaN cannot be compared and would raise.
+    """
+    for index, bar in enumerate(bars):
+        prices = {"open": bar.open, "high": bar.high, "low": bar.low, "close": bar.close}
+        problems = [f"{name}={price} is not finite and positive" for name, price in prices.items() if not price.is_finite() or price <= 0]
+        if not problems:
+            problems = [
+                f"{first} {prices[first]} {way} {second} {prices[second]}"
+                for first, way, second in _PRICE_RELATIONS
+                if (prices[first] > prices[second] if way == ">" else prices[first] < prices[second])
+            ]
+        if problems:
+            raise CorruptVendorBarsError(
+                f"corrupt vendor minute bars for {symbol} {trading_date.isoformat()}: "
+                f"bar[{index}] t_ms={bar.t_ms}: " + "; ".join(problems)
+            )
+
+
 def _publication_gate_view(bars: Sequence[PolygonOptionBar]) -> list[PolygonBar]:
     """The bars in the shape the lake's publication gate takes.
 
     The gate's checks (finite, positive, high above low, ordered, inside the date) read
     floats; they decide whether to publish and never what is stored. The file is encoded from the decimals.
+    The price rules are judged first on the decimals (:func:`_require_exact_price_relations`); the
+    gate repeats them on floats and adds the ordering and the date.
     """
     return [
         PolygonBar(
@@ -489,6 +521,7 @@ async def ensure_option_day_bars(
     # contract the stored listing of this date holds, so it was listed and did not trade.
     # That is pinned as a complete artifact with no rows (the stock path fails it).
     try:
+        _require_exact_price_relations(bars, symbol=symbol, trading_date=trading_date)
         assert_publishable_minute_bars(_publication_gate_view(bars), symbol=symbol, trading_date=trading_date)
     except CorruptVendorBarsError as e:
         return await fail("validation_failed", str(e))

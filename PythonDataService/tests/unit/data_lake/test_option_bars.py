@@ -2016,3 +2016,68 @@ async def test_the_smallest_price_that_rounds_up_to_one_ten_thousandth_is_stored
     assert day is not None
     assert (day.bars[1].open, day.bars[1].low) == (Decimal("0.0001"), Decimal("0.0001"))
 
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("prices", "named", "as_floats"),
+    [
+        ({"o": "1.0", "h": "1.5", "l": "1.0000000000000001", "c": "1.2"}, "low 1.0000000000000001 > open 1.0", ("1.0", "1.0000000000000001")),
+        ({"o": "1.5", "h": "2.0", "l": "1.20000000000000001", "c": "1.2"}, "low 1.20000000000000001 > close 1.2", ("1.2", "1.20000000000000001")),
+        ({"o": "1.5", "h": "1.49999999999999999", "l": "1.0", "c": "1.2"}, "high 1.49999999999999999 < open 1.5", ("1.5", "1.49999999999999999")),
+        ({"o": "1.0", "h": "1.49999999999999999", "l": "0.9", "c": "1.5"}, "high 1.49999999999999999 < close 1.5", ("1.5", "1.49999999999999999")),
+    ],
+    ids=["low above open", "low above close", "high below open", "high below close"],
+)
+async def test_a_bar_whose_low_or_high_is_out_of_place_by_less_than_a_float_holds_fails_the_day_naming_the_relation(
+    prices: dict[str, str], named: str, as_floats: tuple[str, str], fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """The first case is the review's: open 1.0 and low 1.0000000000000001. As floats they are one number, and the float gate passed the bar."""
+    assert float(as_floats[0]) == float(as_floats[1])  # the premise: the hairline is gone once the prices are floats
+    _mock_vendor(_one_price_bars(**prices))
+
+    result = await _ensure()
+
+    assert result.record is None
+    assert result.failure is not None and result.failure.reason == "validation_failed"
+    assert "bar[1]" in result.failure.detail and named in result.failure.detail
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "validation_failed", None)
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+    assert await _read() is None
+
+
+@respx.mock
+async def test_a_low_below_the_open_by_a_hairline_is_in_place_and_the_day_is_stored(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    _mock_vendor(_one_price_bars(o="1.0", h="1.5", l="0.99999999999999999", c="1.2"))
+
+    result = await _ensure()
+
+    assert result.failure is None and result.record is not None
+
+
+@respx.mock
+@pytest.mark.parametrize("price", ["NaN", "Infinity", "-Infinity", "0", "-0.0", "-1.27"])
+async def test_a_bar_with_a_price_that_is_not_finite_and_above_zero_fails_the_day_and_raises_nothing(
+    price: str, fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``Decimal`` NaN cannot be compared, so the price relations must not be asked of it."""
+
+    async def fetch(*args: Any, **kwargs: Any) -> list[PolygonOptionBar]:
+        return [
+            PolygonOptionBar(
+                t_ms=SESSION_OPEN_MS, open=Decimal("1.27"), high=Decimal("1.31"), low=Decimal(price), close=Decimal("1.27"),
+                volume=Decimal(12),
+            )
+        ]
+
+    monkeypatch.setattr(option_bars_module, "fetch_option_minute_bars", fetch)
+
+    result = await _ensure()
+
+    assert result.record is None
+    assert result.failure is not None and result.failure.reason == "validation_failed"
+    assert f"low={Decimal(price)} is not finite and positive" in result.failure.detail
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "validation_failed", None)
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
