@@ -41,6 +41,7 @@ from app.options_backtest.chain_download import (
 from app.options_backtest.fetching import ensure_run_data
 from app.options_backtest.lake_data import LakeRunData
 from tests._helpers.fake_lake_catalog import FakeCatalog
+from tests._helpers.option_lake_cases import DISK_FULL_AT_THE_RENAME, install_write_fault
 from tests._helpers.option_vendor import no_trades, traded
 from tests.options_backtest._lake import (
     BARS_URL,
@@ -57,6 +58,7 @@ from tests.options_backtest._lake import (
     store_underlying_day,
     symbol_asked,
     vendor_bars,
+    vendor_listing_row,
     vendor_lists,
 )
 from tests.options_backtest._lake import fake_catalog as fake_catalog
@@ -486,6 +488,208 @@ async def test_a_listing_captured_and_then_not_readable_fails_the_listing_and_ev
     # The lake's words carry the path of the file on the server; the item names what and the kind of error, not the file.
     assert "/srv" not in detail and ".zip" not in detail
     assert "so no contract of it can be vouched for" in (items[2].detail or "")
+
+
+@respx.mock
+async def test_a_contract_whose_file_cannot_be_written_is_a_failed_item_with_io_error_and_the_rest_is_stored(
+    fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vendor_lists(CALL_600, CALL_601)
+    vendor_bars(lambda symbol: no_trades(symbol))
+    fault = install_write_fault(monkeypatch, DISK_FULL_AT_THE_RENAME, only_bars=True)
+
+    items = await ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[CALL_600, CALL_601])
+
+    assert _summary(items) == [
+        ("listing", "SPY", "fetched", None),
+        ("underlying", "SPY", "fetched", None),
+        ("contract", SYMBOL_600, "failed", "io_error"),
+        ("contract", SYMBOL_601, "failed", "io_error"),
+    ]
+    assert fault.hits == 2
+    # The words say what failed and the system's reason, and name no path on the server's disk.
+    assert all("No space left on device" in (item.detail or "") for item in items[2:])
+    assert all(str(tmp_lake) not in (item.detail or "") for item in items)
+    # Nothing is left fetching: the listing and the underlying's day are complete and the two contract rows are failed.
+    assert sorted(row["status"] for row in fake_catalog.rows.values()) == ["complete", "complete", "failed", "failed"]
+
+
+# ── A download that is cancelled finishes what it started ─────────────────
+
+# The captures run on the process's background loop, so the vendor's answers (mocked, and awaited by the lake's HTTP
+# client) are awaited there too, and the test's loop is another. What a test holds the vendor with is therefore a
+# ``threading.Event`` polled on the background loop, never an ``asyncio.Event`` of the test's loop.
+
+
+async def _until(condition: Callable[[], bool]) -> None:
+    for _ in range(500):
+        if condition():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("the captures never reached the vendor")
+
+
+async def _held_until(release: threading.Event) -> None:
+    """Wait, on the loop the vendor's answer is awaited on, until the test sets ``release``."""
+    while not release.is_set():
+        await asyncio.sleep(0.002)
+
+
+def _statuses(fake_catalog: FakeCatalog) -> list[str]:
+    # A snapshot: the captures add rows from another thread.
+    return sorted(row["status"] for row in list(fake_catalog.rows.values()))
+
+
+class SlowBars:
+    """The vendor's answer to every contract's bars: held until ``release`` is set, then ``latency`` seconds more."""
+
+    def __init__(self) -> None:
+        self.release = threading.Event()
+        self.latency = 0.0
+        self.asked: list[str] = []
+        self.in_flight = 0
+        self.peak = 0
+
+    async def __call__(self, request: httpx.Request) -> httpx.Response:
+        symbol = symbol_asked(request)
+        self.asked.append(symbol)
+        self.in_flight += 1
+        self.peak = max(self.peak, self.in_flight)
+        try:
+            await _held_until(self.release)
+            await asyncio.sleep(self.latency)
+        finally:
+            self.in_flight -= 1
+        return no_trades(symbol)
+
+
+@respx.mock
+async def test_a_download_cancelled_while_the_listing_is_fetched_finishes_the_listing_and_the_underlying_then_ends_cancelled(
+    fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
+) -> None:
+    release = threading.Event()
+    listing_asked = threading.Event()
+
+    async def listing_after_release(request: httpx.Request) -> httpx.Response:
+        listing_asked.set()
+        await _held_until(release)
+        return httpx.Response(200, json={"request_id": "r", "status": "OK", "results": [vendor_listing_row(CALL_600)]})
+
+    respx.get(CONTRACTS_URL).mock(side_effect=listing_after_release)
+    bars_route = vendor_bars(lambda symbol: no_trades(symbol))
+    download = asyncio.create_task(ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[CALL_600]))
+    await _until(listing_asked.is_set)
+    assert "fetching" in _statuses(fake_catalog)  # the listing holds its claimed row and waits on the vendor
+
+    download.cancel()
+    await asyncio.sleep(0.1)
+    ended_before_the_listing_did = download.done()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await download
+
+    assert ended_before_the_listing_did is False
+    assert download.cancelled()
+    # Two rows, the listing and the underlying's day, and both ran to their end (the listing reads back); the contract
+    # was never started, because it had not begun when the download was cancelled.
+    assert _statuses(fake_catalog) == ["complete", "complete"]
+    assert (await asyncio.to_thread(LakeRunData("SPY").listing, FRIDAY)) is not None
+    assert bars_route.call_count == 0
+
+
+@pytest.mark.parametrize("cancels", [1, 2], ids=["cancelled once", "cancelled again while it waits"])
+@respx.mock
+async def test_a_download_cancelled_while_contracts_are_fetched_finishes_each_one_then_ends_cancelled(
+    cancels: int, fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
+) -> None:
+    vendor_lists(CALL_600, CALL_601)
+    bars = SlowBars()
+    respx.get(url__regex=BARS_URL).mock(side_effect=bars)
+    download = asyncio.create_task(ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[CALL_600, CALL_601]))
+    await _until(lambda: len(bars.asked) == 2)  # both contracts hold their claimed rows and wait on the vendor
+
+    for _ in range(cancels):
+        download.cancel()
+        await asyncio.sleep(0.05)
+    ended_before_the_contracts_did = download.done()
+    bars.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await download
+
+    assert ended_before_the_contracts_did is False
+    assert download.cancelled()
+    # Four rows, the listing, the underlying's day and the two contracts; each ran to its end and none is left fetching.
+    assert _statuses(fake_catalog) == ["complete", "complete", "complete", "complete"]
+
+
+@respx.mock
+async def test_a_download_cancelled_while_captures_wait_for_a_place_at_the_gate_ends_every_one_and_frees_every_place(
+    fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
+) -> None:
+    # Six contracts and four places: four captures hold a place and wait on the vendor, two wait at the gate. The
+    # download is cancelled then. Every capture ends, the two that waited included, so there are eight rows, the listing,
+    # the underlying's day and six contracts, all complete, and six requests for bars (4 held + 2 that got a place after).
+    # Then a second download of eight other contracts, each request taking 0.05 s, gets all four places: it has
+    # eight contracts to ask for and the most in flight at once is four. A place the first download kept would show as three.
+    first_six = [_call(600 + n) for n in range(6)]
+    next_eight = [_call(610 + n) for n in range(8)]
+    vendor_lists(*first_six, *next_eight)
+    bars = SlowBars()
+    respx.get(url__regex=BARS_URL).mock(side_effect=bars)
+    download = asyncio.create_task(ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=first_six))
+    await _until(lambda: len(bars.asked) == MAX_VENDOR_REQUESTS_IN_FLIGHT)
+
+    download.cancel()
+    await asyncio.sleep(0.1)
+    waited = (download.done(), len(bars.asked))
+    bars.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await download
+
+    assert MAX_VENDOR_REQUESTS_IN_FLIGHT == 4
+    assert waited == (False, 4), "two captures still waited for a place, and the download had not ended"
+    assert download.cancelled()
+    assert _statuses(fake_catalog) == ["complete"] * 8
+    assert len(bars.asked) == 6
+
+    bars.peak, bars.latency = 0, 0.05
+    items = await ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=next_eight)
+
+    assert bars.peak == 4, "a place the cancelled download kept would leave three"
+    assert [item.outcome for item in items[2:]] == [Outcome.FETCHED] * 8
+
+
+@respx.mock
+async def test_an_error_the_captures_meet_after_the_download_was_cancelled_is_logged_and_the_download_ends_cancelled(
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    materializer: StockFetchDouble,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    claimed, release = threading.Event(), threading.Event()
+
+    async def down_once_released(*args: object, **kwargs: object) -> int:
+        claimed.set()
+        await _held_until(release)
+        raise catalog_client.CatalogUnavailableError("down")
+
+    monkeypatch.setattr(catalog_client, "claim_metadata_artifact", down_once_released)
+    vendor_lists(CALL_600)
+    download = asyncio.create_task(ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[CALL_600]))
+    await _until(claimed.is_set)
+
+    download.cancel()
+    await asyncio.sleep(0.05)
+    release.set()
+    with caplog.at_level("WARNING"), pytest.raises(asyncio.CancelledError):
+        await download
+
+    assert download.cancelled(), "the caller was cancelled, so it ends cancelled and not with the outage"
+    [record] = [r for r in caplog.records if getattr(r, "action", "") == "chain_download_error_after_cancel"]
+    assert record.error_type == "CatalogUnavailableError"
+    # The underlying's fetch ran to its end beside the listing that failed.
+    assert len(materializer.calls) == 1
 
 
 # ── Requests refused before anything is asked ─────────────────────────────

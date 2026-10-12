@@ -23,6 +23,11 @@ too, so a chain download and a run at once do not double it. That gate is one se
 process's background loop is where a run's download asks, so the captures are handed to that loop and not run on the
 caller's.
 
+A caller that cancels the download does not stop a capture that has begun. A capture that has claimed its catalog row
+must reach its publish or its failure, or the row stays ``fetching`` until its lease runs out; and a task that awaits
+work on another loop and is cancelled cancels that work. So the cancellation is held at the caller (``_waited_for``):
+the caller keeps waiting until every capture it began has ended, begins no more, and only then is cancelled.
+
 At most ``MAX_CONTRACTS_PER_DOWNLOAD`` contracts are taken in one call. That is the number of contracts a window of the
 chain can hold (``past_chain.MAX_WINDOW_CONTRACTS``, one constant), so the contracts a window names are one download.
 
@@ -35,6 +40,8 @@ finishes. A caller shows it as "being fetched by another request; ask again" and
 from __future__ import annotations
 
 import asyncio
+import logging
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -58,6 +65,8 @@ from app.options.expiry import option_expiry_anchor_ms
 from app.options_backtest.lake_data import LakeRunData, UnderlyingDayUnreadable
 from app.options_backtest.past_chain import MAX_WINDOW_CONTRACTS, ChainRefusal, unreadable_problem
 from app.utils.background_loop import CallerStoppedWaitingError, background_loop
+
+logger = logging.getLogger(__name__)
 
 # Contracts one call takes: as many as a window of the chain can hold, so the contracts a window names are one download.
 MAX_CONTRACTS_PER_DOWNLOAD = MAX_WINDOW_CONTRACTS
@@ -210,6 +219,14 @@ async def ensure_chain_data(
 
     A contract another call is fetching at the same moment comes back ``failed`` with the lake's ``lease_timeout``
     reason: it is not missing, the other request is fetching it (see the module docstring); ask again.
+
+    Cancelling the call (a client that hangs up) does not cancel a capture. The captures run on the background loop
+    and the cancellation never reaches it: this waits for them through every further cancellation, and raises the
+    cancellation only once each capture it began has ended, so none leaves a row it claimed ``fetching``. A capture
+    that was waiting for a place at the gate is one it began, and ends too. What had not begun when the call was
+    cancelled never does: the contracts are not started if the cancellation came during the listing and the
+    underlying. Nothing is returned for a cancelled call, and an error the captures met after the cancellation is
+    logged and dropped.
     """
     named = _distinct(contracts)
     if len(named) > MAX_CONTRACTS_PER_DOWNLOAD:
@@ -225,17 +242,61 @@ async def ensure_chain_data(
         raise ValueError(f"the underlying must be an upper-case ticker the lake can hold, got {underlying!r}")
     # The vendor limit is a semaphore of one event loop, and the loop a run's download asks on is the process's
     # background loop; the server's own loop would count a second four. So the captures run there, and this waits.
-    return await asyncio.wrap_future(
-        asyncio.run_coroutine_threadsafe(_capture(underlying, trading_date, named, now_ms), background_loop())
+    caller_has_gone = threading.Event()
+    work = asyncio.wrap_future(
+        asyncio.run_coroutine_threadsafe(
+            _capture(underlying, trading_date, named, now_ms, caller_has_gone), background_loop()
+        )
     )
+    return await _waited_for(work, caller_has_gone)
+
+
+async def _waited_for(
+    work: asyncio.Future[tuple[DownloadItem, ...]], caller_has_gone: threading.Event
+) -> tuple[DownloadItem, ...]:
+    """The captures' result; if this task is cancelled meanwhile, wait for them to end and then raise the cancellation.
+
+    A task that awaits ``work`` itself and is cancelled cancels it, and that cancels the coroutine on the other loop:
+    a capture could stop after it claimed its row and leave it ``fetching`` until the lease runs out. ``asyncio.wait``
+    never cancels what it waits for, so the cancellation stops at this task. It is swallowed, every time it comes (an
+    ASGI server's cancel scope sends one at every checkpoint), until ``work`` is done; the captures are told the caller
+    has gone, so they begin nothing more, and the first cancellation is raised when they have ended.
+    """
+    first_cancellation: asyncio.CancelledError | None = None
+    while not work.done():
+        try:
+            await asyncio.wait([work])
+        except asyncio.CancelledError as cancelled:
+            first_cancellation = first_cancellation or cancelled
+            caller_has_gone.set()
+    if first_cancellation is None:
+        return work.result()
+    if not work.cancelled() and (error := work.exception()) is not None:
+        logger.warning(
+            "past-chain download: the captures met an error after the caller cancelled; it is dropped",
+            extra={"action": "chain_download_error_after_cancel", "error_type": type(error).__name__},
+            exc_info=error,
+        )
+    raise first_cancellation
 
 
 async def _capture(
-    underlying: str, trading_date: date, named: Sequence[OptionContract], now_ms: int | None
+    underlying: str,
+    trading_date: date,
+    named: Sequence[OptionContract],
+    now_ms: int | None,
+    caller_has_gone: threading.Event,
 ) -> tuple[DownloadItem, ...]:
-    """The listing and the underlying, then the contracts, as ``ensure_chain_data`` asks, run on the background loop."""
+    """The listing and the underlying, then the contracts, as ``ensure_chain_data`` asks, run on the background loop.
+
+    Nothing cancels this coroutine, so each stage is a plain gather that lets every capture finish before an error is
+    raised. A caller that has gone (``caller_has_gone``) is the one thing that stops it, and only between stages: what
+    has begun finishes. What it returns then is not read.
+    """
     # The catalog's pool belongs to the loop that made it, and the lake's capture functions do not make one.
     await catalog_client.init_pool()
+    if caller_has_gone.is_set():
+        return ()
     # Every capture finishes before an error is raised: none is cancelled halfway through a claim.
     first = await asyncio.gather(
         _capture_listing(underlying, trading_date, now_ms),
@@ -243,6 +304,8 @@ async def _capture(
         return_exceptions=True,
     )
     _raise_the_first_error(first)
+    if caller_has_gone.is_set():
+        return ()
     (listing_item, listing), underlying_item = first  # type: ignore[misc]
     if listing is None:
         why = f"the {underlying} listing for {trading_date.isoformat()} could not be captured ({listing_item.reason})"
