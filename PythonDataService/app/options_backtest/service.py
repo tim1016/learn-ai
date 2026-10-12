@@ -55,6 +55,7 @@ from app.options_backtest.fees import FeeRateNotPublished
 from app.options_backtest.fetching import DownloadFailed, DownloadStopped, ensure_run_data
 from app.options_backtest.lake_check import LakeCheckData
 from app.options_backtest.lake_data import LakeRunData, UnderlyingDayUnreadable
+from app.options_backtest.limits import MAX_RANGE_SESSIONS
 from app.options_backtest.run import RunResult, RunStopped, SessionDataMissing, run_sessions
 from app.options_backtest.saved_runs import FailureItem, RunFailure
 from app.options_backtest.session_market import MalformedBars
@@ -65,10 +66,6 @@ from app.utils.session_anchors import require_schedulable_end
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
-
-# The most sessions one request may name: about five years of trading days. Nothing older than the options plan can be
-# tested anyway; this only keeps a mistyped range from asking the calendar for a century.
-MAX_RANGE_SESSIONS = 1_300
 
 # The phases a job reports, in the order of the work. ``app/jobs/phases.py`` gives each its label.
 PHASE_CHECKING_DATA = "checking_data"

@@ -8,7 +8,10 @@ and skip without one, like their neighbours.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -429,6 +432,22 @@ async def test_the_limits_are_served_with_the_names_a_page_reads(client) -> None
         isinstance(limits[name], int) and limits[name] > 0 for name in (*_LIMIT_OF_A_FIELD, "max_range_sessions")
     )
     assert set(limits["setup_name"]) == {"pattern", "sentence"} and limits["setup_name"]["sentence"]
+
+
+def test_the_setup_routes_read_the_range_limit_without_importing_the_run_service() -> None:
+    # A fresh interpreter: this file imports the whole app, and the app imports the service.
+    probe = "import sys, app.routers.options_backtest; print('app.options_backtest.service' in sys.modules)"
+
+    done = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=True,
+        cwd=Path(__file__).resolve().parents[2],
+    )
+
+    assert done.stdout.split() == ["False"], done.stderr
 
 
 @pytest.mark.parametrize("name", list(_LIMIT_OF_A_FIELD))

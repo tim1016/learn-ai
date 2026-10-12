@@ -217,7 +217,7 @@ async def start_options_backtest_job(req: OptionsBacktestJobRequest) -> OptionsB
 
 
 def _worker(
-    run_id: int, req: OptionsBacktestJobRequest, sessions: tuple[Any, ...], store: Any
+    run_id: int, req: OptionsBacktestJobRequest, sessions: tuple[date, ...], store: service.RunStore
 ) -> Callable[[ProgressEmitter, CancellationCheck], dict[str, Any]]:
     """The job's work: the service behind the runner's emit-and-cancel checks, progress counted in sessions."""
 
