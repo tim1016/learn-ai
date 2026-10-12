@@ -414,6 +414,9 @@ async def test_an_early_close_is_judged_by_its_own_close_not_by_four_oclock(fake
     assert early.failure is not None and early.failure.reason == "session_not_over"
     assert on_time.failure is None and on_time.record is not None
     assert route.call_count == 1
+    # In winter the same 09:30 start is 14:30 UTC, not 13:30: the stored wall clock is read back through New York time.
+    winter_day = await _read(contract, day)
+    assert winter_day is not None and winter_day.bars[0].start_ms == open_ms
 
 
 @respx.mock
