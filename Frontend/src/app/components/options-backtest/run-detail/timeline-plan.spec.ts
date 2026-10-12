@@ -225,6 +225,12 @@ describe('the plan of a traded day: a minute that traded alone', () => {
     expect(plan.series.filter((each) => each.pointMarkers).map((each) => [each.role, each.pane, timesOf(each)])).toEqual([['closes', 2, [sec(10)]]]);
   });
 
+  it('gives no dot to a line of two points, which the library draws as a line', () => {
+    const two = buildTimelinePlan(sessionDetail({ contracts: [shownSeries(CALL_585.symbol, CALL_585, [[2, '2.00'], [3, '2.10'], [6, '2.20']])], levels: [], fills: [], marks: [] }));
+
+    expect(two.series.filter((each) => each.role === 'closes' && each.pane === 1).map((each) => [timesOf(each), each.pointMarkers])).toEqual([[[sec(2), sec(3)], false], [[sec(6)], true]]);
+  });
+
   it('says the dot in the legend of the pane that holds one, and of no other', () => {
     expect(plan.panes.map((pane) => pane.entries.some((entry) => entry.drawn === 'dot'))).toEqual([false, false, true]);
     expect(plan.panes[2].entries.find((entry) => entry.drawn === 'dot')).toMatchObject({ name: 'A lone minute with a trade', sample: 'marker', glyph: '●', token: 'series-sky' });
