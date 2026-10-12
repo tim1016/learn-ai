@@ -578,6 +578,7 @@ async def test_a_listing_row_is_claimed_published_and_completed_by_the_real_sql(
     listing = await asyncio.to_thread(read_option_listing, "SPY", TRADING_DAY)
     assert listing is not None and listing.sha256 == result.record.file_sha256
     assert [r.standard for r in listing.rows] == [True, True]
+    assert [r.expiry_ms for r in listing.rows] == [1749844800000, 1749844800000]  # 2025-06-13 16:00 EDT, held as the instant
 
 
 @respx.mock

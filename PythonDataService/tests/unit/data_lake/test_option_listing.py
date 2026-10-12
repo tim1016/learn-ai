@@ -6,7 +6,8 @@ fake vendor. The Postgres-backed twin is ``test_option_lake_catalog.py``.
 Hand-worked figures used below:
 
 * A strike in dollars is stored in thousandths: 375 -> 375000, 452.5 -> 452500.
-* The expiry is stored as ``YYYYMMDD``: 2025-06-13 -> ``20250613``.
+* The expiry is stored as its 16:00 New York anchor in epoch milliseconds (``expiry_ms``), the one
+  way the repo holds an expiry: 2025-06-13 is 16:00 EDT = 20:00 UTC = 1749844800000 ms.
 * ``O:SPY250613C00375000`` is the SPY call struck at 375 expiring 2025-06-13.
 * 2025-06-13 closes at 20:00 UTC = 1749844800000 ms. A listing is taken, like a session's
   bars, only from New York midnight after its date: 00:00 EDT on the 14th = 04:00 UTC =
@@ -27,7 +28,7 @@ import zipfile
 import zlib
 from datetime import date
 from decimal import Decimal
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import httpx
@@ -38,6 +39,7 @@ from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake import option_listing as option_listing_module
 from app.data_lake.admission import LakeAdmissionError
+from app.data_lake.option_lake import LEASE_TTL_MS, WORKER_ID, HeldLease, publish_option_artifact
 from app.data_lake.option_listing import (
     OptionListing,
     OptionListingFileError,
@@ -62,6 +64,7 @@ from tests._helpers.option_lake_cases import (
 
 AS_OF = date(2025, 6, 13)
 SESSION_CLOSE_MS = 1749844800000
+EXPIRY_MS = 1749844800000  # 2025-06-13 16:00 EDT: the expiry anchor of the rows below (a full day's close is the same instant)
 MINUTE_MS = 60_000
 NOW_2026_10_12_MS = 1791828000000
 CONTRACTS_URL = "https://api.polygon.io/v3/reference/options/contracts"
@@ -210,16 +213,57 @@ async def test_the_file_is_one_sorted_csv_of_the_vendors_facts(fake_catalog: Fak
     names, rows = _csv_rows((_raw_root(tmp_lake) / RELATIVE_PATH).read_bytes())
     assert names == [MEMBER]
     assert rows[0] == [
-        "ticker", "contract_type", "strike_thousandths", "expiry", "exercise_style", "shares_per_contract",
+        "ticker", "contract_type", "strike_thousandths", "expiry_ms", "exercise_style", "shares_per_contract",
         "additional_underlyings",
     ]
+    expiry = str(EXPIRY_MS)
     assert rows[1:] == [
-        ["O:SPY1250613C00375000", "call", "375000", "20250613", "american", "100", "1"],
-        ["O:SPY250613C00375000", "call", "375000", "20250613", "american", "100", "0"],
-        ["O:SPY250613C00380000", "call", "380000", "20250613", "european", "", "0"],
-        ["O:SPY250613C00452500", "call", "452500", "20250613", "american", "100", "0"],
-        ["O:SPY250613P00400000", "put", "400000", "20250613", "american", "100", "0"],
+        ["O:SPY1250613C00375000", "call", "375000", expiry, "american", "100", "1"],
+        ["O:SPY250613C00375000", "call", "375000", expiry, "american", "100", "0"],
+        ["O:SPY250613C00380000", "call", "380000", expiry, "european", "", "0"],
+        ["O:SPY250613C00452500", "call", "452500", expiry, "american", "100", "0"],
+        ["O:SPY250613P00400000", "put", "400000", expiry, "american", "100", "0"],
     ]
+
+
+#: Each expiry date and its 16:00 New York anchor as epoch ms, worked by hand as
+#: (days since 1970-01-01) x 86 400 000 + (21 hours in winter, 20 in summer) x 3 600 000:
+#: 2025-03-07 is day 20154 and still winter; 2025-03-14 is day 20161 and summer (the clocks went forward on 03-09);
+#: 2025-06-13 is day 20252; 2025-11-28 is day 20420 and a half day (it closes at 13:00 but an expiry is still 16:00);
+#: 2025-12-19 is day 20441.
+_EXPIRY_ANCHORS = [
+    ("2025-03-07", 1741381200000),
+    ("2025-03-14", 1741982400000),
+    ("2025-06-13", 1749844800000),
+    ("2025-11-28", 1764363600000),
+    ("2025-12-19", 1766178000000),
+]
+
+
+@respx.mock
+@pytest.mark.parametrize(("expiry", "anchor_ms"), _EXPIRY_ANCHORS, ids=[day for day, _ in _EXPIRY_ANCHORS])
+async def test_an_expiry_is_stored_as_its_16_00_new_york_anchor_in_milliseconds_and_no_date_text_is_in_the_file(
+    expiry: str, anchor_ms: int, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    yymmdd = expiry[2:4] + expiry[5:7] + expiry[8:10]
+    ticker = f"O:SPY{yymmdd}C00375000"
+    _mock_one_page([_row(ticker, 375, expiration_date=expiry)])
+
+    result = await ensure_option_listing("SPY", AS_OF)
+
+    assert result.failure is None
+    payload = (_raw_root(tmp_lake) / RELATIVE_PATH).read_bytes()
+    _, cells = _csv_rows(payload)
+    assert cells[0][3] == "expiry_ms"
+    assert cells[1][3] == str(anchor_ms)
+    with zipfile.ZipFile(io.BytesIO(payload)) as zf:
+        text = zf.read(zf.namelist()[0]).decode()
+    assert expiry not in text and expiry.replace("-", "") not in text  # neither the vendor's text nor a YYYYMMDD
+    listing = await _read()
+    assert listing is not None
+    [row] = listing.rows
+    assert row.expiry_ms == anchor_ms
+    assert row.standard is True  # the ticker names the same expiry as the stored instant
 
 
 @respx.mock
@@ -633,8 +677,8 @@ async def test_a_call_or_put_reads_back_right_whatever_case_the_vendor_wrote_it_
 def test_a_call_or_put_stored_in_any_case_is_read_as_the_right_it_names(stored: str) -> None:
     """The reader says what the cell names, so a file made by hand or by another version reads the same."""
     csv_text = (
-        "ticker,contract_type,strike_thousandths,expiry,exercise_style,shares_per_contract,additional_underlyings\n"
-        f"O:SPY250613C00375000,{stored},375000,20250613,AMERICAN,100,0\n"
+        "ticker,contract_type,strike_thousandths,expiry_ms,exercise_style,shares_per_contract,additional_underlyings\n"
+        f"O:SPY250613C00375000,{stored},375000,{EXPIRY_MS},AMERICAN,100,0\n"
     )
     payload = io.BytesIO()
     with zipfile.ZipFile(payload, "w") as zf:
@@ -960,6 +1004,52 @@ async def test_capturing_a_date_again_under_a_new_file_format_leaves_one_complet
     assert fake_catalog.rows[other_date.record.id]["status"] == "complete"  # another date's file is another file
 
 
+def test_a_listing_of_the_first_file_format_has_another_identity_than_one_of_this_format(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Format 1 wrote the expiry as ``YYYYMMDD`` text; its row must never be taken for a listing in this format."""
+    this_format = option_listing_dch("SPY", AS_OF)
+
+    with monkeypatch.context() as first_format:
+        first_format.setattr(option_listing_module, "OPTION_LISTING_FILE_FORMAT", 1)
+        assert option_listing_dch("SPY", AS_OF) != this_format
+
+
+@respx.mock
+async def test_a_file_of_the_first_format_is_not_read_as_this_one_and_the_next_capture_replaces_it_and_stales_its_row(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old_file = _listing_zip_of(
+        b"ticker,contract_type,strike_thousandths,expiry,exercise_style,shares_per_contract,additional_underlyings\n"
+        b"O:SPY250613C00375000,call,375000,20250613,american,100,0\n"
+    )
+    with monkeypatch.context() as first_format:
+        first_format.setattr(option_listing_module, "OPTION_LISTING_FILE_FORMAT", 1)
+        first_dch = option_listing_dch("SPY", AS_OF)
+        first_id = await catalog_client.claim_metadata_artifact(
+            identity=ArtifactIdentity(
+                artifact_kind="metadata", market="usa_options", symbol="SPY", provider="polygon", price_adjustment_mode="raw"
+            ),
+            worker_id=WORKER_ID, lease_ttl_ms=LEASE_TTL_MS, data_contract_hash=first_dch, file_path=RELATIVE_PATH,
+        )
+        assert first_id is not None
+        published = await publish_option_artifact(
+            payload=old_file, rel_path=PurePosixPath(RELATIVE_PATH), lease=HeldLease(first_id, 1), row_count=1,
+            first_bar_start_ms=0, last_bar_start_ms=0, data_contract_hash=first_dch, symbol="SPY", trading_date=AS_OF,
+        )
+    assert isinstance(published, str)  # the first format's listing is admitted and complete
+    with pytest.raises(OptionListingFileError, match="header"):
+        await _read()
+    _mock_one_page(STANDARD_ROWS)
+
+    renewed = await ensure_option_listing("SPY", AS_OF)
+
+    assert renewed.failure is None and renewed.reused is False and renewed.record is not None
+    assert renewed.record.id != first_id  # a new format is a new row, not the old one rebuilt
+    assert fake_catalog.rows[first_id]["status"] == "stale"
+    assert fake_catalog.rows[renewed.record.id]["status"] == "complete"
+    listing = await _read()
+    assert listing is not None and [row.expiry_ms for row in listing.rows] == [EXPIRY_MS] * 3
+
+
 @respx.mock
 async def test_a_listing_asked_for_again_under_the_same_format_keeps_its_row_complete(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
     _mock_one_page(STANDARD_ROWS)
@@ -1102,7 +1192,7 @@ def _listing_zip_of(body: bytes) -> bytes:
     return buf.getvalue()
 
 
-_LISTING_HEADER = b"ticker,contract_type,strike_thousandths,expiry,exercise_style,shares_per_contract,additional_underlyings\n"
+_LISTING_HEADER = b"ticker,contract_type,strike_thousandths,expiry_ms,exercise_style,shares_per_contract,additional_underlyings\n"
 
 
 @pytest.mark.parametrize(
@@ -1112,11 +1202,18 @@ _LISTING_HEADER = b"ticker,contract_type,strike_thousandths,expiry,exercise_styl
         (b"", zipfile.BadZipFile),
         (_written_listing()[: len(_written_listing()) // 2], zipfile.BadZipFile),
         (_written_listing()[:30 + len(MEMBER)] + b"\xff" * 10 + _written_listing()[40 + len(MEMBER):], zlib.error),
-        (_listing_zip_of(_LISTING_HEADER + b"O:SPY250613C00375000,call,375000,20250613,american,100,0\n\xff\xfe"), UnicodeDecodeError),
-        (_listing_zip_of(_LISTING_HEADER + b"O:SPY250613C00375000,call," + b"9" * 200_000 + b",20250613,american,100,0\n"), None),
-        (_listing_zip_of(_LISTING_HEADER + b"O:SPY250613C00375000,call,375000,20251345,american,100,0\n"), ValueError),
+        (_listing_zip_of(_LISTING_HEADER + b"O:SPY250613C00375000,call,375000,1749844800000,american,100,0\n\xff\xfe"), UnicodeDecodeError),
+        (_listing_zip_of(_LISTING_HEADER + b"O:SPY250613C00375000,call," + b"9" * 200_000 + b",1749844800000,american,100,0\n"), None),
+        (_listing_zip_of(_LISTING_HEADER + b"O:SPY250613C00375000,call,375000,1749844800001,american,100,0\n"), ValueError),
+        (_listing_zip_of(_LISTING_HEADER + b"O:SPY250613C00375000,call,375000,20250613,american,100,0\n"), ValueError),
+        (_listing_zip_of(_LISTING_HEADER + b"O:SPY250613C00375000,call,375000,2025-06-13,american,100,0\n"), ValueError),
+        (_listing_zip_of(_LISTING_HEADER + b"O:SPY250613C00375000,call,375000," + b"9" * 400 + b",american,100,0\n"), None),
     ],
-    ids=["not a zip", "no bytes", "truncated", "damaged data", "bytes that are not text", "a cell too large for the csv reader", "a date that is no date"],
+    ids=[
+        "not a zip", "no bytes", "truncated", "damaged data", "bytes that are not text", "a cell too large for the csv reader",
+        "an instant that is not 16:00 New York", "the old format's YYYYMMDD cell", "an ISO date in the cell",
+        "an instant too large for any calendar",
+    ],
 )
 def test_a_stored_listing_that_is_not_what_the_lake_writes_is_one_named_error(
     payload: bytes, cause: type[Exception] | None
