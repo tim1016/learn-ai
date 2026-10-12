@@ -70,6 +70,33 @@ class Vendor:
     # A hook run when an option request arrives, to cancel a run mid-download.
     on_option_request: Callable[[str], None] | None = None
     on_listing_request: Callable[[date], None] | None = None
+    _in_flight_events: list[tuple[int, threading.Event]] = field(default_factory=list, init=False, repr=False)
+    _idle_events: list[threading.Event] = field(default_factory=list, init=False, repr=False)
+
+    def when_in_flight(self, count: int) -> threading.Event:
+        """An event the stand-in sets the moment ``count`` option requests are in flight at once, never by the clock.
+
+        A test that has to act while that many are in flight (stop, fail, run out of time) waits for this and not for
+        a time, since how soon the last of them gets here depends on the machine. With ``option_release`` the
+        requests stay in flight until the test lets them go.
+        """
+        reached = threading.Event()
+        self._in_flight_events.append((count, reached))
+        if self.in_flight >= count:
+            reached.set()
+        return reached
+
+    def when_nothing_is_in_flight(self) -> threading.Event:
+        """An event the stand-in sets the moment no option request is in flight, because each was answered or cut off.
+
+        Asked for while requests are held, it is how a test learns that a cancel has reached them, which is delivered on
+        the background loop some time after the thread that asked for it has moved on.
+        """
+        left = threading.Event()
+        self._idle_events.append(left)
+        if self.in_flight == 0:
+            left.set()
+        return left
 
     def mount(self) -> None:
         mock_launcher()
@@ -120,6 +147,9 @@ class Vendor:
         self.option_requests.append(symbol)
         self.in_flight += 1
         self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
+        for count, reached in self._in_flight_events:
+            if self.in_flight >= count:
+                reached.set()
         try:
             if self.on_option_request is not None:
                 self.on_option_request(symbol)
@@ -138,6 +168,9 @@ class Vendor:
             return traded(symbol, [_option_row(day, minute, series[minute]) for minute in sorted(series)])
         finally:
             self.in_flight -= 1
+            if self.in_flight == 0:
+                for left in self._idle_events:
+                    left.set()
 
     async def _stock_bars(self, request: httpx.Request) -> httpx.Response:
         self._log(request)
