@@ -39935,6 +39935,7 @@
         "description": "A setup and the half-open range ``[start_ms, end_ms)`` to check: New York midnight of the first date to the\nNew York midnight after the last, as Grid Search's window is.",
         "properties": {
           "end_ms": {
+            "description": "New York midnight of the day after the range's last day. Any other instant is refused with a 400 and the code OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT.",
             "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "End Ms",
@@ -39944,6 +39945,7 @@
             "$ref": "#/components/schemas/OptionsBacktestSetup-Input"
           },
           "start_ms": {
+            "description": "New York midnight of the range's first day. Any other instant is refused with a 400 and the code OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT.",
             "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Start Ms",
@@ -40344,6 +40346,7 @@
         "description": "Body of ``POST /api/jobs-internal/options-backtest``: the setup, the half-open range, and the minted job id.\n\nThe range is ``[start_ms, end_ms)`` as Grid Search's window is: New York midnight of the first date to New York\nmidnight after the last. ``setup_name`` is the name the setup was saved under, when it was started from one.",
         "properties": {
           "end_ms": {
+            "description": "New York midnight of the day after the range's last day. Any other instant is refused with a 400 and the code OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT.",
             "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "End Ms",
@@ -40369,9 +40372,11 @@
                 "type": "null"
               }
             ],
+            "description": "The name the setup was saved under, when the run was started from one. The run is recorded under it only when a saved setup or a shipped example of that name exists and is equal to the setup sent; otherwise the run is recorded with no name, and is accepted all the same.",
             "title": "Setup Name"
           },
           "start_ms": {
+            "description": "New York midnight of the range's first day. Any other instant is refused with a 400 and the code OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT.",
             "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Start Ms",

@@ -22449,10 +22449,16 @@ export interface components {
          *     New York midnight after the last, as Grid Search's window is.
          */
         OptionsBacktestCheckDataRequest: {
-            /** End Ms */
+            /**
+             * End Ms
+             * @description New York midnight of the day after the range's last day. Any other instant is refused with a 400 and the code OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT.
+             */
             end_ms: number;
             setup: components["schemas"]["OptionsBacktestSetup-Input"];
-            /** Start Ms */
+            /**
+             * Start Ms
+             * @description New York midnight of the range's first day. Any other instant is refused with a 400 and the code OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT.
+             */
             start_ms: number;
         };
         /**
@@ -22613,14 +22619,23 @@ export interface components {
          *     midnight after the last. ``setup_name`` is the name the setup was saved under, when it was started from one.
          */
         OptionsBacktestJobRequest: {
-            /** End Ms */
+            /**
+             * End Ms
+             * @description New York midnight of the day after the range's last day. Any other instant is refused with a 400 and the code OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT.
+             */
             end_ms: number;
             /** Job Id */
             job_id: string;
             setup: components["schemas"]["OptionsBacktestSetup-Input"];
-            /** Setup Name */
+            /**
+             * Setup Name
+             * @description The name the setup was saved under, when the run was started from one. The run is recorded under it only when a saved setup or a shipped example of that name exists and is equal to the setup sent; otherwise the run is recorded with no name, and is accepted all the same.
+             */
             setup_name?: string | null;
-            /** Start Ms */
+            /**
+             * Start Ms
+             * @description New York midnight of the range's first day. Any other instant is refused with a 400 and the code OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT.
+             */
             start_ms: number;
         };
         /**
