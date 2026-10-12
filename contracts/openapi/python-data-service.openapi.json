@@ -73260,6 +73260,57 @@
         ]
       }
     },
+    "/api/jobs-internal/pool/drain": {
+      "post": {
+        "description": "The operator's capacity handoff (#3048 AC 10): stop assignments, finish or interrupt, reap.\n\nA drain stops new assignments, waits bounded for owned work to\ncomplete, interrupts what cannot, and reaps the children \u2014 the\ncapacity change (a restart at the new profile) finds no orphans and\nno running pool. On a process with no shared pool it reports that\nhonestly instead of pretending. The wait and the reaping run off the\nevent loop: a probe or a progress poll must never freeze behind them.",
+        "operationId": "drain_research_worker_pool_api_jobs_internal_pool_drain_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Drain Research Worker Pool Api Jobs Internal Pool Drain Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Drain Research Worker Pool",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
     "/api/jobs-internal/recency-chart": {
       "post": {
         "description": "Validate, make the launch durable, and run the Recency Chart sweep on a worker thread. Returns 202.\n\nA malformed or oversized grid (D11) is refused before anything is written;\nthe launch row exists before the worker starts (D20); a redelivered\n``job_id`` is acknowledged without a second worker while the first still\nholds the job, and refused (409) once that job is closed or if the\nconfiguration differs. A resume (#1938) instead names an existing launch:\nthe new job id is bound to the durable record by the worker's claim, the\nrecorded cells are skipped, and the spec fields are ignored \u2014 the stored\nconfiguration governs.\nEverything after the HTTP boundary is ``app.research.recency.service``.",

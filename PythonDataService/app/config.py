@@ -376,6 +376,13 @@ class Settings(BaseSettings):
     # max_connections.
     RESEARCH_ADMISSION_CONNECTIONS: int = Field(default=8, ge=1, le=8)
     RESEARCH_COORDINATION_CONNECTIONS: int = Field(default=4, ge=2, le=4)
+    # The shared research pool's independent byte bounds (#3048, PRD #3034
+    # slice 13): task wires submitted-but-unconsumed, and delivered outcomes
+    # awaiting consumption. Fences against a runaway result shape becoming
+    # resident — backpressure, never a tuner of normal traffic; manifests
+    # and detail curves are the big citizens either side.
+    RESEARCH_POOL_PAYLOAD_BOUND_BYTES: int = Field(default=256 * 1024**2, ge=1)
+    RESEARCH_POOL_RESULT_BOUND_BYTES: int = Field(default=256 * 1024**2, ge=1)
     # Issue #1735 step 3. Off, a strategy-wiring digest that no longer matches
     # its golden-qualification receipt is reported and Start/Resume proceed;
     # on, it fails closed like any other build drift. Deliberately default-off:

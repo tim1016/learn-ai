@@ -47,7 +47,16 @@ from app.jobs.progress import JOB_LEASE_TTL_SECONDS, _lease_key
 
 logger = logging.getLogger(__name__)
 
-CursorKind = Literal["admitted_artifacts", "processed_bars", "processed_blocks", "durable_completions"]
+CursorKind = Literal[
+    "admitted_artifacts",
+    "processed_bars",
+    "processed_blocks",
+    "durable_completions",
+    # The shared pool's capacity handoff (#3048): a waiting owner's first
+    # slot, renewed as a transition after its begin marker. A scheduling
+    # cursor, not a work cursor — it carries no silence-bound phase.
+    "fair_queue_advancement",
+]
 
 # How long each phase class may stay silent before the worker reads as hung.
 # The runtime (not this module) owns hard termination; these bounds are what

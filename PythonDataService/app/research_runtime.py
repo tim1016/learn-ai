@@ -193,15 +193,46 @@ async def _ensure_schema_via_writer_loop() -> None:
         logger.info("research schema ensured", extra={"action": "research_schema_ensured"})
 
 
+def _start_shared_worker_pool() -> None:
+    """Create the shared pool now, so a width the envelope cannot fit fails startup (#3048 AC 7).
+
+    The eager create also declares the operator profile the configured
+    width runs under — the singleton the dispatch factory binds every
+    dispatch to as one owner.
+    """
+    from app.research.golden_search.shared_pool import (
+        SUBMISSION_FACTOR,
+        shared_worker_pool,
+        worker_profile,
+    )
+
+    count = settings.RESEARCH_WORKER_COUNT
+    if count < 2:
+        return
+    pool = shared_worker_pool(
+        workers=count,
+        submission_bound=SUBMISSION_FACTOR * count,
+        payload_bound_bytes=settings.RESEARCH_POOL_PAYLOAD_BOUND_BYTES,
+        result_bound_bytes=settings.RESEARCH_POOL_RESULT_BOUND_BYTES,
+    )
+    logger.info(
+        "research worker pool started: %s",
+        worker_profile(count),
+        extra={"action": "research_pool_started", **pool.facts()},
+    )
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     from app.data_lake.admission import start_admission_batcher, stop_admission_batcher
+    from app.research.golden_search.shared_pool import close_shared_pool
 
     refuse_reload()
     authority = await _claim_authority_or_die()
     await enforce_connection_envelope()
     await _close_abandoned_generations(authority)
     batcher = start_admission_batcher()
+    _start_shared_worker_pool()
     schema_task = asyncio.create_task(_ensure_schema_via_writer_loop(), name="research-runtime-schema-ensure")
     try:
         yield
@@ -209,6 +240,11 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         schema_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await schema_task
+        # The pool's children are the admission batcher's consumers: close
+        # them first, or a child's in-flight verdict recreates the batcher
+        # the line below just stopped (#3048 review). Both block (kill and
+        # reap), so neither runs on the event loop.
+        await asyncio.to_thread(close_shared_pool)
         batcher.close()
         stop_admission_batcher()
         from app.research.persistence import ownership

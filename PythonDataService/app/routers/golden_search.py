@@ -23,7 +23,7 @@ import threading
 from collections.abc import Callable
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Path, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response, status
 
 from app.config import settings
 from app.jobs.progress import CancellationCheck, ProgressEmitter
@@ -53,6 +53,7 @@ from app.schemas.golden_search import (
     GoldenSearchStudySummary,
     GoldenSearchTestOverTimeCharts,
 )
+from app.security.data_plane_control import require_data_plane_control_secret
 from app.utils.background_loop import CallerStoppedWaitingError
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -531,11 +532,15 @@ def _gated_stage_work(req: GoldenSearchJobRequest):
 
 
 def _runtime_dispatch_factory(*, on_checkpoint, cancel_check, emit) -> Callable[[Any], Any]:
-    """The dispatch the runtime executes through: one worker, or the configured bounded pool (#3046).
+    """The dispatch the runtime executes through: one worker, or the shared bounded pool (#3046, #3048).
 
     ``RESEARCH_WORKER_COUNT`` is the deployment's opt-in width — one is
-    exactly the serial runtime #3044 shipped — and the pool's scheduling
-    facts ride the existing log channel until their visual refinement.
+    exactly the serial runtime #3044 shipped — and every wider dispatch is
+    an owner on the process's one shared pool, where round-robin fairness,
+    the global submission bound and warm-lane affinity live. A capacity
+    handoff renews the lease exactly as a checkpoint does (#3048): both
+    are real coordinator transitions. The pool's scheduling facts ride the
+    existing log channel until their visual refinement.
     """
     from app.research.golden_search.worker import worker_dispatch_factory
 
@@ -544,10 +549,66 @@ def _runtime_dispatch_factory(*, on_checkpoint, cancel_check, emit) -> Callable[
     if workers < 2:
         return worker_dispatch_factory(on_checkpoint=on_checkpoint, cancel_check=cancel_check)
     from app.research.golden_search.pool import DispatchFacts, worker_pool_factory
+    from app.research.golden_search.shared_pool import SUBMISSION_FACTOR, shared_worker_pool
+
+    pool = shared_worker_pool(
+        workers=workers,
+        submission_bound=SUBMISSION_FACTOR * workers,
+        payload_bound_bytes=settings.RESEARCH_POOL_PAYLOAD_BOUND_BYTES,
+        result_bound_bytes=settings.RESEARCH_POOL_RESULT_BOUND_BYTES,
+    )
 
     def on_facts(facts: DispatchFacts) -> None:
         emit.log(f"research worker pool: {facts.as_dict()}")
 
+    def on_capacity_handoff() -> None:
+        # A handoff is real advancement (#3048): the scheduler moved this
+        # waiting owner into execution, and the begin marker under it is
+        # the durable transition. Renewed through the same gated checkpoint
+        # relay the child's own progress rides — a message, not a bare call.
+        on_checkpoint(
+            {
+                "phase": "scheduling",
+                "cursor_kind": "fair_queue_advancement",
+                "cursor": 1,
+            }
+        )
+
     return worker_pool_factory(
-        on_checkpoint=on_checkpoint, cancel_check=cancel_check, on_facts=on_facts, workers=workers, window=window
+        on_checkpoint=on_checkpoint,
+        cancel_check=cancel_check,
+        on_facts=on_facts,
+        workers=workers,
+        window=window,
+        pool=pool,
+        on_capacity_handoff=on_capacity_handoff,
     )
+
+
+@jobs_router.post(
+    "/pool/drain",
+    status_code=status.HTTP_200_OK,
+    # Protected on the route itself, not the mount: the API app mounts this
+    # router on network placement alone, and an operator action that ends
+    # a live pool until restart is not a placement-trusted call (#3048
+    # review). The runtime's mount-level dependency simply re-checks.
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
+async def drain_research_worker_pool() -> dict[str, Any]:
+    """The operator's capacity handoff (#3048 AC 10): stop assignments, finish or interrupt, reap.
+
+    A drain stops new assignments, waits bounded for owned work to
+    complete, interrupts what cannot, and reaps the children — the
+    capacity change (a restart at the new profile) finds no orphans and
+    no running pool. On a process with no shared pool it reports that
+    honestly instead of pretending. The wait and the reaping run off the
+    event loop: a probe or a progress poll must never freeze behind them.
+    """
+    import asyncio
+
+    from app.research.golden_search.shared_pool import drain_shared_pool
+
+    facts = await asyncio.to_thread(drain_shared_pool)
+    if facts is None:
+        return {"drained": False, "reason": "no shared worker pool in this process"}
+    return {"drained": True, **facts}
