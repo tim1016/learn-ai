@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import asyncpg
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 # Arbitrary but fixed: serializes concurrent first-use across FastAPI's loop
 # and the worker loop so CREATE IF NOT EXISTS never races itself.
 _ADVISORY_LOCK_KEY = 0x1926_0001
@@ -889,6 +889,18 @@ DDL_V18: tuple[str, ...] = (
     """,
 )
 
+# Saved Options Backtest setups (#3030): one row per name, the setup as it was sent and when it was saved.
+# The setup stays JSON so a setup that stops validating after a schema change is still kept and listed.
+DDL_V19: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS research_options_backtest_setups (
+        name         TEXT PRIMARY KEY,
+        setup_json   JSONB NOT NULL,
+        saved_at_ms  BIGINT NOT NULL
+    )
+    """,
+)
+
 VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (1, DDL_V1),
     (2, DDL_V2),
@@ -908,6 +920,7 @@ VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (16, DDL_V16),
     (17, DDL_V17),
     (18, DDL_V18),
+    (19, DDL_V19),
 )
 
 
