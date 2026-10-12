@@ -31,8 +31,10 @@ _MS_PER_DAY = 24 * 60 * MS_PER_MINUTE
 
 # The same shape a bot's leg id has, so a leg reads alike in a log on either side.
 _LEG_ID_PATTERN = r"^[a-z0-9_]{1,32}$"
-# An OCC root: the letters a contract symbol writes for its underlying.
-_UNDERLYING_PATTERN = r"^[A-Z]{1,6}$"
+# An OCC root: the letters a contract symbol writes for its underlying. One to five, not the six an OCC root can have:
+# US stock and ETF tickers are at most five letters, and a six-letter root makes a contract symbol of 21 characters,
+# one more than the lake's catalog stores, so every contract of such an underlying would be refused.
+_UNDERLYING_PATTERN = r"^[A-Z]{1,5}$"
 
 _Model = ConfigDict(frozen=True, extra="forbid")
 
@@ -237,9 +239,11 @@ class OptionsBacktestSetup(BaseModel):
         An entry is read on a minute's close and fills in the next minute, so the first entry time is one
         minute after the open and the last exit time one minute before the close; the exit comes after
         the entry, so the last entry time is two minutes before the close and the first exit time two
-        minutes after the open. Whether a time counted from one end falls before a time counted from the
-        other depends on the session's length, which is the calendar's to say: ``window_fits`` asks it of
-        each session when it is replayed.
+        minutes after the open. An entry counted from the open and an exit counted from the close whose two
+        distances add up to a day or more fit no session, whatever its length, since none lasts a day. Whether
+        a time counted from one end falls before a time counted from the other, below that, depends on the
+        session's length, which is the calendar's to say: ``window_fits`` asks it of each session when it is
+        replayed.
         """
         entry, exit_ = self.entry, self.exit
         if entry.anchor == "open" and entry.offset_ms < MS_PER_MINUTE:
@@ -256,4 +260,30 @@ class OptionsBacktestSetup(BaseModel):
             )
             if not exit_is_later:
                 raise ValueError("the exit time must be after the entry time")
+        elif entry.anchor == "open" and entry.offset_ms + exit_.offset_ms >= _MS_PER_DAY:
+            raise ValueError(
+                "the entry time, counted from the open, and the exit time, counted from the close, add up to a day "
+                "or more, which no session is long enough to hold: bring them closer to their own ends"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _a_reentry_rule_can_be_reached(self) -> OptionsBacktestSetup:
+        """Refuse a re-entry rule that no stop could ever trigger, since the leg would carry it for nothing.
+
+        A leg earns a re-entry when it is closed by a stop, and it is closed by a stop when its own stop loss is hit.
+        Under a complete square-off a leg is also closed when another leg's stop is hit, and that close earns it its
+        re-entries too. So a leg with a re-entry rule needs a stop loss of its own, or, under a complete square-off,
+        some other leg with one.
+        """
+        stops = [leg.leg_id for leg in self.legs if leg.stop_loss is not None]
+        for leg in self.legs:
+            if leg.reentry_on_stop is None or leg.stop_loss is not None:
+                continue
+            if self.square_off == "complete" and any(each != leg.leg_id for each in stops):
+                continue
+            raise ValueError(
+                f"leg {leg.leg_id!r} has a re-entry rule and nothing can stop it out: give it a stop loss, or "
+                "(when the square-off is complete) give another leg one, or take the re-entry rule off"
+            )
         return self
