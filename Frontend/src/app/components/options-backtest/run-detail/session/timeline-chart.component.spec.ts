@@ -235,6 +235,21 @@ describe('the one-day chart, the tooltip', () => {
     ]);
   });
 
+  it('sits beside the cursor, and on its other side in the right half of the chart so that it is not cut off', async () => {
+    const fake = fakeTimelineChart(vi);
+    await renderChart(fake);
+    Object.defineProperty(screen.getByRole('img'), 'clientWidth', { value: 1000 });
+
+    fake.crosshair({ time: sec(8), point: { x: 300, y: 20 } });
+    await screen.findByText('09:38:00 ET');
+    const tip = () => document.querySelector<HTMLElement>('.tip');
+    expect([tip()?.style.left, tip()?.style.top, tip()?.classList.contains('tip--left')]).toEqual(['300px', '20px', false]);
+
+    fake.crosshair({ time: sec(8), point: { x: 800, y: 60 } });
+    await waitFor(() => expect(tip()?.classList.contains('tip--left')).toBe(true));
+    expect([tip()?.style.left, tip()?.style.top]).toEqual(['800px', '60px']);
+  });
+
   it('is hidden from a screen reader: the lists beside the chart are its equivalent', async () => {
     const fake = fakeTimelineChart(vi);
     await renderChart(fake);

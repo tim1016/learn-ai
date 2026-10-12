@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 
+import { etMidnightMs } from '../../../shared/date/et-midnight';
 import { sessionOpenMs } from '../../../shared/date-picker/testing/fake-trading-calendar';
 import type { DayRow } from '../options-backtest.types';
 import { expectTradingDatesInNewYork, reads } from '../testing/page-actions';
@@ -29,6 +30,16 @@ describe('the by-day table', () => {
     await render(RunDayTableComponent, { inputs: { rows: DAY_ROWS } });
 
     expectTradingDatesInNewYork(document.body);
+  });
+
+  // 00:30 New York time on the 16th is 23:30 on the 15th in Chicago and 18:30 on the 15th in Honolulu; 20:00 on the 15th is the 16th in Tokyo.
+  it.each([
+    ['00:30 on the 16th', etMidnightMs('2026-09-16') + 30 * 60_000, 'Look at 2026-09-16'],
+    ['20:00 on the 15th', etMidnightMs('2026-09-15') + 20 * 60 * 60_000, 'Look at 2026-09-15'],
+  ])('names the control that opens a day by its New York date, whatever the viewer’s zone: an open at %s', async (_name, openMs, label) => {
+    await render(RunDayTableComponent, { inputs: { rows: [{ ...DAY_ROWS[0], session_open_ms: openMs }] } });
+
+    expect(screen.getByRole('button', { name: label })).toBeTruthy();
   });
 
   it('offers each day to look at closely, named by the day, and tells who asked and which day', async () => {

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
+import { etMidnightMs } from '../../../../shared/date/et-midnight';
 import { reads } from '../../testing/page-actions';
 import type { DayRequest } from '../day-request';
 import type { LegTrade } from '../run-detail.types';
@@ -125,6 +126,14 @@ describe('the table of leg trades, time', () => {
     expect(modes.length).toBeGreaterThan(0);
     expect(modes.every((mode) => mode === 'et' || mode === 'date-et')).toBe(true);
     expect(modes.filter((mode) => mode === 'date-et').length).toBe(4);
+  });
+
+  // 00:30 New York time on the 16th is 23:30 on the 15th in Chicago and 18:30 on the 15th in Honolulu.
+  it('names the control that opens a trade’s day by the New York date, though that instant is still the day before in Chicago', async () => {
+    await renderTable({ trades: [stoppedTrade({ session_open_ms: etMidnightMs('2026-09-16') + 30 * 60_000 })] });
+
+    expect(screen.getByRole('button', { name: 'Look at 2026-09-16, leg call, first entry' })).toBeTruthy();
+    expect(cells(bodyRows()[0])[0]).toBe('2026-09-16');
   });
 
   it('puts a trade on the date its session opened in New York, though that instant is already the next day in Tokyo', async () => {

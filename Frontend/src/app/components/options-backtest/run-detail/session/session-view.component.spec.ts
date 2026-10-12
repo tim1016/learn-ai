@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
+import { etMidnightMs } from '../../../../shared/date/et-midnight';
 import { reads } from '../../testing/page-actions';
 import { runDetail } from '../../testing/run-fixtures';
 import { RunDetailRefusedError } from '../run-detail.service';
@@ -57,6 +58,21 @@ describe('one day, before one is chosen', () => {
     await renderSession(vi, { run: runDetail({ figures: null }) });
 
     expect([...screen.getByRole('combobox', { name: 'Day' }).querySelectorAll('option')].map((option) => option.textContent)).toEqual(['Choose a day']);
+  });
+});
+
+describe('one day, the days to choose from', () => {
+  // 00:30 New York time on the 16th is 23:30 on the 15th in Chicago and 18:30 on the 15th in Honolulu; 20:00 on the 15th is the 16th in Tokyo.
+  it.each([
+    ['00:30 on the 16th', etMidnightMs('2026-09-16') + 30 * 60_000, '2026-09-16'],
+    ['20:00 on the 15th', etMidnightMs('2026-09-15') + 20 * 60 * 60_000, '2026-09-15'],
+  ])('names a day by its New York date, whatever the zone of the viewer: an open at %s', async (_name, openMs, date) => {
+    const run = runDetail();
+    const figures = run.figures;
+    if (figures === null || figures === undefined) throw new Error('The fixture run has no figures.');
+    await renderSession(vi, { run: { ...run, figures: { ...figures, by_day: [{ ...figures.by_day[0], session_open_ms: openMs }] } } });
+
+    expect([...screen.getByRole('combobox', { name: 'Day' }).querySelectorAll('option')].map((option) => option.textContent)).toEqual(['Choose a day', `${date} · Traded`]);
   });
 });
 
@@ -136,6 +152,22 @@ describe('one day, the stored facts', () => {
     expect(rows[1][3]).toContain("Oct 16 '26 585 Put");
     expect(rows[2][3]).toBe('— none');
     expect(rows[9][3]).toBe('— none');
+  });
+
+  it('names a contract in words that only a chart series sent the parts of, because no trade of the day was in it', async () => {
+    const day = sessionDetail({
+      trades: [],
+      contracts: [shownSeries(CALL_585.symbol, CALL_585, [[2, '2.00'], [3, '2.10']])],
+      events: [sessionDetail().events[3]],
+      levels: [sessionDetail().levels[0]],
+      fills: [],
+      marks: [],
+    });
+    await renderSession(vi, { detail: servedAs(day), request: ASKED });
+    await screen.findByRole('region', { name: 'What happened, in order (scrolls sideways)' });
+
+    expect(tableRows('What happened, in order (scrolls sideways)')[0][3]).toContain("Oct 16 '26 585 Call");
+    expect(tableRows('Levels (scrolls sideways)')[0][3]).toContain("Oct 16 '26 585 Call");
   });
 
   it('shows the symbol as it came for a contract the server sent no parts for', async () => {

@@ -246,6 +246,21 @@ describe('the trades of a run, filters', () => {
     expect(screen.queryByRole('button', { name: 'Previous page' })).toBeNull();
   });
 
+  it('starts again from the first page when the day changes', async () => {
+    const detail = fakeRunDetail(vi, {
+      trades: vi.fn(async (_runId: number, query?: TradeQuery) => pageOf(100, { total: 250, offset: query?.offset ?? 0, next_offset: query?.offset === 0 ? 90 : 190 })),
+    });
+    await renderTrades(detail);
+    await screen.findByText('Trades 1 to 100 of 250');
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+    await screen.findByText('Trades 91 to 190 of 250');
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^Days/ }), '2026-09-16');
+
+    await waitFor(() => expect(lastQuery(detail)).toEqual({ sessionOpenMs: sessionOpenMs('2026-09-16'), legId: '', limit: 100, offset: 0 }));
+    expect(screen.queryByRole('button', { name: 'Previous page' })).toBeNull();
+  });
+
   it('offers a box to type a leg in when the run’s setup cannot be read, and filters by what is typed', async () => {
     const detail = fakeRunDetail(vi, { trades: vi.fn(async () => tradesPage()) });
     await renderTrades(detail, runWithoutSetup());

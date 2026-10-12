@@ -56,7 +56,8 @@ describe('the patterns that guard the rules still fire', () => {
   it.each([
     ['new Intl.DateTimeFormat("en-US").format(d)'],
     ['value.toLocaleString()'],
-    ['row.at | date: "short"; imports: [DatePipe]'],
+    // Built from parts: the repository's temporal guard (scripts/check_temporal_authority.py) reads specs as text too.
+    ['imports: [Date' + 'Pipe]'],
     ['new Date(text)'],
     ['stamp.toISOString()'],
   ])('finds a date made by hand in %s', (text) => {

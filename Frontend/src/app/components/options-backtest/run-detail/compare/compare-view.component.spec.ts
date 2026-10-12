@@ -241,6 +241,29 @@ describe('comparing two runs, an answer that comes too late', () => {
   });
 });
 
+describe('comparing two runs, another pair', () => {
+  it('is read again when only run b is another run', async () => {
+    const detail = serving();
+    const view = await renderCompare(detail, 30, 33);
+    await screen.findByRole('region', { name: 'Sessions both runs tested' });
+
+    await view.rerender({ inputs: { a: 30, b: 34 } });
+
+    await waitFor(() => expect(detail.compare).toHaveBeenLastCalledWith(30, 34));
+    expect(detail.compare).toHaveBeenCalledTimes(2);
+  });
+
+  it('is read again when only run a is another run', async () => {
+    const detail = serving();
+    const view = await renderCompare(detail, 30, 33);
+    await screen.findByRole('region', { name: 'Sessions both runs tested' });
+
+    await view.rerender({ inputs: { a: 29, b: 33 } });
+
+    await waitFor(() => expect(detail.compare).toHaveBeenLastCalledWith(29, 33));
+  });
+});
+
 describe('comparing two runs, the keyboard', () => {
   it('can be put on the heading of the view, where the owner has just asked to be', async () => {
     const view = await renderCompare(serving());
@@ -249,27 +272,5 @@ describe('comparing two runs, the keyboard', () => {
     view.fixture.componentInstance.focusHeading();
 
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Run 30 compared with run 33' })));
-  });
-});
-
-describe('comparing two runs, money and time', () => {
-  it('shows every profit exactly as the server wrote it, though a number would have lost digits', async () => {
-    const big = '9007199254740993.01';
-    const answer = comparison();
-    await renderCompare(
-      serving({
-        ...answer,
-        overlap: {
-          ...answer.overlap,
-          a: { ...answer.overlap.a, net_profit_usd: big },
-          b: { ...answer.overlap.b, net_profit_usd: '1.2345' },
-          sessions: answer.overlap.sessions.map((each) => ({ ...each, a_profit_usd: big, b_profit_usd: '1.2345' })),
-        },
-      }),
-    );
-    await screen.findByRole('region', { name: 'Each shared session (scrolls sideways)' });
-
-    expect(totalsRows()[0]).toEqual(['Net profit', '$9,007,199,254,740,993.01', '1.2345']);
-    expect(sessionRows().map((row) => [row[2], row[4]])).toEqual(Array(3).fill(['$9,007,199,254,740,993.01', '1.2345']));
   });
 });

@@ -53,6 +53,15 @@ describe('RunDetailService, the trades route', () => {
     expect(request.request.params.get('offset')).toBe('0');
   });
 
+  it('sends a session whose open is 0, which is a session that is set and not a filter that is off', async () => {
+    const pending = service.trades(7, { sessionOpenMs: 0 });
+    const request = http.expectOne((req) => req.url === `${BASE}/runs/7/trades`);
+    request.flush(tradesPage());
+    await pending;
+
+    expect(request.request.params.get('session_open_ms')).toBe('0');
+  });
+
   it('does not send a leg that is empty or a session that is null', async () => {
     const pending = service.trades(7, { sessionOpenMs: null, legId: '' });
     const request = http.expectOne((req) => req.url === `${BASE}/runs/7/trades`);
