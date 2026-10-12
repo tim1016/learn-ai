@@ -99,7 +99,17 @@ async def list_the_trades(
     ] = None,
     # A leg id has the one shape the setup gives it (the setup's own pattern, so the two cannot drift), and nothing else
     # is looked for in the database: a text with a NUL in it is refused there.
-    leg_id: Annotated[str | None, Query(pattern=LEG_ID_PATTERN, description="Only this leg's trades.")] = None,
+    leg_id: Annotated[
+        str | None,
+        Query(
+            pattern=LEG_ID_PATTERN,
+            description=(
+                "Only this leg's trades. A leg the run's setup does not have is a 404 when the setup can be read. "
+                "When the run's stored setup can no longer be read, an unknown leg is answered from the stored "
+                "trades alone: a 200 with `total` 0."
+            ),
+        ),
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=TRADES_PAGE_MAX)] = TRADES_PAGE_DEFAULT,
     offset: Annotated[int, Query(ge=0, le=RUN_ID_MAX)] = 0,
 ) -> OptionsBacktestTradesResponse:

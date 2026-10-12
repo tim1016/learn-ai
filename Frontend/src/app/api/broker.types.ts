@@ -23308,7 +23308,10 @@ export interface components {
             session_close_ms: number;
             /** Session Open Ms */
             session_open_ms: number;
-            /** Setup Cannot Open Reason */
+            /**
+             * Setup Cannot Open Reason
+             * @description Why the run's stored setup can no longer be read; null when it can. When it is set, `levels` leaves out the `momentum` line of every attempt that never filled, because that line is the leg's momentum rule applied to the attempt's starting price and the rule is lost. Nothing else is left out: the same attempt's `starting_price` line, the lines of every attempt that filled, and the trades, events, fills, marks and series are served as for any run.
+             */
             setup_cannot_open_reason?: string | null;
             /** Skip Reason */
             skip_reason?: ("window_does_not_fit" | "underlying_did_not_trade") | null;
@@ -23590,6 +23593,10 @@ export interface components {
          * OptionsBacktestTradesResponse
          * @description A page of a run's leg trades. ``total`` counts every trade that matches, on every page; ``next_offset`` is the
          *     ``offset`` to ask for the rest, and is ``None`` on the last page. The CSV export is never paged.
+         *
+         *     A ``leg_id`` that the run's setup does not have is a 404 when the setup can be read. On a run whose stored setup can
+         *     no longer be read there is no setup to say which legs the run had, so an unknown ``leg_id`` is answered from the
+         *     stored trades alone: a 200 with ``total`` 0, which says only that no trade was stored for that leg.
          */
         OptionsBacktestTradesResponse: {
             /** Limit */
@@ -41613,7 +41620,7 @@ export interface operations {
             query?: {
                 /** @description Only this session's trades, by its open. */
                 session_open_ms?: number | null;
-                /** @description Only this leg's trades. */
+                /** @description Only this leg's trades. A leg the run's setup does not have is a 404 when the setup can be read. When the run's stored setup can no longer be read, an unknown leg is answered from the stored trades alone: a 200 with `total` 0. */
                 leg_id?: string | null;
                 limit?: number;
                 offset?: number;
