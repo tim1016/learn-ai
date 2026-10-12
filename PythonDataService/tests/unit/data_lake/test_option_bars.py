@@ -308,6 +308,65 @@ async def test_spy_options_print_until_16_15_and_what_the_vendor_sent_is_kept(fa
     assert day.bars[-1].start_ms == after_close
 
 
+#: Midnight New York as epoch ms UTC, worked by hand as UTC midnight plus that date's offset:
+#: 2025-01-15 is EST (UTC-5, 05:00 UTC); 2025-03-10 is the Monday after clocks went forward on Sunday 03-09 (EDT, UTC-4);
+#: 2025-06-13 is EDT; 2025-11-03 is the Monday after clocks went back on Sunday 11-02 (EST).
+_MIDNIGHT_NEW_YORK_MS = {
+    date(2025, 1, 15): 1736917200000,
+    date(2025, 3, 10): 1741579200000,
+    date(2025, 6, 13): 1749787200000,
+    date(2025, 11, 3): 1762146000000,
+}
+#: Midnight, before 04:00, before the open, the open, the close, a print after the close, the last minute the
+#: underlying trades, and the last minute of the date.
+_EVERY_HOUR = [(0, 0), (3, 59), (4, 0), (9, 29), (9, 30), (16, 0), (16, 14), (19, 59), (23, 59)]
+#: What the file stores for those: the wall clock as milliseconds after midnight, the same on every date.
+_EVERY_HOUR_STORED = [0, 14_340_000, 14_400_000, 34_140_000, 34_200_000, 57_600_000, 58_440_000, 71_940_000, 86_340_000]
+
+
+@respx.mock
+@pytest.mark.parametrize("day", list(_MIDNIGHT_NEW_YORK_MS), ids=["winter", "after spring forward", "summer", "after fall back"])
+async def test_every_bar_the_vendor_sent_for_the_date_comes_back_at_the_vendors_own_stamp_whatever_the_hour(
+    day: date, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """Trimming to a session is the caller's business: the lake keeps and returns whatever printed on the date."""
+    contract = OptionContract.of(root="SPY", expiry_date=day, right="call", strike=600)
+    stamps = [_MIDNIGHT_NEW_YORK_MS[day] + (hour * 60 + minute) * MINUTE_MS for hour, minute in _EVERY_HOUR]
+    _mock_vendor(_ok([_bar(t=t) for t in stamps], contract.occ_symbol), contract=contract.occ_symbol)
+
+    result = await _ensure(contract, day)
+    read = await _read(contract, day)
+
+    assert result.failure is None and result.record is not None
+    assert (result.record.row_count, result.record.first_bar_start_ms, result.record.last_bar_start_ms) == (
+        len(stamps), stamps[0], stamps[-1],
+    )
+    _, rows = _zip_rows((_raw_root(tmp_lake) / result.record.file_path).read_bytes())
+    assert [int(row.split(",")[0]) for row in rows] == _EVERY_HOUR_STORED
+    assert read is not None
+    assert [bar.start_ms for bar in read.bars] == stamps
+
+
+@respx.mock
+async def test_a_volume_with_a_fraction_and_a_volume_too_large_for_a_float_read_back_exactly(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """Whole contracts are the norm, but the file holds a fractional volume and any size of whole one, exactly."""
+    volumes = ["0.000001", "1234.567891", "9007199254740993", "123456789012345678901234567890"]  # 2**53 + 1; 30 digits
+    rows = ",".join(
+        f'{{"t":{SESSION_OPEN_MS + i * MINUTE_MS},"o":1.27,"h":1.31,"l":1.25,"c":1.27,"v":{v}}}' for i, v in enumerate(volumes)
+    )
+    _mock_vendor(raw_json(f'{{"status":"OK","ticker":"O:{SYMBOL}","resultsCount":{len(volumes)},"results":[{rows}]}}'))
+    result = await _ensure()
+
+    day = await _read()
+
+    assert result.failure is None
+    assert day is not None
+    assert [bar.volume for bar in day.bars] == [Decimal(v) for v in volumes]
+    assert [str(bar.volume) for bar in day.bars] == volumes
+
+
 @respx.mock
 async def test_the_same_vendor_answer_always_makes_the_same_bytes(
     fake_catalog: FakeCatalog, tmp_lake: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -679,9 +738,6 @@ async def test_an_early_close_is_judged_by_its_own_close_not_by_four_oclock(fake
     assert early.failure is not None and early.failure.reason == "session_not_over"
     assert on_time.failure is None and on_time.record is not None
     assert route.call_count == 1
-    # In winter the same 09:30 start is 14:30 UTC, not 13:30: the stored wall clock is read back through New York time.
-    winter_day = await _read(contract, day)
-    assert winter_day is not None and winter_day.bars[0].start_ms == open_ms
 
 
 @respx.mock
@@ -876,7 +932,8 @@ async def test_each_vendor_error_fails_the_row_with_its_own_reason_and_publishes
 ) -> None:
     _mock_vendor(response)
 
-    result = await _ensure()
+    # The plan floor moves with the calendar, so the 403 is always asked on a named day.
+    result = await _ensure(now_ms=NOW_2026_10_12_MS)
 
     assert result.record is None and result.reused is False
     assert result.failure is not None and result.failure.reason == reason
@@ -1183,3 +1240,31 @@ def test_a_file_made_for_another_contract_is_refused() -> None:
 
     with pytest.raises(OptionBarsFileError, match="expected one member"):
         parse_option_day_zip(_zip(other, "34200000,12700,13100,12500,12700,12\n"), SYMBOL, TRADING_DAY)
+
+
+@pytest.mark.parametrize(
+    ("ticks", "price"),
+    [
+        ("9007199254740993", "900719925474.0993"),  # 2**53 + 1: the first integer a float cannot hold
+        ("12345678901234567", "1234567890123.4567"),  # seventeen digits
+    ],
+)
+def test_a_stored_price_with_more_digits_than_a_float_holds_reads_back_exact(ticks: str, price: str) -> None:
+    """Dividing through a float would give 900719925474.0992 and 1234567890123.4568: a price is never decided by one."""
+    [bar] = parse_option_day_zip(_zip(MEMBER, f"34200000,{ticks},{ticks},{ticks},{ticks},1\n"), SYMBOL, TRADING_DAY)
+
+    assert (bar.open, bar.high, bar.low, bar.close) == (Decimal(price),) * 4
+    assert str(bar.open) == price
+
+
+@pytest.mark.parametrize("extra_first", [False, True], ids=["extra last", "extra first"])
+def test_a_file_with_a_member_besides_the_one_it_should_hold_is_refused(extra_first: bool) -> None:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        members = [(MEMBER, "34200000,12700,13100,12500,12700,12\n"), ("20250613_notes.txt", "anything")]
+        for name, body in reversed(members) if extra_first else members:
+            zf.writestr(name, body)
+
+    with pytest.raises(OptionBarsFileError, match="expected one member"):
+        parse_option_day_zip(buf.getvalue(), SYMBOL, TRADING_DAY)
+

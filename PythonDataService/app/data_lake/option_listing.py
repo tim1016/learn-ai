@@ -154,6 +154,12 @@ class OptionListingFileError(ValueError):
     """A vendor contract cannot be held by the file, or a stored file is not the file this module writes."""
 
 
+def _require_ticker(underlying: str) -> None:
+    """A caller's mistake, not a missing listing: the lake spells an underlying in upper case, as the catalog does."""
+    if not is_lake_addressable_symbol(underlying):
+        raise ValueError(f"underlying must be an upper-case ticker, got {underlying!r}")
+
+
 def _member_name(underlying: str, as_of: date) -> str:
     return f"{as_of:%Y%m%d}_{underlying.lower()}_contracts.csv"
 
@@ -298,7 +304,9 @@ def parse_option_listing_zip(payload: bytes, underlying: str, as_of: date) -> tu
             additional = {"0": False, "1": True}[additional_text]
         except (ValueError, KeyError) as exc:
             raise OptionListingFileError(f"{expected} line {number}: {exc!r}") from exc
-        style = style_text or None
+        # The writer stores both in lower case; a cell in another case still names the same thing.
+        contract_type = contract_type.lower()
+        style = style_text.lower() or None
         standard, named = _classify(
             underlying=underlying, ticker=ticker, contract_type=contract_type, strike=strike, expiry_ms=expiry_ms,
             exercise_style=style, shares=shares, additional=additional,
@@ -331,6 +339,7 @@ def read_option_listing(
     bytes by default), so a file the catalog does not admit raises ``LakeAdmissionError``
     rather than reading. Synchronous: call it from a worker thread.
     """
+    _require_ticker(underlying)
     relative = OptionListingPath(underlying=underlying, as_of=as_of).relative_path()
     path = resolve_lake_root(OPTION_PRICE_ADJUSTMENT_MODE) / Path(*relative.parts)
     if not path.is_file():
@@ -354,8 +363,7 @@ async def ensure_option_listing(
     refusals as a session's bars come first (an unstorable symbol, a day with no
     session, a session not over), and cost no claim.
     """
-    if not is_lake_addressable_symbol(underlying):
-        raise ValueError(f"underlying must be an upper-case ticker, got {underlying!r}")
+    _require_ticker(underlying)
     now = now_ms if now_ms is not None else current_ms()
     refusal = refusal_before_claim(underlying, as_of, now_ms=now)
     if refusal is not None:
@@ -478,6 +486,7 @@ async def captured_listing_dates(underlying: str, start: date, end: date) -> tup
     are read at once and each session of the range is kept if the hash of its
     listing is among them. Dates that are not sessions are never listings.
     """
+    _require_ticker(underlying)
     held = {
         record.data_contract_hash
         for record in await catalog_client.select_complete_metadata_artifacts(

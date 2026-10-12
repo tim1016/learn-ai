@@ -44,16 +44,24 @@ from app.data_lake.option_listing import (
 )
 from app.data_lake.path_policy import lake_subpath
 from app.data_lake.polygon_option_contracts import PolygonOptionContract
+from app.data_lake.types import ArtifactIdentity
 from app.options.contract import OptionContract
 from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, point_lake_writer_at_tmp
 
 AS_OF = date(2025, 6, 13)
 SESSION_CLOSE_MS = 1749844800000
 MINUTE_MS = 60_000
+NOW_2026_10_12_MS = 1791828000000
 CONTRACTS_URL = "https://api.polygon.io/v3/reference/options/contracts"
 SECOND_PAGE = f"{CONTRACTS_URL}?cursor=page2"
 RELATIVE_PATH = "option/usa/listing/spy/20250613_contracts.zip"
 MEMBER = "20250613_spy_contracts.csv"
+
+
+@pytest.fixture(autouse=True)
+def _the_clock_is_fixed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every capture without its own ``now_ms`` runs on 2026-10-12, so no test here reads the wall clock."""
+    monkeypatch.setattr(option_listing_module, "current_ms", lambda: NOW_2026_10_12_MS)
 
 
 @pytest.fixture
@@ -517,6 +525,40 @@ async def test_a_value_in_another_case_is_read_as_the_value_it_names(fake_catalo
 
 
 @respx.mock
+@pytest.mark.parametrize("written", ["call", "CALL", "Call", "put", "PUT", "Put"])
+async def test_a_call_or_put_reads_back_right_whatever_case_the_vendor_wrote_it_in(
+    written: str, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    right = written.lower()
+    ticker = "O:SPY250613C00375000" if right == "call" else "O:SPY250613P00375000"
+    _mock_one_page([_row(ticker, 375, contract_type=written)])
+    await ensure_option_listing("SPY", AS_OF)
+
+    listing = await _read()
+
+    assert listing is not None
+    [row] = listing.rows
+    assert (row.contract_type, row.standard) == (right, True)
+    assert row.contract is not None and row.contract.right == right
+
+
+@pytest.mark.parametrize("stored", ["CALL", "Call", "call"])
+def test_a_call_or_put_stored_in_any_case_is_read_as_the_right_it_names(stored: str) -> None:
+    """The reader says what the cell names, so a file made by hand or by another version reads the same."""
+    csv_text = (
+        "ticker,contract_type,strike_thousandths,expiry,exercise_style,shares_per_contract,additional_underlyings\n"
+        f"O:SPY250613C00375000,{stored},375000,20250613,AMERICAN,100,0\n"
+    )
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as zf:
+        zf.writestr(MEMBER, csv_text)
+
+    [row] = parse_option_listing_zip(payload.getvalue(), "SPY", AS_OF)
+
+    assert (row.contract_type, row.exercise_style, row.standard) == ("call", "american", True)
+
+
+@respx.mock
 @pytest.mark.parametrize(
     ("response", "reason"),
     [
@@ -545,7 +587,7 @@ async def test_reference_data_has_no_rolling_window_so_an_old_403_is_a_real_enti
     """Listings reach back before the price floor (probed: as of 2024-06-14 answered)."""
     respx.get(CONTRACTS_URL).mock(return_value=httpx.Response(403, text="not entitled"))
 
-    result = await ensure_option_listing("SPY", date(2024, 6, 14), now_ms=1791828000000)
+    result = await ensure_option_listing("SPY", date(2024, 6, 14), now_ms=NOW_2026_10_12_MS)
 
     assert result.failure is not None and result.failure.reason == "provider_entitlement_error"
 
@@ -610,6 +652,31 @@ async def test_an_underlying_that_is_not_a_ticker_is_a_caller_mistake(bad: str, 
     with pytest.raises(ValueError, match="underlying"):
         await ensure_option_listing(bad, AS_OF)
     assert fake_catalog.rows == {}
+
+
+@respx.mock
+@pytest.mark.parametrize("bad", ["spy", "Spy", "", "SPY/QQQ", "1SPY", "../SPY"])
+async def test_an_underlying_must_be_spelled_as_the_lake_spells_it_on_read_as_on_write(
+    bad: str, fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``spy`` finds SPY's folder, and every row of it would read as non-standard; it is a mistake, said loudly."""
+    _mock_one_page(STANDARD_ROWS)
+    await ensure_option_listing("SPY", AS_OF)
+    asked: list[tuple] = []
+    real = fake_catalog.select_complete_metadata_artifacts
+
+    async def counting(*args: Any, **kwargs: Any):
+        asked.append(args)
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(catalog_client, "select_complete_metadata_artifacts", counting)
+
+    with pytest.raises(ValueError, match="underlying"):
+        await _read(bad)
+    with pytest.raises(ValueError, match="underlying"):
+        await captured_listing_dates(bad, AS_OF, AS_OF)
+
+    assert asked == []  # a mistake costs no catalog question
 
 
 # ── A lost claim ─────────────────────────────────────────────────────────
@@ -822,6 +889,45 @@ async def test_the_captured_as_of_dates_in_a_range_come_from_one_catalog_query(
     # 06-12 and 06-13 are held; 06-16 failed; 06-14/15 are a weekend; 06-19 is Juneteenth; QQQ's date is not SPY's.
     assert captured == (date(2025, 6, 12), date(2025, 6, 13))
     assert len(asked) == 1
+
+
+async def _claim_and_leave_fetching(underlying: str, day: date) -> None:
+    """A listing row some worker is still fetching: claimed, never completed."""
+    identity = ArtifactIdentity(
+        artifact_kind="metadata", market="usa_options", symbol=underlying, provider="polygon", price_adjustment_mode="raw"
+    )
+    claimed = await catalog_client.claim_metadata_artifact(
+        identity=identity, worker_id="w", lease_ttl_ms=300_000, data_contract_hash=option_listing_dch(underlying, day),
+        file_path="x.zip",
+    )
+    assert claimed is not None
+
+
+@respx.mock
+async def test_the_captured_dates_include_both_ends_of_the_range_and_nothing_outside_it_and_only_complete_listings(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """06-10 and 06-18 are captured and sit one day outside the range; 06-12 failed and 06-16 is still being fetched."""
+    for day in (date(2025, 6, 10), date(2025, 6, 11), date(2025, 6, 13), date(2025, 6, 17), date(2025, 6, 18)):
+        respx.get(CONTRACTS_URL, params={"as_of": day.isoformat()}).mock(return_value=_page(STANDARD_ROWS))
+        assert (await ensure_option_listing("SPY", day)).failure is None
+    respx.get(CONTRACTS_URL, params={"as_of": "2025-06-12"}).mock(return_value=httpx.Response(500, text="boom"))
+    assert (await ensure_option_listing("SPY", date(2025, 6, 12))).failure is not None
+    await _claim_and_leave_fetching("SPY", date(2025, 6, 16))
+
+    captured = await captured_listing_dates("SPY", date(2025, 6, 11), date(2025, 6, 17))
+
+    assert captured == (date(2025, 6, 11), date(2025, 6, 13), date(2025, 6, 17))
+
+
+@respx.mock
+async def test_a_range_of_one_day_answers_for_that_day_alone(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    _mock_one_page(STANDARD_ROWS)
+    await ensure_option_listing("SPY", AS_OF)
+
+    assert await captured_listing_dates("SPY", AS_OF, AS_OF) == (AS_OF,)
+    assert await captured_listing_dates("SPY", date(2025, 6, 12), date(2025, 6, 12)) == ()
+    assert await captured_listing_dates("SPY", date(2025, 6, 16), date(2025, 6, 16)) == ()
 
 
 @respx.mock

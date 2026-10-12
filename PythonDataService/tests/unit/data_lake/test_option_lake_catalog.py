@@ -440,6 +440,34 @@ async def test_the_captured_listing_dates_come_from_the_real_table_in_one_select
 
 
 @respx.mock
+async def test_the_captured_dates_include_both_ends_of_the_range_and_only_complete_listings_on_the_real_table(
+    clean_artifacts, pool, tmp_lake
+) -> None:
+    """06-10 and 06-18 are captured and sit one day outside the range; 06-12 failed and 06-16 is still being fetched."""
+    one_listing = [_listing_row("O:SPY250613C00375000", 375)]
+    for day in (date(2025, 6, 10), date(2025, 6, 11), date(2025, 6, 13), date(2025, 6, 17), date(2025, 6, 18)):
+        respx.get(CONTRACTS_URL, params={"as_of": day.isoformat()}).mock(
+            return_value=httpx.Response(200, json={"status": "OK", "results": one_listing})
+        )
+        assert (await ensure_option_listing("SPY", day)).failure is None
+    respx.get(CONTRACTS_URL, params={"as_of": "2025-06-12"}).mock(return_value=httpx.Response(500, text="boom"))
+    assert (await ensure_option_listing("SPY", date(2025, 6, 12))).failure is not None
+    leaving_fetching = await catalog_client.claim_metadata_artifact(
+        identity=ArtifactIdentity(
+            artifact_kind="metadata", market="usa_options", symbol="SPY", provider="polygon", price_adjustment_mode="raw"
+        ),
+        worker_id="w", lease_ttl_ms=300_000, data_contract_hash=option_listing_dch("SPY", date(2025, 6, 16)), file_path="x.zip",
+    )
+    assert leaving_fetching is not None
+
+    captured = await captured_listing_dates("SPY", date(2025, 6, 11), date(2025, 6, 17))
+    one_day = await captured_listing_dates("SPY", date(2025, 6, 18), date(2025, 6, 18))
+
+    assert captured == (date(2025, 6, 11), date(2025, 6, 13), date(2025, 6, 17))
+    assert one_day == (date(2025, 6, 18),)
+
+
+@respx.mock
 async def test_a_row_with_nothing_but_a_ticker_is_stored_on_the_real_table_with_empty_cells(clean_artifacts, pool, tmp_lake) -> None:
     _mock_listing([{"ticker": "O:SPY250613C00375000"}, _listing_row("O:SPY250613C00376000", 376)])
 
