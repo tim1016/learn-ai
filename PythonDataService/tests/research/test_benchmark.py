@@ -65,6 +65,7 @@ def lake(tmp_path: Path, seeded_lake_catalog, monkeypatch) -> Path:
     root = write_root / lake_subpath("raw")
     root.mkdir(parents=True)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    monkeypatch.setenv("LEAN_DATA_WRITE_ROOT", str(write_root))  # the spawned workers read env, not the object
     seed_lake_window(root, SYMBOL, _weekdays(DEVELOPMENT), count=390)
     return root
 
@@ -270,11 +271,11 @@ def test_a_failed_evaluation_is_rejected_never_recorded_as_a_no_trade_result(lak
 
 
 def test_future_modes_are_refused_until_the_executor_that_measures_them_exists(lake) -> None:
-    """No selectable branch without behavior: only serial modes run today."""
-    with pytest.raises(ValueError, match="future executor"):
-        _smoke_baseline(lake, execution_mode="serial-same-resource")
-    with pytest.raises(ValueError, match="worker"):
-        _smoke_baseline(lake, timing_mode="preparation-inclusive")
+    """No selectable branch without behavior: the runtime modes exist since #3053; the rest still refuse."""
+    with pytest.raises(ValueError, match="execution mode"):
+        _smoke_baseline(lake, execution_mode="pooled-3")  # widths outside the qualified 1/2/4/8 ladder
+    with pytest.raises(ValueError, match="execution mode"):
+        _smoke_baseline(lake, execution_mode="serial-turbo")
     with pytest.raises(ValueError, match="positive"):
         _smoke_baseline(lake, execution_mode="serial-decoded-cache", decoded_cache_byte_bound=0)
 
@@ -445,3 +446,34 @@ def test_the_width_histogram_names_drift_per_fold() -> None:
     assert histogram["folds"][1]["totals"]["reconciled"] is False, (
         "rounds that lost an invalid record must read False against the stop accounting"
     )
+
+
+# ── The pooled executor (#3053) ───────────────────────────────────────────
+
+
+@pytest.mark.slow
+def test_the_pooled_executor_matches_the_serial_originals_hashes_and_reports_ipc(lake) -> None:
+    """The runtime-measured corpus is the serial corpus, hash for hash, with nested spans named."""
+    serial = _smoke_baseline(lake)
+    pooled = _smoke_baseline(lake, execution_mode="pooled-2", timing_mode="preparation-inclusive")
+
+    by_key = {run.evaluation_key: run for run in serial.runs}
+    assert len(pooled.runs) == len(serial.runs)
+    for run in pooled.runs:
+        twin = by_key[run.evaluation_key]
+        assert run.result_hash == twin.result_hash, f"evaluation {run.evaluation_key} moved over the wire"
+        assert run.trades == twin.trades and run.expectation_held
+        assert run.nested_ms["ipc"] is not None, "queue/IPC attributed parent-side"
+    assert pooled.throughput["valid_new_evaluations"] == len(pooled.runs)
+    assert any("pooled executor" in note for note in (pooled.notes or []))
+
+
+@pytest.mark.slow
+def test_the_same_resource_serial_baseline_is_the_one_worker_runtime(lake) -> None:
+    """serial-same-resource runs the #3044 shape: one spawned worker, warm timing, serial answers."""
+    serial = _smoke_baseline(lake)
+    same_resource = _smoke_baseline(lake, execution_mode="serial-same-resource")
+
+    by_key = {run.evaluation_key: run for run in serial.runs}
+    for run in same_resource.runs:
+        assert run.result_hash == by_key[run.evaluation_key].result_hash

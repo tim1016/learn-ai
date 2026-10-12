@@ -24,6 +24,17 @@ a singleton coordinator holds a session advisory lock, dispatches are
 stamped with its boot generation, and the API's startup sweep skips a live
 coordinator's jobs.
 
+**Amendment 2026-10-12 (#3049-#3053):** the mounted dispatch surface now
+carries all four research callers — the Golden Search stage, Grid Search,
+the Walk-Forward Study and Recency — each with its own persistence
+contract intact and every scientific identity unchanged; the pooled
+widths, fair scheduling and progress contract are #3046-#3052's, and the
+operator's executor selection, drain and rollback procedure is
+`docs/runbooks/research-runtime-capacity.md`. Decision 1's "the internal
+research dispatch routes" reads with that surface; the concurrency
+bounded by the envelope is qualified per PRD #3034's evidence, not
+assumed.
+
 ## Decision
 
 1. **One research runtime process owns execution; the API forwards.** A

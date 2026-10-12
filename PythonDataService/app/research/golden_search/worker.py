@@ -350,6 +350,11 @@ def _run_one_task(
 
             run_recency_run_task(task, out=out, ask_admission=ask_admission, cancel_flag=cancel_flag, state=state)
             return
+        if kind == "benchmark_eval":
+            from app.research.benchmark import run_benchmark_eval_task
+
+            run_benchmark_eval_task(task, out=out, ask_admission=ask_admission, cancel_flag=cancel_flag, state=state)
+            return
         out.write(
             {"type": "identity_refused", "key": task.get("key", "?"), "reason": f"unknown task kind {kind!r}"}
         )
