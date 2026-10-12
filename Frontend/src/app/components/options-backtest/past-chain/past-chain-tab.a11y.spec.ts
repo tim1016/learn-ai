@@ -4,8 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { PastChainInvalidError, PastChainRefusedError, DownloadNotAllowedError } from './past-chain.service';
 import { deferred } from './testing/deferred';
-import { chainDay, chainExpiry, contract, downloadAnswer, item, side } from './testing/fixtures';
-import { fakeChainService, openStandardChain, pickDate, renderChainTab, showChain, typeStrikes, typeTime } from './testing/render-chain';
+import { chainDay, chainExpiry, contract, downloadAnswer, item, side, sideWithoutMoney, underlyingPrice } from './testing/fixtures';
+import { fakeChainService, openChainCard, openStandardChain, pickDate, renderChainTab, showChain, typeStrikes, typeTime } from './testing/render-chain';
 
 async function violations(): Promise<string[]> {
   const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
@@ -26,6 +26,40 @@ describe('the Past chain tab for a screen reader', () => {
     });
     await renderChainTab(service);
 
+    await openStandardChain();
+
+    expect(await violations()).toEqual([]);
+  });
+
+  it('makes each table that scrolls a named region the keyboard reaches', async () => {
+    await renderChainTab(fakeChainService(vi));
+    await openStandardChain();
+
+    for (const name of ['Scrollable list of expiries', 'Scrollable chain table']) {
+      expect(screen.getByRole('region', { name }).getAttribute('tabindex')).toBe('0');
+    }
+  });
+
+  it('has no violation when no strikes are drawn because the underlying has no price', async () => {
+    const chain = chainExpiry({
+      calls: sideWithoutMoney('call', 120, 118),
+      puts: sideWithoutMoney('put', 118, 116),
+      underlying_price: underlyingPrice({ state: 'not_stored', price: null, price_time_ms: null }),
+    });
+    await renderChainTab(fakeChainService(vi, { expiry: vi.fn(async () => chain) }));
+    await openChainCard();
+
+    expect(await violations()).toEqual([]);
+  });
+
+  it('has no violation with two contracts at one strike, an empty cell for each reason, and a state it does not know', async () => {
+    const odd = { ...contract({ right: 'call', thousandths: 602_000, state: 'did_not_trade', standard: false }), symbol: 'SPY1261016C00602000' };
+    const unknown = { ...contract({ right: 'call', thousandths: 604_000, state: 'traded' }), price_state: 'halted' as 'traded' };
+    const chain = chainExpiry({
+      calls: side('call', [contract({ right: 'call', thousandths: 602_000, state: 'did_not_trade' }), odd, unknown], 602_000, { listed: 90 }),
+      puts: side('put', [contract({ right: 'put', thousandths: 601_000, state: 'did_not_trade' }), contract({ right: 'put', thousandths: 602_000, state: 'did_not_trade' })], 602_000, { listed: 80 }),
+    });
+    await renderChainTab(fakeChainService(vi, { expiry: vi.fn(async () => chain) }));
     await openStandardChain();
 
     expect(await violations()).toEqual([]);

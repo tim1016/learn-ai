@@ -4,5 +4,5 @@
     [underlyingProblem]="underlyingProblem()" [dateProblem]="dateProblem()" [timeProblem]="timeProblem()" [strikesProblem]="strikesProblem()" />
   <app-options-backtest-past-chain-download [plan]="plan()" [state]="downloadState()" [notOver]="notOver()" (start)="startDownload()" />
   <app-options-backtest-past-chain-expiries [view]="dayView()" [picked]="expiryMs()" (pick)="pickExpiry($event)" (retry)="retryDay()" />
-  <app-options-backtest-past-chain-table [view]="chainView()" [expiryMs]="expiryMs()" (retry)="retryChain()" />
+  <app-options-backtest-past-chain-table [view]="chainView()" [expiryMs]="expiryMs()" [downloadOffered]="downloadOffered()" (retry)="retryChain()" />
 </div>

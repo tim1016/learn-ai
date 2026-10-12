@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { NOT_A_SESSION, type ReadProblem } from './past-chain-problems';
-import { cellOf, chainViewOf, dayViewOf, downloadPlan, downloadRequest, outcomeCounts, planWords, readStatusOf, sessionNotOver, sessionOf, strikeRows, underlyingViewOf, type ChainInputs } from './past-chain-view';
-import { chainDay, chainExpiry, contract, downloadAnswer, EXPIRY_MS, item, side, SESSION_CLOSE_MS, SESSION_OPEN_MS, TRADING_DATE_MS, underlyingPrice } from './testing/fixtures';
+import type { ChainContract, ChainDay, ChainExpiry, UnderlyingPrice } from './past-chain.types';
+import { bodyOf, cellOf, chainViewOf, dayViewOf, downloadPlan, downloadRequest, outcomeCounts, planWords, readStatusOf, sessionNotOver, sessionOf, strikeRows, underlyingViewOf, type ChainInputs } from './past-chain-view';
+import { chainDay, chainExpiry, contract, downloadAnswer, EXPIRY_MS, item, side, sideWithoutMoney, SESSION_CLOSE_MS, SESSION_OPEN_MS, TRADING_DATE_MS, underlyingPrice } from './testing/fixtures';
 
 const problem = (changes: Partial<ReadProblem> = {}): ReadProblem => ({ message: 'the server said so', code: 'CODE', control: 'area', canRetry: false, ...changes });
 
@@ -21,6 +22,13 @@ describe('what a read of the day comes to', () => {
     });
     const empty = chainDay({ expiries: [], rows_left_out_unusable: 4 });
     expect(dayViewOf('resolved', empty, null)).toEqual({ kind: 'empty', day: empty });
+  });
+
+  it('says in words the code of a listing state it does not know, and is neither a table nor a stored listing', () => {
+    const odd = chainDay({ listing_state: 'partial' as ChainDay['listing_state'] });
+
+    expect(dayViewOf('resolved', odd, null)).toEqual({ kind: 'unknown_listing', code: 'partial' });
+    expect(dayViewOf('resolved', { ...odd, expiries: [] }, null)).toEqual({ kind: 'unknown_listing', code: 'partial' });
   });
 
   it('is the expiries when the listing is stored and holds some', () => {
@@ -87,6 +95,23 @@ describe('what the read of one expiry comes to', () => {
       kind: 'listing_unknown',
       state: 'unreadable',
       problem: 'damaged',
+    });
+  });
+
+  it('says in words the code of a listing state it does not know, whatever else the answer says of the expiry', () => {
+    const odd = 'partial' as ChainExpiry['listing_state'];
+
+    expect(chainViewOf({ ...ready, chain: chainExpiry({ listing_state: odd }) })).toEqual({ kind: 'unknown_listing', code: 'partial' });
+    expect(chainViewOf({ ...ready, chain: chainExpiry({ listing_state: odd, expiry_listed: null, tag: null }) })).toEqual({ kind: 'unknown_listing', code: 'partial' });
+    expect(chainViewOf({ ...ready, chain: chainExpiry({ listing_state: odd, expiry_listed: false, tag: null }) })).toEqual({ kind: 'unknown_listing', code: 'partial' });
+  });
+
+  it('does not call a stored listing not stored when the server gave no answer on whether the expiry is in it', () => {
+    expect(chainViewOf({ ...ready, chain: chainExpiry({ expiry_listed: null, tag: null, listing_state: 'stored' }) })).toEqual({
+      kind: 'failed',
+      message: 'The server did not say whether the expiry is listed.',
+      code: null,
+      canRetry: false,
     });
   });
 
@@ -175,6 +200,137 @@ describe('the strikes of the table', () => {
   });
 });
 
+describe('the rows of the table, and what an empty cell may say', () => {
+  const call = (thousandths: number, changes: Partial<ChainContract> = {}) => ({ ...contract({ right: 'call', thousandths, state: 'did_not_trade' }), ...changes });
+  const put = (thousandths: number) => contract({ right: 'put', thousandths, state: 'did_not_trade' });
+  /** A contract of another root at a strike that a standard contract also has: the same strike, another symbol. */
+  const odd = (thousandths: number) => ({ ...call(thousandths, { standard: false }), symbol: 'SPY1261016C00602000' });
+
+  it('says a strike is not listed on a side only when the answer proves it: the side lists nothing, shows all it lists, or the strike is among those it shows', () => {
+    const shownAll = strikeRows(side('call', [call(601_000)]), side('put', [put(602_000)]));
+    expect(shownAll.map((row) => [row.thousandths, row.callGap, row.putGap])).toEqual([
+      [601_000, null, 'not_listed'],
+      [602_000, 'not_listed', null],
+    ]);
+
+    // Each side lists far more than it shows, so a strike beyond its shown strikes is not something the answer can speak to.
+    const calls = side('call', [call(600_000), call(601_000), call(603_000), call(604_000)], 602_000, { listed: 120 });
+    const puts = side('put', [put(601_000), put(602_000), put(603_000)], 602_000, { listed: 118 });
+    expect(strikeRows(calls, puts).map((row) => [row.thousandths, row.callGap, row.putGap])).toEqual([
+      [600_000, null, 'outside'],
+      [601_000, null, null],
+      [602_000, 'not_listed', null],
+      [603_000, null, null],
+      [604_000, null, 'outside'],
+    ]);
+  });
+
+  it('holds a side that lists contracts and shows none to nothing: it is not said to list nothing at any strike', () => {
+    const rows = strikeRows(side('call', [call(601_000)]), side('put', [], null, { listed: 5, standard_listed: 0 }));
+
+    expect(rows.map((row) => [row.callGap, row.putGap])).toEqual([[null, 'outside']]);
+  });
+
+  it('says of a side that lists nothing at all that every strike is not listed on it', () => {
+    const rows = strikeRows(side('call', [call(601_000), call(602_000)]), side('put', [], null));
+
+    expect(rows.map((row) => row.putGap)).toEqual(['not_listed', 'not_listed']);
+  });
+
+  it('draws two contracts of one right at one strike as two rows with their own keys, and the put beside the first is not said to be missing from the second', () => {
+    const calls = side('call', [call(602_000), odd(602_000)], 602_000);
+    const puts = side('put', [put(602_000)], 602_000);
+
+    const rows = strikeRows(calls, puts);
+
+    expect(rows.map((row) => [row.key, row.call?.symbol, row.put?.symbol, row.callGap, row.putGap])).toEqual([
+      ['602000:0', 'SPY261016C00602000', 'SPY261016P00602000', null, null],
+      ['602000:1', 'SPY1261016C00602000', undefined, null, 'no_other'],
+    ]);
+    expect(new Set(rows.map((row) => row.key)).size).toBe(2);
+  });
+
+  it('marks the money once, on the first row of its strike', () => {
+    const rows = strikeRows(side('call', [call(602_000), odd(602_000)], 602_000), side('put', [put(602_000)], 602_000));
+
+    expect(rows.map((row) => [row.callMoney, row.putMoney])).toEqual([
+      [true, true],
+      [false, false],
+    ]);
+  });
+
+  it('puts a put with two contracts at a strike beside the call, then below it with the call said to have no other', () => {
+    const rows = strikeRows(side('call', [call(602_000)], 602_000), side('put', [put(602_000), { ...put(602_000), symbol: 'SPY1261016P00602000', standard: false }], 602_000));
+
+    expect(rows.map((row) => [row.key, row.callGap, row.putGap])).toEqual([
+      ['602000:0', null, null],
+      ['602000:1', 'no_other', null],
+    ]);
+    // The money of both sides is at 602, and is marked on the first row alone, whichever side has the second contract.
+    expect(rows.map((row) => [row.callMoney, row.putMoney])).toEqual([
+      [true, true],
+      [false, false],
+    ]);
+  });
+});
+
+describe('what the body of a chain comes to', () => {
+  const noMoney = (changes: Partial<ChainExpiry> = {}) =>
+    chainExpiry({ calls: sideWithoutMoney('call', 120, 118), puts: sideWithoutMoney('put', 118, 116), underlying_price: underlyingPrice({ state: 'no_bar_yet', price: null, price_time_ms: null }), ...changes });
+
+  it('says nothing is listed only when both sides count none listed', () => {
+    expect(bodyOf(chainExpiry({ calls: side('call', [], null), puts: side('put', [], null) }))).toEqual({ kind: 'nothing_listed' });
+  });
+
+  it.each([
+    ['no bar has closed yet', underlyingPrice({ state: 'no_bar_yet', price: null, price_time_ms: null }), { kind: 'no_bar_yet' }],
+    ['its bars are not stored', underlyingPrice({ state: 'not_stored', price: null, price_time_ms: null }), { kind: 'not_stored' }],
+    ['its bars cannot be read', underlyingPrice({ state: 'unreadable', price: null, price_time_ms: null, problem: 'damaged' }), { kind: 'unreadable', problem: 'damaged' }],
+    ['it has a price state this page does not know', underlyingPrice({ state: 'stale' as UnderlyingPrice['state'], price: null, price_time_ms: null }), { kind: 'unknown', code: 'stale' }],
+    ['it says it is priced and sent no price', underlyingPrice({ price: null }), { kind: 'incomplete', missing: 'price' }],
+  ])('says, with contracts listed and none drawn, that the underlying is the reason when %s, and never that nothing is listed', (_name, price, underlying) => {
+    const body = bodyOf(noMoney({ underlying_price: price }));
+
+    expect(body).toEqual({ kind: 'no_strikes', why: { kind: 'underlying', underlying, laterTime: false } });
+  });
+
+  it('offers a later time only when the session runs past the time asked for', () => {
+    expect(bodyOf(noMoney({ at_ms: SESSION_OPEN_MS }))).toMatchObject({ why: { laterTime: true } });
+    expect(bodyOf(noMoney({ at_ms: SESSION_CLOSE_MS }))).toMatchObject({ why: { laterTime: false } });
+  });
+
+  it('says a side has no standard contract to centre on when the underlying has a price and a side that lists contracts has no money strike', () => {
+    const body = bodyOf(chainExpiry({ calls: sideWithoutMoney('call', 4, 0), puts: sideWithoutMoney('put', 4, 0) }));
+
+    expect(body).toEqual({ kind: 'no_strikes', why: { kind: 'no_ladder' } });
+  });
+
+  it('says only that the window is empty when the money is there and nothing is in the window', () => {
+    const body = bodyOf(chainExpiry({ calls: side('call', [], 602_000, { listed: 4 }), puts: side('put', [], 602_000, { listed: 4 }) }));
+
+    expect(body).toEqual({ kind: 'no_strikes', why: { kind: 'empty_window' } });
+  });
+
+  it('does not take a side that lists nothing for one with no standard contract to centre on', () => {
+    const body = bodyOf(chainExpiry({ calls: side('call', [], null), puts: side('put', [], 602_000, { listed: 4 }) }));
+
+    expect(body).toEqual({ kind: 'no_strikes', why: { kind: 'empty_window' } });
+  });
+
+  it('is the rows when a side shows contracts, and names a side that lists contracts and shows none', () => {
+    const body = bodyOf(chainExpiry({ calls: side('call', [contract({ right: 'call', thousandths: 602_000, state: 'did_not_trade' })]), puts: sideWithoutMoney('put', 3, 0) }));
+
+    expect(body).toMatchObject({ kind: 'rows', undrawn: ['puts'] });
+    expect(body.kind === 'rows' ? body.rows.length : 0).toBe(1);
+  });
+
+  it('does not name a side that lists nothing as one that shows nothing', () => {
+    const body = bodyOf(chainExpiry({ calls: side('call', [contract({ right: 'call', thousandths: 602_000, state: 'did_not_trade' })]), puts: side('put', [], null) }));
+
+    expect(body).toMatchObject({ kind: 'rows', undrawn: [] });
+  });
+});
+
 describe('what one contract cell says', () => {
   it('is a price with the time of the trade it is the price of', () => {
     expect(cellOf(contract({ right: 'call', thousandths: 602_000, state: 'traded', price: '2.10', timeMs: 1_791_575_940_000 }))).toEqual({ kind: 'traded', price: '2.10', timeMs: 1_791_575_940_000 });
@@ -193,6 +349,18 @@ describe('what one contract cell says', () => {
     expect(cellOf({ ...contract({ right: 'call', thousandths: 1, state: 'did_not_trade' }), ...stray })).toEqual({ kind: 'did_not_trade' });
     expect(cellOf({ ...contract({ right: 'call', thousandths: 1, state: 'not_stored' }), ...stray })).toEqual({ kind: 'not_stored' });
     expect(cellOf({ ...contract({ right: 'call', thousandths: 1, state: 'unreadable', problem: 'damaged' }), ...stray })).toEqual({ kind: 'unreadable', problem: 'damaged' });
+  });
+
+  it('says in words the code of a price state it does not know, and draws no price even when one came with it', () => {
+    const odd = { ...contract({ right: 'call', thousandths: 1, state: 'traded' }), price_state: 'halted' as ChainContract['price_state'] };
+
+    expect(cellOf(odd)).toEqual({ kind: 'unknown', code: 'halted' });
+  });
+
+  it('says in words the code of an underlying state it does not know, and draws no price even when one came with it', () => {
+    const odd = underlyingPrice({ state: 'stale' as UnderlyingPrice['state'] });
+
+    expect(underlyingViewOf(odd)).toEqual({ kind: 'unknown', code: 'stale' });
   });
 
   it('is the same for the underlying: a price with its time, or the reason it has none', () => {

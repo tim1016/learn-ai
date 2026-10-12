@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { reads } from '../testing/page-actions';
 import { PastChainRefusedError } from './past-chain.service';
+import type { ChainDay } from './past-chain.types';
 import { chainDay, EXPIRY_MS, summary, tag, TRADING_DATE, TRADING_DATE_MS } from './testing/fixtures';
 import { expiriesTable, expiryRow, fakeChainService, pickDate, renderChainTab } from './testing/render-chain';
 
@@ -160,6 +161,19 @@ describe('the states of a day that has no expiries to list', () => {
     expect(await screen.findByText('The listing for this date is stored, but it holds no contract a backtest can use.')).toBeTruthy();
     expect(screen.getByText(/12 name no contract a backtest can use/)).toBeTruthy();
     expect(screen.queryByRole('table')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Download missing data' })).toBeNull();
+  });
+
+  it('says the code of a listing state it does not know, in words, and is neither a table nor a listing that holds nothing', async () => {
+    const odd = chainDay({ listing_state: 'partial' as ChainDay['listing_state'], expiries: [] });
+    await renderChainTab(fakeChainService(vi, { day: vi.fn(async () => odd) }));
+
+    pickDate(TRADING_DATE);
+
+    expect(await screen.findByText('This page does not know this state of the listing for this date: Partial.')).toBeTruthy();
+    expect(screen.queryByRole('table')).toBeNull();
+    expect(screen.queryByText(/holds no contract a backtest can use/)).toBeNull();
+    expect(screen.queryByText(/is not stored/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Download missing data' })).toBeNull();
   });
 

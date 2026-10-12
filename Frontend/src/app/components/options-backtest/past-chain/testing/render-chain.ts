@@ -74,6 +74,14 @@ export async function openStandardChain(): Promise<void> {
   await screen.findByRole('table', { name: /Calls on the left/ });
 }
 
+/** Like `openStandardChain` for a chain that draws no table: it waits for the chain card's counts line instead of the table. */
+export async function openChainCard(): Promise<void> {
+  pickDate(TRADING_DATE);
+  await screen.findByRole('table', { name: /Every expiry the listing held/ });
+  showChain('2026-10-16');
+  await screen.findByText(/^Calls: \d+ listed/);
+}
+
 /**
  * Every date and every time on the tab is drawn in New York, whatever zone the viewer is in: a bare date must be in
  * `date-et` mode and a time of day must be in `et` mode and carry its ET marker. A date in the viewer's zone is

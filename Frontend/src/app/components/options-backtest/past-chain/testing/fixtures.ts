@@ -101,7 +101,8 @@ export function contract(wanted: ContractWanted): ChainContract {
   };
 }
 
-export function side(right: 'call' | 'put', contracts: readonly ChainContract[], moneyThousandths: number | null = 602_000): ChainSide {
+/** A side that lists exactly the contracts it shows; `changes` says otherwise (a window narrower than the listing, a different count). */
+export function side(right: 'call' | 'put', contracts: readonly ChainContract[], moneyThousandths: number | null = 602_000, changes: Partial<ChainSide> = {}): ChainSide {
   return {
     right,
     listed: contracts.length,
@@ -109,7 +110,13 @@ export function side(right: 'call' | 'put', contracts: readonly ChainContract[],
     at_the_money_strike: moneyThousandths === null ? null : dollarsOf(moneyThousandths),
     at_the_money_strike_thousandths: moneyThousandths,
     contracts: [...contracts],
+    ...changes,
   };
+}
+
+/** What the server sends when the underlying has no price at the instant: no money strike, no contracts, and the counts it still knows. */
+export function sideWithoutMoney(right: 'call' | 'put', listed: number, standardListed: number): ChainSide {
+  return side(right, [], null, { listed, standard_listed: standardListed });
 }
 
 export function underlyingPrice(changes: Partial<UnderlyingPrice> = {}): UnderlyingPrice {

@@ -4,9 +4,11 @@ import { NOT_A_SESSION, type ControlName, type ReadProblem } from './past-chain-
 import type { ChainContract, ChainDay, ChainExpiry, ChainSide, DownloadAnswer, DownloadRequest, SessionBounds, UnderlyingPrice } from './past-chain.types';
 
 /**
- * What the tab shows, decided from the server's state codes and from nothing else. Each state the brief names is a
- * kind here, so that a template cannot forget one and a spec can name it. Nothing in this file prices a contract,
- * builds a symbol, or does arithmetic on a served figure: strikes are compared, counts are counted.
+ * What the tab shows, decided from the server's state codes and from nothing else. Each state is a kind here, so that a
+ * template cannot forget one and a spec can name it, and a code this page does not know is a kind of its own, said in
+ * words. Something is said to be absent only where a field of the answer proves it: missing data is never a missing
+ * contract. Nothing in this file prices a contract, builds a symbol, or does arithmetic on a served figure: strikes are
+ * compared, counts are counted.
  */
 
 /** The session of a trading date as one of the three answers states it. */
@@ -28,6 +30,8 @@ export type DayView =
   | { readonly kind: 'failed'; readonly message: string; readonly code: string | null; readonly canRetry: boolean }
   | { readonly kind: 'not_stored' }
   | { readonly kind: 'unreadable'; readonly problem: string | null }
+  /** The server named a listing state this page does not know. */
+  | { readonly kind: 'unknown_listing'; readonly code: string }
   /** The listing is stored and holds no contract a backtest can use. */
   | { readonly kind: 'empty'; readonly day: ChainDay }
   | { readonly kind: 'listed'; readonly day: ChainDay };
@@ -44,8 +48,14 @@ export function dayViewOf(status: ResourceStatus, day: ChainDay | null, problem:
   if (read === 'idle') return { kind: 'pick' };
   if (read === 'loading') return { kind: 'loading' };
   if (read === 'error' || day === null) return problem === null ? { kind: 'failed', message: 'The listing could not be read.', code: null, canRetry: true } : failedDay(problem);
-  if (day.listing_state === 'not_stored') return { kind: 'not_stored' };
-  if (day.listing_state === 'unreadable') return { kind: 'unreadable', problem: day.listing_problem };
+  return listingOf(day);
+}
+
+function listingOf(day: ChainDay): DayView {
+  const state: string = day.listing_state;
+  if (state === 'not_stored') return { kind: 'not_stored' };
+  if (state === 'unreadable') return { kind: 'unreadable', problem: day.listing_problem };
+  if (state !== 'stored') return { kind: 'unknown_listing', code: state };
   return day.expiries.length === 0 ? { kind: 'empty', day } : { kind: 'listed', day };
 }
 
@@ -69,6 +79,8 @@ export type ChainView =
   | { readonly kind: 'not_listed' }
   /** Whether the expiry is listed cannot be said: the listing is not stored, or cannot be read. */
   | { readonly kind: 'listing_unknown'; readonly state: 'not_stored' | 'unreadable'; readonly problem: string | null }
+  /** The server named a listing state this page does not know, so what it says of the expiry is not taken. */
+  | { readonly kind: 'unknown_listing'; readonly code: string }
   | { readonly kind: 'shown'; readonly chain: ChainExpiry };
 
 export interface ChainInputs {
@@ -85,65 +97,154 @@ export function chainViewOf(inputs: ChainInputs): ChainView {
   if (!inputs.expiryPicked) return { kind: 'no_expiry' };
   if (inputs.blockedBy !== null) return { kind: 'blocked', control: inputs.blockedBy };
   const read = readStatusOf(inputs.status);
-  if (read === 'idle' || read === 'loading') return { kind: 'loading' };
   const chain = inputs.chain;
-  if (read === 'error' || chain === null) {
-    const problem = inputs.problem;
-    if (problem === null) return { kind: 'failed', message: 'The chain could not be read.', code: null, canRetry: true };
-    // A refusal about a control is said at that control; the table has nothing to show meanwhile.
-    return problem.control === 'area' ? { kind: 'failed', message: problem.message, code: problem.code, canRetry: problem.canRetry } : { kind: 'blocked', control: problem.control };
-  }
+  if (read === 'idle' || read === 'loading') return { kind: 'loading' };
+  if (chain !== null && read !== 'error') return chainOf(chain);
+  const problem = inputs.problem;
+  if (problem === null) return { kind: 'failed', message: 'The chain could not be read.', code: null, canRetry: true };
+  // A refusal about a control is said at that control; the table has nothing to show meanwhile.
+  return problem.control === 'area' ? { kind: 'failed', message: problem.message, code: problem.code, canRetry: problem.canRetry } : { kind: 'blocked', control: problem.control };
+}
+
+function chainOf(chain: ChainExpiry): ChainView {
+  const listing: string = chain.listing_state;
+  if (listing !== 'stored' && listing !== 'not_stored' && listing !== 'unreadable') return { kind: 'unknown_listing', code: listing };
   if (chain.expiry_listed === false) return { kind: 'not_listed' };
   if (chain.expiry_listed === null) {
-    return { kind: 'listing_unknown', state: chain.listing_state === 'unreadable' ? 'unreadable' : 'not_stored', problem: chain.listing_problem };
+    // The server says null only for a listing it could not read; a stored listing with no answer is a fault in the answer.
+    if (listing === 'stored') return { kind: 'failed', message: 'The server did not say whether the expiry is listed.', code: null, canRetry: false };
+    return { kind: 'listing_unknown', state: listing === 'unreadable' ? 'unreadable' : 'not_stored', problem: chain.listing_problem };
   }
   return { kind: 'shown', chain };
 }
 
 // ---- The table ----------------------------------------------------------------------------------
 
-/** One strike of the table: the call and the put listed at it (either may be absent), and where each side's money is. */
+/**
+ * Why a side shows no contract in a row. `not_listed` is said only when the answer proves it: the side lists nothing,
+ * or shows every contract it lists, or the strike lies inside the strikes it shows (the server shows every contract a
+ * side lists between its lowest and highest strike shown). `no_other` is the same proof for a strike where the side
+ * has a contract in the row above. Anything else is only that the answer holds nothing there: `outside`.
+ */
+export type Gap = 'not_listed' | 'no_other' | 'outside';
+
+/**
+ * One row of the table: the call and the put listed at a strike (either may be absent), and where each side's money is.
+ * Two contracts of one right at one strike are two rows, so no contract is hidden behind another.
+ */
 export interface StrikeRow {
+  /** The strike and the place of this row among the rows of that strike: unique within the table. */
+  readonly key: string;
   readonly thousandths: number;
   /** The strike in dollars, as the server wrote it. */
   readonly strike: string;
   readonly call: ChainContract | null;
   readonly put: ChainContract | null;
-  /** This is the strike the calls' money was found at; likewise the puts'. The two sides' ladders can differ. */
+  /** Why the call (or put) cell is empty; null when it holds a contract. */
+  readonly callGap: Gap | null;
+  readonly putGap: Gap | null;
+  /** This is the strike the calls' money was found at; likewise the puts'. The two sides' ladders can differ. It is marked once, on the first row of the strike. */
   readonly callMoney: boolean;
   readonly putMoney: boolean;
 }
 
 /**
- * The strikes of both sides, ascending, one row each. Each side arrives ascending by strike, so the two lists are merged
- * by comparing their strikes: nothing is subtracted, and a strike listed on one side only is a row with the other side empty.
+ * The rows of both sides, ascending by strike. A strike is compared, never subtracted; a strike listed on one side only
+ * is a row with the other side empty, and the reason it is empty is the answer's, not a guess.
  */
 export function strikeRows(calls: ChainSide, puts: ChainSide): StrikeRow[] {
+  const callsCover = coverOf(calls);
+  const putsCover = coverOf(puts);
   const rows: StrikeRow[] = [];
-  let c = 0;
-  let p = 0;
-  for (;;) {
-    const call = calls.contracts.at(c) ?? null;
-    const put = puts.contracts.at(p) ?? null;
-    if (call !== null && (put === null || call.strike_thousandths <= put.strike_thousandths)) {
-      const paired = put !== null && put.strike_thousandths === call.strike_thousandths;
+  for (const thousandths of strikesOf(calls, puts)) {
+    const callsHere = calls.contracts.filter((each) => each.strike_thousandths === thousandths);
+    const putsHere = puts.contracts.filter((each) => each.strike_thousandths === thousandths);
+    const height = callsHere.length > putsHere.length ? callsHere.length : putsHere.length;
+    const strike = (callsHere.at(0) ?? putsHere.at(0))?.strike ?? '';
+    for (let place = 0; place < height; place += 1) {
+      const call = callsHere.at(place) ?? null;
+      const put = putsHere.at(place) ?? null;
       rows.push({
-        thousandths: call.strike_thousandths,
-        strike: call.strike,
+        key: `${thousandths}:${place}`,
+        thousandths,
+        strike,
         call,
-        put: paired ? put : null,
-        callMoney: calls.at_the_money_strike_thousandths === call.strike_thousandths,
-        putMoney: paired && puts.at_the_money_strike_thousandths === call.strike_thousandths,
+        put,
+        callGap: call === null ? gapOf(callsHere.length > 0, callsCover(thousandths)) : null,
+        putGap: put === null ? gapOf(putsHere.length > 0, putsCover(thousandths)) : null,
+        callMoney: place === 0 && call !== null && calls.at_the_money_strike_thousandths === thousandths,
+        putMoney: place === 0 && put !== null && puts.at_the_money_strike_thousandths === thousandths,
       });
-      c += 1;
-      if (paired) p += 1;
-    } else if (put !== null) {
-      rows.push({ thousandths: put.strike_thousandths, strike: put.strike, call: null, put, callMoney: false, putMoney: puts.at_the_money_strike_thousandths === put.strike_thousandths });
-      p += 1;
-    } else {
-      return rows;
     }
   }
+  return rows;
+}
+
+function gapOf(hasOneHere: boolean, covered: boolean): Gap {
+  if (hasOneHere) return 'no_other';
+  return covered ? 'not_listed' : 'outside';
+}
+
+/** Every strike either side shows, once each, ascending. */
+function strikesOf(calls: ChainSide, puts: ChainSide): number[] {
+  const strikes = new Set<number>();
+  for (const each of [...calls.contracts, ...puts.contracts]) strikes.add(each.strike_thousandths);
+  return [...strikes].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/** Whether the answer says what a side lists at a strike: it lists nothing, shows all it lists, or the strike is inside the strikes it shows. */
+function coverOf(side: ChainSide): (thousandths: number) => boolean {
+  if (side.contracts.length >= side.listed) return () => true;
+  const first = side.contracts.at(0);
+  if (first === undefined) return () => false;
+  let low = first.strike_thousandths;
+  let high = first.strike_thousandths;
+  for (const each of side.contracts) {
+    if (each.strike_thousandths < low) low = each.strike_thousandths;
+    if (each.strike_thousandths > high) high = each.strike_thousandths;
+  }
+  return (thousandths) => low <= thousandths && thousandths <= high;
+}
+
+/**
+ * Why no strikes are drawn at all. The server sends none when the underlying has no price at the instant (there is no
+ * money to centre them on), so the underlying's own state is the reason; with a price, a side lists contracts and has
+ * no standard one to centre on; and otherwise the window is empty although contracts are listed.
+ */
+export type NoStrikesWhy =
+  | { readonly kind: 'underlying'; readonly underlying: UnderlyingView; readonly laterTime: boolean }
+  | { readonly kind: 'no_ladder' }
+  | { readonly kind: 'empty_window' };
+
+/** A side of the chain, named as the table's words name it. */
+export type SideName = 'calls' | 'puts';
+
+export type ChainBody =
+  /** Both sides count nothing listed: the one case where the answer says nothing is there. */
+  | { readonly kind: 'nothing_listed' }
+  /** Contracts are listed and none is drawn: the table is not drawn, and the reason is. */
+  | { readonly kind: 'no_strikes'; readonly why: NoStrikesWhy }
+  /** Some side shows contracts. `undrawn` names a side that lists contracts and shows none, said beside the table. */
+  | { readonly kind: 'rows'; readonly rows: readonly StrikeRow[]; readonly undrawn: readonly SideName[] };
+
+export function bodyOf(chain: ChainExpiry): ChainBody {
+  const callsShown = chain.calls.contracts.length > 0;
+  const putsShown = chain.puts.contracts.length > 0;
+  if (callsShown || putsShown) {
+    const undrawn: SideName[] = [];
+    if (!callsShown && chain.calls.listed > 0) undrawn.push('calls');
+    if (!putsShown && chain.puts.listed > 0) undrawn.push('puts');
+    return { kind: 'rows', rows: strikeRows(chain.calls, chain.puts), undrawn };
+  }
+  if (chain.calls.listed === 0 && chain.puts.listed === 0) return { kind: 'nothing_listed' };
+  return { kind: 'no_strikes', why: noStrikesWhy(chain) };
+}
+
+function noStrikesWhy(chain: ChainExpiry): NoStrikesWhy {
+  const underlying = underlyingViewOf(chain.underlying_price);
+  if (underlying.kind !== 'priced') return { kind: 'underlying', underlying, laterTime: chain.at_ms < chain.session_close_ms };
+  const noMoney = [chain.calls, chain.puts].some((side) => side.listed > 0 && side.at_the_money_strike_thousandths === null);
+  return noMoney ? { kind: 'no_ladder' } : { kind: 'empty_window' };
 }
 
 /** What one contract's cell says. A price is only ever a `traded` cell, and a `traded` cell always carries its time. */
@@ -153,7 +254,9 @@ export type CellView =
   | { readonly kind: 'incomplete'; readonly missing: 'price' | 'time' }
   | { readonly kind: 'did_not_trade' }
   | { readonly kind: 'not_stored' }
-  | { readonly kind: 'unreadable'; readonly problem: string | null };
+  | { readonly kind: 'unreadable'; readonly problem: string | null }
+  /** A price state this page does not know: its code, said in words, and no price. */
+  | { readonly kind: 'unknown'; readonly code: string };
 
 export function cellOf(contract: ChainContract): CellView {
   switch (contract.price_state) {
@@ -167,6 +270,8 @@ export function cellOf(contract: ChainContract): CellView {
       return { kind: 'not_stored' };
     case 'unreadable':
       return { kind: 'unreadable', problem: contract.problem };
+    default:
+      return { kind: 'unknown', code: String(contract.price_state) };
   }
 }
 
@@ -176,7 +281,8 @@ export type UnderlyingView =
   | { readonly kind: 'incomplete'; readonly missing: 'price' | 'time' }
   | { readonly kind: 'no_bar_yet' }
   | { readonly kind: 'not_stored' }
-  | { readonly kind: 'unreadable'; readonly problem: string | null };
+  | { readonly kind: 'unreadable'; readonly problem: string | null }
+  | { readonly kind: 'unknown'; readonly code: string };
 
 export function underlyingViewOf(price: UnderlyingPrice): UnderlyingView {
   switch (price.state) {
@@ -190,6 +296,8 @@ export function underlyingViewOf(price: UnderlyingPrice): UnderlyingView {
       return { kind: 'not_stored' };
     case 'unreadable':
       return { kind: 'unreadable', problem: price.problem };
+    default:
+      return { kind: 'unknown', code: String(price.state) };
   }
 }
 

@@ -128,6 +128,8 @@ export class PastChainTabComponent implements OnInit {
     return state.kind === 'answered' && state.asked.underlying === this.underlying() && state.asked.tradingDateMs === this.tradingDateMs() && sessionNotOver(state.answer);
   });
   protected readonly plan = computed(() => downloadPlan(this.day(), this.chain()));
+  /** The download card offers to fetch what is missing, so the chain can point to it. */
+  protected readonly downloadOffered = computed(() => this.plan() !== null && !this.notOver());
   private readonly downloadCard = viewChild(PastChainDownloadComponent);
 
   constructor() {

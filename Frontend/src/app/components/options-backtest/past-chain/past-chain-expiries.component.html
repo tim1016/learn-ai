@@ -18,6 +18,8 @@
   } @else if (day.kind === 'unreadable') {
     <p class="problem" role="alert">The stored listing for this date cannot be read.</p>
     @if (day.problem; as why) { <p class="muted">{{ why }}</p> }
+  } @else if (day.kind === 'unknown_listing') {
+    <p class="problem" role="alert">This page does not know this state of the listing for this date: {{ day.code | receiptLabel }}.</p>
   } @else {
     @if (day.kind === 'empty') {
       <p role="status">The listing for this date is stored, but it holds no contract a backtest can use.</p>

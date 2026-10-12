@@ -18,3 +18,5 @@
 .rows tr.picked { background: var(--accent-faint); }
 .left-out { display: grid; gap: var(--space-1); }
 .left-out ul { margin: 0; padding-left: var(--space-5); }
+.no-strikes { display: grid; gap: var(--space-1); font-size: var(--fs-sm); }
+.no-strikes p { margin: 0; }

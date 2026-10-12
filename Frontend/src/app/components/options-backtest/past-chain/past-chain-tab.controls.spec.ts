@@ -34,7 +34,7 @@ describe('the time of day', () => {
 
     // 15:45 on 2026-10-09 is 19:45 UTC: 04:00 UTC midnight plus 15 h 45 min.
     expect(lastExpiryQuery(service).atMs).toBe(1_791_575_100_000);
-    await waitFor(() => expect(reads(paragraph(/^Priced as of/))).toBe('Priced as of 15:45 ET'));
+    await waitFor(() => expect(reads(paragraph(/^Priced as of/))).toBe('Priced as of 15:45 ET on 2026-10-09'));
   });
 
   it('goes back to the close when the box is emptied', async () => {

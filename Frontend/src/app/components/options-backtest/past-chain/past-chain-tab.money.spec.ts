@@ -20,13 +20,13 @@ describe('the money on the Past chain tab is the string the server sent', () => 
   it('keeps a price a float cannot hold, to the cent', async () => {
     await openWith(chainExpiry({ calls: side('call', [call(602_000, BEYOND_A_FLOAT)]), puts: side('put', []) }));
 
-    expect(reads(chainTable().querySelector('app-options-backtest-chain-contract'))).toContain('$9,007,199,254,740,993.01 at 15:59 ET');
+    expect(reads(chainTable().querySelector('app-options-backtest-chain-contract'))).toContain('$9,007,199,254,740,993.01 in the minute ending 15:59 ET');
   });
 
   it('keeps the underlying price a float cannot hold, to the cent', async () => {
     await openWith(chainExpiry({ underlying_price: underlyingPrice({ price: BEYOND_A_FLOAT }) }));
 
-    expect(reads(screen.getByRole('group', { name: 'The underlying at that time' }))).toBe('SPY $9,007,199,254,740,993.01 at 16:00 ET');
+    expect(reads(screen.getByRole('group', { name: 'The underlying at that time' }))).toBe('SPY $9,007,199,254,740,993.01 in the minute ending 16:00 ET');
   });
 
   it('shows a price of four decimals as the server wrote it, and not as a figure it re-rounded', async () => {
@@ -34,16 +34,16 @@ describe('the money on the Past chain tab is the string the server sent', () => 
 
     const cells = [...chainTable().querySelectorAll('app-options-backtest-chain-contract')].map((cell) => reads(cell));
 
-    expect(cells[0]).toContain('0.4250 at 15:59 ET');
+    expect(cells[0]).toContain('0.4250 in the minute ending 15:59 ET');
     expect(cells[0]).not.toContain('$0.43');
     expect(cells[0]).not.toContain('0.43');
-    expect(cells[1]).toContain('$1.20 at 15:59 ET');
+    expect(cells[1]).toContain('$1.20 in the minute ending 15:59 ET');
   });
 
   it('pads a whole-cent price to cents and groups thousands without parsing it', async () => {
     await openWith(chainExpiry({ calls: side('call', [call(602_000, '1234.5')]), puts: side('put', []) }));
 
-    expect(reads(chainTable().querySelector('app-options-backtest-chain-contract'))).toContain('$1,234.50 at');
+    expect(reads(chainTable().querySelector('app-options-backtest-chain-contract'))).toContain('$1,234.50 in the minute ending');
   });
 
   it('shows a strike as the server wrote it: whole cents with a dollar sign, anything finer untouched', async () => {

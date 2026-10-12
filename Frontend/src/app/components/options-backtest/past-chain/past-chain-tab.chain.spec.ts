@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { paragraph, reads } from '../testing/page-actions';
 import { PastChainRefusedError } from './past-chain.service';
+import type { ChainExpiry } from './past-chain.types';
 import { chainDay, chainExpiry, contract, EXPIRY_MS, MINUTE_1559_MS, side, summary, tag, TRADING_DATE, TRADING_DATE_MS, underlyingPrice } from './testing/fixtures';
 import { assertNewYorkTimes, chainTable, expiriesTable, fakeChainService, openStandardChain, pickDate, renderChainTab, showChain } from './testing/render-chain';
 
@@ -42,7 +43,7 @@ describe('the chain of one expiry', () => {
     await screen.findByRole('table', { name: /Every expiry the listing held/ });
 
     expect(service.expiry).not.toHaveBeenCalled();
-    expect(screen.getByText('Open an expiry above to read its chain.')).toBeTruthy();
+    expect(screen.getByText('No expiry is open. Open one above to read its chain.')).toBeTruthy();
   });
 
   it('puts calls on the left, the strikes down the middle and puts on the right, in strike order', async () => {
@@ -90,9 +91,9 @@ describe('the chain of one expiry', () => {
     await openStandardChain();
 
     // 19:59 UTC is 15:59 in New York in October; 19:58 UTC is 15:58.
-    expect(cellsOf(rowOf('$602.00'))[0]).toMatch(/\$2\.10 at 15:59 ET/);
-    expect(cellsOf(rowOf('$601.00'))[0]).toMatch(/\$3\.25 at 15:58 ET/);
-    expect(cellsOf(rowOf('$603.00'))[1]).toMatch(/\$1\.05 at 15:45 ET/);
+    expect(cellsOf(rowOf('$602.00'))[0]).toMatch(/\$2\.10 in the minute ending 15:59 ET/);
+    expect(cellsOf(rowOf('$601.00'))[0]).toMatch(/\$3\.25 in the minute ending 15:58 ET/);
+    expect(cellsOf(rowOf('$603.00'))[1]).toMatch(/\$1\.05 in the minute ending 15:45 ET/);
   });
 
   it('never shows a price without a time: every price in the table has the time of its trade beside it', async () => {
@@ -103,7 +104,7 @@ describe('the chain of one expiry', () => {
 
     expect(prices.length).toBe(3);
     for (const price of prices) {
-      expect(reads(price.closest('app-options-backtest-chain-contract'))).toMatch(/\$\d+\.\d{2} at \d{2}:\d{2} ET/);
+      expect(reads(price.closest('app-options-backtest-chain-contract'))).toMatch(/\$\d+\.\d{2} in the minute ending \d{2}:\d{2} ET/);
     }
   });
 
@@ -156,14 +157,6 @@ describe('the chain of one expiry', () => {
     expect(cellsOf(rowOf('$602.00'))[0]).toBe('Not listed at this strike');
   });
 
-  it('says the window holds no contract when the server listed none', async () => {
-    const service = fakeChainService(vi, { expiry: vi.fn(async () => chainExpiry({ calls: side('call', [], null), puts: side('put', [], null) })) });
-    await renderChainTab(service);
-    await openStandardChain();
-
-    expect(screen.getByText('No contract is listed within this window.')).toBeTruthy();
-  });
-
   it('shows the series and the expires-today badge of the expiry that is open, and the instant it is priced at', async () => {
     const service = fakeChainService(vi, {
       expiry: vi.fn(async () => chainExpiry({ tag: { series: 'monthly', version: 1, evidence: 'the third Friday of its month', expires_today: true, days_to_expiry: 0 } })),
@@ -176,7 +169,7 @@ describe('the chain of one expiry', () => {
     expect(head).toContain('Expiry 2026-10-16');
     expect(head).toContain('Monthly');
     expect(head).toContain('Expires today');
-    expect(head).toContain('Priced as of 16:00 ET');
+    expect(head).toContain('Priced as of 16:00 ET on 2026-10-09');
     expect(head).toContain('10 strikes each side of the money');
   });
 
@@ -197,11 +190,11 @@ describe('the underlying at that time', () => {
   }
 
   it('is its price with the time of the bar it is the close of', async () => {
-    expect(await openWith({ price: '602.40', price_time_ms: MINUTE_1559_MS })).toBe('SPY $602.40 at 15:59 ET');
+    expect(await openWith({ price: '602.40', price_time_ms: MINUTE_1559_MS })).toBe('SPY $602.40 in the minute ending 15:59 ET');
   });
 
   it.each([
-    [{ state: 'no_bar_yet', price: null, price_time_ms: null }, 'No trade by then'],
+    [{ state: 'no_bar_yet', price: null, price_time_ms: null }, 'No bar has closed by then'],
     [{ state: 'not_stored', price: null, price_time_ms: null }, 'Its bars are not stored'],
     [{ state: 'unreadable', price: null, price_time_ms: null, problem: 'the bars of SPY cannot be read (UnderlyingDayUnreadable)' }, 'Its bars cannot be read the bars of SPY cannot be read (UnderlyingDayUnreadable)'],
     [{ state: 'priced', price: '602.40', price_time_ms: null }, 'Priced, but the server sent no time for it, so none is shown'],
@@ -239,6 +232,26 @@ describe('an expiry that the date does not list', () => {
     await waitFor(() => expect(paragraph(/Whether the .* expiry is listed cannot be said/)).toBeTruthy());
     expect(reads(paragraph(/Whether the .* expiry is listed cannot be said/))).toBe('Whether the 2026-10-16 expiry is listed cannot be said: the listing for this date is stored but cannot be read.');
     expect(screen.getByText('the listing cannot be read (OptionListingFileError)')).toBeTruthy();
+  });
+});
+
+describe('an expiry whose listing is in a state this page does not know', () => {
+  it.each([
+    ['with the expiry listed', { expiry_listed: true }],
+    ['with the expiry not listed', { expiry_listed: false, tag: null }],
+    ['with no answer on whether the expiry is listed', { expiry_listed: null, tag: null }],
+  ] as const)('says the code in words, %s, and neither draws a chain nor says the listing is not stored', async (_name, changes) => {
+    const odd = chainExpiry({ ...changes, listing_state: 'partial' as ChainExpiry['listing_state'] });
+    await renderChainTab(fakeChainService(vi, { expiry: vi.fn(async () => odd) }));
+    pickDate(TRADING_DATE);
+    await screen.findByRole('table', { name: /Every expiry the listing held/ });
+
+    showChain('2026-10-16');
+
+    const note = await screen.findByText(/This page does not know this state of the listing/);
+    expect(reads(note)).toBe('This page does not know this state of the listing, Partial, so it does not say whether the 2026-10-16 expiry is listed.');
+    expect(screen.queryByRole('table', { name: /Calls on the left/ })).toBeNull();
+    expect(screen.queryByText(/not stored/)).toBeNull();
   });
 });
 
