@@ -17,6 +17,7 @@ import { themeColor } from '../../../../shared/charts/theme-color';
 import { CHART_SERIES_COLOR_TOKENS, type ChartSeriesColorToken } from '../../../../shared/trading-chart/chart-series-color-tokens';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 import type { PlanLineStyle, PlanMarker, SeriesPlan, TimelinePlan } from '../timeline-plan';
+import { labelReachPx, rangeWithRoom, slotCount } from './timeline-room';
 
 /** How the chart is made. A spec hands in a fake, so no canvas is needed. */
 export const TIMELINE_CHART_FACTORY = new InjectionToken<typeof createAppChart>('TIMELINE_CHART_FACTORY', { providedIn: 'root', factory: () => createAppChart });
@@ -53,6 +54,10 @@ interface Tip {
  * The one-day chart: a thin wrapper that hands a {@link TimelinePlan} to `lightweight-charts` and draws nothing of its
  * own. It is made once the view has rendered, redraws when the plan changes, and is taken down with the view.
  *
+ * The day is always shown whole, with room at both ends for a marker's label (see `timeline-room`): the library's own edge
+ * fixing would put the first and last minute against the edges and cut the label off, so it is off, and the chart is not
+ * scrolled or zoomed, so that the day cannot be moved out of view. The room is worked out again when the width changes.
+ *
  * The time axis and the crosshair read in New York time through the shared timestamp helpers. Colours are read from the
  * theme's chart tokens here and nowhere else. The crosshair's own price label is switched off: a price a person reads is
  * the server's text, and the tooltip gives it for the minute under the cursor. The axis labels are the library's own
@@ -77,7 +82,11 @@ export class TimelineChartComponent {
 
   private chart: IChartApi | null = null;
   private drawn: ISeriesApi<'Line'>[] = [];
+  /** What the day on the chart takes: how many places on the time scale, and how far its longest label reaches. */
+  private slots = 0;
+  private reachPx = 0;
   private readonly onCrosshair = (param: MouseEventParams<Time>): void => this.showTip(param);
+  private readonly onWidth = (): void => this.fit();
 
   constructor() {
     afterNextRender(() => this.start());
@@ -97,17 +106,18 @@ export class TimelineChartComponent {
       grid: { vertLines: { color: border }, horzLines: { color: border } },
       rightPriceScale: { borderVisible: false },
       crosshair: { horzLine: { labelVisible: false } },
+      handleScroll: false,
+      handleScale: false,
       localization: { timeFormatter: (time: Time) => crosshairTime(time) },
       timeScale: {
         borderVisible: false,
         timeVisible: true,
         secondsVisible: false,
-        fixLeftEdge: true,
-        fixRightEdge: true,
         tickMarkFormatter: (time: Time, tickMarkType: TickMarkType) => formatChartAxisTick(time, NEW_YORK, tickMarkType),
       },
     });
     chart.subscribeCrosshairMove(this.onCrosshair);
+    chart.timeScale().subscribeSizeChange(this.onWidth);
     this.chart = chart;
     this.draw(this.plan());
   }
@@ -116,6 +126,7 @@ export class TimelineChartComponent {
     const chart = this.chart;
     if (chart === null) return;
     chart.unsubscribeCrosshairMove(this.onCrosshair);
+    chart.timeScale().unsubscribeSizeChange(this.onWidth);
     chart.remove();
     this.chart = null;
     this.drawn = [];
@@ -128,6 +139,8 @@ export class TimelineChartComponent {
     for (const series of this.drawn) chart.removeSeries(series);
     this.drawn = [];
     this.tip.set(null);
+    this.slots = slotCount(plan);
+    this.reachPx = labelReachPx(plan);
     const host = this.canvas().nativeElement;
     for (const each of plan.series) {
       const series = chart.addSeries(
@@ -149,7 +162,16 @@ export class TimelineChartComponent {
       if (each.markers.length > 0) createSeriesMarkers(series, each.markers.map((marker) => this.markerOf(host, marker)));
       this.drawn.push(series);
     }
-    chart.timeScale().fitContent();
+    this.fit();
+  }
+
+  /** Shows the whole day with room for its labels at the width the chart has now; the whole day, as it is, while the width is not known. */
+  private fit(): void {
+    const scale = this.chart?.timeScale();
+    if (scale === undefined) return;
+    const range = rangeWithRoom(this.slots, scale.width(), this.reachPx);
+    if (range === null) scale.fitContent();
+    else scale.setVisibleLogicalRange(range);
   }
 
   private markerOf(host: HTMLElement, marker: PlanMarker): SeriesMarker<Time> {

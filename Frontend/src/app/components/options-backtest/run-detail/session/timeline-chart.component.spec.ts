@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/angular';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { SessionDetail } from '../run-detail.types';
 import { buildTimelinePlan } from '../timeline-plan';
 import { at, CALL_585, PUT_585, sessionDetail, shownSeries, skippedSession } from '../testing/detail-fixtures';
 import { fakeTimelineChart, type FakeTimelineChart } from '../testing/timeline-chart-fake';
@@ -37,7 +38,9 @@ const optionsOf = (fake: FakeTimelineChart) => fake.created[0].options as {
   grid: { vertLines: { color: string }; horzLines: { color: string } };
   crosshair: { horzLine: { labelVisible: boolean } };
   localization: { timeFormatter: (time: number) => string };
-  timeScale: { tickMarkFormatter: (time: number, mark: number) => string; timeVisible: boolean; secondsVisible: boolean };
+  handleScroll: boolean;
+  handleScale: boolean;
+  timeScale: { tickMarkFormatter: (time: number, mark: number) => string; timeVisible: boolean; secondsVisible: boolean; fixLeftEdge?: boolean; fixRightEdge?: boolean };
 };
 
 beforeEach(() => markers.create.mockReset());
@@ -200,13 +203,6 @@ describe('the one-day chart, what it hands to the library', () => {
     ]);
   });
 
-  it('fits the day to the width once it is drawn', async () => {
-    const fake = fakeTimelineChart(vi);
-    await renderChart(fake);
-
-    expect(fake.fitContent).toHaveBeenCalled();
-  });
-
   it('makes a chart of the panes it has: a day with only the underlying has one', async () => {
     const fake = fakeTimelineChart(vi);
     await renderChart(fake, buildTimelinePlan(sessionDetail({ contracts: [], levels: [], fills: [], marks: [] })));
@@ -223,6 +219,111 @@ describe('the one-day chart, what it hands to the library', () => {
 
     expect(fake.series.filter((each) => each.pane === 1).length).toBe(1);
     expect(fake.series.filter((each) => each.pane === 2).length).toBe(1);
+  });
+});
+
+/** A session of 390 minutes, with the first minute's fill and the last minute's mark where a label is cut off if the day touches the edge. */
+const FULL_DAY = 390;
+function fullDayWithMarkersAtBothEnds() {
+  return buildTimelinePlan(fullDay({
+    fills: [{ kind: 'entry', leg_id: 'put', entry_number: 0, contract: PUT_585.symbol, contracts: 1, bar_close_ms: at(1), seen_usd: '1.40', filled_usd: '1.42', exit_reason: null }],
+    marks: [{ leg_id: 'put', entry_number: 0, contract: PUT_585.symbol, bar_close_ms: at(FULL_DAY), price_usd: '1.25' }],
+  }));
+}
+
+function fullDay(changes: Partial<SessionDetail>): SessionDetail {
+  return sessionDetail({
+    session_close_ms: at(FULL_DAY),
+    underlying: shownSeries('SPY', null, Array.from({ length: FULL_DAY }, (_, minute) => [minute + 1, '585.00'] as const)),
+    contracts: [shownSeries(PUT_585.symbol, PUT_585, [[1, '1.40'], [FULL_DAY, '1.25']])],
+    levels: [],
+    ...changes,
+  });
+}
+
+describe('the one-day chart, room for a label at the two ends of the day', () => {
+  it('has a fill in the first minute and a mark in the last, which is where the day is drawn', async () => {
+    const fake = fakeTimelineChart(vi);
+    await renderChart(fake, fullDayWithMarkersAtBothEnds());
+
+    const [, putMarkers] = markers.create.mock.calls[0];
+    expect(putMarkers.map((marker: { time: number; text: string }) => [marker.time, marker.text])).toEqual([[sec(1), 'Bought'], [sec(FULL_DAY), 'Marked, not sold']]);
+  });
+
+  it('does not fix the first and last minute to the edges, which would cut the label off', async () => {
+    const fake = fakeTimelineChart(vi);
+    await renderChart(fake, fullDayWithMarkersAtBothEnds());
+
+    const { timeScale } = optionsOf(fake);
+    expect(timeScale.fixLeftEdge).not.toBe(true);
+    expect(timeScale.fixRightEdge).not.toBe(true);
+  });
+
+  it('shows the 390 minutes with 46 places more on each side at 600 px, which is the 57 px that "Marked, not sold" reaches', async () => {
+    const fake = fakeTimelineChart(vi, 600);
+    await renderChart(fake, fullDayWithMarkersAtBothEnds());
+
+    expect(fake.setVisibleLogicalRange).toHaveBeenLastCalledWith({ from: -46, to: 389 + 46 });
+    expect(fake.fitContent).not.toHaveBeenCalled();
+  });
+
+  it('works the room out again when the plot changes width, since a place is as wide as the plot allows', async () => {
+    const fake = fakeTimelineChart(vi, 600);
+    await renderChart(fake, fullDayWithMarkersAtBothEnds());
+
+    fake.resize(300);
+    expect(fake.setVisibleLogicalRange).toHaveBeenLastCalledWith({ from: -120, to: 389 + 120 });
+    fake.resize(1200);
+    expect(fake.setVisibleLogicalRange).toHaveBeenLastCalledWith({ from: -21, to: 389 + 21 });
+  });
+
+  it('fits the day as it is while the plot has no width, and gives it its room when the width arrives', async () => {
+    const fake = fakeTimelineChart(vi, 0);
+    await renderChart(fake, fullDayWithMarkersAtBothEnds());
+    expect(fake.fitContent).toHaveBeenCalled();
+    expect(fake.setVisibleLogicalRange).not.toHaveBeenCalled();
+
+    fake.resize(600);
+
+    expect(fake.setVisibleLogicalRange).toHaveBeenLastCalledWith({ from: -46, to: 389 + 46 });
+  });
+
+  it('gives a day with no marker the room that the axis’s own label at an end of it needs, and no more', async () => {
+    const fake = fakeTimelineChart(vi, 600);
+    await renderChart(fake, buildTimelinePlan(fullDay({ fills: [], marks: [] })));
+
+    // "16:00" reaches 19 px: 14 places on each side of the 390 minutes are 20 px wide at 600 px, and 13 are not.
+    expect(fake.setVisibleLogicalRange).toHaveBeenLastCalledWith({ from: -14, to: 389 + 14 });
+    expect(fake.fitContent).not.toHaveBeenCalled();
+  });
+
+  it('works the room out for the day it is then given, when the plan changes', async () => {
+    const fake = fakeTimelineChart(vi, 600);
+    const view = await renderChart(fake, fullDayWithMarkersAtBothEnds());
+
+    await view.rerender({ inputs: { plan: buildTimelinePlan(sessionDetail()) } });
+    await view.fixture.whenStable();
+
+    // The toy day: 12 minutes, and "Marked, not sold" still reaches 57 px.
+    expect(fake.setVisibleLogicalRange).toHaveBeenLastCalledWith({ from: -2, to: 11 + 2 });
+  });
+
+  it('cannot be scrolled or zoomed, so that the day is never moved out of view', async () => {
+    const fake = fakeTimelineChart(vi);
+    await renderChart(fake);
+
+    const options = optionsOf(fake);
+    expect([options.handleScroll, options.handleScale]).toEqual([false, false]);
+  });
+
+  it('stops listening for the width when it is taken down', async () => {
+    const fake = fakeTimelineChart(vi);
+    const view = await renderChart(fake);
+    const handler = fake.chart.timeScale().subscribeSizeChange.mock.calls[0][0];
+
+    view.fixture.destroy();
+
+    expect(fake.chart.timeScale().unsubscribeSizeChange).toHaveBeenCalledWith(handler);
   });
 });
 
