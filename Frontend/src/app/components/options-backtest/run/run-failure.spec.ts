@@ -126,6 +126,16 @@ describe('what failed, in the list under the reason', () => {
     expect(secondIds.every((id) => second?.contains(document.getElementById(id)))).toBe(true);
   });
 
+  it.each([
+    [5, 'open', 'true'],
+    [6, 'shut', 'false'],
+  ])('starts a group of %s items %s: five is the largest group that starts open', async (count, _state, expanded) => {
+    const items = Array.from({ length: count }, (_, day) => item('took_too_long', `Took too long on day ${day}.`, sessionOpenMs('2026-09-14') + day * 86_400_000));
+    await renderFailure({ code: 'DOWNLOAD_FAILED', reason: 'Some data could not be fetched.', items });
+
+    expect(screen.getByRole('button', { name: /Took Too Long/ }).getAttribute('aria-expanded')).toBe(expanded);
+  });
+
   it('shows a small group open already, and lets it be shut', async () => {
     await renderFailure({ code: 'DOWNLOAD_FAILED', reason: 'Some data could not be fetched.', items: [item('took_too_long', 'Took too long.')] });
     const group = screen.getByRole<HTMLButtonElement>('button', { name: /Took Too Long/ });
