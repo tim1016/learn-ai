@@ -1,6 +1,6 @@
 @if (groups().length > 0) {
   <section class="part" aria-labelledby="ob-check-cannot">
-    <h3 id="ob-check-cannot">Cannot be tested</h3>
+    <h3 id="ob-check-cannot">{{ 'cannot_be_tested' | receiptLabel }}</h3>
     @for (group of groups(); track group.code) {
       <div class="reason">
         <p class="reason__head"><strong>{{ group.code | receiptLabel }}</strong> · {{ group.sessionOpensMs.length }} {{ group.sessionOpensMs.length === 1 ? 'session' : 'sessions' }}</p>
@@ -20,7 +20,7 @@
 }
 @if (downloads().length > 0) {
   <section class="part" aria-labelledby="ob-check-download">
-    <h3 id="ob-check-download">Needs a download</h3>
+    <h3 id="ob-check-download">{{ 'needs_download' | receiptLabel }}</h3>
     <ul class="rows">
       @for (session of downloads(); track session.session_open_ms) {
         <li>
@@ -36,7 +36,7 @@
 }
 @if (skipped().length > 0) {
   <section class="part" aria-labelledby="ob-check-skipped">
-    <h3 id="ob-check-skipped">Ready, but skipped</h3>
+    <h3 id="ob-check-skipped">{{ 'ready' | receiptLabel }}, but skipped</h3>
     <ul class="rows">
       @for (session of skipped(); track session.session_open_ms) {
         <li><app-timestamp-display [value]="session.session_open_ms" mode="date-et" granularity="date" /> – {{ session.skip | receiptLabel }}</li>

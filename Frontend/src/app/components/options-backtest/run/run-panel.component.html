@@ -1,0 +1,37 @@
+<section class="run" aria-label="Backtest run">
+  <div class="head">
+    <h2 #heading tabindex="-1">Backtest run</h2>
+    <span class="tag" [attr.data-status]="status()">{{ status() | receiptLabel }}</span>
+  </div>
+  <ul class="about">
+    <li><app-asset-identity [symbol]="run().underlying" size="xs" [logo]="false" /></li>
+    @if (run().setup_name; as name) { <li>{{ name }}</li> }
+    <li><app-timestamp-display [value]="run().first_session_open_ms" mode="date-et" granularity="date" /> – <app-timestamp-display [value]="run().last_session_open_ms" mode="date-et" granularity="date" /></li>
+    <li>{{ run().sessions_requested }} sessions requested</li>
+    <li>Started <app-timestamp-display [value]="run().created_at_ms" mode="local" /></li>
+  </ul>
+  @switch (status()) {
+    @case ('running') {
+      <app-options-backtest-job-progress [view]="progress()" [cancelling]="cancelling()" [cancelProblem]="cancelProblem()" (cancelRequested)="cancel()" />
+    }
+    @case ('complete') {
+      @if (detail(); as done) { <app-options-backtest-run-result [run]="done" /> } @else if (readProblem() === null) { <p class="words" role="status">Reading the result…</p> }
+    }
+    @case ('failed') {
+      @if (failure(); as why) { <app-options-backtest-run-failure [failure]="why" /> }
+    }
+    @case ('cancelled') { <p class="words" role="status">The run was cancelled. Nothing was saved.</p> }
+    @case ('interrupted') { <p class="words" role="status">This run did not finish, and its job is gone. It saved no result.</p> }
+  }
+  @if (readProblem(); as why) {
+    <p class="problem" role="alert">{{ why }}</p>
+    <button type="button" class="again" (click)="reread()">Try again</button>
+  }
+  @if (showSetup()) {
+    <section class="setup" aria-label="The setup this run used">
+      <h3>The setup this run used</h3>
+      @if (setupWords(); as words) { <app-options-backtest-setup-sentences [summary]="words" /> } @else if (setupProblem(); as why) { <p class="problem" role="status">{{ why }}</p> }
+      <button pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="detail() === null" (click)="use()"><i class="pi pi-upload" aria-hidden="true"></i><span>Use this setup</span></button>
+    </section>
+  }
+</section>

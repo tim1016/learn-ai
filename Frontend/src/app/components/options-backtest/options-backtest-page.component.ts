@@ -1,6 +1,7 @@
 import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, Injector, input, linkedSignal, resource, signal, untracked, viewChild } from '@angular/core';
 import { applyEach, disabled, form } from '@angular/forms/signals';
 import { ButtonModule } from 'primeng/button';
+import { Tab, TabList, TabPanel, TabPanels, Tabs } from 'primeng/tabs';
 
 import type { DateRange } from '../../shared/date-picker';
 import { FileDownloadService } from '../../shared/file/file-download.service';
@@ -17,17 +18,22 @@ import { LegsCardComponent } from './cards/legs-card.component';
 import { LegwiseCardComponent } from './cards/legwise-card.component';
 import { SideListComponent, type LibraryStatus } from './cards/side-list.component';
 import { SummaryComponent } from './cards/summary.component';
+import { HistoryTabComponent } from './history/history-tab.component';
+import { RunPanelComponent } from './run/run-panel.component';
 import { DataCheckFlow } from './data-check-flow';
 import { NO_DATES, rangeInstants, rangeOfStretch, type RangeChange } from './duration';
 import { builderProblems, newLegBuilder, withLegAdded, withLegCopied, withLegRemoved } from './leg-draft';
 import { OptionsBacktestService, SetupInvalidError, SetupRefusedError } from './options-backtest.service';
-import type { SavedSetup, SessionClock, SetupSummary, TestableStretch } from './options-backtest.types';
+import type { SavedSetup, ServedSetup, SessionClock, SetupSummary, TestableStretch } from './options-backtest.types';
+import { RunLaunch } from './run-launch';
 import { buildSetup } from './setup-build';
 import { draftFromSetup, newSetupDraft, withDefaultTimes, type SetupDraft } from './setup-draft';
 import { readSetupFile, setupFileBlob, setupFileName } from './setup-file';
 import { nameProblem } from './setup-limits';
 import { describeDetail, FIELD, NO_PROBLEMS, type FieldProblems } from './setup-problems';
 import { SetupSummaryChecker } from './setup-summary-checker';
+
+export type OptionsBacktestTab = 'backtest' | 'history';
 
 /** What an import said: it was loaded, or the reasons it was not. Nothing changes when it was not. */
 interface ImportNotice {
@@ -46,6 +52,11 @@ interface ImportNotice {
   selector: 'app-options-backtest-page',
   imports: [
     ButtonModule,
+    Tabs,
+    TabList,
+    Tab,
+    TabPanels,
+    TabPanel,
     PageHeaderComponent,
     SideListComponent,
     InstrumentCardComponent,
@@ -57,16 +68,25 @@ interface ImportNotice {
     DurationCardComponent,
     DataCheckPanelComponent,
     SummaryComponent,
+    RunPanelComponent,
+    HistoryTabComponent,
     BottomBarComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-backtest-page.component.html',
   styleUrl: './options-backtest-page.component.scss',
+  host: {
+    // Shift+Enter starts a backtest from anywhere on the page, as the bar's Start button says.
+    '(document:keydown.shift.enter)': 'onStartShortcut($event)',
+  },
 })
 export class OptionsBacktestPageComponent {
   private readonly service = inject(OptionsBacktestService);
   private readonly download = inject(FileDownloadService);
   private readonly injector = inject(Injector);
+
+  /** The tab on show: building and running a backtest, or the runs made so far. */
+  protected readonly activeTab = signal<OptionsBacktestTab>('backtest');
 
   /** How long the setup rests, in milliseconds, before it is read back. Specs set 0. */
   readonly describeDebounceMs = input(300);
@@ -148,11 +168,15 @@ export class OptionsBacktestPageComponent {
   /** Set when the page wrote the range on the owner's click (Run available dates), until the dates are edited. */
   protected readonly rangeNote = signal<RangeChange | null>(null);
 
+  // Starting a run, and the run on screen.
+  protected readonly launch = new RunLaunch({ startRun: (request) => this.service.startRun(request), runs: (query) => this.service.runs(query) });
+  private readonly runPanel = viewChild(RunPanelComponent);
+
   // Check data.
   private readonly checkFlow = new DataCheckFlow((setup, startMs, endMs) => this.service.checkData(setup, startMs, endMs));
   protected readonly check = this.checkFlow.state;
   protected readonly pricesFromMs = this.checkFlow.pricesFromMs;
-  protected readonly rangeProblem = this.checkFlow.refusal;
+  protected readonly rangeProblem = computed(() => this.checkFlow.refusal() ?? this.launch.refusal());
   /** What a check would be asked with now, and a stamp to tell whether an answer still describes it. */
   private readonly asking = computed(() => {
     const setup = this.readBack();
@@ -177,6 +201,13 @@ export class OptionsBacktestPageComponent {
     return error === undefined ? null : extractServerMessage(error, 'The saved setups could not be read.');
   });
   protected readonly loadedName = signal<string | null>(null);
+  /** The body of the setup as it was when it was loaded or last saved under `loadedName`. */
+  private readonly loadedBody = signal<string | null>(null);
+  /** The name a run is recorded under: the loaded or saved setup's name, but only while the setup on screen is still that one. */
+  private readonly runName = computed(() => {
+    const name = this.loadedName();
+    return name !== null && this.loadedBody() === JSON.stringify(this.body()) ? name : null;
+  });
   protected readonly deleteProblem = signal<string | null>(null);
 
   // Saving.
@@ -209,9 +240,16 @@ export class OptionsBacktestPageComponent {
     return this.body() === null || kind === 'idle' || kind === 'invalid' ? 'complete' : 'read-back';
   });
   /** Why Export waits, until it can go: the setup is not complete, or the server has not read it back yet. */
-  protected readonly exportWhy = computed(() => availableOnce('Export', this.waitingFor()));
-  /** Why Check data waits: the setup, or the dates. */
-  protected readonly checkWhy = computed(() => availableOnce('Check data', this.waitingFor()) ?? (this.instants() === null ? 'Check data is available once both dates are picked.' : null));
+  protected readonly exportWhy = computed(() => availableOnce('Export is', this.waitingFor()));
+  /** What Check data and Start wait for: the setup, then the dates; and that a backtest is going, for Start alone. */
+  protected readonly runHint = computed(() => {
+    const waiting = availableOnce('Check data and Start are', this.waitingFor());
+    if (waiting !== null) return waiting;
+    if (this.instants() === null) return 'Check data and Start are available once both dates are picked.';
+    if (this.launch.starting()) return 'Starting the backtest…';
+    return this.launch.busy() ? 'A backtest is already running.' : null;
+  });
+  protected readonly canStart = computed(() => this.asking() !== null && !this.launch.busy());
 
   constructor() {
     effect(() => {
@@ -219,12 +257,15 @@ export class OptionsBacktestPageComponent {
       untracked(() => this.checker.show(body));
     });
     inject(DestroyRef).onDestroy(() => this.checker.stop());
+    // Coming back to the page while a backtest is going: show it, so that no second one is started.
+    void this.launch.takeUp();
   }
 
   protected rangeChanged(range: DateRange): void {
     this.range.set(range);
     this.rangeNote.set(null);
     this.checkFlow.clearRefusal();
+    this.launch.clearRefusal();
   }
 
   protected checkData(): void {
@@ -241,6 +282,42 @@ export class OptionsBacktestPageComponent {
     this.range.set(rangeOfStretch(stretch));
     this.rangeNote.set({ firstSessionOpenMs: stretch.first_session_open_ms, lastSessionOpenMs: stretch.last_session_open_ms });
     this.checkFlow.clearRefusal();
+    this.launch.clearRefusal();
+  }
+
+  /** Starts the backtest with the setup as the server read it and the two instants; the keyboard then goes to the run. */
+  protected start(): void {
+    const asking = this.asking();
+    if (asking === null || !this.canStart()) return;
+    const request = { setup: asking.setup, start_ms: asking.range.start_ms, end_ms: asking.range.end_ms, setup_name: this.runName() };
+    void this.launch.start(request).then(() => this.afterRender(() => this.runPanel()?.focusHeading()));
+  }
+
+  /** Shift+Enter, from anywhere on the page but a field that uses it for a new line. A date typed and not yet applied is applied first. */
+  protected onStartShortcut(event: Event): void {
+    if (!(event instanceof KeyboardEvent) || this.activeTab() !== 'backtest') return;
+    if (event.repeat || event.isComposing || event.defaultPrevented || usesShiftEnter(event.target)) return;
+    // A date applies when its field is left, and Shift+Enter is not the Enter that applies it.
+    if (event.target instanceof HTMLInputElement && event.target.closest('app-date-range-picker') !== null) event.target.blur();
+    if (!this.canStart()) return;
+    event.preventDefault();
+    this.start();
+  }
+
+  protected setTab(tab: string | number | undefined): void {
+    if (tab === 'backtest' || tab === 'history') this.activeTab.set(tab);
+  }
+
+  /** The owner chose Use this setup on a run in History: the form takes that setup, under no name, and the Backtest tab is shown. */
+  protected useRunSetup(setup: ServedSetup): void {
+    const clock = this.clock();
+    if (clock === null) return;
+    this.draft.set(draftFromSetup(setup, clock));
+    this.saveModel.set({ name: '' });
+    this.loadedName.set(null);
+    this.importNotice.set({ kind: 'loaded', title: 'The setup of that run was loaded. The dates were not changed.', reasons: [] });
+    this.formReplaced += 1;
+    this.activeTab.set('backtest');
   }
 
   protected retryClock(): void {
@@ -262,9 +339,11 @@ export class OptionsBacktestPageComponent {
   protected open(item: SavedSetup): void {
     const clock = this.clock();
     if (clock === null || item.setup == null) return;
-    this.draft.set(draftFromSetup(item.setup, clock));
+    const opened = draftFromSetup(item.setup, clock);
+    this.draft.set(opened);
     this.saveModel.set({ name: item.example ? '' : item.name });
     this.loadedName.set(item.name);
+    this.loadedBody.set(bodyJsonOf(opened, clock));
     this.importNotice.set(null);
     this.formReplaced += 1;
   }
@@ -313,13 +392,17 @@ export class OptionsBacktestPageComponent {
     const name = this.saveModel().name;
     if (body === null || !this.canSave()) return;
     const stamp = this.stamp();
+    const savedBody = JSON.stringify(this.body());
     const replacedAtStart = this.formReplaced;
     this.saving.set(true);
     try {
       const saved = await this.service.save(name, body);
       this.lastSave.set({ name: saved.name, stamp, status: { kind: 'saved', text: `Saved “${saved.name}”.` } });
       // Another setup opened or imported while this was saving is what the form holds now, not this one.
-      if (replacedAtStart === this.formReplaced) this.loadedName.set(saved.name);
+      if (replacedAtStart === this.formReplaced) {
+        this.loadedName.set(saved.name);
+        this.loadedBody.set(savedBody);
+      }
       this.library.reload();
     } catch (error) {
       this.lastSave.set({ name, stamp, status: { kind: 'refused', text: reasonOf(error, 'The setup could not be saved. Try again.') } });
@@ -361,9 +444,21 @@ export class OptionsBacktestPageComponent {
   }
 }
 
-function availableOnce(action: string, waiting: 'complete' | 'read-back' | null): string | null {
+/** The body the draft would make, as JSON; null while it makes none. */
+function bodyJsonOf(draft: SetupDraft, clock: SessionClock): string | null {
+  const built = buildSetup(draft, clock);
+  return built.ok ? JSON.stringify(built.body) : null;
+}
+
+/** A field in which Shift+Enter means something of its own (a new line), so it is not Start. */
+function usesShiftEnter(target: EventTarget | null): boolean {
+  return target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable);
+}
+
+/** "Export is" or "Check data and Start are", then what they wait for. */
+function availableOnce(subject: string, waiting: 'complete' | 'read-back' | null): string | null {
   if (waiting === null) return null;
-  return `${action} is available once ${waiting === 'complete' ? 'the setup is complete' : 'the server has read the setup back'}.`;
+  return `${subject} available once ${waiting === 'complete' ? 'the setup is complete' : 'the server has read the setup back'}.`;
 }
 
 function reasonOf(error: unknown, fallback: string): string {

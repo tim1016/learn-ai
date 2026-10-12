@@ -1,0 +1,11 @@
+<app-options-backtest-run-banner [banner]="run().banner" />
+@if (run().figures; as figures) {
+  <app-options-backtest-run-headline [figures]="figures" />
+  <app-options-backtest-run-drawdown [figures]="figures" />
+  <app-options-backtest-run-sessions [figures]="figures" />
+  @if (run().slippage_tolerance; as tolerance) { <app-options-backtest-slippage-tolerance [tolerance]="tolerance" [points]="run().slippage" /> }
+  <app-options-backtest-run-day-table [rows]="figures.by_day" />
+  <app-options-backtest-run-month-table [rows]="figures.by_month" />
+} @else {
+  <p class="note" role="alert">This run is complete but the server sent no figures for it.</p>
+}

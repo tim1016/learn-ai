@@ -149,7 +149,7 @@ describe('the line beside the dates, and the lower bound', () => {
 
     expect(await screen.findByText('Option prices are available from 2025-10-15, so no earlier day can be picked.')).toBeTruthy();
     await waitFor(() => expect(checkButton().disabled).toBe(true));
-    expect(screen.getByText('Check data is available once both dates are picked.')).toBeTruthy();
+    expect(screen.getByText('Check data and Start are available once both dates are picked.')).toBeTruthy();
   });
 
   it('takes the day itself', async () => {

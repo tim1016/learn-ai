@@ -1,9 +1,10 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 import { ButtonModule } from 'primeng/button';
 
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import type { CheckState } from '../data-check-flow';
-import type { TestableStretch } from '../options-backtest.types';
+import type { DataCheck, TestableStretch } from '../options-backtest.types';
 import { DataCheckSessionsComponent } from './data-check-sessions.component';
 
 /**
@@ -16,7 +17,7 @@ import { DataCheckSessionsComponent } from './data-check-sessions.component';
  */
 @Component({
   selector: 'app-options-backtest-data-check-panel',
-  imports: [ButtonModule, TimestampDisplayComponent, DataCheckSessionsComponent],
+  imports: [ButtonModule, ReceiptLabelPipe, TimestampDisplayComponent, DataCheckSessionsComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './data-check-panel.component.html',
   styleUrls: ['../options-backtest-card.scss', './data-check-panel.component.scss'],
@@ -28,6 +29,9 @@ export class DataCheckPanelComponent {
   readonly dismissed = output();
   readonly retry = output();
   readonly useStretch = output<TestableStretch>();
+
+  /** The three verdicts, each the key of its count in the answer. */
+  protected readonly verdicts: readonly (keyof DataCheck['counts'])[] = ['ready', 'needs_download', 'cannot_be_tested'];
 
   protected readonly ready = computed(() => {
     const state = this.state();

@@ -6,7 +6,7 @@ import { sessionOpenMs } from '../../shared/date-picker/testing/fake-trading-cal
 import { RunRefusedError } from './options-backtest.service';
 import type { DataCheck, DataProblem, SessionCheck } from './options-backtest.types';
 import { dataCheck, sessionCheck } from './testing/fixtures';
-import { checkButton, dateFields, openExample, paragraph, pickDates, press, reads, typeInto } from './testing/page-actions';
+import { checkButton, dateFields, expectTradingDatesInNewYork, lettingGo, openExample, paragraph, pickDates, press, reads, typeInto } from './testing/page-actions';
 import { fakeService, renderPage, type FakeService } from './testing/render-page';
 
 const panel = () => screen.getByRole('region', { name: 'Check data' });
@@ -32,13 +32,13 @@ describe('when Check data can be asked', () => {
     await renderPage(fakeService(vi));
 
     expect(checkButton().disabled).toBe(true);
-    expect(screen.getByText('Check data is available once the setup is complete.')).toBeTruthy();
+    expect(screen.getByText('Check data and Start are available once the setup is complete.')).toBeTruthy();
     await openExample();
-    await waitFor(() => expect(screen.getByText('Check data is available once both dates are picked.')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Check data and Start are available once both dates are picked.')).toBeTruthy());
     expect(checkButton().disabled).toBe(true);
     pickDates('2026-09-14', '2026-09-18');
     await waitFor(() => expect(checkButton().disabled).toBe(false));
-    expect(screen.queryByText(/Check data is available once/)).toBeNull();
+    expect(screen.queryByText(/Check data and Start are available once/)).toBeNull();
   });
 });
 
@@ -82,8 +82,8 @@ describe('the panel', () => {
 
     const counts = within(check);
     expect(counts.getByText('Ready').nextElementSibling?.textContent).toBe('2');
-    expect(counts.getByText('Needs a download', { selector: 'dt' }).nextElementSibling?.textContent).toBe('1');
-    expect(counts.getByText('Cannot be tested', { selector: 'dt' }).nextElementSibling?.textContent).toBe('1');
+    expect(counts.getByText('Needs Download', { selector: 'dt' }).nextElementSibling?.textContent).toBe('1');
+    expect(counts.getByText('Cannot Be Tested', { selector: 'dt' }).nextElementSibling?.textContent).toBe('1');
   });
 
   it('says what range it checked, in New York dates, and that nothing was downloaded', async () => {
@@ -109,7 +109,7 @@ describe('the panel', () => {
 
     const check = await runCheck();
 
-    const section = within(check).getByRole('region', { name: 'Cannot be tested' });
+    const section = within(check).getByRole('region', { name: 'Cannot Be Tested' });
     const olderHead = within(section).getByText('Older Than The Data Plan');
     const olderGroup = olderHead.closest('.reason') as HTMLElement;
     expect(olderGroup.querySelector('.reason__head')?.textContent?.replace(/\s+/g, ' ')).toBe('Older Than The Data Plan · 2 sessions');
@@ -119,6 +119,7 @@ describe('the panel', () => {
     expect(feesGroup.querySelector('.reason__head')?.textContent?.replace(/\s+/g, ' ')).toBe('No Published Fee Rates · 1 session');
     expect(within(feesGroup).getByText('No fee rates are published for this date.')).toBeTruthy();
     expect([...feesGroup.querySelectorAll('.days li')].map((day) => day.textContent?.trim())).toEqual(['2026-09-16']);
+    expectTradingDatesInNewYork(section);
   });
 
   it('shows the lake’s own reason when it recorded a failure, and a session’s notes', async () => {
@@ -148,8 +149,9 @@ describe('the panel', () => {
 
     const check = await runCheck();
 
-    const rows = [...within(check).getByRole('region', { name: 'Needs a download' }).querySelectorAll('li')].map((row) => row.textContent?.replace(/\s+/g, ' ').trim());
+    const rows = [...within(check).getByRole('region', { name: 'Needs Download' }).querySelectorAll('li')].map((row) => row.textContent?.replace(/\s+/g, ' ').trim());
     expect(rows).toEqual(['2026-09-14 – Underlying Bars, Listing, Contracts (not yet known)', '2026-09-15 – Contracts (4 of 9 missing)']);
+    expectTradingDatesInNewYork(check);
   });
 
   it('lists the sessions that are ready but will be skipped, by date, with the reason', async () => {
@@ -164,6 +166,7 @@ describe('the panel', () => {
 
     const rows = [...within(check).getByRole('region', { name: 'Ready, but skipped' }).querySelectorAll('li')].map((row) => row.textContent?.replace(/\s+/g, ' ').trim());
     expect(rows).toEqual(['2026-09-15 – Window Does Not Fit', '2026-09-16 – Underlying Did Not Trade']);
+    expectTradingDatesInNewYork(check);
   });
 
   it('has no section for what does not occur', async () => {
@@ -172,8 +175,8 @@ describe('the panel', () => {
     const check = await runCheck();
 
     await within(check).findByText('Ready');
-    expect(within(check).queryByRole('region', { name: 'Cannot be tested' })).toBeNull();
-    expect(within(check).queryByRole('region', { name: 'Needs a download' })).toBeNull();
+    expect(within(check).queryByRole('region', { name: 'Cannot Be Tested' })).toBeNull();
+    expect(within(check).queryByRole('region', { name: 'Needs Download' })).toBeNull();
     expect(within(check).queryByRole('region', { name: 'Ready, but skipped' })).toBeNull();
     expect(within(check).queryByRole('button', { name: 'Run available dates' })).toBeNull();
   });
@@ -240,7 +243,7 @@ describe('Run available dates', () => {
 
     const check = await runCheck();
 
-    await within(check).findByText('Needs a download', { selector: 'dt' });
+    await within(check).findByText('Needs Download', { selector: 'dt' });
     expect(within(check).queryByRole('button', { name: 'Run available dates' })).toBeNull();
   });
 
@@ -377,7 +380,7 @@ describe('when Check data does not give an answer', () => {
     fireEvent.click(checkButton());
     press('Dismiss');
     waiting[0]?.resolve(dataCheck([sessionCheck('2026-09-14')]));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await lettingGo();
 
     expect(service.checkData).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('region', { name: 'Check data' })).toBeNull();

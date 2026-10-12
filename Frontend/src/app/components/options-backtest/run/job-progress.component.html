@@ -1,0 +1,15 @@
+<div class="progress">
+  <p class="phase" role="status">{{ view().phase }}</p>
+  @if (view().count; as count) {
+    <p class="count">
+      <progress [value]="count.current" [max]="count.total" aria-label="Sessions done"></progress>
+      <span>{{ count.current }} of {{ count.total }} {{ count.unit }}</span>
+    </p>
+  }
+  @if (view().latestLog; as line) { <p class="log">{{ line }}</p> }
+  <div class="actions">
+    <button pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="cancelling()" (click)="cancelRequested.emit()"><i class="pi pi-times" aria-hidden="true"></i><span>{{ cancelling() ? 'Cancel asked for' : 'Cancel' }}</span></button>
+    @if (cancelling()) { <span class="words">Waiting for the run to stop. Nothing will be saved.</span> }
+  </div>
+  @if (cancelProblem(); as why) { <p class="problem" role="alert">{{ why }}</p> }
+</div>

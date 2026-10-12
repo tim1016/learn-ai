@@ -13,9 +13,7 @@
     <p class="words">The answer is read from what is already stored. Nothing was downloaded.</p>
     @if (stale()) { <p class="stale" role="status">The setup or the dates have changed since this check. Check data again.</p> }
     <dl class="counts">
-      <div><dt>Ready</dt><dd>{{ check.answer.counts.ready }}</dd></div>
-      <div><dt>Needs a download</dt><dd>{{ check.answer.counts.needs_download }}</dd></div>
-      <div><dt>Cannot be tested</dt><dd>{{ check.answer.counts.cannot_be_tested }}</dd></div>
+      @for (verdict of verdicts; track verdict) { <div><dt>{{ verdict | receiptLabel }}</dt><dd>{{ check.answer.counts[verdict] }}</dd></div> }
     </dl>
     <app-options-backtest-data-check-sessions [sessions]="check.answer.sessions" />
     @if (stretch(); as longest) {

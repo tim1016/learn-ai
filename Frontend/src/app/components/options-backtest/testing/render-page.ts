@@ -2,12 +2,14 @@ import { render } from '@testing-library/angular';
 import { screen } from '@testing-library/angular';
 import type { Mock, vi as Vi } from 'vitest';
 
+import { JobsService } from '../../../services/jobs.service';
 import { FileDownloadService } from '../../../shared/file/file-download.service';
+import { etIsoDate } from '../../../shared/date/et-midnight';
 import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
 import { OptionsBacktestPageComponent } from '../options-backtest-page.component';
-import { OptionsBacktestService, SetupInvalidError } from '../options-backtest.service';
-import { etIsoDate } from '../../../shared/date/et-midnight';
-import type { DataCheck, SavedSetup, SessionClock, SetupLimits, SetupRequest, SetupSummary } from '../options-backtest.types';
+import { OptionsBacktestService, RunRefusedError, SetupInvalidError, type RunQuery } from '../options-backtest.service';
+import type { DataCheck, RunDetail, RunListItem, RunStartRequest, SavedSetup, SessionClock, SetupLimits, SetupRequest, SetupSummary } from '../options-backtest.types';
+import { fakeJobs, type FakeJobs } from './fake-jobs';
 import { dataCheck, readBackOf, SERVED_LIMITS, SESSION_CLOCK, servedExamples, sessionCheck } from './fixtures';
 
 /** The `vi` of the spec that calls: a shared helper never imports vitest itself. */
@@ -17,6 +19,10 @@ export interface FakeService {
   sessionClock: Mock<() => Promise<SessionClock>>;
   limits: Mock<() => Promise<SetupLimits>>;
   checkData: Mock<(setup: SetupRequest, startMs: number, endMs: number) => Promise<DataCheck>>;
+  startRun: Mock<(request: RunStartRequest) => Promise<string>>;
+  runs: Mock<(query?: RunQuery) => Promise<RunListItem[]>>;
+  run: Mock<(id: number) => Promise<RunDetail>>;
+  deleteRun: Mock<(id: number) => Promise<void>>;
   describe: Mock<(body: unknown) => Promise<SetupSummary>>;
   list: Mock<() => Promise<SavedSetup[]>>;
   save: Mock<(name: string, setup: SetupRequest) => Promise<SavedSetup>>;
@@ -73,6 +79,13 @@ export function fakeService(spy: Spy, changes: Partial<FakeService> = {}): FakeS
     limits: spy.fn(async () => SERVED_LIMITS),
     // Unless a spec says otherwise, the first session of the range is ready.
     checkData: spy.fn(async (_setup: SetupRequest, startMs: number) => dataCheck([sessionCheck(etIsoDate(startMs))])),
+    // Unless a spec says otherwise, a run starts as job-1, no run is going, and no run is found.
+    startRun: spy.fn(async () => 'job-1'),
+    runs: spy.fn(async () => []),
+    run: spy.fn(async (id: number) => {
+      throw new RunRefusedError('OPTIONS_BACKTEST_RUN_NOT_FOUND', `No run ${id}.`, 404);
+    }),
+    deleteRun: spy.fn(async () => undefined),
     describe: spy.fn(async (body: unknown) => {
       const setup = body as SetupRequest;
       if (setup.legs.length === 0) {
@@ -99,13 +112,17 @@ export interface FakeDownload {
   save: Mock<(blob: Blob, filename: string) => void>;
 }
 
-/** `settled: false` returns as soon as the page is up, for a spec whose fake never answers (a read that is still going). */
-export async function renderPage(service: FakeService, download?: FakeDownload, options: { settled?: boolean } = {}) {
+/**
+ * `settled: false` returns as soon as the page is up, for a spec whose fake never answers (a read that is still going).
+ * `jobs` is the jobs service a spec scripts; without one the page gets a jobs service that knows of no job.
+ */
+export async function renderPage(service: FakeService, download?: FakeDownload, options: { settled?: boolean; jobs?: FakeJobs } = {}) {
   const view = await render(OptionsBacktestPageComponent, {
     inputs: { describeDebounceMs: 0 },
     providers: [
       ...fakePickerWorld().providers,
       { provide: OptionsBacktestService, useValue: service },
+      { provide: JobsService, useValue: (options.jobs ?? fakeJobs()).service },
       ...(download === undefined ? [] : [{ provide: FileDownloadService, useValue: download }]),
     ],
   });

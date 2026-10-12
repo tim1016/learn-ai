@@ -1,10 +1,14 @@
 :host { display: block; min-width: 0; }
 p { margin: 0; }
 .footer { position: fixed; z-index: 20; inset-inline: var(--page-pad-x); bottom: var(--space-3); display: grid; gap: var(--space-2); padding: var(--space-3) var(--space-5); background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.35); }
-.bar { display: flex; align-items: flex-end; gap: var(--space-4); flex-wrap: wrap; }
-.name { flex: 0 1 24rem; min-width: 8rem; display: grid; gap: var(--space-1); font-size: var(--fs-sm); color: var(--text-secondary); }
+.bar { display: flex; align-items: flex-end; gap: var(--space-3) var(--space-4); flex-wrap: wrap; }
+.name { flex: 0 1 18rem; min-width: 8rem; display: grid; gap: var(--space-1); font-size: var(--fs-sm); color: var(--text-secondary); }
 .name input { width: 100%; }
-.status { flex: 1 1 16rem; align-self: center; font-size: var(--fs-sm); color: var(--text-secondary); min-width: 0; }
+// At desktop width the two run buttons are plain flex items of the bar, so name, Save, Check data and Start share one row.
+.actions { display: contents; }
+.start { font-weight: var(--fw-semi); }
+kbd { margin-inline-start: var(--space-2); border: 1px solid currentColor; border-radius: var(--radius-sm); padding: 0 var(--space-1); font-family: var(--font-mono); font-size: var(--fs-xxs); line-height: 1.5; opacity: 0.85; }
+.status { flex: 1 1 8rem; align-self: center; font-size: var(--fs-sm); color: var(--text-secondary); min-width: 0; display: flex; flex-wrap: wrap; gap: 0 var(--space-3); }
 .ok { color: var(--bull); }
 .bad { color: var(--bear); }
 
@@ -12,8 +16,12 @@ p { margin: 0; }
   .footer { padding: var(--space-2) var(--space-3); gap: var(--space-1); }
   .bar { gap: var(--space-2) var(--space-3); }
   // The name takes what the row leaves beside Save: a basis of nothing, so the row does not break before Save.
-  .name { flex: 1 1 0; max-width: 24rem; }
+  .name { flex: 1 1 0; max-width: none; }
+  // The run buttons share the row below, each as wide as the other, so Start stays the thing to press.
+  .actions { display: flex; flex: 1 1 100%; gap: var(--space-2); }
+  .actions button { flex: 1 1 0; justify-content: center; }
   // One line above the name and Save, which share the row below it. A refusal or a name rule is the owner's to read in full, so it wraps.
-  .status { flex-basis: 100%; order: -1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .status { flex-basis: 100%; order: -1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
   .status:has(.bad) { white-space: normal; }
+  kbd { display: none; }
 }

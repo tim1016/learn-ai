@@ -5,8 +5,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { etMidnightMs } from '../../shared/date/et-midnight';
 import { sessionOpenMs } from '../../shared/date-picker/testing/fake-trading-calendar';
 import { dataCheck, sessionCheck } from './testing/fixtures';
-import { checkButton, openExample, pickDates } from './testing/page-actions';
+import { checkButton, openExample, pickDates, press } from './testing/page-actions';
 import { fakeService, renderPage } from './testing/render-page';
+import { runDetail, runItem } from './testing/run-fixtures';
+import { scriptedRun } from './testing/run-script';
 
 async function violations(): Promise<string[]> {
   const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
@@ -39,6 +41,51 @@ describe('the run part of the page for a screen reader', () => {
 
     fireEvent.click(checkButton());
     await screen.findByRole('button', { name: 'Run available dates' });
+
+    expect(await violations()).toEqual([]);
+  });
+
+  async function startedRun() {
+    const setup = scriptedRun(vi);
+    await renderPage(setup.service, undefined, { jobs: setup.jobs });
+    await openExample();
+    pickDates('2026-09-14', '2026-09-18');
+    const start = screen.getByRole<HTMLButtonElement>('button', { name: 'Start backtest' });
+    await waitFor(() => expect(start.disabled).toBe(false));
+    fireEvent.click(start);
+    await screen.findByRole('region', { name: 'Backtest run' });
+    return setup;
+  }
+
+  it('has no accessibility violations while a backtest is going', async () => {
+    const setup = await startedRun();
+    setup.jobs.emit('job-1', { type: 'job.phase', phase: 'replaying', friendly: 'Replaying each session' });
+    setup.jobs.emit('job-1', { type: 'job.progress', current: 2, total: 5, unit: 'sessions' });
+    await screen.findByText('2 of 5 sessions');
+
+    expect(await violations()).toEqual([]);
+  });
+
+  it('has no accessibility violations with the result of a run showing', async () => {
+    const setup = await startedRun();
+    setup.service.run.mockResolvedValue(runDetail());
+
+    setup.jobs.emit('job-1', { type: 'job.completed', result_url: '/x' });
+    await screen.findByRole('region', { name: 'Headline figures' });
+
+    expect(await violations()).toEqual([]);
+  });
+
+  it('has no accessibility violations in History, with the list and with a run opened', async () => {
+    const complete = runItem({ id: 30, job_id: 'job-30', status: 'complete', setup_name: 'Straddle', headline: { sessions_tested: 10, sessions_traded: 8, trades: 12, trades_won: 7, net_profit_usd: '1234.56', ending_cash_usd: '11234.56' } });
+    await renderPage(fakeService(vi, { runs: vi.fn(async () => [complete]), run: vi.fn(async () => runDetail({ ...complete })) }));
+    fireEvent.click(screen.getByRole('tab', { name: 'History' }));
+    await screen.findByRole('button', { name: 'Open run 30' });
+    expect(await violations()).toEqual([]);
+
+    press('Open run 30');
+    await screen.findByRole('region', { name: 'Headline figures' });
+    await screen.findByText('Window for SPY.');
 
     expect(await violations()).toEqual([]);
   });

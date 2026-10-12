@@ -1,0 +1,53 @@
+<section class="history" aria-label="Run history">
+  @if (opened(); as run) {
+    <button pButton type="button" size="small" severity="secondary" [text]="true" (click)="close()"><i class="pi pi-arrow-left" aria-hidden="true"></i><span>Back to the runs</span></button>
+    <app-options-backtest-run-panel [run]="run" [showSetup]="true" (useSetup)="useSetup.emit($event)" />
+  } @else {
+    <h2>Runs</h2>
+    @if (deleteProblem(); as why) { <p class="problem" role="alert">{{ why }}</p> }
+    @if (listProblem(); as why) {
+      <p class="problem" role="alert">{{ why }}</p>
+      <button type="button" class="again" (click)="retry()">Try again</button>
+    } @else if (loading()) {
+      <p class="muted" role="status">Loading…</p>
+    } @else if (runs().length === 0) {
+      <p class="muted" role="status">No runs yet. Start a backtest on the Backtest tab.</p>
+    } @else {
+      <div class="table-wrap">
+        <table class="rows">
+          <thead>
+            <tr>
+              <th scope="col">Started</th><th scope="col">Status</th><th scope="col">Setup</th><th scope="col">Dates</th><th scope="col">Result</th><th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (row of runs(); track row.id) {
+              <tr>
+                <td><app-timestamp-display [value]="row.created_at_ms" mode="local" /></td>
+                <td><span class="tag" [attr.data-status]="row.status">{{ row.status | receiptLabel }}</span></td>
+                <td>
+                  <span class="setup"><app-asset-identity [symbol]="row.underlying" size="xs" [logo]="false" />@if (row.setup_name; as name) { <span>{{ name }}</span> }</span>
+                </td>
+                <td><app-timestamp-display [value]="row.first_session_open_ms" mode="date-et" granularity="date" /> – <app-timestamp-display [value]="row.last_session_open_ms" mode="date-et" granularity="date" /></td>
+                <td>
+                  @if (row.headline; as result) {
+                    <dl class="result">
+                      <div><dt>Net profit</dt><dd>{{ result.net_profit_usd | authoredUsd }}</dd></div>
+                      <div><dt>Ending cash</dt><dd>{{ result.ending_cash_usd | authoredUsd }}</dd></div>
+                      <div><dt>Trades</dt><dd>{{ result.trades }}, won {{ result.trades_won }}</dd></div>
+                      <div><dt>Sessions</dt><dd>traded {{ result.sessions_traded }} of {{ result.sessions_tested }}</dd></div>
+                    </dl>
+                  }
+                </td>
+                <td class="actions">
+                  <button pButton type="button" size="small" [text]="true" [attr.aria-label]="'Open run ' + row.id" (click)="open(row)">Open</button>
+                  <app-confirm-delete [ariaLabel]="'Delete run ' + row.id" (confirmed)="remove(row.id)" />
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+  }
+</section>

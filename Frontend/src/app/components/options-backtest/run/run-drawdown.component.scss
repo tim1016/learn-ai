@@ -1,0 +1,9 @@
+:host { display: block; min-width: 0; }
+h3 { margin: 0 0 var(--space-2); font-size: var(--fs-md); font-weight: var(--fw-semi); }
+h4 { margin: 0; font-size: var(--fs-sm); font-weight: var(--fw-semi); color: var(--text-secondary); }
+p { margin: 0; }
+.note { color: var(--text-secondary); font-size: var(--fs-xs); }
+.pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); gap: var(--space-3); margin-top: var(--space-2); }
+.fall { display: grid; gap: var(--space-1); align-content: start; background: var(--bg-elevated); border: 1px solid var(--border-light); border-radius: var(--radius); padding: var(--space-3); min-width: 0; }
+.big { font-size: var(--fs-lg); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+ul { margin: 0; padding-left: var(--space-5); display: grid; gap: var(--space-1); font-size: var(--fs-xs); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
