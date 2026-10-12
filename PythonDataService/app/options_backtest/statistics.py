@@ -71,7 +71,16 @@ class Ratio:
 
 @dataclass(frozen=True)
 class Drawdown:
-    """A fall of equity from a peak to a later trough, measured at the ends of sessions."""
+    """A fall of equity from a peak to a later trough, measured at the ends of sessions.
+
+    Of two equal falls the one whose trough comes first is reported, and equity that comes back to a peak without
+    passing it leaves the peak at the first time it was reached. The comparison is exact (``Decimal`` dollars and
+    whole fractions).
+
+    Equity can reach zero or go below it: a sale is never refused and pays its fee even when it fills at nothing, so
+    cash can end below zero by a closing fee. The fall is then the whole peak or more, and ``fall_ratio`` is 1 or above
+    1: above 1 says the account ended owing money. Nothing is clamped to 1.
+    """
 
     peak_equity_usd: Decimal
     trough_equity_usd: Decimal
@@ -97,9 +106,10 @@ class DayRow:
     trades: int
     net_profit_usd: Decimal
     fees_usd: Decimal
-    wins: int
-    losses: int
-    break_even: int
+    # Trades, not sessions: a session of two trades can add to both of these.
+    trades_won: int
+    trades_lost: int
+    trades_break_even: int
 
 
 @dataclass(frozen=True)
@@ -113,9 +123,10 @@ class MonthRow:
     trades: int
     net_profit_usd: Decimal
     fees_usd: Decimal
-    wins: int
-    losses: int
-    break_even: int
+    # Trades, not sessions or days.
+    trades_won: int
+    trades_lost: int
+    trades_break_even: int
     sessions_by_status: tuple[tuple[SessionStatus, int], ...]
 
 
@@ -154,6 +165,8 @@ class RunSummary:
     gross_loss_usd: Decimal
     profit_factor: Ratio | None
     total_fees_usd: Decimal
+    # What the fills cost beyond the prices seen: slippage and the rounding to the price step together, since both
+    # are in the gap between the price seen and the price filled.
     slippage_paid_usd: Decimal
     # Starting cash plus net profit, a leg marked at its mark.
     ending_cash_usd: Decimal
@@ -170,7 +183,9 @@ class RunSummary:
     picks_refused_by_reason: tuple[tuple[PickRefusal, int], ...]
     # A leg whose contract did not trade at the minute its starting price was due.
     legs_without_a_starting_price: int
-    # A re-entry that ended without entering, for want of market data.
+    # A re-entry that ended without entering, whatever the cause: its pick was refused, its contract had no starting
+    # price, or its entry was dropped at once. Each of those is also counted under its own heading above, so this
+    # overlaps them and is not to be added to them: it says how many of those incidents ended a re-entry.
     re_entries_lost: int
     # --- tables
     by_day: tuple[DayRow, ...]
@@ -276,9 +291,9 @@ def _day_row(session: SessionResult) -> DayRow:
         trades=len(session.outcome.trades),
         net_profit_usd=session.pnl_usd,
         fees_usd=session.fees_usd,
-        wins=won,
-        losses=lost,
-        break_even=even,
+        trades_won=won,
+        trades_lost=lost,
+        trades_break_even=even,
     )
 
 
@@ -295,9 +310,9 @@ def _month_rows(days: Sequence[DayRow]) -> tuple[MonthRow, ...]:
             trades=sum(row.trades for row in rows),
             net_profit_usd=_sum(row.net_profit_usd for row in rows),
             fees_usd=_sum(row.fees_usd for row in rows),
-            wins=sum(row.wins for row in rows),
-            losses=sum(row.losses for row in rows),
-            break_even=sum(row.break_even for row in rows),
+            trades_won=sum(row.trades_won for row in rows),
+            trades_lost=sum(row.trades_lost for row in rows),
+            trades_break_even=sum(row.trades_break_even for row in rows),
             sessions_by_status=_counts(SessionStatus, (row.status for row in rows)),
         )
         for (year, month), rows in months.items()

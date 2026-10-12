@@ -13,6 +13,7 @@ Each fee type of each fill is rounded up to the cent, then the types are added.
 
 from __future__ import annotations
 
+import pickle
 import random
 from datetime import date
 from decimal import Context, Decimal, localcontext
@@ -199,6 +200,18 @@ def test_a_fill_on_a_date_without_a_published_rate_raises_naming_the_date_and_th
     assert raised.value.trading_date == date(2026, 6, 30)
     assert raised.value.components == ("cat",)
     assert "2026-06-30" in str(raised.value)
+
+
+def test_a_fee_rate_that_is_not_published_survives_a_trip_between_processes_with_its_date_and_types() -> None:
+    # A pickle is how an exception crosses a process boundary.
+    original = FeeRateNotPublished(date(2025, 12, 31), ("taf", "cat"))
+
+    restored = pickle.loads(pickle.dumps(original))
+
+    assert isinstance(restored, FeeRateNotPublished)
+    assert (restored.trading_date, restored.components) == (date(2025, 12, 31), ("taf", "cat"))
+    assert str(restored) == str(original)
+    assert "2025-12-31" in str(restored) and "taf, cat" in str(restored)
 
 
 def test_a_buy_before_the_taf_began_names_only_what_a_buy_would_owe() -> None:

@@ -217,8 +217,8 @@ def test_a_ladder_value_the_setup_could_not_carry_is_refused_before_anything_is_
     assert data.asked == []
 
 
-def _point(percent: str, profit: str) -> SlippagePoint:
-    return SlippagePoint(D(percent), False, D(profit), 1, 1, 1)
+def _point(percent: str, profit: str, trades: int = 1) -> SlippagePoint:
+    return SlippagePoint(D(percent), False, D(profit), trades, min(trades, 1), 1)
 
 
 def test_the_figure_stops_at_the_first_value_that_does_not_profit_even_when_a_higher_one_does() -> None:
@@ -237,6 +237,38 @@ def test_a_run_that_loses_at_the_lowest_value_survives_none() -> None:
 
 def test_a_run_that_profits_at_every_value_survives_the_whole_ladder_and_not_beyond_it() -> None:
     assert slippage_tolerance([_point("0", "3"), _point("5", "1")]) == SlippageTolerance(D("5"), None)
+
+
+def test_a_run_that_made_no_trade_at_any_value_says_so_and_does_not_read_as_a_loss_from_the_lowest_value() -> None:
+    nothing = [_point("0", "0", trades=0), _point("1", "0", trades=0), _point("5", "0", trades=0)]
+
+    assert slippage_tolerance(nothing) == SlippageTolerance(None, None, nothing_traded=True)
+
+
+def test_a_run_that_traded_and_broke_even_or_lost_everywhere_is_not_a_run_that_made_no_trade() -> None:
+    # Traded, and made exactly nothing at the lowest value: not a profit, and a trade was made.
+    broke_even = slippage_tolerance([_point("0", "0"), _point("1", "-5")])
+    # Traded at one value only (the higher ones cost the trade its cash): the run did trade.
+    traded_once = slippage_tolerance([_point("0", "-2"), _point("1", "0", trades=0)])
+
+    assert broke_even == SlippageTolerance(None, D("0")) and not broke_even.nothing_traded
+    assert traded_once == SlippageTolerance(None, D("0")) and not traded_once.nothing_traded
+
+
+def test_a_whole_run_that_never_traded_has_no_tolerance_to_report_and_one_that_lost_everywhere_has_a_value() -> None:
+    # Friday's contract was captured and never traded, so the entry is dropped: no trade at any value.
+    never = fake_data({WED: Day(underlying=steady("500.00"), options={CALL_500: {}})})
+    # Every ladder value buys at 2.00 or more and sells at 1.90 or less: a loss at all of them.
+    losing = Day(underlying=steady("500.00"), options={CALL_500: {**flat("2.00", 5, 60), 61: ("1.90", "1.90")}})
+
+    quiet = run_sessions(setup(leg()), [WED], never, slippage_ladder=(D("0"), D("1")))
+    lost = run_sessions(setup(leg()), [WED], fake_data({WED: losing}), slippage_ladder=(D("0"), D("1")))
+
+    assert quiet.slippage_tolerance == SlippageTolerance(None, None, nothing_traded=True)
+    assert [p.trades for p in quiet.slippage] == [0, 0]
+    # (1.90 - 2.00) x 100 = -10.00 at 0%, and a larger loss at 1%.
+    assert lost.slippage_tolerance == SlippageTolerance(None, D("0"))
+    assert [p.trades for p in lost.slippage] == [1, 1]
 
 
 def test_the_points_are_read_from_the_lowest_value_up_whatever_order_they_arrive_in() -> None:

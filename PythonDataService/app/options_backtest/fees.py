@@ -18,9 +18,13 @@ A fill's fee is therefore never less than its share of the day's settlement, and
 is at most n - 1 cents more than the model's settlement (five types, so at most 5(n - 1) cents). The estimate leans
 high by cents a day, and never low.
 
-An unknown fee is never a zero. The model has no pinned rate for some fee types on early dates (CAT, for one, first has
-a rate for 2026-07-01); a fill on such a date raises ``FeeRateNotPublished`` naming the date and the types. Whether a
-date is priced is asked of the model, ``estimated_fees_available``, and no date is written here.
+An unknown fee is never a zero. The model has no pinned rate for some fee types on early dates; a fill on such a date
+raises ``FeeRateNotPublished`` naming the date and the types. Whether a date is priced, and so the first date that is,
+is the model's to say: ``estimated_fees_available`` asks it, and no date is written here.
+
+Importing this module imports ``app.broker.alpaca``, whose ``__init__`` builds the application's settings
+(``app.config``), so the environment must hold the vendor key it requires (``POLYGON_API_KEY``), as the data plane's
+does. It builds no broker client and opens no connection.
 """
 
 from __future__ import annotations
@@ -59,6 +63,10 @@ class FeeRateNotPublished(ValueError):
             f"estimated fees cannot be priced on {trading_date}: the option fee model has no published rate on that date "
             f"for {', '.join(components)}. Charge a fee per contract or none for that range, or start the run later."
         )
+
+    def __reduce__(self) -> tuple[type[FeeRateNotPublished], tuple[date, tuple[str, ...]]]:
+        # Without this an exception that crosses a process boundary is rebuilt from its message alone and fails.
+        return (type(self), (self.trading_date, self.components))
 
 
 def unpublished_fee_types(trading_date: date) -> tuple[str, ...]:

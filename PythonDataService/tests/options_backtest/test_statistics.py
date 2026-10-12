@@ -459,7 +459,7 @@ def test_a_re_entry_lost_is_counted_as_lost_and_again_under_the_cause_that_lost_
 def test_the_by_day_table_has_a_row_for_every_session_in_order() -> None:
     summary = summarize_run(_scene(), starting_cash_usd=STARTING)
 
-    # (date, status, trades, net profit, fees, wins, losses, break even)
+    # (date, status, trades, net profit, fees, trades won, trades lost, trades break even)
     assert [
         (
             row.trading_date,
@@ -467,9 +467,9 @@ def test_the_by_day_table_has_a_row_for_every_session_in_order() -> None:
             row.trades,
             row.net_profit_usd,
             row.fees_usd,
-            row.wins,
-            row.losses,
-            row.break_even,
+            row.trades_won,
+            row.trades_lost,
+            row.trades_break_even,
         )
         for row in summary.by_day
     ] == [
@@ -495,7 +495,7 @@ def test_the_by_month_table_adds_up_the_sessions_of_each_month() -> None:
     # September: sessions 1 and 2. Two sessions, one traded; two trades (B won, A lost); -54.90; fees 3.90.
     assert (september.year, september.month, september.sessions, september.sessions_traded) == (2026, 9, 2, 1)
     assert (september.trades, september.net_profit_usd, september.fees_usd) == (2, D("-54.90"), D("3.90"))
-    assert (september.wins, september.losses, september.break_even) == (1, 1, 0)
+    assert (september.trades_won, september.trades_lost, september.trades_break_even) == (1, 1, 0)
     assert september.sessions_by_status == (
         (SessionStatus.TRADED, 1),
         (SessionStatus.NO_TRADE, 1),
@@ -506,7 +506,7 @@ def test_the_by_month_table_adds_up_the_sessions_of_each_month() -> None:
     # 0 + 49.35 - 29.20 + 100.00 = 120.15; fees 0.65 + 5.20 = 5.85.
     assert (october.year, october.month, october.sessions, october.sessions_traded) == (2026, 10, 5, 4)
     assert (october.trades, october.net_profit_usd, october.fees_usd) == (5, D("120.15"), D("5.85"))
-    assert (october.wins, october.losses, october.break_even) == (3, 1, 1)
+    assert (october.trades_won, october.trades_lost, october.trades_break_even) == (3, 1, 1)
     assert october.sessions_by_status == (
         (SessionStatus.TRADED, 3),
         (SessionStatus.NO_TRADE, 0),
@@ -515,6 +515,43 @@ def test_the_by_month_table_adds_up_the_sessions_of_each_month() -> None:
     )
     # The months add up to the run.
     assert september.net_profit_usd + october.net_profit_usd == summary.net_profit_usd == D("65.25")
+
+
+def test_the_rows_count_trades_won_lost_and_even_and_not_the_sessions_that_had_them() -> None:
+    # Each trade is bought at 1.00 and sold at the price written, one contract: (sold - 1.00) x 100.
+    #   Session X: 1.10 (+10.00) and 1.20 (+20.00) won, 0.95 (-5.00) lost, 1.00 and 1.00 (0.00) broke even:
+    #              five trades, won 2, lost 1, even 2, net 10.00 + 20.00 - 5.00 = 25.00.
+    #   Session Y: 1.01 (+1.00) won, 0.99 (-1.00) and 0.98 (-2.00) lost: three trades, won 1, lost 2, even 0, net -2.00.
+    # The month holds both: eight trades, won 2 + 1 = 3, lost 1 + 2 = 3, even 2 + 0 = 2, net 25.00 - 2.00 = 23.00.
+    def trade(sold: str):
+        return a_trade("a", entry=("1.00", "1.00"), exit=(sold, sold), reason=ExitReason.EXIT_TIME)
+
+    sessions = [
+        a_session(
+            SEP_29,
+            "10000.00",
+            status=SessionStatus.TRADED,
+            trades=tuple(trade(sold) for sold in ("1.10", "1.20", "0.95", "1.00", "1.00")),
+        ),
+        a_session(
+            SEP_30,
+            "10025.00",
+            status=SessionStatus.TRADED,
+            trades=tuple(trade(sold) for sold in ("1.01", "0.99", "0.98")),
+        ),
+    ]
+
+    summary = summarize_run(sessions, starting_cash_usd=STARTING)
+
+    first, second = summary.by_day
+    assert (first.trades, first.trades_won, first.trades_lost, first.trades_break_even) == (5, 2, 1, 2)
+    assert (second.trades, second.trades_won, second.trades_lost, second.trades_break_even) == (3, 1, 2, 0)
+    assert (first.net_profit_usd, second.net_profit_usd) == (D("25.00"), D("-2.00"))
+    [month] = summary.by_month
+    assert (month.sessions, month.sessions_traded, month.trades) == (2, 2, 8)
+    assert (month.trades_won, month.trades_lost, month.trades_break_even) == (3, 3, 2)
+    assert month.net_profit_usd == D("23.00")
+    assert (summary.trades_won, summary.trades_lost, summary.trades_break_even) == (3, 3, 2)
 
 
 def test_a_month_is_the_new_york_month_of_the_trading_date_and_the_table_follows_the_calendar_across_a_year() -> None:
@@ -669,7 +706,7 @@ def test_a_ratio_does_not_depend_on_the_decimal_context_it_is_asked_in() -> None
 
 
 def _big_scene() -> list[SessionResult]:
-    """Three sessions of one trade each, large enough that every sum has more digits than a six-digit context holds.
+    """Five sessions of one trade each, large enough that every sum has more digits than a six-digit context holds.
 
     Cash starts at 1,234,567.89. A trade's profit is (sold - bought) x 100 x contracts less its two fees, bought and
     sold being the prices it filled at. Slippage paid is |filled - seen| x 100 x contracts for each fill.
@@ -682,6 +719,10 @@ def _big_scene() -> list[SessionResult]:
            slippage 0.06781 x 251,300 + 0.041 x 251,300 = 17,040.653 + 10,303.3 = 27,343.953
         C  1,111 contracts  bought 4.00  sold 4.57, both at the price seen        fees 22.22 + 22.22
            profit 0.57 x 111,100 - 44.44 = 63,327.00 - 44.44 = 63,282.56
+        D  1,111 contracts  bought 4.57  sold 4.0004, both at the price seen      no fees
+           profit -0.5696 x 111,100 = -63,282.56, which takes back all of C
+        E  1 contract       bought 1.00  sold 0.9999, both at the price seen      no fees
+           profit -0.0001 x 100 = -0.01
     """
     trades = (
         a_trade(
@@ -708,11 +749,13 @@ def _big_scene() -> list[SessionResult]:
             contracts=1111,
             fees=("22.22", "22.22"),
         ),
+        a_trade("a", entry=("4.57", "4.57"), exit=("4.0004", "4.0004"), reason=ExitReason.EXIT_TIME, contracts=1111),
+        a_trade("a", entry=("1.00", "1.00"), exit=("0.9999", "0.9999"), reason=ExitReason.EXIT_TIME),
     )
-    cash = ("1234567.89", "1302553.41", "1126542.89")
+    cash = ("1234567.89", "1302553.41", "1126542.89", "1189825.45", "1126542.89")
     return [
         a_session(day, before, status=SessionStatus.TRADED, trades=(trade,))
-        for day, before, trade in zip(OCTOBER[:3], cash, trades, strict=True)
+        for day, before, trade in zip(OCTOBER, cash, trades, strict=False)
     ]
 
 
@@ -725,24 +768,27 @@ def test_a_summary_is_the_same_in_a_six_digit_decimal_context_as_in_the_default_
 
     assert in_a_small_one == in_the_default_context
     # And what the summary says is the hand-worked sum, none of it rounded to six digits:
-    #   gross profit 67,985.52 + 63,282.56 = 131,268.08;  gross loss 176,010.52;  net 131,268.08 - 176,010.52 =
-    #   -44,742.44;  fees 49.48 + 100.52 + 44.44 = 194.44;  slippage 7,747.331 + 27,343.953 + 0 = 35,091.284;
-    #   ending cash 1,234,567.89 - 44,742.44 = 1,189,825.45.
-    assert (in_a_small_one.gross_profit_usd, in_a_small_one.gross_loss_usd) == (D("131268.08"), D("176010.52"))
-    assert (in_a_small_one.net_profit_usd, in_a_small_one.total_fees_usd) == (D("-44742.44"), D("194.44"))
+    #   gross profit 67,985.52 + 63,282.56 = 131,268.08;  gross loss 176,010.52 + 63,282.56 + 0.01 = 239,293.09;
+    #   net 131,268.08 - 239,293.09 = -108,025.01;  fees 49.48 + 100.52 + 44.44 = 194.44;
+    #   slippage 7,747.331 + 27,343.953 = 35,091.284;  ending cash 1,234,567.89 - 108,025.01 = 1,126,542.88.
+    assert (in_a_small_one.gross_profit_usd, in_a_small_one.gross_loss_usd) == (D("131268.08"), D("239293.09"))
+    assert (in_a_small_one.net_profit_usd, in_a_small_one.total_fees_usd) == (D("-108025.01"), D("194.44"))
     assert in_a_small_one.slippage_paid_usd == D("35091.284")
-    assert in_a_small_one.ending_cash_usd == D("1189825.45")
-    # Equity: 1,234,567.89 + 67,985.52 = 1,302,553.41 after A, - 176,010.52 = 1,126,542.89 after B, + 63,282.56 =
-    # 1,189,825.45 after C. The worst fall is B's, from the peak after A: 176,010.52 of 1,302,553.41.
+    assert in_a_small_one.ending_cash_usd == D("1126542.88")
+    # Equity: 1,234,567.89 + 67,985.52 = 1,302,553.41 after A (the peak), - 176,010.52 = 1,126,542.89 after B,
+    # + 63,282.56 = 1,189,825.45 after C, - 63,282.56 = 1,126,542.89 after D, - 0.01 = 1,126,542.88 after E.
+    # B's fall from the peak is 176,010.52 and E's is 176,010.53: a cent more, so E is the worst, though six digits
+    # cannot tell the two apart.
     assert in_a_small_one.drawdown_by_fraction == in_a_small_one.drawdown_by_dollars
     drawdown = in_a_small_one.drawdown_by_fraction
     assert drawdown is not None
     assert (drawdown.peak_equity_usd, drawdown.trough_equity_usd, drawdown.fall_usd) == (
         D("1302553.41"),
-        D("1126542.89"),
-        D("176010.52"),
+        D("1126542.88"),
+        D("176010.53"),
     )
-    assert drawdown.fall_ratio == Ratio(D("176010.52"), D("1302553.41"))
+    assert drawdown.trough_date == OCTOBER[4]
+    assert drawdown.fall_ratio == Ratio(D("176010.53"), D("1302553.41"))
 
 
 def test_the_summary_is_exact_dollars_and_never_a_float() -> None:

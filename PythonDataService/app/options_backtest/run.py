@@ -26,7 +26,7 @@ cash, and the session's profit counts it at its mark. ``SessionResult`` keeps ea
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal, localcontext
 from itertools import pairwise
@@ -101,10 +101,19 @@ class SlippageTolerance:
     # The next ladder value up, where net profit is not above zero; None when every value was profitable, which
     # reads "survives the whole ladder", not "survives any slippage".
     first_unprofitable_percent: Decimal | None
+    # True when no trade was made at any ladder value: there was no result to survive, which is not the same as a
+    # result that lost at every value. Both percents are then None.
+    nothing_traded: bool = False
 
 
 def slippage_tolerance(points: Sequence[SlippagePoint]) -> SlippageTolerance:
-    """Walk the ``points`` from the lowest slippage up and stop at the first that does not make a profit."""
+    """Walk the ``points`` from the lowest slippage up and stop at the first that does not make a profit.
+
+    A run that made no trade at any value has a profit of exactly nothing at each, and says so as ``nothing_traded``
+    and not as a result that lost from the lowest value up.
+    """
+    if all(point.trades == 0 for point in points):
+        return SlippageTolerance(None, None, nothing_traded=True)
     highest: Decimal | None = None
     for point in sorted(points, key=lambda each: each.slippage_percent):
         if point.net_profit_usd <= 0:
@@ -226,18 +235,19 @@ def _replay_with_data(
     underlying, listing = data.underlying_day(day), data.listing(day)
     if underlying is None or listing is None:
         raise SessionDataMissing(day, underlying=underlying is None, listing=listing is None, contracts=())
-    if listing.value.underlying != setup.underlying:
-        raise ValueError(
-            f"the listing for {day} is of {listing.value.underlying}, and the setup trades {setup.underlying}"
-        )
-    bars_by_close(underlying.value, trading_date=day, what="the underlying")  # refuse a malformed day before using it
+    # A one-shot iterable would be read once and then look empty, so what is handed in is held before it is used.
+    bars = tuple(underlying.value)
+    listed = replace(listing.value, contracts=tuple(listing.value.contracts))
+    if listed.underlying != setup.underlying:
+        raise ValueError(f"the listing for {day} is of {listed.underlying}, and the setup trades {setup.underlying}")
+    bars_by_close(bars, trading_date=day, what="the underlying")  # refuse a malformed day before using it
     needs = session_needs(
         setup,
         trading_date=day,
         session_open_ms=window.open_ms_utc,
         session_close_ms=window.close_ms_utc,
-        underlying=underlying.value,
-        listing=listing.value,
+        underlying=bars,
+        listing=listed,
     )
     needed = sorted(needs.contracts, key=lambda contract: contract.occ_symbol)
     captured = {contract: data.option_day(contract, day) for contract in needed}
@@ -247,8 +257,8 @@ def _replay_with_data(
     days = {contract: found for contract, found in captured.items() if found is not None}
     market = DayMarket(
         day,
-        underlying=underlying.value,
-        listing=listing.value,
+        underlying=bars,
+        listing=listed,
         option_days={contract: found.value for contract, found in days.items()},
     )
     outcome = replay_session(setup, market, cash_usd=own_cash, fee_for=fee_for)
