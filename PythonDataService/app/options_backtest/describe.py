@@ -64,13 +64,16 @@ def _window(setup: OptionsBacktestSetup, clock: SessionClock) -> str:
         f"Trades {setup.underlying}.",
         f"The entry is read {_time(setup.entry, clock)}.",
         f"The exit is read {_time(setup.exit, clock)}.",
+        "On a day that closes early both times keep their distance from the open and the close, "
+        "and a day they no longer fit is skipped.",
         "An order fills at the next minute's opening trade, never at the minute or the price that set it off.",
         "A buy is dropped if its contract does not trade in that minute; a sale is tried each minute until it does.",
         "At the exit, whatever is open is sold, legs still waiting are cancelled and nothing more is bought.",
     ]
     if setup.no_reentry_after is not None:
         sentences.append(
-            f"A stop hit later than {_time(setup.no_reentry_after, clock)} earns no re-entry. First entries are not affected."
+            f"A stop hit later than {_time(setup.no_reentry_after, clock, at='')} earns no re-entry. "
+            "First entries are not affected."
         )
     return " ".join(sentences)
 
@@ -93,12 +96,13 @@ def _notices(setup: OptionsBacktestSetup, clock: SessionClock) -> tuple[str, ...
     return tuple(notices)
 
 
-def _time(time: SessionTime, clock: SessionClock) -> str:
+def _time(time: SessionTime, clock: SessionClock, *, at: str = "at ") -> str:
+    """``time`` as a distance and a clock time. ``at`` leads a time that is the open or the close itself."""
     minutes = time.offset_ms // MS_PER_MINUTE
     if time.anchor == "open":
-        distance = "at the open" if minutes == 0 else f"{_minutes(minutes)} after the open"
+        distance = f"{at}the open" if minutes == 0 else f"{_minutes(minutes)} after the open"
     else:
-        distance = "at the close" if minutes == 0 else f"{_minutes(minutes)} before the close"
+        distance = f"{at}the close" if minutes == 0 else f"{_minutes(minutes)} before the close"
     return f"{distance} ({_on_a_full_day(_minute_of_day(time, clock), clock)})"
 
 
@@ -177,17 +181,20 @@ def _amount(unit: str, value: Decimal) -> str:
 
 
 def _reentry(rule: ReentryOnStop) -> str:
-    times = f"up to {_count(rule.count, 'time')}"
-    fresh = "After a stop, picks a fresh contract by the same rules and"
+    times = f"up to {_count(rule.count, 'time')} in a session"
+    fresh = "After a stop, picks a fresh contract by the same rules"
     if rule.kind == "at_once":
-        return f"{fresh} buys it at once, {times}."
-    return f"{fresh} waits for momentum again, {times}."
+        return f"{fresh} and buys it at once, {times}."
+    return f"{fresh}, takes a new starting premium from it and waits for momentum again, {times}."
 
 
 def _square_off(setup: OptionsBacktestSetup) -> str:
     if setup.square_off == "partial":
         return "Square off is partial: a stop closes only the leg that was stopped."
-    return "Square off is complete: a stop closes every open leg and cancels legs still waiting for momentum."
+    return (
+        "Square off is complete: a stop closes every open leg and cancels legs still waiting for momentum, "
+        "which stay cancelled for the day."
+    )
 
 
 def _costs(setup: OptionsBacktestSetup) -> str:

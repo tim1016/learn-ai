@@ -46,6 +46,7 @@ _NAME = re.compile(SETUP_NAME_PATTERN)
 
 # How many validation errors a "cannot be opened" reason spells out.
 _REASON_ERRORS = 5
+_REASON_PROBLEM_CHARS = 200
 
 
 class InvalidSetupName(ValueError):
@@ -194,12 +195,13 @@ def read_stored_setup(name: str, setup_json: str, saved_at_ms: int) -> SavedSetu
 def _reason(error: ValidationError) -> str:
     """Where each problem is and what it says, for the owner whose setup it is.
 
-    A stored value is never printed. The name of an unknown rule kind or of an extra field is: pydantic puts it
-    in the location or in the message, and it is what tells the owner which part of the setup to look at.
+    The value stored for a field the setup has is never printed. The name of an unknown rule kind or of an extra
+    field is: pydantic puts it in the location or in the message, and it is what tells the owner which part of
+    the setup to look at. Each problem is cut to a line's length, so a stored name of any size stays readable.
     """
     problems = error.errors(include_url=False, include_input=False, include_context=False)
     shown = [
-        f"{'.'.join(str(part) for part in problem['loc']) or 'setup'}: {problem['msg']}"
+        f"{'.'.join(str(part) for part in problem['loc']) or 'setup'}: {problem['msg']}"[:_REASON_PROBLEM_CHARS]
         for problem in problems[:_REASON_ERRORS]
     ]
     if len(problems) > _REASON_ERRORS:

@@ -84,11 +84,40 @@ def test_the_window_says_a_buy_is_dropped_and_a_sale_is_tried_again_when_the_con
     assert re.search(r"a sale is tried each minute until it does", window, re.IGNORECASE)
 
 
-def test_a_re_entry_cutoff_at_the_open_is_said_to_be_at_the_open() -> None:
+def test_a_re_entry_cutoff_at_the_open_is_said_as_the_open() -> None:
     window = _window(no_reentry_after=_after_open_time(0))
 
-    assert "at the open" in window
+    assert "later than the open" in window
     assert _after_open(0) in window
+
+
+def test_a_re_entry_cutoff_says_it_leaves_first_entries_alone_and_no_cutoff_says_nothing_of_it() -> None:
+    assert "First entries are not affected" in _window(no_reentry_after=_after_open_time(30))
+    assert "First entries" not in _window()
+
+
+def test_the_window_says_what_an_early_close_does_to_it() -> None:
+    window = _window()
+
+    assert re.search(r"closes early", window)
+    assert re.search(r"keep their distance from the open and the close", window)
+    assert re.search(r"no longer fit is skipped", window)
+
+
+def test_a_re_entry_on_momentum_says_it_takes_a_new_starting_premium() -> None:
+    on_momentum = _leg_text(
+        momentum={"kind": "percent_up", "value": "25"},
+        stop_loss={"kind": "percent", "value": "25"},
+        reentry_on_stop={"kind": "on_momentum", "count": 2},
+    )
+    at_once = _leg_text(
+        stop_loss={"kind": "percent", "value": "25"},
+        reentry_on_stop={"kind": "at_once", "count": 2},
+    )
+
+    assert "new starting premium" in on_momentum
+    assert "new starting premium" not in at_once
+    assert "in a session" in on_momentum and "in a session" in at_once
 
 
 @pytest.mark.parametrize(
