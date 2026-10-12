@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { JobsService } from '../../../services/jobs.service';
 import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
 import { OptionsBacktestService, RunRefusedError } from '../options-backtest.service';
+import { RUN_POLL_MS } from '../run-poll';
 import type { RunListItem } from '../options-backtest.types';
 import { fakeJobs, type FakeJobs } from '../testing/fake-jobs';
 import { expectTradingDatesInNewYork, lettingGo, press, reads } from '../testing/page-actions';
@@ -26,7 +27,7 @@ async function renderHistory(options: { service?: FakeService; jobs?: FakeJobs; 
   const jobs = options.jobs ?? fakeJobs();
   const view = await render(HistoryTabComponent, {
     inputs: { active: options.active ?? true },
-    providers: [...fakePickerWorld().providers, { provide: OptionsBacktestService, useValue: service }, { provide: JobsService, useValue: jobs.service }],
+    providers: [...fakePickerWorld().providers, { provide: OptionsBacktestService, useValue: service }, { provide: JobsService, useValue: jobs.service }, { provide: RUN_POLL_MS, useValue: 0 }],
   });
   return { view, service, jobs };
 }

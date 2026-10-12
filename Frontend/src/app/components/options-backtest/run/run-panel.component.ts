@@ -1,14 +1,16 @@
-import { afterNextRender, ChangeDetectionStrategy, Component, computed, effect, ElementRef, inject, Injector, input, output, resource, signal, untracked, viewChild } from '@angular/core';
+import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyRef, effect, ElementRef, inject, Injector, input, output, resource, signal, untracked, viewChild } from '@angular/core';
 import { ButtonModule } from 'primeng/button';
 
 import { JobsService } from '../../../services/jobs.service';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import { RecordPoller } from '../../../shared/research-record/record-poller';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import { extractServerMessage } from '../../broker/operation-error';
 import { SetupSentencesComponent } from '../cards/setup-sentences.component';
 import { OptionsBacktestService, RunRefusedError } from '../options-backtest.service';
 import type { RunDetail, RunListItem, ServedSetup, SetupSummary } from '../options-backtest.types';
+import { RUN_POLL_MS } from '../run-poll';
 import { progressView } from '../run-words';
 import { JobProgressComponent } from './job-progress.component';
 import { RunFailureComponent } from './run-failure.component';
@@ -16,12 +18,14 @@ import { RunResultComponent } from './run-result.component';
 
 /**
  * One run on screen, whichever tab holds it. It is given the run's record and
- * reads the run itself. A run that is going shows its progress, from the shared
- * jobs service, with Cancel; when the job ends the run is read again and what
- * the run's record says decides what is shown: the result, why it failed, or
- * that it was cancelled and nothing was saved. A run opened from History can
- * also show the setup it ran, and offer it back to the form. Each read of the
- * run carries a generation, so an answer to an earlier read never replaces a later one.
+ * reads the run itself, and reads it again every few seconds for as long as
+ * the record says the run is going: the record is the truth, and the job's
+ * stream only decorates it (the phase, the count, the latest line) and says
+ * sooner when the job is over. What the record says decides what is shown: the
+ * result, why it failed, or that it was cancelled and nothing was saved. A run
+ * opened from History can also show the setup it ran, and offer it back to the
+ * form. Each read of the run carries a generation, so an answer to an earlier
+ * read never replaces a later one.
  */
 @Component({
   selector: 'app-options-backtest-run-panel',
@@ -43,6 +47,8 @@ export class RunPanelComponent {
   private readonly service = inject(OptionsBacktestService);
   private readonly jobs = inject(JobsService);
   private readonly injector = inject(Injector);
+  private readonly pollMs = inject(RUN_POLL_MS);
+  private readonly poller = new RecordPoller(inject(DestroyRef));
 
   readonly run = input.required<RunListItem>();
   /** Show the sentences of the setup this run used, and offer Use this setup (a run opened from History). */
@@ -85,10 +91,10 @@ export class RunPanelComponent {
   });
 
   private readonly heading = viewChild<ElementRef<HTMLElement>>('heading');
-  private reloadedFor: string | null = null;
-  private searchedFor: string | null = null;
 
   constructor() {
+    // A read that comes back after the panel is gone is not used, and starts no further poll.
+    inject(DestroyRef).onDestroy(() => (this.generation += 1));
     // A run to show: read it, and start afresh if the run given is another one (the Backtest tab shows each new run in this panel).
     effect(() => {
       const id = this.runId();
@@ -98,20 +104,14 @@ export class RunPanelComponent {
         void this.load(id);
       });
     });
-    // The job ended: what the run's record says is the word on how it went.
+    // The job's stream says it is over before the next poll would find out: read the record at once.
     effect(() => {
       const status = this.job()?.status;
-      if (status === 'completed' || status === 'failed' || status === 'cancelled') untracked(() => this.jobEnded());
-    });
-    // The record says the run is going and this tab has not heard of the job: ask for the jobs that are going, then read the run again.
-    effect(() => {
-      const run = this.run();
-      if (this.status() === 'running' && this.jobs.job(run.job_id) === undefined) untracked(() => void this.findTheJob(run.job_id));
-    });
-    // Tell the page when the record says something other than it was given, so a finished run stops blocking a new start.
-    effect(() => {
-      const detail = this.detail();
-      if (detail !== null && detail.status !== untracked(() => this.run().status)) this.updated.emit(detail);
+      if (status === 'completed' || status === 'failed' || status === 'cancelled') {
+        untracked(() => {
+          if (this.status() === 'running') void this.load(this.run().id);
+        });
+      }
     });
   }
 
@@ -133,10 +133,24 @@ export class RunPanelComponent {
       if (generation !== this.generation) return;
       this.record.set(detail);
       this.readFailure.set(null);
+      // Tell the page when the record says something other than it was given, so a finished run stops blocking a new start.
+      if (detail.status !== this.run().status) this.updated.emit(detail);
     } catch (error) {
       if (generation !== this.generation) return;
       this.readFailure.set(error instanceof RunRefusedError ? error.message : extractServerMessage(error, 'The run could not be read.'));
     }
+    this.lookAgainWhileGoing();
+  }
+
+  /** While the record says the run is going, whether or not the last read worked, read it again in a few seconds. */
+  private lookAgainWhileGoing(): void {
+    if (this.status() !== 'running') {
+      this.poller.stop();
+      return;
+    }
+    // The job's stream is not known to this tab (it began in another, or the first read of the jobs failed): ask for the jobs that are going again.
+    if (this.job() === null) void this.jobs.refreshActive();
+    this.poller.schedule(this.pollMs, () => void this.load(this.run().id));
   }
 
   protected async cancel(): Promise<void> {
@@ -153,19 +167,5 @@ export class RunPanelComponent {
   protected use(): void {
     const setup = this.detail()?.setup;
     if (setup != null) this.useSetup.emit(setup);
-  }
-
-  private jobEnded(): void {
-    const jobId = this.run().job_id;
-    if (this.reloadedFor === jobId || this.status() !== 'running') return;
-    this.reloadedFor = jobId;
-    void this.load(this.run().id);
-  }
-
-  private async findTheJob(jobId: string): Promise<void> {
-    if (this.searchedFor === jobId) return;
-    this.searchedFor = jobId;
-    await this.jobs.refreshActive();
-    if (this.jobs.job(jobId) === undefined) void this.load(this.run().id);
   }
 }

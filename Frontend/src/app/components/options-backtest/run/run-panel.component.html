@@ -27,8 +27,12 @@
     @case ('interrupted') { <p class="words" role="status">This run did not finish, and its job is gone. It saved no result.</p> }
   }
   @if (readProblem(); as why) {
-    <p class="problem" role="alert">{{ why }}</p>
-    <button type="button" class="again" (click)="reread()">Try again</button>
+    @if (status() === 'running') {
+      <p class="problem" role="status">{{ why }} The page is still looking.</p>
+    } @else {
+      <p class="problem" role="alert">{{ why }}</p>
+      <button type="button" class="again" (click)="reread()">Try again</button>
+    }
   }
   @if (showSetup()) {
     <section class="setup" aria-label="The setup this run used">

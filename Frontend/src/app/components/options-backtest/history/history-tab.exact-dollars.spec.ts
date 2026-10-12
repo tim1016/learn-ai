@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { JobsService } from '../../../services/jobs.service';
 import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
 import { OptionsBacktestService } from '../options-backtest.service';
+import { RUN_POLL_MS } from '../run-poll';
 import { fakeJobs } from '../testing/fake-jobs';
 import { reads } from '../testing/page-actions';
 import { fakeService } from '../testing/render-page';
@@ -24,7 +25,7 @@ async function renderList() {
   const service = fakeService(vi, { runs: vi.fn(async () => [runItem({ id: 30, job_id: 'job-30', status: 'complete', headline: HEADLINE, finished_at_ms: 1 })]) });
   await render(HistoryTabComponent, {
     inputs: { active: true },
-    providers: [...fakePickerWorld().providers, { provide: OptionsBacktestService, useValue: service }, { provide: JobsService, useValue: fakeJobs().service }],
+    providers: [...fakePickerWorld().providers, { provide: OptionsBacktestService, useValue: service }, { provide: JobsService, useValue: fakeJobs().service }, { provide: RUN_POLL_MS, useValue: 0 }],
   });
   await screen.findByRole('button', { name: 'Open run 30' });
 }

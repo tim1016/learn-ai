@@ -8,6 +8,7 @@ import { etIsoDate } from '../../../shared/date/et-midnight';
 import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
 import { OptionsBacktestPageComponent } from '../options-backtest-page.component';
 import { OptionsBacktestService, RunRefusedError, SetupInvalidError, type RunQuery } from '../options-backtest.service';
+import { RUN_POLL_MS } from '../run-poll';
 import type { DataCheck, RunDetail, RunListItem, RunStartRequest, SavedSetup, SessionClock, SetupLimits, SetupRequest, SetupSummary } from '../options-backtest.types';
 import { fakeJobs, type FakeJobs } from './fake-jobs';
 import { dataCheck, readBackOf, SERVED_LIMITS, SESSION_CLOCK, servedExamples, sessionCheck } from './fixtures';
@@ -115,12 +116,14 @@ export interface FakeDownload {
 /**
  * `settled: false` returns as soon as the page is up, for a spec whose fake never answers (a read that is still going).
  * `jobs` is the jobs service a spec scripts; without one the page gets a jobs service that knows of no job.
+ * The poll that reads a going run again is off unless `polling` is set, so a spec that is not about it never waits on a timer.
  */
-export async function renderPage(service: FakeService, download?: FakeDownload, options: { settled?: boolean; jobs?: FakeJobs } = {}) {
+export async function renderPage(service: FakeService, download?: FakeDownload, options: { settled?: boolean; jobs?: FakeJobs; polling?: boolean } = {}) {
   const view = await render(OptionsBacktestPageComponent, {
     inputs: { describeDebounceMs: 0 },
     providers: [
       ...fakePickerWorld().providers,
+      ...(options.polling === true ? [] : [{ provide: RUN_POLL_MS, useValue: 0 }]),
       { provide: OptionsBacktestService, useValue: service },
       { provide: JobsService, useValue: (options.jobs ?? fakeJobs()).service },
       ...(download === undefined ? [] : [{ provide: FileDownloadService, useValue: download }]),

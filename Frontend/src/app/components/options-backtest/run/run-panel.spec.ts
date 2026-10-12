@@ -1,35 +1,15 @@
-import { render, screen, waitFor, within } from '@testing-library/angular';
+import { screen, waitFor, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
-import { JobsService } from '../../../services/jobs.service';
-import { OptionsBacktestService, RunRefusedError } from '../options-backtest.service';
+import { RunRefusedError } from '../options-backtest.service';
 import type { RunDetail, RunListItem, RunStatus } from '../options-backtest.types';
-import { fakeJobs, type FakeJobs } from '../testing/fake-jobs';
+import { fakeJobs } from '../testing/fake-jobs';
 import { expectTradingDatesInNewYork, lettingGo, reads } from '../testing/page-actions';
-import { fakeService, type FakeService } from '../testing/render-page';
+import { fakeService } from '../testing/render-page';
+import { readsAs, renderRunPanel } from '../testing/render-run';
 import { runDetail, runItem, runWithoutSetup, SETUP_CANNOT_OPEN_REASON } from '../testing/run-fixtures';
-import { RunPanelComponent } from './run-panel.component';
 
-async function renderRun(run: RunListItem, options: { service?: FakeService; jobs?: FakeJobs; showSetup?: boolean } = {}) {
-  const service = options.service ?? fakeService(vi);
-  const jobs = options.jobs ?? fakeJobs();
-  const view = await render(RunPanelComponent, {
-    inputs: { run, showSetup: options.showSetup ?? false },
-    providers: [
-      { provide: OptionsBacktestService, useValue: service },
-      { provide: JobsService, useValue: jobs.service },
-    ],
-  });
-  const updated: RunDetail[] = [];
-  view.fixture.componentInstance.updated.subscribe((detail) => updated.push(detail));
-  return { view, service, jobs, updated };
-}
-
-/** The record the run is read as, once for each status it passes through. */
-function readsAs(service: FakeService, ...records: RunDetail[]): void {
-  let next = 0;
-  service.run.mockImplementation(async () => records[Math.min(next++, records.length - 1)] ?? runDetail());
-}
+const renderRun = (run: RunListItem, options: Parameters<typeof renderRunPanel>[2] = {}) => renderRunPanel(vi, run, options);
 
 const going = (): RunDetail => runDetail({ status: 'running', finished_at_ms: null, figures: null, slippage: [], slippage_tolerance: null, headline: null });
 
@@ -264,17 +244,6 @@ describe('a run that is going', () => {
     jobs.emit('job-7', { type: 'job.phase', phase: 'replaying', friendly: 'Replaying each session' });
     expect(await screen.findByText('Replaying each session')).toBeTruthy();
     expect(service.run).toHaveBeenCalledTimes(1);
-  });
-
-  it('reads the run again when its job cannot be found, and shows what became of it', async () => {
-    const service = fakeService(vi);
-    readsAs(service, going(), runDetail({ status: 'interrupted', figures: null, slippage: [], slippage_tolerance: null, headline: null }));
-    const jobs = fakeJobs();
-
-    await renderRun(runItem(), { service, jobs });
-
-    expect(await screen.findByText('This run did not finish, and its job is gone. It saved no result.')).toBeTruthy();
-    expect(jobs.refreshes).toBe(1);
   });
 
   it('keeps the later reading of a run when an earlier one comes back after it', async () => {
