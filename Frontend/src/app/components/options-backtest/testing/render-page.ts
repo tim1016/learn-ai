@@ -6,8 +6,9 @@ import { FileDownloadService } from '../../../shared/file/file-download.service'
 import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
 import { OptionsBacktestPageComponent } from '../options-backtest-page.component';
 import { OptionsBacktestService, SetupInvalidError } from '../options-backtest.service';
-import type { SavedSetup, SessionClock, SetupLimits, SetupRequest, SetupSummary } from '../options-backtest.types';
-import { readBackOf, SERVED_LIMITS, SESSION_CLOCK, servedExamples } from './fixtures';
+import { etIsoDate } from '../../../shared/date/et-midnight';
+import type { DataCheck, SavedSetup, SessionClock, SetupLimits, SetupRequest, SetupSummary } from '../options-backtest.types';
+import { dataCheck, readBackOf, SERVED_LIMITS, SESSION_CLOCK, servedExamples, sessionCheck } from './fixtures';
 
 /** The `vi` of the spec that calls: a shared helper never imports vitest itself. */
 type Spy = Pick<typeof Vi, 'fn'>;
@@ -15,6 +16,7 @@ type Spy = Pick<typeof Vi, 'fn'>;
 export interface FakeService {
   sessionClock: Mock<() => Promise<SessionClock>>;
   limits: Mock<() => Promise<SetupLimits>>;
+  checkData: Mock<(setup: SetupRequest, startMs: number, endMs: number) => Promise<DataCheck>>;
   describe: Mock<(body: unknown) => Promise<SetupSummary>>;
   list: Mock<() => Promise<SavedSetup[]>>;
   save: Mock<(name: string, setup: SetupRequest) => Promise<SavedSetup>>;
@@ -69,6 +71,8 @@ export function fakeService(spy: Spy, changes: Partial<FakeService> = {}): FakeS
   return {
     sessionClock: spy.fn(async () => SESSION_CLOCK),
     limits: spy.fn(async () => SERVED_LIMITS),
+    // Unless a spec says otherwise, the first session of the range is ready.
+    checkData: spy.fn(async (_setup: SetupRequest, startMs: number) => dataCheck([sessionCheck(etIsoDate(startMs))])),
     describe: spy.fn(async (body: unknown) => {
       const setup = body as SetupRequest;
       if (setup.legs.length === 0) {

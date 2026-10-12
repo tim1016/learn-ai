@@ -34,6 +34,10 @@
       <app-options-backtest-leg-builder-card [form]="builderForm" [legCount]="draft().legs.length" [limits]="limits()" (add)="addLeg()" />
       <app-options-backtest-legs-card [form]="setupForm" [problems]="fieldProblems()" [limits]="limits()" (legCopied)="copyLeg($event)" (legRemoved)="removeLeg($event)" />
       <app-options-backtest-costs-card [form]="setupForm" [problems]="fieldProblems()" />
+      <app-options-backtest-duration-card [range]="range()" [optionPricesFromMs]="pricesFromMs()" [problem]="rangeProblem()" [rangeChange]="rangeNote()" (changed)="rangeChanged($event)" />
+      @if (check().kind !== 'idle') {
+        <app-options-backtest-data-check-panel [state]="check()" [stale]="checkIsStale()" (dismissed)="dismissCheck()" (retry)="checkData()" (useStretch)="useStretch($event)" />
+      }
       <app-options-backtest-summary [state]="summary()" (retry)="retrySummary()" />
     } @else if (clockProblem(); as problem) {
       <div class="notice notice--error" role="alert">
@@ -48,4 +52,4 @@
 
 <app-options-backtest-bottom-bar
   [nameField]="saveForm.name" [canSave]="canSave()" [saving]="saving()" [nameProblem]="nameProblem()"
-  [hint]="saveHint()" [status]="saveStatus()" (save)="save()" />
+  [hint]="saveHint()" [status]="saveStatus()" [canCheck]="canCheck()" [runHint]="checkWhy()" (save)="save()" (check)="checkData()" />

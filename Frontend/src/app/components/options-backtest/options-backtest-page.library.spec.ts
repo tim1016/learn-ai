@@ -12,7 +12,7 @@ const { open_minute_et: OPEN, close_minute_et: CLOSE } = SESSION_CLOCK;
 
 const saved = (name: string, savedAtMs: number): SavedSetup => servedSaved(name, { ...exampleBody(), underlying: 'AAPL' }, savedAtMs);
 const sideList = () => screen.getByRole('complementary', { name: 'Saved setups' });
-const bar = () => screen.getByRole('region', { name: 'Save this setup' });
+const bar = () => screen.getByRole('region', { name: 'Setup actions' });
 const openButton = (name: string) => within(sideList()).getByRole('button', { name: new RegExp(`^${name}`) });
 
 describe('the side list', () => {

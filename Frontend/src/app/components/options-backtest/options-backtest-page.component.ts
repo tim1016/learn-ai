@@ -2,11 +2,14 @@ import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyR
 import { applyEach, disabled, form } from '@angular/forms/signals';
 import { ButtonModule } from 'primeng/button';
 
+import type { DateRange } from '../../shared/date-picker';
 import { FileDownloadService } from '../../shared/file/file-download.service';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import { extractServerMessage } from '../broker/operation-error';
 import { BottomBarComponent, type SaveStatus } from './cards/bottom-bar.component';
 import { CostsCardComponent } from './cards/costs-card.component';
+import { DataCheckPanelComponent } from './cards/data-check-panel.component';
+import { DurationCardComponent } from './cards/duration-card.component';
 import { EntryCardComponent } from './cards/entry-card.component';
 import { InstrumentCardComponent } from './cards/instrument-card.component';
 import { LegBuilderCardComponent } from './cards/leg-builder-card.component';
@@ -14,9 +17,11 @@ import { LegsCardComponent } from './cards/legs-card.component';
 import { LegwiseCardComponent } from './cards/legwise-card.component';
 import { SideListComponent, type LibraryStatus } from './cards/side-list.component';
 import { SummaryComponent } from './cards/summary.component';
+import { DataCheckFlow } from './data-check-flow';
+import { NO_DATES, rangeInstants, rangeOfStretch, type RangeChange } from './duration';
 import { builderProblems, newLegBuilder, withLegAdded, withLegCopied, withLegRemoved } from './leg-draft';
 import { OptionsBacktestService, SetupInvalidError, SetupRefusedError } from './options-backtest.service';
-import type { SavedSetup, SessionClock, SetupSummary } from './options-backtest.types';
+import type { SavedSetup, SessionClock, SetupSummary, TestableStretch } from './options-backtest.types';
 import { buildSetup } from './setup-build';
 import { draftFromSetup, newSetupDraft, withDefaultTimes, type SetupDraft } from './setup-draft';
 import { readSetupFile, setupFileBlob, setupFileName } from './setup-file';
@@ -49,6 +54,8 @@ interface ImportNotice {
     LegBuilderCardComponent,
     LegsCardComponent,
     CostsCardComponent,
+    DurationCardComponent,
+    DataCheckPanelComponent,
     SummaryComponent,
     BottomBarComponent,
   ],
@@ -135,6 +142,29 @@ export class OptionsBacktestPageComponent {
   protected readonly underlyingProblem = computed(() => this.fieldProblems().get(FIELD.underlying) ?? null);
   protected readonly squareOffProblem = computed(() => this.fieldProblems().get(FIELD.squareOff) ?? null);
 
+  // The dates of a run: kept apart from the draft, so a saved or exported setup never holds them.
+  protected readonly range = signal<DateRange>(NO_DATES);
+  private readonly instants = computed(() => rangeInstants(this.range()));
+  /** Set when the page wrote the range on the owner's click (Run available dates), until the dates are edited. */
+  protected readonly rangeNote = signal<RangeChange | null>(null);
+
+  // Check data.
+  private readonly checkFlow = new DataCheckFlow((setup, startMs, endMs) => this.service.checkData(setup, startMs, endMs));
+  protected readonly check = this.checkFlow.state;
+  protected readonly pricesFromMs = this.checkFlow.pricesFromMs;
+  protected readonly rangeProblem = this.checkFlow.refusal;
+  /** What a check would be asked with now, and a stamp to tell whether an answer still describes it. */
+  private readonly asking = computed(() => {
+    const setup = this.readBack();
+    const range = this.instants();
+    return setup === null || range === null ? null : { setup, range, stamp: JSON.stringify([setup, range]) };
+  });
+  protected readonly checkIsStale = computed(() => {
+    const state = this.check();
+    return state.kind === 'ready' && state.asked.stamp !== this.asking()?.stamp;
+  });
+  protected readonly canCheck = computed(() => this.asking() !== null && this.check().kind !== 'checking');
+
   // The saved setups.
   private readonly library = resource({ loader: () => this.service.list() });
   protected readonly setups = computed<readonly SavedSetup[]>(() => (this.library.hasValue() ? this.library.value() : []));
@@ -172,14 +202,16 @@ export class OptionsBacktestPageComponent {
   // Import and export.
   protected readonly importNotice = signal<ImportNotice | null>(null);
   protected readonly canExport = computed(() => this.readBack() !== null);
-  /** Why Export waits, until it can go: the setup is not complete, or the server has not read it back yet. */
-  protected readonly exportWhy = computed(() => {
+  /** What the setup waits for before it can be exported, checked or run: to be complete, or to be read back by the server. */
+  private readonly waitingFor = computed<'complete' | 'read-back' | null>(() => {
     if (this.readBack() !== null) return null;
     const kind = this.summary().kind;
-    return this.body() === null || kind === 'idle' || kind === 'invalid'
-      ? 'Export is available once the setup is complete.'
-      : 'Export is available once the server has read the setup back.';
+    return this.body() === null || kind === 'idle' || kind === 'invalid' ? 'complete' : 'read-back';
   });
+  /** Why Export waits, until it can go: the setup is not complete, or the server has not read it back yet. */
+  protected readonly exportWhy = computed(() => availableOnce('Export', this.waitingFor()));
+  /** Why Check data waits: the setup, or the dates. */
+  protected readonly checkWhy = computed(() => availableOnce('Check data', this.waitingFor()) ?? (this.instants() === null ? 'Check data is available once both dates are picked.' : null));
 
   constructor() {
     effect(() => {
@@ -187,6 +219,28 @@ export class OptionsBacktestPageComponent {
       untracked(() => this.checker.show(body));
     });
     inject(DestroyRef).onDestroy(() => this.checker.stop());
+  }
+
+  protected rangeChanged(range: DateRange): void {
+    this.range.set(range);
+    this.rangeNote.set(null);
+    this.checkFlow.clearRefusal();
+  }
+
+  protected checkData(): void {
+    const asking = this.asking();
+    if (asking !== null && this.canCheck()) void this.checkFlow.run(asking.setup, asking.range, asking.stamp);
+  }
+
+  protected dismissCheck(): void {
+    this.checkFlow.dismiss();
+  }
+
+  /** The owner chose Run available dates: the range becomes the longest stretch that can be tested, and the page says so. */
+  protected useStretch(stretch: TestableStretch): void {
+    this.range.set(rangeOfStretch(stretch));
+    this.rangeNote.set({ firstSessionOpenMs: stretch.first_session_open_ms, lastSessionOpenMs: stretch.last_session_open_ms });
+    this.checkFlow.clearRefusal();
   }
 
   protected retryClock(): void {
@@ -305,6 +359,11 @@ export class OptionsBacktestPageComponent {
     this.importNotice.set({ kind: 'loaded', title: `${file.name} was loaded.`, reasons: [] });
     this.formReplaced += 1;
   }
+}
+
+function availableOnce(action: string, waiting: 'complete' | 'read-back' | null): string | null {
+  if (waiting === null) return null;
+  return `${action} is available once ${waiting === 'complete' ? 'the setup is complete' : 'the server has read the setup back'}.`;
 }
 
 function reasonOf(error: unknown, fallback: string): string {

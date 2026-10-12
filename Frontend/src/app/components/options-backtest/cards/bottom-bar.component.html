@@ -1,11 +1,12 @@
 <div class="spacer" [style.height.px]="reserved()" aria-hidden="true"></div>
-<section #panel class="footer" aria-label="Save this setup">
+<section #panel class="footer" aria-label="Setup actions">
   <div class="bar">
     <div class="name">
       <label for="ob-setup-name">Setup name</label>
       <input id="ob-setup-name" pInputText type="text" autocomplete="off" [formField]="nameField()" [attr.aria-invalid]="nameProblem() !== null" aria-describedby="ob-save-status" (keydown.enter)="submit()" />
     </div>
     <button pButton type="button" [disabled]="!canSave()" (click)="submit()"><i class="pi pi-save" aria-hidden="true"></i><span>Save setup</span></button>
+    <button pButton type="button" severity="secondary" [outlined]="true" [disabled]="!canCheck()" [attr.aria-describedby]="runHint() === null ? null : 'ob-run-hint'" (click)="check.emit()"><i class="pi pi-search" aria-hidden="true"></i><span>Check data</span></button>
     <p id="ob-save-status" class="status" aria-live="polite">
       @if (nameProblem(); as message) {
         <span class="bad" role="alert" [attr.title]="message">{{ message }}</span>
@@ -16,6 +17,7 @@
       } @else if (hint(); as why) {
         <span [attr.title]="why">{{ why }}</span>
       }
+      @if (runHint(); as why) { <span id="ob-run-hint" class="run-hint" [attr.title]="why">{{ why }}</span> }
     </p>
   </div>
 </section>

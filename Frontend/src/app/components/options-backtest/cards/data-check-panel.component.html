@@ -1,0 +1,29 @@
+<section class="card" aria-labelledby="ob-check-title">
+  <div class="card__head">
+    <h2 id="ob-check-title">Check data</h2>
+    <button pButton type="button" size="small" severity="secondary" [text]="true" (click)="dismissed.emit()"><i class="pi pi-times" aria-hidden="true"></i><span>Dismiss</span></button>
+  </div>
+  @if (state().kind === 'checking') { <p class="words" role="status">Checking which sessions can be tested…</p> }
+  @if (failure(); as message) {
+    <p class="problem" role="alert">{{ message }}</p>
+    <button type="button" class="again" (click)="retry.emit()">Try again</button>
+  }
+  @if (ready(); as check) {
+    <p class="words">Checked <app-timestamp-display [value]="check.asked.start_ms" mode="date-et" granularity="date" /> – <app-timestamp-display [value]="lastDayAskedMs()" mode="date-et" granularity="date" /></p>
+    <p class="words">The answer is read from what is already stored. Nothing was downloaded.</p>
+    @if (stale()) { <p class="stale" role="status">The setup or the dates have changed since this check. Check data again.</p> }
+    <dl class="counts">
+      <div><dt>Ready</dt><dd>{{ check.answer.counts.ready }}</dd></div>
+      <div><dt>Needs a download</dt><dd>{{ check.answer.counts.needs_download }}</dd></div>
+      <div><dt>Cannot be tested</dt><dd>{{ check.answer.counts.cannot_be_tested }}</dd></div>
+    </dl>
+    <app-options-backtest-data-check-sessions [sessions]="check.answer.sessions" />
+    @if (stretch(); as longest) {
+      <div class="stretch">
+        <p class="words">Not every session can be tested. Longest stretch that can be: {{ longest.sessions }} {{ longest.sessions === 1 ? 'session' : 'sessions' }}, <app-timestamp-display [value]="longest.first_session_open_ms" mode="date-et" granularity="date" /> – <app-timestamp-display [value]="longest.last_session_open_ms" mode="date-et" granularity="date" /></p>
+        <button pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="stale()" (click)="useStretch.emit(longest)"><i class="pi pi-calendar" aria-hidden="true"></i><span>Run available dates</span></button>
+      </div>
+    }
+    @if (nothingTestable()) { <p class="words">No session in this range can be tested.</p> }
+  }
+</section>

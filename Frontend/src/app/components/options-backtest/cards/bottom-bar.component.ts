@@ -10,8 +10,8 @@ export interface SaveStatus {
 }
 
 /**
- * The bar kept in view at the bottom of the page: the setup's name and Save
- * setup. It is fixed to the window rather than sticky, because the shell's
+ * The bar kept in view at the bottom of the page: the setup's name, Save
+ * setup and Check data. It is fixed to the window rather than sticky, because the shell's
  * `main` scrolls horizontally and so would hold a sticky bar in place; a
  * spacer of the bar's measured height keeps the end of the page clear of it.
  */
@@ -31,7 +31,12 @@ export class BottomBarComponent {
   /** Why Save is not available yet, when it is not. */
   readonly hint = input<string | null>(null);
   readonly status = input<SaveStatus | null>(null);
+  /** Whether Check data can be asked: the setup is read back and both dates are picked. */
+  readonly canCheck = input(false);
+  /** Why Check data is not available yet, when it is not. */
+  readonly runHint = input<string | null>(null);
   readonly save = output();
+  readonly check = output();
 
   /** The fixed bar's height, reserved at the end of the page. */
   protected readonly reserved = signal(0);
@@ -50,4 +55,5 @@ export class BottomBarComponent {
   protected submit(): void {
     if (this.canSave()) this.save.emit();
   }
+
 }
