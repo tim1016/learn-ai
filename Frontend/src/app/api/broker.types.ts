@@ -5953,6 +5953,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/options-backtest/runs/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Compare Two Runs
+         * @description Two complete runs of one underlying side by side: every setting that differs, the range if it differs, and, on the
+         *     sessions they share, each run's net profit, trades and winning sessions and the pair of profits of each session.
+         *
+         *     Both runs must be complete, have a stored setup that can still be read, and trade the same underlying, else a 409
+         *     that says which is not and why; a run that does not exist is a 404 naming ``a`` or ``b``. This path is the literal
+         *     ``/runs/compare``, mounted before the run service's ``/runs/{run_id}``.
+         */
+        get: operations["compare_two_runs_api_research_options_backtest_runs_compare_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/options-backtest/runs/{run_id}": {
         parameters: {
             query?: never;
@@ -5972,6 +5997,86 @@ export interface paths {
          * @description Delete a run with its sessions and trades. None by that id is a 404; a run that is still running is a 409.
          */
         delete: operations["delete_the_run_api_research_options_backtest_runs__run_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/options-backtest/runs/{run_id}/sessions/{session_open_ms}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get The Session
+         * @description One session of a complete run, for the one-day timeline.
+         *
+         *     The stored facts, trades, events, levels, fills and marks come from the run's own rows. The minute closes of the
+         *     underlying and of each contract the session traded or took a starting price in are read from the lake and shown only
+         *     if the file is the one the run read (its sha256 is the stored pin); a series that cannot be shown says why and the rest
+         *     is still served. A session the run did not test is a 404; a run that is not complete is a 409. A run whose stored
+         *     setup no longer validates is served all the same, with ``setup_cannot_open_reason`` set.
+         */
+        get: operations["get_the_session_api_research_options_backtest_runs__run_id__sessions__session_open_ms__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/options-backtest/runs/{run_id}/trades": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List The Trades
+         * @description Every leg trade of a complete run, in order: session by session, and in each the order the run recorded them.
+         *
+         *     Paged: ``total`` is every trade that matches, and ``next_offset`` is the ``offset`` that reads the rest (``null``
+         *     on the last page). A session the run did not test, or a leg its setup does not have, is a 404 and not an empty page.
+         *     A run that is not complete is a 409. A run whose stored setup no longer validates is listed all the same; with no
+         *     setup to name its legs, a leg filter is answered by the stored trades alone, and an empty page says only that none
+         *     was stored for that leg.
+         */
+        get: operations["list_the_trades_api_research_options_backtest_runs__run_id__trades_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/options-backtest/runs/{run_id}/trades.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export The Trades
+         * @description Every leg trade of a complete run as a CSV: ``unix_ts`` (the entry fill's bar close, ms UTC) first, one readable
+         *     New York time beside it, every other instant in a ``*_ms`` column, money and prices as exact decimal text.
+         *
+         *     The whole run, however many trades it has: the page size of the trades route does not apply. A run that is not
+         *     complete is a 409.
+         *
+         *     ``exit_kind`` tells a leg that was sold (``sale``) from one marked and not sold (``mark``). For a mark,
+         *     ``exit_price_usd`` is the mark and not a price anything sold at, ``exit_seen_usd`` is empty and ``exit_fee_usd`` is
+         *     ``0``; a sum of ``exit_price_usd`` over every row therefore mixes sales and marks.
+         */
+        get: operations["export_the_trades_api_research_options_backtest_runs__run_id__trades_csv_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -22456,6 +22561,40 @@ export interface components {
             start_ms: number;
         };
         /**
+         * OptionsBacktestComparedRunResponse
+         * @description One of the two runs, as the history shows it.
+         */
+        OptionsBacktestComparedRunResponse: {
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Fee Policy */
+            fee_policy: string;
+            /** First Session Open Ms */
+            first_session_open_ms: number;
+            /** Id */
+            id: number;
+            /** Last Session Open Ms */
+            last_session_open_ms: number;
+            /** Sessions Requested */
+            sessions_requested: number;
+            /** Setup Name */
+            setup_name?: string | null;
+        };
+        /**
+         * OptionsBacktestComparisonResponse
+         * @description Two complete runs of one underlying compared. Python works out everything here; the page only shows it.
+         */
+        OptionsBacktestComparisonResponse: {
+            a: components["schemas"]["OptionsBacktestComparedRunResponse"];
+            b: components["schemas"]["OptionsBacktestComparedRunResponse"];
+            overlap: components["schemas"]["OptionsBacktestSessionOverlapResponse"];
+            range_difference?: components["schemas"]["OptionsBacktestRangeDifferenceResponse"] | null;
+            /** Setting Differences */
+            setting_differences: components["schemas"]["OptionsBacktestSettingDifferenceResponse"][];
+            /** Underlying */
+            underlying: string;
+        };
+        /**
          * OptionsBacktestContractNeedsResponse
          * @description How many contract days a session needs and how many are not stored. ``not_yet_known`` while the session's
          *     underlying day or listing is not stored, and both counts are then ``None``.
@@ -22470,6 +22609,25 @@ export interface components {
              * @enum {string}
              */
             state: "known" | "not_yet_known";
+        };
+        /**
+         * OptionsBacktestContractResponse
+         * @description An option contract: its OCC symbol, and the symbol read out for display.
+         */
+        OptionsBacktestContractResponse: {
+            /** Expiry Ms */
+            expiry_ms: number;
+            /**
+             * Right
+             * @enum {string}
+             */
+            right: "call" | "put";
+            /** Strike Usd */
+            strike_usd: string;
+            /** Symbol */
+            symbol: string;
+            /** Underlying */
+            underlying: string;
         };
         /**
          * OptionsBacktestDataCheckResponse
@@ -22557,6 +22715,36 @@ export interface components {
             /** Trough Session Open Ms */
             trough_session_open_ms: number;
         };
+        /**
+         * OptionsBacktestEventResponse
+         * @description One thing that happened in the session, in the order it happened.
+         *
+         *     ``entry_number`` follows the replay's one rule: an event about a position carries that position's number, and an
+         *     event about an attempt to enter carries the number that entry has or would have. ``detail`` is the one place the
+         *     replay writes prose (a refused pick says why). It is the backend's words for the owner, stored and served exactly
+         *     as written, even when they name a date; nothing else on the wire names one, since a session is its open.
+         */
+        OptionsBacktestEventResponse: {
+            /** At Ms */
+            at_ms: number;
+            /** Contract */
+            contract?: string | null;
+            /** Detail */
+            detail?: string | null;
+            /** Entry Number */
+            entry_number: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "picked" | "pick_refused" | "starting_price_taken" | "no_starting_price" | "momentum_hit" | "entry_filled" | "entry_dropped" | "entry_refused_for_cash" | "stop_hit" | "squared_off" | "exit_time" | "close_filled" | "re_entry_earned" | "re_entry_blocked_by_cutoff" | "re_entry_lost" | "leg_cancelled" | "marked_not_sold";
+            /** Leg Id */
+            leg_id: string;
+            /** Price Usd */
+            price_usd?: string | null;
+            /** Reason */
+            reason?: ("chain_incomplete" | "expiry_not_listed" | "expiry_not_a_session" | "strike_not_listed" | "not_standard" | "cash_short" | "square_off" | "exit_time") | null;
+        };
         /** OptionsBacktestExitCountResponse */
         OptionsBacktestExitCountResponse: {
             /** Count */
@@ -22566,6 +22754,34 @@ export interface components {
              * @enum {string}
              */
             reason: "stop" | "square_off" | "exit_time" | "marked_not_sold";
+        };
+        /**
+         * OptionsBacktestFillResponse
+         * @description An order that filled, to mark on the bar it filled in. ``seen_usd`` is that bar's open and ``filled_usd`` what the
+         *     order filled at after slippage and the price step. ``exit_reason`` is why a sale was made; ``null`` for an entry.
+         */
+        OptionsBacktestFillResponse: {
+            /** Bar Close Ms */
+            bar_close_ms: number;
+            /** Contract */
+            contract: string;
+            /** Contracts */
+            contracts: number;
+            /** Entry Number */
+            entry_number: number;
+            /** Exit Reason */
+            exit_reason?: ("stop" | "square_off" | "exit_time" | "marked_not_sold") | null;
+            /** Filled Usd */
+            filled_usd: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "entry" | "exit";
+            /** Leg Id */
+            leg_id: string;
+            /** Seen Usd */
+            seen_usd: string;
         };
         /**
          * OptionsBacktestFillsBannerResponse
@@ -22624,6 +22840,35 @@ export interface components {
             start_ms: number;
         };
         /**
+         * OptionsBacktestLevelResponse
+         * @description A horizontal line to draw at one price, from ``from_ms`` to ``to_ms`` (both minute closes).
+         *
+         *     One rule ends a line that waits: it ends when the thing it waits for happened, whatever came next. ``starting_price``
+         *     and ``momentum`` belong to a leg waiting on momentum and run from the minute its starting price was taken to the
+         *     minute the buy was decided (the minute whose close reached the momentum level), whether the buy then filled or was
+         *     refused for cash; a leg cancelled before it reached the level waited until it was cancelled. ``stop`` belongs to a
+         *     position and runs from the minute it filled to the minute the close that sold it was decided.
+         */
+        OptionsBacktestLevelResponse: {
+            /** Contract */
+            contract: string;
+            /** Entry Number */
+            entry_number: number;
+            /** From Ms */
+            from_ms: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "starting_price" | "momentum" | "stop";
+            /** Leg Id */
+            leg_id: string;
+            /** Price Usd */
+            price_usd: string;
+            /** To Ms */
+            to_ms: number;
+        };
+        /**
          * OptionsBacktestLimitsResponse
          * @description The limits the server holds a setup and a request to, so the page copies none of them.
          */
@@ -22641,6 +22886,22 @@ export interface components {
             /** Max Strike Steps */
             max_strike_steps: number;
             setup_name: components["schemas"]["OptionsBacktestSetupNameRuleResponse"];
+        };
+        /**
+         * OptionsBacktestMarkResponse
+         * @description A leg valued and not sold: the last bar its contract traded in and that bar's close. It is not a fill.
+         */
+        OptionsBacktestMarkResponse: {
+            /** Bar Close Ms */
+            bar_close_ms: number;
+            /** Contract */
+            contract: string;
+            /** Entry Number */
+            entry_number: number;
+            /** Leg Id */
+            leg_id: string;
+            /** Price Usd */
+            price_usd: string;
         };
         /**
          * OptionsBacktestMonthRowResponse
@@ -22691,6 +22952,23 @@ export interface components {
             lake_reason?: string | null;
             /** Message */
             message: string;
+        };
+        /**
+         * OptionsBacktestRangeDifferenceResponse
+         * @description The two runs' ranges, sent only when they differ.
+         */
+        OptionsBacktestRangeDifferenceResponse: {
+            a: components["schemas"]["OptionsBacktestRangeResponse"];
+            b: components["schemas"]["OptionsBacktestRangeResponse"];
+        };
+        /** OptionsBacktestRangeResponse */
+        OptionsBacktestRangeResponse: {
+            /** First Session Open Ms */
+            first_session_open_ms: number;
+            /** Last Session Open Ms */
+            last_session_open_ms: number;
+            /** Sessions Requested */
+            sessions_requested: number;
         };
         /**
          * OptionsBacktestRateResponse
@@ -22906,6 +23184,57 @@ export interface components {
             /** Underlying */
             underlying: string;
         };
+        /**
+         * OptionsBacktestRunTotalsResponse
+         * @description A run's figures over the sessions both runs tested, and only those. Sums of the stored per-session figures.
+         */
+        OptionsBacktestRunTotalsResponse: {
+            /** Net Profit Usd */
+            net_profit_usd: string;
+            /** Trades */
+            trades: number;
+            /** Winning Sessions */
+            winning_sessions: number;
+        };
+        /**
+         * OptionsBacktestSeriesPointResponse
+         * @description A bar's close time and close price. A minute with no trade has no point.
+         */
+        OptionsBacktestSeriesPointResponse: {
+            /** At Ms */
+            at_ms: number;
+            /** Close Usd */
+            close_usd: string;
+        };
+        /**
+         * OptionsBacktestSeriesResponse
+         * @description One instrument's minute closes across the session, or why they are not shown.
+         *
+         *     A series is shown only if the file it is read from is the one the run read (its sha256 is the stored pin). Otherwise
+         *     ``reason`` says why and ``message`` says it in words, and there are no points: a saved run is never drawn from
+         *     changed data. ``session_skipped``: the session was skipped on its window, so no bars were read for it; ``no_pin``:
+         *     the run kept no record of reading this one; ``gone``: no longer in the lake; ``changed``: not the file the run read;
+         *     ``not_confirmed``: the lake's catalog does not admit the file's bytes, so they cannot be checked against what the run
+         *     read (nobody saw them change); ``unreadable``: the file is there and cannot be read (damaged, a bar no session can
+         *     place, or refused by the operating system); ``lake_unavailable``: the lake could not be asked, which says nothing of
+         *     the file.
+         */
+        OptionsBacktestSeriesResponse: {
+            contract?: components["schemas"]["OptionsBacktestContractResponse"] | null;
+            /** Message */
+            message?: string | null;
+            /** Points */
+            points: components["schemas"]["OptionsBacktestSeriesPointResponse"][];
+            /** Reason */
+            reason?: ("session_skipped" | "no_pin" | "gone" | "changed" | "not_confirmed" | "unreadable" | "lake_unavailable") | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "shown" | "not_shown";
+            /** Symbol */
+            symbol: string;
+        };
         /** OptionsBacktestSessionCheckResponse */
         OptionsBacktestSessionCheckResponse: {
             contracts: components["schemas"]["OptionsBacktestContractNeedsResponse"];
@@ -22927,6 +23256,71 @@ export interface components {
              */
             verdict: "ready" | "needs_download" | "cannot_be_tested";
         };
+        /**
+         * OptionsBacktestSessionOverlapResponse
+         * @description The sessions the two runs share (by their opens), how many each has that the other lacks, and the totals over the
+         *     shared ones.
+         */
+        OptionsBacktestSessionOverlapResponse: {
+            a: components["schemas"]["OptionsBacktestRunTotalsResponse"];
+            b: components["schemas"]["OptionsBacktestRunTotalsResponse"];
+            /** Only In A */
+            only_in_a: number;
+            /** Only In B */
+            only_in_b: number;
+            /** Sessions */
+            sessions: components["schemas"]["OptionsBacktestSharedSessionResponse"][];
+            /** Shared Sessions */
+            shared_sessions: number;
+        };
+        /**
+         * OptionsBacktestSessionResponse
+         * @description One session of a complete run: what was stored, and what a timeline draws.
+         *
+         *     The stored facts (status, cash, profit, ``trades``, ``events``, ``levels``, ``fills``, ``marks``) never depend on the
+         *     lake. The series are read from it and are checked against what the run read; one that cannot be shown says so and
+         *     the rest is still served.
+         *
+         *     ``setup_cannot_open_reason`` is set only for a run whose stored setup no longer validates, and says why. Everything
+         *     stored is served all the same; the one thing missing is the ``momentum`` line of an attempt that never filled,
+         *     whose level comes from the leg's rule.
+         */
+        OptionsBacktestSessionResponse: {
+            /** Cash After Usd */
+            cash_after_usd: string;
+            /** Cash Before Usd */
+            cash_before_usd: string;
+            /** Contracts */
+            contracts: components["schemas"]["OptionsBacktestSeriesResponse"][];
+            /** Events */
+            events: components["schemas"]["OptionsBacktestEventResponse"][];
+            /** Fills */
+            fills: components["schemas"]["OptionsBacktestFillResponse"][];
+            /** Levels */
+            levels: components["schemas"]["OptionsBacktestLevelResponse"][];
+            /** Marks */
+            marks: components["schemas"]["OptionsBacktestMarkResponse"][];
+            /** Profit Usd */
+            profit_usd: string;
+            /** Run Id */
+            run_id: number;
+            /** Session Close Ms */
+            session_close_ms: number;
+            /** Session Open Ms */
+            session_open_ms: number;
+            /** Setup Cannot Open Reason */
+            setup_cannot_open_reason?: string | null;
+            /** Skip Reason */
+            skip_reason?: ("window_does_not_fit" | "underlying_did_not_trade") | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "traded" | "no_trade" | "skipped" | "incomplete";
+            /** Trades */
+            trades: components["schemas"]["OptionsBacktestTradeResponse"][];
+            underlying: components["schemas"]["OptionsBacktestSeriesResponse"];
+        };
         /** OptionsBacktestSessionStatusCountResponse */
         OptionsBacktestSessionStatusCountResponse: {
             /** Count */
@@ -22936,6 +23330,27 @@ export interface components {
              * @enum {string}
              */
             status: "traded" | "no_trade" | "skipped" | "incomplete";
+        };
+        /**
+         * OptionsBacktestSettingDifferenceResponse
+         * @description One setting on which the two runs differ. ``label`` names it the way an owner would ("leg call: re-entry on stop");
+         *     ``a`` and ``b`` are each run's value in words ("not set" for a rule that is off, "not in this run" for a leg the run
+         *     lacks). The settings were compared as validated objects, so ``0.3`` and ``0.3000`` are never a difference.
+         */
+        OptionsBacktestSettingDifferenceResponse: {
+            /** A */
+            a: string;
+            /** B */
+            b: string;
+            /** Label */
+            label: string;
+            /** Leg Id */
+            leg_id?: string | null;
+            /**
+             * Setting
+             * @enum {string}
+             */
+            setting: "entry_time" | "exit_time" | "no_reentry_after" | "square_off" | "leg" | "leg_right" | "leg_contracts" | "leg_expiry" | "leg_strike" | "leg_stop_loss" | "leg_momentum" | "leg_reentry" | "slippage" | "price_step" | "fees" | "starting_cash";
         };
         /**
          * OptionsBacktestSetup
@@ -23021,6 +23436,28 @@ export interface components {
             /** Sentence */
             sentence: string;
         };
+        /**
+         * OptionsBacktestSharedSessionResponse
+         * @description A session both runs tested, with each run's status and profit, so a page can show where one setting helped or hurt.
+         */
+        OptionsBacktestSharedSessionResponse: {
+            /** A Profit Usd */
+            a_profit_usd: string;
+            /**
+             * A Status
+             * @enum {string}
+             */
+            a_status: "traded" | "no_trade" | "skipped" | "incomplete";
+            /** B Profit Usd */
+            b_profit_usd: string;
+            /**
+             * B Status
+             * @enum {string}
+             */
+            b_status: "traded" | "no_trade" | "skipped" | "incomplete";
+            /** Session Open Ms */
+            session_open_ms: number;
+        };
         /** OptionsBacktestSkipCountResponse */
         OptionsBacktestSkipCountResponse: {
             /** Count */
@@ -23076,6 +23513,97 @@ export interface components {
             sessions: number;
             /** Start Ms */
             start_ms: number;
+        };
+        /**
+         * OptionsBacktestTradeFillResponse
+         * @description An order that filled: the bar it filled in, the open of that bar (the price seen) and the price it filled at.
+         */
+        OptionsBacktestTradeFillResponse: {
+            /** Bar Close Ms */
+            bar_close_ms: number;
+            /** Filled Usd */
+            filled_usd: string;
+            /** Seen Usd */
+            seen_usd: string;
+        };
+        /**
+         * OptionsBacktestTradeMarkResponse
+         * @description A leg valued and not sold: the last bar its contract traded in and the close of that bar.
+         */
+        OptionsBacktestTradeMarkResponse: {
+            /** Bar Close Ms */
+            bar_close_ms: number;
+            /** Price Usd */
+            price_usd: string;
+        };
+        /**
+         * OptionsBacktestTradeResponse
+         * @description One leg round trip. It left by a ``sale`` or, when its sale never filled, by a ``mark``; exactly one is set.
+         */
+        OptionsBacktestTradeResponse: {
+            contract: components["schemas"]["OptionsBacktestContractResponse"];
+            /** Contracts */
+            contracts: number;
+            entry: components["schemas"]["OptionsBacktestTradeFillResponse"];
+            /** Entry Decided At Ms */
+            entry_decided_at_ms: number;
+            /** Entry Fee Usd */
+            entry_fee_usd: string;
+            /** Entry Number */
+            entry_number: number;
+            /** Exit Decided At Ms */
+            exit_decided_at_ms: number;
+            /** Exit Fee Usd */
+            exit_fee_usd: string;
+            /** Exit Group */
+            exit_group: number;
+            /**
+             * Exit Kind
+             * @enum {string}
+             */
+            exit_kind: "sale" | "mark";
+            /**
+             * Exit Reason
+             * @enum {string}
+             */
+            exit_reason: "stop" | "square_off" | "exit_time" | "marked_not_sold";
+            /** Leg Id */
+            leg_id: string;
+            mark?: components["schemas"]["OptionsBacktestTradeMarkResponse"] | null;
+            /** Momentum Level Usd */
+            momentum_level_usd?: string | null;
+            /** Multiplier */
+            multiplier: number;
+            /** Pnl Usd */
+            pnl_usd: string;
+            sale?: components["schemas"]["OptionsBacktestTradeFillResponse"] | null;
+            /** Session Open Ms */
+            session_open_ms: number;
+            /** Starting Price Usd */
+            starting_price_usd?: string | null;
+            /** Stop Level Usd */
+            stop_level_usd?: string | null;
+            /** Trade Number */
+            trade_number: number;
+        };
+        /**
+         * OptionsBacktestTradesResponse
+         * @description A page of a run's leg trades. ``total`` counts every trade that matches, on every page; ``next_offset`` is the
+         *     ``offset`` to ask for the rest, and is ``None`` on the last page. The CSV export is never paged.
+         */
+        OptionsBacktestTradesResponse: {
+            /** Limit */
+            limit: number;
+            /** Next Offset */
+            next_offset?: number | null;
+            /** Offset */
+            offset: number;
+            /** Run Id */
+            run_id: number;
+            /** Total */
+            total: number;
+            /** Trades */
+            trades: components["schemas"]["OptionsBacktestTradeResponse"][];
         };
         /**
          * OptionsChainSnapshotRequest
@@ -40878,6 +41406,58 @@ export interface operations {
             };
         };
     };
+    compare_two_runs_api_research_options_backtest_runs_compare_get: {
+        parameters: {
+            query: {
+                /** @description The first run's id. */
+                a: number;
+                /** @description The second run's id. */
+                b: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestComparisonResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_the_run_api_research_options_backtest_runs__run_id__get: {
         parameters: {
             query?: never;
@@ -40937,6 +41517,174 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_the_session_api_research_options_backtest_runs__run_id__sessions__session_open_ms__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The run's id, from the history. */
+                run_id: number;
+                /** @description The session's open, as the run's trades and days give it. */
+                session_open_ms: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestSessionResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+        };
+    };
+    list_the_trades_api_research_options_backtest_runs__run_id__trades_get: {
+        parameters: {
+            query?: {
+                /** @description Only this session's trades, by its open. */
+                session_open_ms?: number | null;
+                /** @description Only this leg's trades. */
+                leg_id?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The run's id, from the history. */
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestTradesResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_the_trades_api_research_options_backtest_runs__run_id__trades_csv_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The run's id, from the history. */
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every leg trade of the run as a CSV download, named for the run. Never paged or truncated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
             };
             /** @description Not Found */
             404: {
