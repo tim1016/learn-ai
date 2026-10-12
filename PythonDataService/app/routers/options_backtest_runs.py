@@ -83,21 +83,6 @@ def _refusal(exc: RunRefused) -> HTTPException:
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"code": exc.code, "message": exc.message})
 
 
-def _sessions_of(start_ms: int, end_ms: int) -> tuple[date, ...]:
-    """The sessions of a request's range, refusing one that reaches a session opening before the epoch.
-
-    Every instant on the wire and in the tables is a count of milliseconds from the epoch and never below it, and a
-    session on 1969-12-31 opens at a negative one. It is a mistake of the request, refused before anything is read.
-    """
-    sessions = service.sessions_of_range(start_ms, end_ms)
-    if session_window_for_date(sessions[0]).open_ms_utc < 0:
-        raise RunRefused(
-            "OPTIONS_BACKTEST_RANGE_TOO_EARLY",
-            "The range reaches a trading day before 1970, which a run cannot be asked for. Start the range later.",
-        )
-    return sessions
-
-
 # ── Check data, the history, one run, delete ─────────────────────────────
 
 
@@ -112,7 +97,7 @@ async def check_the_data(body: OptionsBacktestCheckDataRequest) -> OptionsBackte
     Reads files and asks the lake's catalog, so it runs in a worker thread. A range that cannot be run is a 400.
     """
     try:
-        sessions = await asyncio.to_thread(_sessions_of, body.start_ms, body.end_ms)
+        sessions = await asyncio.to_thread(service.sessions_of_range, body.start_ms, body.end_ms)
     except RunRefused as exc:
         raise _refusal(exc) from exc
     try:
@@ -200,7 +185,7 @@ async def start_options_backtest_job(req: OptionsBacktestJobRequest) -> OptionsB
     """Accept a run: 202 once its row is made and a worker holds it. A bad range is a 400 and no job."""
     try:
         # A calendar quarter not yet read is built on first use: off the event loop.
-        sessions = await asyncio.to_thread(_sessions_of, req.start_ms, req.end_ms)
+        sessions = await asyncio.to_thread(service.sessions_of_range, req.start_ms, req.end_ms)
     except RunRefused as exc:
         raise _refusal(exc) from exc
     store = run_store()
