@@ -364,6 +364,18 @@ class Settings(BaseSettings):
     # resident work.
     RESEARCH_WORKER_COUNT: int = Field(default=1, ge=1, le=8)
     RESEARCH_DISPATCH_WINDOW: int = Field(default=8, ge=1, le=64)
+    # The research process's PostgreSQL envelope (#3047, PRD #3034 slice 12).
+    # Admission verdicts share one dedicated loop whose pool holds at most
+    # this many connections; coordination, materialization and study
+    # persistence share the background writer loop at the second bound —
+    # minus the coordinator authority's own dedicated lock connection, which
+    # counts inside it. The sum stays inside the twelve the connection
+    # inventory reserves for the research runtime; an envelope that does
+    # not fit, or leaves fewer than twenty server connections free, is
+    # refused at startup — never repaired by raising the server's
+    # max_connections.
+    RESEARCH_ADMISSION_CONNECTIONS: int = Field(default=8, ge=1, le=8)
+    RESEARCH_COORDINATION_CONNECTIONS: int = Field(default=4, ge=2, le=4)
     # Issue #1735 step 3. Off, a strategy-wiring digest that no longer matches
     # its golden-qualification receipt is reported and Start/Resume proceed;
     # on, it fails closed like any other build drift. Deliberately default-off:

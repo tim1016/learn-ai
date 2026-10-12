@@ -251,12 +251,27 @@ def dispatch_refused() -> bool:
 
 
 async def stamp_dispatch(*, job_id: str, kind: ResearchKind, record_id: str) -> None:
-    """Record one research dispatch under the process's authority.
+    """Record one research dispatch under the process's authority (#3042, #3047).
+
+    The lock and the stamp ride the process's writer loop, whatever loop the
+    calling route served: an ``asyncio.Lock`` never wakes a future set from
+    another loop, so stamps arriving from both the app loop and the writer
+    loop would park the second caller forever (#3047 review). A writer stall
+    past the call bound raises ``CallerStoppedWaitingError`` — the stamp
+    keeps running on the loop; the router answers retryable.
 
     A process without authority records nothing (legacy lifecycle — the job
     is API-owned and the sweep closes it on restart). A process that saw the
     lock held elsewhere, or whose authority connection has died, refuses:
     raising :class:`CoordinatorHeldElsewhere` for the router to surface.
+    """
+    from app.research.persistence.db import writer_loop_call
+
+    await writer_loop_call(_stamp_on_authority(job_id=job_id, kind=kind, record_id=record_id))
+
+
+async def _stamp_on_authority(*, job_id: str, kind: ResearchKind, record_id: str) -> None:
+    """The stamp itself, on the writer loop that owns ``stamp_lock``.
 
     The insert runs on the lock-owning session itself, not a pool member:
     a check on one connection followed by an insert on another is not a

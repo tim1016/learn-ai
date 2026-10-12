@@ -484,3 +484,61 @@ async def test_a_claiming_runtime_closes_the_jobs_of_dead_generations(conn, monk
         assert fake.exists("job:job-live-gen:lease")
     finally:
         await authority.release()
+
+
+# ── The connection envelope (#3047, PRD #3034 slice 12) ────────────────────
+
+
+def test_the_envelope_caps_the_writer_loop_and_refuses_an_oversized_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Admission and coordination live inside the reserved research cap, or startup refuses."""
+    import asyncio
+    import os
+
+    url = settings.POSTGRES_URL or os.getenv("POSTGRES_URL", "")
+    if not url:
+        pytest.skip("POSTGRES_URL not configured")
+    monkeypatch.setattr(settings, "POSTGRES_URL", url)
+
+    from app.data_lake import catalog_client
+    from app.research_runtime import enforce_connection_envelope
+    from app.utils.background_loop import background_loop, run_on_background_loop
+
+    monkeypatch.setattr(settings, "RESEARCH_ADMISSION_CONNECTIONS", 8)
+    monkeypatch.setattr(settings, "RESEARCH_COORDINATION_CONNECTIONS", 4)
+
+    def close_writer_loop_pool() -> None:
+        # Close the writer loop's catalog pool from a thread: the pool is
+        # bound to that loop, and close_pool only touches the calling
+        # loop's.
+        closer = threading.Thread(
+            target=lambda: run_on_background_loop(catalog_client.close_pool(), timeout=5.0), daemon=True
+        )
+        closer.start()
+        closer.join(timeout=5.0)
+
+    # A configuration that cannot fit the research cap is refused, never
+    # repaired by raising anyone's ceiling.
+    with monkeypatch.context() as narrower:
+        narrower.setattr("app.research.benchmark.CONNECTION_INVENTORY_RESEARCH_CAP", 10, raising=False)
+        with pytest.raises(RuntimeError, match="research cap"):
+            asyncio.run(enforce_connection_envelope())
+
+    # The precondition enforcement pins is startup's: no writer-loop pool
+    # exists before it sizes that loop (the lifespan guarantees the ordering
+    # in production). The daily tier shares one process, and an earlier slow
+    # test may have lazily built that pool at the module ceiling — close it
+    # so the envelope is this loop's first initializer here too.
+    close_writer_loop_pool()
+
+    try:
+        # The honest envelope initializes the shared writer loop at the
+        # coordination bound minus the authority's own lock connection.
+        inventory = asyncio.run(enforce_connection_envelope())
+        assert inventory["research_cap"] == 12, "eight admission plus four coordination"
+        pool = catalog_client._pools.get(background_loop())
+        assert pool is not None and pool._maxsize == 3, (
+            "the writer loop's pool left room for the authority's connection"
+        )
+    finally:
+        # The sized pool belongs to this test; later tests lazily build their own.
+        close_writer_loop_pool()

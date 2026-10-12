@@ -556,8 +556,14 @@ class ResearchWorker:
                 self._arrived.notify_all()
 
     def _answer_admission(self, message: Mapping[str, Any]) -> None:
-        """One read's verdict: the parent runs the canonical committed-receipt check."""
-        from app.data_lake.admission import LakeAdmissionError, verify_committed_digest
+        """One read's verdict: the canonical committed-receipt check, batched (#3047).
+
+        Requests already pending share one set-based lookup on the admission
+        loop; the tuple resolution — the marker read and path walk — stays on
+        this thread, and the verdict taxonomy is exactly the single-check
+        relay's: admitted, refused, or the typed outage.
+        """
+        from app.data_lake.admission import LakeAdmissionError, admission_batcher, admission_check_for
         from app.data_lake.catalog_client import CatalogUnavailableError
         from app.data_lake.path_policy import lake_root_for
 
@@ -568,8 +574,8 @@ class ResearchWorker:
             if root is None:
                 verdict["admitted"] = True  # a reference fixture keeps its file-only contract
             else:
-                verify_committed_digest(path, root, str(message["digest"]), int(message["size"]))
-                verdict["admitted"] = True
+                check = admission_check_for(path, root, str(message["digest"]), int(message["size"]))
+                verdict["admitted"] = admission_batcher().submit(check)
         except CatalogUnavailableError:
             verdict["unavailable"] = True
         except LakeAdmissionError:

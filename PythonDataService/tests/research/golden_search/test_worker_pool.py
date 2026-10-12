@@ -13,6 +13,7 @@ evaluations.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import random
 import threading
@@ -549,11 +550,30 @@ async def test_a_lane_loss_under_width_keeps_the_books(conn, pool_driver: Driver
 # ── Slow tier: real children, real overlap ────────────────────────────────
 
 
+def _close_writer_loop_catalog_pool() -> None:
+    """Close the writer loop's lazily built catalog pool after a slow test.
+
+    Real-children study persistence rides the shared writer loop, and that
+    loop's first pooled call sizes its pool at the module ceiling. The
+    daily tier runs one process, so a pool left open here would be the
+    writer loop's first initializer ahead of #3047's envelope test later
+    in that order — exactly the pool-at-startup state the lifespan's
+    enforcement ordering exists to prevent.
+    """
+    from app.data_lake import catalog_client
+    from app.utils.background_loop import run_on_background_loop
+
+    closer = threading.Thread(
+        target=lambda: run_on_background_loop(catalog_client.close_pool(), timeout=5.0), daemon=True
+    )
+    closer.start()
+    closer.join(timeout=5.0)
+
+
 @pytest.mark.slow
 @pytest.mark.usefixtures("seeded_lake_catalog")
 async def test_two_real_children_overlap_independent_evaluations(conn, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Two actual spawned workers overlap — not a synchronous function in a serial loop (#3046's first AC)."""
-    import hashlib
     from datetime import date as date_of
     from uuid import UUID
 
@@ -642,31 +662,34 @@ async def test_two_real_children_overlap_independent_evaluations(conn, tmp_path:
 
     overlaps = 0
     widths: dict[int, float] = {}
-    for width in (1, 2, 4):
-        runs.clear()
-        dispatch = pool_module.PooledWorkerDispatch(context, workers=width, window=width)
-        try:
-            started = time.monotonic()
-            metrics = await asyncio.to_thread(evaluate_through, dispatch, points, f"pool-probe-{width}")
-            widths[width] = time.monotonic() - started
-            assert all(m.status == "completed" for m in metrics), f"width {width}: every real evaluation completed ({[m.error for m in metrics]})"
-        finally:
-            dispatch.close()
-        workers = {worker for worker, _, _ in runs}
-        assert len(workers) == min(width, len(points)), f"width {width}: {len(workers)} actual children served the batch"
-        for first in runs:
-            for second in runs:
-                if first[0] != second[0] and first[1] < second[2] and second[1] < first[2]:
-                    overlaps += 1
-        logger.info(
-            "research pool measurement (#3046 evidence): width=%d elapsed=%.2fs tasks=%d",
-            width,
-            widths[width],
-            len(runs),
-        )
+    try:
+        for width in (1, 2, 4):
+            runs.clear()
+            dispatch = pool_module.PooledWorkerDispatch(context, workers=width, window=width)
+            try:
+                started = time.monotonic()
+                metrics = await asyncio.to_thread(evaluate_through, dispatch, points, f"pool-probe-{width}")
+                widths[width] = time.monotonic() - started
+                assert all(m.status == "completed" for m in metrics), f"width {width}: every real evaluation completed ({[m.error for m in metrics]})"
+            finally:
+                dispatch.close()
+            workers = {worker for worker, _, _ in runs}
+            assert len(workers) == min(width, len(points)), f"width {width}: {len(workers)} actual children served the batch"
+            for first in runs:
+                for second in runs:
+                    if first[0] != second[0] and first[1] < second[2] and second[1] < first[2]:
+                        overlaps += 1
+            logger.info(
+                "research pool measurement (#3046 evidence): width=%d elapsed=%.2fs tasks=%d",
+                width,
+                widths[width],
+                len(runs),
+            )
 
-    assert overlaps >= 1, "two real children ran independent evaluations at the same time"
-    assert widths[4] < widths[1] * 1.5, "width never made the corpus dramatically slower (transport sanity)"
+        assert overlaps >= 1, "two real children ran independent evaluations at the same time"
+        assert widths[4] < widths[1] * 1.5, "width never made the corpus dramatically slower (transport sanity)"
+    finally:
+        _close_writer_loop_catalog_pool()
 
 
 # ── #3065/#3066 review regressions ─────────────────────────────────────────
@@ -923,3 +946,194 @@ def test_a_child_dead_between_tasks_is_replaced_before_the_next_marker(monkeypat
             assert bridge.rows[_key_of(evaluator, _point(gap))]["retries"] == 0, "no allowance spent on an undispatched run"
     finally:
         dispatch.close()
+
+
+@pytest.mark.slow
+async def test_admission_verdicts_batch_with_measured_latency_across_widths(
+    conn, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#3047's measurement tier: real children at 1/2/4/8 widths, real SQL round trips.
+
+    The children's artifact reads ride the production relay — the process's
+    admission batcher — over a lake whose receipts are real catalog rows, so
+    every verdict is a genuine set-based SQL round trip. Per width this
+    records the batcher's own facts (batch sizes, request versus SQL counts,
+    round trips saved), per-batch query latency and per-evaluation write
+    latency; those numbers are what gets published on #3047. Batching itself
+    is asserted where it must exist: at full width, concurrent readers share
+    round trips. The children — bare interpreters — hold no database
+    connection of their own; the server sees at most the test harness beside
+    the envelope's pools.
+    """
+    from datetime import date as date_of
+    from statistics import median
+    from uuid import UUID
+
+    from app.config import settings
+    from app.data_lake import catalog_client
+    from app.data_lake.admission import start_admission_batcher, stop_admission_batcher
+    from app.data_lake.root_identity import init_empty_root
+    from app.lean_sidecar.trading_calendar import expected_sessions
+    from app.research.golden_search import repository
+    from app.research.golden_search.evaluator import EvaluationCapability, StudyEvaluator
+    from app.utils.session_anchors import et_midnight_ms
+    from tests._helpers.lake_fixture import seed_lake_minute_day
+
+    symbol = "SPY"
+    base = tmp_path / "admission-root"
+    init_empty_root(base, UUID(int=3047))
+    lake = base / "lake" / "polygon_split_adjusted"
+    lake.mkdir(parents=True)
+    manifest: dict[str, str] = {}
+    for day in expected_sessions(date_of(2024, 12, 2), date_of(2025, 2, 28)):
+        trade, _quote = seed_lake_minute_day(lake, symbol, day)
+        manifest[trade.relative_to(lake).as_posix()] = hashlib.sha256(trade.read_bytes()).hexdigest()
+        companion = trade.with_name(trade.name + ".adjustment.json")
+        if companion.exists():
+            manifest[companion.relative_to(lake).as_posix()] = hashlib.sha256(companion.read_bytes()).hexdigest()
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(base))
+    monkeypatch.setenv("LEAN_DATA_WRITE_ROOT", str(base))
+
+    # Real catalog rows, not the in-memory fixture: every admission verdict
+    # below is a genuine SQL round trip, which is what the measurement needs.
+    from app.data_lake.root_identity import read_marker
+
+    root_id = read_marker(base).data_root_id
+    for day in expected_sessions(date_of(2024, 12, 2), date_of(2025, 2, 28)):
+        relative = f"equity/usa/minute/{symbol.lower()}/{day.strftime('%Y%m%d')}_trade.zip"
+        payload = (lake / relative).read_bytes()
+        await conn.execute(
+            """
+            INSERT INTO "DataLakeArtifacts" (
+                "ArtifactKind", "Market", "Symbol", "TradingDate", "Resolution", "DataType",
+                "Provider", "ProviderParams", "PriceAdjustmentMode", "DataContractHash",
+                "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs", "LeaseGeneration",
+                "AttemptCount", "FetchedAtMs", "DataRootId", "FileSha256", "FileSizeBytes"
+            ) VALUES (
+                'time_series_bars', 'usa', $3, $4, 'minute', 'trade',
+                'polygon', '{}'::jsonb, 'polygon_split_adjusted', 'dc', $5, 'complete',
+                NULL, NULL, 1, 1, 1, $1, $2, $6
+            )
+            ON CONFLICT ("DataRootId", "Market", "Symbol", "TradingDate", "DataType",
+                         "Provider", "PriceAdjustmentMode")
+                WHERE "ArtifactKind" = 'time_series_bars' AND "Resolution" = 'minute'
+            DO UPDATE SET "FileSha256" = $2, "FileSizeBytes" = $6, "Status" = 'complete'
+            """,
+            root_id, hashlib.sha256(payload).hexdigest(), symbol.upper(), day, relative, len(payload),
+        )
+
+    query_ms: list[float] = []
+    inner_lookup = catalog_client.has_committed_file_receipts
+
+    async def timed_lookup(requests):
+        started = time.monotonic()
+        try:
+            return await inner_lookup(requests)
+        finally:
+            query_ms.append((time.monotonic() - started) * 1000.0)
+
+    monkeypatch.setattr(catalog_client, "has_committed_file_receipts", timed_lookup)
+
+    write_ms: list[float] = []
+    inner_complete = repository.complete_evaluation
+
+    async def timed_complete(conn_arg, *args, **kwargs):
+        started = time.monotonic()
+        try:
+            return await inner_complete(conn_arg, *args, **kwargs)
+        finally:
+            write_ms.append((time.monotonic() - started) * 1000.0)
+
+    monkeypatch.setattr(repository, "complete_evaluation", timed_complete)
+
+    window = (et_midnight_ms(date_of(2025, 1, 2)), et_midnight_ms(date_of(2025, 2, 3)))
+    from app.research.sweep.identity import resolve_code_identity
+
+    resolved = resolve_code_identity()
+    identity = {"source_digest": resolved.source_digest, "environment_digest": resolved.environment_digest, "digest_scheme": resolved.digest_scheme}
+    context = WorkerDispatchContext(
+        strategy_key="sma_crossover",
+        execution={"fill_mode": "next_bar_open", "commission_per_order": 0.0, "slippage_per_share": 0.0, "initial_cash": 50_000.0},
+        manifest=manifest,
+        identity=identity,
+        job_id="job-admission-measure",
+        generation=1,
+    )
+
+    def percentile(samples: list[float], which: float) -> float:
+        if not samples:
+            return 0.0
+        ordered = sorted(samples)
+        return ordered[min(int(which * len(ordered)), len(ordered) - 1)]
+
+    points = [
+        {"symbol": symbol, "short_window": short, "long_window": long, "resolution_minutes": 1}
+        for short, long in ((2, 3), (2, 5), (2, 8), (2, 13), (3, 5), (3, 8), (3, 13), (5, 8))
+    ]
+
+    batcher = start_admission_batcher()
+    try:
+        for width in (1, 2, 4, 8):
+            study = f"admission-measure-{width}-" + unique_symbol().lower()
+            await conn.execute(
+                """
+                INSERT INTO research_golden_search_studies (
+                    id, strategy_key, symbol, state, status, attempt, created_at_ms, updated_at_ms,
+                    protocol_json, protocol_hash, receipt_json, budget_cap
+                ) VALUES ($1, 'sma_crossover', 'SPY', 'search_running', 'running', 1, 1, 1, '{}'::jsonb, 'h', '{}'::jsonb, 100)
+                """,
+                study,
+            )
+
+            def evaluate_through(dispatch: Any, digest: str, study_id: str = study) -> Any:
+                evaluator = StudyEvaluator(
+                    study_id=study_id,
+                    attempt=1,
+                    strategy_key="sma_crossover",
+                    context_digest=digest,
+                    run_up_sessions=1,
+                    capability=EvaluationCapability(allowed=(window,)),
+                    budget_limit=100,
+                    execute=lambda request: None,
+                    dispatch=dispatch,
+                )
+                return evaluator.evaluate(points, window=window, stage="search")
+
+            before = batcher.facts()
+            query_ms.clear()
+            write_ms.clear()
+            dispatch = pool_module.PooledWorkerDispatch(context, workers=width, window=width)
+            try:
+                started = time.monotonic()
+                metrics = await asyncio.to_thread(evaluate_through, dispatch, f"admission-probe-{width}")
+                elapsed = time.monotonic() - started
+            finally:
+                dispatch.close()
+            after = batcher.facts()
+
+            assert all(m.status == "completed" for m in metrics), f"width {width}: every evaluation completed"
+            delta = {name: after[name] - before[name] if isinstance(after[name], int) else None for name in ("requests", "sql_lookups")}
+            batch_delta = {
+                size: after["batch_sizes"].get(size, 0) - before["batch_sizes"].get(size, 0)
+                for size in set(after["batch_sizes"]) | set(before["batch_sizes"])
+            }
+            open_connections = await conn.fetchval("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()")
+            logger.info(
+                "research admission measurement (#3047): width=%d elapsed=%.2fs requests=%d sql_lookups=%d "
+                "query p50/p95=%.2f/%.2fms write p50/p95=%.2f/%.2fms batches=%s server_connections=%d",
+                width, elapsed, delta["requests"], delta["sql_lookups"],
+                median(query_ms) if query_ms else 0.0, percentile(query_ms, 0.95),
+                median(write_ms) if write_ms else 0.0, percentile(write_ms, 0.95),
+                batch_delta, open_connections,
+            )
+            assert open_connections <= 24, (
+                f"width {width}: the children hold no database connections; {open_connections} were open"
+            )
+            if width == 8:
+                assert delta["requests"] > delta["sql_lookups"] > 0, (
+                    "concurrent readers shared round trips at full width "
+                    f"({delta['requests']} requests, {delta['sql_lookups']} lookups)"
+                )
+    finally:
+        stop_admission_batcher()
+        _close_writer_loop_catalog_pool()
