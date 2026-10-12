@@ -108,6 +108,19 @@ def test_times_keep_their_distance_from_the_open_and_the_close_on_a_half_day() -
             "an exit before the entry, both from the close",
         ),
         ({"entry": {"anchor": "open", "offset_ms": 1440 * MS_PER_MINUTE}}, "a time a whole day from its anchor"),
+        (
+            {
+                "entry": {"anchor": "close", "offset_ms": 46 * MS_PER_MINUTE},
+                "exit": {"anchor": "close", "offset_ms": 46 * MS_PER_MINUTE},
+            },
+            "an exit at the entry time, both from the close",
+        ),
+        ({"entry": {"anchor": "close", "offset_ms": MS_PER_MINUTE}}, "an entry that leaves no minute for an exit"),
+        (
+            {"entry": {"anchor": "close", "offset_ms": 0}, "exit": {"anchor": "open", "offset_ms": 30 * MS_PER_MINUTE}},
+            "an entry at the close",
+        ),
+        ({"exit": {"anchor": "open", "offset_ms": MS_PER_MINUTE}}, "an exit with no minute for an entry before it"),
         ({"slippage_percent": "100"}, "slippage that takes the whole price"),
     ],
 )
@@ -169,6 +182,21 @@ def test_a_leg_may_re_enter_at_once_without_a_momentum_rule() -> None:
             {"no_reentry_after": {"anchor": "close", "offset_ms": 1439 * MS_PER_MINUTE}},
             "the furthest a time may be from its anchor",
         ),
+        (
+            {
+                "entry": {"anchor": "close", "offset_ms": 2 * MS_PER_MINUTE},
+                "exit": {"anchor": "close", "offset_ms": MS_PER_MINUTE},
+            },
+            "the last minute an entry can be read at",
+        ),
+        (
+            {
+                "entry": {"anchor": "open", "offset_ms": MS_PER_MINUTE},
+                "exit": {"anchor": "open", "offset_ms": 2 * MS_PER_MINUTE},
+            },
+            "the first minute an exit can be read at",
+        ),
+        ({"no_reentry_after": {"anchor": "open", "offset_ms": 0}}, "a cutoff at the open, so no stop earns a re-entry"),
         ({"slippage_percent": "0"}, "no slippage"),
         ({"slippage_percent": "99.9999"}, "the most slippage a fill can bear"),
     ],
