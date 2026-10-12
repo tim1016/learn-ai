@@ -681,6 +681,36 @@ async def test_a_new_file_format_stales_the_old_formats_row_on_the_real_table(
     assert await captured_listing_dates("SPY", TRADING_DAY, TRADING_DAY) == (TRADING_DAY,)
 
 
+@respx.mock
+async def test_a_listing_published_when_the_cleanup_broke_has_the_old_formats_row_staled_by_the_next_ask_that_reuses_it_on_the_real_table(
+    clean_artifacts, pool, tmp_lake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mock_listing([_listing_row("O:SPY250613C00375000", 375)])
+    old = await ensure_option_listing("SPY", TRADING_DAY)
+    monkeypatch.setattr(option_listing_module, "OPTION_LISTING_FILE_FORMAT", option_listing_module.OPTION_LISTING_FILE_FORMAT + 1)
+    cleanup = catalog_client.mark_metadata_artifacts_stale_for_path
+    broken_once = [True]
+
+    async def breaks_once(*args: Any, **kwargs: Any) -> int:
+        if broken_once:
+            broken_once.pop()
+            raise catalog_client.CatalogUnavailableError("down")
+        return await cleanup(*args, **kwargs)
+
+    monkeypatch.setattr(catalog_client, "mark_metadata_artifacts_stale_for_path", breaks_once)
+    with pytest.raises(catalog_client.CatalogUnavailableError):
+        await ensure_option_listing("SPY", TRADING_DAY)
+    assert old.record is not None
+    assert sorted(row["Status"] for row in await _rows()) == ["complete", "complete"]
+
+    again = await ensure_option_listing("SPY", TRADING_DAY)
+
+    assert again.reused is True and again.record is not None and again.record.id != old.record.id
+    rows = {row["Id"]: row for row in await _rows()}
+    assert (rows[old.record.id]["Status"], rows[again.record.id]["Status"]) == ("stale", "complete")
+    assert await captured_listing_dates("SPY", TRADING_DAY, TRADING_DAY) == (TRADING_DAY,)
+
+
 # ── Neither kind of row shows up in a stock answer ───────────────────────
 
 

@@ -47,7 +47,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from app.config import settings
 from app.data_lake import catalog_client
@@ -89,8 +89,8 @@ OPTION_LISTING_ENDPOINT = "v3/reference/options/contracts"
 #: Bump when the file's columns or encoding change. The format is part of a listing's
 #: recipe, so a new format is a new catalog row: capturing a date again under it
 #: publishes over the old file and stales the old format's row for that file
-#: (``mark_metadata_artifacts_stale_for_path``). A date not captured again keeps its
-#: old row and file until it is. Format 1 wrote the expiry as a ``YYYYMMDD`` text in a
+#: (``mark_metadata_artifacts_stale_for_path``, run again whenever the new row is found
+#: complete). A date not captured again keeps its old row and file until it is. Format 1 wrote the expiry as a ``YYYYMMDD`` text in a
 #: column named ``expiry``; format 2 writes ``expiry_ms``.
 OPTION_LISTING_FILE_FORMAT = 2
 _HEADER = (
@@ -394,6 +394,20 @@ def read_option_listing(
     )
 
 
+async def _stale_other_formats(identity: ArtifactIdentity, rel_path: PurePosixPath, *, keep_artifact_id: int) -> None:
+    """Stale every other complete row for this listing's file: a listing recipe of another file format has its own row for it, and no longer describes it.
+
+    Safe to run when there is nothing to do (it then touches no row), so a capture that publishes and a capture
+    that finds the row complete both run it.
+    """
+    await catalog_client.mark_metadata_artifacts_stale_for_path(
+        data_root_id=identity.data_root_id,
+        price_adjustment_mode=OPTION_PRICE_ADJUSTMENT_MODE,
+        file_path=str(rel_path),
+        keep_artifact_id=keep_artifact_id,
+    )
+
+
 async def ensure_option_listing(
     underlying: str, as_of: date, *, now_ms: int | None = None
 ) -> OptionCaptureResult:
@@ -402,7 +416,9 @@ async def ensure_option_listing(
     Claim, reuse-or-refresh on a lost claim, reclaim, fetch every page, build the
     file, publish under the lease; a typed failure on every vendor error. The paging is
     given :data:`LISTING_FETCH_BUDGET_MS`, inside the lease, and a fetch that runs past it
-    ends as a failed row before another page is asked. The refusals
+    ends as a failed row before another page is asked. A listing found complete and reused is
+    returned only after the same cleanup of other formats' rows a publish does, because the publish
+    that made it may have ended before doing it. The refusals
     that cost no claim come first (``symbol_too_long``, ``not_a_session``,
     ``session_not_over``, which holds until the session's New York date has passed;
     ``option_lake``'s docstring says what each means).
@@ -447,6 +463,10 @@ async def ensure_option_listing(
         trading_date=as_of,
     )
     if isinstance(held, OptionCaptureResult):
+        if held.reused and held.record is not None:
+            # The publish that made this row complete may have ended before it staled the old format's row (an
+            # outage, a process that stopped), and nothing else would try again once the row reads as complete.
+            await _stale_other_formats(identity, rel_path, keep_artifact_id=held.record.id)
         return held
 
     async def fail(reason: OptionFailureReason, detail: str) -> OptionCaptureResult:
@@ -488,13 +508,7 @@ async def ensure_option_listing(
     )
     if isinstance(published, OptionDataFailure):
         return OptionCaptureResult.failed(published)
-    # A listing recipe of another file format has its own row for this same file; it no longer describes it.
-    await catalog_client.mark_metadata_artifacts_stale_for_path(
-        data_root_id=identity.data_root_id,
-        price_adjustment_mode=OPTION_PRICE_ADJUSTMENT_MODE,
-        file_path=str(rel_path),
-        keep_artifact_id=held.artifact_id,
-    )
+    await _stale_other_formats(identity, rel_path, keep_artifact_id=held.artifact_id)
 
     logger.info(
         "data_lake.option_listing: listing captured",

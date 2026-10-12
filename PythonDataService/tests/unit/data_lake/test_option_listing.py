@@ -1164,6 +1164,62 @@ async def test_a_file_of_the_first_format_is_not_read_as_this_one_and_the_next_c
 
 
 @respx.mock
+async def test_a_listing_published_when_the_cleanup_broke_has_the_old_formats_row_staled_by_the_next_ask_that_reuses_it(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Publication commits, then the stale-marking fails or the process ends: the row is complete, so the next ask used to return at once."""
+    route = _mock_one_page(STANDARD_ROWS)
+    old = await ensure_option_listing("SPY", AS_OF)
+    monkeypatch.setattr(option_listing_module, "OPTION_LISTING_FILE_FORMAT", option_listing_module.OPTION_LISTING_FILE_FORMAT + 1)
+    cleanup = fake_catalog.mark_metadata_artifacts_stale_for_path
+    broken_once = [True]
+
+    async def breaks_once(*args: Any, **kwargs: Any) -> int:
+        if broken_once:
+            broken_once.pop()
+            raise catalog_client.CatalogUnavailableError("down")
+        return await cleanup(*args, **kwargs)
+
+    monkeypatch.setattr(catalog_client, "mark_metadata_artifacts_stale_for_path", breaks_once)
+    with pytest.raises(catalog_client.CatalogUnavailableError):
+        await ensure_option_listing("SPY", AS_OF)
+    assert old.record is not None
+    [new_id] = [row_id for row_id in fake_catalog.rows if row_id != old.record.id]
+    assert (fake_catalog.rows[old.record.id]["status"], fake_catalog.rows[new_id]["status"]) == ("complete", "complete")
+
+    again = await ensure_option_listing("SPY", AS_OF)
+
+    assert again.reused is True and again.failure is None and again.record is not None and again.record.id == new_id
+    assert (fake_catalog.rows[old.record.id]["status"], fake_catalog.rows[new_id]["status"]) == ("stale", "complete")
+    assert route.call_count == 2  # the vendor was asked for the old format and for the new one, and not a third time
+
+
+@respx.mock
+async def test_reusing_a_listing_with_nothing_to_clean_up_changes_no_row(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    respx.get(CONTRACTS_URL, params={"as_of": "2025-06-12"}).mock(return_value=_page(STANDARD_ROWS))
+    respx.get(CONTRACTS_URL, params={"as_of": "2025-06-13"}).mock(return_value=_page(STANDARD_ROWS))
+    await ensure_option_listing("SPY", date(2025, 6, 12))
+    first = await ensure_option_listing("SPY", AS_OF)
+    before = {row_id: row["status"] for row_id, row in fake_catalog.rows.items()}
+    cleanup = fake_catalog.mark_metadata_artifacts_stale_for_path
+    staled: list[int] = []
+
+    async def counting(*args: Any, **kwargs: Any) -> int:
+        staled.append(await cleanup(*args, **kwargs))
+        return staled[-1]
+
+    monkeypatch.setattr(catalog_client, "mark_metadata_artifacts_stale_for_path", counting)
+
+    again = await ensure_option_listing("SPY", AS_OF)
+
+    assert again.reused is True and again.record == first.record
+    assert staled == [0]  # the cleanup ran, and had nothing to do
+    assert {row_id: row["status"] for row_id, row in fake_catalog.rows.items()} == before
+
+
+@respx.mock
 async def test_a_listing_asked_for_again_under_the_same_format_keeps_its_row_complete(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
     _mock_one_page(STANDARD_ROWS)
     first = await ensure_option_listing("SPY", AS_OF)
