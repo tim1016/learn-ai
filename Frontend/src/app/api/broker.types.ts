@@ -5965,9 +5965,9 @@ export interface paths {
          * @description Two complete runs of one underlying side by side: every setting that differs, the range if it differs, and, on the
          *     sessions they share, each run's net profit, trades and winning sessions and the pair of profits of each session.
          *
-         *     Both runs must be complete and trade the same underlying, else a 409 that says which is not and why; a run that does
-         *     not exist is a 404 naming ``a`` or ``b``. This path is the literal ``/runs/compare``, mounted before the run service's
-         *     ``/runs/{run_id}``.
+         *     Both runs must be complete, have a stored setup that can still be read, and trade the same underlying, else a 409
+         *     that says which is not and why; a run that does not exist is a 404 naming ``a`` or ``b``. This path is the literal
+         *     ``/runs/compare``, mounted before the run service's ``/runs/{run_id}``.
          */
         get: operations["compare_two_runs_api_research_options_backtest_runs_compare_get"];
         put?: never;
@@ -6016,7 +6016,8 @@ export interface paths {
          *     The stored facts, trades, events, levels, fills and marks come from the run's own rows. The minute closes of the
          *     underlying and of each contract the session traded or took a starting price in are read from the lake and shown only
          *     if the file is the one the run read (its sha256 is the stored pin); a series that cannot be shown says why and the rest
-         *     is still served. A session the run did not test is a 404; a run that is not complete is a 409.
+         *     is still served. A session the run did not test is a 404; a run that is not complete is a 409. A run whose stored
+         *     setup no longer validates is served all the same, with ``setup_cannot_open_reason`` set.
          */
         get: operations["get_the_session_api_research_options_backtest_runs__run_id__sessions__session_open_ms__get"];
         put?: never;
@@ -6040,7 +6041,9 @@ export interface paths {
          *
          *     Paged: ``total`` is every trade that matches, and ``next_offset`` is the ``offset`` that reads the rest (``null``
          *     on the last page). A session the run did not test, or a leg its setup does not have, is a 404 and not an empty page.
-         *     A run that is not complete is a 409.
+         *     A run that is not complete is a 409. A run whose stored setup no longer validates is listed all the same; with no
+         *     setup to name its legs, a leg filter is answered by the stored trades alone, and an empty page says only that none
+         *     was stored for that leg.
          */
         get: operations["list_the_trades_api_research_options_backtest_runs__run_id__trades_get"];
         put?: never;
@@ -6065,6 +6068,10 @@ export interface paths {
          *
          *     The whole run, however many trades it has: the page size of the trades route does not apply. A run that is not
          *     complete is a 409.
+         *
+         *     ``exit_kind`` tells a leg that was sold (``sale``) from one marked and not sold (``mark``). For a mark,
+         *     ``exit_price_usd`` is the mark and not a price anything sold at, ``exit_seen_usd`` is empty and ``exit_fee_usd`` is
+         *     ``0``; a sum of ``exit_price_usd`` over every row therefore mixes sales and marks.
          */
         get: operations["export_the_trades_api_research_options_backtest_runs__run_id__trades_csv_get"];
         put?: never;
@@ -22714,8 +22721,8 @@ export interface components {
          *
          *     ``entry_number`` follows the replay's one rule: an event about a position carries that position's number, and an
          *     event about an attempt to enter carries the number that entry has or would have. ``detail`` is the one place the
-         *     replay writes prose (a refused pick says why); with any date in it replaced by "that day", since a session is its
-         *     open and nothing here names a date.
+         *     replay writes prose (a refused pick says why). It is the backend's words for the owner, stored and served exactly
+         *     as written, even when they name a date; nothing else on the wire names one, since a session is its open.
          */
         OptionsBacktestEventResponse: {
             /** At Ms */
@@ -22836,9 +22843,11 @@ export interface components {
          * OptionsBacktestLevelResponse
          * @description A horizontal line to draw at one price, from ``from_ms`` to ``to_ms`` (both minute closes).
          *
-         *     ``starting_price`` and ``momentum`` belong to a leg waiting on momentum and run from the minute its starting price was
-         *     taken to the minute the attempt ended (the buy was decided, or the leg was cancelled or refused for cash); ``stop``
-         *     belongs to a position and runs from the minute it filled to the minute the close that sold it was decided.
+         *     One rule ends a line that waits: it ends when the thing it waits for happened, whatever came next. ``starting_price``
+         *     and ``momentum`` belong to a leg waiting on momentum and run from the minute its starting price was taken to the
+         *     minute the buy was decided (the minute whose close reached the momentum level), whether the buy then filled or was
+         *     refused for cash; a leg cancelled before it reached the level waited until it was cancelled. ``stop`` belongs to a
+         *     position and runs from the minute it filled to the minute the close that sold it was decided.
          */
         OptionsBacktestLevelResponse: {
             /** Contract */
@@ -23203,9 +23212,12 @@ export interface components {
          *
          *     A series is shown only if the file it is read from is the one the run read (its sha256 is the stored pin). Otherwise
          *     ``reason`` says why and ``message`` says it in words, and there are no points: a saved run is never drawn from
-         *     changed data. ``no_pin``: the run kept no record of reading it; ``gone``: no longer in the lake; ``changed``: not
-         *     the file the run read; ``unreadable``: damaged; ``lake_unavailable``: the lake could not be asked, which says nothing
-         *     of the file.
+         *     changed data. ``session_skipped``: the session was skipped on its window, so no bars were read for it; ``no_pin``:
+         *     the run kept no record of reading this one; ``gone``: no longer in the lake; ``changed``: not the file the run read;
+         *     ``not_confirmed``: the lake's catalog does not admit the file's bytes, so they cannot be checked against what the run
+         *     read (nobody saw them change); ``unreadable``: the file is there and cannot be read (damaged, a bar no session can
+         *     place, or refused by the operating system); ``lake_unavailable``: the lake could not be asked, which says nothing of
+         *     the file.
          */
         OptionsBacktestSeriesResponse: {
             contract?: components["schemas"]["OptionsBacktestContractResponse"] | null;
@@ -23214,7 +23226,7 @@ export interface components {
             /** Points */
             points: components["schemas"]["OptionsBacktestSeriesPointResponse"][];
             /** Reason */
-            reason?: ("no_pin" | "gone" | "changed" | "unreadable" | "lake_unavailable") | null;
+            reason?: ("session_skipped" | "no_pin" | "gone" | "changed" | "not_confirmed" | "unreadable" | "lake_unavailable") | null;
             /**
              * State
              * @enum {string}
@@ -23268,6 +23280,10 @@ export interface components {
          *     The stored facts (status, cash, profit, ``trades``, ``events``, ``levels``, ``fills``, ``marks``) never depend on the
          *     lake. The series are read from it and are checked against what the run read; one that cannot be shown says so and
          *     the rest is still served.
+         *
+         *     ``setup_cannot_open_reason`` is set only for a run whose stored setup no longer validates, and says why. Everything
+         *     stored is served all the same; the one thing missing is the ``momentum`` line of an attempt that never filled,
+         *     whose level comes from the leg's rule.
          */
         OptionsBacktestSessionResponse: {
             /** Cash After Usd */
@@ -23292,6 +23308,8 @@ export interface components {
             session_close_ms: number;
             /** Session Open Ms */
             session_open_ms: number;
+            /** Setup Cannot Open Reason */
+            setup_cannot_open_reason?: string | null;
             /** Skip Reason */
             skip_reason?: ("window_does_not_fit" | "underlying_did_not_trade") | null;
             /**
