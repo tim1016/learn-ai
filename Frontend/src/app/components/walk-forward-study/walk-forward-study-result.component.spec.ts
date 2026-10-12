@@ -98,7 +98,7 @@ async function renderResult(row: WalkForwardStudyDetail, overrides: Partial<Walk
           cellCurves: vi.fn(async (_id: string, hashes: readonly string[]) => ({ sessions_ms: [], curves: [], not_recorded: [...hashes] })),
         },
       },
-      { provide: JobsService, useValue: { cancelJob: vi.fn(async () => undefined) } },
+      { provide: JobsService, useValue: { cancelJob: vi.fn(async () => undefined), job: () => undefined } },
     ],
   });
   return { view, gridGet, charts: charts.charts };

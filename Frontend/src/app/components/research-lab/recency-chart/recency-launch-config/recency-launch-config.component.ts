@@ -12,6 +12,7 @@ import { MultiInstrumentCardComponent } from "../../../../shared/multi-ticker-ra
 import { RecencyDurationInputComponent, type DurationPreset } from "./recency-duration-input.component";
 import { RecencyStrategySelectionComponent } from "./recency-strategy-selection.component";
 import { computeGridSize, defaultRangeForParameter, numericStrategyParams, type ParamRange, type StrategyRangeConfig, rangeProblem } from "../../../../shared/param-range/param-range";
+import { WaitingBadgeComponent } from '../../../../shared/research-record/waiting-badge.component';
 
 const PRESET_MONTHS: Record<Exclude<DurationPreset, "custom">, number> = { "3m": 3, "6m": 6, "12m": 12, "24m": 24 };
 const MAX_MONTHS = 24;
@@ -31,6 +32,7 @@ const DEFAULT_SYMBOLS: readonly string[] = ["SPY"];
     MultiInstrumentCardComponent,
     RecencyDurationInputComponent,
     RecencyStrategySelectionComponent,
+    WaitingBadgeComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./recency-launch-config.component.html",
@@ -119,7 +121,7 @@ export class RecencyLaunchConfigComponent {
    * page reload since startJob only resolves once Python accepts the
    * job (202), long before persistence finishes. */
   readonly launchCompleted = output();
-  private readonly launchedJobId = signal<string | null>(null);
+  protected readonly launchedJobId = signal<string | null>(null);
   private notifiedForJobId: string | null = null;
 
   constructor() {

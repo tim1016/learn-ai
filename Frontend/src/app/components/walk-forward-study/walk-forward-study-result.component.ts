@@ -16,6 +16,7 @@ import type { StrategyInfo } from '../strategy-lab/strategy-lab.models';
 import { WalkForwardFoldCurvesComponent } from './walk-forward-fold-curves.component';
 import { WalkForwardStudyService } from './walk-forward-study.service';
 import { winnerText, type Fold, type WalkForwardStudyDetail } from './walk-forward-study.types';
+import { WaitingBadgeComponent } from '../../shared/research-record/waiting-badge.component';
 
 export interface OpenSweep {
   readonly id: string;
@@ -32,7 +33,7 @@ export interface OpenSweep {
  */
 @Component({
   selector: 'app-walk-forward-study-result',
-  imports: [AssetIdentityComponent, ButtonModule, DecimalPipe, PercentPipe, GridSearchResultComponent, RecordControlsComponent, ReceiptLabelPipe, TimestampDisplayComponent, ValidationScopeNoteComponent, WalkForwardFoldCurvesComponent],
+  imports: [AssetIdentityComponent, ButtonModule, DecimalPipe, PercentPipe, GridSearchResultComponent, RecordControlsComponent, ReceiptLabelPipe, TimestampDisplayComponent, ValidationScopeNoteComponent, WalkForwardFoldCurvesComponent, WaitingBadgeComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './walk-forward-study-result.component.html',
   styleUrl: './walk-forward-study-result.component.scss',

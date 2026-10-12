@@ -307,6 +307,7 @@ async def start_grid_search_job(req: GridSearchJobRequest) -> dict[str, Any]:
         # keep the lease alive (#3041); the API's local mode keeps the
         # emit-and-check renewal ADR 0065 D1 makes authoritative there.
         emit_renews_lease=not runtime_executes,
+        progress_min_interval_s=1.0 if runtime_executes else 0.0,
     )
     return {"job_id": req.job_id, "search_id": search_id, "status": "queued"}
 
@@ -362,6 +363,7 @@ def _gated_grid_work(req: GridSearchJobRequest, search_id: str) -> Callable[[Pro
                 on_checkpoint=lease.child_checkpoint,
                 cancel_check=lease.fenced_cancel,
                 on_log=emit.log,
+                on_waiting=_waiting_emitter(emit),
             ),
             cancel_check=lease.fenced_cancel,
             on_phase=lambda phase: (emit.phase(phase), lease.phase(phase)),
@@ -372,6 +374,19 @@ def _gated_grid_work(req: GridSearchJobRequest, search_id: str) -> Callable[[Pro
 
     return work
 
+
+
+
+def _waiting_emitter(emit):
+    """The waiting state as a transition-gated event (#3052)."""
+    last = {"waiting": object()}
+
+    def emit_waiting(waiting, facts) -> None:
+        if waiting != last["waiting"]:
+            last["waiting"] = waiting
+            emit.research_waiting(waiting, detail={k: facts.get(k) for k in ("workers", "busy_lanes", "active", "queued", "ready_width") if k in facts})
+
+    return emit_waiting
 
 def _outcome_response(outcome: service.ExecutionOutcome) -> dict[str, Any]:
     return {

@@ -278,6 +278,7 @@ async def start_walk_forward_study_job(req: WalkForwardStudyJobRequest) -> dict[
         # In the runtime, emits renew nothing — only accepted checkpoints
         # keep the lease alive (#3041).
         emit_renews_lease=not runtime_executes,
+        progress_min_interval_s=1.0 if runtime_executes else 0.0,
     )
     return {"job_id": req.job_id, "study_id": study_id, "status": "queued"}
 
@@ -331,6 +332,7 @@ def _gated_study_work(req: WalkForwardStudyJobRequest, study_id: str) -> Callabl
                 on_checkpoint=lease.child_checkpoint,
                 cancel_check=lease.fenced_cancel,
                 on_log=emit.log,
+                on_waiting=_waiting_emitter(emit),
             ),
             cancel_check=lease.fenced_cancel,
             on_phase=lambda phase: (emit.phase(phase), lease.phase(phase)),
@@ -341,6 +343,19 @@ def _gated_study_work(req: WalkForwardStudyJobRequest, study_id: str) -> Callabl
 
     return work
 
+
+
+
+def _waiting_emitter(emit):
+    """The waiting state as a transition-gated event (#3052)."""
+    last = {"waiting": object()}
+
+    def emit_waiting(waiting, facts) -> None:
+        if waiting != last["waiting"]:
+            last["waiting"] = waiting
+            emit.research_waiting(waiting, detail={k: facts.get(k) for k in ("workers", "busy_lanes", "active", "queued", "ready_width") if k in facts})
+
+    return emit_waiting
 
 def _outcome_response(outcome: service.StudyOutcome) -> dict[str, Any]:
     return {"study_id": outcome.study_id, "status": outcome.status, "verdict": outcome.verdict.as_dict() if outcome.verdict else None}

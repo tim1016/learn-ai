@@ -466,6 +466,7 @@ def runtime_run_dispatch(
     on_checkpoint: Callable[[Mapping[str, Any]], None],
     cancel_check: Callable[[], object],
     on_log: Callable[[str], None] = lambda message: None,
+    on_waiting: Callable[[str | None, Mapping[str, Any]], None] = lambda waiting, facts: None,
     pool: SharedWorkerPool | None = None,
 ) -> WorkerRunDispatch | PooledRunDispatch:
     """The dispatch the research runtime executes recency runs through (#3051).
@@ -496,7 +497,10 @@ def runtime_run_dispatch(
         return WorkerRunDispatch(context, ready)
 
     def on_facts(facts: Mapping[str, Any]) -> None:
+        from app.research.golden_search.shared_pool import waiting_state_of
+
         on_log(f"research worker pool: {dict(facts)}")
+        on_waiting(waiting_state_of(facts), dict(facts))
 
     def on_capacity_handoff() -> None:
         on_checkpoint({"phase": "scheduling", "cursor_kind": "fair_queue_advancement", "cursor": 1})

@@ -54,7 +54,7 @@ async function renderResult(service: Partial<GridSearchService>, inputs: { maxDr
     providers: [
       provideRouter([]),
       ...fakeCharts().providers,
-      { provide: JobsService, useValue: { cancelJob: vi.fn(async () => undefined) } },
+      { provide: JobsService, useValue: { cancelJob: vi.fn(async () => undefined), job: () => undefined } },
       {
         provide: GridSearchService,
         useValue: {
@@ -259,7 +259,7 @@ describe('GridSearchResultComponent', () => {
       providers: [
         provideRouter([]),
         ...fakeCharts().providers,
-        { provide: JobsService, useValue: { cancelJob } },
+        { provide: JobsService, useValue: { cancelJob, job: () => undefined } },
         { provide: GridSearchService, useValue: { get, cells: vi.fn(async () => page([cell()])), cellCurves: vi.fn(async (_id: string, hashes: readonly string[]) => curves(hashes)), delete: vi.fn(), finish: vi.fn() } },
       ],
     });

@@ -387,6 +387,7 @@ async def start_golden_search_job(req: GoldenSearchJobRequest) -> GoldenSearchJo
         # keep the lease alive (#3041); the API's local mode keeps the
         # emit-and-check renewal ADR 0065 D1 makes authoritative there.
         emit_renews_lease=not runtime_executes,
+        progress_min_interval_s=1.0 if runtime_executes else 0.0,
     )
     logger.info(
         "golden search stage dispatched",
@@ -454,6 +455,18 @@ def _gated_stage_work(req: GoldenSearchJobRequest):
     return work
 
 
+def _waiting_emitter(emit):
+    """The waiting state as a transition-gated event (#3052)."""
+    last = {"waiting": object()}
+
+    def emit_waiting(waiting, facts) -> None:
+        if waiting != last["waiting"]:
+            last["waiting"] = waiting
+            emit.research_waiting(waiting, detail={k: facts.get(k) for k in ("workers", "active", "ready_width") if k in facts})
+
+    return emit_waiting
+
+
 def _runtime_dispatch_factory(*, on_checkpoint, cancel_check, emit) -> Callable[[Any], Any]:
     """The dispatch the runtime executes through: one worker, or the shared bounded pool (#3046, #3048).
 
@@ -505,6 +518,7 @@ def _runtime_dispatch_factory(*, on_checkpoint, cancel_check, emit) -> Callable[
         window=window,
         pool=pool,
         on_capacity_handoff=on_capacity_handoff,
+        on_waiting=_waiting_emitter(emit),
     )
 
 
