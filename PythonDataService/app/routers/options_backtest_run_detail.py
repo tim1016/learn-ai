@@ -26,6 +26,7 @@ from app.options_backtest.run_detail import (
     RunsOfDifferentUnderlyings,
     SessionNotInRun,
     TwoRunsSetupCannotBeRead,
+    read_closely,
     read_comparison_inputs,
     read_every_trade,
     read_session_record,
@@ -36,7 +37,6 @@ from app.options_backtest.session_view import session_view_of
 from app.options_backtest.setup import LEG_ID_PATTERN
 from app.options_backtest.trade_export import csv_file_name, trades_csv
 from app.research.persistence import lifecycle
-from app.research.persistence.db import with_connection
 from app.schemas.options_backtest import OptionsBacktestRefusalBody
 from app.schemas.options_backtest_run_detail import (
     TRADES_PAGE_DEFAULT,
@@ -122,7 +122,7 @@ async def list_the_trades(
     was stored for that leg.
     """
     try:
-        page = await with_connection(
+        page = await read_closely(
             read_trade_page,
             run_id,
             is_live=lifecycle.job_is_live,
@@ -160,7 +160,7 @@ async def get_the_session(
     setup no longer validates is served all the same, with ``setup_cannot_open_reason`` set.
     """
     try:
-        record = await with_connection(read_session_record, run_id, session_open_ms, is_live=lifecycle.job_is_live)
+        record = await read_closely(read_session_record, run_id, session_open_ms, is_live=lifecycle.job_is_live)
         view = await session_view_of(record)
     except (RunNotFound, RunNotComplete, SessionNotInRun) as exc:
         raise _refusal(exc) from exc
@@ -200,7 +200,7 @@ async def export_the_trades(run_id: RunId) -> Response:
     ``0``; a sum of ``exit_price_usd`` over every row therefore mixes sales and marks.
     """
     try:
-        trades = await with_connection(read_every_trade, run_id, is_live=lifecycle.job_is_live)
+        trades = await read_closely(read_every_trade, run_id, is_live=lifecycle.job_is_live)
     except (RunNotFound, RunNotComplete) as exc:
         raise _refusal(exc) from exc
     body = await asyncio.to_thread(trades_csv, trades)
@@ -228,7 +228,7 @@ async def compare_two_runs(
     ``/runs/compare``, mounted before the run service's ``/runs/{run_id}``.
     """
     try:
-        inputs = await with_connection(read_comparison_inputs, a, b, is_live=lifecycle.job_is_live)
+        inputs = await read_closely(read_comparison_inputs, a, b, is_live=lifecycle.job_is_live)
     except RunNotFound as exc:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,

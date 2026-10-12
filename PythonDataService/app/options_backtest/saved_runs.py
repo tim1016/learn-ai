@@ -456,11 +456,12 @@ async def present_runs(rows: Sequence[asyncpg.Record], *, is_live: IsLive) -> tu
     meanwhile.
     """
     running = {row["job_id"] for row in rows if row["status"] == "running"}
-    live = await asyncio.to_thread(_liveness_of, running, is_live) if running else {}
+    live = await asyncio.to_thread(liveness_of, running, is_live) if running else {}
     return tuple(_record(row, live.__getitem__) for row in rows)
 
 
-def _liveness_of(job_ids: Iterable[str | None], is_live: IsLive) -> dict[str | None, bool | None]:
+def liveness_of(job_ids: Iterable[str | None], is_live: IsLive) -> dict[str | None, bool | None]:
+    """Whether each job is alive, asked of ``is_live`` once per job. Blocking (Redis): call it from a worker thread."""
     return {job_id: is_live(job_id) for job_id in job_ids}
 
 
@@ -710,21 +711,32 @@ class SessionLine:
     trades: int
 
 
-async def get_run_header(conn: asyncpg.Connection, run_id: int, *, is_live: IsLive) -> RunHeader | None:
+async def get_run_header(conn: asyncpg.Connection, run_id: int) -> RunHeader | None:
     """A run's record and setup; ``None`` when there is none. Cheaper than ``get_run`` where no figure is wanted.
 
     A run whose stored setup no longer validates still has a header, with no setup and the reason (see ``RunHeader``).
+
+    Nothing is asked of Redis here: a run stored as ``running`` reads ``running`` whatever its job is doing. Whether the
+    job is alive is a blocking round trip, and this runs on the event loop inside the caller's transaction, so a caller
+    that must say ``interrupted`` asks after it has let the connection go (``run_detail.read_closely``).
     """
     row = await conn.fetchrow(
         f"SELECT {_RUN_COLUMNS}, setup_json::text AS setup_json FROM research_options_backtest_runs WHERE id = $1",
         run_id,
     )
-    return None if row is None else _header(row, is_live)
+    return None if row is None else _header(row)
 
 
-def _header(row: asyncpg.Record, is_live: IsLive) -> RunHeader:
+def _not_asked(_job_id: str | None) -> None:
+    """The liveness of a job nobody asked about: "cannot tell", which leaves a row stored as running ``running``."""
+    return None
+
+
+def _header(row: asyncpg.Record) -> RunHeader:
     saved = read_stored_setup(f"run {row['id']}", row["setup_json"], row["created_at_ms"])
-    return RunHeader(record=_record(row, is_live), setup=saved.setup, setup_cannot_open_reason=saved.cannot_open_reason)
+    return RunHeader(
+        record=_record(row, _not_asked), setup=saved.setup, setup_cannot_open_reason=saved.cannot_open_reason
+    )
 
 
 async def has_session(conn: asyncpg.Connection, run_id: int, session_open_ms: int) -> bool:

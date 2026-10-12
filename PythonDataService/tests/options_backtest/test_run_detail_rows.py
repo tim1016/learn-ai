@@ -82,7 +82,7 @@ def _run_row(setup_json: str) -> dict[str, Any]:
 
 
 def _header_of(setup_json: str) -> RunHeader:
-    return saved_runs._header(_run_row(setup_json), lambda _job_id: None)
+    return saved_runs._header(_run_row(setup_json))
 
 
 def test_a_header_has_the_setup_the_run_stored() -> None:
@@ -94,6 +94,14 @@ def test_a_header_has_the_setup_the_run_stored() -> None:
     assert (header.record.id, header.record.underlying, header.record.status) == (41, "SPY", "complete")
     # The record is read as the history reads it, money in plain digits.
     assert header.record.headline is not None and str(header.record.headline.net_profit_usd) == "10000"
+
+
+def test_a_header_of_a_run_stored_as_running_reads_running_and_asks_nothing_of_redis() -> None:
+    # The header is read inside a transaction on the event loop, where a Redis round trip must not happen. Whether the
+    # job is alive is decided later (``run_detail.read_closely``), so a header can only say what the row says.
+    header = saved_runs._header(_run_row(a_busy_run().setup.model_dump_json()) | {"status": "running"})
+
+    assert (header.record.status, header.record.job_id) == ("running", "j")
 
 
 def test_a_run_whose_stored_setup_no_longer_validates_still_has_a_header_with_its_record_and_the_reason() -> None:
