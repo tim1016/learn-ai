@@ -28,7 +28,11 @@ Reasons a series is not served, each with words of its own that say only what is
 * ``unreadable``: the file is there and cannot be read: it is damaged, holds a bar no session can place, or the
   operating system refuses it (permission, an I/O error, a file that vanishes as it is read). The page gets the fixed
   words and nothing of the fault, so each such series is logged once, with the kind of error and no path;
-* ``lake_unavailable``: the lake's catalog could not be asked. This says nothing about the file or the run.
+* ``lake_unavailable``: the lake's catalog could not be asked. This says nothing about the file or the run. Asking can
+  take as long as the admission waits (35 seconds) and a session charts up to 168 contracts, so the catalog is asked no
+  more once it could not be: the first series that finds it out of reach, and every series not yet read after it, are
+  withheld for this reason, and the series already read keep what they got. Only this reason does that. A file that is
+  gone, changed, not confirmed or unreadable is one series' own fault, and the rest are still read.
 
 Blocking: it reads files and asks the catalog, so call it from a worker thread.
 """
@@ -119,38 +123,40 @@ def contracts_to_chart(outcome: SessionOutcome) -> tuple[OptionContract, ...]:
 def read_session_series(session: SessionResult, *, run_id: int, underlying: str, data: RunData) -> SessionSeries:
     """The session's series, each read from ``data`` and shown only if its hash is the one the run pinned.
 
-    ``run_id`` is the run the session belongs to; it only names the run in the log of a series that cannot be read.
+    ``run_id`` is the run the session belongs to; it only names the run in the log of a series that cannot be read. The
+    underlying is read first and then each contract by its symbol; once the catalog could not be asked, the series not
+    yet read are not read (see the module docstring).
     """
     trading_date = et_date_at_ms(session.session_open_ms)
     pins = session.pins
     pinned = {day.contract: day.sha256 for day in pins.option_days}
     # A session skipped on its window read nothing, so the run pinned nothing: that is not a pin gone missing.
     skipped = session.outcome.skip_reason is SkipReason.WINDOW_DOES_NOT_FIT
-    return SessionSeries(
-        underlying=_series(
-            session,
-            run_id=run_id,
-            symbol=underlying,
-            contract=None,
-            pin=pins.underlying_sha256,
-            no_pin=SeriesReason.SESSION_SKIPPED if skipped else SeriesReason.NO_PIN,
-            trading_date=trading_date,
-            data=data,
-        ),
-        contracts=tuple(
-            _series(
-                session,
-                run_id=run_id,
-                symbol=contract.occ_symbol,
-                contract=contract,
-                pin=pinned.get(contract),
-                no_pin=SeriesReason.NO_PIN,
-                trading_date=trading_date,
-                data=data,
-            )
+    # What is read, in the order it is read: (symbol, contract, pin, the reason for no pin).
+    wanted: list[tuple[str, OptionContract | None, str | None, SeriesReason]] = [
+        (underlying, None, pins.underlying_sha256, SeriesReason.SESSION_SKIPPED if skipped else SeriesReason.NO_PIN),
+        *(
+            (contract.occ_symbol, contract, pinned.get(contract), SeriesReason.NO_PIN)
             for contract in contracts_to_chart(session.outcome)
         ),
-    )
+    ]
+    read: list[Series] = []
+    catalog_is_out_of_reach = False
+    for symbol, contract, pin, no_pin in wanted:
+        series = _series(
+            session,
+            run_id=run_id,
+            symbol=symbol,
+            contract=contract,
+            pin=pin,
+            no_pin=no_pin,
+            trading_date=trading_date,
+            data=data,
+            ask_the_catalog=not catalog_is_out_of_reach,
+        )
+        catalog_is_out_of_reach = catalog_is_out_of_reach or series.reason is SeriesReason.LAKE_UNAVAILABLE
+        read.append(series)
+    return SessionSeries(underlying=read[0], contracts=tuple(read[1:]))
 
 
 def _series(
@@ -163,12 +169,16 @@ def _series(
     no_pin: SeriesReason,
     trading_date: date,
     data: RunData,
+    ask_the_catalog: bool,
 ) -> Series:
     def not_shown(reason: SeriesReason) -> Series:
         return Series(symbol, contract, (), reason)
 
     if pin is None:
         return not_shown(no_pin)
+    if not ask_the_catalog:
+        # An earlier series found the catalog out of reach. This one is not read: asking would wait out the same outage.
+        return not_shown(SeriesReason.LAKE_UNAVAILABLE)
     try:
         captured = data.underlying_day(trading_date) if contract is None else data.option_day(contract, trading_date)
     except CatalogUnavailableError:
