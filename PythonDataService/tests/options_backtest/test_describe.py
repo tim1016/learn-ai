@@ -17,6 +17,7 @@ import pytest
 
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.options_backtest.describe import describe_setup
+from app.options_backtest.saved_setups import EXAMPLE_SETUPS
 from app.options_backtest.session_clock import SessionClock
 from app.options_backtest.setup import MS_PER_MINUTE
 from app.utils.timestamps import ny_datetime
@@ -63,8 +64,24 @@ def test_the_window_gives_each_time_as_a_distance_and_as_the_clock_on_a_full_day
     window = _window()
 
     assert "SPY" in window
-    assert "5 minutes after the open" in window and _after_open(5) in window
-    assert "46 minutes before the close" in window and _before_close(46) in window
+    assert re.search(r"entry is read 5 minutes after the open", window) and _after_open(5) in window
+    assert re.search(r"exit is read 46 minutes before the close", window) and _before_close(46) in window
+
+
+def test_the_window_says_the_times_are_when_a_rule_is_read_and_an_order_fills_a_minute_on() -> None:
+    window = _window()
+
+    assert "next minute's opening trade" in window
+    # The times are not the fills: the window never says the setup "starts" or "buys" at them.
+    assert not re.search(r"\b(starts|buys)\b", window, re.IGNORECASE)
+    assert re.search(r"at the exit.*sold.*cancelled.*nothing more is bought", window, re.IGNORECASE)
+
+
+def test_the_window_says_a_buy_is_dropped_and_a_sale_is_tried_again_when_the_contract_does_not_trade() -> None:
+    window = _window()
+
+    assert re.search(r"a buy is dropped if its contract does not trade", window, re.IGNORECASE)
+    assert re.search(r"a sale is tried each minute until it does", window, re.IGNORECASE)
 
 
 def test_a_re_entry_cutoff_at_the_open_is_said_to_be_at_the_open() -> None:
@@ -72,12 +89,6 @@ def test_a_re_entry_cutoff_at_the_open_is_said_to_be_at_the_open() -> None:
 
     assert "at the open" in window
     assert _after_open(0) in window
-
-
-def test_one_minute_is_said_in_the_singular() -> None:
-    window = _window(entry=_after_open_time(1))
-
-    assert re.search(r"\b1 minute after the open", window)
 
 
 @pytest.mark.parametrize(
@@ -98,20 +109,55 @@ def test_a_time_outside_a_full_session_is_not_given_a_clock_time_that_would_misl
     assert _before_close(_SESSION_MINUTES + 1) not in window
 
 
-def test_an_exit_that_is_not_after_the_entry_is_flagged_as_a_setup_that_would_not_trade() -> None:
-    middle = _SESSION_MINUTES // 2
-    fine = describe_setup(_setup(), full_session=_CLOCK)
-    # An entry counted from the open and an exit counted from the close validate; only the clock says they cross.
-    same_minute = describe_setup(
-        _setup(entry=_after_open_time(middle), exit=_before_close_time(middle)), full_session=_CLOCK
-    )
-    earlier = describe_setup(
-        _setup(entry=_after_open_time(middle + 60), exit=_before_close_time(middle + 60)), full_session=_CLOCK
+# (entry, exit, which parts the summary names), worked out by hand on a session of _SESSION_MINUTES minutes.
+_WINDOWS: list[tuple[dict[str, Any], dict[str, Any], set[str]]] = [
+    (_after_open_time(5), _before_close_time(46), set()),
+    (_after_open_time(1), _before_close_time(1), set()),
+    # An entry counted back from the close can land on the open, or before it.
+    (_before_close_time(_SESSION_MINUTES), _before_close_time(46), {"entry"}),
+    (_before_close_time(_SESSION_MINUTES + 210), _before_close_time(46), {"entry"}),
+    # An exit counted from the open can land on the close, or after it.
+    (_after_open_time(5), _after_open_time(_SESSION_MINUTES), {"exit"}),
+    (_after_open_time(5), _after_open_time(_SESSION_MINUTES + 210), {"exit"}),
+    # The two counted from opposite ends can meet or cross in the middle.
+    (_after_open_time(_SESSION_MINUTES // 2), _before_close_time(_SESSION_MINUTES // 2), {"order"}),
+    (_after_open_time(_SESSION_MINUTES // 2 + 60), _before_close_time(_SESSION_MINUTES // 2 + 60), {"order"}),
+    (_before_close_time(_SESSION_MINUTES + 210), _after_open_time(_SESSION_MINUTES + 210), {"entry", "exit"}),
+]
+_TROUBLES = {
+    "entry": r"entry is too close to the open",
+    "exit": r"exit is too close to the close",
+    "order": r"exit is not after the entry",
+}
+
+
+def _named_troubles(notices: tuple[str, ...]) -> set[str]:
+    return {name for name, pattern in _TROUBLES.items() if any(re.search(pattern, notice) for notice in notices)}
+
+
+@pytest.mark.parametrize(("entry", "exit_", "troubles"), _WINDOWS)
+def test_a_window_a_full_day_cannot_trade_is_flagged_with_the_part_that_is_the_trouble(
+    entry: dict[str, Any], exit_: dict[str, Any], troubles: set[str]
+) -> None:
+    notices = describe_setup(_setup(entry=entry, exit=exit_), full_session=_CLOCK).notices
+
+    assert _named_troubles(notices) == troubles
+    if troubles:
+        assert re.search(r"would not trade", notices[0])
+    else:
+        assert notices == ()
+
+
+@pytest.mark.parametrize(("entry", "exit_", "troubles"), _WINDOWS)
+def test_the_summary_warns_exactly_when_the_replay_would_skip_the_day(
+    entry: dict[str, Any], exit_: dict[str, Any], troubles: set[str]
+) -> None:
+    setup = _setup(entry=entry, exit=exit_)
+    fits = setup.window_fits(
+        session_open_ms=_CLOCK.open_minute_et * MS_PER_MINUTE, session_close_ms=_CLOCK.close_minute_et * MS_PER_MINUTE
     )
 
-    assert fine.notices == ()
-    assert same_minute.notices != ()
-    assert earlier.notices != ()
+    assert (describe_setup(setup, full_session=_CLOCK).notices == ()) is fits
 
 
 def test_a_cutoff_for_re_entry_is_said_with_its_distance_and_clock_and_a_missing_one_is_not_mentioned() -> None:
@@ -147,10 +193,10 @@ def test_a_strike_rule_says_where_the_strike_sits(strike: dict[str, Any], said: 
 @pytest.mark.parametrize(
     ("expiry", "said"),
     [
-        ({"kind": "same_day"}, "same day"),
-        ({"kind": "this_week"}, "this week"),
-        ({"kind": "min_days", "days": 3}, "at least 3 days"),
-        ({"kind": "min_days", "days": 1}, "at least 1 day "),
+        ({"kind": "same_day"}, "on the trading date itself"),
+        ({"kind": "this_week"}, "last trading day of its week"),
+        ({"kind": "min_days", "days": 3}, "at least 3 calendar days"),
+        ({"kind": "min_days", "days": 1}, "at least 1 calendar day "),
         ({"kind": "min_days", "days": 0}, "today included"),
     ],
 )
@@ -158,38 +204,49 @@ def test_an_expiry_rule_says_which_expiry_is_wanted(expiry: dict[str, Any], said
     assert said in _leg_text(expiry=expiry)
 
 
+def test_the_this_week_rule_is_said_as_it_works_not_as_an_expiry_in_this_week() -> None:
+    text = _leg_text(expiry={"kind": "this_week"})
+
+    # The nearest listed expiry on a week's last trading day: another week for an underlying with none this week,
+    # and the same day when today is that day.
+    assert "nearest listed expiry" in text and "today included" in text
+    assert "this week" not in text
+
+
 @pytest.mark.parametrize(
     ("momentum", "pattern"),
     [
-        ({"kind": "percent_up", "value": "25"}, r"25% above where it stood at the start"),
-        ({"kind": "percent_down", "value": "10.5"}, r"10\.5% below where it stood at the start"),
-        ({"kind": "points_up", "value": "0.5"}, r"0\.5 points above where it stood at the start"),
-        ({"kind": "points_down", "value": "1.5"}, r"1\.5 points below where it stood at the start"),
+        ({"kind": "percent_up", "value": "25"}, r"closes at least 25% above where its premium stood"),
+        ({"kind": "percent_down", "value": "10.5"}, r"closes at least 10\.5% below where its premium stood"),
+        ({"kind": "points_up", "value": "0.5"}, r"closes at least 0\.5 points above where its premium stood"),
+        ({"kind": "points_down", "value": "1.5"}, r"closes at least 1\.5 points below where its premium stood"),
     ],
 )
 def test_momentum_says_which_way_how_far_and_from_where(momentum: dict[str, Any], pattern: str) -> None:
-    assert re.search(pattern, _leg_text(momentum=momentum))
+    text = _leg_text(momentum=momentum)
+
+    assert re.search(pattern, text)
+    assert "entry time" in text
+
+
+def test_a_leg_without_momentum_buys_when_the_entry_is_read() -> None:
+    text = _leg_text()
+
+    assert "as soon as the entry is read" in text
+    assert "closes" not in text
 
 
 @pytest.mark.parametrize(
     ("stop_loss", "pattern"),
     [
-        ({"kind": "percent", "value": "25"}, r"25% below what was paid"),
-        ({"kind": "points", "value": "0.4"}, r"0\.4 points below what was paid"),
+        ({"kind": "percent", "value": "25"}, r"closes at least 25% below what was paid"),
+        ({"kind": "points", "value": "0.4"}, r"closes at least 0\.4 points below what was paid"),
     ],
 )
-def test_a_stop_loss_says_how_far_below_what_was_paid_it_sells(stop_loss: dict[str, Any], pattern: str) -> None:
+def test_a_stop_loss_says_a_minute_must_close_that_far_below_what_was_paid(
+    stop_loss: dict[str, Any], pattern: str
+) -> None:
     assert re.search(pattern, _leg_text(stop_loss=stop_loss))
-
-
-def test_each_amount_goes_with_its_own_rule() -> None:
-    text = _leg_text(
-        momentum={"kind": "percent_up", "value": "30"},
-        stop_loss={"kind": "percent", "value": "20"},
-    )
-
-    assert re.search(r"30% above", text)
-    assert re.search(r"20% below what was paid", text)
 
 
 def test_a_leg_with_no_rules_of_its_own_mentions_none() -> None:
@@ -205,12 +262,14 @@ def test_a_leg_with_no_rules_of_its_own_mentions_none() -> None:
 @pytest.mark.parametrize(
     ("reentry", "pattern"),
     [
-        ({"kind": "at_once", "count": 1}, r"again at once, up to 1 time\b"),
-        ({"kind": "at_once", "count": 3}, r"again at once, up to 3 times\b"),
-        ({"kind": "on_momentum", "count": 2}, r"momentum again, up to 2 times\b"),
+        ({"kind": "at_once", "count": 1}, r"fresh contract.*buys it at once, up to 1 time\b"),
+        ({"kind": "at_once", "count": 3}, r"fresh contract.*buys it at once, up to 3 times\b"),
+        ({"kind": "on_momentum", "count": 2}, r"fresh contract.*waits for momentum again, up to 2 times\b"),
     ],
 )
-def test_a_re_entry_says_how_it_comes_back_and_how_many_times(reentry: dict[str, Any], pattern: str) -> None:
+def test_a_re_entry_picks_a_fresh_contract_and_says_how_it_comes_back_and_how_many_times(
+    reentry: dict[str, Any], pattern: str
+) -> None:
     text = _leg_text(
         momentum={"kind": "percent_up", "value": "25"},
         stop_loss={"kind": "percent", "value": "25"},
@@ -249,8 +308,33 @@ def test_each_fee_policy_is_named(fees: dict[str, Any], said: str) -> None:
     assert said in describe_setup(_setup(fees=fees), full_session=_CLOCK).costs
 
 
+def test_estimated_fees_say_they_need_published_rates_and_which_sessions_cannot_run_without_them() -> None:
+    estimated = describe_setup(_setup(fees={"kind": "estimated"}), full_session=_CLOCK).costs
+    not_charged = describe_setup(_setup(), full_session=_CLOCK).costs
+
+    assert "published option fee rates" in estimated and "before those rates exist" in estimated
+    assert "cannot be run" in estimated
+    # No date is written: this module does not know the fee model's first day.
+    assert not re.search(r"\b(19|20)\d\d\b", estimated)
+    assert "published" not in not_charged and "cannot" not in not_charged
+
+
 def test_no_slippage_is_said_as_no_slippage_not_as_a_zero_percent_move() -> None:
     costs = describe_setup(_setup(slippage_percent="0"), full_session=_CLOCK).costs
 
     assert "0%" not in costs
     assert "no slippage" in costs.lower()
+
+
+def test_the_example_named_no_re_entry_says_nothing_of_re_entry_and_the_other_one_says_it() -> None:
+    no_re_entry, one_re_entry = (describe_setup(example.setup, full_session=_CLOCK) for example in EXAMPLE_SETUPS)
+
+    assert "re-entry" not in no_re_entry.window
+    assert all("After a stop" not in leg.text for leg in no_re_entry.legs)
+    assert "earns no re-entry" in one_re_entry.window and _before_close(60) in one_re_entry.window
+    assert all(re.search(r"buys it at once, up to 1 time\b", leg.text) for leg in one_re_entry.legs)
+
+
+def test_both_examples_fit_a_full_day() -> None:
+    for example in EXAMPLE_SETUPS:
+        assert describe_setup(example.setup, full_session=_CLOCK).notices == ()

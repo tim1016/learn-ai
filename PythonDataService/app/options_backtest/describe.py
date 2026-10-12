@@ -1,10 +1,14 @@
 """A setup in plain sentences, for the owner to read before pressing Start (#3030).
 
-One sentence for the window, one per leg, one for square-off and one for
-costs. A rule that is switched off is not mentioned. Each time is said as a
-distance from the open or the close and as the New York clock time on a full
-session, so a setup that holds its distance on a half day is read for the
-usual day. The words are written here and the page shows them as they are.
+One block of sentences for the window, one per leg, one for square-off and
+one for costs. A rule that is switched off is not mentioned. Each time is said
+as a distance from the open or the close and as the New York clock time on a
+full session, so a setup that holds its distance on a half day is read for the
+usual day. The entry and exit times are when a rule is read: an order fills at
+the next minute's opening trade, and the window says so. A rule that triggers
+on a premium is reached only by a minute's close. Whether the times fit a full
+day is the setup's own rule (``window_fits``), the one the replay applies to
+skip a session. The words are written here and the page shows them as they are.
 """
 
 from __future__ import annotations
@@ -22,7 +26,6 @@ from app.options_backtest.setup import (
     OptionsBacktestSetup,
     ReentryOnStop,
     SessionTime,
-    StopLoss,
 )
 
 
@@ -57,16 +60,37 @@ def describe_setup(setup: OptionsBacktestSetup, *, full_session: SessionClock) -
 
 
 def _window(setup: OptionsBacktestSetup, clock: SessionClock) -> str:
-    sentence = f"Trades {setup.underlying}. Starts {_time(setup.entry, clock)} and is flat {_time(setup.exit, clock)}."
-    if setup.no_reentry_after is None:
-        return sentence
-    return f"{sentence} A stop hit later than {_time(setup.no_reentry_after, clock)} earns no re-entry."
+    sentences = [
+        f"Trades {setup.underlying}.",
+        f"The entry is read {_time(setup.entry, clock)}.",
+        f"The exit is read {_time(setup.exit, clock)}.",
+        "An order fills at the next minute's opening trade, never at the minute or the price that set it off.",
+        "A buy is dropped if its contract does not trade in that minute; a sale is tried each minute until it does.",
+        "At the exit, whatever is open is sold, legs still waiting are cancelled and nothing more is bought.",
+    ]
+    if setup.no_reentry_after is not None:
+        sentences.append(
+            f"A stop hit later than {_time(setup.no_reentry_after, clock)} earns no re-entry. First entries are not affected."
+        )
+    return " ".join(sentences)
 
 
 def _notices(setup: OptionsBacktestSetup, clock: SessionClock) -> tuple[str, ...]:
-    if _minute_of_day(setup.exit, clock) <= _minute_of_day(setup.entry, clock):
-        return ("The exit is no later than the entry on a full day, so this setup would not trade.",)
-    return ()
+    open_ms, close_ms = _clock_ms(clock)
+    if setup.window_fits(session_open_ms=open_ms, session_close_ms=close_ms):
+        return ()
+    entry_ms = setup.entry.at(session_open_ms=open_ms, session_close_ms=close_ms)
+    exit_ms = setup.exit.at(session_open_ms=open_ms, session_close_ms=close_ms)
+    notices = ["On a full day this setup would not trade, and the run skips any session its times do not fit."]
+    if entry_ms < open_ms + MS_PER_MINUTE:
+        notices.append("The entry is too close to the open, or before it. It must be at least a minute after the open.")
+    if exit_ms > close_ms - MS_PER_MINUTE:
+        notices.append(
+            "The exit is too close to the close, or after it. It must be at least a minute before the close."
+        )
+    if exit_ms <= entry_ms:
+        notices.append("The exit is not after the entry.")
+    return tuple(notices)
 
 
 def _time(time: SessionTime, clock: SessionClock) -> str:
@@ -78,9 +102,14 @@ def _time(time: SessionTime, clock: SessionClock) -> str:
     return f"{distance} ({_on_a_full_day(_minute_of_day(time, clock), clock)})"
 
 
+def _clock_ms(clock: SessionClock) -> tuple[int, int]:
+    """The full session's open and close counted from New York midnight; the setup's rules only compare them."""
+    return clock.open_minute_et * MS_PER_MINUTE, clock.close_minute_et * MS_PER_MINUTE
+
+
 def _minute_of_day(time: SessionTime, clock: SessionClock) -> int:
-    minutes = time.offset_ms // MS_PER_MINUTE
-    return clock.open_minute_et + minutes if time.anchor == "open" else clock.close_minute_et - minutes
+    open_ms, close_ms = _clock_ms(clock)
+    return time.at(session_open_ms=open_ms, session_close_ms=close_ms) // MS_PER_MINUTE
 
 
 def _on_a_full_day(minute: int, clock: SessionClock) -> str:
@@ -93,10 +122,11 @@ def _on_a_full_day(minute: int, clock: SessionClock) -> str:
 
 
 def _leg(leg: LegSetup) -> str:
-    entry = f"Leg {leg.leg_id}: buys {_what_is_bought(leg)} {_expiry(leg.expiry)}, {_when_it_buys(leg.momentum)}."
-    sentences = [entry]
+    sentences = [f"Leg {leg.leg_id}: buys {_what_is_bought(leg)} {_expiry(leg.expiry)}.", _when_it_buys(leg.momentum)]
     if leg.stop_loss is not None:
-        sentences.append(f"Sells if it falls {_stop_distance(leg.stop_loss)} below what was paid.")
+        sentences.append(
+            f"Sells once a minute closes at least {_amount(leg.stop_loss.kind, leg.stop_loss.value)} below what was paid."
+        )
     if leg.reentry_on_stop is not None:
         sentences.append(_reentry(leg.reentry_on_stop))
     return " ".join(sentences)
@@ -112,28 +142,31 @@ def _what_is_bought(leg: LegSetup) -> str:
 
 def _expiry(rule: ExpiryRule) -> str:
     if rule.kind == "same_day":
-        return "expiring the same day"
-    if rule.kind == "min_days":
-        if rule.days == 0:
-            return "expiring on the nearest listed day, today included"
-        return f"expiring at least {_count(rule.days, 'day')} after the trading day"
-    return "expiring this week"
+        return "expiring on the trading date itself"
+    if rule.kind == "this_week":
+        return "expiring on the nearest listed expiry, today included, that falls on the last trading day of its week"
+    if rule.days == 0:
+        return "expiring on the nearest listed expiry, today included"
+    return f"expiring on the nearest listed expiry at least {_count(rule.days, 'calendar day')} after the trading day"
+
+
+# What each momentum kind measures in, and which side of the starting premium it waits for.
+_MOMENTUM_WAYS: dict[str, tuple[str, str]] = {
+    "percent_up": ("percent", "above"),
+    "percent_down": ("percent", "below"),
+    "points_up": ("points", "above"),
+    "points_down": ("points", "below"),
+}
 
 
 def _when_it_buys(momentum: Momentum | None) -> str:
     if momentum is None:
-        return "straight away"
-    amount, way = _momentum_amount(momentum)
-    return f"once its premium is {amount} {way} where it stood at the start"
-
-
-def _momentum_amount(momentum: Momentum) -> tuple[str, str]:
-    unit, _, direction = momentum.kind.rpartition("_")
-    return _amount(unit, momentum.value), "above" if direction == "up" else "below"
-
-
-def _stop_distance(stop: StopLoss) -> str:
-    return _amount(stop.kind, stop.value)
+        return "The buy comes as soon as the entry is read."
+    unit, way = _MOMENTUM_WAYS[momentum.kind]
+    return (
+        f"The buy waits until a minute closes at least {_amount(unit, momentum.value)} {way} "
+        "where its premium stood at the entry time."
+    )
 
 
 def _amount(unit: str, value: Decimal) -> str:
@@ -145,9 +178,10 @@ def _amount(unit: str, value: Decimal) -> str:
 
 def _reentry(rule: ReentryOnStop) -> str:
     times = f"up to {_count(rule.count, 'time')}"
+    fresh = "After a stop, picks a fresh contract by the same rules and"
     if rule.kind == "at_once":
-        return f"After a stop, buys again at once, {times}."
-    return f"After a stop, picks a fresh contract and waits for momentum again, {times}."
+        return f"{fresh} buys it at once, {times}."
+    return f"{fresh} waits for momentum again, {times}."
 
 
 def _square_off(setup: OptionsBacktestSetup) -> str:
@@ -170,7 +204,10 @@ def _fees(fees: FeePolicy) -> str:
     if fees.per_contract_usd is not None:
         return f"Fees are {_dollars(fees.per_contract_usd)} per contract traded."
     if fees.kind == "estimated":
-        return "Fees are estimated from published option fee rates."
+        return (
+            "Fees are estimated from published option fee rates. "
+            "A session from before those rates exist cannot be run with this choice."
+        )
     return "Fees are not charged, so results are before fees."
 
 
