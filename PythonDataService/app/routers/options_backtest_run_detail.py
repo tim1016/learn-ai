@@ -24,8 +24,8 @@ from app.options_backtest.run_detail import (
     RunNotFound,
     RunsNotComplete,
     RunsOfDifferentUnderlyings,
-    RunsSetupCannotBeRead,
     SessionNotInRun,
+    TwoRunsSetupCannotBeRead,
     read_comparison_inputs,
     read_every_trade,
     read_session_record,
@@ -33,7 +33,7 @@ from app.options_backtest.run_detail import (
 )
 from app.options_backtest.session_levels import SessionRecordInconsistent
 from app.options_backtest.session_view import session_view_of
-from app.options_backtest.setup import _LEG_ID_PATTERN as LEG_ID_PATTERN
+from app.options_backtest.setup import LEG_ID_PATTERN
 from app.options_backtest.trade_export import csv_file_name, trades_csv
 from app.research.persistence import lifecycle
 from app.research.persistence.db import with_connection
@@ -232,7 +232,7 @@ async def compare_two_runs(
                 "message": f"Only complete runs can be compared, and {exc}.",
             },
         ) from exc
-    except RunsSetupCannotBeRead as exc:
+    except TwoRunsSetupCannotBeRead as exc:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             {

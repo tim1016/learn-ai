@@ -26,7 +26,8 @@ Reasons a series is not served, each with words of its own that say only what is
 * ``not_confirmed``: the lake's catalog does not admit the file's bytes (no receipt for them, or one being rebuilt). Nobody
   saw the file change, and the bytes cannot be checked against what the run read, so it is not said to have changed;
 * ``unreadable``: the file is there and cannot be read: it is damaged, holds a bar no session can place, or the
-  operating system refuses it (permission, an I/O error, a file that vanishes as it is read);
+  operating system refuses it (permission, an I/O error, a file that vanishes as it is read). The page gets the fixed
+  words and nothing of the fault, so each such series is logged once, with the kind of error and no path;
 * ``lake_unavailable``: the lake's catalog could not be asked. This says nothing about the file or the run.
 
 Blocking: it reads files and asks the catalog, so call it from a worker thread.
@@ -34,6 +35,7 @@ Blocking: it reads files and asks the catalog, so call it from a worker thread.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -48,6 +50,8 @@ from app.options_backtest.lake_data import UnderlyingDayUnreadable
 from app.options_backtest.results import EventKind, SessionOutcome, SkipReason
 from app.options_backtest.session_result import SessionResult
 from app.utils.session_anchors import et_date_at_ms
+
+logger = logging.getLogger(__name__)
 
 
 class SeriesReason(StrEnum):
@@ -112,8 +116,11 @@ def contracts_to_chart(outcome: SessionOutcome) -> tuple[OptionContract, ...]:
     return tuple(sorted(found, key=lambda contract: contract.occ_symbol))
 
 
-def read_session_series(session: SessionResult, *, underlying: str, data: RunData) -> SessionSeries:
-    """The session's series, each read from ``data`` and shown only if its hash is the one the run pinned."""
+def read_session_series(session: SessionResult, *, run_id: int, underlying: str, data: RunData) -> SessionSeries:
+    """The session's series, each read from ``data`` and shown only if its hash is the one the run pinned.
+
+    ``run_id`` is the run the session belongs to; it only names the run in the log of a series that cannot be read.
+    """
     trading_date = et_date_at_ms(session.session_open_ms)
     pins = session.pins
     pinned = {day.contract: day.sha256 for day in pins.option_days}
@@ -122,6 +129,7 @@ def read_session_series(session: SessionResult, *, underlying: str, data: RunDat
     return SessionSeries(
         underlying=_series(
             session,
+            run_id=run_id,
             symbol=underlying,
             contract=None,
             pin=pins.underlying_sha256,
@@ -132,6 +140,7 @@ def read_session_series(session: SessionResult, *, underlying: str, data: RunDat
         contracts=tuple(
             _series(
                 session,
+                run_id=run_id,
                 symbol=contract.occ_symbol,
                 contract=contract,
                 pin=pinned.get(contract),
@@ -147,6 +156,7 @@ def read_session_series(session: SessionResult, *, underlying: str, data: RunDat
 def _series(
     session: SessionResult,
     *,
+    run_id: int,
     symbol: str,
     contract: OptionContract | None,
     pin: str | None,
@@ -165,9 +175,21 @@ def _series(
         return not_shown(SeriesReason.LAKE_UNAVAILABLE)
     except LakeAdmissionError:
         return not_shown(SeriesReason.NOT_CONFIRMED)
-    except (UnderlyingDayUnreadable, OptionBarsFileError, OSError):
+    except (UnderlyingDayUnreadable, OptionBarsFileError, OSError) as exc:
         # OSError: the file or its folder refuses to be read, or vanishes between the lake's check and its read. The
         # underlying's reader names its own errors; a contract's read lets the operating system's out.
+        # The page gets the reason's fixed words. The kind of error is logged, so a permission can be told from a damaged
+        # file; the error's own text is not, since it names the file by its path on the server's disk.
+        logger.warning(
+            "a stored series cannot be read",
+            extra={
+                "action": "options_backtest_series_unreadable",
+                "run_id": run_id,
+                "session_open_ms": session.session_open_ms,
+                "series": symbol,
+                "error_type": type(exc).__name__,
+            },
+        )
         return not_shown(SeriesReason.UNREADABLE)
     if captured is None:
         return not_shown(SeriesReason.GONE)

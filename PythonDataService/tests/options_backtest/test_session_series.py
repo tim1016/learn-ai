@@ -22,6 +22,7 @@ day holding a bar no session can place is ``unreadable`` too.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
@@ -90,7 +91,7 @@ def _bars_file(symbol: str) -> str:
 
 async def _series_of(session: SessionResult) -> SessionSeries:
     # The reader blocks on files and on the catalog, and refuses the event loop's thread.
-    return await asyncio.to_thread(read_session_series, session, underlying="SPY", data=LakeRunData("SPY"))
+    return await asyncio.to_thread(read_session_series, session, run_id=41, underlying="SPY", data=LakeRunData("SPY"))
 
 
 def _by_symbol(series: SessionSeries) -> dict[str, Series]:
@@ -288,6 +289,45 @@ async def test_a_damaged_file_that_the_catalog_admits_is_unreadable(fake_catalog
         PUT_495: None,
         PUT_500: SeriesReason.UNREADABLE,
     }
+
+
+@respx.mock
+async def test_each_series_withheld_as_unreadable_is_logged_once_with_the_kind_of_fault_and_no_path_and_a_shown_one_is_not(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    result = await run_the_scene()
+    # Wednesday has four series: SPY, and the contracts call 500, put 495 and put 500. Two cannot be read, one a damaged
+    # underlying file the catalog admits, the other an operating system error on call 500 (its text carries a made-up
+    # server path). The other two are shown, so the log holds two warnings and none for them.
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), STOCK_FILE, b"admitted, but not a zip", admit=True)
+    real = lake_data.read_option_day_bars
+
+    def refuse_one(contract: OptionContract, *args: Any, **kwargs: Any) -> Any:
+        if contract.occ_symbol == CALL_500:
+            raise PermissionError(13, "Permission denied", "/a/server/path/lake/raw/option/usa/minute/spy/x.zip")
+        return real(contract, *args, **kwargs)
+
+    monkeypatch.setattr(lake_data, "read_option_day_bars", refuse_one)
+    caplog.set_level(logging.WARNING, logger="app.options_backtest.session_series")
+
+    series = await _series_of(result.sessions[0])
+
+    assert _reasons(series) == {
+        "SPY": SeriesReason.UNREADABLE,
+        CALL_500: SeriesReason.UNREADABLE,
+        PUT_495: None,
+        PUT_500: None,
+    }
+    warned = [
+        record for record in caplog.records if getattr(record, "action", None) == "options_backtest_series_unreadable"
+    ]
+    # Run 41 (what ``_series_of`` reads under) and the Wednesday that opened at 1_791_379_800_000 (2026-10-07 09:30 ET).
+    assert sorted((r.series, r.error_type, r.run_id, r.session_open_ms) for r in warned) == [
+        ("SPY", "UnderlyingDayUnreadable", 41, 1_791_379_800_000),
+        (CALL_500, "PermissionError", 41, 1_791_379_800_000),
+    ]
+    # Nothing of the error's own text, which names the file by its path on the server's disk, is in any record.
+    assert not any("/a/server/path" in str(vars(record)) for record in warned)
 
 
 @respx.mock

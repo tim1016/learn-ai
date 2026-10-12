@@ -19,8 +19,8 @@ from app.options_backtest.run_detail import (
     RunNotFound,
     RunsNotComplete,
     RunsOfDifferentUnderlyings,
-    RunsSetupCannotBeRead,
     TradePage,
+    TwoRunsSetupCannotBeRead,
     judge_pair,
     require_a_complete_run,
     require_the_leg,
@@ -133,9 +133,9 @@ def test_every_run_that_is_not_complete_is_named_with_its_place_and_its_status()
 def test_every_run_whose_stored_setup_is_lost_is_named_with_its_place_and_the_reason_beside_it() -> None:
     readable = a_header(1)
 
-    with pytest.raises(RunsSetupCannotBeRead) as only_b:
+    with pytest.raises(TwoRunsSetupCannotBeRead) as only_b:
         judge_pair(1, readable, 2, an_unreadable_header(2))
-    with pytest.raises(RunsSetupCannotBeRead) as both:
+    with pytest.raises(TwoRunsSetupCannotBeRead) as both:
         judge_pair(1, an_unreadable_header(1, "leg: gone"), 2, an_unreadable_header(2, "slippage: gone"))
 
     assert only_b.value.runs == (("b", 2, THE_REASON),)
@@ -158,7 +158,7 @@ def test_the_reasons_are_given_in_one_order_not_complete_then_a_lost_setup_then_
     with pytest.raises(RunsNotComplete):
         judge_pair(1, failed, 2, lost)
     # With both complete, the lost setup comes before the underlyings, whose difference is only known from the record.
-    with pytest.raises(RunsSetupCannotBeRead):
+    with pytest.raises(TwoRunsSetupCannotBeRead):
         judge_pair(1, a_header(1), 2, lost)
 
 

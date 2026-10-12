@@ -23,8 +23,8 @@ from app.options_backtest.run_detail import (
     RunNotFound,
     RunsNotComplete,
     RunsOfDifferentUnderlyings,
-    RunsSetupCannotBeRead,
     SessionNotInRun,
+    TwoRunsSetupCannotBeRead,
     read_comparison_inputs,
     read_every_trade,
     read_session_record,
@@ -400,9 +400,9 @@ async def test_two_runs_cannot_be_compared_while_either_one_has_lost_its_setup_a
     healthy = await save_run(scene, "healthy")
     await _lose_the_setup(conn, lost)
 
-    with pytest.raises(RunsSetupCannotBeRead) as as_b:
+    with pytest.raises(TwoRunsSetupCannotBeRead) as as_b:
         await read_comparison_inputs(conn, healthy, lost, is_live=GONE)
-    with pytest.raises(RunsSetupCannotBeRead) as as_a:
+    with pytest.raises(TwoRunsSetupCannotBeRead) as as_a:
         await read_comparison_inputs(conn, lost, healthy, is_live=GONE)
 
     assert [(role, run_id) for role, run_id, _ in as_b.value.runs] == [("b", lost)]
