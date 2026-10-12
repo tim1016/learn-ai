@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { etMidnightMs } from '../../shared/date/et-midnight';
+import { etIsoDate, etMidnightMs, isoDateAfter } from '../../shared/date/et-midnight';
 import { NO_DATES, OFFERED_RANGES, priceBounds, rangeInstants, rangeOfStretch } from './duration';
 import type { TestableStretch } from './options-backtest.types';
 import { sessionOpenMs } from '../../shared/date-picker/testing/fake-trading-calendar';
@@ -57,6 +57,37 @@ describe('the two instants of a range', () => {
       start_ms: 20_756 * 86_400_000 + 4 * 3_600_000,
       end_ms: 20_759 * 86_400_000 + 5 * 3_600_000,
     });
+  });
+
+  // The server refuses a range whose two instants are not New York midnights (OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT). The
+  // page always sends midnights, and the Sundays the clocks change are where a day that is not 24 hours long would show it.
+  const isNewYorkMidnight = (ms: number) => etMidnightMs(etIsoDate(ms)) === ms;
+
+  it.each([
+    ['ending on the Sunday the clocks go forward', { from: '2026-03-06', to: '2026-03-08' }, '2026-03-09'],
+    ['ending on the Sunday the clocks go back', { from: '2026-10-30', to: '2026-11-01' }, '2026-11-02'],
+    ['starting on the Sunday the clocks go forward', { from: '2026-03-08', to: '2026-03-10' }, '2026-03-11'],
+    ['starting on the Sunday the clocks go back', { from: '2026-11-01', to: '2026-11-03' }, '2026-11-04'],
+    ['of the Sunday the clocks go forward alone', { from: '2026-03-08', to: '2026-03-08' }, '2026-03-09'],
+    ['of the Sunday the clocks go back alone', { from: '2026-11-01', to: '2026-11-01' }, '2026-11-02'],
+    ['of a plain winter week', { from: '2026-01-12', to: '2026-01-16' }, '2026-01-17'],
+  ])('sends two New York midnights for a range %s: the first date’s and the day after the last date’s', (_name, range, dayAfter) => {
+    const instants = rangeInstants(range);
+
+    expect(instants).not.toBeNull();
+    expect(isNewYorkMidnight(instants?.start_ms ?? Number.NaN)).toBe(true);
+    expect(isNewYorkMidnight(instants?.end_ms ?? Number.NaN)).toBe(true);
+    expect(etIsoDate(instants?.start_ms ?? Number.NaN)).toBe(range.from);
+    expect(etIsoDate(instants?.end_ms ?? Number.NaN)).toBe(dayAfter);
+    expect(isoDateAfter(range.to)).toBe(dayAfter);
+  });
+
+  it('is not a midnight at the end when the last date is made one day long by adding 24 hours: that instant is one in the morning (the test sees it)', () => {
+    // The end the page must not send for a range ending on Sunday 2026-03-08: its midnight is 05:00 UTC, and +24 hours is 01:00 EDT on the 9th.
+    const wrong = etMidnightMs('2026-03-08') + 86_400_000;
+
+    expect(isNewYorkMidnight(wrong)).toBe(false);
+    expect(rangeInstants({ from: '2026-03-06', to: '2026-03-08' })?.end_ms).not.toBe(wrong);
   });
 
   it('is one day wide for one date: the start is the date, the end the midnight after it', () => {
