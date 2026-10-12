@@ -33,6 +33,23 @@ describe('the plain-words summary', () => {
     expect(text.indexOf('Sentence for leg call')).toBeLessThan(text.indexOf('THE COSTS SENTENCE'));
   });
 
+  it('sets each block as the one string it came as, and each leg’s block as a list item of its own', async () => {
+    const window = 'Trades SPY. Each fill is moved 0.3% against you, then rounded. A stop later than 15:00 earns no re-entry.';
+    const service = fakeService(vi, {
+      describe: vi.fn(async (body: unknown) => ({ ...sentencesFor(body as SetupRequest), window })),
+    });
+    await renderPage(service);
+
+    addLeg('Call');
+    addLeg('Put');
+
+    const summary = await screen.findByRole('region', { name: 'In plain words' });
+    const block = await within(summary).findByText(window);
+    expect(block.tagName).toBe('P');
+    const legs = within(summary).getAllByRole('listitem');
+    expect(legs.map((leg) => leg.textContent)).toEqual(['Sentence for leg call.', 'Sentence for leg put.']);
+  });
+
   it('says the setup is not complete while it has no legs, and the legs card says to add one without an alarm', async () => {
     await renderPage(fakeService(vi));
 

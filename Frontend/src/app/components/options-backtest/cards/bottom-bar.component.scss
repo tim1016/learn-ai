@@ -2,8 +2,8 @@
 p { margin: 0; }
 .footer { position: fixed; z-index: 20; inset-inline: var(--page-pad-x); bottom: var(--space-3); display: grid; gap: var(--space-2); padding: var(--space-3) var(--space-5); background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.35); }
 .bar { display: flex; align-items: flex-end; gap: var(--space-4); flex-wrap: wrap; }
-.name { display: grid; gap: var(--space-1); font-size: var(--fs-sm); color: var(--text-secondary); }
-.name input { width: min(24rem, 70vw); }
+.name { flex: 0 1 24rem; min-width: 8rem; display: grid; gap: var(--space-1); font-size: var(--fs-sm); color: var(--text-secondary); }
+.name input { width: 100%; }
 .status { flex: 1 1 16rem; align-self: center; font-size: var(--fs-sm); color: var(--text-secondary); min-width: 0; }
 .ok { color: var(--bull); }
 .bad { color: var(--bear); }
@@ -11,5 +11,9 @@ p { margin: 0; }
 @media (max-width: 768px) {
   .footer { padding: var(--space-2) var(--space-3); gap: var(--space-1); }
   .bar { gap: var(--space-2) var(--space-3); }
-  .status { flex-basis: 100%; order: -1; }
+  // The name takes what the row leaves beside Save: a basis of nothing, so the row does not break before Save.
+  .name { flex: 1 1 0; max-width: 24rem; }
+  // One line above the name and Save, which share the row below it. A refusal or a name rule is the owner's to read in full, so it wraps.
+  .status { flex-basis: 100%; order: -1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .status:has(.bad) { white-space: normal; }
 }

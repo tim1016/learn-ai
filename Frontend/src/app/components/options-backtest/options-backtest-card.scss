@@ -1,8 +1,10 @@
 // The Options Backtest page's cards (#3030): one look for every section of the setup.
 :host { display: block; min-width: 0; }
+// The shared picker's name does not wrap, so its minimum width would otherwise stretch the card's column past the card.
+app-symbol-picker { display: block; min-width: 0; }
 p { margin: 0; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.card { display: grid; gap: var(--space-3); background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: var(--radius); padding: var(--space-4) var(--space-5); min-width: 0; }
+.card { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: var(--radius); padding: var(--space-4) var(--space-5); min-width: 0; }
 .card__head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; }
 .card h2 { margin: 0; font-size: var(--fs-md); font-weight: var(--fw-semi); }
 .hint { color: var(--text-secondary); font-size: var(--fs-sm); }

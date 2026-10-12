@@ -1,4 +1,9 @@
-.card div[aria-live] { display: grid; gap: var(--space-2); font-size: var(--fs-sm); }
+// The server writes each block as one string and the page sets it as written, so what makes it readable is the setting:
+// a line of about 75 characters, room between the blocks, and each leg's block visibly its own.
+.card div[aria-live] { display: grid; gap: var(--space-4); font-size: var(--fs-sm); }
+.block, .notice { max-width: 75ch; line-height: 1.55; text-wrap: pretty; }
+.legs { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
+.block--leg { padding: var(--space-3) var(--space-4); background: var(--bg-elevated); border-inline-start: 3px solid var(--accent); border-radius: var(--radius); }
 .sentences { margin: 0; padding-left: var(--space-5); display: grid; gap: var(--space-1); font-size: var(--fs-sm); }
 .notice { border: 1px solid var(--warn); border-radius: var(--radius); background: var(--warn-soft); padding: var(--space-2) var(--space-3); color: var(--text-primary); }
 .again { justify-self: start; background: none; border: 1px solid var(--border-strong); color: var(--text-secondary); border-radius: var(--radius); padding: var(--space-1) var(--space-3); font: inherit; font-size: var(--fs-sm); cursor: pointer; }

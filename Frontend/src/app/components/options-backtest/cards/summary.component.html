@@ -9,12 +9,12 @@
     }
     @if (summary(); as text) {
       @for (notice of text.notices; track notice) { <p class="notice" role="status">{{ notice }}</p> }
-      <p>{{ text.window }}</p>
-      <ul class="sentences">
-        @for (leg of text.legs; track leg.leg_id) { <li>{{ leg.text }}</li> }
+      <p class="block">{{ text.window }}</p>
+      <ul class="legs">
+        @for (leg of text.legs; track leg.leg_id) { <li class="block block--leg">{{ leg.text }}</li> }
       </ul>
-      <p>{{ text.square_off }}</p>
-      <p>{{ text.costs }}</p>
+      <p class="block">{{ text.square_off }}</p>
+      <p class="block">{{ text.costs }}</p>
     }
   </div>
   @if (otherProblems().length > 0) {
