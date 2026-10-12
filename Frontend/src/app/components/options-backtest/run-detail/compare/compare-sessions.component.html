@@ -1,0 +1,39 @@
+<section class="block" aria-label="Sessions both runs tested">
+  <h3>Sessions both runs tested</h3>
+  @let shared = overlap();
+  <p>
+    {{ shared.shared_sessions }} {{ shared.shared_sessions === 1 ? 'session is' : 'sessions are' }} in both runs.
+    Only run A has {{ shared.only_in_a }}, and only run B has {{ shared.only_in_b }}.
+    @if (shared.shared_sessions > 0) { The figures below are for the shared sessions only. }
+  </p>
+  @if (shared.shared_sessions === 0) {
+    <p class="muted" role="status">The two runs have no session in common, so there is nothing to set side by side.</p>
+  } @else {
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Totals over the shared sessions (scrolls sideways)">
+      <table class="rows">
+        <caption class="sr-only">Each run’s totals over the sessions both tested</caption>
+        <thead><tr><th scope="col">Over the shared sessions</th><th scope="col" class="num">Run A</th><th scope="col" class="num">Run B</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Net profit</th><td class="num">{{ shared.a.net_profit_usd | authoredUsd }}</td><td class="num">{{ shared.b.net_profit_usd | authoredUsd }}</td></tr>
+          <tr><th scope="row">Trades</th><td class="num">{{ shared.a.trades }}</td><td class="num">{{ shared.b.trades }}</td></tr>
+          <tr><th scope="row">Winning sessions</th><td class="num">{{ shared.a.winning_sessions }}</td><td class="num">{{ shared.b.winning_sessions }}</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Each shared session (scrolls sideways)">
+      <table class="rows">
+        <caption class="sr-only">Each shared session, with each run’s status and profit</caption>
+        <thead><tr><th scope="col">Day</th><th scope="col">Run A status</th><th scope="col" class="num">Run A profit</th><th scope="col">Run B status</th><th scope="col" class="num">Run B profit</th></tr></thead>
+        <tbody>
+          @for (each of shared.sessions; track each.session_open_ms) {
+            <tr>
+              <th scope="row"><app-timestamp-display [value]="each.session_open_ms" mode="date-et" granularity="date" /></th>
+              <td>{{ each.a_status | receiptLabel }}</td><td class="num">{{ each.a_profit_usd | authoredUsd }}</td>
+              <td>{{ each.b_status | receiptLabel }}</td><td class="num">{{ each.b_profit_usd | authoredUsd }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+</section>

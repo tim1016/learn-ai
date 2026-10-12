@@ -1,6 +1,6 @@
 import { etMidnightMs } from '../../../../shared/date/et-midnight';
 import { sessionOpenMs } from '../../../../shared/date-picker/testing/fake-trading-calendar';
-import type { LegTrade, SeriesReason, SessionDetail, SessionEvent, SessionFill, SessionLevel, SessionMark, SessionSeries, TradeContract, TradesPage } from '../run-detail.types';
+import type { ComparedRun, LegTrade, RunComparison, SeriesReason, SessionDetail, SessionEvent, SessionFill, SessionLevel, SessionMark, SessionSeries, TradeContract, TradesPage } from '../run-detail.types';
 
 /**
  * A small scene made by hand, the way the server serves one. Tuesday 2026-09-15 opens at 09:30 New York time; a minute
@@ -279,4 +279,51 @@ export function skippedSession(changes: Partial<SessionDetail> = {}): SessionDet
     marks: [],
     ...changes,
   });
+}
+
+// ── Two runs side by side ─────────────────────────────────────────────────
+
+export function comparedRun(changes: Partial<ComparedRun> = {}): ComparedRun {
+  return {
+    id: 30,
+    setup_name: 'Straddle',
+    created_at_ms: Date.UTC(2026, 8, 21, 15, 30, 0),
+    first_session_open_ms: sessionOpenMs('2026-09-14'),
+    last_session_open_ms: sessionOpenMs('2026-09-18'),
+    sessions_requested: 5,
+    fee_policy: 'Fees are not charged.',
+    ...changes,
+  };
+}
+
+/**
+ * Two runs of SPY that differ in the re-entry of the call, in slippage and in fees, over the same dates. They share three
+ * sessions. Run A's profits over those are 150.25, -62.40 and 32.65 (120.50 in all, two of them wins) and run B's are 10.00,
+ * -80.25 and 0.00, where it skipped the day (-70.25 in all, one win). The page shows each of these figures from its own field and subtracts none.
+ */
+export function comparison(changes: Partial<RunComparison> = {}): RunComparison {
+  return {
+    underlying: 'SPY',
+    a: comparedRun(),
+    b: comparedRun({ id: 33, setup_name: null, created_at_ms: Date.UTC(2026, 8, 22, 15, 30, 0), fee_policy: 'Fees were set by the owner at 0.65 a contract.' }),
+    setting_differences: [
+      { setting: 'leg_reentry', leg_id: 'call', label: 'leg call: re-entry on stop', a: 'not set', b: 'at once, up to 1 time' },
+      { setting: 'slippage', leg_id: null, label: 'slippage', a: '0.3%', b: '0.45%' },
+      { setting: 'fees', leg_id: null, label: 'fees', a: 'Fees are not charged.', b: 'Fees were set by the owner at 0.65 a contract.' },
+    ],
+    range_difference: null,
+    overlap: {
+      shared_sessions: 3,
+      only_in_a: 1,
+      only_in_b: 0,
+      a: { net_profit_usd: '120.50', trades: 6, winning_sessions: 2 },
+      b: { net_profit_usd: '-70.25', trades: 7, winning_sessions: 1 },
+      sessions: [
+        { session_open_ms: sessionOpenMs('2026-09-14'), a_status: 'traded', b_status: 'traded', a_profit_usd: '150.25', b_profit_usd: '10.00' },
+        { session_open_ms: sessionOpenMs('2026-09-15'), a_status: 'traded', b_status: 'traded', a_profit_usd: '-62.40', b_profit_usd: '-80.25' },
+        { session_open_ms: sessionOpenMs('2026-09-16'), a_status: 'traded', b_status: 'skipped', a_profit_usd: '32.65', b_profit_usd: '0.00' },
+      ],
+    },
+    ...changes,
+  };
 }

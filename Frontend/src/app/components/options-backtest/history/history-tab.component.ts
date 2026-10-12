@@ -11,7 +11,10 @@ import { extractServerMessage } from '../../broker/operation-error';
 import { OptionsBacktestService, RunRefusedError } from '../options-backtest.service';
 import type { RunListItem, ServedSetup } from '../options-backtest.types';
 import { RUN_POLL_MS } from '../run-poll';
+import { CompareViewComponent } from '../run-detail/compare/compare-view.component';
 import { RunPanelComponent } from '../run/run-panel.component';
+
+let nextHintId = 0;
 
 /**
  * This page's runs, newest first as the server lists them: when each was
@@ -25,7 +28,7 @@ import { RunPanelComponent } from '../run/run-panel.component';
  */
 @Component({
   selector: 'app-options-backtest-history',
-  imports: [ButtonModule, AssetIdentityComponent, AuthoredUsdPipe, ReceiptLabelPipe, ConfirmDeleteComponent, TimestampDisplayComponent, RunPanelComponent],
+  imports: [ButtonModule, AssetIdentityComponent, AuthoredUsdPipe, ReceiptLabelPipe, ConfirmDeleteComponent, TimestampDisplayComponent, RunPanelComponent, CompareViewComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './history-tab.component.html',
   styleUrl: './history-tab.component.scss',
@@ -52,8 +55,25 @@ export class HistoryTabComponent {
     return error === undefined ? null : extractServerMessage(error, 'The runs could not be read.');
   });
   protected readonly opened = signal<RunListItem | null>(null);
+  /** The two runs on screen side by side, in the order they were ticked. */
+  protected readonly comparing = signal<{ readonly a: number; readonly b: number } | null>(null);
+  protected readonly hintId = `ob-compare-hint-${nextHintId++}`;
+  /** Every run the owner has ticked, in the order ticked, whether or not it is still listed. */
+  private readonly ticked = signal<readonly number[]>([]);
+  /** The ticked runs that are still listed and complete: a run deleted or not complete cannot be compared. */
+  private readonly chosen = computed(() => this.ticked().filter((id) => this.runs().some((run) => run.id === id && run.status === 'complete')));
+  protected readonly canCompare = computed(() => this.chosen().length === 2);
+  protected readonly compareHint = computed(() => {
+    const ids = this.chosen();
+    if (ids.length === 0) return 'Tick two complete runs to compare them.';
+    if (ids.length === 1) return 'Tick one more complete run.';
+    if (ids.length === 2) return `Run ${ids[0]} and run ${ids[1]} are ticked.`;
+    return 'More than two runs are ticked. Untick until two are left.';
+  });
   protected readonly deleteProblem = signal<string | null>(null);
   private readonly panel = viewChild(RunPanelComponent);
+  private readonly compareView = viewChild(CompareViewComponent);
+  private readonly compareButton = viewChild<ElementRef<HTMLElement>>('compareButton');
   private readonly heading = viewChild<ElementRef<HTMLElement>>('heading');
   /** Where the keyboard goes once the list has been read again after a delete: the row that stood at this place, else the run if it is still there. */
   private focusAfterList: { readonly index: number; readonly id: number } | null = null;
@@ -71,7 +91,7 @@ export class HistoryTabComponent {
     // The list is on show (the tab is, and no run is open over it): while a run in it is going, read it again every few seconds.
     effect(() => {
       const status = this.list.status();
-      const onShow = this.active() && this.opened() === null;
+      const onShow = this.active() && this.opened() === null && this.comparing() === null;
       untracked(() => this.lookAgainWhileAnyGoes(status, onShow));
     });
   }
@@ -87,6 +107,35 @@ export class HistoryTabComponent {
 
   protected deleteLabel(id: number): string {
     return `Delete run ${id}`;
+  }
+
+  protected compareLabel(id: number): string {
+    return `Compare run ${id}`;
+  }
+
+  protected isTicked(id: number): boolean {
+    return this.chosen().includes(id);
+  }
+
+  /** Ticks or unticks one run. A third tick unticks nothing: the hint says what to do. */
+  protected tick(id: number, event: Event): void {
+    const box = event.target;
+    if (!(box instanceof HTMLInputElement)) return;
+    this.ticked.update((ids) => (box.checked ? (ids.includes(id) ? ids : [...ids, id]) : ids.filter((each) => each !== id)));
+  }
+
+  protected compare(): void {
+    const [a, b] = this.chosen();
+    if (this.chosen().length !== 2) return;
+    this.comparing.set({ a, b });
+    afterNextRender(() => this.compareView()?.focusHeading(), { injector: this.injector });
+  }
+
+  /** Back to the list, with the keyboard on the Compare button that opened the comparison (or on the list's heading if it is gone). */
+  protected closeCompare(): void {
+    this.comparing.set(null);
+    this.list.reload();
+    afterNextRender(() => (this.compareButton() ?? this.heading())?.nativeElement.focus(), { injector: this.injector });
   }
 
   protected open(run: RunListItem): void {
