@@ -133,8 +133,13 @@ async def _read(method, *args):
 
 
 def _what_the_app_logged(caplog: pytest.LogCaptureFixture) -> list[tuple[str, str]]:
-    """Every record the app wrote, at any level, as (logger, message); asyncio's own debug lines are not the app's."""
-    return [(record.name, record.getMessage()) for record in caplog.records if record.name.startswith("app")]
+    """Every record this feature wrote, at any level, as (logger, message).
+
+    Only this feature's loggers: the catalog's pool says it was made the first time a database is reached, which is
+    not the reader's doing and depends on which test ran first.
+    """
+    ours = "app.options_backtest"
+    return [(record.name, record.getMessage()) for record in caplog.records if record.name.startswith(ours)]
 
 
 # ── The underlying ───────────────────────────────────────────────────────
