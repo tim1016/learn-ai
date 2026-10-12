@@ -24,6 +24,7 @@ completes is returned.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -35,7 +36,7 @@ from app.data_lake.option_bars import OptionBarsFileError
 from app.data_lake.option_listing import OptionListingFileError
 from app.engine.run_gate import one_backtest_in_flight
 from app.lean_sidecar.trading_calendar import expected_sessions, session_window_for_date
-from app.options_backtest.data_check import DataCheck, SessionVerdict, check_data
+from app.options_backtest.data_check import SESSION_DATA_NOT_FINAL_WORDS, DataCheck, SessionVerdict, check_data
 from app.options_backtest.fees import FeeRateNotPublished
 from app.options_backtest.fetching import DownloadFailed, DownloadStopped, ensure_run_data
 from app.options_backtest.lake_check import LakeCheckData
@@ -70,6 +71,21 @@ DATA_UNREADABLE = "DATA_UNREADABLE"
 FEE_RATE_NOT_PUBLISHED = "FEE_RATE_NOT_PUBLISHED"
 DATA_CATALOG_UNAVAILABLE = "DATA_CATALOG_UNAVAILABLE"
 INTERNAL_ERROR = "INTERNAL_ERROR"
+
+
+# What the lake says when it refuses to take a session at all. Its own sentences name the day and the rule it judged by;
+# a run's words name neither (the session is in the failure's items, by its open, and the rule is the lake's to state).
+_LAKE_REFUSAL_WORDS = {
+    "session_not_over": SESSION_DATA_NOT_FINAL_WORDS,
+    "not_a_session": "The exchange was closed on that day.",
+    "outside_data_plan": "The data plan does not reach that session.",
+}
+_ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _words_of(exc: DownloadFailed) -> str:
+    """The lake's reason in words with no date in them: a refusal in this module's words, any other detail scrubbed."""
+    return _LAKE_REFUSAL_WORDS.get(exc.reason) or _ISO_DATE.sub("that day", exc.detail)
 
 
 class RunRefused(ValueError):
@@ -230,32 +246,41 @@ def _stop_if_asked(hooks: RunHooks) -> None:
 
 
 def failure_of(exc: Exception) -> RunFailure:
-    """What a failed run records: a code, a plain reason and the list of what failed."""
+    """What a failed run records: a code, a plain reason and the list of what failed.
+
+    A session is named by its open in the list's items and not in the reason, which says what went wrong in words.
+    """
     if isinstance(exc, SessionsCannotBeTested):
         return _cannot_be_tested(exc.check)
     if isinstance(exc, DownloadFailed):
         opened = None if exc.session is None else session_window_for_date(exc.session).open_ms_utc
         return RunFailure(
             DOWNLOAD_FAILED,
-            f"The data could not be fetched, so nothing was replayed: {exc}.",
-            (FailureItem(opened, exc.reason, f"{exc.what}: {exc.detail}"),),
+            f"The data could not be fetched, so nothing was replayed: {exc.what} ({exc.reason}): {_words_of(exc)}",
+            (FailureItem(opened, exc.reason, f"{exc.what}: {_words_of(exc)}"),),
         )
     if isinstance(exc, SessionDataMissing):
         opened = session_window_for_date(exc.trading_date).open_ms_utc
+        missing = _what_is_missing(exc)
         return RunFailure(
             DATA_MISSING,
-            f"{exc}. The lake does not hold what this session needs.",
-            (FailureItem(opened, "not_captured", str(exc)),),
+            f"A session cannot be replayed: {missing} not in the lake. Nothing was saved.",
+            (FailureItem(opened, "not_captured", f"{missing} not captured"),),
         )
     if isinstance(exc, FeeRateNotPublished):
         opened = session_window_for_date(exc.trading_date).open_ms_utc
-        return RunFailure(FEE_RATE_NOT_PUBLISHED, str(exc), (FailureItem(opened, "no_published_fee_rates", str(exc)),))
+        return RunFailure(
+            FEE_RATE_NOT_PUBLISHED,
+            f"Estimated fees cannot be priced for a session in the range: the fee model has no published rate for "
+            f"{', '.join(exc.components)}. Charge a fee per contract or none, or start the run later.",
+            (FailureItem(opened, "no_published_fee_rates", f"no published rate for {', '.join(exc.components)}"),),
+        )
     if isinstance(
         exc, LakeAdmissionError | OptionBarsFileError | OptionListingFileError | UnderlyingDayUnreadable | MalformedBars
     ):
         return RunFailure(
             DATA_UNREADABLE,
-            f"A stored file the run needs cannot be read ({type(exc).__name__}: {exc}). Nothing was saved.",
+            f"A stored file the run needs cannot be read ({type(exc).__name__}). Nothing was saved.",
         )
     if isinstance(exc, CatalogUnavailableError):
         return RunFailure(
@@ -272,6 +297,17 @@ def failure_of(exc: Exception) -> RunFailure:
     )
 
 
+def _what_is_missing(exc: SessionDataMissing) -> str:
+    parts = []
+    if exc.underlying:
+        parts.append("the underlying's minute bars")
+    if exc.listing:
+        parts.append("the contract listing")
+    if exc.contracts:
+        parts.append(f"the bars of {', '.join(contract.occ_symbol for contract in exc.contracts)}")
+    return " and ".join(parts) + (" are" if len(parts) > 1 or (exc.contracts and len(exc.contracts) > 1) else " is")
+
+
 def _cannot_be_tested(check: DataCheck) -> RunFailure:
     refused = [session for session in check.sessions if session.verdict is SessionVerdict.CANNOT_BE_TESTED]
     items = tuple(
@@ -279,10 +315,9 @@ def _cannot_be_tested(check: DataCheck) -> RunFailure:
         for session in refused
         for problem in session.problems
     )
-    first = refused[0]
     return RunFailure(
         SESSIONS_CANNOT_BE_TESTED,
         f"{len(refused)} of {len(check.sessions)} sessions cannot be tested, so nothing was fetched or run. "
-        f"The first is {first.trading_date.isoformat()}: {first.problems[0].message}",
+        f"Each is listed with its reason; the first reads: {refused[0].problems[0].message}",
         items,
     )

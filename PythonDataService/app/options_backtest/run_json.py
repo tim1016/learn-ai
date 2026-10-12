@@ -8,15 +8,18 @@ Canonical implementation: this file.
 Validated against: tests/options_backtest/test_run_json.py, and the exact round trip of a whole run through the database in
   tests/options_backtest/test_saved_runs.py.
 
-No float and no ISO string is anywhere in it. A date the result types carry beside a session's open is not stored: it
-is the New York date of the open, and it is made again on the way back (``et_date_at_ms``). Reading raises ``KeyError``
-or ``ValueError`` for JSON that is not what this module writes.
+No float and no date is anywhere in it: a session is identified by its open in ``int64 ms UTC`` and by nothing else.
+Reading raises ``KeyError`` or ``ValueError`` for JSON that is not what this module writes.
+
+Until the run core's records lose the dates they still carry beside a session's open (``trading_date``, ``peak_date``,
+``trough_date``), ``record_of`` is the one place that makes them again, from the open, when a record is built; once they
+are gone it adds nothing and is only ``cls(**fields)``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from datetime import date
+from dataclasses import fields as dataclass_fields
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any
@@ -44,8 +47,22 @@ def _optional_text(value: Decimal | None) -> str | None:
     return None if value is None else str(value)
 
 
-def _date_of(session_open_ms: int | None) -> date | None:
-    return None if session_open_ms is None else et_date_at_ms(session_open_ms)
+# The dates a run-core record may still carry, and the open each is the New York date of.
+_DATE_FIELD_OF = {
+    "trading_date": "session_open_ms",
+    "peak_date": "peak_session_open_ms",
+    "trough_date": "trough_session_open_ms",
+}
+
+
+def record_of[R](cls: type[R], **given: Any) -> R:
+    """``cls(**given)``, with any date field the record still has made from the session open it goes with."""
+    wanted = {field.name for field in dataclass_fields(cls)}  # type: ignore[arg-type]
+    for date_field, open_field in _DATE_FIELD_OF.items():
+        if date_field in wanted:
+            opened = given[open_field]
+            given[date_field] = None if opened is None else et_date_at_ms(opened)
+    return cls(**given)
 
 
 # ── Rates ────────────────────────────────────────────────────────────────
@@ -94,18 +111,14 @@ def _drawdown_from_json(data: Json | None) -> Drawdown | None:
         return None
     ratio = _ratio_from_json(data["fall_ratio"])
     assert ratio is not None  # a drawdown always has its ratio
-    peak_ms, trough_ms = data["peak_session_open_ms"], data["trough_session_open_ms"]
-    trough_date = _date_of(trough_ms)
-    assert trough_date is not None  # a drawdown always has its trough
-    return Drawdown(
+    return record_of(
+        Drawdown,
         peak_equity_usd=Decimal(data["peak_equity_usd"]),
         trough_equity_usd=Decimal(data["trough_equity_usd"]),
         fall_usd=Decimal(data["fall_usd"]),
         fall_ratio=ratio,
-        peak_date=_date_of(peak_ms),
-        peak_session_open_ms=peak_ms,
-        trough_date=trough_date,
-        trough_session_open_ms=trough_ms,
+        peak_session_open_ms=data["peak_session_open_ms"],
+        trough_session_open_ms=data["trough_session_open_ms"],
         measured_at=data["measured_at"],
     )
 
@@ -125,12 +138,9 @@ def _day_to_json(day: DayRow) -> Json:
 
 
 def _day_from_json(data: Json) -> DayRow:
-    opened = data["session_open_ms"]
-    trading_date = _date_of(opened)
-    assert trading_date is not None
-    return DayRow(
-        trading_date=trading_date,
-        session_open_ms=opened,
+    return record_of(
+        DayRow,
+        session_open_ms=data["session_open_ms"],
         status=SessionStatus(data["status"]),
         skip_reason=None if data["skip_reason"] is None else SkipReason(data["skip_reason"]),
         trades=data["trades"],

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -88,6 +89,21 @@ FINISHED_AT_MS = NOW_MS + 5
 
 for _day in (TUE, WED, THU, FRI):
     session_window_for_date(_day)  # raises for a day that is not a session
+
+
+NO_DATE_IN_WORDS = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _says_no_date(failure: RunFailure) -> None:
+    """A failure's words name no date: its sessions are in its items, by their opens."""
+    assert not NO_DATE_IN_WORDS.search(failure.reason), failure.reason
+    for item in failure.items:
+        assert not NO_DATE_IN_WORDS.search(item.message), item.message
+
+
+def _open(day: date) -> int:
+    """A session is identified by its open in ms; this is the open of the session on ``day``."""
+    return session_window_for_date(day).open_ms_utc
 
 
 def the_setup() -> OptionsBacktestSetup:
@@ -208,11 +224,11 @@ async def test_a_request_becomes_a_saved_run_with_every_figure_the_hand_worked_s
     assert returned is saved and run_id == 7 and finished_at_ms == FINISHED_AT_MS
     assert store.failed == [] and store.cancelled == []
     summary = saved.summary
-    assert [(s.trading_date, s.status) for s in saved.sessions] == [
-        (TUE, SessionStatus.INCOMPLETE),
-        (WED, SessionStatus.TRADED),
-        (THU, SessionStatus.TRADED),
-        (FRI, SessionStatus.NO_TRADE),
+    assert [(s.session_open_ms, s.status) for s in saved.sessions] == [
+        (_open(TUE), SessionStatus.INCOMPLETE),
+        (_open(WED), SessionStatus.TRADED),
+        (_open(THU), SessionStatus.TRADED),
+        (_open(FRI), SessionStatus.NO_TRADE),
     ]
     assert [s.pnl_usd for s in saved.sessions] == [D("-52.65"), D("36.70"), D("-53.30"), D("0")]
     assert [s.cash_after_usd for s in saved.sessions] == [D("9947.35"), D("9984.05"), D("9930.75"), D("9930.75")]
@@ -234,7 +250,7 @@ async def test_a_request_becomes_a_saved_run_with_every_figure_the_hand_worked_s
         D("9930.75"),
         D("69.25"),
     )
-    assert drawdown.peak_date is None and drawdown.trough_date == THU
+    assert drawdown.peak_session_open_ms is None and drawdown.trough_session_open_ms == _open(THU)
 
 
 @respx.mock
@@ -309,7 +325,8 @@ async def test_a_session_that_cannot_be_tested_fails_the_run_at_once_naming_it_a
 
     [(_, failure, _)] = store.failed
     assert failure.code == "SESSIONS_CANNOT_BE_TESTED" and caught.value.failure == failure
-    assert "1 of 5 sessions" in failure.reason and "2024-10-11" in failure.reason
+    assert "1 of 5 sessions" in failure.reason
+    _says_no_date(failure)
     assert [(item.session_open_ms, item.code) for item in failure.items] == [
         (session_window_for_date(older_than_the_plan).open_ms_utc, "older_than_the_data_plan")
     ]
@@ -357,11 +374,8 @@ async def test_a_vendor_failure_in_the_middle_of_the_download_fails_the_run_nami
 
     [(_, failure, _)] = store.failed
     assert failure.code == "DOWNLOAD_FAILED"
-    assert (
-        "nothing was replayed" in failure.reason
-        and "2026-10-08" in failure.reason
-        and "provider_rate_limited" in failure.reason
-    )
+    assert "nothing was replayed" in failure.reason and "provider_rate_limited" in failure.reason
+    _says_no_date(failure)
     assert [(item.session_open_ms, item.code) for item in failure.items] == [
         (session_window_for_date(THU).open_ms_utc, "provider_rate_limited")
     ]
@@ -536,16 +550,21 @@ def test_a_session_whose_data_is_missing_fails_with_the_session_named() -> None:
     failure = failure_of(SessionDataMissing(WED, underlying=False, listing=True, contracts=()))
 
     assert failure.code == "DATA_MISSING"
-    assert "2026-10-07" in failure.reason and "contract listing" in failure.reason
+    assert "contract listing" in failure.reason and "underlying" not in failure.reason
+    _says_no_date(failure)
     assert failure.items[0].session_open_ms == session_window_for_date(WED).open_ms_utc
 
 
-def test_an_unpublished_fee_rate_fails_with_its_date_and_types() -> None:
+def test_an_unpublished_fee_rate_fails_with_its_session_and_types() -> None:
     failure = failure_of(FeeRateNotPublished(date(2026, 6, 1), ("cat", "orf")))
 
     assert failure.code == "FEE_RATE_NOT_PUBLISHED"
-    assert "2026-06-01" in failure.reason and "cat, orf" in failure.reason
-    assert failure.items[0].code == "no_published_fee_rates"
+    assert "cat, orf" in failure.reason
+    _says_no_date(failure)
+    assert (failure.items[0].session_open_ms, failure.items[0].code) == (
+        session_window_for_date(date(2026, 6, 1)).open_ms_utc,
+        "no_published_fee_rates",
+    )
 
 
 @pytest.mark.parametrize(
@@ -581,6 +600,7 @@ def test_a_download_failure_with_no_session_is_a_failure_of_the_run_as_a_whole()
     failure = failure_of(DownloadFailed(session=None, what="the minute bars of SPY", reason="x", detail="y"))
 
     assert failure.code == "DOWNLOAD_FAILED" and failure.items[0].session_open_ms is None
+    _says_no_date(failure)
 
 
 # ── The range ────────────────────────────────────────────────────────────
@@ -734,3 +754,31 @@ async def test_a_run_cancelled_before_it_starts_is_saved_cancelled(
 
     stored = await get_run(conn, run_id, is_live=lambda _job_id: False)
     assert stored is not None and stored.record.status == "cancelled" and stored.figures is None
+
+
+def test_a_download_failure_in_a_session_names_that_session_by_its_open_and_no_date_in_words() -> None:
+    failure = failure_of(
+        DownloadFailed(session=WED, what="the bars of SPY261007C00500000", reason="provider_api_error", detail="x")
+    )
+
+    assert [(item.session_open_ms, item.code) for item in failure.items] == [(_open(WED), "provider_api_error")]
+    _says_no_date(failure)
+
+
+@pytest.mark.parametrize(
+    ("reason", "detail", "said"),
+    [
+        ("session_not_over", "some words with 2026-10-09 in them and a number of minutes", "not final yet"),
+        ("not_a_session", "2026-10-10 is not a session", "exchange was closed"),
+        ("outside_data_plan", "2026-10-09 is before 2024-10-14, the oldest session", "plan does not reach"),
+        ("listing_not_captured", "no listing is stored for 2026-10-09; capture it first", "that day"),
+    ],
+)
+def test_what_the_lake_says_of_a_session_it_will_not_take_is_said_without_its_dates_or_its_rule(
+    reason: str, detail: str, said: str
+) -> None:
+    failure = failure_of(DownloadFailed(session=WED, what="the bars of a contract", reason=reason, detail=detail))
+
+    _says_no_date(failure)
+    assert said in failure.items[0].message and said in failure.reason
+    assert "minutes" not in failure.reason and "minutes" not in failure.items[0].message

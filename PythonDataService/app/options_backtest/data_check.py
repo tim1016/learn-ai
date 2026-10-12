@@ -122,9 +122,8 @@ NOT_YET_KNOWN = ContractNeeds(needed=None, missing=None)
 
 @dataclass(frozen=True)
 class SessionCheck:
-    """One session of a range, checked."""
+    """One session of a range, checked. A session is identified by its open in ms."""
 
-    trading_date: date
     session_open_ms: int
     session_close_ms: int
     verdict: SessionVerdict
@@ -139,6 +138,11 @@ class SessionCheck:
     notes: tuple[str, ...]
 
     @property
+    def trading_date(self) -> date:
+        """The New York date of the session's open. Derived, never stored or sent."""
+        return et_date_at_ms(self.session_open_ms)
+
+    @property
     def testable(self) -> bool:
         return self.verdict is not SessionVerdict.CANNOT_BE_TESTED
 
@@ -149,11 +153,17 @@ class TestableStretch:
 
     __test__ = False  # not a pytest class
 
-    first: date
-    last: date
     first_session_open_ms: int
     last_session_open_ms: int
     sessions: int
+
+    @property
+    def first(self) -> date:
+        return et_date_at_ms(self.first_session_open_ms)
+
+    @property
+    def last(self) -> date:
+        return et_date_at_ms(self.last_session_open_ms)
 
 
 @dataclass(frozen=True)
@@ -189,8 +199,6 @@ class DataCheck:
             return None
         first, last = self.sessions[best[0]], self.sessions[best[0] + best[1] - 1]
         return TestableStretch(
-            first=first.trading_date,
-            last=last.trading_date,
             first_session_open_ms=first.session_open_ms,
             last_session_open_ms=last.session_open_ms,
             sessions=best[1],
@@ -200,7 +208,7 @@ class DataCheck:
 # A stored file that is there and is not usable. The lake's capture reads the same files and fetches them again.
 _UNUSABLE_FILE = (LakeAdmissionError, OptionListingFileError, OptionBarsFileError, UnderlyingDayUnreadable)
 
-_NOT_FINAL = "The session's data is not final yet; it can be fetched from the next New York day."
+SESSION_DATA_NOT_FINAL_WORDS = "The session's data is not final yet; it can be fetched from the next New York day."
 _OLDER_THAN_THE_PLAN = "This session is older than the data plan reaches, so option prices for it cannot be fetched."
 
 
@@ -237,7 +245,7 @@ def _check_session(setup: OptionsBacktestSetup, day: date, *, now_ms: int, data:
             "problems": tuple(problems),
             "notes": (),
         }
-        return SessionCheck(day, window.open_ms_utc, window.close_ms_utc, verdict, **{**defaults, **fields})  # type: ignore[arg-type]
+        return SessionCheck(window.open_ms_utc, window.close_ms_utc, verdict, **{**defaults, **fields})  # type: ignore[arg-type]
 
     if not setup.window_fits(session_open_ms=window.open_ms_utc, session_close_ms=window.close_ms_utc):
         # A skipped session reads nothing, so what the lake would say of its data does not matter.
@@ -254,7 +262,7 @@ def _check_session(setup: OptionsBacktestSetup, day: date, *, now_ms: int, data:
 def _lake_refusals(underlying: str, day: date, *, now_ms: int) -> list[Problem]:
     refusals: list[Problem] = []
     if session_refusal(underlying, day, now_ms=now_ms) is not None:
-        refusals.append(Problem(ProblemCode.SESSION_DATA_NOT_FINAL, _NOT_FINAL))
+        refusals.append(Problem(ProblemCode.SESSION_DATA_NOT_FINAL, SESSION_DATA_NOT_FINAL_WORDS))
     if plan_window_refusal(underlying, day, now_ms=now_ms) is not None:
         refusals.append(Problem(ProblemCode.OLDER_THAN_THE_DATA_PLAN, _OLDER_THAN_THE_PLAN))
     return refusals

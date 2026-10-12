@@ -9,6 +9,8 @@ legs marked and not sold, a skipped half day and a session the underlying did no
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import AsyncIterator, Callable
 from dataclasses import fields, is_dataclass, replace
 from datetime import date
@@ -184,6 +186,38 @@ async def test_the_run_opens_with_its_setup_headline_and_summary(
         result.summary.net_profit_usd,
         result.summary.ending_cash_usd,
     )
+
+
+async def test_no_date_is_stored_a_session_is_its_open_in_ms(
+    conn: asyncpg.Connection, tag: str, result: RunResult
+) -> None:
+    run_id = await _complete(conn, result, tag)
+
+    run_row = await conn.fetchrow(
+        "SELECT summary_json::text || slippage_json::text || tolerance_json::text AS text "
+        "FROM research_options_backtest_runs WHERE id = $1",
+        run_id,
+    )
+    session_rows = await conn.fetch(
+        "SELECT events_json::text AS events, option_days_json::text AS days "
+        "FROM research_options_backtest_run_sessions WHERE run_id = $1",
+        run_id,
+    )
+    columns = await conn.fetch(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = 'research_options_backtest_run_sessions'"
+    )
+
+    assert not re.search(r"\d{4}-\d{2}-\d{2}", run_row["text"]), "a date is stored in the run's JSON"
+    # An event's ``detail`` is the run core's own sentence, kept as written so the run reads back equal; the picker's
+    # can name a contract's expiry date in words. Everything else an event holds is a number, a code or a symbol.
+    for row in session_rows:
+        events = [
+            {key: value for key, value in event.items() if key != "detail"} for event in json.loads(row["events"])
+        ]
+        assert not re.search(r"\d{4}-\d{2}-\d{2}", json.dumps(events) + row["days"]), (
+            "a date is stored in a session's JSON"
+        )
+    assert "trading_date" not in {row["column_name"] for row in columns}
 
 
 async def test_no_such_run_is_none(conn: asyncpg.Connection) -> None:

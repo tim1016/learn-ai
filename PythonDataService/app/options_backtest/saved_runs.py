@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal
@@ -39,7 +38,6 @@ from app.options_backtest.statistics import RunSummary
 from app.research.persistence import lifecycle
 from app.research.persistence.db import with_connection, writer_loop_call
 from app.utils.background_loop import run_on_background_loop
-from app.utils.session_anchors import et_date_at_ms
 
 StoredStatus = Literal["running", "complete", "failed", "cancelled"]
 PresentedStatus = Literal["running", "complete", "failed", "cancelled", "interrupted"]
@@ -473,11 +471,9 @@ def _record(row: asyncpg.Record, is_live: IsLive) -> RunRecord:
 
 
 def _session(row: asyncpg.Record, trades: tuple[LegTrade, ...]) -> SessionResult:
-    opened = row["session_open_ms"]
-    trading_date: date = et_date_at_ms(opened)
-    return SessionResult(
-        trading_date=trading_date,
-        session_open_ms=opened,
+    return run_json.record_of(
+        SessionResult,
+        session_open_ms=row["session_open_ms"],
         session_close_ms=row["session_close_ms"],
         cash_before_usd=row["cash_before_usd"],
         outcome=SessionOutcome(

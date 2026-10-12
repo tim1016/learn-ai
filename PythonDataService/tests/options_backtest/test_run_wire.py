@@ -13,6 +13,7 @@ over dictionaries instead of a lake. Hand-worked figures:
 from __future__ import annotations
 
 import json
+import re
 from datetime import date
 from decimal import Decimal
 from typing import get_args
@@ -278,3 +279,10 @@ def test_a_rate_whose_quotient_ends_is_still_given_to_six_places_in_both_kinds_o
     assert (
         wire.OptionsBacktestDollarRateResponse.from_ratio(Ratio(D("1.00"), D("2.00"))).rounded_to_6_places == "0.500000"
     )
+
+
+def test_a_run_is_sent_with_no_date_in_it_its_sessions_are_their_opens(result: RunResult) -> None:
+    sent = wire.OptionsBacktestRunDetailResponse.from_stored(_stored(result)).model_dump_json()
+
+    assert not re.search(r"\d{4}-\d{2}-\d{2}", sent)
+    assert "trading_date" not in sent and "peak_date" not in sent and "trough_date" not in sent

@@ -86,6 +86,11 @@ class CheckData(FakeRunData):
         return self._failures.get((thing.kind, trading_date, symbol))
 
 
+def _open(day: date) -> int:
+    """A session is identified by its open in ms."""
+    return session_window_for_date(day).open_ms_utc
+
+
 def _stored(**changes: Any) -> Day:
     return Day(underlying=steady("500.20"), options=dict(NEEDED), **changes)
 
@@ -118,7 +123,6 @@ def test_the_session_keeps_the_calendars_open_and_close() -> None:
 
     window = session_window_for_date(WED)
     assert (session.session_open_ms, session.session_close_ms) == (window.open_ms_utc, window.close_ms_utc)
-    assert session.trading_date == WED
 
 
 def test_missing_underlying_bars_are_named_and_the_contracts_are_not_yet_known() -> None:
@@ -363,7 +367,16 @@ def test_stored_underlying_bars_that_break_the_rules_of_a_bar_cannot_be_tested()
 
 def _session(day: date, verdict: SessionVerdict) -> SessionCheck:
     window = session_window_for_date(day)
-    return SessionCheck(day, window.open_ms_utc, window.close_ms_utc, verdict, None, (), ContractNeeds(0, 0), (), ())
+    return SessionCheck(
+        session_open_ms=window.open_ms_utc,
+        session_close_ms=window.close_ms_utc,
+        verdict=verdict,
+        skip=None,
+        missing=(),
+        contracts=ContractNeeds(0, 0),
+        problems=(),
+        notes=(),
+    )
 
 
 def _range(*verdicts: SessionVerdict) -> DataCheck:
@@ -380,8 +393,9 @@ R, N, C = SessionVerdict.READY, SessionVerdict.NEEDS_DOWNLOAD, SessionVerdict.CA
 def test_the_first_and_last_session_that_can_be_tested_skip_those_that_cannot() -> None:
     checked = _range(C, R, N, C, R, C, C)
 
-    assert checked.first_testable is not None and checked.first_testable.trading_date == date(2026, 10, 6)
-    assert checked.last_testable is not None and checked.last_testable.trading_date == FRI
+    assert checked.first_testable is not None
+    assert checked.first_testable.session_open_ms == _open(date(2026, 10, 6))
+    assert checked.last_testable is not None and checked.last_testable.session_open_ms == _open(FRI)
 
 
 def test_the_longest_unbroken_run_of_testable_sessions_is_offered_as_a_range() -> None:
@@ -391,9 +405,11 @@ def test_the_longest_unbroken_run_of_testable_sessions_is_offered_as_a_range() -
     stretch = checked.longest_testable_stretch
 
     assert stretch is not None
-    assert (stretch.first, stretch.last, stretch.sessions) == (date(2026, 10, 6), THU, 3)
-    assert stretch.first_session_open_ms == session_window_for_date(date(2026, 10, 6)).open_ms_utc
-    assert stretch.last_session_open_ms == session_window_for_date(THU).open_ms_utc
+    assert (stretch.first_session_open_ms, stretch.last_session_open_ms, stretch.sessions) == (
+        _open(date(2026, 10, 6)),
+        _open(THU),
+        3,
+    )
 
 
 def test_of_two_runs_as_long_the_earlier_is_offered() -> None:
@@ -401,7 +417,7 @@ def test_of_two_runs_as_long_the_earlier_is_offered() -> None:
 
     stretch = checked.longest_testable_stretch
 
-    assert stretch is not None and (stretch.first, stretch.sessions) == (date(2026, 10, 5), 2)
+    assert stretch is not None and (stretch.first_session_open_ms, stretch.sessions) == (_open(date(2026, 10, 5)), 2)
 
 
 def test_a_run_that_ends_the_range_is_counted() -> None:
@@ -409,7 +425,12 @@ def test_a_run_that_ends_the_range_is_counted() -> None:
 
     stretch = checked.longest_testable_stretch
 
-    assert stretch is not None and (stretch.first, stretch.last, stretch.sessions) == (THU, date(2026, 10, 13), 4)
+    assert stretch is not None
+    assert (stretch.first_session_open_ms, stretch.last_session_open_ms, stretch.sessions) == (
+        _open(THU),
+        _open(date(2026, 10, 13)),
+        4,
+    )
 
 
 def test_a_range_with_nothing_testable_offers_no_range() -> None:
@@ -442,4 +463,4 @@ def test_a_session_that_cannot_be_tested_breaks_a_run_of_sessions_even_when_it_i
 
     assert [session.verdict for session in checked.sessions] == [R, C, R]
     stretch = checked.longest_testable_stretch
-    assert stretch is not None and (stretch.first, stretch.sessions) == (WED, 1)
+    assert stretch is not None and (stretch.first_session_open_ms, stretch.sessions) == (_open(WED), 1)

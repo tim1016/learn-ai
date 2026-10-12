@@ -134,7 +134,9 @@ def ensure_run_data(
         if should_stop():
             raise DownloadStopped(done)
         if day in needing_data:
-            _bring_in_the_session(setup, day, reader, now_ms=now_ms, counts=counts, on_log=on_log)
+            _bring_in_the_session(
+                setup, day, reader, now_ms=now_ms, counts=counts, on_log=on_log, position=(done + 1, len(sessions))
+            )
             counts.sessions += 1
         on_progress(done + 1, len(sessions))
     return counts.report()
@@ -154,7 +156,7 @@ def _bring_in_the_underlying(
         if should_stop():
             raise DownloadStopped(0)
         on_log(
-            f"Fetching {underlying} minute bars for {len(chunk)} sessions, {chunk[0].isoformat()} to {chunk[-1].isoformat()}."
+            f"Fetching {underlying} minute bars for {len(chunk)} sessions."
         )
         try:
             materialize_engine_run(
@@ -177,6 +179,7 @@ def _bring_in_the_session(
     now_ms: int,
     counts: _Counts,
     on_log: Callable[[str], None],
+    position: tuple[int, int],
 ) -> None:
     underlying = setup.underlying
     listed = run_on_background_loop(
@@ -216,7 +219,7 @@ def _bring_in_the_session(
     contracts = sorted(needs.contracts, key=lambda each: each.occ_symbol)
     if not contracts:
         return
-    on_log(f"{day.isoformat()}: bringing in {len(contracts)} contract days.")
+    on_log(f"Session {position[0]} of {position[1]}: bringing in {len(contracts)} contract days.")
     results = run_on_background_loop(
         _ensure_contracts(contracts, day, underlying, stored, now_ms), timeout=_CONTRACTS_TIMEOUT_SECONDS
     )

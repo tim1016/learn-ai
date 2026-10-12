@@ -9,6 +9,7 @@ neighbours. Hand-worked figures are in ``tests/options_backtest/test_service.py`
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
@@ -54,6 +55,7 @@ from tests.options_backtest.setup_fixtures import leg, setup_body
 from tests.options_backtest.setup_fixtures import unique as unique
 from tests.options_backtest.test_service import FRI, NOW_MS, SESSION_OF_THE_RANGE, THU, TUE, WED, the_scene, the_setup
 
+DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 PREFIX = "/api/research/options-backtest"
 JOBS = "/api/jobs-internal/options-backtest"
 D = Decimal
@@ -304,6 +306,10 @@ async def test_the_worker_runs_the_service_and_reports_the_phases_and_progress_t
 
     result = await asyncio.to_thread(harness.the_work(), emitter, FakeCancel())
 
+    # The job's log lines say what is being fetched and how much, and name no date.
+    logs = [value for kind, value in emitter.events if kind == "log"]
+    assert logs and not any(DATE.search(line) for line in logs), logs
+
     # A phase the job reports is one the vocabulary lists, in the order it lists them.
     listed = [phase.id for phase in JOB_PHASES["options_backtest"]]
     assert emitter.phases == ["checking_data", "downloading_data", "replaying", "saving"]
@@ -352,7 +358,7 @@ async def test_a_failed_run_fails_the_job_with_the_plain_reason(
     with pytest.raises(RunFailedError) as caught:
         await asyncio.to_thread(harness.the_work(), FakeEmitter(), FakeCancel())
 
-    assert "cannot be tested" in str(caught.value) and "2024-10-11" in str(caught.value)
+    assert "cannot be tested" in str(caught.value)
     [(_, failure, _)] = harness.store.failed
     assert failure.code == "SESSIONS_CANNOT_BE_TESTED"
 
@@ -386,6 +392,7 @@ async def test_check_data_says_for_each_session_what_is_stored_what_is_missing_a
         response = await c.post(f"{PREFIX}/check-data", json=check_body(TUE, FRI))
 
     assert response.status_code == 200, response.text
+    assert not DATE.search(response.text), "the answer names sessions by their opens, not by dates"
     body = response.json()
     assert body["option_prices_from_ms"] == et_midnight_ms(date(2024, 10, 14))
     assert [(s["session_open_ms"], s["verdict"], s["missing"]) for s in body["sessions"]] == [
@@ -422,6 +429,7 @@ async def test_check_data_gives_each_reason_a_session_cannot_be_tested_and_the_r
         response = await c.post(f"{PREFIX}/check-data", json=check_body(first, last))
 
     assert response.status_code == 200, response.text
+    assert not DATE.search(response.text)
     body = response.json()
     assert [s["verdict"] for s in body["sessions"]] == ["cannot_be_tested", "cannot_be_tested", "needs_download"]
     for refused in body["sessions"][:2]:
