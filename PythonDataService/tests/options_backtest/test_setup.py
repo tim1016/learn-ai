@@ -218,3 +218,33 @@ def test_an_entry_from_the_open_and_an_exit_from_the_close_are_left_to_each_sess
     )
 
     assert (full_day, half_day) == (True, False)
+
+
+@pytest.mark.parametrize(
+    ("entry", "exit_", "close_ms", "fits", "reason"),
+    [
+        (("open", 5), ("close", 46), _CLOSE_MS, True, "the shipped window on a full day"),
+        (("open", 5), ("close", 46), _HALF_DAY_CLOSE_MS, True, "the shipped window on a half day"),
+        (("open", 1), ("close", 1), _CLOSE_MS, True, "the widest window a session holds"),
+        (("open", 300), ("close", 46), _HALF_DAY_CLOSE_MS, False, "an entry after the exit on a half day"),
+        (("open", 164), ("close", 46), _HALF_DAY_CLOSE_MS, False, "an entry at the exit on a half day"),
+        (("open", 163), ("close", 46), _HALF_DAY_CLOSE_MS, True, "an entry a minute before the exit on a half day"),
+        (("close", 390), ("close", 46), _CLOSE_MS, False, "an entry at the open, counted from the close"),
+        (("close", 389), ("close", 46), _CLOSE_MS, True, "an entry a minute after the open, counted from the close"),
+        (("open", 5), ("open", 390), _CLOSE_MS, False, "an exit at the close, counted from the open"),
+        (("open", 5), ("open", 389), _CLOSE_MS, True, "an exit a minute before the close, counted from the open"),
+        (("open", 5), ("open", 400), _CLOSE_MS, False, "an exit after the close"),
+        (("close", 400), ("close", 46), _CLOSE_MS, False, "an entry before the open"),
+    ],
+)
+def test_a_session_fits_a_window_that_leaves_a_minute_to_read_and_a_minute_to_fill(
+    entry: tuple[str, int], exit_: tuple[str, int], close_ms: int, fits: bool, reason: str
+) -> None:
+    setup = OptionsBacktestSetup.model_validate(
+        _setup(
+            entry={"anchor": entry[0], "offset_ms": entry[1] * MS_PER_MINUTE},
+            exit={"anchor": exit_[0], "offset_ms": exit_[1] * MS_PER_MINUTE},
+        )
+    )
+
+    assert setup.window_fits(session_open_ms=_OPEN_MS, session_close_ms=close_ms) is fits
