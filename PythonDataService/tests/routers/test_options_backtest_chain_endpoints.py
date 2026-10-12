@@ -34,11 +34,12 @@ from httpx import ASGITransport
 
 from app.broker.fleet.errors import DataPlaneControlSecretRefused, FleetControlPlaneNotInstalled
 from app.config import settings
-from app.data_lake import catalog_client
+from app.data_lake import catalog_client, option_lake
 from app.data_lake.option_listing import OptionListingFileError
 from app.main import app
 from app.options.contract import OptionContract
 from app.options_backtest import chain_download
+from app.options_backtest.data_check import lake_reason_words
 from app.security.data_plane_control import CONTROL_SECRET_ENV_VAR, CONTROL_SECRET_HEADER
 from tests._helpers.fake_lake_catalog import FakeCatalog
 from tests._helpers.option_lake_cases import DISK_FULL_AT_THE_RENAME, install_write_fault
@@ -187,7 +188,52 @@ async def test_a_date_with_no_stored_listing_says_not_stored_and_lists_nothing(
         "expiries": [],
         "rows_left_out_unusable": 0,
         "rows_left_out_expired": 0,
+        "fetch_refusal": None,
     }
+
+
+# The lake takes a session's option data from the New York midnight after its date. Friday 2025-06-13 is taken from
+# Saturday's midnight, 2025-06-14 00:00 EDT = 04:00 UTC = 1749873600000 ms (SATURDAY_MIDNIGHT_MS).
+
+
+@pytest.mark.parametrize(
+    ("now_ms", "refused"),
+    [
+        pytest.param(SATURDAY_MIDNIGHT_MS - 1, True, id="one millisecond before the lake takes the session"),
+        pytest.param(SATURDAY_MIDNIGHT_MS, False, id="at the millisecond it takes it"),
+    ],
+)
+async def test_the_day_carries_the_refusal_until_the_millisecond_the_lake_takes_the_session_and_not_after(
+    client: httpx.AsyncClient,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    now_ms: int,
+    refused: bool,
+) -> None:
+    # The route asks the lake's own clock, the one a download takes when it is given none.
+    monkeypatch.setattr(option_lake, "current_ms", lambda: now_ms)
+
+    async with client as c:
+        response = await c.get(f"{PREFIX}/day", params={"underlying": "SPY", "trading_date_ms": FRIDAY_MIDNIGHT_MS})
+
+    assert response.status_code == 200, response.text
+    expected = {"reason": "session_not_over", "words": lake_reason_words("session_not_over")}
+    assert response.json()["fetch_refusal"] == (expected if refused else None)
+
+
+async def test_the_day_of_a_session_long_over_has_no_refusal_and_todays_has_one(
+    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # The tests' clock is 2026-10-12 14:00 New York: 2025-06-13 is over, and 2026-10-12 is a session not yet over.
+    async with client as c:
+        long_over = await c.get(f"{PREFIX}/day", params={"underlying": "SPY", "trading_date_ms": FRIDAY_MIDNIGHT_MS})
+        today = await c.get(f"{PREFIX}/day", params={"underlying": "SPY", "trading_date_ms": TODAY_MIDNIGHT_MS})
+
+    assert long_over.json()["fetch_refusal"] is None
+    assert today.json()["fetch_refusal"]["reason"] == "session_not_over"
+    # Everything else of the answer is what it was for a day with nothing stored.
+    assert today.json()["listing_state"] == "not_stored" and today.json()["expiries"] == []
 
 
 @respx.mock
@@ -1258,6 +1304,7 @@ PAST_CHAIN_MODELS = {
     "PastChainExpiryResponse",
     "PastChainExpirySummary",
     "PastChainExpiryTag",
+    "PastChainFetchRefusal",
     "PastChainSide",
     "PastChainUnderlyingPrice",
 }

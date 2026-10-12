@@ -21,7 +21,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.data_lake.catalog_client import CatalogUnavailableError
-from app.options_backtest.chain_download import ensure_chain_data
+from app.options_backtest.chain_download import FetchRefusal, ensure_chain_data, fetch_refusal
 from app.options_backtest.lake_data import LakeRunData
 from app.options_backtest.past_chain import (
     DEFAULT_STRIKES_EACH_SIDE,
@@ -99,9 +99,10 @@ def _catalog_is_down(error: CatalogUnavailableError) -> HTTPException:
     )
 
 
-def _read_day(underlying: str, trading_date_ms: int) -> ChainDay:
+def _read_day(underlying: str, trading_date_ms: int) -> tuple[ChainDay, FetchRefusal | None]:
     session = chain_session(trading_date_ms)
-    return describe_day(LakeRunData(underlying), underlying=underlying, session=session)
+    day = describe_day(LakeRunData(underlying), underlying=underlying, session=session)
+    return day, fetch_refusal(underlying, session.trading_date)
 
 
 def _read_expiry(underlying: str, trading_date_ms: int, expiry_ms: int, at_ms: int | None, strikes: int) -> ChainExpiry:
@@ -119,14 +120,18 @@ def _read_expiry(underlying: str, trading_date_ms: int, expiry_ms: int, at_ms: i
 
 @router.get("/past-chain/day", response_model=PastChainDayResponse, responses=_REFUSALS)
 async def get_past_chain_day(underlying: Underlying, trading_date_ms: TradingDateMs) -> PastChainDayResponse:
-    """Every expiry the underlying's listing held on the date, tagged, with its calls and puts counted."""
+    """Every expiry the underlying's listing held on the date, tagged, with its calls and puts counted.
+
+    Also whether the lake would fetch anything for the session now (``fetch_refusal``), by the rule a download asks, on
+    the clock a download takes.
+    """
     try:
-        day = await asyncio.to_thread(_read_day, underlying, trading_date_ms)
+        day, refusal = await asyncio.to_thread(_read_day, underlying, trading_date_ms)
     except ChainRefusal as exc:
         raise _refused(exc) from exc
     except CatalogUnavailableError as exc:
         raise _catalog_is_down(exc) from exc
-    return PastChainDayResponse.from_day(day)
+    return PastChainDayResponse.from_day(day, refusal)
 
 
 @router.get("/past-chain/expiry", response_model=PastChainExpiryResponse, responses=_REFUSALS)

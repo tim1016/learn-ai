@@ -23,7 +23,7 @@ import httpx
 import pytest
 import respx
 
-from app.data_lake import catalog_client
+from app.data_lake import catalog_client, option_lake
 from app.data_lake import option_bars as option_bars_module
 from app.data_lake.admission import LakeAdmissionError
 from app.data_lake.option_lake import MAX_VENDOR_REQUESTS_IN_FLIGHT, vendor_request_gate
@@ -40,7 +40,9 @@ from app.options_backtest.chain_download import (
     Outcome,
     TooManyContracts,
     ensure_chain_data,
+    fetch_refusal,
 )
+from app.options_backtest.data_check import lake_reason_words
 from app.options_backtest.fetching import ensure_run_data
 from app.options_backtest.lake_data import LakeRunData
 from app.utils.background_loop import background_loop
@@ -757,6 +759,37 @@ async def test_a_cancel_scope_that_cancels_again_at_every_checkpoint_does_not_ma
 
     assert cancelled and work.done() and caller_has_gone.is_set()
     assert waits <= 3
+
+
+# ── Why the lake would fetch nothing for a session ───────────────────────
+# The lake takes a session's option data from the New York midnight after its date. Friday 2025-06-13 is taken from
+# Saturday's midnight, 2025-06-14 00:00 EDT = 04:00 UTC = 1 749 873 600 000 ms.
+TAKEN_FROM_MS = 1749873600000
+
+
+def test_a_session_is_refused_until_the_millisecond_the_lake_takes_it_and_not_after() -> None:
+    before = fetch_refusal("SPY", FRIDAY, now_ms=TAKEN_FROM_MS - 1)
+    at_it = fetch_refusal("SPY", FRIDAY, now_ms=TAKEN_FROM_MS)
+
+    assert before is not None and before.reason == "session_not_over"
+    assert before.words == lake_reason_words("session_not_over")
+    assert at_it is None
+
+
+def test_a_date_that_is_not_a_session_is_refused_as_that_whatever_the_clock_says() -> None:
+    # 2025-06-14 is a Saturday.
+    refusal = fetch_refusal("SPY", date(2025, 6, 14), now_ms=TAKEN_FROM_MS * 2)
+
+    assert refusal is not None and refusal.reason == "not_a_session"
+    assert refusal.words == lake_reason_words("not_a_session")
+
+
+def test_the_lakes_clock_is_the_one_asked_when_none_is_given(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The tests' clock is fixed at 2026-10-12 14:00 New York, so a session long over is taken and today's is not.
+    assert fetch_refusal("SPY", FRIDAY) is None
+    assert fetch_refusal("SPY", date(2026, 10, 12)) is not None
+    monkeypatch.setattr(option_lake, "current_ms", lambda: TAKEN_FROM_MS - 1)
+    assert fetch_refusal("SPY", FRIDAY) is not None
 
 
 # ── Requests refused before anything is asked ─────────────────────────────

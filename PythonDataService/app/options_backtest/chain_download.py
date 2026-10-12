@@ -66,6 +66,7 @@ from app.data_lake.run_materialization import LakeMaterializationError, material
 from app.data_lake.types import is_lake_addressable_symbol
 from app.options.contract import OptionContract
 from app.options.expiry import option_expiry_anchor_ms
+from app.options_backtest.data_check import lake_reason_words
 from app.options_backtest.lake_data import LakeRunData, UnderlyingDayUnreadable
 from app.options_backtest.past_chain import MAX_WINDOW_CONTRACTS, ChainRefusal, unreadable_problem
 from app.utils.background_loop import CallerStoppedWaitingError, background_loop
@@ -107,6 +108,30 @@ class DownloadItem:
     # The lake's typed reason (or one of the two for the underlying), and its words; both None unless it failed.
     reason: DownloadReason | None
     detail: str | None
+
+
+@dataclass(frozen=True)
+class FetchRefusal:
+    """Why the lake will not fetch a session's data now: its reason code and the table's plain words for it."""
+
+    reason: str
+    words: str
+
+
+def fetch_refusal(underlying: str, trading_date: date, *, now_ms: int | None = None) -> FetchRefusal | None:
+    """Why a download would fetch nothing for ``trading_date`` now, by the lake's own rule; ``None`` when it would.
+
+    The rule is ``option_lake.session_refusal``, the one the listing's capture, each contract's and the underlying's
+    fetch ask before they claim anything: a date that is not a session, and a session whose New York date has not
+    passed. It is asked on the clock a download takes, the lake's own when ``now_ms`` is ``None``, and is not restated
+    here.
+    """
+    refusal = option_lake.session_refusal(
+        underlying, trading_date, now_ms=option_lake.current_ms() if now_ms is None else now_ms
+    )
+    if refusal is None:
+        return None
+    return FetchRefusal(refusal.reason, lake_reason_words(refusal.reason))
 
 
 def _item_of(kind: ItemKind, subject: str, result: OptionCaptureResult) -> DownloadItem:
