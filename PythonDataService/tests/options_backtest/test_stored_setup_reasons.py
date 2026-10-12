@@ -20,6 +20,15 @@ name, then ``: Extra inputs are not permitted``, whose colon is character 7 + N 
 * N = 231: the colon is the 239th character and the space the 240th, so the text kept is those 239 characters.
 * N = 232: the colon is the 240th and the space the 241st, which counts: the text kept is the 240 characters.
 * N = 233: the colon is the 241st, nothing in the first 241 characters is a space, and the text kept is the first 240.
+
+The problem is ``legs.0.``, the name and ``: Extra inputs are not permitted`` (32 characters), so N = 201 makes exactly
+240 characters, which fit, and N = 202 makes 241. For N = 202 the colon is the 210th character and the spaces after it
+are the 211th, 217th, 224th, 228th and 232nd; the last inside the first 241 characters is the 232nd, the one before
+"permitted", so the text kept is the 231 characters before it, ending "are not".
+
+A name with a space in it, ten ``a``, a space, 222 ``b``, a space and 100 ``c``, puts its second space at the 241st
+character of the problem (7 + 10 + 1 + 222 = 240 characters come first). That space is a word boundary, so the text kept
+is the 240 characters before it, and not the shorter text before the first space.
 """
 
 from __future__ import annotations
@@ -332,6 +341,22 @@ def test_an_extra_field_with_a_name_of_any_size_is_cut_at_a_word_and_marked(lett
     reason = _reason_of(json.dumps(setup_body(legs=[leg(**{"x" * letters: 1})])))
 
     assert reason == kept + " …"
+
+
+def test_a_problem_of_exactly_a_lines_length_is_whole_and_one_character_more_is_cut_at_a_word() -> None:
+    whole = _reason_of(json.dumps(setup_body(legs=[leg(**{"x" * 201: 1})])))
+    one_more = _reason_of(json.dumps(setup_body(legs=[leg(**{"x" * 202: 1})])))
+
+    assert whole == "legs.0." + "x" * 201 + ": Extra inputs are not permitted"
+    assert one_more == "legs.0." + "x" * 202 + ": Extra inputs are not …"
+
+
+def test_a_space_just_past_the_end_of_a_line_is_a_word_boundary() -> None:
+    name = "a" * 10 + " " + "b" * 222 + " " + "c" * 100
+
+    reason = _reason_of(json.dumps(setup_body(legs=[leg(**{name: 1})])))
+
+    assert reason == "legs.0." + "a" * 10 + " " + "b" * 222 + " …"
 
 
 def test_an_unknown_rule_kind_of_any_size_is_cut_at_a_word_and_marked_and_says_where() -> None:

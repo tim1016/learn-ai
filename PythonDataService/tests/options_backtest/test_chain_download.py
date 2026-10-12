@@ -626,6 +626,26 @@ async def test_the_underlyings_fetch_waits_for_a_free_place_among_the_requests_i
 
 
 @respx.mock
+async def test_the_listings_capture_waits_for_a_free_place_among_the_requests_in_flight(
+    fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
+) -> None:
+    # Every place of the process's gate is taken; the listing is one of the requests counted, so it waits for one.
+    listing_route = vendor_lists(CALL_600)
+    gate = vendor_request_gate()
+    for _ in range(MAX_VENDOR_REQUESTS_IN_FLIGHT):
+        await gate.acquire()
+    capture = asyncio.create_task(chain_download._capture_listing("SPY", FRIDAY, None))
+
+    await asyncio.sleep(0.2)
+    waited = (capture.done(), listing_route.call_count)
+    gate.release()
+    item, listing = await capture
+
+    assert waited == (False, 0)
+    assert (item.outcome, listing_route.call_count, listing is not None) == (Outcome.FETCHED, 1, True)
+
+
+@respx.mock
 async def test_the_clock_the_caller_gives_is_the_one_the_contract_capture_uses_for_the_data_plan(
     fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
 ) -> None:

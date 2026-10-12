@@ -110,7 +110,7 @@ CONTRACT_WITH_A_BAR_OFF_THE_MINUTE = Spoil(
     payload=lambda day: option_day_zip(the_500_call(day), [OPEN_MS[day] + 30_000], day=day),
     named=lambda day: the_500_call(day).occ_symbol,
 )
-# The stock pipeline rebuilds a cached day that breaks its own rules, so this one is met in the replay, never the download.
+# The stock pipeline rebuilds a cached day that breaks its own rules: this one is met in the replay, not the download.
 UNDERLYING_WITH_A_MINUTE_TWICE = Spoil(
     path=_underlying_path,
     payload=lambda day: stock_day_zip([stock_bar(OPEN_MS[day], "500.20", "500.20", "500.20", "500.20")] * 2, day=day),
