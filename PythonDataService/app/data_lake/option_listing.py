@@ -93,6 +93,11 @@ OPTION_LISTING_ENDPOINT = "v3/reference/options/contracts"
 #: complete). A date not captured again keeps its old row and file until it is. Format 1
 #: wrote the expiry as a ``YYYYMMDD`` text in a column named ``expiry``; format 2 writes
 #: ``expiry_ms``.
+#: For whoever changes the format next: every format writes to the same path, but a write is
+#: serialized only by the lease of its own row, and rows of different formats are different
+#: rows, so a writer of the old format and one of the new would not wait for each other. No
+#: writer of format 1 was ever deployed, so there is nothing to fence today. A new format must
+#: write to a new path, or fence writes by path.
 OPTION_LISTING_FILE_FORMAT = 2
 _HEADER = (
     "ticker",
