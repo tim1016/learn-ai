@@ -110,6 +110,12 @@ CONTRACT_WITH_A_BAR_OFF_THE_MINUTE = Spoil(
     payload=lambda day: option_day_zip(the_500_call(day), [OPEN_MS[day] + 30_000], day=day),
     named=lambda day: the_500_call(day).occ_symbol,
 )
+# The stock pipeline rebuilds a cached day that breaks its own rules, so this one is met in the replay, never the download.
+UNDERLYING_WITH_A_MINUTE_TWICE = Spoil(
+    path=_underlying_path,
+    payload=lambda day: stock_day_zip([stock_bar(OPEN_MS[day], "500.20", "500.20", "500.20", "500.20")] * 2, day=day),
+    named=lambda _day: "the underlying",
+)
 UNDERLYING_THAT_IS_DAMAGED = Spoil(
     path=_underlying_path, payload=lambda _day: b"admitted, but not a zip", named=lambda _day: "the underlying"
 )
@@ -127,7 +133,9 @@ def _check(days: list[date]) -> DataCheck:
 
 
 @pytest.mark.parametrize(
-    "spoil", [UNDERLYING_WITH_A_BAR_OFF_THE_MINUTE, CONTRACT_WITH_A_BAR_OFF_THE_MINUTE], ids=["underlying", "contract"]
+    "spoil",
+    [UNDERLYING_WITH_A_BAR_OFF_THE_MINUTE, CONTRACT_WITH_A_BAR_OFF_THE_MINUTE, UNDERLYING_WITH_A_MINUTE_TWICE],
+    ids=["underlying", "contract", "underlying, a minute twice"],
 )
 @respx.mock
 async def test_check_data_cannot_test_a_session_whose_stored_day_holds_a_bar_no_session_can_place(
@@ -217,15 +225,34 @@ async def test_the_download_phase_asks_the_lake_again_for_a_contract_day_no_sess
 # (what is put in place of Thursday's file, the phase the run has just entered when it is put there)
 MEETS = [
     pytest.param(
-        UNDERLYING_WITH_A_BAR_OFF_THE_MINUTE, "downloading_data", id="underlying, bar off the minute, at the download"
+        UNDERLYING_WITH_A_BAR_OFF_THE_MINUTE,
+        "downloading_data",
+        "rules of a bar",
+        id="underlying, bar off the minute, at the download",
     ),
-    pytest.param(UNDERLYING_WITH_A_BAR_OFF_THE_MINUTE, "replaying", id="underlying, bar off the minute, at the replay"),
     pytest.param(
-        CONTRACT_WITH_A_BAR_OFF_THE_MINUTE, "downloading_data", id="contract, bar off the minute, at the download"
+        UNDERLYING_WITH_A_BAR_OFF_THE_MINUTE,
+        "replaying",
+        "rules of a bar",
+        id="underlying, bar off the minute, at the replay",
     ),
-    pytest.param(CONTRACT_WITH_A_BAR_OFF_THE_MINUTE, "replaying", id="contract, bar off the minute, at the replay"),
-    pytest.param(UNDERLYING_THAT_IS_DAMAGED, "replaying", id="underlying, damaged, at the replay"),
-    pytest.param(CONTRACT_THAT_IS_DAMAGED, "replaying", id="contract, damaged, at the replay"),
+    pytest.param(
+        CONTRACT_WITH_A_BAR_OFF_THE_MINUTE,
+        "downloading_data",
+        "rules of a bar",
+        id="contract, bar off the minute, at the download",
+    ),
+    pytest.param(
+        CONTRACT_WITH_A_BAR_OFF_THE_MINUTE,
+        "replaying",
+        "rules of a bar",
+        id="contract, bar off the minute, at the replay",
+    ),
+    pytest.param(
+        UNDERLYING_WITH_A_MINUTE_TWICE, "replaying", "rules of a bar", id="underlying, a minute twice, at the replay"
+    ),
+    pytest.param(UNDERLYING_THAT_IS_DAMAGED, "replaying", "cannot be read", id="underlying, damaged, at the replay"),
+    pytest.param(CONTRACT_THAT_IS_DAMAGED, "replaying", "cannot be read", id="contract, damaged, at the replay"),
 ]
 
 
@@ -241,10 +268,10 @@ def _hooks_that_spoil_at(job: Job, phase: str, spoil: Callable[[], None]) -> Run
     return RunHooks(on_phase, hooks.on_progress, hooks.on_log, hooks.should_stop)
 
 
-@pytest.mark.parametrize(("spoil", "phase"), MEETS)
+@pytest.mark.parametrize(("spoil", "phase", "says"), MEETS)
 @respx.mock
 async def test_a_run_that_meets_a_stored_day_it_cannot_use_fails_as_unreadable_and_names_the_session_by_its_open(
-    spoil: Spoil, phase: str, fake_catalog: FakeCatalog, tmp_lake: Path
+    spoil: Spoil, phase: str, says: str, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
     # Check data passes (both sessions are stored whole), and Thursday's file is replaced as the phase begins. The run
     # has finished Wednesday when it meets it, so the session it names is Thursday's, not the first.
@@ -269,6 +296,7 @@ async def test_a_run_that_meets_a_stored_day_it_cannot_use_fails_as_unreadable_a
     assert failure.code == "DATA_UNREADABLE"
     [item] = failure.items
     assert (item.session_open_ms, item.code) == (OPEN_MS[THU], "stored_data_unreadable")
+    assert says in failure.reason, "bars that break a rule and a file that cannot be read are told apart"
     assert_plain(failure.reason)
     assert_plain(item.message)
     assert vendor.vendor_requests == asked, "a day the run cannot use is never a reason to ask the vendor again"
