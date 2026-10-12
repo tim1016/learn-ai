@@ -1,7 +1,7 @@
 import type { LegRequest, SessionClock, SessionTimeWire, SetupRequest } from './options-backtest.types';
 import { FIELD, legKey, type FieldProblems } from './setup-problems';
 import { heldAnchorFor, type HeldAnchor, type LegDraft, type SetupDraft } from './setup-draft';
-import { storedTime, type TimeRole } from './session-time';
+import { exitAfterEntry, storedTime, type TimeRole } from './session-time';
 import { decimalText, wholeNumber } from './typed-text';
 
 export type BuildResult =
@@ -30,6 +30,10 @@ export function buildSetup(draft: SetupDraft, clock: SessionClock): BuildResult 
   if (draft.underlying === '') fail(FIELD.underlying, 'Pick an underlying.');
   const entry = timeAt('entry', draft.entryClock, draft.held.entry, FIELD.entry);
   const exit = timeAt('exit', draft.exitClock, draft.held.exit, FIELD.exit);
+  if (entry !== null && exit !== null) {
+    const order = exitAfterEntry(entry, exit, clock);
+    if (order !== null) fail(FIELD.exit, order);
+  }
   const noReentry = draft.noReentryOn ? timeAt('noReentry', draft.noReentryClock, draft.held.noReentry, FIELD.noReentry) : null;
   const slippage = decimal(draft.slippage, FIELD.slippage, '0.3');
   const cash = decimal(draft.cash, FIELD.cash, '10000');

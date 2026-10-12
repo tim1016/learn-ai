@@ -31,9 +31,37 @@ export function sentencesFor(body: SetupRequest): SetupSummary {
   };
 }
 
+const MINUTE = 60_000;
+
+/**
+ * The rules the setup schema states about the setup as a whole (`setup.py`):
+ * the route says each at `["body"]`, with no field, after the fields have all
+ * passed. Null when the setup breaks none.
+ */
+function wholeSetupRefusal(setup: SetupRequest): string | null {
+  const ids = setup.legs.map((leg) => leg.leg_id);
+  const repeated = [...new Set(ids.filter((id, at) => ids.indexOf(id) !== at))].sort();
+  if (repeated.length > 0) return `every leg needs its own id; repeated: ${repeated.join(', ')}`;
+  const { entry, exit } = setup;
+  if (entry.anchor === 'open' && entry.offset_ms < MINUTE) return 'the entry time must be at least one minute after the open';
+  if (entry.anchor === 'close' && entry.offset_ms < 2 * MINUTE) {
+    return 'the entry time must be at least two minutes before the close, to leave room for the exit';
+  }
+  if (exit.anchor === 'close' && exit.offset_ms < MINUTE) return 'the exit time must be at least one minute before the close';
+  if (exit.anchor === 'open' && exit.offset_ms < 2 * MINUTE) {
+    return 'the exit time must be at least two minutes after the open, to come after an entry';
+  }
+  if (entry.anchor === exit.anchor) {
+    const exitIsLater = entry.anchor === 'open' ? exit.offset_ms > entry.offset_ms : exit.offset_ms < entry.offset_ms;
+    if (!exitIsLater) return 'the exit time must be after the entry time';
+  }
+  return null;
+}
+
 /**
  * A service that answers as the real routes do where it matters: a setup with
- * no legs is a 422 at `legs`, as the schema says, rather than a happy summary.
+ * no legs is a 422 at `legs`, and a setup that breaks a rule about the whole
+ * setup is a 422 at `["body"]`, as the schema says, rather than a happy summary.
  */
 export function fakeService(spy: Spy, changes: Partial<FakeService> = {}): FakeService {
   return {
@@ -43,6 +71,8 @@ export function fakeService(spy: Spy, changes: Partial<FakeService> = {}): FakeS
       if (setup.legs.length === 0) {
         throw new SetupInvalidError([{ loc: ['body', 'legs'], msg: 'List should have at least 1 item after validation, not 0' }]);
       }
+      const refusal = wholeSetupRefusal(setup);
+      if (refusal !== null) throw new SetupInvalidError([{ loc: ['body'], msg: `Value error, ${refusal}` }]);
       return sentencesFor(setup);
     }),
     list: spy.fn(async () => servedExamples()),

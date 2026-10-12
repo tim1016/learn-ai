@@ -174,6 +174,34 @@ describe('times', () => {
     expect([...problems.keys()].sort()).toEqual(['entry', 'exit']);
   });
 
+  it('an entry at the open and an exit at the close are problems at their own fields, and there is no body', () => {
+    const problems = problemsOf({ ...newSetupDraft(SESSION_CLOCK), entryClock: formatClockText(OPEN), exitClock: formatClockText(CLOSE) });
+
+    expect([...problems.keys()].sort()).toEqual(['entry', 'exit']);
+    expect(problems.get('entry')).toMatch(/at least a minute after the open/);
+    expect(problems.get('exit')).toMatch(/at least a minute before the close/);
+  });
+
+  it('the first entry and the last exit the setup allows build', () => {
+    const body = built({ ...newSetupDraft(SESSION_CLOCK), entryClock: formatClockText(OPEN + 1), exitClock: formatClockText(CLOSE - 1) });
+
+    expect(body).toMatchObject({ entry: minutes(1, 'open'), exit: minutes(1, 'close') });
+  });
+
+  it('two times a loaded setup counts from the same end must be in order, and the exit says so', () => {
+    const loaded = draftFromSetup({ ...exampleBody(), entry: minutes(30, 'open'), exit: minutes(10, 'open') }, SESSION_CLOCK);
+
+    expect([...problemsOf(loaded).keys()]).toEqual(['exit']);
+    expect(problemsOf(loaded).get('exit')).toMatch(/after the entry/);
+    expect(built({ ...loaded, exitClock: formatClockText(CLOSE - 46) }).exit).toEqual(minutes(46, 'close'));
+  });
+
+  it('a time that is outside the session is not also judged against the other', () => {
+    const problems = problemsOf({ ...newSetupDraft(SESSION_CLOCK), entryClock: formatClockText(OPEN - 1) });
+
+    expect([...problems.keys()]).toEqual(['entry']);
+  });
+
   it('the "no re-entry after" time is judged only while it is on', () => {
     const draft = { ...newSetupDraft(SESSION_CLOCK), noReentryClock: formatClockText(CLOSE + 1) };
 

@@ -152,13 +152,24 @@ describe('a problem lands at its field', () => {
     expect(screen.getByLabelText('Slippage (percent)').getAttribute('aria-invalid')).toBe('true');
   });
 
-  it('and the summary says the setup is not complete, keeping a reason that has no field', async () => {
+  it('and the summary says the setup is not complete, and says plainly that a reason with no field is about the whole setup', async () => {
     await renderPage(rejecting({ loc: ['body'], msg: 'Value error, every leg needs its own id; repeated: call' }));
     addLeg();
 
     const summary = await screen.findByRole('region', { name: 'In plain words' });
     await waitFor(() => expect(summary.textContent).toMatch(/not complete/i));
-    expect(within(summary).getByText('every leg needs its own id; repeated: call')).toBeTruthy();
+    const reasons = within(summary).getByRole('list', { name: /about the setup as a whole/i });
+    expect(within(reasons).getByText('every leg needs its own id; repeated: call')).toBeTruthy();
+    expect(summary.textContent).not.toMatch(/fields marked above/i);
+  });
+
+  it('keeps pointing at the fields when the server also marked some', async () => {
+    await renderPage(rejecting({ loc: ['body'], msg: 'Value error, a rule about the whole' }, { loc: ['body', 'slippage_percent'], msg: 'SLIPPAGE PROBLEM' }));
+    addLeg();
+
+    const summary = await screen.findByRole('region', { name: 'In plain words' });
+    await waitFor(() => expect(summary.textContent).toMatch(/fields marked above/i));
+    expect(within(summary).getByRole('list', { name: /about the setup as a whole/i })).toBeTruthy();
   });
 });
 
@@ -191,11 +202,32 @@ describe('typed times', () => {
     expect(service.describe.mock.calls.length).toBe(calls);
     expect(screen.getByRole('region', { name: 'In plain words' }).textContent).toMatch(/not complete/i);
 
-    typeInto('Exit time', formatClockText(CLOSE));
-    typeInto('Entry time', formatClockText(OPEN));
+    typeInto('Exit time', formatClockText(CLOSE - 1));
+    typeInto('Entry time', formatClockText(OPEN + 1));
 
     expect(entry.getAttribute('aria-invalid')).toBe('false');
-    await waitFor(() => expect(service.describe.mock.lastCall?.[0]).toMatchObject({ entry: { anchor: 'open', offset_ms: 0 }, exit: { anchor: 'close', offset_ms: 0 } }));
+    await waitFor(() => expect(service.describe.mock.lastCall?.[0]).toMatchObject({ entry: { anchor: 'open', offset_ms: 60_000 }, exit: { anchor: 'close', offset_ms: 60_000 } }));
+  });
+
+  it('an entry at the open and an exit at the close are refused at their own fields with the rule, not left to the server', async () => {
+    const service = fakeService(vi);
+    await renderPage(service);
+    addLeg();
+    await waitFor(() => expect(service.describe).toHaveBeenCalled());
+    const calls = service.describe.mock.calls.length;
+
+    typeInto('Entry time', formatClockText(OPEN));
+    typeInto('Exit time', formatClockText(CLOSE));
+
+    const card = within(screen.getByRole('region', { name: 'Entry settings' }));
+    expect(screen.getByLabelText('Entry time').getAttribute('aria-invalid')).toBe('true');
+    expect(screen.getByLabelText('Exit time').getAttribute('aria-invalid')).toBe('true');
+    expect(card.getByText(`The entry must be at least a minute after the open: ${formatClockText(OPEN + 1)} or later.`).getAttribute('role')).toBe('alert');
+    expect(card.getByText(`The exit must be at least a minute before the close: ${formatClockText(CLOSE - 1)} or earlier.`).getAttribute('role')).toBe('alert');
+    expect(service.describe.mock.calls.length).toBe(calls);
+    const summary = screen.getByRole('region', { name: 'In plain words' });
+    expect(summary.textContent).toMatch(/fields marked above/i);
+    expect(within(summary).queryByRole('list', { name: /about the setup as a whole/i })).toBeNull();
   });
 
   it('follow the noon rule for "No re-entry after": the open up to noon, the close after it', async () => {
@@ -218,10 +250,12 @@ describe('typed times', () => {
 
     expect((screen.getByLabelText('Entry time') as HTMLInputElement).value).toBe('10:05');
     expect((screen.getByLabelText('Exit time') as HTMLInputElement).value).toBe('14:45');
-    typeInto('Entry time', '10:00');
+    typeInto('Entry time', '10:01');
     typeInto('Exit time', '15:01');
 
     expect(screen.getByLabelText('Exit time').getAttribute('aria-invalid')).toBe('true');
     expect(screen.getByLabelText('Entry time').getAttribute('aria-invalid')).toBe('false');
+    typeInto('Entry time', '10:00');
+    expect(within(screen.getByRole('region', { name: 'Entry settings' })).getByText(/10:01 or later/)).toBeTruthy();
   });
 });

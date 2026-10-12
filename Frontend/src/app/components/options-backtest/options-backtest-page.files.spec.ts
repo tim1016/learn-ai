@@ -131,6 +131,17 @@ describe('import', () => {
     expect(screen.queryByRole('article', { name: 'Leg 1' })).toBeNull();
   });
 
+  it('gives the server’s reason, as it says it for the whole setup, for a file whose window can hold no trade', async () => {
+    await renderPage(fakeService(vi), download());
+
+    chooseFile(JSON.stringify({ ...exampleBody(), entry: { anchor: 'open', offset_ms: 0 } }), 'early.json');
+
+    const notice = await screen.findByText(/early\.json was not loaded/);
+    const box = notice.closest('[role="alert"]') as HTMLElement;
+    expect(within(box).getByText('the entry time must be at least one minute after the open')).toBeTruthy();
+    expect(screen.queryByRole('article', { name: 'Leg 1' })).toBeNull();
+  });
+
   it('says so, and changes nothing, for a file that is not JSON', async () => {
     const service = fakeService(vi);
     await renderPage(service, download());

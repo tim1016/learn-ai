@@ -2,7 +2,7 @@
   <div class="card__head"><h2 id="ob-summary-title">In plain words</h2></div>
   <div aria-live="polite">
     @if (checking()) { <p class="hint" role="status">Reading the setup back…</p> }
-    @if (incomplete()) { <p class="hint" role="status">This setup is not complete. The fields marked above say what is missing.</p> }
+    @if (incomplete()) { <p class="hint" role="status">{{ incompleteText() }}</p> }
     @if (failure(); as message) {
       <p class="problem" role="alert">{{ message }}</p>
       <button type="button" class="again" (click)="retry.emit()">Try again</button>
@@ -18,7 +18,8 @@
     }
   </div>
   @if (otherProblems().length > 0) {
-    <ul class="sentences" aria-label="Other problems">
+    <p id="ob-whole-setup" class="problem">These problems are about the setup as a whole, or a part this page has no field for:</p>
+    <ul class="sentences" aria-labelledby="ob-whole-setup">
       @for (problem of otherProblems(); track problem) { <li class="problem">{{ problem }}</li> }
     </ul>
   }

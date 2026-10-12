@@ -34,4 +34,12 @@ export class SummaryComponent {
     const kind = this.state().kind;
     return kind === 'idle' || kind === 'invalid';
   });
+  /** What is missing is at the fields, unless the server's only reasons are about the setup as a whole. */
+  protected readonly incompleteText = computed(() => {
+    const state = this.state();
+    const atTheFields = state.kind !== 'invalid' || state.problems.fields.size > 0;
+    return atTheFields
+      ? 'This setup is not complete. The fields marked above say what is missing.'
+      : 'This setup is not complete. The problem is about the setup as a whole; it is listed below.';
+  });
 }
