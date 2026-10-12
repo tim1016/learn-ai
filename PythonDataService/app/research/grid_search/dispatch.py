@@ -201,12 +201,6 @@ def cell_to_wire(cell: CellResult) -> dict[str, Any]:
     }
 
 
-#: What ``run_grid`` consumes from either adapter: each arrival as its
-#: ``(candidate, result)`` pair, in arrival order — the runner persists and
-#: counts as it consumes, so arrival order is free and logical order is the
-#: ranking's. The alias lives with the parameter it names, in ``runner.py``.
-
-
 def ready_cell_builder(row: SearchRow, spec: GridSearchSpec, attempt: int) -> Callable[[RunSpec], ReadyCell]:
     """The per-candidate item builder: the receipt's frozen parts, one cell's identity."""
     from app.research.grid_search.engine_adapter import execution_block
@@ -355,7 +349,14 @@ class WorkerCellDispatch(ChildOwnerDispatch):
                     self._worker_lost(worker)
                     raise
                 break
-            outcome = item.outcome_of(message)
+            try:
+                outcome = item.outcome_of(message)
+            except WorkerLost:
+                # A protocol break from this child (an answer keyed other than
+                # its item): reap the child before the raise — it is not a
+                # retryable loss, and no foreign cell ever persists.
+                self._worker_lost(worker)
+                raise
             if outcome.cancelled_by is not None:
                 self._cancel()
                 raise outcome.cancelled_by
