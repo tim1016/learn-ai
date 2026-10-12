@@ -12,7 +12,7 @@ import asyncio
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Path, Query, status
+from fastapi import APIRouter, HTTPException, Path, Query, Response, status
 
 from app.options_backtest.lake_data import LakeRunData
 from app.options_backtest.run_detail import (
@@ -20,11 +20,13 @@ from app.options_backtest.run_detail import (
     RunNotComplete,
     RunNotFound,
     SessionNotInRun,
+    read_every_trade,
     read_session_record,
     read_trade_page,
 )
 from app.options_backtest.session_levels import SessionRecordInconsistent, fills_of, levels_of, marks_of
 from app.options_backtest.session_series import read_session_series
+from app.options_backtest.trade_export import csv_file_name, trades_csv
 from app.research.persistence import lifecycle
 from app.research.persistence.db import with_connection
 from app.schemas.options_backtest import OptionsBacktestRefusalBody
@@ -160,4 +162,35 @@ async def get_the_session(
         levels=levels,
         fills=fills_of(session.outcome.trades),
         marks=marks_of(session.outcome.trades),
+    )
+
+
+@router.get(
+    "/runs/{run_id}/trades.csv",
+    response_class=Response,
+    responses={
+        status.HTTP_200_OK: {
+            "description": "Every leg trade of the run as a CSV download, named for the run. Never paged or truncated.",
+            "content": {"text/csv": {"schema": {"type": "string"}}},
+        },
+        **_NOT_FOUND,
+        **_NOT_COMPLETE,
+    },
+)
+async def export_the_trades(run_id: RunId) -> Response:
+    """Every leg trade of a complete run as a CSV: ``unix_ts`` (the entry fill's bar close, ms UTC) first, one readable
+    New York time beside it, every other instant in a ``*_ms`` column, money and prices as exact decimal text.
+
+    The whole run, however many trades it has: the page size of the trades route does not apply. A run that is not
+    complete is a 409.
+    """
+    try:
+        trades = await with_connection(read_every_trade, run_id, is_live=lifecycle.job_is_live)
+    except (RunNotFound, RunNotComplete) as exc:
+        raise _refusal(exc) from exc
+    body = await asyncio.to_thread(trades_csv, trades)
+    return Response(
+        content=body,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{csv_file_name(run_id)}"'},
     )

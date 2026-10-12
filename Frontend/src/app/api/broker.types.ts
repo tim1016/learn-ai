@@ -5959,6 +5959,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/options-backtest/runs/{run_id}/trades.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export The Trades
+         * @description Every leg trade of a complete run as a CSV: ``unix_ts`` (the entry fill's bar close, ms UTC) first, one readable
+         *     New York time beside it, every other instant in a ``*_ms`` column, money and prices as exact decimal text.
+         *
+         *     The whole run, however many trades it has: the page size of the trades route does not apply. A run that is not
+         *     complete is a 409.
+         */
+        get: operations["export_the_trades_api_research_options_backtest_runs__run_id__trades_csv_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/options-backtest/session-clock": {
         parameters: {
             query?: never;
@@ -40950,6 +40974,56 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OptionsBacktestTradesResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_the_trades_api_research_options_backtest_runs__run_id__trades_csv_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The run's id, from the history. */
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every leg trade of the run as a CSV download, named for the run. Never paged or truncated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
                 };
             };
             /** @description Not Found */

@@ -80825,6 +80825,73 @@
         ]
       }
     },
+    "/api/research/options-backtest/runs/{run_id}/trades.csv": {
+      "get": {
+        "description": "Every leg trade of a complete run as a CSV: ``unix_ts`` (the entry fill's bar close, ms UTC) first, one readable\nNew York time beside it, every other instant in a ``*_ms`` column, money and prices as exact decimal text.\n\nThe whole run, however many trades it has: the page size of the trades route does not apply. A run that is not\ncomplete is a 409.",
+        "operationId": "export_the_trades_api_research_options_backtest_runs__run_id__trades_csv_get",
+        "parameters": [
+          {
+            "description": "The run's id, from the history.",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "description": "The run's id, from the history.",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "title": "Run Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Every leg trade of the run as a CSV download, named for the run. Never paged or truncated."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export The Trades",
+        "tags": [
+          "research-options-backtest"
+        ]
+      }
+    },
     "/api/research/options-backtest/session-clock": {
       "get": {
         "description": "A full session's open and close as minutes past New York midnight, from the calendar.",
