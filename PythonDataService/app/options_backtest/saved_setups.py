@@ -30,7 +30,7 @@ from app.options_backtest.setup import (
     ReentryOnStop,
     SessionTime,
     StopLoss,
-    ThisWeekExpiry,
+    ThisWeekExpiryRule,
 )
 
 # 1 to 80 characters of ASCII letters, digits, spaces and - _ . , ( ); a space never starts or ends a name, so
@@ -79,7 +79,7 @@ def _premium_momentum_leg(leg_id: str, right: OptionRight) -> LegSetup:
         leg_id=leg_id,
         right=right,
         contracts=1,
-        expiry=ThisWeekExpiry(kind="this_week"),
+        expiry=ThisWeekExpiryRule(kind="this_week"),
         strike=AtTheMoney(kind="atm"),
         stop_loss=StopLoss(kind="percent", value=Decimal(25)),
         momentum=Momentum(kind="percent_up", value=Decimal(25)),
