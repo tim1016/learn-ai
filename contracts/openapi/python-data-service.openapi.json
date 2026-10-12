@@ -41413,7 +41413,7 @@
             "title": "Starting Cash Usd"
           },
           "underlying": {
-            "pattern": "^[A-Z]{1,6}$",
+            "pattern": "^[A-Z]{1,5}$",
             "title": "Underlying",
             "type": "string"
           },
@@ -41490,7 +41490,7 @@
             "type": "string"
           },
           "underlying": {
-            "pattern": "^[A-Z]{1,6}$",
+            "pattern": "^[A-Z]{1,5}$",
             "title": "Underlying",
             "type": "string"
           },
