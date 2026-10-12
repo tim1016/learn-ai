@@ -14,6 +14,8 @@ export type JobEventType =
   | 'job.started'
   | 'job.phase'
   | 'job.progress'
+  /** The pooled research waiting state, transition-gated and additive (#3052). */
+  | 'job.research_waiting'
   | 'job.log'
   | 'job.cancel_acknowledged'
   | 'job.completed'
@@ -60,6 +62,16 @@ export interface JobState {
   total?: number;
   unit?: string;
   message?: string;
+  /** Why the pooled research run is not evaluating, when it is not:
+   *  ``'capacity'`` (runnable work queued behind busy lanes) or
+   *  ``'adaptive'`` (the procedure waits on results it depends on).
+   *  Server-authored from accepted scheduling facts (#3052); cleared by
+   *  the server's own ``waiting: null`` transition and by terminal events. */
+  waiting?: 'capacity' | 'adaptive' | null;
+  /** Additive server-authored count breakdown riding job.progress (#3052)
+   *  — completed/reused/failed/etc. as each caller reports them. Rendering
+   *  is optional per view; unknown fields are ignored. */
+  counts?: Readonly<Record<string, number>>;
   errorCode?: string;
   errorMessage?: string;
   resultUrl?: string;
@@ -425,6 +437,18 @@ function parseJobParameters(value: string | undefined): Readonly<Record<string, 
 }
 
 // Pure reducer — exported for unit testing.
+/** The additive count vocabulary ordinary progress may carry (#3052). */
+const PROGRESS_COUNT_FIELDS = [
+  'queued',
+  'preparing',
+  'evaluating',
+  'completed',
+  'reused',
+  'failed',
+  'skipped',
+  'interrupted',
+] as const;
+
 export function applyJobEvent(
   prev: JobState,
   evt: JobEvent,
@@ -460,14 +484,34 @@ export function applyJobEvent(
         phaseLabel: (evt['friendly'] as string) ?? humanisePhase(phase),
       });
     }
-    case 'job.progress':
+    case 'job.progress': {
+      // The additive count fields ride the event's top level (#3052); only
+      // the known vocabulary is harvested so unknown extras stay ignored.
+      const counts = PROGRESS_COUNT_FIELDS.reduce<Record<string, number>>((acc, key) => {
+        const value = evt[key];
+        if (typeof value === 'number') acc[key] = value;
+        return acc;
+      }, {});
+      const waiting = evt['waiting'] as 'capacity' | 'adaptive' | null | undefined;
       return withEvent({
         ...prev,
         current: evt['current'] as number,
         total: evt['total'] as number,
         unit: (evt['unit'] as string) ?? prev.unit,
         message: (evt['message'] as string) ?? prev.message,
+        counts: Object.keys(counts).length > 0 ? counts : prev.counts,
+        // A waiting field only transitions the state when the server sent
+        // one; an ordinary evaluating tick without it clears a stale wait.
+        waiting: waiting !== undefined ? waiting : null,
       });
+    }
+    case 'job.research_waiting': {
+      const waiting = evt['waiting'] as 'capacity' | 'adaptive' | null;
+      return withEvent({
+        ...prev,
+        waiting,
+      });
+    }
     case 'job.log': {
       const log = {
         level: (evt['level'] as string) ?? 'info',
@@ -486,6 +530,7 @@ export function applyJobEvent(
     case 'job.completed':
       return withEvent({
         ...prev,
+        waiting: null,
         status: 'completed',
         finishedAt: timestamp,
         resultUrl: evt['result_url'] as string,
@@ -495,6 +540,7 @@ export function applyJobEvent(
     case 'job.failed':
       return withEvent({
         ...prev,
+        waiting: null,
         status: 'failed',
         finishedAt: timestamp,
         errorCode: evt['code'] as string,
@@ -503,6 +549,7 @@ export function applyJobEvent(
     case 'job.cancelled':
       return withEvent({
         ...prev,
+        waiting: null,
         status: 'cancelled',
         finishedAt: timestamp,
         message: evt['reason'] as string,
@@ -538,7 +585,7 @@ function appendEvent(
   };
 }
 
-function describeJobEvent(event: JobEvent): string {
+export function describeJobEvent(event: JobEvent): string {
   switch (event.type) {
     case 'job.started':
       return event['cached'] === true ? 'Run started from cached result' : 'Run started';
@@ -550,6 +597,12 @@ function describeJobEvent(event: JobEvent): string {
       const unit = (event['unit'] as string | undefined) ?? 'items';
       const message = event['message'] as string | undefined;
       return `${message ? `${message} · ` : ''}${current.toLocaleString()} / ${total.toLocaleString()} ${unit}`;
+    }
+    case 'job.research_waiting': {
+      const waiting = event['waiting'] as string | null;
+      if (waiting === 'capacity') return 'Waiting for machine capacity';
+      if (waiting === 'adaptive') return 'Waiting on dependent results';
+      return 'Evaluating';
     }
     case 'job.log':
       return (event['message'] as string | undefined) ?? 'Log event';

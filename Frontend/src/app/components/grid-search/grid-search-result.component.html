@@ -15,6 +15,7 @@
     @if (detail(); as d) {
       <div class="status" [attr.data-status]="d.status">
         <span class="tag">{{ d.status | receiptLabel }}</span>
+        <app-waiting-badge [jobId]="d.job_id" />
         @if (d.uncommitted_changes) { <span class="tag tag--warn">Uncommitted changes</span> }
         @if (d.incomplete) { <span class="tag tag--warn">Incomplete — {{ missingCells() }} of {{ d.expected_cells }} cells missing</span> }
         <span class="muted">{{ d.completed_cells + d.failed_cells }} / {{ d.expected_cells }} cells</span>
