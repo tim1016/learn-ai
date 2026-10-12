@@ -1,0 +1,66 @@
+@let day = view();
+<section class="card" aria-labelledby="ob-chain-expiries-title">
+  <div class="card__head"><h2 id="ob-chain-expiries-title">Expiries listed that day</h2></div>
+  @if (again()) { <p class="muted" role="status">Reading again. What is shown is the last answer.</p> }
+  @if (refusal(); as why) {
+    <div class="refusal" role="status">
+      <p>{{ why.words }}</p>
+      <p class="code">{{ why.reason | receiptLabel }}</p>
+    </div>
+  }
+  @if (day.kind === 'pick') {
+    <p class="muted" role="status">Pick an underlying and a trading date to read the listing of that day.</p>
+  } @else if (day.kind === 'loading') {
+    <p class="muted" role="status">Reading the listing…</p>
+  } @else if (day.kind === 'not_a_session') {
+    <p role="status"><strong>Not a trading day.</strong> {{ day.message }}</p>
+  } @else if (day.kind === 'at_control') {
+    <p class="muted" role="status">The server did not take the {{ day.control === 'underlying' ? 'underlying' : 'trading date' }}; its reason is at that control.</p>
+  } @else if (day.kind === 'failed') {
+    <p class="problem" role="alert">{{ day.message }}</p>
+    @if (day.code; as code) { <p class="code">{{ code | receiptLabel }}</p> }
+    @if (day.canRetry) { <button type="button" class="again" (click)="retry.emit()">Try again</button> }
+  } @else if (day.kind === 'not_stored') {
+    <p role="status">The listing for this date is not stored.</p>
+  } @else if (day.kind === 'unreadable') {
+    <p class="problem" role="alert">The stored listing for this date cannot be read.</p>
+    @if (day.problem; as why) { <p class="muted">{{ why }}</p> }
+  } @else if (day.kind === 'unknown_listing') {
+    <p class="problem" role="alert">This page does not know this state of the listing for this date: {{ day.code | receiptLabel }}.</p>
+  } @else {
+    @if (day.kind === 'empty') {
+      <p role="status">The listing for this date is stored, but it holds no contract a backtest can use.</p>
+    } @else {
+      <div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable list of expiries">
+        <table class="rows">
+          <caption>Every expiry the listing held that day, in order. Open one to read its chain.</caption>
+          <thead>
+            <tr>
+              <th scope="col">Expiry</th><th scope="col">Series</th><th scope="col" class="num">Days to expiry</th>
+              <th scope="col" class="num">Calls</th><th scope="col" class="num">Standard calls</th><th scope="col" class="num">Puts</th><th scope="col" class="num">Standard puts</th>
+              <th scope="col"><span class="sr-only">Chain</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (each of day.day.expiries; track each.expiry_ms) {
+              <tr [class.picked]="each.expiry_ms === picked()">
+                <th scope="row" [id]="dateId(each.expiry_ms)"><app-timestamp-display [value]="each.expiry_ms" mode="date-et" granularity="date" /></th>
+                <td><app-options-backtest-expiry-tag [tag]="each.tag" [evidence]="true" /></td>
+                <td class="num">{{ each.tag.days_to_expiry }}</td>
+                <td class="num">{{ each.calls }}</td><td class="num">{{ each.standard_calls }}</td><td class="num">{{ each.puts }}</td><td class="num">{{ each.standard_puts }}</td>
+                <td><button type="button" class="again" [id]="buttonId(each.expiry_ms)" [attr.aria-labelledby]="nameOf(each.expiry_ms)" [attr.aria-pressed]="each.expiry_ms === picked()" (click)="pick.emit(each.expiry_ms)">Show chain</button></td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+    <div class="left-out">
+      <p class="words">Rows the listing holds that are left out of these counts:</p>
+      <ul class="words">
+        <li>{{ day.day.rows_left_out_unusable }} name no contract a backtest can use, or carry no share count.</li>
+        <li>{{ day.day.rows_left_out_expired }} are contracts that had already expired by this date.</li>
+      </ul>
+    </div>
+  }
+</section>

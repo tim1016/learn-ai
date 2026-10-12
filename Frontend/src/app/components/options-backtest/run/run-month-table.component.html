@@ -1,0 +1,35 @@
+<section class="table-section" aria-label="By month">
+  <h3>By month</h3>
+  <p-table [value]="labelled()" dataKey="label" size="small" sortField="label" [sortOrder]="1" [tableStyle]="{ 'min-width': '44rem' }">
+    <ng-template #header>
+      <tr>
+        <th scope="col" pSortableColumn="label">Month<p-sort-icon field="label" /></th>
+        <th scope="col" class="num" pSortableColumn="sessions">Sessions<p-sort-icon field="sessions" /></th>
+        <th scope="col" class="num" pSortableColumn="sessions_traded">Traded<p-sort-icon field="sessions_traded" /></th>
+        <th scope="col" class="num" pSortableColumn="trades">Trades<p-sort-icon field="trades" /></th>
+        <th scope="col" class="num" pSortableColumn="trades_won">Won<p-sort-icon field="trades_won" /></th>
+        <th scope="col" class="num" pSortableColumn="trades_lost">Lost<p-sort-icon field="trades_lost" /></th>
+        <th scope="col" class="num" pSortableColumn="trades_break_even">Break-even<p-sort-icon field="trades_break_even" /></th>
+        <th scope="col" class="num">Net profit</th>
+        <th scope="col" class="num">Fees</th>
+        <th scope="col">Sessions by status</th>
+      </tr>
+    </ng-template>
+    <ng-template #body let-row>
+      <tr>
+        <td>{{ row.label }}</td>
+        <td class="num">{{ row.sessions }}</td>
+        <td class="num">{{ row.sessions_traded }}</td>
+        <td class="num">{{ row.trades }}</td>
+        <td class="num">{{ row.trades_won }}</td>
+        <td class="num">{{ row.trades_lost }}</td>
+        <td class="num">{{ row.trades_break_even }}</td>
+        <td class="num">{{ row.net_profit_usd | authoredUsd }}</td>
+        <td class="num">{{ row.fees_usd | authoredUsd }}</td>
+        <td>
+          @for (status of row.sessions_by_status; track status.status; let last = $last) { {{ status.status | receiptLabel }} {{ status.count }}{{ last ? '' : ', ' }} }
+        </td>
+      </tr>
+    </ng-template>
+  </p-table>
+</section>

@@ -1,0 +1,52 @@
+<ng-template #absent><span class="none" aria-hidden="true">—</span><span class="sr-only">none</span></ng-template>
+<div class="table-wrap" role="region" tabindex="0" [attr.aria-label]="regionLabel()">
+  <table class="rows">
+    <caption class="sr-only">{{ caption() }}</caption>
+    <thead>
+      <tr>
+        <th scope="col">Day</th><th scope="col">Leg</th><th scope="col">Entry</th><th scope="col">Contract</th><th scope="col" class="num">Contracts</th>
+        <th scope="col">Entry decided</th><th scope="col">Entry filled in the minute ending</th><th scope="col" class="num">Entry price seen</th><th scope="col" class="num">Entry price filled</th>
+        <th scope="col" class="num">Starting price</th><th scope="col" class="num">Momentum level</th><th scope="col" class="num">Stop level</th>
+        <th scope="col">Left because</th><th scope="col">Exit decided</th><th scope="col">Exit filled in the minute ending</th><th scope="col" class="num">Exit price seen</th><th scope="col" class="num">Exit price filled</th>
+        <th scope="col" class="num">Entry fee</th><th scope="col" class="num">Exit fee</th><th scope="col" class="num">Profit</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (row of rows(); track row.key) {
+        @let t = row.trade;
+        <tr>
+          <td>
+            @if (canOpenDay()) {
+              <button type="button" class="day" [attr.aria-label]="row.openLabel" (click)="ask(t.session_open_ms, $event)"><app-timestamp-display [value]="t.session_open_ms" mode="date-et" granularity="date" /></button>
+            } @else {
+              <app-timestamp-display [value]="t.session_open_ms" mode="date-et" granularity="date" />
+            }
+          </td>
+          <td>{{ t.leg_id }}</td>
+          <td>{{ row.attempt }}</td>
+          <td><app-option-contract [contract]="row.contract" /></td>
+          <td class="num">{{ t.contracts }}</td>
+          <td><app-timestamp-display [value]="t.entry_decided_at_ms" mode="et" granularity="time" /></td>
+          <td><app-timestamp-display [value]="t.entry.bar_close_ms" mode="et" granularity="minute" /></td>
+          <td class="num">{{ t.entry.seen_usd | authoredUsd }}</td>
+          <td class="num">{{ t.entry.filled_usd | authoredUsd }}</td>
+          <td class="num">@if (t.starting_price_usd; as price) { {{ price | authoredUsd }} } @else { <ng-container [ngTemplateOutlet]="absent" /> }</td>
+          <td class="num">@if (t.momentum_level_usd; as price) { {{ price | authoredUsd }} } @else { <ng-container [ngTemplateOutlet]="absent" /> }</td>
+          <td class="num">@if (t.stop_level_usd; as price) { {{ price | authoredUsd }} } @else { <ng-container [ngTemplateOutlet]="absent" /> }</td>
+          <td>{{ t.exit_reason | receiptLabel }}</td>
+          <td><app-timestamp-display [value]="t.exit_decided_at_ms" mode="et" granularity="time" /></td>
+          @if (t.sale; as sale) {
+            <td><app-timestamp-display [value]="sale.bar_close_ms" mode="et" granularity="minute" /></td>
+            <td class="num">{{ sale.seen_usd | authoredUsd }}</td>
+            <td class="num">{{ sale.filled_usd | authoredUsd }}</td>
+          } @else if (t.mark; as mark) {
+            <td colspan="3" class="marked">Marked at {{ mark.price_usd | authoredUsd }}, not sold, last traded in the minute ending <app-timestamp-display [value]="mark.bar_close_ms" mode="et" granularity="minute" /></td>
+          }
+          <td class="num">{{ t.entry_fee_usd | authoredUsd }}</td>
+          <td class="num">{{ t.exit_fee_usd | authoredUsd }}</td>
+          <td class="num">{{ t.pnl_usd | authoredUsd }}</td>
+        </tr>
+      }
+    </tbody>
+  </table>
+</div>

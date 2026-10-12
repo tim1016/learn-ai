@@ -1,0 +1,18 @@
+@let state = cell();
+@if (state.kind === 'traded') {
+  <span class="price">{{ state.price | authoredUsd }}</span>
+  <span class="when">in the minute ending <app-timestamp-display [value]="state.timeMs" mode="et" granularity="minute" /></span>
+} @else if (state.kind === 'incomplete') {
+  <span class="state state--bad">Traded, but the server sent no {{ state.missing === 'price' ? 'price' : 'time' }} for the trade, so none is shown</span>
+} @else if (state.kind === 'did_not_trade') {
+  <span class="state">Did not trade by then</span>
+} @else if (state.kind === 'not_stored') {
+  <span class="state">Listed; prices not stored</span>
+} @else if (state.kind === 'unreadable') {
+  <span class="state state--bad">Prices cannot be read</span>
+  @if (state.problem; as why) { <span class="why">{{ why }}</span> }
+} @else {
+  <span class="state state--bad">This page does not know this state of its price: {{ state.code | receiptLabel }}</span>
+}
+@if (!contract().standard) { <span class="nonstandard">Non-standard</span> }
+<code class="symbol">{{ contract().symbol }}</code>

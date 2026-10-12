@@ -1,0 +1,8 @@
+.counts { display: flex; flex-wrap: wrap; gap: var(--space-3) var(--space-6); margin: 0; }
+.counts div { display: grid; gap: var(--space-1); }
+.counts dt { color: var(--text-secondary); font-size: var(--fs-xs); }
+.counts dd { margin: 0; font-size: var(--fs-lg); font-variant-numeric: tabular-nums; }
+.stale { border: 1px solid var(--warn); border-radius: var(--radius); background: var(--warn-soft); padding: var(--space-2) var(--space-3); font-size: var(--fs-sm); }
+.stretch { display: grid; gap: var(--space-2); justify-items: start; }
+.again { justify-self: start; background: none; border: 1px solid var(--border-strong); color: var(--text-secondary); border-radius: var(--radius); padding: var(--space-1) var(--space-3); font: inherit; font-size: var(--fs-sm); cursor: pointer; }
+.again:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

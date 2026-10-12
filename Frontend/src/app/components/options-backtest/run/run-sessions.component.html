@@ -1,0 +1,40 @@
+<section class="sessions" aria-label="Sessions">
+  <h3>Sessions</h3>
+  <dl class="counts">
+    <div><dt>Tested</dt><dd>{{ figures().sessions_tested }}</dd></div>
+    <div><dt>Traded</dt><dd>{{ figures().sessions_traded }}</dd></div>
+    <div><dt>No trade</dt><dd>{{ figures().sessions_no_trade }}</dd></div>
+    <div>
+      <dt>Skipped</dt>
+      <dd>{{ figures().sessions_skipped }}</dd>
+      <dd class="by">
+        @for (skip of figures().skipped_by_reason; track skip.reason) { <span>{{ skip.reason | receiptLabel }}: {{ skip.count }}</span> }
+      </dd>
+    </div>
+    <div><dt>Incomplete</dt><dd>{{ figures().sessions_incomplete }}</dd></div>
+    <div><dt>Profitable</dt><dd>{{ figures().sessions_profitable }}</dd></div>
+    <div><dt>Losing</dt><dd>{{ figures().sessions_losing }}</dd></div>
+    <div><dt>Break-even</dt><dd>{{ figures().sessions_break_even }}</dd></div>
+  </dl>
+</section>
+<section class="sessions" aria-label="What did not trade">
+  <h3>What did not trade</h3>
+  <dl class="counts">
+    <div><dt>Sessions without momentum</dt><dd>{{ figures().sessions_without_momentum }}</dd></div>
+    <div><dt>Entries refused for cash</dt><dd>{{ figures().entries_refused_for_cash }}</dd></div>
+    <div><dt>Re-entries blocked by the cutoff</dt><dd>{{ figures().re_entries_blocked_by_cutoff }}</dd></div>
+    <div><dt>Entries dropped</dt><dd>{{ figures().entries_dropped }}</dd></div>
+    <div>
+      <dt>Picks refused</dt>
+      <dd class="by">
+        @for (pick of figures().picks_refused_by_reason; track pick.reason) { <span>{{ pick.reason | receiptLabel }}: {{ pick.count }}</span> }
+      </dd>
+    </div>
+    <div><dt>Legs without a starting price</dt><dd>{{ figures().legs_without_a_starting_price }}</dd></div>
+    <div>
+      <dt>Re-entries lost</dt>
+      <dd>{{ figures().re_entries_lost }}</dd>
+      <dd class="by">Also counted under the causes above; not to be added to them.</dd>
+    </div>
+  </dl>
+</section>

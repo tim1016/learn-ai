@@ -1,0 +1,23 @@
+<section class="card" aria-labelledby="ob-entry-title">
+  <div class="card__head">
+    <h2 id="ob-entry-title">Entry settings</h2>
+    <p class="hint">Times are New York clock times, held as a distance from the open or the close, so a half day keeps its shape.</p>
+  </div>
+  <div class="fields">
+    <div class="field">
+      <label for="ob-entry-time">Entry time</label>
+      <input id="ob-entry-time" pInputText type="time" step="60" [formField]="form().entryClock" [attr.aria-invalid]="problems().has(field.entry)" aria-describedby="ob-entry-note" />
+      <p id="ob-entry-note" class="words">@if (problems().get(field.entry); as message) { <span class="problem" role="alert">{{ message }}</span> } @else { {{ entryWords() }} }</p>
+    </div>
+    <div class="field">
+      <label for="ob-exit-time">Exit time</label>
+      <input id="ob-exit-time" pInputText type="time" step="60" [formField]="form().exitClock" [attr.aria-invalid]="problems().has(field.exit)" aria-describedby="ob-exit-note" />
+      <p id="ob-exit-note" class="words">@if (problems().get(field.exit); as message) { <span class="problem" role="alert">{{ message }}</span> } @else { {{ exitWords() }} }</p>
+    </div>
+    <div class="field">
+      <app-options-backtest-switch [formField]="form().noReentryOn" label="No re-entry after" />
+      <input pInputText type="time" step="60" aria-label="No re-entry after time" [formField]="form().noReentryClock" [attr.aria-invalid]="problems().has(field.noReentry)" aria-describedby="ob-no-reentry-note" />
+      <p id="ob-no-reentry-note" class="words">@if (problems().get(field.noReentry); as message) { <span class="problem" role="alert">{{ message }}</span> } @else if (form().noReentryOn().value()) { {{ noReentryWords() }} }</p>
+    </div>
+  </div>
+</section>

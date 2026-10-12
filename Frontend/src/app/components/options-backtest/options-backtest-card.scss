@@ -1,0 +1,23 @@
+// The Options Backtest page's cards (#3030): one look for every section of the setup.
+:host { display: block; min-width: 0; }
+// The shared picker's name does not wrap, so its minimum width would otherwise stretch the card's column past the card.
+app-symbol-picker { display: block; min-width: 0; }
+p { margin: 0; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.card { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: var(--radius); padding: var(--space-4) var(--space-5); min-width: 0; }
+.card__head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; }
+.card h2 { margin: 0; font-size: var(--fs-md); font-weight: var(--fw-semi); }
+.card h2:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.hint { color: var(--text-secondary); font-size: var(--fs-sm); }
+.fields { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-4) var(--space-5); }
+.field { display: grid; gap: var(--space-1); font-size: var(--fs-sm); color: var(--text-secondary); align-content: start; min-width: 0; }
+.field input[type='text'], .field input[type='time'], .field input[type='number'] { width: 9rem; }
+.field--narrow input { width: 6rem; }
+.words { color: var(--text-secondary); font-size: var(--fs-xs); }
+.problem { color: var(--bear); font-size: var(--fs-xs); }
+input[aria-invalid='true'] { outline: 1px solid var(--bear); }
+.unit { display: inline-flex; align-items: center; gap: var(--space-2); }
+
+@media (max-width: 768px) {
+  .card { padding: var(--space-3); }
+}

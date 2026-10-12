@@ -1,0 +1,25 @@
+<section class="card" aria-labelledby="ob-costs-title">
+  <div class="card__head"><h2 id="ob-costs-title">Costs</h2></div>
+  <div class="fields">
+    <div class="field">
+      <label for="ob-cash">Cash</label>
+      <span class="unit">$ <input id="ob-cash" pInputText type="text" inputmode="decimal" autocomplete="off" [formField]="form().cash" [attr.aria-invalid]="problems().has(field.cash)" [attr.aria-describedby]="problems().has(field.cash) ? 'ob-cash-note' : null" /></span>
+      @if (problems().get(field.cash); as message) { <p id="ob-cash-note" class="problem" role="alert">{{ message }}</p> }
+    </div>
+    <div class="field">
+      <label for="ob-slippage">Slippage (percent)</label>
+      <span class="unit"><input id="ob-slippage" pInputText type="text" inputmode="decimal" autocomplete="off" [formField]="form().slippage" [attr.aria-invalid]="problems().has(field.slippage)" [attr.aria-describedby]="problems().has(field.slippage) ? 'ob-slippage-note' : null" /> %</span>
+      @if (problems().get(field.slippage); as message) { <p id="ob-slippage-note" class="problem" role="alert">{{ message }}</p> }
+    </div>
+    <div class="field">
+      <span>Fees</span>
+      <app-options-backtest-pill-choice [formField]="form().feeKind" [options]="feeChoices" label="Fees" />
+      @if (problems().get(field.fees); as message) { <p class="problem" role="alert">{{ message }}</p> }
+    </div>
+    <div class="field">
+      <label for="ob-per-contract-fee">Dollars per contract</label>
+      <span class="unit">$ <input id="ob-per-contract-fee" pInputText type="text" inputmode="decimal" autocomplete="off" [formField]="form().perContractFee" [attr.aria-invalid]="problems().has(field.perContractFee)" [attr.aria-describedby]="problems().has(field.perContractFee) ? 'ob-fee-note' : null" /></span>
+      @if (problems().get(field.perContractFee); as message) { <p id="ob-fee-note" class="problem" role="alert">{{ message }}</p> }
+    </div>
+  </div>
+</section>

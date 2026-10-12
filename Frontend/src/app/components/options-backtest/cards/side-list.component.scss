@@ -1,0 +1,27 @@
+:host { display: block; min-width: 0; }
+p { margin: 0; }
+.side { display: grid; gap: var(--space-2); align-content: start; width: 17rem; background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: var(--radius); padding: var(--space-3); }
+.side--collapsed { width: 2.75rem; padding: var(--space-2); justify-items: center; }
+.toggle { display: inline-flex; align-items: center; gap: var(--space-2); background: none; border: 0; padding: var(--space-1); color: var(--text-secondary); font: inherit; font-size: var(--fs-sm); font-weight: var(--fw-semi); cursor: pointer; }
+.toggle:hover { color: var(--text-primary); }
+.toggle:focus-visible, .open:focus-visible, .again:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#ob-side-body { display: grid; gap: var(--space-2); min-width: 0; }
+#ob-side-body[hidden] { display: none; }
+.note { font-size: var(--fs-xs); color: var(--text-secondary); }
+.problem { color: var(--bear); }
+.again { justify-self: start; background: none; border: 1px solid var(--border-strong); color: var(--text-secondary); border-radius: var(--radius); padding: var(--space-1) var(--space-3); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+.list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1); }
+.row { display: flex; align-items: center; gap: var(--space-1); border-radius: var(--radius); }
+.row--current { background: var(--accent-faint); }
+.open, .blocked { flex: 1 1 auto; min-width: 0; display: grid; gap: 2px; text-align: left; padding: var(--space-2); background: none; border: 0; border-radius: var(--radius); color: var(--text-primary); font: inherit; font-size: var(--fs-sm); }
+.open { cursor: pointer; }
+.open:hover:not(:disabled) { background: var(--bg-hover); }
+.open:disabled { opacity: 0.5; cursor: default; }
+.name { overflow-wrap: anywhere; }
+.meta { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--text-secondary); font-size: var(--fs-xs); }
+.tag { border: 1px solid var(--border-strong); border-radius: var(--radius-pill); padding: 0 var(--space-2); }
+.reason { color: var(--text-secondary); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+
+@media (max-width: 768px) {
+  .side, .side--collapsed { width: auto; justify-items: stretch; }
+}

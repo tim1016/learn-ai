@@ -1,0 +1,8 @@
+<div class="chain">
+  <app-options-backtest-past-chain-controls
+    [form]="controls" [session]="session()" [strikesShown]="strikesShown()" [mostStrikes]="mostStrikes()"
+    [underlyingProblem]="underlyingProblem()" [dateProblem]="dateProblem()" [timeProblem]="timeProblem()" [strikesProblem]="strikesProblem()" />
+  <app-options-backtest-past-chain-download [plan]="plan()" [state]="downloadState()" (start)="startDownload()" />
+  <app-options-backtest-past-chain-expiries [view]="dayView()" [refusal]="refusal()" [picked]="expiryMs()" [again]="dayAgain()" (pick)="pickExpiry($event)" (retry)="retryDay()" />
+  <app-options-backtest-past-chain-table [view]="chainView()" [expiryMs]="expiryMs()" [again]="chainAgain()" [downloadOffered]="downloadOffered()" (retry)="retryChain()" />
+</div>

@@ -19,6 +19,7 @@ import { AlpacaHomeComponent } from './components/brokers/alpaca-home/alpaca-hom
 import { AlpacaActivityPageComponent } from './components/brokers/alpaca-desk/activity/alpaca-activity-page.component';
 import { BotPanelShellComponent } from './components/broker/v2-panel/panel-shell/bot-panel-shell.component';
 import { EntryComponent } from './components/entry/entry.component';
+import { OptionsBacktestPageComponent } from './components/options-backtest/options-backtest-page.component';
 import { alpacaSurfaceRedirectGuard } from './fleet/alpaca-surface-redirect.guard';
 import { accountWorkspaceFixRoute, type AccountWorkspaceFixDestination } from './fleet/account-workspace';
 import { routes } from './app.routes';
@@ -139,6 +140,13 @@ describe('routes', () => {
     await router.navigateByUrl(path);
 
     expect(router.url).toBe(expectedUrl);
+  });
+
+  it('lazily loads the Options Backtest page at its own address', async () => {
+    const route = routes.find((candidate) => candidate.path === 'options-backtest');
+    if (route?.loadComponent === undefined) throw new Error('Options Backtest route is missing.');
+
+    expect(await route.loadComponent()).toBe(OptionsBacktestPageComponent);
   });
 
   it('lazily loads the Data Lake Observatory and keeps it distinct from Data Lab', async () => {

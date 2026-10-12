@@ -1,0 +1,17 @@
+<app-asset-identity [symbol]="symbol()" size="xs" [logo]="false" />
+@let under = view();
+@if (under.kind === 'priced') {
+  <span class="price">{{ under.price | authoredUsd }}</span>
+  <span class="when">in the minute ending <app-timestamp-display [value]="under.timeMs" mode="et" granularity="minute" /></span>
+} @else if (under.kind === 'incomplete') {
+  <span class="state state--bad">Priced, but the server sent no {{ under.missing === 'price' ? 'price' : 'time' }} for it, so none is shown</span>
+} @else if (under.kind === 'no_bar_yet') {
+  <span class="state">No bar has closed by then</span>
+} @else if (under.kind === 'not_stored') {
+  <span class="state">Its bars are not stored</span>
+} @else if (under.kind === 'unreadable') {
+  <span class="state state--bad">Its bars cannot be read</span>
+  @if (under.problem; as why) { <span class="why">{{ why }}</span> }
+} @else {
+  <span class="state state--bad">This page does not know this state of its price: {{ under.code | receiptLabel }}</span>
+}

@@ -1,0 +1,11 @@
+<div class="frame">
+  <div #canvas class="canvas" role="img" [attr.aria-label]="plan().label" [style.height.px]="height()"></div>
+  @if (tip(); as shown) {
+    <div class="tip" aria-hidden="true" [class.tip--left]="shown.flip" [style.left.px]="shown.left" [style.top.px]="shown.top">
+      <strong>{{ shown.heading }}</strong>
+      <ul>
+        @for (line of shown.lines; track $index) { <li>{{ line }}</li> }
+      </ul>
+    </div>
+  }
+</div>

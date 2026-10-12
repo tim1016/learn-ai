@@ -1,0 +1,28 @@
+<section class="tolerance" aria-label="Slippage tolerance">
+  <h3>Slippage tolerance</h3>
+  <p class="sentence">{{ sentence() }}</p>
+  @if (points().length > 0) {
+    <div class="table-wrap">
+      <table class="ladder">
+        <caption class="sr-only">The run replayed at each slippage</caption>
+        <thead>
+          <tr>
+            <th scope="col">Slippage (percent)</th><th scope="col" class="num">Net profit</th><th scope="col" class="num">Trades</th>
+            <th scope="col" class="num">Traded sessions</th><th scope="col" class="num">Winning sessions</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (point of points(); track point.slippage_percent) {
+            <tr [class.own]="point.is_setups_own">
+              <th scope="row">{{ point.slippage_percent }}@if (point.is_setups_own) { <span class="tag">this setup</span> }</th>
+              <td class="num">{{ point.net_profit_usd | authoredUsd }}</td>
+              <td class="num">{{ point.trades }}</td>
+              <td class="num">{{ point.traded_sessions }}</td>
+              <td class="num">{{ point.winning_sessions }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+</section>

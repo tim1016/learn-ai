@@ -1,0 +1,8 @@
+:host { display: grid; gap: var(--space-4); min-width: 0; }
+p { margin: 0; }
+h3 { margin: 0 0 var(--space-2); font-size: var(--fs-sm); font-weight: var(--fw-semi); }
+.part { display: grid; gap: var(--space-2); font-size: var(--fs-sm); }
+.reason { display: grid; gap: var(--space-1); padding: var(--space-2) var(--space-3); border-inline-start: 3px solid var(--bear); background: var(--bg-elevated); border-radius: var(--radius); }
+.message { color: var(--text-secondary); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.days { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.rows { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1); font-size: var(--fs-xs); }

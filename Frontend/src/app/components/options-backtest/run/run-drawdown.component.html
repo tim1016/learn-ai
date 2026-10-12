@@ -1,0 +1,25 @@
+<section class="drawdown" aria-label="Maximum drawdown">
+  <h3>Maximum drawdown</h3>
+  <p class="note">Both are measured at the end of each session, not minute by minute.</p>
+  <div class="pair">
+    @for (entry of entries(); track entry.title) {
+      <div class="fall">
+        <h4>{{ entry.title }}</h4>
+        @if (entry.drawdown; as fall) {
+          <p class="big">{{ fall.fall_usd | authoredUsd }}</p>
+          <ul>
+            <li>As a fraction of the peak: {{ fall.fall_ratio.rounded_to_6_places }} (rounded to 6 places)</li>
+            @let peak = fall.peak_session_open_ms ?? null;
+            <li>
+              Peak equity: {{ fall.peak_equity_usd | authoredUsd }}
+              @if (peak !== null) { at the end of <app-timestamp-display [value]="peak" mode="date-et" granularity="date" /> } @else { before the first session }
+            </li>
+            <li>Trough equity: {{ fall.trough_equity_usd | authoredUsd }} at the end of <app-timestamp-display [value]="fall.trough_session_open_ms" mode="date-et" granularity="date" /></li>
+          </ul>
+        } @else {
+          <p class="note">Equity never fell below a peak at the end of a session.</p>
+        }
+      </div>
+    }
+  </div>
+</section>

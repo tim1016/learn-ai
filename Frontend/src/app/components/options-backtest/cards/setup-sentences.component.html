@@ -1,0 +1,19 @@
+<div class="blocks">
+  @for (notice of summary().notices; track $index) { <p class="notice">{{ notice }}</p> }
+  <div class="block">
+    @for (sentence of summary().window; track $index) { <p class="sentence">{{ sentence }}</p> }
+  </div>
+  <ul class="legs">
+    @for (leg of summary().legs; track leg.leg_id) {
+      <li class="block block--leg">
+        @for (sentence of leg.sentences; track $index) { <p class="sentence">{{ sentence }}</p> }
+      </li>
+    }
+  </ul>
+  <div class="block">
+    @for (sentence of summary().square_off; track $index) { <p class="sentence">{{ sentence }}</p> }
+  </div>
+  <div class="block">
+    @for (sentence of summary().costs; track $index) { <p class="sentence">{{ sentence }}</p> }
+  </div>
+</div>

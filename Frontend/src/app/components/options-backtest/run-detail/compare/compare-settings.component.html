@@ -1,0 +1,43 @@
+<section class="block" aria-label="What differs between the two runs">
+  <h3>What differs between the two runs</h3>
+  @if (nothing()) {
+    <p class="muted" role="status">The two runs used the same settings and the same dates.</p>
+  } @else {
+    @if (settings().length === 0) {
+      <p class="muted" role="status">The settings are the same in both runs.</p>
+    } @else {
+      <div class="table-wrap" role="region" tabindex="0" aria-label="Settings that differ (scrolls sideways)">
+        <table class="rows">
+          <caption class="sr-only">Settings that differ between run A and run B</caption>
+          <thead><tr><th scope="col">Setting</th><th scope="col">Run A</th><th scope="col">Run B</th></tr></thead>
+          <tbody>
+            @for (each of settings(); track $index) {
+              <tr><th scope="row">{{ each.label }}</th><td>{{ each.a }}</td><td>{{ each.b }}</td></tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+    @if (range(); as dates) {
+      <div class="table-wrap" role="region" tabindex="0" aria-label="Dates that differ (scrolls sideways)">
+        <table class="rows">
+          <caption class="sr-only">The dates each run covered</caption>
+          <thead><tr><th scope="col">Dates</th><th scope="col">Run A</th><th scope="col">Run B</th></tr></thead>
+          <tbody>
+            <tr>
+              <th scope="row">First day</th>
+              <td><app-timestamp-display [value]="dates.a.first_session_open_ms" mode="date-et" granularity="date" /></td>
+              <td><app-timestamp-display [value]="dates.b.first_session_open_ms" mode="date-et" granularity="date" /></td>
+            </tr>
+            <tr>
+              <th scope="row">Last day</th>
+              <td><app-timestamp-display [value]="dates.a.last_session_open_ms" mode="date-et" granularity="date" /></td>
+              <td><app-timestamp-display [value]="dates.b.last_session_open_ms" mode="date-et" granularity="date" /></td>
+            </tr>
+            <tr><th scope="row">Sessions asked for</th><td>{{ dates.a.sessions_requested }}</td><td>{{ dates.b.sessions_requested }}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    }
+  }
+</section>

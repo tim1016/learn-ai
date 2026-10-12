@@ -1,0 +1,41 @@
+import type { SetupRequest } from './options-backtest.types';
+
+/** A setup is a few kilobytes of JSON. A file over this is not one, and is neither read nor sent. */
+export const MAX_SETUP_FILE_BYTES = 1024 * 1024;
+
+export type SetupFile = { readonly ok: true; readonly json: unknown } | { readonly ok: false; readonly message: string };
+
+/** Reads an import file as JSON. Whether it is a setup is the server's to say; a file too large to be one is refused unread. */
+export async function readSetupFile(file: File): Promise<SetupFile> {
+  if (file.size > MAX_SETUP_FILE_BYTES) {
+    const megabytes = (file.size / MAX_SETUP_FILE_BYTES).toFixed(1);
+    return { ok: false, message: `That file is ${megabytes} MB. A setup file is a few kilobytes, so one over 1 MB is not read.` };
+  }
+  let text: string;
+  try {
+    text = await file.text();
+  } catch (error) {
+    return { ok: false, message: `The file could not be read: ${reasonOf(error)}` };
+  }
+  try {
+    const json: unknown = JSON.parse(text);
+    return { ok: true, json };
+  } catch (error) {
+    return { ok: false, message: `That file is not JSON: ${reasonOf(error)}` };
+  }
+}
+
+/** The export file's bytes: the setup as the server read it, which is exactly what the routes accept. */
+export function setupFileBlob(body: SetupRequest): Blob {
+  return new Blob([`${JSON.stringify(body, null, 2)}\n`], { type: 'application/json' });
+}
+
+/** The export file's name: the setup's name, or its underlying when it has none yet. */
+export function setupFileName(name: string, underlying: string): string {
+  const base = name.trim() === '' ? `${underlying} setup` : name.trim();
+  return `${base.replace(/[\\/:*?"<>|]/g, '-')}.json`;
+}
+
+function reasonOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
