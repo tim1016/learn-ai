@@ -145,7 +145,7 @@ async def enforce_connection_envelope() -> dict[str, Any]:
     """
     from app.data_lake import catalog_client
     from app.research.benchmark import CONNECTION_INVENTORY_RESEARCH_CAP, connection_inventory
-    from app.utils.background_loop import run_on_background_loop
+    from app.research.persistence.db import writer_loop_call
 
     admission_n = settings.RESEARCH_ADMISSION_CONNECTIONS
     coordination_n = settings.RESEARCH_COORDINATION_CONNECTIONS
@@ -155,8 +155,8 @@ async def enforce_connection_envelope() -> dict[str, Any]:
             f"{coordination_n} coordination) exceeds the {CONNECTION_INVENTORY_RESEARCH_CAP}-connection "
             "research cap the deployment's connection inventory reserves; refusing to start"
         )
-    await asyncio.to_thread(
-        run_on_background_loop, catalog_client.init_pool(max_size=coordination_n - 1), timeout=30.0
+    await writer_loop_call(
+        catalog_client.init_pool(max_size=coordination_n - 1), timeout=30.0
     )
     inventory = connection_inventory(research_cap=admission_n + coordination_n)
     if inventory["meets_required_free"] is False:
@@ -179,10 +179,10 @@ async def _ensure_schema_via_writer_loop() -> None:
             # Opening this loop's first pooled connection applies every pending version.
             pass
 
-    from app.utils.background_loop import run_on_background_loop
+    from app.research.persistence.db import writer_loop_call
 
     try:
-        await asyncio.to_thread(run_on_background_loop, _ensure(), timeout=60.0)
+        await writer_loop_call(_ensure())
     except Exception:
         logger.warning(
             "research schema could not be ensured; research routes retry on first use",

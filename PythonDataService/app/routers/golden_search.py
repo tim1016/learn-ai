@@ -346,9 +346,10 @@ async def start_golden_search_job(req: GoldenSearchJobRequest) -> GoldenSearchJo
         raise await _refused(exc) from exc
     except CallerStoppedWaitingError as exc:
         # The writer loop stalled past the call bound: the binding's fate is
-        # unknown — it may still commit. Release behind the stall (the
-        # writer pool's FIFO waiters queue the release behind the stalled
-        # bind's holder) and answer retryable, never stranding the study on
+        # unknown — it may still commit. Release behind the stall (both take
+        # the study row's FOR UPDATE lock, and the writer pool's FIFO
+        # waiters queue the release behind the bind when the pool is
+        # saturated) and answer retryable, never stranding the study on
         # a job id whose retry would be refused as a dead redelivery (#3047
         # review).
         with contextlib.suppress(CallerStoppedWaitingError):

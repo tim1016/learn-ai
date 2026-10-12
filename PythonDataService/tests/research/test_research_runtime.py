@@ -506,6 +506,16 @@ def test_the_envelope_caps_the_writer_loop_and_refuses_an_oversized_configuratio
     monkeypatch.setattr(settings, "RESEARCH_ADMISSION_CONNECTIONS", 8)
     monkeypatch.setattr(settings, "RESEARCH_COORDINATION_CONNECTIONS", 4)
 
+    def close_writer_loop_pool() -> None:
+        # Close the writer loop's catalog pool from a thread: the pool is
+        # bound to that loop, and close_pool only touches the calling
+        # loop's.
+        closer = threading.Thread(
+            target=lambda: run_on_background_loop(catalog_client.close_pool(), timeout=5.0), daemon=True
+        )
+        closer.start()
+        closer.join(timeout=5.0)
+
     # A configuration that cannot fit the research cap is refused, never
     # repaired by raising anyone's ceiling.
     with monkeypatch.context() as narrower:
@@ -518,11 +528,7 @@ def test_the_envelope_caps_the_writer_loop_and_refuses_an_oversized_configuratio
     # in production). The daily tier shares one process, and an earlier slow
     # test may have lazily built that pool at the module ceiling — close it
     # so the envelope is this loop's first initializer here too.
-    stale = threading.Thread(
-        target=lambda: run_on_background_loop(catalog_client.close_pool(), timeout=5.0), daemon=True
-    )
-    stale.start()
-    stale.join(timeout=5.0)
+    close_writer_loop_pool()
 
     try:
         # The honest envelope initializes the shared writer loop at the
@@ -535,8 +541,4 @@ def test_the_envelope_caps_the_writer_loop_and_refuses_an_oversized_configuratio
         )
     finally:
         # The sized pool belongs to this test; later tests lazily build their own.
-        closer = threading.Thread(
-            target=lambda: run_on_background_loop(catalog_client.close_pool(), timeout=5.0), daemon=True
-        )
-        closer.start()
-        closer.join(timeout=5.0)
+        close_writer_loop_pool()

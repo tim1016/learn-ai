@@ -662,32 +662,34 @@ async def test_two_real_children_overlap_independent_evaluations(conn, tmp_path:
 
     overlaps = 0
     widths: dict[int, float] = {}
-    for width in (1, 2, 4):
-        runs.clear()
-        dispatch = pool_module.PooledWorkerDispatch(context, workers=width, window=width)
-        try:
-            started = time.monotonic()
-            metrics = await asyncio.to_thread(evaluate_through, dispatch, points, f"pool-probe-{width}")
-            widths[width] = time.monotonic() - started
-            assert all(m.status == "completed" for m in metrics), f"width {width}: every real evaluation completed ({[m.error for m in metrics]})"
-        finally:
-            dispatch.close()
-        workers = {worker for worker, _, _ in runs}
-        assert len(workers) == min(width, len(points)), f"width {width}: {len(workers)} actual children served the batch"
-        for first in runs:
-            for second in runs:
-                if first[0] != second[0] and first[1] < second[2] and second[1] < first[2]:
-                    overlaps += 1
-        logger.info(
-            "research pool measurement (#3046 evidence): width=%d elapsed=%.2fs tasks=%d",
-            width,
-            widths[width],
-            len(runs),
-        )
+    try:
+        for width in (1, 2, 4):
+            runs.clear()
+            dispatch = pool_module.PooledWorkerDispatch(context, workers=width, window=width)
+            try:
+                started = time.monotonic()
+                metrics = await asyncio.to_thread(evaluate_through, dispatch, points, f"pool-probe-{width}")
+                widths[width] = time.monotonic() - started
+                assert all(m.status == "completed" for m in metrics), f"width {width}: every real evaluation completed ({[m.error for m in metrics]})"
+            finally:
+                dispatch.close()
+            workers = {worker for worker, _, _ in runs}
+            assert len(workers) == min(width, len(points)), f"width {width}: {len(workers)} actual children served the batch"
+            for first in runs:
+                for second in runs:
+                    if first[0] != second[0] and first[1] < second[2] and second[1] < first[2]:
+                        overlaps += 1
+            logger.info(
+                "research pool measurement (#3046 evidence): width=%d elapsed=%.2fs tasks=%d",
+                width,
+                widths[width],
+                len(runs),
+            )
 
-    assert overlaps >= 1, "two real children ran independent evaluations at the same time"
-    assert widths[4] < widths[1] * 1.5, "width never made the corpus dramatically slower (transport sanity)"
-    _close_writer_loop_catalog_pool()
+        assert overlaps >= 1, "two real children ran independent evaluations at the same time"
+        assert widths[4] < widths[1] * 1.5, "width never made the corpus dramatically slower (transport sanity)"
+    finally:
+        _close_writer_loop_catalog_pool()
 
 
 # ── #3065/#3066 review regressions ─────────────────────────────────────────
