@@ -8,6 +8,7 @@ prices. The dates are checked against the canonical calendar when the module loa
 
 from __future__ import annotations
 
+import random
 from datetime import date
 from decimal import Decimal
 from functools import cache
@@ -155,6 +156,34 @@ def test_the_refusals_that_do_not_need_a_price_come_from_prepare_leg_and_the_str
     assert isinstance(prepared, PreparedLeg)
     refused = prepared.pick(Decimal("590"))
     assert isinstance(refused, PickRefused) and refused.reason is PickRefusal.STRIKE_NOT_LISTED
+
+
+@pytest.mark.parametrize("order", ["as listed", "reversed", "shuffled"])
+def test_the_strikes_a_leg_steps_along_do_not_depend_on_the_order_the_listing_arrives_in(order: str) -> None:
+    contracts = list(_contracts((_MONDAY,)))
+    if order == "reversed":
+        contracts.reverse()
+    elif order == "shuffled":
+        random.Random(7).shuffle(contracts)
+    listing = _listing(*contracts)
+    # Strikes 580, 585, 590, 595, 600. At 592.5 the money is the lower of 590 and 595; one step up is 595, one down 585.
+    expected = {"atm": 590, "up": 595, "down": 585}
+    rules = {
+        "atm": {"kind": "atm"},
+        "up": {"kind": "atm_offset", "steps": 1},
+        "down": {"kind": "atm_offset", "steps": -1},
+    }
+
+    for name, strike_rule in rules.items():
+        leg = _leg({"kind": "same_day"}, strike_rule, "call")
+        prepared = prepare_leg(leg, listing=listing, trading_date=_MONDAY)
+        assert isinstance(prepared, PreparedLeg)
+        for picked in (
+            prepared.pick(Decimal("592.5")),
+            pick_contract(leg, listing=listing, trading_date=_MONDAY, underlying_price=Decimal("592.5")),
+        ):
+            assert isinstance(picked, Picked)
+            assert picked.contract.strike == Decimal(expected[name]), f"{order}, {name}"
 
 
 def test_a_prepared_leg_has_settled_its_expiry_and_picks_the_strike_at_each_price() -> None:

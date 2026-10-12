@@ -129,6 +129,9 @@ def test_underlying_bars_that_repeat_a_minute_are_refused_and_not_averaged_or_ov
     with pytest.raises(MalformedBars, match="twice"):
         run_sessions(setup(leg()), [THU], data)
 
+    # It was refused before any contract was read on the strength of it.
+    assert [question[0] for question in data.asked] == ["underlying", "listing"]
+
 
 def test_a_contract_day_that_repeats_a_minute_is_refused() -> None:
     call = contract_on(THU, "call", 500)

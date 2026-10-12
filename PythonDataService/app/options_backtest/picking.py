@@ -36,6 +36,7 @@ were separated.
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -121,9 +122,18 @@ def _require_a_price(underlying_price: Decimal) -> None:
 
 
 def _the_money(ladder: Sequence[int], underlying_price: Decimal) -> int:
-    """Where in the sorted ``ladder`` the money is: the strike nearest the price, the lower of two as near."""
+    """Where in the sorted ``ladder`` the money is: the strike nearest the price, the lower of two as near.
+
+    Only the strike just below the price and the one at or above it can be nearest, so the ladder is bisected and not
+    walked: a run asks this at every minute of a session.
+    """
     money = Fraction(underlying_price) * _THOUSANDTHS_PER_DOLLAR
-    return min(range(len(ladder)), key=lambda at: (abs(ladder[at] - money), ladder[at]))
+    above = bisect_left(ladder, money)
+    if above == 0:
+        return 0
+    if above == len(ladder):
+        return above - 1
+    return above - 1 if money - ladder[above - 1] <= ladder[above] - money else above
 
 
 def strike_for(rule: StrikeRule, *, ladder_thousandths: Collection[int], underlying_price: Decimal) -> int | None:

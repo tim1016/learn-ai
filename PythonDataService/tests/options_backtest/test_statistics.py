@@ -322,6 +322,33 @@ def test_a_month_is_the_new_york_month_of_the_trading_date_and_the_table_follows
     assert [(row.year, row.month, row.sessions) for row in summary.by_month] == [(2026, 12, 1), (2027, 1, 1)]
 
 
+def test_a_session_is_without_momentum_when_a_leg_took_a_starting_price_and_no_leg_reached_its_momentum() -> None:
+    # Session 1: a starting price taken and momentum reached: not counted. Sessions 2 and 3: a starting price and no
+    # momentum: counted. Session 4: no leg waited on momentum at all: not counted. Two sessions are without momentum.
+    waited = an_event(EventKind.STARTING_PRICE_TAKEN, "a")
+    reached = an_event(EventKind.MOMENTUM_HIT, "a")
+    days = (SEP_29, SEP_30, OCT_1, OCT_2)
+    sessions = [
+        a_session(days[0], "10000.00", status=SessionStatus.NO_TRADE, events=(waited, reached)),
+        a_session(days[1], "10000.00", status=SessionStatus.NO_TRADE, events=(waited,)),
+        a_session(days[2], "10000.00", status=SessionStatus.NO_TRADE, events=(waited, an_event(EventKind.PICKED, "b"))),
+        a_session(days[3], "10000.00", status=SessionStatus.NO_TRADE, events=(an_event(EventKind.PICKED, "a"),)),
+    ]
+
+    assert summarize_run(sessions, starting_cash_usd=STARTING).sessions_without_momentum == 2
+
+
+def test_the_same_month_of_two_years_is_two_rows() -> None:
+    sessions = [
+        a_session(date(2026, 12, 30), "10000.00", status=SessionStatus.NO_TRADE),
+        a_session(date(2027, 12, 30), "10000.00", status=SessionStatus.NO_TRADE),
+    ]
+
+    summary = summarize_run(sessions, starting_cash_usd=STARTING)
+
+    assert [(row.year, row.month, row.sessions) for row in summary.by_month] == [(2026, 12, 1), (2027, 12, 1)]
+
+
 def test_a_trade_that_gained_on_the_price_and_lost_on_its_fees_is_a_lost_trade() -> None:
     # Bought 1.00 and sold 1.01: +1.00 on the price; fees 0.65 + 0.65 = 1.30 make it -0.30.
     sessions = [
