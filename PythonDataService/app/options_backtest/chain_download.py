@@ -17,10 +17,12 @@ listing does not hold it, so a listing that could not be captured fails every co
 and no contract is tried. What is raised is the caller's mistake (a request refused before anything is asked) and an
 unreachable catalog.
 
-Every capture holds ``option_lake.vendor_request_gate`` while it asks, the one limit of
-``option_lake.MAX_VENDOR_REQUESTS_IN_FLIGHT`` requests in flight for the whole process, which a run's download holds too:
-a chain download and a run at once do not double it. That gate is one semaphore per event loop, and the process's
-background loop is where a run's download asks, so the captures are handed to that loop and not run on the caller's.
+Every capture holds ``option_lake.vendor_request_gate`` while it asks: the one limit of
+``option_lake.MAX_VENDOR_REQUESTS_IN_FLIGHT`` requests in flight for the whole process, which a run's download holds
+too, so a chain download and a run at once do not double it. That gate is one semaphore per event loop, and the
+process's background loop is where a run's download asks, so the captures are handed to that loop and not run on the
+caller's.
+
 At most ``MAX_CONTRACTS_PER_DOWNLOAD`` contracts are taken in one call. That is the number of contracts a window of the
 chain can hold (``past_chain.MAX_WINDOW_CONTRACTS``, one constant), so the contracts a window names are one download.
 
@@ -231,7 +233,7 @@ async def ensure_chain_data(
 async def _capture(
     underlying: str, trading_date: date, named: Sequence[OptionContract], now_ms: int | None
 ) -> tuple[DownloadItem, ...]:
-    """The captures of ``ensure_chain_data``, on the background loop: the listing and the underlying, then the contracts."""
+    """The listing and the underlying, then the contracts, as ``ensure_chain_data`` asks, run on the background loop."""
     # The catalog's pool belongs to the loop that made it, and the lake's capture functions do not make one.
     await catalog_client.init_pool()
     # Every capture finishes before an error is raised: none is cancelled halfway through a claim.
