@@ -78,16 +78,25 @@ async def stamp_research_dispatch(*, job_id: str, kind: str, record_id: str) -> 
 
     503 when a live coordinator elsewhere — or this process's dead authority
     connection — outranks the dispatch; a no-op under the legacy lifecycle
-    (no authority claimed, no ownership rows, jobs swept as API-owned).
+    (no authority claimed, no ownership rows, jobs swept as API-owned). A
+    writer-loop stall is a retryable 503 too: the stamp keeps running on the
+    loop, so a dispatch route's release-then-retry recovery closes whatever
+    the late commit strands (#3047 review).
     """
     from fastapi import HTTPException
 
     from app.research.persistence import ownership
+    from app.utils.background_loop import CallerStoppedWaitingError
 
     try:
         await ownership.stamp_dispatch(job_id=job_id, kind=kind, record_id=record_id)
     except ownership.CoordinatorHeldElsewhere as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except CallerStoppedWaitingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="the research writer loop stalled while stamping the dispatch; retry",
+        ) from exc
 
 
 def require_live_redelivery(job_id: str, *, noun: str) -> None:

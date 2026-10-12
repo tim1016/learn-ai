@@ -17,6 +17,7 @@ refusals map to HTTP by kind — invalid 400, not found 404, conflict 409
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 from collections.abc import Callable
@@ -52,6 +53,7 @@ from app.schemas.golden_search import (
     GoldenSearchStudySummary,
     GoldenSearchTestOverTimeCharts,
 )
+from app.utils.background_loop import CallerStoppedWaitingError
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 router = APIRouter()
@@ -351,17 +353,30 @@ async def start_golden_search_job(req: GoldenSearchJobRequest) -> GoldenSearchJo
 
     # Refused authority must never bind: a stamp refusal after the bind
     # strands the study on a job no worker will serve (#3042).
-    await _research_record_write(records.refuse_unauthorized_dispatch())
+    await records.refuse_unauthorized_dispatch()
     try:
         bound = await _research_record_write(service.bind_dispatch(req.study_id, stage_token=req.stage_token, job_id=req.job_id))
     except GoldenSearchRefusal as exc:
         raise await _refused(exc) from exc
+    except CallerStoppedWaitingError as exc:
+        # The writer loop stalled past the call bound: the binding's fate is
+        # unknown — it may still commit. Release behind the stall (the loop
+        # drains in order) and answer retryable, never stranding the study on
+        # a job id whose retry would be refused as a dead redelivery (#3047
+        # review).
+        with contextlib.suppress(CallerStoppedWaitingError):
+            await _research_record_write(service.release_dispatch_binding(req.study_id, job_id=req.job_id))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="the research writer loop stalled while binding the dispatch; retry",
+        ) from exc
     try:
-        await _research_record_write(records.stamp_research_dispatch(job_id=req.job_id, kind="golden_search", record_id=req.study_id))
+        await records.stamp_research_dispatch(job_id=req.job_id, kind="golden_search", record_id=req.study_id)
     except HTTPException:
         # The binding is durable but this dispatch will not run: release it
         # (still queued, still this job id) so a retry binds instead of
-        # becoming a redelivery that liveness refuses forever (#3042).
+        # becoming a redelivery that liveness refuses forever (#3042). The
+        # stamp's own stall answer is a 503 here — same recovery (#3047).
         await _research_record_write(service.release_dispatch_binding(req.study_id, job_id=req.job_id))
         raise
     accepted = GoldenSearchJobAccepted(job_id=req.job_id, study_id=req.study_id, status="queued")

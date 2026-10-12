@@ -135,10 +135,14 @@ ADMISSION_CALL_BOUND_S = 35.0
 
 # Shutdown and bound-expiry answers share the outage type: a relay that
 # cannot answer is an infrastructure event, never evidence about the bytes
-# (#3047 review) — the same taxonomy the single-check relay kept.
-_SHUTTING_DOWN = catalog_client.CatalogUnavailableError(
-    "the admission batcher is shutting down; the catalog's answer is unresolved"
-)
+# (#3047 review) — the same taxonomy the single-check relay kept. A fresh
+# instance per site: one shared exception object raced its traceback across
+# the waiters' threads.
+_SHUTTING_DOWN_MESSAGE = "the admission batcher is shutting down; the catalog's answer is unresolved"
+
+
+def _shutting_down() -> catalog_client.CatalogUnavailableError:
+    return catalog_client.CatalogUnavailableError(_SHUTTING_DOWN_MESSAGE)
 
 
 class _AdmissionWaiter:
@@ -261,7 +265,7 @@ class AdmissionBatcher:
                 # Shutdown reached into an in-flight batch: fail it with the
                 # outage, never leave a waiter to its own bound (#3047 review).
                 for waiter in batch:
-                    waiter.fail(_SHUTTING_DOWN)
+                    waiter.fail(_shutting_down())
                 raise
             except (catalog_client.CatalogUnavailableError, asyncpg.PostgresError,
                     OSError, TimeoutError, CallerStoppedWaitingError) as exc:
@@ -316,7 +320,7 @@ class AdmissionBatcher:
 
         async def _stop() -> None:
             for waiter in self._pending:
-                waiter.fail(_SHUTTING_DOWN)
+                waiter.fail(_shutting_down())
             self._pending = []
             if self._serve_task is not None:
                 self._serve_task.cancel()
