@@ -16,6 +16,9 @@ the reader a run uses. Hand-worked figures:
   1749822030000) closes at 1749822090000, which is 30 000 ms past a whole minute.
 * The underlying's last regular-session bars: the one starting at 15:59:00 (19:59 UTC = 1749844740000) closes at
   20:00:00 = 1749844800000, the one starting at 15:59:30 (1749844770000) closes at 1749844830000, off the minute.
+* The underlying's rows, as the lake writes them: the start in ms after New York midnight, then open, high, low, close in
+  ten-thousandths of a dollar, then the volume. 09:30 is 34 200 000 ms after midnight (9.5 h * 3 600 000), 09:31 is 60 000
+  on, 34 260 000, 09:32 is 34 320 000, and the 08:00 pre-market print is 28 800 000 (8 h * 3 600 000).
 * The same last minute of a New York date in winter, 2025-01-15 (a Wednesday, EST = UTC-5): midnight is 05:00 UTC.
   The epoch day of 2025-01-15 is 20103 (2025-01-01 is day 20089, and 14 days on), 20103 * 86 400 000 =
   1736899200000, plus 18 000 000 is midnight, 1736917200000. The 09:30 open is 34 200 000 ms on, 1736951400000; the bar
@@ -438,6 +441,93 @@ async def test_an_underlying_day_with_several_bars_off_the_minute_counts_them_al
 
     message = str(caught.value)
     assert "2 of 4" in message and "1749821430000 ms" in message and "1749844740001" not in message
+
+
+# ── A row the stock reader would skip or read loosely makes the day unreadable ──────────────────────────────────
+
+_FIRST = "34200000,600000,600500,599750,600250,100"  # 09:30
+_SECOND = "34260000,600250,601000,600250,600750,100"  # 09:31
+_THIRD = "34320000,600750,601100,600700,601000,100"  # 09:32
+
+
+@pytest.mark.parametrize(
+    ("body", "failing", "total", "first_line"),
+    [
+        pytest.param(f"{_FIRST}\n34260000,600250,601000,600250,600750\n{_THIRD}", 1, 3, 2, id="a row of five columns"),
+        pytest.param(f"{_FIRST}\n{_SECOND},7\n{_THIRD}", 1, 3, 2, id="a row of seven columns"),
+        pytest.param(f"{_FIRST}\n\n{_THIRD}", 1, 3, 2, id="an empty line in the middle"),
+        pytest.param(f"{_FIRST}\n{_SECOND}\n\n", 1, 3, 3, id="an empty line at the end"),
+        pytest.param(f"34260000,600250,601000,600250,600750\n{_FIRST}\n{_THIRD}", 1, 3, 1, id="the first row short"),
+        pytest.param(
+            f"28800000,599000,599100,598900,599050\n{_FIRST}\n{_SECOND}", 1, 3, 1, id="a short row outside the session"
+        ),
+        pytest.param(f"{_FIRST}\n34260000,600250,601000,600250,600750\n{_SECOND},7\n{_THIRD}", 2, 4, 2, id="two bad rows"),
+        pytest.param("34200000,600000,600500,599750,600250", 1, 1, 1, id="every row bad, so no bar reads at all"),
+        pytest.param(f"{_FIRST}\n34260000,NaN,601000,600250,600750,100\n{_THIRD}", 1, 3, 2, id="a price of NaN"),
+        pytest.param(f"{_FIRST}\n34260000,600250.5,601000,600250,600750,100\n{_THIRD}", 1, 3, 2, id="a decimal price"),
+        pytest.param(f"{_FIRST}\n34260000,+600250,601000,600250,600750,100\n{_THIRD}", 1, 3, 2, id="a signed price"),
+        pytest.param(f"{_FIRST}\n34260000, 600250,601000,600250,600750,100\n{_THIRD}", 1, 3, 2, id="a padded price"),
+        pytest.param(f"{_FIRST}\n34260000,6_00250,601000,600250,600750,100\n{_THIRD}", 1, 3, 2, id="an underscore in a price"),
+        pytest.param(f"{_FIRST}\n34260000,6e5,601000,600250,600750,100\n{_THIRD}", 1, 3, 2, id="an exponent in a price"),
+        pytest.param(f"{_FIRST}\n+34260000,600250,601000,600250,600750,100\n{_THIRD}", 1, 3, 2, id="a signed start"),
+    ],
+)
+async def test_an_underlying_day_with_a_row_the_stock_reader_skips_or_reads_loosely_is_unreadable_and_hands_nothing_over(
+    body: str, failing: int, total: int, first_line: int, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # The stock reader drops an empty line and a row not six columns wide, and takes NaN, 600250.5, +600250 and 6_00250 as
+    # prices, so each of these days used to be read as a good one, shorter or with a price the lake never wrote.
+    await store_underlying_day(fake_catalog, tmp_lake, _underlying_bars())
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), STOCK_PATH, _stock_zip(body.encode()), admit=True)
+
+    with pytest.raises(UnderlyingDayUnreadable) as caught:
+        await _read(LakeRunData("SPY").underlying_day, FRIDAY)
+
+    message = str(caught.value)
+    assert "SPY" in message and "2025-06-13" in message
+    assert f"{failing} of {total} rows" in message and f"line {first_line}" in message
+    assert str(tmp_lake) not in message and ".zip" not in message
+
+
+async def test_an_underlying_day_whose_zip_holds_another_member_than_the_one_the_lake_writes_is_unreadable(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # The stock reader falls back to the first member of any archive; the lake writes one member, named for the day.
+    await store_underlying_day(fake_catalog, tmp_lake, _underlying_bars())
+    payload = _stock_zip(f"{_FIRST}\n{_SECOND}".encode(), member="20250613_notes.csv")
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), STOCK_PATH, payload, admit=True)
+
+    with pytest.raises(UnderlyingDayUnreadable, match="expected one member"):
+        await _read(LakeRunData("SPY").underlying_day, FRIDAY)
+
+
+async def test_a_day_the_lakes_capture_writer_wrote_with_its_trailing_newline_is_read_whole(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    await store_underlying_day(fake_catalog, tmp_lake, _underlying_bars())
+    written = build_minute_trade_zip_bytes(
+        symbol="SPY",
+        trading_date_yyyymmdd="20250613",
+        bars=[
+            MinuteTradeBar(
+                bar_start_et=datetime(2025, 6, 13, 9, 30 + minute, tzinfo=ET),
+                open=D("600.00"),
+                high=D("600.50"),
+                low=D("599.75"),
+                close=D("600.25"),
+                volume=D(100),
+            )
+            for minute in range(2)
+        ],
+    )
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), STOCK_PATH, written, admit=True)
+
+    read = await _read(LakeRunData("SPY").underlying_day, FRIDAY)
+
+    assert read is not None
+    # 09:30 and 09:31 start at 1749821400000 and 1749821460000; each closes a minute later.
+    assert [bar.close_ms for bar in read.value] == [1749821460000, 1749821520000]
+    assert read.sha256 == hashlib.sha256(written).hexdigest()
 
 
 @pytest.mark.parametrize(("day", "open_ms", "last_start_ms", "before_last_start_ms"), _LAST_MINUTES)
