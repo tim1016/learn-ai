@@ -61,7 +61,7 @@ describe('the run part of the page for a screen reader', () => {
     const setup = await startedRun();
     setup.jobs.emit('job-1', { type: 'job.phase', phase: 'replaying', friendly: 'Replaying each session' });
     setup.jobs.emit('job-1', { type: 'job.progress', current: 2, total: 5, unit: 'sessions' });
-    await screen.findByText('2 of 5 sessions');
+    await screen.findByText('Sessions done: 2 of 5');
 
     expect(await violations()).toEqual([]);
   });

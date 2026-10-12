@@ -113,7 +113,7 @@ describe('opening a run', () => {
 
     const panel = await screen.findByRole('region', { name: 'Backtest run' });
     expect(within(panel).getByText('Replaying each session')).toBeTruthy();
-    expect(within(panel).getByText('2 of 5 sessions')).toBeTruthy();
+    expect(within(panel).getByText('Sessions done: 2 of 5')).toBeTruthy();
     expect(within(panel).getByRole('button', { name: 'Cancel' })).toBeTruthy();
     expect(service.run).toHaveBeenCalledWith(31);
   });

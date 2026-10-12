@@ -90,8 +90,8 @@ export class RunDetailService {
  * The file name in a `Content-Disposition` header, read as RFC 6266 says: `filename*` (RFC 8187, the form for a name that
  * is not plain ASCII) is the name when the header holds both, and `filename` is the way back when it holds only that or
  * when the starred name cannot be used. Only UTF-8 is read in the starred form, the one charset RFC 8187 allows. A name
- * that is empty, holds a path separator or a control character, or cannot be decoded is not trusted; with none left the
- * caller names the file.
+ * that is empty or only dots, holds a path separator, a control character or a bidirectional or format control (which
+ * can change how a name reads), or cannot be decoded is not trusted; with none left the caller names the file.
  */
 export function filenameOf(header: string | null): string | null {
   if (header === null) return null;
@@ -116,10 +116,19 @@ function starredName(header: string): string {
   }
 }
 
+/** Arabic letter mark, the left-to-right and right-to-left marks, the embedding and override controls, the isolates, and the byte order mark. */
+const FORMAT_CONTROL = /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/;
+
+/** The C0 controls and DEL, and the C1 controls. */
+function isControl(character: string): boolean {
+  const code = character.charCodeAt(0);
+  return code < 32 || (code >= 127 && code <= 159);
+}
+
 function safeName(name: string): string | null {
   const trimmed = name.trim();
-  const hasControl = [...trimmed].some((character) => character.charCodeAt(0) < 32);
-  return trimmed === '' || hasControl || /[\\/]/.test(trimmed) ? null : trimmed;
+  const unusable = trimmed === '' || /^\.+$/.test(trimmed) || /[\\/]/.test(trimmed) || FORMAT_CONTROL.test(trimmed) || [...trimmed].some(isControl);
+  return unusable ? null : trimmed;
 }
 
 function toRefusal(error: unknown): RunDetailRefusedError | null {

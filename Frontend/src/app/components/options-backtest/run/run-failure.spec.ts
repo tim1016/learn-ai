@@ -98,6 +98,44 @@ describe('what failed, in the list under the reason', () => {
     expect(screen.queryByText('Took too long on day 0.')).toBeNull();
   });
 
+  it('gives each list an id of its own, so that two failures on one page share none, and every group controls a list that exists, whatever its code is', async () => {
+    const failure = {
+      code: 'DOWNLOAD_FAILED',
+      reason: 'Some data could not be fetched.',
+      items: [item('took too long', 'It took longer than the run waits.'), item('listing', 'No listing.')],
+    };
+    await render('<app-options-backtest-run-failure [failure]="failure" /><app-options-backtest-run-failure [failure]="failure" />', {
+      imports: [RunFailureComponent],
+      componentProperties: { failure },
+    });
+
+    const [first, second] = screen.getAllByRole('list', { name: 'What failed' });
+    const controlled = (failures: HTMLElement | undefined) => within(failures ?? document.body).getAllByRole('button').map((group) => group.getAttribute('aria-controls') ?? '');
+    const firstIds = controlled(first);
+    const secondIds = controlled(second);
+
+    expect(firstIds).toHaveLength(2);
+    expect(secondIds).toHaveLength(2);
+    expect(firstIds.filter((id) => secondIds.includes(id))).toEqual([]);
+    for (const id of [...firstIds, ...secondIds]) {
+      expect(id).toMatch(/^\S+$/);
+      expect(id).not.toMatch(/took|listing/i);
+      expect(document.querySelectorAll(`[id="${id}"]`)).toHaveLength(1);
+    }
+    expect(firstIds.every((id) => first?.contains(document.getElementById(id)))).toBe(true);
+    expect(secondIds.every((id) => second?.contains(document.getElementById(id)))).toBe(true);
+  });
+
+  it.each([
+    [5, 'open', 'true'],
+    [6, 'shut', 'false'],
+  ])('starts a group of %s items %s: five is the largest group that starts open', async (count, _state, expanded) => {
+    const items = Array.from({ length: count }, (_, day) => item('took_too_long', `Took too long on day ${day}.`, sessionOpenMs('2026-09-14') + day * 86_400_000));
+    await renderFailure({ code: 'DOWNLOAD_FAILED', reason: 'Some data could not be fetched.', items });
+
+    expect(screen.getByRole('button', { name: /Took Too Long/ }).getAttribute('aria-expanded')).toBe(expanded);
+  });
+
   it('shows a small group open already, and lets it be shut', async () => {
     await renderFailure({ code: 'DOWNLOAD_FAILED', reason: 'Some data could not be fetched.', items: [item('took_too_long', 'Took too long.')] });
     const group = screen.getByRole<HTMLButtonElement>('button', { name: /Took Too Long/ });

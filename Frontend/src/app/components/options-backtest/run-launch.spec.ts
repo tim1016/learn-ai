@@ -24,6 +24,8 @@ function api(changes: Partial<RunApi> = {}): RunApi & { startRun: ReturnType<typ
   } as RunApi & { startRun: ReturnType<typeof vi.fn>; runs: ReturnType<typeof vi.fn> };
 }
 
+const failing = (error: unknown) => launchOf(api({ startRun: vi.fn(async () => Promise.reject(error)) }));
+
 describe('starting a run', () => {
   it('starts the job with the request, finds the run it made by its job id, and shows it', async () => {
     const service = api();
@@ -96,22 +98,6 @@ describe('starting a run', () => {
     expect(launch.refusal()).toBeNull();
   });
 
-  it('says plainly when the run could not be started for any other reason', async () => {
-    const launch = launchOf(
-      api({
-        startRun: vi.fn(async () => {
-          throw new Error('the jobs service is down');
-        }),
-      }),
-    );
-
-    await launch.start(REQUEST);
-
-    expect(launch.problem()).toEqual({ kind: 'not_started', message: 'The backtest could not be started. Try again.', code: null });
-    expect(launch.refusal()).toBeNull();
-    expect(launch.busy()).toBe(false);
-  });
-
   it('forgets an earlier refusal and problem when it starts again', async () => {
     let refuse = true;
     const launch = launchOf(
@@ -133,8 +119,6 @@ describe('starting a run', () => {
 });
 
 describe('when the server will not start the backtest, other than for its range', () => {
-  const failing = (error: unknown) => launchOf(api({ startRun: vi.fn(async () => Promise.reject(error)) }));
-
   it('shows a refusal in the server’s own words and with its code, and does not say to try again, for a refusal trying again cannot cure', async () => {
     const launch = failing(new RunRefusedError('OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN', 'A run was already made for this job.', 409));
 
@@ -154,23 +138,41 @@ describe('when the server will not start the backtest, other than for its range'
   });
 
   it.each([
-    ['a network failure', new HttpErrorResponse({ status: 0 })],
-    ['a server error with no refusal in it', new HttpErrorResponse({ status: 502, error: 'bad gateway' })],
-    ['a failure that is no HTTP answer at all', new Error('the jobs service is down')],
-  ])('says to try again for %s, which trying again can cure', async (_case, error) => {
-    const launch = failing(error);
-
-    await launch.start(REQUEST);
-
-    expect(launch.problem()).toEqual({ kind: 'not_started', message: 'The backtest could not be started. Try again.', code: null });
-  });
-
-  it('does not say to try again for a 4xx the server gave no reason for, and does not repeat a body it cannot read', async () => {
-    const launch = failing(new HttpErrorResponse({ status: 422, error: { detail: JSON.stringify({ detail: [{ loc: ['body'], msg: 'nope' }] }) } }));
+    [400, { error: 'nope' }],
+    [499, { error: 'nope' }],
+    [422, { error: { detail: JSON.stringify({ detail: [{ loc: ['body'], msg: 'nope' }] }) } }],
+  ])('does not say to try again for a %s the server gave no reason for, and does not repeat a body it cannot read', async (status, body) => {
+    const launch = failing(new HttpErrorResponse({ status, ...body }));
 
     await launch.start(REQUEST);
 
     expect(launch.problem()).toEqual({ kind: 'not_started', message: 'The server did not accept the backtest.', code: null });
+    expect(launch.busy()).toBe(false);
+  });
+});
+
+describe('when the request to start the backtest ends without a clear answer', () => {
+  it.each([
+    ['a 500', new HttpErrorResponse({ status: 500, error: 'oops' })],
+    ['a 502 with no refusal in it', new HttpErrorResponse({ status: 502, error: 'bad gateway' })],
+    ['a dropped connection (status 0)', new HttpErrorResponse({ status: 0 })],
+    ['an answer that cannot be read', new HttpErrorResponse({ status: 200, error: new SyntaxError('Unexpected token') })],
+    ['a failure that is no HTTP answer at all', new Error('the jobs service is down')],
+  ])('after %s, does not say the backtest was not started, because it may have been: it points to History, and frees Start without looking for a run', async (_case, error) => {
+    const service = api({ startRun: vi.fn(async () => Promise.reject(error)) });
+    const launch = launchOf(service);
+
+    await launch.start(REQUEST);
+
+    expect(launch.problem()?.kind).toBe('start_unanswered');
+    expect(launch.problem()?.message).toContain('History');
+    expect(launch.problem()?.message).not.toContain('could not be started');
+    expect(launch.refusal()).toBeNull();
+    expect(launch.current()).toBeNull();
+    expect(launch.busy()).toBe(false);
+    expect(service.runs).not.toHaveBeenCalled();
+    await launch.start(REQUEST);
+    expect(service.startRun).toHaveBeenCalledTimes(2);
   });
 });
 

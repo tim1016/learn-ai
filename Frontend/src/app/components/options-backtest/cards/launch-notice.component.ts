@@ -5,8 +5,9 @@ import type { LaunchProblem } from '../run-launch';
 
 /**
  * Something about the run that is not on screen: a backtest that was not started (the server's own words and code), one
- * that was started whose record cannot be read yet (said calmly, for the page is looking again), or a check of whether a
- * run is going that could not be made, which can be tried again.
+ * whose start got no clear answer and may have started (said as that, with where to look), one that was started whose
+ * record cannot be read yet (said calmly, for the page is looking again), or a check of whether a run is going that
+ * could not be made, which can be tried again.
  */
 @Component({
   selector: 'app-options-backtest-launch-notice',

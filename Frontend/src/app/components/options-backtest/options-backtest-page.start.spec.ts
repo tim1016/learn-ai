@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -338,11 +339,11 @@ describe('when the server will not start the backtest', () => {
     expect(startButton().disabled).toBe(false);
   });
 
-  it('says plainly when the backtest could not be started for another reason, and lets it be started again', async () => {
+  it('says that a backtest whose start got no clear answer may have started, points to History, and lets it be started again', async () => {
     let down = true;
     const setup = scriptedRun(vi);
     setup.service.startRun.mockImplementation(async () => {
-      if (down) throw new Error('the jobs service is down');
+      if (down) throw new HttpErrorResponse({ status: 0 });
       setup.jobs.register('job-1');
       return 'job-1';
     });
@@ -350,11 +351,13 @@ describe('when the server will not start the backtest', () => {
 
     fireEvent.click(startButton());
 
-    expect((await screen.findByText('The backtest could not be started. Try again.')).closest('[role="alert"]')).not.toBeNull();
+    expect(reads(await screen.findByRole('alert'))).toContain('History');
+    expect(screen.queryByText(/could not be started/)).toBeNull();
+    expect(startButton().disabled).toBe(false);
     down = false;
     fireEvent.click(startButton());
     await screen.findByRole('region', { name: 'Backtest run' });
-    expect(screen.queryByText('The backtest could not be started. Try again.')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });
 
@@ -373,7 +376,7 @@ describe('coming back to the page while a backtest is going', () => {
 
     const panel = await screen.findByRole('region', { name: 'Backtest run' });
     expect(within(panel).getByText('Replaying each session')).toBeTruthy();
-    expect(within(panel).getByText('4 of 5 sessions')).toBeTruthy();
+    expect(within(panel).getByText('Sessions done: 4 of 5')).toBeTruthy();
     await openExample();
     pickDates('2026-09-14', '2026-09-18');
     await waitFor(() => expect(screen.getByText('A backtest is already running.')).toBeTruthy());

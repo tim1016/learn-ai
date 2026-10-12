@@ -3,7 +3,7 @@
   @let shared = overlap();
   <p>
     Sessions in both runs: {{ shared.shared_sessions }}.
-    Only in run A: {{ shared.only_in_a }}. Only in run B: {{ shared.only_in_b }}.
+    Sessions only in run A: {{ shared.only_in_a }}. Sessions only in run B: {{ shared.only_in_b }}.
     @if (shared.shared_sessions > 0) { The figures below are for the shared sessions only. }
   </p>
   @if (shared.shared_sessions === 0) {

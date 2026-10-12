@@ -231,6 +231,12 @@ describe('the file name in a Content-Disposition header', () => {
     ['attachment; filename="fallback.csv"; filename*=UTF-8\'\'..%2F..%2Fetc%2Fpasswd', 'fallback.csv'],
     // Bytes that are valid UTF-8 but were meant as ISO-8859-1 would read as a different name; only UTF-8 is read.
     ['attachment; filename="fallback.csv"; filename*=ISO-8859-1\'\'caf%C3%A9.csv', 'fallback.csv'],
+    // A starred name that is only dots, or holds a control, is no name, and the plain one is read instead.
+    ['attachment; filename="fallback.csv"; filename*=UTF-8\'\'..', 'fallback.csv'],
+    ['attachment; filename="fallback.csv"; filename*=UTF-8\'\'run%E2%80%AE7.csv', 'fallback.csv'],
+    // Dots are a name when something else is with them.
+    ['attachment; filename="run.7.csv"', 'run.7.csv'],
+    ['attachment; filename=".hidden"', '.hidden'],
   ])('reads %s', (header, name) => {
     expect(filenameOf(header)).toBe(name);
   });
@@ -246,8 +252,52 @@ describe('the file name in a Content-Disposition header', () => {
     ["attachment; filename*=UTF-8''a%00b.csv"],
     ["attachment; filename*=UTF-8''bad%E0%A4%A.csv"],
     ["attachment; filename*=ISO-8859-1''caf%C3%A9.csv"],
+    // Dots only: the parent folder, this folder, and a run of them.
+    ["attachment; filename*=UTF-8''.."],
+    ["attachment; filename*=UTF-8''."],
+    ["attachment; filename*=UTF-8''..."],
+    ['attachment; filename=".."'],
+    ['attachment; filename="."'],
+    // A delete, a C1 control and a right-to-left override, each inside a name that would be fine without it.
+    ["attachment; filename*=UTF-8''trades%7F.csv"],
+    ["attachment; filename*=UTF-8''trades%C2%85.csv"],
+    ["attachment; filename*=UTF-8''trades%E2%80%AE.csv"],
+    ['attachment; filename="trades\u0085.csv"'],
+    ['attachment; filename="trades\u007F.csv"'],
   ])('gives no name for %s: nothing to trust', (header) => {
     expect(filenameOf(header)).toBeNull();
+  });
+
+  // Both ends of every range that is refused, and the code point beside each end that is not.
+  it.each([
+    ['U+0001', 0x01],
+    ['U+001F', 0x1f],
+    ['U+007F', 0x7f],
+    ['U+0080', 0x80],
+    ['U+0085', 0x85],
+    ['U+009F', 0x9f],
+    ['U+061C', 0x061c],
+    ['U+200E', 0x200e],
+    ['U+200F', 0x200f],
+    ['U+202A', 0x202a],
+    ['U+202E', 0x202e],
+    ['U+2066', 0x2066],
+    ['U+2069', 0x2069],
+    ['U+FEFF', 0xfeff],
+  ])('gives no name when it holds %s', (_name, codePoint) => {
+    expect(filenameOf(`attachment; filename*=UTF-8''run${encodeURIComponent(String.fromCodePoint(codePoint))}7.csv`)).toBeNull();
+  });
+
+  it.each([
+    ['U+0020', 0x20],
+    ['U+007E', 0x7e],
+    ['U+00A0', 0xa0],
+    ['U+061B', 0x061b],
+    ['U+200D', 0x200d],
+    ['U+202F', 0x202f],
+  ])('keeps a name that holds %s', (_name, codePoint) => {
+    const character = String.fromCodePoint(codePoint);
+    expect(filenameOf(`attachment; filename*=UTF-8''run${encodeURIComponent(character)}7.csv`)).toBe(`run${character}7.csv`);
   });
 });
 
