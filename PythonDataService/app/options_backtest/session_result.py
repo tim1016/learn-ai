@@ -8,8 +8,9 @@ paid back. The next session starts with that money back at the mark, so a sessio
 ``cash_after = cash_before + cash_change + marked_value``, which is ``cash_before + pnl`` (the replay's own identity
 ``pnl = cash_change + marked_value``). The three figures are all kept, so a reader sees the identity as numbers.
 
-Time. A trading date is kept as a ``date``, the key the run and its data share, and beside it as the session's open and
-close in ``int64 ms UTC``, the form anything stored or sent uses.
+Time. A session is named by its open and close in ``int64 ms UTC``, the form anything stored or sent uses; no ``date``
+is kept. The open is the trading date's 09:30 New York anchor, so ``trading_date`` is derived from it when code that
+groups by day needs the date, and is not a field.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from decimal import Decimal, localcontext
 from app.options.contract import OptionContract
 from app.options_backtest import fills
 from app.options_backtest.results import SessionOutcome, SessionStatus
+from app.utils.session_anchors import et_date_at_ms
 
 
 @dataclass(frozen=True)
@@ -45,7 +47,7 @@ class SessionPins:
 class SessionResult:
     """One session replayed in a run."""
 
-    trading_date: date
+    # The session's identity: the calendar's open of the trading date, 09:30 New York.
     session_open_ms: int
     session_close_ms: int
     # The cash the session started with, a mark from the session before already paid back.
@@ -54,6 +56,14 @@ class SessionResult:
     # The cash the next session starts with: before, plus the cash that moved, plus the marks paid back.
     cash_after_usd: Decimal
     pins: SessionPins
+
+    @property
+    def trading_date(self) -> date:
+        """The New York calendar date of the session's open: derived on each call, never stored or sent.
+
+        For code that groups or looks up by day inside one function. Anything kept or served carries the open instead.
+        """
+        return et_date_at_ms(self.session_open_ms)
 
     @property
     def status(self) -> SessionStatus:

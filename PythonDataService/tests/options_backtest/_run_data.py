@@ -44,6 +44,28 @@ def open_ms(day: date) -> int:
     return session_window_for_date(day).open_ms_utc
 
 
+# The open of each session the scenes name, written out so that an expectation reads as a number and not as a call into
+# the calendar. A session's open is its trading date's 09:30 New York time. New York keeps summer time (UTC-4) until
+# Sunday 2026-11-01, so on all of these dates 09:30 is 13:30 UTC, which is 48,600,000 ms after UTC midnight; and the UTC
+# midnight of a date is its day number (days since 1970-01-01, noted at each line) times 86,400,000 ms. So an open is
+# day x 86,400,000 + 48,600,000. Each is checked against the calendar when the module loads.
+OPEN_MS: dict[date, int] = {
+    date(2026, 9, 29): 1_790_688_600_000,  # day 20,725
+    date(2026, 9, 30): 1_790_775_000_000,  # day 20,726
+    date(2026, 10, 1): 1_790_861_400_000,  # day 20,727
+    date(2026, 10, 2): 1_790_947_800_000,  # day 20,728
+    date(2026, 10, 5): 1_791_207_000_000,  # day 20,731 (a Monday: three days after the Friday)
+    date(2026, 10, 6): 1_791_293_400_000,  # day 20,732
+    WED: 1_791_379_800_000,  # 2026-10-07, day 20,733
+    THU: 1_791_466_200_000,  # 2026-10-08, day 20,734
+    FRI: 1_791_552_600_000,  # 2026-10-09, day 20,735
+    date(2026, 10, 12): 1_791_811_800_000,  # day 20,738 (a Monday: three days after the Friday)
+    date(2026, 10, 13): 1_791_898_200_000,  # day 20,739
+}
+for _day, _open in OPEN_MS.items():
+    assert open_ms(_day) == _open, f"{_day} opens at {open_ms(_day)} ms, and the table says {_open}"
+
+
 def close_ms(day: date, minute: int) -> int:
     """The instant of the bar closing ``minute`` minutes after ``day``'s open."""
     return open_ms(day) + minute * MS_PER_MINUTE

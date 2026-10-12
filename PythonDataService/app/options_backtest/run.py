@@ -220,7 +220,6 @@ class _Run:
         for value, carried in self.ladder.items():
             carried.take(outcomes[value])
         return SessionResult(
-            day,
             window.open_ms_utc,
             window.close_ms_utc,
             cash_before,

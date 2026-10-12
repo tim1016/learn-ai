@@ -21,8 +21,10 @@ and the sessions they sit in, with the cash each starts with (10,000.00 to begin
 
 from __future__ import annotations
 
-from datetime import date
+from dataclasses import replace
+from datetime import date, datetime
 from decimal import Context, Decimal, localcontext
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -41,7 +43,7 @@ from app.options_backtest.session_result import SessionResult
 from app.options_backtest.statistics import Drawdown, Ratio, summarize_run
 from tests.options_backtest._market import TableMarket, contract, flat, leg, picked, replay, setup, steady
 from tests.options_backtest._results import a_session, a_session_of, a_trade, an_event
-from tests.options_backtest._run_data import FRI, D, open_ms
+from tests.options_backtest._run_data import FRI, OPEN_MS, D
 
 SEP_29, SEP_30 = date(2026, 9, 29), date(2026, 9, 30)
 OCT_1, OCT_2, OCT_5, OCT_6, OCT_7 = (date(2026, 10, day) for day in (1, 2, 5, 6, 7))
@@ -223,17 +225,17 @@ def test_the_drawdown_is_the_worst_fall_of_equity_from_its_peak_measured_at_sess
 
     # Equity: 10,000.00 at the start, then 9,945.10 after session 1 (and unchanged through 4), 9,994.45, 9,965.25,
     # 10,065.25. The deepest fall is the first: 10,000.00 - 9,945.10 = 54.90, which is 54.90 / 10,000.00 of the peak.
-    # The peak is the starting cash, before any session, so it has no date.
+    # The peak is the starting cash, before any session, so it names no session. The trough is session 1, Tue
+    # 2026-09-29, whose 09:30 New York open is 1,790,688,600,000 ms UTC.
     expected = Drawdown(
         peak_equity_usd=D("10000.00"),
         trough_equity_usd=D("9945.10"),
         fall_usd=D("54.90"),
         fall_ratio=Ratio(D("54.90"), D("10000.00")),
-        peak_date=None,
         peak_session_open_ms=None,
-        trough_date=SEP_29,
-        trough_session_open_ms=open_ms(SEP_29),
+        trough_session_open_ms=OPEN_MS[SEP_29],
     )
+    assert OPEN_MS[SEP_29] == 1_790_688_600_000
     assert summary.drawdown_by_fraction == expected
     assert summary.drawdown_by_dollars == expected
     assert summary.drawdown_by_fraction.measured_at == "session_end"
@@ -459,10 +461,12 @@ def test_a_re_entry_lost_is_counted_as_lost_and_again_under_the_cause_that_lost_
 def test_the_by_day_table_has_a_row_for_every_session_in_order() -> None:
     summary = summarize_run(_scene(), starting_cash_usd=STARTING)
 
-    # (date, status, trades, net profit, fees, trades won, trades lost, trades break even)
+    # (session open in ms UTC, status, trades, net profit, fees, trades won, trades lost, trades break even). A session
+    # is named by the 09:30 New York open of its date, from the table in _run_data.py: Tue 09-29, Wed 09-30, Thu 10-01,
+    # Fri 10-02, Mon 10-05, Tue 10-06 and Wed 10-07.
     assert [
         (
-            row.trading_date,
+            row.session_open_ms,
             row.status,
             row.trades,
             row.net_profit_usd,
@@ -473,19 +477,16 @@ def test_the_by_day_table_has_a_row_for_every_session_in_order() -> None:
         )
         for row in summary.by_day
     ] == [
-        (SEP_29, SessionStatus.TRADED, 2, D("-54.90"), D("3.90"), 1, 1, 0),
-        (SEP_30, SessionStatus.NO_TRADE, 0, D("0"), D("0"), 0, 0, 0),
-        (OCT_1, SessionStatus.SKIPPED, 0, D("0"), D("0"), 0, 0, 0),
-        (OCT_2, SessionStatus.TRADED, 1, D("0"), D("0"), 0, 0, 1),
-        (OCT_5, SessionStatus.INCOMPLETE, 1, D("49.35"), D("0.65"), 1, 0, 0),
-        (OCT_6, SessionStatus.TRADED, 2, D("-29.20"), D("5.20"), 1, 1, 0),
-        (OCT_7, SessionStatus.TRADED, 1, D("100.00"), D("0"), 1, 0, 0),
+        (OPEN_MS[SEP_29], SessionStatus.TRADED, 2, D("-54.90"), D("3.90"), 1, 1, 0),
+        (OPEN_MS[SEP_30], SessionStatus.NO_TRADE, 0, D("0"), D("0"), 0, 0, 0),
+        (OPEN_MS[OCT_1], SessionStatus.SKIPPED, 0, D("0"), D("0"), 0, 0, 0),
+        (OPEN_MS[OCT_2], SessionStatus.TRADED, 1, D("0"), D("0"), 0, 0, 1),
+        (OPEN_MS[OCT_5], SessionStatus.INCOMPLETE, 1, D("49.35"), D("0.65"), 1, 0, 0),
+        (OPEN_MS[OCT_6], SessionStatus.TRADED, 2, D("-29.20"), D("5.20"), 1, 1, 0),
+        (OPEN_MS[OCT_7], SessionStatus.TRADED, 1, D("100.00"), D("0"), 1, 0, 0),
     ]
     assert summary.by_day[2].skip_reason is SkipReason.UNDERLYING_DID_NOT_TRADE
     assert summary.by_day[0].skip_reason is None
-    assert [row.session_open_ms for row in summary.by_day] == [
-        open_ms(day) for day in (SEP_29, SEP_30, OCT_1, OCT_2, OCT_5, OCT_6, OCT_7)
-    ]
 
 
 def test_the_by_month_table_adds_up_the_sessions_of_each_month() -> None:
@@ -564,6 +565,41 @@ def test_a_month_is_the_new_york_month_of_the_trading_date_and_the_table_follows
     summary = summarize_run(sessions, starting_cash_usd=STARTING)
 
     assert [(row.year, row.month, row.sessions) for row in summary.by_month] == [(2026, 12, 1), (2027, 1, 1)]
+
+
+def test_a_months_year_and_month_are_those_of_the_new_york_date_of_the_open_and_not_of_the_utc_one() -> None:
+    # Four sessions with their opens set by hand where a wrong clock names another month. No real open does this (it is
+    # 13:30 or 14:30 UTC, the same day in New York and UTC), so a test on real sessions could not tell the clocks apart.
+    # Summer time (EDT, UTC-4) until Sun 2026-11-01, standard time (EST, UTC-5) after. UTC midnight of a date is its day
+    # number (days since 1970-01-01) times 86,400,000; New York midnight is that plus 4 h on EDT or 5 h on EST.
+    #   A  21:30 EDT Wed 2026-09-30 = 01:30 UTC 10-01: day 20,727 = 1,790,812,800,000, plus 1.5 h (5,400,000)
+    #                                                                              = 1,790,818,200,000   September
+    #   B  00:30 EDT Thu 2026-10-01 = 04:30 UTC 10-01: New York midnight 1,790,827,200,000, plus 30 min (1,800,000)
+    #                                                                              = 1,790,829,000,000   October
+    #   C  21:30 EST Thu 2026-12-31 = 02:30 UTC 2027-01-01: day 20,819 = 1,798,761,600,000, plus 2.5 h (9,000,000)
+    #                                                                              = 1,798,770,600,000   December
+    #   D  23:30 EST Thu 2026-12-31 = 04:30 UTC 2027-01-01: the same day plus 4.5 h (16,200,000)
+    #                                                                              = 1,798,777,800,000   December
+    # UTC says October, October, January 2027, January 2027. A fixed UTC-5 says September for B; a fixed UTC-4 says
+    # January 2027 for D.
+    opens = (1_790_818_200_000, 1_790_829_000_000, 1_798_770_600_000, 1_798_777_800_000)
+    new_york = ZoneInfo("America/New_York")
+    assert opens == tuple(
+        int(datetime(*when, tzinfo=new_york).timestamp() * 1000)
+        for when in ((2026, 9, 30, 21, 30), (2026, 10, 1, 0, 30), (2026, 12, 31, 21, 30), (2026, 12, 31, 23, 30))
+    )
+    base = a_session(SEP_30, "10000.00", status=SessionStatus.NO_TRADE)
+    sessions = [replace(base, session_open_ms=ms) for ms in opens]
+
+    summary = summarize_run(sessions, starting_cash_usd=STARTING)
+
+    assert [(row.year, row.month, row.sessions) for row in summary.by_month] == [
+        (2026, 9, 1),
+        (2026, 10, 1),
+        (2026, 12, 2),
+    ]
+    # The by-day rows keep the instants as they were set.
+    assert [row.session_open_ms for row in summary.by_day] == list(opens)
 
 
 def test_a_session_is_without_momentum_when_a_leg_took_a_starting_price_and_no_leg_reached_its_momentum() -> None:
@@ -787,7 +823,9 @@ def test_a_summary_is_the_same_in_a_six_digit_decimal_context_as_in_the_default_
         D("1126542.88"),
         D("176010.53"),
     )
-    assert drawdown.trough_date == OCTOBER[4]
+    # Session E is OCTOBER[4], Wed 2026-10-07, whose 09:30 New York open is 1,791,379,800,000 ms UTC.
+    assert OCTOBER[4] == OCT_7
+    assert drawdown.trough_session_open_ms == OPEN_MS[OCT_7] == 1_791_379_800_000
     assert drawdown.fall_ratio == Ratio(D("176010.53"), D("1302553.41"))
 
 
