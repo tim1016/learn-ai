@@ -4890,16 +4890,22 @@ export interface paths {
         put?: never;
         /**
          * Start Recency Chart Job
-         * @description Validate, make the launch durable, and run the Recency Chart sweep on a worker thread. Returns 202.
+         * @description Validate, make the launch durable, and run the Recency Chart sweep. Returns 202.
          *
-         *     A malformed or oversized grid (D11) is refused before anything is written;
-         *     the launch row exists before the worker starts (D20); a redelivered
-         *     ``job_id`` is acknowledged without a second worker while the first still
-         *     holds the job, and refused (409) once that job is closed or if the
-         *     configuration differs. A resume (#1938) instead names an existing launch:
-         *     the new job id is bound to the durable record by the worker's claim, the
-         *     recorded cells are skipped, and the spec fields are ignored — the stored
-         *     configuration governs.
+         *     In research mode the API forwards the dispatch and never creates,
+         *     stamps or starts a thread (#3051): the runtime does, and runs the
+         *     launch's independent runs through the shared research workers. Here —
+         *     the local mode, or this process being the runtime — the launch runs on
+         *     a worker thread, in this process at the local mode.
+         *
+         *     A malformed or oversized grid (D11) is refused before anything is
+         *     written; the launch row exists before the worker starts (D20); a
+         *     redelivered ``job_id`` is acknowledged without a second worker while
+         *     the first still holds the job, and refused (409) once that job is
+         *     closed or if the configuration differs. A resume (#1938) instead names
+         *     an existing launch: the new job id is bound to the durable record by
+         *     the worker's claim, the recorded cells are skipped, and the spec
+         *     fields are ignored — the stored configuration governs.
          *     Everything after the HTTP boundary is ``app.research.recency.service``.
          */
         post: operations["start_recency_chart_job_api_jobs_internal_recency_chart_post"];
@@ -26292,7 +26298,7 @@ export interface components {
         StrategyGridConfigRequest: {
             /** Paramranges */
             paramRanges?: {
-                [key: string]: components["schemas"]["app__routers__jobs__ValueListRangeRequest"] | components["schemas"]["app__routers__jobs__LowHighStepRangeRequest"];
+                [key: string]: components["schemas"]["app__routers__recency_jobs__ValueListRangeRequest"] | components["schemas"]["app__routers__recency_jobs__LowHighStepRangeRequest"];
             };
             /** Strategykey */
             strategyKey: string;
@@ -28598,7 +28604,7 @@ export interface components {
             warmup_days?: number;
         };
         /** LowHighStepRangeRequest */
-        app__routers__jobs__LowHighStepRangeRequest: {
+        app__routers__recency_jobs__LowHighStepRangeRequest: {
             /** High */
             high: number;
             /** Low */
@@ -28612,7 +28618,7 @@ export interface components {
             type: "low_high_step";
         };
         /** ValueListRangeRequest */
-        app__routers__jobs__ValueListRangeRequest: {
+        app__routers__recency_jobs__ValueListRangeRequest: {
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}

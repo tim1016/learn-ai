@@ -15,6 +15,18 @@
 4. **Recency joins the attempt fence (ADR 0055 §4).** `RecencyLaunches` gains `Attempt` / `JobId` / `Incomplete` / `FailureReason` (schema version 9); the fence contract in `app/research/persistence/fence.py` is parameterized by column names and status vocabulary so the PascalCase table claims through the same code. Every launch write — per-run snapshot and terminal status — is fenced: a worker whose generation moved on (a resume claimed the launch) cannot write over it. Every launch claims, fresh ones included, so the fence is uniform.
 5. **Terminal accounting comes from the durable record, never the replay.** The worker no longer overwrites `SucceededRuns` with its execution's success count: the per-persist increments stand (passing `None` keeps them), while `FailedRuns` remains this execution's count — failed runs leave no durable trace, so a resume re-ran every one of them. A previously-failed launch whose recorded cells are skipped therefore reconciles to `COMPLETED` instead of falsely failing.
 6. **Cancelled launches are resumable** (owner decision, matching grid/walk-forward claimable statuses): anything not `COMPLETED` and not still live may Finish. There is no auto-resume; resume is an explicit operator act.
+**Amendment 2026-10-12 (#3051):** the Recency launch joins the isolated
+research runtime. The lease, the fence and this decision's accounting are
+unchanged — the worker claims the attempt before any write, per-run
+snapshots and terminal status stay fenced, and `SucceededRuns` remains the
+durable record's count while a resume's `FailedRuns` is that execution's.
+What the runtime changes is only where independent runs compute: one run
+is one task for a spawned worker, arrival order is free, and the launch's
+own progress, phases and cancellation contract never see the pool. The
+dispatch route lives on its own router (`app/routers/recency_jobs.py`)
+mounted on both the API and the runtime, so the forward-or-execute choice
+is the deployment's, not the route's.
+
 7. **Python only.** No .NET change: .NET stays the transport that mints job ids, writes initial state and serves SSE; a resume rides the same `startJob` path as any launch, so the drawer follows the new id and the new event stream. This keeps the issue aligned with the owner's direction of shrinking the .NET surface without coupling the two efforts.
 
 ## Considered options

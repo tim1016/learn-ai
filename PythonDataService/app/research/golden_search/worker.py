@@ -330,20 +330,29 @@ def _run_one_task(
 ) -> None:
     kind = task.get("kind")
     if kind is not None:
-        # A sibling caller's task kind rides the same child (#3049): Grid
-        # Search cells carry their own wire and projection. The golden
-        # evaluation stays the unmarked default, so existing wires and
-        # fixtures need no migration. A kind this child does not know is a
-        # version skew — refused as loudly as an identity mismatch, never
-        # answered as a failed run that would persist as evidence.
-        from app.research.grid_search.dispatch import GRID_WIRE_KIND, run_grid_cell_task
+        from app.research.grid_search.dispatch import GRID_WIRE_KIND as GRID_KIND
+        from app.research.recency.dispatch import RECENCY_WIRE_KIND as RECENCY_KIND
 
-        if kind != GRID_WIRE_KIND:
-            out.write(
-                {"type": "identity_refused", "key": task.get("key", "?"), "reason": f"unknown task kind {kind!r}"}
-            )
+        # A sibling caller's task kind rides the same child (#3049, #3051):
+        # Grid Search cells and Recency runs carry their own wires and
+        # projections. The golden evaluation stays the unmarked default, so
+        # existing wires and fixtures need no migration. A kind this child
+        # does not know is a version skew — refused as loudly as an identity
+        # mismatch, never answered as a failed run that would persist as
+        # evidence.
+        if kind == GRID_KIND:
+            from app.research.grid_search.dispatch import run_grid_cell_task
+
+            run_grid_cell_task(task, out=out, ask_admission=ask_admission, cancel_flag=cancel_flag, state=state)
             return
-        run_grid_cell_task(task, out=out, ask_admission=ask_admission, cancel_flag=cancel_flag, state=state)
+        if kind == RECENCY_KIND:
+            from app.research.recency.dispatch import run_recency_run_task
+
+            run_recency_run_task(task, out=out, ask_admission=ask_admission, cancel_flag=cancel_flag, state=state)
+            return
+        out.write(
+            {"type": "identity_refused", "key": task.get("key", "?"), "reason": f"unknown task kind {kind!r}"}
+        )
         return
 
     from app.research.golden_search.protocol import ExecutionAssumptions

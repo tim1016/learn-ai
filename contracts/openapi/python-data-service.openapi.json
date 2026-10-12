@@ -49848,17 +49848,17 @@
             "additionalProperties": {
               "discriminator": {
                 "mapping": {
-                  "low_high_step": "#/components/schemas/app__routers__jobs__LowHighStepRangeRequest",
-                  "value_list": "#/components/schemas/app__routers__jobs__ValueListRangeRequest"
+                  "low_high_step": "#/components/schemas/app__routers__recency_jobs__LowHighStepRangeRequest",
+                  "value_list": "#/components/schemas/app__routers__recency_jobs__ValueListRangeRequest"
                 },
                 "propertyName": "type"
               },
               "oneOf": [
                 {
-                  "$ref": "#/components/schemas/app__routers__jobs__ValueListRangeRequest"
+                  "$ref": "#/components/schemas/app__routers__recency_jobs__ValueListRangeRequest"
                 },
                 {
-                  "$ref": "#/components/schemas/app__routers__jobs__LowHighStepRangeRequest"
+                  "$ref": "#/components/schemas/app__routers__recency_jobs__LowHighStepRangeRequest"
                 }
               ]
             },
@@ -55693,7 +55693,7 @@
         "title": "_PreflightRequestBody",
         "type": "object"
       },
-      "app__routers__jobs__LowHighStepRangeRequest": {
+      "app__routers__recency_jobs__LowHighStepRangeRequest": {
         "properties": {
           "high": {
             "title": "High",
@@ -55721,7 +55721,7 @@
         "title": "LowHighStepRangeRequest",
         "type": "object"
       },
-      "app__routers__jobs__ValueListRangeRequest": {
+      "app__routers__recency_jobs__ValueListRangeRequest": {
         "properties": {
           "type": {
             "const": "value_list",
@@ -74189,7 +74189,7 @@
     },
     "/api/jobs-internal/recency-chart": {
       "post": {
-        "description": "Validate, make the launch durable, and run the Recency Chart sweep on a worker thread. Returns 202.\n\nA malformed or oversized grid (D11) is refused before anything is written;\nthe launch row exists before the worker starts (D20); a redelivered\n``job_id`` is acknowledged without a second worker while the first still\nholds the job, and refused (409) once that job is closed or if the\nconfiguration differs. A resume (#1938) instead names an existing launch:\nthe new job id is bound to the durable record by the worker's claim, the\nrecorded cells are skipped, and the spec fields are ignored \u2014 the stored\nconfiguration governs.\nEverything after the HTTP boundary is ``app.research.recency.service``.",
+        "description": "Validate, make the launch durable, and run the Recency Chart sweep. Returns 202.\n\nIn research mode the API forwards the dispatch and never creates,\nstamps or starts a thread (#3051): the runtime does, and runs the\nlaunch's independent runs through the shared research workers. Here \u2014\nthe local mode, or this process being the runtime \u2014 the launch runs on\na worker thread, in this process at the local mode.\n\nA malformed or oversized grid (D11) is refused before anything is\nwritten; the launch row exists before the worker starts (D20); a\nredelivered ``job_id`` is acknowledged without a second worker while\nthe first still holds the job, and refused (409) once that job is\nclosed or if the configuration differs. A resume (#1938) instead names\nan existing launch: the new job id is bound to the durable record by\nthe worker's claim, the recorded cells are skipped, and the spec\nfields are ignored \u2014 the stored configuration governs.\nEverything after the HTTP boundary is ``app.research.recency.service``.",
         "operationId": "start_recency_chart_job_api_jobs_internal_recency_chart_post",
         "requestBody": {
           "content": {
