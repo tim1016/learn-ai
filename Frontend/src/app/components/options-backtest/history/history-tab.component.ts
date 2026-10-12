@@ -57,6 +57,15 @@ export class HistoryTabComponent {
     this.list.reload();
   }
 
+  /** The names of a row's two controls; a template adds no strings to a row's id on a surface that shows dollars. */
+  protected openLabel(id: number): string {
+    return `Open run ${id}`;
+  }
+
+  protected deleteLabel(id: number): string {
+    return `Delete run ${id}`;
+  }
+
   protected open(run: RunListItem): void {
     this.opened.set(run);
     afterNextRender(() => this.panel()?.focusHeading(), { injector: this.injector });
@@ -67,7 +76,8 @@ export class HistoryTabComponent {
     const id = this.opened()?.id;
     this.opened.set(null);
     this.list.reload();
-    afterNextRender(() => this.host.nativeElement.querySelector<HTMLElement>(`button[aria-label="Open run ${id}"]`)?.focus(), { injector: this.injector });
+    if (id === undefined) return;
+    afterNextRender(() => this.host.nativeElement.querySelector<HTMLElement>(`button[aria-label="${this.openLabel(id)}"]`)?.focus(), { injector: this.injector });
   }
 
   protected async remove(id: number): Promise<void> {

@@ -40,8 +40,8 @@
                   }
                 </td>
                 <td class="actions">
-                  <button pButton type="button" size="small" [text]="true" [attr.aria-label]="'Open run ' + row.id" (click)="open(row)">Open</button>
-                  <app-confirm-delete [ariaLabel]="'Delete run ' + row.id" (confirmed)="remove(row.id)" />
+                  <button pButton type="button" size="small" [text]="true" [attr.aria-label]="openLabel(row.id)" (click)="open(row)">Open</button>
+                  <app-confirm-delete [ariaLabel]="deleteLabel(row.id)" (confirmed)="remove(row.id)" />
                 </td>
               </tr>
             }

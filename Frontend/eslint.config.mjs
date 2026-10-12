@@ -124,6 +124,9 @@ const moneySurfaces = (extension) => [
   ),
   `src/app/components/brokers/alpaca-desk/alpaca-account-list-page.component.${extension}`,
   `src/app/components/brokers/alpaca-desk/alpaca-lane-card.component.${extension}`,
+  // The Options Backtest page shows a run's dollars (#3030): its result and its history, whose names say nothing of money.
+  `src/app/components/options-backtest/run/**/*.${extension}`,
+  `src/app/components/options-backtest/history/**/*.${extension}`,
 ];
 
 export default tseslint.config(

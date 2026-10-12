@@ -26,6 +26,9 @@ const MONEY_SURFACES = [
   "src/app/components/broker/broker-deploy-page/deploy-money-step.component",
   "src/app/components/brokers/alpaca-home/alpaca-home.component",
   "src/app/components/brokers/alpaca-home/home-bot-row.component",
+  // The Options Backtest page shows a run's dollars from its run and history folders (#3030); no file there is named for money.
+  "src/app/components/options-backtest/run/run-headline.component",
+  "src/app/components/options-backtest/history/history-tab.component",
 ];
 
 /** Shapes that must be refused everywhere. */
