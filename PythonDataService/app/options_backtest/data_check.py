@@ -15,7 +15,10 @@ session is too old for the plan (``option_lake.plan_window_refusal``), whether i
 (``option_lake.session_refusal``), and whether the fee model prices a date (``fees.estimated_fees_available``). What
 is stored is read the way the run reads it, through ``RunData``, so "stored" here means "the run could read it".
 The contracts a session needs are known only once its underlying day and its listing are stored; until then the
-answer says so, and gives no number.
+answer says so, and gives no number. For the same reason the plan's floor and the settle rule are asked of every
+session whose window fits, before its underlying is read: a session the underlying did not trade at the entry time in
+needs no contract and would be skipped, but is refused here when it is older than the plan or not over yet, since that
+cannot be known without the data the check is not allowed to wait for. That is the conservative side.
 
 A recorded failure is something the lake wrote down when it last tried to fetch a thing. The lake asks again on a
 download until a row has spent its attempts, so a recorded failure makes a session ``cannot_be_tested`` only when the
