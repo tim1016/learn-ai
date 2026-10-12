@@ -340,10 +340,23 @@ async def test_a_listing_of_exactly_the_cap_is_read_whole() -> None:
         {"ticker": "   ", "contract_type": "call", "strike_price": 375},
         {"ticker": None, "contract_type": "call", "strike_price": 375},
         {"ticker": 375, "contract_type": "call", "strike_price": 375},
+        {"ticker": "O:SPY250613C00375000\u00e9", "contract_type": "call", "strike_price": 375},  # not ASCII
+        {"ticker": "O:SPY250613C00375000\U0001f4c8", "contract_type": "call", "strike_price": 375},  # an emoji
     ],
 )
 async def test_a_row_that_is_no_object_or_has_no_ticker_is_an_error_naming_the_row_kind(broken: Any) -> None:
     respx.get(CONTRACTS_URL).mock(return_value=_page([_row("O:SPY250613C00376000", 376), broken]))
+
+    with pytest.raises(PolygonContractRowError, match="contract row"):
+        await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
+
+
+@respx.mock
+async def test_a_ticker_with_a_lone_surrogate_is_an_error_naming_the_row_kind() -> None:
+    """JSON can spell a character no UTF-8 holds (``\\ud800``); only raw text can carry it into a test."""
+    respx.get(CONTRACTS_URL).mock(
+        return_value=_body('"results":[{"ticker":"O:SPY\\ud800250613C00375000","contract_type":"call"}]')
+    )
 
     with pytest.raises(PolygonContractRowError, match="contract row"):
         await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
@@ -418,9 +431,79 @@ async def test_a_standard_row_as_the_vendor_sends_it_has_no_additional_underlyin
 
 @respx.mock
 async def test_a_listing_with_no_contracts_comes_back_empty_for_the_caller_to_judge() -> None:
-    respx.get(CONTRACTS_URL).mock(return_value=httpx.Response(200, json={"status": "OK", "request_id": "r"}))
+    """The vendor's answer for an underlying with no options (probed 2026-10-12): ``results: []``, no next page."""
+    respx.get(CONTRACTS_URL).mock(return_value=_page([]))
 
     assert await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY) == []
+
+
+def _body(fields: str) -> httpx.Response:
+    """A 200 whose body is exactly the JSON object holding ``fields`` and a status of OK."""
+    return httpx.Response(200, content=('{"status":"OK",' + fields + "}").encode(), headers={"content-type": "application/json"})
+
+
+MISSING = ""
+NULL = '"results":null,'
+AN_OBJECT = '"results":{},'
+A_STRING = '"results":"x",'
+A_NUMBER = '"results":0,'
+FALSE = '"results":false,'
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "results",
+    [MISSING, NULL, AN_OBJECT, A_STRING, A_NUMBER, FALSE],
+    ids=["missing", "null", "an object", "a string", "zero", "false"],
+)
+async def test_a_later_page_that_does_not_say_its_rows_as_a_list_is_an_error_never_the_end_of_the_listing(results: str) -> None:
+    """The failure this guards: reading it as an empty last page stores the first page alone as the whole listing."""
+    respx.get(CONTRACTS_URL, params={"underlying_ticker": "SPY"}).mock(
+        return_value=_page([_row("O:SPY250613C00375000", 375)], next_url=SECOND_PAGE)
+    )
+    respx.get(CONTRACTS_URL, params={"cursor": "page2"}).mock(return_value=_body(results + '"request_id":"r"'))
+
+    with pytest.raises(PolygonFetchError, match="not a list"):
+        await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
+
+
+@respx.mock
+@pytest.mark.parametrize("results", [MISSING, NULL, AN_OBJECT, A_STRING], ids=["missing", "null", "an object", "a string"])
+async def test_a_first_page_that_does_not_say_its_rows_as_a_list_is_an_error_not_an_empty_listing(results: str) -> None:
+    respx.get(CONTRACTS_URL).mock(return_value=_body(results + '"request_id":"r"'))
+
+    with pytest.raises(PolygonFetchError, match="not a list"):
+        await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
+
+
+@respx.mock
+async def test_an_empty_page_with_a_next_page_is_an_error_whichever_page_it_is() -> None:
+    later = respx.get(CONTRACTS_URL, params={"cursor": "page2"})
+    first = respx.get(CONTRACTS_URL, params={"underlying_ticker": "SPY"})
+    first.mock(return_value=_page([], next_url=SECOND_PAGE))
+    later.mock(return_value=_page([_row("O:SPY250613C00375000", 375)]))
+
+    with pytest.raises(PolygonFetchError, match="empty page with a next page"):
+        await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
+
+    assert later.call_count == 0  # the cursor of a page that proved nothing is not followed
+
+    first.mock(return_value=_page([_row("O:SPY250613C00375000", 375)], next_url=SECOND_PAGE))
+    later.mock(return_value=_page([], next_url=THIRD_PAGE))
+    with pytest.raises(PolygonFetchError, match="empty page with a next page"):
+        await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
+
+
+@respx.mock
+async def test_an_empty_last_page_after_real_ones_ends_the_listing_with_the_pages_before_it() -> None:
+    respx.get(CONTRACTS_URL, params={"underlying_ticker": "SPY"}).mock(
+        return_value=_page([_row("O:SPY250613C00375000", 375)], next_url=SECOND_PAGE)
+    )
+    respx.get(CONTRACTS_URL, params={"cursor": "page2"}).mock(return_value=_page([]))
+
+    contracts = await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
+
+    assert [c.ticker for c in contracts] == ["O:SPY250613C00375000"]
 
 
 @respx.mock

@@ -396,7 +396,8 @@ async def ensure_option_listing(
     Claim, reuse-or-refresh on a lost claim, reclaim, fetch every page, build the
     file, publish under the lease; a typed failure on every vendor error. The refusals
     that cost no claim come first (``symbol_too_long``, ``not_a_session``,
-    ``session_not_over``; ``option_lake``'s docstring says what each means).
+    ``session_not_over``, which holds until the session's New York date has passed;
+    ``option_lake``'s docstring says what each means).
     """
     _require_ticker(underlying)
     now = now_ms if now_ms is not None else current_ms()

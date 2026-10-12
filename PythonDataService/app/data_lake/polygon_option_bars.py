@@ -9,7 +9,8 @@ by itself. This fetcher only says whether the answer is a *well-formed* one; tha
 a contract was listed that day is for the caller to prove from the stored listing.
 
 A confirmed answer is exactly: HTTP 200, a JSON object, a ``status`` of ``OK`` or
-``DELAYED``, the ticker asked for, a whole-number ``resultsCount`` of at least 0,
+``DELAYED``, the ticker asked for, an ``adjusted`` that is absent or false (the request
+asks for raw bars), a whole-number ``resultsCount`` of at least 0,
 no ``next_url``, and a ``results`` list of exactly that many bars (absent or empty
 when the count is 0). A session of one contract is far under the page limit, so a
 next page is an error, never something to follow. Anything else raises one of the
@@ -76,6 +77,8 @@ def _confirmed_bars(payload: dict[str, Any], ticker: str) -> list[PolygonOptionB
         raise PolygonFetchError(f"Polygon answered for ticker {payload.get('ticker')!r:.60}, not {ticker}", 200)
     if payload.get("next_url") is not None:
         raise PolygonFetchError(f"Polygon sent a next page for one session of {ticker}", 200)
+    if "adjusted" in payload and payload["adjusted"] is not False:  # the request asks for raw bars
+        raise PolygonFetchError(f"Polygon answer for {ticker} is not raw: adjusted is {payload['adjusted']!r:.40}", 200)
     count = payload.get("resultsCount")
     if isinstance(count, bool) or not isinstance(count, int) or count < 0:
         raise PolygonFetchError(f"Polygon answer for {ticker} has no whole-number resultsCount: {count!r:.40}", 200)

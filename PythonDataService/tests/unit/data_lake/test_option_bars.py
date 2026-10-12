@@ -8,6 +8,8 @@ Hand-worked figures used below:
 
 * 2025-06-13 is a full Friday session. Its open, 09:30 EDT, is 13:30 UTC =
   1749821400000 ms, and its close, 16:00 EDT, is 20:00 UTC = 1749844800000 ms.
+* A session's option data may be captured from New York midnight after its date: for 2025-06-13 that
+  is 00:00 EDT on the 14th = 04:00 UTC = 1749873600000 ms (the close plus 8 hours).
 * 09:30 is 34 200 000 ms after midnight, New York time, which is what the zip
   stores as a bar's start. A premium of 1.27 is stored as 12700 ten-thousandths.
 * 2025-11-28 (the day after Thanksgiving) closes at 13:00 EST = 18:00 UTC =
@@ -34,7 +36,7 @@ import zipfile
 import zlib
 from datetime import date, datetime
 from decimal import Decimal
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -60,7 +62,15 @@ from app.data_lake.option_bars import (
     parse_option_day_zip,
     read_option_day_bars,
 )
-from app.data_lake.option_lake import option_history_floor
+from app.data_lake.option_lake import (
+    MAX_FAILURE_TEXT_CHARS,
+    HeldLease,
+    OptionDataFailure,
+    fail_row,
+    option_history_floor,
+    publish_option_artifact,
+    storable_failure_text,
+)
 from app.data_lake.option_listing import ensure_option_listing, read_option_listing
 from app.data_lake.path_policy import lake_subpath
 from app.data_lake.polygon_option_bars import PolygonOptionBar
@@ -68,6 +78,14 @@ from app.data_lake.types import ArtifactIdentity
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.options.contract import OptionContract
 from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, point_lake_writer_at_tmp
+from tests._helpers.option_lake_cases import (
+    CAPTURE_OPENS,
+    HALF_DAY_CLOSE_MS,
+    one_bar_file,
+    pieces_of_the_key_in,
+    publish_stale_writer_first_once_both_have_staged,
+    refuse_what_postgres_refuses,
+)
 from tests._helpers.option_vendor import (
     bad_bars_answers,
     bar_row,
@@ -709,6 +727,49 @@ async def test_after_the_plan_is_upgraded_an_edge_day_that_failed_outside_the_pl
 
 
 @respx.mock
+async def test_a_day_told_it_is_outside_the_plan_twice_and_then_hit_by_one_transient_failure_has_spent_its_attempts(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """A known gap, pinned at its true size (the comment at ``NOT_LATCHED_ERRORS`` states it): the next ask is a timeout.
+
+    The exemption lasts only while the row's last error is the plan's, and every ask counts toward the
+    three attempts, so two plan answers and one 429 leave none, though the vendor would now answer.
+    """
+    contract = OptionContract.of(root="SPY", expiry_date=date(2024, 10, 18), right="call", strike=580)
+    open_ms = session_open_ms_utc(date(2024, 10, 14))
+    route = _mock_vendor(
+        outside_plan(), outside_plan(), httpx.Response(429), _ok([_bar(t=open_ms)], contract.occ_symbol),
+        contract=contract.occ_symbol,
+    )
+
+    asked = [await _ensure(contract, date(2024, 10, 14), now_ms=NOW_2026_10_12_MS) for _ in range(4)]
+
+    assert [r.failure.reason if r.failure else "captured" for r in asked] == [
+        "outside_data_plan", "outside_data_plan", "provider_rate_limited", "fetch_timeout",
+    ]
+    assert route.call_count == 3  # the fourth ask never reached the vendor, who would have answered with bars
+
+
+@respx.mock
+async def test_a_day_told_it_is_outside_the_plan_once_survives_one_transient_failure_and_is_captured(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """The other side of the same number: with one plan answer behind it, a 429 leaves an attempt."""
+    contract = OptionContract.of(root="SPY", expiry_date=date(2024, 10, 18), right="call", strike=580)
+    open_ms = session_open_ms_utc(date(2024, 10, 14))
+    route = _mock_vendor(
+        outside_plan(), httpx.Response(429), _ok([_bar(t=open_ms)], contract.occ_symbol), contract=contract.occ_symbol
+    )
+
+    asked = [await _ensure(contract, date(2024, 10, 14), now_ms=NOW_2026_10_12_MS) for _ in range(3)]
+
+    assert [r.failure.reason if r.failure else "captured" for r in asked] == [
+        "outside_data_plan", "provider_rate_limited", "captured",
+    ]
+    assert route.call_count == 3
+
+
+@respx.mock
 @pytest.mark.parametrize(
     "body",
     [
@@ -735,46 +796,52 @@ def test_the_plan_floor_is_two_years_back_plus_the_two_days_the_lake_composes_in
 
 
 @respx.mock
-async def test_a_session_that_closed_under_thirty_minutes_ago_is_refused_and_nothing_is_claimed(
-    fake_catalog: FakeCatalog, tmp_lake: Path
+@pytest.mark.parametrize(("session", "opens_ms"), [(day, ms) for _, day, ms in CAPTURE_OPENS], ids=[label for label, _, _ in CAPTURE_OPENS])
+async def test_a_session_is_refused_until_new_york_midnight_after_it_and_taken_from_that_midnight(
+    session: date, opens_ms: int, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
-    route = _mock_vendor()
+    """One millisecond before the midnight that ends the session's New York date is refused; the midnight is taken.
 
-    result = await ensure_option_day_bars(
-        CONTRACT, TRADING_DAY, listed_under="SPY", now_ms=SESSION_CLOSE_MS + 30 * MINUTE_MS - 1
-    )
+    The days around both clock changes would each be an hour out under a fixed offset, and the two half
+    days show an early close changes nothing about the rule.
+    """
+    contract = OptionContract.of(root="SPY", expiry_date=session, right="call", strike=600)
+    route = _mock_vendor(_ok([_bar(t=session_open_ms_utc(session))], contract.occ_symbol), contract=contract.occ_symbol)
 
-    assert result.record is None
-    assert result.failure is not None
-    assert result.failure.reason == "session_not_over"
+    too_early = await ensure_option_day_bars(contract, session, listed_under="SPY", now_ms=opens_ms - 1)
+
+    assert too_early.record is None
+    assert too_early.failure is not None and too_early.failure.reason == "session_not_over"
     assert route.call_count == 0
-    assert fake_catalog.rows == {}
+    assert fake_catalog.rows == {}  # refused before any claim
     assert _lake_files(tmp_lake) == []
 
+    on_time = await _ensure(contract, session, now_ms=opens_ms)
 
-@respx.mock
-async def test_a_session_thirty_minutes_after_the_close_is_taken(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
-    route = _mock_vendor()
-
-    result = await _ensure(now_ms=SESSION_CLOSE_MS + 30 * MINUTE_MS)
-
-    assert result.failure is None and result.record is not None
-    assert route.call_count == 1
-
-
-@respx.mock
-async def test_an_early_close_is_judged_by_its_own_close_not_by_four_oclock(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
-    day = date(2025, 11, 28)
-    open_ms, close_ms = 1764340200000, 1764352800000  # 09:30 EST, 13:00 EST
-    contract = OptionContract.of(root="SPY", expiry_date=day, right="call", strike=600)
-    route = _mock_vendor(_ok([_bar(t=open_ms)], "SPY251128C00600000"), contract="SPY251128C00600000")
-
-    early = await ensure_option_day_bars(contract, day, listed_under="SPY", now_ms=close_ms + 30 * MINUTE_MS - 1)
-    on_time = await _ensure(contract, day, now_ms=close_ms + 30 * MINUTE_MS)
-
-    assert early.failure is not None and early.failure.reason == "session_not_over"
     assert on_time.failure is None and on_time.record is not None
     assert route.call_count == 1
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("session", "close_ms"),
+    [(TRADING_DAY, SESSION_CLOSE_MS), *HALF_DAY_CLOSE_MS.items()],
+    ids=["a full day", "a half day in november", "a half day in july"],
+)
+async def test_the_evening_of_a_session_is_refused_from_the_close_to_the_midnight_on_a_full_day_or_a_half_day(
+    session: date, close_ms: int, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """Six hours after the close it is 22:00 New York on the full day, which UTC already calls the next date."""
+    contract = OptionContract.of(root="SPY", expiry_date=session, right="call", strike=600)
+    route = _mock_vendor(contract=contract.occ_symbol)
+
+    at_the_close = await ensure_option_day_bars(contract, session, listed_under="SPY", now_ms=close_ms)
+    half_an_hour_on = await ensure_option_day_bars(contract, session, listed_under="SPY", now_ms=close_ms + 30 * MINUTE_MS)
+    six_hours_on = await ensure_option_day_bars(contract, session, listed_under="SPY", now_ms=close_ms + 6 * 60 * MINUTE_MS)
+
+    for refused in (at_the_close, half_an_hour_on, six_hours_on):
+        assert refused.failure is not None and refused.failure.reason == "session_not_over"
+    assert route.call_count == 0 and fake_catalog.rows == {}
 
 
 @respx.mock
@@ -950,6 +1017,50 @@ def _polygon_option_bar() -> PolygonOptionBar:
     )
 
 
+async def test_a_writer_that_lost_its_lease_and_the_winner_publishing_together_leave_the_winners_file_and_a_complete_row(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both stage their bytes first. If they staged to one path, the loser's refusal would delete the winner's staged file.
+
+    The staging path carries the lease generation, so each writer has its own. The scheduler is told to give the
+    stale writer its turn at the catalog (refusal and cleanup) before the winner's, the order that hurts.
+    """
+    dch = option_minute_trade_dch()
+    identity = ArtifactIdentity(
+        artifact_kind="time_series_bars", market="usa_options", symbol=SYMBOL, trading_date=TRADING_DAY,
+        resolution="minute", data_type="trade", provider="polygon", price_adjustment_mode="raw",
+    )
+    artifact_id = await catalog_client.claim_minute_bar(
+        identity=identity, worker_id=option_lake_module.WORKER_ID, lease_ttl_ms=option_lake_module.LEASE_TTL_MS,
+        data_contract_hash=dch, file_path=RELATIVE_PATH,
+    )
+    assert artifact_id is not None
+    fake_catalog.rows[artifact_id]["lease_expires_at_ms"] = 1  # the first writer's lease runs out
+    winner_generation = await catalog_client.steal_or_retry_minute_bar(
+        artifact_id, option_lake_module.WORKER_ID, option_lake_module.LEASE_TTL_MS, option_lake_module.MAX_CLAIM_RETRIES,
+        fresh_budget_for_contract=dch,
+    )
+    assert winner_generation == 2
+    stale_file, winner_file = one_bar_file("1.11"), one_bar_file("2.22")
+    publish_stale_writer_first_once_both_have_staged(monkeypatch, winner_generation=2)
+    shared = {
+        "rel_path": PurePosixPath(RELATIVE_PATH), "row_count": 1, "first_bar_start_ms": SESSION_OPEN_MS,
+        "last_bar_start_ms": SESSION_OPEN_MS, "data_contract_hash": dch, "symbol": SYMBOL, "trading_date": TRADING_DAY,
+    }
+
+    stale, winner = await asyncio.gather(
+        publish_option_artifact(payload=stale_file, lease=HeldLease(artifact_id, 1), **shared),
+        publish_option_artifact(payload=winner_file, lease=HeldLease(artifact_id, 2), **shared),
+    )
+
+    assert isinstance(stale, OptionDataFailure) and stale.reason == "lease_timeout"  # told the row is not its own
+    assert winner == hashlib.sha256(winner_file).hexdigest()
+    assert (_raw_root(tmp_lake) / RELATIVE_PATH).read_bytes() == winner_file
+    row = fake_catalog.rows[artifact_id]
+    assert (row["status"], row["file_sha256"], row["lease_generation"]) == ("complete", winner, 2)
+    assert _staged_files(tmp_lake) == []
+
+
 # ── A vendor error is a typed failure on the row ─────────────────────────
 
 
@@ -987,6 +1098,93 @@ async def test_a_transport_failure_is_a_provider_api_error(fake_catalog: FakeCat
     result = await _ensure()
 
     assert result.failure is not None and result.failure.reason == "provider_api_error"
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "key",
+    ["", "  \n", "Zq9xV7wK\u00e9", "Zq9xV7wK Zq9xV7wK", "Zq9xV7wK\x00", "Zq9xV7wK\ud800"],
+    ids=["empty", "only whitespace", "accented letter", "inner space", "nul", "lone surrogate"],
+)
+async def test_a_key_that_cannot_be_sent_fails_the_row_as_an_auth_error_and_leaves_none_fetching(
+    key: str, fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A raw ``UnicodeEncodeError`` once escaped here and left the row ``fetching`` for the length of its lease."""
+    route = _mock_vendor()
+    await _list(CONTRACT)  # stored while the key is good
+    stored = refuse_what_postgres_refuses(monkeypatch)
+    monkeypatch.setattr(settings, "POLYGON_API_KEY", key)
+    caplog.set_level(logging.DEBUG)
+
+    result = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
+
+    assert result.record is None
+    assert result.failure is not None and result.failure.reason == "provider_auth_error"
+    assert "malformed" in result.failure.detail
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "provider_auth_error", None)
+    assert route.call_count == 0  # no request was made
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+    shown = [result.failure.detail, *stored, *(r.getMessage() + repr(r.__dict__) for r in caplog.records)]
+    assert pieces_of_the_key_in(key.strip(), *shown) == set()
+
+
+@respx.mock
+async def test_a_vendor_error_text_with_a_nul_is_stored_without_it_and_the_row_is_failed_not_left_fetching(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The table refuses a NUL, so recording the failure raised and the row stayed ``fetching``."""
+    stored = refuse_what_postgres_refuses(monkeypatch)
+    _mock_vendor(httpx.Response(500, content=b"boom\x00boom"))
+
+    result = await _ensure()
+
+    assert result.failure is not None and result.failure.reason == "provider_api_error"
+    assert "boomboom" in result.failure.detail and "\x00" not in result.failure.detail
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "provider_api_error", None)
+    assert stored == [result.failure.detail]
+
+
+@respx.mock
+async def test_a_vendor_status_with_a_character_no_utf8_holds_is_stored_cleaned_and_the_row_is_failed(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """JSON can spell a lone surrogate (``\\ud800``); the status is echoed into the error text, and the driver cannot encode it."""
+    stored = refuse_what_postgres_refuses(monkeypatch)
+    _mock_vendor(raw_json('{"status":"\\ud800","ticker":"O:' + SYMBOL + '","resultsCount":0}'))
+
+    result = await _ensure()
+
+    assert result.failure is not None and result.failure.reason == "provider_api_error"
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["last_error"], row["lease_owner"]) == ("failed", "provider_api_error", None)
+    assert len(stored) == 1 and stored[0] == result.failure.detail
+    stored[0].encode("utf-8")  # storable
+
+
+def test_a_failure_text_loses_its_nuls_is_made_encodable_and_is_cut_to_the_stored_length() -> None:
+    assert storable_failure_text("a\x00b\x00\x00c") == "abc"
+    assert storable_failure_text("x\ud800y") == "x?y"
+    assert storable_failure_text("caf\u00e9 \u2603") == "caf\u00e9 \u2603"  # what UTF-8 holds is kept
+    assert storable_failure_text("x" * (MAX_FAILURE_TEXT_CHARS + 500)) == "x" * MAX_FAILURE_TEXT_CHARS
+    assert storable_failure_text("") == ""
+    assert MAX_FAILURE_TEXT_CHARS > 200  # the vendor's body is cut to 200 elsewhere; this never clips that
+
+
+async def test_fail_row_hands_the_catalog_the_cleaned_text_and_answers_with_it(
+    fake_catalog: FakeCatalog, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stored = refuse_what_postgres_refuses(monkeypatch)
+
+    result = await fail_row(
+        artifact_id=1, lease_generation=1, reason="provider_api_error", detail="bad\x00\ud800" + "y" * 5000,
+        symbol=SYMBOL, trading_date=TRADING_DAY,
+    )
+
+    assert result.failure is not None
+    assert stored == [result.failure.detail] and stored[0].startswith("bad?y")
+    assert len(stored[0]) == MAX_FAILURE_TEXT_CHARS
 
 
 @respx.mock
@@ -1039,7 +1237,7 @@ async def test_a_price_the_file_cannot_hold_fails_the_row_and_raises_nothing(
 async def test_a_vendor_answer_that_is_not_well_formed_fails_the_row_and_raises_nothing(
     name: str, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
-    """Every body the review drove in: a caller looping over contracts must get a result for each, and no row may stay fetching."""
+    """Every body that is not well formed: a caller looping over contracts must get a result for each, and no row may stay fetching."""
     route = _mock_vendor(bad_bars_answers(SYMBOL)[name]())
 
     result = await _ensure()  # returns; nothing escapes
@@ -1095,10 +1293,17 @@ async def test_a_price_the_float_route_would_round_the_other_way_is_stored_by_it
 
 
 @respx.mock
+@pytest.mark.parametrize(
+    "configured_key",
+    [SENTINEL_KEY, f"{SENTINEL_KEY}\n", f"  {SENTINEL_KEY}\r\n"],
+    ids=["as typed", "with a trailing newline", "with spaces in front and a crlf behind"],
+)
 async def test_the_key_is_in_no_url_no_log_line_no_error_text_and_no_stored_failure(
-    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    configured_key: str, fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    monkeypatch.setattr(settings, "POLYGON_API_KEY", SENTINEL_KEY)
+    """The key is sent as itself, stripped of the whitespace an ``.env`` line or a copy-paste leaves on it."""
+    monkeypatch.setattr(settings, "POLYGON_API_KEY", configured_key)
     caplog.set_level(logging.INFO)  # the level the app logs at; httpx logs each request's URL there
     failed_with: list[Any] = []
     stored_fail = catalog_client.fail_artifact
