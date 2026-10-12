@@ -48,7 +48,7 @@ from pathlib import Path
 from app.data_lake.admission import read_committed_bytes
 from app.data_lake.option_bars import read_option_day_bars
 from app.data_lake.option_lake import option_read_root
-from app.data_lake.option_listing import read_option_listing
+from app.data_lake.option_listing import OptionListing, read_option_listing
 from app.data_lake.types import is_lake_addressable_symbol
 from app.engine.data.lean_format import LeanMinuteDataReader
 from app.options.contract import OptionContract
@@ -80,6 +80,25 @@ class StoredListing(Listing):
 
     # Stored rows with no parsed contract (an adjusted root, a ticker that disagrees with its row) or no share count.
     rows_left_out: int = 0
+
+
+def captured_listing_of(stored: OptionListing) -> Captured[Listing]:
+    """The picker's listing, and the hash to pin, of a listing the lake holds."""
+    contracts = tuple(
+        ListedContract(contract=row.contract, multiplier=row.shares_per_contract, standard=row.standard)
+        for row in stored.rows
+        if row.contract is not None and row.shares_per_contract is not None
+    )
+    return Captured(
+        value=StoredListing(
+            underlying=stored.underlying,
+            as_of=stored.as_of,
+            contracts=contracts,
+            complete=True,
+            rows_left_out=len(stored.rows) - len(contracts),
+        ),
+        sha256=stored.sha256,
+    )
 
 
 class _AdmittedBytes:
@@ -147,6 +166,16 @@ class LakeRunData:
             sha256=hashlib.sha256(admitted.payload).hexdigest(),
         )
 
+    def stored_listing(self, trading_date: date) -> OptionListing | None:
+        """The stored listing as the lake holds it, or ``None`` when none is stored.
+
+        For a caller that needs the lake's own listing (to hand it to a capture, which proves a contract is listed
+        from it) as well as the picker's: read it once here and make the picker's of it with
+        ``captured_listing_of``. Raises as ``listing`` does.
+        """
+        _require_a_worker_thread()
+        return read_option_listing(self._underlying, trading_date, lake_root=self._lake_root)
+
     def listing(self, trading_date: date) -> Captured[Listing] | None:
         """The stored listing of the underlying as of ``trading_date``, or ``None`` when none is stored.
 
@@ -156,25 +185,8 @@ class LakeRunData:
         ``LakeAdmissionError`` and ``CatalogUnavailableError`` as the lake does, and ``RuntimeError`` off a worker
         thread.
         """
-        _require_a_worker_thread()
-        stored = read_option_listing(self._underlying, trading_date, lake_root=self._lake_root)
-        if stored is None:
-            return None
-        contracts = tuple(
-            ListedContract(contract=row.contract, multiplier=row.shares_per_contract, standard=row.standard)
-            for row in stored.rows
-            if row.contract is not None and row.shares_per_contract is not None
-        )
-        return Captured(
-            value=StoredListing(
-                underlying=stored.underlying,
-                as_of=stored.as_of,
-                contracts=contracts,
-                complete=True,
-                rows_left_out=len(stored.rows) - len(contracts),
-            ),
-            sha256=stored.sha256,
-        )
+        stored = self.stored_listing(trading_date)
+        return None if stored is None else captured_listing_of(stored)
 
     def option_day(self, contract: OptionContract, trading_date: date) -> Captured[Sequence[MinuteBar]] | None:
         """One contract's stored bars on ``trading_date``; ``None`` when not captured, empty when it never traded.

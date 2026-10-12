@@ -1,0 +1,445 @@
+"""Check data: what each session of a range needs, from what is stored (#3030).
+
+The checks run on dictionaries (``FakeRunData``), so nothing here touches a lake. The sessions are the consecutive
+Wednesday to Friday of 2026-10-07 to 09, all full days; the half day is 2026-11-27, which closes at 13:00. "Now" is
+2026-10-12 14:00 New York, a Monday: more than a day after the last of those sessions, so they are over under any
+rule for when a session's data is final. The one test of a session that is not over puts "now" inside the session.
+
+Hand-worked figures:
+
+* The floor. The options plan reaches two years back with two days of headroom: 2026-10-12 less two years is
+  2024-10-12, plus two days is 2024-10-14. A Monday: the floor day itself is taken, and the Friday before it
+  (2024-10-11) is older than the plan.
+* The setup of most tests buys one same-day at-the-money call at the entry time. The underlying closes at 500.20 in
+  every minute, so the money is the 500 strike, and the one contract a session needs is the 500 call expiring that
+  day. With a put leg added a session needs two.
+* The half day. The window "enter 205 minutes after the open, leave 10 minutes before the close" fits a full day (a
+  09:30 open is entered at 12:55 and the 16:00 close left at 15:50) and not the half day: a 13:00 close is left at
+  12:50, before the 12:55 entry.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from datetime import date
+from typing import Any
+
+from app.data_lake.option_bars import OptionBarsFileError
+from app.lean_sidecar.trading_calendar import session_window_for_date
+from app.options.contract import OptionContract
+from app.options_backtest.data import Captured
+from app.options_backtest.data_check import (
+    ContractNeeds,
+    DataCheck,
+    DataKind,
+    DataThing,
+    ProblemCode,
+    RecordedFailure,
+    SessionCheck,
+    SessionVerdict,
+    check_data,
+)
+from app.options_backtest.results import SkipReason
+from app.options_backtest.setup import MS_PER_MINUTE
+from tests.options_backtest._run_data import (
+    FRI,
+    HALF_DAY,
+    THU,
+    WED,
+    Day,
+    FakeRunData,
+    contract_on,
+    fake_data,
+    flat,
+    steady,
+)
+from tests.options_backtest.setup_fixtures import leg, setup
+
+# 2026-10-12 14:00 New York.
+NOW_MS = 1791828000000
+CALL_500 = ("call", 500)
+PUT_500 = ("put", 500)
+NEEDED = {CALL_500: flat("1.00", 1, 390)}
+
+
+class CheckData(FakeRunData):
+    """A fake lake that also remembers what it failed to fetch, and can hold a file that does not read."""
+
+    def __init__(
+        self,
+        base: FakeRunData,
+        *,
+        failures: Mapping[tuple[DataKind, date, str | None], RecordedFailure] | None = None,
+        damaged: tuple[tuple[date, str], ...] = (),
+    ) -> None:
+        super().__init__(underlying=base._underlying, listings=base._listings, options=base._options)
+        self._failures = dict(failures or {})
+        self._damaged = set(damaged)
+
+    def option_day(self, contract: OptionContract, trading_date: date) -> Captured[Any] | None:
+        if (trading_date, contract.occ_symbol) in self._damaged:
+            raise OptionBarsFileError("the stored bars do not read")
+        return super().option_day(contract, trading_date)
+
+    def recorded_failure(self, thing: DataThing, trading_date: date) -> RecordedFailure | None:
+        symbol = None if thing.contract is None else thing.contract.occ_symbol
+        return self._failures.get((thing.kind, trading_date, symbol))
+
+
+def _stored(**changes: Any) -> Day:
+    return Day(underlying=steady("500.20"), options=dict(NEEDED), **changes)
+
+
+def _check(
+    days: dict[date, Day], *, sessions: list[date] | None = None, now_ms: int = NOW_MS, **kwargs: Any
+) -> DataCheck:
+    failures = kwargs.pop("failures", None)
+    damaged = kwargs.pop("damaged", ())
+    data = CheckData(fake_data(days, **kwargs), failures=failures, damaged=damaged)
+    chosen = {"expiry": {"kind": "same_day"}}
+    return check_data(setup(legs=[leg(**chosen)]), sessions or sorted(days), now_ms=now_ms, data=data)
+
+
+def _only(check: DataCheck) -> SessionCheck:
+    [session] = check.sessions
+    return session
+
+
+def test_a_session_with_everything_it_can_need_stored_is_ready_and_has_its_contract_counted() -> None:
+    session = _only(_check({WED: _stored()}))
+
+    assert session.verdict is SessionVerdict.READY
+    assert session.skip is None and session.missing == () and session.problems == ()
+    assert session.contracts == ContractNeeds(needed=1, missing=0)
+
+
+def test_the_session_keeps_the_calendars_open_and_close() -> None:
+    session = _only(_check({WED: _stored()}))
+
+    window = session_window_for_date(WED)
+    assert (session.session_open_ms, session.session_close_ms) == (window.open_ms_utc, window.close_ms_utc)
+    assert session.trading_date == WED
+
+
+def test_missing_underlying_bars_are_named_and_the_contracts_are_not_yet_known() -> None:
+    session = _only(_check({WED: _stored()}, without_underlying=(WED,)))
+
+    assert session.verdict is SessionVerdict.NEEDS_DOWNLOAD
+    assert session.missing == (DataKind.UNDERLYING_BARS,)
+    assert session.contracts == ContractNeeds(needed=None, missing=None) and not session.contracts.known
+
+
+def test_a_missing_listing_is_named_and_the_contracts_are_not_yet_known() -> None:
+    session = _only(_check({WED: _stored()}, without_listing=(WED,)))
+
+    assert session.verdict is SessionVerdict.NEEDS_DOWNLOAD
+    assert session.missing == (DataKind.LISTING,)
+    assert not session.contracts.known
+
+
+def test_both_missing_are_named_in_the_order_a_download_brings_them() -> None:
+    session = _only(_check({WED: _stored()}, without_underlying=(WED,), without_listing=(WED,)))
+
+    assert session.missing == (DataKind.UNDERLYING_BARS, DataKind.LISTING)
+    assert not session.contracts.known
+
+
+def test_contracts_not_stored_are_counted_of_the_contracts_the_session_needs() -> None:
+    # A call and a put at the money: two contracts. Only the call is stored.
+    two_legs = setup(
+        legs=[leg(expiry={"kind": "same_day"}), leg(leg_id="put", right="put", expiry={"kind": "same_day"})]
+    )
+    data = CheckData(fake_data({WED: _stored()}))
+
+    session = _only(check_data(two_legs, [WED], now_ms=NOW_MS, data=data))
+
+    assert session.verdict is SessionVerdict.NEEDS_DOWNLOAD
+    assert session.missing == (DataKind.CONTRACTS,)
+    assert session.contracts == ContractNeeds(needed=2, missing=1)
+
+
+def test_a_contract_that_never_traded_is_stored_and_does_not_count_as_missing() -> None:
+    # Captured and empty is a fact: the contract was listed and did not trade.
+    never_traded = Day(underlying=steady("500.20"), options={CALL_500: {}})
+
+    session = _only(_check({WED: never_traded}))
+
+    assert session.verdict is SessionVerdict.READY
+    assert session.contracts == ContractNeeds(needed=1, missing=0)
+
+
+def test_a_window_that_does_not_fit_a_half_day_is_ready_needs_nothing_and_says_which_rule_skips_it() -> None:
+    late = setup(
+        entry={"anchor": "open", "offset_ms": 205 * MS_PER_MINUTE},
+        exit={"anchor": "close", "offset_ms": 10 * MS_PER_MINUTE},
+        legs=[leg(expiry={"kind": "same_day"})],
+    )
+    # Nothing at all is stored for the half day, and a full day is stored whole.
+    data = CheckData(fake_data({THU: _stored()}))
+
+    checked = check_data(late, [THU, HALF_DAY], now_ms=NOW_MS + 60 * 24 * 3600 * 1000, data=data)
+
+    full, half = checked.sessions
+    assert full.verdict is SessionVerdict.READY and full.skip is None
+    assert half.verdict is SessionVerdict.READY
+    assert half.skip is SkipReason.WINDOW_DOES_NOT_FIT
+    assert half.contracts == ContractNeeds(0, 0) and half.missing == () and half.problems == ()
+    assert ("underlying", HALF_DAY) not in data.asked, "a skipped session reads nothing"
+
+
+def test_a_session_the_underlying_did_not_trade_in_at_the_entry_time_is_ready_and_skipped() -> None:
+    # The entry is read on the bar closing at minute 5. This underlying has no bar for minute 5.
+    without_the_entry_minute = {minute: "500.20" for minute in range(1, 391) if minute != 5}
+    day = Day(underlying=without_the_entry_minute, options={})
+
+    session = _only(_check({WED: day}))
+
+    assert session.verdict is SessionVerdict.READY
+    assert session.skip is SkipReason.UNDERLYING_DID_NOT_TRADE
+    assert session.contracts == ContractNeeds(0, 0)
+
+
+def test_a_session_the_underlying_did_not_trade_in_still_needs_its_listing_because_the_run_reads_it() -> None:
+    without_the_entry_minute = {minute: "500.20" for minute in range(1, 391) if minute != 5}
+    day = Day(underlying=without_the_entry_minute, options={})
+
+    session = _only(_check({WED: day}, without_listing=(WED,)))
+
+    assert session.verdict is SessionVerdict.NEEDS_DOWNLOAD
+    assert session.missing == (DataKind.LISTING,)
+
+
+def test_a_session_older_than_the_data_plan_cannot_be_tested_and_the_floor_day_itself_can() -> None:
+    friday_before_the_floor = date(2024, 10, 11)
+    the_floor_day = date(2024, 10, 14)
+    data = CheckData(FakeRunData())
+    free = setup(legs=[leg(expiry={"kind": "same_day"})])
+
+    checked = check_data(free, [friday_before_the_floor, the_floor_day], now_ms=NOW_MS, data=data)
+
+    too_old, at_the_floor = checked.sessions
+    assert too_old.verdict is SessionVerdict.CANNOT_BE_TESTED
+    assert [problem.code for problem in too_old.problems] == [ProblemCode.OLDER_THAN_THE_DATA_PLAN]
+    assert at_the_floor.verdict is SessionVerdict.NEEDS_DOWNLOAD
+    assert checked.option_prices_from == date(2024, 10, 14)
+    assert ("underlying", friday_before_the_floor) not in data.asked, "a session that cannot be tested is not read"
+
+
+def test_a_session_that_is_not_over_cannot_be_tested_and_says_its_data_is_not_final() -> None:
+    inside_friday = session_window_for_date(FRI).open_ms_utc + 60 * MS_PER_MINUTE
+
+    checked = _check({THU: _stored(), FRI: _stored()}, now_ms=inside_friday)
+
+    thursday, friday = checked.sessions
+    assert thursday.verdict is SessionVerdict.READY
+    assert friday.verdict is SessionVerdict.CANNOT_BE_TESTED
+    [problem] = friday.problems
+    assert problem.code is ProblemCode.SESSION_DATA_NOT_FINAL
+    assert "not final" in problem.message and "next New York day" in problem.message
+
+
+def test_estimated_fees_on_a_date_without_published_rates_cannot_be_tested_even_when_the_window_skips_it() -> None:
+    # The fee model has no rates before July 2026, so a run that estimates fees refuses such a date outright,
+    # whether the session would have traded or been skipped.
+    estimated = setup(
+        fees={"kind": "estimated"},
+        entry={"anchor": "open", "offset_ms": 205 * MS_PER_MINUTE},
+        exit={"anchor": "close", "offset_ms": 10 * MS_PER_MINUTE},
+        legs=[leg(expiry={"kind": "same_day"})],
+    )
+    before_the_rates_on_a_half_day = date(2025, 11, 28)
+    priced = date(2026, 7, 1)
+    data = CheckData(fake_data({priced: _stored()}))
+
+    checked = check_data(estimated, [before_the_rates_on_a_half_day, priced], now_ms=NOW_MS, data=data)
+
+    unpriced, with_rates = checked.sessions
+    assert unpriced.verdict is SessionVerdict.CANNOT_BE_TESTED
+    assert [problem.code for problem in unpriced.problems] == [ProblemCode.NO_PUBLISHED_FEE_RATES]
+    assert with_rates.verdict is SessionVerdict.READY
+
+
+def test_a_fee_per_contract_or_none_is_never_a_reason_to_refuse_a_date() -> None:
+    old_but_in_the_plan = date(2025, 6, 13)
+    for fees in ({"kind": "not_charged"}, {"kind": "per_contract", "per_contract_usd": "0.65"}):
+        data = CheckData(fake_data({old_but_in_the_plan: _stored()}))
+        checked = check_data(
+            setup(fees=fees, legs=[leg(expiry={"kind": "same_day"})]), [old_but_in_the_plan], now_ms=NOW_MS, data=data
+        )
+
+        assert _only(checked).verdict is SessionVerdict.READY
+
+
+def test_a_session_can_have_more_than_one_reason_and_all_are_given() -> None:
+    estimated = setup(fees={"kind": "estimated"}, legs=[leg(expiry={"kind": "same_day"})])
+    old = date(2024, 10, 11)
+
+    checked = check_data(estimated, [old], now_ms=NOW_MS, data=CheckData(FakeRunData()))
+
+    assert {problem.code for problem in _only(checked).problems} == {
+        ProblemCode.NO_PUBLISHED_FEE_RATES,
+        ProblemCode.OLDER_THAN_THE_DATA_PLAN,
+    }
+
+
+# ── What the lake wrote down ─────────────────────────────────────────────
+
+
+def _failed(reason: str, *, again: bool) -> RecordedFailure:
+    return RecordedFailure(reason=reason, will_be_asked_again=again)
+
+
+def test_a_failure_the_lake_will_not_try_again_cannot_be_tested_and_gives_the_lakes_reason() -> None:
+    failures = {(DataKind.LISTING, WED, None): _failed("provider_entitlement_error", again=False)}
+
+    session = _only(_check({WED: _stored()}, without_listing=(WED,), failures=failures))
+
+    assert session.verdict is SessionVerdict.CANNOT_BE_TESTED
+    [problem] = session.problems
+    assert problem.code is ProblemCode.LAKE_HOLDS_A_FAILURE
+    assert problem.lake_reason == "provider_entitlement_error"
+    assert "listing" in problem.message
+
+
+def test_a_failure_the_lake_will_try_again_is_a_download_with_a_note_and_not_a_refusal() -> None:
+    failures = {(DataKind.UNDERLYING_BARS, WED, None): _failed("provider_rate_limited", again=True)}
+
+    session = _only(_check({WED: _stored()}, without_underlying=(WED,), failures=failures))
+
+    assert session.verdict is SessionVerdict.NEEDS_DOWNLOAD
+    assert session.problems == ()
+    assert any("provider_rate_limited" in note and "again" in note for note in session.notes)
+
+
+def test_a_contract_the_lake_gave_up_on_makes_the_session_untestable_naming_that_contract() -> None:
+    call = contract_on(WED, "call", 500)
+    failures = {(DataKind.CONTRACTS, WED, call.occ_symbol): _failed("fetch_timeout", again=False)}
+    with_the_call_missing = Day(underlying=steady("500.20"), options={})
+
+    session = _only(_check({WED: with_the_call_missing}, failures=failures))
+
+    assert session.verdict is SessionVerdict.CANNOT_BE_TESTED
+    assert call.occ_symbol in session.problems[0].message
+    assert session.contracts == ContractNeeds(needed=1, missing=1)
+
+
+def test_a_failure_recorded_for_something_that_is_stored_is_not_looked_at() -> None:
+    failures = {(DataKind.LISTING, WED, None): _failed("fetch_timeout", again=False)}
+
+    session = _only(_check({WED: _stored()}, failures=failures))
+
+    assert session.verdict is SessionVerdict.READY
+
+
+# ── Stored files that do not read ────────────────────────────────────────
+
+
+def test_a_stored_contract_day_that_does_not_read_is_counted_missing_with_a_note() -> None:
+    call = contract_on(WED, "call", 500)
+
+    session = _only(_check({WED: _stored()}, damaged=((WED, call.occ_symbol),)))
+
+    assert session.verdict is SessionVerdict.NEEDS_DOWNLOAD
+    assert session.contracts == ContractNeeds(needed=1, missing=1)
+    assert any(call.occ_symbol in note and "fetched again" in note for note in session.notes)
+
+
+def test_stored_underlying_bars_that_break_the_rules_of_a_bar_cannot_be_tested() -> None:
+    repeated = _stored()
+    data = fake_data({WED: repeated})
+    bars = list(data._underlying[WED])
+    data._underlying[WED] = (*bars, bars[-1])  # the same minute twice
+
+    session = _only(
+        check_data(setup(legs=[leg(expiry={"kind": "same_day"})]), [WED], now_ms=NOW_MS, data=CheckData(data))
+    )
+
+    assert session.verdict is SessionVerdict.CANNOT_BE_TESTED
+    assert [problem.code for problem in session.problems] == [ProblemCode.STORED_DATA_IS_MALFORMED]
+
+
+# ── The testable range ───────────────────────────────────────────────────
+
+
+def _session(day: date, verdict: SessionVerdict) -> SessionCheck:
+    window = session_window_for_date(day)
+    return SessionCheck(day, window.open_ms_utc, window.close_ms_utc, verdict, None, (), ContractNeeds(0, 0), (), ())
+
+
+def _range(*verdicts: SessionVerdict) -> DataCheck:
+    # Seven consecutive weekdays from Monday 2026-10-05 would include a weekend; these are only labelled sessions.
+    days = [date(2026, 10, 5), date(2026, 10, 6), WED, THU, FRI, date(2026, 10, 12), date(2026, 10, 13)]
+    return DataCheck(
+        tuple(_session(day, verdict) for day, verdict in zip(days, verdicts, strict=False)), date(2024, 10, 14)
+    )
+
+
+R, N, C = SessionVerdict.READY, SessionVerdict.NEEDS_DOWNLOAD, SessionVerdict.CANNOT_BE_TESTED
+
+
+def test_the_first_and_last_session_that_can_be_tested_skip_those_that_cannot() -> None:
+    checked = _range(C, R, N, C, R, C, C)
+
+    assert checked.first_testable is not None and checked.first_testable.trading_date == date(2026, 10, 6)
+    assert checked.last_testable is not None and checked.last_testable.trading_date == FRI
+
+
+def test_the_longest_unbroken_run_of_testable_sessions_is_offered_as_a_range() -> None:
+    # Indices 1 to 3 are three testable sessions in a row (Tue, Wed, Thu); 5 to 6 are two. The run is Tue to Thu.
+    checked = _range(C, R, N, R, C, R, R)
+
+    stretch = checked.longest_testable_stretch
+
+    assert stretch is not None
+    assert (stretch.first, stretch.last, stretch.sessions) == (date(2026, 10, 6), THU, 3)
+    assert stretch.first_session_open_ms == session_window_for_date(date(2026, 10, 6)).open_ms_utc
+    assert stretch.last_session_open_ms == session_window_for_date(THU).open_ms_utc
+
+
+def test_of_two_runs_as_long_the_earlier_is_offered() -> None:
+    checked = _range(R, R, C, R, R, C, C)
+
+    stretch = checked.longest_testable_stretch
+
+    assert stretch is not None and (stretch.first, stretch.sessions) == (date(2026, 10, 5), 2)
+
+
+def test_a_run_that_ends_the_range_is_counted() -> None:
+    checked = _range(C, R, C, R, R, R, N)
+
+    stretch = checked.longest_testable_stretch
+
+    assert stretch is not None and (stretch.first, stretch.last, stretch.sessions) == (THU, date(2026, 10, 13), 4)
+
+
+def test_a_range_with_nothing_testable_offers_no_range() -> None:
+    checked = _range(C, C, C)
+
+    assert checked.longest_testable_stretch is None
+    assert checked.first_testable is None and checked.last_testable is None
+
+
+def test_the_verdicts_are_counted() -> None:
+    checked = _range(C, R, N, R, C, R, R)
+
+    assert (
+        checked.count(SessionVerdict.READY),
+        checked.count(SessionVerdict.NEEDS_DOWNLOAD),
+        checked.count(SessionVerdict.CANNOT_BE_TESTED),
+    ) == (4, 1, 2)
+
+
+def test_a_session_that_cannot_be_tested_breaks_a_run_of_sessions_even_when_it_is_one_in_a_stored_range() -> None:
+    # End to end: Wednesday and Friday are stored, Thursday's listing is missing for good.
+    failures = {(DataKind.LISTING, THU, None): _failed("fetch_timeout", again=False)}
+
+    checked = _check(
+        {WED: _stored(), THU: _stored(), FRI: _stored()},
+        sessions=[WED, THU, FRI],
+        without_listing=(THU,),
+        failures=failures,
+    )
+
+    assert [session.verdict for session in checked.sessions] == [R, C, R]
+    stretch = checked.longest_testable_stretch
+    assert stretch is not None and (stretch.first, stretch.sessions) == (WED, 1)
