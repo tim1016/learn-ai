@@ -5910,6 +5910,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/options-backtest/runs/{run_id}/trades": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List The Trades
+         * @description Every leg trade of a complete run, in order: session by session, and in each the order the run recorded them.
+         *
+         *     Paged: ``total`` is every trade that matches, and ``next_offset`` is the ``offset`` that reads the rest (``null``
+         *     on the last page). A session the run did not test, or a leg its setup does not have, is a 404 and not an empty page.
+         *     A run that is not complete is a 409.
+         */
+        get: operations["list_the_trades_api_research_options_backtest_runs__run_id__trades_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/options-backtest/session-clock": {
         parameters: {
             query?: never;
@@ -22405,6 +22429,25 @@ export interface components {
             state: "known" | "not_yet_known";
         };
         /**
+         * OptionsBacktestContractResponse
+         * @description An option contract: its OCC symbol, and the symbol read out for display.
+         */
+        OptionsBacktestContractResponse: {
+            /** Expiry Ms */
+            expiry_ms: number;
+            /**
+             * Right
+             * @enum {string}
+             */
+            right: "call" | "put";
+            /** Strike Usd */
+            strike_usd: string;
+            /** Symbol */
+            symbol: string;
+            /** Underlying */
+            underlying: string;
+        };
+        /**
          * OptionsBacktestDataCheckResponse
          * @description Which sessions of a range can be tested, from what is already stored. Nothing was fetched to answer.
          */
@@ -23007,6 +23050,97 @@ export interface components {
             sessions: number;
             /** Start Ms */
             start_ms: number;
+        };
+        /**
+         * OptionsBacktestTradeFillResponse
+         * @description An order that filled: the bar it filled in, the open of that bar (the price seen) and the price it filled at.
+         */
+        OptionsBacktestTradeFillResponse: {
+            /** Bar Close Ms */
+            bar_close_ms: number;
+            /** Filled Usd */
+            filled_usd: string;
+            /** Seen Usd */
+            seen_usd: string;
+        };
+        /**
+         * OptionsBacktestTradeMarkResponse
+         * @description A leg valued and not sold: the last bar its contract traded in and the close of that bar.
+         */
+        OptionsBacktestTradeMarkResponse: {
+            /** Bar Close Ms */
+            bar_close_ms: number;
+            /** Price Usd */
+            price_usd: string;
+        };
+        /**
+         * OptionsBacktestTradeResponse
+         * @description One leg round trip. It left by a ``sale`` or, when its sale never filled, by a ``mark``; exactly one is set.
+         */
+        OptionsBacktestTradeResponse: {
+            contract: components["schemas"]["OptionsBacktestContractResponse"];
+            /** Contracts */
+            contracts: number;
+            entry: components["schemas"]["OptionsBacktestTradeFillResponse"];
+            /** Entry Decided At Ms */
+            entry_decided_at_ms: number;
+            /** Entry Fee Usd */
+            entry_fee_usd: string;
+            /** Entry Number */
+            entry_number: number;
+            /** Exit Decided At Ms */
+            exit_decided_at_ms: number;
+            /** Exit Fee Usd */
+            exit_fee_usd: string;
+            /** Exit Group */
+            exit_group: number;
+            /**
+             * Exit Kind
+             * @enum {string}
+             */
+            exit_kind: "sale" | "mark";
+            /**
+             * Exit Reason
+             * @enum {string}
+             */
+            exit_reason: "stop" | "square_off" | "exit_time" | "marked_not_sold";
+            /** Leg Id */
+            leg_id: string;
+            mark?: components["schemas"]["OptionsBacktestTradeMarkResponse"] | null;
+            /** Momentum Level Usd */
+            momentum_level_usd?: string | null;
+            /** Multiplier */
+            multiplier: number;
+            /** Pnl Usd */
+            pnl_usd: string;
+            sale?: components["schemas"]["OptionsBacktestTradeFillResponse"] | null;
+            /** Session Open Ms */
+            session_open_ms: number;
+            /** Starting Price Usd */
+            starting_price_usd?: string | null;
+            /** Stop Level Usd */
+            stop_level_usd?: string | null;
+            /** Trade Number */
+            trade_number: number;
+        };
+        /**
+         * OptionsBacktestTradesResponse
+         * @description A page of a run's leg trades. ``total`` counts every trade that matches, on every page; ``next_offset`` is the
+         *     ``offset`` to ask for the rest, and is ``None`` on the last page. The CSV export is never paged.
+         */
+        OptionsBacktestTradesResponse: {
+            /** Limit */
+            limit: number;
+            /** Next Offset */
+            next_offset?: number | null;
+            /** Offset */
+            offset: number;
+            /** Run Id */
+            run_id: number;
+            /** Total */
+            total: number;
+            /** Trades */
+            trades: components["schemas"]["OptionsBacktestTradeResponse"][];
         };
         /**
          * OptionsChainSnapshotRequest
@@ -40495,6 +40629,63 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_the_trades_api_research_options_backtest_runs__run_id__trades_get: {
+        parameters: {
+            query?: {
+                /** @description Only this session's trades, by its open. */
+                session_open_ms?: number | null;
+                /** @description Only this leg's trades. */
+                leg_id?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The run's id, from the history. */
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestTradesResponse"];
+                };
             };
             /** @description Not Found */
             404: {

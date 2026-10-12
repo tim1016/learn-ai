@@ -556,6 +556,136 @@ async def delete_run(conn: asyncpg.Connection, run_id: int, *, is_live: IsLive) 
         return DeleteOutcome.DELETED
 
 
+# ── Reads for a closer look: one run's trades, one session, the sessions side by side (#3030) ──
+
+
+@dataclass(frozen=True)
+class RunHeader:
+    """A run's record and the setup it ran, with none of the figures' tables parsed."""
+
+    record: RunRecord
+    setup: OptionsBacktestSetup
+
+
+@dataclass(frozen=True)
+class StoredTrade:
+    """A leg trade of a saved run, the session it belongs to, and its place in that session's order."""
+
+    session_open_ms: int
+    # 0 for the first trade the replay recorded in the session, as stored.
+    trade_number: int
+    trade: LegTrade
+
+
+@dataclass(frozen=True)
+class StoredSession:
+    """One session as stored. ``profit_usd`` is the stored column, which the result's own ``pnl_usd`` equals."""
+
+    result: SessionResult
+    profit_usd: Decimal
+
+
+@dataclass(frozen=True)
+class SessionLine:
+    """What the stored sessions say about one session, for putting two runs side by side."""
+
+    session_open_ms: int
+    status: SessionStatus
+    profit_usd: Decimal
+    trades: int
+
+
+async def get_run_header(conn: asyncpg.Connection, run_id: int, *, is_live: IsLive) -> RunHeader | None:
+    """A run's record and setup; ``None`` when there is none. Cheaper than ``get_run`` where no figure is wanted."""
+    row = await conn.fetchrow(
+        f"SELECT {_RUN_COLUMNS}, setup_json::text AS setup_json FROM research_options_backtest_runs WHERE id = $1",
+        run_id,
+    )
+    if row is None:
+        return None
+    return RunHeader(record=_record(row, is_live), setup=OptionsBacktestSetup.model_validate_json(row["setup_json"]))
+
+
+async def has_session(conn: asyncpg.Connection, run_id: int, session_open_ms: int) -> bool:
+    """Whether the run tested the session that opened at ``session_open_ms``."""
+    return await conn.fetchval(
+        "SELECT EXISTS (SELECT 1 FROM research_options_backtest_run_sessions WHERE run_id = $1 AND session_open_ms = $2)",
+        run_id,
+        session_open_ms,
+    )
+
+
+_TRADE_FILTER = "run_id = $1 AND ($2::bigint IS NULL OR session_open_ms = $2) AND ($3::text IS NULL OR leg_id = $3)"
+
+
+async def count_trades(
+    conn: asyncpg.Connection, run_id: int, *, session_open_ms: int | None = None, leg_id: str | None = None
+) -> int:
+    """How many leg trades the run has, narrowed to one session and/or one leg when those are given."""
+    return await conn.fetchval(
+        f"SELECT count(*) FROM research_options_backtest_run_trades WHERE {_TRADE_FILTER}",
+        run_id,
+        session_open_ms,
+        leg_id,
+    )
+
+
+async def read_trades(
+    conn: asyncpg.Connection,
+    run_id: int,
+    *,
+    session_open_ms: int | None = None,
+    leg_id: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+) -> tuple[StoredTrade, ...]:
+    """The run's leg trades in order: session by session, and in each the order the run recorded them.
+
+    ``limit=None`` is every trade. The trades are the ones ``read_result`` builds.
+    """
+    rows = await conn.fetch(
+        f"SELECT * FROM research_options_backtest_run_trades WHERE {_TRADE_FILTER} "
+        "ORDER BY session_open_ms, trade_number LIMIT $4::bigint OFFSET $5::bigint",
+        run_id,
+        session_open_ms,
+        leg_id,
+        limit,
+        offset,
+    )
+    return tuple(StoredTrade(row["session_open_ms"], row["trade_number"], _trade(row)) for row in rows)
+
+
+async def read_session(conn: asyncpg.Connection, run_id: int, session_open_ms: int) -> StoredSession | None:
+    """One session of the run with its trades and events, as stored; ``None`` when the run did not test it."""
+    row = await conn.fetchrow(
+        "SELECT session_open_ms, session_close_ms, status, skip_reason, cash_before_usd, cash_after_usd, "
+        "cash_change_usd, profit_usd, underlying_sha256, listing_sha256, option_days_json::text AS option_days_json, "
+        "events_json::text AS events_json FROM research_options_backtest_run_sessions "
+        "WHERE run_id = $1 AND session_open_ms = $2",
+        run_id,
+        session_open_ms,
+    )
+    if row is None:
+        return None
+    trades = await read_trades(conn, run_id, session_open_ms=session_open_ms)
+    return StoredSession(result=_session(row, tuple(stored.trade for stored in trades)), profit_usd=row["profit_usd"])
+
+
+async def read_session_lines(conn: asyncpg.Connection, run_id: int) -> tuple[SessionLine, ...]:
+    """Every session of the run in order, with its status, its stored profit and how many trades it holds."""
+    rows = await conn.fetch(
+        "SELECT s.session_open_ms, s.status, s.profit_usd, "
+        "(SELECT count(*) FROM research_options_backtest_run_trades t "
+        " WHERE t.run_id = s.run_id AND t.session_open_ms = s.session_open_ms) AS trades "
+        "FROM research_options_backtest_run_sessions s WHERE s.run_id = $1 ORDER BY s.position",
+        run_id,
+    )
+    return tuple(
+        SessionLine(row["session_open_ms"], SessionStatus(row["status"]), row["profit_usd"], row["trades"])
+        for row in rows
+    )
+
+
 # ── The store a worker thread uses ───────────────────────────────────────
 
 
