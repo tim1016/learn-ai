@@ -34,13 +34,15 @@ from httpx import ASGITransport
 
 from app.broker.fleet.errors import DataPlaneControlSecretRefused, FleetControlPlaneNotInstalled
 from app.config import settings
-from app.data_lake import catalog_client
+from app.data_lake import catalog_client, option_lake
 from app.data_lake.option_listing import OptionListingFileError
 from app.main import app
 from app.options.contract import OptionContract
 from app.options_backtest import chain_download
+from app.options_backtest.data_check import lake_reason_words
 from app.security.data_plane_control import CONTROL_SECRET_ENV_VAR, CONTROL_SECRET_HEADER
 from tests._helpers.fake_lake_catalog import FakeCatalog
+from tests._helpers.option_lake_cases import DISK_FULL_AT_THE_RENAME, install_write_fault
 from tests._helpers.option_vendor import no_trades
 from tests.options_backtest._lake import (
     FRIDAY,
@@ -66,6 +68,7 @@ from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixe
 from tests.options_backtest._lake import tmp_lake as tmp_lake
 
 PREFIX = "/api/research/options-backtest/past-chain"
+LIMITS = "/api/research/options-backtest/limits"
 FRIDAY_MIDNIGHT_MS = 1749787200000
 NEXT_FRIDAY = date(2025, 6, 20)
 NEXT_FRIDAY_ANCHOR_MS = 1750449600000
@@ -185,7 +188,52 @@ async def test_a_date_with_no_stored_listing_says_not_stored_and_lists_nothing(
         "expiries": [],
         "rows_left_out_unusable": 0,
         "rows_left_out_expired": 0,
+        "fetch_refusal": None,
     }
+
+
+# The lake takes a session's option data from the New York midnight after its date. Friday 2025-06-13 is taken from
+# Saturday's midnight, 2025-06-14 00:00 EDT = 04:00 UTC = 1749873600000 ms (SATURDAY_MIDNIGHT_MS).
+
+
+@pytest.mark.parametrize(
+    ("now_ms", "refused"),
+    [
+        pytest.param(SATURDAY_MIDNIGHT_MS - 1, True, id="one millisecond before the lake takes the session"),
+        pytest.param(SATURDAY_MIDNIGHT_MS, False, id="at the millisecond it takes it"),
+    ],
+)
+async def test_the_day_carries_the_refusal_until_the_millisecond_the_lake_takes_the_session_and_not_after(
+    client: httpx.AsyncClient,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    now_ms: int,
+    refused: bool,
+) -> None:
+    # The route asks the lake's own clock, the one a download takes when it is given none.
+    monkeypatch.setattr(option_lake, "current_ms", lambda: now_ms)
+
+    async with client as c:
+        response = await c.get(f"{PREFIX}/day", params={"underlying": "SPY", "trading_date_ms": FRIDAY_MIDNIGHT_MS})
+
+    assert response.status_code == 200, response.text
+    expected = {"reason": "session_not_over", "words": lake_reason_words("session_not_over")}
+    assert response.json()["fetch_refusal"] == (expected if refused else None)
+
+
+async def test_the_day_of_a_session_long_over_has_no_refusal_and_todays_has_one(
+    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # The tests' clock is 2026-10-12 14:00 New York: 2025-06-13 is over, and 2026-10-12 is a session not yet over.
+    async with client as c:
+        long_over = await c.get(f"{PREFIX}/day", params={"underlying": "SPY", "trading_date_ms": FRIDAY_MIDNIGHT_MS})
+        today = await c.get(f"{PREFIX}/day", params={"underlying": "SPY", "trading_date_ms": TODAY_MIDNIGHT_MS})
+
+    assert long_over.json()["fetch_refusal"] is None
+    assert today.json()["fetch_refusal"]["reason"] == "session_not_over"
+    # Everything else of the answer is what it was for a day with nothing stored.
+    assert today.json()["listing_state"] == "not_stored" and today.json()["expiries"] == []
 
 
 @respx.mock
@@ -478,6 +526,19 @@ async def test_a_window_of_fourteen_strikes_is_allowed_and_fifteen_is_not(
     assert (widest.status_code, wider.status_code) == (200, 422)
 
 
+async def test_the_most_strikes_each_side_a_read_takes_is_the_limit_served_the_limit_is_allowed_and_one_more_is_not(
+    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    async with client as c:
+        limit = (await c.get(LIMITS)).json()["max_strikes_each_side"]
+        at_the_limit = await c.get(f"{PREFIX}/expiry", params=_expiry_params(strikes=limit))
+        one_more = await c.get(f"{PREFIX}/expiry", params=_expiry_params(strikes=limit + 1))
+
+    # 14 strikes each side is 29 strikes a right, 58 standard contracts, under the 60 a window may hold.
+    assert limit == 14
+    assert (at_the_limit.status_code, one_more.status_code) == (200, 422)
+
+
 async def test_an_expiry_read_with_the_catalog_down_is_a_503(
     client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -622,6 +683,16 @@ def _stamp_a_bar_off_the_minute_on_call_602(fake_catalog: FakeCatalog, tmp_lake:
     )
 
 
+def _stamp_a_bar_closing_on_another_day_on_call_602(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+    # Friday's New York midnight is 04:00 UTC, 34 200 000 ms before the 09:30 open (1749821400000 - 34 200 000 =
+    # 1749787200000). A bar starting at 23:59 starts inside Friday, so the lake's parser accepts it, and closes 60 000
+    # later at Saturday's midnight: 1749787200000 + 23 * 3 600 000 + 59 * 60 000 = 1749873540000 for the start.
+    starts = [FRIDAY_OPEN_MS + 4 * MINUTE_MS, 1749873540000]
+    replace_the_stored_file(
+        fake_catalog, raw_root(tmp_lake), BARS_PATH_602, option_day_zip(CALLS[602], starts), admit=True
+    )
+
+
 def _replace(path: str, payload: bytes, *, admit: bool):
     def damage(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
         replace_the_stored_file(fake_catalog, raw_root(tmp_lake), path, payload, admit=admit)
@@ -703,8 +774,15 @@ _UNREADABLE_ON_THE_EXPIRY = [
         _stamp_a_bar_off_the_minute_on_call_602,
         _contract_problem,
         "SPY250613C00602000",
-        "OptionBarsCannotBePlaced",
+        "OptionBarsFileError",  # the lake's own parser refuses a start off a whole minute, before the reader's guard
         id="a contract day with a bar off the minute",
+    ),
+    pytest.param(
+        _stamp_a_bar_closing_on_another_day_on_call_602,
+        _contract_problem,
+        "SPY250613C00602000",
+        "OptionBarsCannotBePlaced",
+        id="a contract day with a bar closing on another day",
     ),
 ]
 
@@ -865,6 +943,32 @@ async def test_a_failure_of_the_vendor_is_an_item_with_a_reason_and_the_request_
 
 
 @respx.mock
+async def test_a_contract_whose_file_cannot_be_written_is_an_item_failed_with_io_error_and_the_request_still_succeeds(
+    client: httpx.AsyncClient,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    stock_fetch: StockFetchDouble,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vendor_lists(CALLS[602])
+    vendor_bars(lambda symbol: no_trades(symbol))
+    install_write_fault(monkeypatch, DISK_FULL_AT_THE_RENAME, only_bars=True)
+
+    async with client as c:
+        response = await c.post(f"{PREFIX}/download", json=_download(contracts=["SPY250613C00602000"]))
+
+    assert response.status_code == 200, response.text
+    items = response.json()["items"]
+    assert [(i["kind"], i["subject"], i["outcome"], i["reason"]) for i in items] == [
+        ("listing", "SPY", "fetched", None),
+        ("underlying", "SPY", "fetched", None),
+        ("contract", "SPY250613C00602000", "failed", "io_error"),
+    ]
+    # The words say what failed and the system's reason, and name no path on the server's disk.
+    assert "No space left on device" in items[2]["detail"] and str(tmp_lake) not in items[2]["detail"]
+
+
+@respx.mock
 async def test_a_download_with_no_contracts_or_expiry_captures_the_listing_and_the_underlying(
     client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path, stock_fetch: StockFetchDouble
 ) -> None:
@@ -913,6 +1017,27 @@ async def test_a_download_the_page_should_not_have_asked_for_is_refused_before_a
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == code and response.json()["detail"]["message"]
     assert stock_fetch.calls == []  # and an un-mocked request to the vendor would have failed the test
+
+
+@respx.mock
+async def test_the_most_contracts_a_download_takes_is_the_limit_served_the_limit_is_taken_and_one_more_is_refused(
+    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path, stock_fetch: StockFetchDouble
+) -> None:
+    async with client as c:
+        limit = (await c.get(LIMITS)).json()["max_contracts_per_download"]
+        symbols = [f"SPY250613C{strike * 1000:08d}" for strike in range(400, 400 + limit + 1)]
+        vendor_lists(*(OptionContract.from_occ_symbol(symbol) for symbol in symbols))
+        vendor_bars(lambda symbol: no_trades(symbol))
+        at_the_limit = await c.post(f"{PREFIX}/download", json=_download(contracts=symbols[:limit]))
+        one_more = await c.post(f"{PREFIX}/download", json=_download(contracts=symbols))
+
+    # A window holds at most 60 contracts and a download takes as many: the listing, the underlying and 60 contracts
+    # are 62 items; 61 contracts are refused before anything is asked.
+    assert limit == 60
+    assert at_the_limit.status_code == 200, at_the_limit.text
+    assert len(at_the_limit.json()["items"]) == 62
+    assert one_more.status_code == 400
+    assert one_more.json()["detail"]["code"] == "OPTIONS_BACKTEST_TOO_MANY_CONTRACTS"
 
 
 @pytest.mark.parametrize(
@@ -1179,6 +1304,7 @@ PAST_CHAIN_MODELS = {
     "PastChainExpiryResponse",
     "PastChainExpirySummary",
     "PastChainExpiryTag",
+    "PastChainFetchRefusal",
     "PastChainSide",
     "PastChainUnderlyingPrice",
 }

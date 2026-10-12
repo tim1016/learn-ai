@@ -14,7 +14,10 @@ Three reads, one per kind of stored file:
   reads them (``LeanMinuteDataReader``) from the lake's raw tree and never from the split-adjusted one. That reader
   cannot tell a day it does not hold from a day with no bar, so the lake's own coverage rule decides
   (``check_availability``): a day with no file, or a file with no bar in the regular session, is not held and is
-  ``None``. There is no "captured and empty" for the underlying.
+  ``None``. There is no "captured and empty" for the underlying. That reader skips a row of the wrong width and an
+  empty line, so a stored file holding one would be read as a good, shorter day; every row of the file is therefore also
+  checked against the form the lake writes (``lean_writer.parse_minute_trade_row``), and a day with a row that fails is
+  unreadable.
 * ``listing``: the stored listing as the picker's ``Listing``. A stored row can be a ``ListedContract`` only if its
   ticker names a contract and it has a share count; a row that cannot is left out, and ``StoredListing.rows_left_out``
   says how many. The picker therefore never sees such a row, so it cannot say a leg's expiry "is listed only as
@@ -30,7 +33,9 @@ is anywhere inside the date, so it can hold one stamped off the minute or starti
 as a damaged file is: the read raises the kind's own error (``UnderlyingDayUnreadable``, ``OptionBarsFileError``; for
 bars that cannot be placed, its subclass ``UnderlyingBarsCannotBePlaced`` or ``OptionBarsCannotBePlaced``) and hands
 nothing over. A series run without that bar would have a minute missing, one a stop could have been hit in, and
-nothing in its result would say so; nothing is left out or repaired.
+nothing in its result would say so; nothing is left out or repaired. For an option the lake's own parser of a stored day
+refuses a start off a whole minute before this reader looks (``option_bars.parse_option_day_zip``), so what this
+reader's own guard is left to catch there is a close on another New York date.
 
 Every answer carries the sha256 of the exact bytes that were decoded. A damaged file, a file the catalog does not
 admit and an unreachable catalog are errors and never ``None``: ``OptionBarsFileError`` and ``OptionListingFileError``
@@ -53,8 +58,9 @@ from datetime import date
 from pathlib import Path
 
 from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
+from app.data_lake.lean_writer import parse_minute_trade_row
 from app.data_lake.option_bars import OptionBar, OptionBarsFileError, read_option_day_bars
-from app.data_lake.option_lake import option_read_root
+from app.data_lake.option_lake import option_read_root, zip_member_bytes
 from app.data_lake.option_listing import OptionListing, read_option_listing
 from app.data_lake.types import is_lake_addressable_symbol
 
@@ -73,7 +79,11 @@ from app.utils.session_anchors import et_date_at_ms
 
 
 class UnderlyingDayUnreadable(ValueError):
-    """The underlying's stored minute file is there and cannot be decoded; the stock reader's error is the cause."""
+    """The underlying's stored minute file is there and cannot be read as the lake wrote it.
+
+    Either the stock reader cannot decode it (its error is the cause), or it holds a row that reader would skip or read
+    loosely, or a bar no replay can place.
+    """
 
 
 class UnderlyingBarsCannotBePlaced(UnderlyingDayUnreadable):
@@ -85,8 +95,12 @@ class OptionBarsCannotBePlaced(OptionBarsFileError):
 
 
 # A day with a bar that cannot be placed is unreadable as a damaged file is, and every caller that handles one handles
-# these. They differ in one thing: the lake holds such a day as good and never fetches it again, so a caller that tells
-# the owner "it will be fetched again" of an unreadable day must not say it of these.
+# these. For a contract's day they differ in one thing: the lake's parser of a stored day, which its reuse gate and its
+# reader both run, accepts a day whose only fault is a close on another New York date, so the lake holds it as good and a
+# download never fetches it again; a caller that tells the owner "it will be fetched again" of an unreadable contract
+# day must not say it of this. Every other refusal of a contract's day is that parser's, and its reuse gate refuses it
+# too. For the underlying the class says what is wrong with the bars and nothing of a download: whether one replaces
+# the day is the stock capture's gate to say (``LakeCheckData.download_replaces_the_underlying``).
 BARS_CANNOT_BE_PLACED = (UnderlyingBarsCannotBePlaced, OptionBarsCannotBePlaced)
 
 
@@ -158,6 +172,7 @@ def _named_by_close(
         # The one place a stored start becomes a close.
         close_ms = bar.start_ms + MS_PER_MINUTE
         if close_ms % MS_PER_MINUTE:
+            # The lake's parser of an option day already refuses an off-minute start; the stock reader does not.
             why = "is not on a whole minute"
         elif et_date_at_ms(close_ms) != trading_date:
             why = "closes on another New York date"
@@ -169,6 +184,32 @@ def _named_by_close(
     if unplaceable:
         raise unreadable(f"{subject}: {unplaceable} of {len(stored)} stored bars cannot be placed in a session; {first}")
     return tuple(named)
+
+
+def _require_every_row_decodable(payload: bytes, underlying: str, trading_date: date) -> None:
+    """Every row of the stored minute file is one the lake writes, or the day is unreadable.
+
+    The stock reader skips an empty line and a row that is not six columns wide, and reads some rows loosely, so a day
+    with one is handed over as a good, shorter day. The bytes are the lake's own, so this should never be so; if it is,
+    it is said. The container is the lake's one-member rule, and a row is judged by ``parse_minute_trade_row``, the
+    inverse of the lake's writer, which is what the lake's own parser of an option day applies to its rows. An empty line
+    is a row that fails because the writer never writes one. The error names how many rows of how many fail and the
+    first one's line number, and no path.
+    """
+    member = f"{trading_date:%Y%m%d}_{underlying.lower()}_minute_trade.csv"
+    rows = zip_member_bytes(payload, member, UnderlyingDayUnreadable).decode("ascii").splitlines()
+    failing: list[tuple[int, str]] = []
+    for number, row in enumerate(rows, start=1):
+        try:
+            parse_minute_trade_row(row)
+        except ValueError as exc:
+            failing.append((number, str(exc)))
+    if failing:
+        number, why = failing[0]
+        raise UnderlyingDayUnreadable(
+            f"the stored {underlying} minute file for {trading_date.isoformat()}: {len(failing)} of {len(rows)} rows "
+            f"cannot be decoded; the first is line {number} ({why})"
+        )
 
 
 class LakeRunData:
@@ -190,8 +231,10 @@ class LakeRunData:
         Not held is the lake's own coverage rule: no file, or a file with no bar inside the regular session. The
         bars come from the lake's raw tree alone, never the split-adjusted one. Raises ``UnderlyingDayUnreadable``
         for a file that cannot be decoded and for a day holding a bar no replay can place (the module docstring says
-        which), ``LakeAdmissionError`` for bytes the catalog does not admit and ``CatalogUnavailableError`` when the
-        catalog cannot be asked. A thread with a running event loop is a ``RuntimeError``.
+        which) and for a file with a row the lake does not write (an empty line, a row of the wrong width, a number in a
+        form the writer never writes), ``LakeAdmissionError`` for bytes the catalog does not admit and
+        ``CatalogUnavailableError`` when the catalog cannot be asked. A thread with a running event loop is a
+        ``RuntimeError``.
         """
         _require_a_worker_thread()
         admitted = _AdmittedBytes()
@@ -206,7 +249,11 @@ class LakeRunData:
                 f"the stored {self._underlying} minute file for {trading_date.isoformat()} cannot be decoded "
                 f"({type(exc).__name__}: {exc})"
             ) from exc
-        if admitted.payload is None or not bars:
+        if admitted.payload is None:
+            return None
+        # Before "no bar" is decided: a file whose every row the stock reader skipped reads as no bars at all.
+        _require_every_row_decodable(admitted.payload, self._underlying, trading_date)
+        if not bars:
             return None
         named = _named_by_close(
             bars,

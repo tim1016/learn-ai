@@ -16,6 +16,9 @@ the reader a run uses. Hand-worked figures:
   1749822030000) closes at 1749822090000, which is 30 000 ms past a whole minute.
 * The underlying's last regular-session bars: the one starting at 15:59:00 (19:59 UTC = 1749844740000) closes at
   20:00:00 = 1749844800000, the one starting at 15:59:30 (1749844770000) closes at 1749844830000, off the minute.
+* The underlying's rows, as the lake writes them: the start in ms after New York midnight, then open, high, low, close in
+  ten-thousandths of a dollar, then the volume. 09:30 is 34 200 000 ms after midnight (9.5 h * 3 600 000), 09:31 is 60 000
+  on, 34 260 000, 09:32 is 34 320 000, and the 08:00 pre-market print is 28 800 000 (8 h * 3 600 000).
 * The same last minute of a New York date in winter, 2025-01-15 (a Wednesday, EST = UTC-5): midnight is 05:00 UTC.
   The epoch day of 2025-01-15 is 20103 (2025-01-01 is day 20089, and 14 days on), 20103 * 86 400 000 =
   1736899200000, plus 18 000 000 is midnight, 1736917200000. The 09:30 open is 34 200 000 ms on, 1736951400000; the bar
@@ -43,11 +46,12 @@ import respx
 from app.data_lake import catalog_client
 from app.data_lake.admission import LakeAdmissionError
 from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes
-from app.data_lake.option_bars import OptionBarsFileError
+from app.data_lake.option_bars import OptionBar, OptionBarsFileError, OptionDayBars
 from app.data_lake.option_listing import OptionListingFileError
 from app.engine.data.availability import check_availability
 from app.engine.data.lean_format import LeanMinuteDataReader, write_lean_day_zip
 from app.options.contract import OptionContract
+from app.options_backtest import lake_data as lake_data_module
 from app.options_backtest.lake_data import (
     _STOCK_FILE_ERRORS,
     LakeRunData,
@@ -129,8 +133,13 @@ async def _read(method, *args):
 
 
 def _what_the_app_logged(caplog: pytest.LogCaptureFixture) -> list[tuple[str, str]]:
-    """Every record the app wrote, at any level, as (logger, message); asyncio's own debug lines are not the app's."""
-    return [(record.name, record.getMessage()) for record in caplog.records if record.name.startswith("app")]
+    """Every record this feature wrote, at any level, as (logger, message).
+
+    Only this feature's loggers: the catalog's pool says it was made the first time a database is reached, which is
+    not the reader's doing and depends on which test ran first.
+    """
+    ours = "app.options_backtest"
+    return [(record.name, record.getMessage()) for record in caplog.records if record.name.startswith(ours)]
 
 
 # ── The underlying ───────────────────────────────────────────────────────
@@ -439,6 +448,93 @@ async def test_an_underlying_day_with_several_bars_off_the_minute_counts_them_al
     assert "2 of 4" in message and "1749821430000 ms" in message and "1749844740001" not in message
 
 
+# ── A row the stock reader would skip or read loosely makes the day unreadable ──────────────────────────────────
+
+_FIRST = "34200000,600000,600500,599750,600250,100"  # 09:30
+_SECOND = "34260000,600250,601000,600250,600750,100"  # 09:31
+_THIRD = "34320000,600750,601100,600700,601000,100"  # 09:32
+
+
+@pytest.mark.parametrize(
+    ("body", "failing", "total", "first_line"),
+    [
+        pytest.param(f"{_FIRST}\n34260000,600250,601000,600250,600750\n{_THIRD}", 1, 3, 2, id="a row of five columns"),
+        pytest.param(f"{_FIRST}\n{_SECOND},7\n{_THIRD}", 1, 3, 2, id="a row of seven columns"),
+        pytest.param(f"{_FIRST}\n\n{_THIRD}", 1, 3, 2, id="an empty line in the middle"),
+        pytest.param(f"{_FIRST}\n{_SECOND}\n\n", 1, 3, 3, id="an empty line at the end"),
+        pytest.param(f"34260000,600250,601000,600250,600750\n{_FIRST}\n{_THIRD}", 1, 3, 1, id="the first row short"),
+        pytest.param(
+            f"28800000,599000,599100,598900,599050\n{_FIRST}\n{_SECOND}", 1, 3, 1, id="a short row outside the session"
+        ),
+        pytest.param(f"{_FIRST}\n34260000,600250,601000,600250,600750\n{_SECOND},7\n{_THIRD}", 2, 4, 2, id="two bad rows"),
+        pytest.param("34200000,600000,600500,599750,600250", 1, 1, 1, id="every row bad, so no bar reads at all"),
+        pytest.param(f"{_FIRST}\n34260000,NaN,601000,600250,600750,100\n{_THIRD}", 1, 3, 2, id="a price of NaN"),
+        pytest.param(f"{_FIRST}\n34260000,600250.5,601000,600250,600750,100\n{_THIRD}", 1, 3, 2, id="a decimal price"),
+        pytest.param(f"{_FIRST}\n34260000,+600250,601000,600250,600750,100\n{_THIRD}", 1, 3, 2, id="a signed price"),
+        pytest.param(f"{_FIRST}\n34260000, 600250,601000,600250,600750,100\n{_THIRD}", 1, 3, 2, id="a padded price"),
+        pytest.param(f"{_FIRST}\n34260000,6_00250,601000,600250,600750,100\n{_THIRD}", 1, 3, 2, id="an underscore in a price"),
+        pytest.param(f"{_FIRST}\n34260000,6e5,601000,600250,600750,100\n{_THIRD}", 1, 3, 2, id="an exponent in a price"),
+        pytest.param(f"{_FIRST}\n+34260000,600250,601000,600250,600750,100\n{_THIRD}", 1, 3, 2, id="a signed start"),
+    ],
+)
+async def test_an_underlying_day_with_a_row_the_stock_reader_skips_or_reads_loosely_is_unreadable_and_hands_nothing_over(
+    body: str, failing: int, total: int, first_line: int, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # The stock reader drops an empty line and a row not six columns wide, and takes NaN, 600250.5, +600250 and 6_00250 as
+    # prices, so each of these days used to be read as a good one, shorter or with a price the lake never wrote.
+    await store_underlying_day(fake_catalog, tmp_lake, _underlying_bars())
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), STOCK_PATH, _stock_zip(body.encode()), admit=True)
+
+    with pytest.raises(UnderlyingDayUnreadable) as caught:
+        await _read(LakeRunData("SPY").underlying_day, FRIDAY)
+
+    message = str(caught.value)
+    assert "SPY" in message and "2025-06-13" in message
+    assert f"{failing} of {total} rows" in message and f"line {first_line}" in message
+    assert str(tmp_lake) not in message and ".zip" not in message
+
+
+async def test_an_underlying_day_whose_zip_holds_another_member_than_the_one_the_lake_writes_is_unreadable(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # The stock reader falls back to the first member of any archive; the lake writes one member, named for the day.
+    await store_underlying_day(fake_catalog, tmp_lake, _underlying_bars())
+    payload = _stock_zip(f"{_FIRST}\n{_SECOND}".encode(), member="20250613_notes.csv")
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), STOCK_PATH, payload, admit=True)
+
+    with pytest.raises(UnderlyingDayUnreadable, match="expected one member"):
+        await _read(LakeRunData("SPY").underlying_day, FRIDAY)
+
+
+async def test_a_day_the_lakes_capture_writer_wrote_with_its_trailing_newline_is_read_whole(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    await store_underlying_day(fake_catalog, tmp_lake, _underlying_bars())
+    written = build_minute_trade_zip_bytes(
+        symbol="SPY",
+        trading_date_yyyymmdd="20250613",
+        bars=[
+            MinuteTradeBar(
+                bar_start_et=datetime(2025, 6, 13, 9, 30 + minute, tzinfo=ET),
+                open=D("600.00"),
+                high=D("600.50"),
+                low=D("599.75"),
+                close=D("600.25"),
+                volume=D(100),
+            )
+            for minute in range(2)
+        ],
+    )
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), STOCK_PATH, written, admit=True)
+
+    read = await _read(LakeRunData("SPY").underlying_day, FRIDAY)
+
+    assert read is not None
+    # 09:30 and 09:31 start at 1749821400000 and 1749821460000; each closes a minute later.
+    assert [bar.close_ms for bar in read.value] == [1749821460000, 1749821520000]
+    assert read.sha256 == hashlib.sha256(written).hexdigest()
+
+
 @pytest.mark.parametrize(("day", "open_ms", "last_start_ms", "before_last_start_ms"), _LAST_MINUTES)
 async def test_an_underlying_bar_that_closes_on_the_next_new_york_date_makes_the_day_unreadable(
     day: date,
@@ -603,28 +699,37 @@ async def test_an_option_day_with_a_bar_stamped_off_the_minute_is_unreadable_and
         fake_catalog, raw_root(tmp_lake), option_bars_path(contract), option_day_zip(contract, starts), admit=True
     )
 
+    # The lake's own parser of a stored option day refuses a start off the minute, naming the first such bar (index 2).
     with pytest.raises(OptionBarsFileError) as caught:
         await _read(LakeRunData("SPY").option_day, contract, FRIDAY)
 
     message = str(caught.value)
-    assert contract.occ_symbol in message and "1 of 3" in message and f"{first_start_ms} ms" in message
-    assert "not on a whole minute" in message
+    assert contract.occ_symbol in message and "bar[2]" in message and f"t_ms={first_start_ms}" in message
+    assert "does not start on a whole minute" in message
     assert str(tmp_lake) not in message and ".zip" not in message
 
 
-@respx.mock
-async def test_an_option_day_with_several_bars_that_cannot_be_placed_counts_them_all_and_names_the_first(
-    fake_catalog: FakeCatalog, tmp_lake: Path
+async def test_the_readers_own_guard_for_the_close_still_counts_option_bars_it_cannot_place_should_the_lake_hand_over_one(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    contract = await _an_option_day_holding([FRIDAY_OPEN_MS])
-    # 09:30:30 (1749821430000) is off the minute, 23:59 (1749873540000) closes on the 14th, 09:31 is in place.
+    # The lake's parser refuses a start off the minute (above), so a stored option day cannot reach this check with one;
+    # it stays as the reader's own guard for the close, and a double of the lake's read shows it still counts and names.
+    # 09:30:30 (1749821430000) is off the minute, 23:59 (1749873540000) closes on the 14th, 09:30 and 09:31 are in place.
     starts = [FRIDAY_OPEN_MS, FRIDAY_OPEN_MS + 30_000, FRIDAY_OPEN_MS + MINUTE_MS, 1749873540000]
-    replace_the_stored_file(
-        fake_catalog, raw_root(tmp_lake), option_bars_path(contract), option_day_zip(contract, starts), admit=True
+    bars = tuple(
+        OptionBar(start_ms=start_ms, open=D("1.27"), high=D("1.31"), low=D("1.25"), close=D("1.27"), volume=D(10))
+        for start_ms in starts
+    )
+    monkeypatch.setattr(
+        lake_data_module,
+        "read_option_day_bars",
+        lambda contract, day, **kwargs: OptionDayBars(
+            contract_symbol=contract.occ_symbol, trading_date=day, bars=bars, sha256="0" * 64
+        ),
     )
 
     with pytest.raises(OptionBarsFileError) as caught:
-        await _read(LakeRunData("SPY").option_day, contract, FRIDAY)
+        await _read(LakeRunData("SPY").option_day, CALL_600, FRIDAY)
 
     message = str(caught.value)
     assert "2 of 4" in message and "1749821430000 ms" in message and "1749873540000" not in message

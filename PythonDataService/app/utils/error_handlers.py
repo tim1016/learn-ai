@@ -26,7 +26,8 @@ async def request_validation_exception_handler(
     request: Request,
     exc: RequestValidationError,
 ) -> JSONResponse:
-    """Return a JSON-safe 422 even when rejected input is NaN/Infinity, was never sent, or is nested past the echo bound."""
+    """Return a JSON-safe 422 even when rejected input is NaN/Infinity, was never sent, is nested past the echo bound,
+    or holds a string no UTF-8 can write (a lone surrogate, in a value or in a key)."""
     del request
     # A required list parameter that was not sent is reported with pydantic's "undefined" as its input, which has no JSON form.
     # The bound runs before the encoder: the encoder is what deep input
@@ -60,8 +61,11 @@ def _bound_echo_depth(value: Any, depth: int = 0) -> Any:
 def _replace_non_finite(value: Any) -> Any:
     if isinstance(value, float) and not math.isfinite(value):
         return str(value)
+    if isinstance(value, str):
+        # A lone surrogate (JSON "\ud800") has no UTF-8 form: writing it would raise and turn this 422 into a 500.
+        return value.encode("utf-8", errors="replace").decode("utf-8")
     if isinstance(value, dict):
-        return {key: _replace_non_finite(item) for key, item in value.items()}
+        return {_replace_non_finite(key): _replace_non_finite(item) for key, item in value.items()}
     if isinstance(value, list):
         return [_replace_non_finite(item) for item in value]
     return value

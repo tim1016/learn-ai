@@ -512,6 +512,25 @@ def _minute_trade_cache_matches(row: ArtifactRecord, dch: str, lake_root: Path, 
     return _cache_matches(row, dch, lake_root, version)
 
 
+#: What a stored minute day can raise when it no longer passes :func:`check_stored_minute_day`: it fails the
+#: publication contract, is not a zip, has a row the lake's reader cannot parse or a row too short to hold a bar.
+STORED_MINUTE_DAY_ERRORS = (CorruptVendorBarsError, ValueError, OSError, zipfile.BadZipFile, IndexError)
+
+
+def check_stored_minute_day(file_path: str, lake_root: Path, *, symbol: str, trading_date: date) -> None:
+    """The gate a cache hit passes: a stored minute day is read as the capture reads it and held to the contract.
+
+    Raises one of :data:`STORED_MINUTE_DAY_ERRORS` when the day fails it, or ``LakeAdmissionError`` when the catalog
+    does not admit its bytes; the capture rebuilds such a day (:func:`_cached_bars_still_valid`). What this does not
+    look at is not a reason to rebuild: a bar that does not start on a whole minute, a row wider than six columns, an
+    empty line, a number written ``+5``, a zip with no member, a second member, or a first member named for the same
+    day and another symbol (only the date in a member's name is read). Blocking.
+    """
+    assert_publishable_stored_minute_bars(
+        read_minute_trade_bars(file_path, lake_root), symbol=symbol, trading_date=trading_date
+    )
+
+
 async def _cached_bars_still_valid(cached: ArtifactRecord, spec: DataRunSpec) -> bool:
     """Does a contract-matching cache hit still hold contract-valid bars?
 
@@ -527,17 +546,15 @@ async def _cached_bars_still_valid(cached: ArtifactRecord, spec: DataRunSpec) ->
     if cached.trading_date is None:
         return True
     lake_root = resolve_lake_root(spec.price_adjustment_mode)
-
-    def _validate() -> None:
-        assert_publishable_stored_minute_bars(
-            read_minute_trade_bars(cached.file_path, lake_root),
-            symbol=cached.symbol or "",
-            trading_date=cached.trading_date,  # type: ignore[arg-type]
-        )
-
     try:
-        await asyncio.to_thread(_validate)
-    except (CorruptVendorBarsError, ValueError, OSError, zipfile.BadZipFile, IndexError):
+        await asyncio.to_thread(
+            check_stored_minute_day,
+            cached.file_path,
+            lake_root,
+            symbol=cached.symbol or "",
+            trading_date=cached.trading_date,
+        )
+    except STORED_MINUTE_DAY_ERRORS:
         logger.warning(
             "data_lake.ensure_data: cached minute artifact for %s %s fails the publication "
             "contract; rebuilding it",

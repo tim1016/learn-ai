@@ -17,6 +17,7 @@ any rule for when a session's data is final. Hand-worked figures:
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -25,9 +26,10 @@ from typing import Any
 import pytest
 import respx
 
-from app.data_lake import option_bars
+from app.data_lake import catalog_client, option_bars
 from app.data_lake.catalog_client import CatalogUnavailableError
 from app.data_lake.option_lake import MAX_VENDOR_REQUESTS_IN_FLIGHT
+from app.data_lake.run_materialization import LakeMaterializationError
 from app.options.contract import OptionContract
 from app.options_backtest import fetching
 from app.options_backtest.fetching import (
@@ -246,7 +248,88 @@ async def test_the_underlying_that_cannot_be_fetched_stops_the_phase_before_any_
 
     assert caught.value.session is None
     assert "SPY" in caught.value.what
+    assert caught.value.reason == "provider_api_error", "the reason the lake wrote on Thursday's row, not a generic one"
     assert vendor.listing_requests == []
+
+
+@respx.mock
+async def test_an_underlying_day_the_vendor_has_no_data_for_is_a_failure_with_the_reason_the_lake_recorded_for_it(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    scene = {**_scene(*THREE_SESSIONS), THU: Day(underlying={})}
+    Vendor(scene).mount()
+
+    with pytest.raises(DownloadFailed) as caught:
+        await _fetch(_same_day_call(), THREE_SESSIONS)
+
+    assert (caught.value.session, caught.value.reason) == (None, "provider_no_data")
+
+
+@respx.mock
+async def test_when_two_days_of_a_chunk_fail_the_reason_is_the_first_days(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # Wednesday's request fails (500, provider_api_error) and Thursday's comes back empty (provider_no_data): the
+    # reason named is Wednesday's, the first failed day in date order.
+    scene = {**_scene(*THREE_SESSIONS), THU: Day(underlying={})}
+    Vendor(scene, stock_errors={WED: 500}).mount()
+
+    with pytest.raises(DownloadFailed) as caught:
+        await _fetch(_same_day_call(), THREE_SESSIONS)
+
+    assert caught.value.reason == "provider_api_error"
+
+
+@respx.mock
+async def test_an_underlying_failure_with_no_reason_in_the_catalog_is_the_phases_own_reason(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The lake's error comes from somewhere that writes no row, and its sentence happens to look like the lake's own
+    # summary of a failed day. No day of the chunk has a failed row, so the words stay what they were: the code is
+    # asked of the catalog and never read out of a sentence.
+    def cannot_serve(**_arguments: Any) -> None:
+        raise LakeMaterializationError("the lake cannot serve SPY: time_series_bars/provider_no_data@2026-10-08")
+
+    monkeypatch.setattr(fetching, "materialize_engine_run", cannot_serve)
+    Vendor(_scene(*THREE_SESSIONS)).mount()
+
+    with pytest.raises(DownloadFailed) as caught:
+        await _fetch(_same_day_call(), THREE_SESSIONS)
+
+    assert (caught.value.session, caught.value.reason) == (None, "underlying_bars_not_materialized")
+    assert fake_catalog.rows == {}, "no row was written, so there was nothing to read"
+
+
+@respx.mock
+async def test_when_the_catalog_cannot_be_asked_for_the_reason_the_failure_goes_without_it_and_the_log_says_so(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    Vendor(_scene(*THREE_SESSIONS), stock_errors={THU: 500}).mount()
+    real_state = catalog_client.select_minute_bar_claim_state
+
+    async def down_once_the_fetch_has_failed(*args: Any, **kwargs: Any) -> Any:
+        if fetch_failed.is_set():
+            raise CatalogUnavailableError("the catalog went away")
+        return await real_state(*args, **kwargs)
+
+    fetch_failed = threading.Event()
+    real_materialize = fetching.materialize_engine_run
+
+    def materialize_then_note_the_failure(**arguments: Any) -> Any:
+        try:
+            return real_materialize(**arguments)
+        finally:
+            fetch_failed.set()
+
+    monkeypatch.setattr(fetching, "materialize_engine_run", materialize_then_note_the_failure)
+    monkeypatch.setattr(catalog_client, "select_minute_bar_claim_state", down_once_the_fetch_has_failed)
+
+    with caplog.at_level("WARNING"), pytest.raises(DownloadFailed) as caught:
+        await _fetch(_same_day_call(), THREE_SESSIONS)
+
+    assert caught.value.reason == "underlying_bars_not_materialized"
+    [record] = [r for r in caplog.records if getattr(r, "action", "") == "options_backtest_underlying_reason_unread"]
+    assert record.error_type == "CatalogUnavailableError"
 
 
 @respx.mock

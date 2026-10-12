@@ -24,7 +24,7 @@ import logging
 import os
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from typing import Any
@@ -230,7 +230,7 @@ class ProgressEmitter:
     entry ID so callers can log it for debugging.
     """
 
-    def __init__(self, job_id: str, *, renews_lease: bool = True) -> None:
+    def __init__(self, job_id: str, *, renews_lease: bool = True, progress_min_interval_s: float = 0.0) -> None:
         self.job_id = job_id
         # The serial job modes renew on every emit (ADR 0065 decision 1). The
         # pooled research mode opts out: its public events are presentation,
@@ -238,6 +238,16 @@ class ProgressEmitter:
         # (:mod:`app.jobs.checkpoints`) — a hung task that logs would
         # otherwise read alive.
         self.renews_lease = renews_lease
+        # Ordinary progress coalescing (#3052): at most one ``job.progress``
+        # event per interval per job, so eight workers' checkpoint traffic
+        # cannot flood the SSE stream. Zero (the default) keeps the legacy
+        # serial contract — every call is one event. Terminal events, phases
+        # and logs are never coalesced, and a pending update is flushed
+        # BEFORE any terminal event, so an older progress can never land
+        # after one.
+        self._progress_min_interval_s = progress_min_interval_s
+        self._progress_last_s = 0.0
+        self._progress_pending: dict[str, Any] | None = None
         self._r = get_redis()
 
     # ----- low-level -----
@@ -290,21 +300,74 @@ class ProgressEmitter:
     # ----- public verbs -----
 
     def started(self) -> None:
+        self._flush_progress()
         self._patch_state(status="running", started_at=str(int(time.time() * 1000)))
         self._emit("job.started", {})
 
-    def phase(self, name: str) -> None:
+    def phase(self, name: str, *, friendly: str | None = None) -> None:
+        """Enter a phase. ``friendly`` is the plain label a page shows for it; the event carries it only when given."""
         self._patch_state(phase=name)
-        self._emit("job.phase", {"phase": name})
+        payload: dict[str, Any] = {"phase": name}
+        if friendly is not None:
+            payload["friendly"] = friendly
+        self._emit("job.phase", payload)
 
-    def progress(self, current: int, total: int, *, unit: str = "bars", message: str | None = None) -> None:
+    def progress(
+        self,
+        current: int,
+        total: int,
+        *,
+        unit: str = "bars",
+        message: str | None = None,
+        detail: Mapping[str, Any] | None = None,
+    ) -> None:
+        """One ordinary progress tick; ``detail`` carries additive server-authored fields (#3052).
+
+        The detail fields ride the same event (``waiting``, count
+        breakdowns) so existing consumers ignore what they do not know and
+        the upper-bound ``total`` semantics never change. Under coalescing,
+        a suppressed call's payload is the one that lands when the interval
+        expires or a terminal event flushes — the newest ordinary update
+        wins, never a reorder.
+        """
         payload: dict[str, Any] = {"current": current, "total": total, "unit": unit}
         if message is not None:
             payload["message"] = message
+        if detail:
+            payload.update(detail)
+        if self._progress_min_interval_s <= 0:
+            self._emit("job.progress", payload)
+            return
+        now = time.monotonic()
+        self._progress_pending = payload
+        if now - self._progress_last_s >= self._progress_min_interval_s:
+            self._flush_progress()
+
+    def _flush_progress(self) -> None:
+        """Land the suppressed newest ordinary update, if one is pending (#3052)."""
+        if self._progress_pending is None:
+            return
+        payload, self._progress_pending = self._progress_pending, None
+        self._progress_last_s = time.monotonic()
         self._emit("job.progress", payload)
 
     def log(self, message: str, *, level: str = "info") -> None:
         self._emit("job.log", {"level": level, "message": message})
+
+    def research_waiting(self, waiting: str | None, *, detail: Mapping[str, Any] | None = None) -> None:
+        """The pooled research waiting state, as a transition-gated additive event (#3052).
+
+        ``waiting`` is ``"capacity"`` (runnable work is queued behind busy
+        lanes), ``"adaptive"`` (the procedure itself waits on results it
+        depends on), or ``None`` (evaluating). The event fires only when the
+        state CHANGES, so a saturated pool emits no stream; the detail dict
+        carries the scheduling facts (lanes, queued, ready width) the state
+        was read from — presentation, never a liveness authority.
+        """
+        payload: dict[str, Any] = {"waiting": waiting}
+        if detail:
+            payload.update(detail)
+        self._emit("job.research_waiting", payload)
 
     def cancel_acknowledged(self, message: str) -> None:
         """Acknowledge a cancel request the work can no longer honour (#2463).
@@ -316,6 +379,7 @@ class ProgressEmitter:
         self._emit("job.cancel_acknowledged", {"message": message})
 
     def completed(self, result: Any) -> None:
+        self._flush_progress()
         self._r.set(_result_key(self.job_id), json.dumps(result, default=str), ex=JOB_TTL_SECONDS)
         self._patch_state(
             status="completed",
@@ -330,6 +394,7 @@ class ProgressEmitter:
         self._r.srem(_active_set_key(), self.job_id)
 
     def completed_blob(self, *, filename: str, content_type: str, body: bytes) -> None:
+        self._flush_progress()
         """Store a binary result and emit ``job.completed``.
 
         The binary lives at ``job:{id}:result-blob`` (raw bytes — no JSON
@@ -370,6 +435,7 @@ class ProgressEmitter:
         self._r.srem(_active_set_key(), self.job_id)
 
     def failed(self, code: str, message: str) -> None:
+        self._flush_progress()
         self._patch_state(
             status="failed",
             error_code=code,
@@ -380,6 +446,7 @@ class ProgressEmitter:
         self._r.srem(_active_set_key(), self.job_id)
 
     def cancelled(self, reason: str = "user requested") -> None:
+        self._flush_progress()
         self._patch_state(
             status="cancelled",
             completed_at=str(int(time.time() * 1000)),

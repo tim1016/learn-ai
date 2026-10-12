@@ -45,10 +45,12 @@ from app.data_lake.admission import LakeAdmissionError
 from app.data_lake.catalog_client import CatalogUnavailableError
 from app.data_lake.option_bars import OptionBarsFileError
 from app.data_lake.option_listing import OptionListingFileError
+from app.data_lake.run_materialization import LakeMaterializationError
 from app.engine import run_gate
 from app.jobs.phases import JOB_PHASES
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.options_backtest import fetching, service
+from app.options_backtest.data_check import LAKE_REASON_WORDS
 from app.options_backtest.fees import FeeRateNotPublished
 from app.options_backtest.fetching import DownloadFailed
 from app.options_backtest.lake_data import UnderlyingDayUnreadable
@@ -643,7 +645,13 @@ def _inside_friday() -> Callable[[], int]:
         ("a contract the vendor does not know", "DOWNLOAD_FAILED", "unknown_symbol"),
         ("a contract the vendor fails to answer", "DOWNLOAD_FAILED", "provider_api_error"),
         ("a listing the vendor fails to give", "DOWNLOAD_FAILED", "provider_api_error"),
-        ("an underlying the vendor fails to give", "DOWNLOAD_FAILED", "underlying_bars_not_materialized"),
+        ("an underlying the vendor fails to give", "DOWNLOAD_FAILED", "provider_api_error"),
+        ("an underlying the vendor has no data for", "DOWNLOAD_FAILED", "provider_no_data"),
+        (
+            "an underlying the lake cannot serve and says no reason for",
+            "DOWNLOAD_FAILED",
+            "underlying_bars_not_materialized",
+        ),
         ("a contract another request holds", "DOWNLOAD_FAILED", "another_request_still_fetching"),
         ("a wait that runs out", "DOWNLOAD_FAILED", "took_too_long"),
     ],
@@ -691,6 +699,15 @@ async def test_no_way_a_run_can_fail_before_or_during_the_download_names_a_date_
             vendor = Vendor(scene, listing_errors={THU: 503})
         case "an underlying the vendor fails to give":
             vendor = Vendor(scene, stock_errors={THU: 500})
+        case "an underlying the vendor has no data for":
+            vendor = Vendor({**scene, THU: Day(underlying={})})
+        case "an underlying the lake cannot serve and says no reason for":
+            vendor = Vendor(scene)
+
+            def cannot_serve(**_arguments: Any) -> None:
+                raise LakeMaterializationError("the lake cannot serve SPY: a file the catalog names is not on disk")
+
+            monkeypatch.setattr(fetching, "materialize_engine_run", cannot_serve)
         case "a contract another request holds":
             vendor = Vendor(scene)
             monkeypatch.setattr(fetching, "OTHER_REQUEST_WAIT_SECONDS", 0.2)
@@ -711,6 +728,30 @@ async def test_no_way_a_run_can_fail_before_or_during_the_download_names_a_date_
     assert {item.code for item in failure.items} == {reason}
     for said in _everything_a_failed_run_said(failure, raised, caplog):
         assert_plain(said)
+
+
+@respx.mock
+async def test_a_day_the_vendor_has_no_data_for_fails_the_run_with_the_lakes_own_reason_in_its_words_said_once(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # Thursday's stock bars come back empty. The stock capture writes provider_no_data on that day's row, and the run
+    # says that, in the table's words, once in the sentence and once in the item; the generic code the phase falls
+    # back on when the lake gave none is not said at all.
+    store = FakeStore()
+    vendor = Vendor({**the_scene(), THU: Day(underlying={})})
+    vendor.mount()
+
+    raised = await _fails(vendor, store)
+
+    [(_, failure, _)] = store.failed
+    phrase = LAKE_REASON_WORDS["provider_no_data"]
+    [item] = failure.items
+    assert (failure.code, item.session_open_ms, item.code) == ("DOWNLOAD_FAILED", None, "provider_no_data")
+    assert failure.reason.count(phrase) == 1 and item.message.count(phrase) == 1
+    assert failure.reason.count("provider_no_data") == 1 and item.message.count("provider_no_data") == 1
+    assert "underlying_bars_not_materialized" not in failure.reason + item.message
+    assert raised.failure == failure
+    _says_no_date(failure)
 
 
 async def _another_request_holds_the_contract(fake_catalog: FakeCatalog) -> None:

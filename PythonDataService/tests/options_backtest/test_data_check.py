@@ -73,7 +73,9 @@ NEEDED = {CALL_500: flat("1.00", 1, 390)}
 
 
 class CheckData(FakeRunData):
-    """A fake lake that also remembers what it failed to fetch, and can hold a file that does not read."""
+    """A fake lake that also remembers what it failed to fetch, can hold a file that does not read, and says whether a
+    download would replace the underlying's stored day (the lake's gate decides that; ``tests/options_backtest/
+    test_unreadable_days.py`` holds the real answer for each kind of day)."""
 
     def __init__(
         self,
@@ -81,10 +83,15 @@ class CheckData(FakeRunData):
         *,
         failures: Mapping[tuple[DataKind, date, str | None], RecordedFailure] | None = None,
         damaged: tuple[tuple[date, str], ...] = (),
+        download_replaces_the_underlying: bool = False,
     ) -> None:
         super().__init__(underlying=base._underlying, listings=base._listings, options=base._options)
         self._failures = dict(failures or {})
         self._damaged = set(damaged)
+        self._download_replaces_the_underlying = download_replaces_the_underlying
+
+    def download_replaces_the_underlying(self, trading_date: date) -> bool:
+        return self._download_replaces_the_underlying
 
     def option_day(self, contract: OptionContract, trading_date: date) -> Captured[Any] | None:
         if (trading_date, contract.occ_symbol) in self._damaged:
@@ -358,21 +365,38 @@ def test_a_stored_contract_day_that_does_not_read_is_counted_missing_with_a_note
     assert any(call.occ_symbol in note and "fetched again" in note for note in session.notes)
 
 
-def test_stored_underlying_bars_that_break_the_rules_of_a_bar_cannot_be_tested() -> None:
-    repeated = _stored()
-    data = fake_data({WED: repeated})
+def _the_underlying_with_a_minute_twice(*, replaced: bool) -> SessionCheck:
+    data = fake_data({WED: _stored()})
     bars = list(data._underlying[WED])
     data._underlying[WED] = (*bars, bars[-1])  # the same minute twice
-
-    session = _only(
-        check_data(setup(legs=[leg(expiry={"kind": "same_day"})]), [WED], now_ms=NOW_MS, data=CheckData(data))
+    return _only(
+        check_data(
+            setup(legs=[leg(expiry={"kind": "same_day"})]),
+            [WED],
+            now_ms=NOW_MS,
+            data=CheckData(data, download_replaces_the_underlying=replaced),
+        )
     )
+
+
+def test_stored_underlying_bars_that_break_the_rules_of_a_bar_and_that_a_download_keeps_cannot_be_tested() -> None:
+    session = _the_underlying_with_a_minute_twice(replaced=False)
 
     assert session.verdict is SessionVerdict.CANNOT_BE_TESTED
     assert [problem.code for problem in session.problems] == [ProblemCode.STORED_DATA_IS_MALFORMED]
     [problem] = session.problems
-    assert "the underlying" in problem.message
+    assert "the underlying" in problem.message and "break the rules of a bar" in problem.message
     assert_plain(problem.message)
+    assert session.notes == ()
+
+
+def test_stored_underlying_bars_that_break_the_rules_of_a_bar_and_that_a_download_replaces_need_a_download() -> None:
+    session = _the_underlying_with_a_minute_twice(replaced=True)
+
+    assert session.verdict is SessionVerdict.NEEDS_DOWNLOAD
+    assert (session.missing, session.problems) == ((DataKind.UNDERLYING_BARS,), ())
+    assert session.contracts == ContractNeeds(needed=None, missing=None)  # the contracts are not known without the day
+    assert any("underlying bars" in note and "will be fetched again" in note for note in session.notes)
 
 
 def test_stored_option_bars_that_break_the_rules_of_a_bar_cannot_be_tested_and_name_the_contract_but_no_date() -> None:

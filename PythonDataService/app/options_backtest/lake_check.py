@@ -17,19 +17,24 @@ that has not yet downloaded anything, and a check made first would otherwise ans
 
 from __future__ import annotations
 
+import lzma
+import zlib
 from datetime import date
 
 from app.data_lake import catalog_client
-from app.data_lake.ensure_data import provider_for_data_type
+from app.data_lake.admission import LakeAdmissionError
+from app.data_lake.ensure_data import STORED_MINUTE_DAY_ERRORS, check_stored_minute_day, provider_for_data_type
 from app.data_lake.option_bars import option_minute_trade_dch
 from app.data_lake.option_lake import (
     OPTION_MARKET,
     OPTION_PRICE_ADJUSTMENT_MODE,
     OPTION_PROVIDER,
     failed_row_is_asked_again,
+    option_read_root,
     stock_day_is_asked_again,
 )
 from app.data_lake.option_listing import option_listing_dch
+from app.data_lake.path_policy import LeanMinuteBarPath
 from app.data_lake.types import ArtifactIdentity
 from app.options.contract import OptionContract
 from app.options_backtest.data_check import DataKind, DataThing, RecordedFailure
@@ -38,6 +43,11 @@ from app.utils.background_loop import run_on_background_loop
 
 # A claim-state read is a single indexed select.
 _CATALOG_READ_TIMEOUT_SECONDS = 60.0
+
+# What a damaged zip can raise that the stock capture's gate does not handle. The capture is stopped by it with the error
+# and does not rebuild the day, so a download does not replace such a day. (Handling them there would be the stock side's
+# change, and this list and the table in ``data_check`` would follow it.)
+_STOPS_THE_STOCK_CAPTURE = (zlib.error, lzma.LZMAError, EOFError, NotImplementedError, RuntimeError)
 
 
 def _stock_day_identity(symbol: str, day: date) -> ArtifactIdentity:
@@ -67,7 +77,36 @@ def _option_day_identity(contract: OptionContract, day: date) -> ArtifactIdentit
 
 
 class LakeCheckData(LakeRunData):
-    """``LakeRunData`` that can also say what the lake recorded when a fetch failed. For the data check."""
+    """``LakeRunData`` that can also say what the lake recorded when a fetch failed, and what a download would do with
+    a stored underlying day this feature cannot use. For the data check."""
+
+    def download_replaces_the_underlying(self, trading_date: date) -> bool:
+        """Would a download fetch the underlying's stored day again, whatever this feature thinks of it?
+
+        The stock capture reuses a stored raw minute day unless its own gate rejects it (``ensure_data``'s
+        ``check_stored_minute_day``, the one function the capture and this call both run) or the catalog does not
+        admit its bytes. That gate is not this feature's reader, so a day this reader refuses may pass it, and then
+        the download keeps it. A corrupt compressed stream is neither: it stops the capture with the error, so the
+        download does not replace it either. Reads the file and asks the catalog, so a worker thread; ``True`` also for
+        a day that is not stored at all (nothing to keep). Raises ``CatalogUnavailableError`` when the catalog cannot be
+        asked, which says nothing of the file.
+        """
+        relative = LeanMinuteBarPath(
+            market="usa", symbol=self._underlying, trading_date=trading_date, data_type="trade"
+        ).relative_path()
+        try:
+            check_stored_minute_day(
+                str(relative), option_read_root(self._lake_root), symbol=self._underlying, trading_date=trading_date
+            )
+        except (*STORED_MINUTE_DAY_ERRORS, LakeAdmissionError):
+            return True
+        except catalog_client.CatalogUnavailableError:
+            # An outage is an answer to nothing: it is a ``RuntimeError``, which the next clause would call a fault of
+            # the file, and the day would be called malformed because the catalog went away between two reads of it.
+            raise
+        except _STOPS_THE_STOCK_CAPTURE:
+            return False
+        return False
 
     def recorded_failure(self, thing: DataThing, trading_date: date) -> RecordedFailure | None:
         """The failure the lake recorded for ``thing`` on ``trading_date``, or ``None`` when it recorded none.

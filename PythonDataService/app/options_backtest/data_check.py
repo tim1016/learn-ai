@@ -25,6 +25,44 @@ download until a row has spent its attempts, so a recorded failure makes a sessi
 lake will not ask again; otherwise the session needs a download, and the note says the last try failed and why. Whether
 the lake will ask again is the lake's to say (``option_lake.failed_row_is_asked_again``); ``lake_check`` asks it.
 
+A stored day this feature cannot use. The reader refuses a file that is there and cannot be used (``lake_data``), and
+the check must not promise a fetch the lake will not make, nor refuse a day the lake would repair. What a download does
+with it is decided by the lake's own gate for that kind of file, not by the reader that refused it; a day the gate
+rejects is ``needs_download`` with a note that it "will be fetched again", and one the gate passes is
+``cannot_be_tested`` with ``stored_data_is_malformed``. Each row below was checked against a real download
+(``tests/options_backtest/test_unreadable_days.py``; a listing, and a contract day or listing the catalog does not admit,
+also in ``test_lake_check.py``):
+
+    A stored day that                                  A download      Decided by                      Check data says
+    -------------------------------------------------  --------------  ------------------------------  -----------------
+    contract: is damaged in any way the lake's parser  fetches it      ``option_bars.parse_option_     needs_download
+      refuses (not a zip, a bad row, a minute twice,   again           day_zip``, which the reuse
+      a start off a whole minute, bytes the catalog                    gate and the reader both run
+      does not admit)
+    contract: has a bar that closes on another New     keeps it        the same parser accepts it      cannot_be_tested
+      York date (the parser accepts it)                                (``OptionBarsCannotBePlaced``)
+    listing: is damaged or not admitted                fetches it      ``option_listing``'s parser,    needs_download
+                                                       again           run by the reuse gate and the
+                                                                       reader
+    underlying: fails the stock capture's gate (not a  fetches it      ``ensure_data.check_stored_     needs_download
+      zip, a row with fewer than six columns or a      again           minute_day``, asked through
+      number the stock gate cannot parse, a minute                     ``LakeCheckData``
+      twice, a price of zero, a member with no date,
+      bytes the catalog does not admit)
+    underlying: passes that gate and this reader       keeps it        the same gate passes it         cannot_be_tested
+      still refuses it (a bar off a whole minute, a
+      row of more than six columns, an empty line, a
+      number written ``+5``, an empty zip, a second
+      member, another symbol in the member's name)
+    underlying: a corrupt compressed stream            does not        the gate does not handle the    cannot_be_tested
+                                                       replace it:     error, so the capture stops
+                                                       the capture     with it
+                                                       stops
+
+The gate is the one the stock capture runs on a stored day it is about to reuse, so a download of the underlying keeps
+exactly what the check calls ``cannot_be_tested``. A run is never told to fetch what its download keeps: it fails
+``DATA_UNREADABLE`` and names the session by its open (``service``).
+
 No sentence here names a date. A session is identified by its open in ms beside the sentence, and a thing the lake
 could not fetch is named by what it is (the underlying's bars, the contract listing, a contract's bars) and described by
 a short plain phrase for the lake's reason code (``LAKE_REASON_WORDS``), never by text the lake or the vendor wrote,
@@ -48,9 +86,10 @@ from app.data_lake.option_lake import option_history_floor, plan_window_refusal,
 from app.data_lake.option_listing import OptionListingFileError
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.options.contract import OptionContract
-from app.options_backtest.data import RunData
+from app.options_backtest.data import Captured, RunData
 from app.options_backtest.fees import estimated_fees_available
 from app.options_backtest.lake_data import BARS_CANNOT_BE_PLACED, UnderlyingDayUnreadable
+from app.options_backtest.market import MinuteBar
 from app.options_backtest.needs import session_needs
 from app.options_backtest.results import SkipReason
 from app.options_backtest.session_market import MalformedBars, bars_by_close
@@ -74,7 +113,7 @@ class ProblemCode(StrEnum):
     NO_PUBLISHED_FEE_RATES = "no_published_fee_rates"
     # The lake wrote down a failure for something the session needs and will not try it again.
     LAKE_HOLDS_A_FAILURE = "lake_holds_a_failure"
-    # Stored bars that break the rules of a bar (a repeat, a price of zero): fetching them again cannot mend that.
+    # A stored day the run cannot use and a download would not replace (the module docstring says which days).
     STORED_DATA_IS_MALFORMED = "stored_data_is_malformed"
 
 
@@ -104,9 +143,12 @@ class RecordedFailure:
 
 
 class CheckableData(RunData, Protocol):
-    """What the check reads: everything a run reads, and the lake's record of failures. Reads only; no vendor call."""
+    """What the check reads: everything a run reads, the lake's record of failures, and what a download would do with
+    a stored underlying day the reader refuses. Reads only; no vendor call."""
 
     def recorded_failure(self, thing: DataThing, trading_date: date) -> RecordedFailure | None: ...
+
+    def download_replaces_the_underlying(self, trading_date: date) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -217,7 +259,7 @@ class DataCheck:
         )
 
 
-# A stored file that is there and is not usable. The lake's capture reads the same files and fetches them again.
+# A stored file that is there and is not usable. Whether a download fetches it again is the module docstring's table.
 STORED_FILE_ERRORS = (LakeAdmissionError, OptionListingFileError, OptionBarsFileError, UnderlyingDayUnreadable)
 
 SESSION_DATA_NOT_FINAL_WORDS = "The session's data is not final yet; it can be fetched from the next New York day."
@@ -363,19 +405,58 @@ def _lake_refusals(underlying: str, day: date, *, now_ms: int) -> list[Problem]:
     return refusals
 
 
-def _stored[T](read: Callable[[], T | None], what: str, notes: list[str]) -> T | None:
-    """A read that answers ``None`` for a file that is not there and for one that is there and unusable.
+class _KeptUnusable(Exception):
+    """A stored day the run cannot use and a download would not replace; ``cause`` is the error that refused it."""
 
-    A day with a bar no session can place is neither: the lake holds it as good and will not fetch it again, so it
-    passes through for the caller to call malformed and is never promised a fetch.
+    def __init__(self, cause: Exception) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+
+
+# What a stored day can be refused with: the reader's errors, and bars it reads and the market would refuse.
+_UNUSABLE = (*STORED_FILE_ERRORS, MalformedBars)
+# What the rules of a bar refuse. Any other refusal is of the file's form.
+_BREAKS_THE_RULES_OF_A_BAR = (MalformedBars, *BARS_CANNOT_BE_PLACED)
+
+
+def _stored[T](
+    read: Callable[[], T | None], what: str, notes: list[str], *, replaced: Callable[[Exception], bool]
+) -> T | None:
+    """A read that answers ``None`` for a file that is not there and for one that is there, unusable and replaced.
+
+    A day the run cannot use is either fetched again by a download (``replaced`` says so of the error that refused it:
+    the module docstring's table) or kept by the lake as it is. The first is a note and a day to download; the second
+    is ``_KeptUnusable``, for the caller to call malformed, and is never promised a fetch.
     """
     try:
         return read()
-    except BARS_CANNOT_BE_PLACED:
-        raise
-    except STORED_FILE_ERRORS as exc:
+    except _UNUSABLE as exc:
+        if not replaced(exc):
+            raise _KeptUnusable(exc) from exc
         notes.append(f"The stored {what} cannot be read ({type(exc).__name__}) and will be fetched again.")
         return None
+
+
+def _a_contract_day_replaced(exc: Exception) -> bool:
+    """The lake's parser of a contract's day is the reuse gate's too, so it refuses what a download fetches again;
+    what it accepts and the reader still refuses (a close on another day) the lake holds as good."""
+    return not isinstance(exc, _BREAKS_THE_RULES_OF_A_BAR)
+
+
+def _the_underlying_as_the_run_reads_it(data: CheckableData, day: date) -> Captured[Sequence[MinuteBar]] | None:
+    stored = data.underlying_day(day)
+    if stored is not None:
+        bars_by_close(stored.value, trading_date=day, what="the underlying")
+    return stored
+
+
+def _a_contract_day_as_the_run_reads_it(
+    data: CheckableData, contract: OptionContract, day: date
+) -> Captured[Sequence[MinuteBar]] | None:
+    stored = data.option_day(contract, day)
+    if stored is not None:
+        bars_by_close(stored.value, trading_date=day, what=contract.occ_symbol)
+    return stored
 
 
 def _inspect_what_is_stored(
@@ -383,10 +464,15 @@ def _inspect_what_is_stored(
 ) -> SessionCheck:
     notes: list[str] = []
     try:
-        underlying = _stored(lambda: data.underlying_day(day), "underlying bars", notes)
-    except BARS_CANNOT_BE_PLACED:
-        return _malformed(outline, "the underlying")
-    listing = _stored(lambda: data.listing(day), "contract listing", notes)
+        underlying = _stored(
+            lambda: _the_underlying_as_the_run_reads_it(data, day),
+            "underlying bars",
+            notes,
+            replaced=lambda _exc: data.download_replaces_the_underlying(day),
+        )
+    except _KeptUnusable as kept:
+        return _malformed(outline, "the underlying", kept.cause)
+    listing = _stored(lambda: data.listing(day), "contract listing", notes, replaced=lambda _exc: True)
     absent = [
         (DataKind.UNDERLYING_BARS, underlying is None),
         (DataKind.LISTING, listing is None),
@@ -395,10 +481,6 @@ def _inspect_what_is_stored(
     if underlying is None or listing is None:
         return _what_a_download_must_bring(day, missing, data, notes, outline, contracts=NOT_YET_KNOWN)
 
-    try:
-        bars_by_close(underlying.value, trading_date=day, what="the underlying")
-    except MalformedBars:
-        return _malformed(outline, "the underlying")
     needs = session_needs(
         setup,
         trading_date=day,
@@ -415,16 +497,16 @@ def _inspect_what_is_stored(
     absent_contracts: list[OptionContract] = []
     for contract in sorted(needs.contracts, key=lambda each: each.occ_symbol):
         try:
-            stored = _stored(lambda c=contract: data.option_day(c, day), f"bars of {contract.occ_symbol}", notes)
-        except BARS_CANNOT_BE_PLACED:
-            return _malformed(outline, contract.occ_symbol)
+            stored = _stored(
+                lambda c=contract: _a_contract_day_as_the_run_reads_it(data, c, day),
+                f"bars of {contract.occ_symbol}",
+                notes,
+                replaced=_a_contract_day_replaced,
+            )
+        except _KeptUnusable as kept:
+            return _malformed(outline, contract.occ_symbol, kept.cause)
         if stored is None:
             absent_contracts.append(contract)
-            continue
-        try:
-            bars_by_close(stored.value, trading_date=day, what=contract.occ_symbol)
-        except MalformedBars:
-            return _malformed(outline, contract.occ_symbol)
     contracts = ContractNeeds(needed=len(needs.contracts), missing=len(absent_contracts))
     if not absent_contracts:
         return outline.result(SessionVerdict.READY, contracts=contracts, notes=tuple(notes))
@@ -433,12 +515,20 @@ def _inspect_what_is_stored(
     )
 
 
-def _malformed(outline: _Outline, what: str) -> SessionCheck:
-    """Stored bars that break the rules of a bar. What the rule broken was, and on which day, is not said."""
-    message = (
-        f"The stored bars of {what} break the rules of a bar (a minute twice or out of order, a bar not on a whole "
-        "minute, a price of zero or less, or bars of another day), so the run cannot use them."
-    )
+def _malformed(outline: _Outline, what: str, cause: Exception) -> SessionCheck:
+    """A stored day the run cannot use and a download would not replace. What the fault was, and on which day, is not said."""
+    if isinstance(cause, _BREAKS_THE_RULES_OF_A_BAR):
+        message = (
+            f"The stored bars of {what} break the rules of a bar (a minute twice or out of order, a bar not on a "
+            "whole minute, a price of zero or less, or bars of another day), so the run cannot use them, and a "
+            "download does not replace them."
+        )
+    else:
+        message = (
+            f"The stored file of {what} is not in the form the lake writes (a row of the wrong width, an empty "
+            "line, a number written another way, or an archive that does not hold the day's one file), so the run "
+            "cannot use it, and a download does not replace it."
+        )
     return outline.result(
         SessionVerdict.CANNOT_BE_TESTED, problems=(Problem(ProblemCode.STORED_DATA_IS_MALFORMED, message),)
     )
