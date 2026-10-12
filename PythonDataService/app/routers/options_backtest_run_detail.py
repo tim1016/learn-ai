@@ -11,11 +11,12 @@ router is mounted before that one (``main.py``).
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Path, Query, Response, status
+from starlette.background import BackgroundTask
+from starlette.responses import StreamingResponse
 
 from app.options_backtest.comparison import compare
 from app.options_backtest.run_detail import (
@@ -26,16 +27,16 @@ from app.options_backtest.run_detail import (
     RunsOfDifferentUnderlyings,
     SessionNotInRun,
     TwoRunsSetupCannotBeRead,
+    export_every_trade,
     read_closely,
     read_comparison_inputs,
-    read_every_trade,
     read_session_record,
     read_trade_page,
 )
 from app.options_backtest.session_levels import SessionRecordInconsistent
 from app.options_backtest.session_view import session_view_of
 from app.options_backtest.setup import LEG_ID_PATTERN
-from app.options_backtest.trade_export import csv_file_name, trades_csv
+from app.options_backtest.trade_export import csv_file_name
 from app.research.persistence import lifecycle
 from app.schemas.options_backtest import OptionsBacktestRefusalBody
 from app.schemas.options_backtest_run_detail import (
@@ -200,14 +201,19 @@ async def export_the_trades(run_id: RunId) -> Response:
     ``0``; a sum of ``exit_price_usd`` over every row therefore mixes sales and marks.
     """
     try:
-        trades = await read_closely(read_every_trade, run_id, is_live=lifecycle.job_is_live)
+        export = await read_closely(export_every_trade, run_id, is_live=lifecycle.job_is_live)
     except (RunNotFound, RunNotComplete) as exc:
         raise _refusal(exc) from exc
-    body = await asyncio.to_thread(trades_csv, trades)
-    return Response(
-        content=body,
+    # The file is whole before the answer begins, so a failure while it was written was an error answer and not a 200 with
+    # part of a file. It is closed when the last piece is sent, or when the client stops asking.
+    return StreamingResponse(
+        export.chunks(),
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{csv_file_name(run_id)}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{csv_file_name(run_id)}"',
+            "Content-Length": str(export.size),
+        },
+        background=BackgroundTask(export.close),
     )
 
 

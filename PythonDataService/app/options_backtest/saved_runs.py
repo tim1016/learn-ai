@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -749,6 +749,7 @@ async def has_session(conn: asyncpg.Connection, run_id: int, session_open_ms: in
 
 
 _TRADE_FILTER = "run_id = $1 AND ($2::bigint IS NULL OR session_open_ms = $2) AND ($3::text IS NULL OR leg_id = $3)"
+_TRADE_ORDER = "ORDER BY session_open_ms, trade_number"
 
 
 async def count_trades(
@@ -778,14 +779,41 @@ async def read_trades(
     """
     rows = await conn.fetch(
         f"SELECT * FROM research_options_backtest_run_trades WHERE {_TRADE_FILTER} "
-        "ORDER BY session_open_ms, trade_number LIMIT $4::bigint OFFSET $5::bigint",
+        f"{_TRADE_ORDER} LIMIT $4::bigint OFFSET $5::bigint",
         run_id,
         session_open_ms,
         leg_id,
         limit,
         offset,
     )
-    return tuple(StoredTrade(row["session_open_ms"], row["trade_number"], _trade(row)) for row in rows)
+    return tuple(stored_trades_of(rows))
+
+
+async def read_trade_rows_in_batches(
+    conn: asyncpg.Connection, run_id: int, *, batch_rows: int
+) -> AsyncIterator[list[asyncpg.Record]]:
+    """Every trade row of the run, in the order ``read_trades`` gives, ``batch_rows`` rows at a time.
+
+    The rows come from a server-side cursor, so no more than one batch is ever held: the run's trades are never read
+    whole. A cursor exists only inside a transaction, and the batches are of the snapshot that transaction has, so a
+    caller that opens one at repeatable-read reads a run that does not change between its first batch and its last.
+    """
+    if batch_rows < 1:
+        raise ValueError(f"a batch is at least one row, not {batch_rows}")
+    cursor = await conn.cursor(
+        f"SELECT * FROM research_options_backtest_run_trades WHERE {_TRADE_FILTER} {_TRADE_ORDER}",
+        run_id,
+        None,
+        None,
+    )
+    while rows := await cursor.fetch(batch_rows):
+        yield rows
+
+
+def stored_trades_of(rows: Iterable[asyncpg.Record]) -> Iterator[StoredTrade]:
+    """The trade rows as the trades they store, one at a time and in the order given."""
+    for row in rows:
+        yield StoredTrade(row["session_open_ms"], row["trade_number"], _trade(row))
 
 
 async def read_session(conn: asyncpg.Connection, run_id: int, session_open_ms: int) -> StoredSession | None:

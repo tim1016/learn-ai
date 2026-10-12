@@ -25,11 +25,13 @@ from app.options_backtest.run_detail import (
     RunsOfDifferentUnderlyings,
     SessionNotInRun,
     TwoRunsSetupCannotBeRead,
+    export_every_trade,
     read_comparison_inputs,
-    read_every_trade,
     read_session_record,
     read_trade_page,
 )
+from app.options_backtest.saved_runs import StoredTrade
+from app.options_backtest.trade_export import trades_csv
 from tests.options_backtest._a_run import a_busy_run
 from tests.options_backtest._detail_scene import (
     FRI_OPEN_MS,
@@ -186,7 +188,7 @@ async def test_a_run_that_is_missing_or_not_complete_has_no_trades_to_page_and_i
         await read_trade_page(conn, running, **wrong)
     assert (caught.value.status, caught.value.job_id) == ("running", f"running-{unique}")
     with pytest.raises(RunNotComplete):
-        await read_every_trade(conn, failed)
+        await export_every_trade(conn, failed)
 
 
 async def test_a_session_the_run_did_not_test_and_a_leg_it_does_not_have_are_refused_and_not_answered_with_nothing(
@@ -208,17 +210,26 @@ async def test_a_session_the_run_did_not_test_and_a_leg_it_does_not_have_are_ref
     assert (idle.total, idle.trades) == (0, ())
 
 
-async def test_every_trade_of_a_run_is_read_with_no_limit(
-    conn: asyncpg.Connection, save_run: SaveRun, busy: RunResult
+def _the_file(export: run_detail.TradesExport) -> bytes:
+    """What an export holds, read back and closed; its ``size`` is the number of bytes it holds."""
+    data = export.spool.read()
+    export.close()
+    assert len(data) == export.size
+    return data
+
+
+@pytest.mark.parametrize("batch_rows", [1, 4, 1000])
+async def test_every_trade_of_a_run_is_exported_in_order_with_no_limit_whatever_the_size_of_a_batch(
+    conn: asyncpg.Connection, save_run: SaveRun, busy: RunResult, batch_rows: int
 ) -> None:
     run_id = await save_run(busy, "every")
+    saved = [StoredTrade(at, number, trade) for at, number, trade in _every_trade(busy)]
+    assert len(saved) > 4, "the busy run holds more trades than a batch of 4, or this proves too little"
 
-    everything = await read_every_trade(conn, run_id)
+    exported = _the_file(await export_every_trade(conn, run_id, batch_rows=batch_rows))
 
-    assert len(everything) == len(_every_trade(busy))
-    assert [(each.session_open_ms, each.trade_number) for each in everything] == [
-        (at, number) for at, number, _ in _every_trade(busy)
-    ]
+    # The file is the CSV of the trades as they were saved: every one, once, in the order the run recorded them.
+    assert exported == trades_csv(saved)
 
 
 # ── One session, as stored ───────────────────────────────────────────────
@@ -355,7 +366,7 @@ async def test_a_run_whose_stored_setup_no_longer_validates_still_gives_its_trad
     await _lose_the_setup(conn, run_id)
 
     header = await saved_runs.get_run_header(conn, run_id)
-    every = await read_every_trade(conn, run_id)
+    every = _the_file(await export_every_trade(conn, run_id))
     page = await read_trade_page(conn, run_id, session_open_ms=WED_OPEN_MS, leg_id="call", limit=10, offset=0)
     record = await read_session_record(conn, run_id, WED_OPEN_MS)
 
@@ -363,7 +374,7 @@ async def test_a_run_whose_stored_setup_no_longer_validates_still_gives_its_trad
     assert "lots" in header.setup_cannot_open_reason
     assert (header.record.id, header.record.underlying, header.record.status) == (run_id, "SPY", "complete")
     # Wednesday's three trades; the call leg made two of them (trade numbers 1 and 2).
-    assert len(every) == 3
+    assert every.count(b"\r\n") == 1 + 3, "the header and Wednesday's three trades"
     assert (page.total, [each.trade_number for each in page.trades]) == (2, [1, 2])
     assert record.header.setup is None and record.header.setup_cannot_open_reason == header.setup_cannot_open_reason
     assert len(record.session.result.outcome.trades) == 3

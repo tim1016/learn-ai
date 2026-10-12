@@ -26,13 +26,15 @@ refusal are made by ``read_closely``, which asks once, in a worker thread, after
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+import io
+import tempfile
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 import asyncpg
 
-from app.options_backtest import saved_runs
+from app.options_backtest import saved_runs, trade_export
 from app.options_backtest.saved_runs import IsLive, RunHeader, SessionLine, StoredSession, StoredTrade
 from app.research.persistence import lifecycle
 from app.research.persistence.db import with_connection
@@ -204,11 +206,74 @@ async def read_trade_page(
     return TradePage(run_id=run_id, total=total, offset=offset, limit=limit, trades=trades)
 
 
-async def read_every_trade(conn: asyncpg.Connection, run_id: int) -> tuple[StoredTrade, ...]:
-    """Every leg trade of the run, in order, with no page and no limit: what an export holds."""
-    async with conn.transaction(isolation="repeatable_read", readonly=True):
-        require_a_complete_run(run_id, await saved_runs.get_run_header(conn, run_id))
-        return await saved_runs.read_trades(conn, run_id)
+# A run at the limits (1,300 sessions of 8 legs and 21 entries) holds 218,400 trades, some 47 million bytes of CSV. The data
+# plane also serves the bots' control plane, so an export must not be able to run it out of memory. It reads this many trade
+# rows at a time (measured with tracemalloc: 2.1 million bytes of Python objects for a batch of dict rows, 3.4 million for
+# the same of asyncpg records) and keeps no more than ``EXPORT_MEMORY_BYTES`` of the file in memory; the rest is on disk.
+# The peak is therefore some 8 million bytes however many trades the run has (7.6 million for 50,000 trades on a database).
+EXPORT_BATCH_ROWS = 1_000
+EXPORT_MEMORY_BYTES = 4 * 1024 * 1024
+# How many bytes of the finished file are read back, and sent, at a time.
+EXPORT_SEND_BYTES = 1024 * 1024
+
+
+@dataclass
+class TradesExport:
+    """The whole CSV of a run's trades in a spooled temporary file, ``size`` bytes long and rewound to its start.
+
+    It is sent once and closed: ``chunks`` closes it when the last piece has been given or the reader stops asking, and
+    ``close`` is for a caller that never gets as far as asking. The file is anonymous (``tempfile`` unlinks it as it
+    makes it), so closing it is all there is to clean up.
+    """
+
+    spool: tempfile.SpooledTemporaryFile[bytes]
+    size: int
+
+    async def chunks(self) -> AsyncIterator[bytes]:
+        try:
+            while piece := await asyncio.to_thread(self.spool.read, EXPORT_SEND_BYTES):
+                yield piece
+        finally:
+            self.close()
+
+    def close(self) -> None:
+        self.spool.close()
+
+
+def _write_batch(spool: tempfile.SpooledTemporaryFile[bytes], rows: Sequence[asyncpg.Record]) -> None:
+    """Decode a batch of trade rows, write them as CSV and add them to the file. Blocking: call it from a worker thread."""
+    spool.write(trade_export.rows_bytes(saved_runs.stored_trades_of(rows)))
+
+
+async def export_every_trade(
+    conn: asyncpg.Connection, run_id: int, *, batch_rows: int | None = None, memory_bytes: int | None = None
+) -> TradesExport:
+    """Every leg trade of the run as one CSV in a temporary file: no page, no limit, and never the whole run in memory.
+
+    The trades are read from a server-side cursor, ``batch_rows`` at a time, inside the one repeatable-read transaction
+    that checked the run is complete, so the file is one consistent view of the run. Each batch is decoded, written and
+    encoded in a worker thread before the next is read. Nothing is returned until the last row is written: a failure
+    anywhere is an exception and not a half file, and the file is closed. ``memory_bytes`` is how much of the file stays
+    in memory before the rest goes to disk.
+    """
+    spool = tempfile.SpooledTemporaryFile(  # noqa: SIM115 -- it outlives this function, in the export it returns
+        max_size=EXPORT_MEMORY_BYTES if memory_bytes is None else memory_bytes, mode="w+b"
+    )
+    try:
+        async with conn.transaction(isolation="repeatable_read", readonly=True):
+            require_a_complete_run(run_id, await saved_runs.get_run_header(conn, run_id))
+            spool.write(trade_export.header_bytes())
+            batches = saved_runs.read_trade_rows_in_batches(
+                conn, run_id, batch_rows=EXPORT_BATCH_ROWS if batch_rows is None else batch_rows
+            )
+            async for rows in batches:
+                await asyncio.to_thread(_write_batch, spool, rows)
+        size = spool.seek(0, io.SEEK_END)
+        spool.seek(0)
+    except BaseException:
+        spool.close()
+        raise
+    return TradesExport(spool, size)
 
 
 @dataclass(frozen=True)

@@ -5,7 +5,9 @@ statements they send, by the table each names, and refuses any other loudly (a d
 hides the read it was written to watch). It keeps what the tests ask of it:
 
 * ``in_transaction``: whether a transaction is open right now, and ``transactions``, how each was opened;
-* ``log``: every statement, with the number of the transaction it ran in (``None`` outside one).
+* ``log``: every statement, with the number of the transaction it ran in (``None`` outside one);
+* a cursor (``cursor``), which, as asyncpg's, cannot be made outside a transaction. It hands out the trade rows ``n`` at
+  a time and counts them, and can be told to fail on its Nth fetch.
 
 ``Pool(fake)`` stands in for ``with_connection``: it hands the fake to the function and records that a pooled connection
 is held for the length of the call, which is what ``with_connection`` does with the real pool.
@@ -14,11 +16,15 @@ is held for the length of the call, which is what ``with_connection`` does with 
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+import re
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Sequence
 from contextlib import asynccontextmanager
 from decimal import Decimal
+from itertools import islice
 from typing import Any
 
+from app.options_backtest import saved_runs
+from app.options_backtest.saved_runs import StoredTrade
 from tests.options_backtest.setup_fixtures import setup
 
 CREATED_AT_MS = 1_791_800_000_000
@@ -80,9 +86,58 @@ def a_skipped_session_row(session_open_ms: int = FIRST_OPEN_MS) -> dict[str, Any
     }
 
 
+def _the_columns_of(statement: str) -> list[str]:
+    columns = re.search(r"\((.*?)\)\s*VALUES", statement, re.S)
+    assert columns is not None
+    return [name.strip() for name in columns.group(1).split(",")]
+
+
+def _as_asyncpg_returns_it(value: Any) -> Any:
+    """A whole number with zeros at its end in the exponent form asyncpg gives a NUMERIC: 10000 as 1E+4."""
+    if isinstance(value, Decimal) and value.is_finite() and value != 0 and value.as_tuple().exponent == 0:
+        return value.normalize()
+    return value
+
+
+def a_trade_row(stored: StoredTrade, run_id: int = 7) -> dict[str, Any]:
+    """The row the store keeps for a trade, as ``SELECT *`` gives it back: every number in the form asyncpg returns."""
+    values = saved_runs._trade_row(run_id, stored.session_open_ms, stored.trade_number, stored.trade)
+    return dict(zip(_the_columns_of(saved_runs._INSERT_TRADE), map(_as_asyncpg_returns_it, values), strict=True))
+
+
+def many_trade_rows(stored: StoredTrade, count: int, run_id: int = 7) -> Iterator[dict[str, Any]]:
+    """``count`` rows of a trade that differ in their trade number alone, made one at a time as they are asked for."""
+    template = a_trade_row(stored, run_id)
+    for number in range(count):
+        yield {**template, "trade_number": number}
+
+
 def a_line_row(session_open_ms: int, status: str, profit: str, trades: int) -> dict[str, Any]:
     """A row of ``saved_runs.read_session_lines``: what a session says of itself for a comparison."""
     return {"session_open_ms": session_open_ms, "status": status, "profit_usd": Decimal(profit), "trades": trades}
+
+
+class FakeCursor:
+    """What ``await connection.cursor(...)`` gives: rows that ``fetch`` hands out ``n`` at a time, from where it stood.
+
+    The rows are taken from an iterator as they are asked for, so a test of a very large run never holds it whole.
+    """
+
+    def __init__(self, connection: FakeConnection, rows: Iterator[dict[str, Any]]) -> None:
+        self._connection = connection
+        self._rows = rows
+        # The ``n`` of every fetch, and how many rows each gave.
+        self.asked: list[int] = []
+        self.gave: list[int] = []
+
+    async def fetch(self, n: int) -> list[dict[str, Any]]:
+        self._connection.log.append(("cursor fetch", self._connection.transaction_number))
+        self.asked.append(n)
+        if self._connection.fail_at_fetch == len(self.asked):
+            raise ConnectionError("the connection to the database was lost")
+        taken = list(islice(self._rows, n))
+        self.gave.append(len(taken))
+        return taken
 
 
 class FakeConnection:
@@ -92,12 +147,15 @@ class FakeConnection:
         *,
         sessions: Sequence[dict[str, Any]] = (),
         lines: dict[int, Sequence[dict[str, Any]]] | None = None,
-        trade_rows: Sequence[dict[str, Any]] | Callable[[], Sequence[dict[str, Any]]] = (),
+        trade_rows: Iterable[dict[str, Any]] | Callable[[], Iterable[dict[str, Any]]] = (),
+        fail_at_fetch: int | None = None,
     ) -> None:
         self.runs = {row["id"]: row for row in runs}
         self.sessions = {row["session_open_ms"]: row for row in sessions}
         self.lines = lines or {}
         self._trade_rows = trade_rows
+        self.fail_at_fetch = fail_at_fetch
+        self.cursors: list[FakeCursor] = []
         self.in_transaction = False
         self.transaction_number: int | None = None
         # How each transaction was opened: ``(isolation, readonly)``.
@@ -116,7 +174,7 @@ class FakeConnection:
             self.in_transaction = False
             self.transaction_number = None
 
-    def trade_rows(self) -> Sequence[dict[str, Any]]:
+    def trade_rows(self) -> Iterable[dict[str, Any]]:
         return self._trade_rows() if callable(self._trade_rows) else self._trade_rows
 
     def _ran(self, sql: str) -> None:
@@ -146,6 +204,15 @@ class FakeConnection:
         if sql.startswith("SELECT * FROM research_options_backtest_run_trades"):
             return list(self.trade_rows())
         raise AssertionError(f"the fake connection has no answer for: {sql}")
+
+    async def cursor(self, sql: str, *args: Any) -> FakeCursor:
+        assert self.in_transaction, "a cursor cannot be made outside of a transaction (asyncpg refuses it)"
+        self._ran(sql)
+        if not sql.startswith("SELECT * FROM research_options_backtest_run_trades"):
+            raise AssertionError(f"the fake connection has no cursor for: {sql}")
+        made = FakeCursor(self, iter(self.trade_rows()))
+        self.cursors.append(made)
+        return made
 
 
 class Pool:

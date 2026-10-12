@@ -111,25 +111,24 @@ def test_the_header_is_fixed_and_begins_with_the_unix_time_and_one_readable_time
     assert not [name for name in CSV_HEADER if "time" in name and name not in ("unix_ts", "time_america_new_york")]
 
 
-def test_a_sold_trade_and_a_marked_one_are_written_cell_for_cell_as_they_were_saved() -> None:
-    payload = trades_csv([_sold(), _marked()]).decode("utf-8")
+# The two trades above, cell for cell. The entry bar of the sold one closed at 13:41 UTC = 09:41:00 EDT; 500.5 is its
+# strike and 1791403200000 the 16:00 anchor of the day. A trade with no rule has three empty cells, and a mark has no
+# sale: its seen price is empty and its price is the mark.
+THE_TWO_TRADES_CSV = (
+    HEADER_LINE
+    + "\r\n"
+    + "1791380460000,2026-10-07 09:41:00,1791379800000,2,call,1,SPY261007C00500500,SPY,call,500.5,1791403200000,"
+    "2,100,4.00,5.0000,4.080,1791380400000,5.0,5.02,stop,3,1791381000000,sale,1791381060000,3.9,3.88,"
+    "1.30,1.30,-230.60"
+    + "\r\n"
+    + "1791380160000,2026-10-07 09:36:00,1791379800000,0,put,0,SPY261007P00500000,SPY,put,500,1791403200000,"
+    "1,100,,,,1791380100000,2.00,2.00,marked_not_sold,1,1791383400000,mark,1791385800000,,1.75,"
+    "0.65,0,-25.65" + "\r\n"
+)
 
-    assert (
-        payload
-        == (
-            HEADER_LINE
-            + "\r\n"
-            # The entry bar closed at 13:41 UTC = 09:41:00 EDT. 500.5 is the strike and 1791403200000 the 16:00 anchor.
-            + "1791380460000,2026-10-07 09:41:00,1791379800000,2,call,1,SPY261007C00500500,SPY,call,500.5,1791403200000,"
-            "2,100,4.00,5.0000,4.080,1791380400000,5.0,5.02,stop,3,1791381000000,sale,1791381060000,3.9,3.88,"
-            "1.30,1.30,-230.60"
-            + "\r\n"
-            # No rule: three empty cells. A mark has no sale: its seen price is empty and its price is the mark.
-            + "1791380160000,2026-10-07 09:36:00,1791379800000,0,put,0,SPY261007P00500000,SPY,put,500,1791403200000,"
-            "1,100,,,,1791380100000,2.00,2.00,marked_not_sold,1,1791383400000,mark,1791385800000,,1.75,"
-            "0.65,0,-25.65" + "\r\n"
-        )
-    )
+
+def test_a_sold_trade_and_a_marked_one_are_written_cell_for_cell_as_they_were_saved() -> None:
+    assert trades_csv([_sold(), _marked()]).decode("utf-8") == THE_TWO_TRADES_CSV
 
 
 def test_a_run_with_no_trade_is_the_header_alone() -> None:
