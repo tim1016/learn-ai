@@ -36,6 +36,7 @@ from app.options_backtest.fetching import (
     ensure_run_data,
 )
 from app.options_backtest.lake_data import LakeRunData
+from app.options_backtest.service import failure_of
 from app.options_backtest.setup import MS_PER_MINUTE
 from tests._helpers.fake_lake_catalog import FakeCatalog
 from tests.options_backtest._lake import fake_catalog as fake_catalog
@@ -322,6 +323,134 @@ def test_a_stop_before_the_first_chunk_asks_the_lake_for_nothing(monkeypatch: py
         ensure_run_data(_same_day_call(), THREE_SESSIONS, now_ms=NOW_MS, should_stop=lambda: True)
 
     assert calls == []
+
+
+# ── A session that is not over ───────────────────────────────────────────
+# The stock pipeline that fetches the underlying has no gate on a session that is not over: it would store the minutes
+# so far as the whole day. Check data refuses such a session first, but the phase is a function of its own, so the
+# lake's rule is asked of each session in a chunk before the chunk is. Hand-worked figures: the lake takes a session's
+# data from New York midnight after it (EDT, UTC-4, so 04:00 UTC the next day). 2026-10-08 is epoch day 20734 and
+# 20734 x 86 400 000 = 1 791 417 600 000 is its UTC midnight, so Wednesday's data is taken from that plus 14 400 000 =
+# 1 791 432 000 000. Each following day is 86 400 000 later: Thursday's from 1 791 518 400 000, Friday's from
+# 1 791 604 800 000. A session opens at 13:30 UTC = 48 600 000 after its UTC midnight: Wednesday 1 791 379 800 000,
+# Thursday 1 791 466 200 000, Friday 1 791 552 600 000. An hour (3 600 000) into Thursday is 1 791 469 800 000 and an
+# hour into Friday is 1 791 556 200 000.
+
+WEDNESDAYS_DATA_FROM_MS = 1791432000000
+THURSDAYS_OPEN_MS = 1791466200000
+AN_HOUR_INTO_THURSDAY_MS = 1791469800000
+FRIDAYS_OPEN_MS = 1791552600000
+AN_HOUR_INTO_FRIDAY_MS = 1791556200000
+
+
+def _stock_pipeline_that_must_not_run(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    asked: list[dict[str, Any]] = []
+
+    def must_not_run(**kwargs: Any) -> Any:
+        asked.append(kwargs)
+        raise AssertionError("the stock pipeline was asked for a session that is not over")
+
+    monkeypatch.setattr(fetching, "materialize_engine_run", must_not_run)
+    return asked
+
+
+@respx.mock
+async def test_a_chunk_that_holds_a_session_not_over_is_refused_before_the_stock_pipeline_is_asked_and_names_the_session(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vendor = Vendor(_scene(WED, THU))
+    vendor.mount()
+    asked = _stock_pipeline_that_must_not_run(monkeypatch)
+
+    with pytest.raises(DownloadFailed) as caught:
+        await asyncio.to_thread(
+            ensure_run_data, _same_day_call(), [WED, THU], now_ms=AN_HOUR_INTO_THURSDAY_MS, should_stop=lambda: False
+        )
+
+    assert (caught.value.reason, caught.value.session, caught.value.what) == (
+        "session_not_over",
+        THU,
+        "the minute bars of SPY",
+    )
+    failure = failure_of(caught.value)
+    assert failure.code == "DOWNLOAD_FAILED"
+    [item] = failure.items
+    assert (item.session_open_ms, item.code) == (THURSDAYS_OPEN_MS, "session_not_over")
+    assert_plain(failure.reason)
+    assert asked == [] and vendor.vendor_requests == 0, "Wednesday, which is over, is not fetched either: one chunk"
+
+
+@respx.mock
+async def test_a_session_is_taken_from_the_millisecond_the_lake_takes_it_and_not_before(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vendor = Vendor(_scene(WED))
+    vendor.mount()
+    real = fetching.materialize_engine_run
+    asked = _stock_pipeline_that_must_not_run(monkeypatch)
+
+    with pytest.raises(DownloadFailed) as one_before:
+        await asyncio.to_thread(
+            ensure_run_data, _same_day_call(), [WED], now_ms=WEDNESDAYS_DATA_FROM_MS - 1, should_stop=lambda: False
+        )
+    monkeypatch.setattr(fetching, "materialize_engine_run", real)
+    report = await asyncio.to_thread(
+        ensure_run_data, _same_day_call(), [WED], now_ms=WEDNESDAYS_DATA_FROM_MS, should_stop=lambda: False
+    )
+
+    assert one_before.value.reason == "session_not_over" and asked == []
+    assert report.sessions_prepared == 1 and vendor.stock_requests == [WED]
+
+
+@respx.mock
+async def test_the_refusal_comes_at_the_chunk_that_holds_the_session_not_over_and_earlier_chunks_are_fetched_as_before(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Chunks of two: [Wed, Thu], [Fri]. An hour into Friday only Friday is not over.
+    vendor = Vendor(_scene(*THREE_SESSIONS))
+    vendor.mount()
+    real = fetching.materialize_engine_run
+    asked: list[tuple[date, date]] = []
+
+    def delegating(*, symbol: str, start: date, end: date, **kwargs: Any) -> Any:
+        asked.append((start, end))
+        return real(symbol=symbol, start=start, end=end, **kwargs)
+
+    monkeypatch.setattr(fetching, "materialize_engine_run", delegating)
+    monkeypatch.setattr(fetching, "UNDERLYING_CHUNK_SESSIONS", 2)
+
+    with pytest.raises(DownloadFailed) as caught:
+        await asyncio.to_thread(
+            ensure_run_data, _same_day_call(), THREE_SESSIONS, now_ms=AN_HOUR_INTO_FRIDAY_MS, should_stop=lambda: False
+        )
+
+    assert (caught.value.reason, failure_of(caught.value).items[0].session_open_ms) == (
+        "session_not_over",
+        FRIDAYS_OPEN_MS,
+    )
+    assert asked == [(WED, THU)], "the chunk of the two finished sessions was fetched, and the chunk of Friday was not"
+    assert sorted(vendor.stock_requests) == [WED, THU]
+
+
+@respx.mock
+async def test_a_range_of_finished_sessions_is_asked_of_the_stock_pipeline_in_one_chunk_as_before(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vendor = Vendor(_scene(*THREE_SESSIONS))
+    vendor.mount()
+    real = fetching.materialize_engine_run
+    asked: list[tuple[date, date]] = []
+
+    def delegating(*, symbol: str, start: date, end: date, **kwargs: Any) -> Any:
+        asked.append((start, end))
+        return real(symbol=symbol, start=start, end=end, **kwargs)
+
+    monkeypatch.setattr(fetching, "materialize_engine_run", delegating)
+
+    report, _ = await _fetch(_same_day_call(), THREE_SESSIONS)
+
+    assert asked == [(WED, FRI)] and report.sessions_prepared == 3
+    assert sorted(vendor.stock_requests) == THREE_SESSIONS
 
 
 # ── What the phase breaks when it is broken ──────────────────────────────

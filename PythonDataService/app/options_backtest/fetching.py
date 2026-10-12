@@ -19,7 +19,10 @@ day whose file does not read is captured again, as the check promised.
 
 Order. The underlying's bars are asked for in chunks of ``UNDERLYING_CHUNK_SESSIONS`` sessions, each chunk just before
 the first session in it, so the progress counts sessions from the start; then, for each session, its listing and its
-contracts.
+contracts. The stock pipeline that fetches the underlying has no gate on a session that is not over: asked for one, it
+stores the minutes so far as the whole day. Check data refuses such a session first, but this phase is a function of its
+own, so before a chunk is asked for the lake's own rule (``option_lake.session_refusal``) is asked of each session in it,
+and a refused one is a ``DownloadFailed`` with the lake's reason and the pipeline is not called for the chunk.
 
 Limits on the vendor. At most ``MAX_VENDOR_REQUESTS_IN_FLIGHT`` option requests are in flight in the whole process:
 every capture here holds ``option_lake.vendor_request_gate``, which every run and the past chain's download share, so
@@ -53,7 +56,7 @@ from typing import Any
 
 from app.data_lake import catalog_client
 from app.data_lake.option_bars import captured_option_days, ensure_option_day_bars
-from app.data_lake.option_lake import LEASE_TTL_MS, OptionCaptureResult, vendor_request_gate
+from app.data_lake.option_lake import LEASE_TTL_MS, OptionCaptureResult, session_refusal, vendor_request_gate
 from app.data_lake.option_listing import OptionListing, ensure_option_listing
 from app.data_lake.run_materialization import LakeMaterializationError, materialize_engine_run
 from app.lean_sidecar.trading_calendar import session_window_for_date
@@ -246,6 +249,10 @@ class _Download:
     def _bring_in_the_underlying(self, chunk: Sequence[date], *, already: int, of: int) -> None:
         underlying = self._setup.underlying
         what = f"the minute bars of {underlying}"
+        for day in chunk:
+            refusal = session_refusal(underlying, day, now_ms=self._now_ms)
+            if refusal is not None:
+                raise DownloadFailed(session=day, what=what, reason=refusal.reason, detail=refusal.detail)
         self._log(f"Fetching {underlying} minute bars for sessions {already + 1} to {already + len(chunk)} of {of}.")
         future = _in_a_thread(
             lambda: materialize_engine_run(
