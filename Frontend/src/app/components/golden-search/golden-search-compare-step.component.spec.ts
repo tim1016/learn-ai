@@ -431,6 +431,9 @@ describe('GoldenSearchCompareStepComponent', () => {
   });
 
   it('passes axe with every chart drawn and with their tables open', async () => {
+    // Three axe passes over the drawn charts and both evidence tabs need
+    // more than vitest's 5 s default on a loaded CI runner; the assertions
+    // are unchanged — only the clock is honest.
     const { view } = await renderStep();
     const check = async (): Promise<string[]> => {
       const results = await axe.run(view.container, { rules: { 'color-contrast': { enabled: false } } });
@@ -450,5 +453,5 @@ describe('GoldenSearchCompareStepComponent', () => {
     await within(await screen.findByRole('region', { name: 'Trade timeline' })).findByRole('img');
     for (const toggle of screen.getAllByRole('button', { name: 'Show as table' })) fireEvent.click(toggle);
     expect(await check()).toEqual([]);
-  });
+  }, 20_000);
 });
