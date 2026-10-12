@@ -38,14 +38,10 @@ envelope the count is bounded by.
 from __future__ import annotations
 
 import logging
-import queue
-import threading
-import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from app.jobs.progress import JobCancelled
 from app.research.golden_search.evaluator import (
     DeliveredOutcome,
     EvaluationResult,
@@ -54,17 +50,10 @@ from app.research.golden_search.evaluator import (
 )
 from app.research.golden_search.selection import Metrics
 from app.research.golden_search.shared_pool import (
-    DEFAULT_PAYLOAD_BOUND_BYTES,
-    DEFAULT_RESULT_BOUND_BYTES,
-    SUBMISSION_FACTOR,
-    OwnerHandle,
+    PooledOwnerDispatch,
     SharedWorkerPool,
 )
-from app.research.golden_search.worker import (
-    WorkerDispatchContext,
-    pooled_cache_bytes,
-)
-from app.research.persistence.ownership import GenerationFencedError
+from app.research.golden_search.worker import WorkerDispatchContext
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +78,7 @@ class DispatchFacts:
         }
 
 
-class PooledWorkerDispatch:
+class PooledWorkerDispatch(PooledOwnerDispatch):
     """The BatchDispatch a stage's evaluator runs through as one owner on a worker pool (#3046, #3048).
 
     The dispatch registers with its pool for its whole life and drives one
@@ -100,7 +89,10 @@ class PooledWorkerDispatch:
     yields each outcome as it arrives. On a shared pool the same window is
     this owner's share of the pool's global submission bound; a lost worker
     is one item's loss, delivered as that item's outcome for the evaluator
-    to re-admit under an advanced generation.
+    to re-admit under an advanced generation. The window arithmetic, the
+    epoch fence, the cancellation poll and the budget settlement live in
+    the shared owner base (#3049): this subclass is exactly the evaluator's
+    per-arrival policy.
     """
 
     def __init__(
@@ -113,94 +105,29 @@ class PooledWorkerDispatch:
         pool: SharedWorkerPool | None = None,
         on_capacity_handoff: Callable[[], None] = lambda: None,
     ) -> None:
-        if workers < 1:
-            raise ValueError("a worker pool has at least one lane")
-        self._context = context
+        super().__init__(context, workers=workers, window=window, pool=pool, on_capacity_handoff=on_capacity_handoff)
         self._worker_count = workers
-        self._window = max(window, workers)
-        self._on_facts = on_facts
-        # Every child's decoded cache shares one budget inside the runtime
-        # envelope: eight lanes at the serial parity ceiling would consume it
-        # in caches alone (#3066 review).
-        context.decoded_cache_bytes = pooled_cache_bytes(workers)
-        self._owns_pool = pool is None
-        self._pool = pool or SharedWorkerPool(
-            workers=workers,
-            # A private pool admits its one owner's whole window; the shared
-            # pool the runtime builds carries the issue's initial bound.
-            submission_bound=max(SUBMISSION_FACTOR * workers, self._window),
-            payload_bound_bytes=DEFAULT_PAYLOAD_BOUND_BYTES,
-            result_bound_bytes=DEFAULT_RESULT_BOUND_BYTES,
-        )
-        self._epoch = 0
-        self._epoch_lock = threading.Lock()
-        # The owner-side window arithmetic (offered minus consumed this
-        # batch) — only the evaluator's own thread touches it.
-        self._outstanding = 0
-        self._handle: OwnerHandle | None = self._pool.register(
-            context,
+        self._on_facts_callback = on_facts
+
+    def _facts_payload(self, ready_width: int, adaptive_wait_ms: int) -> DispatchFacts:
+        return DispatchFacts(
+            ready_width=ready_width,
+            workers=self._worker_count,
             window=self._window,
-            epoch_of=self._current_epoch,
-            on_capacity_handoff=on_capacity_handoff,
+            active=self._pool.facts()["busy_lanes"],
+            adaptive_wait_ms=adaptive_wait_ms,
         )
 
-    def _current_epoch(self) -> int:
-        with self._epoch_lock:
-            return self._epoch
+    def _on_facts(self, payload: DispatchFacts) -> None:
+        self._on_facts_callback(payload)
 
     # -- the dispatch -------------------------------------------------------
 
     def __call__(self, run, batch: Sequence[ReadyEvaluation]):  # BatchDispatch signature; run unused by design
         owed = {item.key: item for item in batch}
-        with self._epoch_lock:
-            self._epoch += 1
-            epoch = self._epoch
-        submitted: set[str] = set()
-        consumed: set[str] = set()
-        self._outstanding = 0
-        adaptive_wait_ms = 0
-        self._emit_facts(len(batch), adaptive_wait_ms)
+        epoch, state = self._begin(len(batch))
         try:
-            self._feed(owed, submitted, epoch)
-            while owed:
-                try:
-                    cancelled = self._context.cancel_check()
-                except (JobCancelled, GenerationFencedError):
-                    # The production polls raise (#3041): stopping the children and
-                    # the epoch is this side's job on every cancellation path,
-                    # never only the returning one (#3045's prompt-slot rule).
-                    self._interrupt(epoch)
-                    raise
-                if cancelled:
-                    self._interrupt(epoch)
-                    raise JobCancelled("cancelled between pooled research worker tasks")
-                waited_at = time.monotonic()
-                try:
-                    key, task_gen, arrival = self._handle.arrived.get(timeout=0.2)
-                except queue.Empty:
-                    # Every lane busy or the window full: the pool's adaptive wait (#3046).
-                    adaptive_wait_ms += int((time.monotonic() - waited_at) * 1000)
-                    # Retry the offer on the same clock: an owner whose first
-                    # offers were refused by a temporarily full global bound
-                    # has no arrival of its own to retry after — without
-                    # this it would wait forever even after other owners
-                    # freed capacity (#3048 review).
-                    self._feed(owed, submitted, epoch)
-                    continue
-                item = owed.get(key)
-                if item is None or item.task_gen != task_gen:
-                    # A straggler from a superseded dispatch — most often an
-                    # in-flight twin that finished before its re-admitted
-                    # replacement. The evaluator's task-generation fence owns the
-                    # durable refusal; the pool keeps the owed slot for the
-                    # current generation's outcome (#3045, #3046).
-                    logger.warning(
-                        "a pooled worker delivered an outcome the current batch no longer owes",
-                        extra={"action": "golden_search_pool_straggler_discarded", "evaluation_key": key},
-                    )
-                    self._handle.consume(key, task_gen)
-                    continue
-                del owed[key]
+            for item, arrival in self._pump(owed, state, epoch):
                 if isinstance(arrival, WorkerLost):
                     # One lane's loss is that item's loss, not the dispatch's
                     # (#3066 review): delivered as an outcome so the evaluator
@@ -208,111 +135,25 @@ class PooledWorkerDispatch:
                     # delivering — a supersession would spend their begun rows'
                     # retry allowance and discard their results as stragglers,
                     # timing a fabricated failure into the search.
-                    self._handle.consume(key, task_gen)
-                    self._outstanding -= 1
-                    consumed.add(key)
                     yield DeliveredOutcome(
-                        key=key,
+                        key=item.key,
                         attempt=item.attempt,
-                        task_gen=task_gen,
+                        task_gen=item.task_gen,
                         result=EvaluationResult(metrics=Metrics.failed("worker lost")),
                         lost_reason=str(arrival),
                     )
-                    self._feed(owed, submitted, epoch)
-                    continue
-                if isinstance(arrival, BaseException):
-                    # This dispatch is over: whatever it still had queued dies at
-                    # take time, so a lane freed during the recovery cannot begin a
-                    # run nobody owes anymore. The process-control errors stop the
-                    # healthy siblings too, now, not at stage teardown (#3065
-                    # review); every other terminal answer leaves them to it. The
-                    # delivery's budget settles here too — a raised terminal
-                    # answer still consumed a slot the process-lifetime pool
-                    # must see returned (#3048 review).
-                    self._handle.consume(key, task_gen)
-                    if isinstance(arrival, (JobCancelled, GenerationFencedError)):
-                        self._interrupt(epoch)
-                    else:
-                        with self._epoch_lock:
-                            if self._epoch == epoch:
-                                self._epoch += 1
-                    raise arrival
-                self._handle.consume(key, task_gen)
-                self._outstanding -= 1
-                consumed.add(key)
-                yield arrival
+                else:
+                    # The evaluator's own answers arrive pre-decoded; a
+                    # cancelled run is one of them (``cancelled_by``), and the
+                    # evaluator — not this adapter — releases its reservation.
+                    yield arrival
                 # The evaluator resumed — the outcome it took is durable — so
                 # the window opens by one for the next submission.
-                self._feed(owed, submitted, epoch)
+                self._feed(owed, state, epoch)
             # The batch is delivered; the next dispatch opens a fresh epoch, so
             # anything still queued from this one dies at take time.
         finally:
-            self._emit_facts(len(batch), adaptive_wait_ms)
-
-    def _feed(self, owed: Mapping[str, ReadyEvaluation], submitted: set[str], epoch: int) -> None:
-        """Top the dispatch up to the window with the batch's remaining items, in logical order.
-
-        The owner's window is its own permit count — offered minus consumed —
-        and the pool's global bounds refuse an offer the whole pool cannot
-        afford; either way this loop stops and retries on the next
-        consumption, never blocking the evaluator.
-        """
-        handle = self._handle
-        if handle is None:
-            return
-        for key, item in owed.items():
-            if key in submitted:
-                continue
-            if self._outstanding >= self._window:
-                return
-            if not handle.offer(epoch, item):
-                return
-            submitted.add(key)
-            self._outstanding += 1
-
-    def _interrupt(self, epoch: int) -> None:
-        """Invalidate everything this dispatch still owns, then stop its children (#3045, #3046).
-
-        On a shared pool "its children" means exactly the lanes running
-        this owner's items — a sibling owner's lanes are not this
-        dispatch's to stop (#3048).
-        """
-        with self._epoch_lock:
-            if self._epoch == epoch:
-                self._epoch += 1
-        if self._handle is not None:
-            self._handle.interrupt_running()
-
-    def cancel(self) -> None:
-        """The evaluator's pre-reconciliation reap (#3065 review): invalidate everything, stop the children.
-
-        Called when a cancellation or fence was raised outside this adapter's
-        own handlers — delivered as an outcome, most often — so the children
-        never wait out the evaluator's durable release writes.
-        """
-        with self._epoch_lock:
-            self._epoch += 1
-        if self._handle is not None:
-            self._handle.interrupt_running()
-
-    def _emit_facts(self, ready_width: int, adaptive_wait_ms: int) -> None:
-        self._on_facts(
-            DispatchFacts(
-                ready_width=ready_width,
-                workers=self._worker_count,
-                window=self._window,
-                active=self._pool.facts()["busy_lanes"],
-                adaptive_wait_ms=adaptive_wait_ms,
-            )
-        )
-
-    def close(self) -> None:
-        """Leave the pool: queued entries die at take time, running items are interrupted, a private pool stops."""
-        if self._handle is not None:
-            self._handle.close()
-            self._handle = None
-        if self._owns_pool:
-            self._pool.close()
+            self._emit_facts(len(batch), state.adaptive_wait_ms)
 
 
 def worker_pool_factory(

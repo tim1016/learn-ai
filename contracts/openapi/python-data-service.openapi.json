@@ -74052,7 +74052,7 @@
     },
     "/api/jobs-internal/grid-search": {
       "post": {
-        "description": "Launch (or Finish) a search on a worker thread. Returns 202 once the record is durable.",
+        "description": "Launch (or Finish) a search. Returns 202 once the record is durable and a worker holds it.\n\nIn research mode the API forwards the dispatch and never binds, stamps\nor starts a thread: the runtime prepares the immutable receipt and\nmaterialization, claims the attempt and runs the cells (#3049). Here \u2014\nthe local mode, or this process being the runtime \u2014 the search runs on\na worker thread exactly as before, through spawned research workers in\nthe runtime.",
         "operationId": "start_grid_search_job_api_jobs_internal_grid_search_post",
         "requestBody": {
           "content": {
@@ -74305,7 +74305,7 @@
     },
     "/api/jobs-internal/walk-forward-study": {
       "post": {
-        "description": "Launch (or Finish) a study on a worker thread. Returns 202 once the record is durable.",
+        "description": "Launch (or Finish) a study. Returns 202 once the record is durable and a worker holds it.\n\nIn research mode the API forwards the dispatch and never prepares,\nstamps or starts a thread: the runtime prepares the study, and each\nfold's sweeps run their cells through the shared research workers\nunder the checkpoint lease (#3050). Here \u2014 the local mode, or this\nprocess being the runtime \u2014 the study runs on a worker thread exactly\nas before.",
         "operationId": "start_walk_forward_study_job_api_jobs_internal_walk_forward_study_post",
         "requestBody": {
           "content": {
@@ -78072,13 +78072,13 @@
         "operationId": "delete_setup_api_research_options_backtest_setups__name__delete",
         "parameters": [
           {
-            "description": "A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), not starting or ending with a space.",
+            "description": "A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), starting with a letter or a digit and not ending with a space.",
             "in": "path",
             "name": "name",
             "required": true,
             "schema": {
-              "description": "A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), not starting or ending with a space.",
-              "pattern": "^[A-Za-z0-9_.,()-](?:[A-Za-z0-9 _.,()-]{0,78}[A-Za-z0-9_.,()-])?$",
+              "description": "A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), starting with a letter or a digit and not ending with a space.",
+              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9 _.,()-]{0,78}[A-Za-z0-9_.,()-])?$",
               "title": "Name",
               "type": "string"
             }
@@ -78129,13 +78129,13 @@
         "operationId": "save_setup_api_research_options_backtest_setups__name__put",
         "parameters": [
           {
-            "description": "A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), not starting or ending with a space.",
+            "description": "A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), starting with a letter or a digit and not ending with a space.",
             "in": "path",
             "name": "name",
             "required": true,
             "schema": {
-              "description": "A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), not starting or ending with a space.",
-              "pattern": "^[A-Za-z0-9_.,()-](?:[A-Za-z0-9 _.,()-]{0,78}[A-Za-z0-9_.,()-])?$",
+              "description": "A name is 1 to 80 characters: letters, digits, spaces and - _ . , ( ), starting with a letter or a digit and not ending with a space.",
+              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9 _.,()-]{0,78}[A-Za-z0-9_.,()-])?$",
               "title": "Name",
               "type": "string"
             }

@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import threading
 from collections.abc import Callable
 from typing import Annotated, Any
 
@@ -421,13 +420,12 @@ def _gated_stage_work(req: GoldenSearchJobRequest):
     on accepted checkpoints (the stage's phase transitions and durable
     evaluation completions), each fenced by the coordinator's boot
     generation. This is the shape the serial proof in the study lifecycle
-    suite pinned, now wired into the runtime that owns execution.
+    suite pinned, now wired into the runtime that owns execution; the
+    writers themselves live in :class:`~app.jobs.checkpoints.GatedLease`
+    (#3049), shared with the other research workers.
     """
-    from app.jobs.checkpoints import CheckpointGate, ExecutionCheckpoint
-    from app.jobs.progress import CancellationCheck
+    from app.jobs.checkpoints import GatedLease
     from app.research.persistence import ownership
-    from app.research.persistence.ownership import GenerationFencedError
-    from app.utils.timestamps import now_ms_utc
 
     def work(emit: ProgressEmitter, _runner_cancel: CancellationCheck) -> dict[str, Any]:
         authority = ownership.process_authority()
@@ -435,95 +433,20 @@ def _gated_stage_work(req: GoldenSearchJobRequest):
             # The startup claim is fail-closed, so this is an authority lost
             # mid-run: the generation is dead and its lease must not renew.
             raise RuntimeError("research runtime worker without coordinator authority; the generation is fenced")
-        generation = authority.boot_generation
-        cancel = CancellationCheck(req.job_id, renews_lease=False)
-        base_cancel = cancel.raise_if_cancelled
-
-        def fenced_cancel() -> None:
-            # Cancellation and the coordinator fence in one poll: once the
-            # dedicated lock connection dies, a successor can already claim
-            # the next generation, so this worker stops instead of renewing
-            # a lease for a generation it no longer owns. Fired between
-            # evaluations, on every stage-level poll, and by run_task's own
-            # cadence while a child's task runs, so the child is killed
-            # mid-run instead of renewing until the task returns (#3045,
-            # #3065 review). A fenced generation is terminal — nothing may
-            # replace the worker and continue — where a lost worker is
-            # retryable, so this is not WorkerLost (#3045).
-            base_cancel()
-            if not authority.connected:
-                raise GenerationFencedError("coordinator authority connection lost mid-run; the generation is fenced")
-
-        seen: list[ExecutionCheckpoint] = []
-        gate = CheckpointGate(req.job_id, generation, on_accepted=seen.append)
-
-        def phase_checkpoint(phase: str) -> None:
-            with gate_lock:
-                gate.accept(
-                    ExecutionCheckpoint(
-                        generation=generation,
-                        task_id="stage",
-                        sequence=len(seen) + 1,
-                        cursor=0,
-                        cursor_kind="processed_blocks",
-                        phase=phase,
-                        occurred_at_ms=now_ms_utc(),
-                        transition=True,
-                    )
-                )
-
-        def completion_checkpoint(done: int, total: int) -> None:
-            with gate_lock:
-                gate.accept(
-                    ExecutionCheckpoint(
-                        generation=generation,
-                        task_id="stage",
-                        sequence=len(seen) + 1,
-                        cursor=done,
-                        cursor_kind="durable_completions",
-                        phase="search",
-                        occurred_at_ms=now_ms_utc(),
-                        transition=True,
-                    )
-                )
-
-
-        gate_lock = threading.Lock()
-
-        def on_child_checkpoint(message: dict) -> None:
-            # The child's real progress renews the lease through the same
-            # gate: phase transitions and durable completions, generation-fenced.
-            # Inline (never via the nested helpers): this runs on the pump
-            # thread, and nesting two acquisitions of one non-reentrant lock
-            # would deadlock the whole stage on the child's first checkpoint.
-            with gate_lock:
-                kind = str(message.get("cursor_kind", "processed_blocks"))
-                gate.accept(
-                    ExecutionCheckpoint(
-                        generation=generation,
-                        task_id="stage",
-                        sequence=len(seen) + 1,
-                        cursor=int(message.get("cursor", 0)),
-                        cursor_kind=kind,
-                        phase=str(message.get("phase", "search")),
-                        occurred_at_ms=now_ms_utc(),
-                        transition=True,
-                    )
-                )
-
+        lease = GatedLease(req.job_id, task_id="stage", authority=authority)
         outcome = service.run_stage(
             req.study_id,
             stage_token=req.stage_token,
             job_id=req.job_id,
-            cancel_check=fenced_cancel,
-            on_phase=lambda phase: (emit.phase(phase), phase_checkpoint(phase)),
+            cancel_check=lease.fenced_cancel,
+            on_phase=lambda phase: (emit.phase(phase), lease.phase(phase)),
             on_progress=lambda done, total: (
                 emit.progress(done, total, unit="evaluations"),
-                completion_checkpoint(done, total),
+                lease.completion(done, total),
             ),
             on_log=emit.log,
             dispatch_factory=_runtime_dispatch_factory(
-                on_checkpoint=on_child_checkpoint, cancel_check=fenced_cancel, emit=emit
+                on_checkpoint=lease.child_checkpoint, cancel_check=lease.fenced_cancel, emit=emit
             ),
         )
         return outcome.as_dict()

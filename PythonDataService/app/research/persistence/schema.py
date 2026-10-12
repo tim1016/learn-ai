@@ -891,12 +891,14 @@ DDL_V18: tuple[str, ...] = (
 
 # Saved Options Backtest setups (#3030): one row per name, the setup as it was sent and when it was saved.
 # The setup stays JSON so a setup that stops validating after a schema change is still kept and listed.
+# The stamp stays inside what the list route can serve (0 to MAX_TIMESTAMP_MS, the end of 9999-12-31 UTC), so one
+# row cannot make the whole list fail.
 DDL_V19: tuple[str, ...] = (
     """
     CREATE TABLE IF NOT EXISTS research_options_backtest_setups (
         name         TEXT PRIMARY KEY,
         setup_json   JSONB NOT NULL,
-        saved_at_ms  BIGINT NOT NULL
+        saved_at_ms  BIGINT NOT NULL CHECK (saved_at_ms >= 0 AND saved_at_ms <= 253402300799999)
     )
     """,
 )

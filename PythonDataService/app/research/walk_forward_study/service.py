@@ -24,6 +24,7 @@ from dataclasses import dataclass, replace
 from functools import partial
 from itertools import pairwise
 from pathlib import Path
+from typing import Any
 
 from app.engine.data.availability import MissingSessionsError
 from app.jobs.progress import JobCancelled
@@ -142,6 +143,12 @@ class StudyOutcome:
     verdict: Verdict | None
 
 
+#: What the research runtime builds per sweep (#3050): the same factory
+#: Grid Search's ``execute`` takes, so each fold's train and test sweep runs
+#: its cells through the shared workers under its own receipt and attempt.
+CellDispatchFactory = Callable[[SearchRow, GridSearchSpec, int, "str | None"], Any]
+
+
 @dataclass(frozen=True)
 class _StudyRun:
     """Everything a fold needs from the study, fixed for the whole attempt."""
@@ -153,10 +160,11 @@ class _StudyRun:
     snapshot: DataSnapshot
     identity: CodeIdentity
     combinations: int
-    cell_executor: CellExecutorFactory
-    cancel_check: Callable[[], object]
-    on_progress: Callable[[int], None]
-    on_log: Callable[[str], None]
+    cell_executor: CellExecutorFactory | None
+    cell_dispatch_factory: CellDispatchFactory | None = None
+    cancel_check: Callable[[], object] = lambda: None
+    on_progress: Callable[[int], None] = lambda done: None
+    on_log: Callable[[str], None] = lambda message: None
 
 
 def _ensure_sweep(run: _StudyRun, fold: FoldRecord, phase: str, window: tuple[int, int], existing_id: str | None) -> SearchRow:
@@ -181,10 +189,16 @@ def _run_sweep(run: _StudyRun, sweep: SearchRow, fold: FoldRecord, phase: str, p
         run.on_progress(progress_base + sweep.expected_cells)
         return sweep.leader_params_hash
     run.on_log(f"fold {fold.fold_index + 1} {phase}: sweep {sweep.id[:8]} ({sweep.expected_cells} cells)")
+    # Exactly one executor seam is set for the whole study (#3050): cells in
+    # this process, or the research runtime's dispatch per sweep.
+    executor: dict[str, Any] = {"cell_dispatch_factory": run.cell_dispatch_factory}
+    if run.cell_dispatch_factory is None:
+        assert run.cell_executor is not None
+        executor = {"execute_cell": run.cell_executor(sweep, GridSearchSpec.from_request_dict(sweep.request))}
     outcome = sweeps.execute(
         sweep.id,
         job_id=run.job_id,
-        execute_cell=run.cell_executor(sweep, GridSearchSpec.from_request_dict(sweep.request)),
+        **executor,
         cancel_check=run.cancel_check,
         on_progress=lambda done, total: run.on_progress(progress_base + done),
         on_log=run.on_log,
@@ -259,14 +273,25 @@ def execute(
     study_id: str,
     *,
     job_id: str | None,
-    cell_executor: CellExecutorFactory,
+    cell_executor: CellExecutorFactory | None = None,
+    cell_dispatch_factory: CellDispatchFactory | None = None,
     cancel_check: Callable[[], object] = lambda: None,
     on_phase: Callable[[str], None] = lambda phase: None,
     on_progress: Callable[[int, int], None] = lambda done, total: None,
     on_log: Callable[[str], None] = lambda message: None,
     roots: Sequence[Path] | None = None,
 ) -> StudyOutcome:
-    """Run (or Finish) a launched study on the calling worker thread; completed folds are never re-run."""
+    """Run (or Finish) a launched study on the calling worker thread; completed folds are never re-run.
+
+    Exactly one executor seam is given, for the study's whole attempt:
+    ``cell_executor`` runs each sweep's cells in this process (the local
+    mode and tests); a ``cell_dispatch_factory`` (#3050) runs them through
+    the research runtime's spawned workers — one dispatch per sweep, its
+    receipt and attempt — while the folds themselves stay strictly
+    sequential: train, select, test, then the next fold.
+    """
+    if (cell_executor is None) == (cell_dispatch_factory is None):
+        raise ValueError("execute takes exactly one executor: cell_executor or cell_dispatch_factory")
     on_phase("preflight")
     study, spec = load_study(study_id)
     attempt = run_sync(with_connection(repo.claim_attempt, study_id, job_id=job_id))
@@ -279,6 +304,7 @@ def execute(
         identity=CodeIdentity.from_dict(study.receipt["code_identity"]),
         combinations=int(study.receipt["walk_forward"]["combinations"]),
         cell_executor=cell_executor,
+        cell_dispatch_factory=cell_dispatch_factory,
         cancel_check=cancel_check,
         on_progress=lambda done: on_progress(done, study.expected_backtests),
         on_log=on_log,
