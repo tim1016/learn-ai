@@ -209,6 +209,9 @@ class DecodedArtifactCache:
         # once when it becomes resident, and again if it is evicted and
         # re-decoded — the delta must stay a delta, not a census (#3048).
         self._reported: set[ArtifactKey] = set()
+        # Victims evicted since the last delta take, so the parent's warm
+        # hints can forget what no child holds (#3048 review).
+        self._evicted_since: list[ArtifactKey] = []
 
     def get_or_decode(self, key: ArtifactKey, decode: Callable[[], list[TradeBar]]) -> list[TradeBar]:
         """Return ``key``'s bars, decoding through ``decode`` only on a miss.
@@ -255,19 +258,23 @@ class DecodedArtifactCache:
         self._refresh_residency()
         return self._metrics.as_dict()
 
-    def take_residency_delta(self) -> list[tuple[ArtifactKey, int]]:
-        """Entries newly resident since the last take — the warm-affinity hint (#3048).
+    def take_residency_delta(self) -> tuple[list[tuple[ArtifactKey, int]], list[ArtifactKey]]:
+        """Additions and removals since the last take — the warm-affinity hint (#3048).
 
-        The shared pool's scheduler uses this to prefer a lane whose child
-        already holds an artifact's decode. A stale hint — the entry was
-        evicted after it reported — costs one re-decode and nothing else:
-        admission stays per-read whatever a hint claimed, so residency is
-        never correctness. Evicted keys report again on re-decode, keeping
-        the hint honest after turnover.
+        The shared pool's scheduler uses the additions to prefer a lane
+        whose child already holds an artifact's decode, and the removals to
+        forget what an eviction or a bound no longer holds — a hint that
+        only grows would route toward lanes that went cold and report
+        residency no child has (#3048 review). A stale hint still costs one
+        re-decode and nothing else: admission stays per-read whatever a
+        hint claimed, so residency is never correctness.
         """
-        delta = [(key, entry.estimated_bytes) for key, entry in self._entries.items() if key not in self._reported]
-        self._reported.update(key for key, _ in delta)
-        return delta
+        added = [(key, entry.estimated_bytes) for key, entry in self._entries.items() if key not in self._reported]
+        self._reported.update(key for key, _ in added)
+        evicted = [key for key in self._evicted_since if key in self._reported]
+        self._reported.difference_update(self._evicted_since)
+        self._evicted_since = []
+        return added, evicted
 
     def _store(self, key: ArtifactKey, bars: list[TradeBar], estimated: int) -> None:
         self._entries[key] = _Entry(bars=tuple(bars), estimated_bytes=estimated)
@@ -282,7 +289,7 @@ class DecodedArtifactCache:
             if victim is None:
                 return
             self._entries.pop(victim)
-            self._reported.discard(victim)
+            self._evicted_since.append(victim)
             self._metrics.evictions += 1
             remaining = self._digest_residency.get(victim.content_digest, 0) - 1
             if remaining > 0:

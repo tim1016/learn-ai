@@ -1,20 +1,21 @@
 {
-  "control_prefixes": [
-    "/api/accounts",
-    "/api/alpaca-clerk-sqlite",
-    "/api/broker",
-    "/api/brokers",
-    "/api/data-lake",
-    "/api/research/golden-qualifications",
-    "/api/research/golden-search",
-    "/api/research/golden-validations",
-    "/api/strategy-gates",
-    "/api/strategy-validation"
-  ],
-  "protected_read_prefixes": [
-    "/api/accounts",
-    "/api/alpaca-clerk-sqlite",
-    "/api/broker-clerks",
-    "/api/brokers"
-  ]
+ "control_prefixes": [
+  "/api/accounts",
+  "/api/alpaca-clerk-sqlite",
+  "/api/broker",
+  "/api/brokers",
+  "/api/data-lake",
+  "/api/jobs-internal/pool/drain",
+  "/api/research/golden-qualifications",
+  "/api/research/golden-search",
+  "/api/research/golden-validations",
+  "/api/strategy-gates",
+  "/api/strategy-validation"
+ ],
+ "protected_read_prefixes": [
+  "/api/accounts",
+  "/api/alpaca-clerk-sqlite",
+  "/api/broker-clerks",
+  "/api/brokers"
+ ]
 }

@@ -309,12 +309,14 @@ def _run_one_task(
 
     def residency_fields() -> dict[str, Any]:
         # The warm-affinity hint the shared pool's scheduler folds into its
-        # lanes (#3048): what this child newly decoded — on the result and
-        # every failure. The cache's own counters stay in the child; nothing
-        # downstream reads them off the wire.
-        delta = state["decoded_cache"].take_residency_delta()
+        # lanes (#3048): what this child newly decoded, and what an eviction
+        # removed — on the result and every failure. The cache's own
+        # counters stay in the child; nothing downstream reads them off the
+        # wire.
+        added, evicted = state["decoded_cache"].take_residency_delta()
         return {
-            "decoded": [key.__dict__ | {"estimated_bytes": estimated} for key, estimated in delta],
+            "decoded": [key.__dict__ | {"estimated_bytes": estimated} for key, estimated in added],
+            "evicted": [key.relative_path for key in evicted],
         }
 
     try:

@@ -4845,6 +4845,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs-internal/pool/drain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Drain Research Worker Pool
+         * @description The operator's capacity handoff (#3048 AC 10): stop assignments, finish or interrupt, reap.
+         *
+         *     A drain stops new assignments, waits bounded for owned work to
+         *     complete, interrupts what cannot, and reaps the children — the
+         *     capacity change (a restart at the new profile) finds no orphans and
+         *     no running pool. On a process with no shared pool it reports that
+         *     honestly instead of pretending. The wait and the reaping run off the
+         *     event loop: a probe or a progress poll must never freeze behind them.
+         */
+        post: operations["drain_research_worker_pool_api_jobs_internal_pool_drain_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs-internal/recency-chart": {
         parameters: {
             query?: never;
@@ -37001,6 +37028,37 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    drain_research_worker_pool_api_jobs_internal_pool_drain_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

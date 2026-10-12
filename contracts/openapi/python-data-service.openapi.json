@@ -73264,6 +73264,24 @@
       "post": {
         "description": "The operator's capacity handoff (#3048 AC 10): stop assignments, finish or interrupt, reap.\n\nA drain stops new assignments, waits bounded for owned work to\ncomplete, interrupts what cannot, and reaps the children \u2014 the\ncapacity change (a restart at the new profile) finds no orphans and\nno running pool. On a process with no shared pool it reports that\nhonestly instead of pretending. The wait and the reaping run off the\nevent loop: a probe or a progress poll must never freeze behind them.",
         "operationId": "drain_research_worker_pool_api_jobs_internal_pool_drain_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -73275,6 +73293,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Drain Research Worker Pool",

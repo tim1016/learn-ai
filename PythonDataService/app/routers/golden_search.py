@@ -23,7 +23,7 @@ import threading
 from collections.abc import Callable
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Path, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response, status
 
 from app.config import settings
 from app.jobs.progress import CancellationCheck, ProgressEmitter
@@ -53,6 +53,7 @@ from app.schemas.golden_search import (
     GoldenSearchStudySummary,
     GoldenSearchTestOverTimeCharts,
 )
+from app.security.data_plane_control import require_data_plane_control_secret
 from app.utils.background_loop import CallerStoppedWaitingError
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -584,7 +585,15 @@ def _runtime_dispatch_factory(*, on_checkpoint, cancel_check, emit) -> Callable[
     )
 
 
-@jobs_router.post("/pool/drain", status_code=status.HTTP_200_OK)
+@jobs_router.post(
+    "/pool/drain",
+    status_code=status.HTTP_200_OK,
+    # Protected on the route itself, not the mount: the API app mounts this
+    # router on network placement alone, and an operator action that ends
+    # a live pool until restart is not a placement-trusted call (#3048
+    # review). The runtime's mount-level dependency simply re-checks.
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
 async def drain_research_worker_pool() -> dict[str, Any]:
     """The operator's capacity handoff (#3048 AC 10): stop assignments, finish or interrupt, reap.
 

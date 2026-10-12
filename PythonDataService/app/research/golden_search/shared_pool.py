@@ -118,6 +118,15 @@ class PoolDrainingError(RuntimeError):
     """The shared pool is drained or draining and takes no new owners (#3048)."""
 
 
+class PoolPayloadUnadmissibleError(RuntimeError):
+    """A task wire larger than the pool's whole payload bound can never be admitted (#3048 review).
+
+    Terminal and explicit — the alternative is an owner re-offering an
+    unadmittable item on every adaptive tick, waiting forever behind a
+    bound no consumption can ever satisfy for it.
+    """
+
+
 def _wire_size(task: dict[str, Any]) -> int:
     """The wire's serialized size — the honest payload bound needs the real bytes.
 
@@ -297,6 +306,16 @@ class SharedWorkerPool:
                 return False
             entry = _Entry(owner=owner, epoch=epoch, item=item)
             entry.payload_bytes = _wire_size(entry_wire(owner, item))
+            if entry.payload_bytes > self._payload_bound_bytes:
+                # A wire larger than the whole bound can never be admitted,
+                # whatever else frees: ``False`` would have the owner's
+                # adaptive tick re-offering forever. Distinct from temporary
+                # backpressure — this is terminal and explicit (#3048
+                # review).
+                raise PoolPayloadUnadmissibleError(
+                    f"the task wire is {entry.payload_bytes} bytes against the pool's whole "
+                    f"payload bound of {self._payload_bound_bytes}; no retry can admit it"
+                )
             if self._payload_bytes + entry.payload_bytes > self._payload_bound_bytes:
                 return False
             owner.pending.append(entry)
@@ -526,6 +545,9 @@ class SharedWorkerPool:
             with self._state_changed:
                 if lane.worker is worker:
                     lane.worker = None
+                    # The replacement child starts cold; the corpse's hints
+                    # must not route toward it (#3048 review).
+                    lane.resident.clear()
             if self._closing:
                 # close() killed this child mid-run: a cancellation home,
                 # not a loss — the evaluator unwinds instead of re-admitting
@@ -542,6 +564,7 @@ class SharedWorkerPool:
                 with self._state_changed:
                     if lane.worker is worker:
                         lane.worker = None
+                        lane.resident.clear()  # the replacement child starts cold (#3048 review)
             self._deliver(lane, entry, exc)
             return
         finally:
@@ -556,11 +579,14 @@ class SharedWorkerPool:
             if worker is not None and worker.lost_reason() is not None:
                 worker.close()
                 lane.worker = None
+                # The replacement child starts with an empty cache: the dead
+                # one's warm hints must not outlive it (#3048 review).
+                lane.resident.clear()
                 return None
             return worker
 
     def _record_residency(self, lane: _Lane, message: dict[str, Any]) -> None:
-        """Fold a child's reported decode delta into this lane's warm hints (#3048).
+        """Fold a child's reported decode delta — additions and removals — into this lane's warm hints (#3048).
 
         Under the pool lock: ``facts()`` iterates the same dict from
         evaluator threads, and an unsynchronized insert during that
@@ -571,6 +597,8 @@ class SharedWorkerPool:
                 path = artifact.get("relative_path")
                 if path:
                     lane.resident[path] = int(artifact.get("estimated_bytes", 0))
+            for path in message.get("evicted") or []:
+                lane.resident.pop(path, None)
 
     def _deliver(self, lane: _Lane, entry: _Entry, arrival: DeliveredOutcome | BaseException) -> None:
         """Deliver one outcome to its owner under the result-byte bound's backpressure.

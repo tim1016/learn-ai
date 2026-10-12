@@ -242,7 +242,8 @@ def test_the_submission_bound_spans_owners_and_the_payload_bound_refuses(monkeyp
     tiny, _ = _pool(monkeypatch, workers=1, submission_bound=8, payload_bound_bytes=1)
     owner = _register(tiny)
     try:
-        assert not owner.offer(1, _crafted_item(0.1)), "the payload bound refuses a wire it cannot afford"
+        with pytest.raises(shared_pool_module.PoolPayloadUnadmissibleError):
+            owner.offer(1, _crafted_item(0.1))  # a wire the bound can never afford refuses terminally
     finally:
         owner.close()
         tiny.close()
@@ -564,6 +565,96 @@ def test_an_outcome_larger_than_the_whole_result_bound_is_delivered_unaccounted(
         owner.consume(outcome[0], outcome[1])
         facts = pool.facts()
         assert facts["result_bytes"] == 0, "the whale rode unaccounted — visible, never blocking"
+    finally:
+        owner.close()
+        pool.close()
+
+
+def test_a_wire_larger_than_the_whole_payload_bound_refuses_terminally(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3048 review: an unadmittable wire is a typed terminal refusal, not an endless retry."""
+    pool, _ = _pool(monkeypatch, workers=1, submission_bound=2, payload_bound_bytes=8)
+    dispatch = pool_module.PooledWorkerDispatch(worker_module.WorkerDispatchContext(**CONTEXT), workers=1, window=2, pool=pool)
+    try:
+        with pytest.raises(shared_pool_module.PoolPayloadUnadmissibleError, match="no retry can admit it"):
+            list(dispatch(None, [_crafted_item(0.1)]))
+        facts = pool.facts()
+        assert facts["submitted_unconsumed"] == 0 and facts["payload_bytes"] == 0, "nothing was held by the refusal"
+    finally:
+        dispatch.close()
+
+
+def test_the_drain_route_is_protected_at_route_level() -> None:
+    """#3048 review: the API mounts this router on placement alone — the operator route carries its own secret."""
+    from fastapi.routing import APIRoute
+
+    from app.routers import golden_search as router
+    from app.security.data_plane_control import require_data_plane_control_secret
+
+    route = next(
+        (candidate for candidate in router.jobs_router.routes if getattr(candidate, "path", "").endswith("/pool/drain")),
+        None,
+    )
+    assert isinstance(route, APIRoute)
+    assert any(dependency.dependency is require_data_plane_control_secret for dependency in route.dependencies), (
+        "the drain route must demand the data-plane control secret wherever the router is mounted"
+    )
+
+
+def test_an_eviction_report_unwarms_the_lane(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3048 review: hints that only grow route toward lanes that went cold — removals unwind them."""
+    warm_manifest = {"equity/usa/minute/spy/20250102_trade.zip": "d" * 64}
+    reports = iter(
+        [
+            [{"relative_path": "equity/usa/minute/spy/20250102_trade.zip", "content_digest": "d" * 64, "estimated_bytes": 100}],
+            [],  # the second result carries only the eviction
+        ]
+    )
+    evictions = iter([[], ["equity/usa/minute/spy/20250102_trade.zip"]])
+
+    def execute(task: dict[str, Any]) -> dict[str, Any]:
+        message = _gap_message(task)
+        message["decoded"] = next(reports)
+        message["evicted"] = next(evictions)
+        return message
+
+    pool, _ = _pool(monkeypatch, workers=2, execute=execute)
+    owner = _register(pool, manifest=warm_manifest)
+    try:
+        for gap in (0.1, 0.2):
+            assert owner.offer(1, _crafted_item(gap))
+            outcome = owner.arrived.get(timeout=5.0)
+            owner.consume(outcome[0], outcome[1])
+        assert pool.facts()["resident_paths"] == 0, "the eviction unwound the warm hint"
+    finally:
+        owner.close()
+        pool.close()
+
+
+def test_a_replaced_child_starts_with_cold_hints(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3048 review: a dead child's cache dies with it — the lane's hints must not outlive the replacement."""
+
+    def execute(task: dict[str, Any]) -> dict[str, Any]:
+        message = _gap_message(task)
+        message["decoded"] = [{"relative_path": "p/warm.zip", "content_digest": "d" * 64, "estimated_bytes": 50}]
+        return message
+
+    pool, children = _pool(monkeypatch, workers=1, execute=execute)
+    owner = _register(pool, manifest={"p/warm.zip": "d" * 64})
+    try:
+        assert owner.offer(1, _crafted_item(0.1))
+        outcome = owner.arrived.get(timeout=5.0)
+        owner.consume(outcome[0], outcome[1])
+        assert pool.facts()["resident_paths"] == 1
+
+        children[0].lost = "died between tasks"  # the between-tasks death the slot check cleans up
+        assert owner.offer(1, _crafted_item(0.2))
+        outcome = owner.arrived.get(timeout=5.0)
+        owner.consume(outcome[0], outcome[1])
+        assert len(children) == 2, "the lost child was replaced"
+        # The replacement ran on a cold cache and re-reported the artifact
+        # through its own delta — never through the corpse's stale hint.
+        assert pool.facts()["resident_paths"] == 1
+        assert pool._lanes[0].resident, "the lane's hints track the live child's reports alone"
     finally:
         owner.close()
         pool.close()
