@@ -2,8 +2,8 @@ import { fireEvent, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { SetupLimits } from './options-backtest.types';
-import { SERVED_LIMITS } from './testing/fixtures';
-import { addLeg, isDisabled, press, typeInto } from './testing/page-actions';
+import { exampleBody, exampleLeg, SERVED_LIMITS, servedExamples, servedSaved } from './testing/fixtures';
+import { addLeg, isDisabled, openExample, press, typeInto } from './testing/page-actions';
 import { fakeService, renderPage } from './testing/render-page';
 
 const addLegButton = () => screen.getByRole('button', { name: 'Add leg' });
@@ -69,18 +69,23 @@ describe('what the page holds a setup to comes from the server', () => {
 
 describe('while the limits cannot be had', () => {
   it('says plainly that they could not be read, lets the builder work, and leaves the judging to the server', async () => {
+    // A setup that holds one leg more than the 8 the server serves, so that the page is not what stops it.
+    const nine = servedSaved('Nine legs', { ...exampleBody(), legs: Array.from({ length: SERVED_LIMITS.max_legs + 1 }, (_, at) => ({ ...exampleLeg('call', false), leg_id: `saved-${at + 1}` })) });
     const service = fakeService(vi, {
       limits: vi.fn(async () => {
         throw new Error('the data service is down');
       }),
+      list: vi.fn(async () => [...servedExamples(), nine]),
     });
     await renderPage(service);
 
     const notice = await screen.findByText(/The server's limits could not be read/);
     expect(notice.textContent).toContain('The server will judge every setup.');
+    await openExample('Nine legs');
+    await screen.findByRole('article', { name: 'Leg 9' });
     typeInto('Contracts', '5000');
     expect(isDisabled(addLegButton())).toBe(false);
-    for (let count = 0; count < 10; count += 1) addLeg();
+    addLeg();
     await screen.findByRole('article', { name: 'Leg 10' });
     await waitFor(() => expect(service.describe.mock.lastCall?.[0]).toMatchObject({ legs: expect.any(Array) }));
     expect((service.describe.mock.lastCall?.[0] as { legs: unknown[] }).legs).toHaveLength(10);
