@@ -23,7 +23,8 @@ Validated against: tests/research/grid_search/test_service.py (request
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from typing import Any
 
 from app.research.grid_search.models import CellResult, SearchRow
 from app.research.grid_search.service import GridSearchSpec, window_dates
@@ -35,21 +36,58 @@ from app.services.engine_backtest_service import execute_engine_backtest
 logger = logging.getLogger(__name__)
 
 
+def execution_block(spec: GridSearchSpec) -> dict[str, Any]:
+    """The spec's frozen execution contract as the dispatch wire carries it (#3049).
+
+    The one place the field list lives: the in-process adapter and the
+    dispatched item build the same block, so a new spec field can never
+    reach one path and silently miss the other.
+    """
+    return {
+        "strategy_key": spec.strategy_key,
+        "symbol": spec.symbol,
+        "fill_mode": spec.fill_mode,
+        "commission_per_order": spec.commission_per_order,
+        "slippage_per_share": spec.slippage_per_share,
+        "initial_cash": spec.initial_cash,
+        "resolution": spec.resolution,
+    }
+
+
 def engine_request(row: SearchRow, spec: GridSearchSpec, candidate: RunSpec) -> EngineBacktestRequest:
-    table = row.receipt["interval_table"]
-    data_start, _ = window_dates(table["data_start_ms"], table["evaluation_end_ms"])
-    evaluation_start, evaluation_end = window_dates(table["evaluation_start_ms"], table["evaluation_end_ms"])
+    return engine_request_over(
+        candidate,
+        interval=row.receipt["interval_table"],
+        execution=execution_block(spec),
+    )
+
+
+def engine_request_over(
+    candidate: RunSpec,
+    *,
+    interval: Mapping[str, int],
+    execution: Mapping[str, Any],
+) -> EngineBacktestRequest:
+    """One cell's engine call from its wire-shaped parts: the receipt's ms interval and the frozen execution.
+
+    The in-process adapter and the research worker's child build the identical
+    request from the same fields (#3049): the interval is the receipt's
+    ``int64 ms UTC`` table and the execution block the spec's frozen contract,
+    so a dispatched cell cannot drift from a locally executed one.
+    """
+    data_start, _ = window_dates(int(interval["data_start_ms"]), int(interval["evaluation_end_ms"]))
+    evaluation_start, evaluation_end = window_dates(int(interval["evaluation_start_ms"]), int(interval["evaluation_end_ms"]))
     return EngineBacktestRequest(
-        strategy_name=spec.strategy_key,
-        params={**candidate.params, "symbol": spec.symbol},
+        strategy_name=str(execution["strategy_key"]),
+        params={**candidate.params, "symbol": execution["symbol"]},
         from_date=evaluation_start.isoformat(),
         to_date=evaluation_end.isoformat(),
         warmup_from_date=data_start.isoformat() if data_start < evaluation_start else None,
-        fill_mode=spec.fill_mode,
-        commission_per_order=spec.commission_per_order,
-        slippage_per_share=spec.slippage_per_share,
-        initial_cash=spec.initial_cash,
-        resolution=spec.resolution,  # type: ignore[arg-type]
+        fill_mode=str(execution["fill_mode"]),
+        commission_per_order=float(execution["commission_per_order"]),
+        slippage_per_share=float(execution["slippage_per_share"]),
+        initial_cash=float(execution["initial_cash"]),
+        resolution=execution["resolution"],  # type: ignore[arg-type]
         save_study=False,
         auto_fetch=False,
         summary_only=True,

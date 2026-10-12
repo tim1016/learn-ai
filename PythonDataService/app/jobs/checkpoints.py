@@ -38,12 +38,17 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import redis
 
 from app.jobs import progress
 from app.jobs.progress import JOB_LEASE_TTL_SECONDS, _lease_key
+
+if TYPE_CHECKING:
+    # The runtime's coordinator authority, annotation-only: the jobs layer
+    # must not import the research persistence graph at module load.
+    from app.research.persistence.ownership import RuntimeAuthority
 
 logger = logging.getLogger(__name__)
 
@@ -229,3 +234,87 @@ class TaskSilence:
     def expired_tasks(self, *, now_ms: int) -> list[str]:
         """Every stamped task past its deadline, in stamp order — the no-progress expiry the runtime acts on."""
         return [task_id for task_id in self._deadlines if self.expired(task_id, now_ms=now_ms)]
+
+
+# ── The gated lease sinks a research runtime worker runs under (#3049) ───
+
+
+class GatedLease:
+    """One job's checkpoint writers and its fenced cancellation poll, built together (#3041, #3043, #3049).
+
+    Every research runtime worker — a Golden Search stage, a Grid Search
+    run — drives the same three sinks through the same rules: phase
+    transitions and durable completions as coordinator transitions, the
+    children's relayed checkpoints inline on the pump thread, each fenced
+    by the coordinator's boot generation and serialized behind one
+    non-reentrant lock (nesting two acquisitions on the pump thread would
+    deadlock the whole run on the child's first checkpoint). The fence
+    poll rides along: cancellation plus the coordinator authority in one
+    call, because a fenced generation is terminal — nothing may replace
+    the worker and continue (#3065).
+    """
+
+    def __init__(self, job_id: str, *, task_id: str, authority: RuntimeAuthority) -> None:
+        import threading
+
+        from app.jobs.progress import CancellationCheck
+
+        self.generation = authority.boot_generation
+        self._authority = authority
+        self._task_id = task_id
+        self._seen: list[ExecutionCheckpoint] = []
+        self._gate = CheckpointGate(job_id, self.generation, on_accepted=self._seen.append)
+        self._lock = threading.Lock()
+        self._cancel = CancellationCheck(job_id, renews_lease=False)
+
+    def fenced_cancel(self) -> None:
+        """Cancellation and the coordinator fence in one poll (#3065).
+
+        Once the dedicated lock connection dies, a successor can already
+        claim the next generation, so this worker stops instead of renewing
+        a lease for a generation it no longer owns. A fenced generation is
+        terminal — never the retryable loss a lost worker is (#3045).
+        """
+        self._cancel.raise_if_cancelled()
+        if not self._authority.connected:
+            from app.research.persistence.ownership import GenerationFencedError
+
+            raise GenerationFencedError("coordinator authority connection lost mid-run; the generation is fenced")
+
+    def phase(self, phase: str) -> None:
+        with self._lock:
+            self._accept(cursor=0, cursor_kind="processed_blocks", phase=phase)
+
+    def completion(self, done: int, total: int) -> None:
+        with self._lock:
+            self._accept(cursor=done, cursor_kind="durable_completions", phase="search")
+
+    def child_checkpoint(self, message: dict) -> None:
+        """A child's real progress renews the lease through the same gate, inline.
+
+        Inline, never via the phase/completion helpers above: this runs on
+        the pump thread, and nesting two acquisitions of one non-reentrant
+        lock would deadlock the whole run on the child's first checkpoint.
+        """
+        with self._lock:
+            self._accept(
+                cursor=int(message.get("cursor", 0)),
+                cursor_kind=str(message.get("cursor_kind", "processed_blocks")),
+                phase=str(message.get("phase", "search")),
+            )
+
+    def _accept(self, *, cursor: int, cursor_kind: str, phase: str) -> None:
+        from app.utils.timestamps import now_ms_utc
+
+        self._gate.accept(
+            ExecutionCheckpoint(
+                generation=self.generation,
+                task_id=self._task_id,
+                sequence=len(self._seen) + 1,
+                cursor=cursor,
+                cursor_kind=cursor_kind,
+                phase=phase,
+                occurred_at_ms=now_ms_utc(),
+                transition=True,
+            )
+        )
