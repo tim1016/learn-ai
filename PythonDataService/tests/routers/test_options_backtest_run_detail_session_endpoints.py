@@ -591,6 +591,34 @@ async def test_a_stored_session_whose_trades_and_events_disagree_is_a_500_with_a
     assert other.status_code == 200
 
 
+async def test_a_stored_setup_edited_into_another_valid_one_without_a_leg_that_waited_is_the_coded_500_and_not_a_bare_one(
+    client: httpx.AsyncClient,
+    conn: asyncpg.Connection,
+    save_run: SaveRun,
+    scene: RunResult,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    is_the_job_alive: Any,
+) -> None:
+    run_id = await save_run(scene, "renamed-leg")
+    # The setup's legs are call (0), put (1) and lag (2). Renaming the third makes another valid setup, with no leg called
+    # "lag", while the stored trades and events still name it: Wednesday's lag leg took a starting price and never filled.
+    await conn.execute(
+        "UPDATE research_options_backtest_runs SET setup_json = jsonb_set(setup_json, '{legs,2,leg_id}', '\"lag2\"') "
+        "WHERE id = $1",
+        run_id,
+    )
+
+    response = await _get(client, run_id, WED_OPEN_MS)
+    other = await _get(client, run_id, THU_OPEN_MS)
+
+    assert response.status_code == 500, response.text
+    assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_STORED_SESSION_INCONSISTENT"
+    assert "lag" in response.json()["detail"]["message"]
+    # Thursday was skipped and took no starting price, so nothing in it names the leg: it opens.
+    assert other.status_code == 200
+
+
 @respx.mock
 async def test_a_session_of_a_run_whose_stored_setup_no_longer_validates_is_served_with_its_series_and_says_why_beside_it(
     client: httpx.AsyncClient,

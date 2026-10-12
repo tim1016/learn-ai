@@ -162,7 +162,11 @@ def levels_of(setup: OptionsBacktestSetup | None, outcome: SessionOutcome) -> tu
             if setup is None:
                 momentum = None
             else:
-                rule = legs[leg_id].momentum
+                # A setup edited by hand into another valid one may no longer have the leg the events name.
+                leg = legs.get(leg_id)
+                if leg is None:
+                    raise _inconsistent(leg_id, entry_number, "its leg is not in the run's setup")
+                rule = leg.momentum
                 if rule is None:
                     raise _inconsistent(
                         leg_id, entry_number, "it took a starting price and its leg has no momentum rule"
