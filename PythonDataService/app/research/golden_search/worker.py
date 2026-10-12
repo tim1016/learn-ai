@@ -330,6 +330,9 @@ def _run_one_task(
 ) -> None:
     kind = task.get("kind")
     if kind is not None:
+        from app.research.grid_search.dispatch import GRID_WIRE_KIND as GRID_KIND
+        from app.research.recency.dispatch import RECENCY_WIRE_KIND as RECENCY_KIND
+
         # A sibling caller's task kind rides the same child (#3049, #3051):
         # Grid Search cells and Recency runs carry their own wires and
         # projections. The golden evaluation stays the unmarked default, so
@@ -337,12 +340,12 @@ def _run_one_task(
         # does not know is a version skew — refused as loudly as an identity
         # mismatch, never answered as a failed run that would persist as
         # evidence.
-        if kind == "grid_search":
+        if kind == GRID_KIND:
             from app.research.grid_search.dispatch import run_grid_cell_task
 
             run_grid_cell_task(task, out=out, ask_admission=ask_admission, cancel_flag=cancel_flag, state=state)
             return
-        if kind == "recency_run":
+        if kind == RECENCY_KIND:
             from app.research.recency.dispatch import run_recency_run_task
 
             run_recency_run_task(task, out=out, ask_admission=ask_admission, cancel_flag=cancel_flag, state=state)

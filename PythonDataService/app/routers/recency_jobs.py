@@ -189,6 +189,9 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
             # The stored configuration no longer validates (the grid rules
             # tightened since the launch); it cannot run as recorded.
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": "NOT_RESUMABLE", "message": str(exc)}) from exc
+        # A resume stamps like a fresh launch (#3042): the ownership row is
+        # what a restart's recovery sweep reads to fence this generation.
+        await records.stamp_research_dispatch(job_id=req.job_id, kind="recency", record_id=launch.config.launch_id)
     else:
         strategies = _grid_configs(req)
         try:

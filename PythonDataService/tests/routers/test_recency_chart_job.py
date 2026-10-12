@@ -432,16 +432,23 @@ async def test_a_runtime_dispatch_runs_the_launch_through_the_gated_worker(monke
         built["attempt"] = attempt
         built["window"] = dict(window)
 
-        def run(runs):
-            on_checkpoint({"phase": "search", "cursor_kind": "durable_completions", "cursor": 1})
-            for run_spec in runs:
-                yield run_spec, {
-                    "data_policy": '{"adjusted": true}',
-                    "trades": [],
-                    "study_id": None,
-                }, None
+        class _Dispatch:
+            def __call__(self, runs):
+                on_checkpoint({"phase": "search", "cursor_kind": "durable_completions", "cursor": 1})
+                for run_spec in runs:
+                    yield run_spec, {
+                        "data_policy": '{"adjusted": true}',
+                        "trades": [],
+                        "study_id": None,
+                    }, None
 
-        return run
+            def cancel(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        return _Dispatch()
 
     monkeypatch.setattr(recency_dispatch_module, "runtime_run_dispatch", fake_runtime_run_dispatch)
 

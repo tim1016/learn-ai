@@ -858,10 +858,12 @@ class PooledOwnerDispatch:
         window: int,
         pool: SharedWorkerPool | None = None,
         on_capacity_handoff: Callable[[], None] = lambda: None,
+        on_facts: Callable[[Any], None] = lambda payload: None,
     ) -> None:
         if workers < 1:
             raise ValueError("a worker pool has at least one lane")
         self._context = context
+        self._on_facts_callback = on_facts
         self._window = max(window, workers)
         # Every child's decoded cache shares one budget inside the runtime
         # envelope: eight lanes at the serial parity ceiling would consume it
@@ -944,11 +946,18 @@ class PooledOwnerDispatch:
     def _emit_facts(self, ready_width: int, adaptive_wait_ms: int) -> None:
         self._on_facts(self._facts_payload(ready_width, adaptive_wait_ms))
 
-    def _facts_payload(self, ready_width: int, adaptive_wait_ms: int) -> Any:
-        raise NotImplementedError
+    def _facts_payload(self, ready_width: int, adaptive_wait_ms: int) -> dict[str, Any]:
+        # The plain scheduling facts every non-golden owner reports; golden's
+        # adapter overrides this with its frozen DispatchFacts dataclass.
+        return {
+            **self._pool.facts(),
+            "ready_width": ready_width,
+            "window": self._window,
+            "adaptive_wait_ms": adaptive_wait_ms,
+        }
 
     def _on_facts(self, payload: Any) -> None:
-        raise NotImplementedError
+        self._on_facts_callback(payload)
 
     def close(self) -> None:
         """Leave the pool: queued entries die at take time, running items are interrupted, a private pool stops."""

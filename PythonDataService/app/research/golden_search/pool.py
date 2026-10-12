@@ -105,9 +105,11 @@ class PooledWorkerDispatch(PooledOwnerDispatch):
         pool: SharedWorkerPool | None = None,
         on_capacity_handoff: Callable[[], None] = lambda: None,
     ) -> None:
-        super().__init__(context, workers=workers, window=window, pool=pool, on_capacity_handoff=on_capacity_handoff)
+        super().__init__(
+            context, workers=workers, window=window, pool=pool,
+            on_capacity_handoff=on_capacity_handoff, on_facts=on_facts,
+        )
         self._worker_count = workers
-        self._on_facts_callback = on_facts
 
     def _facts_payload(self, ready_width: int, adaptive_wait_ms: int) -> DispatchFacts:
         return DispatchFacts(
@@ -117,9 +119,6 @@ class PooledWorkerDispatch(PooledOwnerDispatch):
             active=self._pool.facts()["busy_lanes"],
             adaptive_wait_ms=adaptive_wait_ms,
         )
-
-    def _on_facts(self, payload: DispatchFacts) -> None:
-        self._on_facts_callback(payload)
 
     # -- the dispatch -------------------------------------------------------
 

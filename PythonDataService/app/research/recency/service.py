@@ -82,6 +82,14 @@ def validate_launch(
     commission_per_order: float,
 ) -> ValidatedLaunch:
     """The canonical grid plus its exact run count, or :class:`RecencyLaunchRejected` (ceiling, ranges, rules)."""
+    # A strategy may appear once: two entries with the same key would expand
+    # onto overlapping (symbol, strategy, params_hash) identities, which the
+    # durable record collapses — the serial loop runs both runs, but a
+    # dispatched launch cannot tell them apart, and the terminal
+    # reconciliation would then refuse the launch it finished (#3051 review).
+    duplicated = sorted({key for key in (s.strategy_key for s in strategies) if sum(1 for s in strategies if s.strategy_key == key) > 1})
+    if duplicated:
+        raise RecencyLaunchRejected(f"each strategy may appear once; duplicate entries: {', '.join(duplicated)}")
     try:
         # The ceiling is checked eagerly by expand_grid; a range the grid
         # language refuses only when it materialises (a step the floats
@@ -278,9 +286,9 @@ def run_launch(
     dispatch = run_dispatch_factory(config, attempt) if run_dispatch_factory is not None else None
 
     def _reap() -> None:
-        # The pre-reconciliation reap (#3065's rule), best-effort for a bare
-        # test dispatch: stop the workers before the abort-state write.
-        if dispatch is not None and hasattr(dispatch, "cancel"):
+        # The pre-reconciliation reap (#3065's rule): stop the workers before
+        # the abort-state write, so the children never wait out the record.
+        if dispatch is not None:
             dispatch.cancel()
 
     skip = _recorded_cells(config.launch_id)
@@ -311,7 +319,7 @@ def run_launch(
         record_abort_state(config.launch_id, "FAILED", attempt=attempt)
         raise
     finally:
-        if dispatch is not None and hasattr(dispatch, "close"):
+        if dispatch is not None:
             dispatch.close()
     record_terminal_status(
         summary.launch_id,

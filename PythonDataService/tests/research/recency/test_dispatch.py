@@ -459,12 +459,15 @@ def test_run_recency_dispatch_mode_counts_skips_failures_and_snapshots_like_the_
     progress: list[tuple[int, int]] = []
 
     config.strategies[0].param_ranges["x"] = ValueListRange((1.0, 2.0, 3.0))
+    from app.research.sweep.grid import params_hash
+
+    skipped_identity = ("SPY", "sma", params_hash("sma", {"x": 3.0}))
 
     class _Permuting:
         def __call__(self, runs: Iterator[RunSpec]) -> Iterator[tuple[RunSpec, dict[str, Any] | None, str | None]]:
             pending = [(spec, _pieces(index), None) for index, spec in enumerate(runs)]
             pending[1] = (pending[1][0], None, "RuntimeError: no bars")
-            yield from [pending[2], pending[0], pending[1]]  # arrival order is free
+            yield from [pending[1], pending[0]]  # arrival order is free; the skipped cell never arrives
 
     summary = run_recency(
         config,
@@ -472,14 +475,17 @@ def test_run_recency_dispatch_mode_counts_skips_failures_and_snapshots_like_the_
         strategy_code_version_fn=lambda strategy_key: "version-7",
         on_progress=lambda done, total: progress.append((done, total)),
         on_run_failed=lambda run_spec, message: failed.append(f"{run_spec.params_hash}: {message}"),
+        skip_identities=frozenset({skipped_identity}),
         dispatch=_Permuting(),
     )
 
     assert summary.expected_runs == 3
-    assert summary.succeeded_runs == 2 and summary.failed_runs == 1 and summary.skipped_runs == 0
-    assert len(persisted) == 2, "each succeeded arrival's snapshot persisted as it was consumed"
+    assert summary.succeeded_runs == 1 and summary.failed_runs == 1
+    assert summary.skipped_runs == 1, "a dispatched resume reports its durable skips exactly as the serial loop does"
+    assert len(persisted) == 1, "each succeeded arrival's snapshot persisted as it was consumed"
     assert len(failed) == 1 and failed[0].endswith("RuntimeError: no bars")
-    assert progress[0] == (0, 3) and progress[-1] == (3, 3)
+    assert progress[0] == (1, 3), "the durable skip leads the first tick"
+    assert progress[-1] == (3, 3)
     assert all(snapshot.launch_id == "launch-1" for snapshot in persisted)
 
 
@@ -550,4 +556,4 @@ def test_ready_run_builder_freezes_the_launch_parts() -> None:
 
 def test_run_outcome_fields_name_their_meaning() -> None:
     outcome = RunOutcome(key="k", attempt=1, task_gen=1, pieces=None)
-    assert outcome.error is None and outcome.cancelled_by is None and outcome.lost_reason is None
+    assert outcome.error is None and outcome.cancelled_by is None

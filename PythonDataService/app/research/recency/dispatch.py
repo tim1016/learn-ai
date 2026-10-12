@@ -40,7 +40,7 @@ import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Protocol
 
 from app.config import settings
 from app.jobs.progress import JobCancelled
@@ -59,11 +59,6 @@ logger = logging.getLogger(__name__)
 
 #: The task-kind marker a recency run carries on the worker wire (#3051).
 RECENCY_WIRE_KIND = "recency_run"
-
-#: The wire's execution block: everything but the candidate a run's engine
-#: request needs, frozen per launch.
-RECENCY_EXECUTION_FIELDS = ("fill_mode", "commission_per_order")
-
 
 def run_key(symbol: str, strategy_key: str, params_hash: str) -> str:
     """The dispatch identity of one run: the composite cell identity, never the params hash alone.
@@ -141,11 +136,15 @@ class RunOutcome:
     pieces: dict[str, Any] | None
     error: str | None = None
     cancelled_by: Exception | None = None
-    lost_reason: str | None = None
 
 
 def run_outcome(item: ReadyRun, message: Mapping[str, Any]) -> RunOutcome:
     """One child answer as the runner consumes it — the same translation both adapters make."""
+    if message.get("key") != item.key:
+        # The item's identity is the one the launch's cell fence will check;
+        # a child answer keyed otherwise is a protocol break, never a foreign
+        # run the durable record would skip forever (the grid twin's rule).
+        raise WorkerLost(f"a research worker answered run {item.key} as {message.get('key')!s}")
     if message["type"] == "failed" and message.get("error") == "cancelled":
         return RunOutcome(
             key=item.key,
@@ -225,8 +224,16 @@ def pieces_to_wire(response: Any) -> dict[str, Any]:
 
 #: What ``run_recency`` consumes from either adapter: each arrival as its
 #: ``(run, pieces, error)`` triple — a succeeded run's snapshot pieces, or
-#: the failure string the serial loop's ``on_error`` would have seen.
-RunDispatch = Callable[[Iterable[RunSpec]], Iterator[tuple[RunSpec, "dict[str, Any] | None", "str | None"]]]
+#: the failure string the serial loop's ``on_error`` would have seen. The
+#: lifecycle members are the contract's, not optional: the coordinator reaps
+#: (``cancel``) before its abort-state writes and closes (``close``) on
+#: every exit path (#3065's rule).
+class RunDispatch(Protocol):
+    def __call__(self, runs: Iterable[RunSpec]) -> Iterator[tuple[RunSpec, dict[str, Any] | None, str | None]]: ...
+
+    def cancel(self) -> None: ...
+
+    def close(self) -> None: ...
 
 
 def ready_run_builder(window: Mapping[str, int], execution: Mapping[str, Any], identity: Mapping[str, Any], attempt: int) -> Callable[[RunSpec], ReadyRun]:
@@ -402,20 +409,11 @@ class PooledRunDispatch(PooledOwnerDispatch):
         on_facts: Callable[[Mapping[str, Any]], None] = lambda facts: None,
         on_capacity_handoff: Callable[[], None] = lambda: None,
     ) -> None:
-        super().__init__(context, workers=workers, window=window, pool=pool, on_capacity_handoff=on_capacity_handoff)
+        super().__init__(
+            context, workers=workers, window=window, pool=pool,
+            on_capacity_handoff=on_capacity_handoff, on_facts=on_facts,
+        )
         self._ready = ready
-        self._on_facts_callback = on_facts
-
-    def _facts_payload(self, ready_width: int, adaptive_wait_ms: int) -> dict[str, Any]:
-        return {
-            **self._pool.facts(),
-            "ready_width": ready_width,
-            "window": self._window,
-            "adaptive_wait_ms": adaptive_wait_ms,
-        }
-
-    def _on_facts(self, payload: dict[str, Any]) -> None:
-        self._on_facts_callback(payload)
 
     def __call__(self, runs: Iterable[RunSpec]) -> Iterator[tuple[RunSpec, dict[str, Any] | None, str | None]]:
         owed: dict[str, ReadyRun] = {}

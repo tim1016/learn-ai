@@ -255,11 +255,21 @@ def run_recency(
     if dispatch is not None:
         from app.research.recency.dispatch import RunPieces
 
-        # The identities are materialized once — tiny, and the skip count
+        # The identities are materialized once — expand_grid is lazy and a
+        # second pass would see an exhausted iterator — and the skip count
         # must lead the first progress tick exactly as the serial loop's
-        # skipped outcomes do.
-        todo = [spec for spec in run_specs if (spec.symbol, spec.strategy_key, spec.params_hash) not in skip_identities]
-        done = expected - len(todo)
+        # skipped outcomes do. Skipped cells enter the outcomes exactly as
+        # the serial loop records them, so the summary's counts are never
+        # the deployment mode's secret (#3051 review).
+        skipped_specs: list[RunSpec] = []
+        todo: list[RunSpec] = []
+        for spec in run_specs:
+            if (spec.symbol, spec.strategy_key, spec.params_hash) in skip_identities:
+                skipped_specs.append(spec)
+            else:
+                todo.append(spec)
+        outcomes.extend(RecencyRunOutcome(run_spec=spec, status="skipped") for spec in skipped_specs)
+        done = len(skipped_specs)
         on_progress(done, expected)
         for run_spec, pieces, error in dispatch(todo):
             done += 1
