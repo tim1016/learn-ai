@@ -19,6 +19,7 @@ from httpx import ASGITransport
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.main import app
 from app.routers import options_backtest as options_backtest_router
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import ny_datetime
 from tests.options_backtest.setup_fixtures import conn as conn
 from tests.options_backtest.setup_fixtures import leg, setup_body
@@ -39,10 +40,12 @@ def client() -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
+_NOON_MS = int(datetime(_NOW.year, _NOW.month, _NOW.day, 12, tzinfo=UTC).timestamp() * 1000)
+
+
 @pytest.fixture(autouse=True)
 def _now_is_a_monday_session(monkeypatch: pytest.MonkeyPatch) -> None:
-    noon = int(datetime(_NOW.year, _NOW.month, _NOW.day, 12, tzinfo=UTC).timestamp() * 1000)
-    monkeypatch.setattr(options_backtest_router, "now_ms_utc", lambda: noon)
+    monkeypatch.setattr(options_backtest_router, "now_ms_utc", lambda: _NOON_MS)
 
 
 def _url(name: str) -> str:
@@ -156,7 +159,7 @@ async def test_a_saved_setup_is_listed_after_the_examples_and_reads_back_as_it_w
 
     assert saved.status_code == 200, saved.text
     assert saved.json()["name"] == name and saved.json()["example"] is False
-    assert saved.json()["saved_at_ms"] > 0 and saved.json()["cannot_open_reason"] is None
+    assert saved.json()["cannot_open_reason"] is None
     rows = listed.json()
     assert [row["name"] for row in rows[:2]] == _EXAMPLE_NAMES
     assert all(
@@ -168,6 +171,22 @@ async def test_a_saved_setup_is_listed_after_the_examples_and_reads_back_as_it_w
     assert mine["setup"]["slippage_percent"] == "0.35"
     assert mine["setup"]["legs"][0]["stop_loss"] == {"kind": "points", "value": "0.4"}
     assert mine["setup"]["no_reentry_after"] == {"anchor": "close", "offset_ms": 3_600_000}
+
+
+async def test_a_setup_is_saved_at_the_moment_the_clock_says_in_the_answer_and_in_the_store(
+    client, conn, tag: str
+) -> None:
+    name = f"On the clock {tag}"
+
+    async with client as c:
+        saved = await c.put(_url(name), json=setup_body())
+        listed = (await c.get(f"{PREFIX}/setups")).json()
+
+    stored = await conn.fetchval("SELECT saved_at_ms FROM research_options_backtest_setups WHERE name = $1", name)
+    [row] = [row for row in listed if row["name"] == name]
+    assert saved.json()["saved_at_ms"] == _NOON_MS
+    assert stored == _NOON_MS
+    assert row["saved_at_ms"] == _NOON_MS
 
 
 async def test_saving_under_a_name_again_replaces_it(client, tag: str) -> None:
@@ -204,6 +223,38 @@ async def test_a_stored_setup_that_no_longer_validates_is_listed_with_the_reason
     assert rows[stale]["setup"] is None and rows[stale]["saved_at_ms"] == 1_000
     assert "version" in rows[stale]["cannot_open_reason"]
     assert [name for name in rows][:2] == _EXAMPLE_NAMES
+
+
+async def test_no_stored_row_can_make_the_list_fail_whatever_its_json_or_its_stamp_holds(
+    client, conn, tag: str
+) -> None:
+    fine = f"Fine {tag}"
+    insert = "INSERT INTO research_options_backtest_setups (name, setup_json, saved_at_ms) VALUES ($1, $2::jsonb, $3)"
+    odd_json = {
+        f"A list {tag}": "[1, 2]",
+        f"A string {tag}": '"hello"',
+        f"A number {tag}": "42",
+        f"A null {tag}": "null",
+        f"An unknown field {tag}": '{"lots": 1}',
+        f"An empty object {tag}": "{}",
+        f"Deep {tag}": "[" * 2000 + "]" * 2000,
+    }
+    for name, stored in odd_json.items():
+        await conn.execute(insert, name, stored, 1_000)
+    # The smallest and the largest stamp the table admits are served as they are.
+    await conn.execute(insert, f"Earliest {tag}", "{}", 0)
+    await conn.execute(insert, f"Latest {tag}", "{}", MAX_TIMESTAMP_MS)
+
+    async with client as c:
+        await c.put(_url(fine), json=setup_body())
+        listed = await c.get(f"{PREFIX}/setups")
+
+    assert listed.status_code == 200, listed.text
+    rows = {row["name"]: row for row in listed.json() if row["name"].endswith(tag)}
+    assert rows[fine]["setup"] is not None
+    for name in (*odd_json, f"Earliest {tag}", f"Latest {tag}"):
+        assert rows[name]["setup"] is None and rows[name]["cannot_open_reason"], name
+    assert (rows[f"Earliest {tag}"]["saved_at_ms"], rows[f"Latest {tag}"]["saved_at_ms"]) == (0, MAX_TIMESTAMP_MS)
 
 
 @pytest.mark.parametrize("name", _EXAMPLE_NAMES)

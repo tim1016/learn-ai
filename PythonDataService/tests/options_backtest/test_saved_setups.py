@@ -8,9 +8,11 @@ need no database.
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 from typing import Any
 
+import asyncpg
 import pytest
 
 from app.options_backtest.saved_setups import (
@@ -22,12 +24,15 @@ from app.options_backtest.saved_setups import (
     get_setup,
     is_valid_setup_name,
     list_setups,
+    read_stored_setup,
     save_setup,
 )
 from app.options_backtest.setup import MS_PER_MINUTE
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from tests.options_backtest.setup_fixtures import conn as conn
 from tests.options_backtest.setup_fixtures import leg as _leg
 from tests.options_backtest.setup_fixtures import setup as _setup
+from tests.options_backtest.setup_fixtures import setup_body as _setup_body
 from tests.options_backtest.setup_fixtures import tag as tag
 from tests.options_backtest.setup_fixtures import unique as unique
 
@@ -165,6 +170,44 @@ async def test_saving_under_a_refused_name_stops_before_the_database() -> None:
         await save_setup(_NoDatabase(), "no/good", _setup(), saved_at_ms=1)
 
 
+# ── A stored row that cannot be opened ────────────────────────────────────
+
+
+def _reason_for(**changes: Any) -> str:
+    reason = read_stored_setup("Stored", json.dumps(_setup_body(**changes)), 1_000).cannot_open_reason
+    assert reason is not None
+    return reason
+
+
+def test_an_unknown_rule_kind_is_named_where_it_sits() -> None:
+    reason = _reason_for(legs=[_leg(expiry={"kind": "SECRET_KIND"})])
+
+    assert "legs.0.expiry" in reason and "SECRET_KIND" in reason
+
+
+def test_an_extra_field_is_named_where_it_sits() -> None:
+    top = _reason_for(password_SECRETKEY="x")
+    in_a_leg = _reason_for(legs=[_leg(lots_SECRETKEY=3)])
+
+    assert "password_SECRETKEY" in top
+    assert "legs.0.lots_SECRETKEY" in in_a_leg
+
+
+def test_a_stored_value_that_fails_a_rule_is_not_printed() -> None:
+    reason = _reason_for(underlying="SECRETVALUE", starting_cash_usd="-5.123456")
+
+    assert "underlying" in reason and "starting_cash_usd" in reason
+    assert "SECRETVALUE" not in reason and "5.123456" not in reason
+
+
+def test_the_reason_spells_out_five_problems_and_counts_the_rest() -> None:
+    reason = _reason_for(legs=[_leg(leg_id=f"leg{n}", extra=1) for n in range(8)])
+
+    assert all(f"legs.{n}.extra" in reason for n in range(5))
+    assert "legs.5.extra" not in reason
+    assert reason.endswith("and 3 more")
+
+
 # ── Saved setups in Postgres ──────────────────────────────────────────────
 
 
@@ -253,6 +296,22 @@ async def test_a_stored_setup_that_no_longer_validates_is_listed_as_one_that_can
     assert listed[not_a_setup].cannot_open_reason
     # The same answer from a direct read, and the setup is still there to be seen, not dropped.
     assert await get_setup(conn, stale_stop) == listed[stale_stop]
+
+
+@pytest.mark.parametrize("stamp", [-1, MAX_TIMESTAMP_MS + 1, 2**62])
+async def test_a_stamp_the_list_could_not_serve_is_refused_by_the_table(conn, tag: str, stamp: int) -> None:
+    with pytest.raises(asyncpg.CheckViolationError):
+        await save_setup(conn, f"Odd stamp {tag}", _setup(), saved_at_ms=stamp)
+
+
+@pytest.mark.parametrize("stamp", [0, MAX_TIMESTAMP_MS])
+async def test_the_earliest_and_latest_stamp_the_list_can_serve_are_stored(conn, tag: str, stamp: int) -> None:
+    name = f"Edge stamp {tag}"
+
+    saved = await save_setup(conn, name, _setup(), saved_at_ms=stamp)
+
+    assert saved.saved_at_ms == stamp
+    assert (await get_setup(conn, name)) == saved
 
 
 async def test_a_name_that_differs_from_an_example_only_by_case_is_an_ordinary_setup(conn) -> None:

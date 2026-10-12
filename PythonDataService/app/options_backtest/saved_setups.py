@@ -177,23 +177,26 @@ def _refuse_an_example(name: str, what_cannot_happen: str) -> None:
 
 
 def _saved(row: asyncpg.Record) -> SavedSetup:
+    return read_stored_setup(row["name"], row["setup_json"], row["saved_at_ms"])
+
+
+def read_stored_setup(name: str, setup_json: str, saved_at_ms: int) -> SavedSetup:
+    """A stored row as a listed setup: opened, or marked as one that cannot be opened and why."""
     try:
-        setup = OptionsBacktestSetup.model_validate_json(row["setup_json"])
+        setup = OptionsBacktestSetup.model_validate_json(setup_json)
     except ValidationError as exc:
         return SavedSetup(
-            name=row["name"],
-            example=False,
-            saved_at_ms=row["saved_at_ms"],
-            setup=None,
-            cannot_open_reason=_reason(exc),
+            name=name, example=False, saved_at_ms=saved_at_ms, setup=None, cannot_open_reason=_reason(exc)
         )
-    return SavedSetup(
-        name=row["name"], example=False, saved_at_ms=row["saved_at_ms"], setup=setup, cannot_open_reason=None
-    )
+    return SavedSetup(name=name, example=False, saved_at_ms=saved_at_ms, setup=setup, cannot_open_reason=None)
 
 
 def _reason(error: ValidationError) -> str:
-    """Where each problem is and what it says, never the stored value."""
+    """Where each problem is and what it says, for the owner whose setup it is.
+
+    A stored value is never printed. The name of an unknown rule kind or of an extra field is: pydantic puts it
+    in the location or in the message, and it is what tells the owner which part of the setup to look at.
+    """
     problems = error.errors(include_url=False, include_input=False, include_context=False)
     shown = [
         f"{'.'.join(str(part) for part in problem['loc']) or 'setup'}: {problem['msg']}"
