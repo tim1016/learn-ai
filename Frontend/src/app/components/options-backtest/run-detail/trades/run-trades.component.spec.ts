@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
+import { etMidnightMs } from '../../../../shared/date/et-midnight';
 import { sessionOpenMs } from '../../../../shared/date-picker/testing/fake-trading-calendar';
 import type { RunDetail } from '../../options-backtest.types';
 import { lettingGo, reads } from '../../testing/page-actions';
@@ -204,6 +205,20 @@ describe('the trades of a run, filters', () => {
     await userEvent.selectOptions(days, '2026-09-16');
 
     await waitFor(() => expect(lastQuery(detail)).toEqual({ sessionOpenMs: sessionOpenMs('2026-09-16'), legId: '', limit: 100, offset: 0 }));
+  });
+
+  // 00:30 New York time on the 16th is 23:30 on the 15th in Chicago; 20:00 on the 15th is the 16th in Tokyo.
+  it.each([
+    ['00:30 on the 16th', etMidnightMs('2026-09-16') + 30 * 60_000, '2026-09-16'],
+    ['20:00 on the 15th', etMidnightMs('2026-09-15') + 20 * 60 * 60_000, '2026-09-15'],
+  ])('names each day to filter by with its New York date, whatever the viewer’s zone: an open at %s', async (_name, openMs, date) => {
+    const run = runDetail();
+    const figures = run.figures;
+    if (figures === null || figures === undefined) throw new Error('The fixture run has no figures.');
+    await renderTrades(fakeRunDetail(vi, { trades: vi.fn(async () => tradesPage()) }), { ...run, figures: { ...figures, by_day: [{ ...figures.by_day[0], session_open_ms: openMs }] } });
+    await screen.findByRole('table', { name: 'Leg trades' });
+
+    expect([...screen.getByRole('combobox', { name: /^Days/ }).querySelectorAll('option')].map((option) => option.textContent)).toEqual(['All days', date]);
   });
 
   it('lists the legs of the run’s setup and filters by the one chosen', async () => {

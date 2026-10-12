@@ -170,6 +170,15 @@ describe('one day, the stored facts', () => {
     expect(tableRows('Levels (scrolls sideways)')[0][3]).toContain("Oct 16 '26 585 Call");
   });
 
+  it('names a contract in words that only a trade of the day sent the parts of, because no chart series was sent for it', async () => {
+    const day = sessionDetail({ contracts: [], events: sessionDetail().events.slice(0, 2), levels: [sessionDetail().levels[0]] });
+    await renderSession(vi, { detail: servedAs(day), request: ASKED });
+    await screen.findByRole('region', { name: 'What happened, in order (scrolls sideways)' });
+
+    expect(tableRows('What happened, in order (scrolls sideways)').map((row) => row[3])).toEqual([expect.stringContaining("Oct 16 '26 585 Call"), expect.stringContaining("Oct 16 '26 585 Put")]);
+    expect(tableRows('Levels (scrolls sideways)')[0][3]).toContain("Oct 16 '26 585 Call");
+  });
+
   it('shows the symbol as it came for a contract the server sent no parts for', async () => {
     const day = sessionDetail({ events: [{ ...sessionDetail().events[0], contract: 'SPY261016C00999000' }] });
     await renderSession(vi, { detail: servedAs(day), request: ASKED });
