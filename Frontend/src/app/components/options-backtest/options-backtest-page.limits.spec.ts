@@ -47,7 +47,7 @@ describe('what the page holds a setup to comes from the server', () => {
 
     await screen.findByRole('article', { name: 'Leg 2' });
     expect(isDisabled(addLegButton())).toBe(true);
-    expect(screen.getByText('A setup holds at most 2 legs. Delete one to add another.')).toBeTruthy();
+    expect(screen.getByText('The most legs a setup holds: 2. Delete one to add another.')).toBeTruthy();
     expect(screen.getByText('2 of 2')).toBeTruthy();
   });
 

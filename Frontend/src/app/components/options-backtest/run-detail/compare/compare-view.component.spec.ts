@@ -130,16 +130,16 @@ describe('comparing two runs, the sessions they share', () => {
     await screen.findByRole('region', { name: 'Sessions both runs tested' });
 
     expect(reads(screen.getByRole('region', { name: 'Sessions both runs tested' }).querySelector('p'))).toBe(
-      '3 sessions are in both runs. Only run A has 1, and only run B has 0. The figures below are for the shared sessions only.',
+      'Sessions in both runs: 3. Only in run A: 1. Only in run B: 0. The figures below are for the shared sessions only.',
     );
   });
 
-  it('says one session, not one sessions', async () => {
+  it('says one shared session with a label and a number, which needs no plural', async () => {
     const answer = comparison();
     await renderCompare(serving({ ...answer, overlap: { ...answer.overlap, shared_sessions: 1, sessions: answer.overlap.sessions.slice(0, 1) } }));
     await screen.findByRole('region', { name: 'Sessions both runs tested' });
 
-    expect(reads(screen.getByRole('region', { name: 'Sessions both runs tested' }).querySelector('p'))).toContain('1 session is in both runs.');
+    expect(reads(screen.getByRole('region', { name: 'Sessions both runs tested' }).querySelector('p'))).toContain('Sessions in both runs: 1.');
   });
 
   it('shows each run’s net profit, trades and winning sessions over the shared sessions as the server worked them out', async () => {
@@ -180,7 +180,7 @@ describe('comparing two runs, the sessions they share', () => {
 
     expect(await screen.findByText('The two runs have no session in common, so there is nothing to set side by side.')).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'Each shared session (scrolls sideways)' })).toBeNull();
-    expect(reads(screen.getByRole('region', { name: 'Sessions both runs tested' }).querySelector('p'))).toBe('0 sessions are in both runs. Only run A has 5, and only run B has 5.');
+    expect(reads(screen.getByRole('region', { name: 'Sessions both runs tested' }).querySelector('p'))).toBe('Sessions in both runs: 0. Only in run A: 5. Only in run B: 5.');
   });
 });
 

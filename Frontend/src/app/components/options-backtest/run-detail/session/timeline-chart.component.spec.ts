@@ -239,7 +239,7 @@ describe('the one-day chart, the tooltip', () => {
       'SPY: $585.55',
       "SPY Oct 16 '26 585 Call: $2.60",
       "SPY Oct 16 '26 585 Put: no trade this minute",
-      "Bought 1 contract of SPY Oct 16 '26 585 Call: filled $2.57, seen $2.55",
+      "Bought SPY Oct 16 '26 585 Call (contracts: 1): filled $2.57, seen $2.55",
       'Stop level $1.93 (call, first entry)',
     ]);
   });

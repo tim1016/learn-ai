@@ -234,7 +234,7 @@ describe('copying and deleting legs', () => {
     await waitFor(() => expect(lastBody(service).legs).toHaveLength(SERVED_LIMITS.max_legs));
     expect(isDisabled(screen.getByRole('button', { name: 'Add leg' }))).toBe(true);
     expect(isDisabled(screen.getByRole('button', { name: 'Copy Leg 1' }))).toBe(true);
-    expect(screen.getByText(`A setup holds at most ${SERVED_LIMITS.max_legs} legs. Delete one to add another.`)).toBeTruthy();
+    expect(screen.getByText(`The most legs a setup holds: ${SERVED_LIMITS.max_legs}. Delete one to add another.`)).toBeTruthy();
 
     press('Delete Leg 8');
 

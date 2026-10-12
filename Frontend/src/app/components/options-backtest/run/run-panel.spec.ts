@@ -262,7 +262,7 @@ describe('a run that is going', () => {
     const failed = screen.getByRole('region', { name: 'Backtest run' });
     expect(within(failed).getByText('Download Failed')).toBeTruthy();
     expect(reads(screen.getByRole('list', { name: 'What failed' }))).toBe(
-      'Listing · 1 item 2026-09-14 – The vendor refused the listing. Internal · 1 item The run as a whole – The run stopped early.',
+      'Listing · Items: 1 2026-09-14 – The vendor refused the listing. Internal · Items: 1 The run as a whole – The run stopped early.',
     );
     expectTradingDatesInNewYork(screen.getByRole('list', { name: 'What failed' }));
   });
@@ -370,12 +370,22 @@ describe('a run that is over, opened later', () => {
 
     await renderRun(runItem({ status: 'complete', setup_name: 'SPY premium momentum' }), { service });
 
-    const about = (await screen.findByText(/sessions requested/)).closest('ul');
+    const about = (await screen.findByText(/Sessions requested/)).closest('ul');
     const items = [...(about?.querySelectorAll('li') ?? [])].map((item) => reads(item));
     // The start is an instant, shown in the viewer's own zone; its date is the 21st in any zone from New York to Chicago.
-    expect(items.slice(0, 4)).toEqual(['SPY', 'SPY premium momentum', '2026-09-14 – 2026-09-18', '5 sessions requested']);
+    expect(items.slice(0, 4)).toEqual(['SPY', 'SPY premium momentum', '2026-09-14 – 2026-09-18', 'Sessions requested: 5']);
     expectTradingDatesInNewYork(about as HTMLElement);
     expect(items[4]).toMatch(/^Started 2026-09-2[12] \d\d:\d\d:\d\d$/);
+  });
+
+  it('says one session asked for with a label and a number, so that no rule has to turn "session" into "sessions"', async () => {
+    const service = fakeService(vi);
+    readsAs(service, runDetail({ sessions_requested: 1 }));
+
+    await renderRun(runItem({ status: 'complete', sessions_requested: 1 }), { service });
+
+    expect(await screen.findByText('Sessions requested: 1')).toBeTruthy();
+    expect(screen.queryByText(/1 sessions/)).toBeNull();
   });
 
   it('says plainly when the run cannot be read, and reads it again on request', async () => {

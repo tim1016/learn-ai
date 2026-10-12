@@ -33,7 +33,7 @@ describe('a chain whose underlying has no price at that time', () => {
 
     expect(card()).toContain('No strikes are drawn.');
     expect(card()).toContain(why);
-    expect(card()).toContain('120 calls and 118 puts are listed.');
+    expect(card()).toContain('Calls listed: 120. Puts listed: 118.');
     expect(screen.queryByRole('table', { name: /Calls on the left/ })).toBeNull();
     for (const sentence of FALSE_SENTENCES) expect(card()).not.toMatch(sentence);
   });
@@ -98,10 +98,10 @@ describe('a chain whose underlying has no price at that time', () => {
     for (const sentence of FALSE_SENTENCES) expect(card()).not.toMatch(sentence);
   });
 
-  it('says one call and one put in the singular', async () => {
+  it('says one call and one put with a label and a number, which needs no plural', async () => {
     await renderUndrawn(withoutMoney({ state: 'no_bar_yet' }, { calls: sideWithoutMoney('call', 1, 1), puts: sideWithoutMoney('put', 1, 1) }));
 
-    expect(card()).toContain('1 call and 1 put are listed.');
+    expect(card()).toContain('Calls listed: 1. Puts listed: 1.');
   });
 });
 
@@ -111,7 +111,7 @@ describe('a chain with a price whose strikes cannot be centred', () => {
 
     expect(card()).toContain('No strikes are drawn.');
     expect(card()).toContain('The underlying has a price, but the server found no standard contract on a side to centre them on.');
-    expect(card()).toContain('4 calls and 4 puts are listed.');
+    expect(card()).toContain('Calls listed: 4. Puts listed: 4.');
     for (const sentence of FALSE_SENTENCES) expect(card()).not.toMatch(sentence);
   });
 
@@ -119,7 +119,7 @@ describe('a chain with a price whose strikes cannot be centred', () => {
     await renderUndrawn(chainExpiry({ calls: side('call', [], 602_000, { listed: 4 }), puts: side('put', [], 602_000, { listed: 4 }) }));
 
     expect(card()).toContain('The server sent no contract in this window.');
-    expect(card()).toContain('4 calls and 4 puts are listed.');
+    expect(card()).toContain('Calls listed: 4. Puts listed: 4.');
   });
 });
 
@@ -127,7 +127,7 @@ describe('a chain in which nothing is listed', () => {
   it('is the one case that says nothing is listed, because both counts say so', async () => {
     await renderUndrawn(chainExpiry({ calls: side('call', [], null), puts: side('put', [], null) }));
 
-    expect(card()).toContain('No contract is listed at this expiry: the server counts 0 calls and 0 puts.');
+    expect(card()).toContain('No contract is listed at this expiry. Calls listed: 0. Puts listed: 0.');
     expect(card()).not.toContain('No strikes are drawn');
     expect(screen.queryByRole('table', { name: /Calls on the left/ })).toBeNull();
   });

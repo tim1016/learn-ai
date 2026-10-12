@@ -204,9 +204,9 @@ describe('the strikes each side of the money', () => {
   });
 
   it.each([
-    ['1', '1 strike each side of the money'],
-    ['0', '0 strikes each side of the money'],
-    ['2', '2 strikes each side of the money'],
+    ['1', 'Strikes each side of the money: 1'],
+    ['0', 'Strikes each side of the money: 0'],
+    ['2', 'Strikes each side of the money: 2'],
   ])('are counted in the words under the table: %j is %j', async (typed, words) => {
     const expiry = vi.fn(async (query: ExpiryQuery) => chainExpiry({ strikes_each_side: query.strikes === null ? 10 : Number(query.strikes) }));
     await renderChainTab(fakeChainService(vi, { expiry }));
@@ -214,7 +214,7 @@ describe('the strikes each side of the money', () => {
 
     typeStrikes(typed);
 
-    await waitFor(() => expect(reads(paragraph(/strikes? each side of the money$/))).toBe(words));
+    await waitFor(() => expect(reads(paragraph(/^Strikes each side of the money: \d+$/))).toBe(words));
   });
 
   it.each([

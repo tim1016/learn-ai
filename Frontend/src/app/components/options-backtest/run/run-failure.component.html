@@ -6,7 +6,7 @@
       @for (group of groups(); track group.code) {
         <li>
           <button type="button" class="group" [attr.aria-expanded]="isOpen(group)" [attr.aria-controls]="listId(group)" (click)="toggle(group)">
-            {{ group.code | receiptLabel }} · {{ group.items.length }} {{ group.items.length === 1 ? 'item' : 'items' }}
+            {{ group.code | receiptLabel }} · Items: {{ group.items.length }}
           </button>
           @if (isOpen(group)) {
             <ul class="items" [id]="listId(group)">

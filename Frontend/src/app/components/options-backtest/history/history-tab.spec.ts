@@ -157,7 +157,7 @@ describe('opening a run', () => {
     const alert = await screen.findByRole('alert');
     expect(reads(alert)).toBe('Some sessions have no data.');
     const failed = screen.getByRole('list', { name: 'What failed' });
-    expect(reads(failed)).toBe('Listing · 1 item 2026-09-15 – No listing was stored.');
+    expect(reads(failed)).toBe('Listing · Items: 1 2026-09-15 – No listing was stored.');
     expectTradingDatesInNewYork(failed);
   });
 

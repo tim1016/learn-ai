@@ -274,7 +274,7 @@ describe('the plan of a traded day: what the tooltip says, in the server’s own
       'SPY: $585.55',
       `${call}: $2.60`,
       `${put}: no trade this minute`,
-      `Bought 1 contract of ${call}: filled $2.57, seen $2.55`,
+      `Bought ${call} (contracts: 1): filled $2.57, seen $2.55`,
       'Stop level $1.93 (call, first entry)',
     ]);
   });
@@ -290,7 +290,7 @@ describe('the plan of a traded day: what the tooltip says, in the server’s own
   });
 
   it('says what a sale was for, and a mark is told apart from a sale', () => {
-    expect(plan.tips.get(sec(11))?.filter((line) => line.startsWith('Sold'))).toEqual([`Sold 1 contract of ${call}: filled $1.82, seen $1.84 (Stop)`]);
+    expect(plan.tips.get(sec(11))?.filter((line) => line.startsWith('Sold'))).toEqual([`Sold ${call} (contracts: 1): filled $1.82, seen $1.84 (Stop)`]);
     expect(plan.tips.get(sec(10))?.filter((line) => line.startsWith('Marked'))).toEqual([`Marked, not sold: ${put} at $1.25`]);
   });
 

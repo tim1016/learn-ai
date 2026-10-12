@@ -201,10 +201,6 @@ function money(text: string): string {
   return formatAuthoredUsd(text) ?? text;
 }
 
-function plural(count: number, one: string, many: string): string {
-  return `${count} ${count === 1 ? one : many}`;
-}
-
 export function buildTimelinePlan(session: SessionDetail): TimelinePlan {
   const known = knownContracts(session);
   const grid = gridOf(session.session_open_ms, session.session_close_ms);
@@ -345,7 +341,7 @@ function addFills(
     const words = contractWords(fill.contract, known);
     const kind = FILL_WORDS[fill.kind];
     const why = fill.exit_reason == null ? '' : ` (${formatReceiptLabel(fill.exit_reason)})`;
-    tips.add(seconds(fill.bar_close_ms), `${kind.name} ${plural(fill.contracts, 'contract', 'contracts')} of ${words}: filled ${money(fill.filled_usd)}, seen ${money(fill.seen_usd)}${why}`);
+    tips.add(seconds(fill.bar_close_ms), `${kind.name} ${words} (contracts: ${fill.contracts}): filled ${money(fill.filled_usd)}, seen ${money(fill.seen_usd)}${why}`);
     const price = axisPrice(fill.filled_usd);
     if (price === null) {
       notDrawn.push({ key: fillKey(fill), what: kind.name, symbol: fill.contract, ofUnderlying: false, contract: known.get(fill.contract) ?? null, reason: null, message: UNPLACEABLE, listedBelow: true });

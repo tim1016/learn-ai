@@ -113,11 +113,11 @@ describe('the panel', () => {
     const section = within(check).getByRole('region', { name: 'Cannot Be Tested' });
     const olderHead = within(section).getByText('Older Than The Data Plan');
     const olderGroup = olderHead.closest('.reason') as HTMLElement;
-    expect(olderGroup.querySelector('.reason__head')?.textContent?.replace(/\s+/g, ' ')).toBe('Older Than The Data Plan · 2 sessions');
+    expect(olderGroup.querySelector('.reason__head')?.textContent?.replace(/\s+/g, ' ')).toBe('Older Than The Data Plan · Sessions: 2');
     expect(within(olderGroup).getByText('This session is older than the data plan reaches.')).toBeTruthy();
     expect([...olderGroup.querySelectorAll('.days li')].map((day) => day.textContent?.trim())).toEqual(['2026-09-14', '2026-09-15']);
     const feesGroup = within(section).getByText('No Published Fee Rates').closest('.reason') as HTMLElement;
-    expect(feesGroup.querySelector('.reason__head')?.textContent?.replace(/\s+/g, ' ')).toBe('No Published Fee Rates · 1 session');
+    expect(feesGroup.querySelector('.reason__head')?.textContent?.replace(/\s+/g, ' ')).toBe('No Published Fee Rates · Sessions: 1');
     expect(within(feesGroup).getByText('No fee rates are published for this date.')).toBeTruthy();
     expect([...feesGroup.querySelectorAll('.days li')].map((day) => day.textContent?.trim())).toEqual(['2026-09-16']);
     expectTradingDatesInNewYork(section);
@@ -211,7 +211,7 @@ describe('Run available dates', () => {
     const button = await within(check).findByRole('button', { name: 'Run available dates' });
     expect(dateFields()).toEqual({ from: '2026-09-14', to: '2026-09-18' });
     expect(screen.queryByText(/Range changed to/)).toBeNull();
-    expect(within(check).getByText(/Longest stretch that can be: 3 sessions/)).toBeTruthy();
+    expect(within(check).getByText(/Longest stretch that can be: .* Sessions in it: 3$/)).toBeTruthy();
     expect((button as HTMLButtonElement).disabled).toBe(false);
   });
 

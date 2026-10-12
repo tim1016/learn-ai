@@ -18,7 +18,7 @@
     <app-options-backtest-data-check-sessions [sessions]="check.answer.sessions" />
     @if (stretch(); as longest) {
       <div class="stretch">
-        <p class="words">Not every session can be tested. Longest stretch that can be: {{ longest.sessions }} {{ longest.sessions === 1 ? 'session' : 'sessions' }}, <app-timestamp-display [value]="longest.first_session_open_ms" mode="date-et" granularity="date" /> – <app-timestamp-display [value]="longest.last_session_open_ms" mode="date-et" granularity="date" /></p>
+        <p class="words">Not every session can be tested. Longest stretch that can be: <app-timestamp-display [value]="longest.first_session_open_ms" mode="date-et" granularity="date" /> – <app-timestamp-display [value]="longest.last_session_open_ms" mode="date-et" granularity="date" />. Sessions in it: {{ longest.sessions }}</p>
         <button pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="stale()" (click)="useStretch.emit(longest)"><i class="pi pi-calendar" aria-hidden="true"></i><span>Run available dates</span></button>
       </div>
     }

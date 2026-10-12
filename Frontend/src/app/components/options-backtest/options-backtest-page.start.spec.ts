@@ -451,7 +451,7 @@ describe('a backtest from start to end', () => {
 
     const alert = await screen.findByRole('alert');
     expect(reads(alert)).toBe('Some sessions have no data to replay.');
-    expect(reads(screen.getByRole('list', { name: 'What failed' }))).toBe('Listing · 1 item 2026-09-14 – No listing was stored.');
+    expect(reads(screen.getByRole('list', { name: 'What failed' }))).toBe('Listing · Items: 1 2026-09-14 – No listing was stored.');
     await waitFor(() => expect(startButton().disabled).toBe(false));
   });
 

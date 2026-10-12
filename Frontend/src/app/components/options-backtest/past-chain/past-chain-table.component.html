@@ -27,12 +27,12 @@
         <p class="words">Expiry <app-timestamp-display [value]="chain.expiry_ms" mode="date-et" granularity="date" /></p>
         @if (chain.tag; as tag) { <app-options-backtest-expiry-tag [tag]="tag" /> }
         <p class="words">Priced as of <app-timestamp-display [value]="chain.at_ms" mode="et" granularity="minute" /> on <app-timestamp-display [value]="chain.session_open_ms" mode="date-et" granularity="date" /></p>
-        <p class="words">{{ chain.strikes_each_side }} {{ chain.strikes_each_side === 1 ? 'strike' : 'strikes' }} each side of the money</p>
+        <p class="words">Strikes each side of the money: {{ chain.strikes_each_side }}</p>
       </div>
       <app-options-backtest-underlying-strip role="group" aria-label="The underlying at that time" [symbol]="chain.underlying" [price]="chain.underlying_price" />
       <p class="words">Calls: {{ chain.calls.listed }} listed, {{ chain.calls.standard_listed }} standard. Puts: {{ chain.puts.listed }} listed, {{ chain.puts.standard_listed }} standard.</p>
       @if (part.kind === 'nothing_listed') {
-        <p role="status">No contract is listed at this expiry: the server counts {{ chain.calls.listed }} calls and {{ chain.puts.listed }} puts.</p>
+        <p role="status">No contract is listed at this expiry. Calls listed: {{ chain.calls.listed }}. Puts listed: {{ chain.puts.listed }}.</p>
       } @else if (part.kind === 'no_strikes') {
         <app-options-backtest-no-strikes [why]="part.why" [calls]="chain.calls.listed" [puts]="chain.puts.listed" [downloadOffered]="downloadOffered()" />
       } @else {

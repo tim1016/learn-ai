@@ -34,5 +34,5 @@
   </div>
   <p id="ob-expiry-hint" class="hint">{{ expiryHint() }}</p>
   @for (problem of problems(); track problem[0]) { <p class="problem" role="alert" [id]="problemId(problem[0])">{{ problem[1] }}</p> }
-  @if (full()) { <p class="hint" role="status">A setup holds at most {{ maxLegs() }} legs. Delete one to add another.</p> }
+  @if (full()) { <p class="hint" role="status">The most legs a setup holds: {{ maxLegs() }}. Delete one to add another.</p> }
 </section>

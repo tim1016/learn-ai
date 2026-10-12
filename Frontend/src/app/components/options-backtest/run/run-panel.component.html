@@ -7,7 +7,7 @@
     <li><app-asset-identity [symbol]="run().underlying" size="xs" [logo]="false" /></li>
     @if (run().setup_name; as name) { <li>{{ name }}</li> }
     <li><app-timestamp-display [value]="run().first_session_open_ms" mode="date-et" granularity="date" /> – <app-timestamp-display [value]="run().last_session_open_ms" mode="date-et" granularity="date" /></li>
-    <li>{{ run().sessions_requested }} sessions requested</li>
+    <li>Sessions requested: {{ run().sessions_requested }}</li>
     <li>Started <app-timestamp-display [value]="run().created_at_ms" mode="local" /></li>
   </ul>
   @if (cancelling() && status() === 'complete') {

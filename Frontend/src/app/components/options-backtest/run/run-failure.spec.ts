@@ -37,7 +37,7 @@ describe('why a run failed, whatever code the server gives', () => {
       items: [item('a_cause_found_next_year', 'The vendor did something new.')],
     });
 
-    expect(reads(groups().getAllByRole('listitem')[0] ?? null)).toBe('A Cause Found Next Year · 1 item 2026-09-14 – The vendor did something new.');
+    expect(reads(groups().getAllByRole('listitem')[0] ?? null)).toBe('A Cause Found Next Year · Items: 1 2026-09-14 – The vendor did something new.');
   });
 });
 
@@ -65,7 +65,7 @@ describe('what failed, in the list under the reason', () => {
     });
 
     const [listing, tooLong, internal] = groups().getAllByRole('button');
-    expect([listing, tooLong, internal].map((group) => reads(group ?? null))).toEqual(['Listing Not Captured · 2 items', 'Took Too Long · 1 item', 'Internal Error · 1 item']);
+    expect([listing, tooLong, internal].map((group) => reads(group ?? null))).toEqual(['Listing Not Captured · Items: 2', 'Took Too Long · Items: 1', 'Internal Error · Items: 1']);
     expect(reads(groups().getAllByRole('list')[0] ?? null)).toBe('2026-09-14 – No listing for the 14th. 2026-09-16 – No listing for the 16th.');
     expect(reads(groups().getAllByRole('list')[2] ?? null)).toBe('The run as a whole – The run as a whole could not go on.');
   });
@@ -76,7 +76,7 @@ describe('what failed, in the list under the reason', () => {
 
     const group = screen.getByRole('button', { name: /Session Cannot Be Tested/ });
 
-    expect(reads(group)).toBe('Session Cannot Be Tested · 1300 items');
+    expect(reads(group)).toBe('Session Cannot Be Tested · Items: 1300');
     expect(group.getAttribute('aria-expanded')).toBe('false');
     expect(screen.queryAllByRole('listitem')).toHaveLength(1);
     expect(reads(screen.getByRole('alert'))).toBe('Some sessions cannot be tested.');

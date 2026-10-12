@@ -170,7 +170,7 @@ describe('the chain of one expiry', () => {
     expect(head).toContain('Monthly');
     expect(head).toContain('Expires today');
     expect(head).toContain('Priced as of 16:00 ET on 2026-10-09');
-    expect(head).toContain('10 strikes each side of the money');
+    expect(head).toContain('Strikes each side of the money: 10');
   });
 
   it('counts calls and puts as served', async () => {

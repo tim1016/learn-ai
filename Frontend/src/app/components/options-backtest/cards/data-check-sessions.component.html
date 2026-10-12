@@ -3,7 +3,7 @@
     <h3 id="ob-check-cannot">{{ 'cannot_be_tested' | receiptLabel }}</h3>
     @for (group of groups(); track group.code) {
       <div class="reason">
-        <p class="reason__head"><strong>{{ group.code | receiptLabel }}</strong> · {{ group.sessionOpensMs.length }} {{ group.sessionOpensMs.length === 1 ? 'session' : 'sessions' }}</p>
+        <p class="reason__head"><strong>{{ group.code | receiptLabel }}</strong> · Sessions: {{ group.sessionOpensMs.length }}</p>
         @for (message of group.messages; track message) { <p class="message">{{ message }}</p> }
         @for (reason of group.lakeReasons; track reason) { <p class="message">The lake recorded: {{ reason | receiptLabel }}</p> }
         <ul class="days">
