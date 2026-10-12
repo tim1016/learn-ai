@@ -577,22 +577,38 @@ class SharedWorkerPool:
 
         A closed owner has no consumer left, so the pool settles the
         entry's budget here instead of waiting for a consumption that will
-        never come. A closing pool still delivers — the owner's generator
-        is the waiter these losses answer — but skips the byte accounting:
-        shutdown never blocks on a bound.
+        never come — including skipping the wait itself. A closing pool
+        still delivers — the owner's generator is the waiter these losses
+        answer — but skips the byte accounting: shutdown never blocks on a
+        bound. A single outcome larger than the whole bound could never be
+        admitted by waiting, so it is delivered unaccounted with a warning
+        — a visible whale, never a hung lane (#3048 review).
         """
         result_bytes = self._arrival_size(arrival)
+        oversized = result_bytes > self._result_bound_bytes
+        if oversized:
+            logger.warning(
+                "a research outcome exceeds the pool's whole result bound; delivering unaccounted",
+                extra={"action": "research_pool_result_oversized", "result_bytes": result_bytes},
+            )
         with self._state_changed:
             owner = entry.owner
             owner.in_flight = max(owner.in_flight - 1, 0)
-            while not self._closing and self._result_bytes + result_bytes > self._result_bound_bytes:
+            while (
+                not self._closing
+                and not owner.closed
+                and not oversized
+                and self._result_bytes + result_bytes > self._result_bound_bytes
+            ):
                 self._state_changed.wait(timeout=_LANE_POLL_S)
             if owner.closed:
                 self._settle_locked(entry)
                 return
-            if not self._closing:
+            if not self._closing and not oversized:
                 self._result_bytes += result_bytes
                 owner.settled[(entry.item.key, entry.item.task_gen)] = (entry.payload_bytes, result_bytes)
+            else:
+                owner.settled[(entry.item.key, entry.item.task_gen)] = (entry.payload_bytes, 0)
         handle = owner.handle
         if handle is not None:
             handle.arrived.put((entry.item.key, entry.item.task_gen, arrival))
@@ -609,16 +625,26 @@ class SharedWorkerPool:
     # -- cancellation and teardown --------------------------------------------
 
     def _cancel_owner_children(self, owner: _OwnerState) -> None:
-        """Stop only the children running this owner's items; its queued entries die at take time."""
+        """Stop the children running this owner's items; its queued entries die at take time.
+
+        Held under the pool lock across the cancels, deliberately: a lane
+        can only finish its item and take another owner's through the
+        lock's busy-flag transition, so the children cancelled here are
+        still running this owner's items when their cancel lands — a
+        snapshot-then-release window would let a persistent child move on
+        to a sibling's item and take a misfired kill as a fabricated retry
+        (#3048 review).
+        """
         with self._state_changed:
-            running = [lane for lane in self._lanes if lane.current is not None and lane.current.owner is owner]
-        for lane in running:
-            worker = lane.worker
-            if worker is None:
-                continue
-            stopper = threading.Thread(target=worker.cancel, daemon=True)
-            stopper.start()
-            stopper.join(timeout=5.0)
+            for lane in self._lanes:
+                if lane.current is None or lane.current.owner is not owner:
+                    continue
+                worker = lane.worker
+                if worker is None:
+                    continue
+                stopper = threading.Thread(target=worker.cancel, daemon=True)
+                stopper.start()
+                stopper.join(timeout=5.0)
 
     def drain(self, *, wait_s: float = 60.0) -> dict[str, Any]:
         """The operator's capacity handoff (#3048 AC 10): stop assignments, finish or interrupt, reap.

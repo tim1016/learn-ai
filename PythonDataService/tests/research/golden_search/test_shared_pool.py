@@ -491,3 +491,79 @@ def test_an_operators_drain_latches_the_singleton_against_recreation(monkeypatch
             )
     finally:
         _reset_shared_singleton()
+
+
+def test_a_refused_owner_retries_its_offer_when_capacity_frees(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3048 review P1: an owner refused by a temporarily full global bound still gets served.
+
+    Its first offers returned False, so it has no arrival of its own to
+    retry after — the adaptive-wait tick must re-offer, or a second study
+    starting against a full bound would wait forever.
+    """
+    release = threading.Event()
+
+    def execute(task: dict[str, Any]) -> dict[str, Any]:
+        release.wait(timeout=5.0)
+        return _gap_message(task)
+
+    pool, _ = _pool(monkeypatch, workers=1, submission_bound=1)
+    context = worker_module.WorkerDispatchContext(**CONTEXT)
+    first = pool_module.PooledWorkerDispatch(context, workers=1, window=1, pool=pool)
+    second = pool_module.PooledWorkerDispatch(
+        worker_module.WorkerDispatchContext(**{**CONTEXT, "job_id": "job-second"}), workers=1, window=1, pool=pool
+    )
+    outcomes: queue.SimpleQueue[list] = queue.SimpleQueue()
+
+    def run_first() -> None:
+        outcomes.put(("first", list(first(None, [_crafted_item(0.1)]))))
+
+    def run_second() -> None:
+        outcomes.put(("second", list(second(None, [_crafted_item(0.9)]))))
+
+    try:
+        # The first owner's item parks mid-run, holding the whole bound.
+        first_thread = threading.Thread(target=run_first, daemon=True)
+        first_thread.start()
+        deadline = time.monotonic() + 5.0
+        while pool.facts()["busy_lanes"] < 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        # The second owner starts against the full bound: its initial feed
+        # is refused and it has no arrival of its own to retry after.
+        second_thread = threading.Thread(target=run_second, daemon=True)
+        second_thread.start()
+        release.set()
+        which, delivered = outcomes.get(timeout=10.0)
+        assert which == "first", "the parked owner completed first"
+        assert delivered and delivered[0].lost_reason is None
+        # The adaptive-wait tick must re-offer for the refused owner — the
+        # freed budget reaches it without any arrival of its own consumed.
+        which, delivered = outcomes.get(timeout=10.0)
+        assert which == "second" and delivered, "the refused owner's offer was retried once capacity freed"
+    finally:
+        release.set()
+        first.close()
+        second.close()
+        pool.close()
+
+
+def test_an_outcome_larger_than_the_whole_result_bound_is_delivered_unaccounted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3048 review P1: a whale outcome can never be admitted by waiting — deliver it visibly, never hang the lane."""
+    pool, _ = _pool(monkeypatch, workers=1, submission_bound=2, result_bound_bytes=8)
+    owner = _register(pool)
+    try:
+        assert owner.offer(1, _crafted_item(0.1))
+        deadline = time.monotonic() + 5.0
+        outcome = None
+        while time.monotonic() < deadline:
+            try:
+                outcome = owner.arrived.get(timeout=0.5)
+                break
+            except queue.Empty:
+                continue
+        assert outcome is not None, "the oversized outcome was delivered, not waited on forever"
+        owner.consume(outcome[0], outcome[1])
+        facts = pool.facts()
+        assert facts["result_bytes"] == 0, "the whale rode unaccounted — visible, never blocking"
+    finally:
+        owner.close()
+        pool.close()

@@ -1013,14 +1013,20 @@ def test_a_delivered_cancellation_reaps_the_children_before_release_reconciliati
 
     events: list[str] = []
     release_blocking = threading.Event()
+    sibling_started = threading.Event()
 
     def spawn(context: WorkerDispatchContext) -> _FakeChild:
         child = _FakeChild(context)
 
         def execute(task: dict[str, Any]) -> dict[str, Any]:
             if float(task["point"]["gap"]) == 0.1:
+                # The cancelling answer waits for its sibling to be provably
+                # mid-run: on a slower runner the reap may otherwise find no
+                # lane occupied yet (#3048 CI).
+                assert sibling_started.wait(timeout=5.0), "the sibling began before the cancellation landed"
                 return {"type": "failed", "key": task["key"], "error": "cancelled"}
             # A sibling item stays mid-run so the reap has a live child to stop.
+            sibling_started.set()
             assert release_blocking.wait(timeout=5.0), "the mid-run child outlived its owner's cancellation"
             return {"type": "failed", "key": task["key"], "error": "cancelled"}
 

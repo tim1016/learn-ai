@@ -180,6 +180,12 @@ class PooledWorkerDispatch:
                 except queue.Empty:
                     # Every lane busy or the window full: the pool's adaptive wait (#3046).
                     adaptive_wait_ms += int((time.monotonic() - waited_at) * 1000)
+                    # Retry the offer on the same clock: an owner whose first
+                    # offers were refused by a temporarily full global bound
+                    # has no arrival of its own to retry after — without
+                    # this it would wait forever even after other owners
+                    # freed capacity (#3048 review).
+                    self._feed(owed, submitted, epoch)
                     continue
                 item = owed.get(key)
                 if item is None or item.task_gen != task_gen:
