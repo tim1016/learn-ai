@@ -94,6 +94,7 @@ export const APP_MENU: readonly AppMenuGroup[] = [
       { title: 'Grid Search', route: '/grid-search' },
       { title: 'Walk-Forward', route: '/walk-forward' },
       { title: 'Golden Search', route: '/golden-search' },
+      { title: 'Options Backtest', route: '/options-backtest' },
     ],
   },
   {

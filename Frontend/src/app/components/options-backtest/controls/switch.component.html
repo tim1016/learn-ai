@@ -1,0 +1,5 @@
+<label class="switch" [class.switch--on]="checked()">
+  <input type="checkbox" role="switch" [attr.aria-label]="accessibleName()" [checked]="checked()" [disabled]="disabled()" (change)="onChange($event)" (blur)="touch.emit()" />
+  <span class="track" aria-hidden="true"><span class="thumb"></span></span>
+  <span class="text">{{ label() }}</span>
+</label>

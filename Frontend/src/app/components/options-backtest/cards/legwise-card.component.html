@@ -1,0 +1,10 @@
+<section class="card" aria-labelledby="ob-legwise-title">
+  <div class="card__head"><h2 id="ob-legwise-title">Legwise settings</h2></div>
+  <div class="fields">
+    <div class="field">
+      <span id="ob-square-off-label">Square off</span>
+      <app-options-backtest-pill-choice [formField]="squareOff()" [options]="choices" label="Square off" />
+    </div>
+  </div>
+  @if (problem(); as message) { <p class="problem" role="alert">{{ message }}</p> }
+</section>

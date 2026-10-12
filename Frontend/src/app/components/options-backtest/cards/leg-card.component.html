@@ -1,0 +1,36 @@
+<article class="card leg" [attr.aria-label]="name()">
+  <header class="leg__head">
+    <span class="leg__number" aria-hidden="true">{{ position() + 1 }}</span>
+    <div class="leg__title">
+      <h3>{{ name() }}</h3>
+      <p class="leg__line">{{ line() }}</p>
+    </div>
+    <button pButton type="button" severity="secondary" [text]="true" size="small" [disabled]="!canCopy()" [attr.aria-label]="'Copy ' + name()" (click)="copied.emit()"><i class="pi pi-copy" aria-hidden="true"></i></button>
+    <button pButton type="button" severity="danger" [text]="true" size="small" [attr.aria-label]="'Delete ' + name()" (click)="removed.emit()"><i class="pi pi-trash" aria-hidden="true"></i></button>
+  </header>
+  @for (message of contractProblems(); track message) { <p class="problem" role="alert">{{ message }}</p> }
+
+  <div class="rule" [class.rule--off]="!leg().stopLossOn">
+    <app-options-backtest-switch [formField]="legForm().stopLossOn" label="Stop loss" [accessibleName]="name() + ' stop loss'" />
+    <app-options-backtest-pill-choice [formField]="legForm().stopLossKind" [options]="stopLossChoices" [label]="name() + ' stop loss unit'" />
+    <input pInputText type="text" inputmode="decimal" autocomplete="off" [formField]="legForm().stopLossValue" [attr.aria-label]="name() + ' stop loss value'" [attr.aria-invalid]="problem('stopLossValue') !== null" />
+    @for (message of stopLossProblems(); track message) { <p class="problem" role="alert">{{ message }}</p> }
+  </div>
+
+  <div class="rule" [class.rule--off]="!leg().momentumOn">
+    <app-options-backtest-switch [formField]="legForm().momentumOn" label="Simple momentum" [accessibleName]="name() + ' simple momentum'" />
+    <app-options-backtest-pill-choice [formField]="legForm().momentumKind" [options]="momentumChoices" [label]="name() + ' momentum direction'" />
+    <input pInputText type="text" inputmode="decimal" autocomplete="off" [formField]="legForm().momentumValue" [attr.aria-label]="name() + ' momentum value'" [attr.aria-invalid]="problem('momentumValue') !== null" />
+    @for (message of momentumProblems(); track message) { <p class="problem" role="alert">{{ message }}</p> }
+  </div>
+
+  <div class="rule" [class.rule--off]="!leg().reentryOn">
+    <app-options-backtest-switch [formField]="legForm().reentryOn" label="Re-entry on SL" [accessibleName]="name() + ' re-entry on stop loss'" />
+    <app-options-backtest-pill-choice [formField]="legForm().reentryKind" [options]="reentryChoices" [label]="name() + ' re-entry kind'" [unavailable]="unavailableReentry()" [describedBy]="leg().momentumOn ? null : reasonId()" />
+    <input pInputText type="text" inputmode="numeric" autocomplete="off" [formField]="legForm().reentryCount" [attr.aria-label]="name() + ' re-entries'" [attr.aria-invalid]="problem('reentryCount') !== null" />
+    <span class="muted">times</span>
+    @if (!leg().momentumOn) { <p class="hint" [id]="reasonId()">On momentum can be chosen once Simple momentum is on: it asks the momentum rule again.</p> }
+    @if (leg().reentryOn && !leg().stopLossOn) { <p class="hint" role="status">A re-entry follows a stop, so nothing re-enters until Stop loss is on.</p> }
+    @for (message of reentryProblems(); track message) { <p class="problem" role="alert">{{ message }}</p> }
+  </div>
+</article>

@@ -1,0 +1,12 @@
+.leg { gap: var(--space-3); }
+.leg__head { display: flex; align-items: center; gap: var(--space-3); }
+.leg__number { display: inline-grid; place-items: center; width: 1.75rem; height: 1.75rem; border-radius: var(--radius-pill); background: var(--accent-soft); color: var(--text-primary); font-weight: var(--fw-semi); font-size: var(--fs-sm); flex: none; }
+.leg__title { flex: 1 1 auto; min-width: 0; display: grid; gap: 2px; }
+.leg__title h3 { margin: 0; font-size: var(--fs-sm); font-weight: var(--fw-semi); }
+.leg__line { color: var(--text-secondary); font-size: var(--fs-sm); }
+.rule { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3) var(--space-4); padding-top: var(--space-3); border-top: 1px solid var(--border-light); }
+.rule app-options-backtest-switch { min-width: 11rem; }
+.rule input[type='text'] { width: 6rem; }
+.rule--off .muted { opacity: 0.5; }
+.rule .hint, .rule .problem { flex-basis: 100%; }
+.muted { color: var(--text-secondary); font-size: var(--fs-sm); }

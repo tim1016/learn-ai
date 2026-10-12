@@ -1,0 +1,37 @@
+<section class="card" aria-labelledby="ob-builder-title">
+  <div class="card__head">
+    <h2 id="ob-builder-title">Leg builder</h2>
+    <p class="hint">Choose a contract, then press Add leg. Only buying is offered.</p>
+  </div>
+  <div class="row">
+    <span class="buy">Buy</span>
+    <app-options-backtest-pill-choice [formField]="form().right" [options]="rights" label="Call or put" />
+    <div class="field field--narrow">
+      <label for="ob-contracts">Contracts</label>
+      <input id="ob-contracts" pInputText type="text" inputmode="numeric" autocomplete="off" [formField]="form().contracts" [attr.aria-invalid]="problems().has('contracts')" />
+    </div>
+    <div class="field">
+      <span>Expiry</span>
+      <app-options-backtest-pill-choice [formField]="form().expiryKind" [options]="expiries" label="Expiry" />
+    </div>
+    @if (builder().expiryKind === 'min_days') {
+      <div class="field field--narrow">
+        <label for="ob-expiry-days">Days (N)</label>
+        <input id="ob-expiry-days" pInputText type="text" inputmode="numeric" autocomplete="off" [formField]="form().expiryDays" [attr.aria-invalid]="problems().has('expiryDays')" />
+      </div>
+    }
+    <div class="field">
+      <span>Strike</span>
+      <app-options-backtest-pill-choice [formField]="form().strikeKind" [options]="strikes" label="Strike" />
+    </div>
+    @if (builder().strikeKind === 'atm_offset') {
+      <div class="field field--narrow">
+        <label for="ob-strike-steps">Steps (+ above, - below)</label>
+        <input id="ob-strike-steps" pInputText type="text" inputmode="numeric" autocomplete="off" [formField]="form().strikeSteps" [attr.aria-invalid]="problems().has('strikeSteps')" />
+      </div>
+    }
+    <button pButton type="button" class="add" [disabled]="!canAdd()" (click)="add.emit()"><i class="pi pi-plus" aria-hidden="true"></i><span>Add leg</span></button>
+  </div>
+  @for (problem of problems().values(); track problem) { <p class="problem" role="alert">{{ problem }}</p> }
+  @if (full()) { <p class="hint" role="status">A setup holds at most {{ maxLegs }} legs. Delete one to add another.</p> }
+</section>

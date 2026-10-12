@@ -1,0 +1,11 @@
+<section class="legs" aria-labelledby="ob-legs-title">
+  <div class="card__head">
+    <h2 id="ob-legs-title">Legs</h2>
+    <span class="hint">{{ legs().length }} of {{ maxLegs }}</span>
+  </div>
+  @if (legs().length === 0) { <p class="hint" role="status">No legs yet. Choose a contract in the leg builder and press Add leg.</p> }
+  @if (legsProblem(); as message) { <p class="problem" role="alert">{{ message }}</p> }
+  @for (leg of legs(); track leg.id; let index = $index) {
+    <app-options-backtest-leg-card [legForm]="form().legs[index]" [position]="index" [problems]="problems()" [canCopy]="!full()" (copied)="legCopied.emit(leg.id)" (removed)="legRemoved.emit(leg.id)" />
+  }
+</section>

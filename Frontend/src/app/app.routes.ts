@@ -236,6 +236,13 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "options-backtest",
+    loadComponent: () =>
+      import("./components/options-backtest/options-backtest-page.component").then(
+        (m) => m.OptionsBacktestPageComponent
+      ),
+  },
+  {
     path: "strategy-validation",
     loadComponent: () =>
       import(

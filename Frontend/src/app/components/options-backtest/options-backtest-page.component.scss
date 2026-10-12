@@ -1,0 +1,13 @@
+:host { display: block; min-width: 0; }
+p { margin: 0; }
+.layout { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: var(--space-4); }
+.column { display: grid; gap: var(--space-4); min-width: 0; max-width: 72rem; }
+.notice { border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--bg-surface); color: var(--text-secondary); padding: var(--space-3); font-size: var(--fs-sm); display: grid; gap: var(--space-2); }
+.notice ul { margin: 0; padding-left: var(--space-5); }
+.notice--error { border-color: var(--bear); color: var(--bear); }
+.again { justify-self: start; background: none; border: 1px solid var(--border-strong); color: var(--text-secondary); border-radius: var(--radius); padding: var(--space-1) var(--space-3); font: inherit; font-size: var(--fs-sm); cursor: pointer; }
+.again:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (max-width: 768px) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+}

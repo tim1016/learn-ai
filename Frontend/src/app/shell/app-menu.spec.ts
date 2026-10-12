@@ -31,6 +31,14 @@ describe('app menu projections', () => {
     expect(groups.filter((group) => group.styleClass === ACTIVE_GROUP_CLASS)).toHaveLength(1);
   });
 
+  it('lists Options Backtest beside the other strategy research pages and titles the window for it', () => {
+    const node = activeMenuNodeFor('/options-backtest');
+
+    expect(node?.group.title).toBe('Strategy Tools');
+    expect(node?.item.title).toBe('Options Backtest');
+    expect(pageTitleFor('/options-backtest')).toBe('Options Backtest');
+  });
+
   it('offers Alpaca as Accounts and nothing else', () => {
     // ADR 0064 Decision 2: Deploy, the bot roster and the Gallery are things
     // done *on* an account, so they are that account's workspace tabs — four

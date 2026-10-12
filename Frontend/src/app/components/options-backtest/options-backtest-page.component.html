@@ -1,0 +1,44 @@
+<app-page-header title="Options Backtest" icon="pi-sliders-h">
+  <button slot="actions" pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="clock() === null" (click)="chooser.click()"><i class="pi pi-upload" aria-hidden="true"></i><span>Import setup</span></button>
+  <button slot="actions" pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="!canExport()" (click)="exportSetup()"><i class="pi pi-download" aria-hidden="true"></i><span>Export setup</span></button>
+</app-page-header>
+<input #chooser hidden type="file" accept=".json,application/json" aria-label="Setup file to import" (change)="importFile($event)" />
+
+<div class="layout">
+  <app-options-backtest-side-list
+    [setups]="setups()" [status]="libraryStatus()" [error]="libraryProblem()" [selected]="loadedName()"
+    [canOpen]="clock() !== null" [message]="deleteProblem()"
+    (opened)="open($event)" (removed)="remove($event)" (retry)="retryLibrary()" />
+  <div class="column">
+    @if (importNotice(); as notice) {
+      <div class="notice" [class.notice--error]="notice.kind === 'refused'" [attr.role]="notice.kind === 'refused' ? 'alert' : 'status'">
+        <p>{{ notice.title }}</p>
+        @if (notice.reasons.length > 0) {
+          <ul>
+            @for (reason of notice.reasons; track reason) { <li>{{ reason }}</li> }
+          </ul>
+        }
+      </div>
+    }
+    @if (clock(); as sessionClock) {
+      <app-options-backtest-instrument-card [underlying]="setupForm.underlying" [problem]="underlyingProblem()" />
+      <app-options-backtest-entry-card [form]="setupForm" [clock]="sessionClock" [problems]="fieldProblems()" />
+      <app-options-backtest-legwise-card [squareOff]="setupForm.squareOff" />
+      <app-options-backtest-leg-builder-card [form]="builderForm" [legCount]="draft().legs.length" (add)="addLeg()" />
+      <app-options-backtest-legs-card [form]="setupForm" [problems]="fieldProblems()" (legCopied)="copyLeg($event)" (legRemoved)="removeLeg($event)" />
+      <app-options-backtest-costs-card [form]="setupForm" [problems]="fieldProblems()" />
+      <app-options-backtest-summary [state]="summary()" (retry)="retrySummary()" />
+    } @else if (clockProblem(); as problem) {
+      <div class="notice notice--error" role="alert">
+        <p>{{ problem }}</p>
+        <button type="button" class="again" (click)="retryClock()">Try again</button>
+      </div>
+    } @else {
+      <p class="notice" role="status">Reading the session times…</p>
+    }
+  </div>
+</div>
+
+<app-options-backtest-bottom-bar
+  [nameField]="saveForm.name" [canSave]="canSave()" [saving]="saving()" [nameProblem]="nameProblem()"
+  [hint]="saveHint()" [status]="saveStatus()" (save)="save()" />
