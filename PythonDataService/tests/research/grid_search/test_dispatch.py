@@ -36,6 +36,11 @@ from app.research.grid_search.dispatch import (
 from app.research.grid_search.models import CellResult, GridSearchSpec, SearchOwner, SearchRow
 from app.research.sweep.grid import RunSpec
 
+# The real-child test's reads are admitted against a committed fixture
+# catalog, never bypassed — the same contract the golden worker suite runs
+# under.
+pytestmark = pytest.mark.usefixtures("seeded_lake_catalog")
+
 IDENTITY = {"source_digest": "s" * 64, "environment_digest": "e" * 64, "digest_scheme": 2}
 INTERVAL = {"data_start_ms": 1735689600000, "evaluation_start_ms": 1736294400000, "evaluation_end_ms": 1737244800000}
 EXECUTION = {
@@ -625,3 +630,89 @@ def test_ready_cell_builder_freezes_the_receipt_parts_into_each_item() -> None:
 def test_cell_outcome_fields_name_their_meaning() -> None:
     outcome = CellOutcome(key="k", attempt=1, task_gen=1, cell=None)
     assert outcome.lost_reason is None and outcome.cancelled_by is None
+
+
+# ── A real spawned child (slow: real process, real engine) ────────────────
+
+
+@pytest.mark.slow
+def test_a_spawned_worker_returns_the_in_process_cell_exactly(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The dispatched cell is the locally executed cell, number for number (#3049)."""
+    from datetime import date
+
+    from app.config import settings
+    from app.research.grid_search.engine_adapter import default_execute_cell
+    from app.research.grid_search.models import SearchOwner
+    from app.research.sweep.grid import ValueListRange
+    from app.research.sweep.identity import resolve_code_identity
+    from tests.research.golden_search.test_worker import _reference_lake
+
+    write_root, _lake, manifest = _reference_lake(tmp_path)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))  # this process's settings object
+    monkeypatch.setenv("LEAN_DATA_WRITE_ROOT", str(write_root))  # the child reads env, not the object
+
+    from app.utils.session_anchors import et_midnight_ms
+
+    start_ms, end_ms = et_midnight_ms(date(2025, 1, 2)), et_midnight_ms(date(2025, 1, 3))
+    spec = GridSearchSpec(
+        strategy_key="sma_crossover",
+        symbol="SPY",
+        param_ranges={"short_window": ValueListRange((2.0,)), "long_window": ValueListRange((3.0,))},
+        start_ms=start_ms,
+        end_ms=end_ms,
+        min_trades=0,
+    )
+    row = SearchRow(
+        id="search-child-parity",
+        owner=SearchOwner(),
+        strategy_key="sma_crossover",
+        symbol="SPY",
+        status="queued",
+        attempt=0,
+        job_id="job-grid-child-parity",
+        created_at_ms=0,
+        updated_at_ms=0,
+        finished_at_ms=None,
+        request=spec.as_request_dict(),
+        receipt={
+            "interval_table": {
+                "data_start_ms": start_ms,
+                "evaluation_start_ms": start_ms,
+                "evaluation_end_ms": end_ms,
+            },
+            "data_snapshot": {"artifacts": manifest},
+            "code_identity": resolve_code_identity().as_dict(),
+        },
+        expected_cells=1,
+        completed_cells=0,
+        failed_cells=0,
+        leader_params_hash=None,
+        leader_params=None,
+        incomplete=False,
+        failure_reason=None,
+    )
+    candidate = RunSpec(
+        symbol="SPY",
+        strategy_key="sma_crossover",
+        params={"short_window": 2.0, "long_window": 3.0},
+        params_hash="parity-1",
+    )
+
+    local = default_execute_cell(row, spec)(candidate)
+    assert local.status == "completed", f"the control must run real bars ({local.error})"
+
+    context = WorkerDispatchContext(
+        strategy_key="sma_crossover",
+        execution={},
+        manifest=manifest,
+        identity=row.receipt["code_identity"],
+        job_id="job-grid-child-parity",
+        generation=1,
+    )
+    dispatch = WorkerCellDispatch(context, ready_cell_builder(row, spec, attempt=1))
+    try:
+        pairs = list(dispatch([candidate]))
+    finally:
+        dispatch.close()
+
+    assert pairs == [(candidate, local)], "the child is the in-process adapter, cell for cell"
