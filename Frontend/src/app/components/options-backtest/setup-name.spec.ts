@@ -22,6 +22,12 @@ describe('a setup name', () => {
     ['é', 'a letter outside ASCII'],
     ['a\nb', 'a new line'],
     ['a\n', 'a trailing new line'],
+    ['.', 'a dot alone'],
+    ['..', 'two dots'],
+    ['.hidden', 'a dot first'],
+    ['-dash', 'a dash first'],
+    ['_under', 'an underscore first'],
+    ['(paren', 'a bracket first'],
   ])('is refused: "%s" (%s)', (name) => {
     expect(isValidSetupName(name)).toBe(false);
   });
