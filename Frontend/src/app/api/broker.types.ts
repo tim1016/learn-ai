@@ -4804,7 +4804,14 @@ export interface paths {
         put?: never;
         /**
          * Start Grid Search Job
-         * @description Launch (or Finish) a search on a worker thread. Returns 202 once the record is durable.
+         * @description Launch (or Finish) a search. Returns 202 once the record is durable and a worker holds it.
+         *
+         *     In research mode the API forwards the dispatch and never binds, stamps
+         *     or starts a thread: the runtime prepares the immutable receipt and
+         *     materialization, claims the attempt and runs the cells (#3049). Here —
+         *     the local mode, or this process being the runtime — the search runs on
+         *     a worker thread exactly as before, through spawned research workers in
+         *     the runtime.
          */
         post: operations["start_grid_search_job_api_jobs_internal_grid_search_post"];
         delete?: never;
@@ -4937,7 +4944,14 @@ export interface paths {
         put?: never;
         /**
          * Start Walk Forward Study Job
-         * @description Launch (or Finish) a study on a worker thread. Returns 202 once the record is durable.
+         * @description Launch (or Finish) a study. Returns 202 once the record is durable and a worker holds it.
+         *
+         *     In research mode the API forwards the dispatch and never prepares,
+         *     stamps or starts a thread: the runtime prepares the study, and each
+         *     fold's sweeps run their cells through the shared research workers
+         *     under the checkpoint lease (#3050). Here — the local mode, or this
+         *     process being the runtime — the study runs on a worker thread exactly
+         *     as before.
          */
         post: operations["start_walk_forward_study_job_api_jobs_internal_walk_forward_study_post"];
         delete?: never;

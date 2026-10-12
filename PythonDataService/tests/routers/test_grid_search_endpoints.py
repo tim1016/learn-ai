@@ -234,3 +234,187 @@ async def test_finish_of_a_completed_search_is_refused(client, lake, monkeypatch
 
     assert resumed.status_code == 409
     assert resumed.json()["detail"]["code"] == "NOT_RESUMABLE"
+
+
+# ── Research-mode forwarding and idempotent dispatch (#3049) ─────────────
+
+
+async def test_research_mode_forwards_the_dispatch_and_never_binds(client, monkeypatch) -> None:
+    """In research mode the API hands the dispatch over and prepares, stamps and runs nothing (#3049)."""
+    import respx
+    from httpx import Response as HttpxResponse
+
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "RESEARCH_EXECUTION_MODE", "research")
+    monkeypatch.setattr(settings, "RESEARCH_RUNTIME_URL", "http://127.0.0.1:8000")
+    monkeypatch.delenv("RESEARCH_RUNTIME", raising=False)
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "sec")
+
+    def never_prepares(*args, **kwargs):
+        raise AssertionError("the forwarding API never prepares a launch")
+
+    monkeypatch.setattr(service, "prepare_launch", never_prepares)
+
+    def never_runs(job_id, work, **kwargs):
+        raise AssertionError("the forwarding API never starts a worker thread")
+
+    monkeypatch.setattr(grid_search_router, "run_in_thread", never_runs)
+
+    with respx.mock(base_url="http://127.0.0.1:8000") as mock:
+        route = mock.post("/api/jobs-internal/grid-search").mock(
+            return_value=HttpxResponse(202, json={"job_id": "job-fwd", "search_id": "search-runtime", "status": "queued"})
+        )
+        async with client as c:
+            launched = await c.post("/api/jobs-internal/grid-search", json={**_body(), "jobId": "job-fwd"})
+
+    assert launched.status_code == 202, launched.text
+    assert launched.json() == {"job_id": "job-fwd", "search_id": "search-runtime", "status": "queued"}
+    assert route.called
+    sent = route.calls.last.request
+    assert sent.headers["X-Data-Plane-Control-Secret"] == "sec", "the authenticated internal boundary"
+
+
+async def test_a_live_redelivery_joins_the_first_worker_and_never_claims_twice(client, lake, monkeypatch) -> None:
+    _requires_ephemeral_db()
+    job = f"job-redelivery-{id(monkeypatch)}"
+    runs: list[str] = []
+    stamps: list[str] = []
+
+    def fake_run_in_thread(job_id, work, **kwargs):
+        runs.append(job_id)
+
+    async def spy_stamp(*, job_id, kind, record_id):
+        stamps.append(job_id)
+
+    monkeypatch.setattr(grid_search_router, "run_in_thread", fake_run_in_thread)
+    monkeypatch.setattr(grid_search_router.records, "stamp_research_dispatch", spy_stamp)
+    monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: True)
+
+    async with client as c:
+        first = await c.post("/api/jobs-internal/grid-search", json={**_body(), "jobId": job})
+        assert first.status_code == 202, first.text
+        search_id = first.json()["search_id"]
+
+        redelivered = await c.post("/api/jobs-internal/grid-search", json={**_body(), "jobId": job})
+
+    assert redelivered.status_code == 202
+    assert redelivered.json() == {"job_id": job, "search_id": search_id, "status": "queued"}
+    assert runs == [job], "exactly one worker, however often the transport retries"
+    assert stamps == [job], "the redelivery neither stamps nor binds again"
+
+
+async def test_a_dead_redelivery_is_refused_never_replayed_under_its_old_id(client, lake, monkeypatch) -> None:
+    _requires_ephemeral_db()
+    job = f"job-dead-redelivery-{id(monkeypatch)}"
+    monkeypatch.setattr(grid_search_router, "run_in_thread", lambda job_id, work, **kwargs: None)
+    monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: True)
+
+    async with client as c:
+        first = await c.post("/api/jobs-internal/grid-search", json={**_body(), "jobId": job})
+        assert first.status_code == 202, first.text
+
+    monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: False)
+    async with client as c:
+        replay = await c.post("/api/jobs-internal/grid-search", json={**_body(), "jobId": job})
+
+    assert replay.status_code == 409
+    assert "cannot be redelivered" in replay.json()["detail"]
+
+
+async def test_a_runtime_dispatch_runs_cells_through_the_gated_worker(client, lake, monkeypatch) -> None:
+    """The runtime executes the search under the checkpoint lease contract, cells through the dispatch (#3049)."""
+    _requires_ephemeral_db()
+    import asyncio
+    from types import SimpleNamespace
+
+    import app.jobs.progress as progress_module
+    from app.research.grid_search import dispatch as dispatch_module
+    from app.research.persistence import ownership
+    from tests.jobs.conftest import _FakeRedis
+
+    job = f"job-runtime-{id(monkeypatch)}"
+    built: dict[str, object] = {}
+    fake_redis = _FakeRedis()
+
+    monkeypatch.setattr(progress_module, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr(lifecycle, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr(ownership, "process_authority", lambda: SimpleNamespace(boot_generation=1, connected=True))
+    monkeypatch.setenv("RESEARCH_RUNTIME", "1")
+
+    def fake_runtime_cell_dispatch(row, spec, *, attempt, job_id, on_checkpoint, cancel_check, on_log=None, pool=None):
+        built["attempt"] = attempt
+        built["cancel_check"] = cancel_check
+
+        def run(cells):
+            # One child-shaped checkpoint rides the relay the gate trusts,
+            # then each cell completes.
+            on_checkpoint({"phase": "search", "cursor_kind": "durable_completions", "cursor": 1})
+            for candidate in cells:
+                yield candidate, CellResult(
+                    params_hash=candidate.params_hash,
+                    params=dict(candidate.params),
+                    status="completed",
+                    total_trades=2,
+                    sharpe_ratio=float(candidate.params["short_window"]),
+                )
+
+        return run
+
+    monkeypatch.setattr(dispatch_module, "runtime_cell_dispatch", fake_runtime_cell_dispatch)
+
+    def fake_run_in_thread(job_id, work, **kwargs):
+        built["job_id"] = job_id
+        built["emit_renews_lease"] = kwargs.get("emit_renews_lease")
+
+        class _Emit:
+            def phase(self, phase):
+                pass
+
+            def progress(self, done, total, unit=None):
+                pass
+
+            def log(self, message):
+                pass
+
+        class _Cancel:
+            def raise_if_cancelled(self):
+                return None
+
+        built["outcome"] = asyncio.to_thread(work, _Emit(), _Cancel())
+
+    monkeypatch.setattr(grid_search_router, "run_in_thread", fake_run_in_thread)
+    monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: True)
+
+    async with client as c:
+        launched = await c.post("/api/jobs-internal/grid-search", json={**_body(), "jobId": job})
+        assert launched.status_code == 202, launched.text
+        outcome = await built["outcome"]
+        assert outcome["status"] == "completed" and outcome["completed_cells"] == 2
+        assert outcome["leader_params_hash"] is not None
+
+    assert built["emit_renews_lease"] is False, "in the runtime, only accepted checkpoints renew the lease (#3041)"
+    assert built["attempt"] == 1
+    assert fake_redis.expires, "the gated run renewed the lease through accepted checkpoints"
+
+
+async def test_a_live_resume_redelivery_joins_the_first_worker_before_any_refusal(client, lake, monkeypatch) -> None:
+    """A transport retry of a live Finish joins the first worker instead of reading NOT_RESUMABLE (#3049)."""
+    _requires_ephemeral_db()
+    job = f"job-resume-redelivery-{id(monkeypatch)}"
+    runs: list[str] = []
+
+    monkeypatch.setattr(grid_search_router, "run_in_thread", lambda job_id, work, **kwargs: runs.append(job_id))
+    monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: True)
+
+    async with client as c:
+        first = await c.post("/api/jobs-internal/grid-search", json={**_body(), "jobId": job})
+        search_id = first.json()["search_id"]
+
+        redelivered = await c.post(
+            "/api/jobs-internal/grid-search", json={"jobId": job, "resumeSearchId": search_id}
+        )
+
+    assert redelivered.status_code == 202, redelivered.text
+    assert redelivered.json() == {"job_id": job, "search_id": search_id, "status": "queued"}
+    assert runs == [job], "the Finish redelivery claimed no second attempt"

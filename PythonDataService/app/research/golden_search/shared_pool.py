@@ -64,6 +64,7 @@ from app.research.golden_search.worker import (
     ResearchWorker,
     WorkerDispatchContext,
     delivered_outcome,
+    pooled_cache_bytes,
     task_wire,
 )
 from app.research.persistence.ownership import GenerationFencedError
@@ -141,7 +142,13 @@ def _wire_size(task: dict[str, Any]) -> int:
 
 @dataclass
 class _Entry:
-    """One owner's offered item inside the pool — submitted task state, never a candidate definition."""
+    """One owner's offered item inside the pool — submitted task state, never a candidate definition.
+
+    ``item`` is whatever ready item the owning adapter offered: golden's
+    ``ReadyEvaluation`` or a sibling caller's (Grid Search cells, #3049) —
+    anything with a unique ``key``, a ``task_gen``, a ``begin()`` and its
+    own ``as_wire()``.
+    """
 
     owner: _OwnerState
     epoch: int
@@ -206,7 +213,7 @@ class OwnerHandle:
         # The arrival queue the adapter's generator drains. Unbounded by
         # count: the pool's result-byte bound is the real cap, enforced at
         # delivery with backpressure (#3048).
-        self.arrived: queue.Queue[tuple[str, int, DeliveredOutcome | BaseException]] = queue.Queue()
+        self.arrived: queue.Queue[tuple[str, int, Any]] = queue.Queue()
 
     def offer(self, epoch: int, item: ReadyEvaluation) -> bool:
         """Offer one authorized item; ``False`` when a global bound is full.
@@ -298,7 +305,7 @@ class SharedWorkerPool:
 
     # -- the owner-side seams ------------------------------------------------
 
-    def _offer(self, owner: _OwnerState, epoch: int, item: ReadyEvaluation) -> bool:
+    def _offer(self, owner: _OwnerState, epoch: int, item: Any) -> bool:
         with self._state_changed:
             if self._closing or self._draining or owner.closed:
                 return False
@@ -644,9 +651,11 @@ class SharedWorkerPool:
     @staticmethod
     def _arrival_size(arrival: DeliveredOutcome | BaseException) -> int:
         try:
-            if isinstance(arrival, DeliveredOutcome):
-                return len(json.dumps(arrival.__dict__, default=str, separators=(",", ":")))
-            return 1024
+            if isinstance(arrival, BaseException):
+                return 1024
+            # Any delivered outcome dataclass — golden's or a sibling
+            # caller's (#3049) — is sized by its fields, never trusted.
+            return len(json.dumps(arrival.__dict__, default=str, separators=(",", ":")))
         except (TypeError, ValueError):
             return 4096
 
@@ -814,12 +823,239 @@ class SharedWorkerPool:
             return None
 
 
+# ── The owner-side base every pooled dispatch shares (#3048, #3049) ───────
+
+
+@dataclass
+class _FeedState:
+    """One dispatch's owner-side window arithmetic — only its own thread touches it."""
+
+    submitted: set[str] = field(default_factory=set)
+    outstanding: int = 0
+    adaptive_wait_ms: int = 0
+
+
+class PooledOwnerDispatch:
+    """The arrival pump every pooled dispatch runs on (#3048, #3049).
+
+    The base owns exactly the protocol: the window permit arithmetic, the
+    epoch fence, the cancellation poll, the straggler discard and the budget
+    settlement on every arrival path. A subclass supplies its ready items
+    and decides per arrival — golden's evaluator consumes a lost item as an
+    outcome for its own fenced re-admission (#3066 review); Grid Search's
+    dispatch re-offers the cell in place under an advanced task generation
+    (#3049) — but neither may bypass the pump's fences. ``_pump`` yields
+    ``(item, arrival)`` pairs; a worker loss is an *arrival* the subclass
+    answers, a terminal exception is raised through, and the subclass feeds
+    the window again only after the consumer persisted what it took.
+    """
+
+    def __init__(
+        self,
+        context: WorkerDispatchContext,
+        *,
+        workers: int,
+        window: int,
+        pool: SharedWorkerPool | None = None,
+        on_capacity_handoff: Callable[[], None] = lambda: None,
+    ) -> None:
+        if workers < 1:
+            raise ValueError("a worker pool has at least one lane")
+        self._context = context
+        self._window = max(window, workers)
+        # Every child's decoded cache shares one budget inside the runtime
+        # envelope: eight lanes at the serial parity ceiling would consume it
+        # in caches alone (#3066 review).
+        context.decoded_cache_bytes = pooled_cache_bytes(workers)
+        self._owns_pool = pool is None
+        self._pool = pool or SharedWorkerPool(
+            workers=workers,
+            # A private pool admits its one owner's whole window; the shared
+            # pool the runtime builds carries the issue's initial bound.
+            submission_bound=max(SUBMISSION_FACTOR * workers, self._window),
+            payload_bound_bytes=DEFAULT_PAYLOAD_BOUND_BYTES,
+            result_bound_bytes=DEFAULT_RESULT_BOUND_BYTES,
+        )
+        self._epoch = 0
+        self._epoch_lock = threading.Lock()
+        self._handle: OwnerHandle | None = self._pool.register(
+            context,
+            window=self._window,
+            epoch_of=self._current_epoch,
+            on_capacity_handoff=on_capacity_handoff,
+        )
+
+    # -- state ------------------------------------------------------------
+
+    def _current_epoch(self) -> int:
+        with self._epoch_lock:
+            return self._epoch
+
+    def _begin(self, ready_width: int) -> tuple[int, _FeedState]:
+        """Open one dispatch: a fresh epoch over a fresh feed state (#3045)."""
+        state = _FeedState()
+        with self._epoch_lock:
+            self._epoch += 1
+            epoch = self._epoch
+        self._emit_facts(ready_width, state.adaptive_wait_ms)
+        return epoch, state
+
+    def _feed(self, owed: dict[str, Any], state: _FeedState, epoch: int) -> None:
+        """Top the dispatch up to the window with the remaining items, in logical order.
+
+        The owner's window is its own permit count — offered minus consumed —
+        and the pool's global bounds refuse an offer the whole pool cannot
+        afford; either way this loop stops and retries on the next
+        consumption, never blocking the consumer.
+        """
+        handle = self._handle
+        if handle is None:
+            return
+        for key, item in owed.items():
+            if key in state.submitted:
+                continue
+            if state.outstanding >= self._window:
+                return
+            if not handle.offer(epoch, item):
+                return
+            state.submitted.add(key)
+            state.outstanding += 1
+
+    def _interrupt(self, epoch: int) -> None:
+        """Invalidate everything this dispatch still owns, then stop its children (#3045, #3046).
+
+        On a shared pool "its children" means exactly the lanes running
+        this owner's items — a sibling owner's lanes are not this
+        dispatch's to stop (#3048).
+        """
+        with self._epoch_lock:
+            if self._epoch == epoch:
+                self._epoch += 1
+        if self._handle is not None:
+            self._handle.interrupt_running()
+
+    def cancel(self) -> None:
+        """The pre-reconciliation reap (#3065 review): invalidate everything, stop the children."""
+        with self._epoch_lock:
+            self._epoch += 1
+        if self._handle is not None:
+            self._handle.interrupt_running()
+
+    def _emit_facts(self, ready_width: int, adaptive_wait_ms: int) -> None:
+        self._on_facts(self._facts_payload(ready_width, adaptive_wait_ms))
+
+    def _facts_payload(self, ready_width: int, adaptive_wait_ms: int) -> Any:
+        raise NotImplementedError
+
+    def _on_facts(self, payload: Any) -> None:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        """Leave the pool: queued entries die at take time, running items are interrupted, a private pool stops."""
+        if self._handle is not None:
+            self._handle.close()
+            self._handle = None
+        if self._owns_pool:
+            self._pool.close()
+
+    # -- the pump -----------------------------------------------------------
+
+    def _pump(self, owed: dict[str, Any], state: _FeedState, epoch: int):
+        """Yield ``(item, arrival)`` as they come: fenced, settled, stragglers discarded.
+
+        The consumer — a subclass generator — feeds the window again after
+        each pair it persists; this pump feeds only on its own empty waits,
+        so a permit is never re-granted before the outcome it bought is
+        durable. A terminal arrival raises through with its budget already
+        settled; the cancel poll raises only after the epoch was bumped and
+        this owner's lanes interrupted.
+        """
+        handle = self._handle
+        self._feed(owed, state, epoch)
+        while owed:
+            try:
+                cancelled = self._context.cancel_check()
+            except (JobCancelled, GenerationFencedError):
+                # The production polls raise (#3041): stopping the children
+                # and the epoch is this side's job on every cancellation
+                # path, never only the returning one (#3045's prompt-slot
+                # rule).
+                self._interrupt(epoch)
+                raise
+            if cancelled:
+                self._interrupt(epoch)
+                raise JobCancelled("cancelled between pooled research worker tasks")
+            waited_at = time.monotonic()
+            try:
+                key, task_gen, arrival = handle.arrived.get(timeout=0.2)
+            except queue.Empty:
+                # Every lane busy or the window full: the pool's adaptive
+                # wait (#3046). Retry the offer on the same clock: an owner
+                # whose first offers were refused by a temporarily full
+                # global bound has no arrival of its own to retry after —
+                # without this it would wait forever even after other
+                # owners freed capacity (#3048 review).
+                state.adaptive_wait_ms += int((time.monotonic() - waited_at) * 1000)
+                self._feed(owed, state, epoch)
+                continue
+            item = owed.get(key)
+            if item is None or item.task_gen != task_gen:
+                # A straggler from a superseded dispatch — most often an
+                # in-flight twin that finished before its re-admitted
+                # replacement. The consumer's task-generation fence owns the
+                # durable refusal; the pool keeps the owed slot for the
+                # current generation's outcome (#3045, #3046).
+                logger.warning(
+                    "a pooled worker delivered an outcome the current dispatch no longer owes",
+                    extra={"action": "research_pool_straggler_discarded", "key": key},
+                )
+                handle.consume(key, task_gen)
+                continue
+            # The item is answered — delivered, lost or terminal — so it
+            # leaves the owed set here; a subclass re-offering a lost item
+            # puts its replacement back under the advanced generation.
+            del owed[key]
+            if isinstance(arrival, WorkerLost):
+                # One lane's loss is that item's loss, not the dispatch's
+                # (#3066 review): the subclass answers it — an outcome to
+                # re-admit, or an in-place re-offer — while healthy siblings
+                # keep delivering.
+                handle.consume(key, task_gen)
+                state.outstanding -= 1
+                yield item, arrival
+                continue
+            if isinstance(arrival, BaseException):
+                # This dispatch is over: whatever it still had queued dies at
+                # take time, so a lane freed during the recovery cannot begin
+                # a run nobody owes anymore. The process-control errors stop
+                # the healthy siblings too, now, not at stage teardown (#3065
+                # review); every other terminal answer leaves them to it.
+                # The delivery's budget settles here too — a raised terminal
+                # answer still consumed a slot the process-lifetime pool must
+                # see returned (#3048 review).
+                handle.consume(key, task_gen)
+                if isinstance(arrival, (JobCancelled, GenerationFencedError)):
+                    self._interrupt(epoch)
+                else:
+                    with self._epoch_lock:
+                        if self._epoch == epoch:
+                            self._epoch += 1
+                raise arrival
+            handle.consume(key, task_gen)
+            state.outstanding -= 1
+            yield item, arrival
+
+
 # The wire an owner's item carries to whichever lane runs it: the child is
 # generic, so the wire — not the spawn — binds strategy, execution, manifest
-# and sealed identity to the run (#3048).
+# and sealed identity to the run (#3048). The golden evaluation is wired
+# from the owner's context; a sibling caller's ready item (#3049, Grid
+# Search cells) carries its own wire on the item.
 
 
 def entry_wire(owner: _OwnerState, item: ReadyEvaluation) -> dict[str, Any]:
+    if not isinstance(item, ReadyEvaluation):
+        return item.as_wire()
     context = owner.context
     return task_wire(item, strategy_key=context.strategy_key, execution=context.execution,
                      manifest=context.manifest, identity=context.identity)
