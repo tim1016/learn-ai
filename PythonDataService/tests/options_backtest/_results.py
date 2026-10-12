@@ -99,7 +99,6 @@ def a_session(
     outcome = SessionOutcome(status, skip_reason, trades, events, profit - marked_value)
     window = session_window_for_date(day)
     return SessionResult(
-        trading_date=day,
         session_open_ms=window.open_ms_utc,
         session_close_ms=window.close_ms_utc,
         cash_before_usd=D(cash_before),
@@ -113,7 +112,6 @@ def a_session_of(day: date, outcome: SessionOutcome, cash_before: str) -> Sessio
     """A session whose outcome came from a replay, kept as a run keeps it: cash after is cash before plus the profit."""
     window = session_window_for_date(day)
     return SessionResult(
-        trading_date=day,
         session_open_ms=window.open_ms_utc,
         session_close_ms=window.close_ms_utc,
         cash_before_usd=D(cash_before),

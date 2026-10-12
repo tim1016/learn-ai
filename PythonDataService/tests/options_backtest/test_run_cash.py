@@ -23,6 +23,7 @@ from tests.options_backtest._market import after_open, before_close, leg, setup
 from tests.options_backtest._run_data import (
     FRI,
     HALF_DAY,
+    OPEN_MS,
     THU,
     WED,
     D,
@@ -78,14 +79,15 @@ def test_cash_is_carried_over_a_win_a_loss_and_a_skipped_session() -> None:
     assert bought_and_sold == [(D("2.00"), D("3.00")), (D("4.00"), D("3.50"))]
 
 
-def test_a_session_keeps_its_trading_date_and_the_calendars_open_and_close_in_ms() -> None:
+def test_a_session_keeps_the_calendars_open_and_close_in_ms_and_derives_its_date_from_the_open() -> None:
     days = {WED: _trade_day("2.00", "3.00"), FRI: _trade_day("2.00", "3.00")}
 
     result = run_sessions(setup(leg()), [WED, FRI], fake_data(days))
 
     # 2026-10-07 09:30 New York (UTC-4) is 13:30 UTC; 2026-10-09 is two days (172,800,000 ms) later; 390 minutes is
     # 23,400,000 ms. The Friday's open is 1,791,552,600,000 ms.
-    assert [session.trading_date for session in result.sessions] == [WED, FRI]
+    assert [session.session_open_ms for session in result.sessions] == [OPEN_MS[WED], OPEN_MS[FRI]]
+    assert [session.trading_date for session in result.sessions] == [WED, FRI]  # derived, and not a field
     assert result.sessions[1].session_open_ms == 1_791_552_600_000
     assert result.sessions[1].session_close_ms == 1_791_576_000_000
     assert result.sessions[0].session_open_ms == 1_791_552_600_000 - 172_800_000
