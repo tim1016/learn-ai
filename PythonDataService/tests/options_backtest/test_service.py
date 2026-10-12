@@ -983,6 +983,59 @@ def test_a_range_of_a_weekend_holds_no_session_and_an_empty_or_reversed_one_is_r
         assert caught.value.code == code
 
 
+# The two instants of a range are New York midnights. A New York day is 24 hours except where the clocks change: Sunday
+# 2026-03-08 is 23 hours long (02:00 EST jumps to 03:00 EDT) and Sunday 2026-11-01 is 25 hours long (02:00 EDT falls
+# back to 01:00 EST). Days since the epoch: 2026-01-01 is day 20 454 (2026-10-08 is 20 734 and is the 281st day of the
+# year), so 2026-03-06 (day of the year 65) is 20 454 + 64 = 20 518, 2026-10-30 (day 303) is 20 756, and each date below
+# is the next day number. A day is 86 400 000 ms and midnight New York is 05:00 UTC in winter (+18 000 000 ms) and 04:00
+# UTC in summer (+14 400 000 ms):
+#   Fri 03-06  20 518 x 86 400 000 = 1 772 755 200 000 + 18 000 000 = 1 772 773 200 000   (EST)
+#   Sun 03-08  20 520 x 86 400 000 = 1 772 928 000 000 + 18 000 000 = 1 772 946 000 000   (EST)
+#   Mon 03-09  20 521 x 86 400 000 = 1 773 014 400 000 + 14 400 000 = 1 773 028 800 000   (EDT)
+#   Tue 03-10  20 522 x 86 400 000 = 1 773 100 800 000 + 14 400 000 = 1 773 115 200 000   (EDT)
+#   Fri 10-30  20 756 x 86 400 000 = 1 793 318 400 000 + 14 400 000 = 1 793 332 800 000   (EDT)
+#   Sun 11-01  20 758 x 86 400 000 = 1 793 491 200 000 + 14 400 000 = 1 793 505 600 000   (EDT)
+#   Mon 11-02  20 759 x 86 400 000 = 1 793 577 600 000 + 18 000 000 = 1 793 595 600 000   (EST)
+#   Tue 11-03  20 760 x 86 400 000 = 1 793 664 000 000 + 18 000 000 = 1 793 682 000 000   (EST)
+# These are also what the page's own helpers (etMidnightMs and etDayEndMs) give for those dates.
+FRI_03_06, SUN_03_08, MON_03_09, TUE_03_10 = 1_772_773_200_000, 1_772_946_000_000, 1_773_028_800_000, 1_773_115_200_000
+FRI_10_30, SUN_11_01, MON_11_02, TUE_11_03 = 1_793_332_800_000, 1_793_505_600_000, 1_793_595_600_000, 1_793_682_000_000
+
+
+def test_a_range_may_start_or_end_on_a_day_the_clocks_change_because_that_days_midnight_is_still_a_midnight() -> None:
+    # Friday to the end of Sunday (Monday's midnight), a range whose last date is a clock-change Sunday, in both seasons.
+    assert sessions_of_range(FRI_03_06, MON_03_09) == (date(2026, 3, 6),)
+    assert sessions_of_range(FRI_10_30, MON_11_02) == (date(2026, 10, 30),)
+    # From the Sunday itself to the Monday's end (Tuesday's midnight): the Monday is the session.
+    assert sessions_of_range(SUN_03_08, TUE_03_10) == (date(2026, 3, 9),)
+    assert sessions_of_range(SUN_11_01, TUE_11_03) == (date(2026, 11, 2),)
+
+
+@pytest.mark.parametrize(
+    ("start_ms", "end_ms", "named"),
+    [
+        pytest.param(FRI_03_06 + 1, MON_03_09, "start_ms", id="a start a millisecond after midnight"),
+        pytest.param(FRI_03_06 - 1, MON_03_09, "start_ms", id="a start a millisecond before midnight"),
+        pytest.param(FRI_03_06 + 11 * 3_600_000, MON_03_09, "start_ms", id="a start at 11:00 (+39 600 000)"),
+        pytest.param(FRI_03_06, MON_03_09 + 1, "end_ms", id="an end a millisecond after midnight"),
+        pytest.param(FRI_03_06, MON_03_09 - 1, "end_ms", id="an end a millisecond before midnight"),
+        pytest.param(FRI_03_06, SUN_03_08 + 86_400_000, "end_ms", id="an end 24 hours on from a 23-hour day's midnight"),
+        pytest.param(SUN_11_01 + 86_400_000, TUE_11_03, "start_ms", id="a start 24 hours on from a 25-hour day's midnight"),
+        pytest.param(FRI_10_30, SUN_11_01 + 86_400_000, "end_ms", id="an end 24 hours on from a 25-hour day's midnight"),
+        pytest.param(FRI_03_06 + 1, MON_03_09 + 1, "start_ms", id="both wrong: the start is named"),
+    ],
+)
+def test_an_instant_that_is_not_new_york_midnight_is_refused_naming_the_one_to_send_and_no_date(
+    start_ms: int, end_ms: int, named: str
+) -> None:
+    with pytest.raises(RunRefused) as caught:
+        sessions_of_range(start_ms, end_ms)
+
+    assert caught.value.code == "OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT"
+    assert named in caught.value.message and ("end_ms" if named == "start_ms" else "start_ms") not in caught.value.message
+    assert_plain(caught.value.message)
+
+
 def test_a_range_of_exactly_the_most_sessions_a_run_takes_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(service, "MAX_RANGE_SESSIONS", 4)
 

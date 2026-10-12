@@ -13,6 +13,7 @@ import json
 import logging
 import random
 import re
+import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -45,6 +46,8 @@ from app.options_backtest.saved_runs import (
     create_run,
     fail_run,
 )
+from app.options_backtest.saved_setups import EXAMPLE_SETUPS, SavedSetup, save_setup
+from app.options_backtest.setup import OptionsBacktestSetup
 from app.research.persistence import lifecycle
 from app.routers import options_backtest_runs as runs_router
 from app.utils.background_loop import CallerStoppedWaitingError
@@ -59,9 +62,11 @@ from tests.options_backtest._run_data import fake_data
 from tests.options_backtest._run_lake import Vendor
 from tests.options_backtest.setup_fixtures import conn as conn
 from tests.options_backtest.setup_fixtures import leg, setup_body
+from tests.options_backtest.setup_fixtures import tag as tag
 from tests.options_backtest.setup_fixtures import unique as unique
 from tests.options_backtest.test_service import FRI, NOW_MS, SESSION_OF_THE_RANGE, THU, TUE, WED, the_scene, the_setup
 
+REAL_SAVED_SETUP = runs_router.saved_setup
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 PREFIX = "/api/research/options-backtest"
 JOBS = "/api/jobs-internal/options-backtest"
@@ -138,6 +143,15 @@ class FakeCancel:
 class Harness:
     store: MemoryRunStore
     started: list[tuple[str, Callable[..., Any], dict[str, Any]]] = field(default_factory=list)
+    # The setups the route finds saved, by name; none until a test saves one.
+    saved: dict[str, SavedSetup] = field(default_factory=dict)
+
+    def save(self, name: str, setup_json: dict[str, Any]) -> None:
+        setup = OptionsBacktestSetup.model_validate(setup_json)
+        self.saved[name] = SavedSetup(name=name, example=False, saved_at_ms=1, setup=setup, cannot_open_reason=None)
+
+    async def saved_setup(self, name: str) -> SavedSetup | None:
+        return self.saved.get(name)
 
     def capture(self, job_id: str, work: Callable[..., Any], **kwargs: Any) -> None:
         self.started.append((job_id, work, kwargs))
@@ -152,6 +166,7 @@ def harness(monkeypatch: pytest.MonkeyPatch) -> Harness:
     h = Harness(MemoryRunStore())
     monkeypatch.setattr(runs_router, "run_store", lambda: h.store)
     monkeypatch.setattr(runs_router, "run_in_thread", h.capture)
+    monkeypatch.setattr(runs_router, "saved_setup", h.saved_setup)
     monkeypatch.setattr(runs_router, "now_ms_utc", lambda: NOW_MS)
     return h
 
@@ -175,6 +190,7 @@ def job_body(**changes: Any) -> dict[str, Any]:
 async def test_a_run_is_accepted_with_its_row_made_and_a_worker_started(
     client: httpx.AsyncClient, harness: Harness
 ) -> None:
+    harness.save("SPY premium momentum, no re-entry", job_body()["setup"])
     async with client as c:
         response = await c.post(JOBS, json=job_body(setup_name="SPY premium momentum, no re-entry"))
 
@@ -209,6 +225,115 @@ async def test_the_setup_is_stored_as_the_server_read_it_with_its_defaults_fille
 
     [new] = harness.store.created
     assert (new.setup.slippage_percent, new.setup.price_step_usd) == (D("0.3"), D("0.01"))
+
+
+# ── The name a run is recorded under ─────────────────────────────────────
+# A run is recorded under the name of a saved setup only when a setup of that name exists and is the setup the run was
+# asked with; otherwise it is recorded with no name and is accepted all the same.
+
+SAVED_AS = "my morning call"
+
+
+def _spelled_out_as_the_server_reads_it(setup_json: dict[str, Any]) -> dict[str, Any]:
+    """The same setup with the defaults written out and a fee spelled with a trailing zero: other text, equal setup."""
+    return {
+        **setup_json,
+        "slippage_percent": "0.3",
+        "price_step_usd": "0.01",
+        "fees": {"kind": "per_contract", "per_contract_usd": "0.650"},
+    }
+
+
+async def _post_named(
+    c: httpx.AsyncClient, name: str | None, setup_json: dict[str, Any], job_id: str
+) -> httpx.Response:
+    changes: dict[str, Any] = {"job_id": job_id, "setup": setup_json}
+    if name is not None:
+        changes["setup_name"] = name
+    return await c.post(JOBS, json=job_body(**changes))
+
+
+async def test_a_run_is_recorded_under_the_name_of_a_saved_setup_equal_to_its_own_whatever_the_text_of_the_request(
+    client: httpx.AsyncClient, harness: Harness
+) -> None:
+    harness.save(SAVED_AS, _spelled_out_as_the_server_reads_it(job_body()["setup"]))
+
+    async with client as c:
+        response = await _post_named(c, SAVED_AS, job_body()["setup"], "job-1")
+
+    assert response.status_code == 202, response.text
+    [new] = harness.store.created
+    assert new.setup_name == SAVED_AS
+
+
+async def test_a_run_is_recorded_with_no_name_when_no_setup_of_that_name_is_saved_and_is_accepted_all_the_same(
+    client: httpx.AsyncClient, harness: Harness
+) -> None:
+    async with client as c:
+        response = await _post_named(c, "never saved", job_body()["setup"], "job-1")
+
+    assert response.status_code == 202, response.text
+    [new] = harness.store.created
+    assert new.setup_name is None and len(harness.started) == 1
+
+
+async def test_a_run_is_recorded_with_no_name_when_the_saved_setup_of_that_name_differs_in_one_field(
+    client: httpx.AsyncClient, harness: Harness
+) -> None:
+    harness.save(SAVED_AS, {**job_body()["setup"], "fees": {"kind": "per_contract", "per_contract_usd": "0.66"}})
+
+    async with client as c:
+        response = await _post_named(c, SAVED_AS, job_body()["setup"], "job-1")
+
+    assert response.status_code == 202, response.text
+    [new] = harness.store.created
+    assert new.setup_name is None
+
+
+async def test_a_run_is_recorded_with_no_name_when_the_saved_setup_of_that_name_can_no_longer_be_opened(
+    client: httpx.AsyncClient, harness: Harness
+) -> None:
+    harness.saved[SAVED_AS] = SavedSetup(
+        name=SAVED_AS, example=False, saved_at_ms=1, setup=None, cannot_open_reason="a rule has changed"
+    )
+
+    async with client as c:
+        response = await _post_named(c, SAVED_AS, job_body()["setup"], "job-1")
+
+    assert response.status_code == 202, response.text
+    [new] = harness.store.created
+    assert new.setup_name is None
+
+
+async def test_a_run_sent_with_no_name_is_recorded_with_none(client: httpx.AsyncClient, harness: Harness) -> None:
+    harness.save(SAVED_AS, job_body()["setup"])
+
+    async with client as c:
+        response = await _post_named(c, None, job_body()["setup"], "job-1")
+
+    assert response.status_code == 202, response.text
+    [new] = harness.store.created
+    assert new.setup_name is None
+
+
+async def test_the_name_of_a_saved_setup_is_found_in_the_database_and_so_is_the_name_of_a_shipped_example(
+    client: httpx.AsyncClient, harness: Harness, monkeypatch: pytest.MonkeyPatch, conn: asyncpg.Connection, tag: str
+) -> None:
+    # The route's own lookup, on a real database: a saved setup of this test's, and the first shipped example.
+    monkeypatch.setattr(runs_router, "saved_setup", REAL_SAVED_SETUP)
+    mine = f"{SAVED_AS} {tag}"
+    await save_setup(conn, mine, OptionsBacktestSetup.model_validate(job_body()["setup"]), saved_at_ms=1)
+    [example, *_] = EXAMPLE_SETUPS
+    assert example.setup is not None
+    different = {**job_body()["setup"], "starting_cash_usd": "25000"}
+
+    async with client as c:
+        kept = await _post_named(c, mine, job_body()["setup"], "n1")
+        differs = await _post_named(c, mine, different, "n2")
+        shipped = await _post_named(c, example.name, example.setup.model_dump(mode="json"), "n3")
+
+    assert (kept.status_code, differs.status_code, shipped.status_code) == (202, 202, 202)
+    assert [new.setup_name for new in harness.store.created] == [mine, None, example.name]
 
 
 @pytest.mark.parametrize(
@@ -356,21 +481,42 @@ async def test_a_job_id_of_the_shape_the_jobs_boundary_mints_is_accepted(
     assert response.json()["job_id"] == job_id
 
 
-async def test_a_range_that_reaches_a_session_before_the_epoch_is_a_400_and_makes_no_run(
+async def test_a_range_whose_instants_are_not_new_york_midnights_is_a_400_and_makes_no_run_and_no_job(
     client: httpx.AsyncClient, harness: Harness
 ) -> None:
-    # start_ms 0 is 1970-01-01 00:00 UTC, which is 19:00 on 1969-12-31 in New York. That was a trading day, opened
-    # by the calendar at 15:00 UTC (10:00 New York, the exchange's hours then), 9 hours before the epoch: -32,400,000.
-    assert session_window_for_date(date(1969, 12, 31)).open_ms_utc == -32_400_000
+    # Two instants the old reading accepted and read as the dates they fall on: 0, the epoch, which is 19:00 on
+    # 1969-12-31 in New York (a day that began before it), and a start 1 ms after Friday 2026-03-06's midnight
+    # (1 772 773 200 000 + 1). An end a millisecond short of Monday 2026-03-09's midnight (1 773 028 800 000 - 1) is the
+    # third, and a start and an end that are both wrong are refused on the start.
     async with client as c:
-        at_the_epoch = await c.post(JOBS, json=job_body(job_id="e1", start_ms=0, end_ms=5 * 86_400_000))
-        one_ms_in = await c.post(JOBS, json=job_body(job_id="e2", start_ms=1, end_ms=86_400_000))
+        responses = [
+            await c.post(JOBS, json=job_body(job_id="e1", start_ms=0, end_ms=5 * 86_400_000)),
+            await c.post(JOBS, json=job_body(job_id="e2", start_ms=1_772_773_200_001, end_ms=1_773_028_800_000)),
+            await c.post(JOBS, json=job_body(job_id="e3", start_ms=1_772_773_200_000, end_ms=1_773_028_799_999)),
+        ]
 
-    for response in (at_the_epoch, one_ms_in):
+    for response, named in zip(responses, ("start_ms", "start_ms", "end_ms"), strict=True):
         assert response.status_code == 400, response.text
-        assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_RANGE_TOO_EARLY"
-        assert response.json()["detail"]["message"]
+        assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT"
+        assert named in response.json()["detail"]["message"]
     assert harness.store.created == [] and harness.started == []
+
+
+async def test_a_range_that_ends_on_a_day_the_clocks_change_is_accepted(
+    client: httpx.AsyncClient, harness: Harness
+) -> None:
+    # Friday 2026-03-06's midnight to Monday the 9th's (the end of Sunday the 8th, a 23-hour day) and Friday 10-30 to
+    # Monday 11-02's midnight (the end of Sunday 11-01, a 25-hour day): the page's own helpers give these instants, and
+    # each range holds the one session of its Friday.
+    async with client as c:
+        spring = await c.post(JOBS, json=job_body(job_id="s1", start_ms=1_772_773_200_000, end_ms=1_773_028_800_000))
+        autumn = await c.post(JOBS, json=job_body(job_id="s2", start_ms=1_793_332_800_000, end_ms=1_793_595_600_000))
+
+    assert (spring.status_code, autumn.status_code) == (202, 202), (spring.text, autumn.text)
+    assert [new.first_session_open_ms for new in harness.store.created] == [
+        session_window_for_date(date(2026, 3, 6)).open_ms_utc,
+        session_window_for_date(date(2026, 10, 30)).open_ms_utc,
+    ]
 
 
 async def test_a_range_that_starts_on_the_first_new_york_day_of_1970_is_accepted_for_its_first_session_after_the_epoch(
@@ -713,21 +859,47 @@ async def test_check_data_on_a_range_that_cannot_be_run_is_a_400_and_a_body_that
     assert no_setup.status_code == 422 and extra.status_code == 422
 
 
-async def test_check_data_on_a_range_that_reaches_a_session_before_the_epoch_is_a_400_and_reads_nothing(
+async def test_check_data_on_a_range_whose_instants_are_not_new_york_midnights_is_a_400_and_reads_nothing(
     client: httpx.AsyncClient, now_is_monday_afternoon: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def must_not_be_asked(*_args: Any, **_kwargs: Any) -> None:
-        raise AssertionError("a range refused as too early must be refused before anything is read")
+        raise AssertionError("a range refused as not on midnight must be refused before anything is read")
 
     monkeypatch.setattr(runs_router, "check_data", must_not_be_asked)
+    setup = job_body()["setup"]
 
     async with client as c:
-        response = await c.post(
-            f"{PREFIX}/check-data", json={"setup": job_body()["setup"], "start_ms": 0, "end_ms": 5 * 86_400_000}
+        at_the_epoch = await c.post(
+            f"{PREFIX}/check-data", json={"setup": setup, "start_ms": 0, "end_ms": 5 * 86_400_000}
+        )
+        late_start = await c.post(
+            f"{PREFIX}/check-data", json={"setup": setup, "start_ms": 1_772_773_200_001, "end_ms": 1_773_028_800_000}
+        )
+        early_end = await c.post(
+            f"{PREFIX}/check-data", json={"setup": setup, "start_ms": 1_772_773_200_000, "end_ms": 1_773_028_799_999}
         )
 
-    assert response.status_code == 400, response.text
-    assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_RANGE_TOO_EARLY"
+    for response, named in ((at_the_epoch, "start_ms"), (late_start, "start_ms"), (early_end, "end_ms")):
+        assert response.status_code == 400, response.text
+        assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT"
+        assert named in response.json()["detail"]["message"]
+
+
+@respx.mock
+async def test_check_data_answers_for_a_range_that_ends_on_a_day_the_clocks_change(
+    client: httpx.AsyncClient, now_is_monday_afternoon: None, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # Friday 2026-03-06's midnight to the end of Sunday the 8th (Monday's midnight): the Friday is the one session.
+    async with client as c:
+        response = await c.post(
+            f"{PREFIX}/check-data",
+            json={"setup": job_body()["setup"], "start_ms": 1_772_773_200_000, "end_ms": 1_773_028_800_000},
+        )
+
+    assert response.status_code == 200, response.text
+    assert [s["session_open_ms"] for s in response.json()["sessions"]] == [
+        session_window_for_date(date(2026, 3, 6)).open_ms_utc
+    ]
 
 
 async def test_check_data_when_the_catalog_cannot_be_reached_is_a_503_with_a_code(
@@ -764,6 +936,102 @@ async def test_check_data_when_the_catalog_does_not_answer_in_time_is_the_same_5
     assert answers["too slow"].status_code == 503
     assert answers["too slow"].json() == answers["unreachable"].json()
     assert answers["too slow"].json()["detail"]["code"] == "OPTIONS_BACKTEST_DATA_CATALOG_UNAVAILABLE"
+
+
+# ── The history reads the liveness of its running jobs once, off the loop ─
+
+
+def _a_row(run_id: int, status: str, job_id: str) -> dict[str, Any]:
+    """A row of the runs table as the history reads it, with nothing of its figures: running, cancelled or failed."""
+    return {
+        "id": run_id,
+        "created_at_ms": 1_791_800_000_000 + run_id,
+        "finished_at_ms": None if status == "running" else 1_791_800_000_000 + run_id + 5,
+        "job_id": job_id,
+        "status": status,
+        "setup_name": None,
+        "underlying": "SPY",
+        "first_session_open_ms": 1_791_379_800_000,
+        "last_session_open_ms": 1_791_552_600_000,
+        "sessions_requested": 4,
+        "fee_policy_text": "No fees are charged.",
+        "calendar_identity": "NYSE",
+        "calendar_package_version": "x",
+        "failure_code": "DOWNLOAD_FAILED" if status == "failed" else None,
+        "failure_reason": "The data could not be fetched." if status == "failed" else None,
+        "failure_detail_json": "[]" if status == "failed" else None,
+        "sessions_tested": None,
+        "sessions_traded": None,
+        "trades": None,
+        "trades_won": None,
+        "net_profit_usd": None,
+        "ending_cash_usd": None,
+    }
+
+
+async def test_the_history_reads_the_liveness_of_all_its_running_jobs_in_one_worker_thread_call_after_the_connection_is_let_go(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Six rows, newest first: four stored as running (jobs 6, 5, 3 and 2), one cancelled, one failed. Redis says job 6 is
+    # alive, jobs 5 and 2 gone, and cannot tell for job 3. Only a job that is gone turns a running row into
+    # interrupted, so the rows read: running, interrupted, cancelled, running, interrupted, failed. Four jobs are
+    # asked, once each, all on one worker thread that is not the loop's, in one hop to it, and with no connection held.
+    table = (
+        _a_row(6, "running", "job-6"),
+        _a_row(5, "running", "job-5"),
+        _a_row(4, "cancelled", "job-4"),
+        _a_row(3, "running", "job-3"),
+        _a_row(2, "running", "job-2"),
+        _a_row(1, "failed", "job-1"),
+    )
+    answers = {"job-6": True, "job-5": False, "job-3": None, "job-2": False}
+    connection_is_held = False
+    asked: list[tuple[str | None, int, bool]] = []
+    hops = 0
+    this_thread = threading.get_ident()
+    real_to_thread = asyncio.to_thread
+
+    async def a_connection(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        nonlocal connection_is_held
+        connection_is_held = True
+        try:
+            return await fn(None, *args, **kwargs)
+        finally:
+            connection_is_held = False
+
+    async def the_rows(_conn: Any, *, limit: int, job_id: str | None) -> tuple[dict[str, Any], ...]:
+        return table
+
+    def is_live(job_id: str | None) -> bool | None:
+        asked.append((job_id, threading.get_ident(), connection_is_held))
+        return answers[job_id or ""]
+
+    async def counted_to_thread(fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
+        nonlocal hops
+        hops += 1
+        return await real_to_thread(fn, *args, **kwargs)
+
+    monkeypatch.setattr(runs_router, "with_connection", a_connection)
+    monkeypatch.setattr(runs_router.saved_runs, "read_run_rows", the_rows)
+    monkeypatch.setattr(lifecycle, "job_is_live", is_live)
+    monkeypatch.setattr(asyncio, "to_thread", counted_to_thread)
+
+    async with client as c:
+        response = await c.get(f"{PREFIX}/runs")
+
+    assert response.status_code == 200, response.text
+    assert [(run["id"], run["status"]) for run in response.json()] == [
+        (6, "running"),
+        (5, "interrupted"),
+        (4, "cancelled"),
+        (3, "running"),
+        (2, "interrupted"),
+        (1, "failed"),
+    ]
+    assert sorted(job for job, _, _ in asked) == ["job-2", "job-3", "job-5", "job-6"]
+    [worker] = {thread for _, thread, _ in asked}
+    assert worker != this_thread and hops == 1
+    assert not any(held for _, _, held in asked)
 
 
 # ── The history, one run, delete: on a real database ─────────────────────

@@ -30,8 +30,9 @@ the caller's ``is_live`` (``lifecycle.job_is_live``), and ``None`` ("cannot tell
 
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -432,17 +433,43 @@ async def cancel_run(conn: asyncpg.Connection, run_id: int, *, finished_at_ms: i
 # ── Reads ────────────────────────────────────────────────────────────────
 
 
-async def list_runs(
-    conn: asyncpg.Connection, *, is_live: IsLive, limit: int = 200, job_id: str | None = None
-) -> tuple[RunRecord, ...]:
-    """Runs newest first, each with its headline figures. ``job_id`` narrows to the run of one job."""
+async def read_run_rows(
+    conn: asyncpg.Connection, *, limit: int = 200, job_id: str | None = None
+) -> tuple[asyncpg.Record, ...]:
+    """The rows of the history, newest first. ``job_id`` narrows to the run of one job. Nothing is asked of Redis."""
     rows = await conn.fetch(
         f"SELECT {_RUN_COLUMNS} FROM research_options_backtest_runs WHERE ($1::text IS NULL OR job_id = $1) "
         "ORDER BY created_at_ms DESC, id DESC LIMIT $2",
         job_id,
         limit,
     )
-    return tuple(_record(row, is_live) for row in rows)
+    return tuple(rows)
+
+
+async def present_runs(rows: Sequence[asyncpg.Record], *, is_live: IsLive) -> tuple[RunRecord, ...]:
+    """The rows as records, each with its headline figures.
+
+    A row stored as ``running`` reads ``interrupted`` once its job is gone, and an interrupted run stays ``running``
+    in the table for good, so a long history holds many. What a job's liveness costs is a blocking round trip to Redis,
+    and this runs on the event loop: so the liveness of every running row's job is read in one call on a worker
+    thread, and not by a call for each row on the loop. The rows are already read, so no database connection is held
+    meanwhile.
+    """
+    running = {row["job_id"] for row in rows if row["status"] == "running"}
+    live = await asyncio.to_thread(_liveness_of, running, is_live) if running else {}
+    return tuple(_record(row, live.__getitem__) for row in rows)
+
+
+def _liveness_of(job_ids: Iterable[str | None], is_live: IsLive) -> dict[str | None, bool | None]:
+    return {job_id: is_live(job_id) for job_id in job_ids}
+
+
+async def list_runs(
+    conn: asyncpg.Connection, *, is_live: IsLive, limit: int = 200, job_id: str | None = None
+) -> tuple[RunRecord, ...]:
+    """Runs newest first, each with its headline figures: :func:`read_run_rows` then :func:`present_runs`, for a
+    caller that holds a connection. A route reads the rows under a connection and presents them after it is released."""
+    return await present_runs(await read_run_rows(conn, limit=limit, job_id=job_id), is_live=is_live)
 
 
 async def get_run(conn: asyncpg.Connection, run_id: int, *, is_live: IsLive) -> StoredRun | None:

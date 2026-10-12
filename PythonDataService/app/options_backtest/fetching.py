@@ -25,7 +25,10 @@ request, and the replay is where it ends the run; the check refuses such a sessi
 
 Order. The underlying's bars are asked for in chunks of ``UNDERLYING_CHUNK_SESSIONS`` sessions, each chunk just before
 the first session in it, so the progress counts sessions from the start; then, for each session, its listing and its
-contracts. The stock pipeline that fetches the underlying has no gate on a session that is not over: asked for one, it
+contracts. A chunk holds only sessions the run needs, and the stock pipeline is asked for the bars of every session from
+the first date of a request to its last, so a chunk is asked for in one call for each stretch of sessions that follow one
+another in the calendar and are all needed: a session the run skips (its window does not fit) is in no request, and a
+failure on it cannot fail the run. The stock pipeline has no gate on a session that is not over: asked for one, it
 stores the minutes so far as the whole day. Check data refuses such a session first, but this phase is a function of its
 own, so before a chunk is asked for, the lake's own rule (``option_lake.session_refusal``) is asked of each session in
 it, and a refused one is a ``DownloadFailed`` with the lake's reason and the pipeline is not called for the chunk.
@@ -53,9 +56,9 @@ after ``STOP_GRACE_SECONDS`` at the latest; a capture still running then is canc
 had claimed stays ``fetching`` until its lease ends (``LEASE_TTL_MS``), after which the next ask for that day takes it
 over. The same holds when a wait runs out: the batch is told to stop before the run is failed, and so it is when the
 job's thread leaves a wait by an exception, so nothing keeps asking the vendor for a run that has ended. The
-underlying's chunk is one call of the lake with no way to cut it short: a stop abandons it, and the thread that runs it
-goes on in the background through the rest of the chunk's sessions, up to ``UNDERLYING_CHUNK_SESSIONS`` stock requests,
-whose days are stored for a rerun to reuse.
+underlying's calls to the lake have no way to be cut short: a stop abandons the one in progress, and the thread that runs
+it goes on in the background through the rest of its sessions, up to ``UNDERLYING_CHUNK_SESSIONS`` stock requests, whose
+days are stored for a rerun to reuse; the stretches of the chunk after it are not asked for.
 
 The functions of the lake that fetch options are coroutines whose catalog pool belongs to one event loop; a worker
 thread has none. The phase hands each coroutine to the process's background loop, opens that loop's pool first, and
@@ -73,6 +76,7 @@ from concurrent.futures import Future
 from concurrent.futures import wait as wait_for_futures
 from dataclasses import dataclass
 from datetime import date
+from functools import partial
 from typing import Any
 
 from app.data_lake import catalog_client
@@ -80,7 +84,7 @@ from app.data_lake.option_bars import captured_option_days, ensure_option_day_ba
 from app.data_lake.option_lake import LEASE_TTL_MS, OptionCaptureResult, session_refusal, vendor_request_gate
 from app.data_lake.option_listing import OptionListing, ensure_option_listing
 from app.data_lake.run_materialization import LakeMaterializationError, materialize_engine_run
-from app.lean_sidecar.trading_calendar import session_window_for_date
+from app.lean_sidecar.trading_calendar import expected_sessions, session_window_for_date
 from app.options.contract import OptionContract
 from app.options_backtest.data_check import STORED_FILE_ERRORS, DataKind, DataThing
 from app.options_backtest.lake_check import LakeCheckData
@@ -319,19 +323,25 @@ class _Download:
             if refusal is not None:
                 raise DownloadFailed(session=day, what=what, reason=refusal.reason, detail=refusal.detail)
         self._log(f"Fetching {underlying} minute bars for sessions {already + 1} to {already + len(chunk)} of {of}.")
-        future = _in_a_thread(
-            lambda: materialize_engine_run(
-                symbol=underlying, start=chunk[0], end=chunk[-1], resolution="minute", price_adjustment_mode="raw"
-            ),
-            name="options-backtest-underlying",
-        )
-        try:
-            self._wait(future, batch=None, give_up_after=_UNDERLYING_TIMEOUT_SECONDS, session=None, what=what)
-        except LakeMaterializationError as exc:
-            reason = self._reason_the_lake_recorded_for_the_underlying(chunk) or UNDERLYING_NOT_FETCHED
-            raise DownloadFailed(session=None, what=what, reason=reason, detail=str(exc)) from exc
-        except CallerStoppedWaitingError as exc:
-            raise DownloadFailed(session=None, what=what, reason=TOOK_TOO_LONG, detail=str(exc)) from exc
+        for stretch in _stretches(chunk):
+            future = _in_a_thread(
+                partial(
+                    materialize_engine_run,
+                    symbol=underlying,
+                    start=stretch[0],
+                    end=stretch[-1],
+                    resolution="minute",
+                    price_adjustment_mode="raw",
+                ),
+                name="options-backtest-underlying",
+            )
+            try:
+                self._wait(future, batch=None, give_up_after=_UNDERLYING_TIMEOUT_SECONDS, session=None, what=what)
+            except LakeMaterializationError as exc:
+                reason = self._reason_the_lake_recorded_for_the_underlying(stretch) or UNDERLYING_NOT_FETCHED
+                raise DownloadFailed(session=None, what=what, reason=reason, detail=str(exc)) from exc
+            except CallerStoppedWaitingError as exc:
+                raise DownloadFailed(session=None, what=what, reason=TOOK_TOO_LONG, detail=str(exc)) from exc
         self._log(f"{underlying} minute bars are in the lake for {already + len(chunk)} of {of} sessions.")
 
     def _reason_the_lake_recorded_for_the_underlying(self, chunk: Sequence[date]) -> str | None:
@@ -554,6 +564,28 @@ class _Download:
             if batch is not None:
                 batch.stop.set()
             raise
+
+
+def _stretches(needed: Sequence[date]) -> list[list[date]]:
+    """``needed`` (sessions in date order) cut at every session of the calendar that falls between two of them and is
+    not among them.
+
+    The stock pipeline is asked for the bars of every session from a first date to a last, so a request for a stretch
+    that holds a session the run does not need would fetch that session too, and a failure on it would fail a run that
+    could have run. Each stretch is sessions that follow one another in the calendar, all of them needed.
+    """
+    wanted = set(needed)
+    stretches: list[list[date]] = []
+    current: list[date] = []
+    for session in expected_sessions(needed[0], needed[-1]):
+        if session in wanted:
+            current.append(session)
+        elif current:
+            stretches.append(current)
+            current = []
+    if current:
+        stretches.append(current)
+    return stretches
 
 
 def _in_a_thread[T](work: Callable[[], T], *, name: str) -> Future[T]:

@@ -7,10 +7,13 @@ lease alive: the job's lease lasts five minutes and is renewed only by a stop po
 
 Hand-worked figures:
 
-* Eight contracts a session (the strikes 496 to 504 less the money, 500), four requests in flight at most. A request
-  takes 0.4 seconds, so the first four are in flight together and the other four would start at 0.4 seconds.
-* A stop noticed 0.05 seconds in (the stop poll is shortened to that) finds four requests in flight, so four requests
-  are asked for in all, and no fifth ever is. A wait that runs out at 0.3 seconds finds the same four.
+* Eight contracts a session (the strikes 496 to 504 less the money, 500), four requests in flight at most. The vendor
+  holds the requests of the tests that stop, fail or run out of time a batch until the test lets them answer, so the
+  first four are in flight together however long the machine takes to bring the fourth, and the other four are queued
+  behind them for a place.
+* The job's thread acts (stops, fails, runs out of time) at the moment the vendor says four requests are in flight,
+  never at a time: a stop noticed then finds four requests in flight, so four requests are asked for in all, and no
+  fifth ever is. A wait that runs out then finds the same four.
 * Two runs over one session of eight contracts, one starting when the other's first request arrives: each of the eight
   days is fetched once by whichever got its row first, so eight requests and not sixteen, and both runs finish.
 * Fake time. A stage of the phase is held for 600 seconds (ten minutes) and the stop poll is every 5 seconds, so the
@@ -21,6 +24,9 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
+from concurrent.futures import Future
+from concurrent.futures import wait as wait_for_futures
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -49,8 +55,9 @@ from tests.options_backtest.setup_fixtures import leg, setup
 # 2026-10-12 14:00 New York.
 NOW_MS = 1791828000000
 SPY_500_CALL = OptionContract.of(root="SPY", expiry_date=WED, right="call", strike=500)
-# The stage of the phase a request belongs to, and the switch of the fake vendor that holds it.
+# The stage of the phase a request belongs to, the switch of the fake vendor that holds it, and the hook that says it came.
 HOLDS = {"underlying": "stock_release", "listing": "listing_release", "contracts": "option_release"}
+ON_REQUEST = {"underlying": "on_stock_request", "listing": "on_listing_request", "contracts": "on_option_request"}
 
 
 def the_money_call() -> Any:
@@ -95,6 +102,7 @@ async def test_two_runs_at_once_share_the_one_limit_of_four_requests_in_flight(
     fake_catalog: FakeCatalog, tmp_lake: Path, quick: None
 ) -> None:
     vendor = Vendor({WED: ladder_day(), THU: ladder_day()}, option_latency_s=0.15)
+    vendor.hold_the_first(4)  # four are in flight together on any machine; the rest overlap as the latency lets them
     vendor.mount()
 
     await asyncio.gather(_run([WED]), _run([THU]))
@@ -475,6 +483,77 @@ def test_a_capture_waits_for_another_request_for_longer_than_the_lake_lets_a_req
 
 
 # ── A phase that has stopped asks for nothing more ───────────────────────
+# The captures of a batch begin one after another on the background loop, each doing some work of its own before its
+# request reaches the vendor, so how many requests have arrived at a given time depends on the machine. These tests
+# therefore never act at a time. The vendor holds the requests it is asked for until the test lets them answer, says when
+# four are in flight (``Vendor.when_in_flight``), and the job's thread stops, fails or runs out of time at that moment.
+
+# How long a test waits, in real time, for the vendor to have the requests it needs in flight, or for a batch to end,
+# before it fails. It is far more than any machine needs, so a failure is a fault of the code or the test.
+WITHIN_SECONDS = 10.0
+# A reading of the phase's clock past every limit it has.
+PAST_EVERY_LIMIT = 1e12
+
+
+async def _happens(event: threading.Event, what: str) -> None:
+    assert await asyncio.to_thread(event.wait, WITHIN_SECONDS), f"{what} did not happen within {WITHIN_SECONDS} seconds"
+
+
+class _TheMoment:
+    """The moment the job's thread acts, which the vendor fixes by saying that the requests the test needs are in flight.
+
+    Until then the job's thread acts on nothing: its stop poll says no and its clock stands still. From then on the stop
+    poll says yes and the clock reads past every limit, so a stop or a wait that runs out is heard at the first look after
+    the requests are in flight. With ``answers``, the vendor is let answer the next time the job's thread waits: it has
+    told the batch to stop before it waits again, so the batch begins no request after the vendor has answered.
+    """
+
+    def __init__(self, in_flight: threading.Event, answers: threading.Event | None = None) -> None:
+        self._in_flight = in_flight
+        self._answers = answers
+        self._began = time.monotonic()
+        self.has_come = False
+
+    def is_here(self) -> bool:
+        if not self.has_come:
+            if self._in_flight.is_set():
+                self.has_come = True
+            elif time.monotonic() - self._began > WITHIN_SECONDS:
+                raise AssertionError(f"the vendor had not four requests in flight within {WITHIN_SECONDS} seconds")
+        return self.has_come
+
+    def wait_until_here(self) -> None:
+        """Hold the job's thread, inside one of its hooks, until the moment comes."""
+        if not self._in_flight.wait(WITHIN_SECONDS):
+            raise AssertionError(f"the vendor had not four requests in flight within {WITHIN_SECONDS} seconds")
+        self.has_come = True
+
+    def now(self) -> float:
+        return PAST_EVERY_LIMIT if self.is_here() else 0.0
+
+    def wait_for(self, future: Future[Any], seconds: float) -> None:
+        if self.has_come and self._answers is not None:
+            self._answers.set()
+        wait_for_futures([future], timeout=seconds)
+
+    def pace(self, *, clock: bool = False) -> Pace:
+        return Pace(now=self.now, wait_for=self.wait_for) if clock else Pace(wait_for=self.wait_for)
+
+
+@pytest.fixture
+def the_batch_ends(monkeypatch: pytest.MonkeyPatch) -> threading.Event:
+    """Set when a session's batch of contract captures, which runs on the background loop, has returned or raised."""
+    ended = threading.Event()
+    batch = fetching._capture_contract_days
+
+    async def watched(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return await batch(*args, **kwargs)
+        finally:
+            ended.set()
+
+    monkeypatch.setattr(fetching, "_capture_contract_days", watched)
+    return ended
 
 
 async def _the_vendor_is_asked_for_nothing_more(vendor: Vendor) -> None:
@@ -487,12 +566,19 @@ async def _the_vendor_is_asked_for_nothing_more(vendor: Vendor) -> None:
 async def test_a_stop_in_the_middle_of_a_session_batch_is_heard_at_once_and_no_further_request_is_made(
     fake_catalog: FakeCatalog, tmp_lake: Path, quick: None
 ) -> None:
-    # Eight contracts, four in flight at a time, 0.4 seconds each. The stop is asked for as the first request arrives.
-    vendor = Vendor({WED: ladder_day()}, option_latency_s=0.4)
+    # Eight contracts, four places. The vendor holds the requests it is asked for, so four are in flight together; the
+    # stop is asked for the moment the fourth is, and the vendor answers once the batch has been told. The four finish,
+    # and the four queued behind them for a place find the batch stopped: four requests in all, not eight.
+    answers = threading.Event()
+    vendor = Vendor({WED: ladder_day()}, option_release=answers)
     vendor.mount()
+    moment = _TheMoment(vendor.when_in_flight(4), answers)
 
-    with pytest.raises(DownloadStopped):
-        await _run([WED], should_stop=lambda: len(vendor.option_requests) >= 1)
+    try:
+        with pytest.raises(DownloadStopped):
+            await _run([WED], should_stop=moment.is_here, pace=moment.pace())
+    finally:
+        answers.set()
 
     assert len(vendor.option_requests) == 4, "the four in flight finished; the other four were never asked"
     await _the_vendor_is_asked_for_nothing_more(vendor)
@@ -500,14 +586,20 @@ async def test_a_stop_in_the_middle_of_a_session_batch_is_heard_at_once_and_no_f
 
 @respx.mock
 async def test_a_wait_that_runs_out_fails_the_run_and_the_batch_is_told_to_stop_before_it_does(
-    fake_catalog: FakeCatalog, tmp_lake: Path, quick: None, monkeypatch: pytest.MonkeyPatch
+    fake_catalog: FakeCatalog, tmp_lake: Path, quick: None
 ) -> None:
-    vendor = Vendor({WED: ladder_day()}, option_latency_s=0.4)
+    # As above, but nobody asks the job to stop: its clock stands still until four requests are in flight and then reads
+    # past the wait's limit, so the wait has run out with the same four in flight.
+    answers = threading.Event()
+    vendor = Vendor({WED: ladder_day()}, option_release=answers)
     vendor.mount()
-    monkeypatch.setattr(fetching, "_CONTRACTS_TIMEOUT_SECONDS", 0.3)
+    moment = _TheMoment(vendor.when_in_flight(4), answers)
 
-    with pytest.raises(DownloadFailed) as caught:
-        await _run([WED])
+    try:
+        with pytest.raises(DownloadFailed) as caught:
+            await _run([WED], pace=moment.pace(clock=True))
+    finally:
+        answers.set()
 
     assert (caught.value.session, caught.value.reason) == (WED, "took_too_long")
     assert len(vendor.option_requests) == 4
@@ -536,32 +628,44 @@ class _HookFailed(Exception):
 @pytest.mark.parametrize("hook", ["the log", "the stop poll"])
 @respx.mock
 async def test_a_wait_the_jobs_thread_leaves_by_an_exception_stops_its_batch_so_the_vendor_is_asked_for_nothing_after_it(
-    hook: str, fake_catalog: FakeCatalog, tmp_lake: Path, quick: None, monkeypatch: pytest.MonkeyPatch
+    hook: str,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    quick: None,
+    monkeypatch: pytest.MonkeyPatch,
+    the_batch_ends: threading.Event,
 ) -> None:
-    # Eight contracts, four places, 0.4 s a request. The 496 call is held by another request: it waits, and never asks
-    # the vendor. The other seven are asked four at a time, so four requests are in flight when the job's first look
-    # (0.05 s) finds the wait and the hook fails; the three still queued must never be asked. Without the stop, they
-    # are asked as the first four finish (0.4 s), and the count goes from 4 to 7.
-    vendor = Vendor({WED: ladder_day()}, option_latency_s=0.4)
+    # Eight contracts, four places. The 496 call is held by another request: it waits, and never asks the vendor. The
+    # other seven are asked four at a time, and the vendor holds the four in flight. The hook fails at the first look
+    # after all four are (the log when it says the wait began, the stop poll when it is asked); the three still queued
+    # must never be asked. Without the stop they are asked as the four answer, and the count goes from 4 to 7.
+    answers = threading.Event()
+    vendor = Vendor({WED: ladder_day()}, option_release=answers)
     vendor.mount()
+    moment = _TheMoment(vendor.when_in_flight(4))
     await _store_the_underlying_and_the_listing_of(WED, listing=True)
     await _another_worker_holds(fake_catalog, "a contract day", WED, strike=496)
     monkeypatch.setattr(fetching, "OTHER_REQUEST_WAIT_SECONDS", 20.0)
 
     def on_log(line: str) -> None:
         if hook == "the log" and line == WAITING:
+            moment.wait_until_here()
             raise _HookFailed("the log could not be written")
 
     def should_stop() -> bool:
-        if hook == "the stop poll" and vendor.option_requests:
+        if hook == "the stop poll" and moment.is_here():
             raise _HookFailed("the stop poll could not be read")
         return False
 
-    with pytest.raises(_HookFailed):
-        await _run([WED], setup=eight_legs_setup(), should_stop=should_stop, on_log=on_log)
+    try:
+        with pytest.raises(_HookFailed):
+            await _run([WED], setup=eight_legs_setup(), should_stop=should_stop, on_log=on_log)
+        asked = len(vendor.option_requests)
+        answers.set()
+        await _happens(the_batch_ends, "the end of the batch")
+    finally:
+        answers.set()
 
-    asked = len(vendor.option_requests)
-    await asyncio.sleep(0.9)  # two requests' time
     assert (asked, len(vendor.option_requests)) == (4, 4)
 
 
@@ -594,22 +698,32 @@ async def test_an_error_in_one_capture_of_a_batch_stops_the_others_before_they_a
 
 @respx.mock
 async def test_a_request_that_never_comes_back_is_cancelled_after_the_grace_and_its_row_stays_fetching_until_its_lease_ends(
-    fake_catalog: FakeCatalog, tmp_lake: Path, quick: None, monkeypatch: pytest.MonkeyPatch
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    quick: None,
+    monkeypatch: pytest.MonkeyPatch,
+    the_batch_ends: threading.Event,
 ) -> None:
     # Eight contracts, four places, and a vendor that never answers: the first four (the 496 to 499 calls) are asked and
-    # their rows claimed. The stop is heard at the first look, the grace (0.3 s) passes and the captures are cancelled.
-    # The vendor then answers, too late for anything that was cut off: had the cancel not happened, the four captures
-    # would finish and their rows would read complete. They are cut off, so the four rows are still fetching, and
-    # nothing was asked beyond the four.
+    # their rows claimed. The stop is heard at the first look after the fourth is in flight, the grace (0.3 s) passes and
+    # the captures are cancelled. The vendor then answers, too late for anything that was cut off: had the cancel not
+    # happened, the four captures would finish and their rows would read complete. They are cut off, so the four rows are
+    # still fetching, and nothing was asked beyond the four.
     monkeypatch.setattr(fetching, "STOP_GRACE_SECONDS", 0.3)
     never = threading.Event()
     vendor = Vendor({WED: ladder_day()}, option_release=never)
     vendor.mount()
+    moment = _TheMoment(vendor.when_in_flight(4))
 
-    with pytest.raises(DownloadStopped):
-        await _run([WED], should_stop=lambda: len(vendor.option_requests) >= 1)
-    never.set()
-    await asyncio.sleep(0.5)
+    try:
+        with pytest.raises(DownloadStopped):
+            await _run([WED], should_stop=moment.is_here)
+        # The cancel is delivered on the background loop some time after the thread that sent it has moved on, and the
+        # vendor may not answer before it has been: wait until the four requests have been cut off.
+        await _happens(vendor.when_every_request_has_ended(), "the cut-off of the four requests")
+    finally:
+        never.set()
+    await _happens(the_batch_ends, "the end of the batch")
 
     assert _contract_day_rows(fake_catalog) == [
         ("SPY261007C00496000", "fetching"),
@@ -654,17 +768,29 @@ def _pace(fake: FakeTime) -> Pace:
     return Pace(now=fake.now, wait_for=fake.wait_for)
 
 
+def _hold_the_stage(vendor: Vendor, stage: str) -> tuple[threading.Event, FakeTime]:
+    """The vendor holds the requests of ``stage`` until the event returned is set, and the fake clock starts at the
+    first of them: the stages before it take as many slices as the machine needs and do not use the clock up."""
+    release, asked = threading.Event(), threading.Event()
+    setattr(vendor, HOLDS[stage], release)
+    setattr(vendor, ON_REQUEST[stage], lambda *_arguments: asked.set())
+    return release, FakeTime(starts_when=asked)
+
+
 @pytest.mark.parametrize("stage", ["underlying", "listing", "contracts"])
 @respx.mock
 async def test_a_stage_that_takes_ten_minutes_asks_whether_to_stop_at_least_every_thirty_seconds(
-    stage: str, fake_catalog: FakeCatalog, tmp_lake: Path
+    stage: str, fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The listing's own limit is ten minutes, the time this stage is held for, and a limit met at the moment the vendor
+    # answers is a different test (the wait that runs out). The limits are put out of the way: an hour.
+    for limit in ("_UNDERLYING_TIMEOUT_SECONDS", "_LISTING_TIMEOUT_SECONDS", "_CONTRACTS_TIMEOUT_SECONDS"):
+        monkeypatch.setattr(fetching, limit, 3600.0)
     vendor = Vendor({WED: ladder_day()})
     vendor.mount()
     if stage != "underlying":
         await _store_the_underlying_and_the_listing(listing=stage == "contracts")
-    release, fake = threading.Event(), FakeTime()
-    setattr(vendor, HOLDS[stage], release)
+    release, fake = _hold_the_stage(vendor, stage)
     fake.release_at(600, release)
 
     report = await _run([WED], should_stop=fake.stop_at(10_000), pace=_pace(fake))
@@ -684,8 +810,7 @@ async def test_a_stop_asked_in_any_stage_is_heard_within_one_poll_and_ends_the_p
     vendor.mount()
     if stage != "underlying":
         await _store_the_underlying_and_the_listing(listing=stage == "contracts")
-    release, fake = threading.Event(), FakeTime()
-    setattr(vendor, HOLDS[stage], release)
+    release, fake = _hold_the_stage(vendor, stage)
     asked = fake.stop_at(100)
 
     def stop_and_let_what_is_in_flight_finish() -> bool:
@@ -712,8 +837,7 @@ async def test_a_request_that_never_comes_back_is_given_a_minute_after_the_stop_
     vendor.mount()
     if stage != "underlying":
         await _store_the_underlying_and_the_listing(listing=stage == "contracts")
-    never, fake = threading.Event(), FakeTime()
-    setattr(vendor, HOLDS[stage], never)
+    never, fake = _hold_the_stage(vendor, stage)
 
     try:
         with pytest.raises(DownloadStopped):
@@ -721,6 +845,10 @@ async def test_a_request_that_never_comes_back_is_given_a_minute_after_the_stop_
         # The underlying's chunk cannot be told to stop and is let go at once; the others are given the grace.
         grace = 0 if stage == "underlying" else fetching.STOP_GRACE_SECONDS
         assert 100 + grace <= fake.at <= 100 + grace + fetching.STOP_POLL_SECONDS
+        if stage != "underlying":
+            # The cancel reaches the request on the background loop after this thread has moved on; the vendor answers
+            # only once it has, so that a request cut off is not answered (and its file written) after the test.
+            await _happens(vendor.when_every_request_has_ended(), "the cut-off of the request")
     finally:
         never.set()
 

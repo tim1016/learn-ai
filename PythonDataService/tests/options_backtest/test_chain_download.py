@@ -555,12 +555,25 @@ class SlowBars:
         self.asked: list[str] = []
         self.in_flight = 0
         self.peak = 0
+        self._together = 0
+
+    def hold_the_first(self, count: int, *, for_at_most: float = 10.0) -> None:
+        """Answer none until ``count`` are in flight together, so a count of the most in flight at once sees that many
+        however slowly the requests arrive. If they never are, they are let go after ``for_at_most`` seconds, so a
+        fault shows as a count that is wrong and not as a hang."""
+        self.release = threading.Event()
+        self._together = count
+        opens_it_anyway = threading.Timer(for_at_most, self.release.set)
+        opens_it_anyway.daemon = True
+        opens_it_anyway.start()
 
     async def __call__(self, request: httpx.Request) -> httpx.Response:
         symbol = symbol_asked(request)
         self.asked.append(symbol)
         self.in_flight += 1
         self.peak = max(self.peak, self.in_flight)
+        if self._together and self.in_flight >= self._together:
+            self.release.set()
         try:
             await _held_until(self.release)
             await asyncio.sleep(self.latency)
@@ -659,6 +672,7 @@ async def test_a_download_cancelled_while_captures_wait_for_a_place_at_the_gate_
     assert len(bars.asked) == 6
 
     bars.peak, bars.latency = 0, 0.05
+    bars.hold_the_first(4)
     items = await ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=next_eight)
 
     assert bars.peak == 4, "a place the cancelled download kept would leave three"
@@ -855,22 +869,14 @@ async def test_no_more_than_four_requests_are_in_flight_and_four_are(
 ) -> None:
     contracts = [_call(500 + n) for n in range(12)]
     vendor_lists(*contracts)
-    in_flight = 0
-    peak = 0
-
-    async def slow_answer(request: httpx.Request) -> httpx.Response:
-        nonlocal in_flight, peak
-        in_flight += 1
-        peak = max(peak, in_flight)
-        await asyncio.sleep(0.02)
-        in_flight -= 1
-        return no_trades(symbol_asked(request))
-
-    respx.get(url__regex=BARS_URL).mock(side_effect=slow_answer)
+    bars = SlowBars()
+    bars.hold_the_first(4)
+    bars.latency = 0.02
+    respx.get(url__regex=BARS_URL).mock(side_effect=bars)
 
     items = await ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=contracts)
 
-    assert MAX_VENDOR_REQUESTS_IN_FLIGHT == 4 and peak == 4
+    assert MAX_VENDOR_REQUESTS_IN_FLIGHT == 4 and bars.peak == 4
     assert all(item.outcome is Outcome.FETCHED for item in items)
 
 
@@ -887,6 +893,7 @@ async def test_a_chain_download_and_a_run_at_once_share_the_one_limit_of_four_re
     run_asked = threading.Event()
     vendor = Vendor({WED: ladder_day(), THU: ladder_day()}, option_latency_s=0.4)
     vendor.on_option_request = lambda _symbol: run_asked.set()
+    vendor.hold_the_first(4)  # the run's first four are in flight together on any machine
     vendor.mount()
     thursday_calls = [
         OptionContract.of(root="SPY", expiry_date=THU, right="call", strike=strike)
@@ -983,7 +990,7 @@ async def test_four_option_requests_can_be_in_flight_beside_a_fetch_of_the_under
     eight = [_call(500 + n) for n in range(8)]
     vendor_lists(*eight)
     bars = SlowBars()
-    bars.release.set()
+    bars.hold_the_first(4)
     bars.latency = 0.05
     respx.get(url__regex=BARS_URL).mock(side_effect=bars)
     held_download = asyncio.create_task(ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[]))
