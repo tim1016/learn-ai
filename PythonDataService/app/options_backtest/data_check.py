@@ -54,6 +54,10 @@ also in ``test_lake_check.py``):
       row of more than six columns, an empty line, a
       number written ``+5``, an empty zip, a second
       member, another symbol in the member's name)
+    underlying: a corrupt compressed stream            does not        the gate does not handle the    cannot_be_tested
+                                                       replace it:     error, so the capture stops
+                                                       the capture     with it
+                                                       stops
 
 The gate is the one the stock capture runs on a stored day it is about to reuse, so a download of the underlying keeps
 exactly what the check calls ``cannot_be_tested``. A run is never told to fetch what its download keeps: it fails

@@ -35,6 +35,7 @@ import contextlib
 import io
 import re
 import zipfile
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
@@ -116,6 +117,24 @@ def _zip_of(members: dict[str, str]) -> bytes:
     return buffer.getvalue()
 
 
+def _zip_whose_compressed_stream_is_corrupt() -> bytes:
+    """A zip whose one member says it is deflated and holds bytes no deflate decoder accepts.
+
+    The member is first written stored, holding bytes whose first byte is 0x07: its low bit says "last block" and the next
+    two, 0b11, are the one block type deflate reserves, so the decoder refuses it at once ("invalid block type") on any
+    version of zlib. The method field of the member's local header (at offset 8) and of its central directory entry (at
+    offset 10 of the entry) is then changed from 0, stored, to 8, deflated.
+    """
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as archive:
+        archive.writestr(THE_UNDERLYING_MEMBER, b"\x07" + b"\x00" * 40)
+    raw = bytearray(buffer.getvalue())
+    raw[8:10] = (8).to_bytes(2, "little")
+    central = raw.index(b"PK\x01\x02")
+    raw[central + 10 : central + 12] = (8).to_bytes(2, "little")
+    return bytes(raw)
+
+
 @dataclass(frozen=True)
 class Spoil:
     """A stored file replaced by another, and what is true of the day it leaves.
@@ -134,6 +153,8 @@ class Spoil:
     replay_says: str
     # False leaves the catalog without a receipt for the bytes, so it does not admit them.
     admit: bool = True
+    # True when the stock capture, asked for the day, stops with the file's own error: it neither rebuilds nor reuses it.
+    stops_the_stock_capture: bool = False
 
     def apply(self, fake_catalog: FakeCatalog, tmp_lake: Path, day: date) -> None:
         replace_the_stored_file(fake_catalog, raw_root(tmp_lake), self.path(day), self.payload(day), admit=self.admit)
@@ -143,7 +164,14 @@ def _underlying_path(day: date) -> str:
     return f"equity/usa/minute/spy/{day:%Y%m%d}_trade.zip"
 
 
-def _underlying(payload: Callable[[date], bytes], *, fetched_again: bool, replay_says: str, admit: bool = True) -> Spoil:
+def _underlying(
+    payload: Callable[[date], bytes],
+    *,
+    fetched_again: bool,
+    replay_says: str,
+    admit: bool = True,
+    stops_the_stock_capture: bool = False,
+) -> Spoil:
     return Spoil(
         path=_underlying_path,
         payload=payload,
@@ -152,6 +180,7 @@ def _underlying(payload: Callable[[date], bytes], *, fetched_again: bool, replay
         fetched_again=fetched_again,
         replay_says=replay_says,
         admit=admit,
+        stops_the_stock_capture=stops_the_stock_capture,
     )
 
 
@@ -228,6 +257,14 @@ UNDERLYING_ZIP_WITH_A_SECOND_MEMBER = _underlying(
     fetched_again=False,
     replay_says=CANNOT_BE_READ,
 )
+# The gate does not handle the error a corrupt compressed stream raises, so the capture stops with it: a download does
+# not replace such a day, and Check data must not promise it (nor fail itself on the error).
+UNDERLYING_CORRUPT_COMPRESSED_STREAM = _underlying(
+    lambda _day: _zip_whose_compressed_stream_is_corrupt(),
+    fetched_again=False,
+    replay_says=CANNOT_BE_READ,
+    stops_the_stock_capture=True,
+)
 UNDERLYING_MEMBER_OF_ANOTHER_SYMBOL = _underlying(
     lambda _day: _stock_zip(THE_ROW_AT_THE_OPEN, member="20261008_qqq_minute_trade.csv"),
     fetched_again=False,
@@ -265,6 +302,7 @@ THE_UNDERLYING_SPOILS = {
     "a zip with no member": UNDERLYING_ZIP_WITH_NO_MEMBER,
     "a zip with a second member": UNDERLYING_ZIP_WITH_A_SECOND_MEMBER,
     "a member of another symbol": UNDERLYING_MEMBER_OF_ANOTHER_SYMBOL,
+    "a corrupt compressed stream": UNDERLYING_CORRUPT_COMPRESSED_STREAM,
 }
 THE_CONTRACT_SPOILS = {
     "contract, a bar off the minute": CONTRACT_BAR_OFF_THE_MINUTE,
@@ -274,11 +312,12 @@ THE_CONTRACT_SPOILS = {
 EVERY_SPOIL = {**{f"underlying, {name}": spoil for name, spoil in THE_UNDERLYING_SPOILS.items()}, **THE_CONTRACT_SPOILS}
 
 
-def _cases(*, fetched_again: bool | None = None) -> list[pytest.ParameterSet]:
+def _cases(*, fetched_again: bool | None = None, stops_the_stock_capture: bool | None = None) -> list[pytest.ParameterSet]:
     return [
         pytest.param(spoil, id=name)
         for name, spoil in EVERY_SPOIL.items()
-        if fetched_again is None or spoil.fetched_again is fetched_again
+        if (fetched_again is None or spoil.fetched_again is fetched_again)
+        and (stops_the_stock_capture is None or spoil.stops_the_stock_capture is stops_the_stock_capture)
     ]
 
 
@@ -408,6 +447,27 @@ async def test_the_download_phase_stops_at_an_underlying_day_the_stock_capture_k
 
 
 @respx.mock
+async def test_a_download_does_not_replace_an_underlying_day_whose_compressed_stream_is_corrupt_it_stops_with_the_error(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # The stock capture's gate handles the errors a bad row or a bad zip raise and rebuilds the day; a corrupt compressed
+    # stream raises another (zlib's), which it does not handle, so the capture stops with it and fetches nothing. Check
+    # data's answer for the day ("cannot be tested", above) rests on this; if the stock side learns to rebuild such a
+    # day, this test, that answer and the table in data_check move together.
+    vendor = await a_lake_that_holds_both_sessions()
+    asked = vendor.vendor_requests
+    UNDERLYING_CORRUPT_COMPRESSED_STREAM.apply(fake_catalog, tmp_lake, THU)
+
+    with pytest.raises(zlib.error):
+        await asyncio.to_thread(
+            ensure_run_data, the_setup(), SESSIONS, now_ms=NOW_2026_10_12_MS, should_stop=lambda: False
+        )
+
+    assert vendor.vendor_requests == asked
+    assert (await asyncio.to_thread(LakeCheckData("SPY").download_replaces_the_underlying, THU)) is False
+
+
+@respx.mock
 async def test_the_download_phase_reuses_a_contract_day_whose_only_fault_is_a_close_on_another_day_and_asks_for_nothing(
     fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
@@ -473,7 +533,7 @@ async def test_a_run_whose_download_meets_a_day_the_lake_replaces_repairs_it_wit
     assert vendor.vendor_requests == asked + 1
 
 
-@pytest.mark.parametrize("spoil", _cases(fetched_again=False))
+@pytest.mark.parametrize("spoil", _cases(fetched_again=False, stops_the_stock_capture=False))
 @respx.mock
 async def test_a_run_whose_download_meets_a_day_the_lake_keeps_fails_as_unreadable_and_names_the_session_by_its_open(
     spoil: Spoil, fake_catalog: FakeCatalog, tmp_lake: Path

@@ -17,6 +17,8 @@ that has not yet downloaded anything, and a check made first would otherwise ans
 
 from __future__ import annotations
 
+import lzma
+import zlib
 from datetime import date
 
 from app.data_lake import catalog_client
@@ -41,6 +43,11 @@ from app.utils.background_loop import run_on_background_loop
 
 # A claim-state read is a single indexed select.
 _CATALOG_READ_TIMEOUT_SECONDS = 60.0
+
+# What a damaged zip can raise that the stock capture's gate does not handle. The capture is stopped by it with the error
+# and does not rebuild the day, so a download does not replace such a day. (Handling them there would be the stock side's
+# change, and this list and the table in ``data_check`` would follow it.)
+_STOPS_THE_STOCK_CAPTURE = (zlib.error, lzma.LZMAError, EOFError, NotImplementedError, RuntimeError)
 
 
 def _stock_day_identity(symbol: str, day: date) -> ArtifactIdentity:
@@ -79,8 +86,9 @@ class LakeCheckData(LakeRunData):
         The stock capture reuses a stored raw minute day unless its own gate rejects it (``ensure_data``'s
         ``check_stored_minute_day``, the one function the capture and this call both run) or the catalog does not
         admit its bytes. That gate is not this feature's reader, so a day this reader refuses may pass it, and then
-        the download keeps it. Reads the file and asks the catalog, so a worker thread; ``True`` also for a day that
-        is not stored at all (nothing to keep).
+        the download keeps it. A corrupt compressed stream is neither: it stops the capture with the error, so the
+        download does not replace it either. Reads the file and asks the catalog, so a worker thread; ``True`` also for
+        a day that is not stored at all (nothing to keep).
         """
         relative = LeanMinuteBarPath(
             market="usa", symbol=self._underlying, trading_date=trading_date, data_type="trade"
@@ -91,6 +99,8 @@ class LakeCheckData(LakeRunData):
             )
         except (*STORED_MINUTE_DAY_ERRORS, LakeAdmissionError):
             return True
+        except _STOPS_THE_STOCK_CAPTURE:
+            return False
         return False
 
     def recorded_failure(self, thing: DataThing, trading_date: date) -> RecordedFailure | None:
