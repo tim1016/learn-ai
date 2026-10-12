@@ -12,16 +12,17 @@ import gc
 import hashlib
 import weakref
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal
+from typing import Any
 
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.options.contract import OptionContract, OptionRight
 from app.options_backtest.data import Captured
 from app.options_backtest.market import MinuteBar
 from app.options_backtest.picking import ListedContract, Listing
-from app.options_backtest.setup import MS_PER_MINUTE
+from app.options_backtest.setup import MS_PER_MINUTE, OptionsBacktestSetup
 
 D = Decimal
 
@@ -132,7 +133,7 @@ class FakeRunData:
         self._underlying = dict(underlying or {})
         self._listings = dict(listings or {})
         self._options = dict(options or {})
-        self.asked: list[tuple[str, ...] | tuple[str, date, str]] = []
+        self.asked: list[tuple[Any, ...]] = []
         self._handed: list[weakref.ref[object]] = []
         # How many things handed out earlier were still alive, each time the underlying of a new session was asked.
         self.alive_at_each_session: list[int] = []
@@ -142,7 +143,7 @@ class FakeRunData:
         self.asked.append(("underlying", trading_date))
         if trading_date not in self._underlying:
             return None
-        return self._hand_out(_Handed(self._underlying[trading_date]), sha_of("underlying", trading_date))
+        return self._hand_out(self._fresh(self._underlying[trading_date]), sha_of("underlying", trading_date))
 
     def listing(self, trading_date: date) -> Captured[Listing] | None:
         self.asked.append(("listing", trading_date))
@@ -154,8 +155,15 @@ class FakeRunData:
         self.asked.append(("option", trading_date, contract.occ_symbol))
         if (contract, trading_date) not in self._options:
             return None
-        bars = _Handed(self._options[(contract, trading_date)])
-        return self._hand_out(bars, sha_of("option", trading_date, contract))
+        return self._hand_out(
+            self._fresh(self._options[(contract, trading_date)]), sha_of("option", trading_date, contract)
+        )
+
+    def _fresh(self, bars: Sequence[MinuteBar]) -> _Handed:
+        """The bars as new objects, each watched, so that a run that keeps a bar keeps it where a test can see."""
+        handed = _Handed(replace(bar) for bar in bars)
+        self._handed.extend(weakref.ref(bar) for bar in handed)
+        return handed
 
     def _hand_out[T](self, value: T, sha256: str) -> Captured[T]:
         captured = Captured(value=value, sha256=sha256)
@@ -163,9 +171,52 @@ class FakeRunData:
         self._handed.append(weakref.ref(captured))
         return captured
 
+    def handed_out_count(self) -> int:
+        return len(self._handed)
+
     def handed_out_and_still_alive(self) -> int:
         gc.collect()
         return sum(1 for reference in self._handed if reference() is not None)
 
     def contracts_asked(self, trading_date: date) -> list[str]:
         return [str(question[2]) for question in self.asked if question[0] == "option" and question[1] == trading_date]
+
+
+@dataclass
+class Day:
+    """What a scene stores of one session: the underlying, and each contract's bars by (right, strike).
+
+    ``underlying`` is ``{minute: price}``, ``options`` is ``{("call", 500): {minute: (open, close)}}``. A contract named
+    in the listing and not in ``options`` is a contract whose day is not captured.
+    """
+
+    underlying: dict[int, str]
+    options: dict[tuple[OptionRight, int], dict[int, tuple[str, ...]]] = field(default_factory=dict)
+    strikes: tuple[int, ...] = (495, 500, 505, 510)
+    complete: bool = True
+
+
+def fake_data(
+    days: dict[date, Day], *, without_underlying: tuple[date, ...] = (), without_listing: tuple[date, ...] = ()
+) -> FakeRunData:
+    """A ``RunData`` over the days, with the stated gaps in what is captured."""
+    return FakeRunData(
+        underlying={
+            day: underlying_bars(day, spec.underlying) for day, spec in days.items() if day not in without_underlying
+        },
+        listings={
+            day: listing_on(day, strikes=spec.strikes, complete=spec.complete)
+            for day, spec in days.items()
+            if day not in without_listing
+        },
+        options={
+            (contract_on(day, right, strike), day): option_bars(day, series)
+            for day, spec in days.items()
+            for (right, strike), series in spec.options.items()
+        },
+    )
+
+
+def changed(written: OptionsBacktestSetup, **fields: Any) -> OptionsBacktestSetup:
+    """The same setup with some of its fields changed, validated afresh."""
+    return OptionsBacktestSetup.model_validate({**written.model_dump(mode="python"), **fields})
