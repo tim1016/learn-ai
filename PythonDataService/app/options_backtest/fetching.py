@@ -12,13 +12,15 @@ Everything is fetched through the lake's functions and nothing else, so its rule
 failure reads: ``materialize_engine_run`` for the underlying, ``ensure_option_listing`` for a listing and
 ``ensure_option_day_bars`` for a contract's day. A typed failure from any of them for something a session needs stops
 the phase with ``DownloadFailed``, naming the session and the lake's reason code (never its words, which can hold a
-date or a vendor's JSON): a run never goes on over data that was only partly fetched. The listing of a session is read
-from the lake once and handed to every contract capture of that session, so it is not parsed again for each contract.
-The lake is asked once which of a session's contract days are captured, and only the rest are captured; a captured
-day whose file does not read is captured again, as the check promised. The lake fetches such a day again whenever its
-own parser refuses the file (the reuse gate runs that parser). A day that parser accepts and this feature's reader
-refuses, a bar closing on another New York date, is held as good: the capture reuses it with no request, and the replay
-is where it ends the run; the check refuses such a session first and promises no fetch for it
+date or a vendor's JSON): a run never goes on over data that was only partly fetched. The stock pipeline's error for
+the underlying is a sentence with no code, so its code is asked of the catalog, where the lake wrote the reason of each
+day it could not fetch; when no day of the chunk has one the failure is ``UNDERLYING_NOT_FETCHED``. The listing of a
+session is read from the lake once and handed to every contract capture of that session, so it is not parsed again for
+each contract. The lake is asked once which of a session's contract days are captured, and only the rest are captured;
+a captured day whose file does not read is captured again, as the check promised. The lake fetches such a day again
+whenever its own parser refuses the file (the reuse gate runs that parser). A day that parser accepts and this
+feature's reader refuses, a bar closing on another New York date, is held as good: the capture reuses it with no
+request, and the replay is where it ends the run; the check refuses such a session first and promises no fetch for it
 (``data_check``'s table of stored days).
 
 Order. The underlying's bars are asked for in chunks of ``UNDERLYING_CHUNK_SESSIONS`` sessions, each chunk just before
@@ -63,6 +65,7 @@ waits for it in short slices.
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 from collections.abc import Callable, Coroutine, Sequence
@@ -79,11 +82,14 @@ from app.data_lake.option_listing import OptionListing, ensure_option_listing
 from app.data_lake.run_materialization import LakeMaterializationError, materialize_engine_run
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.options.contract import OptionContract
-from app.options_backtest.data_check import STORED_FILE_ERRORS
+from app.options_backtest.data_check import STORED_FILE_ERRORS, DataKind, DataThing
+from app.options_backtest.lake_check import LakeCheckData
 from app.options_backtest.lake_data import LakeRunData, captured_listing_of
 from app.options_backtest.needs import session_needs
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.utils.background_loop import CallerStoppedWaitingError, background_loop
+
+logger = logging.getLogger(__name__)
 
 # Sessions of the underlying asked for in one call. That call waits at most ten minutes for a window and reports
 # nothing until it returns, so a long range is asked for in chunks: each has its own wait, log lines and a stop check.
@@ -322,10 +328,33 @@ class _Download:
         try:
             self._wait(future, batch=None, give_up_after=_UNDERLYING_TIMEOUT_SECONDS, session=None, what=what)
         except LakeMaterializationError as exc:
-            raise DownloadFailed(session=None, what=what, reason=UNDERLYING_NOT_FETCHED, detail=str(exc)) from exc
+            reason = self._reason_the_lake_recorded_for_the_underlying(chunk) or UNDERLYING_NOT_FETCHED
+            raise DownloadFailed(session=None, what=what, reason=reason, detail=str(exc)) from exc
         except CallerStoppedWaitingError as exc:
             raise DownloadFailed(session=None, what=what, reason=TOOK_TOO_LONG, detail=str(exc)) from exc
         self._log(f"{underlying} minute bars are in the lake for {already + len(chunk)} of {of} sessions.")
+
+    def _reason_the_lake_recorded_for_the_underlying(self, chunk: Sequence[date]) -> str | None:
+        """The reason code the lake wrote in the catalog for the first day of ``chunk`` whose stock fetch failed.
+
+        The lake's error for a chunk says only that it could not serve it, in a sentence; the reason for each day it
+        could not is in the catalog's row for that day (``provider_no_data``, ``provider_api_error``, ...), and that is
+        asked, never read out of the sentence. ``None`` when no day of the chunk has a failed row (the error came from
+        elsewhere: a file missing on disk, a calendar the lake cannot reach) or when the catalog cannot be asked now.
+        """
+        reader = LakeCheckData(self._setup.underlying)
+        for day in chunk:
+            try:
+                recorded = reader.recorded_failure(DataThing(DataKind.UNDERLYING_BARS), day)
+            except (catalog_client.CatalogUnavailableError, CallerStoppedWaitingError) as exc:
+                logger.warning(
+                    "the lake's reason for the underlying's failed fetch could not be read; the failure goes without it",
+                    extra={"action": "options_backtest_underlying_reason_unread", "error_type": type(exc).__name__},
+                )
+                return None
+            if recorded is not None:
+                return recorded.reason
+        return None
 
     # ── one session ──────────────────────────────────────────────────────
 
