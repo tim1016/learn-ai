@@ -340,15 +340,18 @@ async def select_complete_minute_bar_symbols(
     trading_date: date,
     *,
     price_adjustment_mode: str,
+    provider: str,
     data_root_id: UUID | None = None,
 ) -> frozenset[str]:
-    """Which of ``symbols`` have a complete minute-bar row for one date, in one query.
+    """Which of ``symbols`` have a complete minute-bar row of ``provider`` for one date, in one query.
 
     The set-based twin of :func:`select_coverage_minute_bars` for a caller that holds many
     symbols and one date (a run asking which contract-days of a session are captured).
     It answers "is there a complete row" and returns only the symbols that have one; it
-    does not look at the file, the recipe or the row count. Root-scoped like the other
-    reads (issue #1876). No symbols, no query.
+    does not look at the file, the recipe or the row count. The provider is part of a minute-bar
+    row's identity (``uq_data_lake_artifacts_minute_bars``), so another provider's complete row
+    for the same symbol and date is not an answer; ``provider`` is required so no caller can leave
+    it out. Root-scoped like the other reads (issue #1876). No symbols, no query.
     """
     if not symbols:
         return frozenset()
@@ -364,10 +367,13 @@ async def select_complete_minute_bar_symbols(
            AND "TradingDate" = $4
            AND "PriceAdjustmentMode" = $5
            AND "DataRootId" = $6
+           AND "Provider" = $7
            AND "Status" = 'complete'
     """
     async with connection() as conn:
-        rows = await conn.fetch(query, market, list(symbols), data_type, trading_date, price_adjustment_mode, root_id)
+        rows = await conn.fetch(
+            query, market, list(symbols), data_type, trading_date, price_adjustment_mode, root_id, provider
+        )
     return frozenset(r["Symbol"] for r in rows)
 
 
