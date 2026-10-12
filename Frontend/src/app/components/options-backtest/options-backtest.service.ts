@@ -193,7 +193,7 @@ function validationDetails(body: unknown): ValidationDetail[] {
   return found.length > 0 ? found : [{ loc: [], msg: 'The server did not accept the setup.' }];
 }
 
-function readDetail(entry: unknown): ValidationDetail[] {
+export function readDetail(entry: unknown): ValidationDetail[] {
   if (!isRecord(entry)) return [];
   const { loc, msg } = entry;
   if (typeof msg !== 'string' || !Array.isArray(loc)) return [];

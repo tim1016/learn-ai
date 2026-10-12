@@ -1,0 +1,47 @@
+@if (shown()) {
+  <section class="card" aria-labelledby="ob-chain-download-title">
+    <div class="card__head"><h2 id="ob-chain-download-title">Download missing data</h2></div>
+    @if (notOver()) {
+      <p role="status">The session is not over yet, so its data cannot be fetched until the next New York day.</p>
+    } @else if (plan() !== null) {
+      <p id="ob-chain-download-words" class="words">Fetches {{ words() }}.</p>
+      <button pButton type="button" class="go" [disabled]="busy()" [attr.aria-busy]="busy()" aria-describedby="ob-chain-download-words" (click)="start.emit()"><i class="pi pi-download" aria-hidden="true"></i><span>Download missing data</span></button>
+      @if (busy()) { <p class="words" role="status">Downloading. The server finishes what it has begun even if you leave this tab.</p> }
+    }
+    @let current = state();
+    @if (current.kind === 'answered' || current.kind === 'failed') {
+      <div #result class="result" tabindex="-1" role="group" aria-label="Download result">
+        @if (current.kind === 'failed') {
+          @if (current.problem.kind === 'not_allowed') {
+            <p class="problem" role="alert">This page is not allowed to start a download here.</p>
+            @if (current.problem.serverMessage; as why) { <p class="muted">{{ why }}</p> }
+          } @else {
+            <p class="problem" role="alert">{{ current.problem.message }}</p>
+            @if (current.problem.code; as code) { <p class="code">{{ code | receiptLabel }}</p> }
+            @if (current.problem.nothingDownloaded) {
+              <p class="muted">Nothing was downloaded.</p>
+            } @else {
+              <p class="muted">The download may or may not have happened. The day has been read again: what is shown is what is stored.</p>
+            }
+          }
+        } @else {
+          <h3>Download of <app-asset-identity [symbol]="current.answer.underlying" size="xs" [logo]="false" /> on <app-timestamp-display [value]="current.answer.session_open_ms" mode="date-et" granularity="date" /></h3>
+          @if (counts(); as total) { <p class="words" role="status">{{ total.fetched }} fetched, {{ total.alreadyStored }} already stored, {{ total.failed }} failed.</p> }
+          <ul class="items">
+            @for (each of current.answer.items; track itemKey(each)) {
+              <li [attr.data-outcome]="each.outcome">
+                <span class="what">{{ kindLabel(each) }} @if (each.kind === 'contract') { <span class="subject">{{ each.subject }}</span> } @else { <app-asset-identity [symbol]="each.subject" size="xs" [logo]="false" /> }</span>
+                <span class="outcome">{{ each.outcome | receiptLabel }}</span>
+                @if (each.reason; as reason) {
+                  <span class="reason">{{ reason | receiptLabel }}</span>
+                  @if (reason === 'lease_timeout') { <span class="note">Being fetched by another request. Try again shortly.</span> }
+                }
+                @if (each.detail; as detail) { <span class="detail">{{ detail }}</span> }
+              </li>
+            }
+          </ul>
+        }
+      </div>
+    }
+  </section>
+}

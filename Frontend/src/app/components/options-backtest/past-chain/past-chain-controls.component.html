@@ -1,0 +1,41 @@
+<section class="card" aria-labelledby="ob-chain-controls-title">
+  <div class="card__head">
+    <h2 id="ob-chain-controls-title">Past chain</h2>
+    <p class="hint">What was listed on a past trading date and what it traded at. Times are New York time.</p>
+  </div>
+  <div class="fields">
+    <div class="field">
+      <app-symbol-picker appearance="field" label="Chain underlying" adjustmentMode="raw" [symbol]="form().underlying().value()" (symbolChange)="form().underlying().value.set($event)" />
+      <p id="ob-chain-underlying-note" class="words">Picking a symbol the lake holds no bars for starts a backfill of its trade bars first, with progress shown here and a way to cancel. The chain's own data is fetched only by Download missing data.</p>
+      @if (underlyingProblem(); as message) { <p class="problem" role="alert">{{ message }}</p> }
+    </div>
+    <div class="field">
+      <label for="ob-chain-date">Trading date</label>
+      <app-date-field inputId="ob-chain-date" appearance="filled" [formField]="form().date" [hostProblem]="dateProblem()" />
+    </div>
+    <div class="field">
+      <label for="ob-chain-time">Time of day (New York time)</label>
+      <input id="ob-chain-time" pInputText type="time" step="60" [formField]="form().time" [attr.aria-invalid]="timeProblem() !== null" aria-describedby="ob-chain-time-note" />
+      <p id="ob-chain-time-note" class="words">
+        @if (timeProblem(); as message) {
+          <span class="problem" role="alert">{{ message }}</span>
+        } @else if (session(); as day) {
+          Until you type a time, the chain is read at the close, <app-timestamp-display [value]="day.closeMs" mode="et" granularity="minute" />
+        } @else {
+          Until you type a time, the chain is read at the close of the session.
+        }
+      </p>
+    </div>
+    <div class="field field--narrow">
+      <label for="ob-chain-strikes">Strikes each side of the money</label>
+      <input id="ob-chain-strikes" pInputText type="text" inputmode="numeric" autocomplete="off" [attr.placeholder]="strikesShown()" [formField]="form().strikes" (keydown.enter)="commitStrikes()" [attr.aria-invalid]="strikesProblem() !== null" aria-describedby="ob-chain-strikes-note" />
+      <p id="ob-chain-strikes-note" class="words">
+        @if (strikesProblem(); as message) {
+          <span class="problem" role="alert">{{ message }}</span>
+        } @else {
+          Empty means the server's own number.
+        }
+      </p>
+    </div>
+  </div>
+</section>

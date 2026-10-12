@@ -1,0 +1,63 @@
+@let state = view();
+@if (state.kind !== 'no_day') {
+  <section class="card" aria-labelledby="ob-chain-title">
+    <div class="card__head"><h2 id="ob-chain-title">Chain</h2></div>
+    @if (again()) { <p class="muted" role="status">Reading again. What is shown is the last answer.</p> }
+    @if (state.kind === 'no_expiry') {
+      <p class="muted" role="status">No expiry is open. Open one above to read its chain.</p>
+    } @else if (state.kind === 'blocked') {
+      <p class="muted" role="status">The chain is not read while the {{ waitingOn() }} holds something it cannot be asked with. Its reason is at that control.</p>
+    } @else if (state.kind === 'loading') {
+      <p class="muted" role="status">Reading the chain…</p>
+    } @else if (state.kind === 'failed') {
+      <p class="problem" role="alert">{{ state.message }}</p>
+      @if (state.code; as code) { <p class="code">{{ code | receiptLabel }}</p> }
+      @if (state.canRetry) { <button type="button" class="again" (click)="retry.emit()">Try again</button> }
+    } @else if (state.kind === 'not_listed') {
+      <p role="status">The <app-timestamp-display [value]="expiryMs()" mode="date-et" granularity="date" /> expiry is not listed on this date. The expiries that are listed are above; none has been opened for you.</p>
+    } @else if (state.kind === 'listing_unknown') {
+      <p role="status">Whether the <app-timestamp-display [value]="expiryMs()" mode="date-et" granularity="date" /> expiry is listed cannot be said: the listing for this date is {{ state.state === 'unreadable' ? 'stored but cannot be read' : 'not stored' }}.</p>
+      @if (state.problem; as why) { <p class="muted">{{ why }}</p> }
+    } @else if (state.kind === 'unknown_listing') {
+      <p role="status">This page does not know this state of the listing, {{ state.code | receiptLabel }}, so it does not say whether the <app-timestamp-display [value]="expiryMs()" mode="date-et" granularity="date" /> expiry is listed.</p>
+    } @else if (card(); as card) {
+      @let chain = card.chain;
+      @let part = card.body;
+      <div class="head">
+        <p class="words">Expiry <app-timestamp-display [value]="chain.expiry_ms" mode="date-et" granularity="date" /></p>
+        @if (chain.tag; as tag) { <app-options-backtest-expiry-tag [tag]="tag" /> }
+        <p class="words">Priced as of <app-timestamp-display [value]="chain.at_ms" mode="et" granularity="minute" /> on <app-timestamp-display [value]="chain.session_open_ms" mode="date-et" granularity="date" /></p>
+        <p class="words">{{ chain.strikes_each_side }} {{ chain.strikes_each_side === 1 ? 'strike' : 'strikes' }} each side of the money</p>
+      </div>
+      <app-options-backtest-underlying-strip role="group" aria-label="The underlying at that time" [symbol]="chain.underlying" [price]="chain.underlying_price" />
+      <p class="words">Calls: {{ chain.calls.listed }} listed, {{ chain.calls.standard_listed }} standard. Puts: {{ chain.puts.listed }} listed, {{ chain.puts.standard_listed }} standard.</p>
+      @if (part.kind === 'nothing_listed') {
+        <p role="status">No contract is listed at this expiry: the server counts {{ chain.calls.listed }} calls and {{ chain.puts.listed }} puts.</p>
+      } @else if (part.kind === 'no_strikes') {
+        <app-options-backtest-no-strikes [why]="part.why" [calls]="chain.calls.listed" [puts]="chain.puts.listed" [downloadOffered]="downloadOffered()" />
+      } @else {
+        @for (side of part.undrawn; track side) {
+          <p class="muted" role="status">No strikes are drawn for {{ side }}: the underlying has a price, but the server found no standard contract on that side to centre them on.</p>
+        }
+        <div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable chain table">
+          <table class="rows chain">
+            <caption>Calls on the left, puts on the right, strikes down the middle, for the <app-timestamp-display [value]="chain.expiry_ms" mode="date-et" granularity="date" /> expiry.</caption>
+            <thead><tr><th scope="col">Calls</th><th scope="col">Strike</th><th scope="col">Puts</th></tr></thead>
+            <tbody>
+              @for (row of part.rows; track row.key) {
+                <tr [class.money]="row.callMoney || row.putMoney">
+                  <td>@if (row.call; as call) { <app-options-backtest-chain-contract [contract]="call" /> } @else { <span class="muted">{{ gapWords(row.callGap) }}</span> }</td>
+                  <th scope="row" class="strike">
+                    <span class="price">{{ row.strike | authoredUsd }}</span>
+                    @if (row.callMoney && row.putMoney) { <span class="mark">At the money</span> } @else if (row.callMoney) { <span class="mark">At the money for calls</span> } @else if (row.putMoney) { <span class="mark">At the money for puts</span> }
+                  </th>
+                  <td>@if (row.put; as put) { <app-options-backtest-chain-contract [contract]="put" /> } @else { <span class="muted">{{ gapWords(row.putGap) }}</span> }</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    }
+  </section>
+}

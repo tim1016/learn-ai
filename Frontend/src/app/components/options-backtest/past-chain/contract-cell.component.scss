@@ -1,0 +1,7 @@
+:host { display: grid; gap: var(--space-1); justify-items: start; min-width: 0; }
+.price { font-weight: var(--fw-semi); font-variant-numeric: tabular-nums; }
+.when, .state { color: var(--text-secondary); }
+.state--bad { color: var(--bear-text); }
+.why { color: var(--text-secondary); font-size: var(--fs-xxs); }
+.nonstandard { border: 1px solid var(--border-strong); border-radius: var(--radius-pill); padding: 0 var(--space-2); font-size: var(--fs-xxs); color: var(--text-secondary); }
+.symbol { font-family: var(--font-mono); font-size: var(--fs-xxs); color: var(--text-secondary); overflow-wrap: anywhere; }

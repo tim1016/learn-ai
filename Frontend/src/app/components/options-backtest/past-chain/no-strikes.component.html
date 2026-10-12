@@ -1,0 +1,26 @@
+@let cause = why();
+<div class="no-strikes" role="status">
+  <p><strong>No strikes are drawn.</strong>
+    @if (cause.kind === 'underlying') {
+      @let under = cause.underlying;
+      @if (under.kind === 'no_bar_yet') {
+        No bar of the underlying had closed by this time, so there is no price to centre them on.
+        @if (cause.laterTime) { Pick a later time to see them. }
+      } @else if (under.kind === 'not_stored') {
+        The underlying's bars for this date are not stored, so there is no price to centre them on.
+        @if (downloadOffered()) { Download missing data above fetches them. }
+      } @else if (under.kind === 'unreadable') {
+        The underlying's bars for this date cannot be read, so there is no price to centre them on.
+      } @else if (under.kind === 'unknown') {
+        This page does not know this state of the underlying's price, {{ under.code | receiptLabel }}, so it cannot say why there is no price to centre them on.
+      } @else {
+        The server sent an incomplete price for the underlying, so there is no price to centre them on.
+      }
+    } @else if (cause.kind === 'no_ladder') {
+      The underlying has a price, but the server found no standard contract on a side to centre them on.
+    } @else {
+      The server sent no contract in this window.
+    }
+  </p>
+  <p>{{ calls() }} {{ calls() === 1 ? 'call' : 'calls' }} and {{ puts() }} {{ puts() === 1 ? 'put' : 'puts' }} are listed.</p>
+</div>
