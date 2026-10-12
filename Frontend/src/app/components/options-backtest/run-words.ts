@@ -1,4 +1,4 @@
-import type { JobState } from '../../services/jobs.service';
+import type { JobEventRecord, JobState } from '../../services/jobs.service';
 import type { SlippageTolerance } from './options-backtest.types';
 
 /**
@@ -7,26 +7,47 @@ import type { SlippageTolerance } from './options-backtest.types';
  * job's progress to show.
  */
 
-/** The phases whose progress counts sessions: the job reports 1..N twice, once for the download and once for the replay. */
-const COUNTED_PHASES: readonly string[] = ['downloading_data', 'replaying'];
+/** The phases whose progress counts sessions: the check, the download and the replay each report `(done, total)`, in sessions. */
+const COUNTED_PHASES: readonly string[] = ['checking_data', 'downloading_data', 'replaying'];
 
 export interface ProgressView {
   /** The phase in words, as the job labels it. */
   readonly phase: string;
-  /** The sessions done of the sessions in the phase, only in a phase that counts them. */
+  /** The phase counts sessions, whether or not it has counted one yet; the bar is then drawn, and is not filled until it has. */
+  readonly counted: boolean;
+  /** The sessions done of the sessions in the phase, once the phase has reported them. */
   readonly count: { readonly current: number; readonly total: number; readonly unit: string } | null;
   readonly latestLog: string | null;
 }
 
-/** What to show of a job that is going. A count belongs to the phase that reported it, so it is hidden once the job moves to another. */
+/**
+ * What to show of a job that is going. A `job.progress` event carries no phase, and the job keeps the last count it
+ * was given when it moves on, so the count belongs to the phase on show only if it was reported after that phase began.
+ * The order of the job's events says so, and the page does no arithmetic to find out.
+ */
 export function progressView(job: JobState | null): ProgressView {
-  if (job === null) return { phase: 'Waiting for the run’s progress', count: null, latestLog: null };
-  const counted = job.phase !== undefined && COUNTED_PHASES.includes(job.phase) && job.current !== undefined && job.total !== undefined;
+  if (job === null) return { phase: 'Waiting for the run’s progress', counted: false, count: null, latestLog: null };
+  const counted = job.phase !== undefined && COUNTED_PHASES.includes(job.phase);
+  const reported = counted && reportedSincePhaseBegan(job.recentEvents) && job.current !== undefined && job.total !== undefined;
   return {
     phase: job.phaseLabel ?? 'Starting',
-    count: counted ? { current: job.current ?? 0, total: job.total ?? 0, unit: job.unit ?? 'sessions' } : null,
+    counted,
+    count: reported ? { current: job.current ?? 0, total: job.total ?? 0, unit: job.unit ?? 'sessions' } : null,
     latestLog: job.recentLogs.at(-1)?.message ?? null,
   };
+}
+
+/**
+ * Whether the latest of the job's phase and progress events is a progress event. The job keeps its last 500 events, so
+ * on a long phase the phase event itself may have rolled off the list; then every event left came after it.
+ */
+function reportedSincePhaseBegan(events: readonly JobEventRecord[] | undefined): boolean {
+  for (let at = (events?.length ?? 0) - 1; at >= 0; at -= 1) {
+    const type = events?.[at]?.type;
+    if (type === 'job.progress') return true;
+    if (type === 'job.phase') return false;
+  }
+  return false;
 }
 
 /** What the slippage ladder says of the result, in one sentence. The percents are the server's text. */

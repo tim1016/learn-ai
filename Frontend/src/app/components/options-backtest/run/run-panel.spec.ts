@@ -44,7 +44,8 @@ describe('a run that is going', () => {
     jobs.emit('job-7', { type: 'job.started' });
     jobs.emit('job-7', { type: 'job.phase', phase: 'checking_data', friendly: 'Checking which sessions can be tested' });
     expect(await screen.findByText('Checking which sessions can be tested')).toBeTruthy();
-    expect(screen.queryByText(/of \d+ sessions/)).toBeNull();
+    jobs.emit('job-7', { type: 'job.progress', current: 3, total: 5, unit: 'sessions' });
+    expect(await screen.findByText('3 of 5 sessions')).toBeTruthy();
 
     jobs.emit('job-7', { type: 'job.phase', phase: 'downloading_data', friendly: 'Fetching the market data the run is missing' });
     jobs.emit('job-7', { type: 'job.progress', current: 2, total: 5, unit: 'sessions' });
@@ -58,6 +59,7 @@ describe('a run that is going', () => {
     jobs.emit('job-7', { type: 'job.phase', phase: 'waiting_for_engine', friendly: 'Waiting for the backtest already running' });
     expect(await screen.findByText('Waiting for the backtest already running')).toBeTruthy();
     expect(screen.queryByText(/of \d+ sessions/)).toBeNull();
+    expect(screen.queryByRole('progressbar')).toBeNull();
 
     jobs.emit('job-7', { type: 'job.phase', phase: 'replaying', friendly: 'Replaying each session' });
     jobs.emit('job-7', { type: 'job.progress', current: 1, total: 5, unit: 'sessions' });
@@ -67,6 +69,35 @@ describe('a run that is going', () => {
     jobs.emit('job-7', { type: 'job.phase', phase: 'saving', friendly: 'Saving the run' });
     expect(await screen.findByText('Saving the run')).toBeTruthy();
     expect(screen.queryByText(/of \d+ sessions/)).toBeNull();
+    expect(screen.queryByRole('progressbar')).toBeNull();
+  });
+
+  it.each([
+    ['checking_data', 'Checking which sessions can be tested', null],
+    ['downloading_data', 'Fetching the market data the run is missing', 'checking_data'],
+    ['replaying', 'Replaying each session', 'downloading_data'],
+  ])('at the start of %s, before it has counted a session, says the phase and no count, and draws a bar that is not filled', async (phase, words, after) => {
+    const service = fakeService(vi);
+    readsAs(service, going());
+    const jobs = fakeJobs();
+    jobs.register('job-7');
+    await renderRun(runItem(), { service, jobs });
+    if (after !== null) {
+      jobs.emit('job-7', { type: 'job.phase', phase: after, friendly: 'The phase before' });
+      jobs.emit('job-7', { type: 'job.progress', current: 5, total: 5, unit: 'sessions' });
+    }
+
+    jobs.emit('job-7', { type: 'job.phase', phase, friendly: words });
+
+    expect(await screen.findByText(words)).toBeTruthy();
+    await lettingGo();
+    expect(screen.queryByText(/of \d+ sessions/)).toBeNull();
+    const bar = screen.getByRole('progressbar') as HTMLProgressElement;
+    expect(bar.hasAttribute('value')).toBe(false);
+    jobs.emit('job-7', { type: 'job.progress', current: 1, total: 5, unit: 'sessions' });
+    expect(await screen.findByText('1 of 5 sessions')).toBeTruthy();
+    const filled = screen.getByRole('progressbar') as HTMLProgressElement;
+    expect([filled.value, filled.max]).toEqual([1, 5]);
   });
 
   it('shows the server’s two lines, one when a download starts to wait for another request and one when it ends, while the count does not move', async () => {

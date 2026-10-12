@@ -67,3 +67,19 @@ export function fakeJobs(): FakeJobs {
   };
   return fake;
 }
+
+/** One frame of a job's stream, with the id it came with when the same frame may come twice. */
+export interface Frame {
+  readonly event: JobEvent;
+  readonly id?: string;
+}
+
+/**
+ * A job as the shared reducer holds it after these frames, in this order. A frame without an id is a new one; a frame
+ * whose id was met before is a redelivery, which the reducer folds in but does not list again.
+ */
+export function jobAfter(...frames: Frame[]): JobState {
+  let state: JobState = { id: 'job-7', type: 'options_backtest', status: 'queued', recentLogs: [], logSeq: 0 };
+  for (const frame of frames) state = applyJobEvent(state, frame.event, frame.id);
+  return state;
+}

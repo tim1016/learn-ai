@@ -5,6 +5,8 @@
       <progress [value]="count.current" [max]="count.total" aria-label="Sessions done"></progress>
       <span>{{ count.current }} of {{ count.total }} {{ count.unit }}</span>
     </p>
+  } @else if (view().counted) {
+    <p class="count"><progress aria-label="No session counted yet"></progress></p>
   }
   @if (view().latestLog; as line) { <p class="log">{{ line }}</p> }
   <div class="actions">
