@@ -1,0 +1,362 @@
+"""Reads of a saved run that need one consistent view: its trades, one of its sessions, and two runs side by side (#3030).
+
+Each function opens one read-only transaction at repeatable-read isolation, so everything it returns is of the same
+run in the same state: a trade count and the page of trades beside it cannot disagree because a run was deleted
+between the two questions.
+
+Only a complete run has sessions and trades, so every function refuses a run that is not complete. The order of the
+refusals is the same everywhere: the run is missing (``RunNotFound``), the run is not complete (``RunNotComplete``),
+the session or leg asked about is not in the run (``SessionNotInRun``, ``LegNotInRun``). A route turns each into its
+status; nothing here knows HTTP.
+
+A run whose stored setup no longer validates still opens (see ``saved_runs.RunHeader``). What reads stored rows
+answers all the same: the trades, one session, the export. What needs the setup says so: the legs a trade filter can
+name come from it, so with no setup a leg filter is judged by the stored trades alone; two runs' settings cannot be
+compared without both setups, which is ``TwoRunsSetupCannotBeRead``.
+
+The decisions that need no database (is the run complete, is the leg one the setup has, may these two runs be compared)
+are functions of the headers already read: ``require_a_complete_run``, ``require_the_leg`` and ``judge_pair``.
+
+A run stored as ``running`` reads ``running`` or ``interrupted`` by whether its job is alive, which is a blocking round
+trip to Redis. The reads below never ask: inside their transaction a run stored as running is ``running``, and it is
+refused all the same, because a run that is running or interrupted is not complete either way. The words of that
+refusal are made by ``read_closely``, which asks once, in a worker thread, after the connection is let go.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import io
+import tempfile
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any
+
+import asyncpg
+
+from app.options_backtest import saved_runs, trade_export
+from app.options_backtest.saved_runs import IsLive, RunHeader, SessionLine, StoredSession, StoredTrade
+from app.research.persistence import lifecycle
+from app.research.persistence.db import with_connection
+
+
+class RunNotFound(LookupError):
+    """No run has that id. ``role`` is ``a`` or ``b`` when two runs were asked for to be compared."""
+
+    def __init__(self, run_id: int, role: str | None = None) -> None:
+        self.run_id = run_id
+        self.role = role
+        super().__init__(f"no run has the id {run_id}")
+
+
+class RunNotComplete(RuntimeError):
+    """The run exists and has not finished successfully, so it has no sessions or trades to read.
+
+    ``status`` is what the read saw: a run stored as ``running`` is ``running`` here whether or not its job is alive,
+    and ``job_id`` is the job to ask about. ``as_it_reads`` is the same refusal once that has been asked.
+    """
+
+    def __init__(self, run_id: int, status: str, job_id: str | None = None) -> None:
+        self.run_id = run_id
+        self.status = status
+        self.job_id = job_id
+        super().__init__(f"run {run_id} is {status}, and only a complete run has trades and sessions")
+
+    def running_jobs(self) -> frozenset[str]:
+        """The jobs whose liveness decides the words of this refusal: the run's, when it is stored as running."""
+        return frozenset({self.job_id}) if self.status == "running" and self.job_id is not None else frozenset()
+
+    def as_it_reads(self, live: Mapping[str | None, bool | None]) -> RunNotComplete:
+        """This refusal with ``interrupted`` for a running run whose job is gone; any other status is as it was."""
+        status = lifecycle.presented_status_for(self.status, live=live.get(self.job_id))
+        return RunNotComplete(self.run_id, status, self.job_id)
+
+
+class SessionNotInRun(LookupError):
+    """The run did not test a session that opened at that instant."""
+
+    def __init__(self, run_id: int, session_open_ms: int) -> None:
+        self.run_id = run_id
+        self.session_open_ms = session_open_ms
+        super().__init__(f"run {run_id} did not test a session that opened at {session_open_ms}")
+
+
+class LegNotInRun(LookupError):
+    """The run's setup has no leg of that id."""
+
+    def __init__(self, run_id: int, leg_id: str) -> None:
+        self.run_id = run_id
+        self.leg_id = leg_id
+        super().__init__(f"run {run_id} has no leg {leg_id!r}")
+
+
+class RunsNotComplete(RuntimeError):
+    """Two runs were asked to be compared and one or both are not complete: each, with its place and its status.
+
+    As in ``RunNotComplete``, a run stored as ``running`` is ``running`` here; ``job_ids`` holds each run's job.
+    """
+
+    def __init__(self, runs: tuple[tuple[str, int, str], ...], job_ids: Mapping[int, str] | None = None) -> None:
+        self.runs = runs
+        self.job_ids = dict(job_ids or {})
+        super().__init__("; ".join(f"run {run_id} ({role}) is {status}" for role, run_id, status in runs))
+
+    def running_jobs(self) -> frozenset[str]:
+        """The jobs whose liveness decides the words of this refusal: those of the runs stored as running."""
+        return frozenset(
+            self.job_ids[run_id] for _, run_id, status in self.runs if status == "running" and run_id in self.job_ids
+        )
+
+    def as_it_reads(self, live: Mapping[str | None, bool | None]) -> RunsNotComplete:
+        """This refusal with ``interrupted`` for each running run whose job is gone; any other status is as it was."""
+        runs = tuple(
+            (role, run_id, lifecycle.presented_status_for(status, live=live.get(self.job_ids.get(run_id))))
+            for role, run_id, status in self.runs
+        )
+        return RunsNotComplete(runs, self.job_ids)
+
+
+class TwoRunsSetupCannotBeRead(RuntimeError):
+    """Two runs were asked to be compared and a stored setup no longer validates: each, with its place and its reason.
+
+    Not ``saved_runs.RunSetupCannotBeRead``, which is about one run whose result is to be rebuilt.
+    """
+
+    def __init__(self, runs: tuple[tuple[str, int, str], ...]) -> None:
+        self.runs = runs
+        super().__init__(
+            "; ".join(
+                f"the stored setup of run {run_id} ({role}) can no longer be read: {reason}"
+                for role, run_id, reason in runs
+            )
+        )
+
+
+class RunsOfDifferentUnderlyings(RuntimeError):
+    """Two runs were asked to be compared and they trade different underlyings."""
+
+    def __init__(self, a: tuple[int, str], b: tuple[int, str]) -> None:
+        self.a = a
+        self.b = b
+        super().__init__(f"run {a[0]} (a) trades {a[1]} and run {b[0]} (b) trades {b[1]}")
+
+
+@dataclass(frozen=True)
+class TradePage:
+    """One page of a run's leg trades, and where the rest are."""
+
+    run_id: int
+    # Every trade that matches the filters, across all pages.
+    total: int
+    offset: int
+    limit: int
+    trades: tuple[StoredTrade, ...]
+
+    @property
+    def next_offset(self) -> int | None:
+        """The ``offset`` to ask for the next page; ``None`` when this page reaches the last trade."""
+        reached = self.offset + len(self.trades)
+        return reached if reached < self.total else None
+
+
+def require_a_complete_run(run_id: int, header: RunHeader | None) -> RunHeader:
+    """The header of a run that exists and is complete; ``RunNotFound`` or ``RunNotComplete`` (naming its status)."""
+    if header is None:
+        raise RunNotFound(run_id)
+    if header.record.status != "complete":
+        raise RunNotComplete(run_id, header.record.status, header.record.job_id)
+    return header
+
+
+def require_the_leg(header: RunHeader, leg_id: str | None) -> None:
+    """``LegNotInRun`` unless ``leg_id`` is none or a leg of the run's setup.
+
+    A run whose setup can no longer be read cannot say which legs it had, so the filter is let through: the page of
+    trades then holds the stored trades of that leg, and an empty one says only that none was stored.
+    """
+    if leg_id is None or header.setup is None:
+        return
+    if leg_id not in {leg.leg_id for leg in header.setup.legs}:
+        raise LegNotInRun(header.record.id, leg_id)
+
+
+async def read_trade_page(
+    conn: asyncpg.Connection,
+    run_id: int,
+    *,
+    session_open_ms: int | None,
+    leg_id: str | None,
+    limit: int,
+    offset: int,
+) -> TradePage:
+    """A page of the run's leg trades, in order, narrowed to a session and/or a leg when those are given.
+
+    A session the run did not test, or a leg its setup does not have, is refused and not answered with an empty page:
+    an empty page would read as "that session made no trade".
+    """
+    async with conn.transaction(isolation="repeatable_read", readonly=True):
+        header = require_a_complete_run(run_id, await saved_runs.get_run_header(conn, run_id))
+        if session_open_ms is not None and not await saved_runs.has_session(conn, run_id, session_open_ms):
+            raise SessionNotInRun(run_id, session_open_ms)
+        require_the_leg(header, leg_id)
+        total = await saved_runs.count_trades(conn, run_id, session_open_ms=session_open_ms, leg_id=leg_id)
+        trades = await saved_runs.read_trades(
+            conn, run_id, session_open_ms=session_open_ms, leg_id=leg_id, limit=limit, offset=offset
+        )
+    return TradePage(run_id=run_id, total=total, offset=offset, limit=limit, trades=trades)
+
+
+# A run at the limits (1,300 sessions of 8 legs and 21 entries) holds 218,400 trades, some 47 million bytes of CSV. The data
+# plane also serves the bots' control plane, so an export must not be able to run it out of memory. It reads this many trade
+# rows at a time (measured with tracemalloc: 2.1 million bytes of Python objects for a batch of dict rows, 3.4 million for
+# the same of asyncpg records) and keeps no more than ``EXPORT_MEMORY_BYTES`` of the file in memory; the rest is on disk.
+# The peak is therefore some 8 million bytes however many trades the run has (7.6 million for 50,000 trades on a database).
+EXPORT_BATCH_ROWS = 1_000
+EXPORT_MEMORY_BYTES = 4 * 1024 * 1024
+# How many bytes of the finished file are read back, and sent, at a time.
+EXPORT_SEND_BYTES = 1024 * 1024
+
+
+@dataclass
+class TradesExport:
+    """The whole CSV of a run's trades in a spooled temporary file, ``size`` bytes long and rewound to its start.
+
+    It is sent once and closed: ``chunks`` closes it when the last piece has been given or the reader stops asking, and
+    ``close`` is for a caller that never gets as far as asking. The file is anonymous (``tempfile`` unlinks it as it
+    makes it), so closing it is all there is to clean up.
+    """
+
+    spool: tempfile.SpooledTemporaryFile[bytes]
+    size: int
+
+    async def chunks(self) -> AsyncIterator[bytes]:
+        try:
+            while piece := await asyncio.to_thread(self.spool.read, EXPORT_SEND_BYTES):
+                yield piece
+        finally:
+            self.close()
+
+    def close(self) -> None:
+        self.spool.close()
+
+
+def _write_batch(spool: tempfile.SpooledTemporaryFile[bytes], rows: Sequence[asyncpg.Record]) -> None:
+    """Decode a batch of trade rows, write them as CSV and add them to the file. Blocking: call it from a worker thread."""
+    spool.write(trade_export.rows_bytes(saved_runs.stored_trades_of(rows)))
+
+
+async def export_every_trade(
+    conn: asyncpg.Connection, run_id: int, *, batch_rows: int | None = None, memory_bytes: int | None = None
+) -> TradesExport:
+    """Every leg trade of the run as one CSV in a temporary file: no page, no limit, and never the whole run in memory.
+
+    The trades are read from a server-side cursor, ``batch_rows`` at a time, inside the one repeatable-read transaction
+    that checked the run is complete, so the file is one consistent view of the run. Each batch is decoded, written and
+    encoded in a worker thread before the next is read. Nothing is returned until the last row is written: a failure
+    anywhere is an exception and not a half file, and the file is closed. ``memory_bytes`` is how much of the file stays
+    in memory before the rest goes to disk.
+    """
+    spool = tempfile.SpooledTemporaryFile(  # noqa: SIM115 -- it outlives this function, in the export it returns
+        max_size=EXPORT_MEMORY_BYTES if memory_bytes is None else memory_bytes, mode="w+b"
+    )
+    try:
+        async with conn.transaction(isolation="repeatable_read", readonly=True):
+            require_a_complete_run(run_id, await saved_runs.get_run_header(conn, run_id))
+            spool.write(trade_export.header_bytes())
+            batches = saved_runs.read_trade_rows_in_batches(
+                conn, run_id, batch_rows=EXPORT_BATCH_ROWS if batch_rows is None else batch_rows
+            )
+            async for rows in batches:
+                await asyncio.to_thread(_write_batch, spool, rows)
+        size = spool.seek(0, io.SEEK_END)
+        spool.seek(0)
+    except BaseException:
+        spool.close()
+        raise
+    return TradesExport(spool, size)
+
+
+@dataclass(frozen=True)
+class SessionRecord:
+    """One session of a complete run as stored, with the run it belongs to."""
+
+    header: RunHeader
+    session: StoredSession
+
+
+async def read_session_record(conn: asyncpg.Connection, run_id: int, session_open_ms: int) -> SessionRecord:
+    """One session of a complete run with its trades and events, as stored."""
+    async with conn.transaction(isolation="repeatable_read", readonly=True):
+        header = require_a_complete_run(run_id, await saved_runs.get_run_header(conn, run_id))
+        session = await saved_runs.read_session(conn, run_id, session_open_ms)
+    if session is None:
+        raise SessionNotInRun(run_id, session_open_ms)
+    return SessionRecord(header=header, session=session)
+
+
+@dataclass(frozen=True)
+class ComparisonInputs:
+    """Two complete runs of one underlying: their records and setups, and the lines of their sessions."""
+
+    a: RunHeader
+    b: RunHeader
+    a_lines: tuple[SessionLine, ...]
+    b_lines: tuple[SessionLine, ...]
+
+
+def judge_pair(a_id: int, a: RunHeader | None, b_id: int, b: RunHeader | None) -> tuple[RunHeader, RunHeader]:
+    """Both headers when the two runs may be compared, else the first reason they may not.
+
+    ``RunNotFound`` for the first of the two that is missing (``a`` before ``b``); ``RunsNotComplete`` naming every one
+    that is not complete; ``TwoRunsSetupCannotBeRead`` naming every one whose stored setup no longer validates (its
+    settings cannot be compared without it); ``RunsOfDifferentUnderlyings`` for a pair that trade different
+    underlyings. The same run twice is allowed and compares equal to itself.
+    """
+    if a is None:
+        raise RunNotFound(a_id, "a")
+    if b is None:
+        raise RunNotFound(b_id, "b")
+    pair = (("a", a_id, a), ("b", b_id, b))
+    not_complete = tuple(
+        (role, run_id, header.record.status) for role, run_id, header in pair if header.record.status != "complete"
+    )
+    if not_complete:
+        raise RunsNotComplete(not_complete, {run_id: header.record.job_id for _, run_id, header in pair})
+    unreadable = tuple(
+        (role, run_id, header.setup_cannot_open_reason or "") for role, run_id, header in pair if header.setup is None
+    )
+    if unreadable:
+        raise TwoRunsSetupCannotBeRead(unreadable)
+    if a.record.underlying != b.record.underlying:
+        raise RunsOfDifferentUnderlyings((a_id, a.record.underlying), (b_id, b.record.underlying))
+    return a, b
+
+
+async def read_comparison_inputs(conn: asyncpg.Connection, a_id: int, b_id: int) -> ComparisonInputs:
+    """What comparing run ``a_id`` with run ``b_id`` reads, from one consistent view; refused as ``judge_pair`` says."""
+    async with conn.transaction(isolation="repeatable_read", readonly=True):
+        first = await saved_runs.get_run_header(conn, a_id)
+        second = first if b_id == a_id else await saved_runs.get_run_header(conn, b_id)
+        a, b = judge_pair(a_id, first, b_id, second)
+        a_lines = await saved_runs.read_session_lines(conn, a_id)
+        b_lines = a_lines if b_id == a_id else await saved_runs.read_session_lines(conn, b_id)
+    return ComparisonInputs(a=a, b=b, a_lines=a_lines, b_lines=b_lines)
+
+
+async def read_closely[T](read: Callable[..., Awaitable[T]], /, *args: Any, is_live: IsLive, **kwargs: Any) -> T:
+    """``with_connection(read, *args, **kwargs)``, and the words of a refusal for a run that is not complete.
+
+    A run stored as ``running`` is refused by ``read`` as ``running``. Whether its job is alive decides whether the
+    refusal says ``interrupted``, and that is a blocking Redis round trip (five seconds at most), so it is asked here:
+    after the connection and its transaction are let go, which is why a slow Redis cannot hold a pooled connection; in
+    a worker thread, which is why it cannot hold up the event loop; and once, for the distinct jobs the refusal names.
+    A run that is complete, failed or cancelled asks nothing.
+    """
+    try:
+        return await with_connection(read, *args, **kwargs)
+    except (RunNotComplete, RunsNotComplete) as refusal:
+        jobs = refusal.running_jobs()
+        if not jobs:
+            raise
+        live = await asyncio.to_thread(saved_runs.liveness_of, jobs, is_live)
+        raise refusal.as_it_reads(live) from refusal

@@ -1954,6 +1954,25 @@ structures).
 - **Fills banner** — the facts a result states about itself: fills are simulated
   from trade prices, bid and ask are not available, and the slippage, the price
   step and the fee policy that were assumed.
+- **Attempt** — one try of a leg to enter, named by the leg and its entry number (0
+  for the first entry, 1 for its first re-entry, and so on). An attempt that fills
+  leaves a trade. One that does not (momentum never reached, cancelled, refused for
+  cash) leaves events and no trade.
+- **Level** — a horizontal line a one-day timeline draws at one price between two
+  minute closes: a leg's starting price, its momentum level while it waits, or a
+  position's stop level. Each is a stored figure with the two instants it applied
+  between, except the momentum level of an attempt that never filled, which is the
+  leg's rule applied to its stored starting price. A line that waits ends when the
+  thing it waited for happened, whatever came next: a buy refused for cash ends its
+  lines at the minute the buy was decided, not the minute of the refusal.
+- **Pin check** — before a saved session's price series is shown, the file it would
+  be read from is read now and its sha256 is compared with the pin the run stored.
+  A series is not shown, and the answer says which, when its session was skipped,
+  the run kept no pin for it, its file is gone, has changed, cannot be read or is
+  not one the lake's catalog can vouch for, or the catalog cannot be asked. The
+  session's stored facts are shown all the same.
+- **Shared sessions** — when two runs are compared, the sessions whose open is in
+  both. The comparison's totals are over those only.
 
 ## Market-data readiness (resolved 2026-09-22)
 

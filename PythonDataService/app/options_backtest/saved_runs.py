@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -456,11 +456,12 @@ async def present_runs(rows: Sequence[asyncpg.Record], *, is_live: IsLive) -> tu
     meanwhile.
     """
     running = {row["job_id"] for row in rows if row["status"] == "running"}
-    live = await asyncio.to_thread(_liveness_of, running, is_live) if running else {}
+    live = await asyncio.to_thread(liveness_of, running, is_live) if running else {}
     return tuple(_record(row, live.__getitem__) for row in rows)
 
 
-def _liveness_of(job_ids: Iterable[str | None], is_live: IsLive) -> dict[str | None, bool | None]:
+def liveness_of(job_ids: Iterable[str | None], is_live: IsLive) -> dict[str | None, bool | None]:
+    """Whether each job is alive, asked of ``is_live`` once per job. Blocking (Redis): call it from a worker thread."""
     return {job_id: is_live(job_id) for job_id in job_ids}
 
 
@@ -659,6 +660,196 @@ async def delete_run(conn: asyncpg.Connection, run_id: int, *, is_live: IsLive) 
             return DeleteOutcome.RUNNING
         await conn.execute("DELETE FROM research_options_backtest_runs WHERE id = $1", run_id)
         return DeleteOutcome.DELETED
+
+
+# ── Reads for a closer look: one run's trades, one session, the sessions side by side (#3030) ──
+
+
+@dataclass(frozen=True)
+class RunHeader:
+    """A run's record and the setup it ran, with none of the figures' tables parsed.
+
+    As in ``StoredRun``, a run whose stored setup no longer validates still opens: ``setup`` is ``None`` and
+    ``setup_cannot_open_reason`` says why; exactly one of the two is set. The record (its underlying, its range, its
+    status) is stored apart from the setup and is read all the same.
+    """
+
+    record: RunRecord
+    setup: OptionsBacktestSetup | None
+    setup_cannot_open_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.setup is None) == (self.setup_cannot_open_reason is None):
+            raise ValueError("a run header has its setup, or the reason it cannot be opened, and not both")
+
+
+@dataclass(frozen=True)
+class StoredTrade:
+    """A leg trade of a saved run, the session it belongs to, and its place in that session's order."""
+
+    session_open_ms: int
+    # 0 for the first trade the replay recorded in the session, as stored.
+    trade_number: int
+    trade: LegTrade
+
+
+@dataclass(frozen=True)
+class StoredSession:
+    """One session as stored. ``profit_usd`` is the stored column, which the result's own ``pnl_usd`` equals."""
+
+    result: SessionResult
+    profit_usd: Decimal
+
+
+@dataclass(frozen=True)
+class SessionLine:
+    """What the stored sessions say about one session, for putting two runs side by side."""
+
+    session_open_ms: int
+    status: SessionStatus
+    profit_usd: Decimal
+    trades: int
+
+
+async def get_run_header(conn: asyncpg.Connection, run_id: int) -> RunHeader | None:
+    """A run's record and setup; ``None`` when there is none. Cheaper than ``get_run`` where no figure is wanted.
+
+    A run whose stored setup no longer validates still has a header, with no setup and the reason (see ``RunHeader``).
+
+    Nothing is asked of Redis here: a run stored as ``running`` reads ``running`` whatever its job is doing. Whether the
+    job is alive is a blocking round trip, and this runs on the event loop inside the caller's transaction, so a caller
+    that must say ``interrupted`` asks after it has let the connection go (``run_detail.read_closely``).
+    """
+    row = await conn.fetchrow(
+        f"SELECT {_RUN_COLUMNS}, setup_json::text AS setup_json FROM research_options_backtest_runs WHERE id = $1",
+        run_id,
+    )
+    return None if row is None else _header(row)
+
+
+def _not_asked(_job_id: str | None) -> None:
+    """The liveness of a job nobody asked about: "cannot tell", which leaves a row stored as running ``running``."""
+    return None
+
+
+def _header(row: asyncpg.Record) -> RunHeader:
+    saved = read_stored_setup(f"run {row['id']}", row["setup_json"], row["created_at_ms"])
+    return RunHeader(
+        record=_record(row, _not_asked), setup=saved.setup, setup_cannot_open_reason=saved.cannot_open_reason
+    )
+
+
+async def has_session(conn: asyncpg.Connection, run_id: int, session_open_ms: int) -> bool:
+    """Whether the run tested the session that opened at ``session_open_ms``."""
+    return await conn.fetchval(
+        "SELECT EXISTS (SELECT 1 FROM research_options_backtest_run_sessions WHERE run_id = $1 AND session_open_ms = $2)",
+        run_id,
+        session_open_ms,
+    )
+
+
+_TRADE_FILTER = "run_id = $1 AND ($2::bigint IS NULL OR session_open_ms = $2) AND ($3::text IS NULL OR leg_id = $3)"
+_TRADE_ORDER = "ORDER BY session_open_ms, trade_number"
+
+
+async def count_trades(
+    conn: asyncpg.Connection, run_id: int, *, session_open_ms: int | None = None, leg_id: str | None = None
+) -> int:
+    """How many leg trades the run has, narrowed to one session and/or one leg when those are given."""
+    return await conn.fetchval(
+        f"SELECT count(*) FROM research_options_backtest_run_trades WHERE {_TRADE_FILTER}",
+        run_id,
+        session_open_ms,
+        leg_id,
+    )
+
+
+async def read_trades(
+    conn: asyncpg.Connection,
+    run_id: int,
+    *,
+    session_open_ms: int | None = None,
+    leg_id: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+) -> tuple[StoredTrade, ...]:
+    """The run's leg trades in order: session by session, and in each the order the run recorded them.
+
+    ``limit=None`` is every trade. The trades are the ones ``read_result`` builds.
+    """
+    rows = await conn.fetch(
+        f"SELECT * FROM research_options_backtest_run_trades WHERE {_TRADE_FILTER} "
+        f"{_TRADE_ORDER} LIMIT $4::bigint OFFSET $5::bigint",
+        run_id,
+        session_open_ms,
+        leg_id,
+        limit,
+        offset,
+    )
+    return tuple(stored_trades_of(rows))
+
+
+async def read_trade_rows_in_batches(
+    conn: asyncpg.Connection, run_id: int, *, batch_rows: int
+) -> AsyncIterator[list[asyncpg.Record]]:
+    """Every trade row of the run, in the order ``read_trades`` gives, ``batch_rows`` rows at a time.
+
+    The rows come from a server-side cursor, so no more than one batch is ever held: the run's trades are never read
+    whole. A cursor exists only inside a transaction, and the batches are of the snapshot that transaction has, so a
+    caller that opens one at repeatable-read reads a run that does not change between its first batch and its last.
+    """
+    if batch_rows < 1:
+        raise ValueError(f"a batch is at least one row, not {batch_rows}")
+    cursor = await conn.cursor(
+        f"SELECT * FROM research_options_backtest_run_trades WHERE {_TRADE_FILTER} {_TRADE_ORDER}",
+        run_id,
+        None,
+        None,
+    )
+    while rows := await cursor.fetch(batch_rows):
+        yield rows
+
+
+def stored_trades_of(rows: Iterable[asyncpg.Record]) -> Iterator[StoredTrade]:
+    """The trade rows as the trades they store, one at a time and in the order given."""
+    for row in rows:
+        yield StoredTrade(row["session_open_ms"], row["trade_number"], _trade(row))
+
+
+async def read_session(conn: asyncpg.Connection, run_id: int, session_open_ms: int) -> StoredSession | None:
+    """One session of the run with its trades and events, as stored; ``None`` when the run did not test it."""
+    row = await conn.fetchrow(
+        "SELECT session_open_ms, session_close_ms, status, skip_reason, cash_before_usd, cash_after_usd, "
+        "cash_change_usd, profit_usd, underlying_sha256, listing_sha256, option_days_json::text AS option_days_json, "
+        "events_json::text AS events_json FROM research_options_backtest_run_sessions "
+        "WHERE run_id = $1 AND session_open_ms = $2",
+        run_id,
+        session_open_ms,
+    )
+    if row is None:
+        return None
+    trades = await read_trades(conn, run_id, session_open_ms=session_open_ms)
+    return _stored_session(row, tuple(stored.trade for stored in trades))
+
+
+def _stored_session(row: asyncpg.Record, trades: tuple[LegTrade, ...]) -> StoredSession:
+    return StoredSession(result=_session(row, trades), profit_usd=_money(row["profit_usd"]))
+
+
+async def read_session_lines(conn: asyncpg.Connection, run_id: int) -> tuple[SessionLine, ...]:
+    """Every session of the run in order, with its status, its stored profit and how many trades it holds."""
+    rows = await conn.fetch(
+        "SELECT s.session_open_ms, s.status, s.profit_usd, "
+        "(SELECT count(*) FROM research_options_backtest_run_trades t "
+        " WHERE t.run_id = s.run_id AND t.session_open_ms = s.session_open_ms) AS trades "
+        "FROM research_options_backtest_run_sessions s WHERE s.run_id = $1 ORDER BY s.position",
+        run_id,
+    )
+    return tuple(_session_line(row) for row in rows)
+
+
+def _session_line(row: asyncpg.Record) -> SessionLine:
+    return SessionLine(row["session_open_ms"], SessionStatus(row["status"]), _money(row["profit_usd"]), row["trades"])
 
 
 # ── The store a worker thread uses ───────────────────────────────────────

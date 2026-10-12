@@ -15,19 +15,10 @@ skip a session. The words are written here and the page shows them as they are.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
 
+from app.options_backtest import phrases
 from app.options_backtest.session_clock import SessionClock
-from app.options_backtest.setup import (
-    MS_PER_MINUTE,
-    ExpiryRule,
-    FeePolicy,
-    LegSetup,
-    Momentum,
-    OptionsBacktestSetup,
-    ReentryOnStop,
-    SessionTime,
-)
+from app.options_backtest.setup import MS_PER_MINUTE, FeePolicy, LegSetup, OptionsBacktestSetup, SessionTime
 
 
 @dataclass(frozen=True)
@@ -53,7 +44,7 @@ def describe_setup(setup: OptionsBacktestSetup, *, full_session: SessionClock) -
     """``setup`` in sentences, with its times read against the clock of a full session."""
     return SetupDescription(
         window=_window(setup, full_session),
-        legs=tuple(LegDescription(leg_id=leg.leg_id, sentences=_leg(leg)) for leg in setup.legs),
+        legs=tuple(LegDescription(leg_id=leg.leg_id, sentences=leg_sentences(leg)) for leg in setup.legs),
         square_off=_square_off(setup),
         costs=_costs(setup),
         notices=_notices(setup, full_session),
@@ -97,12 +88,7 @@ def _notices(setup: OptionsBacktestSetup, clock: SessionClock) -> tuple[str, ...
 
 def _time(time: SessionTime, clock: SessionClock, *, at: str = "at ") -> str:
     """``time`` as a distance and a clock time. ``at`` leads a time that is the open or the close itself."""
-    minutes = time.offset_ms // MS_PER_MINUTE
-    if time.anchor == "open":
-        distance = f"{at}the open" if minutes == 0 else f"{_minutes(minutes)} after the open"
-    else:
-        distance = f"{at}the close" if minutes == 0 else f"{_minutes(minutes)} before the close"
-    return f"{distance} ({_on_a_full_day(_minute_of_day(time, clock), clock)})"
+    return f"{phrases.distance(time, at=at)} ({_on_a_full_day(_minute_of_day(time, clock), clock)})"
 
 
 def _clock_ms(clock: SessionClock) -> tuple[int, int]:
@@ -124,14 +110,13 @@ def _on_a_full_day(minute: int, clock: SessionClock) -> str:
     return f"{minute // 60:02d}:{minute % 60:02d} on a full day"
 
 
-def _leg(leg: LegSetup) -> tuple[str, ...]:
-    sentences = [f"Leg {leg.leg_id}: buys {_what_is_bought(leg)} {_expiry(leg.expiry)}.", _when_it_buys(leg.momentum)]
+def leg_sentences(leg: LegSetup) -> tuple[str, ...]:
+    """One leg in a sentence or two. A comparison of two runs says a leg only one of them has with these."""
+    sentences = [f"Leg {leg.leg_id}: buys {_what_is_bought(leg)} {phrases.expiry(leg.expiry)}.", _when_it_buys(leg)]
     if leg.stop_loss is not None:
-        sentences.append(
-            f"Sells once a minute closes at least {_amount(leg.stop_loss.kind, leg.stop_loss.value)} below what was paid."
-        )
+        sentences.append(f"Sells once a minute closes {phrases.stop_loss(leg.stop_loss)}.")
     if leg.reentry_on_stop is not None:
-        sentences.append(_reentry(leg.reentry_on_stop))
+        sentences.append(phrases.reentry(leg.reentry_on_stop))
     return tuple(sentences)
 
 
@@ -139,77 +124,33 @@ def _what_is_bought(leg: LegSetup) -> str:
     right = f"{leg.right}{'' if leg.contracts == 1 else 's'}"
     if leg.strike.kind == "atm":
         return f"{leg.contracts} at-the-money {right}"
-    where = "above" if leg.strike.steps > 0 else "below"
-    return f"{leg.contracts} {right} {_count(abs(leg.strike.steps), 'strike')} {where} the money"
+    return f"{leg.contracts} {right} {phrases.strikes_from_the_money(leg.strike.steps)}"
 
 
-def _expiry(rule: ExpiryRule) -> str:
-    if rule.kind == "same_day":
-        return "expiring on the trading date itself"
-    if rule.kind == "this_week":
-        return "expiring on the nearest listed expiry, today included, that falls on the last trading day of its week"
-    if rule.days == 0:
-        return "expiring on the nearest listed expiry, today included"
-    return f"expiring on the nearest listed expiry at least {_count(rule.days, 'calendar day')} after the trading day"
-
-
-# What each momentum kind measures in, and which side of the starting premium it waits for.
-_MOMENTUM_WAYS: dict[str, tuple[str, str]] = {
-    "percent_up": ("percent", "above"),
-    "percent_down": ("percent", "below"),
-    "points_up": ("points", "above"),
-    "points_down": ("points", "below"),
-}
-
-
-def _when_it_buys(momentum: Momentum | None) -> str:
-    if momentum is None:
+def _when_it_buys(leg: LegSetup) -> str:
+    if leg.momentum is None:
         return "The buy comes as soon as the entry is read."
-    unit, way = _MOMENTUM_WAYS[momentum.kind]
-    return (
-        f"The buy waits until a minute closes at least {_amount(unit, momentum.value)} {way} "
-        "where its premium stood at the entry time."
-    )
-
-
-def _amount(unit: str, value: Decimal) -> str:
-    """``unit`` is ``percent`` or ``points``, the two a rule is set in."""
-    if unit == "percent":
-        return f"{_plain(value)}%"
-    return f"{_plain(value)} {'point' if value == 1 else 'points'}"
-
-
-def _reentry(rule: ReentryOnStop) -> str:
-    times = f"up to {_count(rule.count, 'time')} in a session"
-    fresh = "After a stop, picks a fresh contract by the same rules"
-    if rule.kind == "at_once":
-        return f"{fresh} and buys it at once, {times}."
-    return f"{fresh}, takes a new starting premium from it and waits for momentum again, {times}."
+    return f"The buy waits until a minute closes {phrases.momentum(leg.momentum)}."
 
 
 def _square_off(setup: OptionsBacktestSetup) -> tuple[str, ...]:
-    if setup.square_off == "partial":
-        return ("Square off is partial: a stop closes only the leg that was stopped.",)
-    return (
-        "Square off is complete: a stop closes every open leg and cancels legs still waiting for momentum, "
-        "which stay cancelled for the day.",
-    )
+    return (phrases.square_off(setup.square_off),)
 
 
 def _costs(setup: OptionsBacktestSetup) -> tuple[str, ...]:
-    step = _dollars(setup.price_step_usd)
+    step = phrases.dollars(setup.price_step_usd)
     if setup.slippage_percent == 0:
         fills = f"No slippage is applied; fills are still rounded against you to {step}."
     else:
-        fills = f"Each fill is moved {_plain(setup.slippage_percent)}% against you, then rounded against you to {step}."
-    return (fills, *_fees(setup.fees), f"Starting cash is {_dollars(setup.starting_cash_usd)}.")
+        fills = f"Each fill is moved {phrases.plain(setup.slippage_percent)}% against you, then rounded against you to {step}."
+    return (fills, *_fees(setup.fees), f"Starting cash is {phrases.dollars(setup.starting_cash_usd)}.")
 
 
 def fee_policy_sentence(fees: FeePolicy) -> str:
     """The fee policy in one sentence, for the setup's costs and for the headline of a run."""
     # The policy names a per-contract fee for the per-contract kind and for no other.
     if fees.per_contract_usd is not None:
-        return f"Fees are {_dollars(fees.per_contract_usd)} per contract traded."
+        return f"Fees are {phrases.dollars(fees.per_contract_usd)} per contract traded."
     if fees.kind == "estimated":
         return "Fees are estimated from published option fee rates."
     return "Fees are not charged, so results are before fees."
@@ -219,21 +160,3 @@ def _fees(fees: FeePolicy) -> tuple[str, ...]:
     if fees.kind == "estimated":
         return (fee_policy_sentence(fees), "A session from before those rates exist cannot be run with this choice.")
     return (fee_policy_sentence(fees),)
-
-
-def _minutes(minutes: int) -> str:
-    return _count(minutes, "minute")
-
-
-def _count(number: int, noun: str) -> str:
-    return f"{number} {noun}{'' if number == 1 else 's'}"
-
-
-def _plain(value: Decimal) -> str:
-    """``value`` without a trailing zero or an exponent: 25.0000 reads 25."""
-    return format(value.normalize(), "f")
-
-
-def _dollars(value: Decimal) -> str:
-    whole, _, cents = _plain(value).partition(".")
-    return f"${int(whole):,}.{cents.ljust(2, '0')}"

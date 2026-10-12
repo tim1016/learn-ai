@@ -31,6 +31,8 @@ _MS_PER_DAY = 24 * 60 * MS_PER_MINUTE
 
 # The same shape a bot's leg id has, so a leg reads alike in a log on either side.
 _LEG_ID_PATTERN = r"^[a-z0-9_]{1,32}$"
+# The same pattern under a name other modules may import: a request that names a leg takes the shape the setup gives it.
+LEG_ID_PATTERN = _LEG_ID_PATTERN
 # An OCC root: the letters a contract symbol writes for its underlying. One to five, not the six an OCC root can have:
 # US stock and ETF tickers are at most five letters, and a six-letter root makes a contract symbol of 21 characters,
 # one more than the lake's catalog stores, so every contract of such an underlying would be refused.

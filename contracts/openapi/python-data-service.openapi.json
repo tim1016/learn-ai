@@ -39960,6 +39960,106 @@
         "title": "OptionsBacktestCheckDataRequest",
         "type": "object"
       },
+      "OptionsBacktestComparedRunResponse": {
+        "description": "One of the two runs, as the history shows it.",
+        "properties": {
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "fee_policy": {
+            "title": "Fee Policy",
+            "type": "string"
+          },
+          "first_session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "First Session Open Ms",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "last_session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Last Session Open Ms",
+            "type": "integer"
+          },
+          "sessions_requested": {
+            "title": "Sessions Requested",
+            "type": "integer"
+          },
+          "setup_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setup Name"
+          }
+        },
+        "required": [
+          "id",
+          "created_at_ms",
+          "first_session_open_ms",
+          "last_session_open_ms",
+          "sessions_requested",
+          "fee_policy"
+        ],
+        "title": "OptionsBacktestComparedRunResponse",
+        "type": "object"
+      },
+      "OptionsBacktestComparisonResponse": {
+        "description": "Two complete runs of one underlying compared. Python works out everything here; the page only shows it.",
+        "properties": {
+          "a": {
+            "$ref": "#/components/schemas/OptionsBacktestComparedRunResponse"
+          },
+          "b": {
+            "$ref": "#/components/schemas/OptionsBacktestComparedRunResponse"
+          },
+          "overlap": {
+            "$ref": "#/components/schemas/OptionsBacktestSessionOverlapResponse"
+          },
+          "range_difference": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionsBacktestRangeDifferenceResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "setting_differences": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsBacktestSettingDifferenceResponse"
+            },
+            "title": "Setting Differences",
+            "type": "array"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          }
+        },
+        "required": [
+          "underlying",
+          "a",
+          "b",
+          "setting_differences",
+          "overlap"
+        ],
+        "title": "OptionsBacktestComparisonResponse",
+        "type": "object"
+      },
       "OptionsBacktestContractNeedsResponse": {
         "description": "How many contract days a session needs and how many are not stored. ``not_yet_known`` while the session's\nunderlying day or listing is not stored, and both counts are then ``None``.",
         "properties": {
@@ -39998,6 +40098,46 @@
           "state"
         ],
         "title": "OptionsBacktestContractNeedsResponse",
+        "type": "object"
+      },
+      "OptionsBacktestContractResponse": {
+        "description": "An option contract: its OCC symbol, and the symbol read out for display.",
+        "properties": {
+          "expiry_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Expiry Ms",
+            "type": "integer"
+          },
+          "right": {
+            "enum": [
+              "call",
+              "put"
+            ],
+            "title": "Right",
+            "type": "string"
+          },
+          "strike_usd": {
+            "title": "Strike Usd",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "underlying",
+          "right",
+          "strike_usd",
+          "expiry_ms"
+        ],
+        "title": "OptionsBacktestContractResponse",
         "type": "object"
       },
       "OptionsBacktestDataCheckResponse": {
@@ -40236,6 +40376,111 @@
         "title": "OptionsBacktestDrawdownResponse",
         "type": "object"
       },
+      "OptionsBacktestEventResponse": {
+        "description": "One thing that happened in the session, in the order it happened.\n\n``entry_number`` follows the replay's one rule: an event about a position carries that position's number, and an\nevent about an attempt to enter carries the number that entry has or would have. ``detail`` is the one place the\nreplay writes prose (a refused pick says why). It is the backend's words for the owner, stored and served exactly\nas written, even when they name a date; nothing else on the wire names one, since a session is its open.",
+        "properties": {
+          "at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "At Ms",
+            "type": "integer"
+          },
+          "contract": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contract"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "entry_number": {
+            "minimum": 0.0,
+            "title": "Entry Number",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "picked",
+              "pick_refused",
+              "starting_price_taken",
+              "no_starting_price",
+              "momentum_hit",
+              "entry_filled",
+              "entry_dropped",
+              "entry_refused_for_cash",
+              "stop_hit",
+              "squared_off",
+              "exit_time",
+              "close_filled",
+              "re_entry_earned",
+              "re_entry_blocked_by_cutoff",
+              "re_entry_lost",
+              "leg_cancelled",
+              "marked_not_sold"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "leg_id": {
+            "title": "Leg Id",
+            "type": "string"
+          },
+          "price_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Usd"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "chain_incomplete",
+                  "expiry_not_listed",
+                  "expiry_not_a_session",
+                  "strike_not_listed",
+                  "not_standard",
+                  "cash_short",
+                  "square_off",
+                  "exit_time"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "kind",
+          "at_ms",
+          "leg_id",
+          "entry_number"
+        ],
+        "title": "OptionsBacktestEventResponse",
+        "type": "object"
+      },
       "OptionsBacktestExitCountResponse": {
         "properties": {
           "count": {
@@ -40258,6 +40503,79 @@
           "count"
         ],
         "title": "OptionsBacktestExitCountResponse",
+        "type": "object"
+      },
+      "OptionsBacktestFillResponse": {
+        "description": "An order that filled, to mark on the bar it filled in. ``seen_usd`` is that bar's open and ``filled_usd`` what the\norder filled at after slippage and the price step. ``exit_reason`` is why a sale was made; ``null`` for an entry.",
+        "properties": {
+          "bar_close_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Bar Close Ms",
+            "type": "integer"
+          },
+          "contract": {
+            "title": "Contract",
+            "type": "string"
+          },
+          "contracts": {
+            "title": "Contracts",
+            "type": "integer"
+          },
+          "entry_number": {
+            "minimum": 0.0,
+            "title": "Entry Number",
+            "type": "integer"
+          },
+          "exit_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "stop",
+                  "square_off",
+                  "exit_time",
+                  "marked_not_sold"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Reason"
+          },
+          "filled_usd": {
+            "title": "Filled Usd",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "entry",
+              "exit"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "leg_id": {
+            "title": "Leg Id",
+            "type": "string"
+          },
+          "seen_usd": {
+            "title": "Seen Usd",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "leg_id",
+          "entry_number",
+          "contract",
+          "contracts",
+          "bar_close_ms",
+          "seen_usd",
+          "filled_usd"
+        ],
+        "title": "OptionsBacktestFillResponse",
         "type": "object"
       },
       "OptionsBacktestFillsBannerResponse": {
@@ -40392,6 +40710,60 @@
         "title": "OptionsBacktestJobRequest",
         "type": "object"
       },
+      "OptionsBacktestLevelResponse": {
+        "description": "A horizontal line to draw at one price, from ``from_ms`` to ``to_ms`` (both minute closes).\n\nOne rule ends a line that waits: it ends when the thing it waits for happened, whatever came next. ``starting_price``\nand ``momentum`` belong to a leg waiting on momentum and run from the minute its starting price was taken to the\nminute the buy was decided (the minute whose close reached the momentum level), whether the buy then filled or was\nrefused for cash; a leg cancelled before it reached the level waited until it was cancelled. ``stop`` belongs to a\nposition and runs from the minute it filled to the minute the close that sold it was decided.",
+        "properties": {
+          "contract": {
+            "title": "Contract",
+            "type": "string"
+          },
+          "entry_number": {
+            "minimum": 0.0,
+            "title": "Entry Number",
+            "type": "integer"
+          },
+          "from_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "From Ms",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "starting_price",
+              "momentum",
+              "stop"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "leg_id": {
+            "title": "Leg Id",
+            "type": "string"
+          },
+          "price_usd": {
+            "title": "Price Usd",
+            "type": "string"
+          },
+          "to_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "To Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "leg_id",
+          "entry_number",
+          "contract",
+          "price_usd",
+          "from_ms",
+          "to_ms"
+        ],
+        "title": "OptionsBacktestLevelResponse",
+        "type": "object"
+      },
       "OptionsBacktestLimitsResponse": {
         "description": "The limits the server holds a setup and a request to, so the page copies none of them.",
         "properties": {
@@ -40445,6 +40817,43 @@
           "setup_name"
         ],
         "title": "OptionsBacktestLimitsResponse",
+        "type": "object"
+      },
+      "OptionsBacktestMarkResponse": {
+        "description": "A leg valued and not sold: the last bar its contract traded in and that bar's close. It is not a fill.",
+        "properties": {
+          "bar_close_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Bar Close Ms",
+            "type": "integer"
+          },
+          "contract": {
+            "title": "Contract",
+            "type": "string"
+          },
+          "entry_number": {
+            "minimum": 0.0,
+            "title": "Entry Number",
+            "type": "integer"
+          },
+          "leg_id": {
+            "title": "Leg Id",
+            "type": "string"
+          },
+          "price_usd": {
+            "title": "Price Usd",
+            "type": "string"
+          }
+        },
+        "required": [
+          "leg_id",
+          "entry_number",
+          "contract",
+          "bar_close_ms",
+          "price_usd"
+        ],
+        "title": "OptionsBacktestMarkResponse",
         "type": "object"
       },
       "OptionsBacktestMonthRowResponse": {
@@ -40573,6 +40982,50 @@
           "message"
         ],
         "title": "OptionsBacktestProblemResponse",
+        "type": "object"
+      },
+      "OptionsBacktestRangeDifferenceResponse": {
+        "description": "The two runs' ranges, sent only when they differ.",
+        "properties": {
+          "a": {
+            "$ref": "#/components/schemas/OptionsBacktestRangeResponse"
+          },
+          "b": {
+            "$ref": "#/components/schemas/OptionsBacktestRangeResponse"
+          }
+        },
+        "required": [
+          "a",
+          "b"
+        ],
+        "title": "OptionsBacktestRangeDifferenceResponse",
+        "type": "object"
+      },
+      "OptionsBacktestRangeResponse": {
+        "properties": {
+          "first_session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "First Session Open Ms",
+            "type": "integer"
+          },
+          "last_session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Last Session Open Ms",
+            "type": "integer"
+          },
+          "sessions_requested": {
+            "title": "Sessions Requested",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "first_session_open_ms",
+          "last_session_open_ms",
+          "sessions_requested"
+        ],
+        "title": "OptionsBacktestRangeResponse",
         "type": "object"
       },
       "OptionsBacktestRateResponse": {
@@ -41246,6 +41699,123 @@
         "title": "OptionsBacktestRunListItemResponse",
         "type": "object"
       },
+      "OptionsBacktestRunTotalsResponse": {
+        "description": "A run's figures over the sessions both runs tested, and only those. Sums of the stored per-session figures.",
+        "properties": {
+          "net_profit_usd": {
+            "title": "Net Profit Usd",
+            "type": "string"
+          },
+          "trades": {
+            "title": "Trades",
+            "type": "integer"
+          },
+          "winning_sessions": {
+            "title": "Winning Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "net_profit_usd",
+          "trades",
+          "winning_sessions"
+        ],
+        "title": "OptionsBacktestRunTotalsResponse",
+        "type": "object"
+      },
+      "OptionsBacktestSeriesPointResponse": {
+        "description": "A bar's close time and close price. A minute with no trade has no point.",
+        "properties": {
+          "at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "At Ms",
+            "type": "integer"
+          },
+          "close_usd": {
+            "title": "Close Usd",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at_ms",
+          "close_usd"
+        ],
+        "title": "OptionsBacktestSeriesPointResponse",
+        "type": "object"
+      },
+      "OptionsBacktestSeriesResponse": {
+        "description": "One instrument's minute closes across the session, or why they are not shown.\n\nA series is shown only if the file it is read from is the one the run read (its sha256 is the stored pin). Otherwise\n``reason`` says why and ``message`` says it in words, and there are no points: a saved run is never drawn from\nchanged data. ``session_skipped``: the session was skipped on its window, so no bars were read for it; ``no_pin``:\nthe run kept no record of reading this one; ``gone``: no longer in the lake; ``changed``: not the file the run read;\n``not_confirmed``: the lake's catalog does not admit the file's bytes, so they cannot be checked against what the run\nread (nobody saw them change); ``unreadable``: the file is there and cannot be read (damaged, a bar no session can\nplace, or refused by the operating system); ``lake_unavailable``: the lake could not be asked, which says nothing of\nthe file.",
+        "properties": {
+          "contract": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionsBacktestContractResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsBacktestSeriesPointResponse"
+            },
+            "title": "Points",
+            "type": "array"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "session_skipped",
+                  "no_pin",
+                  "gone",
+                  "changed",
+                  "not_confirmed",
+                  "unreadable",
+                  "lake_unavailable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "state": {
+            "enum": [
+              "shown",
+              "not_shown"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "state",
+          "points"
+        ],
+        "title": "OptionsBacktestSeriesResponse",
+        "type": "object"
+      },
       "OptionsBacktestSessionCheckResponse": {
         "properties": {
           "contracts": {
@@ -41326,6 +41896,179 @@
         "title": "OptionsBacktestSessionCheckResponse",
         "type": "object"
       },
+      "OptionsBacktestSessionOverlapResponse": {
+        "description": "The sessions the two runs share (by their opens), how many each has that the other lacks, and the totals over the\nshared ones.",
+        "properties": {
+          "a": {
+            "$ref": "#/components/schemas/OptionsBacktestRunTotalsResponse"
+          },
+          "b": {
+            "$ref": "#/components/schemas/OptionsBacktestRunTotalsResponse"
+          },
+          "only_in_a": {
+            "title": "Only In A",
+            "type": "integer"
+          },
+          "only_in_b": {
+            "title": "Only In B",
+            "type": "integer"
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsBacktestSharedSessionResponse"
+            },
+            "title": "Sessions",
+            "type": "array"
+          },
+          "shared_sessions": {
+            "title": "Shared Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "shared_sessions",
+          "only_in_a",
+          "only_in_b",
+          "a",
+          "b",
+          "sessions"
+        ],
+        "title": "OptionsBacktestSessionOverlapResponse",
+        "type": "object"
+      },
+      "OptionsBacktestSessionResponse": {
+        "description": "One session of a complete run: what was stored, and what a timeline draws.\n\nThe stored facts (status, cash, profit, ``trades``, ``events``, ``levels``, ``fills``, ``marks``) never depend on the\nlake. The series are read from it and are checked against what the run read; one that cannot be shown says so and\nthe rest is still served.\n\n``setup_cannot_open_reason`` is set only for a run whose stored setup no longer validates, and says why. Everything\nstored is served all the same; the one thing missing is the ``momentum`` line of an attempt that never filled,\nwhose level comes from the leg's rule.",
+        "properties": {
+          "cash_after_usd": {
+            "title": "Cash After Usd",
+            "type": "string"
+          },
+          "cash_before_usd": {
+            "title": "Cash Before Usd",
+            "type": "string"
+          },
+          "contracts": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsBacktestSeriesResponse"
+            },
+            "title": "Contracts",
+            "type": "array"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsBacktestEventResponse"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "fills": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsBacktestFillResponse"
+            },
+            "title": "Fills",
+            "type": "array"
+          },
+          "levels": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsBacktestLevelResponse"
+            },
+            "title": "Levels",
+            "type": "array"
+          },
+          "marks": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsBacktestMarkResponse"
+            },
+            "title": "Marks",
+            "type": "array"
+          },
+          "profit_usd": {
+            "title": "Profit Usd",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "integer"
+          },
+          "session_close_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Session Close Ms",
+            "type": "integer"
+          },
+          "session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Session Open Ms",
+            "type": "integer"
+          },
+          "setup_cannot_open_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the run's stored setup can no longer be read; null when it can. When it is set, `levels` leaves out the `momentum` line of every attempt that never filled, because that line is the leg's momentum rule applied to the attempt's starting price and the rule is lost. Nothing else is left out: the same attempt's `starting_price` line, the lines of every attempt that filled, and the trades, events, fills, marks and series are served as for any run.",
+            "title": "Setup Cannot Open Reason"
+          },
+          "skip_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "window_does_not_fit",
+                  "underlying_did_not_trade"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skip Reason"
+          },
+          "status": {
+            "enum": [
+              "traded",
+              "no_trade",
+              "skipped",
+              "incomplete"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "trades": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsBacktestTradeResponse"
+            },
+            "title": "Trades",
+            "type": "array"
+          },
+          "underlying": {
+            "$ref": "#/components/schemas/OptionsBacktestSeriesResponse"
+          }
+        },
+        "required": [
+          "run_id",
+          "session_open_ms",
+          "session_close_ms",
+          "status",
+          "cash_before_usd",
+          "cash_after_usd",
+          "profit_usd",
+          "trades",
+          "events",
+          "underlying",
+          "contracts",
+          "levels",
+          "fills",
+          "marks"
+        ],
+        "title": "OptionsBacktestSessionResponse",
+        "type": "object"
+      },
       "OptionsBacktestSessionStatusCountResponse": {
         "properties": {
           "count": {
@@ -41348,6 +42091,64 @@
           "count"
         ],
         "title": "OptionsBacktestSessionStatusCountResponse",
+        "type": "object"
+      },
+      "OptionsBacktestSettingDifferenceResponse": {
+        "description": "One setting on which the two runs differ. ``label`` names it the way an owner would (\"leg call: re-entry on stop\");\n``a`` and ``b`` are each run's value in words (\"not set\" for a rule that is off, \"not in this run\" for a leg the run\nlacks). The settings were compared as validated objects, so ``0.3`` and ``0.3000`` are never a difference.",
+        "properties": {
+          "a": {
+            "title": "A",
+            "type": "string"
+          },
+          "b": {
+            "title": "B",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "leg_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leg Id"
+          },
+          "setting": {
+            "enum": [
+              "entry_time",
+              "exit_time",
+              "no_reentry_after",
+              "square_off",
+              "leg",
+              "leg_right",
+              "leg_contracts",
+              "leg_expiry",
+              "leg_strike",
+              "leg_stop_loss",
+              "leg_momentum",
+              "leg_reentry",
+              "slippage",
+              "price_step",
+              "fees",
+              "starting_cash"
+            ],
+            "title": "Setting",
+            "type": "string"
+          }
+        },
+        "required": [
+          "setting",
+          "label",
+          "a",
+          "b"
+        ],
+        "title": "OptionsBacktestSettingDifferenceResponse",
         "type": "object"
       },
       "OptionsBacktestSetup-Input": {
@@ -41548,6 +42349,54 @@
         "title": "OptionsBacktestSetupNameRuleResponse",
         "type": "object"
       },
+      "OptionsBacktestSharedSessionResponse": {
+        "description": "A session both runs tested, with each run's status and profit, so a page can show where one setting helped or hurt.",
+        "properties": {
+          "a_profit_usd": {
+            "title": "A Profit Usd",
+            "type": "string"
+          },
+          "a_status": {
+            "enum": [
+              "traded",
+              "no_trade",
+              "skipped",
+              "incomplete"
+            ],
+            "title": "A Status",
+            "type": "string"
+          },
+          "b_profit_usd": {
+            "title": "B Profit Usd",
+            "type": "string"
+          },
+          "b_status": {
+            "enum": [
+              "traded",
+              "no_trade",
+              "skipped",
+              "incomplete"
+            ],
+            "title": "B Status",
+            "type": "string"
+          },
+          "session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Session Open Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_open_ms",
+          "a_status",
+          "b_status",
+          "a_profit_usd",
+          "b_profit_usd"
+        ],
+        "title": "OptionsBacktestSharedSessionResponse",
+        "type": "object"
+      },
       "OptionsBacktestSkipCountResponse": {
         "properties": {
           "count": {
@@ -41685,6 +42534,263 @@
           "sessions"
         ],
         "title": "OptionsBacktestTestableStretchResponse",
+        "type": "object"
+      },
+      "OptionsBacktestTradeFillResponse": {
+        "description": "An order that filled: the bar it filled in, the open of that bar (the price seen) and the price it filled at.",
+        "properties": {
+          "bar_close_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Bar Close Ms",
+            "type": "integer"
+          },
+          "filled_usd": {
+            "title": "Filled Usd",
+            "type": "string"
+          },
+          "seen_usd": {
+            "title": "Seen Usd",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bar_close_ms",
+          "seen_usd",
+          "filled_usd"
+        ],
+        "title": "OptionsBacktestTradeFillResponse",
+        "type": "object"
+      },
+      "OptionsBacktestTradeMarkResponse": {
+        "description": "A leg valued and not sold: the last bar its contract traded in and the close of that bar.",
+        "properties": {
+          "bar_close_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Bar Close Ms",
+            "type": "integer"
+          },
+          "price_usd": {
+            "title": "Price Usd",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bar_close_ms",
+          "price_usd"
+        ],
+        "title": "OptionsBacktestTradeMarkResponse",
+        "type": "object"
+      },
+      "OptionsBacktestTradeResponse": {
+        "description": "One leg round trip. It left by a ``sale`` or, when its sale never filled, by a ``mark``; exactly one is set.",
+        "properties": {
+          "contract": {
+            "$ref": "#/components/schemas/OptionsBacktestContractResponse"
+          },
+          "contracts": {
+            "title": "Contracts",
+            "type": "integer"
+          },
+          "entry": {
+            "$ref": "#/components/schemas/OptionsBacktestTradeFillResponse"
+          },
+          "entry_decided_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Entry Decided At Ms",
+            "type": "integer"
+          },
+          "entry_fee_usd": {
+            "title": "Entry Fee Usd",
+            "type": "string"
+          },
+          "entry_number": {
+            "minimum": 0.0,
+            "title": "Entry Number",
+            "type": "integer"
+          },
+          "exit_decided_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Exit Decided At Ms",
+            "type": "integer"
+          },
+          "exit_fee_usd": {
+            "title": "Exit Fee Usd",
+            "type": "string"
+          },
+          "exit_group": {
+            "title": "Exit Group",
+            "type": "integer"
+          },
+          "exit_kind": {
+            "enum": [
+              "sale",
+              "mark"
+            ],
+            "title": "Exit Kind",
+            "type": "string"
+          },
+          "exit_reason": {
+            "enum": [
+              "stop",
+              "square_off",
+              "exit_time",
+              "marked_not_sold"
+            ],
+            "title": "Exit Reason",
+            "type": "string"
+          },
+          "leg_id": {
+            "title": "Leg Id",
+            "type": "string"
+          },
+          "mark": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionsBacktestTradeMarkResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "momentum_level_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Momentum Level Usd"
+          },
+          "multiplier": {
+            "title": "Multiplier",
+            "type": "integer"
+          },
+          "pnl_usd": {
+            "title": "Pnl Usd",
+            "type": "string"
+          },
+          "sale": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionsBacktestTradeFillResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Session Open Ms",
+            "type": "integer"
+          },
+          "starting_price_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Starting Price Usd"
+          },
+          "stop_level_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Level Usd"
+          },
+          "trade_number": {
+            "minimum": 0.0,
+            "title": "Trade Number",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_open_ms",
+          "trade_number",
+          "leg_id",
+          "entry_number",
+          "contract",
+          "contracts",
+          "multiplier",
+          "entry_decided_at_ms",
+          "entry",
+          "exit_reason",
+          "exit_group",
+          "exit_decided_at_ms",
+          "exit_kind",
+          "entry_fee_usd",
+          "exit_fee_usd",
+          "pnl_usd"
+        ],
+        "title": "OptionsBacktestTradeResponse",
+        "type": "object"
+      },
+      "OptionsBacktestTradesResponse": {
+        "description": "A page of a run's leg trades. ``total`` counts every trade that matches, on every page; ``next_offset`` is the\n``offset`` to ask for the rest, and is ``None`` on the last page. The CSV export is never paged.\n\nA ``leg_id`` that the run's setup does not have is a 404 when the setup can be read. On a run whose stored setup can\nno longer be read there is no setup to say which legs the run had, so an unknown ``leg_id`` is answered from the\nstored trades alone: a 200 with ``total`` 0, which says only that no trade was stored for that leg.",
+        "properties": {
+          "limit": {
+            "maximum": 5000.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "next_offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Offset"
+          },
+          "offset": {
+            "minimum": 0.0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "trades": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsBacktestTradeResponse"
+            },
+            "title": "Trades",
+            "type": "array"
+          }
+        },
+        "required": [
+          "run_id",
+          "total",
+          "offset",
+          "limit",
+          "trades"
+        ],
+        "title": "OptionsBacktestTradesResponse",
         "type": "object"
       },
       "OptionsChainSnapshotRequest": {
@@ -80732,6 +81838,86 @@
         ]
       }
     },
+    "/api/research/options-backtest/runs/compare": {
+      "get": {
+        "description": "Two complete runs of one underlying side by side: every setting that differs, the range if it differs, and, on the\nsessions they share, each run's net profit, trades and winning sessions and the pair of profits of each session.\n\nBoth runs must be complete, have a stored setup that can still be read, and trade the same underlying, else a 409\nthat says which is not and why; a run that does not exist is a 404 naming ``a`` or ``b``. This path is the literal\n``/runs/compare``, mounted before the run service's ``/runs/{run_id}``.",
+        "operationId": "compare_two_runs_api_research_options_backtest_runs_compare_get",
+        "parameters": [
+          {
+            "description": "The first run's id.",
+            "in": "query",
+            "name": "a",
+            "required": true,
+            "schema": {
+              "description": "The first run's id.",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "title": "A",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The second run's id.",
+            "in": "query",
+            "name": "b",
+            "required": true,
+            "schema": {
+              "description": "The second run's id.",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "title": "B",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestComparisonResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Compare Two Runs",
+        "tags": [
+          "research-options-backtest"
+        ]
+      }
+    },
     "/api/research/options-backtest/runs/{run_id}": {
       "delete": {
         "description": "Delete a run with its sessions and trades. None by that id is a 404; a run that is still running is a 409.",
@@ -80842,6 +82028,293 @@
           }
         },
         "summary": "Get The Run",
+        "tags": [
+          "research-options-backtest"
+        ]
+      }
+    },
+    "/api/research/options-backtest/runs/{run_id}/sessions/{session_open_ms}": {
+      "get": {
+        "description": "One session of a complete run, for the one-day timeline.\n\nThe stored facts, trades, events, levels, fills and marks come from the run's own rows. The minute closes of the\nunderlying and of each contract the session traded or took a starting price in are read from the lake and shown only\nif the file is the one the run read (its sha256 is the stored pin); a series that cannot be shown says why and the rest\nis still served. A session the run did not test is a 404; a run that is not complete is a 409. A run whose stored\nsetup no longer validates is served all the same, with ``setup_cannot_open_reason`` set.",
+        "operationId": "get_the_session_api_research_options_backtest_runs__run_id__sessions__session_open_ms__get",
+        "parameters": [
+          {
+            "description": "The run's id, from the history.",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "description": "The run's id, from the history.",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "title": "Run Id",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The session's open, as the run's trades and days give it.",
+            "in": "path",
+            "name": "session_open_ms",
+            "required": true,
+            "schema": {
+              "description": "The session's open, as the run's trades and days give it.",
+              "maximum": 253402300799999,
+              "minimum": 0,
+              "title": "Session Open Ms",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Get The Session",
+        "tags": [
+          "research-options-backtest"
+        ]
+      }
+    },
+    "/api/research/options-backtest/runs/{run_id}/trades": {
+      "get": {
+        "description": "Every leg trade of a complete run, in order: session by session, and in each the order the run recorded them.\n\nPaged: ``total`` is every trade that matches, and ``next_offset`` is the ``offset`` that reads the rest (``null``\non the last page). A session the run did not test, or a leg its setup does not have, is a 404 and not an empty page.\nA run that is not complete is a 409. A run whose stored setup no longer validates is listed all the same; with no\nsetup to name its legs, a leg filter is answered by the stored trades alone, and an empty page says only that none\nwas stored for that leg.",
+        "operationId": "list_the_trades_api_research_options_backtest_runs__run_id__trades_get",
+        "parameters": [
+          {
+            "description": "The run's id, from the history.",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "description": "The run's id, from the history.",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "title": "Run Id",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Only this session's trades, by its open.",
+            "in": "query",
+            "name": "session_open_ms",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 253402300799999,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this session's trades, by its open.",
+              "title": "Session Open Ms"
+            }
+          },
+          {
+            "description": "Only this leg's trades. A leg the run's setup does not have is a 404 when the setup can be read. When the run's stored setup can no longer be read, an unknown leg is answered from the stored trades alone: a 200 with `total` 0.",
+            "in": "query",
+            "name": "leg_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[a-z0-9_]{1,32}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this leg's trades. A leg the run's setup does not have is a 404 when the setup can be read. When the run's stored setup can no longer be read, an unknown leg is answered from the stored trades alone: a 200 with `total` 0.",
+              "title": "Leg Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 1000,
+              "maximum": 5000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestTradesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List The Trades",
+        "tags": [
+          "research-options-backtest"
+        ]
+      }
+    },
+    "/api/research/options-backtest/runs/{run_id}/trades.csv": {
+      "get": {
+        "description": "Every leg trade of a complete run as a CSV: ``unix_ts`` (the entry fill's bar close, ms UTC) first, one readable\nNew York time beside it, every other instant in a ``*_ms`` column, money and prices as exact decimal text.\n\nThe whole run, however many trades it has: the page size of the trades route does not apply. A run that is not\ncomplete is a 409.\n\n``exit_kind`` tells a leg that was sold (``sale``) from one marked and not sold (``mark``). For a mark,\n``exit_price_usd`` is the mark and not a price anything sold at, ``exit_seen_usd`` is empty and ``exit_fee_usd`` is\n``0``; a sum of ``exit_price_usd`` over every row therefore mixes sales and marks.",
+        "operationId": "export_the_trades_api_research_options_backtest_runs__run_id__trades_csv_get",
+        "parameters": [
+          {
+            "description": "The run's id, from the history.",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "description": "The run's id, from the history.",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "title": "Run Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Every leg trade of the run as a CSV download, named for the run. Never paged or truncated."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export The Trades",
         "tags": [
           "research-options-backtest"
         ]
