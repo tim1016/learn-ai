@@ -45,6 +45,20 @@ describe('a run that is going, read again while its record says so', () => {
     expect(service.run).toHaveBeenCalledTimes(3);
   });
 
+  it('reads the run it is given now, and never the one it was given before, when another run takes its place', async () => {
+    const service = fakeService(vi);
+    readsAs(service, going());
+    const { view } = await renderRun(runItem({ id: 7, job_id: 'job-7' }), { service });
+    await screen.findByRole('button', { name: 'Cancel' });
+
+    view.fixture.componentRef.setInput('run', runItem({ id: 8, job_id: 'job-8' }));
+    await waitFor(() => expect(service.run).toHaveBeenCalledTimes(2));
+    await after(2 * POLL_MS);
+    await waitFor(() => expect(service.run.mock.calls.length).toBeGreaterThanOrEqual(3));
+
+    expect(service.run.mock.calls.map(([id]) => id)).toEqual([7, 8, ...Array<number>(service.run.mock.calls.length - 2).fill(8)]);
+  });
+
   it('does not read again a run that is already over', async () => {
     const service = fakeService(vi);
     readsAs(service, runDetail());
