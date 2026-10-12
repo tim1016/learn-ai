@@ -7,6 +7,14 @@ itself, no slippage and no fee unless a scene says so. Every expectation is work
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import replace
+from datetime import date
+
+from app.options.contract import OptionContract
+from app.options_backtest.data import Captured
+from app.options_backtest.market import MinuteBar
+from app.options_backtest.picking import Listing
 from app.options_backtest.results import ExitReason, SessionStatus, SkipReason
 from app.options_backtest.run import run_sessions
 from app.options_backtest.session_result import PinnedDay, SessionPins
@@ -19,6 +27,7 @@ from tests.options_backtest._run_data import (
     WED,
     D,
     Day,
+    FakeRunData,
     changed,
     contract_on,
     fake_data,
@@ -157,6 +166,36 @@ def test_a_session_keeps_the_sha256_of_everything_it_read() -> None:
     )
     # Friday read its underlying and listing and, being skipped, needed no contract.
     assert result.sessions[1].pins == SessionPins(sha_of("underlying", FRI), sha_of("listing", FRI), ())
+
+
+class _ReadOnce:
+    """A ``RunData`` whose bars and listing come back as iterators, which can be read once and are then empty."""
+
+    def __init__(self, inner: FakeRunData) -> None:
+        self._inner = inner
+
+    def underlying_day(self, trading_date: date) -> Captured[Sequence[MinuteBar]] | None:
+        found = self._inner.underlying_day(trading_date)
+        return found and Captured(iter(found.value), found.sha256)  # type: ignore[arg-type]
+
+    def listing(self, trading_date: date) -> Captured[Listing] | None:
+        found = self._inner.listing(trading_date)
+        return found and Captured(replace(found.value, contracts=iter(found.value.contracts)), found.sha256)  # type: ignore[arg-type]
+
+    def option_day(self, contract: OptionContract, trading_date: date) -> Captured[Sequence[MinuteBar]] | None:
+        found = self._inner.option_day(contract, trading_date)
+        return found and Captured(iter(found.value), found.sha256)  # type: ignore[arg-type]
+
+
+def test_bars_and_a_listing_that_can_be_read_only_once_are_held_before_they_are_used() -> None:
+    # Bought at 2.00 and sold at 3.00: +100.00, as for a list. Read once and then looked at again, the underlying would
+    # seem not to have traded and the day would be skipped quietly, so a run must hold what it is handed.
+    data = _ReadOnce(fake_data({WED: _trade_day("2.00", "3.00")}))
+
+    result = run_sessions(setup(leg()), [WED], data)
+
+    [session] = result.sessions
+    assert (session.status, session.pnl_usd) == (SessionStatus.TRADED, D("100.00"))
 
 
 def test_only_the_contracts_a_session_needs_are_read_and_each_is_read_once() -> None:

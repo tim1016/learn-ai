@@ -14,6 +14,7 @@ from fractions import Fraction
 from itertools import pairwise
 
 import numpy as np
+import pytest
 
 from app.engine.results.statistics import max_drawdown
 from app.lean_sidecar.trading_calendar import expected_sessions
@@ -51,6 +52,12 @@ def _fall(summary_drawdown: Drawdown | None) -> tuple[int, int, int, date | None
     )
 
 
+def _instants(drawdown: Drawdown | None) -> tuple[int | None, int]:
+    """The peak's and the trough's session open in int64 ms UTC, the form that is stored."""
+    assert drawdown is not None
+    return drawdown.peak_session_open_ms, drawdown.trough_session_open_ms
+
+
 def test_with_two_peaks_the_worst_fall_is_measured_from_the_peak_before_it() -> None:
     # Equity from 1,000: 1,200 (s1), 900 (s2), 1,500 (s3), 1,350 (s4), 1,450 (s5), 1,000 (s6), 1,300 (s7).
     #   s2 fell 300 from the first peak 1,200: 25%.   s4 fell 150 from the second peak 1,500: 10%.
@@ -61,6 +68,11 @@ def test_with_two_peaks_the_worst_fall_is_measured_from_the_peak_before_it() -> 
 
     assert _fall(summary.drawdown_by_fraction) == (1500, 1000, 500, DAYS[2], DAYS[5])
     assert _fall(summary.drawdown_by_dollars) == (1500, 1000, 500, DAYS[2], DAYS[5])
+    # The instants stored are the opens of the third session (the peak) and the sixth (the trough), and no other.
+    third, sixth = sessions[2].session_open_ms, sessions[5].session_open_ms
+    assert third != sixth
+    assert _instants(summary.drawdown_by_fraction) == (third, sixth)
+    assert _instants(summary.drawdown_by_dollars) == (third, sixth)
     assert summary.drawdown_by_fraction.fall_ratio == Ratio(D("500"), D("1500"))
     assert summary.drawdown_by_fraction.fall_ratio.exact() is None
     assert summary.drawdown_by_fraction.fall_ratio.rounded_to_6_places() == D("0.333333")
@@ -75,6 +87,8 @@ def test_the_worst_fall_in_dollars_and_the_worst_as_a_fraction_can_be_different_
 
     assert _fall(summary.drawdown_by_fraction) == (100, 50, 50, None, DAYS[0])  # from the starting cash
     assert _fall(summary.drawdown_by_dollars) == (2000, 1400, 600, DAYS[1], DAYS[2])
+    assert _instants(summary.drawdown_by_fraction) == (None, sessions[0].session_open_ms)
+    assert _instants(summary.drawdown_by_dollars) == (sessions[1].session_open_ms, sessions[2].session_open_ms)
 
 
 def test_a_loss_on_the_first_session_is_a_fall_from_the_starting_cash_which_has_no_date() -> None:
@@ -98,6 +112,8 @@ def test_when_two_falls_are_equally_bad_the_earlier_one_is_reported() -> None:
 
     assert _fall(summary.drawdown_by_fraction) == (100, 50, 50, None, DAYS[0])
     assert _fall(summary.drawdown_by_dollars) == (200, 100, 100, DAYS[1], DAYS[2])
+    assert _instants(summary.drawdown_by_fraction) == (None, sessions[0].session_open_ms)
+    assert _instants(summary.drawdown_by_dollars) == (sessions[1].session_open_ms, sessions[2].session_open_ms)
 
 
 def test_when_equity_comes_back_to_a_peak_without_passing_it_the_peak_is_still_the_first_time_it_was_reached() -> None:
@@ -108,6 +124,36 @@ def test_when_equity_comes_back_to_a_peak_without_passing_it_the_peak_is_still_t
     drawdown = summarize_run(sessions, starting_cash_usd=start).drawdown_by_dollars
 
     assert _fall(drawdown) == (1100, 800, 300, DAYS[0], DAYS[3])
+    assert _instants(drawdown) == (sessions[0].session_open_ms, sessions[3].session_open_ms)
+
+
+@pytest.mark.parametrize(
+    ("fee", "trough", "fall", "ratio"),
+    [
+        # Bought at 0.99, sold at 0.00: (0.00 - 0.99) x 100 = -99.00, and two fees of 0.50 make -100.00: equity from
+        # 100.00 is 0.00, a fall of 100.00 over a peak of 100.00, the whole of it.
+        ("0.50", "0.00", "100.00", "1"),
+        # Two fees of 0.65 make -100.30: equity is -0.30, a fall of 100.30 over 100.00, which is 1.003: more than all.
+        ("0.65", "-0.30", "100.30", "1.003"),
+    ],
+)
+def test_a_closing_fee_can_take_equity_to_zero_or_below_and_the_fall_is_then_the_whole_peak_or_more(
+    fee: str, trough: str, fall: str, ratio: str
+) -> None:
+    # The replay never refuses a sale and charges its fee even when it fills at nothing, so cash can end below zero.
+    ruined = a_trade("a", entry=("0.99", "0.99"), exit=("0.00", "0.00"), reason=ExitReason.EXIT_TIME, fees=(fee, fee))
+    sessions = [a_session(DAYS[0], "100.00", status=SessionStatus.TRADED, trades=(ruined,))]
+
+    drawdown = summarize_run(sessions, starting_cash_usd=D("100.00")).drawdown_by_fraction
+
+    assert drawdown is not None
+    assert (drawdown.peak_equity_usd, drawdown.trough_equity_usd, drawdown.fall_usd) == (
+        D("100.00"),
+        D(trough),
+        D(fall),
+    )
+    assert drawdown.fall_ratio.exact() == D(ratio)  # not clamped to one
+    assert drawdown.peak_date is None
 
 
 def test_equity_that_only_rises_has_no_drawdown() -> None:
@@ -144,9 +190,22 @@ def _brute_force(equities: list[int]) -> tuple[Fraction, int, int, int, int, int
     return best
 
 
+def _two_falls_tie_for_the_worst(equities: list[int]) -> bool:
+    """Whether two points of the path fall by exactly the same fraction of their peaks, and no point by more."""
+    ratios = []
+    for at in range(1, len(equities)):
+        peak = max(equities[: at + 1])
+        ratios.append(Fraction(peak - equities[at], peak))
+    return ratios.count(max(ratios)) > 1
+
+
 def test_the_drawdown_over_many_random_paths_is_the_brute_force_one_and_the_engines_float_one() -> None:
+    # The fraction is compared with the engine's on every path. The engine's dates are compared only on paths with no
+    # exact tie for the worst fall: which of two equal falls a float computation reports depends on how its rounding
+    # falls, and this module's rule (the earliest) is exact. The brute-force oracle compares the dates on every path.
     rng = random.Random(20261012)
     compared = 0
+    compared_without_a_tie = 0
     for trial in range(400):
         equity, equities, profits = 1000, [1000], []
         for _ in range(rng.randint(3, 30)):
@@ -167,6 +226,8 @@ def test_the_drawdown_over_many_random_paths_is_the_brute_force_one_and_the_engi
         assert (int(found.peak_equity_usd), int(found.trough_equity_usd), int(found.fall_usd)) == (peak, trough, fall)
         assert found.peak_date == (None if peak_at == 0 else DAYS[peak_at - 1]), f"trial {trial}"
         assert found.trough_date == DAYS[trough_at - 1], f"trial {trial}"
+        assert found.peak_session_open_ms == (None if peak_at == 0 else sessions[peak_at - 1].session_open_ms)
+        assert found.trough_session_open_ms == sessions[trough_at - 1].session_open_ms, f"trial {trial}"
         assert Fraction(found.fall_ratio.numerator) / Fraction(found.fall_ratio.denominator) == ratio
 
         # The float twin: the engine's maximum drawdown over the same equity at the same instants. The starting cash
@@ -177,10 +238,17 @@ def test_the_drawdown_over_many_random_paths_is_the_brute_force_one_and_the_engi
         ]
         engine = max_drawdown(points)
         np.testing.assert_allclose(float(ratio), engine["max_drawdown"], atol=1e-12, rtol=0)
-        assert engine["peak_timestamp"] == (start_ms if peak_at == 0 else sessions[peak_at - 1].session_open_ms)
-        assert engine["trough_timestamp"] == sessions[trough_at - 1].session_open_ms
         compared += 1
+        if _two_falls_tie_for_the_worst(equities):
+            continue
+        # Our stored instants against the engine's own timestamps: the starting cash is the engine's start_ms.
+        assert (start_ms if found.peak_session_open_ms is None else found.peak_session_open_ms) == engine[
+            "peak_timestamp"
+        ], f"trial {trial}"
+        assert found.trough_session_open_ms == engine["trough_timestamp"], f"trial {trial}"
+        compared_without_a_tie += 1
     assert compared >= 350  # nearly every random path falls somewhere, so the comparison is made on nearly all
+    assert compared_without_a_tie >= 300  # and most of them have one worst fall, so the dates are compared on most
 
 
 def test_the_fraction_with_cents_agrees_with_the_engines_float_to_a_trillionth() -> None:

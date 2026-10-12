@@ -2,8 +2,9 @@
 
 Minutes are counted after the session's open, as in ``_market.py``: minute ``k`` is the bar closing ``k`` minutes
 after the open, so the bar of minute 5 holds the trades from the fourth to the fifth minute. A price list is
-``{minute: price}`` for the underlying and ``{minute: (open, close)}`` or ``{minute: (open, high, low, close)}`` for a
-contract; a minute that is not listed did not trade, and nothing is filled in.
+``{minute: price}`` (a bar that did not move) or ``{minute: (open, high, low, close)}`` for the underlying, and
+``{minute: (open, close)}`` or ``{minute: (open, high, low, close)}`` for a contract; a minute that is not listed did
+not trade, and nothing is filled in.
 """
 
 from __future__ import annotations
@@ -66,9 +67,12 @@ def option_bars(day: date, series: Mapping[int, tuple[str, ...]]) -> tuple[Minut
     return tuple(bars)
 
 
-def underlying_bars(day: date, prices: Mapping[int, str]) -> tuple[MinuteBar, ...]:
-    """The underlying's bars: one price a minute, as open, high, low and close."""
-    return option_bars(day, {minute: (price, price) for minute, price in prices.items()})
+def underlying_bars(day: date, prices: Mapping[int, str | tuple[str, str, str, str]]) -> tuple[MinuteBar, ...]:
+    """The underlying's bars from ``{minute: price}`` (a bar that did not move: open, high, low and close are the
+    price) or ``{minute: (open, high, low, close)}``."""
+    return option_bars(
+        day, {minute: (price, price) if isinstance(price, str) else price for minute, price in prices.items()}
+    )
 
 
 def steady(price: str, first: int = 1, last: int = 390) -> dict[int, str]:
@@ -186,11 +190,11 @@ class FakeRunData:
 class Day:
     """What a scene stores of one session: the underlying, and each contract's bars by (right, strike).
 
-    ``underlying`` is ``{minute: price}``, ``options`` is ``{("call", 500): {minute: (open, close)}}``. A contract named
+    ``underlying`` is ``{minute: price}`` or ``{minute: (open, high, low, close)}``, ``options`` is ``{("call", 500): {minute: (open, close)}}``. A contract named
     in the listing and not in ``options`` is a contract whose day is not captured.
     """
 
-    underlying: dict[int, str]
+    underlying: dict[int, str | tuple[str, str, str, str]]
     options: dict[tuple[OptionRight, int], dict[int, tuple[str, ...]]] = field(default_factory=dict)
     strikes: tuple[int, ...] = (495, 500, 505, 510)
     complete: bool = True

@@ -13,6 +13,7 @@ Each fee type of each fill is rounded up to the cent, then the types are added.
 
 from __future__ import annotations
 
+import pickle
 import random
 from datetime import date
 from decimal import Context, Decimal, localcontext
@@ -132,6 +133,25 @@ def test_a_sale_that_fills_at_nothing_owes_no_sec_fee_and_the_per_contract_ones_
     assert fee_for(_fill("buy", 1, "0.00")) == D("0.06")
 
 
+@pytest.mark.parametrize(
+    ("side", "price", "expected"),
+    [
+        # Buy 1,000 contracts of 10 shares at 1.50 on 2026-10-09: CAT 1,000 x 10 x 0.000003 = 0.03 (a multiplier of 100
+        # would make it 0.30); ORF 1,000 x 0.015 = 15.00; OCC 1,000 x 0.025 = 25.00. 0.03 + 15.00 + 25.00 = 40.03.
+        ("buy", "1.50", "40.03"),
+        # Sell them at 1.45: SEC 1,000 x 1.45 x 10 x 0.0000206 = 0.2987 up to 0.30 (a multiplier of 100 would make it
+        # 2.987 up to 2.99); TAF 0; CAT 0.03; ORF 15.00; OCC 25.00. 0.30 + 0 + 0.03 + 15.00 + 25.00 = 40.33.
+        ("sell", "1.45", "40.33"),
+    ],
+)
+def test_the_contracts_own_multiplier_counts_in_the_fee_not_a_hundred_shares(
+    side: str, price: str, expected: str
+) -> None:
+    fill = _fill(side, 1000, price, multiplier=10)
+
+    assert fee_for_policy(ESTIMATED)(fill) == D(expected)
+
+
 @pytest.mark.parametrize("price", ["0.01", "0.50", "1", "2", "7.25", "100"])
 def test_only_the_sec_fee_depends_on_the_price_so_a_stand_in_price_for_a_sale_at_nothing_is_harmless(
     price: str,
@@ -180,6 +200,18 @@ def test_a_fill_on_a_date_without_a_published_rate_raises_naming_the_date_and_th
     assert raised.value.trading_date == date(2026, 6, 30)
     assert raised.value.components == ("cat",)
     assert "2026-06-30" in str(raised.value)
+
+
+def test_a_fee_rate_that_is_not_published_survives_a_trip_between_processes_with_its_date_and_types() -> None:
+    # A pickle is how an exception crosses a process boundary.
+    original = FeeRateNotPublished(date(2025, 12, 31), ("taf", "cat"))
+
+    restored = pickle.loads(pickle.dumps(original))
+
+    assert isinstance(restored, FeeRateNotPublished)
+    assert (restored.trading_date, restored.components) == (date(2025, 12, 31), ("taf", "cat"))
+    assert str(restored) == str(original)
+    assert "2025-12-31" in str(restored) and "taf, cat" in str(restored)
 
 
 def test_a_buy_before_the_taf_began_names_only_what_a_buy_would_owe() -> None:

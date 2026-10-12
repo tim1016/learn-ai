@@ -64,6 +64,20 @@ def test_the_underlying_close_is_the_close_of_the_bar_closing_then_and_none_wher
     assert market.underlying_close(close_ms(FRI, 7)) == D("500.60")
 
 
+def test_the_underlying_price_is_the_bars_close_and_not_its_open_high_or_low() -> None:
+    # One bar, minute 5: opened at 500.0, reached 510.0 and 490.0, and closed at 505.2. Against the strikes listed
+    # (495, 500, 505, 510) each price comes to a different contract: the open to 500, the high to 510, the low to 495
+    # (490 is below the lowest strike) and the close to 505 (0.2 away). Only the close is the underlying's price.
+    around = underlying_bars(FRI, {5: ("500.0", "510.0", "490.0", "505.2")})
+    market = _market(underlying=around)
+
+    price = market.underlying_close(close_ms(FRI, 5))
+    picked = market.pick(_leg(), at_ms=close_ms(FRI, 5), underlying_price=price)
+
+    assert price == D("505.2")
+    assert isinstance(picked, Picked) and picked.contract == CALL_505
+
+
 def test_a_contracts_bar_is_the_bar_closing_then_and_none_where_it_did_not_trade() -> None:
     bars = option_bars(FRI, {5: ("2.00", "2.10"), 8: ("2.20", "2.30")})
     market = _market(options={CALL_500: bars})
@@ -166,9 +180,6 @@ _BAD_BARS = {
     "bars out of order": ([_bar(FRI, 6), _bar(FRI, 5)], "after a later one"),
     "a bar between minutes": ([MinuteBar(close_ms(FRI, 5) + 1_000, D(2), D(2), D(2), D(2))], "whole minute"),
     "the bars of another day": ([_bar(THU, 5)], "another day"),
-    "a price of zero": ([_bar(FRI, 5, "0")], "not above zero"),
-    "a negative price": ([_bar(FRI, 5, "-1.5")], "not above zero"),
-    "a price that is not a number": ([_bar(FRI, 5, "NaN")], "not above zero"),
 }
 
 
@@ -190,6 +201,28 @@ def test_bars_that_cannot_be_a_day_of_minute_bars_are_refused_for_a_contract_and
         _market(options={CALL_500: bars})
 
     assert CALL_500.occ_symbol in str(raised.value)
+
+
+_PRICE_COLUMNS = ("open", "high", "low", "close")
+_NOT_A_PRICE = {"zero": "0", "negative": "-1.5", "not a number": "NaN", "infinite": "Infinity"}
+
+
+@pytest.mark.parametrize("column", _PRICE_COLUMNS)
+@pytest.mark.parametrize("bad", _NOT_A_PRICE.values(), ids=_NOT_A_PRICE.keys())
+def test_a_price_that_is_not_above_zero_is_refused_in_every_column_of_a_bar_for_the_underlying_and_a_contract(
+    column: str, bad: str
+) -> None:
+    # The replay fills at a bar's open, so an open of nothing would be a free buy: every column is held to the same rule.
+    prices = {"open": "2.00", "high": "2.00", "low": "2.00", "close": "2.00", column: bad}
+    bar = MinuteBar(close_ms(FRI, 5), *(D(prices[name]) for name in _PRICE_COLUMNS))
+
+    with pytest.raises(MalformedBars, match="not above zero") as for_the_underlying:
+        _market(underlying=[bar])
+    with pytest.raises(MalformedBars, match="not above zero") as for_a_contract:
+        _market(options={CALL_500: [bar]})
+
+    assert "the underlying" in str(for_the_underlying.value)
+    assert CALL_500.occ_symbol in str(for_a_contract.value)
 
 
 def test_bars_outside_the_session_on_the_same_day_are_allowed_and_the_session_is_still_read() -> None:

@@ -26,12 +26,22 @@ from decimal import Context, Decimal, localcontext
 
 import pytest
 
-from app.options_backtest.market import PickRefusal
-from app.options_backtest.results import EventKind, ExitReason, SessionStatus, SkipReason
+from app.lean_sidecar.trading_calendar import expected_sessions
+from app.options_backtest.market import PickRefusal, PickRefused
+from app.options_backtest.results import (
+    EntryRefusal,
+    Event,
+    EventKind,
+    ExitReason,
+    SessionOutcome,
+    SessionStatus,
+    SkipReason,
+)
 from app.options_backtest.session_result import SessionResult
 from app.options_backtest.statistics import Drawdown, Ratio, summarize_run
-from tests.options_backtest._results import a_session, a_trade, an_event
-from tests.options_backtest._run_data import D, open_ms
+from tests.options_backtest._market import TableMarket, contract, flat, leg, picked, replay, setup, steady
+from tests.options_backtest._results import a_session, a_session_of, a_trade, an_event
+from tests.options_backtest._run_data import FRI, D, open_ms
 
 SEP_29, SEP_30 = date(2026, 9, 29), date(2026, 9, 30)
 OCT_1, OCT_2, OCT_5, OCT_6, OCT_7 = (date(2026, 10, day) for day in (1, 2, 5, 6, 7))
@@ -249,10 +259,207 @@ def test_what_did_not_trade_is_counted_from_the_events() -> None:
     assert summary.re_entries_lost == 1  # session 6
 
 
+OCTOBER = expected_sessions(date(2026, 10, 1), date(2026, 10, 30))
+
+
+def _many(kind: EventKind, count: int, *, entry_number: int = 0, reason: str | None = None) -> tuple[Event, ...]:
+    """``count`` events of one kind, on legs of their own. ``entry_number`` 1 is a re-entry."""
+    return tuple(an_event(kind, f"leg{at}", reason, entry_number) for at in range(count))
+
+
+def _counting_scene() -> list[SessionResult]:
+    """Eleven sessions in which every count the owner reads of what did not trade has a value of its own.
+
+    No trade makes or loses anything here (a trade is bought and sold at 1.00, or bought at 1.00 and marked at 1.00),
+    so the scene is only about counts. What each session holds, with the counts it adds to:
+
+        1  traded      starting price taken, momentum hit; 2 re-entries blocked by the cutoff
+        2  traded      starting price taken, momentum never hit; 1 entry refused for cash; 2 entries dropped;
+                       1 re-entry blocked by the cutoff
+        3  traded      starting price taken, momentum never hit; 2 re-entries blocked by the cutoff; 3 re-entries
+                       dropped, each lost (3 dropped, 3 lost)
+        4  traded      1 entry refused for cash; 2 legs without a starting price; 1 pick refused, chain incomplete
+        5  incomplete  1 entry refused for cash; 3 entries dropped; 2 re-entries whose pick was refused, strike not
+                       listed, each lost (2 refused picks, 2 lost)
+        6  incomplete  starting price taken, momentum never hit; 1 entry refused for cash; 2 legs without a starting
+                       price; 2 re-entries without a starting price, each lost (2 more without one, 2 lost)
+        7  no trade    3 picks refused: 2 expiry not listed, 1 strike not listed
+        8  traded      nothing else
+        9  skipped     the window does not fit
+       10  skipped     the underlying did not trade
+       11  skipped     the underlying did not trade
+
+    So: sessions 11; traded 7 (1 to 6 and 8); incomplete 2 (5, 6); no trade 1 (7); skipped 3 (9, 10, 11); without
+    momentum 3 (2, 3, 6); refused for cash 1 + 1 + 1 + 1 = 4 (2, 4, 5, 6); blocked by the cutoff 2 + 1 + 2 = 5
+    (1, 2, 3); without a starting price 2 + 2 + 2 = 6 (4, 6, 6); lost 3 + 2 + 2 = 7 (3, 5, 6); dropped
+    2 + 3 + 3 = 8 (2, 3, 5); picks refused: chain incomplete 1, expiry not listed 2, strike not listed 2 + 1 = 3.
+    """
+    held = a_trade("a", entry=("1.00", "1.00"), exit=("1.00", "1.00"), reason=ExitReason.EXIT_TIME)
+    marked = a_trade("a", entry=("1.00", "1.00"), mark="1.00", reason=ExitReason.MARKED_NOT_SOLD)
+    waited, reached = _many(EventKind.STARTING_PRICE_TAKEN, 1), _many(EventKind.MOMENTUM_HIT, 1)
+    cutoff, cash = EventKind.RE_ENTRY_BLOCKED_BY_CUTOFF, EventKind.ENTRY_REFUSED_FOR_CASH
+    dropped, lost = EventKind.ENTRY_DROPPED, EventKind.RE_ENTRY_LOST
+    no_start, refused = EventKind.NO_STARTING_PRICE, EventKind.PICK_REFUSED
+    short = EntryRefusal.CASH_SHORT.value
+    rows: list[tuple[SessionStatus, tuple, tuple[Event, ...]]] = [
+        (SessionStatus.TRADED, (held,), waited + reached + _many(cutoff, 2)),
+        (
+            SessionStatus.TRADED,
+            (held,),
+            waited + _many(cash, 1, reason=short) + _many(dropped, 2) + _many(cutoff, 1),
+        ),
+        (
+            SessionStatus.TRADED,
+            (held,),
+            waited + _many(cutoff, 2) + _many(dropped, 3, entry_number=1) + _many(lost, 3, entry_number=1),
+        ),
+        (
+            SessionStatus.TRADED,
+            (held,),
+            _many(cash, 1, reason=short)
+            + _many(no_start, 2)
+            + _many(refused, 1, reason=PickRefusal.CHAIN_INCOMPLETE.value),
+        ),
+        (
+            SessionStatus.INCOMPLETE,
+            (marked,),
+            _many(cash, 1, reason=short)
+            + _many(dropped, 3)
+            + _many(refused, 2, reason=PickRefusal.STRIKE_NOT_LISTED.value, entry_number=1)
+            + _many(lost, 2, entry_number=1),
+        ),
+        (
+            SessionStatus.INCOMPLETE,
+            (marked,),
+            waited
+            + _many(cash, 1, reason=short)
+            + _many(no_start, 2)
+            + _many(no_start, 2, entry_number=1)
+            + _many(lost, 2, entry_number=1),
+        ),
+        (
+            SessionStatus.NO_TRADE,
+            (),
+            _many(refused, 2, reason=PickRefusal.EXPIRY_NOT_LISTED.value)
+            + _many(refused, 1, reason=PickRefusal.STRIKE_NOT_LISTED.value),
+        ),
+        (SessionStatus.TRADED, (held,), ()),
+    ]
+    sessions = [
+        a_session(day, "10000.00", status=status, trades=trades, events=events)
+        for day, (status, trades, events) in zip(OCTOBER, rows, strict=False)
+    ]
+    for day, why in zip(
+        OCTOBER[len(rows) :],
+        (SkipReason.WINDOW_DOES_NOT_FIT, SkipReason.UNDERLYING_DID_NOT_TRADE, SkipReason.UNDERLYING_DID_NOT_TRADE),
+        strict=False,
+    ):
+        sessions.append(a_session(day, "10000.00", status=SessionStatus.SKIPPED, skip_reason=why))
+    return sessions
+
+
+def test_the_sessions_of_each_status_are_counted_apart_when_no_two_counts_agree() -> None:
+    summary = summarize_run(_counting_scene(), starting_cash_usd=STARTING)
+
+    assert summary.sessions_tested == 11
+    assert summary.sessions_traded == 7  # sessions 1 to 6 and 8, the two incomplete ones included
+    assert summary.sessions_incomplete == 2  # 5 and 6
+    assert summary.sessions_no_trade == 1  # 7
+    assert summary.sessions_skipped == 3  # 9, 10 and 11
+    assert summary.skipped_by_reason == ((SkipReason.WINDOW_DOES_NOT_FIT, 1), (SkipReason.UNDERLYING_DID_NOT_TRADE, 2))
+
+
+def test_each_count_of_what_did_not_trade_is_its_own_figure_when_no_two_counts_agree() -> None:
+    summary = summarize_run(_counting_scene(), starting_cash_usd=STARTING)
+
+    assert summary.sessions_without_momentum == 3  # 2, 3 and 6; session 1 reached its momentum
+    assert summary.entries_refused_for_cash == 4  # one each in 2, 4, 5 and 6
+    assert summary.re_entries_blocked_by_cutoff == 5  # 2 in session 1, 1 in 2, 2 in 3
+    assert summary.legs_without_a_starting_price == 6  # 2 in session 4, 2 + 2 in 6
+    assert summary.re_entries_lost == 7  # 3 in session 3, 2 in 5, 2 in 6
+    assert summary.entries_dropped == 8  # 2 in session 2, 3 in 3, 3 in 5
+    assert summary.picks_refused_by_reason == (
+        (PickRefusal.CHAIN_INCOMPLETE, 1),  # session 4
+        (PickRefusal.EXPIRY_NOT_LISTED, 2),  # session 7
+        (PickRefusal.EXPIRY_NOT_A_SESSION, 0),
+        (PickRefusal.STRIKE_NOT_LISTED, 3),  # 2 in session 5, 1 in 7
+        (PickRefusal.NOT_STANDARD, 0),
+    )
+
+
+CALL, CALL_498 = contract("call", "500"), contract("call", "498")
+STOP_25 = ("percent", "25")
+
+
+def _a_re_entry_lost_to_a_refused_pick() -> SessionOutcome:
+    # Stopped at minute 10 (2.00 falls to 1.40, under the stop at 1.50), sold at minute 11, where the re-entry's pick,
+    # with the underlying at 498, is refused.
+    refusal = PickRefused(PickRefusal.CHAIN_INCOMPLETE, "the chain at minute 11 lists too few strikes")
+    market = TableMarket(
+        underlying={**steady("500", 1, 10), **steady("498", 11)},
+        picks={**picked(("call", "500", CALL)), ("call", "498"): refusal},
+        options={CALL: {**flat("2.00", 5, 9), 10: ("2.00", "1.40"), 11: ("1.40", "1.40"), **flat("1.50", 12, 61)}},
+    )
+    return replay(setup(leg(stop=STOP_25, reentry=("at_once", 1))), market)
+
+
+def _a_re_entry_lost_for_want_of_a_starting_price() -> SessionOutcome:
+    # Bought on momentum, stopped at minute 9, sold at minute 10, where the re-entry's fresh contract (the 498) has no
+    # bar to take a starting price from.
+    market = TableMarket(
+        underlying={**steady("500", 1, 9), **steady("498", 10)},
+        picks=picked(("call", "500", CALL), ("call", "498", CALL_498)),
+        options={
+            CALL: {
+                5: ("2.00", "2.00"),
+                6: ("2.00", "2.50"),
+                7: ("2.50", "2.50"),
+                8: ("2.50", "2.50"),
+                9: ("2.50", "1.80"),
+                10: ("1.80", "1.80"),
+            },
+            CALL_498: flat("1.30", 11, 61),
+        },
+    )
+    return replay(setup(leg(momentum=("percent_up", "25"), stop=STOP_25, reentry=("on_momentum", 1))), market)
+
+
+def _a_re_entry_lost_to_an_entry_dropped_at_once() -> SessionOutcome:
+    # Stopped at minute 10, sold at minute 11, and the re-entry bought at once finds no bar in minute 12.
+    market = TableMarket(
+        underlying=steady("500"),
+        picks=picked(("call", "500", CALL)),
+        options={CALL: {**flat("2.00", 5, 9), 10: ("2.00", "1.40"), 11: ("1.40", "1.40"), **flat("1.50", 13, 61)}},
+    )
+    return replay(setup(leg(stop=STOP_25, reentry=("at_once", 2))), market)
+
+
+@pytest.mark.parametrize(
+    ("replayed", "picks_refused", "without_a_starting_price", "dropped"),
+    [
+        (_a_re_entry_lost_to_a_refused_pick, 1, 0, 0),
+        (_a_re_entry_lost_for_want_of_a_starting_price, 0, 1, 0),
+        (_a_re_entry_lost_to_an_entry_dropped_at_once, 0, 0, 1),
+    ],
+    ids=["a refused pick", "no starting price", "an entry dropped at once"],
+)
+def test_a_re_entry_lost_is_counted_as_lost_and_again_under_the_cause_that_lost_it(
+    replayed, picks_refused: int, without_a_starting_price: int, dropped: int
+) -> None:
+    summary = summarize_run([a_session_of(FRI, replayed(), "10000.00")], starting_cash_usd=STARTING)
+
+    # One re-entry was lost, and the same incident is the one pick refused, or the one leg without a starting price,
+    # or the one entry dropped: the headings overlap, they do not add up.
+    assert summary.re_entries_lost == 1
+    assert sum(count for _, count in summary.picks_refused_by_reason) == picks_refused
+    assert summary.legs_without_a_starting_price == without_a_starting_price
+    assert summary.entries_dropped == dropped
+
+
 def test_the_by_day_table_has_a_row_for_every_session_in_order() -> None:
     summary = summarize_run(_scene(), starting_cash_usd=STARTING)
 
-    # (date, status, trades, net profit, fees, wins, losses, break even)
+    # (date, status, trades, net profit, fees, trades won, trades lost, trades break even)
     assert [
         (
             row.trading_date,
@@ -260,9 +467,9 @@ def test_the_by_day_table_has_a_row_for_every_session_in_order() -> None:
             row.trades,
             row.net_profit_usd,
             row.fees_usd,
-            row.wins,
-            row.losses,
-            row.break_even,
+            row.trades_won,
+            row.trades_lost,
+            row.trades_break_even,
         )
         for row in summary.by_day
     ] == [
@@ -288,7 +495,7 @@ def test_the_by_month_table_adds_up_the_sessions_of_each_month() -> None:
     # September: sessions 1 and 2. Two sessions, one traded; two trades (B won, A lost); -54.90; fees 3.90.
     assert (september.year, september.month, september.sessions, september.sessions_traded) == (2026, 9, 2, 1)
     assert (september.trades, september.net_profit_usd, september.fees_usd) == (2, D("-54.90"), D("3.90"))
-    assert (september.wins, september.losses, september.break_even) == (1, 1, 0)
+    assert (september.trades_won, september.trades_lost, september.trades_break_even) == (1, 1, 0)
     assert september.sessions_by_status == (
         (SessionStatus.TRADED, 1),
         (SessionStatus.NO_TRADE, 1),
@@ -299,7 +506,7 @@ def test_the_by_month_table_adds_up_the_sessions_of_each_month() -> None:
     # 0 + 49.35 - 29.20 + 100.00 = 120.15; fees 0.65 + 5.20 = 5.85.
     assert (october.year, october.month, october.sessions, october.sessions_traded) == (2026, 10, 5, 4)
     assert (october.trades, october.net_profit_usd, october.fees_usd) == (5, D("120.15"), D("5.85"))
-    assert (october.wins, october.losses, october.break_even) == (3, 1, 1)
+    assert (october.trades_won, october.trades_lost, october.trades_break_even) == (3, 1, 1)
     assert october.sessions_by_status == (
         (SessionStatus.TRADED, 3),
         (SessionStatus.NO_TRADE, 0),
@@ -308,6 +515,43 @@ def test_the_by_month_table_adds_up_the_sessions_of_each_month() -> None:
     )
     # The months add up to the run.
     assert september.net_profit_usd + october.net_profit_usd == summary.net_profit_usd == D("65.25")
+
+
+def test_the_rows_count_trades_won_lost_and_even_and_not_the_sessions_that_had_them() -> None:
+    # Each trade is bought at 1.00 and sold at the price written, one contract: (sold - 1.00) x 100.
+    #   Session X: 1.10 (+10.00) and 1.20 (+20.00) won, 0.95 (-5.00) lost, 1.00 and 1.00 (0.00) broke even:
+    #              five trades, won 2, lost 1, even 2, net 10.00 + 20.00 - 5.00 = 25.00.
+    #   Session Y: 1.01 (+1.00) won, 0.99 (-1.00) and 0.98 (-2.00) lost: three trades, won 1, lost 2, even 0, net -2.00.
+    # The month holds both: eight trades, won 2 + 1 = 3, lost 1 + 2 = 3, even 2 + 0 = 2, net 25.00 - 2.00 = 23.00.
+    def trade(sold: str):
+        return a_trade("a", entry=("1.00", "1.00"), exit=(sold, sold), reason=ExitReason.EXIT_TIME)
+
+    sessions = [
+        a_session(
+            SEP_29,
+            "10000.00",
+            status=SessionStatus.TRADED,
+            trades=tuple(trade(sold) for sold in ("1.10", "1.20", "0.95", "1.00", "1.00")),
+        ),
+        a_session(
+            SEP_30,
+            "10025.00",
+            status=SessionStatus.TRADED,
+            trades=tuple(trade(sold) for sold in ("1.01", "0.99", "0.98")),
+        ),
+    ]
+
+    summary = summarize_run(sessions, starting_cash_usd=STARTING)
+
+    first, second = summary.by_day
+    assert (first.trades, first.trades_won, first.trades_lost, first.trades_break_even) == (5, 2, 1, 2)
+    assert (second.trades, second.trades_won, second.trades_lost, second.trades_break_even) == (3, 1, 2, 0)
+    assert (first.net_profit_usd, second.net_profit_usd) == (D("25.00"), D("-2.00"))
+    [month] = summary.by_month
+    assert (month.sessions, month.sessions_traded, month.trades) == (2, 2, 8)
+    assert (month.trades_won, month.trades_lost, month.trades_break_even) == (3, 3, 2)
+    assert month.net_profit_usd == D("23.00")
+    assert (summary.trades_won, summary.trades_lost, summary.trades_break_even) == (3, 3, 2)
 
 
 def test_a_month_is_the_new_york_month_of_the_trading_date_and_the_table_follows_the_calendar_across_a_year() -> None:
@@ -431,6 +675,11 @@ def test_a_summary_of_no_sessions_is_empty_and_still_says_what_cash_it_started_w
         ("0.0000015", "1", "0.0000015", "0.000002"),
         ("0.0000025", "1", "0.0000025", "0.000002"),
         ("0.0000035", "1", "0.0000035", "0.000004"),
+        # Ties a float cannot see: 0.0001255 x 1,000,000 is 125.5 exactly, and goes to the even 126, but as a float it
+        # is 125.49999999999999 and would round down to 125. 0.0001265 is 126.5, so the even 126, and as a float it is
+        # a little over and would round up to 127.
+        ("0.0001255", "1", "0.0001255", "0.000126"),
+        ("0.0001265", "1", "0.0001265", "0.000126"),
     ],
 )
 def test_a_ratio_is_exact_where_it_ends_and_rounds_half_to_even_where_it_is_shown(
@@ -454,6 +703,92 @@ def test_a_ratio_does_not_depend_on_the_decimal_context_it_is_asked_in() -> None
     with localcontext(Context(prec=3)):
         assert Ratio(D("245.75"), D("180.50")).rounded_to_6_places() == D("1.361496")
         assert Ratio(D("1"), D("8")).exact() == D("0.125")
+
+
+def _big_scene() -> list[SessionResult]:
+    """Five sessions of one trade each, large enough that every sum has more digits than a six-digit context holds.
+
+    Cash starts at 1,234,567.89. A trade's profit is (sold - bought) x 100 x contracts less its two fees, bought and
+    sold being the prices it filled at. Slippage paid is |filled - seen| x 100 x contracts for each fill.
+
+        A  1,237 contracts  bought 2.03 (seen 2.00437)  sold 2.58 (seen 2.617)   fees 24.74 + 24.74
+           profit 0.55 x 123,700 - 49.48 = 68,035.00 - 49.48 = 67,985.52
+           slippage 0.02563 x 123,700 + 0.037 x 123,700 = 3,170.431 + 4,576.9 = 7,747.331
+        B  2,513 contracts  bought 3.07 (seen 3.00219)  sold 2.37 (seen 2.411)   fees 50.26 + 50.26
+           profit -0.70 x 251,300 - 100.52 = -175,910.00 - 100.52 = -176,010.52
+           slippage 0.06781 x 251,300 + 0.041 x 251,300 = 17,040.653 + 10,303.3 = 27,343.953
+        C  1,111 contracts  bought 4.00  sold 4.57, both at the price seen        fees 22.22 + 22.22
+           profit 0.57 x 111,100 - 44.44 = 63,327.00 - 44.44 = 63,282.56
+        D  1,111 contracts  bought 4.57  sold 4.0004, both at the price seen      no fees
+           profit -0.5696 x 111,100 = -63,282.56, which takes back all of C
+        E  1 contract       bought 1.00  sold 0.9999, both at the price seen      no fees
+           profit -0.0001 x 100 = -0.01
+    """
+    trades = (
+        a_trade(
+            "a",
+            entry=("2.00437", "2.03"),
+            exit=("2.617", "2.58"),
+            reason=ExitReason.EXIT_TIME,
+            contracts=1237,
+            fees=("24.74", "24.74"),
+        ),
+        a_trade(
+            "a",
+            entry=("3.00219", "3.07"),
+            exit=("2.411", "2.37"),
+            reason=ExitReason.STOP,
+            contracts=2513,
+            fees=("50.26", "50.26"),
+        ),
+        a_trade(
+            "a",
+            entry=("4.00", "4.00"),
+            exit=("4.57", "4.57"),
+            reason=ExitReason.EXIT_TIME,
+            contracts=1111,
+            fees=("22.22", "22.22"),
+        ),
+        a_trade("a", entry=("4.57", "4.57"), exit=("4.0004", "4.0004"), reason=ExitReason.EXIT_TIME, contracts=1111),
+        a_trade("a", entry=("1.00", "1.00"), exit=("0.9999", "0.9999"), reason=ExitReason.EXIT_TIME),
+    )
+    cash = ("1234567.89", "1302553.41", "1126542.89", "1189825.45", "1126542.89")
+    return [
+        a_session(day, before, status=SessionStatus.TRADED, trades=(trade,))
+        for day, before, trade in zip(OCTOBER, cash, trades, strict=False)
+    ]
+
+
+def test_a_summary_is_the_same_in_a_six_digit_decimal_context_as_in_the_default_one() -> None:
+    sessions, starting = _big_scene(), D("1234567.89")
+    in_the_default_context = summarize_run(sessions, starting_cash_usd=starting)
+
+    with localcontext(Context(prec=6)):
+        in_a_small_one = summarize_run(sessions, starting_cash_usd=starting)
+
+    assert in_a_small_one == in_the_default_context
+    # And what the summary says is the hand-worked sum, none of it rounded to six digits:
+    #   gross profit 67,985.52 + 63,282.56 = 131,268.08;  gross loss 176,010.52 + 63,282.56 + 0.01 = 239,293.09;
+    #   net 131,268.08 - 239,293.09 = -108,025.01;  fees 49.48 + 100.52 + 44.44 = 194.44;
+    #   slippage 7,747.331 + 27,343.953 = 35,091.284;  ending cash 1,234,567.89 - 108,025.01 = 1,126,542.88.
+    assert (in_a_small_one.gross_profit_usd, in_a_small_one.gross_loss_usd) == (D("131268.08"), D("239293.09"))
+    assert (in_a_small_one.net_profit_usd, in_a_small_one.total_fees_usd) == (D("-108025.01"), D("194.44"))
+    assert in_a_small_one.slippage_paid_usd == D("35091.284")
+    assert in_a_small_one.ending_cash_usd == D("1126542.88")
+    # Equity: 1,234,567.89 + 67,985.52 = 1,302,553.41 after A (the peak), - 176,010.52 = 1,126,542.89 after B,
+    # + 63,282.56 = 1,189,825.45 after C, - 63,282.56 = 1,126,542.89 after D, - 0.01 = 1,126,542.88 after E.
+    # B's fall from the peak is 176,010.52 and E's is 176,010.53: a cent more, so E is the worst, though six digits
+    # cannot tell the two apart.
+    assert in_a_small_one.drawdown_by_fraction == in_a_small_one.drawdown_by_dollars
+    drawdown = in_a_small_one.drawdown_by_fraction
+    assert drawdown is not None
+    assert (drawdown.peak_equity_usd, drawdown.trough_equity_usd, drawdown.fall_usd) == (
+        D("1302553.41"),
+        D("1126542.88"),
+        D("176010.53"),
+    )
+    assert drawdown.trough_date == OCTOBER[4]
+    assert drawdown.fall_ratio == Ratio(D("176010.53"), D("1302553.41"))
 
 
 def test_the_summary_is_exact_dollars_and_never_a_float() -> None:
