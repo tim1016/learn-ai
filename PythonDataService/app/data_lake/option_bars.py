@@ -9,7 +9,7 @@ ten-thousandths of a dollar. The vendor stamps a bar with its start and the
 lake keeps that; turning a start into a close is the replay's one conversion.
 
 ``ensure_option_day_bars`` mirrors ``ensure_data._process_minute_trade_artifact``
-step by step. Four things differ, all on purpose:
+step by step. Five things differ, all on purpose:
 
 * A contract that was listed and never traded that session gets an empty answer
   from the vendor. That is a fact, not a failure: it is published as a complete
@@ -27,6 +27,10 @@ step by step. Four things differ, all on purpose:
   the vendor's data is delayed and an empty answer stored too early would be a permanent wrong
   "never traded".
 * The vendor's digits go to the stored integer as decimals, never through a float.
+* Every bar must start on a whole minute (:func:`_require_whole_minute_starts`). A bar is named by its
+  close, its start plus a minute, and a start between two minutes gives a close on no minute, which
+  no replay can place in a session. The stock path does not check this; for an option the answer
+  fails the day, like any other corrupt vendor answer.
 
 ``read_option_day_bars`` reads only bytes the catalog admits, so it needs the catalog
 reachable, the lake root's identity marker and a thread with no running event loop
@@ -100,6 +104,7 @@ logger = logging.getLogger(__name__)
 _ET = ZoneInfo("America/New_York")
 #: A bar's start and its four prices as the file writes them: digits and nothing else.
 _UNSIGNED_INTEGER = re.compile(r"[0-9]+")
+_MS_PER_MINUTE = 60_000
 
 
 def option_minute_trade_dch() -> str:
@@ -369,6 +374,22 @@ def _require_exact_price_relations(bars: Sequence[PolygonOptionBar], *, symbol: 
             )
 
 
+def _require_whole_minute_starts(bars: Sequence[PolygonOptionBar], *, symbol: str, trading_date: date) -> None:
+    """Every bar starts on a whole minute; the first that does not fails the day, named by its index and ``t_ms``.
+
+    The publication gate checks the order and the date of the starts, not that a start is a minute and not between
+    two, and the file stores a start as it came. A bar is named by its close, its start plus a minute, so a start
+    off the minute gives a close on no minute, and no replay can place the bar in a session. Nothing is repaired or
+    dropped.
+    """
+    for index, bar in enumerate(bars):
+        if bar.t_ms % _MS_PER_MINUTE:
+            raise CorruptVendorBarsError(
+                f"corrupt vendor minute bars for {symbol} {trading_date.isoformat()}: "
+                f"bar[{index}] t_ms={bar.t_ms}: does not start on a whole minute"
+            )
+
+
 def _publication_gate_view(bars: Sequence[PolygonOptionBar]) -> list[PolygonBar]:
     """The bars in the shape the lake's publication gate takes.
 
@@ -524,6 +545,7 @@ async def ensure_option_day_bars(
     try:
         _require_exact_price_relations(bars, symbol=symbol, trading_date=trading_date)
         assert_publishable_minute_bars(_publication_gate_view(bars), symbol=symbol, trading_date=trading_date)
+        _require_whole_minute_starts(bars, symbol=symbol, trading_date=trading_date)
     except CorruptVendorBarsError as e:
         return await fail("validation_failed", str(e))
 
