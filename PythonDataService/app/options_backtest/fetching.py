@@ -36,18 +36,24 @@ asks again for up to ``OTHER_REQUEST_WAIT_SECONDS``, and only then is it ``anoth
 Saying so. While a capture waits for a day another request is fetching nothing else moves: the phase, the progress and
 the log stay as they were, and a healthy run would look hung for as long as six minutes. The captures run on the
 background loop and do not call the job's log hook, so each batch keeps a count of the captures that are waiting on
-another request (``_Batch``), changed only where a capture decides to wait and where it carries on. The job's own
-thread reads it once a slice and writes ``WAITING_FOR_ANOTHER_REQUEST`` when it goes from none to some, and
-``THE_OTHER_REQUEST_FINISHED`` when it goes back to none, so a wait is said once and its end once. A capture that gives
-up, is stopped or meets another failure is not carrying on and stays counted, so a run that fails never says it goes on.
+another request (``_Batch``): a capture is counted from its first ``lease_timeout`` to the moment it leaves the wait,
+however it leaves, and a batch notes when a capture of it has failed. The job's own thread reads the count once a
+slice and writes ``WAITING_FOR_ANOTHER_REQUEST`` when it goes from none to some, and ``THE_OTHER_REQUEST_FINISHED``
+when it goes back to none, so a wait is said once and its end once. Neither line is ever untrue: the count is of the
+captures waiting now, so a wait that began and ended between two looks is not announced afterwards, and the second line
+is written only when no capture of the batch has failed and the phase was not told to stop, so a run that is failing or
+stopping never says it carries on.
 
 Liveness. The job's lease is renewed only by an emit or a stop poll, so no wait here is longer than
 ``STOP_POLL_SECONDS`` without asking ``should_stop``. A yes while contract requests are in flight lets those finish
-(a capture cut off half way could leave a file with no receipt), starts no other, and ends the phase when they have, or
-after ``STOP_GRACE_SECONDS`` at the latest. The same holds when a wait runs out: the batch is told to stop before the
-run is failed, so nothing keeps asking the vendor for a run that has ended. The underlying's chunk is one call of the
-lake with no way to cut it short: a stop abandons it, and the chunk's requests already begun (at most one chunk of
-days) finish in the background.
+(a request cut off half way could leave a file with no receipt), starts no other, and ends the phase when they have, or
+after ``STOP_GRACE_SECONDS`` at the latest; a capture still running then is cancelled as a last resort, and the row it
+had claimed stays ``fetching`` until its lease ends (``LEASE_TTL_MS``), after which the next ask for that day takes it
+over. The same holds when a wait runs out: the batch is told to stop before the run is failed, and so it is when the
+job's thread leaves a wait by an exception, so nothing keeps asking the vendor for a run that has ended. The
+underlying's chunk is one call of the lake with no way to cut it short: a stop abandons it, and the thread that runs it
+goes on in the background through the rest of the chunk's sessions, up to ``UNDERLYING_CHUNK_SESSIONS`` stock requests,
+whose days are stored for a rerun to reuse.
 
 The functions of the lake that fetch options are coroutines whose catalog pool belongs to one event loop; a worker
 thread has none. The phase hands each coroutine to the process's background loop, opens that loop's pool first, and
@@ -217,26 +223,38 @@ def ensure_run_data(
 class _Batch:
     """What a piece of work on the background loop shares with the thread waiting for it.
 
-    A stop the thread sets and the coroutine reads, and how many of its captures are waiting for another request. The
-    count is changed on the loop and read on the thread, so it is held under a lock.
+    A stop the thread sets and the coroutine reads, how many of its captures are waiting for another request, and
+    whether any capture of it has failed. The count and the note are changed on the loop and read on the thread, so
+    they are held under a lock.
     """
 
     def __init__(self) -> None:
         self.stop = threading.Event()
         self._lock = threading.Lock()
         self._waiting = 0
+        self._failed = False
 
     def begins_to_wait(self) -> None:
         with self._lock:
             self._waiting += 1
 
-    def carries_on(self) -> None:
+    def ends_the_wait(self) -> None:
         with self._lock:
             self._waiting -= 1
 
     def is_waiting(self) -> bool:
         with self._lock:
             return self._waiting > 0
+
+    def fails(self) -> None:
+        """A capture of this batch ended in a failure, or in an error."""
+        with self._lock:
+            self._failed = True
+
+    def is_carrying_on(self) -> bool:
+        """Whether a wait that has ended did so because the other request finished and the batch goes on."""
+        with self._lock:
+            return not self._failed and not self.stop.is_set()
 
 
 class _Download:
@@ -434,13 +452,22 @@ class _Download:
         return self._wait(future, batch=batch, give_up_after=give_up_after, session=session, what=what)
 
     def _say_if_waiting_changed(self, batch: _Batch, said_waiting: bool) -> bool:
-        """Write the line for a wait that has begun or ended since the last look; return whether one is going on."""
+        """Write the line for a wait that has begun or ended since the last look; return whether one has been said
+        and not yet closed.
+
+        The count is of the captures that are waiting now, so a wait that began and ended between two looks is never
+        announced after the fact, and the end of a wait is not announced as carrying on once a capture has failed or
+        the batch has been told to stop.
+        """
         waiting = batch.is_waiting()
         if waiting and not said_waiting:
             self._log(WAITING_FOR_ANOTHER_REQUEST)
-        elif said_waiting and not waiting:
-            self._log(THE_OTHER_REQUEST_FINISHED)
-        return waiting
+            return True
+        if said_waiting and not waiting:
+            if batch.is_carrying_on():
+                self._log(THE_OTHER_REQUEST_FINISHED)
+            return False
+        return said_waiting
 
     def _wait[T](
         self,
@@ -458,38 +485,46 @@ class _Download:
         cancelled as a last resort. A work with no batch (the underlying's chunk) is abandoned at once. A yes then
         raises ``DownloadStopped``; a wait that ran out raises ``DownloadFailed``. Whatever the future raised on its
         own propagates. After each slice the log is told if the batch has begun to wait for another request or has
-        stopped waiting.
+        stopped waiting. If the thread leaves the wait by any other exception (a log hook or a stop poll that fails),
+        the batch is told to stop first, so the captures begin no request after it.
         """
         deadline = self._pace.now() + give_up_after
         grace = STOP_GRACE_SECONDS if batch is not None else 0.0
         told_at: float | None = None
         stopped = False
         said_waiting = False
-        while True:
-            self._pace.wait_for(future, STOP_POLL_SECONDS)
-            if batch is not None:
-                said_waiting = self._say_if_waiting_changed(batch, said_waiting)
-            if future.done():
-                break
-            now = self._pace.now()
-            if told_at is None:
-                stopped = self._should_stop()
-                if not stopped and now < deadline:
-                    continue
-                told_at = now
+        try:
+            while True:
+                self._pace.wait_for(future, STOP_POLL_SECONDS)
                 if batch is not None:
-                    batch.stop.set()
-            if now - told_at >= grace:
-                break
-        if told_at is None:
-            return future.result()
-        if not future.done():
-            future.cancel()
-        if stopped:
-            raise DownloadStopped(self._done)
-        raise DownloadFailed(
-            session=session, what=what, reason=TOOK_TOO_LONG, detail=f"not finished after {give_up_after} seconds"
-        )
+                    said_waiting = self._say_if_waiting_changed(batch, said_waiting)
+                if future.done():
+                    break
+                now = self._pace.now()
+                if told_at is None:
+                    stopped = self._should_stop()
+                    if not stopped and now < deadline:
+                        continue
+                    told_at = now
+                    if batch is not None:
+                        batch.stop.set()
+                if now - told_at >= grace:
+                    break
+            if told_at is None:
+                return future.result()
+            if not future.done():
+                future.cancel()
+            if stopped:
+                raise DownloadStopped(self._done)
+            raise DownloadFailed(
+                session=session, what=what, reason=TOOK_TOO_LONG, detail=f"not finished after {give_up_after} seconds"
+            )
+        except BaseException:
+            # Nothing waits for this batch any more, so nothing of it may start a request: the stop is a flag the
+            # coroutines read, and setting it again after the paths above set it is harmless.
+            if batch is not None:
+                batch.stop.set()
+            raise
 
 
 def _in_a_thread[T](work: Callable[[], T], *, name: str) -> Future[T]:
@@ -575,27 +610,34 @@ async def _ask_until_nobody_else_is_fetching(
     The lake answers ``lease_timeout`` while another worker holds the row it wants. That is not a failure yet: the
     gate is let go, the capture waits ``OTHER_REQUEST_POLL_SECONDS`` and asks again, until
     ``OTHER_REQUEST_WAIT_SECONDS`` have passed, when the last ``lease_timeout`` is returned. The batch counts the
-    capture as waiting from the first ``lease_timeout`` until an ask succeeds; one that gives up, is stopped or meets
-    another failure stays counted, since the run is not carrying on.
+    capture as waiting from the first ``lease_timeout`` until it leaves the wait, whichever way it leaves, and notes
+    when a capture's answer is a failure, so the job's thread can tell a wait that ended well from one that did not.
     """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + OTHER_REQUEST_WAIT_SECONDS
     waiting = False
-    while True:
-        if batch.stop.is_set() or halt():
-            return None
-        async with vendor_request_gate():
+    try:
+        while True:
             if batch.stop.is_set() or halt():
                 return None
-            result = await ask()
-        failure = result.failure
-        if failure is None or failure.reason != "lease_timeout":
-            if waiting and failure is None:
-                batch.carries_on()
-            return result
-        if loop.time() >= deadline:
-            return result
-        if not waiting:
-            batch.begins_to_wait()
-            waiting = True
-        await asyncio.sleep(OTHER_REQUEST_POLL_SECONDS)
+            async with vendor_request_gate():
+                if batch.stop.is_set() or halt():
+                    return None
+                result = await ask()
+            failure = result.failure
+            if failure is None:
+                return result
+            if failure.reason != "lease_timeout" or loop.time() >= deadline:
+                batch.fails()
+                return result
+            if not waiting:
+                batch.begins_to_wait()
+                waiting = True
+            await asyncio.sleep(OTHER_REQUEST_POLL_SECONDS)
+    except Exception:
+        # Noted before the capture leaves the wait, so the thread never sees a wait that ended with nothing wrong.
+        batch.fails()
+        raise
+    finally:
+        if waiting:
+            batch.ends_the_wait()

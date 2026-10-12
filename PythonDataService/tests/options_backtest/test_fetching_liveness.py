@@ -29,7 +29,7 @@ import pytest
 import respx
 
 from app.data_lake.option_bars import option_minute_trade_dch
-from app.data_lake.option_lake import MAX_VENDOR_REQUESTS_IN_FLIGHT
+from app.data_lake.option_lake import LEASE_TTL_MS, MAX_VENDOR_REQUESTS_IN_FLIGHT
 from app.data_lake.option_listing import ensure_option_listing, option_listing_dch
 from app.data_lake.run_materialization import materialize_engine_run
 from app.data_lake.types import ArtifactIdentity
@@ -226,11 +226,11 @@ FINISHED = "The other request has finished; carrying on."
 ANOTHER_WORKER = "another-worker"
 
 
-def _the_500_call(day: date) -> OptionContract:
-    return OptionContract.of(root="SPY", expiry_date=day, right="call", strike=500)
+def _the_call(day: date, strike: int = 500) -> OptionContract:
+    return OptionContract.of(root="SPY", expiry_date=day, right="call", strike=strike)
 
 
-async def _another_worker_holds(fake_catalog: FakeCatalog, what: str, day: date) -> None:
+async def _another_worker_holds(fake_catalog: FakeCatalog, what: str, day: date, *, strike: int = 500) -> None:
     if what == "a listing":
         claimed = await fake_catalog.claim_metadata_artifact(
             ArtifactIdentity(
@@ -252,7 +252,7 @@ async def _another_worker_holds(fake_catalog: FakeCatalog, what: str, day: date)
         ArtifactIdentity(
             artifact_kind="time_series_bars",
             market="usa_options",
-            symbol=_the_500_call(day).occ_symbol,
+            symbol=_the_call(day, strike).occ_symbol,
             trading_date=day,
             resolution="minute",
             data_type="trade",
@@ -368,6 +368,112 @@ async def test_a_wait_that_runs_out_says_it_began_once_and_never_that_the_run_ca
     assert [line for line in lines if line in (WAITING, FINISHED)] == [WAITING]
 
 
+# The two lines are only ever true. The first is written while a capture really is waiting and the phase is still going,
+# and the second only when the wait ended and no capture of the batch has failed.
+
+
+@respx.mock
+async def test_a_wait_that_began_and_ended_before_the_job_looked_is_not_announced_once_the_run_is_over(
+    fake_catalog: FakeCatalog, tmp_lake: Path, quick: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # One contract, held by another request. The job looks every 3 seconds, and the run is over in about a tenth: the
+    # other request ends at 0.1 s, the capture takes its row over at the next ask (0.02 s on) and the vendor refuses it
+    # (429). The first look comes when the run has failed, so no line is written, neither "waiting" nor "carrying on".
+    Vendor({WED: ladder_day()}, option_errors={"SPY261007C00500000": 429}).mount()
+    await _store_the_underlying_and_the_listing_of(WED, listing=True)
+    await _another_worker_holds(fake_catalog, "a contract day", WED)
+    monkeypatch.setattr(fetching, "STOP_POLL_SECONDS", 3.0)
+    monkeypatch.setattr(fetching, "OTHER_REQUEST_WAIT_SECONDS", 20.0)
+    lines: list[str] = []
+    threading.Timer(0.1, _let_go_of_what_another_worker_holds, args=(fake_catalog,)).start()
+
+    with pytest.raises(DownloadFailed) as caught:
+        await _run([WED], setup=the_money_call(), on_log=lines.append)
+
+    assert caught.value.reason == "provider_rate_limited"
+    assert [line for line in lines if line in (WAITING, FINISHED)] == []
+
+
+@respx.mock
+async def test_a_wait_that_ends_while_another_capture_has_failed_never_says_the_run_carries_on(
+    fake_catalog: FakeCatalog, tmp_lake: Path, quick: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Two contracts, the 499 call and the 501 call, each request taking 0.4 s. The 499 call is held by another request
+    # and waits; the job says so at its first look (0.05 s) and the other request ends then. The 499 call takes its row
+    # over at the next ask (0.02 s on) and its request ends at about 0.42 s. The 501 call was asked at the start, is
+    # refused by the vendor (500) and fails at 0.4 s. So the wait ends, at 0.42 s, with a capture failed: the run fails
+    # and the log says waiting once and never that it carries on.
+    Vendor({WED: ladder_day()}, option_latency_s=0.4, option_errors={"SPY261007C00501000": 500}).mount()
+    await _store_the_underlying_and_the_listing_of(WED, listing=True)
+    await _another_worker_holds(fake_catalog, "a contract day", WED, strike=499)
+    monkeypatch.setattr(fetching, "OTHER_REQUEST_WAIT_SECONDS", 20.0)
+    lines: list[str] = []
+
+    def on_log(line: str) -> None:
+        lines.append(line)
+        if line == WAITING:
+            _let_go_of_what_another_worker_holds(fake_catalog)
+
+    with pytest.raises(DownloadFailed) as caught:
+        await _run([WED], setup=eight_legs_setup(steps=(-1, 1)), on_log=on_log)
+
+    assert caught.value.reason == "provider_api_error"
+    assert [line for line in lines if line in (WAITING, FINISHED)] == [WAITING]
+
+
+@respx.mock
+async def test_a_wait_that_ends_because_the_run_was_told_to_stop_never_says_it_carries_on(
+    fake_catalog: FakeCatalog, tmp_lake: Path, quick: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # One contract, held by another request for good. The job says it is waiting at its first look and is told to stop
+    # at the same look; the capture hears the stop at its next ask (0.02 s on) and leaves the wait. The wait has ended,
+    # and not because the other request finished: the log has the first line and never the second.
+    Vendor({WED: ladder_day()}).mount()
+    await _store_the_underlying_and_the_listing_of(WED, listing=True)
+    await _another_worker_holds(fake_catalog, "a contract day", WED)
+    monkeypatch.setattr(fetching, "OTHER_REQUEST_WAIT_SECONDS", 20.0)
+    lines: list[str] = []
+
+    with pytest.raises(DownloadStopped):
+        await _run([WED], setup=the_money_call(), should_stop=lambda: WAITING in lines, on_log=lines.append)
+
+    assert [line for line in lines if line in (WAITING, FINISHED)] == [WAITING]
+
+
+@respx.mock
+async def test_a_capture_that_waits_for_another_request_asks_again_only_once_every_poll(
+    fake_catalog: FakeCatalog, tmp_lake: Path, quick: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A wait of 0.5 s that asks again every 0.1 s asks at 0, 0.1, 0.2, 0.3, 0.4 and, at the deadline, once more: six
+    # times at the most. A wait that did not pause between asks would ask thousands of times.
+    Vendor({WED: ladder_day()}).mount()
+    await _store_the_underlying_and_the_listing_of(WED, listing=True)
+    await _another_worker_holds(fake_catalog, "a contract day", WED)
+    monkeypatch.setattr(fetching, "OTHER_REQUEST_POLL_SECONDS", 0.1)
+    monkeypatch.setattr(fetching, "OTHER_REQUEST_WAIT_SECONDS", 0.5)
+    asks = 0
+    capture = fetching.ensure_option_day_bars
+
+    async def counted_capture(*args: Any, **kwargs: Any) -> Any:
+        nonlocal asks
+        asks += 1
+        return await capture(*args, **kwargs)
+
+    monkeypatch.setattr(fetching, "ensure_option_day_bars", counted_capture)
+
+    with pytest.raises(DownloadFailed):
+        await _run([WED], setup=the_money_call())
+
+    assert 2 <= asks <= 6
+
+
+def test_a_capture_waits_for_another_request_for_longer_than_the_lake_lets_a_request_hold_a_row() -> None:
+    # The lake's lease on a row is 300 000 ms = 300 s. A request that died while fetching holds its row for that long,
+    # and the next ask takes it over only after; a wait of 300 s and a minute (360 s) outlasts it. A shorter wait would
+    # fail a run for a row that was about to be free.
+    assert fetching.OTHER_REQUEST_WAIT_SECONDS > LEASE_TTL_MS / 1000
+
+
 # ── A phase that has stopped asks for nothing more ───────────────────────
 
 
@@ -421,6 +527,116 @@ async def test_a_failure_in_a_batch_ends_the_phase_and_nothing_keeps_asking_the_
     assert caught.value.reason == "provider_rate_limited"
     assert len(vendor.option_requests) == 4
     await _the_vendor_is_asked_for_nothing_more(vendor)
+
+
+class _HookFailed(Exception):
+    pass
+
+
+@pytest.mark.parametrize("hook", ["the log", "the stop poll"])
+@respx.mock
+async def test_a_wait_the_jobs_thread_leaves_by_an_exception_stops_its_batch_so_the_vendor_is_asked_for_nothing_after_it(
+    hook: str, fake_catalog: FakeCatalog, tmp_lake: Path, quick: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Eight contracts, four places, 0.4 s a request. The 496 call is held by another request: it waits, and never asks
+    # the vendor. The other seven are asked four at a time, so four requests are in flight when the job's first look
+    # (0.05 s) finds the wait and the hook fails; the three still queued must never be asked. Without the stop, they
+    # are asked as the first four finish (0.4 s), and the count goes from 4 to 7.
+    vendor = Vendor({WED: ladder_day()}, option_latency_s=0.4)
+    vendor.mount()
+    await _store_the_underlying_and_the_listing_of(WED, listing=True)
+    await _another_worker_holds(fake_catalog, "a contract day", WED, strike=496)
+    monkeypatch.setattr(fetching, "OTHER_REQUEST_WAIT_SECONDS", 20.0)
+
+    def on_log(line: str) -> None:
+        if hook == "the log" and line == WAITING:
+            raise _HookFailed("the log could not be written")
+
+    def should_stop() -> bool:
+        if hook == "the stop poll" and vendor.option_requests:
+            raise _HookFailed("the stop poll could not be read")
+        return False
+
+    with pytest.raises(_HookFailed):
+        await _run([WED], setup=eight_legs_setup(), should_stop=should_stop, on_log=on_log)
+
+    asked = len(vendor.option_requests)
+    await asyncio.sleep(0.9)  # two requests' time
+    assert (asked, len(vendor.option_requests)) == (4, 4)
+
+
+@respx.mock
+async def test_an_error_in_one_capture_of_a_batch_stops_the_others_before_they_ask_the_vendor(
+    fake_catalog: FakeCatalog, tmp_lake: Path, quick: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Eight contracts, four places, 0.4 s a request. The first four hold the places: the 496, 498 and 499 calls ask
+    # the vendor, and the 497 call's capture raises after 0.1 s. The four queued behind it must then find the batch
+    # broken and ask for nothing: three requests in all. Without that, the 501 call takes the freed place and the
+    # count goes to 7.
+    vendor = Vendor({WED: ladder_day()}, option_latency_s=0.4)
+    vendor.mount()
+    capture = fetching.ensure_option_day_bars
+
+    async def raises_for_the_497_call(contract: OptionContract, day: date, **kwargs: Any) -> Any:
+        if int(contract.strike) == 497:
+            await asyncio.sleep(0.1)
+            raise RuntimeError("the lake broke")
+        return await capture(contract, day, **kwargs)
+
+    monkeypatch.setattr(fetching, "ensure_option_day_bars", raises_for_the_497_call)
+
+    with pytest.raises(RuntimeError, match="the lake broke"):
+        await _run([WED])
+
+    await asyncio.sleep(0.9)  # two requests' time
+    assert len(vendor.option_requests) == 3
+
+
+@respx.mock
+async def test_a_request_that_never_comes_back_is_cancelled_after_the_grace_and_its_row_stays_fetching_until_its_lease_ends(
+    fake_catalog: FakeCatalog, tmp_lake: Path, quick: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Eight contracts, four places, and a vendor that never answers: the first four (the 496 to 499 calls) are asked and
+    # their rows claimed. The stop is heard at the first look, the grace (0.3 s) passes and the captures are cancelled.
+    # The vendor then answers, too late for anything that was cut off: had the cancel not happened, the four captures
+    # would finish and their rows would read complete. They are cut off, so the four rows are still fetching, and
+    # nothing was asked beyond the four.
+    monkeypatch.setattr(fetching, "STOP_GRACE_SECONDS", 0.3)
+    never = threading.Event()
+    vendor = Vendor({WED: ladder_day()}, option_release=never)
+    vendor.mount()
+
+    with pytest.raises(DownloadStopped):
+        await _run([WED], should_stop=lambda: len(vendor.option_requests) >= 1)
+    never.set()
+    await asyncio.sleep(0.5)
+
+    assert _contract_day_rows(fake_catalog) == [
+        ("SPY261007C00496000", "fetching"),
+        ("SPY261007C00497000", "fetching"),
+        ("SPY261007C00498000", "fetching"),
+        ("SPY261007C00499000", "fetching"),
+    ]
+    assert len(vendor.option_requests) == 4
+
+    # Once their lease has ended, the next ask for those days takes them over: with the other four contracts that is
+    # eight days fetched, and every row reads complete.
+    for row in list(fake_catalog.rows.values()):
+        if row["status"] == "fetching":
+            row["lease_expires_at_ms"] = 0
+    report = await _run([WED])
+
+    assert report.option_days_fetched == 8
+    assert {status for _, status in _contract_day_rows(fake_catalog)} == {"complete"}
+
+
+def _contract_day_rows(fake_catalog: FakeCatalog) -> list[tuple[str, str]]:
+    """The catalog's row of each option contract day, by symbol: a snapshot, as the captures add rows from a thread."""
+    return sorted(
+        (row["symbol"], row["status"])
+        for row in list(fake_catalog.rows.values())
+        if row["market"] == "usa_options" and row["artifact_kind"] == "time_series_bars"
+    )
 
 
 # ── A phase that waits asks whether to stop, on a clock the test controls ─
