@@ -6,12 +6,15 @@ expectation is worked by hand and written as a literal.
 
 from __future__ import annotations
 
-from decimal import Context, localcontext
+from dataclasses import replace
+from decimal import ROUND_CEILING, Context, Decimal, localcontext
 
 import pytest
 
-from app.options_backtest.market import Picked
-from app.options_backtest.results import EventKind, SessionOutcome, SessionStatus
+from app.options.contract import OptionContract
+from app.options_backtest.market import MinuteBar, Picked, PickRefused
+from app.options_backtest.results import EventKind, Fill, SessionOutcome, SessionStatus
+from app.options_backtest.setup import LegSetup
 from tests.options_backtest._market import (
     FULL_CLOSE_MS,
     D,
@@ -195,6 +198,64 @@ def test_the_money_does_not_depend_on_the_ambient_decimal_precision() -> None:
 
     assert [t.pnl_usd for t in outcome.trades] == [D("-146.60"), D("13.40")]
     assert outcome.cash_change_usd == D("-133.20")
+
+
+def _sale_fee_rounded_up_to_the_cent(fill: Fill) -> Decimal:
+    """A buy owes nothing. A sale owes 0.0000278 of its value, rounded up to the cent."""
+    if fill.side == "buy":
+        return D(0)
+    value = fill.filled * fill.multiplier * fill.contracts
+    return (value * D("0.0000278")).quantize(D("0.01"), rounding=ROUND_CEILING)
+
+
+def test_a_fee_that_rounds_to_the_cent_is_charged_and_does_not_crash_the_replay() -> None:
+    market = TableMarket(
+        underlying=steady("500"), picks=picked(("call", "500", CALL)), options={CALL: flat("1.50", 5, 61)}
+    )
+
+    outcome = replay(setup(leg()), market, fee_for=_sale_fee_rounded_up_to_the_cent)
+
+    # Bought at 1.50 in minute 6 and sold at 1.50 in minute 61: 1.50 * 100 = 150.00 each way.
+    # The sale's fee is 150.00 * 0.0000278 = 0.00417, which rounds up to 0.01.
+    trade = outcome.trades[0]
+    assert (trade.entry_fee_usd, trade.exit_fee_usd) == (D("0"), D("0.01"))
+    assert trade.pnl_usd == D("-0.01")  # (1.50 - 1.50) * 100 - 0.01
+    assert outcome.cash_change_usd == D("-0.01")  # -150.00 out, 149.99 back
+
+
+class _MarketThatRounds:
+    """A market whose three methods round, as a picker that snaps to a strike or a vendor adapter might."""
+
+    def __init__(self, inner: TableMarket) -> None:
+        self._inner = inner
+        self.session_open_ms = inner.session_open_ms
+        self.session_close_ms = inner.session_close_ms
+
+    def underlying_close(self, close_ms: int) -> Decimal | None:
+        price = self._inner.underlying_close(close_ms)
+        return None if price is None else (price + D("0.0049")).quantize(D("0.01"))
+
+    def pick(self, leg: LegSetup, *, at_ms: int, underlying_price: Decimal) -> Picked | PickRefused:
+        return self._inner.pick(leg, at_ms=at_ms, underlying_price=underlying_price.quantize(D("1")))
+
+    def option_bar(self, option: OptionContract, close_ms: int) -> MinuteBar | None:
+        bar = self._inner.option_bar(option, close_ms)
+        return None if bar is None else replace(bar, open=(bar.open + D("0.0049")).quantize(D("0.01")))
+
+
+def test_a_market_that_rounds_what_it_returns_does_not_crash_the_replay() -> None:
+    inner = TableMarket(
+        underlying=steady("500.40"), picks=picked(("call", "500", CALL)), options={CALL: flat("2.00", 5, 61)}
+    )
+
+    outcome = replay(setup(leg()), _MarketThatRounds(inner))
+
+    # The underlying 500.40 + 0.0049 rounds to 500.40, and the pick rounds that to the 500 strike: the call.
+    # Each bar opens at 2.00 + 0.0049, which rounds to 2.00: bought and sold at 2.00, so no profit.
+    assert [row(trade) for trade in outcome.trades] == [
+        ("call", 0, 6, D("2.00"), D("2.00"), "exit_time", 61, D("2.00"), D("2.00"))
+    ]
+    assert outcome.trades[0].pnl_usd == D("0.00")
 
 
 def _rich_session() -> SessionOutcome:

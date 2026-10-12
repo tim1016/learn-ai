@@ -28,13 +28,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from decimal import Decimal, localcontext
+from decimal import Context, Decimal, getcontext, localcontext
 from enum import Enum, auto
 from typing import Literal
 
 from app.options.contract import OptionContract
 from app.options_backtest import fills
-from app.options_backtest.market import MinuteBar, PickRefused, SessionMarket
+from app.options_backtest.market import MinuteBar, Picked, PickRefused, SessionMarket
 from app.options_backtest.results import (
     CASH_SHORT,
     CancelReason,
@@ -130,11 +130,18 @@ def replay_session(
     the run, which carries it from one session to the next. ``fee_for`` gives the fee in dollars
     for each fill, entries and exits alike. Raises ``ValueError`` for a session whose open or
     close is not on a whole minute: no bar could close at its exit time.
+
+    The replay's own arithmetic runs in an exact decimal context: a hundred digits, with ``Inexact``
+    trapped, so a figure too long to hold (a bar price of more than about a hundred digits) raises
+    ``decimal.Inexact`` and is never rounded. ``fee_for`` and the market's methods (``underlying_close``,
+    ``pick`` and ``option_bar``) are the caller's code and run in the decimal context the caller had
+    when it called, so a fee that rounds to the cent or a picker that rounds to a strike is ordinary use.
     """
     if market.session_open_ms % MS_PER_MINUTE or market.session_close_ms % MS_PER_MINUTE:
         raise ValueError("a session opens and closes on a whole minute: bars are named by the minute they close")
+    caller_context = getcontext().copy()
     with localcontext(fills.EXACT):
-        return _Session(setup, market, fee_for, cash_usd).run()
+        return _Session(setup, market, fee_for, cash_usd, caller_context).run()
 
 
 def _skipped(reason: SkipReason) -> SessionOutcome:
@@ -144,10 +151,18 @@ def _skipped(reason: SkipReason) -> SessionOutcome:
 class _Session:
     """The state of one session's replay. Built inside ``replay_session`` and gone when it returns."""
 
-    def __init__(self, setup: OptionsBacktestSetup, market: SessionMarket, fee_for: FeeFor, cash_usd: Decimal) -> None:
+    def __init__(
+        self,
+        setup: OptionsBacktestSetup,
+        market: SessionMarket,
+        fee_for: FeeFor,
+        cash_usd: Decimal,
+        caller_context: Context,
+    ) -> None:
         self.setup = setup
         self.market = market
         self.fee_for = fee_for
+        self.caller_context = caller_context
         self.start_cash = self.cash = cash_usd
         self.open_ms, self.close_ms = market.session_open_ms, market.session_close_ms
         self.entry_ms = setup.entry.at(session_open_ms=self.open_ms, session_close_ms=self.close_ms)
@@ -167,7 +182,7 @@ class _Session:
     def run(self) -> SessionOutcome:
         if not self.setup.window_fits(session_open_ms=self.open_ms, session_close_ms=self.close_ms):
             return _skipped(SkipReason.WINDOW_DOES_NOT_FIT)
-        underlying = self.market.underlying_close(self.entry_ms)
+        underlying = self._underlying_close(self.entry_ms)
         if underlying is None:
             return _skipped(SkipReason.UNDERLYING_DID_NOT_TRADE)
         for leg in self.legs:
@@ -201,10 +216,10 @@ class _Session:
         taken: dict[str, _Taken] = {}
         for leg in ordered:
             attempt = _attempt_of(leg)
-            bar = self.market.option_bar(attempt.contract, t)
+            bar = self._option_bar(attempt.contract, t)
             if bar is not None:
                 fill = self._fill(leg, attempt.contract, attempt.multiplier, "buy", t, bar)
-                taken[leg.setup.leg_id] = _Taken(bar, fill, self.fee_for(fill))
+                taken[leg.setup.leg_id] = _Taken(bar, fill, self._fee(fill))
         refused = sum((entry.cost for entry in taken.values()), start=Decimal(0)) > self.cash
         for leg in ordered:
             entry = taken.get(leg.setup.leg_id)
@@ -249,11 +264,11 @@ class _Session:
             if leg.phase is not _Phase.HELD:
                 continue
             position = _position_of(leg)
-            bar = self.market.option_bar(position.attempt.contract, t)
+            bar = self._option_bar(position.attempt.contract, t)
             if position.close is None or bar is None:
                 continue
             fill = self._fill(leg, position.attempt.contract, position.attempt.multiplier, "sell", t, bar)
-            fee = self.fee_for(fill)
+            fee = self._fee(fill)
             self.cash += fills.exit_proceeds(fill.filled, multiplier=fill.multiplier, contracts=fill.contracts, fee=fee)
             self._record(position, position.close, position.close.reason, fill, fee)
             self._event(EventKind.CLOSE_FILLED, t, leg, contract=fill.contract, price=fill.filled)
@@ -283,7 +298,7 @@ class _Session:
         for leg in self.legs:
             if leg.phase is _Phase.HELD:
                 position = _position_of(leg)
-                bar = self.market.option_bar(position.attempt.contract, t)
+                bar = self._option_bar(position.attempt.contract, t)
                 bars[leg.setup.leg_id] = bar
                 if bar is not None:
                     position.last_seen = Mark(t, bar.close)
@@ -377,7 +392,7 @@ class _Session:
 
     def _reenter(self, leg: _Leg, t: int) -> None:
         """Start a re-entry the leg has earned, once its close has filled. With no underlying price it waits a minute."""
-        underlying = self.market.underlying_close(t)
+        underlying = self._underlying_close(t)
         rule = leg.setup.reentry_on_stop
         assert rule is not None
         if underlying is not None:
@@ -388,7 +403,7 @@ class _Session:
 
     def _begin(self, leg: _Leg, t: int, underlying: Decimal, *, wait: bool) -> None:
         """Pick a contract for the leg's next attempt at ``t``; then buy at once or start waiting for momentum."""
-        picked = self.market.pick(leg.setup, at_ms=t, underlying_price=underlying)
+        picked = self._pick(leg.setup, t, underlying)
         if isinstance(picked, PickRefused):
             self._event(EventKind.PICK_REFUSED, t, leg, reason=picked.reason.value, detail=picked.detail)
             leg.phase = _Phase.DONE
@@ -399,7 +414,7 @@ class _Session:
             leg.attempt = _Attempt(picked.contract, picked.multiplier, None, None, at_once=True)
             leg.phase, leg.order_decided_at_ms = _Phase.ORDERED, t
             return
-        bar = self.market.option_bar(picked.contract, t)
+        bar = self._option_bar(picked.contract, t)
         if bar is None:
             self._event(EventKind.NO_STARTING_PRICE, t, leg, contract=picked.contract)
             leg.phase = _Phase.DONE
@@ -416,7 +431,7 @@ class _Session:
         attempt = _attempt_of(leg)
         momentum = leg.setup.momentum
         assert momentum is not None and attempt.momentum_level is not None
-        bar = self.market.option_bar(attempt.contract, t)
+        bar = self._option_bar(attempt.contract, t)
         if bar is not None and fills.momentum_reached(momentum, level=attempt.momentum_level, close=bar.close):
             self._event(EventKind.MOMENTUM_HIT, t, leg, contract=attempt.contract, price=bar.close)
             leg.phase, leg.order_decided_at_ms = _Phase.ORDERED, t
@@ -451,6 +466,24 @@ class _Session:
         else:
             status = SessionStatus.TRADED if trades else SessionStatus.NO_TRADE
         return SessionOutcome(status, None, trades, tuple(self.events), self.cash - self.start_cash)
+
+    # --- the caller's code ------------------------------------------------------------------------
+
+    def _underlying_close(self, close_ms: int) -> Decimal | None:
+        with localcontext(self.caller_context):
+            return self.market.underlying_close(close_ms)
+
+    def _pick(self, leg: LegSetup, at_ms: int, underlying_price: Decimal) -> Picked | PickRefused:
+        with localcontext(self.caller_context):
+            return self.market.pick(leg, at_ms=at_ms, underlying_price=underlying_price)
+
+    def _option_bar(self, contract: OptionContract, close_ms: int) -> MinuteBar | None:
+        with localcontext(self.caller_context):
+            return self.market.option_bar(contract, close_ms)
+
+    def _fee(self, fill: Fill) -> Decimal:
+        with localcontext(self.caller_context):
+            return self.fee_for(fill)
 
     # --- records ----------------------------------------------------------------------------------
 
