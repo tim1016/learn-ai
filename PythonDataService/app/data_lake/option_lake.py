@@ -50,7 +50,8 @@ These are recorded on the claimed row, which is failed and never left fetching:
 These come from the claim protocol, when nothing was fetched:
 
 * ``lease_timeout``: another worker holds the row, or this writer lost its lease while
-  fetching and published nothing.
+  working and published or recorded nothing: not a publish, and not a failure it met (a
+  failure it met is the row's only when it still holds the lease to record it).
 * ``fetch_timeout``: the row has spent its attempts; the vendor is not asked again.
 """
 
@@ -329,11 +330,26 @@ async def fail_row(
     """Fail the claimed row under its generation (fenced), and answer with the typed failure.
 
     The text is made storable first (:func:`storable_failure_text`), and the answer carries the text stored.
+    The catalog refuses the update when this writer no longer holds the generation (its lease was taken
+    over while it fetched or validated). Then the failure was not recorded and is not the row's: the row
+    is the new owner's, and the answer is ``lease_timeout``, as a publish by a writer that lost its lease
+    answers, never the failure this writer met.
     """
     detail = storable_failure_text(detail)
-    await catalog_client.fail_artifact(
+    recorded = await catalog_client.fail_artifact(
         artifact_id, reason, detail, worker_id=WORKER_ID, lease_generation=lease_generation
     )
+    if not recorded:
+        return OptionCaptureResult.failed(
+            OptionDataFailure(
+                "lease_timeout",
+                f"the lease on this row was taken over before this writer's failure ({reason}) could be recorded; "
+                "the row is the new owner's",
+                symbol,
+                trading_date,
+                attempt_count=1,
+            )
+        )
     return OptionCaptureResult.failed(OptionDataFailure(reason, detail, symbol, trading_date, attempt_count=1))
 
 

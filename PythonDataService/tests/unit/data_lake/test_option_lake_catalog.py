@@ -586,6 +586,66 @@ async def test_a_complete_row_whose_file_has_gone_is_refreshed_under_a_new_gener
     assert (row["Status"], row["LeaseGeneration"], row["AttemptCount"]) == ("complete", 2, 2)
 
 
+async def _another_worker_takes_the_row() -> None:
+    await _sql(
+        'UPDATE "DataLakeArtifacts" SET "LeaseGeneration" = "LeaseGeneration" + 1, "LeaseOwner" = \'the-winner\''
+        ' WHERE "Status" = \'fetching\''
+    )
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("answer", "would_have_been"),
+    [
+        (lambda: httpx.Response(401, text="no key"), "provider_auth_error"),
+        (lambda: httpx.Response(500, text="boom"), "provider_api_error"),
+        (lambda: _bars_ok([_bar(0, h=1.0)]), "validation_failed"),
+    ],
+    ids=["a 401", "a 500", "corrupt bars"],
+)
+async def test_a_stale_writers_vendor_failure_comes_back_as_lease_lost_and_the_row_is_the_new_owners_on_the_real_table(
+    answer: Any, would_have_been: str, clean_artifacts, pool, tmp_lake
+) -> None:
+    await _list(CONTRACT)
+
+    async def another_worker_takes_the_row_while_the_vendor_answers(request: httpx.Request) -> httpx.Response:
+        await _another_worker_takes_the_row()
+        return answer()
+
+    respx.get(url__regex=rf"https://api\.polygon\.io/v2/aggs/ticker/O:{SYMBOL}/range/1/minute/.*").mock(
+        side_effect=another_worker_takes_the_row_while_the_vendor_answers
+    )
+
+    result = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
+
+    assert result.record is None
+    assert result.failure is not None
+    assert result.failure.reason == "lease_timeout" != would_have_been
+    [row] = await _bar_rows()
+    assert (row["Status"], row["LeaseOwner"], row["LeaseGeneration"], row["LastError"]) == ("fetching", "the-winner", 2, None)
+    assert await catalog_client.fail_artifact(
+        row["Id"], "provider_api_error", "its own", worker_id="the-winner", lease_generation=2
+    )  # the new owner's lease is intact: it can still finish the row
+
+
+@respx.mock
+async def test_a_stale_writers_failure_on_a_listing_comes_back_as_lease_lost_and_the_row_is_the_new_owners_on_the_real_table(
+    clean_artifacts, pool, tmp_lake
+) -> None:
+    async def another_worker_takes_the_row_while_the_vendor_answers(request: httpx.Request) -> httpx.Response:
+        await _another_worker_takes_the_row()
+        return httpx.Response(401, text="no key")
+
+    respx.get(CONTRACTS_URL).mock(side_effect=another_worker_takes_the_row_while_the_vendor_answers)
+
+    result = await ensure_option_listing("SPY", TRADING_DAY)
+
+    assert result.record is None
+    assert result.failure is not None and result.failure.reason == "lease_timeout"
+    [row] = await _rows()
+    assert (row["Status"], row["LeaseOwner"], row["LeaseGeneration"], row["LastError"]) == ("fetching", "the-winner", 2, None)
+
+
 @respx.mock
 async def test_a_writer_whose_lease_was_taken_while_it_fetched_publishes_nothing_under_the_real_row_lock(
     clean_artifacts, pool, tmp_lake, monkeypatch: pytest.MonkeyPatch

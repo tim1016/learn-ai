@@ -1062,6 +1062,38 @@ async def test_a_failed_row_that_spent_its_retries_is_a_timeout(fake_catalog: Fa
 
 
 @respx.mock
+@pytest.mark.parametrize(
+    ("answer", "would_have_been"),
+    [
+        (lambda: httpx.Response(401, text="no key"), "provider_auth_error"),
+        (lambda: httpx.Response(403, text="not entitled"), "provider_entitlement_error"),
+        (lambda: httpx.Response(500, text="boom"), "provider_api_error"),
+        (lambda: _page([]), "provider_no_data"),
+        (lambda: _page([STANDARD_ROWS[0], STANDARD_ROWS[0]]), "validation_failed"),
+    ],
+    ids=["a 401", "a 403", "a 500", "no contracts", "a ticker listed twice"],
+)
+async def test_a_stale_writers_failure_on_a_listing_comes_back_as_lease_lost_and_the_row_is_the_new_owners(
+    answer: Any, would_have_been: str, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    def another_worker_takes_the_row_while_the_vendor_answers(request: httpx.Request) -> httpx.Response:
+        [row] = fake_catalog.rows.values()
+        row.update(lease_generation=row["lease_generation"] + 1, lease_owner="the-winner")
+        return answer()
+
+    respx.get(CONTRACTS_URL).mock(side_effect=another_worker_takes_the_row_while_the_vendor_answers)
+
+    result = await ensure_option_listing("SPY", AS_OF)
+
+    assert result.record is None
+    assert result.failure is not None
+    assert result.failure.reason == "lease_timeout" != would_have_been
+    [row] = fake_catalog.rows.values()
+    assert (row["status"], row["lease_owner"], row["lease_generation"], row["last_error"]) == ("fetching", "the-winner", 2, None)
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+
+
+@respx.mock
 async def test_a_writer_that_lost_its_lease_publishes_nothing_and_does_not_fail_the_row(
     fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

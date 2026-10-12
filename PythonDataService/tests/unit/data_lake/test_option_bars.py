@@ -146,6 +146,13 @@ def _mock_vendor(*responses: httpx.Response, contract: str = SYMBOL) -> respx.Ro
     return route.mock(return_value=responses[0] if responses else _ok([_bar(0)], contract))
 
 
+def _mock_vendor_with(side_effect: Any, contract: str = SYMBOL) -> respx.Route:
+    """Answer every ask for the contract by calling ``side_effect(request)``."""
+    return respx.get(url__regex=rf"https://api\.polygon\.io/v2/aggs/ticker/O:{contract}/range/1/minute/.*").mock(
+        side_effect=side_effect
+    )
+
+
 def _listing_row(contract: OptionContract, underlying: str = "SPY") -> dict[str, Any]:
     """A listed contract exactly as the vendor sends it: nine keys, and no ``additional_underlyings``."""
     strike = contract.strike
@@ -1232,19 +1239,94 @@ def test_a_failure_text_loses_its_nuls_is_made_encodable_and_is_cut_to_the_store
     assert MAX_FAILURE_TEXT_CHARS > 200  # the vendor's body is cut to 200 elsewhere; this never clips that
 
 
+async def _claim_the_contract_day() -> int:
+    """This worker's own claim on the contract-day, at the first generation: the row a capture would fail."""
+    claimed = await catalog_client.claim_minute_bar(
+        identity=ArtifactIdentity(
+            artifact_kind="time_series_bars", market="usa_options", symbol=SYMBOL, trading_date=TRADING_DAY,
+            resolution="minute", data_type="trade", provider="polygon", price_adjustment_mode="raw",
+        ),
+        worker_id=option_lake_module.WORKER_ID, lease_ttl_ms=option_lake_module.LEASE_TTL_MS,
+        data_contract_hash=option_minute_trade_dch(), file_path=RELATIVE_PATH,
+    )
+    assert claimed is not None
+    return claimed
+
+
 async def test_fail_row_hands_the_catalog_the_cleaned_text_and_answers_with_it(
     fake_catalog: FakeCatalog, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     stored = refuse_what_postgres_refuses(monkeypatch)
+    artifact_id = await _claim_the_contract_day()
 
     result = await fail_row(
-        artifact_id=1, lease_generation=1, reason="provider_api_error", detail="bad\x00\ud800" + "y" * 5000,
-        symbol=SYMBOL, trading_date=TRADING_DAY,
+        artifact_id=artifact_id, lease_generation=catalog_client.INITIAL_LEASE_GENERATION, reason="provider_api_error",
+        detail="bad\x00\ud800" + "y" * 5000, symbol=SYMBOL, trading_date=TRADING_DAY,
     )
 
     assert result.failure is not None
     assert stored == [result.failure.detail] and stored[0].startswith("bad?y")
     assert len(stored[0]) == MAX_FAILURE_TEXT_CHARS
+
+
+async def test_a_failure_whose_lease_was_taken_over_is_not_recorded_and_is_answered_as_lease_lost(
+    fake_catalog: FakeCatalog,
+) -> None:
+    artifact_id = await _claim_the_contract_day()
+    fake_catalog.rows[artifact_id].update(lease_generation=2, lease_owner="the-winner")
+
+    result = await fail_row(
+        artifact_id=artifact_id, lease_generation=catalog_client.INITIAL_LEASE_GENERATION, reason="provider_auth_error",
+        detail="no key", symbol=SYMBOL, trading_date=TRADING_DAY,
+    )
+
+    assert result.record is None
+    assert result.failure is not None and result.failure.reason == "lease_timeout"
+    row = fake_catalog.rows[artifact_id]
+    assert (row["status"], row["lease_owner"], row["lease_generation"], row["last_error"]) == ("fetching", "the-winner", 2, None)
+
+
+#: What a writer that lost its lease can meet while it fetches or validates: the answer, and the reason it would have been failed with.
+_STALE_WRITER_MEETS = [
+    ("a 401", lambda: httpx.Response(401, text="no key"), "provider_auth_error"),
+    ("a 403", lambda: httpx.Response(403, text="not entitled"), "provider_entitlement_error"),
+    ("a 429", lambda: httpx.Response(429), "provider_rate_limited"),
+    ("a 404", lambda: httpx.Response(404), "unknown_symbol"),
+    ("a 500", lambda: httpx.Response(500, text="boom"), "provider_api_error"),
+    ("the plan's 403", outside_plan, "outside_data_plan"),
+    ("a malformed answer", lambda: bad_bars_answers(SYMBOL)["bare object"](), "provider_api_error"),
+    ("corrupt bars", lambda: _ok([_bar(0, h=1.0)]), "validation_failed"),
+]
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("answer", "would_have_been"), [(a, r) for _, a, r in _STALE_WRITER_MEETS], ids=[name for name, _, _ in _STALE_WRITER_MEETS]
+)
+async def test_a_stale_writers_vendor_failure_comes_back_as_lease_lost_and_the_row_is_whatever_the_new_owner_makes_it(
+    answer: Any, would_have_been: str, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """A writer whose lease was taken over while it fetched met a failure: it must not report it as the row's."""
+
+    def another_worker_takes_the_row_while_the_vendor_answers(request: httpx.Request) -> httpx.Response:
+        [row] = _bar_rows(fake_catalog)
+        row.update(lease_generation=row["lease_generation"] + 1, lease_owner="the-winner")
+        return answer()
+
+    _mock_vendor_with(another_worker_takes_the_row_while_the_vendor_answers)
+
+    result = await _ensure(now_ms=NOW_2026_10_12_MS)
+
+    assert result.record is None
+    assert result.failure is not None
+    assert result.failure.reason == "lease_timeout" != would_have_been
+    [row] = _bar_rows(fake_catalog)
+    assert (row["status"], row["lease_owner"], row["lease_generation"], row["last_error"]) == ("fetching", "the-winner", 2, None)
+    assert _lake_files(tmp_lake) == [] and _staged_files(tmp_lake) == []
+    # the new owner's own lease is intact: it can still finish the row
+    assert await catalog_client.fail_artifact(
+        row["id"], "provider_api_error", "its own", worker_id="the-winner", lease_generation=2
+    )
 
 
 @respx.mock
