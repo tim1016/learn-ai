@@ -22,11 +22,12 @@ from app.jobs.phases import friendly as friendly_phase
 from app.jobs.progress import CancellationCheck, JobCancelled, ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.lean_sidecar.trading_calendar import session_window_for_date
-from app.options_backtest import saved_runs, service
+from app.options_backtest import saved_runs, saved_setups, service
 from app.options_backtest.data_check import check_data
 from app.options_backtest.lake_check import LakeCheckData
 from app.options_backtest.run import RunResult
 from app.options_backtest.saved_runs import DbRunStore, DeleteOutcome, DuplicateJob, NewRun, RunFailure
+from app.options_backtest.saved_setups import SavedSetup
 from app.options_backtest.service import INTERNAL_ERROR, RunCancelled, RunFailedError, RunHooks, RunRefused
 from app.research.persistence import lifecycle
 from app.research.persistence.db import with_connection
@@ -61,6 +62,21 @@ RunId = Annotated[int, Path(ge=1, le=RUN_ID_MAX, description="The run's id, from
 def run_store() -> DbRunStore:
     """Where runs are saved. A function so a test can put another store in its place."""
     return DbRunStore()
+
+
+async def saved_setup(name: str) -> SavedSetup | None:
+    """The setup saved or shipped under ``name``, or ``None``. A function so a test can put another in its place."""
+    return await with_connection(saved_setups.get_setup, name)
+
+
+async def _name_the_run_may_carry(req: OptionsBacktestJobRequest) -> str | None:
+    """The name a run is recorded under: the one the caller sent, when a saved setup or a shipped example of that name
+    exists and is the setup the run was asked with, compared as validated setups and not as text. Otherwise none: a run
+    sent under a stale label is still a valid run, so this is no refusal."""
+    if req.setup_name is None:
+        return None
+    named = await saved_setup(req.setup_name)
+    return req.setup_name if named is not None and named.setup == req.setup else None
 
 
 def _refusal(exc: RunRefused) -> HTTPException:
@@ -187,13 +203,14 @@ async def start_options_backtest_job(req: OptionsBacktestJobRequest) -> OptionsB
     except RunRefused as exc:
         raise _refusal(exc) from exc
     store = run_store()
+    setup_name = await _name_the_run_may_carry(req)
     try:
         run_id = await store.create(
             NewRun(
                 job_id=req.job_id,
                 created_at_ms=now_ms_utc(),
                 setup=req.setup,
-                setup_name=req.setup_name,
+                setup_name=setup_name,
                 first_session_open_ms=session_window_for_date(sessions[0]).open_ms_utc,
                 last_session_open_ms=session_window_for_date(sessions[-1]).open_ms_utc,
                 sessions_requested=len(sessions),

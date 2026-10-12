@@ -42,6 +42,13 @@ END_MS_RULE = (
     "OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT."
 )
 
+# What a run's setup_name is: the run is kept under it only when it is true, and a name that is not is no refusal.
+RUN_SETUP_NAME_RULE = (
+    "The name the setup was saved under, when the run was started from one. The run is recorded under it only when a "
+    "saved setup or a shipped example of that name exists and is equal to the setup sent; otherwise the run is "
+    "recorded with no name, and is accepted all the same."
+)
+
 SessionStatusWord = Literal["traded", "no_trade", "skipped", "incomplete"]
 SkipReasonWord = Literal["window_does_not_fit", "underlying_did_not_trade"]
 ExitReasonWord = Literal["stop", "square_off", "exit_time", "marked_not_sold"]
@@ -650,7 +657,9 @@ class OptionsBacktestJobRequest(BaseModel):
     setup: OptionsBacktestSetup
     start_ms: Ms = Field(description=START_MS_RULE)
     end_ms: Ms = Field(description=END_MS_RULE)
-    setup_name: Annotated[str, Field(pattern=SETUP_NAME_PATTERN)] | None = None
+    setup_name: Annotated[str, Field(pattern=SETUP_NAME_PATTERN)] | None = Field(
+        default=None, description=RUN_SETUP_NAME_RULE
+    )
 
 
 class OptionsBacktestJobAcceptedResponse(BaseModel):

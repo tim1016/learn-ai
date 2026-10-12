@@ -45,6 +45,8 @@ from app.options_backtest.saved_runs import (
     create_run,
     fail_run,
 )
+from app.options_backtest.saved_setups import EXAMPLE_SETUPS, SavedSetup, save_setup
+from app.options_backtest.setup import OptionsBacktestSetup
 from app.research.persistence import lifecycle
 from app.routers import options_backtest_runs as runs_router
 from app.utils.background_loop import CallerStoppedWaitingError
@@ -59,9 +61,11 @@ from tests.options_backtest._run_data import fake_data
 from tests.options_backtest._run_lake import Vendor
 from tests.options_backtest.setup_fixtures import conn as conn
 from tests.options_backtest.setup_fixtures import leg, setup_body
+from tests.options_backtest.setup_fixtures import tag as tag
 from tests.options_backtest.setup_fixtures import unique as unique
 from tests.options_backtest.test_service import FRI, NOW_MS, SESSION_OF_THE_RANGE, THU, TUE, WED, the_scene, the_setup
 
+REAL_SAVED_SETUP = runs_router.saved_setup
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 PREFIX = "/api/research/options-backtest"
 JOBS = "/api/jobs-internal/options-backtest"
@@ -138,6 +142,15 @@ class FakeCancel:
 class Harness:
     store: MemoryRunStore
     started: list[tuple[str, Callable[..., Any], dict[str, Any]]] = field(default_factory=list)
+    # The setups the route finds saved, by name; none until a test saves one.
+    saved: dict[str, SavedSetup] = field(default_factory=dict)
+
+    def save(self, name: str, setup_json: dict[str, Any]) -> None:
+        setup = OptionsBacktestSetup.model_validate(setup_json)
+        self.saved[name] = SavedSetup(name=name, example=False, saved_at_ms=1, setup=setup, cannot_open_reason=None)
+
+    async def saved_setup(self, name: str) -> SavedSetup | None:
+        return self.saved.get(name)
 
     def capture(self, job_id: str, work: Callable[..., Any], **kwargs: Any) -> None:
         self.started.append((job_id, work, kwargs))
@@ -152,6 +165,7 @@ def harness(monkeypatch: pytest.MonkeyPatch) -> Harness:
     h = Harness(MemoryRunStore())
     monkeypatch.setattr(runs_router, "run_store", lambda: h.store)
     monkeypatch.setattr(runs_router, "run_in_thread", h.capture)
+    monkeypatch.setattr(runs_router, "saved_setup", h.saved_setup)
     monkeypatch.setattr(runs_router, "now_ms_utc", lambda: NOW_MS)
     return h
 
@@ -175,6 +189,7 @@ def job_body(**changes: Any) -> dict[str, Any]:
 async def test_a_run_is_accepted_with_its_row_made_and_a_worker_started(
     client: httpx.AsyncClient, harness: Harness
 ) -> None:
+    harness.save("SPY premium momentum, no re-entry", job_body()["setup"])
     async with client as c:
         response = await c.post(JOBS, json=job_body(setup_name="SPY premium momentum, no re-entry"))
 
@@ -209,6 +224,115 @@ async def test_the_setup_is_stored_as_the_server_read_it_with_its_defaults_fille
 
     [new] = harness.store.created
     assert (new.setup.slippage_percent, new.setup.price_step_usd) == (D("0.3"), D("0.01"))
+
+
+# ── The name a run is recorded under ─────────────────────────────────────
+# A run is recorded under the name of a saved setup only when a setup of that name exists and is the setup the run was
+# asked with; otherwise it is recorded with no name and is accepted all the same.
+
+SAVED_AS = "my morning call"
+
+
+def _spelled_out_as_the_server_reads_it(setup_json: dict[str, Any]) -> dict[str, Any]:
+    """The same setup with the defaults written out and a fee spelled with a trailing zero: other text, equal setup."""
+    return {
+        **setup_json,
+        "slippage_percent": "0.3",
+        "price_step_usd": "0.01",
+        "fees": {"kind": "per_contract", "per_contract_usd": "0.650"},
+    }
+
+
+async def _post_named(
+    c: httpx.AsyncClient, name: str | None, setup_json: dict[str, Any], job_id: str
+) -> httpx.Response:
+    changes: dict[str, Any] = {"job_id": job_id, "setup": setup_json}
+    if name is not None:
+        changes["setup_name"] = name
+    return await c.post(JOBS, json=job_body(**changes))
+
+
+async def test_a_run_is_recorded_under_the_name_of_a_saved_setup_equal_to_its_own_whatever_the_text_of_the_request(
+    client: httpx.AsyncClient, harness: Harness
+) -> None:
+    harness.save(SAVED_AS, _spelled_out_as_the_server_reads_it(job_body()["setup"]))
+
+    async with client as c:
+        response = await _post_named(c, SAVED_AS, job_body()["setup"], "job-1")
+
+    assert response.status_code == 202, response.text
+    [new] = harness.store.created
+    assert new.setup_name == SAVED_AS
+
+
+async def test_a_run_is_recorded_with_no_name_when_no_setup_of_that_name_is_saved_and_is_accepted_all_the_same(
+    client: httpx.AsyncClient, harness: Harness
+) -> None:
+    async with client as c:
+        response = await _post_named(c, "never saved", job_body()["setup"], "job-1")
+
+    assert response.status_code == 202, response.text
+    [new] = harness.store.created
+    assert new.setup_name is None and len(harness.started) == 1
+
+
+async def test_a_run_is_recorded_with_no_name_when_the_saved_setup_of_that_name_differs_in_one_field(
+    client: httpx.AsyncClient, harness: Harness
+) -> None:
+    harness.save(SAVED_AS, {**job_body()["setup"], "fees": {"kind": "per_contract", "per_contract_usd": "0.66"}})
+
+    async with client as c:
+        response = await _post_named(c, SAVED_AS, job_body()["setup"], "job-1")
+
+    assert response.status_code == 202, response.text
+    [new] = harness.store.created
+    assert new.setup_name is None
+
+
+async def test_a_run_is_recorded_with_no_name_when_the_saved_setup_of_that_name_can_no_longer_be_opened(
+    client: httpx.AsyncClient, harness: Harness
+) -> None:
+    harness.saved[SAVED_AS] = SavedSetup(
+        name=SAVED_AS, example=False, saved_at_ms=1, setup=None, cannot_open_reason="a rule has changed"
+    )
+
+    async with client as c:
+        response = await _post_named(c, SAVED_AS, job_body()["setup"], "job-1")
+
+    assert response.status_code == 202, response.text
+    [new] = harness.store.created
+    assert new.setup_name is None
+
+
+async def test_a_run_sent_with_no_name_is_recorded_with_none(client: httpx.AsyncClient, harness: Harness) -> None:
+    harness.save(SAVED_AS, job_body()["setup"])
+
+    async with client as c:
+        response = await _post_named(c, None, job_body()["setup"], "job-1")
+
+    assert response.status_code == 202, response.text
+    [new] = harness.store.created
+    assert new.setup_name is None
+
+
+async def test_the_name_of_a_saved_setup_is_found_in_the_database_and_so_is_the_name_of_a_shipped_example(
+    client: httpx.AsyncClient, harness: Harness, monkeypatch: pytest.MonkeyPatch, conn: asyncpg.Connection, tag: str
+) -> None:
+    # The route's own lookup, on a real database: a saved setup of this test's, and the first shipped example.
+    monkeypatch.setattr(runs_router, "saved_setup", REAL_SAVED_SETUP)
+    mine = f"{SAVED_AS} {tag}"
+    await save_setup(conn, mine, OptionsBacktestSetup.model_validate(job_body()["setup"]), saved_at_ms=1)
+    [example, *_] = EXAMPLE_SETUPS
+    assert example.setup is not None
+    different = {**job_body()["setup"], "starting_cash_usd": "25000"}
+
+    async with client as c:
+        kept = await _post_named(c, mine, job_body()["setup"], "n1")
+        differs = await _post_named(c, mine, different, "n2")
+        shipped = await _post_named(c, example.name, example.setup.model_dump(mode="json"), "n3")
+
+    assert (kept.status_code, differs.status_code, shipped.status_code) == (202, 202, 202)
+    assert [new.setup_name for new in harness.store.created] == [mine, None, example.name]
 
 
 @pytest.mark.parametrize(
