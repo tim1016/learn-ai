@@ -43,3 +43,11 @@ either process the gate itself is unchanged: one backtest at a time,
 process-wide, held at `BacktestEngine.run` (#1990). The runtime's
 bounded-worker boundary is #3044's; until it ships, the runtime runs this
 same serial engine.
+**Amendment 2026-10-11 (#3049):** Grid Search cells join that runtime through
+the same spawned workers and shared pool Golden Search dispatches onto. The
+fence does not move: cells stay keyed by `params_hash`, and every write —
+cell persistence, ranking, terminal status, Finish reuse — stays with the
+coordinator under this ADR's attempt fence; a worker loss re-offers its cell
+under an advanced task generation and never records a cell that never ran.
+The API's local mode (`RESEARCH_EXECUTION_MODE=local`) keeps the serial
+in-process runner above.

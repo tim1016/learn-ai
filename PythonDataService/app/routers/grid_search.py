@@ -11,6 +11,7 @@ wire is ``int64 ms UTC``.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from functools import partial
 from typing import Annotated, Any, Literal
 
@@ -241,27 +242,77 @@ async def delete_grid_search(search_id: str) -> Response:
 
 @jobs_router.post("/grid-search", status_code=status.HTTP_202_ACCEPTED)
 async def start_grid_search_job(req: GridSearchJobRequest) -> dict[str, Any]:
-    """Launch (or Finish) a search on a worker thread. Returns 202 once the record is durable."""
-    from app.services.research_runtime_client import refuse_forwarded_research_dispatch
+    """Launch (or Finish) a search. Returns 202 once the record is durable and a worker holds it.
 
-    # Research mode never runs this on the API (#3043, ADR 0077): refuse
-    # before any durable record exists, loudly, until the forwarding slice lands.
-    refuse_forwarded_research_dispatch("grid search")
+    In research mode the API forwards the dispatch and never binds, stamps
+    or starts a thread: the runtime prepares the immutable receipt and
+    materialization, claims the attempt and runs the cells (#3049). Here —
+    the local mode, or this process being the runtime — the search runs on
+    a worker thread exactly as before, through spawned research workers in
+    the runtime.
+    """
+    from app.services.research_runtime_client import (
+        forward_grid_search_job,
+        is_research_runtime,
+        research_forwarding_enabled,
+    )
+
+    if research_forwarding_enabled() and not is_research_runtime():
+        return await forward_grid_search_job(req.model_dump(mode="json"))
+
+    # Refused authority must never bind (#3042): the check runs before any
+    # durable record exists.
     await records.refuse_unauthorized_dispatch()
     if req.resume_search_id:
         row = await _load(req.resume_search_id)
         _refuse_if_owned(row)
+        if row.job_id == req.job_id and row.status in records.STORED_LIVE_STATUSES:
+            # A redelivery of a live dispatch joins the first worker before
+            # any resume refusal can call it unresumable — the attempt is
+            # never claimed twice (#3049).
+            records.require_live_redelivery(req.job_id, noun=NOUN)
+            return {"job_id": req.job_id, "search_id": row.id, "status": "queued"}
         refusal = await to_thread.run_sync(partial(_resume_refusal, row, live=records.liveness(row), verify_data=True))
         if refusal is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": "NOT_RESUMABLE", "message": refusal})
         search_id = row.id
+        await records.stamp_research_dispatch(job_id=req.job_id, kind="grid_search", record_id=search_id)
     else:
+        # A fresh launch is idempotent under its job id: a search already
+        # bound to it is a redelivery, never a second search (#3049).
+        bound = await with_connection(repo.list_searches, job_id=req.job_id, limit=1)
+        if bound:
+            records.require_live_redelivery(req.job_id, noun=NOUN)
+            return {"job_id": req.job_id, "search_id": bound[0].id, "status": "queued"}
         try:
             record = await to_thread.run_sync(partial(service.prepare_launch, to_grid_spec(req), job_id=req.job_id))
         except service.GridSearchRefusal as exc:
             raise records.refused(exc) from exc
-        created = await service.create(record)
-        search_id = created.id
+        search_id = record.id
+        # The stamp precedes the durable row: a stamp refusal strands
+        # nothing, and a create failure leaves only a stamped job whose
+        # search was never born — a retry as a fresh dispatch, not a dead
+        # redelivery (#3042's lesson, applied to grid's launch order).
+        await records.stamp_research_dispatch(job_id=req.job_id, kind="grid_search", record_id=search_id)
+        await service.create(record)
+
+    runtime_executes = is_research_runtime()
+    work = _gated_grid_work(req, search_id) if runtime_executes else _local_grid_work(req, search_id)
+    run_in_thread(
+        req.job_id,
+        work,
+        thread_name=f"grid-search-{req.job_id[:8]}",
+        cancel_check_every_n=1,
+        # In the runtime, emits renew nothing — only accepted checkpoints
+        # keep the lease alive (#3041); the API's local mode keeps the
+        # emit-and-check renewal ADR 0065 D1 makes authoritative there.
+        emit_renews_lease=not runtime_executes,
+    )
+    return {"job_id": req.job_id, "search_id": search_id, "status": "queued"}
+
+
+def _local_grid_work(req: GridSearchJobRequest, search_id: str) -> Callable[[ProgressEmitter, CancellationCheck], dict[str, Any]]:
+    """The local-mode worker: the search behind the runner's emit-and-cancel checks, cells in this process."""
 
     def work(emit: ProgressEmitter, cancel: CancellationCheck) -> dict[str, Any]:
         row, spec = service.load_search(search_id)
@@ -274,15 +325,60 @@ async def start_grid_search_job(req: GridSearchJobRequest) -> dict[str, Any]:
             on_progress=lambda done, total: emit.progress(done, total, unit="backtests"),
             on_log=emit.log,
         )
-        return {
-            "search_id": outcome.search_id,
-            "status": outcome.status,
-            "leader_params_hash": outcome.leader_params_hash,
-            "executed_cells": outcome.summary.executed_cells,
-            "completed_cells": outcome.summary.completed_cells,
-            "failed_cells": outcome.summary.failed_cells,
-        }
+        return _outcome_response(outcome)
 
-    await records.stamp_research_dispatch(job_id=req.job_id, kind="grid_search", record_id=search_id)
-    run_in_thread(req.job_id, work, thread_name=f"grid-search-{req.job_id[:8]}", cancel_check_every_n=1)
-    return {"job_id": req.job_id, "search_id": search_id, "status": "queued"}
+    return work
+
+
+def _gated_grid_work(req: GridSearchJobRequest, search_id: str) -> Callable[[ProgressEmitter, CancellationCheck], dict[str, Any]]:
+    """The research runtime's grid worker: the search under the checkpoint lease contract (#3041, #3049).
+
+    In the runtime, cancellation polls renew nothing — the lease renews only
+    on accepted checkpoints (the run's phase transitions, each durably
+    persisted cell and the children's own progress), each fenced by the
+    coordinator's boot generation. Cells execute through spawned research
+    workers — one child at the serial width, the shared pool wider — and
+    persistence, ranking and the terminal status stay in the coordinator.
+    """
+    from app.jobs.checkpoints import GatedLease
+    from app.research.grid_search.dispatch import runtime_cell_dispatch
+    from app.research.persistence import ownership
+
+    def work(emit: ProgressEmitter, _runner_cancel: CancellationCheck) -> dict[str, Any]:
+        authority = ownership.process_authority()
+        if authority is None:
+            # The startup claim is fail-closed, so this is an authority lost
+            # mid-run: the generation is dead and its lease must not renew.
+            raise RuntimeError("research runtime worker without coordinator authority; the generation is fenced")
+        lease = GatedLease(req.job_id, task_id="search", authority=authority)
+        outcome = service.execute(
+            search_id,
+            job_id=req.job_id,
+            cell_dispatch_factory=lambda row, spec, attempt, job_id: runtime_cell_dispatch(
+                row,
+                spec,
+                attempt=attempt,
+                job_id=job_id,
+                on_checkpoint=lease.child_checkpoint,
+                cancel_check=lease.fenced_cancel,
+                on_log=emit.log,
+            ),
+            cancel_check=lease.fenced_cancel,
+            on_phase=lambda phase: (emit.phase(phase), lease.phase(phase)),
+            on_progress=lambda done, total: (emit.progress(done, total, unit="backtests"), lease.completion(done, total)),
+            on_log=emit.log,
+        )
+        return _outcome_response(outcome)
+
+    return work
+
+
+def _outcome_response(outcome: service.ExecutionOutcome) -> dict[str, Any]:
+    return {
+        "search_id": outcome.search_id,
+        "status": outcome.status,
+        "leader_params_hash": outcome.leader_params_hash,
+        "executed_cells": outcome.summary.executed_cells,
+        "completed_cells": outcome.summary.completed_cells,
+        "failed_cells": outcome.summary.failed_cells,
+    }
