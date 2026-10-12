@@ -31,13 +31,13 @@ from datetime import date
 from decimal import Decimal, localcontext
 from itertools import pairwise
 
-from app.lean_sidecar.trading_calendar import expected_sessions, session_window_for_date
+from app.lean_sidecar.trading_calendar import SessionWindow, expected_sessions, session_window_for_date
 from app.options.contract import OptionContract
 from app.options_backtest import fills
 from app.options_backtest.data import RunData
 from app.options_backtest.fees import FeeRateNotPublished, fee_for_policy, unpublished_fee_types
 from app.options_backtest.needs import session_needs
-from app.options_backtest.replay import FeeFor, replay_session
+from app.options_backtest.replay import replay_session
 from app.options_backtest.results import SessionOutcome, SessionStatus
 from app.options_backtest.session_market import DayMarket, bars_by_close, window_only_market
 from app.options_backtest.session_result import PinnedDay, SessionPins, SessionResult
@@ -143,9 +143,10 @@ def _never_stop() -> bool:
 
 
 @dataclass
-class _Tally:
-    """One slippage value's run so far: its own cash, and what it has made."""
+class _Carried:
+    """One slippage value's run so far: the setup at that value, the cash it carries, and what it has made."""
 
+    setup: OptionsBacktestSetup
     cash: Decimal
     net_profit: Decimal = Decimal(0)
     trades: int = 0
@@ -153,20 +154,15 @@ class _Tally:
     winning_sessions: int = 0
 
     def take(self, outcome: SessionOutcome) -> None:
+        """Carry on from a session: its cash that moved and its marks paid back at their marks, and what it made."""
         pnl = outcome.pnl_usd
-        self.cash = _cash_after(self.cash, outcome)
         with localcontext(fills.EXACT):
+            self.cash = self.cash + outcome.cash_change_usd + outcome.marked_value_usd
             self.net_profit = self.net_profit + pnl
         self.trades += len(outcome.trades)
         if outcome.trades:
             self.traded_sessions += 1
             self.winning_sessions += pnl > 0
-
-
-def _cash_after(cash_before: Decimal, outcome: SessionOutcome) -> Decimal:
-    """What the next session starts with: the cash that moved, and the marks of legs not sold, paid back at their marks."""
-    with localcontext(fills.EXACT):
-        return cash_before + outcome.cash_change_usd + outcome.marked_value_usd
 
 
 def _check_the_run_can_start(setup: OptionsBacktestSetup, sessions: Sequence[date]) -> None:
@@ -184,96 +180,101 @@ def _check_the_run_can_start(setup: OptionsBacktestSetup, sessions: Sequence[dat
                 raise FeeRateNotPublished(day, missing)
 
 
-def _ladder(setup: OptionsBacktestSetup, requested: Sequence[Decimal]) -> dict[Decimal, OptionsBacktestSetup]:
-    """The setup at each slippage value, lowest first, the setup's own value among them."""
+def _ladder(setup: OptionsBacktestSetup, requested: Sequence[Decimal]) -> dict[Decimal, _Carried]:
+    """The run at each slippage value, lowest first, the setup's own value among them, each starting with the cash."""
     own = setup.slippage_percent
     return {
-        value: setup
-        if value == own
-        else OptionsBacktestSetup.model_validate({**setup.model_dump(mode="python"), "slippage_percent": value})
+        value: _Carried(
+            setup
+            if value == own
+            else OptionsBacktestSetup.model_validate({**setup.model_dump(mode="python"), "slippage_percent": value}),
+            setup.starting_cash_usd,
+        )
         for value in sorted({*requested, own})
     }
 
 
-def _replay_one_session(
-    day: date,
-    data: RunData,
-    fee_for: FeeFor,
-    variants: dict[Decimal, OptionsBacktestSetup],
-    own: Decimal,
-    own_cash: Decimal,
-    cash_of: dict[Decimal, Decimal],
-) -> tuple[SessionResult, dict[Decimal, SessionOutcome]]:
-    """Read one session's data, replay it at every ladder value, and let the data go.
+class _Run:
+    """One run's state: what it reads from, how it prices fees, and each ladder value's run so far."""
 
-    Returns the session as it is kept, and the outcome at each other ladder value. Everything read is local to this
-    call, so nothing of it outlives the session.
-    """
-    setup = variants[own]
-    window = session_window_for_date(day)
-    if setup.window_fits(session_open_ms=window.open_ms_utc, session_close_ms=window.close_ms_utc):
-        outcome, others, pins = _replay_with_data(day, data, fee_for, variants, own, own_cash, cash_of)
-    else:
-        # Nothing is read for a session the window rule skips, so that a data check that needs nothing there agrees.
-        outcome = replay_session(setup, window_only_market(day), cash_usd=own_cash, fee_for=fee_for)
-        others, pins = {}, SessionPins(None, None, ())
-    cash_after = _cash_after(own_cash, outcome)
-    return SessionResult(day, window.open_ms_utc, window.close_ms_utc, own_cash, outcome, cash_after, pins), others
+    def __init__(self, setup: OptionsBacktestSetup, data: RunData, requested: Sequence[Decimal]) -> None:
+        self.setup = setup
+        self.data = data
+        self.fee_for = fee_for_policy(setup.fees)
+        self.ladder = _ladder(setup, requested)
+        self.own = self.ladder[setup.slippage_percent]
 
+    def replay(self, day: date) -> SessionResult:
+        """Replay one session at every ladder value, carry each value's cash on, and keep the setup's own result.
 
-def _replay_with_data(
-    day: date,
-    data: RunData,
-    fee_for: FeeFor,
-    variants: dict[Decimal, OptionsBacktestSetup],
-    own: Decimal,
-    own_cash: Decimal,
-    cash_of: dict[Decimal, Decimal],
-) -> tuple[SessionOutcome, dict[Decimal, SessionOutcome], SessionPins]:
-    setup = variants[own]
-    window = session_window_for_date(day)
-    underlying, listing = data.underlying_day(day), data.listing(day)
-    if underlying is None or listing is None:
-        raise SessionDataMissing(day, underlying=underlying is None, listing=listing is None, contracts=())
-    # A one-shot iterable would be read once and then look empty, so what is handed in is held before it is used.
-    bars = tuple(underlying.value)
-    listed = replace(listing.value, contracts=tuple(listing.value.contracts))
-    if listed.underlying != setup.underlying:
-        raise ValueError(f"the listing for {day} is of {listed.underlying}, and the setup trades {setup.underlying}")
-    bars_by_close(bars, trading_date=day, what="the underlying")  # refuse a malformed day before using it
-    needs = session_needs(
-        setup,
-        trading_date=day,
-        session_open_ms=window.open_ms_utc,
-        session_close_ms=window.close_ms_utc,
-        underlying=bars,
-        listing=listed,
-    )
-    needed = sorted(needs.contracts, key=lambda contract: contract.occ_symbol)
-    captured = {contract: data.option_day(contract, day) for contract in needed}
-    absent = tuple(contract for contract in needed if captured[contract] is None)
-    if absent:
-        raise SessionDataMissing(day, underlying=False, listing=False, contracts=absent)
-    days = {contract: found for contract, found in captured.items() if found is not None}
-    market = DayMarket(
-        day,
-        underlying=bars,
-        listing=listed,
-        option_days={contract: found.value for contract, found in days.items()},
-    )
-    outcome = replay_session(setup, market, cash_usd=own_cash, fee_for=fee_for)
-    # A skipped session is skipped at every slippage: the window and the underlying do not depend on it.
-    others = {
-        value: outcome
-        if outcome.status is SessionStatus.SKIPPED
-        else replay_session(variant, market, cash_usd=cash_of[value], fee_for=fee_for)
-        for value, variant in variants.items()
-        if value != own
-    }
-    pins = SessionPins(
-        underlying.sha256, listing.sha256, tuple(PinnedDay(contract, found.sha256) for contract, found in days.items())
-    )
-    return outcome, others, pins
+        Everything read is local to this call, so nothing of it outlives the session.
+        """
+        window = session_window_for_date(day)
+        if self.setup.window_fits(session_open_ms=window.open_ms_utc, session_close_ms=window.close_ms_utc):
+            outcomes, pins = self._replay_with_data(day, window)
+        else:
+            # Nothing is read for a session the window rule skips, so that a data check that needs nothing there agrees.
+            skipped = replay_session(self.setup, window_only_market(day), cash_usd=self.own.cash, fee_for=self.fee_for)
+            outcomes, pins = dict.fromkeys(self.ladder, skipped), SessionPins(None, None, ())
+        cash_before = self.own.cash
+        for value, carried in self.ladder.items():
+            carried.take(outcomes[value])
+        return SessionResult(
+            day,
+            window.open_ms_utc,
+            window.close_ms_utc,
+            cash_before,
+            outcomes[self.setup.slippage_percent],
+            self.own.cash,
+            pins,
+        )
+
+    def _replay_with_data(self, day: date, window: SessionWindow) -> tuple[dict[Decimal, SessionOutcome], SessionPins]:
+        underlying, listing = self.data.underlying_day(day), self.data.listing(day)
+        if underlying is None or listing is None:
+            raise SessionDataMissing(day, underlying=underlying is None, listing=listing is None, contracts=())
+        # A one-shot iterable would be read once and then look empty, so what is handed in is held before it is used.
+        bars = tuple(underlying.value)
+        listed = replace(listing.value, contracts=tuple(listing.value.contracts))
+        if listed.underlying != self.setup.underlying:
+            raise ValueError(
+                f"the listing for {day} is of {listed.underlying}, and the setup trades {self.setup.underlying}"
+            )
+        bars_by_close(bars, trading_date=day, what="the underlying")  # refuse a malformed day before using it
+        needs = session_needs(
+            self.setup,
+            trading_date=day,
+            session_open_ms=window.open_ms_utc,
+            session_close_ms=window.close_ms_utc,
+            underlying=bars,
+            listing=listed,
+        )
+        needed = sorted(needs.contracts, key=lambda contract: contract.occ_symbol)
+        captured = {contract: self.data.option_day(contract, day) for contract in needed}
+        absent = tuple(contract for contract in needed if captured[contract] is None)
+        if absent:
+            raise SessionDataMissing(day, underlying=False, listing=False, contracts=absent)
+        days = {contract: found for contract, found in captured.items() if found is not None}
+        market = DayMarket(
+            day,
+            underlying=bars,
+            listing=listed,
+            option_days={contract: found.value for contract, found in days.items()},
+        )
+        replayed = replay_session(self.setup, market, cash_usd=self.own.cash, fee_for=self.fee_for)
+        # A skipped session is skipped at every slippage: the window and the underlying do not depend on it.
+        outcomes = {
+            value: replayed
+            if carried is self.own or replayed.status is SessionStatus.SKIPPED
+            else replay_session(carried.setup, market, cash_usd=carried.cash, fee_for=self.fee_for)
+            for value, carried in self.ladder.items()
+        }
+        pins = SessionPins(
+            underlying.sha256,
+            listing.sha256,
+            tuple(PinnedDay(contract, found.sha256) for contract, found in days.items()),
+        )
+        return outcomes, pins
 
 
 def run_sessions(
@@ -293,31 +294,23 @@ def run_sessions(
     estimated and some session is on a date the fee model has no rate for.
     """
     _check_the_run_can_start(setup, sessions)
-    variants = _ladder(setup, slippage_ladder)
-    own = setup.slippage_percent
-    fee_for = fee_for_policy(setup.fees)
-    tallies = {value: _Tally(setup.starting_cash_usd) for value in variants}
+    run = _Run(setup, data, slippage_ladder)
     kept: list[SessionResult] = []
     for done, day in enumerate(sessions):
         if should_stop():
             raise RunStopped(done)
-        cash_of = {value: tally.cash for value, tally in tallies.items()}
-        result, others = _replay_one_session(day, data, fee_for, variants, own, cash_of[own], cash_of)
-        kept.append(result)
-        tallies[own].take(result.outcome)
-        for value, outcome in others.items():
-            tallies[value].take(outcome)
+        kept.append(run.replay(day))
         on_session(done + 1, len(sessions), day)
     points = tuple(
         SlippagePoint(
             value,
-            value == own,
-            tally.net_profit,
-            tally.trades,
-            tally.traded_sessions,
-            tally.winning_sessions,
+            value == setup.slippage_percent,
+            carried.net_profit,
+            carried.trades,
+            carried.traded_sessions,
+            carried.winning_sessions,
         )
-        for value, tally in tallies.items()
+        for value, carried in run.ladder.items()
     )
     summary = summarize_run(kept, starting_cash_usd=setup.starting_cash_usd)
     return RunResult(setup, tuple(kept), summary, points, slippage_tolerance(points))
