@@ -783,16 +783,17 @@ async def test_a_listing_is_refused_until_new_york_midnight_after_its_session_an
     [(AS_OF, SESSION_CLOSE_MS), *HALF_DAY_CLOSE_MS.items()],
     ids=["a full day", "a half day in november", "a half day in july"],
 )
-async def test_thirty_minutes_after_the_close_is_no_longer_a_time_to_capture_a_listing(
+async def test_the_evening_of_a_session_is_refused_for_a_listing_from_the_close_to_the_midnight(
     session: date, close_ms: int, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
     route = _mock_one_page(STANDARD_ROWS)
 
-    at_the_old_time = await ensure_option_listing("SPY", session, now_ms=close_ms + 30 * MINUTE_MS)
-    that_evening = await ensure_option_listing("SPY", session, now_ms=close_ms + 6 * 60 * MINUTE_MS)
+    at_the_close = await ensure_option_listing("SPY", session, now_ms=close_ms)
+    half_an_hour_on = await ensure_option_listing("SPY", session, now_ms=close_ms + 30 * MINUTE_MS)
+    six_hours_on = await ensure_option_listing("SPY", session, now_ms=close_ms + 6 * 60 * MINUTE_MS)
 
-    assert at_the_old_time.failure is not None and at_the_old_time.failure.reason == "session_not_over"
-    assert that_evening.failure is not None and that_evening.failure.reason == "session_not_over"
+    for refused in (at_the_close, half_an_hour_on, six_hours_on):
+        assert refused.failure is not None and refused.failure.reason == "session_not_over"
     assert route.call_count == 0 and fake_catalog.rows == {}
 
 

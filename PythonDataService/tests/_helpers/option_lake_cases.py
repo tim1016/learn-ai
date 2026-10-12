@@ -40,8 +40,8 @@ CAPTURE_OPENS: tuple[tuple[str, date, int], ...] = (
     ("half day before the fourth of july", date(2025, 7, 3), 1751601600000),
 )
 
-#: The session close of the two half days, 13:00 New York (hand-worked as above), for the test that
-#: shows the old thirty-minutes-after-the-close time is no longer a time to capture.
+#: The session close of the two half days, 13:00 New York (hand-worked as above), for the tests that
+#: show nothing is captured between a session's close and the midnight that ends its date.
 HALF_DAY_CLOSE_MS = {date(2025, 11, 28): 1764352800000, date(2025, 7, 3): 1751562000000}
 
 

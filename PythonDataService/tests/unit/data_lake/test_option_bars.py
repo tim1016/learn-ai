@@ -828,31 +828,19 @@ async def test_a_session_is_refused_until_new_york_midnight_after_it_and_taken_f
     [(TRADING_DAY, SESSION_CLOSE_MS), *HALF_DAY_CLOSE_MS.items()],
     ids=["a full day", "a half day in november", "a half day in july"],
 )
-async def test_thirty_minutes_after_the_close_is_no_longer_a_time_to_capture_on_a_full_day_or_a_half_day(
+async def test_the_evening_of_a_session_is_refused_from_the_close_to_the_midnight_on_a_full_day_or_a_half_day(
     session: date, close_ms: int, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
+    """Six hours after the close it is 22:00 New York on the full day, which UTC already calls the next date."""
     contract = OptionContract.of(root="SPY", expiry_date=session, right="call", strike=600)
     route = _mock_vendor(contract=contract.occ_symbol)
 
-    at_the_old_time = await ensure_option_day_bars(contract, session, listed_under="SPY", now_ms=close_ms + 30 * MINUTE_MS)
-    that_evening = await ensure_option_day_bars(contract, session, listed_under="SPY", now_ms=close_ms + 6 * 60 * MINUTE_MS)
+    at_the_close = await ensure_option_day_bars(contract, session, listed_under="SPY", now_ms=close_ms)
+    half_an_hour_on = await ensure_option_day_bars(contract, session, listed_under="SPY", now_ms=close_ms + 30 * MINUTE_MS)
+    six_hours_on = await ensure_option_day_bars(contract, session, listed_under="SPY", now_ms=close_ms + 6 * 60 * MINUTE_MS)
 
-    assert at_the_old_time.failure is not None and at_the_old_time.failure.reason == "session_not_over"
-    assert that_evening.failure is not None and that_evening.failure.reason == "session_not_over"
-    assert route.call_count == 0 and fake_catalog.rows == {}
-
-
-@respx.mock
-async def test_the_session_of_a_date_that_is_today_in_new_york_is_refused_even_when_it_is_already_the_next_day_in_utc(
-    fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    """21:00 New York on 2025-06-13 is already 01:00 UTC on the 14th; the session's date has not passed."""
-    route = _mock_vendor()
-    nine_pm_in_new_york = SESSION_CLOSE_MS + 60 * MINUTE_MS
-
-    result = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY", now_ms=nine_pm_in_new_york)
-
-    assert result.failure is not None and result.failure.reason == "session_not_over"
+    for refused in (at_the_close, half_an_hour_on, six_hours_on):
+        assert refused.failure is not None and refused.failure.reason == "session_not_over"
     assert route.call_count == 0 and fake_catalog.rows == {}
 
 
