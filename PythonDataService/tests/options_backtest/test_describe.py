@@ -67,8 +67,8 @@ def test_the_window_gives_each_time_as_a_distance_and_as_the_clock_on_a_full_day
     assert "46 minutes before the close" in window and _before_close(46) in window
 
 
-def test_a_time_at_the_open_is_said_to_be_at_the_open() -> None:
-    window = _window(entry=_after_open_time(0))
+def test_a_re_entry_cutoff_at_the_open_is_said_to_be_at_the_open() -> None:
+    window = _window(no_reentry_after=_after_open_time(0))
 
     assert "at the open" in window
     assert _after_open(0) in window
@@ -99,9 +99,15 @@ def test_a_time_outside_a_full_session_is_not_given_a_clock_time_that_would_misl
 
 
 def test_an_exit_that_is_not_after_the_entry_is_flagged_as_a_setup_that_would_not_trade() -> None:
+    middle = _SESSION_MINUTES // 2
     fine = describe_setup(_setup(), full_session=_CLOCK)
-    same_minute = describe_setup(_setup(entry=_after_open_time(30), exit=_after_open_time(30)), full_session=_CLOCK)
-    earlier = describe_setup(_setup(entry=_after_open_time(60), exit=_after_open_time(30)), full_session=_CLOCK)
+    # An entry counted from the open and an exit counted from the close validate; only the clock says they cross.
+    same_minute = describe_setup(
+        _setup(entry=_after_open_time(middle), exit=_before_close_time(middle)), full_session=_CLOCK
+    )
+    earlier = describe_setup(
+        _setup(entry=_after_open_time(middle + 60), exit=_before_close_time(middle + 60)), full_session=_CLOCK
+    )
 
     assert fine.notices == ()
     assert same_minute.notices != ()
