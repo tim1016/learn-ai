@@ -42,6 +42,7 @@ from app.options_backtest.results import SessionOutcome, SessionStatus
 from app.options_backtest.session_market import DayMarket, bars_by_close, window_only_market
 from app.options_backtest.session_result import PinnedDay, SessionPins, SessionResult
 from app.options_backtest.setup import OptionsBacktestSetup
+from app.options_backtest.statistics import RunSummary, summarize_run
 
 DEFAULT_SLIPPAGE_LADDER: tuple[Decimal, ...] = tuple(
     Decimal(percent) for percent in ("0", "0.1", "0.2", "0.3", "0.5", "0.75", "1", "1.5", "2", "3", "5")
@@ -118,6 +119,7 @@ class RunResult:
 
     setup: OptionsBacktestSetup
     sessions: tuple[SessionResult, ...]
+    summary: RunSummary
     # One point per ladder value, lowest first, with the setup's own value among them.
     slippage: tuple[SlippagePoint, ...]
     slippage_tolerance: SlippageTolerance
@@ -307,4 +309,5 @@ def run_sessions(
         )
         for value, tally in tallies.items()
     )
-    return RunResult(setup, tuple(kept), points, slippage_tolerance(points))
+    summary = summarize_run(kept, starting_cash_usd=setup.starting_cash_usd)
+    return RunResult(setup, tuple(kept), summary, points, slippage_tolerance(points))
