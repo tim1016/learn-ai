@@ -229,7 +229,8 @@ describe('the file name in a Content-Disposition header', () => {
     // A starred name that cannot be used leaves the plain one to be read.
     ['attachment; filename="fallback.csv"; filename*=UTF-8\'\'bad%E0%A4%A.csv', 'fallback.csv'],
     ['attachment; filename="fallback.csv"; filename*=UTF-8\'\'..%2F..%2Fetc%2Fpasswd', 'fallback.csv'],
-    ['attachment; filename="fallback.csv"; filename*=ISO-8859-1\'\'caf%E9.csv', 'fallback.csv'],
+    // Bytes that are valid UTF-8 but were meant as ISO-8859-1 would read as a different name; only UTF-8 is read.
+    ['attachment; filename="fallback.csv"; filename*=ISO-8859-1\'\'caf%C3%A9.csv', 'fallback.csv'],
   ])('reads %s', (header, name) => {
     expect(filenameOf(header)).toBe(name);
   });
@@ -244,7 +245,7 @@ describe('the file name in a Content-Disposition header', () => {
     ["attachment; filename*=UTF-8''..%2F..%2Fetc%2Fpasswd"],
     ["attachment; filename*=UTF-8''a%00b.csv"],
     ["attachment; filename*=UTF-8''bad%E0%A4%A.csv"],
-    ["attachment; filename*=ISO-8859-1''caf%E9.csv"],
+    ["attachment; filename*=ISO-8859-1''caf%C3%A9.csv"],
   ])('gives no name for %s: nothing to trust', (header) => {
     expect(filenameOf(header)).toBeNull();
   });
