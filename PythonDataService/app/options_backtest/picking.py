@@ -19,7 +19,8 @@ Why this file exists beside the resolver. The resolver picks a contract from liv
 a contract without one, for every rule including "at the money". A past date has no quotes: its listing says
 which contracts existed and nothing more. So a past pick is made from the listing and the underlying's price
 alone, on types of its own. The rules are the same ones and the parity test keeps them so; the one place they
-differ is named at ``expiry_for``.
+differ is named at ``expiry_for``. Whether a date is a session, and whether it ends its week, are read through
+``sessions.py``, which the series tags read too.
 
 Only standard contracts are picked: American style, a hundred shares. As in the resolver, the expiries and the
 strike ladder come from them alone, so a non-standard contract neither is picked nor shifts a count of steps.
@@ -32,16 +33,15 @@ from __future__ import annotations
 
 from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal
 from fractions import Fraction
-from functools import lru_cache
 from typing import assert_never
 
-from app.lean_sidecar.trading_calendar import expected_sessions
 from app.options.contract import OptionContract
 from app.options.expiry import option_expiry_date
 from app.options_backtest.market import STANDARD_MULTIPLIER, Picked, PickRefusal, PickRefused
+from app.options_backtest.sessions import ends_its_week, is_session
 from app.options_backtest.setup import (
     AtTheMoney,
     ExpiryRule,
@@ -54,7 +54,6 @@ from app.options_backtest.setup import (
 )
 
 _THOUSANDTHS_PER_DOLLAR = 1000
-_DAYS_IN_A_WEEK = 7
 
 
 @dataclass(frozen=True)
@@ -84,30 +83,6 @@ class Listing:
     complete: bool
 
 
-# ---- What the calendar says about a week --------------------------------------
-
-
-@lru_cache(maxsize=512)
-def _sessions_of_week_from(monday: date) -> tuple[date, ...]:
-    return tuple(expected_sessions(monday, monday + timedelta(days=_DAYS_IN_A_WEEK - 1)))
-
-
-def sessions_of_week(day: date) -> tuple[date, ...]:
-    """The sessions, oldest first, of the Monday-to-Sunday week ``day`` falls in."""
-    return _sessions_of_week_from(day - timedelta(days=day.weekday()))
-
-
-def is_session(day: date) -> bool:
-    """Whether the calendar has a session on ``day``."""
-    return day in sessions_of_week(day)
-
-
-def ends_its_week(day: date) -> bool:
-    """Whether ``day`` is the last session of its Monday-to-Sunday week: a Friday, or a Thursday when that is closed."""
-    sessions = sessions_of_week(day)
-    return bool(sessions) and sessions[-1] == day
-
-
 # ---- The expiry and the strike a rule comes to --------------------------------
 
 
@@ -132,9 +107,11 @@ def expiry_for(rule: ExpiryRule, *, listed: Collection[date], trading_date: date
 
 
 def _require_a_price(underlying_price: Decimal) -> None:
-    if not (underlying_price.is_finite() and underlying_price > 0):
+    # An int or a float is a caller's mistake as much as a zero is: a float's rounding would decide a pick.
+    if not (isinstance(underlying_price, Decimal) and underlying_price.is_finite() and underlying_price > 0):
         raise ValueError(
-            f"the underlying's price must be a number above zero to call the money from; got {underlying_price}"
+            "the underlying's price must be a Decimal above zero to call the money from; "
+            f"got {underlying_price} ({type(underlying_price).__name__})"
         )
 
 
@@ -148,7 +125,8 @@ def strike_for(rule: StrikeRule, *, ladder_thousandths: Collection[int], underly
     """The strike, in thousandths of a dollar, ``rule`` means on a ladder, or None when it is off the ladder.
 
     A ladder is the set of strikes listed for one expiry and right, in whatever order and with whatever
-    repeats it arrives in. Steps are counted along it and not in dollars.
+    repeats it arrives in. Steps are counted along it and not in dollars. Raises ``ValueError`` for a price
+    that is not a Decimal above zero.
     """
     _require_a_price(underlying_price)
     ladder = sorted(set(ladder_thousandths))
@@ -180,14 +158,15 @@ def _by_expiry(contracts: Iterable[ListedContract]) -> dict[date, dict[int, List
     return grouped
 
 
-def _expiry_in_words(rule: ExpiryRule, trading_date: date) -> str:
+def _none_listed_in_words(rule: ExpiryRule, right: str, trading_date: date) -> str:
+    """The sentence for a listing that holds no ``right`` expiry ``rule`` could mean on ``trading_date``."""
     match rule:
         case SameDayExpiryRule():
-            return f"an expiry on {trading_date}"
+            return f"the listing holds no {right}s expiring on {trading_date}"
         case ThisWeekExpiryRule():
-            return f"an expiry on or after {trading_date} that is the last session of its week"
+            return f"the listing holds no {right}s expiring on the last session of a week, on or after {trading_date}"
         case MinDaysExpiryRule():
-            return f"an expiry {rule.days} or more days after {trading_date}"
+            return f"the listing holds no {right}s expiring {rule.days} or more days after {trading_date}"
         case _:
             assert_never(rule)
 
@@ -198,7 +177,7 @@ def pick_contract(
     """The contract ``leg``'s rules come to in ``listing`` with the underlying at ``underlying_price``, or why none.
 
     Raises ``ValueError`` for a listing of another date than ``trading_date`` and for a price that is not a
-    number above zero: those are the caller's mistake and not a fact about the market.
+    Decimal above zero: those are the caller's mistake and not a fact about the market.
     """
     if listing.as_of != trading_date:
         raise ValueError(
@@ -240,7 +219,6 @@ def _no_expiry(
     leg: LegSetup, of_its_right: Sequence[ListedContract], standard_dates: Collection[date], trading_date: date
 ) -> PickRefused:
     """Why no standard expiry meets the rule: none is listed, or the one that does is listed only as non-standard."""
-    meant = _expiry_in_words(leg.expiry, trading_date)
     others = _by_expiry(listed for listed in of_its_right if not listed.is_pickable)
     reaches = expiry_for(leg.expiry, listed=set(standard_dates) | others.keys(), trading_date=trading_date)
     if reaches is not None:
@@ -248,4 +226,4 @@ def _no_expiry(
             PickRefusal.NOT_STANDARD,
             f"the rule comes to the {leg.right}s expiring {reaches}, which are listed only as non-standard contracts",
         )
-    return PickRefused(PickRefusal.EXPIRY_NOT_LISTED, f"the listing holds no {leg.right} expiry that is {meant}")
+    return PickRefused(PickRefusal.EXPIRY_NOT_LISTED, _none_listed_in_words(leg.expiry, leg.right, trading_date))

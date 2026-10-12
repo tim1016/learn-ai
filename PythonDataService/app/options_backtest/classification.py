@@ -11,7 +11,8 @@ Formula: with ``E`` an expiry that is in the listing of a trading date ``T`` on 
   the 14th to the 21st, the quarter's last session in the last days of its month), so "quarterly, when it
   is not the monthly" never has to choose.
 Reference: the owner's definition of each series for #3030; no exchange notice was consulted, which is why
-  the floor below exists. Each session fact is ``app/lean_sidecar/trading_calendar.py``'s.
+  the floor below exists. Each session fact is ``app/lean_sidecar/trading_calendar.py``'s, read through
+  ``app/options_backtest/sessions.py``.
 Canonical implementation: this file.
 Validated against: tests/options_backtest/test_classification.py.
 
@@ -31,7 +32,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from enum import StrEnum
 
-from app.options_backtest.picking import ends_its_week, is_session, sessions_of_week
+from app.options_backtest.sessions import ends_its_week, is_session, sessions_of_week
 
 CLASSIFICATION_VERSION = 1
 

@@ -324,10 +324,23 @@ def test_no_strikes_listed_is_no_strike() -> None:
     )
 
 
-@pytest.mark.parametrize("price", ["0", "-1", "NaN", "Infinity"])
-def test_a_price_that_is_not_a_price_is_a_callers_mistake(price: str) -> None:
+# What a caller must never hand over as the underlying's price. An int or a float is as much a mistake as
+# a zero: a float's rounding would decide a pick, so neither is quietly turned into a Decimal.
+_NOT_A_PRICE = [
+    pytest.param(Decimal("0"), id="zero"),
+    pytest.param(Decimal("-1"), id="negative"),
+    pytest.param(Decimal("NaN"), id="a Decimal NaN"),
+    pytest.param(Decimal("Infinity"), id="infinite"),
+    pytest.param(586, id="an int"),
+    pytest.param(586.0, id="a float"),
+    pytest.param(float("nan"), id="a float NaN"),
+]
+
+
+@pytest.mark.parametrize("price", _NOT_A_PRICE)
+def test_a_price_that_is_not_a_price_is_a_callers_mistake(price: Any) -> None:
     with pytest.raises(ValueError, match="price"):
-        strike_for(_ATM, ladder_thousandths=_LADDER, underlying_price=Decimal(price))
+        strike_for(_ATM, ladder_thousandths=_LADDER, underlying_price=price)
 
 
 # ---- Picking a contract ------------------------------------------------------
@@ -447,6 +460,31 @@ def test_a_rule_that_meets_no_listed_expiry_is_refused_as_not_listed() -> None:
     assert _refusal(picked) is PickRefusal.EXPIRY_NOT_LISTED
 
 
+@pytest.mark.parametrize(
+    ("leg", "expiries", "right", "says", "does_not_say"),
+    [
+        pytest.param(_SAME_DAY, (_WED, _FRI), "call", ("calls", str(_MON)), ("week", "days"), id="same day"),
+        pytest.param(_THIS_WEEK, (_TUE, _WED), "put", ("puts", str(_MON), "week"), ("days",), id="this week"),
+        pytest.param(
+            _min_days(60), (_MON, _FRI), "call", ("calls", str(_MON), "60", "days"), ("week",), id="at least 60 days"
+        ),
+    ],
+)
+def test_a_refusal_for_no_listed_expiry_says_the_right_the_date_and_the_rule(
+    leg: dict[str, Any], expiries: tuple[date, ...], right: str, says: tuple[str, ...], does_not_say: tuple[str, ...]
+) -> None:
+    picked = pick_contract(
+        _leg(leg, right=right), listing=_listing(expiries), trading_date=_MON, underlying_price=_PRICE
+    )
+
+    assert _refusal(picked) is PickRefusal.EXPIRY_NOT_LISTED
+    assert isinstance(picked, PickRefused)
+    for word in says:
+        assert word in picked.detail
+    for word in does_not_say:
+        assert word not in picked.detail
+
+
 def test_an_at_least_rule_past_everything_listed_is_refused_as_not_listed() -> None:
     picked = pick_contract(
         _leg(_min_days(60)), listing=_listing((_MON, _FRI)), trading_date=_MON, underlying_price=_PRICE
@@ -537,7 +575,7 @@ def test_a_listing_for_another_date_than_the_one_asked_about_raises() -> None:
         pick_contract(_leg(_SAME_DAY), listing=listing, trading_date=_MON, underlying_price=_PRICE)
 
 
-@pytest.mark.parametrize("price", ["0", "-586", "NaN"])
-def test_picking_with_no_underlying_price_to_call_the_money_from_raises(price: str) -> None:
+@pytest.mark.parametrize("price", _NOT_A_PRICE)
+def test_picking_with_no_underlying_price_to_call_the_money_from_raises(price: Any) -> None:
     with pytest.raises(ValueError, match="price"):
-        pick_contract(_leg(_SAME_DAY), listing=_listing((_MON,)), trading_date=_MON, underlying_price=Decimal(price))
+        pick_contract(_leg(_SAME_DAY), listing=_listing((_MON,)), trading_date=_MON, underlying_price=price)
