@@ -7,17 +7,31 @@ and no replay arithmetic decides it.
 
 from __future__ import annotations
 
+import inspect
 from datetime import date
 from decimal import Decimal
-from typing import get_args
+from typing import get_args, get_type_hints
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from app.options.contract import OptionContract
-from app.options_backtest.results import ExitReason, Fill, LegTrade, Mark
+from app.options_backtest.market import PickRefusal
+from app.options_backtest.results import (
+    CancelReason,
+    EntryRefusal,
+    Event,
+    EventKind,
+    ExitReason,
+    Fill,
+    LegTrade,
+    Mark,
+)
 from app.options_backtest.saved_runs import StoredTrade
+from app.options_backtest.session_levels import ChartedFill, LevelKind
+from app.options_backtest.session_series import SeriesReason
 from app.schemas import options_backtest_run_detail as wire
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 D = Decimal
 OPEN_MS = 1_791_379_800_000
@@ -153,9 +167,95 @@ def test_the_page_size_the_server_holds_is_one_the_response_can_carry() -> None:
 
 @pytest.mark.parametrize(
     ("words", "members"),
-    [(wire.ExitReasonWord, [member.value for member in ExitReason])],
+    [
+        (wire.ExitReasonWord, [member.value for member in ExitReason]),
+        (wire.EventKindWord, [member.value for member in EventKind]),
+        (
+            wire.EventReasonWord,
+            [
+                *(member.value for member in PickRefusal),
+                *(member.value for member in EntryRefusal),
+                *(member.value for member in CancelReason),
+            ],
+        ),
+        (wire.LevelKindWord, [member.value for member in LevelKind]),
+        (wire.SeriesReasonWord, [member.value for member in SeriesReason]),
+        (wire.SeriesStateWord, ["shown", "not_shown"]),
+        (wire.FillKindWord, list(get_args(get_type_hints(ChartedFill)["kind"]))),
+    ],
 )
-def test_each_closed_set_a_trade_uses_is_exactly_the_members_of_the_enum_it_comes_from(
+def test_each_closed_set_on_the_wire_is_exactly_the_members_of_the_enum_it_comes_from(
     words: object, members: list[str]
 ) -> None:
     assert list(get_args(words)) == members
+
+
+def test_an_event_names_its_contract_by_symbol_and_its_price_as_text_and_says_no_date_in_its_words() -> None:
+    event = Event(
+        kind=EventKind.PICK_REFUSED,
+        at_ms=OPEN_MS + 300_000,
+        leg_id="far",
+        entry_number=0,
+        reason=PickRefusal.STRIKE_NOT_LISTED.value,
+        detail="the strike rule comes off the end of the 4 call strikes listed for 2026-10-09 with the underlying at 499.07",
+    )
+    priced = Event(EventKind.ENTRY_FILLED, OPEN_MS + 360_000, "call", 1, CALL, D("5.10"))
+
+    sent, sent_priced = (
+        wire.OptionsBacktestEventResponse.from_event(event),
+        wire.OptionsBacktestEventResponse.from_event(priced),
+    )
+
+    assert (
+        sent.detail
+        == "the strike rule comes off the end of the 4 call strikes listed for that day with the underlying at 499.07"
+    )
+    assert (sent.reason, sent.contract, sent.price_usd) == ("strike_not_listed", None, None)
+    assert (sent_priced.contract, sent_priced.price_usd, sent_priced.detail) == ("SPY261007C00500500", "5.10", None)
+
+
+def test_a_series_is_shown_with_no_reason_or_not_shown_with_a_reason_a_message_and_no_points() -> None:
+    shown = {"symbol": "SPY", "state": "shown", "points": [{"at_ms": OPEN_MS, "close_usd": "500.2"}]}
+    not_shown = {"symbol": "SPY", "state": "not_shown", "reason": "gone", "message": "words", "points": []}
+
+    wire.OptionsBacktestSeriesResponse.model_validate(shown)
+    wire.OptionsBacktestSeriesResponse.model_validate(not_shown)
+    for broken in (
+        shown | {"reason": "gone"},
+        shown | {"message": "words"},
+        not_shown | {"reason": None},
+        not_shown | {"message": None},
+        not_shown | {"points": shown["points"]},
+    ):
+        with pytest.raises(ValidationError):
+            wire.OptionsBacktestSeriesResponse.model_validate(broken)
+
+
+def _served_models() -> list[type[BaseModel]]:
+    return [
+        member
+        for _, member in inspect.getmembers(wire, inspect.isclass)
+        if issubclass(member, BaseModel) and member.__module__ == wire.__name__
+    ]
+
+
+def test_every_model_this_module_serves_is_named_for_the_feature_so_none_collides_with_another() -> None:
+    models = _served_models()
+
+    assert len(models) >= 10
+    assert [m.__name__ for m in models if not m.__name__.startswith("OptionsBacktest")] == []
+
+
+def test_every_instant_is_bounded_by_the_domains_ceiling_every_price_is_text_and_no_field_is_a_bare_dict() -> None:
+    for model in _served_models():
+        schema = model.model_json_schema()
+        for name, prop in schema.get("properties", {}).items():
+            where = f"{model.__name__}.{name}"
+            options = prop.get("anyOf", [prop])
+            if name.endswith("_ms"):
+                bounded = [o for o in options if o.get("type") == "integer"]
+                assert bounded and all(o.get("maximum") == MAX_TIMESTAMP_MS for o in bounded), where
+            if name.endswith("_usd"):
+                assert {o.get("type") for o in options} <= {"string", "null"}, where
+            assert not any(o.get("type") == "object" and "$ref" not in o for o in options), f"{where} is a naked dict"
+        assert "9223372036854775807" not in str(schema), f"{model.__name__} bounds a field by 2**63 - 1"

@@ -59,6 +59,9 @@ FRI_OPEN_MS = THU_OPEN_MS + 86_400_000
 CALL_500 = "SPY261007C00500000"
 PUT_500 = "SPY261007P00500000"
 PUT_495 = "SPY261007P00495000"
+FRI_CALL_500 = "SPY261009C00500000"
+FRI_PUT_500 = "SPY261009P00500000"
+FRI_PUT_495 = "SPY261009P00495000"
 
 
 def minute(open_ms: int, k: int) -> int:
@@ -113,7 +116,9 @@ def the_scene() -> dict[date, Day]:
         61: ("4.55", "4.50"),
     }
     wednesday_put = {5: ("2.00", "2.00"), 6: ("2.00", "2.02"), **flat("2.02", 7, 60), 61: ("2.10", "2.12")}
-    wednesday_put_495 = flat("1.00", 5, 60)
+    # The 495 put also has a bar closing at the open itself (it started at 09:29) and two closing after the close (it
+    # printed after 16:00). The replay never reads them and a timeline does not draw them.
+    wednesday_put_495 = {0: ("0.70", "0.70"), **flat("1.00", 5, 60), 391: ("0.50", "0.50"), 392: ("0.50", "0.50")}
     friday_call = {**flat("4.00", 5, 5), **flat("4.10", 6, 60)}
     underlying_without_minute_5 = {k: price for k, price in steady("500.20").items() if k != 5}
     return {

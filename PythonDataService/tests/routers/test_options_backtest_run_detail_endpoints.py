@@ -14,9 +14,7 @@ from typing import Any
 
 import httpx
 import pytest
-from httpx import ASGITransport
 
-from app.main import app
 from app.options_backtest.results import Fill, LegTrade, Mark
 from app.options_backtest.run import RunResult, run_sessions
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
@@ -32,20 +30,14 @@ from tests.options_backtest._detail_scene import (
     the_setup,
 )
 from tests.options_backtest._run_data import fake_data
-from tests.options_backtest._stored_runs import SaveRun
+from tests.options_backtest._stored_runs import PREFIX, SaveRun, no_date_in
+from tests.options_backtest._stored_runs import client as client
 from tests.options_backtest._stored_runs import is_the_job_alive as is_the_job_alive
 from tests.options_backtest._stored_runs import save_run as save_run
 from tests.options_backtest.setup_fixtures import conn as conn
 from tests.options_backtest.setup_fixtures import unique as unique
 
 D = Decimal
-PREFIX = "/api/research/options-backtest"
-A_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
-
-
-@pytest.fixture
-def client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
 @pytest.fixture(scope="module")
@@ -56,19 +48,6 @@ def scene() -> RunResult:
 @pytest.fixture(scope="module")
 def busy() -> RunResult:
     return a_busy_run()
-
-
-def _no_date_in(value: Any, path: str = "body") -> None:
-    """Nothing on the wire names a date: a session is its open in ms."""
-    if isinstance(value, str):
-        assert not A_DATE.search(value), f"{path}: {value!r} names a date"
-    elif isinstance(value, dict):
-        for key, each in value.items():
-            _no_date_in(key, f"{path}.{key}")
-            _no_date_in(each, f"{path}.{key}")
-    elif isinstance(value, list):
-        for at, each in enumerate(value):
-            _no_date_in(each, f"{path}[{at}]")
 
 
 # ── The trades, with the figures of the hand-worked scene ────────────────
@@ -194,7 +173,7 @@ async def test_the_trades_of_a_run_are_served_in_order_with_every_figure_the_sce
         ("put", sixteen_hundred_eastern),
         ("call", sixteen_hundred_eastern),
     }
-    _no_date_in(body)
+    no_date_in(body)
 
 
 async def test_every_price_is_text_in_plain_digits_and_every_instant_a_whole_number_under_the_ceiling(
@@ -224,7 +203,7 @@ async def test_every_price_is_text_in_plain_digits_and_every_instant_a_whole_num
             for name, value in (part or {}).items():
                 assert not name.endswith("_usd") or plain.fullmatch(value), (name, value)
                 assert not name.endswith("_ms") or (type(value) is int and 0 <= value <= MAX_TIMESTAMP_MS)
-    _no_date_in(body)
+    no_date_in(body)
 
 
 async def test_a_leg_marked_and_not_sold_is_told_apart_from_one_that_was_sold(

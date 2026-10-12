@@ -3,17 +3,22 @@
 ``save_run`` makes a run the way the job route and the worker do (``create_run``, then ``complete_run`` /
 ``fail_run`` / ``cancel_run``) and removes every run the test made afterwards. ``conn`` and ``unique`` skip the test
 without a database attested as disposable (``POSTGRES_URL_IS_EPHEMERAL=1``). ``is_the_job_alive`` is what the routes
-are told of a running job; a test sets ``["live"]``, and the default is "cannot tell".
+are told of a running job; a test sets ``["live"]``, and the default is "cannot tell". ``client`` calls the real app, and
+``no_date_in`` holds that nothing sent names a date: a session is its open in ms.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 import asyncpg
+import httpx
 import pytest
+from httpx import ASGITransport
 
+from app.main import app
 from app.options_backtest.run import RunResult
 from app.options_backtest.saved_runs import (
     FailureItem,
@@ -29,8 +34,28 @@ from tests.options_backtest.setup_fixtures import conn as conn
 from tests.options_backtest.setup_fixtures import unique as unique
 
 CREATED_AT_MS = 1_791_800_000_000
+PREFIX = "/api/research/options-backtest"
+A_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 SaveRun = Callable[..., Awaitable[int]]
+
+
+@pytest.fixture
+def client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+def no_date_in(value: Any, path: str = "body") -> None:
+    """Nothing on the wire names a date: a session is its open in ms."""
+    if isinstance(value, str):
+        assert not A_DATE.search(value), f"{path}: {value!r} names a date"
+    elif isinstance(value, dict):
+        for key, each in value.items():
+            no_date_in(key, f"{path}.{key}")
+            no_date_in(each, f"{path}.{key}")
+    elif isinstance(value, list):
+        for at, each in enumerate(value):
+            no_date_in(each, f"{path}[{at}]")
 
 
 @pytest.fixture

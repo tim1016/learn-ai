@@ -1,0 +1,440 @@
+"""One session of a saved run, over HTTP (#3030): its stored facts, and the series, levels and fills of the one-day timeline.
+
+Saved runs live in a real database, so these run only against one attested as disposable
+(``POSTGRES_URL_IS_EPHEMERAL=1``) and skip without one. The run is made over a lake in a temporary folder
+(``_detail_scene.py``, whose docstring works the figures out), so the pins are the hashes of real stored files and the
+route reads the same files back. A minute is "m5": the bar closing five minutes after the open.
+"""
+
+from __future__ import annotations
+
+from datetime import date
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+
+import httpx
+import pytest
+import respx
+
+from app.lean_sidecar.trading_calendar import session_window_for_date
+from app.options_backtest.results import Mark
+from app.options_backtest.run import RunResult, run_sessions
+from app.options_backtest.setup import MS_PER_MINUTE, OptionsBacktestSetup
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
+from tests._helpers.fake_lake_catalog import FakeCatalog
+from tests.options_backtest._a_run import a_busy_run
+from tests.options_backtest._detail_scene import (
+    CALL_500,
+    FRI_CALL_500,
+    FRI_OPEN_MS,
+    FRI_PUT_495,
+    FRI_PUT_500,
+    PUT_495,
+    PUT_500,
+    SESSIONS,
+    THU_OPEN_MS,
+    WED_OPEN_MS,
+    run_the_scene,
+    the_scene,
+    the_setup,
+)
+from tests.options_backtest._lake import fake_catalog as fake_catalog
+from tests.options_backtest._lake import raw_root
+from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixed
+from tests.options_backtest._lake import tmp_lake as tmp_lake
+from tests.options_backtest._run_data import HALF_DAY, Day, fake_data, steady
+from tests.options_backtest._stored_runs import PREFIX, SaveRun, no_date_in
+from tests.options_backtest._stored_runs import client as client
+from tests.options_backtest._stored_runs import is_the_job_alive as is_the_job_alive
+from tests.options_backtest._stored_runs import save_run as save_run
+from tests.options_backtest.setup_fixtures import conn as conn
+from tests.options_backtest.setup_fixtures import setup_body
+from tests.options_backtest.setup_fixtures import unique as unique
+
+D = Decimal
+
+
+def _minute_of(at_ms: int, open_ms: int) -> int:
+    return (at_ms - open_ms) // MS_PER_MINUTE
+
+
+async def _get(client: httpx.AsyncClient, run_id: int, open_ms: int) -> httpx.Response:
+    return await client.get(f"{PREFIX}/runs/{run_id}/sessions/{open_ms}")
+
+
+def _series_minutes(series: dict[str, Any], open_ms: int) -> list[int]:
+    return [_minute_of(point["at_ms"], open_ms) for point in series["points"]]
+
+
+# ── The busy Wednesday ───────────────────────────────────────────────────
+
+
+@respx.mock
+async def test_the_busy_session_is_served_with_its_stored_facts_in_order_and_every_figure_the_scene_works_out(
+    client: httpx.AsyncClient, save_run: SaveRun, fake_catalog: FakeCatalog, tmp_lake: Path, is_the_job_alive: Any
+) -> None:
+    run_id = await save_run(await run_the_scene(), "busy")
+
+    response = await _get(client, run_id, WED_OPEN_MS)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["run_id"], body["session_open_ms"], body["session_close_ms"]) == (
+        run_id,
+        WED_OPEN_MS,
+        WED_OPEN_MS + 390 * MS_PER_MINUTE,
+    )
+    # 10,000.00 less 8.70 - 121.30 - 31.30 = -143.90 is 9,856.10.
+    assert (body["status"], body["skip_reason"]) == ("traded", None)
+    assert (D(body["cash_before_usd"]), D(body["cash_after_usd"]), D(body["profit_usd"])) == (
+        D("10000"),
+        D("9856.10"),
+        D("-143.90"),
+    )
+    assert [(t["trade_number"], t["leg_id"], t["entry_number"], D(t["pnl_usd"])) for t in body["trades"]] == [
+        (0, "put", 0, D("8.70")),
+        (1, "call", 0, D("-121.30")),
+        (2, "call", 1, D("-31.30")),
+    ]
+
+    def event(e: dict[str, Any]) -> tuple[Any, ...]:
+        price = None if e["price_usd"] is None else D(e["price_usd"])
+        return (
+            e["kind"],
+            _minute_of(e["at_ms"], WED_OPEN_MS),
+            e["leg_id"],
+            e["entry_number"],
+            e["contract"],
+            price,
+            e["reason"],
+        )
+
+    # In the order they happened, worked from the scene (see its docstring).
+    assert [event(e) for e in body["events"]] == [
+        ("picked", 5, "call", 0, CALL_500, None, None),
+        ("starting_price_taken", 5, "call", 0, CALL_500, D("4.00"), None),
+        ("picked", 5, "put", 0, PUT_500, None, None),
+        ("picked", 5, "lag", 0, PUT_495, None, None),
+        ("starting_price_taken", 5, "lag", 0, PUT_495, D("1.00"), None),
+        ("entry_filled", 6, "put", 0, PUT_500, D("2.00"), None),
+        ("momentum_hit", 10, "call", 0, CALL_500, D("5.00"), None),
+        ("entry_filled", 11, "call", 0, CALL_500, D("5.10"), None),
+        ("stop_hit", 20, "call", 0, CALL_500, D("4.00"), None),
+        ("re_entry_earned", 20, "call", 1, None, None, None),
+        ("close_filled", 21, "call", 0, CALL_500, D("3.90"), None),
+        ("picked", 21, "call", 1, CALL_500, None, None),
+        ("starting_price_taken", 21, "call", 1, CALL_500, D("3.80"), None),
+        ("momentum_hit", 30, "call", 1, CALL_500, D("4.80"), None),
+        ("entry_filled", 31, "call", 1, CALL_500, D("4.85"), None),
+        ("exit_time", 60, "call", 1, CALL_500, None, None),
+        ("exit_time", 60, "put", 0, PUT_500, None, None),
+        ("leg_cancelled", 60, "lag", 0, None, None, "exit_time"),
+        ("close_filled", 61, "call", 1, CALL_500, D("4.55"), None),
+        ("close_filled", 61, "put", 0, PUT_500, D("2.10"), None),
+    ]
+    no_date_in(body)
+
+
+@respx.mock
+async def test_the_busy_session_draws_its_lines_and_marks_its_fills_where_the_scene_puts_them(
+    client: httpx.AsyncClient, save_run: SaveRun, fake_catalog: FakeCatalog, tmp_lake: Path, is_the_job_alive: Any
+) -> None:
+    run_id = await save_run(await run_the_scene(), "lines")
+
+    body = (await _get(client, run_id, WED_OPEN_MS)).json()
+
+    def line(each: dict[str, Any]) -> tuple[Any, ...]:
+        return (
+            each["kind"],
+            each["leg_id"],
+            each["entry_number"],
+            each["contract"],
+            D(each["price_usd"]),
+            _minute_of(each["from_ms"], WED_OPEN_MS),
+            _minute_of(each["to_ms"], WED_OPEN_MS),
+        )
+
+    assert [line(each) for each in body["levels"]] == [
+        ("starting_price", "call", 0, CALL_500, D("4.00"), 5, 10),
+        ("momentum", "call", 0, CALL_500, D("5.00"), 5, 10),
+        ("starting_price", "lag", 0, PUT_495, D("1.00"), 5, 60),
+        ("momentum", "lag", 0, PUT_495, D("0.90"), 5, 60),
+        ("stop", "call", 0, CALL_500, D("4.08"), 11, 20),
+        ("starting_price", "call", 1, CALL_500, D("3.80"), 21, 30),
+        ("momentum", "call", 1, CALL_500, D("4.75"), 21, 30),
+        ("stop", "call", 1, CALL_500, D("3.88"), 31, 60),
+    ]
+    assert [
+        (
+            f["kind"],
+            f["leg_id"],
+            f["entry_number"],
+            _minute_of(f["bar_close_ms"], WED_OPEN_MS),
+            D(f["seen_usd"]),
+            D(f["filled_usd"]),
+            f["exit_reason"],
+        )
+        for f in body["fills"]
+    ] == [
+        ("entry", "put", 0, 6, D("2.00"), D("2.00"), None),
+        ("entry", "call", 0, 11, D("5.10"), D("5.10"), None),
+        ("exit", "call", 0, 21, D("3.90"), D("3.90"), "stop"),
+        ("entry", "call", 1, 31, D("4.85"), D("4.85"), None),
+        ("exit", "put", 0, 61, D("2.10"), D("2.10"), "exit_time"),
+        ("exit", "call", 1, 61, D("4.55"), D("4.55"), "exit_time"),
+    ]
+    assert body["marks"] == []
+
+
+@respx.mock
+async def test_the_series_are_the_lakes_closes_with_no_point_where_nothing_traded_and_none_outside_the_session(
+    client: httpx.AsyncClient, save_run: SaveRun, fake_catalog: FakeCatalog, tmp_lake: Path, is_the_job_alive: Any
+) -> None:
+    run_id = await save_run(await run_the_scene(), "series")
+
+    body = (await _get(client, run_id, WED_OPEN_MS)).json()
+
+    underlying = body["underlying"]
+    assert (underlying["symbol"], underlying["contract"], underlying["state"]) == ("SPY", None, "shown")
+    assert (underlying["reason"], underlying["message"]) == (None, None)
+    assert _series_minutes(underlying, WED_OPEN_MS) == list(range(1, 391))
+    assert {D(point["close_usd"]) for point in underlying["points"]} == {D("500.20")}
+    assert [each["symbol"] for each in body["contracts"]] == [CALL_500, PUT_495, PUT_500]
+    call, lag, put = body["contracts"]
+    # No bar at m40 and m41; nothing is filled in.
+    assert _series_minutes(call, WED_OPEN_MS) == [m for m in range(5, 62) if m not in (40, 41)]
+    assert _series_minutes(put, WED_OPEN_MS) == list(range(5, 62))
+    # The 495 put has bars closing at the open and after the close in the lake; the timeline starts at m5 and ends at m60.
+    assert _series_minutes(lag, WED_OPEN_MS) == list(range(5, 61))
+    assert call["contract"] == {
+        "symbol": CALL_500,
+        "underlying": "SPY",
+        "right": "call",
+        "strike_usd": "500",
+        "expiry_ms": WED_OPEN_MS + 390 * MS_PER_MINUTE,
+    }
+    closes = {_minute_of(p["at_ms"], WED_OPEN_MS): D(p["close_usd"]) for p in call["points"]}
+    assert (closes[5], closes[10], closes[20], closes[30], closes[61]) == (
+        D("4.00"),
+        D("5.00"),
+        D("4.00"),
+        D("4.80"),
+        D("4.50"),
+    )
+    assert all(type(p["close_usd"]) is str and type(p["at_ms"]) is int for p in call["points"])
+
+
+# ── A pin that does not hold ─────────────────────────────────────────────
+
+
+@respx.mock
+async def test_a_series_whose_file_was_deleted_is_not_served_with_its_reason_and_the_rest_of_the_session_still_is(
+    client: httpx.AsyncClient, save_run: SaveRun, fake_catalog: FakeCatalog, tmp_lake: Path, is_the_job_alive: Any
+) -> None:
+    run_id = await save_run(await run_the_scene(), "gone")
+    (raw_root(tmp_lake) / "option/usa/minute/spy/spy261007c00500000/20261007_trade.zip").unlink()
+
+    response = await _get(client, run_id, WED_OPEN_MS)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    call = next(each for each in body["contracts"] if each["symbol"] == CALL_500)
+    assert (call["state"], call["reason"], call["points"]) == ("not_shown", "gone", [])
+    assert call["message"] and call["contract"]["symbol"] == CALL_500
+    # The other series are served, and so is everything stored: trades, events, levels, fills.
+    others = [each for each in body["contracts"] if each["symbol"] != CALL_500]
+    assert all(each["state"] == "shown" and each["points"] for each in others)
+    assert body["underlying"]["state"] == "shown"
+    assert (len(body["trades"]), len(body["events"]), len(body["levels"]), len(body["fills"])) == (3, 20, 8, 6)
+    no_date_in(body)
+
+
+@respx.mock
+async def test_a_file_the_catalog_no_longer_admits_is_a_changed_series(
+    client: httpx.AsyncClient, save_run: SaveRun, fake_catalog: FakeCatalog, tmp_lake: Path, is_the_job_alive: Any
+) -> None:
+    run_id = await save_run(await run_the_scene(), "changed")
+    (raw_root(tmp_lake) / "equity/usa/minute/spy/20261007_trade.zip").write_bytes(b"changed after its receipt")
+
+    body = (await _get(client, run_id, WED_OPEN_MS)).json()
+
+    assert (body["underlying"]["state"], body["underlying"]["reason"], body["underlying"]["points"]) == (
+        "not_shown",
+        "changed",
+        [],
+    )
+    assert all(each["state"] == "shown" for each in body["contracts"])
+
+
+# ── Sessions that did not trade ──────────────────────────────────────────
+
+
+@respx.mock
+async def test_a_session_skipped_for_want_of_an_underlying_price_answers_with_its_facts_and_the_underlyings_series(
+    client: httpx.AsyncClient, save_run: SaveRun, fake_catalog: FakeCatalog, tmp_lake: Path, is_the_job_alive: Any
+) -> None:
+    run_id = await save_run(await run_the_scene(), "skipped")
+
+    body = (await _get(client, run_id, THU_OPEN_MS)).json()
+
+    # The cash stays at Wednesday's end. Thursday has no bar at m5, so 389 points and no point at m5.
+    assert (body["status"], body["skip_reason"]) == ("skipped", "underlying_did_not_trade")
+    assert (D(body["cash_before_usd"]), D(body["cash_after_usd"]), D(body["profit_usd"])) == (
+        D("9856.10"),
+        D("9856.10"),
+        D("0"),
+    )
+    assert (body["trades"], body["events"], body["levels"], body["fills"], body["marks"], body["contracts"]) == (
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+    )
+    assert body["underlying"]["state"] == "shown"
+    assert _series_minutes(body["underlying"], THU_OPEN_MS) == [m for m in range(1, 391) if m != 5]
+
+
+@respx.mock
+async def test_a_session_that_made_no_trade_still_has_its_lines_and_the_series_of_the_contracts_that_took_a_price(
+    client: httpx.AsyncClient, save_run: SaveRun, fake_catalog: FakeCatalog, tmp_lake: Path, is_the_job_alive: Any
+) -> None:
+    run_id = await save_run(await run_the_scene(), "quiet")
+
+    body = (await _get(client, run_id, FRI_OPEN_MS)).json()
+
+    assert body["status"] == "no_trade" and D(body["profit_usd"]) == 0
+    assert body["trades"] == [] and body["fills"] == [] and body["marks"] == []
+    assert [(e["kind"], _minute_of(e["at_ms"], FRI_OPEN_MS), e["leg_id"]) for e in body["events"]] == [
+        ("picked", 5, "call"),
+        ("starting_price_taken", 5, "call"),
+        ("picked", 5, "put"),
+        ("picked", 5, "lag"),
+        ("starting_price_taken", 5, "lag"),
+        ("entry_dropped", 6, "put"),
+        ("leg_cancelled", 60, "call"),
+        ("leg_cancelled", 60, "lag"),
+    ]
+    # Worked from the setup: 4.00 x 1.25 = 5.00 for the call, 1.00 x 0.9 = 0.90 for the lag leg, both to the exit time.
+    assert [(each["kind"], each["leg_id"], D(each["price_usd"])) for each in body["levels"]] == [
+        ("starting_price", "call", D("4.00")),
+        ("momentum", "call", D("5.00")),
+        ("starting_price", "lag", D("1.00")),
+        ("momentum", "lag", D("0.90")),
+    ]
+    # The put 500 was picked and its buy dropped, so it has no series; the other two took a starting price.
+    assert [each["symbol"] for each in body["contracts"]] == [FRI_CALL_500, FRI_PUT_495]
+    assert FRI_PUT_500 not in [each["symbol"] for each in body["contracts"]]
+
+
+async def test_a_session_skipped_on_its_window_read_nothing_so_it_has_no_series_to_check_and_serves_none(
+    client: httpx.AsyncClient, save_run: SaveRun, is_the_job_alive: Any
+) -> None:
+    # Entry 190 minutes after the open and exit 30 before the close: 190 to 360 on a full day, 190 to 180 on a half day.
+    setup = OptionsBacktestSetup.model_validate(
+        setup_body(
+            entry={"anchor": "open", "offset_ms": 190 * MS_PER_MINUTE},
+            exit={"anchor": "close", "offset_ms": 30 * MS_PER_MINUTE},
+        )
+    )
+    half_day: date = HALF_DAY
+    result = run_sessions(setup, [half_day], fake_data({half_day: Day(underlying=steady("500.20"))}))
+    run_id = await save_run(result, "window")
+    opened = session_window_for_date(half_day).open_ms_utc
+
+    body = (await _get(client, run_id, opened)).json()
+
+    assert (body["status"], body["skip_reason"]) == ("skipped", "window_does_not_fit")
+    assert body["session_close_ms"] - body["session_open_ms"] == 210 * MS_PER_MINUTE
+    assert (body["underlying"]["state"], body["underlying"]["reason"]) == ("not_shown", "no_pin")
+    assert body["underlying"]["points"] == [] and body["contracts"] == []
+
+
+# ── What is stored does not depend on the lake ───────────────────────────
+
+
+async def test_the_stored_facts_marks_and_dateless_words_are_served_when_the_lake_holds_nothing(
+    client: httpx.AsyncClient,
+    save_run: SaveRun,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    is_the_job_alive: Any,
+) -> None:
+    busy: RunResult = a_busy_run()
+    run_id = await save_run(busy, "stored")
+    incomplete = next(s for s in busy.sessions if any(isinstance(t.exit, Mark) for t in s.outcome.trades))
+    refused = next(s for s in busy.sessions if any(e.detail for e in s.outcome.events))
+
+    marked = (await _get(client, run_id, incomplete.session_open_ms)).json()
+    pick_refused = (await _get(client, run_id, refused.session_open_ms)).json()
+
+    # No file is in the lake, so every series is gone and none has a point; the stored facts do not need the lake.
+    for body in (marked, pick_refused):
+        assert body["underlying"]["reason"] == "gone"
+        assert all(each["reason"] == "gone" and each["points"] == [] for each in body["contracts"])
+    saved_marks = [t for t in incomplete.outcome.trades if isinstance(t.exit, Mark)]
+    assert saved_marks and [
+        (m["leg_id"], m["entry_number"], m["contract"], m["bar_close_ms"], D(m["price_usd"])) for m in marked["marks"]
+    ] == [(t.leg_id, t.entry_number, t.contract.occ_symbol, t.exit.bar_close_ms, t.exit.price) for t in saved_marks]
+    assert marked["status"] == "incomplete"
+    assert [f["kind"] for f in marked["fills"]].count("exit") == len(marked["trades"]) - len(saved_marks)
+    # The stored words of a refused pick name the day; what is sent says "that day" and no date.
+    [words] = [e["detail"] for e in pick_refused["events"] if e["detail"]]
+    assert (
+        words
+        == "the strike rule comes off the end of the 4 call strikes listed for that day with the underlying at 499.07"
+    )
+    no_date_in(marked)
+    no_date_in(pick_refused)
+
+
+# ── What it refuses ──────────────────────────────────────────────────────
+
+
+async def test_a_session_the_run_did_not_test_is_a_404_and_so_is_a_run_that_does_not_exist(
+    client: httpx.AsyncClient, save_run: SaveRun, is_the_job_alive: Any
+) -> None:
+    run_id = await save_run(run_sessions(*_the_scene_args()), "refused")
+
+    not_tested = await _get(client, run_id, WED_OPEN_MS + MS_PER_MINUTE)
+    no_run = await _get(client, 2**52, WED_OPEN_MS)
+
+    assert not_tested.status_code == 404
+    assert not_tested.json()["detail"]["code"] == "OPTIONS_BACKTEST_SESSION_NOT_IN_RUN"
+    assert no_run.status_code == 404 and no_run.json()["detail"]["code"] == "OPTIONS_BACKTEST_RUN_NOT_FOUND"
+
+
+def _the_scene_args() -> tuple[Any, ...]:
+    return the_setup(), SESSIONS, fake_data(the_scene())
+
+
+async def test_a_run_that_is_not_complete_has_no_session_to_show_and_is_a_409_before_anything_is_looked_for(
+    client: httpx.AsyncClient, save_run: SaveRun, is_the_job_alive: dict[str, bool | None]
+) -> None:
+    result = run_sessions(*_the_scene_args())
+    running = await save_run(result, "running", end="running")
+    failed = await save_run(result, "failed", end="failed")
+    is_the_job_alive["live"] = True
+
+    from_running = await _get(client, running, WED_OPEN_MS + 1)
+    from_failed = await _get(client, failed, WED_OPEN_MS + 1)
+
+    for response, status in ((from_running, "running"), (from_failed, "failed")):
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_RUN_NOT_COMPLETE"
+        assert status in response.json()["detail"]["message"]
+
+
+@pytest.mark.parametrize(
+    "run_id, session",
+    [(0, 1), (-1, 1), ("abc", 1), (1, -1), (1, MAX_TIMESTAMP_MS + 1), (1, "x"), (2**53, 1)],
+)
+async def test_a_request_that_cannot_be_one_is_a_422(
+    client: httpx.AsyncClient, run_id: object, session: object
+) -> None:
+    async with client as c:
+        response = await c.get(f"{PREFIX}/runs/{run_id}/sessions/{session}")
+
+    assert response.status_code == 422, response.text
