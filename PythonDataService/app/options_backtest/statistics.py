@@ -183,9 +183,10 @@ class RunSummary:
     picks_refused_by_reason: tuple[tuple[PickRefusal, int], ...]
     # A leg whose contract did not trade at the minute its starting price was due.
     legs_without_a_starting_price: int
-    # A re-entry that ended without entering, whatever the cause: its pick was refused, its contract had no starting
-    # price, or its entry was dropped at once. Each of those is also counted under its own heading above, so this
-    # overlaps them and is not to be added to them: it says how many of those incidents ended a re-entry.
+    # A re-entry that ended without entering for want of market data: its pick was refused, its contract had no
+    # starting price, or its entry was dropped at once. Each of those is also counted under its own heading above,
+    # so this overlaps them and is not to be added to them: it says how many of those incidents ended a re-entry.
+    # A re-entry refused for want of cash is not among them; it is an entry refused for cash.
     re_entries_lost: int
     # --- tables
     by_day: tuple[DayRow, ...]
