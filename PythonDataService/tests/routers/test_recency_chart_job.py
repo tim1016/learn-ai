@@ -23,7 +23,7 @@ from app.main import app
 from app.research.recency import service as recency_service
 from app.research.recency.models import LaunchView
 from app.research.recency.runner import RecencyLaunchConfig, run_recency
-from app.routers import jobs as jobs_router
+from app.routers import recency_jobs as jobs_router
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
@@ -399,3 +399,90 @@ class TestRecordRecencyAbortState:
         recency_service.record_abort_state("launch-2", "CANCELLED", attempt=1)
 
         assert seen == {"launch_id": "launch-2", "status": "CANCELLED", "attempt": 1}
+
+
+# ── The runtime's gated worker (#3051) ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_runtime_dispatch_runs_the_launch_through_the_gated_worker(monkeypatch) -> None:
+    """The runtime executes the launch under the checkpoint lease, runs through the dispatch (#3051)."""
+    import asyncio
+    import os
+    from types import SimpleNamespace
+
+    if not os.getenv("POSTGRES_URL") or os.getenv("POSTGRES_URL_IS_EPHEMERAL", "").lower() not in ("1", "true"):
+        pytest.skip("live-DB endpoint tests need an ephemeral POSTGRES_URL")
+
+    import app.jobs.progress as progress_module
+    from app.research.grid_search.models import CellResult  # noqa: F401  (kept off the wire; runs arrive as pieces)
+    from app.research.persistence import ownership
+    from app.research.recency import dispatch as recency_dispatch_module
+    from tests.jobs.conftest import _FakeRedis
+
+    job = f"job-recency-runtime-{id(monkeypatch)}"
+    built: dict[str, object] = {}
+    fake_redis = _FakeRedis()
+
+    monkeypatch.setattr(progress_module, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr(ownership, "process_authority", lambda: SimpleNamespace(boot_generation=1, connected=True))
+    monkeypatch.setenv("RESEARCH_RUNTIME", "1")
+
+    def fake_runtime_run_dispatch(window, execution, *, attempt, job_id, on_checkpoint, cancel_check, on_log=None, pool=None):
+        built["attempt"] = attempt
+        built["window"] = dict(window)
+
+        def run(runs):
+            on_checkpoint({"phase": "search", "cursor_kind": "durable_completions", "cursor": 1})
+            for run_spec in runs:
+                yield run_spec, {
+                    "data_policy": '{"adjusted": true}',
+                    "trades": [],
+                    "study_id": None,
+                }, None
+
+        return run
+
+    monkeypatch.setattr(recency_dispatch_module, "runtime_run_dispatch", fake_runtime_run_dispatch)
+
+    def fake_run_in_thread(job_id, work, **kwargs):
+        built["emit_renews_lease"] = kwargs.get("emit_renews_lease")
+
+        class _Emit:
+            job_id = job
+
+            def phase(self, phase):
+                pass
+
+            def progress(self, done, total, unit=None):
+                pass
+
+            def log(self, message, level=None):
+                pass
+
+        class _Cancel:
+            def raise_if_cancelled(self):
+                return None
+
+        built["outcome"] = asyncio.to_thread(work, _Emit(), _Cancel())
+
+    monkeypatch.setattr(jobs_router, "run_in_thread", fake_run_in_thread)
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        launched = await client.post(
+            "/api/jobs-internal/recency-chart",
+            json={
+                "jobId": job,
+                "strategies": [{"strategyKey": "ema_crossover_signal", "paramRanges": {"gapBps": {"type": "value_list", "values": [2.0]}}}],
+                "symbols": ["SPY"],
+                "windowStartMs": 1735689600000,
+                "windowEndMs": 1738368000000,
+            },
+        )
+        assert launched.status_code == 202, launched.text
+        outcome = await built["outcome"]
+
+    assert outcome["attempt"] == 1 and outcome["failed_runs"] == 0 and outcome["succeeded_runs"] == 1
+    assert built["emit_renews_lease"] is False, "in the runtime, only accepted checkpoints renew the lease (#3041)"
+    assert built["window"] == {"start_ms": 1735689600000, "end_ms": 1738368000000}
+    assert fake_redis.expires, "the gated launch renewed the lease through accepted checkpoints"

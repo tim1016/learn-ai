@@ -54,26 +54,6 @@ def is_research_runtime() -> bool:
     return os.environ.get("RESEARCH_RUNTIME", "").strip() == "1"
 
 
-def refuse_forwarded_research_dispatch(noun: str) -> None:
-    """503 when this API must forward a research dispatch it cannot forward yet (#3043).
-
-    ADR 0077: in ``RESEARCH_EXECUTION_MODE=research`` the API never starts a
-    research thread — execution belongs to the isolated runtime. Golden
-    Search (#3043), Grid Search (#3049) and the Walk-Forward Study (#3050)
-    are forwarded today; Recency joins them in a later #3034 slice, and
-    until then its dispatches fail loudly here rather than silently running
-    unisolated, unstamped work on the forwarding API.
-    """
-    if research_forwarding_enabled() and not is_research_runtime():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                f"{noun} cannot start on this API while RESEARCH_EXECUTION_MODE=research; "
-                "it joins the isolated research runtime in a later PRD #3034 slice"
-            ),
-        )
-
-
 def _require_runtime_url() -> str:
     url = settings.RESEARCH_RUNTIME_URL.strip().rstrip("/")
     if not url:
@@ -214,6 +194,57 @@ async def _reconcile_walk_forward_after_transport_failure(payload: dict[str, Any
     raise HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY,
         detail=f"the research runtime did not accept the study dispatch ({type(exc).__name__}); no study attempt started",
+    )
+
+
+async def forward_recency_chart_job(payload: dict[str, Any]) -> dict[str, Any]:
+    """Hand one recency-chart dispatch to the research runtime (#3051); reconcile on transport failure.
+
+    Same contract as the other hops: the runtime's refusals pass through,
+    and a transport failure is reconciled against the durable launch row
+    before the API answers.
+    """
+    try:
+        response = await _post_runtime_dispatch("/api/jobs-internal/recency-chart", payload)
+    except httpx.HTTPError as exc:
+        return await _reconcile_recency_after_transport_failure(payload, exc)
+    return _answer_of(response)
+
+
+async def _recency_job_binding(payload: dict[str, Any]) -> str | None:
+    """The launch id a job is bound to, if any — the durable evidence a recency reconcile reads (#3051).
+
+    A fresh launch's id is its job id; a resume names the launch while the
+    worker's claim binds the job. Either way the durable row plus a live
+    lease is the evidence a dispatch reached a worker.
+    """
+    from app.research.recency import service as recency_service
+
+    job_id = str(payload.get("job_id", ""))
+    launch_id = str(payload.get("resume_launch_id") or job_id)
+    launch = await recency_service.load_launch(launch_id)
+    if launch is None:
+        return None
+    return launch.launch_id
+
+
+async def _reconcile_recency_after_transport_failure(payload: dict[str, Any], exc: Exception) -> dict[str, Any]:
+    """A recency dispatch's timeout is not a refusal: ask the durable row what actually happened (#3051)."""
+    from app.research.persistence import lifecycle
+
+    job_id = str(payload.get("job_id", ""))
+    bound = await _recency_job_binding(payload)
+    if bound is not None and lifecycle.job_is_live(job_id) is True:
+        logger.warning(
+            "research runtime transport failed after a live worker took the recency dispatch; joining the original dispatch (%s)",
+            exc,
+            exc_info=True,
+        )
+        return {"job_id": job_id, "launch_id": bound, "status": "queued"}
+    logger.error("research runtime recency dispatch failed without a live worker on the job: %s", exc, exc_info=True)
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail=f"the research runtime did not accept the recency dispatch ({type(exc).__name__}); no launch attempt started",
     )
 
 

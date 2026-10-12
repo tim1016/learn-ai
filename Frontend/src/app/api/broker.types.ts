@@ -4684,61 +4684,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jobs-internal/dataset-zip": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Start Dataset Zip Job
-         * @description Kick off a dataset fetch + bundle into a ZIP archive.
-         *
-         *     Maps the existing dataset bundling pipeline (`_fetch_and_process` +
-         *     `_build_zip_with_events`) onto the generic job framework. The pipeline
-         *     already supports ``on_event`` and ``cancel_check`` callables — we
-         *     plug those into :class:`ProgressEmitter` and
-         *     :class:`CancellationCheck` respectively, so the inner code is
-         *     unchanged. The final ZIP bytes go through ``completed_blob`` which
-         *     parks them at ``job:{id}:result-blob``; the .NET ``GET /api/jobs/
-         *     {id}/download`` streams them with the right Content-Disposition.
-         */
-        post: operations["start_dataset_zip_job_api_jobs_internal_dataset_zip_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jobs-internal/engine-backtest": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Start Engine Backtest Job
-         * @description Kick off a LEAN-engine backtest in a worker thread. Returns 202.
-         *
-         *     The Engine Lab UI is the primary caller; the .NET JobsApi forwards
-         *     the request after minting the ``job_id`` and writing the initial
-         *     state record to Redis. The worker emits ``phase`` and ``log`` events
-         *     to the same Redis stream, then ``completed`` with the
-         *     EngineBacktestResponse-shaped result body.
-         */
-        post: operations["start_engine_backtest_job_api_jobs_internal_engine_backtest_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/jobs-internal/feature-research": {
         parameters: {
             query?: never;
@@ -4890,16 +4835,22 @@ export interface paths {
         put?: never;
         /**
          * Start Recency Chart Job
-         * @description Validate, make the launch durable, and run the Recency Chart sweep on a worker thread. Returns 202.
+         * @description Validate, make the launch durable, and run the Recency Chart sweep. Returns 202.
          *
-         *     A malformed or oversized grid (D11) is refused before anything is written;
-         *     the launch row exists before the worker starts (D20); a redelivered
-         *     ``job_id`` is acknowledged without a second worker while the first still
-         *     holds the job, and refused (409) once that job is closed or if the
-         *     configuration differs. A resume (#1938) instead names an existing launch:
-         *     the new job id is bound to the durable record by the worker's claim, the
-         *     recorded cells are skipped, and the spec fields are ignored — the stored
-         *     configuration governs.
+         *     In research mode the API forwards the dispatch and never creates,
+         *     stamps or starts a thread (#3051): the runtime does, and runs the
+         *     launch's independent runs through the shared research workers. Here —
+         *     the local mode, or this process being the runtime — the launch runs on
+         *     a worker thread, in this process at the local mode.
+         *
+         *     A malformed or oversized grid (D11) is refused before anything is
+         *     written; the launch row exists before the worker starts (D20); a
+         *     redelivered ``job_id`` is acknowledged without a second worker while
+         *     the first still holds the job, and refused (409) once that job is
+         *     closed or if the configuration differs. A resume (#1938) instead names
+         *     an existing launch: the new job id is bound to the durable record by
+         *     the worker's claim, the recorded cells are skipped, and the spec
+         *     fields are ignored — the stored configuration governs.
          *     Everything after the HTTP boundary is ``app.research.recency.service``.
          */
         post: operations["start_recency_chart_job_api_jobs_internal_recency_chart_post"];
@@ -10945,7 +10896,6 @@ export interface components {
         /**
          * CrossSectionalJobRequest
          * @description Body of POST /api/jobs-internal/cross-sectional.
-         *
          *     The Frontend's research request, plus an injected ``job_id`` from the
          *     .NET JobsApi.
          */
@@ -11608,21 +11558,6 @@ export interface components {
              * @description Resolved half-open window start (int64 ms UTC). Date-only intent resolves to the session open.
              */
             window_start_ms_utc: number;
-        };
-        /**
-         * DatasetZipJobRequest
-         * @description Body of POST /api/jobs-internal/dataset-zip.
-         *
-         *     Carries every field the existing :class:`DatasetGenerationRequest`
-         *     accepts — since the dataset request is an established schema, we
-         *     accept it as a ``dataset`` sub-object rather than flattening, so the
-         *     bundler keeps its single source of truth for shape validation.
-         */
-        DatasetZipJobRequest: {
-            /** Dataset */
-            dataset?: Record<string, never>;
-            /** Jobid */
-            jobId: string;
         };
         /** DayCandleBarModel */
         DayCandleBarModel: {
@@ -12370,21 +12305,6 @@ export interface components {
              * @default 10
              */
             slow_period?: number;
-        };
-        /**
-         * EngineBacktestJobRequest
-         * @description Body of POST /api/jobs-internal/engine-backtest.
-         *
-         *     Mirrors the existing synchronous EngineBacktestRequest shape but
-         *     accepts it as a ``backtest`` sub-object so the field validation
-         *     remains the single source of truth. The .NET JobsApi forwards the
-         *     Engine Lab POST body verbatim plus an injected ``job_id``.
-         */
-        EngineBacktestJobRequest: {
-            /** Backtest */
-            backtest?: Record<string, never>;
-            /** Jobid */
-            jobId: string;
         };
         /**
          * EngineBacktestRequest
@@ -13159,11 +13079,9 @@ export interface components {
         /**
          * FeatureResearchJobRequest
          * @description Body of POST /api/jobs-internal/feature-research.
-         *
          *     The runner fetches bars from Polygon itself — the Frontend sends only
          *     the symbol + date range + feature, no payload of OHLCV. This keeps
          *     the .NET round-trip small and matches the cross-sectional pattern.
-         *
          *     Inherits all defaults from the base (``multiplier=1``,
          *     ``timespan="minute"``, ``session="rth"``) — those match the
          *     pre-migration shape exactly.
@@ -19363,7 +19281,6 @@ export interface components {
         /**
          * LeanEngineRunJobRequest
          * @description Body of POST /api/jobs-internal/lean-engine-run.
-         *
          *     Wraps the existing synchronous ``TrustedRunRequestModel`` shape as a
          *     ``request`` sub-object so the lean-sidecar router's Pydantic
          *     validation remains the single source of truth for the payload. The
@@ -25207,7 +25124,6 @@ export interface components {
         /**
          * SignalEngineJobRequest
          * @description Body of POST /api/jobs-internal/signal-engine.
-         *
          *     **Default override**: ``multiplier=15`` to preserve the
          *     pre-migration default. Signal-engine processing operates on
          *     15-minute bars by default; the inherited base default of 1 would
@@ -25876,7 +25792,7 @@ export interface components {
         StrategyGridConfigRequest: {
             /** Paramranges */
             paramRanges?: {
-                [key: string]: components["schemas"]["app__routers__jobs__ValueListRangeRequest"] | components["schemas"]["app__routers__jobs__LowHighStepRangeRequest"];
+                [key: string]: components["schemas"]["app__routers__recency_jobs__ValueListRangeRequest"] | components["schemas"]["app__routers__recency_jobs__LowHighStepRangeRequest"];
             };
             /** Strategykey */
             strategyKey: string;
@@ -28171,7 +28087,7 @@ export interface components {
             warmup_days?: number;
         };
         /** LowHighStepRangeRequest */
-        app__routers__jobs__LowHighStepRangeRequest: {
+        app__routers__recency_jobs__LowHighStepRangeRequest: {
             /** High */
             high: number;
             /** Low */
@@ -28185,7 +28101,7 @@ export interface components {
             type: "low_high_step";
         };
         /** ValueListRangeRequest */
-        app__routers__jobs__ValueListRangeRequest: {
+        app__routers__recency_jobs__ValueListRangeRequest: {
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -36839,72 +36755,6 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["CrossSectionalJobRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    start_dataset_zip_job_api_jobs_internal_dataset_zip_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DatasetZipJobRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    start_engine_backtest_job_api_jobs_internal_engine_backtest_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EngineBacktestJobRequest"];
             };
         };
         responses: {

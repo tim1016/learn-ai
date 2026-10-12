@@ -22,6 +22,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
+from app.research.recency.dispatch import RunDispatch
 from app.research.recency.fingerprint import RunFingerprintBase, trade_fingerprint
 from app.research.recency.stats import (
     TradeForStats,
@@ -185,7 +186,6 @@ def _snapshot_for_run(
 def run_recency(
     config: RecencyLaunchConfig,
     *,
-    execute_backtest_fn: Callable[[RunSpec, RecencyLaunchConfig], BacktestResultLike],
     persist_fn: Callable[[RecencyRunSnapshot], None],
     strategy_code_version_fn: Callable[[str], str],
     on_phase: Callable[[str], None] = lambda phase: None,
@@ -193,8 +193,16 @@ def run_recency(
     on_run_failed: Callable[[RunSpec, str], None] = lambda run_spec, message: None,
     cancel_check: Callable[[], bool | None] = lambda: False,
     skip_identities: frozenset[tuple[str, str, str]] = frozenset(),
+    execute_backtest_fn: Callable[[RunSpec, RecencyLaunchConfig], BacktestResultLike] | None = None,
+    dispatch: RunDispatch | None = None,
 ) -> RecencyRunSummary:
-    """Execute one launch's grid one run at a time with per-run isolation.
+    """Execute one launch's grid with per-run isolation, one executor given.
+
+    ``execute_backtest_fn`` runs each run in this process (the local mode
+    and tests); ``dispatch`` (#3051) runs them through the research
+    runtime's workers — independent runs overlap, each arrival's snapshot
+    persists as it is consumed, and the counts, skip set and cancellation
+    contract are identical.
 
     ``cancel_check`` follows app/research/walk_forward/runner.py's CancelCheck
     contract in every respect but one: its return value is IGNORED —
@@ -206,18 +214,26 @@ def run_recency(
     The difference: it is called once per run **and once more after the last
     run completes**, before any completion is announced. A head-of-run check
     alone cannot observe a cancellation that arrives while the final run is
-    executing (issue #1928); ``run_each`` owns that contract for every sweep
-    runner.
+    executing (issue #1928); ``run_each`` owns that contract for the serial
+    mode, the dispatch branch's trailing poll for the pooled one.
 
     ``skip_identities`` carries the (symbol, strategy, params_hash) cells the
     durable launch already holds (#1938): a resumed launch re-runs only what
     is missing, and a skipped cell counts toward progress but toward neither
     succeeded nor failed — its result is already recorded.
     """
+    if (execute_backtest_fn is None) == (dispatch is None):
+        raise ValueError("run_recency takes exactly one executor: execute_backtest_fn or dispatch")
     on_phase("expand")
     expected = grid_size(config.strategies, config.symbols)
     run_specs = expand_grid(config.strategies, config.symbols)
     outcomes: list[RecencyRunOutcome] = []
+
+    def _snapshot_and_persist(run_spec: RunSpec, result: BacktestResultLike) -> RecencyRunOutcome:
+        version = strategy_code_version_fn(run_spec.strategy_key)
+        snapshot = _snapshot_for_run(run_spec, config, result, version)
+        persist_fn(snapshot)
+        return RecencyRunOutcome(run_spec=run_spec, status="succeeded")
 
     def _execute_and_persist(run_spec: RunSpec) -> RecencyRunOutcome:
         if (run_spec.symbol, run_spec.strategy_key, run_spec.params_hash) in skip_identities:
@@ -225,10 +241,7 @@ def run_recency(
         result = execute_backtest_fn(run_spec, config)
         if not result.success:
             raise RuntimeError(result.error or "backtest did not succeed")
-        version = strategy_code_version_fn(run_spec.strategy_key)
-        snapshot = _snapshot_for_run(run_spec, config, result, version)
-        persist_fn(snapshot)
-        return RecencyRunOutcome(run_spec=run_spec, status="succeeded")
+        return _snapshot_and_persist(run_spec, result)
 
     on_phase("run")
 
@@ -239,12 +252,36 @@ def run_recency(
         on_run_failed(run_spec, message)
         return RecencyRunOutcome(run_spec=run_spec, status="failed", error=message)
 
-    # Runs are pulled one at a time from the lazy expand_grid() iterator, so a
-    # large-but-legitimate sweep never holds its entire grid in memory. The
-    # cancellation contract lives in app.research.sweep.execution.
-    for done, outcome in enumerate(run_each(run_specs, _execute_and_persist, cancel_check=cancel_check, on_error=_failed), start=1):
-        outcomes.append(outcome)
+    if dispatch is not None:
+        from app.research.recency.dispatch import RunPieces
+
+        # The identities are materialized once — tiny, and the skip count
+        # must lead the first progress tick exactly as the serial loop's
+        # skipped outcomes do.
+        todo = [spec for spec in run_specs if (spec.symbol, spec.strategy_key, spec.params_hash) not in skip_identities]
+        done = expected - len(todo)
         on_progress(done, expected)
+        for run_spec, pieces, error in dispatch(todo):
+            done += 1
+            if error is not None:
+                outcomes.append(_failed(run_spec, RuntimeError(error)))
+                on_progress(done, expected)
+                continue
+            assert pieces is not None  # only a failure arrives without them
+            outcomes.append(_snapshot_and_persist(run_spec, RunPieces(pieces)))
+            on_progress(done, expected)
+        # The serial loop's last poll (#1928): a cancel that lands while the
+        # final run executes is observed once more after its snapshot
+        # persists, so the launch records cancelled, never a silent
+        # completed over an acknowledged cancellation.
+        cancel_check()
+    else:
+        # Runs are pulled one at a time from the lazy expand_grid() iterator, so a
+        # large-but-legitimate sweep never holds its entire grid in memory. The
+        # cancellation contract lives in app.research.sweep.execution.
+        for done, outcome in enumerate(run_each(run_specs, _execute_and_persist, cancel_check=cancel_check, on_error=_failed), start=1):
+            outcomes.append(outcome)
+            on_progress(done, expected)
 
     succeeded = sum(1 for outcome in outcomes if outcome.status == "succeeded")
     failed = sum(1 for outcome in outcomes if outcome.status == "failed")
