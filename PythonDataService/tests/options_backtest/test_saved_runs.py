@@ -23,6 +23,7 @@ import asyncpg
 import pytest
 from pydantic import BaseModel
 
+from app.jobs.progress import JOB_LEASE_TTL_SECONDS
 from app.options_backtest import saved_runs
 from app.options_backtest.results import Fill, LegTrade, SessionStatus
 from app.options_backtest.run import RunResult
@@ -1156,3 +1157,30 @@ async def test_a_save_waits_for_whatever_holds_the_row_and_finds_the_run_no_long
     opened = await get_run(conn, run_id, is_live=GONE)
     assert opened is not None and opened.record.status == "cancelled" and opened.figures is None
     assert await _rows_of(conn, "research_options_backtest_run_sessions", run_id) == 0
+
+
+# ── The save and the job's lease ─────────────────────────────────────────
+
+
+def test_no_write_that_ends_a_run_waits_as_long_as_the_jobs_lease_lasts(
+    monkeypatch: pytest.MonkeyPatch, result: RunResult
+) -> None:
+    # The job's lease is 300 seconds and is last renewed when the ``saving`` phase begins; a run whose lease has
+    # lapsed reads ``interrupted``, and an interrupted run can be deleted. So the writes of the job's own thread (the
+    # save, the failure and the cancel) wait 60 seconds less than a lease: 300 - 60 = 240. The history, one run and
+    # the delete are awaited by the routes and take no part in this.
+    timeouts: list[float | None] = []
+
+    def run_on(coroutine: Any, *, timeout: float | None) -> None:
+        coroutine.close()
+        timeouts.append(timeout)
+
+    monkeypatch.setattr(saved_runs, "run_on_background_loop", run_on)
+    store = saved_runs.DbRunStore()
+
+    store.complete(1, result, finished_at_ms=FINISHED_AT_MS)
+    store.fail(1, RunFailure("X", "x"), finished_at_ms=FINISHED_AT_MS)
+    store.cancel(1, finished_at_ms=FINISHED_AT_MS)
+
+    assert timeouts == [240.0, 240.0, 240.0]
+    assert all(timeout is not None and timeout < JOB_LEASE_TTL_SECONDS for timeout in timeouts)

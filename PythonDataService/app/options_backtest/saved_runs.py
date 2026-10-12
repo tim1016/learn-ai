@@ -40,6 +40,7 @@ from typing import Any, Literal
 
 import asyncpg
 
+from app.jobs.progress import JOB_LEASE_TTL_SECONDS
 from app.lean_sidecar.trading_calendar import CALENDAR_IDENTITY, CALENDAR_PACKAGE_VERSION
 from app.options.contract import OptionContract
 from app.options_backtest import run_json
@@ -58,8 +59,11 @@ StoredStatus = Literal["running", "complete", "failed", "cancelled"]
 PresentedStatus = Literal["running", "complete", "failed", "cancelled", "interrupted"]
 IsLive = Callable[[str | None], bool | None]
 
-# How long a worker waits for the one transaction that saves a whole run.
-SAVE_TIMEOUT_SECONDS = 600.0
+# How long the job's thread waits for one of the writes that end a run (the save, the failure, the cancel). The job's
+# lease is renewed when the ``saving`` phase begins and by nothing during the write, and a run whose lease has lapsed
+# reads ``interrupted``, which can be deleted. So a write waits for less than a lease, never as long as one.
+SAVE_LEASE_MARGIN_SECONDS = 60
+SAVE_TIMEOUT_SECONDS = float(JOB_LEASE_TTL_SECONDS - SAVE_LEASE_MARGIN_SECONDS)
 
 _RUN_COLUMNS = """
     id, created_at_ms, finished_at_ms, job_id, status, setup_name, underlying, first_session_open_ms,
