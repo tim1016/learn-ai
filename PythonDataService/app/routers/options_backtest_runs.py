@@ -18,6 +18,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, HTTPException, Path, Query, Response, status
 
 from app.data_lake.catalog_client import CatalogUnavailableError
+from app.jobs.phases import friendly as friendly_phase
 from app.jobs.progress import CancellationCheck, JobCancelled, ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.lean_sidecar.trading_calendar import session_window_for_date
@@ -225,7 +226,7 @@ def _worker(
 
     def work(emit: ProgressEmitter, cancel: CancellationCheck) -> dict[str, Any]:
         hooks = RunHooks(
-            on_phase=emit.phase,
+            on_phase=lambda phase: emit.phase(phase, friendly=friendly_phase("options_backtest", phase)),
             on_progress=lambda done, total: emit.progress(done, total, unit="sessions"),
             on_log=emit.log,
             should_stop=cancel.should_cancel,

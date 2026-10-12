@@ -29,6 +29,7 @@ from httpx import ASGITransport
 from app.data_lake.catalog_client import CatalogUnavailableError
 from app.jobs.phases import JOB_PHASES
 from app.jobs.progress import JobCancelled
+from app.jobs.runner import run_in_thread as run_the_job
 from app.lean_sidecar.trading_calendar import expected_sessions, session_window_for_date
 from app.main import app
 from app.options_backtest import service
@@ -49,6 +50,8 @@ from app.routers import options_backtest_runs as runs_router
 from app.utils.background_loop import CallerStoppedWaitingError
 from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_day_end_ms, et_midnight_ms
 from tests._helpers.fake_lake_catalog import FakeCatalog
+from tests.jobs.conftest import _FakeRedis
+from tests.jobs.conftest import fake as fake
 from tests.options_backtest._lake import fake_catalog as fake_catalog
 from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixed
 from tests.options_backtest._lake import tmp_lake as tmp_lake
@@ -105,7 +108,7 @@ class FakeEmitter:
     def phases(self) -> list[str]:
         return [value for kind, value in self.events if kind == "phase"]
 
-    def phase(self, name: str) -> None:
+    def phase(self, name: str, *, friendly: str | None = None) -> None:
         self.events.append(("phase", name))
 
     def progress(self, current: int, total: int, *, unit: str = "bars", message: str | None = None) -> None:
@@ -479,6 +482,36 @@ async def test_a_failed_run_fails_the_job_with_the_plain_reason(
     assert "cannot be tested" in str(caught.value)
     [(_, failure, _)] = harness.store.failed
     assert failure.code == "SESSIONS_CANNOT_BE_TESTED"
+
+
+# ── The job as the runner ends it ────────────────────────────────────────
+# These start the captured worker through the job runner itself, on the tests' stand-in for the job store, and read the
+# events a page would receive and the records the logs got.
+
+
+async def _the_job_runs_to_its_end(harness: Harness, job_id: str = "job-1") -> None:
+    thread = run_the_job(job_id, harness.the_work(), thread_name="options-backtest-test", cancel_check_every_n=1)
+    await asyncio.to_thread(thread.join, 60)
+    assert not thread.is_alive()
+
+
+@respx.mock
+async def test_each_phase_event_of_a_run_carries_the_plain_label_the_vocabulary_gives_that_phase(
+    client: httpx.AsyncClient, harness: Harness, fake: _FakeRedis, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    Vendor(the_scene()).mount()
+    async with client as c:
+        await c.post(JOBS, json=job_body())
+
+    await _the_job_runs_to_its_end(harness)
+
+    phase_events = [event for event in fake.events("job-1") if event["type"] == "job.phase"]
+    labels = {phase.id: phase.label for phase in JOB_PHASES["options_backtest"]}
+    # A lone run never waits for the engine: the four phases it enters, in order.
+    assert [event["phase"] for event in phase_events] == ["checking_data", "downloading_data", "replaying", "saving"]
+    for event in phase_events:
+        assert event["friendly"] == labels[event["phase"]]
+        assert event["friendly"] != event["phase"].replace("_", " ").title(), "the id made readable is no label"
 
 
 # ── Check data ───────────────────────────────────────────────────────────
