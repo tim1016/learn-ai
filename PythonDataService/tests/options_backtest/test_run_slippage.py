@@ -256,9 +256,9 @@ def test_a_run_that_traded_and_broke_even_or_lost_everywhere_is_not_a_run_that_m
 
 
 def test_a_whole_run_that_never_traded_has_no_tolerance_to_report_and_one_that_lost_everywhere_has_a_value() -> None:
-    # Friday's contract was captured and never traded, so the entry is dropped: no trade at any value.
+    # Wednesday's contract was captured and never traded, so the entry is dropped: no trade at any value.
     never = fake_data({WED: Day(underlying=steady("500.00"), options={CALL_500: {}})})
-    # Every ladder value buys at 2.00 or more and sells at 1.90 or less: a loss at all of them.
+    # Bought at 2.00 or more and sold at 1.90 or less at every ladder value: a loss at all of them.
     losing = Day(underlying=steady("500.00"), options={CALL_500: {**flat("2.00", 5, 60), 61: ("1.90", "1.90")}})
 
     quiet = run_sessions(setup(leg()), [WED], never, slippage_ladder=(D("0"), D("1")))
