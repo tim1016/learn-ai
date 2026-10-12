@@ -38,6 +38,9 @@ def a_run_row(
     job_id: str | None = None,
     underlying: str = "SPY",
     setup_json: str | None = None,
+    first_open_ms: int = FIRST_OPEN_MS,
+    last_open_ms: int = FIRST_OPEN_MS,
+    sessions_requested: int = 1,
 ) -> dict[str, Any]:
     """The row of the runs table ``saved_runs.get_run_header`` reads: a run of one session, stored in ``status``."""
     complete = status == "complete"
@@ -49,9 +52,9 @@ def a_run_row(
         "status": status,
         "setup_name": None,
         "underlying": underlying,
-        "first_session_open_ms": FIRST_OPEN_MS,
-        "last_session_open_ms": FIRST_OPEN_MS,
-        "sessions_requested": 1,
+        "first_session_open_ms": first_open_ms,
+        "last_session_open_ms": last_open_ms,
+        "sessions_requested": sessions_requested,
         "fee_policy_text": "No fees are charged.",
         "calendar_identity": "NYSE",
         "calendar_package_version": "1",

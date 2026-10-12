@@ -11,6 +11,7 @@ router is mounted before that one (``main.py``).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Annotated
 
@@ -20,6 +21,7 @@ from starlette.responses import StreamingResponse
 
 from app.options_backtest.comparison import compare
 from app.options_backtest.run_detail import (
+    ComparisonInputs,
     LegNotInRun,
     RunNotComplete,
     RunNotFound,
@@ -217,6 +219,19 @@ async def export_the_trades(run_id: RunId) -> Response:
     )
 
 
+def _compared(inputs: ComparisonInputs) -> OptionsBacktestComparisonResponse:
+    """The two runs compared, and the answer made of the comparison. Blocking, and pure: it walks every setting, every
+    session and every trade line of both runs, so it is run in a worker thread.
+
+    It touches nothing shared. It reads the frozen headers and lines it is handed and the validated setups in them, and
+    builds new objects; it keeps no state in a module, and has no connection, no event loop and no file. The decimal
+    context is per thread: the totals are summed under a ``localcontext`` of their own, and the words trim a figure
+    (``normalize``) under the thread's default context, which is the loop thread's too, since nothing in the app changes it.
+    """
+    comparison = compare(inputs.a, inputs.a_lines, inputs.b, inputs.b_lines)
+    return OptionsBacktestComparisonResponse.from_comparison(inputs.a, inputs.b, comparison)
+
+
 @router.get(
     "/runs/compare",
     response_model=OptionsBacktestComparisonResponse,
@@ -264,5 +279,4 @@ async def compare_two_runs(
                 "message": f"Only runs of one underlying can be compared: {exc}.",
             },
         ) from exc
-    comparison = compare(inputs.a, inputs.a_lines, inputs.b, inputs.b_lines)
-    return OptionsBacktestComparisonResponse.from_comparison(inputs.a, inputs.b, comparison)
+    return await asyncio.to_thread(_compared, inputs)
