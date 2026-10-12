@@ -15,8 +15,8 @@ writers, so each pin is the sha256 of a real stored file. Hand-worked figures:
   and 4.10 after; its put 495 has the same 56 as Wednesday's.
 
 Every reason a series is not shown has words of its own, held to the reason by ``test_each_reason_has_its_own_words``.
-A file the operating system refuses (a permission, a folder) is ``unreadable`` for a contract as for the underlying, and a
-day holding a bar no session can place is ``unreadable`` too.
+A file the operating system refuses (a permission, a folder) is ``unreadable`` for a contract as for the underlying, and so
+is every stored day the lake reader refuses, whichever error it refuses it with (``_refused_days.py`` lists the four kinds).
 """
 
 from __future__ import annotations
@@ -68,16 +68,11 @@ from tests.options_backtest._detail_scene import (
     the_setup,
 )
 from tests.options_backtest._lake import fake_catalog as fake_catalog
-from tests.options_backtest._lake import (
-    option_day_zip,
-    raw_root,
-    replace_the_stored_file,
-    stock_bar,
-    stock_day_zip,
-)
+from tests.options_backtest._lake import raw_root, replace_the_stored_file
 from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixed
 from tests.options_backtest._lake import tmp_lake as tmp_lake
-from tests.options_backtest._run_data import HALF_DAY, WED, Day, fake_data, steady
+from tests.options_backtest._refused_days import REFUSED_DAYS, RefusedDay
+from tests.options_backtest._run_data import HALF_DAY, Day, fake_data, steady
 from tests.options_backtest.setup_fixtures import setup_body
 
 D = Decimal
@@ -511,43 +506,35 @@ async def test_the_underlying_file_the_operating_system_refuses_is_unreadable_to
     assert _reasons(series) == {"SPY": SeriesReason.UNREADABLE, CALL_500: None, PUT_495: None, PUT_500: None}
 
 
+@pytest.mark.parametrize("day", REFUSED_DAYS)
 @respx.mock
-async def test_a_stored_day_holding_a_bar_no_session_can_place_is_an_unreadable_series_for_a_contract_and_the_underlying(
-    fake_catalog: FakeCatalog, tmp_lake: Path
+async def test_a_stored_day_the_lake_reader_refuses_is_an_unreadable_series_whatever_the_error_and_the_rest_still_are(
+    day: RefusedDay, fake_catalog: FakeCatalog, tmp_lake: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     result = await run_the_scene()
-    # A bar starting half a minute past the minute closes off a whole minute, and the lake reader refuses the whole day.
-    # The stored files are put in place of the captured ones with the catalog's receipt for them, so they read cleanly:
-    # only the bar tells them from a good day. Minute m5 starts at the open plus five minutes.
-    put = OptionContract.from_occ_symbol(PUT_500)
-    off_the_minute = [WED_OPEN_MS + 5 * MS_PER_MINUTE, WED_OPEN_MS + 6 * MS_PER_MINUTE + 30_000]
-    replace_the_stored_file(
-        fake_catalog, raw_root(tmp_lake), _bars_file(PUT_500), option_day_zip(put, off_the_minute, day=WED), admit=True
-    )
-    replace_the_stored_file(
-        fake_catalog,
-        raw_root(tmp_lake),
-        STOCK_FILE,
-        stock_day_zip(
-            [
-                stock_bar(WED_OPEN_MS + MS_PER_MINUTE, "500.20", "500.20", "500.20", "500.20"),
-                stock_bar(WED_OPEN_MS + 2 * MS_PER_MINUTE + 30_000, "500.20", "500.20", "500.20", "500.20"),
-            ],
-            day=WED,
-        ),
-        admit=True,
-    )
+    # The refused bytes are put in place of the captured file with the catalog's receipt for them, so they read cleanly
+    # as far as the catalog goes: only what is in them tells them from a good day. ``_refused_days.py`` works out each.
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), day.file, day.payload, admit=True)
+    caplog.set_level(logging.WARNING, logger="app.options_backtest.session_series")
 
     series = await _series_of(result.sessions[0])
 
+    # Wednesday has four series; the refused day's is withheld and the other three are shown.
     assert _reasons(series) == {
-        "SPY": SeriesReason.UNREADABLE,
+        "SPY": None,
         CALL_500: None,
         PUT_495: None,
-        PUT_500: SeriesReason.UNREADABLE,
+        PUT_500: None,
+        day.symbol: SeriesReason.UNREADABLE,
     }
-    assert series.underlying.points == () and _by_symbol(series)[PUT_500].points == ()
-    assert len(_by_symbol(series)[CALL_500].points) == 55
+    withheld = series.underlying if day.symbol == "SPY" else _by_symbol(series)[day.symbol]
+    assert withheld.points == ()
+    shown = [series.underlying, *series.contracts]
+    assert [len(each.points) > 0 for each in shown if each.symbol != day.symbol] == [True, True, True]
+    # One warning, naming the error the reader refused it with, and nothing of where the file is.
+    warned = [r for r in caplog.records if getattr(r, "action", None) == "options_backtest_series_unreadable"]
+    assert [(r.series, r.error_type) for r in warned] == [(day.symbol, day.error)]
+    assert str(tmp_lake) not in str([vars(r) for r in warned])
 
 
 # ── A session skipped on its window read nothing ─────────────────────────
