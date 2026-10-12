@@ -5,7 +5,12 @@ import { sessionOpenMs } from '../../../shared/date-picker/testing/fake-trading-
 import type { DayRow, Drawdown, MonthRow, RunDetail } from '../options-backtest.types';
 import { reads } from '../testing/page-actions';
 import { DAY_ROWS, figures, LADDER, MONTH_ROWS, runBanner, runDetail } from '../testing/run-fixtures';
+import { RunDetailService } from '../run-detail/run-detail.service';
+import { inertRunDetail } from '../run-detail/testing/fake-run-detail';
 import { RunResultComponent } from './run-result.component';
+
+/** The closer look at the trades is not what this spec is about, so it reads nothing. */
+const providers = [{ provide: RunDetailService, useValue: inertRunDetail() }];
 
 /**
  * Every dollar a run's result shows is a string the server wrote, and it is shown as written. 9007199254740993 is the
@@ -78,13 +83,13 @@ const occurrences = (text: string) => text.split(SHOWN).length - 1;
 
 describe('the dollars of a result are shown exactly as the server wrote them', () => {
   it.each(PLACES)('%s', async (_place, read, shown) => {
-    await render(RunResultComponent, { inputs: { run: runOfBigDollars() } });
+    await render(RunResultComponent, { inputs: { run: runOfBigDollars() }, providers });
 
     expect(read()).toEqual(shown);
   });
 
   it('has a row above for every dollar on the screen: nothing else on the result carries one', async () => {
-    const { container } = await render(RunResultComponent, { inputs: { run: runOfBigDollars() } });
+    const { container } = await render(RunResultComponent, { inputs: { run: runOfBigDollars() }, providers });
 
     const onScreen = reads(container);
     const named = PLACES.map(([, , shown]) => (Array.isArray(shown) ? shown : [shown]).join(' ')).join(' ');

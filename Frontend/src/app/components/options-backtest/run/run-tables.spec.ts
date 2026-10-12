@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 
+import { etMidnightMs } from '../../../shared/date/et-midnight';
 import { sessionOpenMs } from '../../../shared/date-picker/testing/fake-trading-calendar';
 import type { DayRow } from '../options-backtest.types';
 import { expectTradingDatesInNewYork, reads } from '../testing/page-actions';
@@ -17,11 +18,11 @@ describe('the by-day table', () => {
     await render(RunDayTableComponent, { inputs: { rows: DAY_ROWS } });
 
     expect(bodyRows().map((row) => reads(row))).toEqual([
-      '2026-09-14 Traded 2 2 0 0 $150.25 $2.60',
-      '2026-09-15 Traded 4 1 3 0 -$62.40 $5.20',
-      '2026-09-16 No Trade 0 0 0 0 $0.00 $0.00',
-      '2026-09-17 Skipped Window Does Not Fit 0 0 0 0 $0.00 $0.00',
-      '2026-09-18 Traded 6 4 1 1 $1,146.71 $39.00',
+      '2026-09-14 Traded 2 2 0 0 $150.25 $2.60 Look at',
+      '2026-09-15 Traded 4 1 3 0 -$62.40 $5.20 Look at',
+      '2026-09-16 No Trade 0 0 0 0 $0.00 $0.00 Look at',
+      '2026-09-17 Skipped Window Does Not Fit 0 0 0 0 $0.00 $0.00 Look at',
+      '2026-09-18 Traded 6 4 1 1 $1,146.71 $39.00 Look at',
     ]);
   });
 
@@ -29,6 +30,27 @@ describe('the by-day table', () => {
     await render(RunDayTableComponent, { inputs: { rows: DAY_ROWS } });
 
     expectTradingDatesInNewYork(document.body);
+  });
+
+  // 00:30 New York time on the 16th is 23:30 on the 15th in Chicago and 18:30 on the 15th in Honolulu; 20:00 on the 15th is the 16th in Tokyo.
+  it.each([
+    ['00:30 on the 16th', etMidnightMs('2026-09-16') + 30 * 60_000, 'Look at 2026-09-16'],
+    ['20:00 on the 15th', etMidnightMs('2026-09-15') + 20 * 60 * 60_000, 'Look at 2026-09-15'],
+  ])('names the control that opens a day by its New York date, whatever the viewer’s zone: an open at %s', async (_name, openMs, label) => {
+    await render(RunDayTableComponent, { inputs: { rows: [{ ...DAY_ROWS[0], session_open_ms: openMs }] } });
+
+    expect(screen.getByRole('button', { name: label })).toBeTruthy();
+  });
+
+  it('offers each day to look at closely, named by the day, and tells who asked and which day', async () => {
+    const asked: { openMs: number; origin: HTMLElement | null }[] = [];
+    await render(RunDayTableComponent, { inputs: { rows: DAY_ROWS }, on: { openDay: (request: { openMs: number; origin: HTMLElement | null }) => asked.push(request) } });
+
+    const buttons = screen.getAllByRole('button', { name: /^Look at / });
+    expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual(['Look at 2026-09-14', 'Look at 2026-09-15', 'Look at 2026-09-16', 'Look at 2026-09-17', 'Look at 2026-09-18']);
+    fireEvent.click(buttons[3]);
+
+    expect(asked).toEqual([{ openMs: sessionOpenMs('2026-09-17'), origin: buttons[3] }]);
   });
 
   it('starts in date order and sorts by a whole-number column when its heading is pressed, both ways', async () => {
@@ -78,7 +100,7 @@ describe('the by-day table', () => {
     await render(RunDayTableComponent, { inputs: { rows: DAY_ROWS } });
 
     expect(screen.getByRole('region', { name: 'By day' })).toBeTruthy();
-    expect(screen.getAllByRole('columnheader').map((cell) => reads(cell))).toEqual(['Date', 'Status', 'Skipped because', 'Trades', 'Won', 'Lost', 'Break-even', 'Net profit', 'Fees']);
+    expect(screen.getAllByRole('columnheader').map((cell) => reads(cell))).toEqual(['Date', 'Status', 'Skipped because', 'Trades', 'Won', 'Lost', 'Break-even', 'Net profit', 'Fees', 'Look at the day']);
   });
 });
 

@@ -1,0 +1,13 @@
+:host { display: block; min-width: 0; }
+p { margin: 0; }
+h2 { margin: 0; font-size: var(--fs-md); font-weight: var(--fw-semi); }
+h2:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.compare { display: grid; gap: var(--space-4); background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: var(--radius); padding: var(--space-4) var(--space-5); min-width: 0; }
+.runs { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1); font-size: var(--fs-sm); color: var(--text-secondary); }
+.muted { color: var(--text-secondary); font-size: var(--fs-sm); }
+.problem { color: var(--bear); font-size: var(--fs-sm); }
+.again { justify-self: start; background: none; border: 1px solid var(--border-strong); color: var(--text-secondary); border-radius: var(--radius); padding: var(--space-1) var(--space-3); font: inherit; font-size: var(--fs-sm); cursor: pointer; }
+.again:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 768px) {
+  .compare { padding: var(--space-3); }
+}

@@ -1,0 +1,19 @@
+<section class="compare" aria-label="Two runs compared">
+  <h2 #heading tabindex="-1">Run {{ a() }} compared with run {{ b() }}</h2>
+  @if (problem(); as why) {
+    <p class="problem" role="alert">{{ why }}</p>
+    <button type="button" class="again" (click)="retry()">Try again</button>
+  } @else if (reading()) {
+    <p class="muted" role="status">Reading the comparison…</p>
+  } @else if (comparison(); as both) {
+    <ul class="runs" aria-label="The two runs">
+      @for (side of sides(); track side.role) {
+        <li>
+          <strong>Run {{ side.role }}</strong> is run {{ side.run.id }}@if (side.run.setup_name; as name) { , {{ name }}}, of <app-asset-identity [symbol]="both.underlying" size="xs" [logo]="false" />, started <app-timestamp-display [value]="side.run.created_at_ms" mode="local" />
+        </li>
+      }
+    </ul>
+    <app-options-backtest-compare-settings [comparison]="both" />
+    <app-options-backtest-compare-sessions [comparison]="both" />
+  }
+</section>

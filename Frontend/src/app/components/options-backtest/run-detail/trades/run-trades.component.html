@@ -1,0 +1,42 @@
+<section class="trades" aria-label="Trades">
+  <div class="head">
+    <h3>Trades</h3>
+    <app-options-backtest-run-export [runId]="run().id" />
+  </div>
+  <div class="filters">
+    <label>Days <select (change)="chooseSession($event)">
+      <option [selected]="sessionFilter() === null">All days</option>
+      @for (day of days(); track day.session_open_ms) {
+        <option [selected]="sessionFilter() === day.session_open_ms">{{ day.session_open_ms | timestampDisplay: 'date-et' : 'date' }}</option>
+      }
+    </select></label>
+    @if (legs(); as legIds) {
+      <label>Legs <select (change)="chooseLeg($event)">
+        <option value="" [selected]="legFilter() === ''">All legs</option>
+        @for (leg of legIds; track leg) { <option [value]="leg" [selected]="legFilter() === leg">{{ leg }}</option> }
+      </select></label>
+    } @else {
+      <label>Leg <input type="text" maxlength="32" autocomplete="off" [value]="legFilter()" (change)="chooseLeg($event)" /></label>
+    }
+  </div>
+  @if (problem(); as why) {
+    <p class="problem" role="alert">{{ why }}</p>
+    <button type="button" class="again" (click)="retry()">Try again</button>
+  } @else if (reading()) {
+    <p class="muted" role="status">Reading the trades…</p>
+  } @else if (page(); as shown) {
+    @if (shown.trades.length === 0) {
+      <p class="muted" role="status">{{ filtered() ? 'No trade matches these filters.' : 'This run made no trades.' }}</p>
+    } @else {
+      <app-options-backtest-trade-table caption="Leg trades" [trades]="shown.trades" (openDay)="openDay.emit($event)" />
+    }
+    <nav class="pager" aria-label="Pages of trades">
+      @if (where(); as place) { <p class="where" role="status">{{ place }}</p> }
+      @if (canGoBack()) {
+        <button type="button" class="step" (click)="goFirst()">First page</button>
+        <button type="button" class="step" (click)="goBack()">Previous page</button>
+      }
+      @if (next() !== null) { <button type="button" class="step" (click)="goNext()">Next page</button> }
+    </nav>
+  }
+</section>

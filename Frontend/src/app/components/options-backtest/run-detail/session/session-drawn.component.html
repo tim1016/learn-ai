@@ -1,0 +1,73 @@
+<section class="block" aria-label="Levels">
+  <h4>Levels</h4>
+  @if (levels().length === 0) {
+    <p class="muted" role="status">No levels were in force on this day.</p>
+  } @else {
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Levels (scrolls sideways)">
+      <table class="rows">
+        <caption class="sr-only">Levels, each drawn between two instants</caption>
+        <thead><tr><th scope="col">Level</th><th scope="col">Drawn as</th><th scope="col">Leg</th><th scope="col">Contract</th><th scope="col" class="num">Price</th><th scope="col">From</th><th scope="col">To</th></tr></thead>
+        <tbody>
+          @for (row of levels(); track row.key) {
+            <tr>
+              <td>{{ row.name }}</td><td>{{ row.drawn }}</td><td>{{ row.level.leg_id }}, {{ row.attempt }}</td>
+              <td><app-options-backtest-instrument [instrument]="row.instrument" /></td>
+              <td class="num">{{ row.level.price_usd | authoredUsd }}</td>
+              <td><app-timestamp-display [value]="row.level.from_ms" mode="et" granularity="time" /></td>
+              <td><app-timestamp-display [value]="row.level.to_ms" mode="et" granularity="time" /></td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+</section>
+<section class="block" aria-label="Fills">
+  <h4>Fills</h4>
+  @if (fills().length === 0) {
+    <p class="muted" role="status">Nothing was bought or sold on this day.</p>
+  } @else {
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Fills (scrolls sideways)">
+      <table class="rows">
+        <caption class="sr-only">Fills, each in the bar it filled in</caption>
+        <thead><tr><th scope="col">Fill</th><th scope="col">Drawn as</th><th scope="col">Leg</th><th scope="col">Contract</th><th scope="col" class="num">Contracts</th><th scope="col">Bar closed at</th><th scope="col" class="num">Price filled</th><th scope="col" class="num">Price seen</th><th scope="col">Sold because</th></tr></thead>
+        <tbody>
+          @for (row of fills(); track row.key) {
+            <tr>
+              <td>{{ row.name }}</td><td>{{ row.drawn }}</td><td>{{ row.fill.leg_id }}, {{ row.attempt }}</td>
+              <td><app-options-backtest-instrument [instrument]="row.instrument" /></td>
+              <td class="num">{{ row.fill.contracts }}</td>
+              <td><app-timestamp-display [value]="row.fill.bar_close_ms" mode="et" granularity="time" /></td>
+              <td class="num">{{ row.fill.filled_usd | authoredUsd }}</td>
+              <td class="num">{{ row.fill.seen_usd | authoredUsd }}</td>
+              <td>{{ row.fill.exit_reason | receiptLabel }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+</section>
+<section class="block" aria-label="Marks">
+  <h4>Marked, not sold</h4>
+  @if (marks().length === 0) {
+    <p class="muted" role="status">No leg was left unsold on this day.</p>
+  } @else {
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Marks (scrolls sideways)">
+      <table class="rows">
+        <caption class="sr-only">Legs marked at the last price their contract traded at, and not sold</caption>
+        <thead><tr><th scope="col">Mark</th><th scope="col">Drawn as</th><th scope="col">Leg</th><th scope="col">Contract</th><th scope="col">Last traded in the bar that closed at</th><th scope="col" class="num">Marked at</th></tr></thead>
+        <tbody>
+          @for (row of marks(); track row.key) {
+            <tr>
+              <td>{{ row.name }}</td><td>{{ row.drawn }}</td><td>{{ row.mark.leg_id }}, {{ row.attempt }}</td>
+              <td><app-options-backtest-instrument [instrument]="row.instrument" /></td>
+              <td><app-timestamp-display [value]="row.mark.bar_close_ms" mode="et" granularity="time" /></td>
+              <td class="num">{{ row.mark.price_usd | authoredUsd }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+</section>

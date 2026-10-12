@@ -1,5 +1,8 @@
 <section class="history" aria-label="Run history">
-  @if (opened(); as run) {
+  @if (comparing(); as pair) {
+    <button pButton type="button" size="small" severity="secondary" [text]="true" (click)="closeCompare()"><i class="pi pi-arrow-left" aria-hidden="true"></i><span>Back to the runs</span></button>
+    <app-options-backtest-compare-view [a]="pair.a" [b]="pair.b" />
+  } @else if (opened(); as run) {
     <button pButton type="button" size="small" severity="secondary" [text]="true" (click)="close()"><i class="pi pi-arrow-left" aria-hidden="true"></i><span>Back to the runs</span></button>
     <app-options-backtest-run-panel [run]="run" [showSetup]="true" (useSetup)="useSetup.emit($event)" />
   } @else {
@@ -13,11 +16,15 @@
     } @else if (runs().length === 0) {
       <p class="muted" role="status">No runs yet. Start a backtest on the Backtest tab.</p>
     } @else {
+      <div class="compare-bar">
+        <button #compareButton pButton type="button" size="small" [disabled]="!canCompare()" [attr.aria-describedby]="hintId" (click)="compare()">Compare</button>
+        <span [id]="hintId" class="hint" role="status">{{ compareHint() }}</span>
+      </div>
       <div class="table-wrap">
         <table class="rows">
           <thead>
             <tr>
-              <th scope="col">Started</th><th scope="col">Status</th><th scope="col">Setup</th><th scope="col">Dates</th><th scope="col">Result</th><th scope="col"><span class="sr-only">Actions</span></th>
+              <th scope="col">Started</th><th scope="col">Status</th><th scope="col">Setup</th><th scope="col">Dates</th><th scope="col">Result</th><th scope="col">Compare</th><th scope="col"><span class="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>
@@ -38,6 +45,9 @@
                       <div><dt>Sessions</dt><dd>traded {{ result.sessions_traded }} of {{ result.sessions_tested }}</dd></div>
                     </dl>
                   }
+                </td>
+                <td class="compare">
+                  <input type="checkbox" [checked]="isTicked(row.id)" [disabled]="row.status !== 'complete'" [attr.aria-label]="compareLabel(row.id)" [attr.aria-describedby]="hintId" (change)="tick(row.id, $event)" />
                 </td>
                 <td class="actions">
                   <button pButton type="button" size="small" [text]="true" [attr.aria-label]="openLabel(row.id)" (click)="open(row)">Open</button>

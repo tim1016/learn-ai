@@ -1,0 +1,28 @@
+<section class="block" aria-label="What happened">
+  <h4>What happened</h4>
+  @if (rows().length === 0) {
+    <p class="muted" role="status">Nothing happened on this day.</p>
+  } @else {
+    <div class="table-wrap" role="region" tabindex="0" aria-label="What happened, in order (scrolls sideways)">
+      <table class="rows">
+        <caption class="sr-only">What happened on this day, in the order it happened</caption>
+        <thead>
+          <tr><th scope="col">Time</th><th scope="col">What happened</th><th scope="col">Leg</th><th scope="col">Contract</th><th scope="col" class="num">Price</th><th scope="col">Reason</th><th scope="col">The server’s words</th></tr>
+        </thead>
+        <tbody>
+          @for (row of rows(); track row.key) {
+            <tr>
+              <td><app-timestamp-display [value]="row.event.at_ms" mode="et" granularity="time" /></td>
+              <td>{{ row.event.kind | receiptLabel }}</td>
+              <td>{{ row.event.leg_id }}, {{ row.attempt }}</td>
+              <td><app-options-backtest-instrument [instrument]="row.instrument" /></td>
+              <td class="num">@if (row.event.price_usd; as price) { {{ price | authoredUsd }} }</td>
+              <td>{{ row.event.reason | receiptLabel }}</td>
+              <td class="words">{{ row.event.detail }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+</section>

@@ -1,0 +1,46 @@
+<section class="day" aria-label="One day">
+  <div class="head">
+    <h3 #heading tabindex="-1">One day</h3>
+    <label>Day
+      <select #picker (change)="choose($event)">
+        <option [selected]="chosen() === null">Choose a day</option>
+        @for (day of days(); track day.session_open_ms) {
+          <option [selected]="chosen() === day.session_open_ms">{{ day.session_open_ms | timestampDisplay: 'date-et' : 'date' }} · {{ day.status | receiptLabel }}</option>
+        }
+      </select>
+    </label>
+    @if (chosen() !== null) { <button type="button" class="close" (click)="close()">Close this day</button> }
+  </div>
+  @if (chosen() === null) {
+    <p class="muted" role="status">Choose a day here, or press a day in the trades or in the by-day table above, to see what happened in it and a chart of its prices.</p>
+  } @else if (problem(); as why) {
+    <p class="problem" role="alert">{{ why }}</p>
+    <button type="button" class="again" (click)="retry()">Try again</button>
+  } @else if (reading()) {
+    <p class="muted" role="status">Reading the day…</p>
+  } @else if (session(); as day) {
+    <dl class="facts">
+      <div><dt>Day</dt><dd><app-timestamp-display [value]="day.session_open_ms" mode="date-et" granularity="date" /></dd></div>
+      <div><dt>Session</dt><dd><app-timestamp-display [value]="day.session_open_ms" mode="et" granularity="time" /> to <app-timestamp-display [value]="day.session_close_ms" mode="et" granularity="time" /></dd></div>
+      <div><dt>Status</dt><dd>{{ day.status | receiptLabel }}</dd></div>
+      @if (day.skip_reason; as why) { <div><dt>Skipped because</dt><dd>{{ why | receiptLabel }}</dd></div> }
+      <div><dt>Cash before</dt><dd>{{ day.cash_before_usd | authoredUsd }}</dd></div>
+      <div><dt>Cash after</dt><dd>{{ day.cash_after_usd | authoredUsd }}</dd></div>
+      <div><dt>Profit</dt><dd>{{ day.profit_usd | authoredUsd }}</dd></div>
+    </dl>
+    @if (day.setup_cannot_open_reason; as why) {
+      <p class="notice" role="status">The stored setup of this run can no longer be read, so one kind of line is missing here: the momentum level of an attempt that never bought. Why: {{ why }}</p>
+    }
+    @if (day.trades.length === 0) {
+      <p class="muted" role="status">No leg traded on this day.</p>
+    } @else {
+      <app-options-backtest-trade-table caption="Leg trades of this day" [trades]="day.trades" [canOpenDay]="false" />
+    }
+    @if (plan(); as drawn) {
+      @if (drawn.panes.length > 0) { <app-options-backtest-timeline-chart [plan]="drawn" /> }
+      <app-options-backtest-timeline-legend [plan]="drawn" />
+    }
+    <app-options-backtest-session-events [session]="day" />
+    <app-options-backtest-session-drawn [session]="day" />
+  }
+</section>
