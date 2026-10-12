@@ -33,14 +33,17 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib.util
 import json
 import re
+import sys
 import zipfile
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -757,3 +760,77 @@ async def test_an_entry_into_a_minute_the_contract_did_not_trade_is_dropped_with
     assert session.outcome.cash_change_usd == 0
     assert (session.cash_before_usd, session.cash_after_usd) == (D("10000.00"), D("10000.00"))
     assert result.summary.entries_dropped == 1 and result.summary.net_profit_usd == D("0")
+
+
+# ── The script that records the fixture ───────────────────────────────────────────────────────────────────────
+
+
+def _the_regeneration_script(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """``regenerate.py`` loaded from the fixture's folder. Loading it runs nothing: it acts only as ``__main__``."""
+    name = "regenerate_options_backtest_spy_2025_06_10"
+    spec = importlib.util.spec_from_file_location(name, RECORDING / "regenerate.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, name, module)  # its dataclasses look their module up here
+    spec.loader.exec_module(module)
+    return module
+
+
+def _a_folder_holding(tmp_path: Path, *names: str) -> Path:
+    """A folder of the test's own (the suite's lake fixture keeps a folder in ``tmp_path`` itself) holding one file or
+    one folder for each name: a name ending in ``/`` is a folder."""
+    folder = tmp_path / "to-record-into"
+    folder.mkdir()
+    for name in names:
+        if name.endswith("/"):
+            (folder / name).mkdir()
+        else:
+            (folder / name).write_text("keep me")
+    return folder
+
+
+@pytest.mark.parametrize("name", ["mine.txt", "work/"])
+def test_the_regeneration_script_refuses_a_folder_that_is_not_empty_and_changes_nothing_in_it(
+    name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = _the_regeneration_script(monkeypatch)
+    folder = _a_folder_holding(tmp_path, name)
+
+    with pytest.raises(ValueError, match="not an empty folder"):
+        script.require_an_empty_folder(folder)
+
+    assert [path.name for path in folder.iterdir()] == [name.rstrip("/")]
+
+
+def test_the_regeneration_script_takes_a_folder_that_is_empty_or_not_there_yet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = _the_regeneration_script(monkeypatch)
+
+    script.require_an_empty_folder(_a_folder_holding(tmp_path))
+    script.require_an_empty_folder(tmp_path / "not there yet")
+
+
+def test_the_regeneration_script_refuses_a_path_that_is_a_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    script = _the_regeneration_script(monkeypatch)
+    (tmp_path / "a file").write_text("x")
+
+    with pytest.raises(ValueError, match="not an empty folder"):
+        script.require_an_empty_folder(tmp_path / "a file")
+
+
+@respx.mock
+def test_the_regeneration_script_makes_no_request_for_a_folder_that_is_not_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Offline: respx answers every request with an error, and the key is a made-up one. The check comes first, so the
+    # script never gets as far as a request.
+    script = _the_regeneration_script(monkeypatch)
+    monkeypatch.setenv("POLYGON_API_KEY", "not-a-real-key")
+    folder = _a_folder_holding(tmp_path, "mine.txt")
+
+    with pytest.raises(ValueError, match="not an empty folder"):
+        script.main(folder)
+
+    assert len(respx.calls) == 0
+    assert [path.name for path in folder.iterdir()] == ["mine.txt"]

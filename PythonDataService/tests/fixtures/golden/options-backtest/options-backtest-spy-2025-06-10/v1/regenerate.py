@@ -104,7 +104,19 @@ def occ_ticker(right: str, strike: Decimal) -> str:
     return f"O:SPY{EXPIRY:%y%m%d}{right}{int(strike * 1000):08d}"
 
 
+def require_an_empty_folder(out: Path) -> None:
+    """Refuse a folder that already holds anything, before a request is made.
+
+    A recording is the files this script saves and nothing else, and it overwrites a file of the same name, so a folder
+    with other files in it would mix a new recording into an old one or into someone's work. The folder may not exist
+    yet; it is made.
+    """
+    if out.exists() and (not out.is_dir() or any(out.iterdir())):
+        raise ValueError(f"{out} is not an empty folder. Name a folder that is empty or does not exist yet.")
+
+
 def main(out: Path) -> dict[str, Any]:
+    require_an_empty_folder(out)
     key = key_from_environment()
     day = TRADING_DATE.isoformat()
     out.mkdir(parents=True, exist_ok=True)

@@ -2452,7 +2452,7 @@
             "O_SPY250613P00600000_minute_2025-06-10.json": "4dd9f4acdb9100759defb168d128a58dd77fed1f21c41ff1ebcd0b7da3966eb4",
             "O_SPY250613C00680000_minute_2025-06-10.json": "c7d35d96756fe55aab8cf3d4f74ca816ca9e35adc4fd400368b518232afd6a84",
             "expected.json": "0488d82a06ec1d11ec6d6ec8b5dd5e5f1862560dca96a58cf2f2c5fb42ec8325",
-            "regenerate.py": "fd1ace60e001184fa20958898aaf5414f3f047ccc080818f83e172ec9328759c",
+            "regenerate.py": "faee56accaeb44c7252bf337ec441165a11183b2c07f8556873e34417fab30ba",
             "attribution.md": "a458e9174d75175fa6c8b3a04ea223d62c994d502e92ba00b98297e50d4bf23d"
           },
           "file_sha256": {
@@ -2463,7 +2463,7 @@
             "O_SPY250613P00600000_minute_2025-06-10.json": "e63935edf79762227b3357ca78c072c6478466b54ab5a02dc4d8bda81be96a15",
             "O_SPY250613C00680000_minute_2025-06-10.json": "5790fffb36d62076c333e96c8fe4cdd596cdf7f0bb22131264735f118bfb0e05",
             "expected.json": "c804084e54abe6df6ff4f1cdec0ed2e82c3aada8757d31a10a20698b8168753e",
-            "regenerate.py": "fd1ace60e001184fa20958898aaf5414f3f047ccc080818f83e172ec9328759c",
+            "regenerate.py": "faee56accaeb44c7252bf337ec441165a11183b2c07f8556873e34417fab30ba",
             "attribution.md": "a458e9174d75175fa6c8b3a04ea223d62c994d502e92ba00b98297e50d4bf23d"
           }
         }
