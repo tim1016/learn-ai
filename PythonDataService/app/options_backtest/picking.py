@@ -27,6 +27,11 @@ strike ladder come from them alone, so a non-standard contract neither is picked
 When no standard date meets a rule but a date listed only as non-standard contracts does, the refusal says
 that, and does not say nothing is listed. A listing that may be missing contracts is refused before any rule
 is read, for a pick from half a chain is a guess presented as a fact.
+
+A pick is made in two steps because only the second depends on the price. ``prepare_leg`` settles the expiry on a
+date's listing, and ``PreparedLeg.pick`` takes the strike for one underlying price. A run that picks at every minute
+of a session prepares once; ``pick_contract`` is the two steps in a row and answers exactly as it did before they
+were separated.
 """
 
 from __future__ import annotations
@@ -132,6 +137,11 @@ def strike_for(rule: StrikeRule, *, ladder_thousandths: Collection[int], underly
     ladder = sorted(set(ladder_thousandths))
     if not ladder:
         return None
+    return _strike_on(rule, ladder, underlying_price)
+
+
+def _strike_on(rule: StrikeRule, ladder: Sequence[int], underlying_price: Decimal) -> int | None:
+    """The strike ``rule`` means on a ladder that is sorted, without repeats and not empty, or None off its ends."""
     match rule:
         case AtTheMoney():
             steps = 0
@@ -171,19 +181,53 @@ def _none_listed_in_words(rule: ExpiryRule, right: str, trading_date: date) -> s
             assert_never(rule)
 
 
-def pick_contract(
-    leg: LegSetup, *, listing: Listing, trading_date: date, underlying_price: Decimal
-) -> Picked | PickRefused:
-    """The contract ``leg``'s rules come to in ``listing`` with the underlying at ``underlying_price``, or why none.
+class PreparedLeg:
+    """A leg whose expiry is settled on one date's listing: only the strike still depends on the price.
 
-    Raises ``ValueError`` for a listing of another date than ``trading_date`` and for a price that is not a
-    Decimal above zero: those are the caller's mistake and not a fact about the market.
+    Built by ``prepare_leg``. It holds the standard contracts of the one expiry the leg's rule came to, so a pick
+    at another price does not regroup the listing.
     """
+
+    __slots__ = ("_ladder", "_strikes", "expiry", "leg")
+
+    def __init__(self, leg: LegSetup, expiry: date, ladder: dict[int, ListedContract]) -> None:
+        self.leg = leg
+        self.expiry = expiry
+        self._ladder = ladder
+        self._strikes = sorted(ladder)
+
+    def pick(self, underlying_price: Decimal) -> Picked | PickRefused:
+        """The contract the leg's strike rule comes to with the underlying at ``underlying_price``, or why none.
+
+        Raises ``ValueError`` for a price that is not a Decimal above zero.
+        """
+        _require_a_price(underlying_price)
+        strike = _strike_on(self.leg.strike, self._strikes, underlying_price)
+        if strike is None:
+            return PickRefused(
+                PickRefusal.STRIKE_NOT_LISTED,
+                f"the strike rule comes off the end of the {len(self._strikes)} {self.leg.right} strikes listed "
+                f"for {self.expiry} with the underlying at {underlying_price}",
+            )
+        chosen = self._ladder[strike]
+        return Picked(contract=chosen.contract, multiplier=chosen.multiplier)
+
+
+def _require_the_listings_date(listing: Listing, trading_date: date) -> None:
     if listing.as_of != trading_date:
         raise ValueError(
             f"the listing describes {listing.as_of}, not {trading_date}: a pick is made from its own date's listing"
         )
-    _require_a_price(underlying_price)
+
+
+def prepare_leg(leg: LegSetup, *, listing: Listing, trading_date: date) -> PreparedLeg | PickRefused:
+    """Settle the expiry ``leg``'s rule comes to in ``listing``, or say why it comes to none.
+
+    The refusals here are the ones that do not depend on the underlying's price: an incomplete listing, no listed
+    expiry the rule means, an expiry that is not a session. A strike that is off the ladder depends on the price and
+    is refused by ``PreparedLeg.pick``. Raises ``ValueError`` for a listing of another date than ``trading_date``.
+    """
+    _require_the_listings_date(listing, trading_date)
     if not listing.complete:
         return PickRefused(
             PickRefusal.CHAIN_INCOMPLETE,
@@ -203,16 +247,21 @@ def pick_contract(
             PickRefusal.EXPIRY_NOT_A_SESSION,
             f"the rule comes to the {leg.right}s expiring {expiry}, and the calendar has no session that day",
         )
-    ladder = standard[expiry]
-    strike = strike_for(leg.strike, ladder_thousandths=ladder.keys(), underlying_price=underlying_price)
-    if strike is None:
-        return PickRefused(
-            PickRefusal.STRIKE_NOT_LISTED,
-            f"the strike rule comes off the end of the {len(ladder)} {leg.right} strikes listed for {expiry} "
-            f"with the underlying at {underlying_price}",
-        )
-    chosen = ladder[strike]
-    return Picked(contract=chosen.contract, multiplier=chosen.multiplier)
+    return PreparedLeg(leg, expiry, standard[expiry])
+
+
+def pick_contract(
+    leg: LegSetup, *, listing: Listing, trading_date: date, underlying_price: Decimal
+) -> Picked | PickRefused:
+    """The contract ``leg``'s rules come to in ``listing`` with the underlying at ``underlying_price``, or why none.
+
+    Raises ``ValueError`` for a listing of another date than ``trading_date`` and for a price that is not a
+    Decimal above zero: those are the caller's mistake and not a fact about the market.
+    """
+    _require_the_listings_date(listing, trading_date)
+    _require_a_price(underlying_price)
+    prepared = prepare_leg(leg, listing=listing, trading_date=trading_date)
+    return prepared if isinstance(prepared, PickRefused) else prepared.pick(underlying_price)
 
 
 def _no_expiry(
