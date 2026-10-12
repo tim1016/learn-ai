@@ -19,10 +19,11 @@ capture here stores that listing first. The in-memory twins are
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 from datetime import date
 from decimal import Decimal
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import asyncpg
@@ -41,6 +42,7 @@ from app.data_lake.option_bars import (
     option_minute_trade_dch,
     read_option_day_bars,
 )
+from app.data_lake.option_lake import HeldLease, OptionDataFailure, publish_option_artifact
 from app.data_lake.option_listing import (
     captured_listing_dates,
     ensure_option_listing,
@@ -51,7 +53,11 @@ from app.data_lake.polygon_option_bars import PolygonOptionBar
 from app.data_lake.types import ArtifactIdentity
 from app.options.contract import OptionContract
 from tests._helpers.fake_lake_catalog import point_lake_writer_at_tmp
-from tests._helpers.option_lake_cases import pieces_of_the_key_in
+from tests._helpers.option_lake_cases import (
+    one_bar_file,
+    pieces_of_the_key_in,
+    publish_stale_writer_first_once_both_have_staged,
+)
 from tests._helpers.option_vendor import bad_bars_answers, no_trades, outside_plan, traded
 
 pytestmark = pytest.mark.asyncio
@@ -421,6 +427,93 @@ async def test_a_vendor_text_with_a_nul_is_stored_cleaned_and_the_row_is_failed_
     [june_12] = [r for r in await _rows() if r["ArtifactKind"] == "metadata" and r["Status"] != "complete"]
     assert (june_12["Status"], june_12["LastError"], june_12["LeaseOwner"]) == ("failed", "provider_api_error", None)
     assert "listing" in june_12["ErrorMessage"] and "\x00" not in june_12["ErrorMessage"]
+
+
+@respx.mock
+async def test_a_writer_that_lost_its_lease_and_the_winner_publishing_together_leave_the_winners_file_on_the_real_table(
+    clean_artifacts, pool, tmp_lake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two writers of one day in one process stage their bytes before either is judged; each stages under its own generation.
+
+    Under one shared staging path the stale writer's refusal deletes the winner's staged file, the winner's
+    promotion then fails with ``FileNotFoundError``, and the row stays ``fetching`` with no file on the lake.
+    """
+    dch = option_minute_trade_dch()
+    identity = ArtifactIdentity(
+        artifact_kind="time_series_bars", market="usa_options", symbol=SYMBOL, trading_date=TRADING_DAY,
+        resolution="minute", data_type="trade", provider="polygon", price_adjustment_mode="raw",
+    )
+    relative = PurePosixPath("option/usa/minute/spy/spy250613c00600000/20250613_trade.zip")
+    artifact_id = await catalog_client.claim_minute_bar(
+        identity=identity, worker_id=option_lake_module.WORKER_ID, lease_ttl_ms=option_lake_module.LEASE_TTL_MS,
+        data_contract_hash=dch, file_path=str(relative),
+    )
+    assert artifact_id is not None
+    await _sql('UPDATE "DataLakeArtifacts" SET "LeaseExpiresAtMs" = 1 WHERE "Id" = $1', artifact_id)  # the first lease runs out
+    winner_generation = await catalog_client.steal_or_retry_minute_bar(
+        artifact_id=artifact_id, worker_id=option_lake_module.WORKER_ID, lease_ttl_ms=option_lake_module.LEASE_TTL_MS,
+        max_retries=option_lake_module.MAX_CLAIM_RETRIES, bypass_retry_ceiling=False, fresh_budget_for_contract=dch,
+    )
+    assert winner_generation == 2
+    stale_file, winner_file = one_bar_file("1.11"), one_bar_file("2.22")
+    publish_stale_writer_first_once_both_have_staged(monkeypatch, winner_generation=2)
+    shared = {
+        "rel_path": relative, "row_count": 1, "first_bar_start_ms": SESSION_OPEN_MS, "last_bar_start_ms": SESSION_OPEN_MS,
+        "data_contract_hash": dch, "symbol": SYMBOL, "trading_date": TRADING_DAY,
+    }
+
+    stale, winner = await asyncio.gather(
+        publish_option_artifact(payload=stale_file, lease=HeldLease(artifact_id, 1), **shared),
+        publish_option_artifact(payload=winner_file, lease=HeldLease(artifact_id, 2), **shared),
+    )
+
+    assert isinstance(stale, OptionDataFailure) and stale.reason == "lease_timeout"
+    assert winner == hashlib.sha256(winner_file).hexdigest()
+    [row] = await _bar_rows()
+    assert (row["Status"], row["FileSha256"], row["LeaseGeneration"], row["LeaseOwner"]) == ("complete", winner, 2, None)
+    assert (tmp_lake / "lake" / "raw" / relative).read_bytes() == winner_file
+    assert [p for p in (tmp_lake / "staging").rglob("*") if p.is_file()] == []
+
+
+@respx.mock
+async def test_a_day_told_it_is_outside_the_plan_twice_and_then_hit_by_one_transient_failure_has_spent_its_attempts_on_the_real_retry_sql(
+    clean_artifacts, pool, tmp_lake
+) -> None:
+    """The known gap at its true size: two plan answers and a 429 are the three attempts; the fourth ask is a timeout."""
+    edge_contract = OptionContract.of(root="SPY", expiry_date=date(2024, 10, 18), right="call", strike=580)
+    symbol = edge_contract.occ_symbol
+    open_ms = 1728912600000  # 09:30 EDT on 2024-10-14
+    route = respx.get(url__regex=rf"https://api\.polygon\.io/v2/aggs/ticker/O:{symbol}/range/1/minute/.*").mock(
+        side_effect=[outside_plan(), outside_plan(), httpx.Response(429), _bars_ok([_bar(0, t=open_ms)], symbol)]
+    )
+
+    asked = [await _ensure(edge_contract, date(2024, 10, 14), now_ms=NOW_2026_10_12_MS) for _ in range(4)]
+
+    assert [r.failure.reason if r.failure else "captured" for r in asked] == [
+        "outside_data_plan", "outside_data_plan", "provider_rate_limited", "fetch_timeout",
+    ]
+    assert route.call_count == 3
+    [row] = await _bar_rows()
+    assert (row["Status"], row["AttemptCount"]) == ("failed", 3)
+
+
+@respx.mock
+async def test_a_day_told_it_is_outside_the_plan_once_survives_one_transient_failure_on_the_real_retry_sql(
+    clean_artifacts, pool, tmp_lake
+) -> None:
+    edge_contract = OptionContract.of(root="SPY", expiry_date=date(2024, 10, 18), right="call", strike=580)
+    symbol = edge_contract.occ_symbol
+    open_ms = 1728912600000  # 09:30 EDT on 2024-10-14
+    route = respx.get(url__regex=rf"https://api\.polygon\.io/v2/aggs/ticker/O:{symbol}/range/1/minute/.*").mock(
+        side_effect=[outside_plan(), httpx.Response(429), _bars_ok([_bar(0, t=open_ms)], symbol)]
+    )
+
+    asked = [await _ensure(edge_contract, date(2024, 10, 14), now_ms=NOW_2026_10_12_MS) for _ in range(3)]
+
+    assert [r.failure.reason if r.failure else "captured" for r in asked] == [
+        "outside_data_plan", "provider_rate_limited", "captured",
+    ]
+    assert route.call_count == 3
 
 
 @respx.mock

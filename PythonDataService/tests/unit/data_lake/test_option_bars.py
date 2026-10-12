@@ -36,7 +36,7 @@ import zipfile
 import zlib
 from datetime import date, datetime
 from decimal import Decimal
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -64,8 +64,11 @@ from app.data_lake.option_bars import (
 )
 from app.data_lake.option_lake import (
     MAX_FAILURE_TEXT_CHARS,
+    HeldLease,
+    OptionDataFailure,
     fail_row,
     option_history_floor,
+    publish_option_artifact,
     storable_failure_text,
 )
 from app.data_lake.option_listing import ensure_option_listing, read_option_listing
@@ -78,7 +81,9 @@ from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, 
 from tests._helpers.option_lake_cases import (
     CAPTURE_OPENS,
     HALF_DAY_CLOSE_MS,
+    one_bar_file,
     pieces_of_the_key_in,
+    publish_stale_writer_first_once_both_have_staged,
     refuse_what_postgres_refuses,
 )
 from tests._helpers.option_vendor import (
@@ -722,6 +727,49 @@ async def test_after_the_plan_is_upgraded_an_edge_day_that_failed_outside_the_pl
 
 
 @respx.mock
+async def test_a_day_told_it_is_outside_the_plan_twice_and_then_hit_by_one_transient_failure_has_spent_its_attempts(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """A known gap, pinned at its true size (the comment at ``NOT_LATCHED_ERRORS`` states it): the next ask is a timeout.
+
+    The exemption lasts only while the row's last error is the plan's, and every ask counts toward the
+    three attempts, so two plan answers and one 429 leave none, though the vendor would now answer.
+    """
+    contract = OptionContract.of(root="SPY", expiry_date=date(2024, 10, 18), right="call", strike=580)
+    open_ms = session_open_ms_utc(date(2024, 10, 14))
+    route = _mock_vendor(
+        outside_plan(), outside_plan(), httpx.Response(429), _ok([_bar(t=open_ms)], contract.occ_symbol),
+        contract=contract.occ_symbol,
+    )
+
+    asked = [await _ensure(contract, date(2024, 10, 14), now_ms=NOW_2026_10_12_MS) for _ in range(4)]
+
+    assert [r.failure.reason if r.failure else "captured" for r in asked] == [
+        "outside_data_plan", "outside_data_plan", "provider_rate_limited", "fetch_timeout",
+    ]
+    assert route.call_count == 3  # the fourth ask never reached the vendor, who would have answered with bars
+
+
+@respx.mock
+async def test_a_day_told_it_is_outside_the_plan_once_survives_one_transient_failure_and_is_captured(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    """The other side of the same number: with one plan answer behind it, a 429 leaves an attempt."""
+    contract = OptionContract.of(root="SPY", expiry_date=date(2024, 10, 18), right="call", strike=580)
+    open_ms = session_open_ms_utc(date(2024, 10, 14))
+    route = _mock_vendor(
+        outside_plan(), httpx.Response(429), _ok([_bar(t=open_ms)], contract.occ_symbol), contract=contract.occ_symbol
+    )
+
+    asked = [await _ensure(contract, date(2024, 10, 14), now_ms=NOW_2026_10_12_MS) for _ in range(3)]
+
+    assert [r.failure.reason if r.failure else "captured" for r in asked] == [
+        "outside_data_plan", "provider_rate_limited", "captured",
+    ]
+    assert route.call_count == 3
+
+
+@respx.mock
 @pytest.mark.parametrize(
     "body",
     [
@@ -979,6 +1027,50 @@ def _polygon_option_bar() -> PolygonOptionBar:
         t_ms=SESSION_OPEN_MS, open=Decimal("1.27"), high=Decimal("1.31"), low=Decimal("1.25"), close=Decimal("1.27"),
         volume=Decimal(12),
     )
+
+
+async def test_a_writer_that_lost_its_lease_and_the_winner_publishing_together_leave_the_winners_file_and_a_complete_row(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both stage their bytes first. If they staged to one path, the loser's refusal would delete the winner's staged file.
+
+    The staging path carries the lease generation, so each writer has its own. The scheduler is told to give the
+    stale writer its turn at the catalog (refusal and cleanup) before the winner's, the order that hurts.
+    """
+    dch = option_minute_trade_dch()
+    identity = ArtifactIdentity(
+        artifact_kind="time_series_bars", market="usa_options", symbol=SYMBOL, trading_date=TRADING_DAY,
+        resolution="minute", data_type="trade", provider="polygon", price_adjustment_mode="raw",
+    )
+    artifact_id = await catalog_client.claim_minute_bar(
+        identity=identity, worker_id=option_lake_module.WORKER_ID, lease_ttl_ms=option_lake_module.LEASE_TTL_MS,
+        data_contract_hash=dch, file_path=RELATIVE_PATH,
+    )
+    assert artifact_id is not None
+    fake_catalog.rows[artifact_id]["lease_expires_at_ms"] = 1  # the first writer's lease runs out
+    winner_generation = await catalog_client.steal_or_retry_minute_bar(
+        artifact_id, option_lake_module.WORKER_ID, option_lake_module.LEASE_TTL_MS, option_lake_module.MAX_CLAIM_RETRIES,
+        fresh_budget_for_contract=dch,
+    )
+    assert winner_generation == 2
+    stale_file, winner_file = one_bar_file("1.11"), one_bar_file("2.22")
+    publish_stale_writer_first_once_both_have_staged(monkeypatch, winner_generation=2)
+    shared = {
+        "rel_path": PurePosixPath(RELATIVE_PATH), "row_count": 1, "first_bar_start_ms": SESSION_OPEN_MS,
+        "last_bar_start_ms": SESSION_OPEN_MS, "data_contract_hash": dch, "symbol": SYMBOL, "trading_date": TRADING_DAY,
+    }
+
+    stale, winner = await asyncio.gather(
+        publish_option_artifact(payload=stale_file, lease=HeldLease(artifact_id, 1), **shared),
+        publish_option_artifact(payload=winner_file, lease=HeldLease(artifact_id, 2), **shared),
+    )
+
+    assert isinstance(stale, OptionDataFailure) and stale.reason == "lease_timeout"  # told the row is not its own
+    assert winner == hashlib.sha256(winner_file).hexdigest()
+    assert (_raw_root(tmp_lake) / RELATIVE_PATH).read_bytes() == winner_file
+    row = fake_catalog.rows[artifact_id]
+    assert (row["status"], row["file_sha256"], row["lease_generation"]) == ("complete", winner, 2)
+    assert _staged_files(tmp_lake) == []
 
 
 # ── A vendor error is a typed failure on the row ─────────────────────────

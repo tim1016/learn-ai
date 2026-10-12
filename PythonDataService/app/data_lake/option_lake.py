@@ -130,10 +130,12 @@ MAX_CLAIM_RETRIES = _MAX_CLAIM_RETRIES
 #: the vendor says is outside the plan is environmental, not data: the owner upgrading
 #: the plan clears it, so it must not latch into a terminal ``fetch_timeout`` after
 #: three asks. Only a day at the edge of the floor reaches the vendor to be told so
-#: (an older one is refused before any claim). The exemption lasts while the row's last
-#: error is this one: a transient failure after the plan changed, on a row already asked
-#: three times or more, spends the ceiling and ends as ``fetch_timeout``, because every
-#: ask counts as an attempt and the shared reclaim has no reset for it.
+#: (an older one is refused before any claim). Known gap: the exemption lasts only while
+#: the row's last error is this one, and every ask counts as an attempt (the shared
+#: reclaim has no reset for it). So a row told "outside the plan" on two asks and then hit
+#: by one transient failure (a 429, a 5xx, a malformed answer) has spent its three
+#: attempts, and its next ask is ``fetch_timeout`` with no vendor call. One plan answer
+#: before the failure is survived; two are not.
 NOT_LATCHED_ERRORS = frozenset({"outside_data_plan"})
 
 #: The lake's own reasons (``ArtifactFailureReason``) and the six an option capture adds; the module docstring says what each means.
