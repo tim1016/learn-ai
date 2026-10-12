@@ -17,7 +17,7 @@ from dataclasses import dataclass
 import asyncpg
 
 from app.options_backtest import saved_runs
-from app.options_backtest.saved_runs import IsLive, RunHeader, StoredSession, StoredTrade
+from app.options_backtest.saved_runs import IsLive, RunHeader, SessionLine, StoredSession, StoredTrade
 
 
 class RunNotFound(LookupError):
@@ -51,6 +51,23 @@ class LegNotInRun(LookupError):
         self.run_id = run_id
         self.leg_id = leg_id
         super().__init__(f"run {run_id} has no leg {leg_id!r}")
+
+
+class RunsNotComplete(RuntimeError):
+    """Two runs were asked to be compared and one or both are not complete: each, with its place and its status."""
+
+    def __init__(self, runs: tuple[tuple[str, int, str], ...]) -> None:
+        self.runs = runs
+        super().__init__("; ".join(f"run {run_id} ({role}) is {status}" for role, run_id, status in runs))
+
+
+class RunsOfDifferentUnderlyings(RuntimeError):
+    """Two runs were asked to be compared and they trade different underlyings."""
+
+    def __init__(self, a: tuple[int, str], b: tuple[int, str]) -> None:
+        self.a = a
+        self.b = b
+        super().__init__(f"run {a[0]} (a) trades {a[1]} and run {b[0]} (b) trades {b[1]}")
 
 
 @dataclass(frozen=True)
@@ -133,3 +150,43 @@ async def read_session_record(
     if session is None:
         raise SessionNotInRun(run_id, session_open_ms)
     return SessionRecord(header=header, session=session)
+
+
+@dataclass(frozen=True)
+class ComparisonInputs:
+    """Two complete runs of one underlying: their records and setups, and the lines of their sessions."""
+
+    a: RunHeader
+    b: RunHeader
+    a_lines: tuple[SessionLine, ...]
+    b_lines: tuple[SessionLine, ...]
+
+
+async def read_comparison_inputs(
+    conn: asyncpg.Connection, a_id: int, b_id: int, *, is_live: IsLive
+) -> ComparisonInputs:
+    """What comparing run ``a_id`` with run ``b_id`` reads, from one consistent view.
+
+    ``RunNotFound`` for the first of the two that is missing (``a`` before ``b``); ``RunsNotComplete`` naming every one that
+    is not complete; ``RunsOfDifferentUnderlyings`` for a pair that trade different underlyings. The same run twice is
+    allowed and compares equal to itself.
+    """
+    async with conn.transaction(isolation="repeatable_read", readonly=True):
+        a = await saved_runs.get_run_header(conn, a_id, is_live=is_live)
+        if a is None:
+            raise RunNotFound(a_id)
+        b = a if b_id == a_id else await saved_runs.get_run_header(conn, b_id, is_live=is_live)
+        if b is None:
+            raise RunNotFound(b_id)
+        not_complete = tuple(
+            (role, run_id, header.record.status)
+            for role, run_id, header in (("a", a_id, a), ("b", b_id, b))
+            if header.record.status != "complete"
+        )
+        if not_complete:
+            raise RunsNotComplete(not_complete)
+        if a.setup.underlying != b.setup.underlying:
+            raise RunsOfDifferentUnderlyings((a_id, a.setup.underlying), (b_id, b.setup.underlying))
+        a_lines = await saved_runs.read_session_lines(conn, a_id)
+        b_lines = a_lines if b_id == a_id else await saved_runs.read_session_lines(conn, b_id)
+    return ComparisonInputs(a=a, b=b, a_lines=a_lines, b_lines=b_lines)

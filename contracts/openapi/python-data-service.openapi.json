@@ -39958,6 +39958,106 @@
         "title": "OptionsBacktestCheckDataRequest",
         "type": "object"
       },
+      "OptionsBacktestComparedRunResponse": {
+        "description": "One of the two runs, as the history shows it.",
+        "properties": {
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "fee_policy": {
+            "title": "Fee Policy",
+            "type": "string"
+          },
+          "first_session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "First Session Open Ms",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "last_session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Last Session Open Ms",
+            "type": "integer"
+          },
+          "sessions_requested": {
+            "title": "Sessions Requested",
+            "type": "integer"
+          },
+          "setup_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setup Name"
+          }
+        },
+        "required": [
+          "id",
+          "created_at_ms",
+          "first_session_open_ms",
+          "last_session_open_ms",
+          "sessions_requested",
+          "fee_policy"
+        ],
+        "title": "OptionsBacktestComparedRunResponse",
+        "type": "object"
+      },
+      "OptionsBacktestComparisonResponse": {
+        "description": "Two complete runs of one underlying compared. Python works out everything here; the page only shows it.",
+        "properties": {
+          "a": {
+            "$ref": "#/components/schemas/OptionsBacktestComparedRunResponse"
+          },
+          "b": {
+            "$ref": "#/components/schemas/OptionsBacktestComparedRunResponse"
+          },
+          "overlap": {
+            "$ref": "#/components/schemas/OptionsBacktestSessionOverlapResponse"
+          },
+          "range_difference": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionsBacktestRangeDifferenceResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "setting_differences": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsBacktestSettingDifferenceResponse"
+            },
+            "title": "Setting Differences",
+            "type": "array"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          }
+        },
+        "required": [
+          "underlying",
+          "a",
+          "b",
+          "setting_differences",
+          "overlap"
+        ],
+        "title": "OptionsBacktestComparisonResponse",
+        "type": "object"
+      },
       "OptionsBacktestContractNeedsResponse": {
         "description": "How many contract days a session needs and how many are not stored. ``not_yet_known`` while the session's\nunderlying day or listing is not stored, and both counts are then ``None``.",
         "properties": {
@@ -40865,6 +40965,50 @@
         "title": "OptionsBacktestProblemResponse",
         "type": "object"
       },
+      "OptionsBacktestRangeDifferenceResponse": {
+        "description": "The two runs' ranges, sent only when they differ.",
+        "properties": {
+          "a": {
+            "$ref": "#/components/schemas/OptionsBacktestRangeResponse"
+          },
+          "b": {
+            "$ref": "#/components/schemas/OptionsBacktestRangeResponse"
+          }
+        },
+        "required": [
+          "a",
+          "b"
+        ],
+        "title": "OptionsBacktestRangeDifferenceResponse",
+        "type": "object"
+      },
+      "OptionsBacktestRangeResponse": {
+        "properties": {
+          "first_session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "First Session Open Ms",
+            "type": "integer"
+          },
+          "last_session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Last Session Open Ms",
+            "type": "integer"
+          },
+          "sessions_requested": {
+            "title": "Sessions Requested",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "first_session_open_ms",
+          "last_session_open_ms",
+          "sessions_requested"
+        ],
+        "title": "OptionsBacktestRangeResponse",
+        "type": "object"
+      },
       "OptionsBacktestRateResponse": {
         "description": "A rate of two counts: the numerator and the denominator, and the quotient rounded half-even to six places.",
         "properties": {
@@ -41513,6 +41657,30 @@
         "title": "OptionsBacktestRunListItemResponse",
         "type": "object"
       },
+      "OptionsBacktestRunTotalsResponse": {
+        "description": "A run's figures over the sessions both runs tested, and only those. Sums of the stored per-session figures.",
+        "properties": {
+          "net_profit_usd": {
+            "title": "Net Profit Usd",
+            "type": "string"
+          },
+          "trades": {
+            "title": "Trades",
+            "type": "integer"
+          },
+          "winning_sessions": {
+            "title": "Winning Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "net_profit_usd",
+          "trades",
+          "winning_sessions"
+        ],
+        "title": "OptionsBacktestRunTotalsResponse",
+        "type": "object"
+      },
       "OptionsBacktestSeriesPointResponse": {
         "description": "A bar's close time and close price. A minute with no trade has no point.",
         "properties": {
@@ -41684,6 +41852,46 @@
         "title": "OptionsBacktestSessionCheckResponse",
         "type": "object"
       },
+      "OptionsBacktestSessionOverlapResponse": {
+        "description": "The sessions the two runs share (by their opens), how many each has that the other lacks, and the totals over the\nshared ones.",
+        "properties": {
+          "a": {
+            "$ref": "#/components/schemas/OptionsBacktestRunTotalsResponse"
+          },
+          "b": {
+            "$ref": "#/components/schemas/OptionsBacktestRunTotalsResponse"
+          },
+          "only_in_a": {
+            "title": "Only In A",
+            "type": "integer"
+          },
+          "only_in_b": {
+            "title": "Only In B",
+            "type": "integer"
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsBacktestSharedSessionResponse"
+            },
+            "title": "Sessions",
+            "type": "array"
+          },
+          "shared_sessions": {
+            "title": "Shared Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "shared_sessions",
+          "only_in_a",
+          "only_in_b",
+          "a",
+          "b",
+          "sessions"
+        ],
+        "title": "OptionsBacktestSessionOverlapResponse",
+        "type": "object"
+      },
       "OptionsBacktestSessionResponse": {
         "description": "One session of a complete run: what was stored, and what a timeline draws.\n\nThe stored facts (status, cash, profit, ``trades``, ``events``, ``levels``, ``fills``, ``marks``) never depend on the\nlake. The series are read from it and are checked against what the run read; one that cannot be shown says so and\nthe rest is still served.",
         "properties": {
@@ -41827,6 +42035,64 @@
           "count"
         ],
         "title": "OptionsBacktestSessionStatusCountResponse",
+        "type": "object"
+      },
+      "OptionsBacktestSettingDifferenceResponse": {
+        "description": "One setting on which the two runs differ. ``label`` names it the way an owner would (\"leg call: re-entry on stop\");\n``a`` and ``b`` are each run's value in words (\"not set\" for a rule that is off, \"not in this run\" for a leg the run\nlacks). The settings were compared as validated objects, so ``0.3`` and ``0.3000`` are never a difference.",
+        "properties": {
+          "a": {
+            "title": "A",
+            "type": "string"
+          },
+          "b": {
+            "title": "B",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "leg_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leg Id"
+          },
+          "setting": {
+            "enum": [
+              "entry_time",
+              "exit_time",
+              "no_reentry_after",
+              "square_off",
+              "leg",
+              "leg_right",
+              "leg_contracts",
+              "leg_expiry",
+              "leg_strike",
+              "leg_stop_loss",
+              "leg_momentum",
+              "leg_reentry",
+              "slippage",
+              "price_step",
+              "fees",
+              "starting_cash"
+            ],
+            "title": "Setting",
+            "type": "string"
+          }
+        },
+        "required": [
+          "setting",
+          "label",
+          "a",
+          "b"
+        ],
+        "title": "OptionsBacktestSettingDifferenceResponse",
         "type": "object"
       },
       "OptionsBacktestSetup-Input": {
@@ -42025,6 +42291,54 @@
           "sentence"
         ],
         "title": "OptionsBacktestSetupNameRuleResponse",
+        "type": "object"
+      },
+      "OptionsBacktestSharedSessionResponse": {
+        "description": "A session both runs tested, with each run's status and profit, so a page can show where one setting helped or hurt.",
+        "properties": {
+          "a_profit_usd": {
+            "title": "A Profit Usd",
+            "type": "string"
+          },
+          "a_status": {
+            "enum": [
+              "traded",
+              "no_trade",
+              "skipped",
+              "incomplete"
+            ],
+            "title": "A Status",
+            "type": "string"
+          },
+          "b_profit_usd": {
+            "title": "B Profit Usd",
+            "type": "string"
+          },
+          "b_status": {
+            "enum": [
+              "traded",
+              "no_trade",
+              "skipped",
+              "incomplete"
+            ],
+            "title": "B Status",
+            "type": "string"
+          },
+          "session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Session Open Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_open_ms",
+          "a_status",
+          "b_status",
+          "a_profit_usd",
+          "b_profit_usd"
+        ],
+        "title": "OptionsBacktestSharedSessionResponse",
         "type": "object"
       },
       "OptionsBacktestSkipCountResponse": {
@@ -80484,6 +80798,86 @@
           }
         },
         "summary": "List The Runs",
+        "tags": [
+          "research-options-backtest"
+        ]
+      }
+    },
+    "/api/research/options-backtest/runs/compare": {
+      "get": {
+        "description": "Two complete runs of one underlying side by side: every setting that differs, the range if it differs, and, on the\nsessions they share, each run's net profit, trades and winning sessions and the pair of profits of each session.\n\nBoth runs must be complete and trade the same underlying, else a 409 that says which is not and why; a run that does\nnot exist is a 404 naming ``a`` or ``b``. This path is the literal ``/runs/compare``, mounted before the run service's\n``/runs/{run_id}``.",
+        "operationId": "compare_two_runs_api_research_options_backtest_runs_compare_get",
+        "parameters": [
+          {
+            "description": "The first run's id.",
+            "in": "query",
+            "name": "a",
+            "required": true,
+            "schema": {
+              "description": "The first run's id.",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "title": "A",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The second run's id.",
+            "in": "query",
+            "name": "b",
+            "required": true,
+            "schema": {
+              "description": "The second run's id.",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "title": "B",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestComparisonResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Compare Two Runs",
         "tags": [
           "research-options-backtest"
         ]

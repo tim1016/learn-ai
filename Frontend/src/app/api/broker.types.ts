@@ -5886,6 +5886,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/options-backtest/runs/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Compare Two Runs
+         * @description Two complete runs of one underlying side by side: every setting that differs, the range if it differs, and, on the
+         *     sessions they share, each run's net profit, trades and winning sessions and the pair of profits of each session.
+         *
+         *     Both runs must be complete and trade the same underlying, else a 409 that says which is not and why; a run that does
+         *     not exist is a 404 naming ``a`` or ``b``. This path is the literal ``/runs/compare``, mounted before the run service's
+         *     ``/runs/{run_id}``.
+         */
+        get: operations["compare_two_runs_api_research_options_backtest_runs_compare_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/options-backtest/runs/{run_id}": {
         parameters: {
             query?: never;
@@ -22462,6 +22487,40 @@ export interface components {
             start_ms: number;
         };
         /**
+         * OptionsBacktestComparedRunResponse
+         * @description One of the two runs, as the history shows it.
+         */
+        OptionsBacktestComparedRunResponse: {
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Fee Policy */
+            fee_policy: string;
+            /** First Session Open Ms */
+            first_session_open_ms: number;
+            /** Id */
+            id: number;
+            /** Last Session Open Ms */
+            last_session_open_ms: number;
+            /** Sessions Requested */
+            sessions_requested: number;
+            /** Setup Name */
+            setup_name?: string | null;
+        };
+        /**
+         * OptionsBacktestComparisonResponse
+         * @description Two complete runs of one underlying compared. Python works out everything here; the page only shows it.
+         */
+        OptionsBacktestComparisonResponse: {
+            a: components["schemas"]["OptionsBacktestComparedRunResponse"];
+            b: components["schemas"]["OptionsBacktestComparedRunResponse"];
+            overlap: components["schemas"]["OptionsBacktestSessionOverlapResponse"];
+            range_difference?: components["schemas"]["OptionsBacktestRangeDifferenceResponse"] | null;
+            /** Setting Differences */
+            setting_differences: components["schemas"]["OptionsBacktestSettingDifferenceResponse"][];
+            /** Underlying */
+            underlying: string;
+        };
+        /**
          * OptionsBacktestContractNeedsResponse
          * @description How many contract days a session needs and how many are not stored. ``not_yet_known`` while the session's
          *     underlying day or listing is not stored, and both counts are then ``None``.
@@ -22819,6 +22878,23 @@ export interface components {
             message: string;
         };
         /**
+         * OptionsBacktestRangeDifferenceResponse
+         * @description The two runs' ranges, sent only when they differ.
+         */
+        OptionsBacktestRangeDifferenceResponse: {
+            a: components["schemas"]["OptionsBacktestRangeResponse"];
+            b: components["schemas"]["OptionsBacktestRangeResponse"];
+        };
+        /** OptionsBacktestRangeResponse */
+        OptionsBacktestRangeResponse: {
+            /** First Session Open Ms */
+            first_session_open_ms: number;
+            /** Last Session Open Ms */
+            last_session_open_ms: number;
+            /** Sessions Requested */
+            sessions_requested: number;
+        };
+        /**
          * OptionsBacktestRateResponse
          * @description A rate of two counts: the numerator and the denominator, and the quotient rounded half-even to six places.
          */
@@ -23031,6 +23107,18 @@ export interface components {
             underlying: string;
         };
         /**
+         * OptionsBacktestRunTotalsResponse
+         * @description A run's figures over the sessions both runs tested, and only those. Sums of the stored per-session figures.
+         */
+        OptionsBacktestRunTotalsResponse: {
+            /** Net Profit Usd */
+            net_profit_usd: string;
+            /** Trades */
+            trades: number;
+            /** Winning Sessions */
+            winning_sessions: number;
+        };
+        /**
          * OptionsBacktestSeriesPointResponse
          * @description A bar's close time and close price. A minute with no trade has no point.
          */
@@ -23088,6 +23176,23 @@ export interface components {
             verdict: "ready" | "needs_download" | "cannot_be_tested";
         };
         /**
+         * OptionsBacktestSessionOverlapResponse
+         * @description The sessions the two runs share (by their opens), how many each has that the other lacks, and the totals over the
+         *     shared ones.
+         */
+        OptionsBacktestSessionOverlapResponse: {
+            a: components["schemas"]["OptionsBacktestRunTotalsResponse"];
+            b: components["schemas"]["OptionsBacktestRunTotalsResponse"];
+            /** Only In A */
+            only_in_a: number;
+            /** Only In B */
+            only_in_b: number;
+            /** Sessions */
+            sessions: components["schemas"]["OptionsBacktestSharedSessionResponse"][];
+            /** Shared Sessions */
+            shared_sessions: number;
+        };
+        /**
          * OptionsBacktestSessionResponse
          * @description One session of a complete run: what was stored, and what a timeline draws.
          *
@@ -23138,6 +23243,27 @@ export interface components {
              * @enum {string}
              */
             status: "traded" | "no_trade" | "skipped" | "incomplete";
+        };
+        /**
+         * OptionsBacktestSettingDifferenceResponse
+         * @description One setting on which the two runs differ. ``label`` names it the way an owner would ("leg call: re-entry on stop");
+         *     ``a`` and ``b`` are each run's value in words ("not set" for a rule that is off, "not in this run" for a leg the run
+         *     lacks). The settings were compared as validated objects, so ``0.3`` and ``0.3000`` are never a difference.
+         */
+        OptionsBacktestSettingDifferenceResponse: {
+            /** A */
+            a: string;
+            /** B */
+            b: string;
+            /** Label */
+            label: string;
+            /** Leg Id */
+            leg_id?: string | null;
+            /**
+             * Setting
+             * @enum {string}
+             */
+            setting: "entry_time" | "exit_time" | "no_reentry_after" | "square_off" | "leg" | "leg_right" | "leg_contracts" | "leg_expiry" | "leg_strike" | "leg_stop_loss" | "leg_momentum" | "leg_reentry" | "slippage" | "price_step" | "fees" | "starting_cash";
         };
         /**
          * OptionsBacktestSetup
@@ -23222,6 +23348,28 @@ export interface components {
             pattern: string;
             /** Sentence */
             sentence: string;
+        };
+        /**
+         * OptionsBacktestSharedSessionResponse
+         * @description A session both runs tested, with each run's status and profit, so a page can show where one setting helped or hurt.
+         */
+        OptionsBacktestSharedSessionResponse: {
+            /** A Profit Usd */
+            a_profit_usd: string;
+            /**
+             * A Status
+             * @enum {string}
+             */
+            a_status: "traded" | "no_trade" | "skipped" | "incomplete";
+            /** B Profit Usd */
+            b_profit_usd: string;
+            /**
+             * B Status
+             * @enum {string}
+             */
+            b_status: "traded" | "no_trade" | "skipped" | "incomplete";
+            /** Session Open Ms */
+            session_open_ms: number;
         };
         /** OptionsBacktestSkipCountResponse */
         OptionsBacktestSkipCountResponse: {
@@ -40785,6 +40933,58 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OptionsBacktestRunListItemResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    compare_two_runs_api_research_options_backtest_runs_compare_get: {
+        parameters: {
+            query: {
+                /** @description The first run's id. */
+                a: number;
+                /** @description The second run's id. */
+                b: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestComparisonResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
                 };
             };
             /** @description Validation Error */

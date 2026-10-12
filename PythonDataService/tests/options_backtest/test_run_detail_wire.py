@@ -16,6 +16,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from app.options.contract import OptionContract
+from app.options_backtest.comparison import Setting
 from app.options_backtest.market import PickRefusal
 from app.options_backtest.results import (
     CancelReason,
@@ -26,6 +27,7 @@ from app.options_backtest.results import (
     Fill,
     LegTrade,
     Mark,
+    SessionStatus,
 )
 from app.options_backtest.saved_runs import StoredTrade
 from app.options_backtest.session_levels import ChartedFill, LevelKind
@@ -182,6 +184,8 @@ def test_the_page_size_the_server_holds_is_one_the_response_can_carry() -> None:
         (wire.SeriesReasonWord, [member.value for member in SeriesReason]),
         (wire.SeriesStateWord, ["shown", "not_shown"]),
         (wire.FillKindWord, list(get_args(get_type_hints(ChartedFill)["kind"]))),
+        (wire.SettingWord, [member.value for member in Setting]),
+        (wire.SessionStatusWord, [member.value for member in SessionStatus]),
     ],
 )
 def test_each_closed_set_on_the_wire_is_exactly_the_members_of_the_enum_it_comes_from(

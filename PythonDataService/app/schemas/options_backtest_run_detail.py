@@ -15,9 +15,10 @@ from typing import Literal, Self
 from pydantic import BaseModel, Field, model_validator
 
 from app.options.contract import OptionContract, OptionRight
+from app.options_backtest.comparison import Comparison, RangeOfRun, RunTotals, SettingDifference, SharedSession
 from app.options_backtest.results import Event, Fill, Mark
 from app.options_backtest.run_detail import SessionRecord, TradePage
-from app.options_backtest.saved_runs import StoredTrade
+from app.options_backtest.saved_runs import RunHeader, StoredTrade
 from app.options_backtest.session_levels import ChartedFill, ChartedMark, Level
 from app.options_backtest.session_series import SERIES_WORDS, Series, SessionSeries
 from app.schemas.options_backtest_runs import ExitReasonWord, Ms, SessionStatusWord, SkipReasonWord, exact
@@ -59,6 +60,24 @@ LevelKindWord = Literal["starting_price", "momentum", "stop"]
 FillKindWord = Literal["entry", "exit"]
 SeriesStateWord = Literal["shown", "not_shown"]
 SeriesReasonWord = Literal["no_pin", "gone", "changed", "unreadable", "lake_unavailable"]
+SettingWord = Literal[
+    "entry_time",
+    "exit_time",
+    "no_reentry_after",
+    "square_off",
+    "leg",
+    "leg_right",
+    "leg_contracts",
+    "leg_expiry",
+    "leg_strike",
+    "leg_stop_loss",
+    "leg_momentum",
+    "leg_reentry",
+    "slippage",
+    "price_step",
+    "fees",
+    "starting_cash",
+]
 
 _A_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
@@ -425,4 +444,166 @@ class OptionsBacktestSessionResponse(BaseModel):
             levels=[OptionsBacktestLevelResponse.from_level(level) for level in levels],
             fills=[OptionsBacktestFillResponse.from_fill(fill) for fill in fills],
             marks=[OptionsBacktestMarkResponse.from_mark(mark) for mark in marks],
+        )
+
+
+# ── Two runs side by side ────────────────────────────────────────────────
+
+
+class OptionsBacktestComparedRunResponse(BaseModel):
+    """One of the two runs, as the history shows it."""
+
+    id: int
+    setup_name: str | None = None
+    created_at_ms: Ms
+    first_session_open_ms: Ms
+    last_session_open_ms: Ms
+    sessions_requested: int
+    # The fee policy in a sentence, written when the run was made.
+    fee_policy: str
+
+    @classmethod
+    def from_header(cls, header: RunHeader) -> Self:
+        record = header.record
+        return cls(
+            id=record.id,
+            setup_name=record.setup_name,
+            created_at_ms=record.created_at_ms,
+            first_session_open_ms=record.first_session_open_ms,
+            last_session_open_ms=record.last_session_open_ms,
+            sessions_requested=record.sessions_requested,
+            fee_policy=record.fee_policy_text,
+        )
+
+
+class OptionsBacktestSettingDifferenceResponse(BaseModel):
+    """One setting on which the two runs differ. ``label`` names it the way an owner would ("leg call: re-entry on stop");
+    ``a`` and ``b`` are each run's value in words ("not set" for a rule that is off, "not in this run" for a leg the run
+    lacks). The settings were compared as validated objects, so ``0.3`` and ``0.3000`` are never a difference."""
+
+    setting: SettingWord
+    # The leg a setting belongs to; ``null`` for a setting of the whole run.
+    leg_id: str | None = None
+    label: str
+    a: str
+    b: str
+
+    @classmethod
+    def from_difference(cls, difference: SettingDifference) -> Self:
+        return cls(
+            setting=difference.setting.value,  # type: ignore[arg-type]
+            leg_id=difference.leg_id,
+            label=difference.label,
+            a=difference.a,
+            b=difference.b,
+        )
+
+
+class OptionsBacktestRangeResponse(BaseModel):
+    first_session_open_ms: Ms
+    last_session_open_ms: Ms
+    sessions_requested: int
+
+    @classmethod
+    def from_range(cls, each: RangeOfRun) -> Self:
+        return cls(
+            first_session_open_ms=each.first_session_open_ms,
+            last_session_open_ms=each.last_session_open_ms,
+            sessions_requested=each.sessions_requested,
+        )
+
+
+class OptionsBacktestRangeDifferenceResponse(BaseModel):
+    """The two runs' ranges, sent only when they differ."""
+
+    a: OptionsBacktestRangeResponse
+    b: OptionsBacktestRangeResponse
+
+
+class OptionsBacktestRunTotalsResponse(BaseModel):
+    """A run's figures over the sessions both runs tested, and only those. Sums of the stored per-session figures."""
+
+    net_profit_usd: str
+    trades: int
+    # Shared sessions whose profit is above zero.
+    winning_sessions: int
+
+    @classmethod
+    def from_totals(cls, totals: RunTotals) -> Self:
+        return cls(
+            net_profit_usd=exact(totals.net_profit_usd),
+            trades=totals.trades,
+            winning_sessions=totals.winning_sessions,
+        )
+
+
+class OptionsBacktestSharedSessionResponse(BaseModel):
+    """A session both runs tested, with each run's status and profit, so a page can show where one setting helped or hurt."""
+
+    session_open_ms: Ms
+    a_status: SessionStatusWord
+    b_status: SessionStatusWord
+    a_profit_usd: str
+    b_profit_usd: str
+
+    @classmethod
+    def from_shared(cls, shared: SharedSession) -> Self:
+        return cls(
+            session_open_ms=shared.session_open_ms,
+            a_status=shared.a.status.value,  # type: ignore[arg-type]
+            b_status=shared.b.status.value,  # type: ignore[arg-type]
+            a_profit_usd=exact(shared.a.profit_usd),
+            b_profit_usd=exact(shared.b.profit_usd),
+        )
+
+
+class OptionsBacktestSessionOverlapResponse(BaseModel):
+    """The sessions the two runs share (by their opens), how many each has that the other lacks, and the totals over the
+    shared ones."""
+
+    shared_sessions: int
+    only_in_a: int
+    only_in_b: int
+    a: OptionsBacktestRunTotalsResponse
+    b: OptionsBacktestRunTotalsResponse
+    # One per shared session, in order.
+    sessions: list[OptionsBacktestSharedSessionResponse]
+
+
+class OptionsBacktestComparisonResponse(BaseModel):
+    """Two complete runs of one underlying compared. Python works out everything here; the page only shows it."""
+
+    underlying: str
+    a: OptionsBacktestComparedRunResponse
+    b: OptionsBacktestComparedRunResponse
+    # Every setting that differs, in a fixed order; empty when the two runs ran the same setup.
+    setting_differences: list[OptionsBacktestSettingDifferenceResponse]
+    # Set only when the two runs' ranges differ.
+    range_difference: OptionsBacktestRangeDifferenceResponse | None = None
+    overlap: OptionsBacktestSessionOverlapResponse
+
+    @classmethod
+    def from_comparison(cls, a: RunHeader, b: RunHeader, comparison: Comparison) -> Self:
+        sessions = comparison.sessions
+        return cls(
+            underlying=comparison.underlying,
+            a=OptionsBacktestComparedRunResponse.from_header(a),
+            b=OptionsBacktestComparedRunResponse.from_header(b),
+            setting_differences=[
+                OptionsBacktestSettingDifferenceResponse.from_difference(each) for each in comparison.settings
+            ],
+            range_difference=OptionsBacktestRangeDifferenceResponse(
+                a=OptionsBacktestRangeResponse.from_range(comparison.range_a),
+                b=OptionsBacktestRangeResponse.from_range(comparison.range_b),
+            )
+            if comparison.ranges_differ
+            else None,
+            overlap=OptionsBacktestSessionOverlapResponse(
+                shared_sessions=len(sessions.shared),
+                only_in_a=sessions.only_in_a,
+                only_in_b=sessions.only_in_b,
+                a=OptionsBacktestRunTotalsResponse.from_totals(sessions.a),
+                b=OptionsBacktestRunTotalsResponse.from_totals(sessions.b),
+                sessions=[OptionsBacktestSharedSessionResponse.from_shared(each) for each in sessions.shared],
+            ),
         )

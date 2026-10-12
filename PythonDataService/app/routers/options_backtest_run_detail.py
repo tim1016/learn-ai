@@ -14,12 +14,16 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Path, Query, Response, status
 
+from app.options_backtest.comparison import compare
 from app.options_backtest.lake_data import LakeRunData
 from app.options_backtest.run_detail import (
     LegNotInRun,
     RunNotComplete,
     RunNotFound,
+    RunsNotComplete,
+    RunsOfDifferentUnderlyings,
     SessionNotInRun,
+    read_comparison_inputs,
     read_every_trade,
     read_session_record,
     read_trade_page,
@@ -33,6 +37,7 @@ from app.schemas.options_backtest import OptionsBacktestRefusalBody
 from app.schemas.options_backtest_run_detail import (
     TRADES_PAGE_DEFAULT,
     TRADES_PAGE_MAX,
+    OptionsBacktestComparisonResponse,
     OptionsBacktestSessionResponse,
     OptionsBacktestTradesResponse,
 )
@@ -194,3 +199,47 @@ async def export_the_trades(run_id: RunId) -> Response:
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{csv_file_name(run_id)}"'},
     )
+
+
+@router.get(
+    "/runs/compare",
+    response_model=OptionsBacktestComparisonResponse,
+    responses={**_NOT_FOUND, **_NOT_COMPLETE},
+)
+async def compare_two_runs(
+    a: Annotated[int, Query(ge=1, le=RUN_ID_MAX, description="The first run's id.")],
+    b: Annotated[int, Query(ge=1, le=RUN_ID_MAX, description="The second run's id.")],
+) -> OptionsBacktestComparisonResponse:
+    """Two complete runs of one underlying side by side: every setting that differs, the range if it differs, and, on the
+    sessions they share, each run's net profit, trades and winning sessions and the pair of profits of each session.
+
+    Both runs must be complete and trade the same underlying, else a 409 that says which is not and why; a run that does
+    not exist is a 404 naming ``a`` or ``b``. This path is the literal ``/runs/compare``, mounted before the run service's
+    ``/runs/{run_id}``.
+    """
+    try:
+        inputs = await with_connection(read_comparison_inputs, a, b, is_live=lifecycle.job_is_live)
+    except RunNotFound as exc:
+        role = "a" if exc.run_id == a else "b"
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            {"code": "OPTIONS_BACKTEST_RUN_NOT_FOUND", "message": f"No run has the id {exc.run_id} (run {role})."},
+        ) from exc
+    except RunsNotComplete as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            {
+                "code": "OPTIONS_BACKTEST_RUN_NOT_COMPLETE",
+                "message": f"Only complete runs can be compared, and {exc}.",
+            },
+        ) from exc
+    except RunsOfDifferentUnderlyings as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            {
+                "code": "OPTIONS_BACKTEST_RUNS_OF_DIFFERENT_UNDERLYINGS",
+                "message": f"Only runs of one underlying can be compared: {exc}.",
+            },
+        ) from exc
+    comparison = compare(inputs.a, inputs.a_lines, inputs.b, inputs.b_lines)
+    return OptionsBacktestComparisonResponse.from_comparison(inputs.a, inputs.b, comparison)

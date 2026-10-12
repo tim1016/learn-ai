@@ -21,8 +21,12 @@ from app.options_backtest.run_detail import (
     LegNotInRun,
     RunNotComplete,
     RunNotFound,
+    RunsNotComplete,
+    RunsOfDifferentUnderlyings,
     SessionNotInRun,
+    read_comparison_inputs,
     read_every_trade,
+    read_session_record,
     read_trade_page,
 )
 from tests.options_backtest._a_run import a_busy_run
@@ -219,3 +223,87 @@ async def test_every_trade_of_a_run_is_read_with_no_limit(
     assert [(each.session_open_ms, each.trade_number) for each in everything] == [
         (at, number) for at, number, _ in _every_trade(busy)
     ]
+
+
+# ── One session, as stored ───────────────────────────────────────────────
+
+
+async def test_a_session_reads_back_equal_to_the_one_saved_with_its_trades_events_and_pins(
+    conn: asyncpg.Connection, save_run: SaveRun, busy: RunResult
+) -> None:
+    run_id = await save_run(busy, "session")
+
+    for saved in busy.sessions:
+        record = await read_session_record(conn, run_id, saved.session_open_ms, is_live=GONE)
+
+        _the_same_all_the_way_down(record.session.result, saved, f"session {saved.session_open_ms}")
+        assert record.session.profit_usd == saved.pnl_usd and type(record.session.profit_usd) is Decimal
+        assert record.header.record.id == run_id and record.header.setup == busy.setup
+
+
+async def test_a_session_of_a_run_that_is_missing_or_not_complete_or_that_the_run_did_not_test_is_refused_in_that_order(
+    conn: asyncpg.Connection, save_run: SaveRun, scene: RunResult
+) -> None:
+    complete = await save_run(scene, "complete")
+    failed = await save_run(scene, "failed", end="failed")
+
+    with pytest.raises(RunNotFound):
+        await read_session_record(conn, 2**52, WED_OPEN_MS + 1, is_live=GONE)
+    with pytest.raises(RunNotComplete) as caught:
+        await read_session_record(conn, failed, WED_OPEN_MS + 1, is_live=GONE)
+    assert caught.value.status == "failed"
+    with pytest.raises(SessionNotInRun) as no_session:
+        await read_session_record(conn, complete, WED_OPEN_MS + 1, is_live=GONE)
+    assert no_session.value.session_open_ms == WED_OPEN_MS + 1
+
+
+# ── Two runs ─────────────────────────────────────────────────────────────
+
+
+async def test_two_complete_runs_of_one_underlying_are_read_with_the_lines_of_their_sessions(
+    conn: asyncpg.Connection, save_run: SaveRun, scene: RunResult
+) -> None:
+    first = await save_run(scene, "first")
+    second = await save_run(scene, "second")
+
+    inputs = await read_comparison_inputs(conn, first, second, is_live=GONE)
+    twice = await read_comparison_inputs(conn, first, first, is_live=GONE)
+
+    assert (inputs.a.record.id, inputs.b.record.id) == (first, second)
+    assert [line.session_open_ms for line in inputs.a_lines] == [WED_OPEN_MS, THU_OPEN_MS, FRI_OPEN_MS]
+    assert inputs.a_lines == inputs.b_lines
+    assert twice.a_lines == twice.b_lines == inputs.a_lines
+
+
+async def test_a_pair_is_refused_for_the_first_missing_run_then_for_every_run_not_complete_then_for_its_underlyings(
+    conn: asyncpg.Connection, save_run: SaveRun, scene: RunResult
+) -> None:
+    complete = await save_run(scene, "complete")
+    failed = await save_run(scene, "failed", end="failed")
+    running = await save_run(scene, "running", end="running")
+    other = await save_run(
+        RunResult(
+            setup=scene.setup.model_copy(update={"underlying": "QQQ"}),
+            sessions=scene.sessions,
+            summary=scene.summary,
+            slippage=scene.slippage,
+            slippage_tolerance=scene.slippage_tolerance,
+        ),
+        "other",
+    )
+
+    with pytest.raises(RunNotFound) as missing:
+        await read_comparison_inputs(conn, 2**52, 2**51, is_live=GONE)
+    assert missing.value.run_id == 2**52
+    with pytest.raises(RunNotFound) as missing_b:
+        await read_comparison_inputs(conn, complete, 2**51, is_live=GONE)
+    assert missing_b.value.run_id == 2**51
+    with pytest.raises(RunsNotComplete) as neither:
+        await read_comparison_inputs(conn, failed, running, is_live=GONE)
+    assert neither.value.runs == (("a", failed, "failed"), ("b", running, "interrupted"))
+    with pytest.raises(RunsNotComplete) as one:
+        await read_comparison_inputs(conn, complete, failed, is_live=GONE)
+    assert one.value.runs == (("b", failed, "failed"),)
+    with pytest.raises(RunsOfDifferentUnderlyings) as different:
+        await read_comparison_inputs(conn, complete, other, is_live=GONE)
+    assert (different.value.a, different.value.b) == ((complete, "SPY"), (other, "QQQ"))
