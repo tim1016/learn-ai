@@ -152,6 +152,25 @@ def test_each_ladder_value_carries_its_own_cash_from_session_to_session() -> Non
     assert (twenty.net_profit_usd, twenty.trades) == (D("-48.00"), 1)
 
 
+def test_a_point_counts_the_trades_and_not_the_sessions_that_traded_when_a_stop_turns_a_re_entry() -> None:
+    # Thursday's contract and a leg that re-enters at once after a stop; the underlying is steady at 500.
+    # 0%: bought 2.00, the stop 1.50 is not reached by minute 6's close of 1.55; sold at minute 61 for 1.90:
+    #     (1.90 - 2.00) x 100 = -10.00. One trade.
+    # 5%: bought 2.10, the stop 1.575 is reached by 1.55: sold at minute 7 for 1.70 x 0.95 = 1.615 down to 1.61:
+    #     (1.61 - 2.10) x 100 = -49.00. The stop earns a re-entry, decided at minute 7 and bought at minute 8's open:
+    #     1.70 x 1.05 = 1.785 up to 1.79. It is held to the exit time and sold at minute 61 for 1.90 x 0.95 = 1.805
+    #     down to 1.80: (1.80 - 1.79) x 100 = +1.00. Two trades in the one session, net -49.00 + 1.00 = -48.00.
+    written = setup(leg(stop=STOP_25, reentry=("at_once", 1)), slippage="5")
+
+    result = run_sessions(written, [THU], fake_data({THU: _stop_day()}), slippage_ladder=(D("0"), D("5")))
+
+    assert [
+        (p.slippage_percent, p.net_profit_usd, p.trades, p.traded_sessions, p.winning_sessions) for p in result.slippage
+    ] == [(D("0"), D("-10.00"), 1, 1, 0), (D("5"), D("-48.00"), 2, 1, 0)]
+    # The setup's own slippage is 5%, so the session kept is that one: the first entry and its re-entry.
+    assert [trade.entry_number for trade in result.sessions[0].outcome.trades] == [0, 1]
+
+
 def test_the_ladder_replays_read_each_days_data_once() -> None:
     written, data = _two_days_at_one_percent()
 

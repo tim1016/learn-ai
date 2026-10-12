@@ -100,13 +100,25 @@ def _random_setup(rng: random.Random, slippage: str) -> OptionsBacktestSetup:
 
 
 def _underlying(rng: random.Random, day: date) -> tuple[MinuteBar, ...]:
-    price, bars = 500.0 + rng.gauss(0, 3), []
+    """A random walk of closes, each bar with an open, a high and a low of its own around its close.
+
+    The prices come to different strikes on purpose: a needs or a market that read the open, the high or the low
+    where the close belongs would pick other contracts.
+    """
+    price, closes = 500.0 + rng.gauss(0, 3), []
     for minute in range(1, 391):
         price += rng.gauss(0, 0.6)
         if rng.random() < 0.04:
             continue  # the underlying did not trade
-        shown = D(f"{price:.2f}")
-        bars.append(MinuteBar(close_ms=close_ms(day, minute), open=shown, high=shown, low=shown, close=shown))
+        closes.append((minute, D(f"{price:.2f}")))
+    # Drawn after the walk, so that the walk is the same one it was before the bars had a range.
+    around = random.Random(rng.random())
+    bars = []
+    for minute, close in closes:
+        opened = close + D(f"{around.gauss(0, 1.2):.2f}")
+        high = max(opened, close) + D(f"{abs(around.gauss(0, 0.5)):.2f}")
+        low = min(opened, close) - D(f"{abs(around.gauss(0, 0.5)):.2f}")
+        bars.append(MinuteBar(close_ms=close_ms(day, minute), open=opened, high=high, low=low, close=close))
     return tuple(bars)
 
 
