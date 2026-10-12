@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { SetupInvalidError } from './options-backtest.service';
 import type { SetupRequest, SetupSummary } from './options-backtest.types';
 import { formatClockText } from './session-time';
-import { SESSION_CLOCK } from './testing/fixtures';
+import { exampleBody, minutes, servedSaved, SESSION_CLOCK } from './testing/fixtures';
 import { addLeg, inLeg, typeInto } from './testing/page-actions';
 import { fakeService, renderPage, sentencesFor } from './testing/render-page';
 
@@ -303,6 +303,29 @@ describe('typed times', () => {
     const summary = screen.getByRole('region', { name: 'In plain words' });
     expect(summary.textContent).toMatch(/fields marked above/i);
     expect(within(summary).queryByRole('list', { name: /about the setup as a whole/i })).toBeNull();
+  });
+
+  it('are put in order at the exit when a loaded setup counts both from the open and the entry is moved to the exit', async () => {
+    const bothFromTheOpen = servedSaved('Both from the open', { ...exampleBody(), entry: minutes(5, 'open'), exit: minutes(60, 'open') });
+    const service = fakeService(vi, { list: vi.fn(async () => [bothFromTheOpen]) });
+    await renderPage(service);
+    fireEvent.click(await within(screen.getByRole('complementary', { name: 'Saved setups' })).findByRole('button', { name: /^Both from the open/ }));
+    await screen.findByRole('article', { name: 'Leg 2' });
+    expect((screen.getByLabelText('Exit time') as HTMLInputElement).value).toBe(formatClockText(OPEN + 60));
+    await waitFor(() => expect(service.describe).toHaveBeenCalled());
+    const calls = service.describe.mock.calls.length;
+
+    typeInto('Entry time', formatClockText(OPEN + 60));
+
+    const card = within(screen.getByRole('region', { name: 'Entry settings' }));
+    expect(card.getByText(/The exit must be after the entry/).getAttribute('role')).toBe('alert');
+    expect(screen.getByLabelText('Exit time').getAttribute('aria-invalid')).toBe('true');
+    expect(service.describe.mock.calls.length).toBe(calls);
+
+    typeInto('Exit time', formatClockText(OPEN + 61));
+
+    expect(screen.getByLabelText('Exit time').getAttribute('aria-invalid')).toBe('false');
+    await waitFor(() => expect(service.describe.mock.lastCall?.[0]).toMatchObject({ entry: minutes(60, 'open'), exit: minutes(CLOSE - OPEN - 61, 'close') }));
   });
 
   it('follow the noon rule for "No re-entry after": the open up to noon, the close after it', async () => {
