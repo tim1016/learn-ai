@@ -76,6 +76,28 @@ describe('the run part of the page for a screen reader', () => {
     expect(await violations()).toEqual([]);
   });
 
+  it('has no accessibility violations with a failed run showing, its items grouped, one group open and one shut', async () => {
+    const setup = await startedRun();
+    const day = (offset: number) => sessionOpenMs('2026-09-14') + offset * 86_400_000;
+    const failure = {
+      code: 'DOWNLOAD_FAILED',
+      reason: 'The market data for some sessions could not be fetched.',
+      items: [
+        { session_open_ms: day(0), code: 'listing_not_captured', message: 'No listing was stored.' },
+        ...Array.from({ length: 8 }, (_, at) => ({ session_open_ms: day(at), code: 'took_too_long', message: 'It took longer than the run waits.' })),
+        { session_open_ms: null, code: 'internal_error', message: 'The run stopped early.' },
+      ],
+    };
+    setup.service.run.mockResolvedValue(runDetail({ status: 'failed', failure, figures: null, slippage: [], slippage_tolerance: null, headline: null }));
+
+    setup.jobs.emit('job-1', { type: 'job.failed', code: 'RunFailedError', message: failure.reason });
+    await screen.findByRole('list', { name: 'What failed' });
+
+    expect(await violations()).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: /Took Too Long/ }));
+    expect(await violations()).toEqual([]);
+  });
+
   it('has no accessibility violations in History, with the list and with a run opened', async () => {
     const complete = runItem({ id: 30, job_id: 'job-30', status: 'complete', setup_name: 'Straddle', headline: { sessions_tested: 10, sessions_traded: 8, trades: 12, trades_won: 7, net_profit_usd: '1234.56', ending_cash_usd: '11234.56' } });
     await renderPage(fakeService(vi, { runs: vi.fn(async () => [complete]), run: vi.fn(async () => runDetail({ ...complete })) }));
