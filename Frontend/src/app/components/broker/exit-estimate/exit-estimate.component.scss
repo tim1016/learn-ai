@@ -1,0 +1,79 @@
+.exit-estimate {
+  display: grid;
+  gap: var(--space-2);
+  h4, p, dl, dd, ul { margin: 0; }
+  h4 { color: var(--text-primary); font-size: var(--fs-sm); }
+}
+
+.exit-estimate__figures,
+.exit-estimate__quotes,
+.exit-estimate__conditions {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0;
+  list-style: none;
+}
+
+.exit-estimate__figure {
+  padding: var(--space-2);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2);
+    cursor: pointer;
+  }
+}
+
+.exit-estimate__label {
+  color: var(--text-primary);
+}
+
+.exit-estimate__amount {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+/* Stale and unknown are said in words and set apart in italic, so a figure that is not current is never read as one. */
+.exit-estimate__state {
+  font-size: var(--fs-xs);
+  font-style: italic;
+}
+
+.exit-estimate__source {
+  margin-top: var(--space-2);
+  font-size: var(--fs-xs);
+}
+
+.exit-estimate__terms {
+  display: grid;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+  font-size: var(--fs-xs);
+  div {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+  dd { font-variant-numeric: tabular-nums; text-align: right; }
+}
+
+.exit-estimate__quote {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--fs-xs);
+}
+
+.exit-estimate__held {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.exit-estimate__conditions {
+  font-size: var(--fs-xs);
+}

@@ -87,11 +87,12 @@ def option_fold_registry() -> FoldRegistry:
 
 
 def open_option_books(
-    tmp_path: Path, *, clock: _TestClock | None = None, bots: dict[str, str] | None = None
+    tmp_path: Path, *, clock: _TestClock | None = None, bots: dict[str, str] | None = None,
+    account_id: str = ACCOUNT_ID,
 ) -> ClerkSqliteRepository:
     """A fresh authority with each bot registered under its symbol and running."""
     repo = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID,
+        account_id=account_id,
         artifacts_root=tmp_path,
         clock=clock or _clock_at(NOON),
         fold_registry=option_fold_registry(),
@@ -102,7 +103,7 @@ def open_option_books(
         )
         submit_start_run(
             repo,
-            account_id=ACCOUNT_ID,
+            account_id=account_id,
             strategy_instance_id=strategy_instance_id,
             lifecycle_run_id=RUN_ID,
             clock=repo.clock,

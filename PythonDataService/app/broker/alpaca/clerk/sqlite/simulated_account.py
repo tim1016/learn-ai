@@ -49,6 +49,7 @@ from app.broker.alpaca.clerk.et_day import et_day_window_ms
 from app.broker.alpaca.clerk.fifo_pnl import LotWriteOff, compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.kept_option_quotes import (
+    HELD_MARK_MAX_AGE_MS,
     KeptOptionQuote,
     KeptOptionQuotes,
     KeptOptionQuotesUnavailable,
@@ -84,6 +85,26 @@ logger = logging.getLogger(__name__)
 
 class SimulationEvidenceUnavailable(BrokerUnavailable):
     """A simulated world cannot prove its cash, marks or retained risk baseline."""
+
+
+def read_kept_option_quotes_ahead(kept: KeptOptionQuotes, *, account_id: str) -> None:
+    """Read an account's kept option quotes before the custody lock is taken, never under it.
+
+    What is kept is then already in memory when a mark, or an exit estimate
+    (#3100), asks for it. A file that cannot be read is not an error of a
+    reading that marks no contract: the mark, or the estimate, says so when
+    one is needed. An account that never kept a quote has no file, and
+    reading it writes none.
+    """
+    try:
+        kept.refresh()
+    except KeptOptionQuotesUnavailable:
+        logger.warning(
+            "the option quotes kept for a simulated account cannot be read; an open contract cannot be marked "
+            "or its exit priced",
+            exc_info=True,
+            extra={"action": "kept_option_quotes_unreadable", "account_id": account_id},
+        )
 
 
 class SimulationBaseline(BaseModel):
@@ -168,21 +189,7 @@ class SimulatedAccountProjection:
         return KeptOptionQuotes.of_account(artifacts_root=self.artifacts_root, account_id=self.repo.account_id)
 
     def _read_kept_option_quotes_ahead(self) -> None:
-        """Read the account's kept option quotes before the custody lock is taken, never under it.
-
-        What is kept is then already in memory when a mark is asked for. A
-        file that cannot be read is not an error of a reading that marks no
-        contract: the mark itself says so when one is needed. An account
-        that never kept a quote has no file, and reading it writes none.
-        """
-        try:
-            self._kept_option_quotes().refresh()
-        except KeptOptionQuotesUnavailable:
-            logger.warning(
-                "the option quotes kept for a simulated account cannot be read; an open contract cannot be marked",
-                exc_info=True,
-                extra={"action": "kept_option_quotes_unreadable", "account_id": self.repo.account_id},
-            )
+        read_kept_option_quotes_ahead(self._kept_option_quotes(), account_id=self.repo.account_id)
 
     def _option_mark(self, symbol: str, *, at_ms: int) -> KeptOptionQuote:
         """The quote an open option contract is marked from at ``at_ms``, or the reading is unavailable.
@@ -213,7 +220,7 @@ class SimulatedAccountProjection:
                 f"The option quotes kept for this {simulated_account_named(self.repo.account_id)} need repair; "
                 f"{symbol} cannot be marked from them."
             ) from exc
-        if kept is None or at_ms - kept.kept_at_ms > SOURCE_BAR_MS + DELIVERY_ALLOWANCE_MS:
+        if kept is None or at_ms - kept.kept_at_ms > HELD_MARK_MAX_AGE_MS:
             raise SimulationEvidenceUnavailable(
                 f"A fresh quote for the option contract {symbol} is unavailable. Wait for its market feed."
             )
@@ -247,7 +254,7 @@ class SimulatedAccountProjection:
                 refs.append(kept.ref)
                 # Good while its hand-over is fresh, and never into the contract's expiry.
                 expires = min(
-                    kept.kept_at_ms + SOURCE_BAR_MS + DELIVERY_ALLOWANCE_MS,
+                    kept.kept_at_ms + HELD_MARK_MAX_AGE_MS,
                     last_session_close_ms(OptionContract.from_occ_symbol(symbol).expiry_date) - 1,
                 )
                 valid_until = expires if valid_until is None else min(valid_until, expires)

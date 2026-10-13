@@ -951,6 +951,74 @@ def test_holding_a_position_reads_as_holding_never_as_a_fault(authority: tuple) 
     assert ("Free to trade", "100.00", False) in _statement(view)
 
 
+def test_a_bot_holding_shares_or_nothing_has_no_exit_estimate(authority: tuple) -> None:
+    """The estimate is of an option position: a flat bot, and a bot holding a share, have none to show (#3100)."""
+    repo, runtime, gate = _committed_view(authority)
+    assert budget_deploy._budget_view(runtime, "view").exit_estimate is None
+
+    _hold_one_share(repo, gate)
+
+    view = budget_deploy._budget_view(runtime, "view")
+    assert ("In shares, at cost", "100.00", False) in _statement(view)
+    assert view.exit_estimate is None
+
+
+SOLD_CONTRACT = "SPY260918C00585000"
+
+
+def _hold_one_sold_contract(repo: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bot ``view`` is left holding one sold contract, with no live quote held for it in this process."""
+    from app.services.broker_v2_panel import exit_estimate_read
+
+    with repo.write_fence() as conn:
+        conn.execute("INSERT INTO option_contracts (symbol, multiplier, recorded_at_ms) VALUES (?, 100, ?)", (SOLD_CONTRACT, NOON))
+        subject = conn.execute("SELECT subject_id FROM custody_subjects WHERE strategy_instance_id = 'view'").fetchone()[0]
+        conn.execute(
+            "INSERT INTO positions (subject_id, strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
+            "VALUES (?, 'view', ?, -1, ?)",
+            (subject, SOLD_CONTRACT, NOON),
+        )
+    monkeypatch.setattr(exit_estimate_read, "get_option_quotes", lambda: None)
+
+
+def test_a_real_accounts_bot_holding_an_option_is_served_an_exit_estimate_that_states_no_price_without_a_live_quote(
+    authority: tuple, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real accounts keep no option quotes, and no supervisor here holds one for the bot's run. The bot holds one
+    sold contract: its buy-back needs an ask nothing states, so both figures are unknown, with the reason, and no
+    amount is invented from anything else on the page (#3100)."""
+    repo, runtime, _ = _committed_view(authority)
+    _hold_one_sold_contract(repo, monkeypatch)
+
+    view = budget_deploy._budget_view(runtime, "view")
+
+    assert view.state == "ready" and view.exit_estimate is not None
+    for figure in (view.exit_estimate.net_close, view.exit_estimate.gross_buy_back):
+        assert (figure.state, figure.amount_usd, figure.terms) == ("unknown", None, ())
+        assert "real accounts keep no option quotes" in figure.source
+        assert "the bot's run is not asking for any" in figure.source
+    [leg] = view.exit_estimate.quotes
+    assert (leg.contract.occ_symbol, leg.contracts, leg.state, leg.missing) == (SOLD_CONTRACT, -1, "unknown", ("bid", "ask"))
+    assert view.exit_estimate.conditions[-1] == "Alpaca's own expiry-day cutoff has not been verified."
+
+
+def test_a_stopped_bot_still_holding_an_option_is_still_served_what_getting_out_costs(
+    authority: tuple, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Stop ends the bot's entries and not its position: what getting out costs matters most then, and it
+    is served beside a statement that says what the Stop released (#3100)."""
+    repo, runtime, _ = _committed_view(authority)
+    _hold_one_sold_contract(repo, monkeypatch)
+    _stop(repo)
+
+    view = budget_deploy._budget_view(runtime, "view")
+
+    assert view.state == "ready" and view.funding is None
+    assert view.exit_estimate is not None
+    assert (view.exit_estimate.net_close.state, view.exit_estimate.gross_buy_back.state) == ("unknown", "unknown")
+    assert [leg.contract.occ_symbol for leg in view.exit_estimate.quotes] == [SOLD_CONTRACT]
+
+
 def test_a_dry_run_bot_shows_its_own_money_after_a_fill_without_account_evidence(tmp_path) -> None:
     """Hurdle H27: once a Dry Run's simulated buy filled, every figure read
     "Unknown" under "Fresh account evidence ... unavailable". Its money is its
