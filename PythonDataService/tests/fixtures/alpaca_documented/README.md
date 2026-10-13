@@ -5,9 +5,14 @@ documentation**, cut from the page verbatim. None was returned by an Alpaca
 account. They stand in for recordings from Alpaca Paper, which the option work
 (#2913) could not make while it was built without live data.
 
-**Each is to be replaced by a recording.** A recording goes in
+**Each is to be joined by a recording.** A recording goes in
 `tests/fixtures/alpaca/`, beside the other captures from a live paper account,
-and the matching file here is deleted with the tests moved onto it.
+and is made, sanitised, by the qualification kit
+(`scripts/option_qualification_bundle.py recordings`). It is added **beside**
+the example it answers and does not take its place (#3095, #3102): an example
+here, and the tests that mutate an answer into a hostile one, cover states a
+Paper account never produced, and a recording shows one account on one day.
+Tests move onto a recording only for what it shows; the rest stay on these.
 
 What an example can prove is narrow: that this repo sends and reads the shape
 the documentation shows. It cannot prove Alpaca's API answers that way. Each
