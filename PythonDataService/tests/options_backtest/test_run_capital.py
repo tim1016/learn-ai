@@ -9,6 +9,7 @@ and no slippage unless a scene says so. Every expectation is worked by hand and 
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
@@ -22,7 +23,7 @@ from app.options_backtest.capital_evidence import (
     CapitalInvalidKind,
     CapitalSession,
 )
-from app.options_backtest.cash_ladder import DEFAULT_CASH_LADDER
+from app.options_backtest.cash_ladder import DEFAULT_CASH_LADDER, ladder_levels
 from app.options_backtest.results import SessionStatus
 from app.options_backtest.run import run_sessions
 from app.options_backtest.run_stamps import RunStamps, current_stamps
@@ -383,6 +384,79 @@ def test_a_session_whose_underlying_did_not_trade_at_the_entry_time_is_skipped_a
         D("20000"),
         D("40000"),
     ]
+
+
+# ── Cents: a level's cash is whole cents, rounded down ───────────────────
+
+
+def _is_whole_cents(amount: Decimal) -> bool:
+    return (amount * 100) % 1 == 0
+
+
+@pytest.mark.parametrize(
+    ("start", "half"),
+    [
+        # 100.01 / 2 = 50.005; 33.33 / 2 = 16.665; 0.03 / 2 = 0.015: each down to the cent, and not up.
+        ("100.01", "50.00"),
+        ("33.33", "16.66"),
+        ("0.03", "0.01"),
+        ("10000", "5000.00"),
+    ],
+)
+def test_an_odd_cent_start_gives_whole_cent_cash_at_every_default_rung_rounded_down_and_its_own_level_untouched(
+    start: str, half: str
+) -> None:
+    levels = ladder_levels(D(start), DEFAULT_CASH_LADDER)
+
+    # Double and four times are exact in cents already; only the half is rounded, and down. The setup's own is as given.
+    assert levels == {D(half): D("0.5"), D(start): D("1"), D(start) * 2: D("2"), D(start) * 4: D("4")}
+    assert all(_is_whole_cents(cash) for cash in levels)
+    assert [str(cash) for cash in levels if levels[cash] == D("1")] == [start]
+
+
+def test_a_multiple_that_comes_to_less_than_a_cent_is_refused_and_two_that_round_to_one_cash_are_one_level() -> None:
+    with pytest.raises(ValueError, match="under one cent"):
+        ladder_levels(D("0.01"), (D("0.5"),))
+
+    # 1.00001 x 100.01 = 100.0110001, which rounds down to the setup's own cash: it is the own level, labelled 1.
+    assert ladder_levels(D("100.01"), (D("1.00001"),)) == {D("100.01"): D("1")}
+    # 1.0001 x 100.01 = 100.020001 is a cent more, and is a level of its own.
+    assert ladder_levels(D("100.01"), (D("1.0001"),)) == {D("100.01"): D("1"), D("100.02"): D("1.0001")}
+
+
+def test_a_run_from_an_odd_cent_cash_replays_every_level_on_whole_cents_and_serves_each_as_dollars_and_cents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cash_of_each_replay: list[Decimal] = []
+    real = run_module.replay_session
+
+    def counting(*args: object, **kwargs: object):
+        cash_of_each_replay.append(kwargs["cash_usd"])  # type: ignore[arg-type]
+        return real(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(run_module, "replay_session", counting)
+
+    result = run_sessions(
+        _spread_setup("100.01"), [WED], fake_data({WED: a_spread_that_closes()}), slippage_ladder=(D("0"),)
+    )
+
+    # Each level is a whole number of cents, the half rounded down from 50.005, and the setup's own was replayed once,
+    # as it is given. The spread pledges 500.00 and brings in 120.00: 50.00, 100.01 and 200.02 cannot hold it, so both
+    # legs are refused for cash; 400.04 + 120.00 is over 500.00, so both fill.
+    assert sorted(cash_of_each_replay) == [D("50.00"), D("100.01"), D("200.02"), D("400.04")]
+    ladder = result.summary.cash_ladder
+    assert ladder is not None
+    assert [(level.starting_cash_usd, level.entries_refused_for_cash, level.entries_filled) for level in ladder] == [
+        (D("50.00"), 2, 0),
+        (D("100.01"), 2, 0),
+        (D("200.02"), 2, 0),
+        (D("400.04"), 0, 2),
+    ]
+    own = next(level for level in ladder if level.is_setups_own)
+    assert str(own.starting_cash_usd) == "100.01" and own.starting_cash_usd == result.setup.starting_cash_usd
+    # What the page is sent reads as dollars and cents: one or two decimals, never a half cent.
+    for level in ladder:
+        assert re.fullmatch(r"\d+(\.\d{1,2})?", format(level.starting_cash_usd, "f")), level.starting_cash_usd
 
 
 def test_the_default_ladder_is_half_the_same_double_and_four_times_and_the_levels_are_the_callers_to_set() -> None:

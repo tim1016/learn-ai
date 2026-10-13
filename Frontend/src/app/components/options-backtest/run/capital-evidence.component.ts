@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import type { RunFigures } from '../options-backtest.types';
 import { fundedThroughSentence, requirementRuleWords } from '../run-words';
@@ -14,7 +15,7 @@ import { fundedThroughSentence, requirementRuleWords } from '../run-words';
  */
 @Component({
   selector: 'app-options-backtest-capital-evidence',
-  imports: [AuthoredUsdPipe, TimestampDisplayComponent],
+  imports: [AuthoredUsdPipe, ReceiptLabelPipe, TimestampDisplayComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './capital-evidence.component.html',
   styleUrl: './capital-evidence.component.scss',

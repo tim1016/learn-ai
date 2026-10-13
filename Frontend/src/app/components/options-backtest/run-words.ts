@@ -1,3 +1,4 @@
+import { formatReceiptLabel } from '../../shared/pipes/receipt-label.pipe';
 import type { JobEventRecord, JobState } from '../../services/jobs.service';
 import type { CapitalEvidence, CapitalInvalidEvent, SlippageTolerance } from './options-backtest.types';
 
@@ -69,7 +70,7 @@ export function fundedThroughSentence(evidence: CapitalEvidence): string {
   return `Funded continuously through session ${through} of ${of}.`;
 }
 
-/** What a ladder row says ended its evidence, in a few words for a table cell. A kind with no words is shown as given. */
+/** What a ladder row says ended its evidence, in a few words for a table cell. A kind with no words is shown as a receipt label. */
 export function capitalEventLabel(kind: CapitalInvalidEvent['kind']): string {
   switch (kind) {
     case 'unfunded_close':
@@ -77,7 +78,7 @@ export function capitalEventLabel(kind: CapitalInvalidEvent['kind']): string {
     case 'position_marked':
       return 'a position marked';
     default:
-      return kind;
+      return formatReceiptLabel(kind);
   }
 }
 
@@ -85,9 +86,9 @@ const REQUIREMENT_RULE_WORDS: Readonly<Record<string, string>> = {
   alpaca_covered_positions: 'Alpaca’s published rule for covered positions',
 };
 
-/** The requirement rule's name in words. A rule this page has no words for is shown by its name. */
+/** The requirement rule's name in words. A rule this page has no words for is shown as a receipt label, never as its raw token. */
 export function requirementRuleWords(rule: string): string {
-  return REQUIREMENT_RULE_WORDS[rule] ?? rule;
+  return REQUIREMENT_RULE_WORDS[rule] ?? formatReceiptLabel(rule);
 }
 
 /** A month as `YYYY-MM`, from the year and month the server counts it by. */

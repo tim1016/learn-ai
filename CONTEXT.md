@@ -1870,7 +1870,8 @@ backtest still stands (Option structures).
   counted and ends nothing.
 - **Cash ladder** — the run replayed at several starting cashes (half the setup's,
   the same, double and four times by default) at the setup's own slippage, each
-  level carrying its own cash. A level shows its starting cash, the entries it
+  level carrying its own cash, rounded down to the cent (the setup's own is
+  as it is given). A level shows its starting cash, the entries it
   filled and had refused for cash, its net profit and its capital evidence. The
   level at the setup's own cash is the run. No level is called safe.
 - **Entry time, exit time** — the minutes at which a setup's rules start and stop

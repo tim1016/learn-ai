@@ -17,7 +17,7 @@
             <app-timestamp-display [value]="ended.session_open_ms" mode="date-et" granularity="date" /> ended with a position still held, valued at its mark.
           </p>
         }
-        @default { <p class="ended">The evidence ended: {{ ended.kind }}.</p> }
+        @default { <p class="ended">The evidence ended: {{ ended.kind | receiptLabel }}.</p> }
       }
       <p class="note">Later sessions still ran, on the assumption that the position was settled at its mark. They are not continuously funded.</p>
     } @else {

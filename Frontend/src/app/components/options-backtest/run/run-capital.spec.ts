@@ -4,9 +4,9 @@ import { describe, expect, it } from 'vitest';
 import { sessionOpenMs } from '../../../shared/date-picker/testing/fake-trading-calendar';
 import { RunDetailService } from '../run-detail/run-detail.service';
 import { inertRunDetail } from '../run-detail/testing/fake-run-detail';
-import type { CapitalEvidence, RunFigures } from '../options-backtest.types';
+import type { CapitalEvidence, CapitalInvalidEvent, RunFigures } from '../options-backtest.types';
 import { expectTradingDatesInNewYork, paragraph, reads } from '../testing/page-actions';
-import { capitalEvidence, figures, runDetail } from '../testing/run-fixtures';
+import { capitalEvidence, CASH_LADDER, figures, runDetail } from '../testing/run-fixtures';
 import { RunResultComponent } from './run-result.component';
 
 /** The closer look at the trades is not what these specs are about, so it reads nothing. */
@@ -121,10 +121,25 @@ describe('the capital block', () => {
     expectTradingDatesInNewYork(stamp);
   });
 
-  it('shows a rule it has no words for by its name', async () => {
+  it('shows a rule it has no words for as an operator-readable label, never as the raw token', async () => {
     await renderResult({ stamps: { replay_rules_version: 2, requirement_rule: 'a_rule_of_the_future', requirement_rule_read_at_ms: 1_791_777_600_000 } });
 
-    expect(reads(paragraph(/^Replay rules version 2/, capital()))).toContain('Requirement rule: a_rule_of_the_future');
+    const stamp = reads(paragraph(/^Replay rules version 2/, capital()));
+    expect(stamp).toContain('Requirement rule: A Rule Of The Future,');
+    expect(stamp).not.toContain('a_rule_of_the_future');
+  });
+
+  it('shows an event kind it has no words for, in the block and in the ladder, as a label and not as the raw token', async () => {
+    // A server newer than the page can send a kind the generated type does not list yet, so the type is widened here.
+    const newer = 'a_stop_of_the_future' as CapitalInvalidEvent['kind'];
+    const ended = { kind: newer, session_open_ms: sessionOpenMs(SESSION), at_ms: null, free_cash_after_usd: null };
+    const evidence = capitalEvidence({ sessions_funded_continuously: 3, ended_by: ended });
+    await renderResult({ capital_evidence: evidence, cash_ladder: [{ ...CASH_LADDER[1], capital_evidence: evidence }] });
+
+    expect(reads(paragraph(/^The evidence ended/, capital()))).toBe('The evidence ended: A Stop Of The Future.');
+    expect(capital().textContent).not.toContain('a_stop_of_the_future');
+    expect(reads(ladder().querySelector('tbody tr'))).toContain('3 of 10 A Stop Of The Future');
+    expect(ladder().textContent).not.toContain('a_stop_of_the_future');
   });
 });
 
