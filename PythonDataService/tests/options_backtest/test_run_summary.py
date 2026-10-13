@@ -77,6 +77,7 @@ def test_the_summary_counts_the_sessions_and_trades_of_the_run() -> None:
     assert summary.exits_by_reason == (
         (ExitReason.STOP, 0),
         (ExitReason.SQUARE_OFF, 0),
+        (ExitReason.CLOSED_WITH_ITS_PROTECTION, 0),
         (ExitReason.EXIT_TIME, 2),
         (ExitReason.MARKED_NOT_SOLD, 1),
         (ExitReason.MARKED_NOT_BOUGHT_BACK, 0),

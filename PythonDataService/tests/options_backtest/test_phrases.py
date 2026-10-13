@@ -98,8 +98,35 @@ def test_a_re_entry_buys_the_fresh_contract_of_a_bought_leg_and_sells_that_of_a_
     assert phrases.reentry(at_once) == (
         "After a stop, picks a fresh contract by the same rules and buys it at once, up to 1 time in a session."
     )
+    # A sold leg may have no stop of its own and be closed by the one on the bought leg that protects it, which earns
+    # it a re-entry too: its sentence does not say that the stop is its own.
     assert phrases.reentry(at_once, "sell") == (
-        "After a stop, picks a fresh contract by the same rules and sells it at once, up to 1 time in a session."
+        "After a stop closes it (its own, or one that takes it along), picks a fresh contract by the same rules and "
+        "sells it at once, up to 1 time in a session."
     )
-    # Waiting for momentum names no verb, so it reads alike on both sides.
-    assert phrases.reentry(on_momentum, "sell") == phrases.reentry(on_momentum, "buy")
+    assert phrases.reentry(on_momentum, "sell") == (
+        "After a stop closes it (its own, or one that takes it along), picks a fresh contract by the same rules, takes "
+        "a new starting premium from it and waits for momentum again, up to 2 times in a session."
+    )
+    assert phrases.reentry(on_momentum, "buy") == (
+        "After a stop, picks a fresh contract by the same rules, takes a new starting premium from it and waits for "
+        "momentum again, up to 2 times in a session."
+    )
+
+
+def test_a_partial_square_off_says_that_a_stopped_bought_leg_takes_the_sold_legs_it_protects_only_when_the_setup_sells() -> (
+    None
+):
+    only_the_stopped_leg = "Square off is partial: a stop closes only the leg that was stopped."
+
+    assert phrases.square_off("partial") == only_the_stopped_leg
+    assert phrases.square_off("partial", sells=False) == only_the_stopped_leg
+    # The order is decided in the stop's minute and fills at the next open or a later one, so it is not said to be bought
+    # back in that minute; and the order of the book (last listed first) is a policy that can close more than is needed.
+    assert phrases.square_off("partial", sells=True) == (
+        "Square off is partial: a stop closes only the leg that was stopped, and a stopped bought leg takes with it "
+        "the sold legs it protects, closed in the same minute and exit group, last listed first, which can close more "
+        "legs than strictly needed."
+    )
+    # A complete square-off closes every open leg already, the sold ones with the rest.
+    assert phrases.square_off("complete", sells=True) == phrases.square_off("complete")

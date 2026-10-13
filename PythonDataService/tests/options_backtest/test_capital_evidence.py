@@ -229,6 +229,33 @@ def test_an_unfunded_close_in_the_first_session_is_funded_through_none() -> None
     )
 
 
+def test_a_group_that_buys_back_a_sold_leg_and_sells_the_cover_that_went_with_it_is_classed_by_the_collateral_left() -> (
+    None
+):
+    # A stop on a bought put takes the sold put with it (#3107), in one closing group: the sold put is bought back and
+    # the bought put sold. A call spread stays held and pledges 500.00 before and after. From 770.00 the group costs
+    # 800.00 and brings 65.00: 35.00 is under the 500.00 still pledged, so it is unfunded, though the legs of the group
+    # are gone and the buy-back was not made under cover.
+    unfunded = _session(
+        OPEN_1,
+        (
+            _opening(OPEN_1 + 6 * MINUTE, "500.00", "770.00"),
+            _closing(OPEN_1 + 11 * MINUTE, "770.00", "35.00", "500.00", "500.00", under_cover=False),
+        ),
+    )
+
+    evidence = capital_evidence([unfunded], starting_cash=D("500.00"))
+
+    assert evidence.ended_by == CapitalInvalidEvent(
+        CapitalInvalidKind.UNFUNDED_CLOSE, OPEN_1, OPEN_1 + 11 * MINUTE, D("-465.00")
+    )
+    assert evidence.sessions_funded_continuously == 0
+    # Not made under cover, so it is not a close that relied on its own relief: it is unfunded and nothing else.
+    assert evidence.closes_relied_on_own_relief == 0
+    # The opening came before the event: 500.00 - 270.00 of cash in.
+    assert evidence.cash_needed_usd == D("230.00")
+
+
 def test_a_close_that_leaves_the_cash_exactly_at_the_collateral_is_funded_and_one_cent_under_is_not() -> None:
     def a_close_leaving(cash_after: str) -> CapitalSession:
         # 800.00 in cash and 500.00 pledged; the close costs enough to leave ``cash_after`` and keeps 500.00 pledged.

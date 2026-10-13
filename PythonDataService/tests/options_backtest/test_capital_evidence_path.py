@@ -17,7 +17,15 @@ import pytest
 from app.options_backtest.capital_evidence import CapitalSession, capital_evidence
 from app.options_backtest.results import FillGroup, MoneyStep, SessionOutcome
 from tests.options_backtest._market import OPEN_MS, fee_per_contract, replay
-from tests.options_backtest.test_replay_selling_invariants import SEEDS, _a_scene
+from tests.options_backtest.test_replay_selling_invariants import (
+    RULE_SAMPLE,
+    RULE_SEEDS,
+    SEEDS,
+    _a_scene,
+    _a_scene_with_stops,
+    _Scene,
+    _the_sample_every_pr_and_the_rest_daily,
+)
 
 D = Decimal
 
@@ -52,6 +60,20 @@ def test_replayed_from_the_cash_it_needed_a_path_repeats_and_from_a_cent_less_a_
     scene = _a_scene(seed)
     if scene is None:
         pytest.skip("the generated setup sells more of a kind than it buys")
+    _a_path_repeats_from_the_cash_it_needed(scene, seed)
+
+
+@pytest.mark.parametrize("seed", _the_sample_every_pr_and_the_rest_daily(RULE_SEEDS, RULE_SAMPLE))
+def test_the_same_holds_of_sessions_with_stops_whose_buy_backs_and_protection_closes_can_be_unfunded(
+    seed: int,
+) -> None:
+    # A stop on a sold leg, or on the bought leg that protects it (#3107), makes closes the first family has not: the
+    # buy-back is decided by a price and not by the clock, and a protection's group sells a bought leg with it. Every
+    # pull request runs the sample; the other seeds of the family are marked slow and run daily.
+    _a_path_repeats_from_the_cash_it_needed(_a_scene_with_stops(seed), seed)
+
+
+def _a_path_repeats_from_the_cash_it_needed(scene: _Scene, seed: int) -> None:
     fee = fee_per_contract(scene.fee)
     outcome = replay(scene.written, scene.market, cash=scene.cash, fee_for=fee)
     start = D(scene.cash)

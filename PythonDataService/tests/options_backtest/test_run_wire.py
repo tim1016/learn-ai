@@ -259,6 +259,7 @@ def test_the_counts_and_the_by_reason_lists_list_every_member_in_the_enums_order
     assert [(each.reason, each.count) for each in figures.exits_by_reason] == [
         ("stop", 0),
         ("square_off", 0),
+        ("closed_with_its_protection", 0),
         ("exit_time", 2),
         ("marked_not_sold", 1),
         ("marked_not_bought_back", 0),
@@ -350,7 +351,7 @@ def test_capital_evidence_the_cash_ladder_and_the_stamps_are_sent_as_exact_strin
     ]
     assert ladder[1].capital_evidence == capital
     assert figures.stamps == wire.OptionsBacktestRunStampsResponse(
-        replay_rules_version=1,
+        replay_rules_version=2,
         requirement_rule="alpaca_covered_positions",
         requirement_rule_read_at_ms=1_791_777_600_000,
     )

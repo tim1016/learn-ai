@@ -1803,9 +1803,8 @@ backtest still stands (Option structures).
   bought leg buys to open and sells to close. A sold leg sells to open and is
   bought back to close (see **Sold leg**). A sold leg needs a bought leg of its
   kind to cover it, so a setup never sells more contracts of a kind than it buys,
-  and a setup that sells carries one expiry rule on every leg. Until #3107 a setup
-  that sells and carries a stop loss or a re-entry rule on any leg is refused by
-  name, and one that sells without them runs.
+  and a setup that sells carries one expiry rule on every leg. A sold leg keeps its
+  own stop loss, momentum and re-entry.
   _Avoid_: a structure's leg (Option structures), which is a bot's.
 - **Sold leg** — a leg that opens by selling its contract and closes by buying it
   back. It is never naked: it opens only with **cover**. It opens at the sale price
@@ -1824,6 +1823,20 @@ backtest still stands (Option structures).
   whether its cover **did not trade** (a bought leg of its kind found no bar in the
   minute) or was **not yet held**. A bought leg's sale waits while a sold leg
   depends on it.
+- **Protection** — a bought leg whose leaving would leave a sold contract
+  uncovered, or would make the collateral larger than it is. It is defined without
+  reading cash, so a bought leg can be protection while another bought leg still
+  covers the sold one by count. When a protection's close is decided by its stop,
+  the sold legs that must go with it get a close order in the same minute and exit
+  group, last listed first, the same kind and expiry before any other, until what
+  remains is covered and pledges no more than it did. That is a policy by listed
+  order and is not minimal: it can close more sold legs than another policy
+  would. A bought leg that protects nothing is sold freely.
+- **Closed with its protection** — the exit reason of a sold leg bought back
+  because the bought leg that protects it was stopped. It has an event of its own,
+  shares the exit group of the stop that caused it, and earns a re-entry as a
+  stopped leg does. The protection's sale fills in the minute the buy-backs do, and
+  waits while a sold leg's buy-back has no bar.
 - **Collateral** — what a run pledges against what it holds: the lowest point of
   the summed exercise payoff of the contracts held, premiums left out (ADR 0076
   decisions 3 and 28), asked of the canonical portfolio function the bots use. An
@@ -1892,17 +1905,25 @@ backtest still stands (Option structures).
 - **Stop loss** — a leg's close level, a set percent or number of points taken from
   its own fill price: under what a bought leg paid, hit when a minute closes at or
   below it; over what a sold leg was sold for, hit when a minute closes at or above
-  it (a percent over has no ceiling at 100). A high or a low inside a minute never
-  hits it. Unrelated to **Stop** (ending a deployment).
+  it (a percent over has no ceiling at 100): its level is the sale price times
+  (1 + percent / 100), or plus the points, and it is the price at or above which the
+  leg is bought back. A high or a low inside a minute never hits it. A stop on a
+  sold leg closes only that leg, so the bought legs stay; a stop on a bought leg
+  also takes along the sold legs it protects (see **Protection**). Unrelated to
+  **Stop** (ending a deployment).
 - **Re-entry on stop** — after a stop a leg may come back, up to a count in one
-  session. **At once**: a fresh contract by the same rules, bought with no wait.
-  **On momentum**: a fresh contract, a new starting price, and the momentum wait
-  again; it needs the leg's momentum rule.
+  session. **At once**: a fresh contract by the same rules, bought with no wait
+  (sold, for a sold leg). **On momentum**: a fresh contract, a new starting price,
+  and the momentum wait again; it needs the leg's momentum rule. A sold leg
+  closed by its own stop, by a square off or **with its protection** earns one,
+  and it joins an opening group like a first entry, so it is refused for cover
+  when its cover did not come back.
 - **No re-entry after** — a time after which a stop earns no re-entry. A stop hit
   later than it earns none. First entries are not affected.
-- **Square off** — what a stop closes. **Partial**: only the stopped leg.
-  **Complete**: every open leg, and legs still waiting for momentum are cancelled
-  for the day.
+- **Square off** — what a stop closes. **Partial**: only the stopped leg, and,
+  when the stopped leg is a bought leg that protects sold legs, those sold legs
+  with it (see **Protection**). **Complete**: every open leg, bought and sold
+  together, and legs still waiting for momentum are cancelled for the day.
   _Avoid_: exit (the exit time).
 - **Session** — one trading day as a run replays it. It is named everywhere by its
   open in ms; its trading date is the New York date of that open and is never

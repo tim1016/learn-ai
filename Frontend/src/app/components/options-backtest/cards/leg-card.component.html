@@ -30,7 +30,15 @@
     <input pInputText type="text" inputmode="numeric" autocomplete="off" [formField]="legForm().reentryCount" [attr.aria-label]="name() + ' re-entries'" [attr.aria-invalid]="problem('reentryCount') !== null" [attr.aria-describedby]="describedByProblem('reentry')" />
     <span class="muted">times</span>
     @if (!leg().momentumOn) { <p class="hint" [id]="reasonId()">On momentum can be chosen once Simple momentum is on: it asks the momentum rule again.</p> }
-    @if (leg().reentryOn && !leg().stopLossOn) { <p class="hint" role="status">A re-entry follows a stop, so nothing re-enters until Stop loss is on.</p> }
+    @if (leg().reentryOn && !leg().stopLossOn) {
+      <p class="hint" role="status">
+        @if (leg().side === 'sell') {
+          A re-entry follows a stop. With no Stop loss here, this leg re-enters only when it is closed with its protection (a stop on the bought {{ leg().right }} that covers it takes it along) or by a complete square off for another leg's stop.
+        } @else {
+          A re-entry follows a stop, so nothing re-enters until Stop loss is on, unless a complete square off closes this leg for another leg's stop.
+        }
+      </p>
+    }
     @if (reentryProblem(); as message) { <p class="problem" role="alert" [id]="problemId('reentry')">{{ message }}</p> }
   </div>
 </article>

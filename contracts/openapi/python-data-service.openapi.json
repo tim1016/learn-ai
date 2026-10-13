@@ -41056,6 +41056,7 @@
               "sale_not_taken_at_zero",
               "stop_hit",
               "squared_off",
+              "closed_with_its_protection",
               "exit_time",
               "close_filled",
               "re_entry_earned",
@@ -41129,6 +41130,7 @@
             "enum": [
               "stop",
               "square_off",
+              "closed_with_its_protection",
               "exit_time",
               "marked_not_sold",
               "marked_not_bought_back"
@@ -41172,6 +41174,7 @@
                 "enum": [
                   "stop",
                   "square_off",
+                  "closed_with_its_protection",
                   "exit_time",
                   "marked_not_sold",
                   "marked_not_bought_back"
@@ -43348,6 +43351,7 @@
             "enum": [
               "stop",
               "square_off",
+              "closed_with_its_protection",
               "exit_time",
               "marked_not_sold",
               "marked_not_bought_back"

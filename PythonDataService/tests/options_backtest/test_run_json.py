@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from app.options_backtest import run_json
+from app.options_backtest.results import ExitReason
 from tests.options_backtest._a_run import a_busy_run, what_the_busy_run_reaches
 
 
@@ -33,6 +34,30 @@ def test_the_summary_comes_back_as_it_went_and_holds_no_float() -> None:
 
     assert run_json.summary_from_json(written) == summary
     _no_float_anywhere(written)
+
+
+def test_a_summary_stored_before_a_sold_leg_could_be_closed_with_its_protection_reads_with_the_five_reasons_it_had() -> (
+    None
+):
+    # A run saved before #3107 lists five exit reasons. It is read as it was written: the sixth is not invented for it.
+    written = json.loads(json.dumps(run_json.summary_to_json(a_busy_run().summary)))
+    written["exits_by_reason"] = [
+        ["stop", 1],
+        ["square_off", 0],
+        ["exit_time", 2],
+        ["marked_not_sold", 1],
+        ["marked_not_bought_back", 0],
+    ]
+
+    read = run_json.summary_from_json(written)
+
+    assert read.exits_by_reason == (
+        (ExitReason.STOP, 1),
+        (ExitReason.SQUARE_OFF, 0),
+        (ExitReason.EXIT_TIME, 2),
+        (ExitReason.MARKED_NOT_SOLD, 1),
+        (ExitReason.MARKED_NOT_BOUGHT_BACK, 0),
+    )
 
 
 def test_a_session_is_identified_by_its_open_and_no_date_is_written() -> None:
