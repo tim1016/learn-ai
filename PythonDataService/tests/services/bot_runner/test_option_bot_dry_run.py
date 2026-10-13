@@ -1758,6 +1758,23 @@ async def test_an_option_bots_money_view_prices_no_next_entry_from_a_share_of_th
     assert _lines(view)["Free to trade"] == "1000.00"
 
 
+async def test_an_option_bots_page_shows_its_limits_while_no_entry_is_priced(floor: Floor) -> None:
+    """Nothing is priced, so nothing is judged: the page shows the bot's free budget and what its account
+    can fund for it, no figure for an entry, and no broker figure, since a Dry Run has none."""
+    view = await _money_view(floor)
+
+    funding = view.funding
+    assert funding is not None
+    assert (funding.free_budget.state, funding.free_budget.amount_usd) == ("known", "1000.00")
+    assert (funding.account_headroom.state, funding.account_headroom.amount_usd) == ("known", "1000.00")
+    assert funding.broker_buying_power is None
+    assert (funding.need, funding.admits, funding.shortfall_usd, funding.fits, funding.action) == (None, None, None, None, None)
+    assert funding.binding == "bot_budget"
+    assert funding.sentence == (
+        "This bot has $1,000.00 free and the account can fund $1,000.00 after protecting other positions."
+    )
+
+
 async def test_an_option_bot_with_a_budget_of_one_cent_is_never_said_to_be_ready(
     on_the_floor: Callable[..., Floor],
 ) -> None:
@@ -1805,20 +1822,26 @@ async def test_an_option_bot_with_nothing_of_its_budget_free_waits_for_its_next_
     repo, sync = floor.repo, floor.runtime.envelope_sync
     risk = current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock())
 
-    def read_with(fees: str) -> Any:
+    def read_with(fees: str, cash: str = "1000") -> Any:
         own = deployment_budget(
             strategy_instance_id=SID, committed_cents=100_000, active=True, realized_gross=Decimal("-900"),
             fees=Decimal(fees), position_cost=Decimal(0), pending_orders=Decimal(0),
         )
-        money = account_budget(cash=Decimal("1000"), deployments=[own], order_claims=Decimal(0), fee_claims=Decimal(0))
-        return budget_deploy._next_entry(floor.runtime, repo, money, SID, risk)
+        money = account_budget(cash=Decimal(cash), deployments=[own], order_claims=Decimal(0), fee_claims=Decimal(0))
+        return budget_deploy._next_entry(floor.runtime, repo, money, SID, risk, repo.clock())
 
     nothing_free, over_its_budget, a_cent_free = read_with("100"), read_with("100.50"), read_with("99.99")
 
     for waits in (nothing_free, over_its_budget):
         assert (waits.eligible, waits.headline) == (False, "Its next entry waits")
-        assert "nothing of its budget is free" in waits.detail.lower() and waits.required is None
+        assert "nothing of its budget is free" in waits.detail.lower()
+        assert waits.funding is not None and waits.funding.need is None
     assert a_cent_free.eligible and "picked" in a_cent_free.headline
+    # Budget left, and an account with no cash to fund it: the account's limit is one the page shows and judges too.
+    nothing_fundable = read_with("0", cash="0")
+    assert (nothing_fundable.eligible, nothing_fundable.headline) == (False, "Its next entry waits")
+    assert "account can fund nothing" in nothing_fundable.detail
+    assert nothing_fundable.funding is not None and nothing_fundable.funding.binding == "account_headroom"
 
 
 # ---- With nothing handed in, the process's own -------------------------------------------

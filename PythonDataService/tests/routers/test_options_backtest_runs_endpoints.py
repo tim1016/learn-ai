@@ -638,14 +638,17 @@ async def test_a_failed_run_ends_the_job_failed_with_the_runs_code_and_its_plain
 
 
 @respx.mock
-async def test_a_run_of_a_setup_that_sells_ends_the_job_failed_with_its_own_code_before_anything_is_fetched(
+async def test_a_run_of_a_setup_that_sells_and_carries_a_stop_ends_the_job_failed_with_its_own_code_before_anything_is_fetched(
     client: httpx.AsyncClient, harness: Harness, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
     vendor = Vendor(the_scene())
     vendor.mount()
     same_day = {"kind": "same_day"}
     selling = setup_body(
-        legs=[leg(leg_id="long_call", expiry=same_day), leg(leg_id="short_call", side="sell", expiry=same_day)]
+        legs=[
+            leg(leg_id="long_call", expiry=same_day, stop_loss={"kind": "percent", "value": "25"}),
+            leg(leg_id="short_call", side="sell", expiry=same_day),
+        ]
     )
     async with client as c:
         accepted = await c.post(JOBS, json=job_body(setup=selling))
@@ -653,12 +656,13 @@ async def test_a_run_of_a_setup_that_sells_ends_the_job_failed_with_its_own_code
 
     result = await asyncio.to_thread(harness.the_work(), emitter, FakeCancel())
 
-    # The setup is a valid one, so the route takes it; the run then fails by name until selling is replayed.
+    # The setup is a valid one, so the route takes it; the run then fails by name until #3107 replays the stops.
     assert accepted.status_code == 202, accepted.text
     [(_, failure, _)] = harness.store.failed
-    assert failure.code == "SELLING_NOT_REPLAYED_YET" and "does not replay a sold leg yet" in failure.reason
+    assert failure.code == "SOLD_LEG_RULES_NOT_REPLAYED_YET"
+    assert "does not replay those on a setup that sells yet" in failure.reason
     assert result is None
-    assert emitter.failures == [("SELLING_NOT_REPLAYED_YET", failure.reason)]
+    assert emitter.failures == [("SOLD_LEG_RULES_NOT_REPLAYED_YET", failure.reason)]
     assert emitter.phases == [] and vendor.vendor_requests == 0
 
 

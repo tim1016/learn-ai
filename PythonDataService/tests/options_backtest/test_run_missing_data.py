@@ -13,8 +13,9 @@ import pytest
 
 from app.options_backtest.fees import FeeRateNotPublished
 from app.options_backtest.picking import Listing
+from app.options_backtest.replay import SoldLegRulesNotReplayed
 from app.options_backtest.results import EventKind, SessionStatus, SkipReason
-from app.options_backtest.run import RunStopped, SellingNotReplayed, SessionDataMissing, run_sessions
+from app.options_backtest.run import RunStopped, SessionDataMissing, run_sessions
 from app.options_backtest.session_market import MalformedBars
 from app.options_backtest.setup import FeePolicy
 from tests.options_backtest._market import leg, setup
@@ -226,18 +227,57 @@ def test_estimated_fees_on_a_date_without_published_rates_are_refused_before_any
     assert data.asked == []
 
 
-def test_a_setup_with_a_sold_leg_is_refused_before_anything_is_read_until_selling_is_replayed() -> None:
-    # No path may replay a sold leg as if it were bought (#3106 replays it).
+@pytest.mark.parametrize(
+    ("legs", "ruled"),
+    [
+        # A stop on a bought leg, on a sold leg, and a re-entry rule (which a stop must be able to reach).
+        ((leg("long_call", stop=("percent", "25")), leg("short_call", side="sell")), ("long_call",)),
+        ((leg("long_call"), leg("short_call", side="sell", stop=("percent", "150"))), ("short_call",)),
+        (
+            (
+                leg("long_call", stop=("percent", "25"), reentry=("at_once", 1)),
+                leg("short_call", side="sell"),
+                leg("long_put", "put", stop=("points", "1")),
+            ),
+            ("long_call", "long_put"),
+        ),
+    ],
+)
+def test_a_setup_that_sells_and_carries_a_stop_or_a_re_entry_rule_is_refused_before_anything_is_read(
+    legs: tuple[dict[str, object], ...], ruled: tuple[str, ...]
+) -> None:
+    # No path may replay a sold leg's stop as if it were a bought leg's (#3107 replays it).
     data = FakeRunData()
-    selling = setup(
+
+    with pytest.raises(SoldLegRulesNotReplayed) as raised:
+        run_sessions(setup(*legs), [WED], data)
+
+    assert raised.value.sold == ("short_call",)
+    assert raised.value.ruled == ruled
+    assert data.asked == []
+
+
+def test_a_setup_that_sells_with_no_stop_and_no_re_entry_rule_is_not_refused() -> None:
+    data = fake_data(
+        {
+            WED: Day(
+                underlying=steady("500.00"),
+                options={
+                    CALL_500: flat("2.00", 5, 61),
+                    ("call", 505): flat("1.00", 5, 61),
+                },
+            )
+        }
+    )
+    spread = setup(
         leg("long_call"),
-        {**leg("short_call"), "side": "sell"},
-        leg("long_put", "put"),
-        {**leg("short_put", "put"), "side": "sell"},
+        {**leg("short_call", side="sell"), "strike": {"kind": "atm_offset", "steps": 1}},
+        slippage="0",
     )
 
-    with pytest.raises(SellingNotReplayed) as raised:
-        run_sessions(selling, [WED], data)
+    result = run_sessions(spread, [WED], data)
 
-    assert raised.value.leg_ids == ("short_call", "short_put")
-    assert data.asked == []
+    assert [(trade.leg_id, trade.is_sold_leg) for trade in result.sessions[0].outcome.trades] == [
+        ("long_call", False),
+        ("short_call", True),
+    ]

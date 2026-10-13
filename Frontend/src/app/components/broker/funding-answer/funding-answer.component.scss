@@ -1,0 +1,79 @@
+.funding-answer {
+  display: grid;
+  gap: var(--space-2);
+  p, dl, dd, ul { margin: 0; }
+}
+
+.funding-answer__action {
+  color: var(--text-primary);
+}
+
+.funding-answer__limits {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0;
+  list-style: none;
+}
+
+.funding-answer__limit {
+  padding: var(--space-2);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2);
+    cursor: pointer;
+  }
+}
+
+/* The limit that binds reads as heavier by weight and edge, not by colour alone. */
+.funding-answer__limit--binds {
+  border-color: var(--border-strong);
+  border-left-width: 4px;
+}
+
+.funding-answer__label {
+  color: var(--text-primary);
+}
+
+.funding-answer__amount {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+/* Stale and unknown are said in words and set apart in italic, so a figure that is not current is never read as one. */
+.funding-answer__state {
+  font-size: var(--fs-xs);
+  font-style: italic;
+}
+
+.funding-answer__mark {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.funding-answer__source {
+  margin-top: var(--space-2);
+  font-size: var(--fs-xs);
+}
+
+.funding-answer__terms {
+  display: grid;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+  font-size: var(--fs-xs);
+  div {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+  dd { font-variant-numeric: tabular-nums; text-align: right; }
+}
+
+.funding-answer__shortfall {
+  color: var(--text-primary);
+}

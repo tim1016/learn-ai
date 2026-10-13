@@ -183,6 +183,7 @@ def test_the_trades_are_counted_by_the_reason_they_left_with_every_reason_listed
         (ExitReason.SQUARE_OFF, 1),
         (ExitReason.EXIT_TIME, 4),
         (ExitReason.MARKED_NOT_SOLD, 1),
+        (ExitReason.MARKED_NOT_BOUGHT_BACK, 0),
     )
 
 

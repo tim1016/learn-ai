@@ -31,7 +31,7 @@
       <span class="home-row__caption">
         balance {{ slice.amount_usd | authoredUsd }} · free {{ parts.free_usd | authoredUsd }}
         @if (slice.shortfall_usd; as shortfall) {
-          · <strong>short of next entry {{ shortfall | authoredUsd }}</strong>
+          · <strong>over its budget by {{ shortfall | authoredUsd }}</strong>
         }
       </span>
     } @else {

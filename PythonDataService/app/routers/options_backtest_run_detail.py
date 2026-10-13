@@ -198,9 +198,10 @@ async def export_the_trades(run_id: RunId) -> Response:
     The whole run, however many trades it has: the page size of the trades route does not apply. A run that is not
     complete is a 409.
 
-    ``exit_kind`` tells a leg that was sold (``sale``) from one marked and not sold (``mark``). For a mark,
-    ``exit_price_usd`` is the mark and not a price anything sold at, ``exit_seen_usd`` is empty and ``exit_fee_usd`` is
-    ``0``; a sum of ``exit_price_usd`` over every row therefore mixes sales and marks.
+    ``exit_kind`` tells a leg that was closed by a sale (``sale``) or by a buy-back (``buy_back``) from one marked
+    (``mark``). For a mark, ``exit_price_usd`` is the mark and not a price anything traded at, ``exit_seen_usd`` is
+    empty and ``exit_fee_usd`` is ``0``; a sum of ``exit_price_usd`` over every row therefore mixes sales, buy-backs
+    and marks.
     """
     try:
         export = await read_closely(export_every_trade, run_id, is_live=lifecycle.job_is_live)

@@ -264,7 +264,7 @@ async def test_after_one_tick_the_cash_bound_admits_what_cash_covers_and_refuses
     # ``reference_price`` the facade now passes. A market ENTER with no price
     # is refused UNOBSERVED, so a wrong wiring here cannot hide behind a
     # plausible-looking refusal.
-    assert "The next position needs 5100.01 USD" in refused.explanation, refused.explanation
+    assert "The entry needs $5,100.01 including its fee provision." in refused.explanation, refused.explanation
 
     admitted = await _enter(
         runtime, registered_running_bot, quantity=50, decision_id="d2"

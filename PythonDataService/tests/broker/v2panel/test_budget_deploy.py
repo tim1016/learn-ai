@@ -342,12 +342,12 @@ def test_budget_read_uses_the_sealed_next_position_and_current_cash(authority: t
     before = repo.custody_transitions()
     _publish_book(("SPY", 200))
     view = budget_deploy._budget_view(runtime, "view")
-    assert not view.entry_eligible and "200.01 USD" in view.detail
+    assert not view.entry_eligible and "The entry needs $200.01 including its fee provision." in view.detail
     assert ("Free to trade", "200.00", False) in _statement(view)
     _publish_book(("SPY", 100))
     gate.publish(replace(gate.latest_observation(), cash_available_usd=100))
     assert not budget_deploy._budget_view(runtime, "view").entry_eligible
-    assert "the account can fund 100.00 USD for this deployment" in budget_deploy._budget_view(runtime, "view").detail
+    assert "the account can fund only $100.00 after protecting other positions" in budget_deploy._budget_view(runtime, "view").detail
     assert repo.custody_transitions() == before
 
 
@@ -918,7 +918,10 @@ def test_a_bot_short_of_its_next_entry_says_by_how_much(authority: tuple) -> Non
 
     view = budget_deploy._budget_view(runtime, "view")
 
-    assert view.headline == "Its next entry waits" and "200.01 USD" in view.detail
+    assert view.headline == "Its next entry waits"
+    assert view.detail == (
+        "This bot has only $200.00 free. The entry needs $200.01 including its fee provision. Shortfall: $0.01."
+    )
     assert _statement(view)[-1] == ("Short of its next entry", "0.01", False)
 
 
@@ -1292,3 +1295,99 @@ def test_a_bot_whose_stop_recorded_no_release_shows_an_estimate_so_labelled(
     assert view.detail == ("Its Stop did not record what it released, so that figure is an estimate from its money now. "
                            "The money in its shares comes back when they are sold.")
     assert view.segment is not None and (view.segment.released_usd, view.segment.released_estimated) == ("100.00", True)
+
+
+# ── The funding answer the Clerk and the bot page both read (#3097) ───────────
+
+
+def test_the_bot_page_and_the_clerks_admission_give_one_verdict_with_the_same_figures(authority: tuple) -> None:
+    """One moment, $200.00 free of a $1,000.00 account: SPY at $200.00 needs $200.01 with its fee provision.
+
+    The page says the entry does not fit, which limit binds and by how much; the Clerk, asked for that entry
+    at that price, refuses it with exactly that sentence. A price at which the entry fits is one the page
+    says fits and the Clerk takes.
+    """
+    from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+    from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
+    from app.broker.contract.models import BrokerOrderLeg
+
+    repo, runtime, gate = _committed_view(authority)
+
+    def enter(price: float, decision_id: str):
+        return accept_enter(repo, account_id=repo.account_id, strategy_instance_id="view", decision_id=decision_id,
+                            lifecycle_run_id="view-run", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+                            reference_price=price, envelope=gate)
+
+    _publish_book(("SPY", 200))
+    refused_view = budget_deploy._budget_view(runtime, "view")
+    with pytest.raises(AdmissionBlockedError) as refusal:
+        enter(200, "refused")
+
+    funding = refused_view.funding
+    assert funding is not None and not refused_view.entry_eligible
+    assert (funding.admits, funding.binding, funding.shortfall_usd, funding.fits) == (False, "bot_budget", "0.01", 0)
+    assert (funding.free_budget.amount_usd, funding.account_headroom.amount_usd) == ("200.00", "1000.00")
+    assert funding.need is not None and funding.need.commitment_usd == "200.01"
+    assert refusal.value.decision.reason_code == "LIVE_ENVELOPE_CASH_EXCEEDED"
+    assert refusal.value.decision.why == funding.sentence == refused_view.detail
+
+    _publish_book(("SPY", 100))
+    admitted_view = budget_deploy._budget_view(runtime, "view")
+    assert admitted_view.funding is not None and admitted_view.entry_eligible
+    assert (admitted_view.funding.admits, admitted_view.funding.shortfall_usd, admitted_view.funding.fits) == (True, None, 1)
+    assert enter(100, "admitted").created
+
+
+def test_the_bot_page_serves_every_limit_with_its_terms_source_and_age(authority: tuple) -> None:
+    """A real paper account: the budget and the account's headroom are known as of the reading; Alpaca's option
+    buying power is an unknown figure that says it is read at Deploy and around each entry, never a zero."""
+    _, runtime, gate = _committed_view(authority)
+
+    funding = budget_deploy._budget_view(runtime, "view").funding
+
+    assert funding is not None
+    read_at = gate.latest_observation().observed_at_ms
+    budget, headroom, broker = funding.free_budget, funding.account_headroom, funding.broker_buying_power
+    assert (budget.state, budget.amount_usd, budget.source) == ("known", "200.00", "Clerk books")
+    assert [(term.label, term.amount_usd) for term in budget.terms][:1] == [("Budget set aside at deploy", "200.00")]
+    assert (headroom.state, headroom.amount_usd, headroom.as_of_ms) == ("known", "1000.00", read_at)
+    assert [(term.label, term.amount_usd) for term in headroom.terms] == [
+        ("Unreserved account cash", "800.00"), ("This bot's own claim", "200.00"),
+    ]
+    assert broker is not None and (broker.state, broker.amount_usd, broker.terms) == ("unknown", None, ())
+    assert "read at Deploy and around each entry" in broker.source
+    assert funding.binding == "bot_budget"
+
+
+def test_a_reading_past_its_age_limit_is_stale_on_the_page_and_the_entry_is_not_promised(authority: tuple) -> None:
+    """The bot's own books are current; the account's cash was read 46 seconds before the page asked."""
+    from app.broker.alpaca.clerk.live_envelope import OBSERVATION_MAX_AGE_MS
+    from app.broker.alpaca.clerk.sqlite.risk_admission import current_risk_readiness
+
+    repo, runtime, gate = _committed_view(authority)
+    reading = gate.latest_observation()
+    money = repo.account_money(
+        cash=reading.cash_available_usd, seen_before_ms=reading.fills_seen_before_ms,
+        modelled_fees_seen_before_ms=reading.modelled_fees_seen_before_ms,
+    )
+    risk = current_risk_readiness(repo, envelope=gate, now_ms=repo.clock())
+
+    entry = budget_deploy._next_entry(runtime, repo, money.budget, "view", risk, repo.clock() - OBSERVATION_MAX_AGE_MS - 1)
+
+    assert entry.funding is not None and entry.funding.account_headroom.state == "stale"
+    assert entry.funding.account_headroom.amount_cents == 100_000
+    assert (entry.eligible, entry.funding.admits, entry.funding.shortfall_cents) == (False, None, None)
+    assert "Whether the entry fits is not said." in entry.detail
+
+
+def test_a_dry_run_or_live_shadow_page_has_no_broker_figure_and_a_stopped_bot_has_no_funding(authority: tuple) -> None:
+    repo, runtime, _ = _committed_view(authority)
+    for world in ("synthetic", "shadow"):
+        runtime.account_authority_kind = world
+        assert budget_deploy._broker_buying_power(runtime) is None
+    runtime.account_authority_kind = "real_paper"
+    assert budget_deploy._budget_view(runtime, "view").funding is not None
+
+    _stop(repo)
+
+    assert budget_deploy._budget_view(runtime, "view").funding is None

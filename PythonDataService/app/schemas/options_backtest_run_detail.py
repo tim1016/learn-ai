@@ -35,6 +35,10 @@ EventKindWord = Literal[
     "entry_filled",
     "entry_dropped",
     "entry_refused_for_cash",
+    "entry_refused_for_cover",
+    "entry_refused_for_second_expiry",
+    "entry_refused_for_other_side",
+    "sale_not_taken_at_zero",
     "stop_hit",
     "squared_off",
     "exit_time",
@@ -44,6 +48,7 @@ EventKindWord = Literal[
     "re_entry_lost",
     "leg_cancelled",
     "marked_not_sold",
+    "marked_not_bought_back",
 ]
 # The reasons an event gives: why a pick was refused, why an entry was refused, why a leg was cancelled.
 EventReasonWord = Literal[
@@ -53,6 +58,11 @@ EventReasonWord = Literal[
     "strike_not_listed",
     "not_standard",
     "cash_short",
+    "other_side",
+    "second_expiry",
+    "cover_did_not_trade",
+    "cover_not_yet_held",
+    "sale_at_zero",
     "square_off",
     "exit_time",
 ]
@@ -108,8 +118,13 @@ class OptionsBacktestContractResponse(BaseModel):
 
 
 class OptionsBacktestTradeFillResponse(BaseModel):
-    """An order that filled: the bar it filled in, the open of that bar (the price seen) and the price it filled at."""
+    """An order that filled: the side it traded on, the bar it filled in, the open of that bar (the price seen) and
+    the price it filled at.
 
+    A bought leg's entry is a buy and its exit a sale. A sold leg's entry is a sale and its exit a buy-back.
+    """
+
+    side: Literal["buy", "sell"]
     bar_close_ms: Ms
     seen_usd: str
     filled_usd: str
@@ -123,7 +138,13 @@ class OptionsBacktestTradeMarkResponse(BaseModel):
 
 
 class OptionsBacktestTradeResponse(BaseModel):
-    """One leg round trip. It left by a ``sale`` or, when its sale never filled, by a ``mark``; exactly one is set."""
+    """One leg round trip. It left by an order that filled, or, when that never filled, by a ``mark``.
+
+    ``exit_kind`` says which: ``sale`` for a bought leg's sale, ``buy_back`` for a sold leg's buy-back, ``mark`` for a
+    leg valued and not closed. The order that filled is ``sale`` whichever way it traded (its ``side`` says
+    which), and exactly one of ``sale`` and ``mark`` is set. A sold leg's mark is an amount owed: ``entry.side`` says
+    so, since a mark has none.
+    """
 
     session_open_ms: Ms
     # Its place in the session's order, from 0, as the run recorded it.
@@ -144,27 +165,30 @@ class OptionsBacktestTradeResponse(BaseModel):
     exit_reason: ExitReasonWord
     exit_group: int
     exit_decided_at_ms: Ms
-    exit_kind: Literal["sale", "mark"]
+    exit_kind: Literal["sale", "buy_back", "mark"]
     sale: OptionsBacktestTradeFillResponse | None = None
     mark: OptionsBacktestTradeMarkResponse | None = None
     entry_fee_usd: str
-    # Zero for a leg that was marked and not sold.
+    # Zero for a leg that was marked.
     exit_fee_usd: str
     pnl_usd: str
 
     @model_validator(mode="after")
     def _the_exit_is_the_one_it_says(self) -> Self:
-        if (self.exit_kind == "sale") != (self.sale is not None) or (self.exit_kind == "mark") != (
+        if (self.exit_kind != "mark") != (self.sale is not None) or (self.exit_kind == "mark") != (
             self.mark is not None
         ):
-            raise ValueError("a trade left by a sale or by a mark, and carries exactly the one its exit_kind names")
+            raise ValueError(
+                "a trade left by an order that filled or by a mark, and carries exactly the one its exit_kind names"
+            )
+        if self.sale is not None and (self.exit_kind == "sale") != (self.sale.side == "sell"):
+            raise ValueError("a sale is a fill on the sell side and a buy-back one on the buy side")
         return self
 
     @classmethod
     def from_stored(cls, stored: StoredTrade) -> Self:
         trade, leaving = stored.trade, stored.trade.exit
         entry = trade.entry
-        sold = isinstance(leaving, Fill)
         return cls(
             session_open_ms=stored.session_open_ms,
             trade_number=stored.trade_number,
@@ -178,14 +202,20 @@ class OptionsBacktestTradeResponse(BaseModel):
             stop_level_usd=None if trade.stop_level is None else exact(trade.stop_level),
             entry_decided_at_ms=trade.entry_decided_at_ms,
             entry=OptionsBacktestTradeFillResponse(
-                bar_close_ms=entry.bar_close_ms, seen_usd=exact(entry.seen), filled_usd=exact(entry.filled)
+                side=entry.side,
+                bar_close_ms=entry.bar_close_ms,
+                seen_usd=exact(entry.seen),
+                filled_usd=exact(entry.filled),
             ),
             exit_reason=trade.exit_reason.value,  # type: ignore[arg-type]
             exit_group=trade.exit_group,
             exit_decided_at_ms=trade.exit_decided_at_ms,
-            exit_kind="sale" if sold else "mark",
+            exit_kind="mark" if isinstance(leaving, Mark) else ("sale" if leaving.side == "sell" else "buy_back"),
             sale=OptionsBacktestTradeFillResponse(
-                bar_close_ms=leaving.bar_close_ms, seen_usd=exact(leaving.seen), filled_usd=exact(leaving.filled)
+                side=leaving.side,
+                bar_close_ms=leaving.bar_close_ms,
+                seen_usd=exact(leaving.seen),
+                filled_usd=exact(leaving.filled),
             )
             if isinstance(leaving, Fill)
             else None,

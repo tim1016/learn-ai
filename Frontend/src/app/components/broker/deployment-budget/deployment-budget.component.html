@@ -20,6 +20,9 @@
           </div>
         }
       </dl>
+      @if (report.funding; as funding) {
+        <app-funding-answer [funding]="funding" />
+      }
       @if (report.note) {
         <p class="deployment-budget__fine">{{ report.note }}</p>
       }

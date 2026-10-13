@@ -33,9 +33,9 @@ from app.broker.alpaca.clerk.budgets import (
     AccountBudget,
     BudgetUnavailable,
     DeploymentBudget,
-    budget_entry_decision,
     entry_requirement,
 )
+from app.broker.alpaca.clerk.funding import EntryNeed, Figure, FundingAnswer, funding_answer
 from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_UNOBSERVED, AccountObservation
 from app.broker.alpaca.clerk.money import (
     MoneyInputError,
@@ -71,6 +71,7 @@ from app.schemas.deployment_budget import (
     DeploymentBudgetPreview,
     DeploymentBudgetShortcut,
     DeploymentBudgetView,
+    FundingView,
     MoneyParts,
     MoneySegment,
 )
@@ -587,8 +588,8 @@ class _NextEntry:
     eligible: bool
     headline: str
     detail: str
-    # What the next position would cost, when it could be priced.
-    required: Decimal | None = None
+    # The funding answer behind the verdict, once the bot is past the custody gates.
+    funding: FundingAnswer | None = None
 
 
 # Custody refusals that are this bot's own position at work, not a fault: a
@@ -607,12 +608,15 @@ _OPTION_ENTRY_PRICED_AT_THE_ENTRY = (
 )
 # Said in place of "Ready": this view has judged no cost, so it says nothing about the money being enough.
 _OPTION_ENTRY_PRICED_WHEN_PICKED = "Its next entry is priced when its contracts are picked"
-# The one thing known of an option entry's cost before its contracts are picked: it is above zero.
-_OPTION_ENTRY_NOTHING_FREE = "Nothing of its budget is free to trade, and an option entry always costs something."
+# Alpaca's option buying power is read at Deploy and around each entry, never for this view (#3097).
+_BROKER_BUYING_POWER_NOT_READ_HERE = Figure.unknown(
+    "Not read for this view. Alpaca's option buying power is read at Deploy and around each entry"
+)
 
 
 def _next_entry(
     runtime: ActiveClerkRuntime, repo: ClerkSqliteRepository, projected: AccountBudget, sid: str, risk: RiskReadiness | None,
+    observed_at_ms: int,
 ) -> _NextEntry:
     capability = admit_new_exposure(repo, strategy_instance_id=sid)
     holding = _HOLDING_COPY.get(capability.reason_code or "")
@@ -630,26 +634,38 @@ def _next_entry(
     if config is None:
         raise BudgetUnavailable("The immutable position sizing is unavailable. Resolve deployment configuration evidence.")
     terms = _EntryConfiguration.model_validate_json(config.config_json)
-    if terms.trades_options:
-        # No cost is judged here: each entry is admitted on its own commitment, when its contracts are
-        # picked. A budget with nothing free can still be said to wait, since every entry costs something.
-        own = next(item for item in projected.deployments if item.strategy_instance_id == sid)
-        if own.spendable_cents <= 0:
-            return _NextEntry(False, _WAITS, _OPTION_ENTRY_NOTHING_FREE)
-        return _NextEntry(
-            True, _OPTION_ENTRY_PRICED_WHEN_PICKED, _OPTION_ENTRY_PRICED_AT_THE_ENTRY + _STILL_CHECKED_AT_THE_ORDER
-        )
-    quote = prepared_top_of_book(terms.order_symbol, repo.clock())
-    if quote is None:
-        return _NextEntry(False, _WAITS, "Wait for a fresh IBKR price to judge the next position's cost.")
-    decision = budget_entry_decision(projected, strategy_instance_id=sid, quantity=terms.quantity, price=quote.ask, at_ms=repo.clock())
-    if not decision.allowed:
-        return _NextEntry(False, _WAITS, decision.detail, decision.required)
-    return _NextEntry(
-        True, "Ready for its next entry",
-        decision.detail + _STILL_CHECKED_AT_THE_ORDER,
-        decision.required,
+    now = repo.clock()
+    # An option bot's entry is priced when its contracts are picked, and a share entry waits for a fresh
+    # quote: with no need the answer still shows every limit and says when nothing can be entered.
+    need = None
+    if not terms.trades_options:
+        quote = prepared_top_of_book(terms.order_symbol, now)
+        if quote is not None:
+            required, fee_cents = entry_requirement(quantity=terms.quantity, price=quote.ask, at_ms=now)
+            need = EntryNeed.for_shares(requirement=required, fee_provision_cents=fee_cents)
+    answer = funding_answer(
+        projected, strategy_instance_id=sid, need=need, broker_buying_power=_broker_buying_power(runtime),
+        observed_at_ms=observed_at_ms, now_ms=now,
     )
+    if need is None:
+        if answer.admits is False:
+            return _NextEntry(False, _WAITS, answer.sentence, funding=answer)
+        if terms.trades_options:
+            return _NextEntry(
+                True, _OPTION_ENTRY_PRICED_WHEN_PICKED,
+                _OPTION_ENTRY_PRICED_AT_THE_ENTRY + _STILL_CHECKED_AT_THE_ORDER, funding=answer,
+            )
+        return _NextEntry(False, _WAITS, "Wait for a fresh IBKR price to judge the next position's cost.", funding=answer)
+    if answer.admits is not True:
+        return _NextEntry(False, _WAITS, answer.sentence, funding=answer)
+    return _NextEntry(True, "Ready for its next entry", answer.sentence + _STILL_CHECKED_AT_THE_ORDER, funding=answer)
+
+
+def _broker_buying_power(runtime: ActiveClerkRuntime) -> Figure | None:
+    """Alpaca's option buying power for this view: not read here, and none for a Dry Run or a Live Shadow."""
+    if runtime.account_authority_kind in ("real_paper", "real_live"):
+        return _BROKER_BUYING_POWER_NOT_READ_HERE
+    return None
 
 
 def _statement(own: DeploymentBudget, entry: _NextEntry | None) -> tuple[BudgetStatementLine, ...]:
@@ -698,9 +714,8 @@ def _statement(own: DeploymentBudget, entry: _NextEntry | None) -> tuple[BudgetS
     shortfall = cents_required(max(Decimal(0), -own.free))
     if shortfall > 0:
         lines.append(BudgetStatementLine(label="Over its budget by", amount_usd=dollars(shortfall)))
-    if entry is not None and entry.required is not None:
-        short = max(0, cents_required(entry.required) - own.spendable_cents)
-        lines.append(BudgetStatementLine(label="Short of its next entry", amount_usd=dollars(short)))
+    if entry is not None and entry.funding is not None and entry.funding.shortfall_cents is not None:
+        lines.append(BudgetStatementLine(label="Short of its next entry", amount_usd=dollars(entry.funding.shortfall_cents)))
     return tuple(lines)
 
 
@@ -746,7 +761,7 @@ def _fenced_budget_view(runtime: ActiveClerkRuntime, sid: str) -> DeploymentBudg
         money = repo.account_money(cash=read.cash, seen_before_ms=read.fills_seen_before_ms,
                                    modelled_fees_seen_before_ms=read.modelled_fees_seen_before_ms)
         own = next(item for item in money.budget.deployments if item.strategy_instance_id == sid)
-        entry = _next_entry(runtime, repo, money.budget, sid, risk) if own.active else None
+        entry = _next_entry(runtime, repo, money.budget, sid, risk, read.observed_at_ms) if own.active else None
         headline, detail = (entry.headline, entry.detail) if entry is not None else _stopped_copy(own)
         segment = bot_segment(money, sid)
         with money_context():
@@ -758,6 +773,7 @@ def _fenced_budget_view(runtime: ActiveClerkRuntime, sid: str) -> DeploymentBudg
                 segment=None if segment is None else _segment_view(segment),
                 statement=_statement(own, entry),
                 note="The budget limits new entries. Market fills and losses can go past it." if own.active else None,
+                funding=None if entry is None or entry.funding is None else FundingView.from_answer(entry.funding),
             )
     except (BudgetUnavailable, MoneyInputError, RateNotPinnedError, ValidationError, SimulationEvidenceUnavailable) as exc:
         return DeploymentBudgetView(

@@ -132,7 +132,9 @@ def leg_sentences(leg: LegSetup) -> tuple[str, ...]:
     """One leg in a sentence or two. A comparison of two runs says a leg only one of them has with these.
 
     A bought leg buys to open and sells to close. A sold leg sells to open and is bought back: its stop is a rise in
-    its premium and its momentum rule gates the sale.
+    its premium and its momentum rule gates the sale. The sale is refused, and the leg done for the day, unless a bought
+    contract covers it in the minute it fills. A setup cannot know that one is open by then (the bought leg may wait
+    on a momentum rule the sold leg does not have), so the replay settles it and this says what the replay does.
     """
     contract = f"{_what_is_traded(leg)} {phrases.expiry(leg.expiry)}"
     if leg.side == "sell":
@@ -140,6 +142,11 @@ def leg_sentences(leg: LegSetup) -> tuple[str, ...]:
     else:
         sentences = [f"Leg {leg.leg_id}: buys {contract}."]
     sentences.append(_when_it_opens(leg))
+    if leg.side == "sell":
+        sentences.append(
+            f"The sale needs one bought {leg.right} of the same expiry for each contract sold, held already or "
+            "filling in the same minute; with too few, it is refused and the leg is done for the day."
+        )
     if leg.stop_loss is not None:
         closes = "Bought back" if leg.side == "sell" else "Sells"
         sentences.append(f"{closes} once a minute closes {phrases.stop_loss(leg.stop_loss, leg.side)}.")

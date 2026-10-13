@@ -1783,10 +1783,10 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
 **Lineage: neutral.**
 
 Decision record: ADR 0078. Options Backtest is the research page that replays a
-setup of bought option legs over past sessions, on the trade prices the data lake
-holds (PRD #3030). It tests a setup the owner writes. It never tests what a bot
-trades, so Deploy's warning that options have no backtest still stands (Option
-structures).
+setup of option legs, bought and covered sold, over past sessions, on the trade
+prices the data lake holds (PRD #3030, PRD #3095). It tests a setup the owner
+writes. It never tests what a bot trades, so Deploy's warning that options have no
+backtest still stands (Option structures).
 
 - **Setup** — the trading window, the option legs and the cost assumptions one run
   is replayed under. It names no dates: the same setup runs over whatever sessions
@@ -1800,10 +1800,49 @@ structures).
 - **Leg** — one call or put, bought or sold (a leg with no side is bought): a
   number of contracts, a rule for its expiry, a rule for its strike, and three
   rules of its own that may each be off: stop loss, momentum, re-entry on stop. A
-  sold leg needs a bought leg of its kind to cover it, so a setup never sells more
-  contracts of a kind than it buys, and a setup that sells carries one expiry rule
-  on every leg.
+  bought leg buys to open and sells to close. A sold leg sells to open and is
+  bought back to close (see **Sold leg**). A sold leg needs a bought leg of its
+  kind to cover it, so a setup never sells more contracts of a kind than it buys,
+  and a setup that sells carries one expiry rule on every leg. Until #3107 a setup
+  that sells and carries a stop loss or a re-entry rule on any leg is refused by
+  name, and one that sells without them runs.
   _Avoid_: a structure's leg (Option structures), which is a bot's.
+- **Sold leg** — a leg that opens by selling its contract and closes by buying it
+  back. It is never naked: it opens only with **cover**. It opens at the sale price
+  (the price seen moved down by the slippage, rounded down to the step; a sale
+  that would fill at nothing is not taken, and the leg is done for the day) and
+  closes at the buy price. Its profit is the sale price less the buy-back price,
+  or less its mark, times multiplier and contracts, less both fees. A sale brings
+  its value less its fee into cash, and a buy-back takes its value plus its fee out.
+  _Avoid_: short leg, naked leg.
+- **Cover** — what makes a sold contract safe to hold: a bought contract of the
+  same underlying, kind (call or put) and actual expiry, held first or opening in
+  the same minute. One bought contract covers one sold contract. Cover is judged on
+  the contracts that were picked and not on the legs' expiry rules, since two legs
+  with one rule can come to two dates, so while anything is sold everything held
+  shares one actual expiry. A sold leg without cover is refused for it, and says
+  whether its cover **did not trade** (a bought leg of its kind found no bar in the
+  minute) or was **not yet held**. A bought leg's sale waits while a sold leg
+  depends on it.
+- **Collateral** — what a run pledges against what it holds: the lowest point of
+  the summed exercise payoff of the contracts held, premiums left out (ADR 0076
+  decisions 3 and 28), asked of the canonical portfolio function the bots use. An
+  iron condor's is its wider side. It is Alpaca's published rule for covered
+  positions as of today, worked out by this system, and is no evidence of what a
+  broker required on the session's date.
+- **Free cash** — cash less collateral. Premium received sits in cash and is not
+  free while it is pledged. An opening group is refused, all of it, when the cash
+  after it would be less than the collateral then held. A close is never refused
+  for cash, so free cash can go below zero, and entries are refused until it is back.
+- **Fill group** — the fills of one kind in one minute: the opening group, then the
+  closing group. The opening group is judged together as one simulated atomic
+  group, because minute bars cannot show which of two contracts printed first (a
+  modelling choice, not observed coverage). The closing group buys back first, then
+  sells each bought leg that may leave. Each group that filled anything leaves a
+  **money step**: the minute, opening or closing, cash and collateral before and
+  after, the assignment obligation after (sold contracts times strike times
+  multiplier, gross, not a loss), and whether it bought back a sold leg while a
+  bought contract of that kind and expiry stayed held.
 - **Entry time, exit time** — the minutes at which a setup's rules start and stop
   being read. Each is stored as a distance after the open or before the close (its
   **anchor**), so a half day keeps the distance. The entry time is when each leg's
@@ -1852,15 +1891,21 @@ structures).
   slippage".
   _Avoid_: spread.
 - **Marked, not sold** — a leg still held when the session's data ends: valued at
-  the close of the last bar its contract traded in, and never sold. Its session is
-  **incomplete** and stays in the totals, and the mark returns to cash at the start
-  of the next session. Unrelated to the **Mark (of a held contract)** in Option
-  structures, which is a live quote.
+  the close of the last bar its contract traded in, and never closed. A bought leg
+  is marked, not sold, and its mark is what it is worth. A sold leg is marked, not
+  bought back, and its mark is an amount owed, with an exit reason of its own. The
+  session is **incomplete** and stays in the totals. A session's marked value is
+  signed: a bought mark counts for the run and an owed one against it, and it
+  settles into cash at the start of the next session. Unrelated to the **Mark (of a
+  held contract)** in Option structures, which is a live quote.
 - **What did not trade** — the counts a result keeps beside its figures, so that a
   day that made nothing is told from a day that could not. **Sessions without
   momentum**: a leg took a starting price and no leg's momentum was reached.
   **Entries refused for cash**: the entries filling in one minute cost more than the
-  cash on hand. **Re-entries blocked by the cutoff**: a stop came after the "No
+  cash on hand, or, for a setup that sells, leave less cash than the collateral
+  then held. An entry refused for cover, for a second expiry or for a contract held
+  on the other side, and a sale at nothing not taken, are events of their own
+  (not counted in the summary yet: #3109). **Re-entries blocked by the cutoff**: a stop came after the "No
   re-entry after" time. **Entries dropped**: the contract did not trade in the
   minute the order filled. **Legs without a starting price**: the contract did not
   trade in the minute its starting price was due. **Re-entries lost**: a re-entry

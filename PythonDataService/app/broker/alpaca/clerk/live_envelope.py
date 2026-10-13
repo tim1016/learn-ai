@@ -262,14 +262,19 @@ class EnvelopeReservation:
     fee_provision_cents: int
 
 
-def observation_is_fresh(observation: AccountObservation, *, now_ms: int, max_age_ms: int) -> bool:
-    """The one freshness rule for a published or a displayed observation.
+def reading_is_fresh(observed_at_ms: int, *, now_ms: int, max_age_ms: int) -> bool:
+    """The one freshness rule, for a reading known only by the instant it was taken.
 
-    Fresh means ``0 <= age <= max_age``: an observation dated *after* the
-    clock is not fresh either, so a backward clock step cannot make obsolete
-    cash look current for the whole rollback.
+    Fresh means ``0 <= age <= max_age``: a reading dated *after* the clock is
+    not fresh either, so a backward clock step cannot make obsolete cash look
+    current for the whole rollback.
     """
-    return 0 <= now_ms - observation.observed_at_ms <= max_age_ms
+    return 0 <= now_ms - observed_at_ms <= max_age_ms
+
+
+def observation_is_fresh(observation: AccountObservation, *, now_ms: int, max_age_ms: int) -> bool:
+    """The one freshness rule for a published or a displayed observation (``reading_is_fresh`` of its instant)."""
+    return reading_is_fresh(observation.observed_at_ms, now_ms=now_ms, max_age_ms=max_age_ms)
 
 
 def loss_limit_usd(values: LiveEnvelopeValues, *, last_equity_usd: float | Decimal) -> float:
@@ -360,4 +365,5 @@ __all__ = [
     "loss_breached",
     "loss_limit_usd",
     "observation_is_fresh",
+    "reading_is_fresh",
 ]

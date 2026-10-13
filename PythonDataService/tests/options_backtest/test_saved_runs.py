@@ -47,6 +47,7 @@ from app.options_backtest.saved_runs import (
 )
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from tests.options_backtest._a_run import a_busy_run
+from tests.options_backtest._a_selling_run import a_selling_run
 from tests.options_backtest.setup_fixtures import conn as conn
 from tests.options_backtest.setup_fixtures import unique as unique
 from tests.research.conftest import second_conn as second_conn
@@ -139,6 +140,39 @@ async def test_a_run_saved_and_read_back_is_the_run_field_for_field_and_decimal_
     assert any(isinstance(trade.exit, Fill) for trade in trades) and any(
         not isinstance(trade.exit, Fill) for trade in trades
     )
+
+
+async def test_a_run_that_sells_saves_and_reads_back_with_its_buy_back_exits_its_owed_mark_and_each_fills_side(
+    conn: asyncpg.Connection, tag: str
+) -> None:
+    selling = a_selling_run()
+    run_id = await _complete(conn, selling, tag, "selling")
+
+    read = await read_result(conn, run_id)
+    rows = await conn.fetch(
+        "SELECT leg_id, entry_side, exit_kind, exit_side, exit_reason FROM research_options_backtest_run_trades "
+        "WHERE run_id = $1 ORDER BY session_open_ms, trade_number",
+        run_id,
+    )
+
+    assert read == selling
+    assert read is not None
+    # The money steps are not stored (a run read back has none), so the trades are held to the original one by one.
+    for kept_session, session in zip(read.sessions, selling.sessions, strict=True):
+        assert len(kept_session.outcome.trades) == len(session.outcome.trades)
+        for kept, was in zip(kept_session.outcome.trades, session.outcome.trades, strict=True):
+            _the_same_all_the_way_down(kept, was)
+    assert [tuple(row.values()) for row in rows] == [
+        ("long", "buy", "fill", "sell", "exit_time"),
+        ("short", "sell", "fill", "buy", "exit_time"),
+        ("long", "buy", "mark", None, "marked_not_sold"),
+        ("short", "sell", "mark", None, "marked_not_bought_back"),
+    ]
+    # The sold leg of the second session is owed: its profit counts the mark against the run, and the cash that moved,
+    # with the signed mark, is the session's profit.
+    second = read.sessions[1]
+    assert second.status is SessionStatus.INCOMPLETE
+    assert second.outcome.cash_change_usd + second.outcome.marked_value_usd == second.pnl_usd == D("-20.00")
 
 
 async def test_money_is_kept_to_the_last_digit_where_a_float_would_lose_it(

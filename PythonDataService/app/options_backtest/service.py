@@ -57,14 +57,8 @@ from app.options_backtest.fetching import DownloadFailed, DownloadStopped, ensur
 from app.options_backtest.lake_check import LakeCheckData
 from app.options_backtest.lake_data import BARS_CANNOT_BE_PLACED, LakeRunData, UnderlyingDayUnreadable
 from app.options_backtest.limits import MAX_RANGE_SESSIONS
-from app.options_backtest.run import (
-    RunResult,
-    RunStopped,
-    SellingNotReplayed,
-    SessionDataMissing,
-    refuse_a_sold_leg,
-    run_sessions,
-)
+from app.options_backtest.replay import SoldLegRulesNotReplayed, refuse_sold_leg_rules
+from app.options_backtest.run import RunResult, RunStopped, SessionDataMissing, run_sessions
 from app.options_backtest.saved_runs import FailureItem, RunFailure
 from app.options_backtest.session_market import MalformedBars
 from app.options_backtest.setup import OptionsBacktestSetup
@@ -88,7 +82,7 @@ DOWNLOAD_FAILED = "DOWNLOAD_FAILED"
 DATA_MISSING = "DATA_MISSING"
 DATA_UNREADABLE = "DATA_UNREADABLE"
 FEE_RATE_NOT_PUBLISHED = "FEE_RATE_NOT_PUBLISHED"
-SELLING_NOT_REPLAYED_YET = "SELLING_NOT_REPLAYED_YET"
+SOLD_LEG_RULES_NOT_REPLAYED_YET = "SOLD_LEG_RULES_NOT_REPLAYED_YET"
 DATA_CATALOG_UNAVAILABLE = "DATA_CATALOG_UNAVAILABLE"
 SAVE_TIMED_OUT = "SAVE_TIMED_OUT"
 INTERNAL_ERROR = "INTERNAL_ERROR"
@@ -280,8 +274,9 @@ def _work(
 ) -> RunResult:
     now_ms = clock()
     _stop_if_asked(hooks)
-    # Until selling is replayed (#3106) a sold leg is refused here, before the check reads or fetches anything.
-    refuse_a_sold_leg(setup)
+    # Until a stop loss and a re-entry rule on a sold leg are replayed (#3107) such a setup is refused here, before
+    # the check reads or fetches anything.
+    refuse_sold_leg_rules(setup)
     hooks.on_phase(PHASE_CHECKING_DATA)
     check = check_data(
         setup,
@@ -417,13 +412,17 @@ def _fee_rate_not_published(exc: FeeRateNotPublished) -> RunFailure:
     )
 
 
-def _selling_not_replayed(exc: SellingNotReplayed) -> RunFailure:
-    legs = ", ".join(exc.leg_ids)
+def _sold_leg_rules_not_replayed(exc: SoldLegRulesNotReplayed) -> RunFailure:
+    sold, ruled = ", ".join(exc.sold), ", ".join(exc.ruled)
     return RunFailure(
-        SELLING_NOT_REPLAYED_YET,
-        f"This setup sells ({legs}), and a run does not replay a sold leg yet, so nothing was fetched or run. "
-        "A setup that sells can be built and saved now; it will run once selling is replayed.",
-        tuple(FailureItem(None, "sold_leg", f"leg {leg_id} is sold") for leg_id in exc.leg_ids),
+        SOLD_LEG_RULES_NOT_REPLAYED_YET,
+        f"This setup sells ({sold}) and a leg carries a stop loss or a re-entry rule ({ruled}), and a run does not "
+        "replay those on a setup that sells yet, so nothing was fetched or run. Take the stop losses and the "
+        "re-entry rules off to run it: a setup that sells and has none runs, and this one can be saved as it is.",
+        tuple(
+            FailureItem(None, "sold_leg_rule", f"leg {leg_id} carries a stop loss or a re-entry rule")
+            for leg_id in exc.ruled
+        ),
     )
 
 
@@ -475,7 +474,7 @@ def _save_timed_out(_exc: SaveTimedOut) -> RunFailure:
 # The first entry an exception is an instance of builds its failure. Each takes the exception as its own type.
 _BUILDERS: tuple[tuple[type[Exception] | tuple[type[Exception], ...], Callable[[Any], RunFailure]], ...] = (
     (SessionsCannotBeTested, lambda exc: _cannot_be_tested(exc.check)),
-    (SellingNotReplayed, _selling_not_replayed),
+    (SoldLegRulesNotReplayed, _sold_leg_rules_not_replayed),
     (DownloadFailed, _download_failed),
     (SessionDataMissing, _session_data_missing),
     (FeeRateNotPublished, _fee_rate_not_published),

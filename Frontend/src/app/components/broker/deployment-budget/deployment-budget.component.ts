@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, input, resource }
 import type { ResourceTarget } from '../../../fleet/resource-target';
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
+import { FundingAnswerComponent } from '../funding-answer/funding-answer.component';
 import { MoneyBarComponent } from '../money-bar/money-bar.component';
 import { BrokerV2PanelService } from '../v2-panel/lib/broker-v2-panel.service';
 import type { BotPanelView } from '../v2-panel/lib/broker-v2-panel.types';
@@ -20,12 +21,14 @@ let nextHeadingId = 0;
  * arithmetic. The slice is the one Home draws for this bot (`segment`), as
  * Python wrote it: a running bot's balance shaded by its parts, a stopped
  * bot's still-held money with what it released; a finished bot has none.
- * Open gain or loss on shares is a note, never in the bar.
+ * Open gain or loss on shares is a note, never in the bar. A running bot's
+ * `funding` (#3097) is the Clerk's own answer to whether it can fund its next
+ * entry, shown beneath the statement exactly as Python wrote it.
  */
 @Component({
   selector: 'app-deployment-budget',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AuthoredUsdPipe, MoneyBarComponent, TimestampDisplayComponent],
+  imports: [AuthoredUsdPipe, FundingAnswerComponent, MoneyBarComponent, TimestampDisplayComponent],
   templateUrl: './deployment-budget.component.html',
   styleUrl: './deployment-budget.component.scss',
 })

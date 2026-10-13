@@ -40,14 +40,16 @@ describe('MoneyBarComponent', () => {
     ]);
   });
 
-  it('states a bot’s shortfall and what a stopped bot released and still claims', async () => {
+  it('states how far a bot spent past its budget and what a stopped bot released and still claims', async () => {
     const [bot, stopped] = SEGMENTS;
     await renderBar('detail', [
       { ...bot, shortfall_usd: '41.37' },
       { ...stopped, released_usd: '329.57', still_claimed_usd: '12.05' },
     ]);
 
-    expect(screen.getByText(/short of next entry \$41\.37/)).toBeTruthy();
+    // The served value is what the bot spent beyond its balance; it is not a shortfall against an entry (#3097).
+    expect(screen.getByText(/over its budget by \$41\.37/)).toBeTruthy();
+    expect(screen.queryByText(/short of next entry/)).toBeNull();
     expect(screen.getByText(/released \$329\.57 · still claimed \$12\.05/)).toBeTruthy();
   });
 
@@ -67,7 +69,7 @@ describe('MoneyBarComponent', () => {
   it('never states a shortfall the backend did not send', async () => {
     await renderBar('detail', [{ ...SEGMENTS[0], shortfall_usd: null }]);
 
-    expect(screen.queryByText(/short of next entry/)).toBeNull();
+    expect(screen.queryByText(/over its budget by/)).toBeNull();
   });
 
   it('draws an empty bot slice as no part at all, and still names its overrun', async () => {
@@ -82,7 +84,7 @@ describe('MoneyBarComponent', () => {
 
     expect(slices(container).map((slice) => slice.className)).toEqual(['money-bar__slice money-bar__slice--free']);
     expect(container.querySelectorAll('.money-bar__part')).toHaveLength(0);
-    expect(screen.getByText(/short of next entry \$5\.01/)).toBeTruthy();
+    expect(screen.getByText(/over its budget by \$5\.01/)).toBeTruthy();
   });
 
   it('draws money settling into cash with its own treatment and names it', async () => {

@@ -122,17 +122,88 @@ def test_a_sold_trade_is_sent_with_every_figure_as_the_text_it_was_saved_as_and_
         "momentum_level_usd": "5.0000",
         "stop_level_usd": "4.080",
         "entry_decided_at_ms": OPEN_MS + 600_000,
-        "entry": {"bar_close_ms": OPEN_MS + 660_000, "seen_usd": "5.0", "filled_usd": "5.02"},
+        "entry": {"side": "buy", "bar_close_ms": OPEN_MS + 660_000, "seen_usd": "5.0", "filled_usd": "5.02"},
         "exit_reason": "stop",
         "exit_group": 3,
         "exit_decided_at_ms": OPEN_MS + 1_200_000,
         "exit_kind": "sale",
-        "sale": {"bar_close_ms": OPEN_MS + 1_260_000, "seen_usd": "3.9", "filled_usd": "3.88"},
+        "sale": {"side": "sell", "bar_close_ms": OPEN_MS + 1_260_000, "seen_usd": "3.9", "filled_usd": "3.88"},
         "mark": None,
         "entry_fee_usd": "1.30",
         "exit_fee_usd": "1.30",
         "pnl_usd": "-230.60",
     }
+
+
+def _bought_back() -> LegTrade:
+    """A sold leg that left by a buy-back: sold for 2.50 at entry, bought back for 1.80, two contracts."""
+    return LegTrade(
+        leg_id="short_call",
+        entry_number=0,
+        contract=CALL,
+        contracts=2,
+        multiplier=100,
+        starting_price=None,
+        momentum_level=None,
+        stop_level=None,
+        entry_decided_at_ms=OPEN_MS + 300_000,
+        entry=Fill("short_call", CALL, "sell", 2, 100, OPEN_MS + 360_000, D("2.50"), D("2.50")),
+        exit_reason=ExitReason.EXIT_TIME,
+        exit_group=1,
+        exit_decided_at_ms=OPEN_MS + 3_600_000,
+        exit=Fill("short_call", CALL, "buy", 2, 100, OPEN_MS + 3_660_000, D("1.80"), D("1.80")),
+        entry_fee_usd=D("0"),
+        exit_fee_usd=D("0"),
+        pnl_usd=D("140.00"),
+    )
+
+
+def _owed() -> LegTrade:
+    """A sold leg never bought back: sold for 2.50 and marked at 3.00, which it owes."""
+    return LegTrade(
+        leg_id="short_call",
+        entry_number=0,
+        contract=CALL,
+        contracts=1,
+        multiplier=100,
+        starting_price=None,
+        momentum_level=None,
+        stop_level=None,
+        entry_decided_at_ms=OPEN_MS + 300_000,
+        entry=Fill("short_call", CALL, "sell", 1, 100, OPEN_MS + 360_000, D("2.50"), D("2.50")),
+        exit_reason=ExitReason.MARKED_NOT_BOUGHT_BACK,
+        exit_group=1,
+        exit_decided_at_ms=OPEN_MS + 3_600_000,
+        exit=Mark(OPEN_MS + 6_000_000, D("3.00")),
+        entry_fee_usd=D("0"),
+        exit_fee_usd=D("0"),
+        pnl_usd=D("-50.00"),
+    )
+
+
+def test_a_buy_back_is_sent_as_a_buy_back_with_the_side_of_each_fill() -> None:
+    sent = wire.OptionsBacktestTradeResponse.from_stored(StoredTrade(OPEN_MS, 0, _bought_back()))
+
+    assert (sent.exit_kind, sent.mark, sent.exit_reason) == ("buy_back", None, "exit_time")
+    assert sent.entry.side == "sell"
+    assert sent.sale == wire.OptionsBacktestTradeFillResponse(
+        side="buy", bar_close_ms=OPEN_MS + 3_660_000, seen_usd="1.80", filled_usd="1.80"
+    )
+
+
+def test_a_sold_leg_marked_and_not_bought_back_is_a_mark_whose_entry_says_it_is_owed() -> None:
+    sent = wire.OptionsBacktestTradeResponse.from_stored(StoredTrade(OPEN_MS, 0, _owed()))
+
+    assert (sent.exit_kind, sent.sale, sent.exit_reason) == ("mark", None, "marked_not_bought_back")
+    assert sent.entry.side == "sell"
+    assert sent.mark == wire.OptionsBacktestTradeMarkResponse(bar_close_ms=OPEN_MS + 6_000_000, price_usd="3.00")
+
+
+def test_a_trade_whose_exit_kind_disagrees_with_the_side_of_its_fill_cannot_be_made() -> None:
+    sent = wire.OptionsBacktestTradeResponse.from_stored(StoredTrade(OPEN_MS, 0, _bought_back()))
+
+    with pytest.raises(ValidationError):
+        wire.OptionsBacktestTradeResponse.model_validate(sent.model_dump() | {"exit_kind": "sale"})
 
 
 def test_a_leg_marked_and_not_sold_is_sent_as_a_mark_with_no_sale_and_no_exit_fee() -> None:
