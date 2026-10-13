@@ -25,7 +25,9 @@ A run is made ``running`` when its job is accepted. It ends in exactly one of th
 * ``cancel_run``: nothing but the status.
 
 A row that says ``running`` while its job is gone reads back as ``interrupted``; whether the job is alive is asked of
-the caller's ``is_live`` (``lifecycle.job_is_live``), and ``None`` ("cannot tell") leaves it ``running``.
+the caller's ``is_live`` (``lifecycle.job_is_live``), and ``None`` ("cannot tell") leaves it ``running``. That is a
+blocking round trip to Redis, so a route on the event loop reads a run with ``not_asked`` and then asks on a worker
+thread, with no connection and no row lock held: ``present_runs``, ``present_run`` and ``delete_unless_alive`` do.
 """
 
 from __future__ import annotations
@@ -33,7 +35,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from enum import StrEnum
 from itertools import pairwise
@@ -502,6 +504,22 @@ async def get_run(conn: asyncpg.Connection, run_id: int, *, is_live: IsLive) -> 
     )
 
 
+async def present_run(stored: StoredRun, *, is_live: IsLive) -> StoredRun:
+    """A run read with ``not_asked``, as it reads now: a run stored as ``running`` reads ``interrupted`` once its job
+    is gone.
+
+    A job's liveness is a blocking round trip to Redis, and this runs on the event loop: so it is asked on a worker
+    thread, and the run is already read, so no database connection is held meanwhile. A run stored as anything else
+    asks nothing.
+    """
+    record = stored.record
+    if record.status != "running":
+        return stored
+    live = await asyncio.to_thread(is_live, record.job_id)
+    status = lifecycle.presented_status_for("running", live=live)
+    return replace(stored, record=replace(record, status=status))
+
+
 async def read_result(conn: asyncpg.Connection, run_id: int) -> RunResult | None:
     """The whole result of a complete run, rebuilt field for field; ``None`` for no such run or one not complete.
 
@@ -662,6 +680,26 @@ async def delete_run(conn: asyncpg.Connection, run_id: int, *, is_live: IsLive) 
         return DeleteOutcome.DELETED
 
 
+async def read_running_job(conn: asyncpg.Connection, run_id: int) -> str | None:
+    """The job of the run when it is stored as ``running``; ``None`` for a run stored as anything else and for none."""
+    row = await conn.fetchrow("SELECT status, job_id FROM research_options_backtest_runs WHERE id = $1", run_id)
+    return row["job_id"] if row is not None and row["status"] == "running" else None
+
+
+async def delete_unless_alive(run_id: int, *, is_live: IsLive) -> DeleteOutcome:
+    """:func:`delete_run`, with the run's job asked about before the row is locked and with no connection held.
+
+    A job's liveness is a blocking round trip to Redis (five seconds at most). Asked under the row lock it would hold a
+    pooled connection and the row for that long, on the event loop. So the run is peeked at under a connection that is
+    then released, its job is asked once on a worker thread, and only then is the row locked and judged by that answer
+    (a job that was not asked about reads as "cannot tell", which counts as alive). A run that ended between the two
+    is deleted as an ended run is; a run that is not stored as running asks nothing.
+    """
+    job_id = await with_connection(read_running_job, run_id)
+    answers = await asyncio.to_thread(liveness_of, (job_id,), is_live) if job_id is not None else {}
+    return await with_connection(delete_run, run_id, is_live=answers.get)
+
+
 # ── Reads for a closer look: one run's trades, one session, the sessions side by side (#3030) ──
 
 
@@ -727,7 +765,7 @@ async def get_run_header(conn: asyncpg.Connection, run_id: int) -> RunHeader | N
     return None if row is None else _header(row)
 
 
-def _not_asked(_job_id: str | None) -> None:
+def not_asked(_job_id: str | None) -> None:
     """The liveness of a job nobody asked about: "cannot tell", which leaves a row stored as running ``running``."""
     return None
 
@@ -735,7 +773,7 @@ def _not_asked(_job_id: str | None) -> None:
 def _header(row: asyncpg.Record) -> RunHeader:
     saved = read_stored_setup(f"run {row['id']}", row["setup_json"], row["created_at_ms"])
     return RunHeader(
-        record=_record(row, _not_asked), setup=saved.setup, setup_cannot_open_reason=saved.cannot_open_reason
+        record=_record(row, not_asked), setup=saved.setup, setup_cannot_open_reason=saved.cannot_open_reason
     )
 
 

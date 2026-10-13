@@ -9,13 +9,14 @@ neighbours. Hand-worked figures are in ``tests/options_backtest/test_service.py`
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import random
 import re
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
@@ -1032,6 +1033,130 @@ async def test_the_history_reads_the_liveness_of_all_its_running_jobs_in_one_wor
     [worker] = {thread for _, thread, _ in asked}
     assert worker != this_thread and hops == 1
     assert not any(held for _, _, held in asked)
+
+
+# ── One run and delete read the liveness of its job off the loop, with no connection and no lock held (#3085) ─
+
+
+def _a_stored_row(status: str) -> dict[str, Any]:
+    """The row of one run as ``get_run`` reads it: a row of the history and the columns of a run opened."""
+    return {
+        **_a_row(1, status, "job-1"),
+        "setup_json": the_setup().model_dump_json(),
+        "summary_json": None,
+        "slippage_json": None,
+        "tolerance_json": None,
+    }
+
+
+class _OneRunConnection:
+    """A connection over one row of the runs table, or none, that says whether the row lock is open.
+
+    Only the statements of opening and deleting a run are answered: the row, the delete, and the transaction that
+    ``delete_run`` takes the row lock in. What a statement does to a real table is the tests on a database's.
+    """
+
+    def __init__(self, row: dict[str, Any] | None) -> None:
+        self.row = row
+        self.in_transaction = False
+        self.deleted = False
+
+    async def fetchrow(self, _query: str, *_args: Any) -> dict[str, Any] | None:
+        return self.row
+
+    async def execute(self, query: str, *_args: Any) -> str:
+        assert query.startswith("DELETE FROM research_options_backtest_runs"), query
+        self.deleted = True
+        return "DELETE 1"
+
+    @contextlib.asynccontextmanager
+    async def transaction(self) -> AsyncIterator[None]:
+        self.in_transaction = True
+        try:
+            yield
+        finally:
+            self.in_transaction = False
+
+
+def _a_run_whose_job_answers(
+    monkeypatch: pytest.MonkeyPatch, row: dict[str, Any] | None, answer: bool | None
+) -> tuple[_OneRunConnection, list[tuple[str | None, int, bool, bool]]]:
+    """Put one stored row behind the runs routes and ``answer`` behind every job's liveness.
+
+    Each question put to Redis is recorded as (the job, the thread asked on, whether a pooled connection is held,
+    whether the row lock is open).
+    """
+    connection = _OneRunConnection(row)
+    held = False
+    asked: list[tuple[str | None, int, bool, bool]] = []
+
+    async def a_connection(fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
+        nonlocal held
+        held = True
+        try:
+            return await fn(connection, *args, **kwargs)
+        finally:
+            held = False
+
+    def is_live(job_id: str | None) -> bool | None:
+        asked.append((job_id, threading.get_ident(), held, connection.in_transaction))
+        return answer
+
+    monkeypatch.setattr(runs_router, "with_connection", a_connection)
+    monkeypatch.setattr(runs_router.saved_runs, "with_connection", a_connection)
+    monkeypatch.setattr(lifecycle, "job_is_live", is_live)
+    return connection, asked
+
+
+@pytest.mark.parametrize(("answer", "reads"), [(True, "running"), (False, "interrupted"), (None, "running")])
+async def test_opening_a_run_stored_as_running_asks_its_job_once_on_a_worker_thread_with_no_connection_held(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, answer: bool | None, reads: str
+) -> None:
+    _, asked = _a_run_whose_job_answers(monkeypatch, _a_stored_row("running"), answer)
+
+    async with client as c:
+        response = await c.get(f"{PREFIX}/runs/1")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == reads
+    [(job, thread, held, locked)] = asked
+    assert job == "job-1" and thread != threading.get_ident()
+    assert not held and not locked
+
+
+@pytest.mark.parametrize(
+    ("answer", "status_code", "is_deleted"), [(True, 409, False), (None, 409, False), (False, 204, True)]
+)
+async def test_deleting_a_run_stored_as_running_asks_its_job_once_on_a_worker_thread_before_the_row_is_locked(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, answer: bool | None, status_code: int, is_deleted: bool
+) -> None:
+    connection, asked = _a_run_whose_job_answers(monkeypatch, _a_stored_row("running"), answer)
+
+    async with client as c:
+        response = await c.delete(f"{PREFIX}/runs/1")
+
+    assert response.status_code == status_code, response.text
+    assert connection.deleted is is_deleted
+    [(job, thread, held, locked)] = asked
+    assert job == "job-1" and thread != threading.get_ident()
+    assert not held and not locked
+
+
+@pytest.mark.parametrize(
+    ("row", "opened", "deleted"),
+    [(_a_stored_row("failed"), 200, 204), (_a_stored_row("cancelled"), 200, 204), (None, 404, 404)],
+)
+async def test_a_run_that_is_not_stored_as_running_and_a_run_that_is_not_there_ask_nothing_of_redis(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, row: dict[str, Any] | None, opened: int, deleted: int
+) -> None:
+    _, asked = _a_run_whose_job_answers(monkeypatch, row, True)
+
+    async with client as c:
+        got = await c.get(f"{PREFIX}/runs/1")
+        removed = await c.delete(f"{PREFIX}/runs/1")
+
+    assert (got.status_code, removed.status_code) == (opened, deleted)
+    assert asked == []
 
 
 # ── The history, one run, delete: on a real database ─────────────────────
