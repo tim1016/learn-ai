@@ -20,8 +20,10 @@ from httpx import AsyncClient
 from app.models.requests import OptionsCompanionConfig
 from app.options.expiry import option_expiry_anchor_ms
 from app.routers import quantlib_options
+from app.services import strategy_engine
 from app.services.options_companion_service import _compute_row_greeks
 from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
+from app.utils.timestamps import to_ms_utc
 
 OTHER_RATE = 0.10
 
@@ -64,8 +66,14 @@ async def _post_three_ways(
     return omitted, explicit_default, other
 
 
-async def test_strategy_analyze_prices_an_omitted_rate_at_the_default(client: AsyncClient) -> None:
-    expiration = option_expiry_anchor_ms(datetime.now(UTC).date() + timedelta(days=90))
+async def test_strategy_analyze_prices_an_omitted_rate_at_the_default(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The engine reads the clock once per request for time to expiry, so three
+    # requests on a live clock price three instants and `==` fails on a tick (#3126).
+    pinned_now = datetime(2026, 1, 5, 15, 0, tzinfo=UTC)
+    monkeypatch.setattr(strategy_engine, "now_ms_utc", lambda: to_ms_utc(pinned_now))
+    expiration = option_expiry_anchor_ms(pinned_now.date() + timedelta(days=90))
     payload = {
         "symbol": "AAPL",
         "legs": [
