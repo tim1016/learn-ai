@@ -55,7 +55,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from app.broker.alpaca.clerk.live_envelope import OBSERVATION_MAX_AGE_MS
 from app.broker.alpaca.clerk.money import dollars, money_context, notional
@@ -133,7 +133,7 @@ class NotComparedReason(StrEnum):
     JUDGMENT_NOT_SWITCHED_ON = JUDGMENT_NOT_SWITCHED_ON_REASON
     # The read before the order failed or did not answer in time.
     FIRST_READING_FAILED = "FIRST_READING_FAILED"
-    # The listing answered before the account reading; the entry did not wait for it.
+    # The account reading had not finished when the order was handed over; the entry did not wait for it.
     FIRST_READING_NOT_READY = "FIRST_READING_NOT_READY"
     # It answered, and stated no option buying power.
     FIRST_READING_WITHOUT_FIGURE = "FIRST_READING_WITHOUT_FIGURE"
@@ -191,6 +191,27 @@ class AccountReading:
     not_ready: bool = False
 
 
+@dataclass(slots=True)
+class _Completed:
+    """When each of a reading's two reads finished, on the Clerk's clock; ``None`` while it has not."""
+
+    account_ms: int | None = None
+    transfers_ms: int | None = None
+
+    def account_finished(self, ms: int) -> None:
+        self.account_ms = ms
+
+    def transfers_finished(self, ms: int) -> None:
+        self.transfers_ms = ms
+
+    @property
+    def ended_ms(self) -> int | None:
+        """When the later of the two finished, or ``None`` while either has not."""
+        if self.account_ms is None or self.transfers_ms is None:
+            return None
+        return max(self.account_ms, self.transfers_ms)
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ReadingBegun:
     """One reading of the account, started and not yet waited for."""
@@ -201,6 +222,7 @@ class ReadingBegun:
     transfers_from_ms: int
     account: asyncio.Future[BrokerOptionAccountSnapshot]
     transfers: asyncio.Future[list[BrokerActivity]]
+    completed: _Completed
 
     def cancel(self) -> None:
         """Stop both reads: the reading is no longer wanted."""
@@ -221,6 +243,16 @@ def _discard_read_answer(read: asyncio.Future[object]) -> None:
             extra={"action": "option_buying_power_abandoned_read_failed"},
             exc_info=(type(error), error, error.__traceback__),
         )
+
+
+def _answer_of_done[T](read: asyncio.Future[T]) -> T | Exception:
+    """What a read that has finished, and was not cancelled, answered or raised."""
+    error = read.exception()
+    if error is None:
+        return read.result()
+    if not isinstance(error, Exception):
+        raise error
+    return error
 
 
 async def _answer_of[T](read: asyncio.Future[T]) -> T | Exception:
@@ -255,6 +287,12 @@ class EntryBuyingPowerWatch:
 
     The first reading is held in memory only. Entries a restart left with
     none are recorded as that by the first round of the new process.
+
+    A first reading that has not finished when the contract's listing
+    answers is not given up on there (#3136). It goes on while the entry
+    goes on to its send, which waits for nothing, and is taken at the send:
+    kept when both its reads finished before the order was handed to the
+    port, cancelled and recorded not ready when they did not.
     """
 
     def __init__(
@@ -266,6 +304,8 @@ class EntryBuyingPowerWatch:
         self._intake = intake
         self._judged = judged
         self._first: dict[tuple[str, str], tuple[AccountReading, int]] = {}
+        # Readings whose reads were still going when the listing answered, by entry, until its send.
+        self._going_on: dict[tuple[str, str], ReadingBegun] = {}
         self._watched: dict[str, _Watched] = {}
         self._restart_recorded = False
         # One round at a time: two would each take a second reading of the same entry.
@@ -284,17 +324,16 @@ class EntryBuyingPowerWatch:
         )
 
     async def finish_first(self, key: tuple[str, str], begun: ReadingBegun) -> None:
-        """Keep a reading that finished beside the listing; abandon one the entry would have to wait for."""
+        """Keep a reading that finished beside the listing; let one that did not go on to the entry's send.
+
+        The entry never waits for the reading. One still going is neither
+        waited for nor cancelled here: it is taken at ``sent``, by when it
+        has had the rest of the entry's own work to finish in (#3136).
+        """
         if begun.account.done() and begun.transfers.done():
-            reading = await self._finish_reading(begun)
+            self._first[key] = (await self._finish_reading(begun), begun.transfers_from_ms)
         else:
-            begun.cancel()
-            reading = AccountReading(
-                began_ms=begun.began_ms, ended_ms=self._repo.clock(),
-                began_after_sequence=begun.began_after_sequence, held=begun.held, buying_power=None,
-                failed=True, cash_transfers=None, not_ready=True,
-            )
-        self._first[key] = (reading, begun.transfers_from_ms)
+            self._going_on[key] = begun
 
     def sent(self, key: tuple[str, str], *, order_ref: str | None, sent_at_ms: int | None) -> None:
         """The entry ``key`` was accepted as ``order_ref`` and handed to the broker at ``sent_at_ms``: watch it.
@@ -305,7 +344,14 @@ class EntryBuyingPowerWatch:
         order already watched keeps the reading it was first watched with.
         """
         held = self._first.pop(key, None)
-        if order_ref is None or order_ref in self._watched:
+        going_on = self._going_on.pop(key, None)
+        taken = order_ref is not None and order_ref not in self._watched
+        if going_on is not None:
+            if taken and held is None:
+                held = (self._reading_at_send(going_on, sent_at_ms=sent_at_ms), going_on.transfers_from_ms)
+            else:
+                going_on.cancel()
+        if not taken:
             return
         first, transfers_from_ms = (
             held if held is not None else (None, et_midnight_ms(et_date_at_ms(self._repo.clock())))
@@ -315,8 +361,11 @@ class EntryBuyingPowerWatch:
         )
 
     def forget(self, key: tuple[str, str]) -> None:
-        """Drop the reading held for an entry that was not taken."""
+        """Drop the reading held for an entry that was not taken, and stop one still going."""
         self._first.pop(key, None)
+        going_on = self._going_on.pop(key, None)
+        if going_on is not None:
+            going_on.cancel()
 
     @property
     def watching(self) -> tuple[str, ...]:
@@ -339,7 +388,7 @@ class EntryBuyingPowerWatch:
         """
         recorded: list[str] = []
         async with self._one_round:
-            if not self._restart_recorded and not self._first:
+            if not self._restart_recorded and not self._first and not self._going_on:
                 # Not while an entry is between its first reading and its send: it is not watched yet.
                 recorded.extend(await self._record_entries_a_restart_left())
                 self._restart_recorded = True
@@ -403,7 +452,8 @@ class EntryBuyingPowerWatch:
         of the event loop, and a port that answers at once has answered by
         the time this returns. Python 3.12's eager tasks are needed to
         start both reads before a listing port that also answers without
-        yielding; a pending read is cancelled as soon as that listing ends.
+        yielding. A read still pending when that listing ends goes on to the
+        entry's send (``finish_first``, #3136).
         """
         loop = asyncio.get_running_loop()
         began_ms = self._repo.clock()
@@ -411,25 +461,48 @@ class EntryBuyingPowerWatch:
             # One moment of the books: the log's newest record and what the bots hold at it.
             began_after_sequence = self._repo.last_custody_sequence()
             held = tuple(held_option_contracts(conn))
+        completed = _Completed()
+        account = asyncio.Task(
+            asyncio.wait_for(self._read.get_option_account(), timeout=bound_ms / 1000),
+            loop=loop, eager_start=True,
+        )
+        transfers = asyncio.Task(
+            asyncio.wait_for(
+                self._read.list_activities(
+                    after_ms=transfers_from_ms, limit=_TRANSFER_PAGE, activity_type=CASH_TRANSFER_ACTIVITY_FILTER
+                ),
+                timeout=bound_ms / 1000,
+            ),
+            loop=loop, eager_start=True,
+        )
+        self._note_when_done(account, completed.account_finished)
+        self._note_when_done(transfers, completed.transfers_finished)
         return ReadingBegun(
             began_ms=began_ms,
             began_after_sequence=began_after_sequence,
             held=held,
             transfers_from_ms=transfers_from_ms,
-            account=asyncio.Task(
-                asyncio.wait_for(self._read.get_option_account(), timeout=bound_ms / 1000),
-                loop=loop, eager_start=True,
-            ),
-            transfers=asyncio.Task(
-                asyncio.wait_for(
-                    self._read.list_activities(
-                        after_ms=transfers_from_ms, limit=_TRANSFER_PAGE, activity_type=CASH_TRANSFER_ACTIVITY_FILTER
-                    ),
-                    timeout=bound_ms / 1000,
-                ),
-                loop=loop, eager_start=True,
-            ),
+            account=account,
+            transfers=transfers,
+            completed=completed,
         )
+
+    def _note_when_done(self, read: asyncio.Future[Any], note: Callable[[int], None]) -> None:
+        """Say, through ``note``, the Clerk's clock at the moment ``read`` finished, answered or not.
+
+        A read that raised is marked as seen here: the reading carries what it raised on, so it is
+        not an exception nobody retrieved.
+        """
+
+        def finished(done: asyncio.Future[Any]) -> None:
+            if not done.cancelled():
+                done.exception()
+            note(self._repo.clock())
+
+        if read.done():
+            finished(read)
+        else:
+            read.add_done_callback(finished)
 
     async def _finish_reading(self, begun: ReadingBegun) -> AccountReading:
         """Wait for a reading that was begun, and say what it read. Never raises for the broker's sake."""
@@ -439,7 +512,44 @@ class EntryBuyingPowerWatch:
         except BaseException:
             begun.cancel()
             raise
-        ended_ms = self._repo.clock()
+        return self._reading_of(begun, account=account, transfers=transfers, ended_ms=self._repo.clock())
+
+    def _reading_at_send(self, begun: ReadingBegun, *, sent_at_ms: int | None) -> AccountReading:
+        """What a reading that went on past the listing came to, when the entry's order was handed over.
+
+        Kept only when both reads had finished, and the later of them had finished no later than the
+        order was handed to the port: an answer that reached the Clerk after that cannot be the
+        account as it stood before the order. Anything else is cancelled and is not ready, as a
+        reading the listing outran always was. For an order the Clerk took and never handed over
+        (``sent_at_ms`` is ``None``) there is no order to be before: a finished reading is kept, and
+        the entry's record says it bought nothing.
+        """
+        ended_ms = begun.completed.ended_ms
+        finished = (
+            begun.account.done() and begun.transfers.done()
+            and not begun.account.cancelled() and not begun.transfers.cancelled()
+        )
+        if finished and ended_ms is not None and (sent_at_ms is None or ended_ms <= sent_at_ms):
+            return self._reading_of(
+                begun, account=_answer_of_done(begun.account), transfers=_answer_of_done(begun.transfers),
+                ended_ms=ended_ms,
+            )
+        begun.cancel()
+        return AccountReading(
+            began_ms=begun.began_ms, ended_ms=self._repo.clock(),
+            began_after_sequence=begun.began_after_sequence, held=begun.held, buying_power=None,
+            failed=True, cash_transfers=None, not_ready=True,
+        )
+
+    def _reading_of(
+        self,
+        begun: ReadingBegun,
+        *,
+        account: BrokerOptionAccountSnapshot | Exception,
+        transfers: list[BrokerActivity] | Exception,
+        ended_ms: int,
+    ) -> AccountReading:
+        """What two answered reads say of the account, each as it was answered or as it raised."""
         if isinstance(account, Exception):
             # Whatever the read raised, a timeout among it: it is evidence the Clerk could not have,
             # never a reason to stop an entry.
