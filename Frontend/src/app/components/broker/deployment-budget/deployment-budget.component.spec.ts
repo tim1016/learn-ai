@@ -7,6 +7,7 @@ import { resourceTarget } from '../../../fleet/resource-target';
 import {
   BrokerV2PanelService,
   type DeploymentBudgetView,
+  type ExitEstimateView,
   type FundingView,
   type MoneySegment,
 } from '../v2-panel/lib/broker-v2-panel.service';
@@ -105,6 +106,28 @@ const FUNDING_UNPRICED: FundingView = {
     { label: "This bot's own claim", amount_usd: '1000.00' },
   ] },
   sentence: 'This bot has $1,000.00 free and the account can fund $1,000.00 after protecting other positions.',
+};
+
+/** What getting out of one held bought call costs: $408.00 comes back at the bid, and nothing is sold short. */
+const EXIT_ESTIMATE: ExitEstimateView = {
+  net_close: {
+    state: 'known', amount_usd: '-408.00', source: 'Quotes kept for this Dry Run', as_of_ms: READ_AT,
+    terms: [{ label: 'Sell 1 SPY261016C00585000 at the bid', amount_usd: '-408.00' }],
+  },
+  gross_buy_back: {
+    state: 'known', amount_usd: '0.00', source: 'No sold leg is held, so nothing is bought back', as_of_ms: READ_AT, terms: [],
+  },
+  quotes: [{
+    contract: {
+      occ_symbol: 'SPY261016C00585000', underlying: 'SPY', expiry_ms: Date.UTC(2026, 9, 16, 20, 0, 0), right: 'call',
+      strike: '585',
+    },
+    contracts: 1, state: 'known', age_ms: 2_000, missing: [], gap_usd: '0.04',
+  }],
+  conditions: [
+    'Amounts are before fees. A positive amount is paid and a negative one comes back.',
+    "Alpaca's own expiry-day cutoff has not been verified.",
+  ],
 };
 
 /** What Python adds to a pass on the bot page, after the funding sentence. */
@@ -430,6 +453,25 @@ describe("This bot's money", () => {
     expect(container.querySelector('app-funding-answer')).toBeNull();
   });
 
+  it('shows what getting out costs while the bot holds an option position, after its funding', async () => {
+    const view: DeploymentBudgetView = { ...RUNNING, funding: FUNDING_UNPRICED, exit_estimate: EXIT_ESTIMATE };
+    const { container } = await renderCard(vi.fn().mockResolvedValue(view));
+
+    await screen.findByText('Holding its position');
+    const card = container.querySelector('app-exit-estimate');
+    expect(card?.textContent).toContain('Closing everything as one order');
+    expect(card?.textContent).toContain('-$408.00');
+    expect(card?.textContent).toContain("Alpaca's own expiry-day cutoff has not been verified.");
+    expect(container.querySelector('app-funding-answer + app-exit-estimate')).not.toBeNull();
+  });
+
+  it('shows no exit estimate for a bot that holds no option position', async () => {
+    const { container } = await renderCard(vi.fn().mockResolvedValue(RUNNING));
+
+    await screen.findByText('Holding its position');
+    expect(container.querySelector('app-exit-estimate')).toBeNull();
+  });
+
   it('draws no slice for a finished bot, which holds no money', async () => {
     const { container } = await renderCard(vi.fn().mockResolvedValue(FINISHED));
 
@@ -507,6 +549,7 @@ describe("This bot's money", () => {
     ['running', RUNNING],
     ['stopped', STOPPED],
     ['running with its funding answer', { ...RUNNING, funding: FUNDING_REFUSED }],
+    ['running with its exit estimate', { ...RUNNING, exit_estimate: EXIT_ESTIMATE }],
   ])('has no detectable accessibility violations when %s', async (_name, view) => {
     await renderCard(vi.fn().mockResolvedValue(view), { holdsShares: true, openPnl: openPnl('12.50', 'gain') });
     await screen.findByText(view.headline);

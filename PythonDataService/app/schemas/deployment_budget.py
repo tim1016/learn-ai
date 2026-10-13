@@ -20,6 +20,7 @@ from app.broker.alpaca.clerk.models import EpochMs
 from app.broker.alpaca.clerk.money import consent_cents, dollars
 from app.schemas.account_authority import AuthorityKind
 from app.schemas.option_deploy import OptionDeployReview
+from app.schemas.option_preview import OptionContractView
 from app.schemas.traded_asset_acknowledgement import UntestedTradedAssetWarning
 
 
@@ -397,6 +398,46 @@ class FundingView(BaseModel):
         )
 
 
+class ExitLegQuoteView(BaseModel):
+    """How far the quote behind one held contract's exit price can be trusted (#3100).
+
+    ``state`` is the leg's own: unknown when the side its close fills at is no
+    price, stale when that side is past the age a held contract's mark is
+    allowed, known otherwise. ``age_ms`` is that side's age and is absent
+    when no side arrived; ``missing`` lists every side that has not arrived;
+    ``gap_usd`` is the ask less the bid in dollars a share, exactly as
+    quoted, and absent unless both sides arrived.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    contract: OptionContractView
+    # Signed whole contracts held: bought above zero, sold below.
+    contracts: int
+    state: Literal["known", "stale", "unknown"]
+    age_ms: int | None = None
+    missing: tuple[Literal["bid", "ask"], ...] = ()
+    gap_usd: str | None = None
+
+
+class ExitEstimateView(BaseModel):
+    """What getting out of the bot's held option position costs at the quotes held, before fees (#3100).
+
+    ``net_close`` is closing everything as one order and ``gross_buy_back``
+    buying the sold legs back alone: two figures, because Alpaca can ask
+    for far more buying power for the second than the first suggests. Each
+    is known, stale or unknown with its terms and source, never "0.00" for
+    a figure that is not known. ``quotes`` says how far each leg's quote can
+    be trusted, and ``conditions`` what is not settled. It informs and
+    blocks nothing. Every dollar and every word is authored by Python.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    net_close: FigureView
+    gross_buy_back: FigureView
+    quotes: tuple[ExitLegQuoteView, ...]
+    conditions: tuple[str, ...]
+
+
 class DeploymentBudgetView(BaseModel):
     """All dollars are authored by Python, including display rounding.
 
@@ -429,6 +470,9 @@ class DeploymentBudgetView(BaseModel):
     # Whether the bot can fund its next entry and which limit binds: the
     # answer the Clerk's admission reads (#3097). Only a running bot has one.
     funding: FundingView | None = None
+    # What getting out of its held option position costs at the quotes held (#3100). Present only while
+    # the bot holds an option contract, a stopped bot's included.
+    exit_estimate: ExitEstimateView | None = None
 
     @model_validator(mode="after")
     def segment_is_this_bots_own(self) -> DeploymentBudgetView:

@@ -49,6 +49,7 @@ from app.broker.alpaca.clerk.et_day import et_day_window_ms
 from app.broker.alpaca.clerk.fifo_pnl import LotWriteOff, compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.kept_option_quotes import (
+    HELD_MARK_MAX_AGE_MS,
     KeptOptionQuote,
     KeptOptionQuotes,
     KeptOptionQuotesUnavailable,
@@ -213,7 +214,7 @@ class SimulatedAccountProjection:
                 f"The option quotes kept for this {simulated_account_named(self.repo.account_id)} need repair; "
                 f"{symbol} cannot be marked from them."
             ) from exc
-        if kept is None or at_ms - kept.kept_at_ms > SOURCE_BAR_MS + DELIVERY_ALLOWANCE_MS:
+        if kept is None or at_ms - kept.kept_at_ms > HELD_MARK_MAX_AGE_MS:
             raise SimulationEvidenceUnavailable(
                 f"A fresh quote for the option contract {symbol} is unavailable. Wait for its market feed."
             )
@@ -247,7 +248,7 @@ class SimulatedAccountProjection:
                 refs.append(kept.ref)
                 # Good while its hand-over is fresh, and never into the contract's expiry.
                 expires = min(
-                    kept.kept_at_ms + SOURCE_BAR_MS + DELIVERY_ALLOWANCE_MS,
+                    kept.kept_at_ms + HELD_MARK_MAX_AGE_MS,
                     last_session_close_ms(OptionContract.from_occ_symbol(symbol).expiry_date) - 1,
                 )
                 valid_until = expires if valid_until is None else min(valid_until, expires)
