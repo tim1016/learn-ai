@@ -21,8 +21,9 @@ Formula: admits = need <= free budget and need <= account headroom;
   A refusal is bound by a limit that makes it, short by what that limit must
   cover (the budget covers the entry; at a Deploy the account funds the
   entry and the whole budget set aside), the one short by more when two
-  refuse; a figure that covers what it must is never named. Only a pass
-  names the limit with the least room, which Alpaca's own figure can be.
+  refuse; a figure that covers what it must is never named. Only an entry no
+  limit refuses names the limit with the least room, which Alpaca's own
+  figure can be.
   A figure is stale when its reading is older than ``OBSERVATION_MAX_AGE_MS``;
   one that cannot be worked out is unknown, never zero and never a pass.
   A refusal that a known limit already makes does not wait on an unknown one.
@@ -188,8 +189,9 @@ class FundingAnswer:
     """Whether the bot can fund the entry, by which limit, and the words for it.
 
     ``admits`` is the Clerk's own rule and is ``None`` when there is no need
-    or a limit it depends on is not known. ``binding`` is the limit that makes
-    a refusal, and for a pass the known limit with the least room.
+    or a limit it depends on is not known. ``binding`` is the limit that
+    refuses the entry when one does, and otherwise the known limit with the
+    least room.
     ``shortfall_cents`` and ``fits`` are ``None`` when they cannot be said.
     ``action`` is given only where it is known to work.
     ``fits_sentence`` says ``fits`` with the caveat that every bot draws on
@@ -249,7 +251,7 @@ def funding_answer(
             )
         room = _Room(_known_cents(free), _known_cents(headroom), _known_cents(broker))
         admits = _admits(room, need)
-        binding = _bound_by(room, need, admits)
+        binding = _bound_by(room, need)
         shortfall, fits = _shortfall_and_fits(need, admits is not None, binding)
         name = None if binding is None else binding[0]
         return FundingAnswer(
@@ -302,7 +304,7 @@ def deploy_funding_answer(
         broker = _aged(broker_buying_power, now_ms=now_ms)
         room = _Room(_known_cents(free), _known_cents(headroom), _known_cents(broker))
         admits = _admits(room, need, set_aside=amount_cents)
-        binding = _bound_by(room, need, admits, set_aside=amount_cents)
+        binding = _bound_by(room, need, set_aside=amount_cents)
         # An untyped budget is no missing reading: the account's own figures still say what fits.
         judged = admits is not None or (amount_cents is None and (account is None or room.headroom is not None))
         shortfall, fits = _shortfall_and_fits(need, judged, binding, set_aside=amount_cents)
@@ -539,16 +541,14 @@ def _refusing_limit(room: _Room, need: EntryNeed | None, *, set_aside: int | Non
     return name, cents
 
 
-def _bound_by(
-    room: _Room, need: EntryNeed | None, admits: bool | None, *, set_aside: int | None = None,
-) -> tuple[LimitName, int] | None:
-    """The limit an answer is bound by: for a refusal the one that makes it, for a pass the one with the least room.
+def _bound_by(room: _Room, need: EntryNeed | None, *, set_aside: int | None = None) -> tuple[LimitName, int] | None:
+    """The limit an answer is bound by: the one that refuses the entry when one does, else the one with the least room.
 
     Alpaca's own figure never refuses, so when our own limit does and the
-    broker's has the least room, it is not the one named.
+    broker's has the least room, it is not the one named. A refusal is exactly
+    what ``_admits`` reports as ``False``, so this needs no verdict handed in.
     """
-    refusing = _refusing_limit(room, need, set_aside=set_aside) if admits is False else None
-    return refusing or room.binding()
+    return _refusing_limit(room, need, set_aside=set_aside) or room.binding()
 
 
 def _admits(room: _Room, need: EntryNeed | None, *, set_aside: int | None = None) -> bool | None:
