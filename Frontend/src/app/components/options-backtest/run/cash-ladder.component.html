@@ -1,0 +1,37 @@
+<section class="ladder-block" aria-label="Cash ladder">
+  <h3>Cash ladder</h3>
+  @if (levels(); as rows) {
+    <p class="sentence">
+      The run replayed at several starting cashes, at the setup’s own slippage. It shows how many entries a smaller cash refuses and a larger one fills.
+      No level is called safe.
+    </p>
+    <div class="table-wrap">
+      <table class="ladder">
+        <caption class="sr-only">The run replayed at each starting cash</caption>
+        <thead>
+          <tr>
+            <th scope="col">Starting cash</th><th scope="col" class="num">Entries filled</th><th scope="col" class="num">Entries refused for cash</th>
+            <th scope="col" class="num">Net profit</th><th scope="col" class="num">Funded through</th><th scope="col">Ended by</th>
+            <th scope="col" class="num">Cash this path needed</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (level of rows; track level.starting_cash_usd) {
+            @let capital = level.capital_evidence;
+            <tr [class.own]="level.is_setups_own">
+              <th scope="row">{{ level.starting_cash_usd | authoredUsd }}@if (level.is_setups_own) { <span class="tag">setup’s own cash</span> }</th>
+              <td class="num">{{ level.entries_filled }}</td>
+              <td class="num">{{ level.entries_refused_for_cash }}</td>
+              <td class="num">{{ level.net_profit_usd | authoredUsd }}</td>
+              <td class="num">{{ capital.sessions_funded_continuously }} of {{ capital.sessions_tested }}</td>
+              <td>@if (capital.ended_by; as ended) { {{ eventLabel(ended.kind) }} } @else { nothing }</td>
+              <td class="num">{{ capital.cash_needed_usd | authoredUsd }}@if (capital.cash_needed_is_incomplete) { <span class="tag">incomplete</span> }</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  } @else {
+    <p class="note">Not recorded. This run was saved before the cash ladder was kept.</p>
+  }
+</section>

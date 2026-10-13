@@ -1843,6 +1843,36 @@ backtest still stands (Option structures).
   after, the assignment obligation after (sold contracts times strike times
   multiplier, gross, not a loss), and whether it bought back a sold leg while a
   bought contract of that kind and expiry stayed held.
+- **Capital evidence** — a verdict kept apart from a run's totals, which keep every
+  session at its mark: how far the cash provably carried the run. It says the run
+  was **funded continuously through session N of M** and what ended it, and it
+  gives five figures, each on its own and none standing in for another: the most
+  collateral held; **the cash this path needed** (the largest collateral held less
+  the cash that had come in or gone out by then, over the stretch before the
+  event, and never less than zero); the least free cash seen, below zero
+  included; the largest assignment obligation held; and the closes that **relied
+  on their own relief** (a buy-back of a sold leg, its cover held, that cost more
+  than the free cash before it: Alpaca may refuse such an order). The cash this
+  path needed is true of this recorded path only and is marked **incomplete** when
+  an entry before the event was refused for cash; it is never a minimum or a safe
+  amount. The drawdown stays marked equity's at the ends of sessions. A run
+  carries the rules it was made under (the version of the replay's rules and the
+  requirement rule, with the day its page was read), which are today's and no
+  evidence of what a broker required on a session's date. A run saved before
+  capital evidence reads "not recorded", and its figures are as they were.
+- **Capital-invalid event** — the first thing that ends capital evidence: a closing
+  group that left the cash below the collateral held (an **unfunded** close), or a
+  session that ended with a position marked and not closed, since the money a
+  mark returns is not cash a trade produced. A closing group is **funded** when
+  the cash after it is not less than the collateral after it. Sessions after the
+  event still ran, on the assumption that the position was settled at its mark,
+  and are not continuously funded. A close that relied on its own relief is
+  counted and ends nothing.
+- **Cash ladder** — the run replayed at several starting cashes (half the setup's,
+  the same, double and four times by default) at the setup's own slippage, each
+  level carrying its own cash. A level shows its starting cash, the entries it
+  filled and had refused for cash, its net profit and its capital evidence. The
+  level at the setup's own cash is the run. No level is called safe.
 - **Entry time, exit time** — the minutes at which a setup's rules start and stop
   being read. Each is stored as a distance after the open or before the close (its
   **anchor**), so a half day keeps the distance. The entry time is when each leg's

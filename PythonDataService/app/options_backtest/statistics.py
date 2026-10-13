@@ -21,6 +21,10 @@ Validated against: tests/options_backtest/test_statistics.py and tests/options_b
 Everything is exact ``Decimal`` dollars and whole counts; nothing is a float. A rate is a ``Ratio`` of two numbers and
 nothing is rounded: ``rounded_to_6_places`` gives the one rounded figure for display, half-even, and says so in its
 name. The drawdown is measured on the equity at the end of each session, and not inside a day.
+
+What the cash could carry is a verdict apart from these totals, which keep every session at its mark. The capital
+evidence, the cash ladder and the stamps a run carries beside them come from ``capital_evidence.py``,
+``cash_ladder.py`` and ``run_stamps.py``: ``summarize_run`` leaves them unrecorded, and no figure here depends on them.
 """
 
 from __future__ import annotations
@@ -34,8 +38,11 @@ from fractions import Fraction
 from typing import Literal
 
 from app.options_backtest import fills
+from app.options_backtest.capital_evidence import CapitalEvidence
+from app.options_backtest.cash_ladder import CashLevel
 from app.options_backtest.market import PickRefusal
 from app.options_backtest.results import EventKind, ExitReason, Fill, LegTrade, SessionStatus, SkipReason
+from app.options_backtest.run_stamps import RunStamps
 from app.options_backtest.session_result import SessionResult
 
 _PLACES = 6
@@ -189,6 +196,11 @@ class RunSummary:
     # --- tables
     by_day: tuple[DayRow, ...]
     by_month: tuple[MonthRow, ...]
+    # --- whether the cash could have carried the run (#3108), apart from every figure above, which it never changes.
+    # None reads "not recorded": the run was stored before they were, or this summary was made without them.
+    capital_evidence: CapitalEvidence | None = None
+    cash_ladder: tuple[CashLevel, ...] | None = None
+    stamps: RunStamps | None = None
 
 
 def _counts[E: StrEnum](members: type[E], seen: Iterable[E]) -> tuple[tuple[E, int], ...]:
