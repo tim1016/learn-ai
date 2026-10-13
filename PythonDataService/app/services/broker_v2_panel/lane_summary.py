@@ -347,7 +347,13 @@ def _episode_item(
         if uncertainty.reason_code == STREAM_HEALTH_HOLD_REASON_CODE
         else uncertainty.headline
     )
-    if under_reserved is not None and uncertainty.strategy_instance_id is not None:
+    # Only the shortfall's own episode is worded for the account. The bot's other episodes (an exit that has
+    # not flattened, an order of unknown outcome) keep their own headline, kind and fix.
+    if (
+        under_reserved is not None
+        and uncertainty.reason_code == OPTION_BUYING_POWER_UNDER_RESERVED_REASON_CODE
+        and uncertainty.strategy_instance_id is not None
+    ):
         headline = _under_reserved_headline(uncertainty.strategy_instance_id, under_reserved)
     return LaneAttentionItem(
         condition_id=uncertainty.uncertainty_id,

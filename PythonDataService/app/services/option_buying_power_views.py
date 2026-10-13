@@ -51,11 +51,12 @@ _NEWEST_ENTRIES_SQL = (
     "CROSS JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
     f"WHERE {_IS_AN_OPTION_ENTRY_OF_A_BOT_SQL} ORDER BY o.submitted_at_ms DESC, o.order_ref DESC LIMIT ?"
 )
-# All of them counted in one read, by whether each has a record and, when it has, the reason it records. One
-# comparison is recorded for an effect operation (``entry_buying_power`` guards it), so the join adds no row.
-# A record that is not JSON, or names a reason this build does not, is counted and never raised on.
+# All of them counted in one read, by whether each has a record and, when it has, the result and the reason
+# it records. One comparison is recorded for an effect operation (``entry_buying_power`` guards it), so the join
+# adds no row. What a record says is judged in ``_counts``, and a record that is not JSON is read as saying nothing.
 _COUNTS_SQL = (
-    "SELECT t.sequence IS NULL AS unrecorded, json_valid(t.facts_json) AS readable, "
+    "SELECT t.sequence IS NULL AS unrecorded, "
+    "CASE WHEN json_valid(t.facts_json) THEN json_extract(t.facts_json, '$.result') END AS result, "
     "CASE WHEN json_valid(t.facts_json) THEN json_extract(t.facts_json, '$.reason_code') END AS reason_code, "
     "COUNT(*) AS entries FROM orders o "
     "CROSS JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
@@ -63,6 +64,9 @@ _COUNTS_SQL = (
     f"WHERE {_IS_AN_OPTION_ENTRY_OF_A_BOT_SQL} GROUP BY 1, 2, 3"
 )
 _REASONS_BY_CODE = {reason.value: reason for reason in NotComparedReason}
+_JUDGED_RESULTS = frozenset(
+    result.value for result in BuyingPowerCheckResult if result is not BuyingPowerCheckResult.UNKNOWN
+)
 
 RESULT_LABELS: dict[BuyingPowerCheckResult, str] = {
     BuyingPowerCheckResult.CONSISTENT: "Consistent",
@@ -194,24 +198,30 @@ def option_buying_power_checks(
 def _counts(grouped: list[sqlite3.Row], *, simulation: bool) -> OptionBuyingPowerCounts:
     """How many entries came to a result and, for the rest, why not, from ``_COUNTS_SQL``'s groups.
 
-    An entry with no record counts as not made yet. A record this build
-    cannot read, or whose reason it does not name, counts as a failed
-    comparison: it is told apart from agreement and the page still serves.
+    An entry with no record counts as not made yet. A record counts as
+    compared only when it says what ``EntryBuyingPowerComparedFacts`` accepts:
+    one of the three results that were judged with no reason, or ``unknown``
+    with a reason this build names. Anything else it says (``{}``, an
+    ``unknown`` with no reason, an agreeing result carrying a reason, a
+    reason this build does not name, text that is not JSON) counts as a
+    failed comparison: it is told apart from agreement and the page still
+    serves.
     """
     unmade = NotComparedReason.SIMULATION if simulation else NotComparedReason.NOT_COMPARED_YET
     reasons: Counter[NotComparedReason] = Counter()
-    total = 0
+    total = compared = 0
     for group in grouped:
-        entries = group["entries"]
+        entries, result, code = group["entries"], group["result"], group["reason_code"]
         total += entries
         if group["unrecorded"]:
             reasons[unmade] += entries
-        elif not group["readable"]:
+        elif result in _JUDGED_RESULTS and code is None:
+            compared += entries
+        elif result == BuyingPowerCheckResult.UNKNOWN.value and code in _REASONS_BY_CODE:
+            reasons[_REASONS_BY_CODE[code]] += entries
+        else:
             reasons[NotComparedReason.COMPARISON_FAILED] += entries
-        elif group["reason_code"] is not None:
-            reasons[_REASONS_BY_CODE.get(group["reason_code"], NotComparedReason.COMPARISON_FAILED)] += entries
     not_compared = sum(reasons.values())
-    compared = total - not_compared
     return OptionBuyingPowerCounts(
         entries=total,
         compared=compared,

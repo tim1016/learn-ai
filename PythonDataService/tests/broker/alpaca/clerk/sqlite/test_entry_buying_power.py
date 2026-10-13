@@ -14,6 +14,7 @@ cents of fees.
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import replace
 from decimal import Decimal
@@ -44,8 +45,12 @@ from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryStanding
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import FACTS_SCHEMA_VERSION, EntryBuyingPowerComparedFacts
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
-from app.broker.alpaca.clerk.sqlite.uncertainty import admit_new_exposure
-from app.broker.alpaca.clerk.sqlite.uncertainty_causes import OPTION_BUYING_POWER_UNDER_RESERVED_REASON_CODE
+from app.broker.alpaca.clerk.sqlite.uncertainty import admit_new_exposure, raise_uncertainty
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    EXIT_NOT_FLAT_REASON_CODE,
+    OPTION_BUYING_POWER_UNDER_RESERVED_REASON_CODE,
+    ExitNotFlatCause,
+)
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerPosition
 from app.broker.contract.options import BrokerOptionAccountSnapshot
@@ -1121,6 +1126,54 @@ async def test_an_old_record_this_build_cannot_name_does_not_stop_the_page_and_i
     }
 
 
+def test_a_record_that_says_nothing_this_build_accepts_is_counted_as_a_failed_comparison_not_a_compared_one() -> None:
+    """The counts read each record's text in SQL, so what a record says is judged here as the record's own type does."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        "CREATE TABLE orders (order_ref TEXT PRIMARY KEY, effect_operation_id TEXT, role TEXT, submitted_at_ms INTEGER);"
+        "CREATE TABLE effect_operations (effect_operation_id TEXT PRIMARY KEY, strategy_instance_id TEXT);"
+        "CREATE TABLE order_contracts (order_ref TEXT);"
+        "CREATE TABLE option_order_legs (order_ref TEXT, parent_order_ref TEXT);"
+        "CREATE TABLE custody_transitions ("
+        "sequence INTEGER PRIMARY KEY, effect_operation_id TEXT, transition_kind TEXT, facts_json TEXT);"
+    )
+    recorded = [
+        # What the Clerk writes, and what the counts take as compared.
+        '{"result":"consistent","reason_code":null}',
+        '{"result":"over_reserved","reason_code":null}',
+        '{"result":"under_reserved_unexplained","reason_code":null}',
+        # An entry that was not compared, for a reason this build names.
+        '{"result":"unknown","reason_code":"CASH_MOVED"}',
+        # Valid JSON that is not a comparison this build can read.
+        "{}",
+        '{"reason_code":"CASH_MOVED"}',
+        '{"result":"unknown","reason_code":null}',
+        '{"result":"consistent","reason_code":"CASH_MOVED"}',
+        '{"result":"unknown","reason_code":"A_REASON_RETIRED_SINCE"}',
+        '{"result":"fine","reason_code":null}',
+        "not json at all",
+    ]
+    for number, facts_json in enumerate([*recorded, None]):
+        conn.execute("INSERT INTO effect_operations VALUES (?, 'a')", (f"effect-{number}",))
+        conn.execute("INSERT INTO orders VALUES (?, ?, 'ENTRY', ?)", (f"order-{number}", f"effect-{number}", number))
+        conn.execute("INSERT INTO order_contracts VALUES (?)", (f"order-{number}",))
+        if facts_json is not None:
+            conn.execute(
+                "INSERT INTO custody_transitions (effect_operation_id, transition_kind, facts_json) VALUES (?, ?, ?)",
+                (f"effect-{number}", COMPARED_KIND, facts_json),
+            )
+
+    counts = option_buying_power_views._counts(
+        conn.execute(option_buying_power_views._COUNTS_SQL, (COMPARED_KIND, "a")).fetchall(), simulation=False
+    )
+
+    assert (counts.entries, counts.compared, counts.not_compared) == (12, 3, 9)
+    assert {(reason.reason_code, reason.count) for reason in counts.not_compared_by_reason} == {
+        ("COMPARISON_FAILED", 7), ("CASH_MOVED", 1), ("NOT_COMPARED_YET", 1),
+    }
+
+
 def test_the_counts_are_one_read_that_reaches_the_log_by_each_entrys_effect_and_never_scans_it(paper: Paper) -> None:
     with paper.repo.write_fence() as conn:
         plan = [
@@ -1189,6 +1242,40 @@ async def test_a_standing_shortfall_is_one_line_for_the_account_and_blocks_no_ot
     # And the line ends with the owner's review, as the notice does.
     assert await paper.clerk.review_option_buying_power_hold("a", operator="owner") is True
     assert [item for item in (await lane_summary.lane_attention_read()).items if item.reason_code == HOLD] == []
+
+
+@pytest.mark.usefixtures("judged")
+async def test_a_bots_other_episodes_keep_their_own_headline_kind_and_fix_beside_its_shortfall_line(
+    paper: Paper, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    order_ref = await paper.filled(shows="99750.00")
+    await paper.compared(order_ref)
+    # The same bot has a second episode of its own: an exit that left shares it is still attributed.
+    raise_uncertainty(
+        paper.repo,
+        strategy_instance_id="a",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        headline="A completed EXIT left attributed exposure",
+        explanation="The closing order ended without flattening the position.",
+        operator_impact="New exposure is paused for this strategy.",
+        next_step="Flatten the position, or discharge it if Alpaca does not hold it.",
+        evidence_refs=("exit-evidence",),
+        cause_facts=ExitNotFlatCause(symbol="SPY", attributed_qty=1.0).to_mapping(),
+        severity="error",
+    )
+    monkeypatch.setattr(lane_summary, "get_active_clerk_runtime", lambda: SimpleNamespace(
+        sqlite_repository=paper.repo, clerk=None, startup_failure=None, selected_account_authority_kind="real_paper",
+    ))
+
+    items = (await lane_summary.lane_attention_read()).items
+
+    [shortfall] = [item for item in items if item.reason_code == HOLD]
+    [exit_line] = [item for item in items if item.reason_code == EXIT_NOT_FLAT_REASON_CODE]
+    # The shortfall is worded for the account; the exit is still its own problem, with its own fix.
+    assert "same rule prices every option bot" in shortfall.headline
+    assert (exit_line.strategy_instance_id, exit_line.kind, exit_line.action.destination) == ("a", "exit", "bot")
+    assert exit_line.headline == "A completed EXIT left attributed exposure"
+    assert "option buying power" not in exit_line.headline
 
 
 @pytest.mark.usefixtures("judged")

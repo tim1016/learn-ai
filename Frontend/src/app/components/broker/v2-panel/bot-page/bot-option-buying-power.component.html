@@ -73,7 +73,16 @@
                 </div>
               }
               @if (check.fall; as fall) {
-                <div><dt>Change in the figure</dt><dd>{{ money(fall.dollars) }}</dd></div>
+                <!-- The fall is the reading before less the reading after: negative when the figure rose. -->
+                <div>
+                  <dt>Fall in option buying power</dt>
+                  <dd>
+                    {{ money(fall.dollars) }}
+                    @if (fall.cents < 0) {
+                      <span class="obp__note">it rose</span>
+                    }
+                  </dd>
+                </div>
               }
               @if (check.account_requirement_before; as before) {
                 @if (check.account_requirement_after; as after) {
@@ -82,7 +91,7 @@
                     <dd>
                       {{ money(before.dollars) }} to {{ money(after.dollars) }}
                       @if (check.account_requirement_change; as change) {
-                        <span class="obp__note">({{ money(change.dollars) }})</span>
+                        <span class="obp__note">change {{ money(change.dollars) }}</span>
                       }
                     </dd>
                   </div>

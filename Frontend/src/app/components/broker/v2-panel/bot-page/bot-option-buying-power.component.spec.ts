@@ -174,11 +174,33 @@ describe('BotOptionBuyingPowerComponent (#3098)', () => {
     expect(figure(compared, 'Set aside for the entry')).toBe('$194.06');
     expect(figure(compared, 'Option buying power before')).toContain('$100000.00');
     expect(figure(compared, 'Option buying power after')).toContain('$99806.00');
-    expect(figure(compared, 'Change in the figure')).toBe('$194.00');
-    expect(figure(compared, 'Account requirement')).toBe('$0.00 to $500.00 ($500.00)');
+    // The fall is the reading before less the reading after, said as a fall: $100,000.00 to $99,806.00.
+    expect(figure(compared, 'Fall in option buying power')).toBe('$194.00');
+    expect(figure(compared, 'Account requirement')).toBe('$0.00 to $500.00 change $500.00');
     // Each reading carries the time it was read.
     expect(compared.querySelectorAll('app-timestamp-display').length).toBe(2);
     expect(within(compared).getByText(CONSISTENT.account_requirement_sentence)).toBeTruthy();
+  });
+
+  it('says a figure that rose rose, and a requirement the entry released as a negative change', async () => {
+    const rose: OptionBuyingPowerCheck = {
+      ...CONSISTENT,
+      order_ref: 'order-rose',
+      result: 'over_reserved',
+      result_label: 'Over-reserved',
+      fall: amount(-5_000),
+      account_requirement_before: amount(100_000),
+      account_requirement_after: amount(0),
+      account_requirement_change: amount(-100_000),
+    };
+    await renderCard(page({ checks: [rose] }));
+
+    const entry = within(await screen.findByRole('list', { name: 'Option entries, newest first' }))
+      .getAllByRole('listitem')[0];
+
+    // The label says fall, so a negative fall is told as the figure having risen.
+    expect(figure(entry, 'Fall in option buying power')).toBe('-$50.00 it rose');
+    expect(figure(entry, 'Account requirement')).toBe('$1000.00 to $0.00 change -$1000.00');
   });
 
   it('says only the newest entries are listed when the counts cover more', async () => {
