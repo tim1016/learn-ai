@@ -13,6 +13,7 @@ stand-ins. Nothing is sent to a broker.
 
 from __future__ import annotations
 
+import itertools
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -137,6 +138,8 @@ class _Alpaca:
     account_error: Exception | None = None
     listing_error: Exception | None = None
     asked: list[str] = field(default_factory=list)
+    # How long before the review its account answer is stamped as read: zero is just now.
+    read_ms_ago: int = 0
 
     async def get_option_account(self) -> BrokerOptionAccountSnapshot:
         self.asked.append("account")
@@ -145,7 +148,9 @@ class _Alpaca:
         approved = self.level if self.approved_level == _AS_IN_FORCE else self.approved_level
         return BrokerOptionAccountSnapshot(
             broker="alpaca", account_id=ACCT, account_mode="paper", options_buying_power=self.buying_power,
-            options_approved_level=approved, options_trading_level=self.level, observed_at_ms=1,
+            options_approved_level=approved, options_trading_level=self.level,
+            # On the clock the review judges its age by: just now unless a test says it was read earlier.
+            observed_at_ms=option_deploy.now_ms_utc() - self.read_ms_ago,
         )
 
     async def get_option_contract(self, contract: OptionContract) -> Any:
@@ -552,7 +557,9 @@ async def _review(app, floor: _Floor, monkeypatch: pytest.MonkeyPatch, **changes
     """The review of an option Deploy once its quotes have arrived, and the price its budget was judged by."""
     priced: list[Any] = []
 
-    def reviewed(account_id: str, request: AlpacaPaperDeployRequest, *, resolved_parameters: dict, option_entry: Any):
+    def reviewed(
+        account_id: str, request: AlpacaPaperDeployRequest, *, resolved_parameters: dict, option_entry: Any, **_more: Any
+    ):
         priced.append(option_entry)
         return DeploymentBudgetPreview(state="ready", detail="Ready", world="real_paper", custody_account_id=ACCT)
 
@@ -657,6 +664,47 @@ async def test_option_buying_power_short_of_one_entry_stops_a_paper_deploy_with_
     [blocker] = seen["option_review"]["blockers"]
     assert blocker["gate_id"] == option_deploy.BUYING_POWER_SHORT
     assert "$500.00" in blocker["headline"] and "$824." in blocker["headline"]
+
+
+async def test_a_buying_power_reading_taken_during_the_review_is_judged_after_it_was_taken(
+    deploy_app, floor: _Floor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Alpaca stamps its answer when it was read, which is after the review began. A clock read before the
+    answer arrived would date it ahead and call it stale, so a short figure would never stop a Deploy."""
+    app, _registry = deploy_app
+    ticks = itertools.count(1_790_000_000_000, 7)
+    monkeypatch.setattr(option_deploy, "now_ms_utc", lambda: next(ticks))
+    floor.alpaca.buying_power = Decimal("500")
+
+    seen, _price = await _review(app, floor, monkeypatch, execution_mode="paper")
+
+    [blocker] = seen["option_review"]["blockers"]
+    assert blocker["gate_id"] == option_deploy.BUYING_POWER_SHORT
+
+
+async def test_a_deploy_that_buying_power_stops_still_shows_the_budget_row_and_says_why_the_rest_has_none(
+    deploy_app, floor: _Floor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing is priced for a Deploy that something stops, and no consent rests on its rows. What the budget has
+    left after one entry does not need the account, so it is shown; what does is unknown, and says why."""
+    app, _registry = deploy_app
+    floor.alpaca.buying_power = Decimal("500")
+
+    seen, price = await _review(
+        app, floor, monkeypatch, execution_mode="paper", budget={"amount_usd": "1000.00", "risk_revision": 0},
+    )
+
+    review = seen["option_review"]
+    rows = {row["key"]: row for row in review["money_rows"]}
+    assert [blocker["gate_id"] for blocker in review["blockers"]] == [option_deploy.BUYING_POWER_SHORT]
+    assert price.commitment_cents is None, "no price, so no consent rests on the rows"
+    assert (rows["budget_free"]["amount_cents"], rows["budget_free"]["state"]) == (
+        100_000 - rows["set_aside"]["amount_cents"], "known",
+    )
+    for key in ("incremental_requirement", "headroom_left"):
+        assert (rows[key]["amount_cents"], rows[key]["amount_usd"], rows[key]["state"]) == (None, None, "unknown")
+        assert rows[key]["note"], f"{key} says why it has no figure"
+    assert (review["fits"], review["fits_sentence"]) == (None, None)
 
 
 async def test_buying_power_alpaca_did_not_report_is_a_note_and_stops_nothing(

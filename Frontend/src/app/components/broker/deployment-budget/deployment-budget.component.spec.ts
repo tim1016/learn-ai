@@ -75,6 +75,8 @@ const FUNDING_PASSES: FundingView = {
   ] },
   need: { commitment_usd: '400.00', terms: [{ label: 'Shares at the ask', amount_usd: '399.99' }, { label: 'Fee provision', amount_usd: '0.01' }] },
   admits: true, binding: 'bot_budget', shortfall_usd: null, fits: 2, action: null,
+  fits_sentence: "2 whole entries fit right now under the bot's budget, the limit with the least room. "
+    + 'Every bot competes for the same account headroom, so these counts are never added up across bots.',
   sentence: 'This bot has $1,000.00 free and the account can fund $1,000.00 after protecting other positions, '
     + "enough for the entry's $400.00 including its fee provision. "
     + 'Passing our own limits does not guarantee that Alpaca accepts the order.',
@@ -393,6 +395,8 @@ describe("This bot's money", () => {
 
     await screen.findByText('Ready for its next entry');
     expect(occurrences(FUNDING_PASSES.sentence)).toBe(1);
+    // How many fit comes with the caveat that every bot draws on the same headroom, said once (#3099).
+    expect(occurrences(FUNDING_PASSES.fits_sentence ?? '')).toBe(1);
     expect(screen.getByText(/Order-time strategy, session and execution checks still apply\./)).toBeTruthy();
     expect(limitRows().map((row) => [row.label, row.mark])).toEqual([
       ['Free budget', 'least room'],

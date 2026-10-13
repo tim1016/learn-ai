@@ -14,7 +14,8 @@ import logging
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Literal
+from functools import partial
+from typing import Any, Literal
 
 import asyncpg
 
@@ -25,7 +26,6 @@ from app.broker.alpaca.clerk.active_authority import (
     primary_custody_world,
 )
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
-from app.broker.alpaca.clerk.money import consent_cents
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
 from app.broker.alpaca.clerk.sqlite.runtime import StrategyRegistrationConflictError
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
@@ -322,10 +322,14 @@ async def preview_alpaca_deployment_budget(
         # The structure is judged and priced first: an option entry has no
         # top of book, so the budget is reviewed against what the structure
         # preview says one entry sets aside (ADR 0076 decision 24).
-        amount = None if request.budget is None else consent_cents(request.budget.amount_usd)
-        option_review, option_entry = await option_deploy.review_for(broker, account_id, request, budget_cents=amount)
+        option_review, option_entry = await option_deploy.review_for(broker, account_id, request)
     try:
-        preview = _priced(budget_deploy.preview_budget, account_id, request, resolved.effective, option_entry)
+        # The money review completes the option review with the funding answer it judged the budget by, so the
+        # two show the same figures (#3099). A review it could not complete is the structure's own.
+        complete = {} if option_review is None else {
+            "complete_option_review": partial(option_deploy.with_account, option_review),
+        }
+        preview = _priced(budget_deploy.preview_budget, account_id, request, resolved.effective, option_entry, **complete)
         same_symbol_note = await asyncio.to_thread(budget_deploy.same_symbol_note, account_id, request)
     except BudgetUnavailable as exc:
         raise budget_deploy.budget_error(exc) from exc
@@ -333,7 +337,7 @@ async def preview_alpaca_deployment_budget(
         "same_symbol_note": same_symbol_note,
         "traded_asset_warning": _untested_traded_asset_warning(request),
         "trades_summary": _trades_summary(request),
-        "option_review": option_review,
+        "option_review": option_review if preview.option_review is None else preview.option_review,
     })
 
 
@@ -824,15 +828,19 @@ def _priced[Reviewed](
     request: AlpacaPaperDeployRequest,
     resolved_parameters: dict,
     option_entry: budget_deploy.OptionEntryPrice | None,
+    **option_arguments: Any,
 ) -> Reviewed:
     """Ask the money review, or the consent that stands on it, with the price of an option entry when there is one.
 
     A bot in shares is asked about exactly as it was before an option entry
-    had a price: no new argument.
+    had a price: no new argument. ``option_arguments`` are what only the
+    review of an option bot is handed beside its price.
     """
     if option_entry is None:
         return reviewed(account_id, request, resolved_parameters=resolved_parameters)
-    return reviewed(account_id, request, resolved_parameters=resolved_parameters, option_entry=option_entry)
+    return reviewed(
+        account_id, request, resolved_parameters=resolved_parameters, option_entry=option_entry, **option_arguments
+    )
 
 
 def _owner_parameters(binding: BrokerBotBinding) -> dict[str, object]:

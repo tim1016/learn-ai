@@ -81,6 +81,15 @@
     }
   </div>
 
+  @if (funding(); as answer) {
+    <app-funding-answer
+      [funding]="answer"
+      [showSentence]="sentenceHere()"
+      [showFits]="!fitsInTheReview()"
+      shortfallLabel="Short by"
+    />
+  }
+
   @if (readyFacts(); as view) {
     <div class="money-step__shortcuts" role="group" aria-label="Budget shortcuts">
       @for (shortcut of view.shortcuts; track shortcut.key) {

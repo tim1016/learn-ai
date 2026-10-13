@@ -10,7 +10,7 @@ import asyncio
 import logging
 import math
 import sqlite3
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from decimal import Decimal
@@ -35,7 +35,15 @@ from app.broker.alpaca.clerk.budgets import (
     DeploymentBudget,
     entry_requirement,
 )
-from app.broker.alpaca.clerk.funding import EntryNeed, Figure, FundingAnswer, funding_answer
+from app.broker.alpaca.clerk.funding import (
+    EntryNeed,
+    Figure,
+    FundingAnswer,
+    RequirementEffect,
+    deploy_funding_answer,
+    funding_answer,
+    requirement_effect,
+)
 from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_UNOBSERVED, AccountObservation
 from app.broker.alpaca.clerk.money import (
     MoneyInputError,
@@ -51,6 +59,7 @@ from app.broker.alpaca.clerk.money import (
 )
 from app.broker.alpaca.clerk.option_effects import is_option_plan
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
+from app.broker.alpaca.clerk.sqlite.account_option_requirement import held_signed_contracts, with_contracts
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy
 from app.broker.alpaca.clerk.sqlite.day_pnl import observed_day_pnl
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -60,6 +69,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import admit_new_exposure
 from app.broker.alpaca.regulatory_fees import RateNotPinnedError
 from app.broker_configuration.runtime import get_broker_configuration_service
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
+from app.options.requirement import ContractAtMultiplier, incremental_account_requirement
 from app.schemas.account_authority import AuthorityKind
 from app.schemas.action_plan import ActionPlan, traded_instrument
 from app.schemas.broker_bots import AlpacaPaperDeployRequest
@@ -76,6 +86,7 @@ from app.schemas.deployment_budget import (
     MoneySegment,
 )
 from app.schemas.exit_terms import ExitTerms
+from app.schemas.option_deploy import OptionDeployReview
 from app.services.broker_v2_panel.bot_custody import bot_clerk_runtime
 from app.services.broker_v2_panel.deploy_submissions import DeploySubmission, bot_name_note
 from app.services.broker_v2_panel.exit_estimate_read import exit_estimate_view, read_exit_estimate, read_quotes_ahead
@@ -148,6 +159,19 @@ class OptionEntryPrice:
     waiting: bool
     # Why there is no price, in a sentence. Empty with one.
     detail: str
+    # The fee provision inside the commitment, and the requirement of the entry's own legs (the part that nets).
+    fee_provision_cents: int = 0
+    requirement_cents: int = 0
+    # The contracts one entry holds once filled, as signed whole contracts at the multiplier the listing carries:
+    # bought above zero (#3099).
+    picked: tuple[tuple[ContractAtMultiplier, int], ...] = ()
+    # Alpaca's option buying power as it was read for this review, with the time it was read. None where the
+    # bot has none to compare with (a Dry Run).
+    broker_buying_power: Figure | None = None
+
+
+# Completes the structure's review with the account's side: the funding answer, and the requirement change.
+OptionReviewCompleter = Callable[[FundingAnswer | None, RequirementEffect | None], OptionDeployReview]
 
 
 def preview_budget(
@@ -156,8 +180,14 @@ def preview_budget(
     *,
     resolved_parameters: dict,
     option_entry: OptionEntryPrice | None = None,
+    complete_option_review: OptionReviewCompleter | None = None,
 ) -> DeploymentBudgetPreview:
-    """The money review of one Deploy. ``option_entry`` prices a bot that trades option contracts, and only it."""
+    """The money review of one Deploy. ``option_entry`` prices a bot that trades option contracts, and only it.
+
+    ``complete_option_review`` is handed the one funding answer this review
+    judged the budget by, and what the entry does to the account's
+    requirement, so the option review beside it shows the same figures (#3099).
+    """
     runtime = _primary(account_id)
     world, custody_id = _request_world(runtime, request)
     name_note = bot_name_note(request.symbol, request.strategy_key)
@@ -171,6 +201,7 @@ def preview_budget(
             return _priced_preview(
                 runtime, account_id, request, _option_price(option_entry), world=world, custody_id=custody_id,
                 name_note=name_note, resolved_parameters=resolved_parameters,
+                complete_option_review=complete_option_review,
             )
         # The entry is priced from the asset it buys, never from the Signal
         # stream's symbol when the two differ (#2912).
@@ -199,10 +230,14 @@ def preview_budget(
                 ),
                 world=world, custody_account_id=custody_id, bot_name_note=name_note,
             )
-        requirement, _ = entry_requirement(quantity=request.sizing.quantity, price=quote.ask, at_ms=now)
+        requirement, fee_cents = entry_requirement(quantity=request.sizing.quantity, price=quote.ask, at_ms=now)
         return _priced_preview(
             runtime, account_id, request,
-            _PricedEntry(requirement=requirement, observed_at_ms=quote.observed_at_ms, estimated_price_usd=recorded_dollars(quote.ask)),
+            _PricedEntry(
+                requirement=requirement, observed_at_ms=quote.observed_at_ms,
+                estimated_price_usd=recorded_dollars(quote.ask),
+                need=EntryNeed.for_shares(requirement=requirement, fee_provision_cents=fee_cents),
+            ),
             world=world, custody_id=custody_id, name_note=name_note, resolved_parameters=resolved_parameters,
         )
     except (BudgetUnavailable, MoneyInputError, RateNotPinnedError) as exc:
@@ -212,12 +247,10 @@ def preview_budget(
 
 
 _STOCK_HEADROOM = "1.2 × the ${minimum} estimated position, including modelled fees. Market fills can cost more."
-_STOCK_TOO_LITTLE = "One estimated position needs at least ${minimum}, including fees."
 _OPTION_HEADROOM = (
     "1.2 × the ${minimum} one entry sets aside right now, including the fee estimate. The bot picks its "
     "contracts again at every entry, and their price moves."
 )
-_OPTION_TOO_LITTLE = "One entry sets aside ${minimum} right now, including the fee estimate. Choose a budget of at least that."
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,8 +262,9 @@ class _PricedEntry:
     observed_at_ms: int
     # The price one share was estimated at. None for option contracts, which have no one price.
     estimated_price_usd: str | None
+    # The same entry in whole cents, with its parts: what the funding answer judges the budget against.
+    need: EntryNeed
     headroom_explanation: str = _STOCK_HEADROOM
-    too_little: str = _STOCK_TOO_LITTLE
 
 
 def _option_price(option_entry: OptionEntryPrice | None) -> OptionEntryPrice:
@@ -249,15 +283,21 @@ def _priced_preview(
     custody_id: str | None,
     name_note: str,
     resolved_parameters: dict,
+    complete_option_review: OptionReviewCompleter | None = None,
 ) -> DeploymentBudgetPreview:
     """The review of a budget against one priced entry: the amount, the shortcuts, the token and the bar.
 
     One body for a bot in shares, priced from its asset's ask, and for a
     bot in option contracts, priced by the structure preview. An option
     entry with no price has no review to consent to: it waits, or says why.
+
+    The amount is judged by ``funding.deploy_funding_answer`` and by nothing
+    else here: the review, the option review beside it and the Clerk's own
+    re-check at the commit read the one rule (#3099).
     """
     repo = runtime.sqlite_repository
     assert repo is not None
+    broker_buying_power: Figure | None = None
     if isinstance(entry, OptionEntryPrice):
         if entry.commitment_cents is None:
             return DeploymentBudgetPreview(
@@ -266,15 +306,22 @@ def _priced_preview(
             )
         priced = _PricedEntry(
             requirement=Decimal(entry.commitment_cents) / 100, observed_at_ms=entry.observed_at_ms,
-            estimated_price_usd=None, headroom_explanation=_OPTION_HEADROOM, too_little=_OPTION_TOO_LITTLE,
+            estimated_price_usd=None, headroom_explanation=_OPTION_HEADROOM,
+            need=EntryNeed.for_options(
+                commitment_cents=entry.commitment_cents, fee_provision_cents=entry.fee_provision_cents,
+            ),
         )
+        broker_buying_power = entry.broker_buying_power
     else:
         priced = entry
-    minimum = cents_required(priced.requirement)
+    minimum = priced.need.commitment_cents
     amount = None if request.budget is None else consent_cents(request.budget.amount_usd)
     # Dry Run never draws on the account's money, so it has no bar.
     money: AccountMoney | None = None
     observation: AccountObservation | None = None
+    # The account's own option holdings, or why they cannot be read. A Dry Run's private account holds nothing yet.
+    holdings: dict[ContractAtMultiplier, int] | None = {}
+    holdings_problem = ""
     if world == "synthetic":
         # Private starting cash is the consent amount, never a copy of
         # parent cash. No real account risk policy is borrowed.
@@ -282,9 +329,14 @@ def _priced_preview(
         observed_at = priced.observed_at_ms
         risk_revision = 0
         risk_summary = "Private simulated starting cash. Real-account daily loss limits and holds do not apply."
+        account = None
+        now_ms = repo.clock()
     else:
-        with repo.write_fence():
-            observation, policy = _account_admission(repo, runtime)
+        with repo.write_fence() as conn:
+            # One instant judges the reading's freshness and, below, the budget by it, so a reading admitted
+            # here is never called stale a moment later.
+            now_ms = repo.clock()
+            observation, policy = _account_admission(repo, runtime, now_ms=now_ms)
             # One read under the fence: the bar's free to deploy IS this
             # preview's unreserved cash, by construction.
             money = _read_account_money(repo, observation)
@@ -294,6 +346,17 @@ def _priced_preview(
             with money_context():
                 percent = normalize_money(policy.loss_fraction) * 100
                 risk_summary = f"Daily loss limit: the smaller of {percent:f}% of prior-close equity and ${recorded_dollars(policy.loss_usd)}. Existing exit terms stay fixed."
+            if isinstance(entry, OptionEntryPrice):
+                try:
+                    holdings = held_signed_contracts(conn)
+                except ValueError as exc:
+                    holdings, holdings_problem = None, str(exc)
+        account = money.budget
+    answer = deploy_funding_answer(
+        account, amount_cents=amount, need=priced.need, broker_buying_power=broker_buying_power,
+        observed_at_ms=now_ms if observation is None else observation.observed_at_ms, now_ms=now_ms,
+        simulated=world == "synthetic",
+    )
     with money_context():
         shortcuts = [DeploymentBudgetShortcut(
             key="position_headroom", label="1.2 × one position",
@@ -308,10 +371,7 @@ def _priced_preview(
     confirmation = None
     refusal = None
     if request.budget is not None and amount is not None:
-        refusal = _amount_refusal(
-                request.budget.risk_revision, amount, risk_revision=risk_revision, minimum=minimum, available=available,
-                too_little=priced.too_little,
-            )
+        refusal = _amount_refusal(request.budget.risk_revision, risk_revision=risk_revision, answer=answer)
     if request.budget is not None and amount is not None and refusal is None:
         registration = _STRATEGY_REGISTRY.get(request.strategy_key)
         contract = None if registration is None else registration.signal_program_contract
@@ -328,6 +388,9 @@ def _priced_preview(
         repo, observation, world=world, account_id=account_id, money=money,
         new_cents=amount if refusal is None else None,
     )
+    option_review = None
+    if complete_option_review is not None and isinstance(entry, OptionEntryPrice):
+        option_review = complete_option_review(answer, _requirement_effect(entry, holdings, holdings_problem))
     return DeploymentBudgetPreview(
         state="ready" if refusal is None else "unavailable",
         detail=refusal or "This is an entry-admission budget. Market fills and losses can exceed it.",
@@ -338,6 +401,36 @@ def _priced_preview(
         risk_limits_summary=risk_summary,
         shortcuts=tuple(shortcuts), review_token=token, confirmation_text=confirmation,
         money_after=money_after,
+        # A Dry Run has no account side until it is told how much cash it starts with.
+        funding=None if world == "synthetic" and amount is None else FundingView.from_answer(answer),
+        option_review=option_review,
+    )
+
+
+def _requirement_effect(
+    entry: OptionEntryPrice, holdings: dict[ContractAtMultiplier, int] | None, problem: str,
+) -> RequirementEffect:
+    """What the entry's contracts do to the account's requirement, or why that cannot be worked out.
+
+    The account's holdings with the picked contracts added count by count
+    (``with_contracts``), valued together by ``incremental_account_requirement``.
+    """
+    as_of_ms = entry.observed_at_ms
+    entry_requirement_cents = entry.requirement_cents
+    if holdings is None:
+        return requirement_effect(
+            before_after_cents=None, why_not=problem, entry_requirement_cents=entry_requirement_cents, as_of_ms=as_of_ms,
+        )
+    try:
+        before_after = incremental_account_requirement(holdings, with_contracts(holdings, dict(entry.picked)))
+    except ValueError as refused:
+        # ``StructureMoneyRefused`` is one: the holdings' loss has no limit, or an amount is not whole cents.
+        return requirement_effect(
+            before_after_cents=None, why_not=str(refused), entry_requirement_cents=entry_requirement_cents,
+            as_of_ms=as_of_ms,
+        )
+    return requirement_effect(
+        before_after_cents=before_after, why_not="", entry_requirement_cents=entry_requirement_cents, as_of_ms=as_of_ms,
     )
 
 
@@ -387,19 +480,22 @@ def same_symbol_note(account_id: str, request: AlpacaPaperDeployRequest) -> str 
     return f"Also traded here by {others[0]}{more}."
 
 
-def _account_admission(repo: ClerkSqliteRepository, runtime: ActiveClerkRuntime) -> tuple[AccountObservation, AccountRiskPolicy]:
-    """What a Deploy on the account's money is admitted against, or why not.
+def _account_admission(
+    repo: ClerkSqliteRepository, runtime: ActiveClerkRuntime, *, now_ms: int,
+) -> tuple[AccountObservation, AccountRiskPolicy]:
+    """What a Deploy on the account's money is admitted against at ``now_ms``, or why not.
 
-    The caller holds the custody fence. ``BudgetUnavailable`` carries the
-    owner-facing reason Deploy refuses on: the one statement the Deploy
-    preview and the account-money read (``deploy_refusal``) both give.
+    The caller holds the custody fence and says the instant, so what it then
+    judges by the same reading is judged at the same moment. ``BudgetUnavailable``
+    carries the owner-facing reason Deploy refuses on: the one statement the
+    Deploy preview and the account-money read (``deploy_refusal``) both give.
     """
     if repo.budget_authority_version() < 2:
         raise BudgetUnavailable("Switch this account to budgets in Settings before reviewing a deployment.")
     sync = runtime.envelope_sync
     if sync is None:
         raise BudgetUnavailable("Wait for account cash and risk observations; Settings shows the daily loss limit.")
-    risk = current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock())
+    risk = current_risk_readiness(repo, envelope=sync.envelope, now_ms=now_ms)
     if not risk.allowed:
         raise BudgetUnavailable(risk.detail)
     policy = sync.risk_snapshot().policy
@@ -408,17 +504,17 @@ def _account_admission(repo: ClerkSqliteRepository, runtime: ActiveClerkRuntime)
     return risk.observation, policy
 
 
-def _amount_refusal(
-    reviewed_revision: int, amount: int, *, risk_revision: int, minimum: int, available: int | None,
-    too_little: str = _STOCK_TOO_LITTLE,
-) -> str | None:
-    """Why this amount cannot be reviewed, or ``None``; the bar is drawn either way."""
+def _amount_refusal(reviewed_revision: int, *, risk_revision: int, answer: FundingAnswer) -> str | None:
+    """Why this amount cannot be reviewed, or ``None``; the bar is drawn either way.
+
+    The money is the funding answer's: a budget under one entry or over the
+    account's unreserved cash is refused in its words, and a verdict it
+    cannot give is no pass.
+    """
     if reviewed_revision != risk_revision:
         return "Risk limits changed. Review the current limits and budget again."
-    if amount < minimum:
-        return too_little.format(minimum=dollars(minimum))
-    if available is not None and amount > available:
-        return f"Only ${dollars(available)} is unreserved. Choose a smaller budget or resolve existing claims."
+    if answer.admits is not True:
+        return answer.sentence
     return None
 
 
@@ -832,7 +928,7 @@ def _account_money_view(account_id: str) -> AccountMoneyView:
         if view.state != "ready":
             return view
         try:
-            _account_admission(repo, runtime)
+            _account_admission(repo, runtime, now_ms=repo.clock())
         except BudgetUnavailable as refusal:
             return view.model_copy(update={"deploy_refusal": str(refusal)})
         return view

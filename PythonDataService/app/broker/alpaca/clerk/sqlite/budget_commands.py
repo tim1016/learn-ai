@@ -7,8 +7,9 @@ from dataclasses import asdict
 from decimal import Decimal
 
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
+from app.broker.alpaca.clerk.funding import EntryNeed, deploy_funding_answer
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
-from app.broker.alpaca.clerk.money import MoneyInputError, cents_required, money_context
+from app.broker.alpaca.clerk.money import MoneyInputError
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.budget_facts import DeployCommittedFacts
 from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission
@@ -45,6 +46,11 @@ def submit_budgeted_deploy(
     The initial ACTIVE run is custody permission held by the launch's owner,
     not a claim that the process has started; commands remains accepted until
     DEPLOY_LAUNCHED proves that outcome.
+
+    The budget is judged by ``funding.deploy_funding_answer``, the one rule the
+    Deploy review reads (#3099): it must cover ``minimum_position_cost`` (zero
+    for a bot whose entries are priced when their contracts are picked, so none
+    is asked here) and fit what the account has unreserved.
     """
     reject_colon("strategy_instance_id", strategy_instance_id)
     reject_colon("lifecycle_run_id", lifecycle_run_id)
@@ -76,7 +82,10 @@ def submit_budgeted_deploy(
         if repo.latest_run(strategy_instance_id) is not None:
             raise BudgetUnavailable("Trading again requires a fresh deployment identity.")
         require_admission(repo, strategy_instance_id=strategy_instance_id)
-        observation = require_current_risk_admission(repo, envelope=envelope, now_ms=repo.clock())
+        # One instant judges the reading's freshness and the budget by it, so a reading admitted here is
+        # never called stale a moment later.
+        admitted_at_ms = repo.clock()
+        observation = require_current_risk_admission(repo, envelope=envelope, now_ms=admitted_at_ms)
         if observation is None:
             raise BudgetUnavailable("Wait for a fresh cash observation, then review Deploy again.")
         policy = repo.account_risk_policy()
@@ -90,12 +99,16 @@ def submit_budgeted_deploy(
                 cash=observation.cash_available_usd, seen_before_ms=observation.fills_seen_before_ms,
                 modelled_fees_seen_before_ms=observation.modelled_fees_seen_before_ms,
             )
-            with money_context():
-                amount = Decimal(committed_cents) / 100
-                if amount < minimum_position_cost:
-                    raise BudgetUnavailable(f"One estimated position needs at least {cents_required(minimum_position_cost)} cents including fees.")
-                if amount > projection.available:
-                    raise BudgetUnavailable(f"The requested budget exceeds the {projection.unreserved_cents} unreserved cents.")
+            need = None if minimum_position_cost <= 0 else EntryNeed.for_shares(
+                requirement=minimum_position_cost, fee_provision_cents=0,
+            )
+            answer = deploy_funding_answer(
+                projection, amount_cents=committed_cents, need=need, broker_buying_power=None,
+                observed_at_ms=observation.observed_at_ms, now_ms=admitted_at_ms,
+            )
+            # A priced need passes only on a verdict; with none, only a refusal the account itself makes stops it.
+            if answer.admits is False or (need is not None and answer.admits is None):
+                raise BudgetUnavailable(answer.sentence)
         except MoneyInputError as exc:
             raise BudgetUnavailable(str(exc)) from exc
         return TransitionInput(

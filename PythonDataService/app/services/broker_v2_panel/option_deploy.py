@@ -47,10 +47,18 @@ resolved.
 **The money.** One entry is priced by the structure preview, which reads the
 entry's own figures function. The rows here are that answer's fields under
 the names the owner knows them by: what is set aside, and the premium,
-Alpaca's requirement and the fee estimate that add up to it; the loss at
-expiry if held, an estimate; and what the budget has free after one entry,
-which is the one figure worked out here (the budget less what is set
-aside). With no resolved preview there is no price, and the review says why.
+Alpaca's requirement and the fee estimate that add up to it; and the loss at
+expiry if held, an estimate. With no resolved preview there is no price, and
+the review says why.
+
+**The account's side.** What one more structure changes is worked out
+nowhere here. The money review judges the budget by one funding answer
+(``funding.deploy_funding_answer``) and hands it back (``with_account``),
+with what the entry does to the account's requirement: the rows for the
+budget and the account's headroom left after one entry, the change in the
+account's requirement, and how many entries fit. Alpaca's option buying power
+reaches that answer as a figure that keeps the time it was read, and the
+buying-power blocker is that answer's verdict on it.
 """
 
 from __future__ import annotations
@@ -60,10 +68,19 @@ import hashlib
 import json
 import re
 import time
-from dataclasses import dataclass
-from decimal import Decimal
+from dataclasses import dataclass, replace
 from typing import Final
 
+from app.broker.alpaca.clerk.funding import (
+    EntryNeed,
+    Figure,
+    FundingAnswer,
+    RequirementEffect,
+    deploy_funding_answer,
+    option_buying_power_figure,
+    requirement_effect,
+)
+from app.broker.alpaca.clerk.money import consent_cents
 from app.broker.alpaca.clerk.option_effects import (
     OptionEffectRefusal,
     OptionPlanRefused,
@@ -77,12 +94,14 @@ from app.broker.contract.options import BrokerOptionAccountSnapshot, option_cont
 from app.broker.contract.registry import get_broker_registry
 from app.options.contract import OptionContract
 from app.options.deadlines import CloseTerms
+from app.options.requirement import ContractAtMultiplier
 from app.options.structure_catalogue import in_a_sentence, label, orders_in_a_line
 from app.options.structure_check import StructureRefusal
 from app.options.watch import LineClass, lines_a_plan_can_need
 from app.schemas.action_plan import ActionPlan, OptionEntryLeg
 from app.schemas.broker_bots import AlpacaPaperDeployRequest
 from app.schemas.option_deploy import (
+    MoneyRowKey,
     OptionDeployBlocker,
     OptionDeployNote,
     OptionDeployReview,
@@ -95,7 +114,7 @@ from app.services.bot_option_run import OptionMarket, this_process_option_market
 from app.services.broker_v2_panel import option_structure_panel
 from app.services.broker_v2_panel.budget_deploy import OptionEntryPrice
 from app.services.broker_v2_panel.panel_errors import PanelRunnerError
-from app.services.option_preview_words import in_the_builders_words, plural, sentence, usd
+from app.services.option_preview_words import dollars, in_the_builders_words, plural, sentence, usd
 from app.services.option_structure_preview import PlanRefusal, plan_or_refusal
 from app.utils.timestamps import now_ms_utc
 
@@ -114,6 +133,7 @@ NOT_PRICED: Final = "OPTION_DEPLOY_NOT_PRICED"
 FEES_ARE_AN_ESTIMATE: Final = "OPTION_DEPLOY_FEES_ARE_AN_ESTIMATE"
 STREAM_NOT_SEEN: Final = "OPTION_DEPLOY_TRADE_STREAM_NOT_SEEN"
 BUYING_POWER_UNKNOWN: Final = "OPTION_DEPLOY_BUYING_POWER_UNKNOWN"
+BUYING_POWER_STALE: Final = "OPTION_DEPLOY_BUYING_POWER_STALE"
 ENTRY_WOULD_BE_SKIPPED: Final = "OPTION_DEPLOY_ENTRY_WOULD_BE_SKIPPED"
 LEANS_AGAINST_THE_SIGNAL: Final = "OPTION_DEPLOY_LEANS_AGAINST_THE_SIGNAL"
 UNTESTED_AT_ALPACA: Final = "OPTION_DEPLOY_NOT_CHECKED_AT_ALPACA"
@@ -126,6 +146,10 @@ LEVEL_FOR_SEVERAL_LEGS: Final = 3
 # How long a Deploy waits, at the click, for a preview that is only still arriving.
 PRICE_PATIENCE_MS = 6_000
 
+PRICES_SENTENCE: Final = (
+    "Each bought contract is priced at its ask and each sold one at its bid, as quoted when the quotes were read. "
+    "The bot picks again at every entry, and the prices move."
+)
 MONEY_SENTENCE: Final = (
     "The budget decides whether an entry may start. It is not a cap on what you can spend or lose. "
     "A market exit can do worse than these figures."
@@ -356,60 +380,76 @@ def approval_blocker(plan: ActionPlan, account: BrokerOptionAccountSnapshot) -> 
     )
 
 
-def buying_power_finding(
-    account: BrokerOptionAccountSnapshot, commitment_cents: int | None, structures: int
-) -> OptionDeployBlocker | OptionDeployNote | None:
-    """Whether the account's option buying power covers one entry, as Alpaca reports the figure.
+def buying_power_figure(account: BrokerOptionAccountSnapshot) -> Figure:
+    """Alpaca's option buying power for this review: a figure that keeps the time it was read."""
+    return option_buying_power_figure(account.options_buying_power, read_at_ms=account.observed_at_ms)
 
-    Short of it, a blocker that names both figures. Not reported, a note:
+
+def buying_power_finding(
+    account: BrokerOptionAccountSnapshot, need: EntryNeed | None, structures: int, *, now_ms: int
+) -> OptionDeployBlocker | OptionDeployNote | None:
+    """Whether the account's option buying power covers one entry, as the funding answer judges it.
+
+    The comparison is ``funding.deploy_funding_answer``'s, given Alpaca's
+    figure and no account: short of it, a blocker in that answer's words.
+    Not reported, or read longer ago than a reading is good for, a note:
     the figure is account-wide and Alpaca's own refusal at the order stays
-    the final word, so an unknown here stops nothing.
+    the final word, so an unknown or a stale one here stops nothing and is
+    never a pass.
     """
-    if commitment_cents is None:
+    if need is None:
         return None
-    power = account.options_buying_power
+    answer = deploy_funding_answer(
+        None, amount_cents=None, need=need, broker_buying_power=buying_power_figure(account),
+        observed_at_ms=now_ms, now_ms=now_ms,
+    )
+    reading = answer.broker_buying_power
+    assert reading is not None, "the figure was handed in"
     of = plural(structures, "structure")
-    if power is None:
+    if reading.state == "unknown":
         return OptionDeployNote(
             code=BUYING_POWER_UNKNOWN,
             headline="Alpaca did not report this account's options buying power.",
             detail=(
-                f"An entry of {of} sets aside {usd(commitment_cents)} right now. Whether the account can cover "
+                f"An entry of {of} sets aside {usd(need.commitment_cents)} right now. Whether the account can cover "
                 "it is Alpaca's to say when the order is sent."
             ),
         )
-    if power * 100 >= Decimal(commitment_cents):
+    if reading.state == "stale":
+        return OptionDeployNote(
+            code=BUYING_POWER_STALE,
+            headline="Alpaca's options buying power was read too long ago to be counted here.",
+            detail=(
+                f"An entry of {of} sets aside {usd(need.commitment_cents)} right now. Review the Deploy again for a "
+                "fresh reading; Alpaca's own answer at the order is the final word."
+            ),
+        )
+    if answer.binding != "broker_buying_power" or not answer.shortfall_cents:
         return None
     return OptionDeployBlocker(
         gate_id=BUYING_POWER_SHORT,
         label="Options buying power",
-        headline=(
-            f"Alpaca reports {_in_dollars(power)} of options buying power on this account. An entry of {of} sets "
-            f"aside {usd(commitment_cents)} right now."
-        ),
+        headline=answer.sentence,
         fix="Add cash to the account, close other positions, or deploy fewer structures.",
     )
 
 
-def _in_dollars(amount: Decimal) -> str:
-    """A dollar figure a broker reported, written out: the sign before the ``$``, as cents are written."""
-    cents = amount.quantize(Decimal("0.01"))
-    return f"-${-cents:,.2f}" if cents < 0 else f"${cents:,.2f}"
-
-
 async def real_account_findings(
     broker: str, request: AlpacaPaperDeployRequest, plan: ActionPlan, preview: OptionStructurePreview | None
-) -> tuple[list[OptionDeployBlocker], list[OptionDeployNote]]:
-    """What Alpaca's own answers stop or warn of, for a bot on a Paper or a Live account.
+) -> tuple[list[OptionDeployBlocker], list[OptionDeployNote], Figure]:
+    """What Alpaca's own answers stop or warn of, for a bot on a Paper or a Live account, and its buying power.
 
     Two reads of the broker's port, both of its reference and neither of
     market data: the account's option fields, and its listing of the first
     contract the preview picked, when it picked one. A read that failed is
     a blocker that says so. Nothing is deployed on an answer nobody got.
+    The figure is Alpaca's option buying power as read, which keeps the time
+    it was read; one that could not be read is unknown.
     """
     blockers: list[OptionDeployBlocker] = []
     notes: list[OptionDeployNote] = []
     port = get_broker_registry().resolve(broker)
+    power = Figure(None, "unknown", "Alpaca's account answer, which could not be read", now_ms_utc())
     try:
         account = await port.get_option_account()
     except BrokerError as exc:
@@ -425,8 +465,13 @@ async def real_account_findings(
         approval = approval_blocker(plan, account)
         if approval is not None:
             blockers.append(approval)
-        commitment = None if preview is None or preview.money is None else preview.money.entry_commitment_cents
-        finding = buying_power_finding(account, commitment, request.sizing.quantity)
+        power = buying_power_figure(account)
+        money = None if preview is None else preview.money
+        need = None if money is None else EntryNeed.for_options(
+            commitment_cents=money.entry_commitment_cents, fee_provision_cents=money.fee_estimate_cents,
+        )
+        # Asked after the read: a reading is stamped when it was taken, so no clock read before it can judge it.
+        finding = buying_power_finding(account, need, request.sizing.quantity, now_ms=now_ms_utc())
         if isinstance(finding, OptionDeployBlocker):
             blockers.append(finding)
         elif finding is not None:
@@ -455,7 +500,7 @@ async def real_account_findings(
                         fix=f"Choose another underlying than {picked.root}, or other rules.",
                     )
                 )
-    return blockers, notes
+    return blockers, notes, power
 
 
 # The refusals that say the picked contracts are another shape than the one named.
@@ -490,11 +535,28 @@ def preview_blocker(preview: OptionStructurePreview) -> OptionDeployBlocker | No
 # ---- one entry's price ----------------------------------------------------------------------------------
 
 
+def _picked_contracts(preview: OptionStructurePreview, multiplier: int) -> tuple[tuple[ContractAtMultiplier, int], ...]:
+    """What one entry of the picks holds once filled: each contract's signed whole contracts, bought above zero.
+
+    A leg's ratio is its contracts a structure, and an entry is the request's
+    structures. A contract two legs name has one count.
+    """
+    held: dict[ContractAtMultiplier, int] = {}
+    for leg in preview.legs:
+        key = (leg.contract.occ_symbol, multiplier)
+        held[key] = held.get(key, 0) + (1 if leg.position == "long" else -1) * leg.ratio * preview.structures
+    return tuple(held.items())
+
+
 def price_of(preview: OptionStructurePreview) -> OptionEntryPrice:
     """The price a money review reads from one answer of the structure preview."""
     money = preview.money
     if preview.state == "resolved" and money is not None and not preview.verdict.red:
-        return OptionEntryPrice(money.entry_commitment_cents, preview.quotes_read_ms, False, "")
+        return OptionEntryPrice(
+            money.entry_commitment_cents, preview.quotes_read_ms, False, "",
+            fee_provision_cents=money.fee_estimate_cents, requirement_cents=money.broker_requirement_cents,
+            picked=_picked_contracts(preview, money.multiplier),
+        )
     waiting = preview.ask_again_in_ms is not None
     why = preview.notice or preview.verdict.resolves_sentence
     lead = "Waiting to price this structure." if waiting else "This structure cannot be priced right now."
@@ -527,7 +589,7 @@ async def read_preview(
 # ---- the review -------------------------------------------------------------------------------------------
 
 
-def _money_rows(preview: OptionStructurePreview, structures: int, budget_cents: int | None) -> tuple[OptionMoneyRow, ...]:
+def _money_rows(preview: OptionStructurePreview, structures: int) -> tuple[OptionMoneyRow, ...]:
     money, at_expiry = preview.money, preview.at_expiry
     if preview.state != "resolved" or money is None:
         return ()
@@ -567,15 +629,59 @@ def _money_rows(preview: OptionStructurePreview, structures: int, budget_cents: 
                 part_of_set_aside=False,
             )
         )
-    if budget_cents is not None:
-        free = budget_cents - money.entry_commitment_cents
+    return tuple(rows)
+
+
+def _figure_row(key: MoneyRowKey, label: str, figure: Figure, *, note: str | None = None) -> OptionMoneyRow:
+    """One row of a figure the funding answer worked out: its state and time with it, and why it has no amount."""
+    cents = figure.amount_cents
+    return OptionMoneyRow(
+        key=key, label=label, amount_cents=cents, amount_usd=None if cents is None else usd(cents),
+        note=note if note is not None else (None if figure.is_known else figure.source),
+        part_of_set_aside=False, state=figure.state, as_of_ms=figure.as_of_ms,
+    )
+
+
+def with_account(
+    review: OptionDeployReview, funding: FundingAnswer | None, requirement: RequirementEffect | None
+) -> OptionDeployReview:
+    """The review with the account's side of one more structure beside its own figures (#3099).
+
+    Under the rows of the structure: what the budget has free after one
+    entry, the change in the account's requirement (with the netting
+    sentence when Alpaca would value the positions together and the bot does
+    not spend the saving), and the account's headroom left after one entry
+    (a Dry Run's cash is its own, and is said to be). Then how many entries
+    fit. Every figure is the funding answer's, with the state it was given;
+    a review with no figures of its own gets none.
+
+    Rows of these three kinds already on the review are replaced, so a
+    review that said why they could not be worked out (``review_for``) is
+    completed by the figures themselves.
+    """
+    if not review.money_rows:
+        return review
+    ours = ("budget_free", "incremental_requirement", "headroom_left")
+    rows = [row for row in review.money_rows if row.key not in ours]
+    if funding is not None and funding.budget_left is not None:
+        rows.append(_figure_row("budget_free", "Free in this budget after one entry", funding.budget_left))
+    if requirement is not None:
         rows.append(
-            OptionMoneyRow(
-                key="budget_free", label="Free in this budget after one entry", amount_cents=free,
-                amount_usd=usd(free), note=None, part_of_set_aside=False,
+            _figure_row(
+                "incremental_requirement", "What this adds to the account's requirement", requirement.change,
+                note=requirement.netting,
             )
         )
-    return tuple(rows)
+    if funding is not None and funding.headroom_left is not None:
+        headroom = "Simulated cash left after one entry" if funding.simulated else "Account headroom left after one entry"
+        rows.append(_figure_row("headroom_left", headroom, funding.headroom_left))
+    return review.model_copy(
+        update={
+            "money_rows": tuple(rows),
+            "fits": None if funding is None else funding.fits,
+            "fits_sentence": None if funding is None else funding.fits_sentence,
+        }
+    )
 
 
 def _end_sentence(plan: ActionPlan) -> str | None:
@@ -649,7 +755,6 @@ def review_of(
     *,
     blockers: list[OptionDeployBlocker],
     notes: list[OptionDeployNote],
-    budget_cents: int | None,
 ) -> OptionDeployReview:
     """The review of one option Deploy: its rows, what stops it and what the owner should know.
 
@@ -690,11 +795,12 @@ def review_of(
         picks=() if preview is None else tuple(
             OptionPickedContract(
                 number=leg.number, side_label="Buy" if leg.position == "long" else "Sell", ratio=leg.ratio,
-                contract=leg.contract,
+                contract=leg.contract, price_usd=dollars(leg.quote.ask if leg.position == "long" else leg.quote.bid),
             )
             for leg in preview.legs
         ),
-        money_rows=() if preview is None else _money_rows(preview, structures, budget_cents),
+        prices_sentence=PRICES_SENTENCE if preview is not None and with_figures and preview.legs else None,
+        money_rows=() if preview is None else _money_rows(preview, structures),
         money_sentence=MONEY_SENTENCE,
         entry_sentence=(
             preview.entry_sentence if preview is not None and with_figures and not preview.verdict.red else None
@@ -730,6 +836,8 @@ class _Judged:
     preview: OptionStructurePreview | None
     blockers: list[OptionDeployBlocker]
     notes: list[OptionDeployNote]
+    # Alpaca's option buying power as read for a real account, with the time it was read. None where nobody was asked.
+    buying_power: Figure | None = None
 
 
 async def _judge(
@@ -772,38 +880,68 @@ async def _judge(
     if not market.quotes_are_read_elsewhere():
         preview = await read_preview(broker, account_id, request, patience_ms=patience_ms)
     notes: list[OptionDeployNote] = []
+    power: Figure | None = None
     if request.execution_mode != "dry_run" and mode is None:
-        said_by_alpaca, notes = await real_account_findings(broker, request, plan, preview)
+        said_by_alpaca, notes, power = await real_account_findings(broker, request, plan, preview)
         blockers.extend(said_by_alpaca)
     found = None if preview is None else preview_blocker(preview)
     if found is not None:
         blockers.append(found)
-    return _Judged(plan, preview, blockers, notes)
+    return _Judged(plan, preview, blockers, notes, power)
 
 
 def _price(judged: _Judged) -> OptionEntryPrice:
     """The price a budget is judged against: none for a Deploy that something stops, in the first blocker's words."""
     if not judged.blockers:
         assert judged.preview is not None
-        return price_of(judged.preview)
+        return replace(price_of(judged.preview), broker_buying_power=judged.buying_power)
     read_ms = now_ms_utc() if judged.preview is None else judged.preview.quotes_read_ms
     return OptionEntryPrice(None, read_ms, False, judged.blockers[0].headline)
 
 
 async def review_for(
-    broker: str, account_id: str, request: AlpacaPaperDeployRequest, *, budget_cents: int | None
+    broker: str, account_id: str, request: AlpacaPaperDeployRequest
 ) -> tuple[OptionDeployReview, OptionEntryPrice]:
     """The review of one option Deploy, and the price its budget is judged against.
 
     Every blocker found is listed. A Deploy that something stops has no
     price: its budget is reviewed against nothing, so no review of it can be
-    consented to.
+    consented to. The review carries the structure's own figures and the
+    account's side as far as it can be said without the account: what the
+    budget has free after one entry, and why each figure that needs the
+    account is not worked out. The money review completes it
+    (``with_account``) once it has read the account.
     """
     judged = await _judge(broker, account_id, request, every_blocker=True, patience_ms=0)
-    review = review_of(
-        request, judged.plan, judged.preview, blockers=judged.blockers, notes=judged.notes, budget_cents=budget_cents
+    review = review_of(request, judged.plan, judged.preview, blockers=judged.blockers, notes=judged.notes)
+    return _without_the_account(review, request, judged), _price(judged)
+
+
+def _without_the_account(review: OptionDeployReview, request: AlpacaPaperDeployRequest, judged: _Judged) -> OptionDeployReview:
+    """The review's account rows as they stand before the account is read: the budget row, and a reason for the rest.
+
+    The budget row is the funding answer's with no account asked, so it is
+    the figure the money review gives later. What needs the account (its
+    holdings and its headroom) says why it has no figure, never goes absent.
+    A review with no figures of its own is left as it is.
+    """
+    money = None if judged.preview is None else judged.preview.money
+    if judged.preview is None or money is None or not review.money_rows:
+        return review
+    now_ms = now_ms_utc()
+    amount = None if request.budget is None else consent_cents(request.budget.amount_usd)
+    funding = deploy_funding_answer(
+        None, amount_cents=amount,
+        need=EntryNeed.for_options(
+            commitment_cents=money.entry_commitment_cents, fee_provision_cents=money.fee_estimate_cents,
+        ),
+        broker_buying_power=judged.buying_power, observed_at_ms=now_ms, now_ms=now_ms,
     )
-    return review, _price(judged)
+    unread = requirement_effect(
+        before_after_cents=None, why_not="the account's holdings are read once the money review can price this entry.",
+        entry_requirement_cents=money.broker_requirement_cents, as_of_ms=judged.preview.quotes_read_ms,
+    )
+    return with_account(review, funding, unread)
 
 
 def require_mode_open(request: AlpacaPaperDeployRequest) -> None:
@@ -861,6 +999,7 @@ __all__ = [
     "LIVE_SWITCHED_OFF",
     "OptionEntryPrice",
     "approval_blocker",
+    "buying_power_figure",
     "buying_power_finding",
     "mode_blocker",
     "plan_blocker",
@@ -876,4 +1015,5 @@ __all__ = [
     "review_of",
     "structure_not_taken",
     "trades_summary",
+    "with_account",
 ]

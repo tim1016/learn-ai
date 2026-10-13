@@ -1,4 +1,7 @@
 <div class="funding-answer">
+  @if (showSentence()) {
+    <p class="funding-answer__sentence">{{ funding().sentence }}</p>
+  }
   @if (funding().action; as action) {
     <p class="funding-answer__action"><strong>What you can do:</strong> {{ action }}</p>
   }
@@ -13,6 +16,9 @@
             }
             @if (row.figure.state === 'stale') {
               <span class="funding-answer__state">stale, as last read</span>
+              @if (row.figure.as_of_ms; as readAt) {
+                <span class="funding-answer__time"><app-timestamp-display [value]="readAt" mode="local" /></span>
+              }
             } @else if (row.figure.state === 'unknown') {
               <span class="funding-answer__state">unknown</span>
             }
@@ -39,6 +45,9 @@
     }
   </ul>
   @if (funding().shortfall_usd; as shortfall) {
-    <p class="funding-answer__shortfall">Short of this entry by <strong>{{ shortfall | authoredUsd }}</strong></p>
+    <p class="funding-answer__shortfall">{{ shortfallLabel() }} <strong>{{ shortfall | authoredUsd }}</strong></p>
+  }
+  @if (showFits() && funding().fits_sentence; as fits) {
+    <p class="funding-answer__fits">{{ fits }}</p>
   }
 </div>

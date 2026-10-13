@@ -217,78 +217,6 @@ class AccountMoneyView(BaseModel):
         return self
 
 
-class DeploymentBudgetPreview(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    # ``awaiting_price``: the feed is connected, the review asked IBKR for the
-    # instrument, and no fresh quote has arrived yet -- transient, so the
-    # client re-checks. A disconnected feed is ``unavailable`` with its own
-    # copy, never a wait it cannot ride out (#2559).
-    state: Literal["ready", "unavailable", "awaiting_price"]
-    detail: str
-    world: AuthorityKind
-    # The account whose money this budget comes from. ``None`` for Dry Run:
-    # its simulated cash lives in the bot's own ``sim:`` account, which is
-    # named from the bot at Deploy, so no real account number applies (H18).
-    custody_account_id: str | None = None
-    # How the bot will be named -- the backend names it at Deploy (#2551).
-    bot_name_note: str = "The bot is named at Deploy."
-    # A warning, never a refusal (#2622): one short line naming the other
-    # bots in this account that already trade the chosen symbol. ``None``
-    # when there are none, and for Dry Run, which never trades the account.
-    same_symbol_note: str | None = None
-    # What the strategy's evidence does not cover, when the bot trades another
-    # asset than it listens to (#2912). ``None`` when it trades its own symbol.
-    traded_asset_warning: UntestedTradedAssetWarning | None = None
-    # Confirm's "Trades" line for these settings, written here so no screen
-    # composes it: what the bot listens to, what it trades when that is
-    # something else, and how many shares. ``None`` on a preview no route
-    # served.
-    trades_summary: str | None = None
-    # What Deploy says of a bot that trades an option structure (#2913): its
-    # money rows, what stops the Deploy, and what the owner should know.
-    # ``None`` for every bot in shares, and then left out of the review's
-    # dump (``_omit_an_absent_option_review``).
-    option_review: OptionDeployReview | None = None
-    # The previewed amount as Python normalizes it: what Deploy sets aside.
-    budget_usd: str | None = None
-    observed_at_ms: EpochMs | None = None
-    minimum_budget_usd: str | None = None
-    unreserved_usd: str | None = None
-    estimated_price_usd: str | None = None
-    risk_revision: int = Field(default=0, ge=0)
-    risk_limits_summary: str = "Account risk evidence is unavailable."
-    shortcuts: tuple[DeploymentBudgetShortcut, ...] = ()
-    review_token: str | None = None
-    confirmation_text: str | None = None
-    # The account's money bar with this Deploy drawn in: an admitted budget
-    # is a ``new`` slice carved out of free to deploy. With no amount yet, or
-    # an amount refused (too little, more than free, stale risk revision --
-    # the refusal is ``detail``), it is today's bar, so the Money step always
-    # has one to draw. ``None`` when the account itself could not be read,
-    # and for Dry Run, which never uses the account's money.
-    money_after: AccountMoneyView | None = None
-
-    # No return annotation: the review's published schema stays this model's own fields.
-    @model_serializer(mode="wrap")
-    def _omit_an_absent_option_review(self, handler: SerializerFunctionWrapHandler):
-        """A bot in shares is reviewed in exactly the bytes it was before ``option_review`` existed."""
-        dumped = handler(self)
-        if dumped.get("option_review") is None:
-            dumped.pop("option_review", None)
-        return dumped
-
-
-class BudgetStatementLine(BaseModel):
-    """One line of a bot's money statement, worded and valued by Python."""
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    label: str
-    amount_usd: str
-    # The statement's running total (the bot's balance), set apart when shown.
-    total: bool = False
-
-
 class FigureTermView(BaseModel):
     """One labelled amount a figure is made of, signed."""
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -382,6 +310,8 @@ class FundingView(BaseModel):
     binding: Literal["bot_budget", "account_headroom", "broker_buying_power"] | None = None
     shortfall_usd: str | None = None
     fits: int | None = Field(default=None, ge=0)
+    # ``fits`` in words, with the caveat that every bot competes for the same account headroom (#3099).
+    fits_sentence: str | None = None
     sentence: str
     action: str | None = None
 
@@ -394,8 +324,84 @@ class FundingView(BaseModel):
             need=None if answer.need is None else EntryNeedView.from_need(answer.need),
             admits=answer.admits, binding=answer.binding,
             shortfall_usd=dollars(answer.shortfall_cents) if answer.shortfall_cents else None,
-            fits=answer.fits, sentence=answer.sentence, action=answer.action,
+            fits=answer.fits, fits_sentence=answer.fits_sentence, sentence=answer.sentence, action=answer.action,
         )
+
+
+class DeploymentBudgetPreview(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # ``awaiting_price``: the feed is connected, the review asked IBKR for the
+    # instrument, and no fresh quote has arrived yet -- transient, so the
+    # client re-checks. A disconnected feed is ``unavailable`` with its own
+    # copy, never a wait it cannot ride out (#2559).
+    state: Literal["ready", "unavailable", "awaiting_price"]
+    detail: str
+    world: AuthorityKind
+    # The account whose money this budget comes from. ``None`` for Dry Run:
+    # its simulated cash lives in the bot's own ``sim:`` account, which is
+    # named from the bot at Deploy, so no real account number applies (H18).
+    custody_account_id: str | None = None
+    # How the bot will be named -- the backend names it at Deploy (#2551).
+    bot_name_note: str = "The bot is named at Deploy."
+    # A warning, never a refusal (#2622): one short line naming the other
+    # bots in this account that already trade the chosen symbol. ``None``
+    # when there are none, and for Dry Run, which never trades the account.
+    same_symbol_note: str | None = None
+    # What the strategy's evidence does not cover, when the bot trades another
+    # asset than it listens to (#2912). ``None`` when it trades its own symbol.
+    traded_asset_warning: UntestedTradedAssetWarning | None = None
+    # Confirm's "Trades" line for these settings, written here so no screen
+    # composes it: what the bot listens to, what it trades when that is
+    # something else, and how many shares. ``None`` on a preview no route
+    # served.
+    trades_summary: str | None = None
+    # What Deploy says of a bot that trades an option structure (#2913): its
+    # money rows, what stops the Deploy, and what the owner should know.
+    # ``None`` for every bot in shares, and then left out of the review's
+    # dump (``_omit_an_absent_option_review``).
+    option_review: OptionDeployReview | None = None
+    # The previewed amount as Python normalizes it: what Deploy sets aside.
+    budget_usd: str | None = None
+    observed_at_ms: EpochMs | None = None
+    minimum_budget_usd: str | None = None
+    unreserved_usd: str | None = None
+    estimated_price_usd: str | None = None
+    risk_revision: int = Field(default=0, ge=0)
+    risk_limits_summary: str = "Account risk evidence is unavailable."
+    shortcuts: tuple[DeploymentBudgetShortcut, ...] = ()
+    review_token: str | None = None
+    confirmation_text: str | None = None
+    # The account's money bar with this Deploy drawn in: an admitted budget
+    # is a ``new`` slice carved out of free to deploy. With no amount yet, or
+    # an amount refused (too little, more than free, stale risk revision --
+    # the refusal is ``detail``), it is today's bar, so the Money step always
+    # has one to draw. ``None`` when the account itself could not be read,
+    # and for Dry Run, which never uses the account's money.
+    money_after: AccountMoneyView | None = None
+    # Whether this budget can be set aside and fund one entry, and which limit binds: the one answer the
+    # review, the option review beside it and the Clerk's re-check at the commit read (#3099). ``None``
+    # before the account's side can be worked out.
+    funding: FundingView | None = None
+
+    # No return annotation: the review's published schema stays this model's own fields.
+    @model_serializer(mode="wrap")
+    def _omit_an_absent_option_review(self, handler: SerializerFunctionWrapHandler):
+        """A bot in shares is reviewed in exactly the bytes it was before ``option_review`` existed."""
+        dumped = handler(self)
+        if dumped.get("option_review") is None:
+            dumped.pop("option_review", None)
+        return dumped
+
+
+class BudgetStatementLine(BaseModel):
+    """One line of a bot's money statement, worded and valued by Python."""
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    label: str
+    amount_usd: str
+    # The statement's running total (the bot's balance), set apart when shown.
+    total: bool = False
 
 
 class ExitLegQuoteView(BaseModel):

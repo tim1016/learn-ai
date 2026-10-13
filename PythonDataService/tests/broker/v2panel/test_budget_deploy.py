@@ -10,8 +10,13 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from app.broker.alpaca.clerk.budgets import BudgetUnavailable
-from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate, observation_is_fresh
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable, entry_requirement
+from app.broker.alpaca.clerk.live_envelope import (
+    OBSERVATION_MAX_AGE_MS,
+    AccountObservation,
+    LiveEnvelopeGate,
+    observation_is_fresh,
+)
 from app.broker.alpaca.clerk.money import MoneyInputError
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
@@ -138,6 +143,80 @@ def test_preview_shortcuts_are_server_authored_and_round_at_boundary(authority) 
     assert preview.minimum_budget_usd == "100.02"
     assert {row.key: row.amount_usd for row in preview.shortcuts} == {"quarter": "250.00", "half": "500.00", "all": "1000.00", "position_headroom": "120.02"}
     assert preview.review_token is None
+
+
+def test_the_review_serves_the_funding_answer_it_judged_the_budget_by(authority) -> None:
+    """$1,000 of cash, one position at $100.02: the limits with their terms and times, the binding one, how many fit."""
+    preview = budget_deploy.preview_budget(
+        "BUDGET-PAPER", _request(budget=DeploymentBudgetInput(amount_usd="500", risk_revision=1)), resolved_parameters={},
+    )
+
+    funding = preview.funding
+    assert funding is not None and preview.state == "ready"
+    assert (funding.free_budget.state, funding.free_budget.amount_usd) == ("known", "500.00")
+    assert (funding.account_headroom.state, funding.account_headroom.amount_usd) == ("known", "1000.00")
+    assert funding.account_headroom.as_of_ms == NOON
+    assert [(term.label, term.amount_usd) for term in funding.account_headroom.terms][:2] == [
+        ("Cash in the account", "1000.00"), ("Set aside for running bots", "0.00"),
+    ]
+    assert funding.broker_buying_power is None, "a bot in shares has no option buying power"
+    assert funding.need is not None and funding.need.commitment_usd == "100.02"
+    assert (funding.admits, funding.binding, funding.shortfall_usd, funding.fits) == (True, "bot_budget", None, 4)
+    assert funding.fits_sentence is not None and "never added up across bots" in funding.fits_sentence
+
+
+def test_a_reading_the_review_admitted_is_judged_by_that_same_instant_and_never_called_stale_after(
+    authority, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The clock steps a minute past the reading's age limit once the account has been read. A second read of the
+    clock for the answer would call the reading stale and refuse a budget the review had just admitted, the one
+    way the rule could refuse what it admitted before."""
+    repo, _runtime, _snapshot = authority
+    read = budget_deploy._read_account_money
+
+    def read_then_step(repo_, observation):
+        money = read(repo_, observation)
+        repo_.clock.advance(OBSERVATION_MAX_AGE_MS + 15_000)
+        return money
+
+    monkeypatch.setattr(budget_deploy, "_read_account_money", read_then_step)
+
+    preview = budget_deploy.preview_budget(
+        "BUDGET-PAPER", _request(budget=DeploymentBudgetInput(amount_usd="500", risk_revision=1)), resolved_parameters={},
+    )
+
+    assert repo.clock() > NOON + OBSERVATION_MAX_AGE_MS, "the clock did step past the limit"
+    assert preview.state == "ready" and preview.review_token is not None
+    assert preview.funding is not None
+    assert (preview.funding.account_headroom.state, preview.funding.admits) == ("known", True)
+
+
+def test_a_review_the_clerk_would_refuse_and_the_clerks_recheck_say_the_same_thing(authority) -> None:
+    """One moment: $1,000.00 of cash and a position that needs $100.02. A budget of $1,000.01 and one of $100.01
+    are refused by the review and by the Clerk's own re-check, in the same words."""
+    repo, _runtime, _snapshot = authority
+    needs, _fee = entry_requirement(quantity=1, price=100.001, at_ms=NOON)
+    terms = _request().exit_terms.seal()
+    repo.register_strategy_instance(
+        strategy_instance_id="clerk-a", symbol="SPY", config_hash="seal", exit_terms=terms, strategy_key="deployment_validation",
+        display_name="clerk-a", config_json=canonicalize({"mode": "trade", "carryover_policy": "FORBID", "quantity": 1}),
+    )
+    gate = LiveEnvelopeGate(values=None, custody_is_simulated=False)
+    gate.publish(authority[1].envelope_sync.reading)
+
+    for amount, cents in (("1000.01", 100_001), ("100.01", 10_001)):
+        preview = budget_deploy.preview_budget(
+            "BUDGET-PAPER", _request(budget=DeploymentBudgetInput(amount_usd=amount, risk_revision=1)), resolved_parameters={},
+        )
+        with pytest.raises(BudgetUnavailable) as recheck:
+            submit_budgeted_deploy(
+                repo, strategy_instance_id="clerk-a", lifecycle_run_id="run", world="real_paper", committed_cents=cents,
+                configuration_hash="seal", exit_terms_hash=canonical_sha256(terms.model_dump(mode="json")),
+                risk_revision=1, actor="owner", envelope=gate, minimum_position_cost=needs,
+            )
+
+        assert preview.state == "unavailable" and preview.funding is not None and preview.funding.admits is False
+        assert str(recheck.value) == preview.detail == preview.funding.sentence
 
 
 def test_confirmation_binds_amount_effective_parameters_and_risk(authority) -> None:
@@ -564,7 +643,10 @@ async def test_the_deploy_preview_reads_the_account_once_under_its_fence(authori
 async def test_a_refused_amount_still_returns_the_bar_the_money_step_draws(authority: tuple) -> None:
     repo, _, _ = _committed_view(authority)
     today = await budget_deploy.account_money_view(repo.account_id)
-    for amount, why in (("900", "Only $800.00 is unreserved"), ("50", "at least $100.02")):
+    for amount, why in (
+        ("900", "This budget is $900.00, but the account has only $800.00 unreserved."),
+        ("50", "This budget is only $50.00. The entry needs $100.02 including its fee provision."),
+    ):
         refused = budget_deploy.preview_budget(
             repo.account_id, _request(budget=DeploymentBudgetInput(amount_usd=amount, risk_revision=1)), resolved_parameters={},
         )
@@ -1429,7 +1511,6 @@ def test_the_bot_page_serves_every_limit_with_its_terms_source_and_age(authority
 
 def test_a_reading_past_its_age_limit_is_stale_on_the_page_and_the_entry_is_not_promised(authority: tuple) -> None:
     """The bot's own books are current; the account's cash was read 46 seconds before the page asked."""
-    from app.broker.alpaca.clerk.live_envelope import OBSERVATION_MAX_AGE_MS
     from app.broker.alpaca.clerk.sqlite.risk_admission import current_risk_readiness
 
     repo, runtime, gate = _committed_view(authority)

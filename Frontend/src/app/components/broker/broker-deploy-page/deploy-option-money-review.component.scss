@@ -47,6 +47,15 @@
   font-variant-numeric: tabular-nums;
 }
 
+// A price a pick is assumed at, and a figure that is stale or unknown: said in words, and set apart in italic.
+.option-money__price,
+.option-money__figure-state {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.option-money__figure-state { font-style: italic; }
+
 // A row's note: a word beside a premium (paid, received), a sentence under an estimate.
 .option-money__note {
   grid-column: 1 / -1;

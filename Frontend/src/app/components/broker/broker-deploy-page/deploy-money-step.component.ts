@@ -20,6 +20,7 @@ import type { ResourceTarget } from '../../../fleet/resource-target';
 import { extractServerMessage } from '../operation-error';
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
+import { FundingAnswerComponent } from '../funding-answer/funding-answer.component';
 import { MoneyBarComponent } from '../money-bar/money-bar.component';
 import {
   BrokerV2PanelService,
@@ -92,7 +93,15 @@ const AMOUNT_PATTERN = /^(?=.*[1-9])\d+(\.\d{1,2})?$/;
 @Component({
   selector: 'app-deploy-money-step',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AuthoredUsdPipe, DeployOptionMoneyReviewComponent, FormField, MoneyBarComponent, TimestampDisplayComponent, TooltipModule],
+  imports: [
+    AuthoredUsdPipe,
+    DeployOptionMoneyReviewComponent,
+    FormField,
+    FundingAnswerComponent,
+    MoneyBarComponent,
+    TimestampDisplayComponent,
+    TooltipModule,
+  ],
   templateUrl: './deploy-money-step.component.html',
   styleUrl: './deploy-money-step.component.scss',
 })
@@ -207,6 +216,13 @@ export class DeployMoneyStepComponent {
   });
   /** The backend's review of one entry of an option structure; `null` for a bot that trades shares. */
   protected readonly optionReview = computed(() => this.answer()?.preview.option_review ?? null);
+  /** Whether this budget can be set aside and fund one entry, and which limit binds: the one answer the
+   * backend judged the amount by (#3099). `null` until the account's side can be worked out. */
+  protected readonly funding = computed(() => this.answer()?.preview.funding ?? null);
+  /** A refused amount's outcome line already says the answer's sentence; every other state says it here. */
+  protected readonly sentenceHere = computed(() => this.amountView()?.state !== 'unavailable');
+  /** How many fit is said once: by the option review when it carries the sentence, else by the funding card. */
+  protected readonly fitsInTheReview = computed(() => Boolean(this.optionReview()?.fits_sentence));
   /** The asks this step has made by itself for the option review of these settings. */
   private readonly optionRechecks = linkedSignal({ source: this.context, computation: () => 0 });
 
