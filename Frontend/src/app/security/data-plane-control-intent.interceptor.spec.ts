@@ -39,6 +39,7 @@ describe("dataPlaneControlIntentInterceptor", () => {
       expect(req.request.headers.get(DATA_PLANE_CONTROL_INTENT_HEADER)).toBe(
         DATA_PLANE_CONTROL_INTENT_VALUE,
       );
+      expect(req.request.headers.has("Cache-Control")).toBe(false);
       req.flush({});
     });
   }
@@ -52,6 +53,7 @@ describe("dataPlaneControlIntentInterceptor", () => {
       expect(req.request.headers.get(DATA_PLANE_CONTROL_INTENT_HEADER)).toBe(
         DATA_PLANE_CONTROL_INTENT_VALUE,
       );
+      expect(req.request.headers.get("Cache-Control")).toBe("no-cache, no-store");
       req.flush({});
     });
   }
@@ -87,7 +89,26 @@ describe("dataPlaneControlIntentInterceptor", () => {
 
     const req = httpMock.expectOne("/api/broker/health");
     expect(req.request.headers.has(DATA_PLANE_CONTROL_INTENT_HEADER)).toBe(false);
+    expect(req.request.headers.has("Cache-Control")).toBe(false);
     req.flush({});
+  });
+
+  it("revalidates account-mode reads even when a caller allows cached responses", () => {
+    const url = "/api/brokers/alpaca/clerks/clrk_live/live-verdict";
+    http.get(url, { headers: { "Cache-Control": "max-age=3600" } }).subscribe();
+
+    const req = httpMock.expectOne(url);
+    expect(req.request.headers.get("Cache-Control")).toBe("no-cache, no-store");
+    req.flush({ final_verdict: "live" });
+  });
+
+  it("requires fresh metadata for protected HEAD reads", () => {
+    const url = "/api/broker-clerks";
+    http.head(url).subscribe();
+
+    const req = httpMock.expectOne(url);
+    expect(req.request.headers.get("Cache-Control")).toBe("no-cache, no-store");
+    req.flush(null);
   });
 
   it("does not mark non-control mutations", () => {

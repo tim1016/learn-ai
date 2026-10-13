@@ -13,10 +13,14 @@ const SAFE_READ_METHODS = new Set(["GET", "HEAD"]);
 
 export const dataPlaneControlIntentInterceptor: HttpInterceptorFn = (request, next) => {
   if (!requiresDataPlaneControlIntent(request)) return next(request);
+  let headers = request.headers.set(DATA_PLANE_CONTROL_INTENT_HEADER, DATA_PLANE_CONTROL_INTENT_VALUE);
+  if (SAFE_READ_METHODS.has(request.method.toUpperCase())) {
+    // Account mode and custody reads must reach the service, even when an old
+    // preview server left cacheable HTML at the same API URL.
+    headers = headers.set("Cache-Control", "no-cache, no-store");
+  }
   return next(request.clone({
-    setHeaders: {
-      [DATA_PLANE_CONTROL_INTENT_HEADER]: DATA_PLANE_CONTROL_INTENT_VALUE,
-    },
+    headers,
   }));
 };
 
