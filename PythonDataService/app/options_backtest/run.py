@@ -57,6 +57,25 @@ class RunStopped(Exception):
         super().__init__(f"the run was stopped after {sessions_done} sessions")
 
 
+class SellingNotReplayed(Exception):
+    """The setup sells a leg, and the replay trades bought legs only until selling is replayed (#3106).
+
+    ``leg_ids`` are the sold legs, in the setup's order.
+    """
+
+    def __init__(self, leg_ids: tuple[str, ...]) -> None:
+        self.leg_ids = leg_ids
+        super().__init__(f"selling is not replayed yet; sold: {', '.join(leg_ids)}")
+
+
+def refuse_a_sold_leg(setup: OptionsBacktestSetup) -> None:
+    """``SellingNotReplayed`` when ``setup`` has a sold leg. Asked before anything is fetched, and again by the replay,
+    so no path replays a sold leg as if it were bought."""
+    sold = tuple(leg.leg_id for leg in setup.legs if leg.side == "sell")
+    if sold:
+        raise SellingNotReplayed(sold)
+
+
 class SessionDataMissing(Exception):
     """A session needs data that was not captured, so it cannot be replayed."""
 
@@ -166,6 +185,7 @@ class _Carried:
 
 
 def _check_the_run_can_start(setup: OptionsBacktestSetup, sessions: Sequence[date]) -> None:
+    refuse_a_sold_leg(setup)
     if not sessions:
         raise ValueError("a run needs at least one session")
     if any(later <= earlier for earlier, later in pairwise(sessions)):
@@ -290,7 +310,8 @@ def run_sessions(
     ``on_session(done, total, day)`` is called after each session is replayed. ``should_stop()`` is asked before each
     session; when it says yes, ``RunStopped`` is raised and nothing is returned. Raises ``SessionDataMissing`` for a
     session whose data is not captured and ``FeeRateNotPublished`` before anything is read when the setup's fees are
-    estimated and some session is on a date the fee model has no rate for.
+    estimated and some session is on a date the fee model has no rate for. ``SellingNotReplayed`` before anything is
+    read when the setup has a sold leg.
     """
     _check_the_run_can_start(setup, sessions)
     run = _Run(setup, data, slippage_ladder)

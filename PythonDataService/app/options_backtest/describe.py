@@ -59,13 +59,31 @@ def _window(setup: OptionsBacktestSetup, clock: SessionClock) -> tuple[str, ...]
         "On a day that closes early both times keep their distance from the open and the close, "
         "and a day they no longer fit is skipped.",
         "An order fills at the next minute's opening trade, never at the minute or the price that set it off.",
-        "A buy is dropped if its contract does not trade in that minute; a sale is tried each minute until it does.",
-        "At the exit, whatever is open is sold, legs still waiting are cancelled and nothing more is bought.",
+        *_what_happens_to_orders(setup),
     ]
     if setup.no_reentry_after is not None:
         sentences.append(f"A stop hit later than {_time(setup.no_reentry_after, clock, at='')} earns no re-entry.")
         sentences.append("First entries are not affected.")
     return tuple(sentences)
+
+
+def _what_happens_to_orders(setup: OptionsBacktestSetup) -> tuple[str, str]:
+    """Which orders are dropped and which are tried again, and what the exit does.
+
+    A setup that sells has orders to open and to close of both sides, so it says them by which is which. A setup that
+    only buys is said as it always was.
+    """
+    if any(leg.side == "sell" for leg in setup.legs):
+        return (
+            "An order to open is dropped if its contract does not trade in that minute; "
+            "an order to close is tried each minute until it does.",
+            "At the exit, a bought leg still open is sold, a sold leg still open is bought back, "
+            "legs still waiting are cancelled and nothing more is opened.",
+        )
+    return (
+        "A buy is dropped if its contract does not trade in that minute; a sale is tried each minute until it does.",
+        "At the exit, whatever is open is sold, legs still waiting are cancelled and nothing more is bought.",
+    )
 
 
 def _notices(setup: OptionsBacktestSetup, clock: SessionClock) -> tuple[str, ...]:
@@ -111,26 +129,37 @@ def _on_a_full_day(minute: int, clock: SessionClock) -> str:
 
 
 def leg_sentences(leg: LegSetup) -> tuple[str, ...]:
-    """One leg in a sentence or two. A comparison of two runs says a leg only one of them has with these."""
-    sentences = [f"Leg {leg.leg_id}: buys {_what_is_bought(leg)} {phrases.expiry(leg.expiry)}.", _when_it_buys(leg)]
+    """One leg in a sentence or two. A comparison of two runs says a leg only one of them has with these.
+
+    A bought leg buys to open and sells to close. A sold leg sells to open and is bought back: its stop is a rise in
+    its premium and its momentum rule gates the sale.
+    """
+    contract = f"{_what_is_traded(leg)} {phrases.expiry(leg.expiry)}"
+    if leg.side == "sell":
+        sentences = [f"Leg {leg.leg_id}: sells to open {contract}, and is bought back to close."]
+    else:
+        sentences = [f"Leg {leg.leg_id}: buys {contract}."]
+    sentences.append(_when_it_opens(leg))
     if leg.stop_loss is not None:
-        sentences.append(f"Sells once a minute closes {phrases.stop_loss(leg.stop_loss)}.")
+        closes = "Bought back" if leg.side == "sell" else "Sells"
+        sentences.append(f"{closes} once a minute closes {phrases.stop_loss(leg.stop_loss, leg.side)}.")
     if leg.reentry_on_stop is not None:
-        sentences.append(phrases.reentry(leg.reentry_on_stop))
+        sentences.append(phrases.reentry(leg.reentry_on_stop, leg.side))
     return tuple(sentences)
 
 
-def _what_is_bought(leg: LegSetup) -> str:
+def _what_is_traded(leg: LegSetup) -> str:
     right = f"{leg.right}{'' if leg.contracts == 1 else 's'}"
     if leg.strike.kind == "atm":
         return f"{leg.contracts} at-the-money {right}"
     return f"{leg.contracts} {right} {phrases.strikes_from_the_money(leg.strike.steps)}"
 
 
-def _when_it_buys(leg: LegSetup) -> str:
+def _when_it_opens(leg: LegSetup) -> str:
+    opens = "sale" if leg.side == "sell" else "buy"
     if leg.momentum is None:
-        return "The buy comes as soon as the entry is read."
-    return f"The buy waits until a minute closes {phrases.momentum(leg.momentum)}."
+        return f"The {opens} comes as soon as the entry is read."
+    return f"The {opens} waits until a minute closes {phrases.momentum(leg.momentum)}."
 
 
 def _square_off(setup: OptionsBacktestSetup) -> tuple[str, ...]:

@@ -347,7 +347,7 @@ def test_budget_read_uses_the_sealed_next_position_and_current_cash(authority: t
     _publish_book(("SPY", 100))
     gate.publish(replace(gate.latest_observation(), cash_available_usd=100))
     assert not budget_deploy._budget_view(runtime, "view").entry_eligible
-    assert "account cash" in budget_deploy._budget_view(runtime, "view").detail
+    assert "the account can fund 100.00 USD for this deployment" in budget_deploy._budget_view(runtime, "view").detail
     assert repo.custody_transitions() == before
 
 

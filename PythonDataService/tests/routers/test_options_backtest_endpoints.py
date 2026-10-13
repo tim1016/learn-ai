@@ -219,6 +219,76 @@ async def test_a_setup_that_does_not_validate_is_a_422_with_the_field_errors(cli
     assert extra.json()["detail"][0]["loc"] == ["body", "lots"]
 
 
+async def test_a_setup_that_sells_is_described_with_each_leg_said_bought_or_sold_and_is_read_back_with_its_side(
+    client,
+) -> None:
+    body = setup_body(
+        legs=[
+            leg(leg_id="long_call"),
+            leg(
+                leg_id="short_call",
+                side="sell",
+                strike={"kind": "atm_offset", "steps": 2},
+                stop_loss={"kind": "percent", "value": "150"},
+            ),
+        ]
+    )
+
+    async with client as c:
+        response = await c.post(f"{PREFIX}/setups/describe", json=body)
+
+    assert response.status_code == 200, response.text
+    described = response.json()
+    bought, sold = (" ".join(part["sentences"]) for part in described["legs"])
+    assert "Leg long_call: buys 1 at-the-money call" in bought
+    assert "Leg short_call: sells to open 1 call 2 strikes above the money" in sold
+    assert "bought back" in sold and "150% above what it was sold for" in sold
+    # The setup as the server read it carries a sold leg's side, and a bought leg's carries none.
+    assert [each.get("side") for each in described["setup"]["legs"]] == [None, "sell"]
+
+
+@pytest.mark.parametrize(
+    ("legs", "said"),
+    [
+        ([leg(leg_id="short_call", side="sell")], "sell more call contracts than they buy"),
+        ([leg(leg_id="long_call"), leg(leg_id="short_put", right="put", side="sell")], "sell more put contracts"),
+        (
+            [leg(leg_id="long_call"), leg(leg_id="short_call", side="sell", expiry={"kind": "same_day"})],
+            "needs every leg on one expiry rule",
+        ),
+    ],
+)
+async def test_a_setup_that_sells_without_cover_or_on_two_expiry_rules_is_a_422_in_the_servers_words(
+    client, legs: list[dict[str, Any]], said: str
+) -> None:
+    async with client as c:
+        described = await c.post(f"{PREFIX}/setups/describe", json=setup_body(legs=legs))
+        saved = await c.put(_url("Never saved"), json=setup_body(legs=legs))
+
+    for response in (described, saved):
+        assert response.status_code == 422, response.text
+        [problem] = response.json()["detail"]
+        assert problem["loc"] == ["body"]
+        assert said in problem["msg"]
+
+
+async def test_a_percent_stop_of_a_hundred_or_more_is_a_422_on_a_bought_leg_at_its_stop_loss_and_is_taken_on_a_sold_leg(
+    client,
+) -> None:
+    stop = {"kind": "percent", "value": "150"}
+
+    async with client as c:
+        bought = await c.post(f"{PREFIX}/setups/describe", json=setup_body(legs=[leg(stop_loss=stop)]))
+        sold = await c.post(
+            f"{PREFIX}/setups/describe",
+            json=setup_body(legs=[leg(leg_id="long_call"), leg(leg_id="short_call", side="sell", stop_loss=stop)]),
+        )
+
+    assert bought.status_code == 422
+    assert bought.json()["detail"][0]["loc"] == ["body", "legs", 0, "stop_loss"]
+    assert sold.status_code == 200, sold.text
+
+
 @pytest.mark.parametrize(
     "name",
     ["semi;colon", " leading", "trailing ", "x" * 81, "line\nbreak", "slash\\back", ".hidden", "-dash"],

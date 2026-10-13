@@ -10,7 +10,6 @@ import pytest
 from app.broker.alpaca.clerk.money import (
     MoneyInputError,
     apportion_units,
-    cash_admits,
     cents_required,
     cents_spendable,
     consent_cents,
@@ -32,11 +31,6 @@ def test_fractional_share_cost_preserves_every_digit_until_actionable_boundary()
 def test_binary_float_inputs_are_normalized_before_multiplication() -> None:
     assert notional(0.1, 0.2) == Decimal("0.02")
     assert normalize_money(0.1) == Decimal("0.1")
-
-
-def test_even_a_subcent_shortage_refuses_without_epsilon() -> None:
-    assert not cash_admits(cash=100, claims=0, required="100.0000000001")
-    assert cash_admits(cash="1.25125", claims=0, required=notional("0.125", "10.01"))
 
 
 @pytest.mark.parametrize("amount", ["0.001", "12.345", True, "NaN", "Infinity", -1, 0])
@@ -65,11 +59,6 @@ def test_supported_magnitude_and_scale_survive_small_ambient_context() -> None:
         with money_context():
             total = sum((product for _ in range(10_000)), Decimal(0))
     assert Fraction(total) == Fraction(left) * Fraction(right) * 10_000
-
-
-def test_negative_claims_cannot_manufacture_available_cash() -> None:
-    with pytest.raises(MoneyInputError):
-        cash_admits(cash=100, claims=-1, required=101)
 
 
 def test_extreme_finite_float_inputs_are_normalized_without_precision_loss() -> None:

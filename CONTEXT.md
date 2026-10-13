@@ -1797,10 +1797,13 @@ structures).
   neither overwritten nor deleted: the #3030 strategy, without a re-entry rule and
   with one. A saved setup that no longer passes the current rules stays listed as
   **cannot be opened**, with the reason.
-- **Leg** — one bought call or put: a number of contracts, a rule for its expiry,
-  a rule for its strike, and three rules of its own that may each be off: stop
-  loss, momentum, re-entry on stop. A leg only buys.
-  _Avoid_: a structure's leg (Option structures), which may be sold.
+- **Leg** — one call or put, bought or sold (a leg with no side is bought): a
+  number of contracts, a rule for its expiry, a rule for its strike, and three
+  rules of its own that may each be off: stop loss, momentum, re-entry on stop. A
+  sold leg needs a bought leg of its kind to cover it, so a setup never sells more
+  contracts of a kind than it buys, and a setup that sells carries one expiry rule
+  on every leg.
+  _Avoid_: a structure's leg (Option structures), which is a bot's.
 - **Entry time, exit time** — the minutes at which a setup's rules start and stop
   being read. Each is stored as a distance after the open or before the close (its
   **anchor**), so a half day keeps the distance. The entry time is when each leg's
@@ -1816,10 +1819,11 @@ structures).
   minute that closes at the entry time, or at a re-entry's start. A setup's
   sentences call it the starting premium. A leg whose contract did not trade in
   that minute has none, and the leg is done for the day.
-- **Stop loss** — a leg's sell level, a set percent or number of points under what
-  the leg paid, taken from its own fill price. It is hit when a minute closes at or
-  below it. A high or a low inside a minute never hits it. Unrelated to **Stop**
-  (ending a deployment).
+- **Stop loss** — a leg's close level, a set percent or number of points taken from
+  its own fill price: under what a bought leg paid, hit when a minute closes at or
+  below it; over what a sold leg was sold for, hit when a minute closes at or above
+  it (a percent over has no ceiling at 100). A high or a low inside a minute never
+  hits it. Unrelated to **Stop** (ending a deployment).
 - **Re-entry on stop** — after a stop a leg may come back, up to a count in one
   session. **At once**: a fresh contract by the same rules, bought with no wait.
   **On momentum**: a fresh contract, a new starting price, and the momentum wait

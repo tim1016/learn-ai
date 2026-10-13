@@ -79,6 +79,8 @@ function buildLeg(leg: LegDraft, problems: Map<string, string>): LegRequest | nu
 
   return {
     leg_id: leg.id,
+    // A bought leg sends no side, as the server stores none: a setup of bought legs is the body it always was.
+    ...(leg.side === 'sell' ? { side: leg.side } : {}),
     right: leg.right,
     contracts: leg.contracts,
     expiry: leg.expiryKind === 'min_days' ? { kind: 'min_days', days: leg.expiryDays } : { kind: leg.expiryKind },

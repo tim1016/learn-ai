@@ -20253,7 +20253,7 @@ export interface components {
         };
         /**
          * LegSetup
-         * @description One bought option leg: how its contract is picked and the rules it carries.
+         * @description One option leg, bought or sold: how its contract is picked and the rules it carries.
          */
         "LegSetup-Input": {
             /** Contracts */
@@ -20269,13 +20269,19 @@ export interface components {
              * @enum {string}
              */
             right: "call" | "put";
+            /**
+             * Side
+             * @default buy
+             * @enum {string}
+             */
+            side?: "buy" | "sell";
             stop_loss?: components["schemas"]["StopLoss-Input"] | null;
             /** Strike */
             strike: components["schemas"]["AtTheMoney"] | components["schemas"]["StepsFromTheMoney"];
         };
         /**
          * LegSetup
-         * @description One bought option leg: how its contract is picked and the rules it carries.
+         * @description One option leg, bought or sold: how its contract is picked and the rules it carries.
          */
         "LegSetup-Output": {
             /** Contracts */
@@ -20291,6 +20297,12 @@ export interface components {
              * @enum {string}
              */
             right: "call" | "put";
+            /**
+             * Side
+             * @default buy
+             * @enum {string}
+             */
+            side?: "buy" | "sell";
             stop_loss?: components["schemas"]["StopLoss-Output"] | null;
             /** Strike */
             strike: components["schemas"]["AtTheMoney"] | components["schemas"]["StepsFromTheMoney"];
@@ -23421,7 +23433,7 @@ export interface components {
              * Setting
              * @enum {string}
              */
-            setting: "entry_time" | "exit_time" | "no_reentry_after" | "square_off" | "leg" | "leg_right" | "leg_contracts" | "leg_expiry" | "leg_strike" | "leg_stop_loss" | "leg_momentum" | "leg_reentry" | "slippage" | "price_step" | "fees" | "starting_cash";
+            setting: "entry_time" | "exit_time" | "no_reentry_after" | "square_off" | "leg" | "leg_side" | "leg_right" | "leg_contracts" | "leg_expiry" | "leg_strike" | "leg_stop_loss" | "leg_momentum" | "leg_reentry" | "slippage" | "price_step" | "fees" | "starting_cash";
         };
         /**
          * OptionsBacktestSetup
@@ -27558,7 +27570,7 @@ export interface components {
         };
         /**
          * StopLoss
-         * @description Sell a leg once its premium has fallen this far below what was paid for it.
+         * @description Close a leg once its premium has moved this far against it: a fall for a bought leg, a rise for a sold one.
          */
         "StopLoss-Input": {
             /**
@@ -27571,7 +27583,7 @@ export interface components {
         };
         /**
          * StopLoss
-         * @description Sell a leg once its premium has fallen this far below what was paid for it.
+         * @description Close a leg once its premium has moved this far against it: a fall for a bought leg, a rise for a sold one.
          */
         "StopLoss-Output": {
             /**

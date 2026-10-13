@@ -33268,7 +33268,7 @@
       },
       "LegSetup-Input": {
         "additionalProperties": false,
-        "description": "One bought option leg: how its contract is picked and the rules it carries.",
+        "description": "One option leg, bought or sold: how its contract is picked and the rules it carries.",
         "properties": {
           "contracts": {
             "maximum": 1000.0,
@@ -33331,6 +33331,15 @@
             "title": "Right",
             "type": "string"
           },
+          "side": {
+            "default": "buy",
+            "enum": [
+              "buy",
+              "sell"
+            ],
+            "title": "Side",
+            "type": "string"
+          },
           "stop_loss": {
             "anyOf": [
               {
@@ -33372,7 +33381,7 @@
       },
       "LegSetup-Output": {
         "additionalProperties": false,
-        "description": "One bought option leg: how its contract is picked and the rules it carries.",
+        "description": "One option leg, bought or sold: how its contract is picked and the rules it carries.",
         "properties": {
           "contracts": {
             "maximum": 1000.0,
@@ -33433,6 +33442,15 @@
               "put"
             ],
             "title": "Right",
+            "type": "string"
+          },
+          "side": {
+            "default": "buy",
+            "enum": [
+              "buy",
+              "sell"
+            ],
+            "title": "Side",
             "type": "string"
           },
           "stop_loss": {
@@ -42263,6 +42281,7 @@
               "no_reentry_after",
               "square_off",
               "leg",
+              "leg_side",
               "leg_right",
               "leg_contracts",
               "leg_expiry",
@@ -52668,7 +52687,7 @@
       },
       "StopLoss-Input": {
         "additionalProperties": false,
-        "description": "Sell a leg once its premium has fallen this far below what was paid for it.",
+        "description": "Close a leg once its premium has moved this far against it: a fall for a bought leg, a rise for a sold one.",
         "properties": {
           "kind": {
             "enum": [
@@ -52700,7 +52719,7 @@
       },
       "StopLoss-Output": {
         "additionalProperties": false,
-        "description": "Sell a leg once its premium has fallen this far below what was paid for it.",
+        "description": "Close a leg once its premium has moved this far against it: a fall for a bought leg, a rise for a sold one.",
         "properties": {
           "kind": {
             "enum": [

@@ -40,6 +40,8 @@ export type SlippageTolerance = Schemas['OptionsBacktestSlippageToleranceRespons
 export type RunStartRequest = Omit<Schemas['OptionsBacktestJobRequest'], 'job_id'>;
 
 export type OptionRight = LegRequest['right'];
+/** A leg with no side is bought, and a bought leg is served with none. */
+export type LegSide = NonNullable<LegRequest['side']>;
 export type SquareOff = SetupRequest['square_off'];
 export type FeeKind = SetupRequest['fees']['kind'];
 export type Anchor = SessionTimeWire['anchor'];

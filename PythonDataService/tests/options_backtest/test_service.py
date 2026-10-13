@@ -55,7 +55,7 @@ from app.options_backtest.fees import FeeRateNotPublished
 from app.options_backtest.fetching import DownloadFailed
 from app.options_backtest.lake_data import UnderlyingDayUnreadable
 from app.options_backtest.results import SessionStatus
-from app.options_backtest.run import RunResult, SessionDataMissing
+from app.options_backtest.run import RunResult, SellingNotReplayed, SessionDataMissing
 from app.options_backtest.saved_runs import DbRunStore, NewRun, RunFailure, create_run, get_run, read_result
 from app.options_backtest.service import (
     MAX_RANGE_SESSIONS,
@@ -359,6 +359,47 @@ async def test_estimated_fees_on_a_date_without_published_rates_fail_the_run_bef
         session_window_for_date(day).open_ms_utc for day in june
     ]
     assert vendor.vendor_requests == 0
+
+
+@respx.mock
+async def test_a_setup_with_a_sold_leg_fails_the_run_at_once_with_its_own_code_and_nothing_is_fetched(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    vendor = Vendor(the_scene())
+    vendor.mount()
+    store, job = FakeStore(), Job()
+    same_day = {"kind": "same_day"}
+    selling = setup_of(
+        legs=[
+            leg(leg_id="long_call", expiry=same_day),
+            leg(leg_id="short_call", side="sell", expiry=same_day),
+        ]
+    )
+
+    with pytest.raises(RunFailedError) as caught:
+        await _execute(store, job, setup=selling)
+
+    [(_, failure, _)] = store.failed
+    assert failure.code == "SELLING_NOT_REPLAYED_YET" and caught.value.failure == failure
+    assert "does not replay a sold leg yet" in failure.reason and "short_call" in failure.reason
+    assert "long_call" not in failure.reason
+    _says_no_date(failure)
+    assert [(item.session_open_ms, item.code, item.message) for item in failure.items] == [
+        (None, "sold_leg", "leg short_call is sold")
+    ]
+    assert vendor.vendor_requests == 0
+    assert job.phases == [], "not even the check of the data began"
+    assert store.completed == [] and store.cancelled == []
+
+
+def test_a_sold_leg_that_is_not_replayed_yet_is_a_failure_of_the_run_as_a_whole_naming_each_sold_leg() -> None:
+    failure = failure_of(SellingNotReplayed(("short_call", "short_put")))
+
+    assert failure.code == "SELLING_NOT_REPLAYED_YET"
+    assert "short_call, short_put" in failure.reason
+    _says_no_date(failure)
+    assert [item.message for item in failure.items] == ["leg short_call is sold", "leg short_put is sold"]
+    assert all(item.session_open_ms is None for item in failure.items)
 
 
 # ── A failure in the download ────────────────────────────────────────────

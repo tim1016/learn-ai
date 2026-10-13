@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.budgets import BudgetUnavailable
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable, option_entry_decision
 from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl, compute_open_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.money import MoneyInputError
@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.sqlite import schema
 from app.broker.alpaca.clerk.sqlite.budget_projection import project_account_budget, project_account_money
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.contract_terms import (
+    ContractTerms,
     ContractTermsConflict,
     contract_terms,
     order_contract_terms,
@@ -785,6 +786,44 @@ def test_an_option_entry_still_working_claims_what_its_contracts_will_cost(tmp_p
 
         fill(repo, working, execution_id="x2", symbol=AAPL_CALL.symbol, side="BUY", quantity=1, price=1.50)
         assert bot_and_free_cash(4_710) == (Decimal(290), Decimal(0), Decimal(710), Decimal(4_000))
+    finally:
+        repo.close()
+
+
+def test_a_spread_one_bot_holds_pledges_cash_that_another_bots_entry_would_spend(tmp_path: Path) -> None:
+    """The cash rule through real fills (#3096). Each bot has a $1,000.00 budget.
+
+    Bot A sold a 200 call at $5.00 and bought a 210 call at $1.00 as its wing: a $400.00 credit, $1,000.00 of
+    collateral, a $600.00 position (-400 + 1,000) and $400.00 of its budget free. Bot B has $1,000.00 free.
+    The account's cash reads $1,900.00, so it can fund B 1,900 - 400 - 1,000 = $500.00: an entry of $800.00
+    is refused and one of $500.00 is not.
+    """
+    wing = ContractTerms(symbol="AAPL261016C00210000", multiplier=100)
+    repo = _budgeted_books(tmp_path, bots={"bot-a": "AAPL", "bot-b": "AAPL"}, budget_cents=100_000)
+    try:
+        sold = accept_option_order(repo, terms=AAPL_CALL, side="sell", contracts=1, decision_id="d1", strategy_instance_id="bot-a")
+        fill(repo, sold, execution_id="x1", symbol=AAPL_CALL.symbol, side="SELL", quantity=1, price=5.00)
+        _acknowledge_filled(repo, sold, symbol=AAPL_CALL.symbol, side="sell", quantity=1, price=5.00, order_id="b1")
+        bought = accept_option_order(repo, terms=wing, side="buy", contracts=1, decision_id="d2", strategy_instance_id="bot-a")
+        fill(repo, bought, execution_id="x2", symbol=wing.symbol, side="BUY", quantity=1, price=1.00)
+        _acknowledge_filled(repo, bought, symbol=wing.symbol, side="buy", quantity=1, price=1.00, order_id="b2")
+
+        budget = project_account_budget(repo._conn, cash=Decimal(1_900), seen_before_ms=NOON + 1, fees=_NO_FEES)
+
+        held = {item.strategy_instance_id: item for item in budget.deployments}
+        assert (held["bot-a"].position_cost, held["bot-a"].free, held["bot-a"].option_collateral) == (
+            Decimal(600), Decimal(400), Decimal(1_000),
+        )
+        assert held["bot-b"].free == Decimal(1_000)
+
+        def asks(cents: int) -> bool:
+            return option_entry_decision(
+                budget, strategy_instance_id="bot-b", commitment_cents=cents, fee_provision_cents=0
+            ).allowed
+
+        assert not asks(80_000)
+        assert asks(50_000)
+        assert not asks(50_001)
     finally:
         repo.close()
 

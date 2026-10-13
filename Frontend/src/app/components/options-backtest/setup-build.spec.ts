@@ -167,6 +167,57 @@ describe('a rule that is on but cannot be read', () => {
   });
 });
 
+describe('a leg’s side', () => {
+  const selling = (): SetupDraft => ({
+    ...newSetupDraft(SESSION_CLOCK),
+    legs: [
+      legFromBuilder(newLegBuilder(), []),
+      legFromBuilder({ ...newLegBuilder(), side: 'sell', strikeKind: 'atm_offset', strikeSteps: '2' }, ['call']),
+    ],
+  });
+
+  it('is sent for a sold leg, and a bought leg sends none, as the server writes none for it', () => {
+    const [bought, sold] = built(selling()).legs;
+
+    expect(bought).not.toHaveProperty('side');
+    expect(sold).toMatchObject({ leg_id: 'call_2', side: 'sell', strike: { kind: 'atm_offset', steps: 2 } });
+  });
+
+  it('reads back from a served selling setup into the draft, and builds the body it came from', () => {
+    const served: ServedSetup = {
+      ...noReentryExampleBody(),
+      legs: [
+        { leg_id: 'long_call', right: 'call', contracts: 1, expiry: { kind: 'this_week' }, strike: { kind: 'atm' } },
+        {
+          leg_id: 'short_call',
+          side: 'sell',
+          right: 'call',
+          contracts: 2,
+          expiry: { kind: 'this_week' },
+          strike: { kind: 'atm_offset', steps: 2 },
+          stop_loss: { kind: 'percent', value: '150' },
+        },
+      ],
+    };
+
+    const draft = draftFromSetup(served, SESSION_CLOCK);
+    const body = built(draft);
+
+    expect(draft.legs.map((leg) => [leg.id, leg.side])).toEqual([
+      ['long_call', 'buy'],
+      ['short_call', 'sell'],
+    ]);
+    expect(draft.legs[1]).toMatchObject({ stopLossOn: true, stopLossKind: 'percent', stopLossValue: '150' });
+    expect(body.legs).toEqual(served.legs);
+  });
+
+  it('is bought for a leg the server served with none, as it serves every bought leg', () => {
+    const draft = draftFromSetup(exampleBody(), SESSION_CLOCK);
+
+    expect(draft.legs.map((leg) => leg.side)).toEqual(['buy', 'buy']);
+  });
+});
+
 describe('times', () => {
   it('a time outside the full session is a problem at its field and there is no body', () => {
     const problems = problemsOf({ ...newSetupDraft(SESSION_CLOCK), entryClock: formatClockText(OPEN - 1), exitClock: formatClockText(CLOSE + 1) });
