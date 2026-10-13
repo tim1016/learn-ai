@@ -35,6 +35,11 @@ export type DayRow = Schemas['OptionsBacktestDayRowResponse'];
 export type MonthRow = Schemas['OptionsBacktestMonthRowResponse'];
 export type SlippagePoint = Schemas['OptionsBacktestSlippagePointResponse'];
 export type SlippageTolerance = Schemas['OptionsBacktestSlippageToleranceResponse'];
+/** Whether the cash could have carried a run, and the run replayed at several starting cashes (#3108). */
+export type CapitalEvidence = Schemas['OptionsBacktestCapitalEvidenceResponse'];
+export type CapitalInvalidEvent = Schemas['OptionsBacktestCapitalInvalidEventResponse'];
+export type CashLevel = Schemas['OptionsBacktestCashLevelResponse'];
+export type RunStamps = Schemas['OptionsBacktestRunStampsResponse'];
 
 /** The body of a run's job without its id: the jobs boundary adds `job_id`. */
 export type RunStartRequest = Omit<Schemas['OptionsBacktestJobRequest'], 'job_id'>;

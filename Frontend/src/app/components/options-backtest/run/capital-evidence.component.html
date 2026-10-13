@@ -1,0 +1,73 @@
+<section class="capital" aria-label="Capital evidence">
+  <h3>Capital evidence</h3>
+  @if (evidence(); as capital) {
+    <p class="sentence">{{ funded() }}</p>
+    @if (capital.ended_by; as ended) {
+      @switch (ended.kind) {
+        @case ('unfunded_close') {
+          <p class="ended">
+            An unfunded close ended it: in the session of <app-timestamp-display [value]="ended.session_open_ms" mode="date-et" granularity="date" />
+            a close at <app-timestamp-display [value]="ended.at_ms" mode="et" granularity="minute" /> left free cash at
+            {{ ended.free_cash_after_usd | authoredUsd }}, below zero.
+          </p>
+        }
+        @case ('position_marked') {
+          <p class="ended">
+            A position marked and not closed ended it: the session of
+            <app-timestamp-display [value]="ended.session_open_ms" mode="date-et" granularity="date" /> ended with a position still held, valued at its mark.
+          </p>
+        }
+        @default { <p class="ended">The evidence ended: {{ ended.kind | receiptLabel }}.</p> }
+      }
+      <p class="note">Later sessions still ran, on the assumption that the position was settled at its mark. They are not continuously funded.</p>
+    } @else {
+      <p class="note">Nothing ended it: no close left free cash below zero and no session ended with a position marked.</p>
+    }
+    <p class="note">The totals above keep every session at its mark. This says only how far the cash provably carried the run.</p>
+    <dl class="tiles">
+      <div class="tile">
+        <dt>Most collateral held</dt>
+        <dd class="big">{{ capital.most_collateral_held_usd | authoredUsd }}</dd>
+        <dd class="sub scope">Over every session the replay ran.</dd>
+      </div>
+      <div class="tile">
+        <dt>Cash this path needed</dt>
+        <dd class="big">{{ capital.cash_needed_usd | authoredUsd }}@if (capital.cash_needed_is_incomplete) { <span class="tag">incomplete</span> }</dd>
+        <dd class="sub scope">Over the funded stretch only, the steps before the event.</dd>
+        <dd class="sub">True of this recorded path only. It is not a minimum and not a safe amount.</dd>
+        @if (capital.cash_needed_is_incomplete) {
+          <dd class="sub">An entry was refused for cash on the way, so a larger starting cash would have traded a different path.</dd>
+        }
+      </div>
+      <div class="tile">
+        <dt>Least free cash seen</dt>
+        <dd class="big">{{ capital.least_free_cash_usd | authoredUsd }}</dd>
+        <dd class="sub scope">Over every session the replay ran.</dd>
+        <dd class="sub">Below zero is included.</dd>
+      </div>
+      <div class="tile">
+        <dt>Largest assignment obligation held</dt>
+        <dd class="big">{{ capital.largest_assignment_obligation_usd | authoredUsd }}</dd>
+        <dd class="sub scope">Over every session the replay ran.</dd>
+        <dd class="sub">Sold contracts times strike times multiplier, gross. It is not a loss.</dd>
+      </div>
+      <div class="tile">
+        <dt>Closes that relied on their own relief</dt>
+        <dd class="big">{{ capital.closes_relied_on_own_relief }}</dd>
+        <dd class="sub scope">Over every session the replay ran.</dd>
+        <dd class="sub">A buy-back of a sold leg that cost more than the free cash before it. Alpaca may refuse such an order.</dd>
+      </div>
+    </dl>
+  } @else {
+    <p class="note">Not recorded. This run was saved before capital evidence was kept; its figures are as they were.</p>
+  }
+  @if (stamps(); as stamp) {
+    <p class="note">
+      Replay rules version {{ stamp.replay_rules_version }}. Requirement rule: {{ ruleWords() }}, as its page read on
+      <app-timestamp-display [value]="stamp.requirement_rule_read_at_ms" mode="date-et" granularity="date" />.
+      It is today’s rule and is no evidence of what a broker required on a session’s date.
+    </p>
+  } @else {
+    <p class="note">The replay rules and the requirement rule it used are not recorded.</p>
+  }
+</section>

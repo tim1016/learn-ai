@@ -1,5 +1,6 @@
+import { formatReceiptLabel } from '../../shared/pipes/receipt-label.pipe';
 import type { JobEventRecord, JobState } from '../../services/jobs.service';
-import type { SlippageTolerance } from './options-backtest.types';
+import type { CapitalEvidence, CapitalInvalidEvent, SlippageTolerance } from './options-backtest.types';
 
 /**
  * Words and small shapes for a run on screen. Every figure stays the
@@ -58,6 +59,36 @@ export function toleranceSentence(tolerance: SlippageTolerance): string {
   if (highest != null) return `The result survives the whole ladder, up to ${highest}% slippage.`;
   if (first != null) return `The result is not profitable even at the lowest slippage tried. It is first unprofitable at ${first}%.`;
   return 'The server gave no slippage tolerance for this run.';
+}
+
+/** How far the cash carried the run, in one sentence. The two numbers are the server's. */
+export function fundedThroughSentence(evidence: CapitalEvidence): string {
+  const { sessions_funded_continuously: through, sessions_tested: of } = evidence;
+  if (of === 0) return 'No session was tested, so there is no cash to judge.';
+  if (evidence.ended_by == null) return `Funded continuously through session ${of} of ${of}: the cash carried the whole run.`;
+  if (through === 0) return `Not funded continuously through even the first of ${of} sessions.`;
+  return `Funded continuously through session ${through} of ${of}.`;
+}
+
+/** What a ladder row says ended its evidence, in a few words for a table cell. A kind with no words is shown as a receipt label. */
+export function capitalEventLabel(kind: CapitalInvalidEvent['kind']): string {
+  switch (kind) {
+    case 'unfunded_close':
+      return 'an unfunded close';
+    case 'position_marked':
+      return 'a position marked';
+    default:
+      return formatReceiptLabel(kind);
+  }
+}
+
+const REQUIREMENT_RULE_WORDS: Readonly<Record<string, string>> = {
+  alpaca_covered_positions: 'Alpaca’s published rule for covered positions',
+};
+
+/** The requirement rule's name in words. A rule this page has no words for is shown as a receipt label, never as its raw token. */
+export function requirementRuleWords(rule: string): string {
+  return REQUIREMENT_RULE_WORDS[rule] ?? formatReceiptLabel(rule);
 }
 
 /** A month as `YYYY-MM`, from the year and month the server counts it by. */
