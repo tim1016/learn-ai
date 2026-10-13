@@ -21,8 +21,9 @@ Formula: admits = need <= free budget and need <= account headroom;
   A refusal is bound by a limit that makes it, short by what that limit must
   cover (the budget covers the entry; at a Deploy the account funds the
   entry and the whole budget set aside), the one short by more when two
-  refuse; a figure that covers what it must is never named. Only a pass
-  names the limit with the least room, which Alpaca's own figure can be.
+  refuse; a figure that covers what it must is never named. Only an entry no
+  limit refuses names the limit with the least room, which Alpaca's own
+  figure can be.
   A figure is stale when its reading is older than ``OBSERVATION_MAX_AGE_MS``;
   one that cannot be worked out is unknown, never zero and never a pass.
   A refusal that a known limit already makes does not wait on an unknown one.
@@ -188,9 +189,11 @@ class FundingAnswer:
     """Whether the bot can fund the entry, by which limit, and the words for it.
 
     ``admits`` is the Clerk's own rule and is ``None`` when there is no need
-    or a limit it depends on is not known. ``binding`` is the known limit with
-    the least room. ``shortfall_cents`` and ``fits`` are ``None`` when they
-    cannot be said. ``action`` is given only where it is known to work.
+    or a limit it depends on is not known. ``binding`` is the limit that
+    refuses the entry when one does, and otherwise the known limit with the
+    least room.
+    ``shortfall_cents`` and ``fits`` are ``None`` when they cannot be said.
+    ``action`` is given only where it is known to work.
     ``fits_sentence`` says ``fits`` with the caveat that every bot draws on
     the same account headroom. ``budget_left`` and ``headroom_left`` are what
     each limit leaves after one entry, given only by ``deploy_funding_answer``;
@@ -248,7 +251,7 @@ def funding_answer(
             )
         room = _Room(_known_cents(free), _known_cents(headroom), _known_cents(broker))
         admits = _admits(room, need)
-        binding = room.binding()
+        binding = _bound_by(room, need)
         shortfall, fits = _shortfall_and_fits(need, admits is not None, binding)
         name = None if binding is None else binding[0]
         return FundingAnswer(
@@ -259,7 +262,7 @@ def funding_answer(
                 shortfall_cents=shortfall,
             ),
             action=_action(admits, name),
-            fits_sentence=_fits_sentence(fits, name),
+            fits_sentence=_fits_sentence(fits, name, refuses="this entry" if admits is False else None),
         )
 
 
@@ -301,8 +304,7 @@ def deploy_funding_answer(
         broker = _aged(broker_buying_power, now_ms=now_ms)
         room = _Room(_known_cents(free), _known_cents(headroom), _known_cents(broker))
         admits = _admits(room, need, set_aside=amount_cents)
-        # A refusal is bound by the limit that makes it, a pass by the limit with the least room.
-        binding = (_refusing_limit(room, need, set_aside=amount_cents) if admits is False else None) or room.binding()
+        binding = _bound_by(room, need, set_aside=amount_cents)
         # An untyped budget is no missing reading: the account's own figures still say what fits.
         judged = admits is not None or (amount_cents is None and (account is None or room.headroom is not None))
         shortfall, fits = _shortfall_and_fits(need, judged, binding, set_aside=amount_cents)
@@ -319,7 +321,9 @@ def deploy_funding_answer(
                 shortfall_cents=shortfall,
             ),
             action=_deploy_action(admits, name, need),
-            fits_sentence=_fits_sentence(fits, name, simulated=simulated, refused=admits is False),
+            fits_sentence=_fits_sentence(
+                fits, name, simulated=simulated, refuses="this budget" if admits is False else None,
+            ),
             budget_left=None if amount_cents is None else _left_after_one_entry(free, need, what="Budget typed in Deploy"),
             headroom_left=_left_after_one_entry(
                 headroom, need, what="Simulated starting cash" if simulated else "Unreserved account cash",
@@ -537,6 +541,16 @@ def _refusing_limit(room: _Room, need: EntryNeed | None, *, set_aside: int | Non
     return name, cents
 
 
+def _bound_by(room: _Room, need: EntryNeed | None, *, set_aside: int | None = None) -> tuple[LimitName, int] | None:
+    """The limit an answer is bound by: the one that refuses the entry when one does, else the one with the least room.
+
+    Alpaca's own figure never refuses, so when our own limit does and the
+    broker's has the least room, it is not the one named. A refusal is exactly
+    what ``_admits`` reports as ``False``, so this needs no verdict handed in.
+    """
+    return _refusing_limit(room, need, set_aside=set_aside) or room.binding()
+
+
 def _admits(room: _Room, need: EntryNeed | None, *, set_aside: int | None = None) -> bool | None:
     """The Clerk's rule on the bot's own two limits.
 
@@ -597,21 +611,22 @@ def _deploy_action(admits: bool | None, binding: LimitName | None, need: EntryNe
 
 
 def _fits_sentence(
-    fits: int | None, binding: LimitName | None, *, simulated: bool = False, refused: bool = False,
+    fits: int | None, binding: LimitName | None, *, simulated: bool = False, refuses: str | None = None,
 ) -> str | None:
     """How many whole entries fit, said with the caveat that every bot draws on the same account (PRD #3095, story 18).
 
     The count is of the limit that binds: the one with the least room for a
     pass, and for a refusal the limit that refuses, which need not have the
-    least room. A Dry Run's cash is its own, so it is counted against that
-    cash and no caveat is said: no other bot draws on it.
+    least room; ``refuses`` is what it refuses, in words ("this budget" at a
+    Deploy, "this entry" for a bot). A Dry Run's cash is its own, so it is
+    counted against that cash and no caveat is said: no other bot draws on it.
     """
     if fits is None or binding is None:
         return None
     count = "No whole entry fits" if fits == 0 else "One whole entry fits" if fits == 1 else f"{fits:,} whole entries fit"
     if simulated:
         return f"{count} right now with this budget as its starting cash."
-    which = "the limit that refuses this budget" if refused else "the limit with the least room"
+    which = f"the limit that refuses {refuses}" if refuses else "the limit with the least room"
     return (
         f"{count} right now under {_LIMIT_WORDS[binding]}, {which}. Every bot competes "
         "for the same account headroom, so these counts are never added up across bots."
@@ -675,11 +690,6 @@ def _sentence(
         return f"{sentence} {_PASS_NOTE}"
     if binding == _ACCOUNT_HEADROOM:
         limits = f"This bot {_has_free(free)}, but {_account_can_fund(headroom, only=True)}."
-    elif binding == _BROKER_BUYING_POWER and room.broker is not None:
-        limits = (
-            f"This bot {_has_free(free)} and {_account_can_fund(headroom)}, "
-            f"but Alpaca's option buying power is only {_usd(room.broker)}."
-        )
     else:
         limits = f"This bot {_has_free(free, only=True)}."
         if headroom < need.commitment_cents:

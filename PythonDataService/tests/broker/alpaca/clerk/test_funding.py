@@ -133,16 +133,33 @@ def test_broker_buying_power_can_bind_but_never_changes_what_the_clerk_admits() 
     assert answer.action is None
 
 
-def test_broker_buying_power_that_binds_does_not_rescue_a_refusal_our_own_rule_makes() -> None:
+def test_a_refusal_the_bots_budget_makes_is_bound_by_the_budget_though_buying_power_has_less_room() -> None:
+    """The $300 budget refuses $800; Alpaca's $100 is the smallest figure but never refuses (#3122).
+
+    The answer is what it is without the broker's figure: the budget binds, $500 short, with the budget's action.
+    """
     answer = _answer(_account(_bot("b", committed=300), cash=5000), need=_need(80_000), broker=_broker(10_000))
 
-    assert (answer.admits, answer.binding, answer.shortfall_cents) == (False, "broker_buying_power", 70_000)
+    assert (answer.admits, answer.binding, answer.shortfall_cents, answer.fits) == (False, "bot_budget", 50_000, 0)
     assert answer.sentence == (
-        "This bot has $300.00 free and the account can fund $5,000.00 after protecting other positions, "
-        "but Alpaca's option buying power is only $100.00. "
-        "The entry needs $800.00 including its fee provision. Shortfall: $700.00."
+        "This bot has only $300.00 free. The entry needs $800.00 including its fee provision. Shortfall: $500.00."
     )
-    assert answer.action is None
+    assert answer.action == "Stop the bot and deploy it again with a larger budget, or reduce its size."
+    assert answer.fits_sentence == (
+        "No whole entry fits right now under the bot's budget, the limit that refuses this entry. "
+        "Every bot competes for the same account headroom, so these counts are never added up across bots."
+    )
+
+
+def test_a_refusal_the_accounts_headroom_makes_is_bound_by_the_headroom_though_buying_power_has_less_room() -> None:
+    answer = _answer(_reproduced_account(), need=_need(80_000), broker=_broker(10_000))
+
+    assert (answer.admits, answer.binding, answer.shortfall_cents, answer.fits) == (False, "account_headroom", 30_000, 0)
+    assert answer.sentence == (
+        "This bot has $1,000.00 free, but the account can fund only $500.00 after protecting other positions. "
+        "The entry needs $800.00 including its fee provision. Shortfall: $300.00."
+    )
+    assert answer.action == "Free another bot's budget, or add cash to the account."
 
 
 def test_an_entry_every_limit_covers_passes_with_the_note_and_counts_how_many_fit() -> None:
