@@ -176,6 +176,8 @@ def test_a_new_way_to_close_a_leg_must_be_weighed_in_what_a_session_needs() -> N
         ExitReason.SQUARE_OFF,
         ExitReason.EXIT_TIME,
         ExitReason.MARKED_NOT_SOLD,
+        # A mark is how a session ends for a leg that was not closed. It decides nothing, so it is not a way to close.
+        ExitReason.MARKED_NOT_BOUGHT_BACK,
     }, (
         "the replay's ways of closing a leg changed. ``needs._can_come_back`` reasons from them: only a stop on the "
         "leg itself, or a complete square-off with a stop on some leg, closes a leg that can start a re-entry, and "

@@ -6069,9 +6069,10 @@ export interface paths {
          *     The whole run, however many trades it has: the page size of the trades route does not apply. A run that is not
          *     complete is a 409.
          *
-         *     ``exit_kind`` tells a leg that was sold (``sale``) from one marked and not sold (``mark``). For a mark,
-         *     ``exit_price_usd`` is the mark and not a price anything sold at, ``exit_seen_usd`` is empty and ``exit_fee_usd`` is
-         *     ``0``; a sum of ``exit_price_usd`` over every row therefore mixes sales and marks.
+         *     ``exit_kind`` tells a leg that was closed by a sale (``sale``) or by a buy-back (``buy_back``) from one marked
+         *     (``mark``). For a mark, ``exit_price_usd`` is the mark and not a price anything traded at, ``exit_seen_usd`` is
+         *     empty and ``exit_fee_usd`` is ``0``; a sum of ``exit_price_usd`` over every row therefore mixes sales, buy-backs
+         *     and marks.
          */
         get: operations["export_the_trades_api_research_options_backtest_runs__run_id__trades_csv_get"];
         put?: never;
@@ -22755,13 +22756,13 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "picked" | "pick_refused" | "starting_price_taken" | "no_starting_price" | "momentum_hit" | "entry_filled" | "entry_dropped" | "entry_refused_for_cash" | "stop_hit" | "squared_off" | "exit_time" | "close_filled" | "re_entry_earned" | "re_entry_blocked_by_cutoff" | "re_entry_lost" | "leg_cancelled" | "marked_not_sold";
+            kind: "picked" | "pick_refused" | "starting_price_taken" | "no_starting_price" | "momentum_hit" | "entry_filled" | "entry_dropped" | "entry_refused_for_cash" | "entry_refused_for_cover" | "entry_refused_for_second_expiry" | "entry_refused_for_other_side" | "sale_not_taken_at_zero" | "stop_hit" | "squared_off" | "exit_time" | "close_filled" | "re_entry_earned" | "re_entry_blocked_by_cutoff" | "re_entry_lost" | "leg_cancelled" | "marked_not_sold" | "marked_not_bought_back";
             /** Leg Id */
             leg_id: string;
             /** Price Usd */
             price_usd?: string | null;
             /** Reason */
-            reason?: ("chain_incomplete" | "expiry_not_listed" | "expiry_not_a_session" | "strike_not_listed" | "not_standard" | "cash_short" | "square_off" | "exit_time") | null;
+            reason?: ("chain_incomplete" | "expiry_not_listed" | "expiry_not_a_session" | "strike_not_listed" | "not_standard" | "cash_short" | "other_side" | "second_expiry" | "cover_did_not_trade" | "cover_not_yet_held" | "sale_at_zero" | "square_off" | "exit_time") | null;
         };
         /** OptionsBacktestExitCountResponse */
         OptionsBacktestExitCountResponse: {
@@ -22771,7 +22772,7 @@ export interface components {
              * Reason
              * @enum {string}
              */
-            reason: "stop" | "square_off" | "exit_time" | "marked_not_sold";
+            reason: "stop" | "square_off" | "exit_time" | "marked_not_sold" | "marked_not_bought_back";
         };
         /**
          * OptionsBacktestFillResponse
@@ -22788,7 +22789,7 @@ export interface components {
             /** Entry Number */
             entry_number: number;
             /** Exit Reason */
-            exit_reason?: ("stop" | "square_off" | "exit_time" | "marked_not_sold") | null;
+            exit_reason?: ("stop" | "square_off" | "exit_time" | "marked_not_sold" | "marked_not_bought_back") | null;
             /** Filled Usd */
             filled_usd: string;
             /**
@@ -23556,7 +23557,10 @@ export interface components {
         };
         /**
          * OptionsBacktestTradeFillResponse
-         * @description An order that filled: the bar it filled in, the open of that bar (the price seen) and the price it filled at.
+         * @description An order that filled: the side it traded on, the bar it filled in, the open of that bar (the price seen) and
+         *     the price it filled at.
+         *
+         *     A bought leg's entry is a buy and its exit a sale. A sold leg's entry is a sale and its exit a buy-back.
          */
         OptionsBacktestTradeFillResponse: {
             /** Bar Close Ms */
@@ -23565,6 +23569,11 @@ export interface components {
             filled_usd: string;
             /** Seen Usd */
             seen_usd: string;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "buy" | "sell";
         };
         /**
          * OptionsBacktestTradeMarkResponse
@@ -23578,7 +23587,12 @@ export interface components {
         };
         /**
          * OptionsBacktestTradeResponse
-         * @description One leg round trip. It left by a ``sale`` or, when its sale never filled, by a ``mark``; exactly one is set.
+         * @description One leg round trip. It left by an order that filled, or, when that never filled, by a ``mark``.
+         *
+         *     ``exit_kind`` says which: ``sale`` for a bought leg's sale, ``buy_back`` for a sold leg's buy-back, ``mark`` for a
+         *     leg valued and not closed. The order that filled is ``sale`` whichever way it traded (its ``side`` says
+         *     which), and exactly one of ``sale`` and ``mark`` is set. A sold leg's mark is an amount owed: ``entry.side`` says
+         *     so, since a mark has none.
          */
         OptionsBacktestTradeResponse: {
             contract: components["schemas"]["OptionsBacktestContractResponse"];
@@ -23601,12 +23615,12 @@ export interface components {
              * Exit Kind
              * @enum {string}
              */
-            exit_kind: "sale" | "mark";
+            exit_kind: "sale" | "buy_back" | "mark";
             /**
              * Exit Reason
              * @enum {string}
              */
-            exit_reason: "stop" | "square_off" | "exit_time" | "marked_not_sold";
+            exit_reason: "stop" | "square_off" | "exit_time" | "marked_not_sold" | "marked_not_bought_back";
             /** Leg Id */
             leg_id: string;
             mark?: components["schemas"]["OptionsBacktestTradeMarkResponse"] | null;

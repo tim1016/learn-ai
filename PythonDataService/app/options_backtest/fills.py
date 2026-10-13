@@ -4,14 +4,17 @@ Formula: buy fill   = ceil_to_step(seen · (1 + p/100))
     sell fill  = floor_to_step(seen · (1 − p/100)), which is never below zero
     order value = filled · multiplier · contracts
     entry cost  = order value + fee;  exit proceeds = order value − fee
-    P&L = (sold − bought) · multiplier · contracts − entry fee − exit fee
+    cash effect = − entry cost for a buy and + exit proceeds for a sale, whichever of a leg's two orders it is
+    P&L = (sold − bought) · multiplier · contracts − entry fee − exit fee, where a sold leg is sold at its entry and
+          bought at its exit, or marked (#3106)
     stop level  = bought · (1 − v/100) for a percent stop, bought − v for a points stop;
                   hit by a close ≤ level
     momentum level from the starting price s = s · (1 ± v/100) or s ± v;
                   reached by a close ≥ level when it is up, ≤ level when it is down
   with p the slippage in percent, v a rule's value, and ``seen`` the open of the fill bar.
-Reference: the owner's rules in #3030 (behaviours 3 to 6 and 16). Nothing outside the repo is
-  ported: AlgoTest's own pages name the same triggers but fill at the trigger level, and this
+Reference: the owner's rules in #3030 (behaviours 3 to 6 and 16) and in #3095 (a sold leg opens at the sale
+  price and closes at the buy price, and its profit is the sale price less the buy-back price or the mark). Nothing
+  outside the repo is ported: AlgoTest's own pages name the same triggers but fill at the trigger level, and this
   does not.
 Canonical implementation: this file.
 Validated against: tests/options_backtest/test_fills.py, and through the replay in
@@ -26,6 +29,7 @@ price step: only a fill is, against the trader.
 from __future__ import annotations
 
 from decimal import MAX_EMAX, MIN_EMIN, Context, Decimal, Inexact, InvalidOperation, Overflow, localcontext
+from typing import Literal
 
 from app.options_backtest.setup import Momentum, StopLoss
 
@@ -81,10 +85,28 @@ def exit_proceeds(filled: Decimal, *, multiplier: int, contracts: int, fee: Deci
         return order_value(filled, multiplier=multiplier, contracts=contracts) - fee
 
 
+def cash_effect(
+    side: Literal["buy", "sell"], filled: Decimal, *, multiplier: int, contracts: int, fee: Decimal
+) -> Decimal:
+    """The cash an order moves, signed: a buy takes its cost out, a sale brings its proceeds in.
+
+    A sold leg's two orders are the sale that opens it (cash in) and the buy-back that closes it (cash out).
+    """
+    with localcontext(EXACT):
+        if side == "buy":
+            return -entry_cost(filled, multiplier=multiplier, contracts=contracts, fee=fee)
+        return exit_proceeds(filled, multiplier=multiplier, contracts=contracts, fee=fee)
+
+
 def trade_pnl(
     *, bought: Decimal, sold: Decimal, multiplier: int, contracts: int, entry_fee: Decimal, exit_fee: Decimal
 ) -> Decimal:
-    """A round trip's profit: the price move on every share, less both fees. ``sold`` may be a mark."""
+    """A round trip's profit: the price move on every share, less both fees.
+
+    For a bought leg ``bought`` is its entry and ``sold`` its sale, or its mark. For a sold leg ``sold`` is the price
+    it was sold for at its entry and ``bought`` is what it was bought back for, or its mark. The fees are its entry's
+    and its exit's, whichever way each went.
+    """
     with localcontext(EXACT):
         return (sold - bought) * multiplier * contracts - entry_fee - exit_fee
 

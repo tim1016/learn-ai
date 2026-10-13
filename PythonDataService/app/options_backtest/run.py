@@ -19,8 +19,10 @@ the same data, with that value's own carried cash. A different slippage moves a 
 starts, and can turn a cash refusal, so re-pricing the fills of one replay would be wrong exactly where it matters.
 The contracts a session can read do not depend on slippage, so one set of loaded days serves every value.
 
-Cash and a leg marked, not sold. The leg has paid out and not been paid back; the next session starts with its mark in
-cash, and the session's profit counts it at its mark. ``SessionResult`` keeps each figure.
+Cash and a leg marked. A bought leg marked, not sold, has paid out and not been paid back; the next session starts
+with its mark in cash, and the session's profit counts it at its mark. A sold leg marked, not bought back, has been
+paid and owes its mark: the next session starts with that mark out of its cash. The outcome signs the mark that way
+(``SessionOutcome.marked_value_usd``), so the carried cash is the same formula. ``SessionResult`` keeps each figure.
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ from app.options_backtest import fills
 from app.options_backtest.data import RunData
 from app.options_backtest.fees import FeeRateNotPublished, fee_for_policy, unpublished_fee_types
 from app.options_backtest.needs import session_needs
-from app.options_backtest.replay import replay_session
+from app.options_backtest.replay import refuse_sold_leg_rules, replay_session
 from app.options_backtest.results import SessionOutcome, SessionStatus
 from app.options_backtest.session_market import DayMarket, bars_by_close, window_only_market
 from app.options_backtest.session_result import PinnedDay, SessionPins, SessionResult
@@ -55,25 +57,6 @@ class RunStopped(Exception):
     def __init__(self, sessions_done: int) -> None:
         self.sessions_done = sessions_done
         super().__init__(f"the run was stopped after {sessions_done} sessions")
-
-
-class SellingNotReplayed(Exception):
-    """The setup sells a leg, and the replay trades bought legs only until selling is replayed (#3106).
-
-    ``leg_ids`` are the sold legs, in the setup's order.
-    """
-
-    def __init__(self, leg_ids: tuple[str, ...]) -> None:
-        self.leg_ids = leg_ids
-        super().__init__(f"selling is not replayed yet; sold: {', '.join(leg_ids)}")
-
-
-def refuse_a_sold_leg(setup: OptionsBacktestSetup) -> None:
-    """``SellingNotReplayed`` when ``setup`` has a sold leg. Asked before anything is fetched, and again by the replay,
-    so no path replays a sold leg as if it were bought."""
-    sold = tuple(leg.leg_id for leg in setup.legs if leg.side == "sell")
-    if sold:
-        raise SellingNotReplayed(sold)
 
 
 class SessionDataMissing(Exception):
@@ -185,7 +168,7 @@ class _Carried:
 
 
 def _check_the_run_can_start(setup: OptionsBacktestSetup, sessions: Sequence[date]) -> None:
-    refuse_a_sold_leg(setup)
+    refuse_sold_leg_rules(setup)
     if not sessions:
         raise ValueError("a run needs at least one session")
     if any(later <= earlier for earlier, later in pairwise(sessions)):
@@ -310,8 +293,8 @@ def run_sessions(
     ``on_session(done, total, day)`` is called after each session is replayed. ``should_stop()`` is asked before each
     session; when it says yes, ``RunStopped`` is raised and nothing is returned. Raises ``SessionDataMissing`` for a
     session whose data is not captured and ``FeeRateNotPublished`` before anything is read when the setup's fees are
-    estimated and some session is on a date the fee model has no rate for. ``SellingNotReplayed`` before anything is
-    read when the setup has a sold leg.
+    estimated and some session is on a date the fee model has no rate for. ``SoldLegRulesNotReplayed`` before anything
+    is read when the setup has a sold leg and any leg carries a stop loss or a re-entry rule.
     """
     _check_the_run_can_start(setup, sessions)
     run = _Run(setup, data, slippage_ladder)

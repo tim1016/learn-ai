@@ -8,6 +8,7 @@ import pytest
 
 from app.options_backtest import fills
 from app.options_backtest.fills import (
+    cash_effect,
     entry_cost,
     exit_proceeds,
     momentum_level,
@@ -107,6 +108,29 @@ def test_a_trades_profit_is_the_price_move_less_both_fees_and_equals_the_cash_it
     assert pnl == D("-146.60")
     # -517.30 out, +370.70 back.
     assert pnl == -D("517.30") + D("370.70")
+
+
+def test_a_buy_moves_its_cost_out_of_the_cash_and_a_sale_moves_its_proceeds_in_whichever_order_of_a_leg_it_is() -> None:
+    # A bought leg buys to open (-517.30) and sells to close (+370.70). A sold leg sells to open and buys to close.
+    assert cash_effect("buy", D("2.58"), multiplier=100, contracts=2, fee=D("1.30")) == D("-517.30")
+    assert cash_effect("sell", D("1.86"), multiplier=100, contracts=2, fee=D("1.30")) == D("370.70")
+    # A sale whose fee is more than its value takes cash out.
+    assert cash_effect("sell", D("0.00"), multiplier=100, contracts=1, fee=D("0.65")) == D("-0.65")
+
+
+def test_a_sold_legs_profit_is_its_sale_less_its_buy_back_less_both_fees_and_equals_the_cash_it_moved() -> None:
+    # Sold at 2.20 and bought back at 1.50, 2 contracts, a fee of 1.30 each way:
+    # (2.20 - 1.50) * 100 * 2 = 140.00, less 1.30 twice = 137.40.
+    pnl = trade_pnl(
+        bought=D("1.50"), sold=D("2.20"), multiplier=100, contracts=2, entry_fee=D("1.30"), exit_fee=D("1.30")
+    )
+
+    assert pnl == D("137.40")
+    # +438.70 in at the sale (440.00 less 1.30), -301.30 out at the buy-back (300.00 and 1.30).
+    cash = cash_effect("sell", D("2.20"), multiplier=100, contracts=2, fee=D("1.30")) + cash_effect(
+        "buy", D("1.50"), multiplier=100, contracts=2, fee=D("1.30")
+    )
+    assert pnl == cash == D("137.40")
 
 
 def test_a_percent_stop_sits_below_the_buy_fill_and_is_not_rounded() -> None:

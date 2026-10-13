@@ -131,6 +131,48 @@ def test_a_sold_trade_and_a_marked_one_are_written_cell_for_cell_as_they_were_sa
     assert trades_csv([_sold(), _marked()]).decode("utf-8") == THE_TWO_TRADES_CSV
 
 
+def test_a_sold_leg_bought_back_is_a_buy_back_and_one_marked_as_owed_is_a_mark_with_its_own_reason() -> None:
+    sold_to_open = Fill("short_call", CALL, "sell", 1, 100, OPEN_MS + 360_000, D("2.20"), D("2.20"))
+    base = _sold().trade
+    bought_back = replace(
+        base,
+        leg_id="short_call",
+        entry_number=0,
+        contracts=1,
+        starting_price=None,
+        momentum_level=None,
+        stop_level=None,
+        entry=sold_to_open,
+        exit_reason=ExitReason.EXIT_TIME,
+        exit=Fill("short_call", CALL, "buy", 1, 100, OPEN_MS + 3_660_000, D("1.50"), D("1.50")),
+        entry_fee_usd=D("0"),
+        exit_fee_usd=D("0"),
+        pnl_usd=D("70.00"),
+    )
+    owed = replace(
+        bought_back,
+        exit_reason=ExitReason.MARKED_NOT_BOUGHT_BACK,
+        exit=Mark(OPEN_MS + 6_000_000, D("2.40")),
+        pnl_usd=D("-20.00"),
+    )
+
+    [_, back_row, owed_row] = _rows(trades_csv([StoredTrade(OPEN_MS, 0, bought_back), StoredTrade(OPEN_MS, 1, owed)]))
+
+    back, owes = (dict(zip(CSV_HEADER, each, strict=True)) for each in (back_row, owed_row))
+    assert (back["exit_reason"], back["exit_kind"], back["exit_seen_usd"], back["exit_price_usd"]) == (
+        "exit_time",
+        "buy_back",
+        "1.50",
+        "1.50",
+    )
+    assert (owes["exit_reason"], owes["exit_kind"], owes["exit_seen_usd"], owes["exit_price_usd"]) == (
+        "marked_not_bought_back",
+        "mark",
+        "",
+        "2.40",
+    )
+
+
 def test_a_run_with_no_trade_is_the_header_alone() -> None:
     assert trades_csv([]).decode("utf-8") == HEADER_LINE + "\r\n"
 

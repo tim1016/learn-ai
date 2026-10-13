@@ -79,6 +79,7 @@ def test_the_summary_counts_the_sessions_and_trades_of_the_run() -> None:
         (ExitReason.SQUARE_OFF, 0),
         (ExitReason.EXIT_TIME, 2),
         (ExitReason.MARKED_NOT_SOLD, 1),
+        (ExitReason.MARKED_NOT_BOUGHT_BACK, 0),
     )
 
 

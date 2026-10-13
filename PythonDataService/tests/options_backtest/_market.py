@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import date
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from app.options.contract import OptionContract, OptionRight
 from app.options_backtest.market import MinuteBar, Picked, PickRefused
@@ -111,11 +111,15 @@ def leg(
     right: OptionRight = "call",
     *,
     contracts: int = 1,
+    side: Literal["buy", "sell"] = "buy",
     stop: tuple[str, str] | None = None,
     momentum: tuple[str, str] | None = None,
     reentry: tuple[str, int] | None = None,
 ) -> dict[str, Any]:
-    """A leg as a setup is written: ``stop=("percent", "25")``, ``momentum=("percent_up", "25")``, ``reentry=("at_once", 1)``."""
+    """A leg as a setup is written: ``stop=("percent", "25")``, ``momentum=("percent_up", "25")``, ``reentry=("at_once", 1)``.
+
+    A leg is bought unless ``side="sell"``, and a bought leg writes no side, as a stored one does not.
+    """
     written: dict[str, Any] = {
         "leg_id": leg_id,
         "right": right,
@@ -123,6 +127,8 @@ def leg(
         "expiry": {"kind": "same_day"},
         "strike": {"kind": "atm"},
     }
+    if side == "sell":
+        written["side"] = "sell"
     if stop is not None:
         written["stop_loss"] = {"kind": stop[0], "value": stop[1]}
     if momentum is not None:
