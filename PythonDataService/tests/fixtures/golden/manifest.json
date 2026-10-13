@@ -2472,6 +2472,61 @@
       "validated_by": [
         "tests/options_backtest/test_golden_spy_2025_06_10.py"
       ]
+    },
+    {
+      "id": "options-backtest-spy-2026-10-09-sold-spread",
+      "name": "Options Backtest: the vendor's real answers for SPY on 2026-10-09, from the lake's fetchers to a call credit spread's entry, a stop on its sold leg and its exit, worked by hand",
+      "category": "options-backtest",
+      "canonical_module": "PythonDataService/app/data_lake/option_listing.py, PythonDataService/app/data_lake/option_bars.py, PythonDataService/app/options_backtest/lake_data.py, PythonDataService/app/options_backtest/run.py, PythonDataService/app/options_backtest/replay.py, PythonDataService/app/options_backtest/cover_book.py",
+      "canonical_callable": "ensure_option_listing, ensure_option_day_bars, LakeRunData, run_sessions, replay_session, collateral",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "A call credit spread worked out by hand (arithmetic on recorded prices) from the vendor's own answers, in the test's comments and asserted as literals, and written down once more in expected.json; no figure is computed by the code under test.",
+        "citation": "Polygon (Massive) REST API answers recorded 2026-10-13, see the fixture attribution; the rules applied are the owner's, in https://github.com/tim1016/learn-ai/issues/3095, and ADR 0078 decisions 4 and 11."
+      },
+      "market_input": {
+        "source": "polygon",
+        "vendor": "Polygon (Massive) REST API, recorded byte for byte",
+        "generated_by": "tests/fixtures/golden/options-backtest/options-backtest-spy-2026-10-09-sold-spread/v1/regenerate.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.0,
+        "rtol": 0.0,
+        "note": "Exact. Prices are the vendor's decimals, held as Decimal, and the money is exact Decimal arithmetic on them (a price times 100 times the contracts, less a fee per contract, with slippage rounded against the trader to the price step); a tolerance would only hide a wrong minute or a wrong price."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "manifest.json",
+          "output": "expected.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "manifest.json": "525518339924888f804b78f0c49de6f87049b72317f48d2fe4dcf73c9c78ef86",
+            "spy_minute_2026-10-09.json": "ea31e2712d9915ded6e6dd023a49505bae39a323f9e80f2f7f7c439d86d1d5f2",
+            "spy_contracts_as_of_2026-10-09_expiring_2026-10-09.json": "8e14a90b58e825b945cff991bce1ce01f843c7e248d2cd18b2608440375d57fc",
+            "O_SPY261009C00777000_minute_2026-10-09.json": "4b7dadbf136f7dc95be09f1681cb9571b4b8ac9a453e8aafc20e47991aae3bcc",
+            "O_SPY261009C00779000_minute_2026-10-09.json": "dcbd5be04c7625a32d4e5f9f29f8e6ecebea878d7d9d4bfd3af98b2be2446179",
+            "expected.json": "9c17bf2bcf95b2ee406f5d80374fccdf95e57e83cfc786b67b15114c463262f7",
+            "regenerate.py": "3587f1d179824d77e01ee50e3ea819fa975d8e75efb8edcb8cd77b33b60a876b",
+            "attribution.md": "eacbe1ad404923fd3f0b390883c486d0f170ce25b084e7aac4cf8fb1c282ae1c"
+          },
+          "file_sha256": {
+            "manifest.json": "82c8ebc763849ff87e1eec341df9bf22f239b6c86f3037dd3227522205f3f116",
+            "spy_minute_2026-10-09.json": "f92b8bd0d8ebe2323b09a57a8e98380a49e796604ffac4934f1ba734d0f3116c",
+            "spy_contracts_as_of_2026-10-09_expiring_2026-10-09.json": "729f12fd70ed6081d7fca851520a39d882fa728ae7eef9495dcb95306673f84a",
+            "O_SPY261009C00777000_minute_2026-10-09.json": "7d3993fea4732c4184bbed1a3ee57f385bbdd46d724050d36d72e7a8b25ad6cc",
+            "O_SPY261009C00779000_minute_2026-10-09.json": "600fd1ec5fa778713ee7476a0923125800ade63b3eab7c3586953972a3bd89f7",
+            "expected.json": "c96ef2d905537216657e5089d5e903234e39bc7a4fe64f2c9816d61dbe075d07",
+            "regenerate.py": "3587f1d179824d77e01ee50e3ea819fa975d8e75efb8edcb8cd77b33b60a876b",
+            "attribution.md": "eacbe1ad404923fd3f0b390883c486d0f170ce25b084e7aac4cf8fb1c282ae1c"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/options_backtest/test_golden_spy_2026_10_09_sold_spread.py"
+      ]
     }
   ]
 }

@@ -1,0 +1,76 @@
+{
+ "requests": [
+  {
+   "file": "spy_minute_2026-10-09.json",
+   "method": "GET",
+   "path": "/v2/aggs/ticker/SPY/range/1/minute/2026-10-09/2026-10-09",
+   "query": {
+    "adjusted": "false",
+    "sort": "asc",
+    "limit": "50000"
+   },
+   "http_status": 200,
+   "sha256": "f92b8bd0d8ebe2323b09a57a8e98380a49e796604ffac4934f1ba734d0f3116c",
+   "bytes": 86188
+  },
+  {
+   "file": "spy_contracts_as_of_2026-10-09_expiring_2026-10-09.json",
+   "method": "GET",
+   "path": "/v3/reference/options/contracts",
+   "query": {
+    "underlying_ticker": "SPY",
+    "as_of": "2026-10-09",
+    "expiration_date": "2026-10-09",
+    "limit": "1000"
+   },
+   "http_status": 200,
+   "sha256": "729f12fd70ed6081d7fca851520a39d882fa728ae7eef9495dcb95306673f84a",
+   "bytes": 83340
+  },
+  {
+   "file": "O_SPY261009C00777000_minute_2026-10-09.json",
+   "method": "GET",
+   "path": "/v2/aggs/ticker/O:SPY261009C00777000/range/1/minute/2026-10-09/2026-10-09",
+   "query": {
+    "adjusted": "false",
+    "sort": "asc",
+    "limit": "50000"
+   },
+   "http_status": 200,
+   "sha256": "7d3993fea4732c4184bbed1a3ee57f385bbdd46d724050d36d72e7a8b25ad6cc",
+   "bytes": 33499
+  },
+  {
+   "file": "O_SPY261009C00779000_minute_2026-10-09.json",
+   "method": "GET",
+   "path": "/v2/aggs/ticker/O:SPY261009C00779000/range/1/minute/2026-10-09/2026-10-09",
+   "query": {
+    "adjusted": "false",
+    "sort": "asc",
+    "limit": "50000"
+   },
+   "http_status": 200,
+   "sha256": "600fd1ec5fa778713ee7476a0923125800ade63b3eab7c3586953972a3bd89f7",
+   "bytes": 33843
+  }
+ ],
+ "facts": {
+  "trading_date": "2026-10-09",
+  "expiry": "2026-10-09",
+  "underlying_close_at_0935_new_york": "776.55",
+  "underlying_bar_start_ms": 1791552840000,
+  "entry_fill_bar_start_ms": 1791552900000,
+  "exit_fill_bar_start_ms": 1791574200000,
+  "money_call_strike": "777",
+  "cover_call_strike": "779",
+  "contracts": {
+   "sold_call": "O:SPY261009C00777000",
+   "bought_call": "O:SPY261009C00779000"
+  },
+  "listing_has_next_url": false,
+  "listing_rows": 366,
+  "call_strikes": 183,
+  "put_strikes": 183,
+  "every_listed_contract_is_standard": true
+ }
+}
