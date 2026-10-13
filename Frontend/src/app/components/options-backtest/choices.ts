@@ -1,4 +1,4 @@
-import type { ExpiryKind, FeeKind, MomentumKind, OptionRight, ReentryKind, SquareOff, StopLossKind, StrikeKind } from './options-backtest.types';
+import type { ExpiryKind, FeeKind, LegSide, MomentumKind, OptionRight, ReentryKind, SquareOff, StopLossKind, StrikeKind } from './options-backtest.types';
 
 export interface Choice<T extends string> {
   readonly value: T;
@@ -6,6 +6,11 @@ export interface Choice<T extends string> {
 }
 
 /** Every either-or on the page, in the order the owner reads it. */
+export const SIDE_CHOICES: readonly Choice<LegSide>[] = [
+  { value: 'buy', label: 'Buy' },
+  { value: 'sell', label: 'Sell' },
+];
+
 export const RIGHT_CHOICES: readonly Choice<OptionRight>[] = [
   { value: 'call', label: 'Call' },
   { value: 'put', label: 'Put' },

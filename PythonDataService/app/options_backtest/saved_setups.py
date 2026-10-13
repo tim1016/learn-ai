@@ -46,9 +46,9 @@ _NAME = re.compile(SETUP_NAME_PATTERN)
 
 # How many validation errors a "cannot be opened" reason spells out.
 _REASON_ERRORS = 5
-# The longest sentence the setup's own rules can give is 217 characters: its place, then the re-entry rule's sentence
-# about a leg whose id is 32 letters long. So a sentence that is the setup's own is never cut. One that is longer names
-# something the owner stored of any size (an extra field, an unknown rule kind), and is cut at a word and marked.
+# The longest sentence the setup's own rules can give is 236 characters: its place, then the re-entry rule's sentence
+# about a sold call whose id is 32 letters long. So a sentence that is the setup's own is never cut. One that is longer
+# names something the owner stored of any size (an extra field, an unknown rule kind), and is cut at a word and marked.
 _REASON_PROBLEM_CHARS = 240
 _CUT = " …"
 

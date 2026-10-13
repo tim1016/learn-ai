@@ -130,6 +130,32 @@ describe('the contract line', () => {
     expect(contractLine(leg)).toBe('Buy · 2 contracts · Put · Expires at least 1 day out · 3 strikes below the money');
     expect(contractLine({ ...leg, expiryKind: 'same_day', strikeSteps: 1 })).toBe('Buy · 2 contracts · Put · Expires the same day · 1 strike above the money');
   });
+
+  it('says Sell for a sold leg and reads as a bought one otherwise', () => {
+    const sold = legFromBuilder(builder({ side: 'sell', right: 'put', contracts: '2' }), []);
+
+    expect(contractLine(sold)).toBe('Sell · 2 contracts · Put · Weekly expiry · At the money');
+    expect(contractLine({ ...sold, side: 'buy' })).toBe('Buy · 2 contracts · Put · Weekly expiry · At the money');
+  });
+});
+
+describe('a leg’s side', () => {
+  it('is Buy in a new builder, and the leg it makes carries the side chosen', () => {
+    expect(newLegBuilder().side).toBe('buy');
+    expect(legFromBuilder(newLegBuilder(), []).side).toBe('buy');
+    expect(legFromBuilder(builder({ side: 'sell' }), []).side).toBe('sell');
+  });
+
+  it('is part of the contract a leg keeps when it is copied', () => {
+    const sold = legFromBuilder(builder({ side: 'sell' }), []);
+
+    expect(copyOfLeg(sold, ['call'])).toEqual({ ...sold, id: 'call_2' });
+  });
+
+  it('asks nothing of the builder that a bought leg does not, and a sold leg is held to the same ranges', () => {
+    expect(problemsOf(builder({ side: 'sell' })).size).toBe(0);
+    expect([...problemsOf(builder({ side: 'sell', contracts: '0' })).keys()]).toEqual(['contracts']);
+  });
 });
 
 describe('the legs of a setup', () => {

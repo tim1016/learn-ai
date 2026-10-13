@@ -338,6 +338,77 @@ def test_several_differences_come_in_a_fixed_order_the_window_then_the_legs_then
     ]
 
 
+# ── A leg's side (#3105) ─────────────────────────────────────────────────
+
+COVER = leg(leg_id="long_call")
+BOUGHT_PAIR = {"legs": [COVER, leg(leg_id="short_call")]}
+SOLD_PAIR = {"legs": [COVER, leg(leg_id="short_call", side="sell")]}
+
+
+def test_two_setups_that_differ_only_in_one_legs_side_differ_in_that_setting_and_in_nothing_else() -> None:
+    assert _differences(BOUGHT_PAIR, SOLD_PAIR) == [
+        (Setting.LEG_SIDE, "short_call", "leg short_call: bought or sold", "bought", "sold")
+    ]
+    assert _differences(SOLD_PAIR, BOUGHT_PAIR) == [
+        (Setting.LEG_SIDE, "short_call", "leg short_call: bought or sold", "sold", "bought")
+    ]
+
+
+def test_a_stop_that_is_the_same_rule_on_a_leg_whose_side_changed_is_one_difference_the_side() -> None:
+    stop = {"stop_loss": {"kind": "percent", "value": "40"}}
+    a = {"legs": [COVER, leg(leg_id="short_call", **stop)]}
+    b = {"legs": [COVER, leg(leg_id="short_call", side="sell", **stop)]}
+
+    assert [(setting, leg_id) for setting, leg_id, _, _, _ in _differences(a, b)] == [(Setting.LEG_SIDE, "short_call")]
+
+
+def test_a_stop_that_differs_between_a_bought_and_a_sold_leg_is_said_as_a_fall_and_as_a_rise() -> None:
+    a = {"legs": [COVER, leg(leg_id="short_call", stop_loss={"kind": "percent", "value": "25"})]}
+    b = {"legs": [COVER, leg(leg_id="short_call", side="sell", stop_loss={"kind": "percent", "value": "150"})]}
+
+    assert _differences(a, b) == [
+        (Setting.LEG_SIDE, "short_call", "leg short_call: bought or sold", "bought", "sold"),
+        (
+            Setting.LEG_STOP_LOSS,
+            "short_call",
+            "leg short_call: stop loss",
+            "at least 25% below what was paid",
+            "at or above its stop level, 150% above what it was sold for",
+        ),
+    ]
+
+
+def test_a_re_entry_that_differs_between_a_bought_and_a_sold_leg_says_which_side_it_enters() -> None:
+    stop = {"stop_loss": {"kind": "percent", "value": "25"}}
+    a = {"legs": [COVER, leg(leg_id="short_call", **stop)]}
+    re_enters = {"reentry_on_stop": {"kind": "at_once", "count": 1}}
+    b = {"legs": [COVER, leg(leg_id="short_call", side="sell", **re_enters, **stop)]}
+
+    [side, reentry] = _differences(a, b)
+
+    assert side[0] is Setting.LEG_SIDE
+    assert reentry[0] is Setting.LEG_REENTRY
+    assert reentry[3:] == (
+        NOT_SET,
+        "After a stop, picks a fresh contract by the same rules and sells it at once, up to 1 time in a session.",
+    )
+
+
+def test_a_sold_leg_only_one_run_has_is_said_with_the_sentences_the_description_makes_of_it() -> None:
+    sold = leg(leg_id="short_call", side="sell", stop_loss={"kind": "points", "value": "0.4"})
+    described = (
+        "Leg short_call: sells to open 1 at-the-money call expiring on the nearest listed expiry, today included, "
+        "that falls on the last trading day of its week, and is bought back to close. "
+        "The sale comes as soon as the entry is read. "
+        "Bought back once a minute closes at or above its stop level, 0.4 points above what it was sold for."
+    )
+
+    added = _differences({"legs": [COVER]}, {"legs": [COVER, sold]})
+
+    assert added == [(Setting.LEG, "short_call", "leg short_call", NOT_IN_THIS_RUN, described)]
+    assert described == " ".join(leg_sentences(LegSetup.model_validate(sold)))
+
+
 # ── The sessions two runs share ──────────────────────────────────────────
 
 

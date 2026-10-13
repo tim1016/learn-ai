@@ -20,6 +20,7 @@ from decimal import Decimal
 from app.options_backtest.setup import (
     MS_PER_MINUTE,
     ExpiryRule,
+    LegSide,
     Momentum,
     ReentryOnStop,
     SessionTime,
@@ -33,6 +34,10 @@ _MOMENTUM_WAYS: dict[str, tuple[str, str]] = {
     "points_up": ("points", "above"),
     "points_down": ("points", "below"),
 }
+
+
+# How a leg's side is said of a leg that is part of a setup: it was bought, or it was sold.
+_SIDE_WORDS: dict[LegSide, str] = {"buy": "bought", "sell": "sold"}
 
 
 def count(number: int, noun: str) -> str:
@@ -80,7 +85,15 @@ def strikes_from_the_money(steps: int) -> str:
     return f"{count(abs(steps), 'strike')} {'above' if steps > 0 else 'below'} the money"
 
 
-def stop_loss(rule: StopLoss) -> str:
+def bought_or_sold(side: LegSide) -> str:
+    return _SIDE_WORDS[side]
+
+
+def stop_loss(rule: StopLoss, side: LegSide = "buy") -> str:
+    """What a minute must close at to stop a leg out: a fall from what a bought leg cost, a rise from what a sold
+    one fetched."""
+    if side == "sell":
+        return f"at or above its stop level, {amount(rule.kind, rule.value)} above what it was sold for"
     return f"at least {amount(rule.kind, rule.value)} below what was paid"
 
 
@@ -89,12 +102,12 @@ def momentum(rule: Momentum) -> str:
     return f"at least {amount(unit, rule.value)} {way} where its premium stood at the entry time"
 
 
-def reentry(rule: ReentryOnStop) -> str:
+def reentry(rule: ReentryOnStop, side: LegSide = "buy") -> str:
     """What a leg does after a stop, as a sentence."""
     times = f"up to {count(rule.count, 'time')} in a session"
     fresh = "After a stop, picks a fresh contract by the same rules"
     if rule.kind == "at_once":
-        return f"{fresh} and buys it at once, {times}."
+        return f"{fresh} and {'sells' if side == 'sell' else 'buys'} it at once, {times}."
     return f"{fresh}, takes a new starting premium from it and waits for momentum again, {times}."
 
 

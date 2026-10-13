@@ -13,7 +13,8 @@ another order are the same setup; a leg only one run has is one difference. The 
 caller refuses any other pair), so the underlying is not compared.
 
 A rule reads here as it reads in ``describe.py``: both take its words from ``phrases.py``, and a leg only one run has is
-said with the sentences ``describe.leg_sentences`` makes of it. Three settings are said shorter than their sentence, for
+said with the sentences ``describe.leg_sentences`` makes of it. A leg's side (bought or sold) is a setting like the
+rest; a stop and a re-entry are said as they read on a leg of that side. Three settings are said shorter than their sentence, for
 the reason beside each: a time of day, the slippage and the price step, and the starting cash.
 
 Totals are sums of the stored per-session figures, in exact decimals (``fills.EXACT``): a sum is never rounded and never
@@ -33,6 +34,7 @@ from app.options_backtest.describe import fee_policy_sentence, leg_sentences
 from app.options_backtest.saved_runs import RunHeader, RunSetupCannotBeRead, SessionLine
 from app.options_backtest.setup import (
     LegSetup,
+    LegSide,
     Momentum,
     OptionsBacktestSetup,
     ReentryOnStop,
@@ -52,6 +54,7 @@ class Setting(StrEnum):
     SQUARE_OFF = "square_off"
     # A leg only one of the runs has.
     LEG = "leg"
+    LEG_SIDE = "leg_side"
     LEG_RIGHT = "leg_right"
     LEG_CONTRACTS = "leg_contracts"
     LEG_EXPIRY = "leg_expiry"
@@ -91,16 +94,17 @@ def _strike_words(rule: StrikeRule) -> str:
     return "at the money" if rule.kind == "atm" else phrases.strikes_from_the_money(rule.steps)
 
 
-def _stop_words(rule: StopLoss | None) -> str:
-    return NOT_SET if rule is None else phrases.stop_loss(rule)
+def _stop_words(rule: StopLoss | None, side: LegSide) -> str:
+    # A stop reads as a fall on a bought leg and as a rise on a sold one, so it is said with its leg's side.
+    return NOT_SET if rule is None else phrases.stop_loss(rule, side)
 
 
 def _momentum_words(rule: Momentum | None) -> str:
     return NOT_SET if rule is None else phrases.momentum(rule)
 
 
-def _reentry_words(rule: ReentryOnStop | None) -> str:
-    return NOT_SET if rule is None else phrases.reentry(rule)
+def _reentry_words(rule: ReentryOnStop | None, side: LegSide) -> str:
+    return NOT_SET if rule is None else phrases.reentry(rule, side)
 
 
 def _contracts_words(contracts: int) -> str:
@@ -109,14 +113,22 @@ def _contracts_words(contracts: int) -> str:
 
 # ── Settings ─────────────────────────────────────────────────────────────
 
-# Each setting of a leg that is compared: its code, what it is called, how to read it off a leg and how to say it.
-_LEG_SETTINGS: tuple[tuple[Setting, str, Callable[[LegSetup], Any], Callable[[Any], str]], ...] = (
-    (Setting.LEG_RIGHT, "call or put", lambda leg: leg.right, str),
-    (Setting.LEG_CONTRACTS, "contracts", lambda leg: leg.contracts, _contracts_words),
-    (Setting.LEG_EXPIRY, "expiry", lambda leg: leg.expiry, phrases.expiry),
-    (Setting.LEG_STRIKE, "strike", lambda leg: leg.strike, _strike_words),
+
+def _whatever_the_side(say: Callable[[Any], str]) -> Callable[[Any, LegSide], str]:
+    """A way to say a setting that reads the same on a bought leg and on a sold one."""
+    return lambda value, _side: say(value)
+
+
+# Each setting of a leg that is compared: its code, what it is called, how to read it off a leg and how to say it from
+# its value and the side of the leg that holds it.
+_LEG_SETTINGS: tuple[tuple[Setting, str, Callable[[LegSetup], Any], Callable[[Any, LegSide], str]], ...] = (
+    (Setting.LEG_SIDE, "bought or sold", lambda leg: leg.side, _whatever_the_side(phrases.bought_or_sold)),
+    (Setting.LEG_RIGHT, "call or put", lambda leg: leg.right, _whatever_the_side(str)),
+    (Setting.LEG_CONTRACTS, "contracts", lambda leg: leg.contracts, _whatever_the_side(_contracts_words)),
+    (Setting.LEG_EXPIRY, "expiry", lambda leg: leg.expiry, _whatever_the_side(phrases.expiry)),
+    (Setting.LEG_STRIKE, "strike", lambda leg: leg.strike, _whatever_the_side(_strike_words)),
     (Setting.LEG_STOP_LOSS, "stop loss", lambda leg: leg.stop_loss, _stop_words),
-    (Setting.LEG_MOMENTUM, "momentum", lambda leg: leg.momentum, _momentum_words),
+    (Setting.LEG_MOMENTUM, "momentum", lambda leg: leg.momentum, _whatever_the_side(_momentum_words)),
     (Setting.LEG_REENTRY, "re-entry on stop", lambda leg: leg.reentry_on_stop, _reentry_words),
 )
 
@@ -126,7 +138,9 @@ def _leg_differences(a: LegSetup, b: LegSetup) -> list[SettingDifference]:
     for setting, name, read, say in _LEG_SETTINGS:
         first, second = read(a), read(b)
         if first != second:
-            found.append(SettingDifference(setting, a.leg_id, f"leg {a.leg_id}: {name}", say(first), say(second)))
+            found.append(
+                SettingDifference(setting, a.leg_id, f"leg {a.leg_id}: {name}", say(first, a.side), say(second, b.side))
+            )
     return found
 
 
