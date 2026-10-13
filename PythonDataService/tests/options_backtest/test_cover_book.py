@@ -23,6 +23,8 @@ from app.options_backtest.cover_book import (
     admit_opening,
     assignment_obligation,
     collateral,
+    covers,
+    is_covered,
     leaving_plan,
     may_leave,
 )
@@ -33,28 +35,46 @@ LATER = date(2026, 10, 16)
 PLENTY = D("1000000")
 
 
-def option(right: OptionRight, strike: str, expiry: date = SOON) -> OptionContract:
-    return OptionContract.of(root="SPY", expiry_date=expiry, right=right, strike=D(strike))
+def option(right: OptionRight, strike: str, expiry: date = SOON, root: str = "SPY") -> OptionContract:
+    return OptionContract.of(root=root, expiry_date=expiry, right=right, strike=D(strike))
 
 
-def bought(leg_id: str, right: OptionRight, strike: str, contracts: int = 1, expiry: date = SOON) -> Holding:
-    return Holding(leg_id, option(right, strike, expiry), "buy", contracts, 100)
+def bought(
+    leg_id: str, right: OptionRight, strike: str, contracts: int = 1, expiry: date = SOON, root: str = "SPY"
+) -> Holding:
+    return Holding(leg_id, option(right, strike, expiry, root), "buy", contracts, 100)
 
 
-def sold(leg_id: str, right: OptionRight, strike: str, contracts: int = 1, expiry: date = SOON) -> Holding:
-    return Holding(leg_id, option(right, strike, expiry), "sell", contracts, 100)
+def sold(
+    leg_id: str, right: OptionRight, strike: str, contracts: int = 1, expiry: date = SOON, root: str = "SPY"
+) -> Holding:
+    return Holding(leg_id, option(right, strike, expiry, root), "sell", contracts, 100)
 
 
 def buy(
-    leg_id: str, right: OptionRight, strike: str, contracts: int = 1, *, cash: str = "-1", expiry: date = SOON
+    leg_id: str,
+    right: OptionRight,
+    strike: str,
+    contracts: int = 1,
+    *,
+    cash: str = "-1",
+    expiry: date = SOON,
+    root: str = "SPY",
 ) -> Candidate:
-    return Candidate(leg_id, option(right, strike, expiry), "buy", contracts, 100, D(cash))
+    return Candidate(leg_id, option(right, strike, expiry, root), "buy", contracts, 100, D(cash))
 
 
 def sell(
-    leg_id: str, right: OptionRight, strike: str, contracts: int = 1, *, cash: str = "1", expiry: date = SOON
+    leg_id: str,
+    right: OptionRight,
+    strike: str,
+    contracts: int = 1,
+    *,
+    cash: str = "1",
+    expiry: date = SOON,
+    root: str = "SPY",
 ) -> Candidate:
-    return Candidate(leg_id, option(right, strike, expiry), "sell", contracts, 100, D(cash))
+    return Candidate(leg_id, option(right, strike, expiry, root), "sell", contracts, 100, D(cash))
 
 
 def book(listed: str, *holdings: Holding) -> Held:
@@ -105,16 +125,41 @@ def test_holdings_are_kept_in_the_order_the_setup_lists_its_legs() -> None:
 
 
 def test_two_legs_on_one_contract_on_the_same_side_add_up() -> None:
-    held = book("AB", bought("A", "call", "680", 2), bought("B", "call", "680", 1))
+    # Three bought 680 calls in two legs cover three sold 675 calls in two legs: $5 wide, three contracts.
+    # With one more contract sold, the sold side is four against three bought and one is bare.
+    together = book(
+        "ABCD",
+        bought("A", "call", "680", 2),
+        bought("B", "call", "680", 1),
+        sold("C", "call", "675", 2),
+        sold("D", "call", "675", 1),
+    )
+    one_more = book(
+        "ABCD",
+        bought("A", "call", "680", 2),
+        bought("B", "call", "680", 1),
+        sold("C", "call", "675", 2),
+        sold("D", "call", "675", 2),
+    )
 
-    assert held.signed_contracts(option("call", "680")) == 3
-    assert held.signed_contracts(option("call", "685")) == 0
+    assert is_covered(together)
+    assert collateral(together) == D("1500.00")
+    assert not is_covered(one_more)
 
 
-def test_a_sold_contract_counts_as_negative() -> None:
-    held = book("AB", sold("A", "put", "660", 2), sold("B", "put", "660", 3))
+def test_a_sold_holding_counts_as_negative_and_a_bought_one_as_positive() -> None:
+    assert sold("A", "put", "660", 2).signed_contracts == -2
+    assert bought("A", "put", "660", 3).signed_contracts == 3
 
-    assert held.signed_contracts(option("put", "660")) == -5
+
+def test_the_setups_leg_order_is_a_tuple_whatever_it_was_built_from() -> None:
+    from_a_list = Held(listed=["A", "B"], holdings=[bought("A", "call", "680")])  # type: ignore[arg-type]
+    from_tuples = Held(listed=("A", "B"), holdings=(bought("A", "call", "680"),))
+
+    assert from_a_list.listed == ("A", "B")
+    assert from_a_list.holdings == (bought("A", "call", "680"),)
+    assert from_a_list == from_tuples
+    assert hash(from_a_list) == hash(from_tuples)
 
 
 def test_a_contract_cannot_be_held_on_both_sides() -> None:
@@ -206,25 +251,6 @@ def test_an_iron_butterfly_pledges_its_wing() -> None:
     assert collateral(held) == D("500.00")
 
 
-def test_eight_legs_are_asked_of_the_canonical_function_whole_and_not_split_into_condors() -> None:
-    # Condor one: puts 640/650 ($10 wide), calls 700/705 ($5). Condor two: puts 660/665 ($5), calls 710/720 ($10).
-    # Each condor alone pledges $1,000, so a sum of two groups would say $2,000. Together the puts' worst case is
-    # -15 at or below 640 and the calls' is -15 at or above 720, and they never coincide: $1,500.00.
-    held = book(
-        "ABCDEFGH",
-        bought("A", "put", "640"),
-        sold("B", "put", "650"),
-        sold("C", "call", "700"),
-        bought("D", "call", "705"),
-        bought("E", "put", "660"),
-        sold("F", "put", "665"),
-        sold("G", "call", "710"),
-        bought("H", "call", "720"),
-    )
-
-    assert collateral(held) == D("1500.00")
-
-
 def test_a_sold_put_with_its_bought_put_pledges_the_width() -> None:
     held = book("AB", bought("A", "put", "660"), sold("B", "put", "665"))
 
@@ -257,6 +283,69 @@ def test_a_loss_with_no_limit_is_a_broken_invariant_and_is_never_estimated() -> 
         collateral(held)
     with pytest.raises(CoverInvariantBroken):
         leaving_plan(held, [])
+    with pytest.raises(CoverInvariantBroken):
+        may_leave(held, "B")
+
+
+# ---- The cover identity, public -----------------------------------------------
+
+_SPY_680_CALL = option("call", "680")
+
+
+@pytest.mark.parametrize(
+    ("bought_contract", "sold_contract", "answer"),
+    [
+        pytest.param(_SPY_680_CALL, option("call", "675"), True, id="same kind and expiry, another strike"),
+        pytest.param(_SPY_680_CALL, option("call", "680"), True, id="the same contract"),
+        pytest.param(option("put", "660"), option("put", "665"), True, id="puts"),
+        pytest.param(_SPY_680_CALL, option("put", "680"), False, id="a call for a put"),
+        pytest.param(_SPY_680_CALL, option("call", "675", LATER), False, id="another expiry"),
+        pytest.param(_SPY_680_CALL, option("call", "675", root="QQQ"), False, id="another underlying"),
+    ],
+)
+def test_one_contract_covers_another_only_on_underlying_kind_and_expiry(
+    bought_contract: OptionContract, sold_contract: OptionContract, answer: bool
+) -> None:
+    assert covers(bought_contract, sold_contract) is answer
+    # An identity on those three: it does not matter which is which.
+    assert covers(sold_contract, bought_contract) is answer
+
+
+@pytest.mark.parametrize(
+    ("held", "answer"),
+    [
+        pytest.param(Held.empty("A"), True, id="nothing held"),
+        pytest.param(book("AB", bought("A", "call", "680"), bought("B", "put", "660")), True, id="bought only"),
+        pytest.param(book("AB", bought("A", "call", "680"), sold("B", "call", "675")), True, id="a spread"),
+        pytest.param(book("A", sold("A", "put", "660")), False, id="a bare sale"),
+        pytest.param(
+            book("ABC", bought("A", "call", "680"), sold("B", "call", "675"), sold("C", "call", "670")),
+            False,
+            id="two sold for one bought",
+        ),
+        pytest.param(book("AB", bought("A", "call", "680", 2), sold("B", "call", "675", 2)), True, id="two for two"),
+        pytest.param(book("AB", bought("A", "put", "660", expiry=LATER), sold("B", "put", "665")), False, id="expiry"),
+        pytest.param(book("AB", bought("A", "call", "660"), sold("B", "put", "665")), False, id="call for a put"),
+        pytest.param(
+            book("AB", bought("A", "call", "680", root="QQQ"), sold("B", "call", "675")), False, id="underlying"
+        ),
+        pytest.param(
+            book(
+                "ABCD",
+                bought("A", "call", "680"),
+                sold("B", "call", "675"),
+                bought("C", "put", "660", 3),
+                sold("D", "put", "665", 3),
+            ),
+            True,
+            id="two kinds each covered",
+        ),
+    ],
+)
+def test_what_is_held_is_covered_when_each_kind_has_a_bought_contract_for_each_sold_one(
+    held: Held, answer: bool
+) -> None:
+    assert is_covered(held) is answer
 
 
 # ---- Cover, as the opening group meets it -------------------------------------
@@ -353,6 +442,23 @@ def test_a_bought_contract_whose_close_is_pending_is_not_cover_for_a_new_sale() 
 
     assert admission(held, sell("B", "call", "675"), closing=[]) == {"B": None}
     assert admission(held, sell("B", "call", "675"), closing=["A"]) == {"B": OpeningRefusal.NO_COVER}
+
+
+def test_a_bought_call_on_another_underlying_is_not_cover_for_a_sold_call() -> None:
+    held = Held.empty("AB")
+
+    assert admission(held, buy("A", "call", "680", root="QQQ"), sell("B", "call", "675")) == {
+        "A": None,
+        "B": OpeningRefusal.NO_COVER,
+    }
+
+
+def test_a_sold_leg_whose_buy_back_is_pending_still_uses_its_cover() -> None:
+    # B is covered by A and is being bought back, but the buy-back fills after the opening group. Until it does,
+    # B still sits on A's contract, so a new sale has none to take.
+    held = book("ABC", bought("A", "call", "680"), sold("B", "call", "675"))
+
+    assert admission(held, sell("C", "call", "670"), closing=["B"]) == {"C": OpeningRefusal.NO_COVER}
 
 
 def test_a_bought_candidate_that_was_refused_is_not_cover() -> None:
@@ -475,6 +581,18 @@ def test_an_empty_group_is_taken_whole_and_asks_nothing_of_the_cash() -> None:
 
 
 # ---- The order of the four steps, each by a case where two would apply --------
+
+
+def test_a_sold_candidate_refused_for_cover_was_still_in_play_for_the_second_expiry_step() -> None:
+    # A sells a call with nothing to cover it. The second-expiry step runs before cover does and sees A in play,
+    # so B, a call bought at another expiry beside a sold contract, is refused there. A's own refusal, at the
+    # cover step, frees nothing an earlier step decided.
+    held = Held.empty("AB")
+
+    assert admission(held, sell("A", "call", "675"), buy("B", "call", "700", expiry=LATER)) == {
+        "A": OpeningRefusal.NO_COVER,
+        "B": OpeningRefusal.SECOND_EXPIRY,
+    }
 
 
 def test_other_side_is_judged_before_second_expiry() -> None:

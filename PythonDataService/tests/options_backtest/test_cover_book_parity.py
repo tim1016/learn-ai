@@ -45,6 +45,8 @@ from app.options_backtest.cover_book import (
     admit_opening,
     assignment_obligation,
     collateral,
+    covers,
+    is_covered,
     leaving_plan,
     may_leave,
 )
@@ -163,6 +165,17 @@ def _opening_group_of(structure: ResolvedStructure) -> tuple[Held, list[Candidat
     return Held.empty(leg.leg_id for leg in structure.legs), candidates
 
 
+def _held_as_a_structure_is(structure: ResolvedStructure) -> Held:
+    """Every leg of the structure held at once, as the bots' check sees it."""
+    return Held(
+        tuple(leg.leg_id for leg in structure.legs),
+        tuple(
+            Holding(leg.leg_id, leg.contract, "buy" if leg.position == "long" else "sell", leg.ratio, 100)
+            for leg in structure.legs
+        ),
+    )
+
+
 def test_the_book_covers_exactly_the_structures_the_bots_cover_where_there_is_one_expiry() -> None:
     covered = uncovered = 0
     for legs in _structures_of_the_ladder():
@@ -178,6 +191,7 @@ def test_the_book_covers_exactly_the_structures_the_bots_cover_where_there_is_on
 
         assert {refused.reason for refused in admission.refused} <= {OpeningRefusal.NO_COVER}, legs
         assert (not admission.refused) == _bots_say_covered(structure), legs
+        assert is_covered(_held_as_a_structure_is(structure)) == _bots_say_covered(structure), legs
         covered += not admission.refused
         uncovered += bool(admission.refused)
     # Neither answer is the only one the sweep met, so agreement is not agreement on a constant.
@@ -240,6 +254,10 @@ def test_where_the_bots_let_a_later_bought_contract_cover_the_book_does_not_and_
                 assert admission.refused, "two expiries and a sold leg are never taken whole"
             if _bots_say_covered(structure) and structure.has_sold_leg:
                 differing += 1
+                bought_leg = next(leg for leg in structure.legs if leg.position == "long")
+                sold_leg = next(leg for leg in structure.legs if leg.position == "short")
+                assert not covers(bought_leg.contract, sold_leg.contract)
+                assert not is_covered(_held_as_a_structure_is(structure))
                 with pytest.raises(StructureMoneyRefused) as refused:
                     broker_requirement(structure, _ONE)
                 assert refused.value.reason is StructureMoneyRefusal.MIXED_EXPIRY_WITH_SOLD_LEG
@@ -309,7 +327,12 @@ def test_collateral_agrees_with_the_canonical_requirement_and_a_scan_to_the_cent
 
 
 def test_a_book_of_up_to_eight_legs_is_asked_whole() -> None:
-    """Eight held legs are beyond one order's four, and the book never splits them."""
+    """Eight held legs are beyond one order's four, and the book never splits them.
+
+    Condor one: puts 640/650 ($10 wide), calls 700/705 ($5). Condor two: puts 660/665 ($5), calls 710/720 ($10).
+    Each condor alone pledges $1,000, so a sum of two groups would say $2,000. Together the puts' worst case is -15
+    at or below 640 and the calls' is -15 at or above 720, and they never coincide: $1,500.00.
+    """
     holdings = [
         Holding("A", _contract("put", 640, SOON), "buy", 1, 100),
         Holding("B", _contract("put", 650, SOON), "sell", 1, 100),
@@ -364,8 +387,9 @@ def _run_session(seed: int, seen: Counter[str]) -> None:
         idle = [leg for leg in legs if held.holding_of(leg) is None]
         group = rng.sample(idle, k=rng.randint(1, len(idle))) if idle else []
         candidates = [_random_candidate(rng, leg) for leg in group]
-        bought_held = [holding.leg_id for holding in held.holdings if holding.side == "buy"]
-        closing = rng.sample(bought_held, k=rng.randint(0, len(bought_held)))
+        # Any held leg may have a close pending, a sold leg's buy-back included.
+        held_legs = [holding.leg_id for holding in held.holdings]
+        closing = rng.sample(held_legs, k=rng.randint(0, len(held_legs)))
 
         admission = admit_opening(held, candidates, cash=cash, closing=closing)
 
@@ -377,6 +401,7 @@ def _run_session(seed: int, seen: Counter[str]) -> None:
         after = held.opened(admission.taken)
 
         assert _is_covered(after.holdings), where
+        assert is_covered(after), where
         if any(holding.side == "sell" for holding in after.holdings):
             assert len({holding.contract.expiry_ms for holding in after.holdings}) == 1, where
         if admission.taken:
@@ -400,6 +425,7 @@ def _run_session(seed: int, seen: Counter[str]) -> None:
             plan = leaving_plan(held, [leaver])
             remaining = held.without([leaver, *plan])
             assert _is_covered(remaining.holdings), where
+            assert is_covered(remaining), where
             assert collateral(remaining) <= before, where
             seen["plans"] += 1
             seen["plans_nonempty"] += bool(plan)

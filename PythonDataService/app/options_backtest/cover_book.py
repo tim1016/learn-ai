@@ -14,8 +14,10 @@ Reference: ADR 0076 decision 3 (the requirement is the lowest point of the summe
   "Options Level 3 Trading", https://docs.alpaca.markets/docs/options-level-3-trading, as cited by
   ``app/options/requirement.py``. What covers what, one for one and on the actual expiry, is the owner's rule in
   #3095: you cannot sell something you did not buy.
-Canonical implementation: this file for holdings, cover and the order an opening group is judged in;
-  ``app/options/requirement.py`` for the requirement, which is called here and not copied.
+Canonical implementation: this file for cover over holdings through time: what is held, what a sale needs and
+  the order an opening group is judged in. ``app/options/structure_check.py`` is canonical for cover within one
+  resolved structure, and the parity test holds the two to one answer. ``app/options/requirement.py`` is
+  canonical for the requirement, which is called here and not copied.
 Validated against: tests/options_backtest/test_cover_book.py (scenes worked by hand from the rules) and
   tests/options_backtest/test_cover_book_parity.py (the bots' cover check, ``require_sold_legs_covered``, on every
   case both express; the canonical requirement and an independent exhaustive scan of the payoff, to the cent).
@@ -53,7 +55,7 @@ caller's mistake and is refused.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -156,20 +158,23 @@ class Held:
     holdings: tuple[Holding, ...] = ()
 
     def __post_init__(self) -> None:
-        if len(set(self.listed)) != len(self.listed) or not all(isinstance(leg, str) and leg for leg in self.listed):
-            raise ValueError(f"a setup lists each leg once, by a non-empty id; got {self.listed!r}")
-        position = {leg_id: place for place, leg_id in enumerate(self.listed)}
-        holders = [holding.leg_id for holding in self.holdings]
+        listed = tuple(self.listed)
+        holdings = tuple(self.holdings)
+        if len(set(listed)) != len(listed) or not all(isinstance(leg, str) and leg for leg in listed):
+            raise ValueError(f"a setup lists each leg once, by a non-empty id; got {listed!r}")
+        position = {leg_id: place for place, leg_id in enumerate(listed)}
+        holders = [holding.leg_id for holding in holdings]
         if len(set(holders)) != len(holders):
             raise ValueError(f"a leg holds one contract; these hold more: {sorted(holders)}")
         if unlisted := sorted(set(holders) - position.keys()):
-            raise ValueError(f"legs {unlisted} are not among the setup's legs {list(self.listed)}")
+            raise ValueError(f"legs {unlisted} are not among the setup's legs {list(listed)}")
         sides: dict[OptionContract, LegSide] = {}
-        for holding in self.holdings:
+        for holding in holdings:
             if sides.setdefault(holding.contract, holding.side) != holding.side:
                 raise ValueError(f"{holding.contract.occ_symbol} is held on both sides")
-        # Normalised, so that two values that hold the same things are equal.
-        object.__setattr__(self, "holdings", tuple(sorted(self.holdings, key=lambda held: position[held.leg_id])))
+        # Normalised to tuples in listed order, so that two values that hold the same things are equal.
+        object.__setattr__(self, "listed", listed)
+        object.__setattr__(self, "holdings", tuple(sorted(holdings, key=lambda held: position[held.leg_id])))
 
     @classmethod
     def empty(cls, listed_leg_ids: Iterable[str]) -> Held:
@@ -179,10 +184,6 @@ class Held:
     def holding_of(self, leg_id: str) -> Holding | None:
         """What ``leg_id`` holds, or None when it holds nothing."""
         return next((holding for holding in self.holdings if holding.leg_id == leg_id), None)
-
-    def signed_contracts(self, contract: OptionContract) -> int:
-        """The contracts held in ``contract``, positive when bought and negative when sold; zero when none."""
-        return sum(holding.signed_contracts for holding in self.holdings if holding.contract == contract)
 
     def opened(self, taken: Iterable[Candidate]) -> Held:
         """What is held once ``taken`` have filled. Refuses a leg that already holds, and a contract held both ways."""
@@ -246,7 +247,7 @@ def _dollars(cents: int) -> Decimal:
     return Decimal(cents).scaleb(_DOLLARS_AS_CENTS, context=EXACT)
 
 
-def _is_covered(holdings: Iterable[Holding]) -> bool:
+def _covered(holdings: Iterable[Holding]) -> bool:
     """Whether, in every kind, the bought contracts are at least the sold ones."""
     net: dict[_Kind, int] = defaultdict(int)
     for holding in holdings:
@@ -254,11 +255,40 @@ def _is_covered(holdings: Iterable[Holding]) -> bool:
     return all(count >= 0 for count in net.values())
 
 
+def _stands(remaining: Sequence[Holding], *, before: int) -> bool:
+    """Whether what remains is covered and pledges no more than ``before`` cents.
+
+    The one test ``may_leave`` and ``leaving_plan`` both apply, so the two cannot disagree.
+    """
+    return _covered(remaining) and _requirement_cents(remaining) <= before
+
+
 def _bought_leg(held: Held, leg_id: str, *, asked: str) -> Holding:
     holding = held.holding_of(leg_id)
     if holding is None or holding.side != "buy":
         raise ValueError(f"{asked} is asked of bought legs that are held; leg {leg_id!r} is not one")
     return holding
+
+
+# ---- Cover ----------------------------------------------------------------------
+
+
+def covers(bought: OptionContract, sold: OptionContract) -> bool:
+    """Whether one bought contract can cover one sold contract: the same underlying, call or put, and actual expiry.
+
+    Cover is an identity on those three, so the strikes do not matter and neither does which is which. The
+    standard hundred-share deliverable that cover also needs is held by ``Holding``, which refuses any other
+    multiplier. One bought contract covers one sold contract and never two: ``is_covered`` counts it so.
+    """
+    return _kind(bought) == _kind(sold)
+
+
+def is_covered(held: Held) -> bool:
+    """Whether every sold contract held has a bought contract of its own to cover it.
+
+    In each underlying, call or put and actual expiry, the bought contracts held are at least the sold ones.
+    """
+    return _covered(held.holdings)
 
 
 # ---- Collateral and obligation --------------------------------------------------
@@ -289,11 +319,12 @@ def may_leave(held: Held, leg_id: str) -> bool:
     """Whether one bought leg can be sold now: with it gone, every sold contract is still covered and the
     collateral is no larger than it is now. Reads no cash.
 
-    Raises ``ValueError`` for a leg that is not a bought leg that is held.
+    Raises ``ValueError`` for a leg that is not a bought leg that is held, and ``CoverInvariantBroken`` when what
+    is held has a loss with no limit.
     """
     _bought_leg(held, leg_id, asked="may_leave")
     remaining = tuple(holding for holding in held.holdings if holding.leg_id != leg_id)
-    return _is_covered(remaining) and _requirement_cents(remaining) <= _requirement_cents(held.holdings)
+    return _stands(remaining, before=_requirement_cents(held.holdings))
 
 
 def leaving_plan(held: Held, leaving: Iterable[str]) -> tuple[str, ...]:
@@ -318,7 +349,7 @@ def leaving_plan(held: Held, leaving: Iterable[str]) -> tuple[str, ...]:
     )
     plan: list[str] = []
     for holding in sold:
-        if _is_covered(remaining) and _requirement_cents(remaining) <= before:
+        if _stands(remaining, before=before):
             break
         remaining.remove(holding)
         plan.append(holding.leg_id)
@@ -346,7 +377,9 @@ def _other_side(held: Held, candidates: list[Candidate]) -> tuple[list[Candidate
 def _second_expiry(held: Held, candidates: list[Candidate]) -> tuple[list[Candidate], dict[str, OpeningRefusal]]:
     """A candidate whose expiry differs from one in play is refused when a sold contract is in play or it is sold.
 
-    Bought-only holdings may span expiries.
+    Bought-only holdings may span expiries. What is in play is what is held and what has stood so far in this
+    step, so a sold candidate that the cover step goes on to refuse is still in play here: it can be the reason a
+    bought candidate of another expiry is refused, and its own later refusal does not undo that.
     """
     expiries = {holding.contract.expiry_ms for holding in held.holdings}
     sold_in_play = any(holding.side == "sell" for holding in held.holdings)
@@ -418,10 +451,13 @@ def admit_opening(held: Held, candidates: Iterable[Candidate], *, cash: Decimal,
     4. Cash: the candidates still standing are applied together. When ``cash`` plus their cash effects is less
        than the collateral of what would then be held, every one of them is refused.
 
-    Each candidate is refused by the first step that refuses it. ``cash`` is the cash on hand before the group,
-    and ``closing`` names the legs whose close is pending: they are still held, and still pledged, but their
-    contracts are not cover for a sale to open. For a group with no sold candidate and nothing sold held, the
-    last step is exactly "refused when the cost is more than the cash".
+    Each step judges what the one before left standing, and each candidate is refused by the first step that
+    refuses it. So a refusal at a later step frees nothing an earlier step decided: a sold candidate refused for
+    cover was still in play for the second-expiry step. ``cash`` is the cash on hand before the group, and
+    ``closing`` names the legs whose close is pending. They are still held and still pledged, and their fills
+    come after the opening group: a bought leg in ``closing`` is not cover for a sale to open, and a sold leg in
+    ``closing`` keeps using the cover it has until its buy-back fills. For a group with no sold candidate and
+    nothing sold held, the last step is exactly "refused when the cost is more than the cash".
 
     Raises ``ValueError`` for a candidate of a leg the setup does not list, of a leg that already holds, or
     named twice, and for a pending close of a leg that holds nothing.
