@@ -14,10 +14,12 @@ cents of fees.
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, get_args
 
 import httpx
@@ -41,9 +43,14 @@ from app.broker.alpaca.clerk.sqlite.entry_buying_power import (
 )
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryStanding
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
-from app.broker.alpaca.clerk.sqlite.facts import EntryBuyingPowerComparedFacts
-from app.broker.alpaca.clerk.sqlite.uncertainty import admit_new_exposure
-from app.broker.alpaca.clerk.sqlite.uncertainty_causes import OPTION_BUYING_POWER_UNDER_RESERVED_REASON_CODE
+from app.broker.alpaca.clerk.sqlite.facts import FACTS_SCHEMA_VERSION, EntryBuyingPowerComparedFacts
+from app.broker.alpaca.clerk.sqlite.models import TransitionInput
+from app.broker.alpaca.clerk.sqlite.uncertainty import admit_new_exposure, raise_uncertainty
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    EXIT_NOT_FLAT_REASON_CODE,
+    OPTION_BUYING_POWER_UNDER_RESERVED_REASON_CODE,
+    ExitNotFlatCause,
+)
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerPosition
 from app.broker.contract.options import BrokerOptionAccountSnapshot
@@ -52,7 +59,8 @@ from app.options.buying_power_check import BuyingPowerCheckResult
 from app.routers.alpaca_clerk_sqlite import _option_buying_power_checks as served
 from app.routers.alpaca_clerk_sqlite import router
 from app.schemas.option_buying_power_check import OptionBuyingPowerNotComparedReason, OptionBuyingPowerResult
-from app.services import market_liveness
+from app.services import market_liveness, option_buying_power_views
+from app.services.broker_v2_panel import lane_summary
 from app.services.option_buying_power_views import REASON_SENTENCES, RESULT_LABELS
 from tests._helpers.market_quotes import publish_quotes
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _FakeTradePort, _TestClock
@@ -1029,6 +1037,270 @@ async def test_every_result_and_every_reason_has_a_label_and_a_sentence_of_its_o
 
 
 @pytest.mark.usefixtures("judged")
+async def test_the_page_counts_every_entry_compared_and_every_one_not_and_gives_each_one_its_account_figures(
+    paper: Paper, routes: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = await paper.filled(shows="99806.00")
+    assert (await paper.compared(first)).result == "consistent"
+    sold = await paper.exit()
+    closing_ref = next(ref for ref in sold.child_order_refs if ref != first)
+    await paper.stream_fill(closing_ref, contracts=1, filled_in_all=1, price="1.90", execution_id="x-close")
+    await paper.pass_()
+    assert await paper.sync.tick() == "observed"
+    second = await paper.resting()
+    # Only the newest entry is listed; the counts are over both.
+    monkeypatch.setattr(option_buying_power_views, "CHECKS_SERVED", 1)
+
+    async with _http(routes) as client:
+        listed_one = (await client.get(_checks_route(paper))).json()
+    monkeypatch.setattr(option_buying_power_views, "CHECKS_SERVED", 20)
+    async with _http(routes) as client:
+        page = (await client.get(_checks_route(paper))).json()
+
+    assert [check["order_ref"] for check in listed_one["checks"]] == [second]
+    assert listed_one["counts"] == page["counts"]
+    assert page["counts"] == {
+        "entries": 2, "compared": 1, "not_compared": 1,
+        "not_compared_by_reason": [{
+            "reason_code": "NOT_COMPARED_YET", "sentence": REASON_SENTENCES[NotComparedReason.NOT_COMPARED_YET],
+            "count": 1,
+        }],
+        "sentence": "1 of 2 option entries were compared with Alpaca's option buying power, 1 not.",
+    }
+    by_ref = {check["order_ref"]: check for check in page["checks"]}
+    # The compared entry: a bought call on a flat account adds no requirement to the account.
+    done = by_ref[first]
+    assert [done["account_requirement_before"], done["account_requirement_after"], done["account_requirement_change"]] == [
+        {"cents": 0, "dollars": "0.00"}
+    ] * 3
+    assert "did not change" in done["account_requirement_sentence"]
+    # The entry nobody has compared says so, and says nothing about the account.
+    waiting = by_ref[second]
+    assert (waiting["account_requirement_before"], waiting["account_requirement_change"]) == (None, None)
+    assert "not recorded" in waiting["account_requirement_sentence"]
+
+
+@pytest.mark.usefixtures("judged")
+async def test_an_old_record_this_build_cannot_name_does_not_stop_the_page_and_is_counted_as_failed(
+    paper: Paper, routes: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old = await paper.filled(shows="99806.00")
+    # A record an earlier build wrote, naming a reason this one has retired, is on the books before any round.
+    order = paper.repo.order(old)
+    assert order is not None
+    effect = paper.repo.effect_operation(order.effect_operation_id)
+    assert effect is not None
+    odd = EntryBuyingPowerComparedFacts(
+        result="unknown", reason_code="A_REASON_RETIRED_SINCE", contracts_asked=1, contracts_filled=1,
+        commitment_cents=SET_ASIDE, set_aside_for_filled_cents=None, premium_paid_cents=None,
+        cost_of_filled_cents=None, first_began_ms=None, first_ended_ms=None, first_buying_power=None, sent_at_ms=None,
+        second_began_ms=None, second_ended_ms=None, second_buying_power=None, fall_cents=None,
+        compared_at_ms=paper.clock(), holds=False,
+    )
+    with paper.repo.write_fence():
+        paper.repo.append_transition(TransitionInput(
+            strategy_instance_id=effect.strategy_instance_id, run_id=effect.run_id, command_id=effect.command_id,
+            effect_operation_id=effect.effect_operation_id, transition_kind=COMPARED_KIND,
+            custody_owner="ACCOUNT_CLERK", execution_authority="ACCOUNT_CLERK", operation_state=effect.state,
+            clerk_observed_at_ms=paper.clock(), summary_code="A_REASON_RETIRED_SINCE",
+            facts_schema_version=FACTS_SCHEMA_VERSION, facts_json=odd.to_facts_json(),
+        ))
+    sold = await paper.exit()
+    closing_ref = next(ref for ref in sold.child_order_refs if ref != old)
+    await paper.stream_fill(closing_ref, contracts=1, filled_in_all=1, price="1.90", execution_id="x-close")
+    await paper.pass_()
+    assert await paper.sync.tick() == "observed"
+    newest = await paper.resting()
+    monkeypatch.setattr(option_buying_power_views, "CHECKS_SERVED", 1)
+
+    async with _http(routes) as client:
+        answered = await client.get(_checks_route(paper))
+
+    # The old record is outside what is listed, so it is never read; the counts take it as a failed comparison.
+    assert answered.status_code == 200, answered.text
+    page = answered.json()
+    assert [check["order_ref"] for check in page["checks"]] == [newest]
+    assert (page["counts"]["entries"], page["counts"]["compared"], page["counts"]["not_compared"]) == (2, 0, 2)
+    assert {(r["reason_code"], r["count"]) for r in page["counts"]["not_compared_by_reason"]} == {
+        ("COMPARISON_FAILED", 1), ("NOT_COMPARED_YET", 1),
+    }
+
+
+def test_a_record_that_says_nothing_this_build_accepts_is_counted_as_a_failed_comparison_not_a_compared_one() -> None:
+    """The counts read each record's text in SQL, so what a record says is judged here as the record's own type does."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        "CREATE TABLE orders (order_ref TEXT PRIMARY KEY, effect_operation_id TEXT, role TEXT, submitted_at_ms INTEGER);"
+        "CREATE TABLE effect_operations (effect_operation_id TEXT PRIMARY KEY, strategy_instance_id TEXT);"
+        "CREATE TABLE order_contracts (order_ref TEXT);"
+        "CREATE TABLE option_order_legs (order_ref TEXT, parent_order_ref TEXT);"
+        "CREATE TABLE custody_transitions ("
+        "sequence INTEGER PRIMARY KEY, effect_operation_id TEXT, transition_kind TEXT, facts_json TEXT);"
+    )
+    recorded = [
+        # What the Clerk writes, and what the counts take as compared.
+        '{"result":"consistent","reason_code":null}',
+        '{"result":"over_reserved","reason_code":null}',
+        '{"result":"under_reserved_unexplained","reason_code":null}',
+        # An entry that was not compared, for a reason this build names.
+        '{"result":"unknown","reason_code":"CASH_MOVED"}',
+        # Valid JSON that is not a comparison this build can read.
+        "{}",
+        '{"reason_code":"CASH_MOVED"}',
+        '{"result":"unknown","reason_code":null}',
+        '{"result":"consistent","reason_code":"CASH_MOVED"}',
+        '{"result":"unknown","reason_code":"A_REASON_RETIRED_SINCE"}',
+        '{"result":"fine","reason_code":null}',
+        "not json at all",
+    ]
+    for number, facts_json in enumerate([*recorded, None]):
+        conn.execute("INSERT INTO effect_operations VALUES (?, 'a')", (f"effect-{number}",))
+        conn.execute("INSERT INTO orders VALUES (?, ?, 'ENTRY', ?)", (f"order-{number}", f"effect-{number}", number))
+        conn.execute("INSERT INTO order_contracts VALUES (?)", (f"order-{number}",))
+        if facts_json is not None:
+            conn.execute(
+                "INSERT INTO custody_transitions (effect_operation_id, transition_kind, facts_json) VALUES (?, ?, ?)",
+                (f"effect-{number}", COMPARED_KIND, facts_json),
+            )
+
+    counts = option_buying_power_views._counts(
+        conn.execute(option_buying_power_views._COUNTS_SQL, (COMPARED_KIND, "a")).fetchall(), simulation=False
+    )
+
+    assert (counts.entries, counts.compared, counts.not_compared) == (12, 3, 9)
+    assert {(reason.reason_code, reason.count) for reason in counts.not_compared_by_reason} == {
+        ("COMPARISON_FAILED", 7), ("CASH_MOVED", 1), ("NOT_COMPARED_YET", 1),
+    }
+
+
+def test_the_counts_are_one_read_that_reaches_the_log_by_each_entrys_effect_and_never_scans_it(paper: Paper) -> None:
+    with paper.repo.write_fence() as conn:
+        plan = [
+            row[3] for row in conn.execute(
+                f"EXPLAIN QUERY PLAN {option_buying_power_views._COUNTS_SQL}", (COMPARED_KIND, "a")
+            ).fetchall()
+        ]
+
+    assert any(step.startswith("SEARCH t USING INDEX ix_custody_transitions_effect_sequence") for step in plan), plan
+    assert not any(step.startswith("SCAN") for step in plan), plan
+
+
+async def test_with_the_setting_off_the_page_counts_each_entry_as_recorded_and_not_judged(
+    paper: Paper, routes: FastAPI
+) -> None:
+    order_ref = await paper.filled(shows="99806.00")
+    await paper.compared(order_ref)
+
+    async with _http(routes) as client:
+        page = (await client.get(_checks_route(paper))).json()
+
+    assert page["judged"] is False
+    assert (page["counts"]["entries"], page["counts"]["compared"], page["counts"]["not_compared"]) == (1, 0, 1)
+    assert [(r["reason_code"], r["count"]) for r in page["counts"]["not_compared_by_reason"]] == [
+        ("JUDGMENT_NOT_SWITCHED_ON", 1)
+    ]
+    # Recorded all the same: the two readings and the account's requirement are there to be read.
+    [check] = page["checks"]
+    assert check["fall"]["cents"] == 19_400 and check["account_requirement_after"] == {"cents": 0, "dollars": "0.00"}
+
+
+async def test_a_bot_with_no_option_entry_is_counted_as_that_and_not_as_agreeing(
+    paper: Paper, routes: FastAPI
+) -> None:
+    async with _http(routes) as client:
+        page = (await client.get(_checks_route(paper, "b"))).json()
+
+    assert page["counts"] == {
+        "entries": 0, "compared": 0, "not_compared": 0, "not_compared_by_reason": [],
+        "sentence": "This bot has made no option entry.",
+    }
+
+
+@pytest.mark.usefixtures("judged")
+async def test_a_standing_shortfall_is_one_line_for_the_account_and_blocks_no_other_bot(
+    paper: Paper, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    order_ref = await paper.filled(shows="99750.00")
+    await paper.compared(order_ref)
+    monkeypatch.setattr(lane_summary, "get_active_clerk_runtime", lambda: SimpleNamespace(
+        sqlite_repository=paper.repo, clerk=None, startup_failure=None, selected_account_authority_kind="real_paper",
+    ))
+
+    read = await lane_summary.lane_attention_read()
+
+    # One line, the bot's own notice worded for the account: the bot, both figures, and the shared rule.
+    [line] = [item for item in read.items if item.reason_code == HOLD]
+    assert (line.strategy_instance_id, line.action.destination, line.severity) == ("a", "bot", "error")
+    assert "a's option entry" in line.headline
+    assert "$250.00" in line.headline and "$194.06" in line.headline
+    assert "The same rule prices every option bot on this account" in line.headline
+    assert "Only a is held" in line.headline
+    # Nothing else is blocked by it: another bot is admitted as before and has no notice.
+    assert admit_new_exposure(paper.repo, strategy_instance_id="b").reason_code != HOLD
+    assert paper.notices("b") == []
+    # And the line ends with the owner's review, as the notice does.
+    assert await paper.clerk.review_option_buying_power_hold("a", operator="owner") is True
+    assert [item for item in (await lane_summary.lane_attention_read()).items if item.reason_code == HOLD] == []
+
+
+@pytest.mark.usefixtures("judged")
+async def test_a_bots_other_episodes_keep_their_own_headline_kind_and_fix_beside_its_shortfall_line(
+    paper: Paper, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    order_ref = await paper.filled(shows="99750.00")
+    await paper.compared(order_ref)
+    # The same bot has a second episode of its own: an exit that left shares it is still attributed.
+    raise_uncertainty(
+        paper.repo,
+        strategy_instance_id="a",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        headline="A completed EXIT left attributed exposure",
+        explanation="The closing order ended without flattening the position.",
+        operator_impact="New exposure is paused for this strategy.",
+        next_step="Flatten the position, or discharge it if Alpaca does not hold it.",
+        evidence_refs=("exit-evidence",),
+        cause_facts=ExitNotFlatCause(symbol="SPY", attributed_qty=1.0).to_mapping(),
+        severity="error",
+    )
+    monkeypatch.setattr(lane_summary, "get_active_clerk_runtime", lambda: SimpleNamespace(
+        sqlite_repository=paper.repo, clerk=None, startup_failure=None, selected_account_authority_kind="real_paper",
+    ))
+
+    items = (await lane_summary.lane_attention_read()).items
+
+    [shortfall] = [item for item in items if item.reason_code == HOLD]
+    [exit_line] = [item for item in items if item.reason_code == EXIT_NOT_FLAT_REASON_CODE]
+    # The shortfall is worded for the account; the exit is still its own problem, with its own fix.
+    assert "same rule prices every option bot" in shortfall.headline
+    assert (exit_line.strategy_instance_id, exit_line.kind, exit_line.action.destination) == ("a", "exit", "bot")
+    assert exit_line.headline == "A completed EXIT left attributed exposure"
+    assert "option buying power" not in exit_line.headline
+
+
+@pytest.mark.usefixtures("judged")
+async def test_a_notice_whose_record_cannot_be_read_keeps_its_own_headline_on_the_lane(
+    paper: Paper, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    order_ref = await paper.filled(shows="99750.00")
+    await paper.compared(order_ref)
+    monkeypatch.setattr(lane_summary, "get_active_clerk_runtime", lambda: SimpleNamespace(
+        sqlite_repository=paper.repo, clerk=None, startup_failure=None, selected_account_authority_kind="real_paper",
+    ))
+
+    def unreadable(*_args: object, **_kwargs: object) -> None:
+        raise ValueError("cause facts are damaged")
+
+    monkeypatch.setattr(lane_summary, "under_reserved_cause", unreadable)
+
+    read = await lane_summary.lane_attention_read()
+
+    [line] = [item for item in read.items if item.reason_code == HOLD]
+    assert line.headline == "Alpaca took more than this bot set aside for an entry"
+    assert any(getattr(r, "action", None) == "under_reserved_notice_unreadable" for r in caplog.records)
+
+
+@pytest.mark.usefixtures("judged")
 async def test_the_owners_review_over_http_ends_the_hold_and_answers_with_the_bots_comparisons(
     paper: Paper, routes: FastAPI
 ) -> None:
@@ -1048,7 +1320,7 @@ async def test_the_owners_review_over_http_ends_the_hold_and_answers_with_the_bo
         "set_aside": {"cents": SET_ASIDE, "dollars": "194.06"},
     }]
     assert held["hold"]["headline"] and held["hold"]["explanation"] and held["hold"]["impact"]
-    assert held["hold"]["next_step"] and held["hold"]["raised_at_ms"] > 0
+    assert held["hold"]["next_step"] and held["hold"]["review_consequence"] and held["hold"]["raised_at_ms"] > 0
     [check] = held["checks"]
     assert (check["result"], check["holds"]) == ("under_reserved_unexplained", True)
     # The review ends it, under the server's own name for the operator.

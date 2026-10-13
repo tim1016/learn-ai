@@ -303,6 +303,7 @@ class Settings(BaseSettings):
     # readings is judged, and a fall of more than the bot set aside holds that
     # bot's new entries until the owner has reviewed it. Stays off until Alpaca
     # has been seen, on the account, to move the figure by an order's cost.
+    # The one reader is ``app.broker.alpaca.option_buying_power_judged``.
     ALPACA_OPTION_BUYING_POWER_JUDGED: bool = False
     # Dev-only broker fault-injection seam (PRD #1354). Off by default; the seam
     # ALSO fails closed unless the Alpaca posture is paper. Never enable in a

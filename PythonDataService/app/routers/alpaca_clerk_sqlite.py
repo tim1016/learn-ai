@@ -69,6 +69,7 @@ from app.broker.alpaca.clerk.sqlite.repository_execution_coverage_api import (
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.scheduled_end import SCHEDULED_END_REASON
+from app.broker.alpaca.option_buying_power_judged import option_buying_power_judged
 from app.broker.contract.errors import BrokerError
 from app.config import settings
 from app.schemas.alpaca_clerk_sqlite import (
@@ -406,7 +407,7 @@ def _option_buying_power_checks(
         facade.repository,
         strategy_instance_id=strategy_instance_id,
         simulation=not facade.compares_option_buying_power,
-        judged=settings.ALPACA_OPTION_BUYING_POWER_JUDGED,
+        judged=option_buying_power_judged(),
     )
 
 

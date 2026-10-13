@@ -255,6 +255,7 @@ from app.broker.alpaca.clerk.stream_health import (
 )
 from app.broker.alpaca.live_option_bots import live_option_bots_enabled
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
+from app.broker.alpaca.option_buying_power_judged import option_buying_power_judged
 from app.broker.contract.errors import BrokerError, BrokerOrderRejected
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide, OrderType
 from app.broker.contract.options import (
@@ -640,7 +641,7 @@ class SqliteAlpacaClerkFacade:
         self._buying_power: EntryBuyingPowerWatch | None = (
             EntryBuyingPowerWatch(
                 repo=repo, read=self._read, intake=self._intake,
-                judged=lambda: settings.ALPACA_OPTION_BUYING_POWER_JUDGED,
+                judged=option_buying_power_judged,
             )
             if authority_kind == "sqlite" and not trade_port_folds_simulated_evidence(trade)
             else None

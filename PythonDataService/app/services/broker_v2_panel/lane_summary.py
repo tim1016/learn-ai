@@ -35,6 +35,7 @@ from app.broker.alpaca.clerk.account_money import holdings_text
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk
 from app.broker.alpaca.clerk.active_runtime import ClerkStartupFailure
+from app.broker.alpaca.clerk.money import dollars
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.recovery_reduction import next_redrive_at_ms
 from app.broker.alpaca.clerk.sqlite.account_eligibility import (
@@ -44,6 +45,7 @@ from app.broker.alpaca.clerk.sqlite.account_eligibility import (
     AUTHORITY_RECONNECTING_HEADLINE as _AUTHORITY_RECONNECTING_HEADLINE,
 )
 from app.broker.alpaca.clerk.sqlite.budget_authority import BUDGETS_NOT_SWITCHED_ON
+from app.broker.alpaca.clerk.sqlite.entry_buying_power import under_reserved_cause
 from app.broker.alpaca.clerk.sqlite.exit_resolution import SCHEDULED_END_WAITS_FOR_OPEN
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection, ProjectedUncertainty
@@ -65,6 +67,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXIT_STUCK_REASON_CODE,
     FAILED_ENTER_FILLED_REASON_CODE,
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+    OPTION_BUYING_POWER_UNDER_RESERVED_REASON_CODE,
     OPTION_LEGS_OUT_OF_STEP_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
@@ -73,6 +76,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     STREAM_HEALTH_HOLD_REASON_CODE,
     UNEXPLAINED_ORDER_HOLD_REASON_CODE,
     UNFOLDABLE_BROKER_ORDER_REASON_CODE,
+    BuyingPowerUnderReservedCause,
 )
 from app.schemas.account_authority import AuthorityKind
 from app.schemas.broker_v2_panel import (
@@ -149,6 +153,11 @@ async def lane_attention_read() -> LaneAttentionRead:
     end sale waiting for the next open or left to the operator, and an account that has not switched
     to budgets. A lane with no authority at all, or one awaiting the owner's
     activation, answers empty rather than unknown.
+
+    A bot's standing unexplained shortfall of option buying power is one
+    line like any episode, worded for the account: it names the bot and both
+    figures and says the same rule prices every option bot here (ADR 0076
+    decision 26). The hold stays that bot's own; the line blocks nothing.
     """
     runtime = get_active_clerk_runtime()
     repository = None if runtime is None else runtime.sqlite_repository
@@ -178,10 +187,15 @@ async def lane_attention_read() -> LaneAttentionRead:
         ))
         world = runtime.selected_account_authority_kind or "real_paper"
     unconfirmed = await asyncio.to_thread(_bots_with_an_unconfirmed_closing_order, repository, uncertainties)
+    under_reserved = await asyncio.to_thread(_under_reserved_causes, repository, uncertainties)
     items = [
         *account_items,
         *(
-            _episode_item(uncertainty, closing_order_unconfirmed=uncertainty.strategy_instance_id in unconfirmed)
+            _episode_item(
+                uncertainty,
+                closing_order_unconfirmed=uncertainty.strategy_instance_id in unconfirmed,
+                under_reserved=under_reserved.get(uncertainty.strategy_instance_id or ""),
+            )
             for uncertainty in uncertainties
         ),
     ]
@@ -263,13 +277,64 @@ def _bots_with_an_unconfirmed_closing_order(
     )
 
 
+def _under_reserved_causes(
+    repository: ClerkSqliteRepository, uncertainties: Sequence[ProjectedUncertainty]
+) -> dict[str, BuyingPowerUnderReservedCause]:
+    """The entries each bot's open under-reserved notice names, read from the standing notice itself.
+
+    A notice whose record cannot be read keeps its own headline: it is logged
+    here, and the lane's line says less, never nothing. Blocking: runs off
+    the event loop.
+    """
+    causes: dict[str, BuyingPowerUnderReservedCause] = {}
+    for uncertainty in uncertainties:
+        sid = uncertainty.strategy_instance_id
+        if uncertainty.reason_code != OPTION_BUYING_POWER_UNDER_RESERVED_REASON_CODE or sid is None:
+            continue
+        try:
+            cause = under_reserved_cause(repository, strategy_instance_id=sid)
+        except (TypeError, ValueError):
+            logger.exception(
+                "a bot's under-reserved notice cannot be read; its lane line keeps the notice's own headline",
+                extra={"action": "under_reserved_notice_unreadable", "strategy_instance_id": sid},
+            )
+            continue
+        if cause is not None:
+            causes[sid] = cause
+    return causes
+
+
+def _under_reserved_headline(strategy_instance_id: str, cause: BuyingPowerUnderReservedCause) -> str:
+    """The account's notice for one bot's standing unexplained shortfall (ADR 0076 decision 26).
+
+    It names the bot and, for each entry the bot's notice holds, both
+    figures: how far Alpaca's option buying power fell and what the bot had
+    set aside. It says the same rule prices every option bot on the account.
+    It is a notice and not a hold: only the one bot is held.
+    """
+    figures = "; ".join(
+        f"it fell ${dollars(entry.fall_cents)} and the bot had set aside ${dollars(entry.set_aside_cents)}"
+        for entry in cause.entries
+    )
+    return (
+        f"{strategy_instance_id}'s option {'entry' if len(cause.entries) == 1 else 'entries'} took more of "
+        f"Alpaca's option buying power than the bot had set aside: {figures}. The same rule prices every option "
+        f"bot on this account, so other bots' entries may be under-reserved too. Only {strategy_instance_id} is held."
+    )
+
+
 def _episode_item(
-    uncertainty: ProjectedUncertainty, *, closing_order_unconfirmed: bool = False
+    uncertainty: ProjectedUncertainty,
+    *,
+    closing_order_unconfirmed: bool = False,
+    under_reserved: BuyingPowerUnderReservedCause | None = None,
 ) -> LaneAttentionItem:
     """One active episode as one line, with the fix its kind names.
 
     ``closing_order_unconfirmed``: the episode is a bot's unknown order
     outcome, and the order is a closing order its page settles.
+    ``under_reserved``: the episode is a bot's unexplained shortfall, and
+    these are the entries its notice names.
     """
     kind, action = _EPISODE_LINES.get(
         uncertainty.reason_code,
@@ -282,6 +347,14 @@ def _episode_item(
         if uncertainty.reason_code == STREAM_HEALTH_HOLD_REASON_CODE
         else uncertainty.headline
     )
+    # Only the shortfall's own episode is worded for the account. The bot's other episodes (an exit that has
+    # not flattened, an order of unknown outcome) keep their own headline, kind and fix.
+    if (
+        under_reserved is not None
+        and uncertainty.reason_code == OPTION_BUYING_POWER_UNDER_RESERVED_REASON_CODE
+        and uncertainty.strategy_instance_id is not None
+    ):
+        headline = _under_reserved_headline(uncertainty.strategy_instance_id, under_reserved)
     return LaneAttentionItem(
         condition_id=uncertainty.uncertainty_id,
         reason_code=uncertainty.reason_code,

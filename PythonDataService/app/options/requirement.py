@@ -6,6 +6,9 @@ Formula: with ``s_i`` = +1 for a bought leg and -1 for a sold one, ``r_i`` its
   payoff(p)   = Σ s_i · r_i · (max(p - K_i, 0) for a call, max(K_i - p, 0) for a put)
   requirement = N · m · max(0, -min over p ≥ 0 of payoff(p))
   portfolio requirement = Σ_underlying max_expiry(requirement for that expiry's holdings)
+  held requirement = Σ_multiplier portfolio requirement of the contracts with that multiplier
+  incremental account requirement = (held requirement of the account's holdings
+    before an entry, and of them once it has filled)
   premium     = N · m · net price,  net price = Σ s_i · r_i · price_i   (positive is paid)
   commitment  = requirement + premium + fee provision
   loss at expiry (estimate) = max(0, premium - N · m · min over p ≥ 0 of payoff(p))
@@ -46,6 +49,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 
+from app.options.contract import OptionContract
 from app.options.exact import exact_sum, require_everyday, whole_units
 from app.options.structure import ResolvedLeg, ResolvedStructure
 
@@ -218,6 +222,84 @@ def portfolio_broker_requirement(legs: Sequence[ResolvedLeg], size: EntrySize) -
         cents = _payoff_cents(max(0, -_lowest_legs_payoff_thousandths(held)), size)
         by_underlying[root] = max(by_underlying.get(root, 0), cents)
     return sum(by_underlying.values())
+
+
+# One held contract: its OCC symbol and the shares its price stands for, as its listing recorded them.
+ContractAtMultiplier = tuple[str, int]
+
+
+def held_requirement_cents(signed_contracts: Mapping[ContractAtMultiplier, int]) -> int:
+    """The collateral of held option contracts, in whole cents: the one composition every holder of it uses.
+
+    ``signed_contracts`` is each held contract's net whole contracts, bought
+    above zero and sold below, keyed by ``(OCC symbol, multiplier)``; one
+    netting to zero holds nothing. A contract is valued at its own
+    multiplier, so holdings with several are worked out apart, never
+    offsetting each other, and their requirements add.
+
+    Formula: requirement = Σ_m portfolio requirement of the contracts with
+      multiplier m, where portfolio requirement is
+      ``portfolio_broker_requirement`` (largest expiry requirement per
+      underlying, summed across underlyings).
+    Reference: Alpaca, "Options Level 3 Trading"
+      (https://docs.alpaca.markets/docs/options-level-3-trading, read
+      2026-10-08); ADR 0076 decision 28.
+    Canonical implementation: this function over ``portfolio_broker_requirement``;
+      it adds no payoff arithmetic of its own.
+    Validated against: tests/options/test_requirement.py and
+      tests/broker/alpaca/clerk/test_option_position_money.py (the money a
+      bot's lots hold), and golden fixture OSM-002 through
+      ``portfolio_broker_requirement``.
+
+    Raises ``StructureMoneyRefused`` for holdings whose loss has no limit,
+    and ``ValueError`` for a symbol that is not an option contract or a
+    count that is not whole contracts. Nothing is rounded or guessed.
+    """
+    by_multiplier: dict[int, list[ResolvedLeg]] = defaultdict(list)
+    for (symbol, multiplier), held in sorted(signed_contracts.items()):
+        contract = OptionContract.from_occ_symbol(symbol)
+        if isinstance(held, bool) or not isinstance(held, int):
+            raise ValueError(f"{symbol} is held as {held!r}: option contracts are held in whole contracts")
+        if held == 0:
+            continue
+        by_multiplier[multiplier].append(
+            ResolvedLeg(leg_id=symbol, contract=contract, position="long" if held > 0 else "short", ratio=abs(held))
+        )
+    return sum(
+        portfolio_broker_requirement(legs, EntrySize(multiplier=multiplier, units=1))
+        for multiplier, legs in by_multiplier.items()
+    )
+
+
+def incremental_account_requirement(
+    held_before: Mapping[ContractAtMultiplier, int], held_after: Mapping[ContractAtMultiplier, int]
+) -> tuple[int, int]:
+    """The account's collateral before and after an entry, in whole cents: ``(before, after)``.
+
+    Both holdings are the account's own, netted across its bots: every
+    contract's signed whole contracts, as ``held_requirement_cents`` takes
+    them. Alpaca values the account together, so what an entry adds to the
+    account (``after - before``) can be less than the requirement of the
+    entry's own legs, down to zero or below. The bot's own commitment
+    (``entry_money``) is independent of the account's other holdings and
+    never says that.
+
+    Formula: before = held requirement(held_before) and after = held
+      requirement(held_after). A flat account entering a first $5-wide
+      spread of 100 shares is ``(0, 50_000)``.
+    Reference: Alpaca, "Options Level 3 Trading"
+      (https://docs.alpaca.markets/docs/options-level-3-trading, read
+      2026-10-08): positions are valued together, so two spreads that need
+      $1,000 apart can need $0 together; ADR 0076 decision 28.
+    Canonical implementation: this function over ``held_requirement_cents``;
+      it adds no arithmetic of its own.
+    Validated against: tests/options/test_requirement.py (the page's
+      documented pair, and a first spread on a flat account).
+
+    Refuses what ``held_requirement_cents`` refuses, whichever of the two
+    holdings it is in.
+    """
+    return held_requirement_cents(held_before), held_requirement_cents(held_after)
 
 
 def _markets(structure: ResolvedStructure, quotes: Mapping[str, LegQuote]) -> dict[str, LegQuote]:

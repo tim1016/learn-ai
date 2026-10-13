@@ -21457,6 +21457,11 @@ export interface components {
          * @description One option entry's comparison, as a page shows it.
          */
         OptionBuyingPowerCheck: {
+            account_requirement_after: components["schemas"]["OptionBuyingPowerAmount"] | null;
+            account_requirement_before: components["schemas"]["OptionBuyingPowerAmount"] | null;
+            account_requirement_change: components["schemas"]["OptionBuyingPowerAmount"] | null;
+            /** Account Requirement Sentence */
+            account_requirement_sentence: string;
             /** Compared At Ms */
             compared_at_ms?: number | null;
             /** Contract */
@@ -21498,6 +21503,7 @@ export interface components {
             account_id: string;
             /** Checks */
             checks: components["schemas"]["OptionBuyingPowerCheck"][];
+            counts: components["schemas"]["OptionBuyingPowerCounts"];
             hold: components["schemas"]["OptionBuyingPowerHold"] | null;
             /** Judged */
             judged: boolean;
@@ -21505,6 +21511,26 @@ export interface components {
             simulation: boolean;
             /** Strategy Instance Id */
             strategy_instance_id: string;
+        };
+        /**
+         * OptionBuyingPowerCounts
+         * @description How many of a bot's option entries were compared with Alpaca's option buying power, and why the others were not.
+         *
+         *     Over every option entry of the bot, not only the newest ones listed.
+         *     An entry nobody compared is counted as that, with its reason: silence is
+         *     never shown as agreement.
+         */
+        OptionBuyingPowerCounts: {
+            /** Compared */
+            compared: number;
+            /** Entries */
+            entries: number;
+            /** Not Compared */
+            not_compared: number;
+            /** Not Compared By Reason */
+            not_compared_by_reason: components["schemas"]["OptionBuyingPowerReasonCount"][];
+            /** Sentence */
+            sentence: string;
         };
         /**
          * OptionBuyingPowerHold
@@ -21523,6 +21549,8 @@ export interface components {
             next_step: string;
             /** Raised At Ms */
             raised_at_ms: number;
+            /** Review Consequence */
+            review_consequence: string;
         };
         /**
          * OptionBuyingPowerHoldEntry
@@ -21553,6 +21581,21 @@ export interface components {
             buying_power: components["schemas"]["OptionBuyingPowerAmount"] | null;
             /** Ended Ms */
             ended_ms: number;
+        };
+        /**
+         * OptionBuyingPowerReasonCount
+         * @description How many of a bot's option entries were not compared for one reason, with the reason in words.
+         */
+        OptionBuyingPowerReasonCount: {
+            /** Count */
+            count: number;
+            /**
+             * Reason Code
+             * @enum {string}
+             */
+            reason_code: "JUDGMENT_NOT_SWITCHED_ON" | "FIRST_READING_FAILED" | "FIRST_READING_NOT_READY" | "FIRST_READING_WITHOUT_FIGURE" | "FIRST_READING_STALE" | "SECOND_READING_FAILED" | "SECOND_READING_WITHOUT_FIGURE" | "READING_NOT_WHOLE_CENTS" | "PREMIUM_NOT_WHOLE_CENTS" | "OTHER_ORDER_MOVED" | "CASH_MOVED" | "CASH_MOVEMENT_UNREAD" | "ACCOUNT_NOT_CHECKED_AFTER" | "ACCOUNT_NOT_CLEAN_AFTER" | "ENTRY_BOUGHT_NOTHING" | "UNFILLED_PART_RELEASE_NOT_VERIFIED" | "OUTCOME_NOT_PROVEN" | "CLERK_RESTARTED" | "COMPARISON_FAILED" | "SIMULATION" | "NOT_COMPARED_YET";
+            /** Sentence */
+            sentence: string;
         };
         /** OptionContractView */
         OptionContractView: {

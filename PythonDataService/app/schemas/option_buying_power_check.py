@@ -92,6 +92,16 @@ class OptionBuyingPowerCheck(BaseModel):
     compared_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     # Whether the bot's open notice names this entry.
     holds: bool
+    # The account's own option requirement over every contract the books attribute to a bot, as the
+    # first reading began and as the second began once the entry's outcome was proven. Evidence: it
+    # changes no result and holds nothing. Alpaca values the whole account together, so the change
+    # can be less than what the bot set aside. Absent, not zero, when it was not recorded.
+    account_requirement_before: OptionBuyingPowerAmount | None
+    account_requirement_after: OptionBuyingPowerAmount | None
+    # After less before. Negative when the entry released requirement by netting.
+    account_requirement_change: OptionBuyingPowerAmount | None
+    # One sentence saying what the account's requirement did, or that it was not recorded.
+    account_requirement_sentence: str
 
 
 class OptionBuyingPowerHoldEntry(BaseModel):
@@ -113,8 +123,39 @@ class OptionBuyingPowerHold(BaseModel):
     explanation: str
     impact: str
     next_step: str
+    # What the owner's review does, said before it is confirmed.
+    review_consequence: str
     raised_at_ms: int = _Ms
     entries: list[OptionBuyingPowerHoldEntry]
+
+
+class OptionBuyingPowerReasonCount(BaseModel):
+    """How many of a bot's option entries were not compared for one reason, with the reason in words."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reason_code: OptionBuyingPowerNotComparedReason
+    sentence: str
+    count: int = Field(ge=1)
+
+
+class OptionBuyingPowerCounts(BaseModel):
+    """How many of a bot's option entries were compared with Alpaca's option buying power, and why the others were not.
+
+    Over every option entry of the bot, not only the newest ones listed.
+    An entry nobody compared is counted as that, with its reason: silence is
+    never shown as agreement.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    entries: int = Field(ge=0)
+    # Entries whose pair of readings came to a result: consistent, over-reserved or under-reserved.
+    compared: int = Field(ge=0)
+    not_compared: int = Field(ge=0)
+    # The reasons of the entries not compared, most first.
+    not_compared_by_reason: list[OptionBuyingPowerReasonCount]
+    sentence: str
 
 
 class OptionBuyingPowerChecksResponse(BaseModel):
@@ -129,6 +170,8 @@ class OptionBuyingPowerChecksResponse(BaseModel):
     # Whether a clean pair of readings is judged on this account (the account's setting).
     judged: bool
     hold: OptionBuyingPowerHold | None
+    counts: OptionBuyingPowerCounts
+    # The newest entries only; ``counts`` is over all of them.
     checks: list[OptionBuyingPowerCheck]
 
 

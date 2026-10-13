@@ -306,6 +306,16 @@ class EntryBuyingPowerComparedFacts:
     that could not be had is ``None``, never zero. ``holds`` is whether
     this record raised the bot's notice: only an under-reserved result
     judged with the account's setting on does.
+
+    ``account_requirement_before_cents`` and ``account_requirement_after_cents``
+    are the account's own collateral over every option contract the books
+    attribute to a bot, as the first reading began and as the second began
+    once the entry's outcome was proven. They are evidence: they change no
+    result and hold nothing. Alpaca values the whole account together, so
+    their difference can be less than the bot's commitment. Both are present
+    or both absent, and a record written before they existed has neither:
+    they are left out of its canonical JSON when absent, so that record reads
+    and hashes as it always did (hash-chained schema evolution).
     """
 
     result: str
@@ -329,6 +339,8 @@ class EntryBuyingPowerComparedFacts:
     fall_cents: int | None
     compared_at_ms: int
     holds: bool
+    account_requirement_before_cents: int | None = None
+    account_requirement_after_cents: int | None = None
 
     def __post_init__(self) -> None:
         if self.result not in _BUYING_POWER_RESULTS:
@@ -354,13 +366,24 @@ class EntryBuyingPowerComparedFacts:
             raise ValueError(f"premium_paid_cents is signed whole cents or absent; got {self.premium_paid_cents!r}")
         if type(self.holds) is not bool:
             raise ValueError("holds is true or false")
+        requirement = (self.account_requirement_before_cents, self.account_requirement_after_cents)
+        if (requirement[0] is None) != (requirement[1] is None):
+            raise ValueError("the account's requirement is recorded before and after together, or neither")
+        if any(value is not None and (type(value) is not int or value < 0) for value in requirement):
+            raise ValueError(f"the account's requirement is whole cents, zero or more, or absent; got {requirement!r}")
 
     def to_facts_json(self) -> str:
-        return canonicalize(asdict(self))
+        return canonicalize(_omit_defaults(asdict(self), _BUYING_POWER_COMPARED_DEFAULTS))
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> EntryBuyingPowerComparedFacts:
         return cls(**json.loads(facts_json))
+
+
+_BUYING_POWER_COMPARED_DEFAULTS: Mapping[str, Any] = {
+    "account_requirement_before_cents": None,
+    "account_requirement_after_cents": None,
+}
 
 
 @dataclass(frozen=True)

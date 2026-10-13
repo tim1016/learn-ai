@@ -19,7 +19,15 @@ was set aside are recorded all the same.
 Only one result does anything: a fall of more than the bot set aside,
 across a clean pair, judged. It raises a notice of that bot's own that
 holds its new entries and none of its exits until the owner has reviewed
-it. No other bot is touched.
+it. No other bot is touched. The lane shows the same notice as one line
+for the account, saying that the same rule prices every option bot there;
+that line holds nothing (``lane_summary``).
+
+The record also holds the account's own requirement over every option
+contract the books attribute to a bot, as the first reading began and as the
+second began once the outcome was proven (``account_option_requirement``).
+Alpaca values the whole account together, so that change can be less than
+what the bot set aside. It is evidence: it changes no result and holds nothing.
 
 This module costs an entry nothing. A reading that fails or is slow is
 recorded as that, and the entry goes on. An account whose bots trade shares
@@ -51,6 +59,7 @@ from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.live_envelope import OBSERVATION_MAX_AGE_MS
 from app.broker.alpaca.clerk.money import dollars, money_context, notional
+from app.broker.alpaca.clerk.sqlite.account_option_requirement import account_requirement_cents
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import BrokerCallUnderIntakeError
 from app.broker.alpaca.clerk.sqlite.day_pnl import CASH_TRANSFER_ACTIVITY_FILTER
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
@@ -64,7 +73,11 @@ from app.broker.alpaca.clerk.sqlite.facts import (
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.option_entry import OptionEntry, option_entry_of_order
 from app.broker.alpaca.clerk.sqlite.option_order_legs import multi_leg_entry_refs
-from app.broker.alpaca.clerk.sqlite.reads import CANCELLABLE_ENTRY_BROKER_STATES
+from app.broker.alpaca.clerk.sqlite.reads import (
+    CANCELLABLE_ENTRY_BROKER_STATES,
+    HeldOptionContract,
+    held_option_contracts,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     OPTION_BUYING_POWER_UNDER_RESERVED_REASON_CODE,
@@ -165,6 +178,8 @@ class AccountReading:
     ended_ms: int
     # The newest record on the custody log as the read began: what was written after it came later.
     began_after_sequence: int
+    # Every option contract the books attribute to a bot as the read began, signed, per bot.
+    held: tuple[HeldOptionContract, ...]
     # Dollars, exact as the broker wrote them. None when the read failed or stated none.
     buying_power: Decimal | None
     # Whether the read raised or did not answer inside its bound.
@@ -180,6 +195,7 @@ class ReadingBegun:
 
     began_ms: int
     began_after_sequence: int
+    held: tuple[HeldOptionContract, ...]
     transfers_from_ms: int
     account: asyncio.Future[BrokerOptionAccountSnapshot]
     transfers: asyncio.Future[list[BrokerActivity]]
@@ -273,7 +289,7 @@ class EntryBuyingPowerWatch:
             begun.cancel()
             reading = AccountReading(
                 began_ms=begun.began_ms, ended_ms=self._repo.clock(),
-                began_after_sequence=begun.began_after_sequence, buying_power=None,
+                began_after_sequence=begun.began_after_sequence, held=begun.held, buying_power=None,
                 failed=True, cash_transfers=None, not_ready=True,
             )
         self._first[key] = (reading, begun.transfers_from_ms)
@@ -389,9 +405,14 @@ class EntryBuyingPowerWatch:
         """
         loop = asyncio.get_running_loop()
         began_ms = self._repo.clock()
+        with self._repo.write_fence() as conn:
+            # One moment of the books: the log's newest record and what the bots hold at it.
+            began_after_sequence = self._repo.last_custody_sequence()
+            held = tuple(held_option_contracts(conn))
         return ReadingBegun(
             began_ms=began_ms,
-            began_after_sequence=self._repo.last_custody_sequence(),
+            began_after_sequence=began_after_sequence,
+            held=held,
             transfers_from_ms=transfers_from_ms,
             account=asyncio.Task(
                 asyncio.wait_for(self._read.get_option_account(), timeout=bound_ms / 1000),
@@ -438,6 +459,7 @@ class EntryBuyingPowerWatch:
             began_ms=begun.began_ms,
             ended_ms=ended_ms,
             began_after_sequence=begun.began_after_sequence,
+            held=begun.held,
             buying_power=None if isinstance(account, Exception) else account.options_buying_power,
             failed=isinstance(account, Exception),
             cash_transfers=None if listed is None else frozenset(activity.activity_id for activity in listed),
@@ -618,6 +640,13 @@ def _compare(
         second_cents=second_cents, cost_cents=cost_cents, set_aside_cents=set_aside_cents,
         effect_operation_id=effect_operation_id, broker_order_id=broker_order_id,
     )
+    # Evidence beside the judgment: what the account's own requirement came to across the entry. It is
+    # never an input to the result, and an entry with no second reading, or one that cannot be worked out, has none.
+    account_requirement = (
+        None
+        if first is None or second is None
+        else account_requirement_cents(conn, account_id=account_id, before=first.held, after=second.held)
+    )
     result = BuyingPowerCheckResult.UNKNOWN
     if reason is None:
         # A clean pair. What it comes to is the arithmetic's to say, and whether that is acted on the setting's.
@@ -659,6 +688,8 @@ def _compare(
         fall_cents=fall_cents,
         compared_at_ms=now_ms,
         holds=result is BuyingPowerCheckResult.UNDER_RESERVED_UNEXPLAINED,
+        account_requirement_before_cents=None if account_requirement is None else account_requirement[0],
+        account_requirement_after_cents=None if account_requirement is None else account_requirement[1],
     )
 
 

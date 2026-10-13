@@ -1,12 +1,16 @@
 """A bot's option entries beside Alpaca's option buying power, as a page is served them (ADR 0076 decision 26).
 
-Reads the Clerk's books and authors every word. Nothing is computed here:
-each figure is the comparison's own record (``ENTRY_BUYING_POWER_COMPARED``),
-and an entry with no record yet says so by name.
+Reads the Clerk's books and authors every word. Nothing is computed here but
+the counts and one subtraction: each figure is the comparison's own record
+(``ENTRY_BUYING_POWER_COMPARED``), and an entry with no record yet says so by
+name. The newest entries are listed one by one; the counts are one aggregate
+over every option entry of the bot, so an entry nobody compared is never
+silent and the page never reads a bot's whole history record by record.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -20,16 +24,49 @@ from app.schemas.option_buying_power_check import (
     OptionBuyingPowerAmount,
     OptionBuyingPowerCheck,
     OptionBuyingPowerChecksResponse,
+    OptionBuyingPowerCounts,
     OptionBuyingPowerHold,
     OptionBuyingPowerHoldEntry,
     OptionBuyingPowerReading,
+    OptionBuyingPowerReasonCount,
 )
 
 if TYPE_CHECKING:
+    import sqlite3
+
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 
-# How many of a bot's entries one answer carries, newest first.
+# How many of a bot's entries one answer lists, newest first. The counts are over all of them.
 CHECKS_SERVED = 20
+
+# A bot's option entries: its ENTRY orders that trade a contract or are the parent of several legs.
+_IS_AN_OPTION_ENTRY_OF_A_BOT_SQL = (
+    "o.role = 'ENTRY' AND e.strategy_instance_id = ? AND ("
+    "EXISTS (SELECT 1 FROM order_contracts bound WHERE bound.order_ref=o.order_ref) OR "
+    "EXISTS (SELECT 1 FROM option_order_legs leg WHERE leg.parent_order_ref=o.order_ref))"
+)
+# The newest of them, to be listed one by one.
+_NEWEST_ENTRIES_SQL = (
+    "SELECT o.order_ref, o.effect_operation_id FROM orders o "
+    "CROSS JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+    f"WHERE {_IS_AN_OPTION_ENTRY_OF_A_BOT_SQL} ORDER BY o.submitted_at_ms DESC, o.order_ref DESC LIMIT ?"
+)
+# All of them counted in one read, by whether each has a record and, when it has, the result and the reason
+# it records. One comparison is recorded for an effect operation (``entry_buying_power`` guards it), so the join
+# adds no row. What a record says is judged in ``_counts``, and a record that is not JSON is read as saying nothing.
+_COUNTS_SQL = (
+    "SELECT t.sequence IS NULL AS unrecorded, "
+    "CASE WHEN json_valid(t.facts_json) THEN json_extract(t.facts_json, '$.result') END AS result, "
+    "CASE WHEN json_valid(t.facts_json) THEN json_extract(t.facts_json, '$.reason_code') END AS reason_code, "
+    "COUNT(*) AS entries FROM orders o "
+    "CROSS JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+    "LEFT JOIN custody_transitions t ON t.effect_operation_id = o.effect_operation_id AND t.transition_kind = ? "
+    f"WHERE {_IS_AN_OPTION_ENTRY_OF_A_BOT_SQL} GROUP BY 1, 2, 3"
+)
+_REASONS_BY_CODE = {reason.value: reason for reason in NotComparedReason}
+_JUDGED_RESULTS = frozenset(
+    result.value for result in BuyingPowerCheckResult if result is not BuyingPowerCheckResult.UNKNOWN
+)
 
 RESULT_LABELS: dict[BuyingPowerCheckResult, str] = {
     BuyingPowerCheckResult.CONSISTENT: "Consistent",
@@ -97,21 +134,21 @@ REASON_SENTENCES: dict[NotComparedReason, str] = {
     NotComparedReason.NOT_COMPARED_YET: "The comparison for this entry has not been made yet.",
 }
 
+_REQUIREMENT_NOT_RECORDED = "The account's own option requirement was not recorded across this entry."
+
+REVIEW_CONSEQUENCE = (
+    "Once you have reviewed it, this bot may open new option entries again. Nothing is sent to Alpaca "
+    "and no order changes."
+)
+
 
 def option_buying_power_checks(
     repo: ClerkSqliteRepository, *, strategy_instance_id: str, simulation: bool, judged: bool
 ) -> OptionBuyingPowerChecksResponse:
     """The bot's option entries, newest first, each with its comparison, and the notice holding the bot if one is."""
     with repo.write_fence() as conn:
-        rows = conn.execute(
-            "SELECT o.order_ref, o.effect_operation_id FROM orders o "
-            "CROSS JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
-            "WHERE o.role = 'ENTRY' AND e.strategy_instance_id = ? AND ("
-            "EXISTS (SELECT 1 FROM order_contracts bound WHERE bound.order_ref=o.order_ref) OR "
-            "EXISTS (SELECT 1 FROM option_order_legs leg WHERE leg.parent_order_ref=o.order_ref)) "
-            "ORDER BY o.submitted_at_ms DESC, o.order_ref DESC LIMIT ?",
-            (strategy_instance_id, CHECKS_SERVED),
-        ).fetchall()
+        rows = conn.execute(_NEWEST_ENTRIES_SQL, (strategy_instance_id, CHECKS_SERVED)).fetchall()
+        grouped = conn.execute(_COUNTS_SQL, (COMPARED_KIND, strategy_instance_id)).fetchall()
         cause = under_reserved_cause(repo, strategy_instance_id=strategy_instance_id)
         held = frozenset() if cause is None else frozenset(entry.order_ref for entry in cause.entries)
         checks = [
@@ -142,6 +179,7 @@ def option_buying_power_checks(
                 explanation=notice["explanation"],
                 impact=notice["operator_impact"],
                 next_step=notice["next_step"],
+                review_consequence=REVIEW_CONSEQUENCE,
                 raised_at_ms=notice["observed_at_ms"],
                 entries=[
                     OptionBuyingPowerHoldEntry(
@@ -152,7 +190,52 @@ def option_buying_power_checks(
                 ],
             )
         ),
+        counts=_counts(grouped, simulation=simulation),
         checks=checks,
+    )
+
+
+def _counts(grouped: list[sqlite3.Row], *, simulation: bool) -> OptionBuyingPowerCounts:
+    """How many entries came to a result and, for the rest, why not, from ``_COUNTS_SQL``'s groups.
+
+    An entry with no record counts as not made yet. A record counts as
+    compared only when it says what ``EntryBuyingPowerComparedFacts`` accepts:
+    one of the three results that were judged with no reason, or ``unknown``
+    with a reason this build names. Anything else it says (``{}``, an
+    ``unknown`` with no reason, an agreeing result carrying a reason, a
+    reason this build does not name, text that is not JSON) counts as a
+    failed comparison: it is told apart from agreement and the page still
+    serves.
+    """
+    unmade = NotComparedReason.SIMULATION if simulation else NotComparedReason.NOT_COMPARED_YET
+    reasons: Counter[NotComparedReason] = Counter()
+    total = compared = 0
+    for group in grouped:
+        entries, result, code = group["entries"], group["result"], group["reason_code"]
+        total += entries
+        if group["unrecorded"]:
+            reasons[unmade] += entries
+        elif result in _JUDGED_RESULTS and code is None:
+            compared += entries
+        elif result == BuyingPowerCheckResult.UNKNOWN.value and code in _REASONS_BY_CODE:
+            reasons[_REASONS_BY_CODE[code]] += entries
+        else:
+            reasons[NotComparedReason.COMPARISON_FAILED] += entries
+    not_compared = sum(reasons.values())
+    return OptionBuyingPowerCounts(
+        entries=total,
+        compared=compared,
+        not_compared=not_compared,
+        not_compared_by_reason=[
+            OptionBuyingPowerReasonCount(reason_code=reason.value, sentence=REASON_SENTENCES[reason], count=count)
+            for reason, count in sorted(reasons.items(), key=lambda item: (-item[1], item[0].value))
+        ],
+        sentence=(
+            "This bot has made no option entry."
+            if total == 0
+            else f"{compared} of {total} option {'entry was' if total == 1 else 'entries were'} compared with "
+            f"Alpaca's option buying power, {not_compared} not."
+        ),
     )
 
 
@@ -172,9 +255,12 @@ def _check(
             sentence=REASON_SENTENCES[reason], contracts_asked=sum(entry.units * leg.ratio for leg in entry.legs), contracts_filled=None,
             set_aside=set_aside, set_aside_for_filled=None, premium_paid=None, first_reading=None,
             second_reading=None, sent_at_ms=None, fall=None, compared_at_ms=None, holds=False,
+            account_requirement_before=None, account_requirement_after=None, account_requirement_change=None,
+            account_requirement_sentence=_REQUIREMENT_NOT_RECORDED,
         )
     facts = EntryBuyingPowerComparedFacts.from_facts_json(recorded["facts_json"])
     result = BuyingPowerCheckResult(facts.result)
+    requirement_change, requirement_sentence = _requirement_words(facts)
     return OptionBuyingPowerCheck(
         order_ref=order_ref,
         contract=", ".join(leg.symbol for leg in entry.leg_terms),
@@ -193,6 +279,27 @@ def _check(
         fall=_amount(facts.fall_cents),
         compared_at_ms=facts.compared_at_ms,
         holds=order_ref in held,
+        account_requirement_before=_amount(facts.account_requirement_before_cents),
+        account_requirement_after=_amount(facts.account_requirement_after_cents),
+        account_requirement_change=requirement_change,
+        account_requirement_sentence=requirement_sentence,
+    )
+
+
+def _requirement_words(facts: EntryBuyingPowerComparedFacts) -> tuple[OptionBuyingPowerAmount | None, str]:
+    """What the account's requirement did across the entry: the change, and one sentence saying so.
+
+    The change is signed: negative when the entry released requirement by
+    netting against what the account already held.
+    """
+    before, after = facts.account_requirement_before_cents, facts.account_requirement_after_cents
+    if before is None or after is None:
+        return None, _REQUIREMENT_NOT_RECORDED
+    change = after - before
+    moved = "did not change" if change == 0 else f"{'rose' if change > 0 else 'fell'} by ${dollars(abs(change))}"
+    return _amount(change), (
+        f"The account's option requirement, over every contract the books hold for its bots, {moved} across this "
+        f"entry: ${dollars(before)} before and ${dollars(after)} after."
     )
 
 

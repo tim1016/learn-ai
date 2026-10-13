@@ -197,6 +197,31 @@ describe('BrokerV2PanelService run evidence', () => {
     await expect(confirmed).resolves.toMatchObject({ receipt_id: 'coverage-resolution:2' });
   });
 
+  it('reads a bot’s option buying power comparisons, and records the owner’s review as one enveloped command (#3098)', async () => {
+    const read = service.getOptionBuyingPowerChecks(target('account/1', 'bot/1'), 'bot/1');
+    const get = http.expectOne(
+      '/api/brokers/alpaca/clerks/clrk_spec/accounts/account%2F1/custody/bots/bot%2F1/option-buying-power-checks',
+    );
+    expect(get.request.method).toBe('GET');
+    get.flush({ account_id: 'account/1', strategy_instance_id: 'bot/1', checks: [], hold: null });
+    await expect(read).resolves.toMatchObject({ strategy_instance_id: 'bot/1' });
+
+    const reviewed = service.reviewOptionBuyingPowerHold(target('account/1', 'bot/1'), 'bot/1');
+    const post = http.expectOne(
+      '/api/brokers/alpaca/clerks/clrk_spec/accounts/account%2F1/custody/bots/bot%2F1/option-buying-power-hold/review',
+    );
+    expect(post.request.method).toBe('POST');
+    expect(post.request.body).toEqual({
+      command_context: expect.objectContaining({
+        capability: 'custody_command',
+        idempotency_key: 'command-key-1',
+        expected_effective_binding_generation: 3,
+      }),
+    });
+    post.flush({ reviewed: true, state: { strategy_instance_id: 'bot/1', hold: null, checks: [] } });
+    await expect(reviewed).resolves.toMatchObject({ reviewed: true });
+  });
+
   it('sends an extended-hours flatten with its confirmed limit to the bot custody route (#2007)', async () => {
     const sent = service.executeExtendedSafeFlatten(
       target('account/1', 'bot/1'),

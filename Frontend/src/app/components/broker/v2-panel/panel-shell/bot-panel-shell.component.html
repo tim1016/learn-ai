@@ -147,6 +147,20 @@
               />
             </div>
 
+            @if (panelData.traded?.kind === 'option') {
+              <div class="bot-board__panel bot-board__option-power bot-board__panel--bare">
+                <app-bot-option-buying-power
+                  [broker]="broker()"
+                  [clerkId]="clerkId()"
+                  [accountId]="accountId()"
+                  [sid]="sid()"
+                  [journalTailSeq]="panelData.journal_tail_seq"
+                  [review]="reviewOptionBuyingPowerHold"
+                  [locked]="actionPending()"
+                />
+              </div>
+            }
+
             <section class="bot-board__panel bot-board__orders" aria-labelledby="bot-orders-title">
               <h3 id="bot-orders-title" class="bot-board__title">Orders</h3>
               <app-bot-order-records
