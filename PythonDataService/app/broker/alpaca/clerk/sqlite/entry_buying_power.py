@@ -85,6 +85,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     UnderReservedEntry,
 )
 from app.options.buying_power_check import (
+    JUDGMENT_NOT_SWITCHED_ON_REASON,
     BuyingPowerCheckResult,
     judge_fall,
     judge_part_fill,
@@ -127,8 +128,9 @@ _OPERATOR_REF_PREFIX = "operator:"
 class NotComparedReason(StrEnum):
     """Why one entry's comparison is ``unknown``. A closed set; the first that is met is the one recorded."""
 
-    # The account's setting has not said the broker moves this figure by an order's cost.
-    JUDGMENT_NOT_SWITCHED_ON = "JUDGMENT_NOT_SWITCHED_ON"
+    # The account's setting has not said the broker moves this figure by an order's cost. Its value is the
+    # one the offline judgment looks for (``buying_power_check.rejudge``).
+    JUDGMENT_NOT_SWITCHED_ON = JUDGMENT_NOT_SWITCHED_ON_REASON
     # The read before the order failed or did not answer in time.
     FIRST_READING_FAILED = "FIRST_READING_FAILED"
     # The listing answered before the account reading; the entry did not wait for it.
