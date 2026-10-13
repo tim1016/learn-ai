@@ -137,9 +137,10 @@ async def list_the_runs(
 @router.get("/runs/{run_id}", response_model=OptionsBacktestRunDetailResponse, responses=_NOT_FOUND)
 async def get_the_run(run_id: RunId) -> OptionsBacktestRunDetailResponse:
     """One run: its status, the setup it ran, the banner facts, and when it is complete every figure. Not its trades."""
-    stored = await with_connection(saved_runs.get_run, run_id, is_live=lifecycle.job_is_live)
+    stored = await with_connection(saved_runs.get_run, run_id, is_live=saved_runs.not_asked)
     if stored is None:
         raise _no_such_run(run_id)
+    stored = await saved_runs.present_run(stored, is_live=lifecycle.job_is_live)
     return OptionsBacktestRunDetailResponse.from_stored(stored)
 
 
@@ -151,7 +152,7 @@ async def get_the_run(run_id: RunId) -> OptionsBacktestRunDetailResponse:
 )
 async def delete_the_run(run_id: RunId) -> Response:
     """Delete a run with its sessions and trades. None by that id is a 404; a run that is still running is a 409."""
-    outcome = await with_connection(saved_runs.delete_run, run_id, is_live=lifecycle.job_is_live)
+    outcome = await saved_runs.delete_unless_alive(run_id, is_live=lifecycle.job_is_live)
     if outcome is DeleteOutcome.NOT_FOUND:
         raise _no_such_run(run_id)
     if outcome is DeleteOutcome.RUNNING:
