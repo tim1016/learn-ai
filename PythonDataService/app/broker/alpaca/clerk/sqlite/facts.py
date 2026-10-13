@@ -373,15 +373,17 @@ class EntryBuyingPowerComparedFacts:
             raise ValueError(f"the account's requirement is whole cents, zero or more, or absent; got {requirement!r}")
 
     def to_facts_json(self) -> str:
-        facts = asdict(self)
-        for name in ("account_requirement_before_cents", "account_requirement_after_cents"):
-            if facts[name] is None:
-                del facts[name]
-        return canonicalize(facts)
+        return canonicalize(_omit_defaults(asdict(self), _BUYING_POWER_COMPARED_DEFAULTS))
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> EntryBuyingPowerComparedFacts:
         return cls(**json.loads(facts_json))
+
+
+_BUYING_POWER_COMPARED_DEFAULTS: Mapping[str, Any] = {
+    "account_requirement_before_cents": None,
+    "account_requirement_after_cents": None,
+}
 
 
 @dataclass(frozen=True)

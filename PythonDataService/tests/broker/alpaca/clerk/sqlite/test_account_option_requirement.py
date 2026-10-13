@@ -16,19 +16,29 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite import reads
+from app.broker.alpaca.clerk.sqlite import account_option_requirement, reads
 from app.broker.alpaca.clerk.sqlite.account_option_requirement import account_requirement_cents
 from app.broker.alpaca.clerk.sqlite.contract_terms import ContractTerms
+from app.broker.alpaca.clerk.sqlite.enter import accept_option_enter
 from app.broker.alpaca.clerk.sqlite.entry_buying_power import COMPARED_KIND, EntryBuyingPowerWatch
 from app.broker.alpaca.clerk.sqlite.facts import EntryBuyingPowerComparedFacts
-from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
+from app.broker.alpaca.clerk.sqlite.hashchain import GENESIS, PAYLOAD_COLUMNS, canonical_payload, compute_row_hash
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
+from app.broker.alpaca.clerk.sqlite.option_order_evidence import multi_leg_order_evidence
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.services.option_buying_power_views import option_buying_power_checks
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON
-from tests.broker.alpaca.clerk.sqlite.option_custody_fixtures import accept_option_order, fill, open_option_books
-from tests.broker.alpaca.clerk.sqlite.several_legs_fixtures import call
+from tests.broker.alpaca.clerk.sqlite.option_custody_fixtures import (
+    ACCOUNT_ID,
+    RUN_ID,
+    accept_option_order,
+    fill,
+    open_option_books,
+)
+from tests.broker.alpaca.clerk.sqlite.several_legs_fixtures import PAID_SPREAD, call, worked_entry
 from tests.broker.alpaca.clerk.sqlite.test_multi_leg_evidence import _order
+from tests.broker.alpaca.clerk.test_simulated_multi_leg_orders import _bind
 from tests.broker.alpaca.clerk.test_simulated_multi_leg_orders import world as _world_fixture
 
 world = _world_fixture
@@ -149,24 +159,37 @@ def test_a_fraction_of_a_contract_has_no_figure_and_is_not_rounded(books: ClerkS
 
 # ── the record ───────────────────────────────────────────────────────────
 
-_RECORD_BEFORE_THE_FIGURES = {
-    "result": "unknown", "reason_code": "JUDGMENT_NOT_SWITCHED_ON", "contracts_asked": 1, "contracts_filled": 1,
-    "commitment_cents": 19_406, "set_aside_for_filled_cents": 19_406, "premium_paid_cents": 19_400,
-    "cost_of_filled_cents": 19_400, "first_began_ms": 1, "first_ended_ms": 2, "first_buying_power": "100000",
-    "sent_at_ms": 3, "second_began_ms": 4, "second_ended_ms": 5, "second_buying_power": "99806.00",
-    "fall_cents": 19_400, "compared_at_ms": 6, "holds": False,
-}
+# The record of one option entry as the Clerk stored it before the figures existed (90937b3c): sorted keys, no
+# whitespace. The chain hashes a row over this text, so the text and the row's hash are pinned as literals.
+_STORED_BEFORE_THE_FIGURES = (
+    '{"commitment_cents":19406,"compared_at_ms":6,"contracts_asked":1,"contracts_filled":1,'
+    '"cost_of_filled_cents":19400,"fall_cents":19400,"first_began_ms":1,"first_buying_power":"100000",'
+    '"first_ended_ms":2,"holds":false,"premium_paid_cents":19400,"reason_code":"JUDGMENT_NOT_SWITCHED_ON",'
+    '"result":"unknown","second_began_ms":4,"second_buying_power":"99806.00","second_ended_ms":5,'
+    '"sent_at_ms":3,"set_aside_for_filled_cents":19406}'
+)
+_ROW_HASH_BEFORE_THE_FIGURES = "1d8f9218476dce066726a831a902a0d22e8ab9e4a2ffb9bbd106dbfd837665d1"
+_RECORD_BEFORE_THE_FIGURES = json.loads(_STORED_BEFORE_THE_FIGURES)
+
+
+def _row_of(facts_json: str) -> dict[str, object]:
+    """The custody row a comparison record is written as, with the fields the chain hashes."""
+    row: dict[str, object] = dict.fromkeys(PAYLOAD_COLUMNS)
+    row.update(
+        transition_kind=COMPARED_KIND, custody_owner="ACCOUNT_CLERK", execution_authority="ACCOUNT_CLERK",
+        operation_state="succeeded", clerk_observed_at_ms=6, summary_code="JUDGMENT_NOT_SWITCHED_ON",
+        facts_json=facts_json,
+    )
+    return row
 
 
 def test_a_record_written_before_the_figures_existed_reads_and_hashes_as_it_did() -> None:
-    stored = canonicalize(_RECORD_BEFORE_THE_FIGURES)
-
-    read = EntryBuyingPowerComparedFacts.from_facts_json(stored)
+    read = EntryBuyingPowerComparedFacts.from_facts_json(_STORED_BEFORE_THE_FIGURES)
 
     assert (read.account_requirement_before_cents, read.account_requirement_after_cents) == (None, None)
-    # Written back it is the same text, so it is the same hash.
-    assert read.to_facts_json() == stored
-    assert "account_requirement" not in stored
+    # Written back it is the same text, so the chain hashes the same row.
+    assert read.to_facts_json() == _STORED_BEFORE_THE_FIGURES
+    assert compute_row_hash(GENESIS, canonical_payload(_row_of(read.to_facts_json()))) == _ROW_HASH_BEFORE_THE_FIGURES
 
 
 def test_a_record_with_the_figures_carries_both() -> None:
@@ -212,9 +235,15 @@ class _OptionAccount:
         return []
 
 
-@pytest.mark.parametrize("judged", [False, True], ids=["recorded only", "judged"])
-async def test_an_entrys_record_holds_the_accounts_requirement_as_each_reading_began(world, judged: bool) -> None:
-    """Bot B holds a sold $5 spread of two. Bot A then sells another two: $1,000 of requirement before, $2,000 after."""
+async def _entered_beside_another_bots_spread(
+    world, *, judged: bool, buying_power_after: str, picks: dict | None = None, plan=None,
+) -> tuple[ClerkSqliteRepository, EntryBuyingPowerComparedFacts]:
+    """Bot B holds a sold $5 spread of two; bot A then enters ``plan`` at ``picks``; its comparison is recorded.
+
+    Bot A's reading of the account is begun before its entry exists and its second after its fills are folded.
+    The two rounds are the watch's: the first takes the second reading (and records bot B's earlier entry as one
+    a restart left), the second records bot A's.
+    """
     books, _port = world
     held_by_b, held_evidence = await _order(world, received=True, decision="d0", sid="bot-b")
     fold_order_evidence(books, effect_operation_id=held_by_b.effect_operation_id, order=held_evidence)
@@ -223,18 +252,42 @@ async def test_an_entrys_record_holds_the_accounts_requirement_as_each_reading_b
     key = ("bot-a", "d1")
     await watch.finish_first(key, watch.begin_first())
 
-    accepted, evidence = await _order(world, received=True, decision="d1", sid="bot-a")
+    if picks is None:
+        accepted, evidence = await _order(world, received=True, decision="d1", sid="bot-a")
+    else:
+        accepted, evidence = await _enter(world, plan, picks, decision="d1", sid="bot-a")
     fold_order_evidence(books, effect_operation_id=accepted.effect_operation_id, order=evidence)
-    # Two sold spreads at $3.07 are $614.00 received, and $1,000.00 of requirement: Alpaca takes $386.00.
-    account.buying_power = Decimal("99614.00")
+    account.buying_power = Decimal(buying_power_after)
     watch.sent(key, order_ref=accepted.order_ref, sent_at_ms=NOON)
-    # The first round takes the second reading, and records bot B's earlier entry as one a restart left.
     assert await watch.round(last_pass_at_ms=NOON + 1, last_pass_clean=True) == (held_by_b.order_ref,)
     assert await watch.round(last_pass_at_ms=NOON + 1, last_pass_clean=True) == (accepted.order_ref,)
-
     recorded = EntryBuyingPowerComparedFacts.from_facts_json(books.first_effect_transition(
         effect_operation_id=accepted.effect_operation_id, transition_kind=COMPARED_KIND,
     )["facts_json"])
+    return books, recorded
+
+
+async def _enter(world, plan, picks, *, decision: str, sid: str):
+    """An entry of two units at ``picks``, accepted and sent to the simulation, as ``_order`` does for the fixtures."""
+    books, port = world
+    entry = worked_entry(plan, picks, units=2, now_ms=NOON)
+    accepted = accept_option_enter(
+        books, account_id=ACCOUNT_ID, strategy_instance_id=sid, decision_id=decision, lifecycle_run_id=RUN_ID,
+        entry=entry,
+    )
+    assert accepted.order_ref is not None
+    _bind(port, accepted.order_ref, entry)
+    return accepted, multi_leg_order_evidence(
+        await port.submit_option_order(entry.order, client_order_id=accepted.order_ref)
+    )
+
+
+@pytest.mark.parametrize("judged", [False, True], ids=["recorded only", "judged"])
+async def test_an_entrys_record_holds_the_accounts_requirement_as_each_reading_began(world, judged: bool) -> None:
+    """Bot B holds a sold $5 spread of two. Bot A then sells another two: $1,000 of requirement before, $2,000 after."""
+    # Two sold spreads at $3.07 are $614.00 received, and $1,000.00 of requirement: Alpaca takes $386.00.
+    _books, recorded = await _entered_beside_another_bots_spread(world, judged=judged, buying_power_after="99614.00")
+
     assert (recorded.account_requirement_before_cents, recorded.account_requirement_after_cents) == (100_000, 200_000)
     # The figures are evidence beside the judgment and never an input to it: what the entry cost, and what
     # Alpaca took, are the same whether it is judged or only recorded.
@@ -242,6 +295,48 @@ async def test_an_entrys_record_holds_the_accounts_requirement_as_each_reading_b
     assert (recorded.result, recorded.reason_code, recorded.holds) == (
         ("consistent", None, False) if judged else ("unknown", "JUDGMENT_NOT_SWITCHED_ON", False)
     )
+
+
+# Bot A buys back the contracts bot B sold: long the 580 call and short the 585 call, at the $5 width B is short.
+_BUYS_IT_BACK = {"long_call": (call(580), "5.31", "5.35"), "short_call": (call(585), "2.20", "2.24")}
+
+
+async def test_an_entry_that_nets_against_another_bots_spread_shows_the_requirement_it_released(world) -> None:
+    """Alpaca's netting: the account's $1,000 goes to nothing, though bot A set aside a debit spread's premium."""
+    books, recorded = await _entered_beside_another_bots_spread(
+        world, judged=False, buying_power_after="100000", picks=_BUYS_IT_BACK, plan=PAID_SPREAD,
+    )
+
+    assert (recorded.account_requirement_before_cents, recorded.account_requirement_after_cents) == (100_000, 0)
+    page = option_buying_power_checks(books, strategy_instance_id="bot-a", simulation=False, judged=False)
+    [check] = page.checks
+    # Served signed, so a release is a negative amount and is worded as one.
+    assert check.account_requirement_change is not None
+    assert check.account_requirement_change.model_dump() == {"cents": -100_000, "dollars": "-1000.00"}
+    assert "fell by $1000.00" in check.account_requirement_sentence
+    assert "$1000.00 before and $0.00 after" in check.account_requirement_sentence
+    # What the bot set aside is its own premium and fees, and says nothing of the account.
+    assert check.set_aside.cents > 0
+
+
+async def test_evidence_that_fails_unexpectedly_leaves_a_judged_result_as_it_was(
+    world, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def broken(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("an arithmetic nobody expected")
+
+    monkeypatch.setattr(account_option_requirement, "incremental_account_requirement", broken)
+
+    with caplog.at_level(logging.WARNING):
+        _books, recorded = await _entered_beside_another_bots_spread(
+            world, judged=True, buying_power_after="99614.00"
+        )
+
+    # Judged as it would have been, with no figures: the comparison is not failed for evidence's sake.
+    assert (recorded.result, recorded.reason_code, recorded.holds) == ("consistent", None, False)
+    assert (recorded.account_requirement_before_cents, recorded.account_requirement_after_cents) == (None, None)
+    [logged] = [r for r in caplog.records if getattr(r, "action", None) == "option_account_requirement_failed"]
+    assert logged.exc_info is not None and "an arithmetic nobody expected" in str(logged.exc_info[1])
 
 
 async def test_an_entry_with_no_second_reading_records_no_figures_and_says_nothing_about_them(world) -> None:

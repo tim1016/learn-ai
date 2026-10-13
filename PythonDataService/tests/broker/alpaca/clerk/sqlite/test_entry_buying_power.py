@@ -42,7 +42,8 @@ from app.broker.alpaca.clerk.sqlite.entry_buying_power import (
 )
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryStanding
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
-from app.broker.alpaca.clerk.sqlite.facts import EntryBuyingPowerComparedFacts
+from app.broker.alpaca.clerk.sqlite.facts import FACTS_SCHEMA_VERSION, EntryBuyingPowerComparedFacts
+from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.uncertainty import admit_new_exposure
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import OPTION_BUYING_POWER_UNDER_RESERVED_REASON_CODE
 from app.broker.contract.errors import BrokerUnavailable
@@ -1072,6 +1073,64 @@ async def test_the_page_counts_every_entry_compared_and_every_one_not_and_gives_
     waiting = by_ref[second]
     assert (waiting["account_requirement_before"], waiting["account_requirement_change"]) == (None, None)
     assert "not recorded" in waiting["account_requirement_sentence"]
+
+
+@pytest.mark.usefixtures("judged")
+async def test_an_old_record_this_build_cannot_name_does_not_stop_the_page_and_is_counted_as_failed(
+    paper: Paper, routes: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old = await paper.filled(shows="99806.00")
+    # A record an earlier build wrote, naming a reason this one has retired, is on the books before any round.
+    order = paper.repo.order(old)
+    assert order is not None
+    effect = paper.repo.effect_operation(order.effect_operation_id)
+    assert effect is not None
+    odd = EntryBuyingPowerComparedFacts(
+        result="unknown", reason_code="A_REASON_RETIRED_SINCE", contracts_asked=1, contracts_filled=1,
+        commitment_cents=SET_ASIDE, set_aside_for_filled_cents=None, premium_paid_cents=None,
+        cost_of_filled_cents=None, first_began_ms=None, first_ended_ms=None, first_buying_power=None, sent_at_ms=None,
+        second_began_ms=None, second_ended_ms=None, second_buying_power=None, fall_cents=None,
+        compared_at_ms=paper.clock(), holds=False,
+    )
+    with paper.repo.write_fence():
+        paper.repo.append_transition(TransitionInput(
+            strategy_instance_id=effect.strategy_instance_id, run_id=effect.run_id, command_id=effect.command_id,
+            effect_operation_id=effect.effect_operation_id, transition_kind=COMPARED_KIND,
+            custody_owner="ACCOUNT_CLERK", execution_authority="ACCOUNT_CLERK", operation_state=effect.state,
+            clerk_observed_at_ms=paper.clock(), summary_code="A_REASON_RETIRED_SINCE",
+            facts_schema_version=FACTS_SCHEMA_VERSION, facts_json=odd.to_facts_json(),
+        ))
+    sold = await paper.exit()
+    closing_ref = next(ref for ref in sold.child_order_refs if ref != old)
+    await paper.stream_fill(closing_ref, contracts=1, filled_in_all=1, price="1.90", execution_id="x-close")
+    await paper.pass_()
+    assert await paper.sync.tick() == "observed"
+    newest = await paper.resting()
+    monkeypatch.setattr(option_buying_power_views, "CHECKS_SERVED", 1)
+
+    async with _http(routes) as client:
+        answered = await client.get(_checks_route(paper))
+
+    # The old record is outside what is listed, so it is never read; the counts take it as a failed comparison.
+    assert answered.status_code == 200, answered.text
+    page = answered.json()
+    assert [check["order_ref"] for check in page["checks"]] == [newest]
+    assert (page["counts"]["entries"], page["counts"]["compared"], page["counts"]["not_compared"]) == (2, 0, 2)
+    assert {(r["reason_code"], r["count"]) for r in page["counts"]["not_compared_by_reason"]} == {
+        ("COMPARISON_FAILED", 1), ("NOT_COMPARED_YET", 1),
+    }
+
+
+def test_the_counts_are_one_read_that_reaches_the_log_by_each_entrys_effect_and_never_scans_it(paper: Paper) -> None:
+    with paper.repo.write_fence() as conn:
+        plan = [
+            row[3] for row in conn.execute(
+                f"EXPLAIN QUERY PLAN {option_buying_power_views._COUNTS_SQL}", (COMPARED_KIND, "a")
+            ).fetchall()
+        ]
+
+    assert any(step.startswith("SEARCH t USING INDEX ix_custody_transitions_effect_sequence") for step in plan), plan
+    assert not any(step.startswith("SCAN") for step in plan), plan
 
 
 async def test_with_the_setting_off_the_page_counts_each_entry_as_recorded_and_not_judged(

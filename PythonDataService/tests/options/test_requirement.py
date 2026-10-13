@@ -16,8 +16,10 @@ from app.options.requirement import (
     StructureMoneyRefused,
     broker_requirement,
     entry_money,
+    held_requirement_cents,
     incremental_account_requirement,
     natural_net_price,
+    portfolio_broker_requirement,
     round_trip_cost,
     round_trip_cost_is_over_limit,
 )
@@ -272,56 +274,101 @@ def test_a_structure_its_money_could_not_be_worked_out_for_is_refused(legs: tupl
 
 # ── what an entry adds to the account (ADR 0076 decision 28) ─────────────
 
-_BOUGHT_CALL_SPREAD = (_leg("long_100", "long", "call", "100"), _leg("short_110", "short", "call", "110"))
-_SOLD_CALL_SPREAD = (_leg("short_190", "short", "call", "190"), _leg("long_200", "long", "call", "200"))
+
+def _symbol(right: str, strike: str, *, root: str = "SPY") -> str:
+    return OptionContract.of(root=root, expiry_date=_EXPIRY, right=right, strike=Decimal(strike)).occ_symbol
+
+
+def _held(*positions: tuple[str, str, int], multiplier: int = 100) -> dict[tuple[str, int], int]:
+    """Signed whole contracts by ``(OCC symbol, multiplier)``, from ``(right, strike, contracts)``."""
+    return {(_symbol(right, strike), multiplier): contracts for right, strike, contracts in positions}
+
+
+_SOLD_SPREAD_450 = _held(("call", "450", -1), ("call", "455", 1))
+_BOUGHT_CALL_SPREAD = _held(("call", "100", 1), ("call", "110", -1))
+_SOLD_CALL_SPREAD = _held(("call", "190", -1), ("call", "200", 1))
 
 
 def test_a_first_five_dollar_spread_on_a_flat_account_adds_its_whole_requirement() -> None:
-    assert incremental_account_requirement((), _sold_call_spread().legs, _ONE_STRUCTURE) == (0, 50_000)
+    assert incremental_account_requirement({}, _SOLD_SPREAD_450) == (0, 50_000)
 
 
 def test_a_bought_spread_on_a_flat_account_adds_nothing() -> None:
-    assert incremental_account_requirement((), _BOUGHT_CALL_SPREAD, _ONE_STRUCTURE) == (0, 0)
+    assert incremental_account_requirement({}, _BOUGHT_CALL_SPREAD) == (0, 0)
 
 
 def test_alpacas_two_spreads_that_need_1000_apart_need_nothing_together() -> None:
     """The page's four-call example: the sold $190/$200 spread needs $1,000 and the bought $100/$110 one nothing."""
     apart = (
-        incremental_account_requirement((), _SOLD_CALL_SPREAD, _ONE_STRUCTURE)[1]
-        + incremental_account_requirement((), _BOUGHT_CALL_SPREAD, _ONE_STRUCTURE)[1]
+        incremental_account_requirement({}, _SOLD_CALL_SPREAD)[1]
+        + incremental_account_requirement({}, _BOUGHT_CALL_SPREAD)[1]
     )
-    together = incremental_account_requirement((), (*_SOLD_CALL_SPREAD, *_BOUGHT_CALL_SPREAD), _ONE_STRUCTURE)
 
     assert apart == 100_000
-    assert together == (0, 0)
+    assert incremental_account_requirement({}, {**_SOLD_CALL_SPREAD, **_BOUGHT_CALL_SPREAD}) == (0, 0)
 
 
 def test_an_entry_that_nets_against_what_is_held_shows_the_requirement_it_released_not_the_commitment() -> None:
     """The account holds the sold spread; entering the bought one takes its $1,000 requirement to nothing."""
-    held = _SOLD_CALL_SPREAD
+    after = {**_SOLD_CALL_SPREAD, **_BOUGHT_CALL_SPREAD}
 
-    assert incremental_account_requirement(held, (*held, *_BOUGHT_CALL_SPREAD), _ONE_STRUCTURE) == (100_000, 0)
+    assert incremental_account_requirement(_SOLD_CALL_SPREAD, after) == (100_000, 0)
 
 
 def test_the_holdings_are_the_accounts_whole_and_not_the_entrys_alone() -> None:
     """A second sold spread beside the first is counted with it, on the same expiry: $1,000 more, not $500 alone."""
-    first = (_leg("a_short", "short", "call", "450"), _leg("a_long", "long", "call", "455"))
-    second = (_leg("b_short", "short", "call", "460"), _leg("b_long", "long", "call", "465"))
+    first = _held(("call", "450", -1), ("call", "455", 1))
+    second = _held(("call", "460", -1), ("call", "465", 1))
 
-    assert incremental_account_requirement(first, (*first, *second), _ONE_STRUCTURE) == (50_000, 100_000)
+    assert incremental_account_requirement(first, {**first, **second}) == (50_000, 100_000)
 
 
-def test_the_requirement_is_in_the_sizes_own_multiplier() -> None:
-    assert incremental_account_requirement((), _sold_call_spread().legs, EntrySize(multiplier=10, units=1)) == (0, 5_000)
+def test_a_contract_that_nets_to_nothing_is_not_held() -> None:
+    assert held_requirement_cents({**_SOLD_SPREAD_450, **_held(("call", "460", 0))}) == 50_000
+
+
+def test_each_contract_is_valued_at_its_own_multiplier_and_the_requirements_add() -> None:
+    ten = _held(("call", "450", -1), ("call", "455", 1), multiplier=10)
+
+    # A $5-wide spread at a hundred shares, and the same two contracts at ten: they do not offset.
+    assert held_requirement_cents({**_SOLD_SPREAD_450, **ten}) == 50_000 + 5_000
+
+
+def test_the_held_requirement_is_the_canonical_portfolio_requirement_when_every_contract_shares_a_multiplier() -> None:
+    """Agreement with the canon: the same holdings through ``portfolio_broker_requirement`` come to the same cents."""
+    held = _held(("call", "450", -2), ("call", "455", 3), ("put", "440", -1), ("put", "445", 1))
+    legs = tuple(
+        ResolvedLeg(
+            leg_id=symbol, contract=OptionContract.from_occ_symbol(symbol),
+            position="long" if contracts > 0 else "short", ratio=abs(contracts),
+        )
+        for (symbol, _multiplier), contracts in held.items()
+    )
+
+    assert held_requirement_cents(held) == portfolio_broker_requirement(legs, _ONE_STRUCTURE)
 
 
 @pytest.mark.parametrize("uncovered_in", ["before", "after"])
 def test_holdings_with_a_loss_that_has_no_limit_are_refused_whichever_side_they_are_on(uncovered_in: str) -> None:
-    uncovered = (_leg("lone_short", "short", "call", "450"),)
-    covered = _sold_call_spread().legs
-    before, after = (uncovered, covered) if uncovered_in == "before" else (covered, uncovered)
+    uncovered = _held(("call", "450", -1))
+    before, after = (uncovered, _SOLD_SPREAD_450) if uncovered_in == "before" else (_SOLD_SPREAD_450, uncovered)
 
     with pytest.raises(StructureMoneyRefused) as refused:
-        incremental_account_requirement(before, after, _ONE_STRUCTURE)
+        incremental_account_requirement(before, after)
 
     assert refused.value.reason is StructureMoneyRefusal.LOSS_UNBOUNDED
+
+
+@pytest.mark.parametrize(
+    ("held", "reason"),
+    [
+        pytest.param({(_symbol("call", "450"), 100): 1.5}, "whole contracts", id="a fraction"),
+        pytest.param({(_symbol("call", "450"), 100): True}, "whole contracts", id="a boolean"),
+        pytest.param({("AAPL", 1): 1}, "AAPL", id="shares, which are no option contract"),
+    ],
+)
+def test_holdings_the_books_cannot_value_are_refused_and_never_guessed(
+    held: dict[tuple[str, int], object], reason: str
+) -> None:
+    with pytest.raises(ValueError, match=reason):
+        held_requirement_cents(held)  # type: ignore[arg-type]

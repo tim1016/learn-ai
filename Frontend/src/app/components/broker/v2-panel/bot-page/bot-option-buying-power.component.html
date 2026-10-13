@@ -36,6 +36,11 @@
     }
 
     @if (state.checks.length > 0) {
+      @if (state.checks.length < state.counts.entries) {
+        <p class="obp__note">
+          Showing the newest {{ state.checks.length }} of {{ state.counts.entries }} entries. The counts above are over all of them.
+        </p>
+      }
       <ol class="obp__entries" aria-label="Option entries, newest first">
         @for (check of state.checks; track check.order_ref) {
           <li class="obp__entry" [class.is-held]="check.holds">

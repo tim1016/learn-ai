@@ -181,6 +181,20 @@ describe('BotOptionBuyingPowerComponent (#3098)', () => {
     expect(within(compared).getByText(CONSISTENT.account_requirement_sentence)).toBeTruthy();
   });
 
+  it('says only the newest entries are listed when the counts cover more', async () => {
+    await renderCard(page({ counts: { ...page().counts, entries: 37, compared: 30, not_compared: 7 } }));
+
+    expect(await screen.findByText(/Showing the newest 2 of 37 entries\./)).toBeTruthy();
+    expect(screen.getByText(/The counts above are over all of them\./)).toBeTruthy();
+  });
+
+  it('says nothing of a limit when every entry is listed', async () => {
+    await renderCard(page());
+
+    await screen.findByRole('region', { name: 'Alpaca option buying power' });
+    expect(screen.queryByText(/Showing the newest/)).toBeNull();
+  });
+
   it('shows an entry nobody compared as that, with no readings and nothing about the account', async () => {
     await renderCard(page());
 
