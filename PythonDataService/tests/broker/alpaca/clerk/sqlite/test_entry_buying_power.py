@@ -436,7 +436,7 @@ async def test_a_first_reading_that_states_no_buying_power_is_not_read_as_zero(p
 
 
 @pytest.mark.usefixtures("judged")
-async def test_a_slow_account_read_does_not_age_a_quote_or_outlive_the_listing(
+async def test_a_slow_account_read_does_not_age_a_quote_or_outlive_the_entry(
     paper: Paper, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     began = asyncio.Event()
@@ -460,6 +460,115 @@ async def test_a_slow_account_read_does_not_age_a_quote_or_outlive_the_listing(
     assert began.is_set()
     assert receipt.state is EffectOperationState.SUBMITTED, receipt.explanation
     assert len(paper.venue.option_submit_calls) == 1
+
+
+def _a_venue_whose_hand_over_takes_a_turn(paper: Paper, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The venue answers an order a turn of the loop after it is handed over, as a request over a network does."""
+    submit = paper.venue.submit_option_order
+
+    async def takes_a_turn(*args: Any, **kwargs: Any) -> Any:
+        await asyncio.sleep(0)
+        return await submit(*args, **kwargs)
+
+    monkeypatch.setattr(paper.venue, "submit_option_order", takes_a_turn)
+
+
+@pytest.mark.usefixtures("judged")
+async def test_an_account_read_the_listing_outruns_is_still_the_first_reading_if_it_ends_before_the_send(
+    paper: Paper, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#3136: the listing answers first, and an entry used to throw the account read away there."""
+    read = OptionAccount.get_option_account
+
+    async def a_turn_behind_the_listing() -> BrokerOptionAccountSnapshot:
+        await asyncio.sleep(0)
+        return await read(paper.account)
+
+    monkeypatch.setattr(paper.account, "get_option_account", a_turn_behind_the_listing)
+    _a_venue_whose_hand_over_takes_a_turn(paper, monkeypatch)
+    taken_at = paper.clock()
+
+    order_ref = await paper.resting()
+    # The entry did not wait: it was sent at the clock it was asked at.
+    assert paper.venue.option_submit_calls == [order_ref] and paper.clock() == taken_at
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+    paper.account.buying_power = Decimal("99806.00")
+    found = await paper.compared(order_ref)
+
+    assert (found.result, found.reason_code) == ("consistent", None)
+    assert found.first_buying_power == "100000" and found.fall_cents == SET_ASIDE - 6
+
+
+@pytest.mark.usefixtures("judged")
+async def test_an_account_read_that_ends_after_the_order_was_handed_over_is_not_the_account_before_it(
+    paper: Paper, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    released = asyncio.Event()
+    paper.account.option_account_waits_for = released
+    submit = paper.venue.submit_option_order
+
+    async def answered_once_the_order_is_away(*args: Any, **kwargs: Any) -> Any:
+        sent = await submit(*args, **kwargs)
+        paper.clock.advance(5)
+        released.set()
+        await asyncio.sleep(0)
+        return sent
+
+    monkeypatch.setattr(paper.venue, "submit_option_order", answered_once_the_order_is_away)
+
+    order_ref = await paper.resting()
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+    paper.account.buying_power = Decimal("99806.00")
+    found = await paper.compared(order_ref)
+
+    # Not stale and not compared: the answer was never taken as the first reading at all.
+    assert (found.result, found.reason_code) == ("unknown", "FIRST_READING_NOT_READY")
+    assert (found.first_buying_power, found.second_began_ms, found.fall_cents) == (None, None, None)
+
+
+@pytest.mark.usefixtures("judged")
+async def test_an_account_read_that_fails_after_the_listing_answered_is_recorded_as_failed(
+    paper: Paper, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fails_a_turn_behind_the_listing() -> BrokerOptionAccountSnapshot:
+        await asyncio.sleep(0)
+        raise BrokerUnavailable("account read timed out")
+
+    monkeypatch.setattr(paper.account, "get_option_account", fails_a_turn_behind_the_listing)
+    _a_venue_whose_hand_over_takes_a_turn(paper, monkeypatch)
+
+    order_ref = await paper.resting()
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+    found = await paper.compared(order_ref)
+
+    assert (found.result, found.reason_code) == ("unknown", "FIRST_READING_FAILED")
+    assert found.first_buying_power is None
+
+
+@pytest.mark.usefixtures("judged")
+async def test_an_entry_refused_while_its_account_read_goes_on_stops_the_read_and_keeps_none(
+    paper: Paper,
+) -> None:
+    began = asyncio.Event()
+    ended = asyncio.Event()
+    never_answers = asyncio.Event()
+
+    async def slow_account() -> BrokerOptionAccountSnapshot:
+        began.set()
+        try:
+            await never_answers.wait()
+            return await OptionAccount.get_option_account(paper.account)
+        finally:
+            ended.set()
+
+    paper.account.get_option_account = slow_account  # type: ignore[method-assign]
+
+    refused = await paper.enter(evidence=paper.evidence(bid="1.00", ask="1.94"))
+    await asyncio.wait_for(ended.wait(), timeout=1)
+
+    assert began.is_set() and refused.state is EffectOperationState.REJECTED
+    watch = paper.clerk._buying_power
+    assert watch._first == {} and watch._going_on == {} and watch.watching == ()
 
 
 @pytest.mark.usefixtures("judged")

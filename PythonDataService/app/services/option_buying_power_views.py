@@ -84,7 +84,7 @@ REASON_SENTENCES: dict[NotComparedReason, str] = {
         "Alpaca's account figures could not be read before the order was sent."
     ),
     NotComparedReason.FIRST_READING_NOT_READY: (
-        "The account reading had not finished when the contract listing answered. The entry did not wait for it."
+        "The account reading had not finished when the order was sent. The entry did not wait for it."
     ),
     NotComparedReason.FIRST_READING_WITHOUT_FIGURE: (
         "Alpaca's account answered before the order was sent and stated no option buying power."
