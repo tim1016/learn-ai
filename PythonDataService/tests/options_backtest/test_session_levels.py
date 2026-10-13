@@ -620,3 +620,33 @@ def test_lines_that_begin_together_follow_the_legs_place_in_the_setup_and_with_n
         (SP, "a", D("3.00")),
         (SP, "b", D("2.00")),
     ]
+
+
+def test_a_sale_decided_on_momentum_and_then_refused_for_cover_ends_its_lines_at_the_minute_it_was_decided() -> None:
+    sold_put = contract("put", "500")
+    cover = contract("put", "495")
+    written = setup(leg("long", "put"), leg("short", "put", side="sell", momentum=("percent_up", "25")))
+    market = TableMarket(
+        underlying=steady("500.00"),
+        picks=picked(("long", "500.00", cover), ("short", "500.00", sold_put)),
+        options={
+            # The cover traded at m5 and not at m6, where it was to fill, so it was dropped and its day is over.
+            cover: {5: ("1.00", "1.00"), **flat("1.00", 7, 60)},
+            # The starting price at m5 is 2.00, so the level is 2.00 x 1.25 = 2.500. m8 closes at 2.60: decided. The sale
+            # would fill at the open of m9, and no cover is held: refused for cover at m9, a minute after the decision.
+            sold_put: {**flat("2.00", 5, 7), 8: ("2.00", "2.60"), **flat("2.60", 9, 60)},
+        },
+    )
+
+    outcome = replay(written, market)
+
+    assert outcome.trades == ()
+    assert [
+        (e.kind, e.reason, minute_of(e.at_ms))
+        for e in outcome.events
+        if e.kind in (EventKind.MOMENTUM_HIT, EventKind.ENTRY_REFUSED_FOR_COVER)
+    ] == [(EventKind.MOMENTUM_HIT, None, 8), (EventKind.ENTRY_REFUSED_FOR_COVER, "cover_not_yet_held", 9)]
+    assert _lines(levels_of(written, outcome), at(0)) == [
+        (SP, "short", 0, sold_put.occ_symbol, D("2.00"), 5, 8),
+        (MOM, "short", 0, sold_put.occ_symbol, D("2.500"), 5, 8),
+    ]

@@ -17,9 +17,10 @@ Three kinds of line, each from one instant to another, both ends being minute cl
 
 * ``starting_price``: the premium the leg's momentum is measured from, from the minute it was taken until the buy was
   decided, which is the minute whose close reached the momentum level (the last such minute, if an order was dropped
-  and the leg waited again). A buy that was decided and then refused for cash ends its lines at that same minute, as
-  one that filled does; the refusal comes a minute later and moves nothing. A leg cancelled before it ever reached the
-  level was waiting until it was cancelled, so its lines end at the cancel.
+  and the leg waited again). An order that was decided and then refused (for cash, for cover, for a second expiry or
+  for a contract held on the other side) or not taken (a sale to open at nothing) ends its lines at that same minute,
+  as one that filled does; the refusal comes a minute later and moves nothing. A leg cancelled before it ever reached
+  the level was waiting until it was cancelled, so its lines end at the cancel.
 * ``momentum``: the premium the leg waits for, between the same two instants.
 * ``stop``: the premium at or below which the position is sold, from the minute it filled (the replay reads the stop
   on that very bar) until the minute the close that sold it was decided: a stop hit, or the exit time.
@@ -46,7 +47,15 @@ from typing import Literal
 
 from app.options.contract import OptionContract
 from app.options_backtest import fills
-from app.options_backtest.results import Event, EventKind, ExitReason, Fill, LegTrade, SessionOutcome
+from app.options_backtest.results import (
+    ENTRY_REFUSAL_EVENTS,
+    Event,
+    EventKind,
+    ExitReason,
+    Fill,
+    LegTrade,
+    SessionOutcome,
+)
 from app.options_backtest.setup import OptionsBacktestSetup
 
 
@@ -58,6 +67,8 @@ class LevelKind(StrEnum):
 
 # The order lines are listed in when they begin together.
 _KIND_ORDER = {kind: place for place, kind in enumerate(LevelKind)}
+# The events that end an entry which found a bar without a fill.
+_ENTRY_REFUSED = frozenset(ENTRY_REFUSAL_EVENTS.values())
 
 
 class SessionRecordInconsistent(ValueError):
@@ -111,11 +122,12 @@ def _inconsistent(leg_id: str, entry_number: int, what: str) -> SessionRecordInc
 def _ended_at(leg_id: str, entry_number: int, events: Sequence[Event]) -> int:
     """When an attempt that never filled stopped waiting for what it was waiting for. It ends exactly once.
 
-    A leg cancelled while it waited waited until the cancel. A buy refused for cash was decided at the last minute whose
-    close reached the momentum level, so that is when its waiting ended, and not the minute of the refusal.
+    A leg cancelled while it waited waited until the cancel. An order refused (for whatever reason an entry is
+    refused) was decided at the last minute whose close reached the momentum level, so that is when its waiting
+    ended, and not the minute of the refusal.
     """
     cancelled = [event.at_ms for event in events if event.kind is EventKind.LEG_CANCELLED]
-    refused = [event.at_ms for event in events if event.kind is EventKind.ENTRY_REFUSED_FOR_CASH]
+    refused = [event.at_ms for event in events if event.kind in _ENTRY_REFUSED]
     if len(cancelled) + len(refused) != 1:
         raise _inconsistent(
             leg_id,
@@ -126,7 +138,7 @@ def _ended_at(leg_id: str, entry_number: int, events: Sequence[Event]) -> int:
         return cancelled[0]
     decided = [event.at_ms for event in events if event.kind is EventKind.MOMENTUM_HIT]
     if not decided:
-        raise _inconsistent(leg_id, entry_number, "its buy was refused for cash and momentum was never reached")
+        raise _inconsistent(leg_id, entry_number, "its order was refused and momentum was never reached")
     return max(decided)
 
 

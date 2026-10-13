@@ -19,6 +19,7 @@ from app.options_backtest import saved_runs
 from app.options_backtest.results import SessionStatus
 from app.options_backtest.saved_runs import RunHeader
 from tests.options_backtest._a_run import a_busy_run
+from tests.options_backtest._a_selling_run import a_selling_run, what_the_selling_run_reaches
 from tests.options_backtest.test_saved_runs import _as_asyncpg_returns_it, _columns_of
 
 D = Decimal
@@ -66,6 +67,38 @@ def test_the_line_a_session_gives_a_comparison_has_its_profit_in_plain_digits(pr
 
     assert (line.session_open_ms, line.status, line.trades) == (1_791_379_800_000, SessionStatus.TRADED, 3)
     assert str(line.profit_usd) == profit
+
+
+def test_a_selling_runs_trades_keep_the_side_of_every_fill_and_a_mark_has_none_and_read_back_equal() -> None:
+    # No schema change carries selling: a buy-back is a stored fill on the buy side, and a mark has no side, so that the
+    # trade's entry side says whether it is owed.
+    result = a_selling_run()
+    assert all(what_the_selling_run_reaches(result).values()), what_the_selling_run_reaches(result)
+    trades = [trade for session in result.sessions for trade in session.outcome.trades]
+    rows = [
+        dict(
+            zip(
+                _columns_of(saved_runs._INSERT_TRADE),
+                (
+                    _as_asyncpg_returns_it(each)
+                    for each in saved_runs._trade_row(7, session.session_open_ms, number, trade)
+                ),
+                strict=True,
+            )
+        )
+        for session in result.sessions
+        for number, trade in enumerate(session.outcome.trades)
+    ]
+
+    assert [
+        (row["leg_id"], row["entry_side"], row["exit_kind"], row["exit_side"], row["exit_reason"]) for row in rows
+    ] == [
+        ("long", "buy", "fill", "sell", "exit_time"),
+        ("short", "sell", "fill", "buy", "exit_time"),
+        ("long", "buy", "mark", None, "marked_not_sold"),
+        ("short", "sell", "mark", None, "marked_not_bought_back"),
+    ]
+    assert [stored.trade for stored in saved_runs.stored_trades_of(rows)] == trades
 
 
 def _run_row(setup_json: str) -> dict[str, Any]:

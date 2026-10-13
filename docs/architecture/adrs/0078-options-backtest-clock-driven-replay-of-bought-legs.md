@@ -1,6 +1,6 @@
-# ADR 0078 — Options Backtest: a clock-driven replay of bought option legs over stored trade bars
+# ADR 0078 — Options Backtest: a clock-driven replay of option legs, bought and covered sold, over stored trade bars
 
-**Status:** Accepted 2026-10-12
+**Status:** Accepted 2026-10-12. Amended by #3104 and #3106 (PRD #3095): the replay also sells covered legs.
 **Provenance:** Owner decisions in [#3030](https://github.com/tim1016/learn-ai/issues/3030), grilled on 2026-10-11 and 2026-10-12, and the build plan kept on that issue. Each decision says whose it is. The owner's decisions stand. A decision *made for the owner* by the build's coordinator stands until the owner revises it. Facts about the vendor come from a read-only probe of the owner's Options Starter key on 2026-10-12.
 **Related:** ADR 0022 (time; its amendment (i) is the option expiry anchor), ADR 0049 (the data lake is the market-data authority), ADR 0065 (a worker's lease is a job's liveness), ADR 0068 (Python owns the math; a duplicate inside Python needs a parity test), ADR 0069 (numerical rigor), ADR 0074 (Golden Search, which this does not change), ADR 0076 (option structures on the money path, and its Deploy warning that options have no backtest).
 **Vocabulary:** `CONTEXT.md` § "Options Backtest".
@@ -17,13 +17,13 @@ The owner's data plan serves option **trade** bars. It serves no bid or ask. It 
 
 ### 1. A page of its own that tests a setup, not a bot
 
-*Whose:* the owner's. It is a separate page, it does what AlgoTest's backtest page does and looks like it, its underlying can be changed, and Golden Search and Deploy are untouched. *Made for the owner:* the name, the first release's control set, and buy legs only.
+*Whose:* the owner's. It is a separate page, it does what AlgoTest's backtest page does and looks like it, its underlying can be changed, and Golden Search and Deploy are untouched. *Made for the owner:* the name, and the first release's control set. (Buy legs only was also made for the owner, and is amended below.)
 
 Options Backtest is a page of its own. Strategy Lab, Golden Search, Deploy and the Clerk are not changed by it.
 
 It replays a **setup**: a trading window by the clock, and rules on each leg's premium (stop loss, momentum, re-entry). It does not replay what a bot trades. A bot's options follow a stock signal, and a setup has no signal. So ADR 0076's Deploy warning, "options have no backtest here", stays true. This page is not that backtest, and nothing links the two.
 
-The first release buys only. A sold leg needs a margin rule for uncovered options, and this system has none.
+**Amended by #3106 (2026-10-12, PRD #3095, the owner's):** the replay sells covered legs. *You cannot sell something you did not buy*: a leg is sold to open only while a bought contract of the same underlying, kind and actual expiry covers it, and nothing is sold naked. The first release bought only because a sold leg needs a rule for the money it ties up; that rule is the one the bots hold, the canonical portfolio requirement (decision 2), asked of what is held. No second rule (Cboe, Regulation T, portfolio margin) is built. A setup that sells and carries a stop loss or a re-entry rule on any leg is refused by name until #3107.
 
 A run has no broker client and no custody writer, so research cannot touch an account. The feature takes from the broker packages only the option fee model, its cent rounding and an order-side enum. No test enforces that.
 
@@ -66,9 +66,12 @@ Trade bars only, no bid or ask, two years back. So:
 - A rule is read on a bar's close only. A high or a low inside a minute never triggers anything.
 - An order decided at close *t* fills at the open of the bar closing at *t* + 60 s. It never fills at the trigger level.
 - Inside one minute the order is fixed: fills that are due, then the exit time or else the stops and their square-off, then entries. An exit or a stop decided in a minute means no entry is decided in it.
+- **Fill groups (amended by #3106).** Fills that are due are two groups: the fills of one kind in one minute, the opening group and then the closing group. A sold leg opens at the sale price (the price seen moved down by the slippage and rounded down to the step) and closes at the buy price. A sale to open that would fill at nothing is not taken, and its leg is done for the day; a buy-back or a closing sale at nothing is taken.
+- **The opening group is one simulated atomic group.** Orders whose contract has no bar are dropped, as above. The rest go to the cover book (`app/options_backtest/cover_book.py`) together, and are judged in four steps. A fill in a contract another leg holds on the other side is refused. Then a fill whose expiry differs from one in play is refused when a sold contract is in play or it is itself sold, so that everything held shares one actual expiry while anything is sold. Then sold legs take cover in listed order, one bought contract for one sold, counting bought contracts held and not being closed plus those filling in the group; a sold leg left without it is refused for cover, and the event says whether its cover did not trade (a bought leg of its kind was dropped in the group) or was not yet held. Then the group is applied together: if the cash after it is less than the collateral of what would then be held, every fill of it is refused for cash. Each refused leg is done for the day. Minute bars cannot show which of two contracts printed first inside a minute, so treating the group as atomic is a modelling choice and not observed coverage.
+- **The closing group.** Buy-backs fill first. Then each bought leg's sale, in listed order, fills only if the cover book says that leg may leave what is then held (with it gone every sold contract is still covered and the collateral is no larger), counting a sold leg whose buy-back found no bar this minute. Otherwise the sale waits and is tried every minute. No cash is read there, and a close is never refused.
 - A buy whose contract has no bar in its fill minute is dropped. A leg that was waiting on momentum goes back to waiting. A leg that was bought at once has finished that attempt. A sale is tried each minute until its contract trades.
 - At the exit time whatever is open is sold, legs still waiting are cancelled, and nothing more is bought.
-- A leg still held when the session's data ends is **marked, not sold**. It is valued at the close of the last bar its contract traded in. Its session is incomplete and stays in the totals.
+- A leg still held when the session's data ends is **marked, not sold**. It is valued at the close of the last bar its contract traded in. Its session is incomplete and stays in the totals. A sold leg never bought back is marked the same way as an amount owed, with an exit reason of its own (amended by #3106).
 - A setup's times are distances from the open or the close, so a half day keeps them. A session the times no longer fit is skipped, and says so.
 
 Why. A rule decided on a close can use only what had happened by then, so the replay cannot look ahead. The whole rule is short enough for the page to say in a sentence.
@@ -158,12 +161,15 @@ Each fee type of each fill is rounded up to a cent. The model settles a whole da
 
 *Rejected:* charging nothing where the model has no rate.
 
-### 11. Contracts are fixed in number, and an unsold leg keeps its money in the totals
+### 11. Contracts are fixed in number, and an unsettled leg keeps its money in the totals
 
 *Whose:* made for the owner. The PRD did not say what cash does after an incomplete day.
 
 - Contracts per leg are fixed. An entry the cash cannot cover is refused and counted. When several entries fill in one minute and together cost more than the cash on hand, all of them are refused.
 - A leg marked, not sold, has paid out and not been paid back. Its session stays in the totals at the mark, and the mark returns to cash at the start of the next session. Profit is the cash change plus the marked value.
+- **Collateral and free cash (amended by #3106).** A run that sells holds the collateral of what it holds out of what it may spend: free cash is cash less collateral. Premium received sits in cash and is not free while it is pledged. An opening group is refused, all of it, when the cash after it would be less than the collateral then held. A close is never refused for cash, so a buy-back at a loss can take free cash below zero, and entries are then refused until it is back. Nothing is borrowed: the budget stays cash.
+- **A sold leg's mark is signed (amended by #3106).** A sold leg marked, not bought back, has been paid and owes its mark. The session's marked value is signed: a bought mark counts for the run and an owed one against it, and the next session's cash is today's formula, cash before plus cash that moved plus the signed marked value. A sold leg's profit is the sale price less the buy-back price or the mark, times multiplier and contracts, less both fees.
+- **Money steps (amended by #3106).** The replay records, for each fill group that filled anything, the minute, whether it opened or closed, cash and collateral before and after, the assignment obligation after, and whether it bought back a sold leg while a bought contract of that kind and expiry stayed held. They are facts and not judgments, and they are not stored with a saved run. Whether the cash could have carried a run is judged from them (#3108).
 
 *Rejected:* dropping an incomplete day from the totals, so that losing days can leave them.
 
@@ -339,7 +345,8 @@ Why. The lake moves on: a file can change, be replaced or go. A saved run that f
 
 ## What this does not decide
 
-- Sell legs, target profit, trailing stops, range breakouts, overnight holds, a volatility filter.
+- Naked selling and any requirement rule but the cover book's, target profit, trailing stops, range breakouts, overnight holds, a volatility filter.
+- A stop loss and a re-entry rule on a setup that sells, and a bought leg leaving while a sold leg depends on it: refused by name until #3107.
 - Index options.
 - Historical bid and ask, and anything priced from quotes.
 - Entries triggered by a stock signal, and any link to Deploy or Golden Search.
@@ -351,6 +358,8 @@ Why. The lake moves on: a file can change, be replaced or go. A saved run that f
 
 - A result is simulated from trade prints and is not measured execution. It cannot show a spread, a bid, an ask or a quote-based Greek. The banner says so, and the slippage tolerance says how much of the guess a result survives.
 - An illiquid contract shows only as a dropped entry or a retried sale, counted and never forced.
+- A far wing that does not trade in its fill minute is dropped, and the sold leg it would cover is then refused for cover and done for the day. On thinly traded contracts this will be common. It is an event, never hidden.
+- A sold leg never bought back is marked at its last trade and not at its exercise value, as a bought leg is. Exercise, assignment and expiry are not simulated.
 - A listing is asked for as of a date, never a minute. Nothing proves that a picked contract was listed at the entry time and not only later that day.
 - Only a session whose New York date has passed can be fetched, and only two years back (decision 14).
 - Under a partial square-off, a stop on one leg also holds back every other leg's entry check in that minute (decision 4).

@@ -257,6 +257,7 @@ def test_the_counts_and_the_by_reason_lists_list_every_member_in_the_enums_order
         ("square_off", 0),
         ("exit_time", 2),
         ("marked_not_sold", 1),
+        ("marked_not_bought_back", 0),
     ]
     assert [(each.reason, each.count) for each in figures.skipped_by_reason] == [
         ("window_does_not_fit", 0),

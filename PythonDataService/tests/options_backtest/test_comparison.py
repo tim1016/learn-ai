@@ -400,6 +400,8 @@ def test_a_sold_leg_only_one_run_has_is_said_with_the_sentences_the_description_
         "Leg short_call: sells to open 1 at-the-money call expiring on the nearest listed expiry, today included, "
         "that falls on the last trading day of its week, and is bought back to close. "
         "The sale comes as soon as the entry is read. "
+        "The sale needs one bought call of the same expiry for each contract sold, held already or filling in the "
+        "same minute; with too few, it is refused and the leg is done for the day. "
         "Bought back once a minute closes at or above its stop level, 0.4 points above what it was sold for."
     )
 

@@ -18,7 +18,7 @@ from app.options_backtest.picking import Listing
 from app.options_backtest.results import ExitReason, SessionStatus, SkipReason
 from app.options_backtest.run import run_sessions
 from app.options_backtest.session_result import PinnedDay, SessionPins
-from app.options_backtest.setup import FeePolicy
+from app.options_backtest.setup import FeePolicy, OptionsBacktestSetup
 from tests.options_backtest._market import after_open, before_close, leg, setup
 from tests.options_backtest._run_data import (
     FRI,
@@ -286,3 +286,86 @@ def test_a_window_counted_from_the_close_ends_at_each_sessions_own_close() -> No
     [half_trade] = half.outcome.trades
     assert half_trade.exit_decided_at_ms == half.session_close_ms - 10 * 60_000
     assert half_trade.exit.bar_close_ms == half.session_close_ms - 9 * 60_000
+
+
+# ── A setup that sells ───────────────────────────────────────────────────
+
+
+def _put_spread_setup() -> OptionsBacktestSetup:
+    """A put 495 bought and a put 500 sold, one contract each, for the day itself: a credit put spread 5 wide."""
+    return setup(
+        {**leg("long", "put"), "strike": {"kind": "atm_offset", "steps": -1}},
+        leg("short", "put", side="sell"),
+    )
+
+
+def _spread_day(*, sold_last_bar: int | None = None) -> Day:
+    """The 495 put bought at 1.00 and the 500 put sold at 2.20 at the open of minute 6, and closed at the open of
+    minute 61: the 500 put bought back at 1.50 and the 495 put sold at 0.60. ``sold_last_bar`` is the last minute the
+    500 put traded in, at 2.20 and closing at 2.40, with nothing after it: it cannot be bought back."""
+    if sold_last_bar is None:
+        return Day(
+            underlying=steady("500.00"),
+            options={
+                ("put", 495): {**flat("1.00", 5, 60), 61: ("0.60", "0.60")},
+                ("put", 500): {**flat("2.20", 5, 60), 61: ("1.50", "1.50")},
+            },
+        )
+    return Day(
+        underlying=steady("500.00"),
+        options={
+            ("put", 495): flat("1.00", 5, 61),
+            ("put", 500): {**flat("2.20", 5, sold_last_bar - 1), sold_last_bar: ("2.20", "2.40")},
+        },
+    )
+
+
+def test_a_sold_leg_marked_and_owed_takes_its_mark_out_of_the_cash_the_next_session_starts_with() -> None:
+    # Wednesday: the 495 put is bought at 1.00 (-100.00) and the 500 put sold at 2.20 (+220.00), so +120.00 moves. The
+    # 500 put's last bar is minute 60, closing at 2.40, so it cannot be bought back at the exit time and is owed at 2.40;
+    # the 495 put, which may not leave it bare, is marked at its last close, 1.00.
+    #   marked value: +1.00 x 100 for the bought leg and -2.40 x 100 for the owed one = 100.00 - 240.00 = -140.00;
+    #   profit at the marks: (1.00 - 1.00) x 100 + (2.20 - 2.40) x 100 = -20.00 = +120.00 - 140.00.
+    #   the next session starts with 10,000.00 + 120.00 - 140.00 = 9,980.00.
+    # Thursday: a spread that closes cleanly: (0.60 - 1.00) x 100 + (2.20 - 1.50) x 100 = +30.00, so 9,980.00 -> 10,010.00.
+    days = {WED: _spread_day(sold_last_bar=60), THU: _spread_day()}
+
+    result = run_sessions(_put_spread_setup(), [WED, THU], fake_data(days))
+
+    first, second = result.sessions
+    assert first.status is SessionStatus.INCOMPLETE
+    assert [trade.exit_reason for trade in first.outcome.trades] == [
+        ExitReason.MARKED_NOT_SOLD,
+        ExitReason.MARKED_NOT_BOUGHT_BACK,
+    ]
+    assert first.outcome.cash_change_usd == D("120.00")
+    assert first.outcome.marked_value_usd == D("-140.00")
+    assert first.pnl_usd == D("-20.00")
+    assert first.cash_after_usd == D("9980.00")
+    assert second.cash_before_usd == D("9980.00")
+    assert second.status is SessionStatus.TRADED
+    assert second.pnl_usd == D("30.00")
+    assert second.cash_after_usd == D("10010.00")
+    assert result.summary.ending_cash_usd == D("10010.00")
+    assert result.summary.exits_by_reason[-2:] == (
+        (ExitReason.MARKED_NOT_SOLD, 1),
+        (ExitReason.MARKED_NOT_BOUGHT_BACK, 1),
+    )
+
+
+def test_the_slippage_ladder_replays_a_setup_that_sells_at_each_value_with_the_fills_moved_against_each_side() -> None:
+    # No slippage: (0.60 - 1.00) x 100 + (2.20 - 1.50) x 100 = +30.00.
+    # One percent: the 495 put is bought at 1.00 x 1.01 = 1.01 and sold at 0.60 x 0.99 = 0.594 down to 0.59, the 500 put
+    # is sold at 2.20 x 0.99 = 2.178 down to 2.17 and bought back at 1.50 x 1.01 = 1.515 up to 1.52:
+    # (0.59 - 1.01) x 100 + (2.17 - 1.52) x 100 = -42.00 + 65.00 = +23.00.
+    result = run_sessions(
+        _put_spread_setup(),
+        [THU],
+        fake_data({THU: _spread_day()}),
+        slippage_ladder=(D("0"), D("1")),
+    )
+
+    assert [(point.slippage_percent, point.net_profit_usd) for point in result.slippage] == [
+        (D("0"), D("30.00")),
+        (D("1"), D("23.00")),
+    ]

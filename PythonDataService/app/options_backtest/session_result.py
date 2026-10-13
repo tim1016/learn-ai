@@ -4,7 +4,8 @@ A session's result holds the replay's outcome untouched, the cash the session st
 what was read to replay it.
 
 Cash. The replay's ``cash_change_usd`` counts only cash that moved: a leg marked, not sold, has paid out and not been
-paid back. The next session starts with that money back at the mark, so a session ends with
+paid back. The next session starts with that money back at the mark, and a sold leg marked, not bought back, has been
+paid and owes its mark, which the next session starts without (the marked value is signed). So a session ends with
 ``cash_after = cash_before + cash_change + marked_value``, which is ``cash_before + pnl`` (the replay's own identity
 ``pnl = cash_change + marked_value``). The three figures are all kept, so a reader sees the identity as numbers.
 
