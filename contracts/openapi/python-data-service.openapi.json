@@ -13717,6 +13717,16 @@
             "title": "Entry Eligible",
             "type": "boolean"
           },
+          "funding": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FundingView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "headline": {
             "title": "Headline",
             "type": "string"
@@ -15592,6 +15602,29 @@
         "title": "EntryBlock",
         "type": "object"
       },
+      "EntryNeedView": {
+        "additionalProperties": false,
+        "description": "What one entry commits, and the parts that make it.",
+        "properties": {
+          "commitment_usd": {
+            "title": "Commitment Usd",
+            "type": "string"
+          },
+          "terms": {
+            "items": {
+              "$ref": "#/components/schemas/FigureTermView"
+            },
+            "title": "Terms",
+            "type": "array"
+          }
+        },
+        "required": [
+          "commitment_usd",
+          "terms"
+        ],
+        "title": "EntryNeedView",
+        "type": "object"
+      },
       "EquityBandPoint": {
         "additionalProperties": false,
         "description": "One trade-index slice of the simulated-equity distribution.\n\nIndex 0 is ``initial_equity`` (before any trade); subsequent\nindices are after the i-th trade in each simulation. P5/P50/P95\nare the 5th, 50th, and 95th percentiles across the simulation\nbatch at this index \u2014 visualised as a fan chart on the UI.",
@@ -17066,6 +17099,84 @@
         "title": "FifoAttributionRowResponse",
         "type": "object"
       },
+      "FigureTermView": {
+        "additionalProperties": false,
+        "description": "One labelled amount a figure is made of, signed.",
+        "properties": {
+          "amount_usd": {
+            "title": "Amount Usd",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "amount_usd"
+        ],
+        "title": "FigureTermView",
+        "type": "object"
+      },
+      "FigureView": {
+        "additionalProperties": false,
+        "description": "One number the owner compares against another, with its source and age (#3097).\n\n``known`` and ``stale`` carry an amount and the terms that add up to it;\na stale amount is the last one worked out. ``unknown`` carries neither,\nnever \"0.00\", and ``source`` says where it would come from.",
+        "properties": {
+          "amount_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount Usd"
+          },
+          "as_of_ms": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of Ms"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "known",
+              "stale",
+              "unknown"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "terms": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/FigureTermView"
+            },
+            "title": "Terms",
+            "type": "array"
+          }
+        },
+        "required": [
+          "state",
+          "source"
+        ],
+        "title": "FigureView",
+        "type": "object"
+      },
       "FixedContracts": {
         "additionalProperties": false,
         "properties": {
@@ -17913,6 +18024,110 @@
           "direction"
         ],
         "title": "FreshCross",
+        "type": "object"
+      },
+      "FundingView": {
+        "additionalProperties": false,
+        "description": "Whether a bot can fund an entry and which limit binds (``funding.funding_answer``, #3097).\n\nThe Clerk's admission reads the same answer, so the same entry at the same\nmoment is never promised here and refused by the Clerk. ``admits`` is the\nClerk's own rule, in whole cents: ``None`` when there is no priced entry\nor a limit it depends on is not known, and ``False`` with no entry priced\nonly when a known limit of the bot's own has under a cent of room, since\nevery entry commits at least that. ``binding`` is the known limit with\nthe least room; ``fits`` is absent when it cannot be said, and\n``shortfall_usd`` unless something is short, never \"0.00\".\n``broker_buying_power`` is absent for a bot with no broker figure (a Dry\nRun, a Live Shadow). Every dollar and every word is authored by Python.",
+        "properties": {
+          "account_headroom": {
+            "$ref": "#/components/schemas/FigureView"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          },
+          "admits": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Admits"
+          },
+          "binding": {
+            "anyOf": [
+              {
+                "enum": [
+                  "bot_budget",
+                  "account_headroom",
+                  "broker_buying_power"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Binding"
+          },
+          "broker_buying_power": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FigureView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fits": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fits"
+          },
+          "free_budget": {
+            "$ref": "#/components/schemas/FigureView"
+          },
+          "need": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EntryNeedView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sentence": {
+            "title": "Sentence",
+            "type": "string"
+          },
+          "shortfall_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shortfall Usd"
+          }
+        },
+        "required": [
+          "free_budget",
+          "account_headroom",
+          "sentence"
+        ],
+        "title": "FundingView",
         "type": "object"
       },
       "GalleryBotView": {

@@ -31,7 +31,7 @@
           in shares {{ parts.in_shares_usd | authoredUsd }} · in entry orders
           {{ parts.pending_usd | authoredUsd }} · free {{ parts.free_usd | authoredUsd }}
           @if (slice.segment.shortfall_usd; as shortfall) {
-            · short of next entry {{ shortfall | authoredUsd }}
+            · over its budget by {{ shortfall | authoredUsd }}
           }
         </span>
       }

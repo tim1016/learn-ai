@@ -7,7 +7,8 @@ claims - fees not already reflected in cash or an order-overlap claim
 - option collateral (ADR 0076 decision 28);
 an entry is admitted when it fits free and fits the deployment's account
 headroom = available + its own max(free, 0), so the entry test and
-``available`` are one rule (#3096).
+``available`` are one rule (#3096). The entry decisions below are that rule
+as ``funding.funding_answer`` judges it (#3097): its verdict and its words.
 A stopped deployment's release is the Stop's recorded fact (#2555), read back
 as ``DeploymentBudget.release``; it is never re-derived from later money.
 Reference: https://github.com/tim1016/learn-ai/issues/2540, Money contract.
@@ -21,6 +22,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal, Inexact, localcontext
 
+from app.broker.alpaca.clerk.funding import EntryNeed, funding_answer
 from app.broker.alpaca.clerk.money import (
     ZERO,
     cents_required,
@@ -182,34 +184,44 @@ class BudgetEntryDecision:
 
 
 @money_context()
-def budget_entry_decision(account: AccountBudget, *, strategy_instance_id: str, quantity: object, price: object, at_ms: int) -> BudgetEntryDecision:
+def budget_entry_decision(
+    account: AccountBudget, *, strategy_instance_id: str, quantity: object, price: object, at_ms: int,
+    observed_at_ms: int,
+) -> BudgetEntryDecision:
     """The same exact next-position cash rule for commitment and its read view.
 
     Required dollars include the canonical BUY fee provision. Other active
     deployments retain their positive free claims, and option collateral held
     by any deployment is out of reach; this deployment spends its own claim
     once (``account_headroom``). Cash projections already own order/fill/fee
-    overlap.
+    overlap. ``at_ms`` is the instant of the decision, and ``observed_at_ms``
+    when the account reading behind ``account`` was taken.
     """
     required, fee_cents = entry_requirement(quantity=quantity, price=price, at_ms=at_ms)
-    return _requirement_decision(account, strategy_instance_id=strategy_instance_id, required=required, fee_cents=fee_cents)
+    need = EntryNeed.for_shares(requirement=required, fee_provision_cents=fee_cents)
+    return _requirement_decision(
+        account, strategy_instance_id=strategy_instance_id, need=need, required=required, fee_cents=fee_cents,
+        at_ms=at_ms, observed_at_ms=observed_at_ms,
+    )
 
 
 @money_context()
 def option_entry_decision(
     account: AccountBudget, *, strategy_instance_id: str, commitment_cents: int, fee_provision_cents: int,
+    at_ms: int, observed_at_ms: int,
 ) -> BudgetEntryDecision:
     """The same next-position rule for an entry in option contracts (ADR 0076).
 
     What it needs is its entry commitment, in whole cents: the broker's
     requirement, plus the premium at the limit price, plus the option fee
     provision. That figure is ``app/options/requirement.py``'s; nothing is
-    priced here.
+    priced here. ``at_ms`` is the instant of the decision, and
+    ``observed_at_ms`` when the account reading behind ``account`` was taken.
 
     Formula: admitted when commitment <= this deployment's free budget and
       commitment <= the account's headroom for it (``account_headroom``).
     Reference: ADR 0076 decision 2 and decision 28; PRD #2540 admission.
-    Canonical implementation: the rule is this file's (``_requirement_decision``).
+    Canonical implementation: the rule is ``funding.funding_answer``'s.
     Validated against: tests/broker/alpaca/clerk/sqlite/test_option_entry_and_exit.py.
     """
     for name, cents in (("an entry commitment", commitment_cents), ("a fee provision", fee_provision_cents)):
@@ -217,21 +229,25 @@ def option_entry_decision(
             raise BudgetUnavailable(f"{name} is a whole number of cents, zero or more.")
     return _requirement_decision(
         account, strategy_instance_id=strategy_instance_id,
+        need=EntryNeed.for_options(commitment_cents=commitment_cents, fee_provision_cents=fee_provision_cents),
         required=Decimal(commitment_cents) / 100, fee_cents=fee_provision_cents,
+        at_ms=at_ms, observed_at_ms=observed_at_ms,
     )
 
 
 def _requirement_decision(
-    account: AccountBudget, *, strategy_instance_id: str, required: Decimal, fee_cents: int,
+    account: AccountBudget, *, strategy_instance_id: str, need: EntryNeed, required: Decimal, fee_cents: int,
+    at_ms: int, observed_at_ms: int,
 ) -> BudgetEntryDecision:
-    """Whether this deployment's budget and the account's headroom for it cover ``required`` dollars. The caller holds the money context."""
-    required_display = Decimal(cents_required(required)) / 100
-    own = next((item for item in account.deployments if item.strategy_instance_id == strategy_instance_id), None)
-    if own is None or not own.active:
-        return BudgetEntryDecision(False, required, fee_cents, "This deployment is stopped. Review a fresh Deploy before creating new exposure.")
-    if required > own.free:
-        return BudgetEntryDecision(False, required, fee_cents, f"The next position needs {required_display:.2f} USD including estimated fees; this deployment has {Decimal(cents_spendable(own.free)) / 100:.2f} USD free.")
-    headroom = account_headroom(account, own)
-    if required > headroom:
-        return BudgetEntryDecision(False, required, fee_cents, f"The next position needs {required_display:.2f} USD including estimated fees; the account can fund {Decimal(max(0, cents_spendable(headroom))) / 100:.2f} USD for this deployment.")
-    return BudgetEntryDecision(True, required, fee_cents, f"Current budget and cash cover the next position's estimated {required_display:.2f} USD including fees.")
+    """The funding answer's verdict and sentence for ``need``, as the entry decision (#3097).
+
+    Only a pass admits: a figure the answer cannot know is a refusal under the
+    same reason code, never a pass. Broker buying power is not handed in: it
+    never changes whether the Clerk's own rule admits. The caller holds the
+    money context.
+    """
+    answer = funding_answer(
+        account, strategy_instance_id=strategy_instance_id, need=need, broker_buying_power=None,
+        observed_at_ms=observed_at_ms, now_ms=at_ms,
+    )
+    return BudgetEntryDecision(answer.admits is True, required, fee_cents, answer.sentence)

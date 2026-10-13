@@ -11,9 +11,10 @@ one still on authority version 1 refuses under ``BUDGETS_NOT_SWITCHED_ON``
 and is never switched automatically. ``budget_entry_decision`` prices the
 ENTER through the one entry requirement (``budgets.entry_requirement``: its
 notional plus the canonical BUY fee provision) against the deployment's
-budget and the account's other claims, and the reservation -- exact price
-and fee provision -- rides the ``ENTER_ACCEPTED`` facts, so no claim is ever
-re-quoted or priced without its fee.
+budget and the account's other claims -- the verdict and the sentence of
+``funding.funding_answer``, the same the bot page reads -- and the
+reservation -- exact price and fee provision -- rides the ``ENTER_ACCEPTED``
+facts, so no claim is ever re-quoted or priced without its fee.
 
 An entry in option contracts (ADR 0076) passes the same refusals in the same
 order through ``require_option_envelope_admission``, and is then held to the
@@ -137,7 +138,7 @@ def require_envelope_admission(
     decision, exact_price = _admitted_by_the_budget(
         repo, observation, price=price,
         required=lambda projection: budget_entry_decision(projection, strategy_instance_id=strategy_instance_id,
-            quantity=leg.quantity, price=price, at_ms=now_ms),
+            quantity=leg.quantity, price=price, at_ms=now_ms, observed_at_ms=observation.observed_at_ms),
     )
     return EnvelopeReservation(
         quantity=leg.quantity, reference_price=float(price),
@@ -184,6 +185,7 @@ def require_option_envelope_admission(
         required=lambda projection: option_entry_decision(
             projection, strategy_instance_id=strategy_instance_id,
             commitment_cents=commitment_cents, fee_provision_cents=fee_provision_cents,
+            at_ms=now_ms, observed_at_ms=observation.observed_at_ms,
         ),
     )
     return EnvelopeReservation(

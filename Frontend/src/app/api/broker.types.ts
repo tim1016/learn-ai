@@ -12360,6 +12360,7 @@ export interface components {
              * @default false
              */
             entry_eligible?: boolean;
+            funding?: components["schemas"]["FundingView"] | null;
             /** Headline */
             headline: string;
             /** Note */
@@ -13130,6 +13131,16 @@ export interface components {
             size: components["schemas"]["SetHoldings"] | components["schemas"]["FixedContracts"];
         };
         /**
+         * EntryNeedView
+         * @description What one entry commits, and the parts that make it.
+         */
+        EntryNeedView: {
+            /** Commitment Usd */
+            commitment_usd: string;
+            /** Terms */
+            terms: components["schemas"]["FigureTermView"][];
+        };
+        /**
          * EquityBandPoint
          * @description One trade-index slice of the simulated-equity distribution.
          *
@@ -13701,6 +13712,42 @@ export interface components {
             /** Symbol */
             symbol: string;
         };
+        /**
+         * FigureTermView
+         * @description One labelled amount a figure is made of, signed.
+         */
+        FigureTermView: {
+            /** Amount Usd */
+            amount_usd: string;
+            /** Label */
+            label: string;
+        };
+        /**
+         * FigureView
+         * @description One number the owner compares against another, with its source and age (#3097).
+         *
+         *     ``known`` and ``stale`` carry an amount and the terms that add up to it;
+         *     a stale amount is the last one worked out. ``unknown`` carries neither,
+         *     never "0.00", and ``source`` says where it would come from.
+         */
+        FigureView: {
+            /** Amount Usd */
+            amount_usd?: string | null;
+            /** As Of Ms */
+            as_of_ms?: number | null;
+            /** Source */
+            source: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "known" | "stale" | "unknown";
+            /**
+             * Terms
+             * @default []
+             */
+            terms?: components["schemas"]["FigureTermView"][];
+        };
         /** FixedContracts */
         FixedContracts: {
             /**
@@ -13986,6 +14033,39 @@ export interface components {
             left: string;
             /** Right */
             right: string;
+        };
+        /**
+         * FundingView
+         * @description Whether a bot can fund an entry and which limit binds (``funding.funding_answer``, #3097).
+         *
+         *     The Clerk's admission reads the same answer, so the same entry at the same
+         *     moment is never promised here and refused by the Clerk. ``admits`` is the
+         *     Clerk's own rule, in whole cents: ``None`` when there is no priced entry
+         *     or a limit it depends on is not known, and ``False`` with no entry priced
+         *     only when a known limit of the bot's own has under a cent of room, since
+         *     every entry commits at least that. ``binding`` is the known limit with
+         *     the least room; ``fits`` is absent when it cannot be said, and
+         *     ``shortfall_usd`` unless something is short, never "0.00".
+         *     ``broker_buying_power`` is absent for a bot with no broker figure (a Dry
+         *     Run, a Live Shadow). Every dollar and every word is authored by Python.
+         */
+        FundingView: {
+            account_headroom: components["schemas"]["FigureView"];
+            /** Action */
+            action?: string | null;
+            /** Admits */
+            admits?: boolean | null;
+            /** Binding */
+            binding?: ("bot_budget" | "account_headroom" | "broker_buying_power") | null;
+            broker_buying_power?: components["schemas"]["FigureView"] | null;
+            /** Fits */
+            fits?: number | null;
+            free_budget: components["schemas"]["FigureView"];
+            need?: components["schemas"]["EntryNeedView"] | null;
+            /** Sentence */
+            sentence: string;
+            /** Shortfall Usd */
+            shortfall_usd?: string | null;
         };
         /**
          * GalleryBotView
