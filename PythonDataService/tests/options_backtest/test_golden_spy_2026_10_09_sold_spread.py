@@ -49,6 +49,7 @@ from app.data_lake.option_bars import OptionBar, ensure_option_day_bars, read_op
 from app.data_lake.option_lake import OptionCaptureResult
 from app.data_lake.option_listing import ensure_option_listing, read_option_listing
 from app.data_lake.run_materialization import EngineRunMaterialization, materialize_engine_run
+from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
 from app.options.contract import OptionContract
 from app.options_backtest.lake_data import LakeRunData
 from app.options_backtest.market import MinuteBar
@@ -111,22 +112,25 @@ STORED_BOUGHT_CALL_FILE = "option/usa/minute/spy/spy261009c00779000/20261009_tra
 # contract in fees, so that both move the money of every fill.
 ENTRY_0935_MS = 300_000
 EXIT_1530_BEFORE_THE_CLOSE_MS = 1_800_000
+STOP_PERCENT = "18"
 SLIPPAGE = D("0.3")
 FEE_PER_CONTRACT = D("0.65")
 STARTING_CASH = D("10000.00")
 
-# The instants the scenes use (ms UTC), each worked out in the scenes' comments below.
-DECIDED_ENTRY_MS = 1791552900000
-ENTRY_FILL_MS = 1791552960000
-STOP_DECIDED_MS = 1791559140000
-STOP_FILL_MS = 1791559200000
-EXIT_DECIDED_MS = 1791574200000
-EXIT_FILL_MS = 1791574260000
-
 # The fixture's answer key, ``expected.json``: the figures of each scene below, worked by hand from the recorded bytes
-# and written down once more beside the recording. The scenes assert the same figures as literals; this check keeps the
-# file the fixture registers as its output true to the run.
+# and written down once more beside the recording. The scenes assert the same figures as literals and compare the run
+# with the key; ``test_the_answer_keys_decision_times_...`` holds the key's instants to the recorded bars and the
+# calendar, without a run, so that a key edited together with its registry hashes cannot carry a time nothing gives.
 ANSWER_KEY = json.loads((RECORDING / "expected.json").read_bytes())["scenes"]
+
+# The instants the scenes use (ms UTC) are the key's, read from it and not written again here, each worked out in the
+# scenes' comments below. A fill instant is the close of the bar the order fills in.
+DECIDED_ENTRY_MS = ANSWER_KEY["entry"]["decided_at_ms"]
+ENTRY_FILL_MS = ANSWER_KEY["entry"]["group"]["fills"][0]["bar_close_ms"]
+STOP_DECIDED_MS = ANSWER_KEY["stop_on_the_sold_leg"]["decided_at_ms"]
+STOP_FILL_MS = ANSWER_KEY["stop_on_the_sold_leg"]["group"]["fills"][0]["bar_close_ms"]
+EXIT_DECIDED_MS = ANSWER_KEY["exit"]["decided_at_ms"]
+EXIT_FILL_MS = ANSWER_KEY["exit"]["group"]["fills"][0]["bar_close_ms"]
 
 
 def recorded(name: str) -> bytes:
@@ -653,17 +657,19 @@ async def test_a_stop_on_the_sold_leg_buys_it_back_alone_at_the_next_open_and_le
     # 10000.00 - 57.20 = 9942.80.
     await capture_the_recording()
 
-    result = await the_run(a_call_credit_spread(stop_percent="18"))
+    result = await the_run(a_call_credit_spread(stop_percent=STOP_PERCENT))
 
     [session] = result.sessions
     assert session.status is SessionStatus.TRADED
     trades = trades_of(session)
     short, long = trades["short_call"], trades["long_call"]
-    # The same entry group as the spread held by the clock.
+    # The same entry, decided at the key's instant, and the same entry group as the spread held by the clock.
+    assert short.entry_decided_at_ms == long.entry_decided_at_ms == ANSWER_KEY["entry"]["decided_at_ms"]
     assert what_a_group_did(session, ENTRY_FILL_MS) == the_key_group(ANSWER_KEY["entry"]["group"])
-    # The stop on the sold leg alone.
+    # The stop on the sold leg alone, decided at the key's instant.
     assert short.stop_level == D("1.1682") == D(ANSWER_KEY["stop_on_the_sold_leg"]["stop_level"])
-    assert short.exit_reason is ExitReason.STOP and short.exit_decided_at_ms == STOP_DECIDED_MS
+    assert short.exit_reason is ExitReason.STOP
+    assert short.exit_decided_at_ms == ANSWER_KEY["stop_on_the_sold_leg"]["decided_at_ms"]
     # The bar stamped 10:58 has a high at the level and a close under it, and the stop was not hit there: it was read on
     # a close. The bar is read from the recorded file by the standard library, as the one oracle here that is not our code.
     bar_1058 = {row["t"]: row for row in recorded_rows(RECORDED_FILES[SOLD_CALL_PATH])}[1791557880000]
@@ -686,8 +692,9 @@ async def test_a_stop_on_the_sold_leg_buys_it_back_alone_at_the_next_open_and_le
     )
     assert (stopped["collateral_before_usd"], stopped["collateral_after_usd"]) == (D("400.00"), D("0.00"))
     assert stopped == the_key_group(ANSWER_KEY["stop_on_the_sold_leg"]["group"])
-    # The bought leg was left alone by the stop, and leaves at the exit time.
-    assert long.exit_reason is ExitReason.EXIT_TIME and long.exit_decided_at_ms == EXIT_DECIDED_MS
+    # The bought leg was left alone by the stop, and leaves at the exit time: this run's own decision, in the key.
+    exit_group = ANSWER_KEY["stop_on_the_sold_leg"]["then_the_exit_time_sells_the_cover"]
+    assert long.exit_reason is ExitReason.EXIT_TIME and long.exit_decided_at_ms == exit_group["decided_at_ms"]
     assert (sale_of(long).side, sale_of(long).bar_close_ms, sale_of(long).seen, sale_of(long).filled) == (
         "sell",
         EXIT_FILL_MS,
@@ -695,7 +702,6 @@ async def test_a_stop_on_the_sold_leg_buys_it_back_alone_at_the_next_open_and_le
         D("0.31"),
     )
     assert long.pnl_usd == D("-12.60")
-    exit_group = ANSWER_KEY["stop_on_the_sold_leg"]["then_the_exit_time_sells_the_cover"]
     assert what_a_group_did(session, EXIT_FILL_MS) == the_key_group(exit_group["group"])
     assert session.outcome.pnl_usd == D("-57.20") == D(exit_group["total_profit_usd"])
     assert (session.cash_before_usd, session.cash_after_usd) == (D("10000.00"), D("9942.80"))
@@ -707,6 +713,46 @@ async def test_a_stop_on_the_sold_leg_buys_it_back_alone_at_the_next_open_and_le
         EventKind.EXIT_TIME: 1,
         EventKind.CLOSE_FILLED: 2,
     }
+
+
+def test_the_answer_keys_decision_times_are_the_calendars_anchors_and_the_closes_of_bars_the_vendor_recorded() -> None:
+    # Nothing is run and no lake is read: the key's instants against the recorded bytes and the calendar alone. The
+    # scenes compare the run with the key, so a key edited together with its registry hashes must not be able to carry a
+    # time that no anchor and no bar gives. A bar is named by its close, so an order decided at ``t`` fills at the open of
+    # the bar stamped ``t`` and closing at ``t + 1 minute``.
+    minute = 60_000
+    opens, closes = session_open_ms_utc(TRADING_DATE), session_close_ms_utc(TRADING_DATE)
+    underlying = {row["t"] for row in recorded_rows(RECORDED_FILES[STOCK_PATH])}
+    sold = {row["t"]: row for row in recorded_rows(RECORDED_FILES[SOLD_CALL_PATH])}
+    starts_of = {
+        "O:SPY261009C00777000": set(sold),
+        "O:SPY261009C00779000": {row["t"] for row in recorded_rows(RECORDED_FILES[BOUGHT_CALL_PATH])},
+    }
+
+    def fills_at_the_next_open(decided_at_ms: int, group: dict[str, Any]) -> None:
+        for fill in group["fills"]:
+            assert fill["bar_close_ms"] == decided_at_ms + minute
+            assert decided_at_ms in starts_of[fill["contract"]]
+
+    entry, stop, exit_ = ANSWER_KEY["entry"], ANSWER_KEY["stop_on_the_sold_leg"], ANSWER_KEY["exit"]
+    cover = stop["then_the_exit_time_sells_the_cover"]
+    # The entry time is 5 minutes after the open, read on the underlying's bar that closes then.
+    assert entry["decided_at_ms"] == opens + ENTRY_0935_MS
+    assert entry["decided_at_ms"] - minute in underlying
+    fills_at_the_next_open(entry["decided_at_ms"], entry["group"])
+    # The exit time is 30 minutes before the close, in the run held to the clock and in the run with the stop.
+    assert exit_["decided_at_ms"] == cover["decided_at_ms"] == closes - EXIT_1530_BEFORE_THE_CLOSE_MS
+    fills_at_the_next_open(exit_["decided_at_ms"], exit_["group"])
+    fills_at_the_next_open(cover["decided_at_ms"], cover["group"])
+    # The stop level is what the leg was sold for moved up by the percentage. It is read on the first bar of the sold
+    # call, from the one the entry fills in, whose close reaches the level; that is the close at which it is decided.
+    [sold_fill] = [fill for fill in entry["group"]["fills"] if fill["side"] == "sell"]
+    level = D(sold_fill["filled"]) * (1 + D(STOP_PERCENT) / 100)
+    assert level == D(stop["stop_level"])
+    first_to_close_at_the_level = next(t for t in sorted(sold) if t >= entry["decided_at_ms"] and sold[t]["c"] >= level)
+    assert stop["decided_at_ms"] == first_to_close_at_the_level + minute
+    assert sold[first_to_close_at_the_level]["c"] == D(stop["stop_close"])
+    fills_at_the_next_open(stop["decided_at_ms"], stop["group"])
 
 
 # ── The script that records the fixture ───────────────────────────────────────────────────────────────────────
