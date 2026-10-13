@@ -1,10 +1,10 @@
 <section class="card" aria-labelledby="ob-builder-title">
   <div class="card__head">
     <h2 id="ob-builder-title">Leg builder</h2>
-    <p class="hint">Choose a contract, then press Add leg. Only buying is offered.</p>
+    <p class="hint">Choose buy or sell and a contract, then press Add leg.</p>
   </div>
   <div class="row">
-    <span class="buy">Buy</span>
+    <app-options-backtest-pill-choice [formField]="form().side" [options]="sides" label="Buy or sell" describedBy="ob-side-hint" />
     <app-options-backtest-pill-choice [formField]="form().right" [options]="rights" label="Call or put" />
     <div class="field field--narrow">
       <label for="ob-contracts">Contracts</label>
@@ -32,6 +32,7 @@
     }
     <button #addButton pButton type="button" class="add" [disabled]="!canAdd()" (click)="add.emit()"><i class="pi pi-plus" aria-hidden="true"></i><span>Add leg</span></button>
   </div>
+  <p id="ob-side-hint" class="hint">A sold leg needs a bought leg of the same kind, call or put, to cover it.</p>
   <p id="ob-expiry-hint" class="hint">{{ expiryHint() }}</p>
   @for (problem of problems(); track problem[0]) { <p class="problem" role="alert" [id]="problemId(problem[0])">{{ problem[1] }}</p> }
   @if (full()) { <p class="hint" role="status">The most legs a setup holds: {{ maxLegs() }}. Delete one to add another.</p> }

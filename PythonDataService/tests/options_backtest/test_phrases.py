@@ -12,7 +12,7 @@ from decimal import Decimal
 import pytest
 
 from app.options_backtest import phrases
-from app.options_backtest.setup import MS_PER_MINUTE, SessionTime
+from app.options_backtest.setup import MS_PER_MINUTE, ReentryOnStop, SessionTime, StopLoss
 
 D = Decimal
 
@@ -70,3 +70,36 @@ def test_a_strike_is_counted_in_strikes_above_or_below_the_money_and_one_strike_
     assert phrases.strikes_from_the_money(1) == "1 strike above the money"
     assert phrases.strikes_from_the_money(-1) == "1 strike below the money"
     assert phrases.strikes_from_the_money(-3) == "3 strikes below the money"
+
+
+def test_a_side_is_said_as_bought_or_sold() -> None:
+    assert phrases.bought_or_sold("buy") == "bought"
+    assert phrases.bought_or_sold("sell") == "sold"
+
+
+def test_a_bought_legs_stop_is_a_fall_from_what_was_paid_and_a_sold_legs_a_rise_from_what_it_was_sold_for() -> None:
+    percent = StopLoss(kind="percent", value=D("25.0"))
+    points = StopLoss(kind="points", value=D("1"))
+    over_a_hundred = StopLoss(kind="percent", value=D("250"))
+
+    # A bought leg's words are the words they were, whether the side is said or left out.
+    assert phrases.stop_loss(percent) == "at least 25% below what was paid"
+    assert phrases.stop_loss(percent, "buy") == "at least 25% below what was paid"
+    assert phrases.stop_loss(points, "buy") == "at least 1 point below what was paid"
+    assert phrases.stop_loss(percent, "sell") == "at or above its stop level, 25% above what it was sold for"
+    assert phrases.stop_loss(points, "sell") == "at or above its stop level, 1 point above what it was sold for"
+    assert phrases.stop_loss(over_a_hundred, "sell") == "at or above its stop level, 250% above what it was sold for"
+
+
+def test_a_re_entry_buys_the_fresh_contract_of_a_bought_leg_and_sells_that_of_a_sold_one() -> None:
+    at_once = ReentryOnStop(kind="at_once", count=1)
+    on_momentum = ReentryOnStop(kind="on_momentum", count=2)
+
+    assert phrases.reentry(at_once) == (
+        "After a stop, picks a fresh contract by the same rules and buys it at once, up to 1 time in a session."
+    )
+    assert phrases.reentry(at_once, "sell") == (
+        "After a stop, picks a fresh contract by the same rules and sells it at once, up to 1 time in a session."
+    )
+    # Waiting for momentum names no verb, so it reads alike on both sides.
+    assert phrases.reentry(on_momentum, "sell") == phrases.reentry(on_momentum, "buy")

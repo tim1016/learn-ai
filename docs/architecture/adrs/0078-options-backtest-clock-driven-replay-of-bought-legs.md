@@ -40,6 +40,8 @@ Why. Research studies freeze a digest of the engine tree and a short list of oth
 
 What it shares with the engine. The canonical calendar. The option fee model. The contract spelling and the expiry anchor (ADR 0076 decision 1, ADR 0022 (i)). The engine's one-backtest-at-a-time gate, which a run takes for its replay because #3030 names it.
 
+**Amended by #3104 (2026-10-12):** it also takes the canonical portfolio requirement (`portfolio_broker_requirement`, ADR 0076 decisions 3 and 28) and the leg shape that function reads (`ResolvedLeg` and `EntrySize`), both pure, for the cover book (`app/options_backtest/cover_book.py`, PRD #3095). The backtest asks the one requirement the bots hold and does not copy it. The money path's code is not edited for it.
+
 *To change:* moving any of it under `app/engine/` moves Golden Search's identity.
 
 ### 3. The plan's data decides what a fill is

@@ -1,4 +1,4 @@
-import type { ExpiryKind, OptionRight, SetupLimits, StrikeKind } from './options-backtest.types';
+import type { ExpiryKind, LegSide, OptionRight, SetupLimits, StrikeKind } from './options-backtest.types';
 import type { LegDraft, SetupDraft } from './setup-draft';
 import { legsFull } from './setup-limits';
 import { wholeNumber } from './typed-text';
@@ -8,6 +8,7 @@ const NO_UPPER_LIMIT = Number.MAX_SAFE_INTEGER;
 
 /** The leg builder's row, as typed. */
 export interface LegBuilder {
+  side: LegSide;
   right: OptionRight;
   contracts: string;
   expiryKind: ExpiryKind;
@@ -19,7 +20,7 @@ export interface LegBuilder {
 export type BuilderField = 'contracts' | 'expiryDays' | 'strikeSteps';
 
 export function newLegBuilder(): LegBuilder {
-  return { right: 'call', contracts: '1', expiryKind: 'this_week', expiryDays: '1', strikeKind: 'atm', strikeSteps: '1' };
+  return { side: 'buy', right: 'call', contracts: '1', expiryKind: 'this_week', expiryDays: '1', strikeKind: 'atm', strikeSteps: '1' };
 }
 
 /**
@@ -53,6 +54,7 @@ export function builderProblems(builder: LegBuilder, limits: SetupLimits | null)
 export function legFromBuilder(builder: LegBuilder, takenIds: readonly string[]): LegDraft {
   return {
     id: nextLegId(builder.right, takenIds),
+    side: builder.side,
     right: builder.right,
     contracts: wholeNumber(builder.contracts, 1, NO_UPPER_LIMIT) ?? 1,
     expiryKind: builder.expiryKind,
@@ -92,7 +94,8 @@ export function nextLegId(right: OptionRight, takenIds: readonly string[]): stri
 /** The leg's contract in one line, from the choices made in the builder. */
 export function contractLine(leg: LegDraft): string {
   const right = leg.right === 'call' ? 'Call' : 'Put';
-  return ['Buy', plural(leg.contracts, 'contract'), right, expiryText(leg), strikeText(leg)].join(' · ');
+  const side = leg.side === 'sell' ? 'Sell' : 'Buy';
+  return [side, plural(leg.contracts, 'contract'), right, expiryText(leg), strikeText(leg)].join(' · ');
 }
 
 function expiryText(leg: LegDraft): string {

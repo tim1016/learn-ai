@@ -418,3 +418,147 @@ def test_the_blocks_have_the_sentences_the_setup_gives_rise_to_and_no_more() -> 
     assert [len(leg.sentences) for leg in plain.legs] == [2]
     assert len(plain.square_off) == 1
     assert len(plain.costs) == 3 and len(estimated.costs) == 4
+
+
+# ── A leg that sells (#3105) ─────────────────────────────────────────────
+
+_COVER = _leg(leg_id="long_call")
+
+
+def _sold_leg_sentences(**changes: Any) -> tuple[str, ...]:
+    """The sentences of a sold call, set up beside the bought call that covers it."""
+    legs = [_COVER, _leg(leg_id="short_call", side="sell", **changes)]
+    return describe_setup(_setup(legs=legs), full_session=_CLOCK).legs[1].sentences
+
+
+def test_a_sold_leg_says_it_sells_to_open_and_is_bought_back_and_its_bought_cover_is_said_as_it_always_was() -> None:
+    described = describe_setup(_setup(legs=[_COVER, _leg(leg_id="short_call", side="sell")]), full_session=_CLOCK).legs
+
+    assert [leg.leg_id for leg in described] == ["long_call", "short_call"]
+    assert described[0].sentences == (
+        "Leg long_call: buys 1 at-the-money call expiring on the nearest listed expiry, today included, that falls "
+        "on the last trading day of its week.",
+        "The buy comes as soon as the entry is read.",
+    )
+    assert described[1].sentences == (
+        "Leg short_call: sells to open 1 at-the-money call expiring on the nearest listed expiry, today included, "
+        "that falls on the last trading day of its week, and is bought back to close.",
+        "The sale comes as soon as the entry is read.",
+    )
+
+
+@pytest.mark.parametrize(
+    ("stop_loss", "said"),
+    [
+        (
+            {"kind": "percent", "value": "25"},
+            "Bought back once a minute closes at or above its stop level, 25% above what it was sold for.",
+        ),
+        (
+            {"kind": "percent", "value": "150"},
+            "Bought back once a minute closes at or above its stop level, 150% above what it was sold for.",
+        ),
+        (
+            {"kind": "points", "value": "0.4"},
+            "Bought back once a minute closes at or above its stop level, 0.4 points above what it was sold for.",
+        ),
+    ],
+)
+def test_a_sold_legs_stop_is_a_rise_above_what_it_was_sold_for_and_is_not_a_sale(
+    stop_loss: dict[str, Any], said: str
+) -> None:
+    sentences = _sold_leg_sentences(stop_loss=stop_loss)
+
+    assert said in sentences
+    assert not any("below what was paid" in sentence or sentence.startswith("Sells ") for sentence in sentences)
+
+
+def test_a_sold_legs_momentum_gates_the_sale() -> None:
+    sentences = _sold_leg_sentences(momentum={"kind": "percent_down", "value": "10"})
+
+    assert sentences[1] == (
+        "The sale waits until a minute closes at least 10% below where its premium stood at the entry time."
+    )
+    assert not any("The buy" in sentence for sentence in sentences)
+
+
+def test_a_sold_legs_re_entry_sells_the_fresh_contract_and_on_momentum_is_said_as_for_a_bought_leg() -> None:
+    at_once = _sold_leg_sentences(
+        stop_loss={"kind": "percent", "value": "25"}, reentry_on_stop={"kind": "at_once", "count": 2}
+    )
+    on_momentum = _sold_leg_sentences(
+        stop_loss={"kind": "percent", "value": "25"},
+        momentum={"kind": "percent_up", "value": "10"},
+        reentry_on_stop={"kind": "on_momentum", "count": 1},
+    )
+
+    assert at_once[-1] == (
+        "After a stop, picks a fresh contract by the same rules and sells it at once, up to 2 times in a session."
+    )
+    assert on_momentum[-1] == (
+        "After a stop, picks a fresh contract by the same rules, takes a new starting premium from it and waits for "
+        "momentum again, up to 1 time in a session."
+    )
+
+
+def test_a_bought_legs_sentences_are_what_they_were_with_every_rule_on() -> None:
+    [leg] = describe_setup(
+        _setup(
+            legs=[
+                _leg(
+                    leg_id="put",
+                    right="put",
+                    contracts=2,
+                    strike={"kind": "atm_offset", "steps": -1},
+                    stop_loss={"kind": "points", "value": "0.4"},
+                    momentum={"kind": "percent_up", "value": "25"},
+                    reentry_on_stop={"kind": "at_once", "count": 1},
+                )
+            ]
+        ),
+        full_session=_CLOCK,
+    ).legs
+
+    assert leg.sentences == (
+        "Leg put: buys 2 puts 1 strike below the money expiring on the nearest listed expiry, today included, that "
+        "falls on the last trading day of its week.",
+        "The buy waits until a minute closes at least 25% above where its premium stood at the entry time.",
+        "Sells once a minute closes at least 0.4 points below what was paid.",
+        "After a stop, picks a fresh contract by the same rules and buys it at once, up to 1 time in a session.",
+    )
+
+
+def test_a_setup_that_sells_says_which_orders_open_and_which_close_and_a_setup_that_buys_is_said_as_it_was() -> None:
+    buys = describe_setup(_setup(), full_session=_CLOCK).window
+    sells = describe_setup(_setup(legs=[_COVER, _leg(leg_id="short_call", side="sell")]), full_session=_CLOCK).window
+
+    assert re.search(r"A buy is dropped.*a sale is tried each minute until it does", " ".join(buys))
+    assert "At the exit, whatever is open is sold, legs still waiting are cancelled and nothing more is bought." in buys
+    assert len(sells) == len(buys)
+    assert re.search(r"order to open is dropped.*order to close is tried each minute", " ".join(sells))
+    assert re.search(r"a bought leg still open is sold, a sold leg still open is bought back", " ".join(sells))
+    assert not any("A buy is dropped" in sentence or "whatever is open is sold" in sentence for sentence in sells)
+    assert sells[:5] == buys[:5]
+
+
+def test_the_sentences_of_a_setup_that_sells_are_whole_sentences_one_to_an_item() -> None:
+    selling = _setup(
+        no_reentry_after=_before_close_time(60),
+        legs=[
+            _leg(leg_id="long_call", stop_loss={"kind": "percent", "value": "25"}),
+            _leg(
+                leg_id="short_call",
+                side="sell",
+                momentum={"kind": "percent_up", "value": "25"},
+                stop_loss={"kind": "percent", "value": "150"},
+                reentry_on_stop={"kind": "on_momentum", "count": 2},
+            ),
+        ],
+    )
+
+    sentences = _every_sentence(selling)
+
+    assert sentences
+    for sentence in sentences:
+        assert sentence.endswith(".") and sentence == sentence.strip(), sentence
+        assert ". " not in sentence, sentence

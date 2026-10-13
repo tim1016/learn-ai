@@ -14,7 +14,7 @@ import pytest
 from app.options_backtest.fees import FeeRateNotPublished
 from app.options_backtest.picking import Listing
 from app.options_backtest.results import EventKind, SessionStatus, SkipReason
-from app.options_backtest.run import RunStopped, SessionDataMissing, run_sessions
+from app.options_backtest.run import RunStopped, SellingNotReplayed, SessionDataMissing, run_sessions
 from app.options_backtest.session_market import MalformedBars
 from app.options_backtest.setup import FeePolicy
 from tests.options_backtest._market import leg, setup
@@ -223,4 +223,21 @@ def test_estimated_fees_on_a_date_without_published_rates_are_refused_before_any
         run_sessions(changed(setup(leg()), fees=FeePolicy(kind="estimated")), [june_30, july_1], data)
 
     assert (raised.value.trading_date, raised.value.components) == (june_30, ("cat",))
+    assert data.asked == []
+
+
+def test_a_setup_with_a_sold_leg_is_refused_before_anything_is_read_until_selling_is_replayed() -> None:
+    # No path may replay a sold leg as if it were bought (#3106 replays it).
+    data = FakeRunData()
+    selling = setup(
+        leg("long_call"),
+        {**leg("short_call"), "side": "sell"},
+        leg("long_put", "put"),
+        {**leg("short_put", "put"), "side": "sell"},
+    )
+
+    with pytest.raises(SellingNotReplayed) as raised:
+        run_sessions(selling, [WED], data)
+
+    assert raised.value.leg_ids == ("short_call", "short_put")
     assert data.asked == []
