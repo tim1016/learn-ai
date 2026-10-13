@@ -22,6 +22,7 @@ from app.options.requirement import (
     portfolio_broker_requirement,
     round_trip_cost,
     round_trip_cost_is_over_limit,
+    with_contracts,
 )
 from app.options.structure import ResolvedLeg, ResolvedStructure
 
@@ -372,3 +373,23 @@ def test_holdings_the_books_cannot_value_are_refused_and_never_guessed(
 ) -> None:
     with pytest.raises(ValueError, match=reason):
         held_requirement_cents(held)  # type: ignore[arg-type]
+
+
+def test_an_entrys_contracts_are_added_to_the_holdings_count_by_count_and_never_laid_over_them() -> None:
+    """The account holds one bought 585 and one sold 580; the entry sells the 585 and buys a 590."""
+    c580, c585, c590 = ("SPY260918C00580000", 100), ("SPY260918C00585000", 100), ("SPY260918C00590000", 100)
+    held = {c585: 1, c580: -1}
+    entry = {c585: -1, c590: 1}
+
+    after = with_contracts(held, entry)
+
+    assert after == {c585: 0, c580: -1, c590: 1}
+    assert held == {c585: 1, c580: -1}, "the holdings themselves are not changed"
+    # $5 wide before, $10 wide after: laying the entry over the holdings would have kept a bought 585.
+    assert incremental_account_requirement(held, after) == (50_000, 100_000)
+
+
+def test_one_bots_holdings_put_onto_anothers_add_and_a_contract_held_both_ways_nets() -> None:
+    c580 = ("SPY260918C00580000", 100)
+    assert with_contracts({c580: -2}, {c580: 2}) == {c580: 0}
+    assert with_contracts({}, {c580: 3}) == {c580: 3}

@@ -290,6 +290,27 @@
             ],
             "title": "Outside Bots Usd"
           },
+          "picture": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountPictureView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "picture_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Picture Detail"
+          },
           "segments": {
             "default": [],
             "items": {
@@ -370,6 +391,37 @@
           "account_id"
         ],
         "title": "AccountMoneyView",
+        "type": "object"
+      },
+      "AccountPictureView": {
+        "additionalProperties": false,
+        "description": "What the account owns, what is spoken for, where it is concentrated and what it is obliged to (#3101).\n\nEvery dollar and every word is authored by Python, and every figure keeps\nits source, its age and its state. It informs and blocks nothing.",
+        "properties": {
+          "concentration": {
+            "$ref": "#/components/schemas/ConcentrationView"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "obligations": {
+            "$ref": "#/components/schemas/ObligationsView"
+          },
+          "owned": {
+            "$ref": "#/components/schemas/OwnedView"
+          },
+          "spoken_for": {
+            "$ref": "#/components/schemas/SpokenForView"
+          }
+        },
+        "required": [
+          "owned",
+          "spoken_for",
+          "concentration",
+          "obligations",
+          "note"
+        ],
+        "title": "AccountPictureView",
         "type": "object"
       },
       "AccountPinRequest": {
@@ -11188,6 +11240,34 @@
         "title": "CohortLegResult",
         "type": "object"
       },
+      "CollateralGroupView": {
+        "additionalProperties": false,
+        "description": "The collateral of one underlying and expiry taken alone.\n\n``expiry_ms`` is the expiry date's own anchor, a date and not an instant:\nit is shown as a date in the exchange's time, never in the viewer's.",
+        "properties": {
+          "collateral_usd": {
+            "title": "Collateral Usd",
+            "type": "string"
+          },
+          "expiry_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Expiry Ms",
+            "type": "integer"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          }
+        },
+        "required": [
+          "underlying",
+          "expiry_ms",
+          "collateral_usd"
+        ],
+        "title": "CollateralGroupView",
+        "type": "object"
+      },
       "CommandResponse": {
         "description": "The durable command resource (R2). Mirrors ``CommandResource`` 1:1,\nplus a backend-authored ``disabled_tooltip`` for a non-terminal command\nso a future UI slice needs no extra round trip to render \"already\nrequested\".",
         "properties": {
@@ -11302,6 +11382,39 @@
           "disabled_tooltip"
         ],
         "title": "CommandResponse",
+        "type": "object"
+      },
+      "ConcentrationView": {
+        "additionalProperties": false,
+        "description": "Where the collateral is: each underlying and expiry alone, and the account's own figure beside them.",
+        "properties": {
+          "account_collateral": {
+            "$ref": "#/components/schemas/FigureView"
+          },
+          "expiry_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expiry Note"
+          },
+          "groups": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CollateralGroupView"
+            },
+            "title": "Groups",
+            "type": "array"
+          }
+        },
+        "required": [
+          "account_collateral"
+        ],
+        "title": "ConcentrationView",
         "type": "object"
       },
       "ConfiguredSignalProgramSeal": {
@@ -36560,6 +36673,49 @@
         "title": "NumericalProvenanceContract",
         "type": "object"
       },
+      "ObligationsView": {
+        "additionalProperties": false,
+        "description": "What assignment could oblige, gross and apart from any loss, and what closing everything costs.",
+        "properties": {
+          "assignment": {
+            "$ref": "#/components/schemas/FigureView"
+          },
+          "assignment_note": {
+            "title": "Assignment Note",
+            "type": "string"
+          },
+          "bots_holding": {
+            "minimum": 0.0,
+            "title": "Bots Holding",
+            "type": "integer"
+          },
+          "bots_unpriced": {
+            "minimum": 0.0,
+            "title": "Bots Unpriced",
+            "type": "integer"
+          },
+          "close_everything": {
+            "$ref": "#/components/schemas/FigureView"
+          },
+          "conditions": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Conditions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "assignment",
+          "assignment_note",
+          "close_everything",
+          "bots_holding",
+          "bots_unpriced"
+        ],
+        "title": "ObligationsView",
+        "type": "object"
+      },
       "ObservedAccountResponse": {
         "additionalProperties": false,
         "properties": {
@@ -44132,6 +44288,29 @@
         ],
         "title": "OrderSide",
         "type": "string"
+      },
+      "OwnedView": {
+        "additionalProperties": false,
+        "description": "What the account owns: its cash and its marked equity, two figures that are never read as one.",
+        "properties": {
+          "broker_cash": {
+            "$ref": "#/components/schemas/FigureView"
+          },
+          "marked_equity": {
+            "$ref": "#/components/schemas/FigureView"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          }
+        },
+        "required": [
+          "broker_cash",
+          "marked_equity",
+          "note"
+        ],
+        "title": "OwnedView",
+        "type": "object"
       },
       "PanelAction": {
         "description": "One backend-presented action.\n\nAngular executes only the closed set of known action ids and renders\nexactly what it is given. ``revision`` binds the action to the panel-state\nrevision it was presented against; a stale POST is a 409.",
@@ -52942,6 +53121,66 @@
           "result"
         ],
         "title": "SpecTradeResponse",
+        "type": "object"
+      },
+      "SpokenForLineView": {
+        "additionalProperties": false,
+        "description": "One claim on the cash; its figure's terms are what it is made of, by bot where it is a bot's.",
+        "properties": {
+          "figure": {
+            "$ref": "#/components/schemas/FigureView"
+          },
+          "kind": {
+            "enum": [
+              "bot_free",
+              "collateral",
+              "orders",
+              "outside",
+              "fees",
+              "unreserved",
+              "rounding"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "label",
+          "figure"
+        ],
+        "title": "SpokenForLineView",
+        "type": "object"
+      },
+      "SpokenForView": {
+        "additionalProperties": false,
+        "description": "The cash, partitioned (#3101). ``partition`` is the cash and the lines add up to it, or it is unknown.",
+        "properties": {
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/SpokenForLineView"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "partition": {
+            "$ref": "#/components/schemas/FigureView"
+          },
+          "sentence": {
+            "title": "Sentence",
+            "type": "string"
+          }
+        },
+        "required": [
+          "partition",
+          "lines",
+          "sentence"
+        ],
+        "title": "SpokenForView",
         "type": "object"
       },
       "StartupJoinView": {

@@ -32,7 +32,12 @@ from app.options.deadlines import CloseTerms
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
 from app.options.resolver import Chain, FeedState, WatchedContract
 from app.services.broker_v2_panel import exit_estimate_read
-from app.services.broker_v2_panel.exit_estimate_read import exit_estimate_view, read_exit_estimate, read_quotes_ahead
+from app.services.broker_v2_panel.exit_estimate_read import (
+    exit_estimate_view,
+    read_exit_estimate,
+    read_exit_estimates,
+    read_quotes_ahead,
+)
 from app.utils.et_words import et_when_words
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON
 from tests.broker.alpaca.clerk.sqlite.option_custody_fixtures import accept_option_order, fill, open_option_books
@@ -228,6 +233,21 @@ async def test_the_page_is_served_the_figures_each_contract_and_the_words_as_pyt
         (C585, "SPY", "call", D("585"), 2, "known", 1_000, ("ask",), None),
     ]
     assert view.conditions == estimate.conditions
+
+
+async def test_the_accounts_picture_reads_each_holding_bots_estimate_from_the_holdings_it_was_handed(
+    world, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#3101: the same estimate the bot's page reads, for each bot that holds a contract and no other."""
+    books, _ = world
+    await opened(world, RECEIVED_SPREAD, RECEIVED_PICKS, units=2)
+    _supervisor(monkeypatch, short=_quote("5.30", "5.35"), long=_quote("2.20", "2.24"))
+    held = {(C580, 100): -2, (C585, 100): 2}
+
+    estimates = read_exit_estimates(books, {"bot-a": held, "flat-bot": {}, "closed-out": {(C585, 100): 0}}, now_ms=NOON)
+
+    assert list(estimates) == ["bot-a"]
+    assert estimates["bot-a"] == read_exit_estimate(books, "bot-a", now_ms=NOON)
 
 
 async def test_an_unknown_figure_is_served_with_no_amount_and_never_zero(

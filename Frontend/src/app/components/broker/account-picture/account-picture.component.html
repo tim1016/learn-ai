@@ -1,0 +1,69 @@
+@let owned = picture().owned;
+@let spoken = picture().spoken_for;
+@let concentration = picture().concentration;
+@let groups = concentration.groups ?? [];
+@let obligations = picture().obligations;
+<div class="account-picture">
+  <section class="account-picture__part" [attr.aria-labelledby]="ids.owned">
+    <h3 [id]="ids.owned">What the account owns</h3>
+    <app-figure-row label="Broker cash" [figure]="owned.broker_cash" [showProvenance]="true" />
+    <app-figure-row label="Marked equity" [figure]="owned.marked_equity" [showProvenance]="true" />
+    <p class="account-picture__note">{{ owned.note }}</p>
+  </section>
+
+  <section class="account-picture__part" [attr.aria-labelledby]="ids.spoken">
+    <h3 [id]="ids.spoken">What is spoken for</h3>
+    <p class="account-picture__total" [attr.data-state]="spoken.partition.state">
+      <span>The account's cash</span>
+      @if (spoken.partition.amount_usd; as cash) {
+        <span class="account-picture__amount">{{ cash | authoredUsd }}</span>
+      }
+      @if (spoken.partition.state === 'stale') {
+        <span class="account-picture__state">stale, as last read</span>
+      } @else if (spoken.partition.state === 'unknown') {
+        <span class="account-picture__state">unknown</span>
+      }
+    </p>
+    <p class="account-picture__note">{{ spoken.sentence }}</p>
+    <ul class="account-picture__list">
+      @for (line of spoken.lines; track line.kind) {
+        <li><app-figure-row [label]="line.label" [figure]="line.figure" /></li>
+      }
+    </ul>
+  </section>
+
+  <section class="account-picture__part" [attr.aria-labelledby]="ids.concentration">
+    <h3 [id]="ids.concentration">Where the collateral is</h3>
+    <app-figure-row label="The account's collateral, of the bots' contracts" [figure]="concentration.account_collateral" [showProvenance]="true" />
+    @if (groups.length > 0) {
+      <ul class="account-picture__list account-picture__groups" aria-label="Collateral by underlying and expiry">
+        @for (group of groups; track group.underlying + group.expiry_ms) {
+          <li class="account-picture__group">
+            <app-asset-identity [symbol]="group.underlying" size="xs" [logo]="false" />
+            <span class="account-picture__expiry">
+              <app-timestamp-display [value]="group.expiry_ms" mode="date-et" granularity="short-date" />
+            </span>
+            <span class="account-picture__amount">{{ group.collateral_usd | authoredUsd }}</span>
+          </li>
+        }
+      </ul>
+    }
+    @if (concentration.expiry_note; as note) {
+      <p class="account-picture__note">{{ note }}</p>
+    }
+  </section>
+
+  <section class="account-picture__part" [attr.aria-labelledby]="ids.obligations">
+    <h3 [id]="ids.obligations">What it could be obliged to, and what getting out costs</h3>
+    <app-figure-row label="Assignment obligation, gross" [figure]="obligations.assignment" />
+    <p class="account-picture__note">{{ obligations.assignment_note }}</p>
+    <app-figure-row label="Cost to close every option position" [figure]="obligations.close_everything" [showProvenance]="true" />
+    <ul class="account-picture__conditions">
+      @for (line of obligations.conditions ?? []; track line) {
+        <li>{{ line }}</li>
+      }
+    </ul>
+  </section>
+
+  <p class="account-picture__note">{{ picture().note }}</p>
+</div>

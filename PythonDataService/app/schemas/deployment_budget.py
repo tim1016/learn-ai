@@ -15,6 +15,7 @@ from pydantic import (
 )
 
 from app.broker.alpaca.clerk.account_money import FULL_BAR_BPS, SegmentKind
+from app.broker.alpaca.clerk.account_picture import AccountPicture, SpokenForKind
 from app.broker.alpaca.clerk.funding import EntryNeed, Figure, FundingAnswer, Term
 from app.broker.alpaca.clerk.models import EpochMs
 from app.broker.alpaca.clerk.money import consent_cents, dollars
@@ -182,6 +183,11 @@ class AccountMoneyView(BaseModel):
     # one, so free to deploy never reads as spendable when it is not (PRD
     # #2560 story 12). Beside a ready bar only: otherwise ``detail`` speaks.
     deploy_refusal: str | None = None
+    # What the account owns, what is spoken for and where it is concentrated (#3101): the account's own money
+    # read carries it, and the Deploy review's bar does not. Absent, never half-drawn, when it could not be
+    # worked out, and ``picture_detail`` says why. Beside a ready bar only.
+    picture: AccountPictureView | None = None
+    picture_detail: str | None = None
 
     @model_validator(mode="after")
     def conserves_every_dollar(self) -> AccountMoneyView:
@@ -190,7 +196,7 @@ class AccountMoneyView(BaseModel):
                     self.settling_usd, self.stopped_holding_count)
         shortfall = self.account_shortfall_usd
         if self.state != "ready":
-            notes = (shortfall, self.open_pnl_usd, self.open_pnl_detail, self.deploy_refusal)
+            notes = (shortfall, self.open_pnl_usd, self.open_pnl_detail, self.deploy_refusal, self.picture, self.picture_detail)
             if self.segments or any(value is not None for value in (*headline, *notes)):
                 raise ValueError("a money read that cannot draw its bar carries a reason, never bar figures")
             if self.state == "legacy" and (self.equity_usd, self.today_pnl_usd, self.observed_at_ms) != (None, None, None):
@@ -205,6 +211,8 @@ class AccountMoneyView(BaseModel):
             raise ValueError("an account shortfall is stated only when the account is overdrawn")
         if (self.open_pnl_usd is None) == (self.open_pnl_detail is None):
             raise ValueError("open P&L is either a figure or the reason there is none")
+        if self.picture is not None and self.picture_detail is not None:
+            raise ValueError("the account's picture is either shown or the reason there is none")
         if sum(_cents(segment.amount_usd) for segment in self.segments) != _cents(total) + (0 if shortfall is None else _cents(shortfall)):
             raise ValueError("the money bar's segments must sum exactly to total_usd plus account_shortfall_usd")
         if sum(segment.share_bps for segment in self.segments) != FULL_BAR_BPS:
@@ -442,6 +450,132 @@ class ExitEstimateView(BaseModel):
     gross_buy_back: FigureView
     quotes: tuple[ExitLegQuoteView, ...]
     conditions: tuple[str, ...]
+
+
+class OwnedView(BaseModel):
+    """What the account owns: its cash and its marked equity, two figures that are never read as one."""
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    broker_cash: FigureView
+    marked_equity: FigureView
+    note: str
+
+
+class SpokenForLineView(BaseModel):
+    """One claim on the cash; its figure's terms are what it is made of, by bot where it is a bot's."""
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: SpokenForKind
+    label: str
+    figure: FigureView
+
+
+class SpokenForView(BaseModel):
+    """The cash, partitioned (#3101). ``partition`` is the cash and the lines add up to it, or it is unknown."""
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    partition: FigureView
+    lines: tuple[SpokenForLineView, ...]
+    sentence: str
+
+    @model_validator(mode="after")
+    def lines_add_up_to_the_cash(self) -> SpokenForView:
+        if self.partition.state != "unknown" and self.partition.amount_usd is not None:
+            lines = sum(_cents(line.figure.amount_usd) for line in self.lines if line.figure.amount_usd is not None)
+            if lines != _cents(self.partition.amount_usd):
+                raise ValueError("the lines of what is spoken for add up to the cash")
+        return self
+
+
+class CollateralGroupView(BaseModel):
+    """The collateral of one underlying and expiry taken alone.
+
+    ``expiry_ms`` is the expiry date's own anchor, a date and not an instant:
+    it is shown as a date in the exchange's time, never in the viewer's.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    underlying: str
+    expiry_ms: EpochMs
+    collateral_usd: str
+
+
+class ConcentrationView(BaseModel):
+    """Where the collateral is: each underlying and expiry alone, and the account's own figure beside them."""
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account_collateral: FigureView
+    groups: tuple[CollateralGroupView, ...] = ()
+    expiry_note: str | None = None
+
+
+class ObligationsView(BaseModel):
+    """What assignment could oblige, gross and apart from any loss, and what closing everything costs."""
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    assignment: FigureView
+    assignment_note: str
+    close_everything: FigureView
+    bots_holding: int = Field(ge=0)
+    bots_unpriced: int = Field(ge=0)
+    conditions: tuple[str, ...] = ()
+
+
+class AccountPictureView(BaseModel):
+    """What the account owns, what is spoken for, where it is concentrated and what it is obliged to (#3101).
+
+    Every dollar and every word is authored by Python, and every figure keeps
+    its source, its age and its state. It informs and blocks nothing.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    owned: OwnedView
+    spoken_for: SpokenForView
+    concentration: ConcentrationView
+    obligations: ObligationsView
+    note: str
+
+    @classmethod
+    def from_picture(cls, picture: AccountPicture) -> AccountPictureView:
+        return cls(
+            owned=OwnedView(
+                broker_cash=FigureView.from_figure(picture.owned.broker_cash),
+                marked_equity=FigureView.from_figure(picture.owned.marked_equity),
+                note=picture.owned.note,
+            ),
+            spoken_for=SpokenForView(
+                partition=FigureView.from_figure(picture.spoken_for.partition),
+                lines=tuple(
+                    SpokenForLineView(kind=line.kind, label=line.label, figure=FigureView.from_figure(line.figure))
+                    for line in picture.spoken_for.lines
+                ),
+                sentence=picture.spoken_for.sentence,
+            ),
+            concentration=ConcentrationView(
+                account_collateral=FigureView.from_figure(picture.concentration.account_collateral),
+                groups=tuple(
+                    CollateralGroupView(
+                        underlying=group.underlying, expiry_ms=group.expiry_ms,
+                        collateral_usd=dollars(group.collateral_cents),
+                    )
+                    for group in picture.concentration.groups
+                ),
+                expiry_note=picture.concentration.expiry_note,
+            ),
+            obligations=ObligationsView(
+                assignment=FigureView.from_figure(picture.obligations.assignment),
+                assignment_note=picture.obligations.assignment_note,
+                close_everything=FigureView.from_figure(picture.obligations.close_everything),
+                bots_holding=picture.obligations.bots_holding, bots_unpriced=picture.obligations.bots_unpriced,
+                conditions=picture.obligations.conditions,
+            ),
+            note=picture.note,
+        )
+
+
+# The money view names the picture, which is defined here with the figures it is made of; the review embeds the view.
+AccountMoneyView.model_rebuild()
+DeploymentBudgetPreview.model_rebuild()
 
 
 class DeploymentBudgetView(BaseModel):

@@ -626,10 +626,18 @@ def _project(
             _deployment_budget(conn, commitment, records=records, claims=claims, fees=fees, write_offs=write_offs)
             for commitment in commitments
         ]
+        # Each bot's claim, by bot (#3101): the parts of ``order_claims`` that are not outside activity.
+        bot_claims: dict[str, Decimal] = {}
+        for claim in claims:
+            bot_claims[claim.strategy_instance_id] = (
+                bot_claims.get(claim.strategy_instance_id, ZERO)
+                + claim.unfilled_cost + claim.unseen_fill_cost + claim.unfilled_fee
+            )
         budget = account_budget(
             cash=cash, deployments=budgets,
-            order_claims=external_claim + manual_claim + sum((claim.unfilled_cost + claim.unseen_fill_cost + claim.unfilled_fee for claim in claims), ZERO),
+            order_claims=external_claim + manual_claim + sum(bot_claims.values(), ZERO),
             fee_claims=fees.unobserved_cash_claim(cash_seen_before_ms=seen_before_ms, modelled_fees_seen_before_ms=modelled_fees_seen_before_ms),
+            outside_claims=external_claim + manual_claim, bot_order_claims=bot_claims,
         )
         return _Projected(
             budget=budget, records=records, claims=claims,

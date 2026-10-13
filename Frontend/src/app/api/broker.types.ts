@@ -7068,6 +7068,9 @@ export interface components {
             open_pnl_usd?: string | null;
             /** Outside Bots Usd */
             outside_bots_usd?: string | null;
+            picture?: components["schemas"]["AccountPictureView"] | null;
+            /** Picture Detail */
+            picture_detail?: string | null;
             /**
              * Segments
              * @default []
@@ -7091,6 +7094,21 @@ export interface components {
              * @enum {string}
              */
             world: "real_paper" | "real_live" | "shadow" | "synthetic";
+        };
+        /**
+         * AccountPictureView
+         * @description What the account owns, what is spoken for, where it is concentrated and what it is obliged to (#3101).
+         *
+         *     Every dollar and every word is authored by Python, and every figure keeps
+         *     its source, its age and its state. It informs and blocks nothing.
+         */
+        AccountPictureView: {
+            concentration: components["schemas"]["ConcentrationView"];
+            /** Note */
+            note: string;
+            obligations: components["schemas"]["ObligationsView"];
+            owned: components["schemas"]["OwnedView"];
+            spoken_for: components["schemas"]["SpokenForView"];
         };
         /** AccountPinRequest */
         AccountPinRequest: {
@@ -11143,6 +11161,24 @@ export interface components {
             strategy_instance_id: string;
         };
         /**
+         * CollateralGroupView
+         * @description The collateral of one underlying and expiry taken alone.
+         *
+         *     ``expiry_ms`` is the expiry date's own anchor, a date and not an instant:
+         *     it is shown as a date in the exchange's time, never in the viewer's.
+         */
+        CollateralGroupView: {
+            /** Collateral Usd */
+            collateral_usd: string;
+            /**
+             * Expiry Ms
+             * Format: int64
+             */
+            expiry_ms: number;
+            /** Underlying */
+            underlying: string;
+        };
+        /**
          * CommandResponse
          * @description The durable command resource (R2). Mirrors ``CommandResource`` 1:1,
          *     plus a backend-authored ``disabled_tooltip`` for a non-terminal command
@@ -11176,6 +11212,20 @@ export interface components {
             strategy_instance_id: string | null;
             /** Updated At Ms */
             updated_at_ms: number;
+        };
+        /**
+         * ConcentrationView
+         * @description Where the collateral is: each underlying and expiry alone, and the account's own figure beside them.
+         */
+        ConcentrationView: {
+            account_collateral: components["schemas"]["FigureView"];
+            /** Expiry Note */
+            expiry_note?: string | null;
+            /**
+             * Groups
+             * @default []
+             */
+            groups?: components["schemas"]["CollateralGroupView"][];
         };
         /**
          * ConfiguredSignalProgramSeal
@@ -21466,6 +21516,25 @@ export interface components {
             /** Validated Against */
             validated_against: string;
         };
+        /**
+         * ObligationsView
+         * @description What assignment could oblige, gross and apart from any loss, and what closing everything costs.
+         */
+        ObligationsView: {
+            assignment: components["schemas"]["FigureView"];
+            /** Assignment Note */
+            assignment_note: string;
+            /** Bots Holding */
+            bots_holding: number;
+            /** Bots Unpriced */
+            bots_unpriced: number;
+            close_everything: components["schemas"]["FigureView"];
+            /**
+             * Conditions
+             * @default []
+             */
+            conditions?: string[];
+        };
         /** ObservedAccountResponse */
         ObservedAccountResponse: {
             /** Account Id */
@@ -24213,6 +24282,16 @@ export interface components {
          * @enum {string}
          */
         OrderSide: "buy" | "sell";
+        /**
+         * OwnedView
+         * @description What the account owns: its cash and its marked equity, two figures that are never read as one.
+         */
+        OwnedView: {
+            broker_cash: components["schemas"]["FigureView"];
+            marked_equity: components["schemas"]["FigureView"];
+            /** Note */
+            note: string;
+        };
         /**
          * PanelAction
          * @description One backend-presented action.
@@ -27671,6 +27750,31 @@ export interface components {
             signal_reason?: string;
             /** Trade Number */
             trade_number: number;
+        };
+        /**
+         * SpokenForLineView
+         * @description One claim on the cash; its figure's terms are what it is made of, by bot where it is a bot's.
+         */
+        SpokenForLineView: {
+            figure: components["schemas"]["FigureView"];
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "bot_free" | "collateral" | "orders" | "outside" | "fees" | "unreserved" | "rounding";
+            /** Label */
+            label: string;
+        };
+        /**
+         * SpokenForView
+         * @description The cash, partitioned (#3101). ``partition`` is the cash and the lines add up to it, or it is unknown.
+         */
+        SpokenForView: {
+            /** Lines */
+            lines: components["schemas"]["SpokenForLineView"][];
+            partition: components["schemas"]["FigureView"];
+            /** Sentence */
+            sentence: string;
         };
         /**
          * StartupJoinView

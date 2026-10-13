@@ -1,0 +1,36 @@
+<ng-template #provenance>
+  <p class="figure-row__source">{{ figure().source }}.</p>
+  @if (figure().as_of_ms; as asOf) {
+    <small class="figure-row__time">As of <app-timestamp-display [value]="asOf" mode="local" /></small>
+  }
+</ng-template>
+
+<details class="figure-row" [attr.data-state]="figure().state">
+  <summary>
+    <span class="figure-row__label">{{ label() }}</span>
+    @if (figure().amount_usd; as amount) {
+      <span class="figure-row__amount">{{ amount | authoredUsd }}</span>
+    }
+    @if (figure().state === 'stale') {
+      <span class="figure-row__state">stale, as last read</span>
+    } @else if (figure().state === 'unknown') {
+      <span class="figure-row__state">unknown</span>
+    }
+  </summary>
+  @if (!showProvenance()) {
+    <ng-container [ngTemplateOutlet]="provenance" />
+  }
+  @if (terms().length > 0) {
+    <dl class="figure-row__terms">
+      @for (term of terms(); track term.label) {
+        <div>
+          <dt>{{ term.label }}</dt>
+          <dd>{{ term.amount_usd | authoredUsd }}</dd>
+        </div>
+      }
+    </dl>
+  }
+</details>
+@if (showProvenance()) {
+  <ng-container [ngTemplateOutlet]="provenance" />
+}

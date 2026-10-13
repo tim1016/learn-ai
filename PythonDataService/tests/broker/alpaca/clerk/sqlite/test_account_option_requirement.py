@@ -27,7 +27,6 @@ from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.option_order_evidence import multi_leg_order_evidence
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.options.requirement import incremental_account_requirement
 from app.services.option_buying_power_views import option_buying_power_checks
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON
 from tests.broker.alpaca.clerk.sqlite.option_custody_fixtures import (
@@ -101,17 +100,24 @@ def test_the_accounts_holdings_are_each_contract_netted_across_its_bots_at_its_r
     assert held == {(C580, 100): 0, (C585, 100): 2, (SMALL_C500, 10): -3}
 
 
-def test_an_entrys_contracts_are_added_to_the_holdings_count_by_count_and_never_laid_over_them() -> None:
-    """The account holds one bought 585 and one sold 580; the entry sells the 585 and buys a 590."""
-    held = {(C585, 100): 1, (C580, 100): -1}
-    entry = {(C585, 100): -1, (C590, 100): 1}
+def test_each_bots_holdings_are_read_apart_at_their_recorded_multipliers_and_a_flat_bot_has_none(
+    books: ClerkSqliteRepository,
+) -> None:
+    """The account's picture counts by bot (#3101): nothing nets across bots, and a bot that closed out is flat."""
+    _hold(books, "bot-a", C580, -1)
+    _hold(books, "bot-b", C580, 1)
+    _hold(books, "bot-a", C585, 2)
+    _hold(books, "bot-b", SMALL_C500, -3, multiplier=10)
+    _hold(books, "bot-b", C590, 1)
+    _hold(books, "bot-b", C590, -1)
 
-    after = account_option_requirement.with_contracts(held, entry)
+    with books.write_fence() as conn:
+        by_bot = account_option_requirement.held_signed_contracts_by_bot(conn)
 
-    assert after == {(C585, 100): 0, (C580, 100): -1, (C590, 100): 1}
-    assert held == {(C585, 100): 1, (C580, 100): -1}, "the holdings themselves are not changed"
-    # $5 wide before, $10 wide after: laying the entry over the holdings would have kept a bought 585.
-    assert incremental_account_requirement(held, after) == (50_000, 100_000)
+    assert by_bot == {
+        "bot-a": {(C580, 100): -1, (C585, 100): 2},
+        "bot-b": {(C580, 100): 1, (SMALL_C500, 10): -3},
+    }
 
 
 def test_a_first_spread_on_a_flat_account_adds_its_whole_requirement(books: ClerkSqliteRepository) -> None:

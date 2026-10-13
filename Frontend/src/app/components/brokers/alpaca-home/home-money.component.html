@@ -18,6 +18,11 @@
       </p>
     }
     <app-money-bar [segments]="money.view.segments ?? []" [notes]="money.view" size="home" caption="Where the money is" />
+    @if (money.view.picture; as picture) {
+      <app-account-picture [picture]="picture" />
+    } @else if (money.view.picture_detail; as reason) {
+      <p class="home-money__reason" role="status">{{ reason }}</p>
+    }
   } @else {
     <p class="home-money__reason" role="status">
       {{ money.text }}

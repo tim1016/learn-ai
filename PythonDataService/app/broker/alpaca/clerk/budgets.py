@@ -18,7 +18,7 @@ Validated against: tests/broker/alpaca/clerk/test_budgets.py (conservation fixtu
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, Inexact, localcontext
 
@@ -83,6 +83,17 @@ class DeploymentBudget:
 
 @dataclass(frozen=True)
 class AccountBudget:
+    """One account's cash and every claim on it.
+
+    ``order_claims`` is the one figure ``available`` subtracts. Two optional
+    parts say what it is made of (#3101): ``outside_claims``, purchases by
+    manual trades and outside orders that cash does not show yet, and
+    ``bot_order_claims``, each bot's entry orders (unfilled cost and fee
+    provision) and fills cash does not show yet, by bot. Both are left out of
+    ``available`` and change no admission; a budget built without them says
+    nothing of the split.
+    """
+
     cash: Decimal
     active_free_claims: Decimal
     order_claims: Decimal
@@ -90,6 +101,8 @@ class AccountBudget:
     available: Decimal
     deployments: tuple[DeploymentBudget, ...]
     option_collateral: Decimal = ZERO
+    outside_claims: Decimal = ZERO
+    bot_order_claims: tuple[tuple[str, Decimal], ...] = ()
 
     @property
     def unreserved_cents(self) -> int:
@@ -120,8 +133,13 @@ def deployment_budget(
 def account_budget(
     *, cash: object, deployments: Sequence[DeploymentBudget],
     order_claims: Decimal, fee_claims: Decimal,
+    outside_claims: Decimal = ZERO, bot_order_claims: Mapping[str, Decimal] | None = None,
 ) -> AccountBudget:
-    """Subtract disjoint claims; a historical deficit never becomes a claim."""
+    """Subtract disjoint claims; a historical deficit never becomes a claim.
+
+    ``outside_claims`` and ``bot_order_claims`` only say what ``order_claims``
+    is made of (``AccountBudget``); neither is subtracted again.
+    """
     with money_context():
         observed = normalize_money(cash)
         active_free = sum((budget.cash_claim for budget in deployments), ZERO)
@@ -132,6 +150,8 @@ def account_budget(
             available=observed - active_free - order_claims - fee_claims - collateral,
             deployments=tuple(deployments),
             option_collateral=collateral,
+            outside_claims=outside_claims,
+            bot_order_claims=tuple(sorted((bot_order_claims or {}).items())),
         )
 
 

@@ -17,10 +17,14 @@ Reference: ADR 0076 decision 3 (the requirement is the lowest point of the summe
 Canonical implementation: this file for cover over holdings through time: what is held, what a sale needs and
   the order an opening group is judged in. ``app/options/structure_check.py`` is canonical for cover within one
   resolved structure, and the parity test holds the two to one answer. ``app/options/requirement.py`` is
-  canonical for the requirement, which is called here and not copied.
+  canonical for the requirement, which is called here and not copied, and ``app/options/event_allocation.py``
+  (``assignment_cash_cents``) for the cash an assignment moves, which the obligation sums and the account's
+  picture states in cents from the same kernel.
 Validated against: tests/options_backtest/test_cover_book.py (scenes worked by hand from the rules) and
   tests/options_backtest/test_cover_book_parity.py (the bots' cover check, ``require_sold_legs_covered``, on every
-  case both express; the canonical requirement and an independent exhaustive scan of the payoff, to the cent).
+  case both express; the canonical requirement and an independent exhaustive scan of the payoff, to the cent),
+  and tests/broker/alpaca/clerk/test_account_picture.py (the obligation, held to the account's picture over the
+  same holdings).
 
 Why this file exists. The replay decides what happens when. Every question about what is held, whether a sale is
 covered, what the holdings pledge and which legs must go with a leaving one is asked here, so the replay never
@@ -63,6 +67,7 @@ from functools import partial
 from typing import Literal
 
 from app.options.contract import OptionContract
+from app.options.event_allocation import assignment_cash_cents
 from app.options.exact import exact_sum, require_everyday
 from app.options.requirement import EntrySize, StructureMoneyRefused, portfolio_broker_requirement
 from app.options.structure import ResolvedLeg
@@ -71,9 +76,8 @@ from app.options_backtest.market import STANDARD_MULTIPLIER
 
 LegSide = Literal["buy", "sell"]
 
-# Whole cents and whole thousandths of a dollar, the units the canonical requirement and a strike are held in.
+# Whole cents, the unit the canonical requirement and an assignment's cash are held in.
 _DOLLARS_AS_CENTS = -2
-_DOLLARS_AS_THOUSANDTHS = -3
 
 # Every held contract is one structure's worth of the recorded multiplier: ratios are the contracts held.
 _HELD_SIZE = EntrySize(multiplier=STANDARD_MULTIPLIER, units=1)
@@ -303,13 +307,16 @@ def collateral(held: Held) -> Decimal:
 
 
 def assignment_obligation(held: Held) -> Decimal:
-    """Sold contracts times strike times multiplier, in dollars. Gross: not a loss, and nothing is netted."""
-    thousandths = sum(
-        holding.contracts * holding.contract.strike_thousandths * holding.multiplier
+    """Sold contracts times strike times multiplier, in dollars. Gross: not a loss, and nothing is netted.
+
+    The cash of one assignment is ``assignment_cash_cents``, which the account's picture states in cents from the
+    same kernel (``app/broker/alpaca/clerk/account_picture.py``); each converts the unit at its own edge.
+    """
+    return _dollars(sum(
+        assignment_cash_cents(holding.contract, contracts=holding.contracts, multiplier=holding.multiplier)
         for holding in held.holdings
         if holding.side == "sell"
-    )
-    return Decimal(thousandths).scaleb(_DOLLARS_AS_THOUSANDTHS, context=EXACT)
+    ))
 
 
 # ---- Protection -----------------------------------------------------------------

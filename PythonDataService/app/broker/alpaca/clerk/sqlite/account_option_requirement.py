@@ -26,8 +26,12 @@ Validated against: tests/broker/alpaca/clerk/sqlite/test_account_option_requirem
 
 The Deploy review asks the same of an entry that has not been made (#3099):
 the account's holdings (``held_signed_contracts``) and those holdings with the
-entry's contracts added (``with_contracts``), which ``incremental_account_requirement``
-then values together.
+entry's contracts added (``app.options.requirement.with_contracts``), which
+``incremental_account_requirement`` then values together.
+
+The account's picture (#3101) reads the same holdings bot by bot
+(``held_signed_contracts_by_bot``), stopped bots included, and nets them itself
+with ``with_contracts``.
 """
 
 from __future__ import annotations
@@ -35,9 +39,10 @@ from __future__ import annotations
 import logging
 import sqlite3
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 
 from app.broker.alpaca.clerk.sqlite.contract_terms import contract_terms
+from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.reads import HeldOptionContract, held_option_contracts
 from app.options.requirement import ContractAtMultiplier, incremental_account_requirement
 
@@ -73,19 +78,19 @@ def held_signed_contracts(conn: sqlite3.Connection) -> dict[ContractAtMultiplier
     return _signed_contracts(conn, held_option_contracts(conn))
 
 
-def with_contracts(
-    held: Mapping[ContractAtMultiplier, int], added: Mapping[ContractAtMultiplier, int]
-) -> dict[ContractAtMultiplier, int]:
-    """``held`` with ``added`` filled on top: the signed counts of one contract add, they never replace.
+def held_signed_contracts_by_bot(conn: sqlite3.Connection) -> dict[str, dict[ContractAtMultiplier, int]]:
+    """Every option contract each bot holds, by bot: signed whole contracts at the multiplier the books recorded.
 
-    A contract the account already holds and an entry also takes has one
-    count, the sum: replacing it would drop the account's side of it and
-    misstate the requirement.
+    A stopped bot's holdings are listed too: a Stop ends entries, not positions.
+    A position the books count as no exposure (``position_quantity_is_nonzero``)
+    is not held, as ``held_option_legs`` reads it. Raises ``ValueError`` as
+    ``_signed_contracts`` does.
     """
-    after = dict(held)
-    for key, count in added.items():
-        after[key] = after.get(key, 0) + count
-    return after
+    by_bot: dict[str, list[HeldOptionContract]] = defaultdict(list)
+    for holding in held_option_contracts(conn):
+        if position_quantity_is_nonzero(holding.quantity):
+            by_bot[holding.strategy_instance_id].append(holding)
+    return {sid: _signed_contracts(conn, holdings) for sid, holdings in sorted(by_bot.items())}
 
 
 def account_requirement_cents(
@@ -120,4 +125,4 @@ def account_requirement_cents(
     return None
 
 
-__all__ = ["account_requirement_cents", "held_signed_contracts", "with_contracts"]
+__all__ = ["account_requirement_cents", "held_signed_contracts", "held_signed_contracts_by_bot"]
