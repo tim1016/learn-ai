@@ -486,9 +486,19 @@ frame becomes a placeholder):
 ```bash
 cd PythonDataService
 POLYGON_API_KEY= DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m scripts.option_qualification_bundle \
-  recordings --bundle-dir "$EVIDENCE/$STEP" \
+  recordings --bundle-dir "$EVIDENCE/$STEP" --distinct \
+  --only account activities option_contracts orders positions stream \
   --out-dir tests/fixtures/alpaca/option_paper_recordings/$STEP
 ```
+
+A journal of one afternoon is about 10 MB of the same answers polled again (one
+page-through of the account's activities is three polls of about 30 KB each, and
+the Clerk reads the account every few seconds). `--distinct` drops a poll, or a
+page-through, that asked the same and got the same answer as the polls kept just
+before it; the attribution counts what was dropped. `--only` leaves out the
+families a reader of option orders does not need (the clock's polls); it names
+the ones it left out. Both are choices made when the recording is made, not
+gaps in the journal, and a recording made without them is the whole journal.
 
 Recordings are added **beside** `tests/fixtures/alpaca_documented/` and the
 tests that mutate an answer into a hostile one. Nothing there is removed or
@@ -642,6 +652,8 @@ shown.
 | Bundle **Not read:** the capture journal | No `alpaca` journal under the capture directory | `--capture-dir` must be the lane's `BROKER_CAPTURE_DIR`. |
 | Bundle **Not read:** a journal line | A line that is not a journal line it can place in time | Keep it as it is; the journal is append-only and is never edited. Note it in the step log. |
 | Bundle refused: *lies inside*, or *not empty* | The folder is the Clerk's, the journal's, or already holds a bundle | Choose a new folder. |
+| Deploy row *IBKR quote lines: no lines free for another options bot* while a Dry Run of an option bot runs | A running Dry Run holds every option quote line of the budget, so a Paper option bot has none | Stop the rehearsal bot, review again after a few seconds (the lines reopen), then deploy. |
+| Deploy refused: *The account changed before Deploy ... waiting to price this structure* | The money review on the page is older than about a minute, or the quote lines had only just reopened | Refresh money on the Deploy page and deploy inside the minute. Nothing was sent. |
 | Recordings refused: *still carries the account id* | A sanitised line still holds the account id (as a key, for one) | Nothing was written. Read the line in the bundle, tell the owner, and do not commit it. |
 | Recordings exit `3`, **Not recorded:** a line, *not sanitised, so it is left out* | The line's body is opaque text, a bare JSON string or not UTF-8: only JSON can be sanitised | Nothing of it was written. Leave it out; the attribution names it. Do not paste it into a fixture by hand. |
 | Recordings exit `3`, **Not recorded:** a piece the *source bundle could not read* | The bundle that the recordings come from lost journal evidence | The attribution carries it forward. Make the bundle again from the journal if the cause is mended, or have the owner accept the gap. |
@@ -671,4 +683,36 @@ image under `compose.fleet.dev.yaml` (section 7); the controls an order from
 outside is reviewed with, which
 this runbook names by what they show; the sign Alpaca reports for a received
 order (section 6); and how Alpaca moves its option buying power (section 11).
-Nothing in this runbook has been run against Alpaca.
+Nothing in this runbook had been run against Alpaca when that was written.
+
+## Run record: 2026-10-13, shape A (#3103)
+
+The first run, on a flat Paper account at option level 3: one bought SPY call,
+Deployment Validation, four round trips over two bots (every order a limit
+buy to open filled inside its 20 second wait, every exit a market sell to
+close). What it settled and what it did not:
+
+- **Settled.** An option order is sent as the body the writer produces and
+  Alpaca answers it read whole (`tests/fixtures/alpaca/option_paper_recordings`,
+  read by `tests/broker/alpaca/test_paper_option_recordings.py`); the trade
+  stream carries option fills (pending_new, new, fill) and each fill is also an
+  activity row under the same execution id; the bundle runs from the one-off
+  container under `compose.fleet.dev.yaml`; the lane carried the several-leg
+  setting from its env file after a recreate.
+- **Not shown.** No FEE or CFEE row was posted for these option fills within the
+  window, which on Paper shows nothing about this system's fee model. Cash read
+  above equity by about the sale proceeds for a few seconds after each exit
+  (section 8, a figure read before Alpaca had moved it).
+- **Found, fixed.** Every entry's comparison read *unknown, the first reading was
+  not ready* (4 of 4): the "before" account read was cancelled when the contract
+  listing answered first (#3136, fixed in #3137). No pair was therefore judged
+  in this run; a run after #3137 is what shows whether one can be.
+- **Procedure facts.** A Dry Run holds every quote line; a Deploy review older
+  than about a minute is refused; a Deployment Validation bot re-enters on every
+  two green bars and a Stop sells nothing, so stop it when it is flat.
+  `alpaca_onboarding_gates.py status --require deploy` refuses an account that
+  has no defaults for new bots, whatever the line it prints; read the Deploy page.
+- **Not run.** The overlapping pass of shape A, every lifecycle row but *filled
+  and closed*, shapes B to D, the hand-placed sign check and the buy-back of one
+  sold leg. None of them is stated as shown.
+
