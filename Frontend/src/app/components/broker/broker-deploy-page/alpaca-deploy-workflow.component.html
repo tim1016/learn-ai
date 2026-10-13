@@ -204,6 +204,7 @@
                 <span class="deploy-unit"><input type="number" step="any" [formField]="ticketForm.spreadCapBps" (blur)="refreshExitTerms()" /><span aria-hidden="true">bps</span></span>
               </label>
             </div>
+            @for (error of exitTermErrors(); track error) { <em role="alert">{{ error }}</em> }
             @if (!view.default_exit_terms) {
               <p>This account has no defaults for new bots, so these start empty.
                 <a [routerLink]="settingsRoute()">Set defaults for new bots in Settings</a></p>

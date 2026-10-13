@@ -281,6 +281,17 @@ function exitTermSettings(terms: DeployBotBody['exit_terms'] | null | undefined)
   };
 }
 
+/** Each exit term's accepted range, as the backend's `ExitTermsInput` holds it. */
+const EXIT_TERM_RANGES = {
+  exitAllowanceBps: { min: 0, max: 9999.999, message: 'Exit allowance must be between 0 and 9,999.999 bps.' },
+  bandMultiple: { min: 1, max: 10, message: 'Band multiple must be between 1 and 10×.' },
+  spreadCapBps: { min: 1, max: 1000, message: 'Spread cap must be between 1 and 1,000 bps.' },
+} as const;
+
+/** The backend's check for exit terms. It sees none at all while one is out of
+ * range, so its own fix ("enter all three") is wrong for a typed term. */
+const EXIT_TERMS_GATE_ID = 'deploy.exit_terms';
+
 function settingsOf(ticket: AlpacaDeployTicket): DeployTicketSettings {
   return {
     exitAllowanceBps: ticket.exitAllowanceBps,
@@ -599,15 +610,16 @@ export class AlpacaDeployWorkflowComponent {
   private readonly restoredDraftKey = signal<string | null>(null);
 
   protected readonly ticketForm = form(this.ticket, (ticket) => {
+    const range = EXIT_TERM_RANGES;
     required(ticket.exitAllowanceBps);
-    min(ticket.exitAllowanceBps, 0);
-    max(ticket.exitAllowanceBps, 9999.999);
+    min(ticket.exitAllowanceBps, range.exitAllowanceBps.min, { message: range.exitAllowanceBps.message });
+    max(ticket.exitAllowanceBps, range.exitAllowanceBps.max, { message: range.exitAllowanceBps.message });
     required(ticket.bandMultiple);
-    min(ticket.bandMultiple, 1);
-    max(ticket.bandMultiple, 10);
+    min(ticket.bandMultiple, range.bandMultiple.min, { message: range.bandMultiple.message });
+    max(ticket.bandMultiple, range.bandMultiple.max, { message: range.bandMultiple.message });
     required(ticket.spreadCapBps);
-    min(ticket.spreadCapBps, 1);
-    max(ticket.spreadCapBps, 1000);
+    min(ticket.spreadCapBps, range.spreadCapBps.min, { message: range.spreadCapBps.message });
+    max(ticket.spreadCapBps, range.spreadCapBps.max, { message: range.spreadCapBps.message });
     required(ticket.strategyKey, { message: 'Choose a deployment strategy.' });
     required(ticket.symbol, { message: 'Enter the strategy signal symbol.' });
     pattern(ticket.symbol, SYMBOL_RE, { message: 'Enter a valid stock symbol.' });
@@ -628,6 +640,24 @@ export class AlpacaDeployWorkflowComponent {
     return { exit_allowance_bps: ticket.exitAllowanceBps, band_multiple: ticket.bandMultiple,
       spread_cap_bps: ticket.spreadCapBps };
   }
+
+  /** What is wrong with each exit term typed out of range. An empty term is
+   * unset, not wrong; the three read as unset together until every one is in
+   * range, so this is what tells a typed 0.2 from an empty field. */
+  protected readonly exitTermErrors = computed<readonly string[]>(() => {
+    const ticket = this.ticket();
+    const terms = [
+      [ticket.exitAllowanceBps, this.ticketForm.exitAllowanceBps()],
+      [ticket.bandMultiple, this.ticketForm.bandMultiple()],
+      [ticket.spreadCapBps, this.ticketForm.spreadCapBps()],
+    ] as const;
+    const messages: string[] = [];
+    for (const [value, field] of terms) {
+      const message = value === null ? undefined : field.errors()[0]?.message;
+      if (message) messages.push(message);
+    }
+    return messages;
+  });
 
   protected refreshExitTerms(): void {
     this.admissionDecision.set(null);
@@ -1004,7 +1034,7 @@ export class AlpacaDeployWorkflowComponent {
     // asset, independently of its execution terms.
     const options = this.options();
     if (options !== null && !orderTermsSet(options.order_terms, this.offeredOrderTerms())) return 'Needs order terms';
-    if (this.exitTerms() === null) return 'Needs exit terms';
+    if (this.exitTerms() === null) return this.exitTermErrors().length > 0 ? 'Needs valid exit terms' : 'Needs exit terms';
     return this.endMissing();
   });
   protected readonly howComplete = computed(() => this.howMissing() === null);
@@ -1163,11 +1193,14 @@ export class AlpacaDeployWorkflowComponent {
       return { canSubmit: false, guidance: 'Set this bot’s four option order terms in How.' };
     }
     if (this.exitTerms() === null) {
+      const outOfRange = this.exitTermErrors();
       return {
         canSubmit: false,
-        guidance: options === null
-          ? 'Set this bot’s exit allowance, band multiple and spread cap in How.'
-          : 'Set this bot’s exit terms in How.',
+        guidance: outOfRange.length > 0
+          ? outOfRange.join(' ')
+          : options === null
+            ? 'Set this bot’s exit allowance, band multiple and spread cap in How.'
+            : 'Set this bot’s exit terms in How.',
       };
     }
     // What the backend's review of the option structure says stops this Deploy, with its fix.
@@ -1281,9 +1314,15 @@ export class AlpacaDeployWorkflowComponent {
         ? []
         : [{ id: eligibility.reason_code, label: eligibility.headline, headline: eligibility.explanation, fix: eligibility.next_action }];
     }
+    const outOfRange = this.exitTermErrors();
     return view.readiness_checks
       .filter((check) => !check.ready)
-      .map((check) => ({ id: check.gate_id, label: check.label, headline: check.headline, fix: check.recovery }));
+      .map((check) => ({
+        id: check.gate_id,
+        label: check.label,
+        headline: check.headline,
+        fix: check.gate_id === EXIT_TERMS_GATE_ID && outOfRange.length > 0 ? outOfRange.join(' ') : check.recovery,
+      }));
   });
 
   /**
