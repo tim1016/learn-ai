@@ -11,6 +11,7 @@ spread times its contracts times 100 for one expiry. Free cash is cash less coll
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from enum import StrEnum
@@ -259,6 +260,60 @@ def test_the_description_says_what_the_replay_does_with_a_sale_whose_cover_waits
         "The sale needs one bought put of the same expiry for each contract sold, held already or filling in the "
         "same minute; with too few, it is refused and the leg is done for the day."
     ) in sold
+
+
+def test_a_bought_leg_of_the_other_kind_that_was_dropped_is_not_the_cover_that_did_not_trade() -> None:
+    market = TableMarket(
+        underlying=steady("500"),
+        picks=picked(("long_call", "500", CALL_505), ("long_put", "500", PUT_495), ("short_call", "500", CALL_500)),
+        options={
+            # The call cover waits on a momentum its flat premium never reaches. The bought put, which is no cover for
+            # a call, traded at minute 5 and not at minute 6, so it is dropped in the group of the sold call.
+            CALL_505: flat("1.00", 5, 61),
+            PUT_495: {5: ("1.00", "1.00"), **flat("1.00", 7, 61)},
+            CALL_500: flat("2.20", 5, 61),
+        },
+    )
+    written = setup(
+        leg("long_call", "call", momentum=("percent_up", "25")),
+        leg("long_put", "put"),
+        leg("short_call", "call", side="sell"),
+    )
+
+    outcome = replay(written, market)
+
+    # The put was dropped, and the sold call has none of its own kind: it is not yet held, and did not fail to trade.
+    assert [(event.leg_id, event.kind) for event in outcome.events if event.kind is EventKind.ENTRY_DROPPED] == [
+        ("long_put", EventKind.ENTRY_DROPPED)
+    ]
+    assert _refusals(outcome) == [(6, "short_call", EventKind.ENTRY_REFUSED_FOR_COVER, "cover_not_yet_held", D("2.20"))]
+
+
+def test_a_sold_leg_of_the_same_kind_that_was_dropped_is_no_cover_that_did_not_trade() -> None:
+    market = TableMarket(
+        underlying=steady("500"),
+        picks=picked(("short_a", "500", CALL_500), ("short_b", "500", CALL_505), ("long_call", "500", CALL_510)),
+        options={
+            # short_a traded at minute 5 and not at minute 6, so it is dropped in the group of short_b. The only bought
+            # call waits on a momentum its flat premium never reaches, so short_b has no cover held or filling.
+            CALL_500: {5: ("2.00", "2.00"), **flat("2.00", 7, 61)},
+            CALL_505: flat("1.50", 5, 61),
+            CALL_510: flat("1.00", 5, 61),
+        },
+    )
+    written = setup(
+        leg("short_a", "call", side="sell"),
+        leg("short_b", "call", side="sell"),
+        leg("long_call", "call", contracts=2, momentum=("percent_up", "25")),
+    )
+
+    outcome = replay(written, market)
+
+    # A sold leg that found no bar is no bought leg of its kind: nothing was dropped that would have covered short_b.
+    assert [(event.leg_id, event.kind) for event in outcome.events if event.kind is EventKind.ENTRY_DROPPED] == [
+        ("short_a", EventKind.ENTRY_DROPPED)
+    ]
+    assert _refusals(outcome) == [(6, "short_b", EventKind.ENTRY_REFUSED_FOR_COVER, "cover_not_yet_held", D("1.50"))]
 
 
 # ---- Calls and puts that come to two expiries -------------------------------------------
@@ -684,3 +739,132 @@ def test_every_refusal_the_book_gives_is_met_in_a_replay_as_an_event_with_the_wo
     assert {ENTRY_REFUSAL_EVENTS[EntryRefusal(event.reason)] for event in events if event.reason} == {
         event.kind for event in events
     }
+
+
+# ---- A setup that buys only takes one path, and a setup that sells takes the other ---------------------------
+
+
+@dataclass(frozen=True)
+class _BoughtOnly:
+    """A scene of bought legs: each leg's contract, each contract's bars, the cash, the fee and the slippage."""
+
+    legs: tuple[dict[str, Any], ...]
+    contracts: dict[str, OptionContract]
+    bars: dict[OptionContract, dict[int, tuple[str, ...]]]
+    reaches: EventKind
+    cash: str = "10000"
+    fee: str = "0"
+    slippage: str = "0"
+
+
+_NEVER_TRADED = contract("call", "520")
+
+_BOUGHT_ONLY_SCENES: dict[str, _BoughtOnly] = {
+    "momentum with fees and slippage": _BoughtOnly(
+        legs=(leg("a", "call", momentum=("percent_up", "25")),),
+        contracts={"a": CALL_500},
+        bars={CALL_500: {**flat("2.00", 5, 7), 8: ("2.00", "2.60"), **flat("2.60", 9, 70)}},
+        reaches=EventKind.MOMENTUM_HIT,
+        fee="0.65",
+        slippage="0.3",
+    ),
+    "a bar missing where an order fills, for a leg that buys at once and one that waits on momentum": _BoughtOnly(
+        legs=(leg("a", "call"), leg("b", "put", momentum=("percent_up", "10"))),
+        contracts={"a": CALL_500, "b": PUT_500},
+        bars={
+            CALL_500: {5: ("2.00", "2.00"), **flat("2.00", 7, 70)},
+            # The level is 3.00 x 1.1 = 3.30: decided at 8, dropped at 9 for want of a bar, decided again at 10.
+            PUT_500: {**flat("3.00", 5, 7), 8: ("3.00", "3.40"), 10: ("3.40", "3.50"), **flat("3.50", 11, 70)},
+        },
+        reaches=EventKind.ENTRY_DROPPED,
+    ),
+    "two entries that together are more than the cash": _BoughtOnly(
+        legs=(leg("a", "call"), leg("b", "put")),
+        contracts={"a": CALL_500, "b": PUT_500},
+        bars={CALL_500: flat("2.00", 5, 70), PUT_500: flat("3.00", 5, 70)},
+        reaches=EventKind.ENTRY_REFUSED_FOR_CASH,
+        cash="450",
+    ),
+    "a sale that waits for a bar and a leg marked, not sold": _BoughtOnly(
+        legs=(leg("a", "call", contracts=2), leg("b", "put")),
+        contracts={"a": CALL_500, "b": PUT_500},
+        bars={
+            CALL_500: {**flat("2.00", 5, 60), **flat("2.40", 63, 70)},
+            PUT_500: {**flat("3.00", 5, 57), 58: ("3.00", "2.75")},
+        },
+        reaches=EventKind.MARKED_NOT_SOLD,
+        fee="0.65",
+    ),
+    "three legs that cost exactly the cash with their fees": _BoughtOnly(
+        legs=(leg("a", "call", contracts=2), leg("b", "put"), leg("c", "call", contracts=3)),
+        contracts={"a": CALL_500, "b": PUT_500, "c": CALL_505},
+        bars={CALL_500: flat("2.00", 5, 70), PUT_500: flat("3.00", 5, 70), CALL_505: flat("1.00", 5, 70)},
+        # 2 x 2.00 x 100 + 3.00 x 100 + 3 x 1.00 x 100 = 1000.00, and six contracts' fees of 0.65 are 3.90.
+        reaches=EventKind.ENTRY_FILLED,
+        cash="1003.90",
+        fee="0.65",
+    ),
+    "three legs that cost a cent more than the cash with their fees": _BoughtOnly(
+        legs=(leg("a", "call", contracts=2), leg("b", "put"), leg("c", "call", contracts=3)),
+        contracts={"a": CALL_500, "b": PUT_500, "c": CALL_505},
+        bars={CALL_500: flat("2.00", 5, 70), PUT_500: flat("3.00", 5, 70), CALL_505: flat("1.00", 5, 70)},
+        reaches=EventKind.ENTRY_REFUSED_FOR_CASH,
+        cash="1003.89",
+        fee="0.65",
+    ),
+}
+
+
+def _market_of(scene: _BoughtOnly, *, with_a_sale_that_never_trades: bool) -> TableMarket:
+    picks = [(leg_id, "500", each) for leg_id, each in scene.contracts.items()]
+    if with_a_sale_that_never_trades:
+        picks.append(("ghost", "500", _NEVER_TRADED))
+    return TableMarket(underlying=steady("500"), picks=picked(*picks), options=scene.bars)
+
+
+@pytest.mark.parametrize("scene", _BOUGHT_ONLY_SCENES.values(), ids=list(_BOUGHT_ONLY_SCENES))
+def test_a_setup_that_buys_only_replays_alike_through_the_cover_book_and_without_it(
+    scene: _BoughtOnly, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A setup that sells nothing never asks the cover book, so that a bought option of any multiplier replays as it
+    # always did. That is a second path through the replay. Adding a sold leg whose contract never trades sends the same
+    # scene through the book without changing anything it does: the two must agree on everything but the sold leg's own
+    # events (it is picked, and then dropped for want of a bar).
+    asked = 0
+    real_admission = replay_module.admit_opening
+
+    def counting(*args: Any, **kwargs: Any) -> Any:
+        nonlocal asked
+        asked += 1
+        return real_admission(*args, **kwargs)
+
+    monkeypatch.setattr(replay_module, "admit_opening", counting)
+    fee = fee_per_contract(scene.fee)
+
+    plain = replay(
+        setup(*scene.legs, slippage=scene.slippage),
+        _market_of(scene, with_a_sale_that_never_trades=False),
+        cash=scene.cash,
+        fee_for=fee,
+    )
+    assert asked == 0
+    through_the_book = replay(
+        setup(*scene.legs, leg("ghost", "call", side="sell"), slippage=scene.slippage),
+        _market_of(scene, with_a_sale_that_never_trades=True),
+        cash=scene.cash,
+        fee_for=fee,
+    )
+    assert asked > 0
+
+    assert scene.reaches in {event.kind for event in plain.events}, "the scene must reach what it is there for"
+    assert [(event.kind, event.at_ms) for event in through_the_book.events if event.leg_id == "ghost"] == [
+        (EventKind.PICKED, at(5)),
+        (EventKind.ENTRY_DROPPED, at(6)),
+    ]
+    assert through_the_book.trades == plain.trades
+    assert [event for event in through_the_book.events if event.leg_id != "ghost"] == list(plain.events)
+    assert through_the_book.status is plain.status
+    assert through_the_book.skip_reason == plain.skip_reason
+    assert through_the_book.cash_change_usd == plain.cash_change_usd
+    assert (through_the_book.marked_value_usd, through_the_book.pnl_usd) == (plain.marked_value_usd, plain.pnl_usd)
+    assert through_the_book.money_steps == plain.money_steps
