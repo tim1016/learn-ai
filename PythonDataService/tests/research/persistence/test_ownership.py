@@ -109,7 +109,9 @@ async def test_lost_authority_connection_fences_the_generation(conn: asyncpg.Con
     ownership.set_process_authority(authority)
     successor = None
     try:
-        await authority.connection.close()  # the network died; the lock died with it
+        from app.research.persistence.db import writer_loop_call
+
+        await writer_loop_call(authority.connection.close())  # the network died; the lock died with it
         assert not authority.connected
 
         with pytest.raises(ownership.CoordinatorHeldElsewhere, match="authority connection was lost"):
@@ -239,11 +241,10 @@ async def test_startup_claims_authority_and_protects_its_own_generations_jobs() 
     assert authority is not None and authority.boot_generation >= 1
     try:
         assert ownership.process_authority() is authority
-        # The claimed generation protects its own dispatches from the sweep.
-        from app.research.persistence.db import with_connection
-
-        await with_connection(
-            ownership.record_dispatch, authority, job_id="job-mine", kind="golden_search", record_id="study-9"
+        # Use the dispatch boundary: a pooled insert would bypass the
+        # authority connection and miss a startup/dispatch loop mismatch.
+        await ownership.stamp_dispatch(
+            job_id="job-mine", kind="golden_search", record_id="study-9"
         )
         probe = await asyncpg.connect(dsn)
         try:

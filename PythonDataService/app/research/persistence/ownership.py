@@ -100,9 +100,17 @@ class RuntimeAuthority:
         The row keeps the generation — a released runtime is as dead as a
         crashed one, and the next claim advances past it.
         """
-        if not self.connection.is_closed():
-            await self.connection.execute("SELECT pg_advisory_unlock($1, $2)", COORDINATOR_LOCK_CLASSID, COORDINATOR_LOCK_OBJID)
-            await self.connection.close()
+        from app.research.persistence.db import writer_loop_call
+
+        await writer_loop_call(self._release_on_writer())
+
+    async def _release_on_writer(self) -> None:
+        async with self.stamp_lock:
+            if not self.connection.is_closed():
+                try:
+                    await self.connection.execute("SELECT pg_advisory_unlock($1, $2)", COORDINATOR_LOCK_CLASSID, COORDINATOR_LOCK_OBJID)
+                finally:
+                    await self.connection.close()
 
 
 async def claim_coordinator_authority(
@@ -115,7 +123,16 @@ async def claim_coordinator_authority(
     connection errors propagate: without the database there is no authority
     to claim, and the caller runs degraded (legacy behavior), never
     half-authoritative.
+
+    The connection and its stamp lock belong to the writer loop for their
+    entire lifetime, including startup and shutdown (ADR 0077).
     """
+    from app.research.persistence.db import writer_loop_call
+
+    return await writer_loop_call(_claim_on_writer(dsn=dsn, instance_id=instance_id, role=role))
+
+
+async def _claim_on_writer(*, dsn: str, instance_id: str, role: str) -> RuntimeAuthority:
     connection = await asyncpg.connect(dsn)
     try:
         acquired = await connection.fetchval(
@@ -285,11 +302,11 @@ async def _stamp_on_authority(*, job_id: str, kind: ResearchKind, record_id: str
         if dispatch_refused():
             raise CoordinatorHeldElsewhere("research dispatch refused: another coordinator holds the singleton authority")
         return
-    if not authority.connected:
-        # The lock connection died: this generation is fenced, and a runtime
-        # that lost authority must not dispatch on its way down.
-        raise CoordinatorHeldElsewhere("research dispatch refused: this coordinator's authority connection was lost")
     async with authority.stamp_lock:
+        if not authority.connected:
+            # The lock connection died: this generation is fenced, and a runtime
+            # that lost authority must not dispatch on its way down.
+            raise CoordinatorHeldElsewhere("research dispatch refused: this coordinator's authority connection was lost")
         await record_dispatch(authority.connection, authority, job_id=job_id, kind=kind, record_id=record_id)
 
 

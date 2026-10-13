@@ -560,6 +560,10 @@ class ResearchWorker:
         env = {
             **os.environ,
             **CHILD_ENV_FIXED,
+            # Startup imports can extend the runtime's library search path.
+            # Preserve it so the child sees the same installed environment
+            # when it verifies the sealed identity (ADR 0077).
+            "PYTHONPATH": os.pathsep.join(sys.path),
             # The parent sizes the child's decoded cache (#3066 review): the
             # pool divides the shared budget, a lone child keeps the ceiling.
             "RESEARCH_WORKER_DECODED_CACHE_BYTES": str(self._context.decoded_cache_bytes),
