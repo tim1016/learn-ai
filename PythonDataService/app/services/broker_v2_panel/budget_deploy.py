@@ -59,7 +59,7 @@ from app.broker.alpaca.clerk.money import (
 )
 from app.broker.alpaca.clerk.option_effects import is_option_plan
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
-from app.broker.alpaca.clerk.sqlite.account_option_requirement import held_signed_contracts, with_contracts
+from app.broker.alpaca.clerk.sqlite.account_option_requirement import held_signed_contracts
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy
 from app.broker.alpaca.clerk.sqlite.day_pnl import observed_day_pnl
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -69,7 +69,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import admit_new_exposure
 from app.broker.alpaca.regulatory_fees import RateNotPinnedError
 from app.broker_configuration.runtime import get_broker_configuration_service
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
-from app.options.requirement import ContractAtMultiplier, incremental_account_requirement
+from app.options.requirement import ContractAtMultiplier, incremental_account_requirement, with_contracts
 from app.schemas.account_authority import AuthorityKind
 from app.schemas.action_plan import ActionPlan, traded_instrument
 from app.schemas.broker_bots import AlpacaPaperDeployRequest

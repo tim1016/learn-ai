@@ -153,6 +153,58 @@ def test_a_stopped_bots_collateral_stays_spoken_for_and_appears_by_name(books: C
     assert "Stopped bot a" in picture.obligations.close_everything.source
 
 
+def test_a_bot_whose_estimate_cannot_be_worked_out_is_unknown_and_the_partition_survives(
+    books: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """One bot's legs that cannot be priced are that bot's unknown estimate, logged: they never take the cash, what
+    is spoken for or the collateral down with them."""
+    _opens_a_credit_spread(books)
+
+    def unworkable(*args: object, **kwargs: object) -> None:
+        raise ValueError("the multiplier of the sold put is a whole number, one or more; got 0")
+
+    monkeypatch.setattr(exit_estimate_read, "exit_estimate", unworkable)
+
+    picture = _picture(books, cash="2300")
+
+    assert picture.spoken_for.partition.state == "known" and picture.owned.broker_cash.amount_usd == "2300.00"
+    _adds_up(picture)
+    assert picture.concentration.account_collateral.amount_usd == "500.00"
+    close = picture.obligations.close_everything
+    assert (close.state, close.amount_usd, picture.obligations.bots_unpriced) == ("unknown", None, 1)
+    assert "This bot's exit estimate could not be worked out: the multiplier of the sold put" in close.source
+    assert [r.__dict__.get("action") for r in caplog.records if r.levelname == "WARNING"] == ["exit_estimate_unworkable"]
+
+
+def test_what_cannot_be_added_up_to_the_cash_is_logged_as_an_error_as_well_as_said(
+    books: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    from dataclasses import replace
+
+    from app.broker.alpaca.clerk.account_picture import account_picture as real
+    from app.services.broker_v2_panel import account_picture_read
+
+    _opens_a_credit_spread(books)
+
+    def with_a_claim_dropped(budget: object, *args: object, **kwargs: object) -> object:
+        return real(replace(budget, available=budget.available + 1000), *args, **kwargs)  # type: ignore[attr-defined,type-var]
+
+    monkeypatch.setattr(account_picture_read, "account_picture", with_a_claim_dropped)
+
+    picture = _picture(books, cash="2300")
+
+    assert picture.spoken_for.partition.state == "unknown" and picture.owned.broker_cash.amount_usd == "2300.00"
+    errors = [record.__dict__.get("action") for record in caplog.records if record.levelname == "ERROR"]
+    assert errors.count("account_picture_partition_unknown") == 1
+
+
+def test_a_world_that_is_not_known_fails_loudly_and_is_never_taken_for_a_real_account(
+    books: ClerkSqliteRepository,
+) -> None:
+    with pytest.raises(KeyError):
+        _picture(books, cash="1000", world="a_new_kind_of_authority")
+
+
 def test_a_dry_runs_picture_says_its_cash_and_equity_are_simulated(books: ClerkSqliteRepository) -> None:
     picture = _picture(books, cash="1000", world="synthetic", equity=D("1010.50"))
 
@@ -222,7 +274,7 @@ def test_a_manual_buy_the_cash_has_not_shown_yet_is_outside_the_system_and_still
             "fees": ("0.00", []),
             "unreserved": ("999.97", [
                 ("Cash as the account reports it", "2000.00"), ("Set aside for running bots", "-400.00"),
-                ("Outside the system", "-600.03"),
+                ("Outside purchases not in the cash yet", "-600.03"),
             ]),
         }
         _adds_up(picture)

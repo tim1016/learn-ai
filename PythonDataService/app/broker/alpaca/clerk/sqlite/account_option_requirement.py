@@ -26,8 +26,7 @@ Validated against: tests/broker/alpaca/clerk/sqlite/test_account_option_requirem
 
 The Deploy review asks the same of an entry that has not been made (#3099):
 the account's holdings (``held_signed_contracts``) and those holdings with the
-entry's contracts added (``with_contracts``, which lives beside the requirement it
-feeds in ``app/options/requirement.py`` and is re-exported here), which
+entry's contracts added (``app.options.requirement.with_contracts``), which
 ``incremental_account_requirement`` then values together.
 
 The account's picture (#3101) reads the same holdings bot by bot
@@ -45,7 +44,7 @@ from collections.abc import Sequence
 from app.broker.alpaca.clerk.sqlite.contract_terms import contract_terms
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.reads import HeldOptionContract, held_option_contracts
-from app.options.requirement import ContractAtMultiplier, incremental_account_requirement, with_contracts
+from app.options.requirement import ContractAtMultiplier, incremental_account_requirement
 
 logger = logging.getLogger(__name__)
 
@@ -126,4 +125,4 @@ def account_requirement_cents(
     return None
 
 
-__all__ = ["account_requirement_cents", "held_signed_contracts", "held_signed_contracts_by_bot", "with_contracts"]
+__all__ = ["account_requirement_cents", "held_signed_contracts", "held_signed_contracts_by_bot"]

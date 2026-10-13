@@ -37,7 +37,7 @@ const KNOWN: AccountPictureView = fakeAccountPicture({
   spoken_for: {
     partition: figure('2300.00', [
       ['Set aside for running bots', '300.00'], ['Collateral held against sold options', '1300.00'],
-      ['Held in entry orders', '0.00'], ['Outside the system', '0.00'], ['Fees not posted yet', '0.00'],
+      ['Held in entry orders', '0.00'], ['Outside purchases not in the cash yet', '0.00'], ['Fees not posted yet', '0.00'],
       ['Unreserved cash', '700.00'],
     ]),
     lines: [
@@ -47,7 +47,7 @@ const KNOWN: AccountPictureView = fakeAccountPicture({
         figure: figure('1300.00', [['Bot a', '1000.00'], ['Stopped bot c', '300.00']]),
       },
       { kind: 'orders', label: 'Held in entry orders', figure: figure('0.00', []) },
-      { kind: 'outside', label: 'Outside the system', figure: figure('0.00', []) },
+      { kind: 'outside', label: 'Outside purchases not in the cash yet', figure: figure('0.00', []) },
       { kind: 'fees', label: 'Fees not posted yet', figure: figure('0.00', []) },
       {
         kind: 'unreserved', label: 'Unreserved cash',
@@ -119,7 +119,7 @@ describe('The account’s picture', () => {
       ['Set aside for running bots', '$300.00'],
       ['Collateral held against sold options', '$1,300.00'],
       ['Held in entry orders', '$0.00'],
-      ['Outside the system', '$0.00'],
+      ['Outside purchases not in the cash yet', '$0.00'],
       ['Fees not posted yet', '$0.00'],
       ['Unreserved cash', '$700.00'],
     ]);
@@ -135,7 +135,7 @@ describe('The account’s picture', () => {
 
     const concentration = screen.getByRole('region', { name: 'Where the collateral is' });
     expect(rows(concentration).map((row) => [row.label, row.amount, row.terms])).toEqual([
-      ["The account's collateral", '$1,300.00', [['QQQ', '$300.00'], ['SPY', '$1,000.00']]],
+      ["The account's collateral, of the bots' contracts", '$1,300.00', [['QQQ', '$300.00'], ['SPY', '$1,000.00']]],
     ]);
     const groups = within(within(concentration).getByRole('list', { name: 'Collateral by underlying and expiry' }))
       .getAllByRole('listitem').map((item) => item.textContent?.replace(/\s+/g, ' ').trim());
@@ -224,7 +224,7 @@ describe('The account’s picture', () => {
     await render(AccountPictureComponent, { inputs: { picture: fakeAccountPicture() } });
 
     const concentration = screen.getByRole('region', { name: 'Where the collateral is' });
-    expect(rows(concentration).map((row) => [row.label, row.amount])).toEqual([["The account's collateral", '$0.00']]);
+    expect(rows(concentration).map((row) => [row.label, row.amount])).toEqual([["The account's collateral, of the bots' contracts", '$0.00']]);
     expect(within(concentration).queryByRole('list')).toBeNull();
     const obligations = screen.getByRole('region', { name: 'What it could be obliged to, and what getting out costs' });
     expect(rows(obligations).map((row) => [row.label, row.amount])).toEqual([

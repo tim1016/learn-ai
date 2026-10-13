@@ -89,7 +89,7 @@ export function fakeAccountPicture(overrides: Partial<AccountPictureView> = {}):
           { label: 'Set aside for running bots', amount_usd: '235.28' },
           { label: 'Collateral held against sold options', amount_usd: '0.00' },
           { label: 'Held in entry orders', amount_usd: '0.00' },
-          { label: 'Outside the system', amount_usd: '0.00' },
+          { label: 'Outside purchases not in the cash yet', amount_usd: '0.00' },
           { label: 'Fees not posted yet', amount_usd: '0.01' },
           { label: 'Unreserved cash', amount_usd: '98329.57' },
         ],
@@ -120,7 +120,7 @@ export function fakeAccountPicture(overrides: Partial<AccountPictureView> = {}):
           },
         },
         {
-          kind: 'outside', label: 'Outside the system',
+          kind: 'outside', label: 'Outside purchases not in the cash yet',
           figure: {
             ...books, amount_usd: '0.00', terms: [],
             source: 'Clerk books and the account reading: purchases by manual trades and by orders placed outside '

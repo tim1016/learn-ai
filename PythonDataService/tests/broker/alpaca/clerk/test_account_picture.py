@@ -14,13 +14,15 @@ Every figure is worked by hand from the rules and stated in whole cents:
 from __future__ import annotations
 
 import random
+from dataclasses import replace
+from datetime import date
+from decimal import ROUND_FLOOR, ROUND_HALF_EVEN
 from decimal import Decimal as D
 
 import pytest
 
 from app.broker.alpaca.clerk.account_picture import (
     EXPIRY_NOTE,
-    INFORMS_NOTE,
     OBLIGATION_NOTE,
     OWNED_NOTE,
     PARTITION_ADDS_UP,
@@ -37,6 +39,8 @@ from app.broker.alpaca.clerk.live_envelope import OBSERVATION_MAX_AGE_MS
 from app.options.contract import OptionContract
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
 from app.options.requirement import ContractAtMultiplier
+from app.options_backtest.cover_book import Held, Holding
+from app.options_backtest.cover_book import assignment_obligation as backtest_obligation
 
 NOW = 1_800_000_000_000
 READ = NOW - 5_000
@@ -84,7 +88,7 @@ def _readings(**changes: object) -> AccountReadings:
 
 def _picture(
     budget: AccountBudget, *, holdings: dict[str, dict[ContractAtMultiplier, int]] | None = None,
-    estimates: dict[str, ExitEstimate | None] | None = None, readings: AccountReadings | None = None, why: str = "",
+    estimates: dict[str, ExitEstimate] | None = None, readings: AccountReadings | None = None, why: str = "",
 ) -> AccountPicture:
     return account_picture(
         budget, readings or _readings(), {} if holdings is None and not why else holdings, estimates or {},
@@ -201,7 +205,7 @@ def test_a_stopped_bots_collateral_and_an_outside_purchase_appear_by_name_and_st
         "fees": (0, "known", []),
         "unreserved": (330_000, "known", [
             ("Cash as the account reports it", 500_000), ("Set aside for running bots", -100_000),
-            ("Collateral held against sold options", -50_000), ("Outside the system", -20_000),
+            ("Collateral held against sold options", -50_000), ("Outside purchases not in the cash yet", -20_000),
         ]),
     }
     _adds_up(picture)
@@ -264,9 +268,59 @@ def test_a_line_that_cannot_be_worked_out_makes_the_partition_unknown_and_is_nev
     assert picture.owned.broker_cash.amount_cents == 100_000
 
 
-def test_the_lines_add_up_to_the_cash_on_every_constructed_case() -> None:
-    """Seeded cases with fractional claims, collateral, orders, outside purchases, stopped bots and fees."""
+def _half_even_cents(amount: D) -> int:
+    """The independent oracle: cents rounded half-even, from the budget's own aggregates and nothing of the picture's."""
+    return int((amount * 100).quantize(D(1), rounding=ROUND_HALF_EVEN))
+
+
+def _floor_cents(amount: D) -> int:
+    return int((amount * 100).to_integral_value(rounding=ROUND_FLOOR))
+
+
+# Free claims of $100.00 and a part of a cent, in the cents the rule reads: half-even. Flooring reads another
+# cent for .006, .015 and .035, and half-up for .025 and .045, so each wrong rule fails at least one of these.
+@pytest.mark.parametrize(
+    ("gain", "cents"),
+    [("0.004", 10_000), ("0.006", 10_001), ("0.015", 10_002), ("0.025", 10_002), ("0.035", 10_004), ("0.045", 10_004)],
+)
+def test_a_line_is_rounded_half_even_and_not_floored_or_rounded_half_up(gain: str, cents: int) -> None:
+    """Bot a's free budget is $100.00 and ``gain`` of it."""
+    picture = _picture(_budget("1000", [_bot("a", committed_cents=10_000, realized=gain)]))
+
+    claim = _lines(picture)["bot_free"]
+    assert claim[0] == cents
+    assert claim[2] == [("Bot a", cents)]
+    _adds_up(picture)
+
+
+def test_a_claim_missing_from_the_lines_makes_the_partition_unknown_and_never_a_rounding_line() -> None:
+    """The collateral is in the cash's claims and not in the lines: $500.00 is no rounding, so nothing adds it up."""
+    whole = _budget("5000", [
+        _bot("run", committed_cents=100_000),
+        _bot("old", committed_cents=80_000, active=False, position="350", collateral="500"),
+    ], outside="200")
+    assert _picture(whole).spoken_for.partition.state == "known"
+
+    dropped = replace(whole, available=whole.available + whole.option_collateral)
+    picture = _picture(dropped)
+
+    partition = picture.spoken_for.partition
+    assert (partition.state, partition.amount_cents) == ("unknown", None)
+    assert "more than rounding to whole cents can explain" in partition.source
+    assert picture.spoken_for.sentence == (
+        "The lines cannot be added up to the account's cash: its lines miss the cash by more than rounding to whole "
+        "cents can explain."
+    )
+    assert "rounding" not in _lines(picture)
+    assert picture.owned.broker_cash.amount_cents == 500_000
+
+
+def test_every_line_is_what_an_independent_half_even_oracle_says_and_the_lines_add_up_to_the_cash() -> None:
+    """Seeded cases with fractional claims, collateral, orders, outside purchases, stopped bots and fees. Each line
+    is compared with the half-even cents of the budget's own aggregate; only the unreserved line floors. What is
+    left to the rounding line is at most the cents rounding can explain."""
     rng = random.Random(3101)
+    rounding_seen = 0
     for _ in range(300):
         bots: list[DeploymentBudget] = []
         by_bot: dict[str, str] = {}
@@ -287,7 +341,27 @@ def test_the_lines_add_up_to_the_cash_on_every_constructed_case() -> None:
             outside=rng.choice(["0", f"{rng.randint(0, 100_000) / 100:.2f}", f"{rng.randint(0, 9_999) / 10_000:.4f}"]),
             fees=rng.choice(["0", f"{rng.randint(0, 9_999) / 10_000:.4f}"]),
         )
-        _adds_up(_picture(budget))
+
+        picture = _picture(budget)
+
+        assert picture.spoken_for.partition.state == "known"
+        _adds_up(picture)
+        expected = {
+            "bot_free": _half_even_cents(budget.active_free_claims),
+            "collateral": _half_even_cents(budget.option_collateral),
+            "orders": _half_even_cents(budget.order_claims - budget.outside_claims),
+            "outside": _half_even_cents(budget.outside_claims),
+            "fees": _half_even_cents(budget.fee_claims),
+            "unreserved": _floor_cents(budget.available),
+        }
+        lines = {line.kind: line.figure.amount_cents for line in picture.spoken_for.lines}
+        assert {kind: lines[kind] for kind in expected} == expected
+        rounding = lines.get("rounding", 0) or 0
+        assert rounding == _half_even_cents(budget.cash) - sum(expected.values())
+        # Half a cent for the cash and for each of the five rounded lines, under a cent for the floored one.
+        assert abs(rounding) <= 3
+        rounding_seen += rounding != 0
+    assert rounding_seen > 50, "the sweep must exercise the rounding line it bounds"
 
 
 # ---- concentration --------------------------------------------------------------------------------------
@@ -371,6 +445,35 @@ def test_holdings_whose_loss_has_no_limit_make_the_concentration_unknown_with_th
 
 def test_one_sold_put_struck_at_665_is_an_obligation_of_66500_dollars() -> None:
     assert assignment_obligation({("SPY261016P00665000", 100): -1}) == {"SPY": 6_650_000}
+
+
+def test_the_obligation_is_the_backtests_own_over_the_same_holdings() -> None:
+    """One kernel, ``assignment_cash_cents``, stated in cents here and in dollars by the Options Backtest: calls and
+    puts, long and short, several strikes (whole and half dollars), two underlyings and two expiries, and two legs
+    on one contract. The backtest trades the standard hundred-share contract only; another multiplier is held to
+    the kernel by the hand-worked case beside this one."""
+    rng = random.Random(3104)
+    contracts = [
+        OptionContract.of(root=root, expiry_date=expiry, right=right, strike=strike)
+        for root in ("SPY", "QQQ")
+        for expiry in (date(2026, 10, 16), date(2026, 10, 23))
+        for right in ("call", "put")
+        for strike in ("1.5", "440", "445.5", "500", "505", "512.5", "665")
+    ]
+    for _ in range(150):
+        picked = rng.sample(contracts, rng.randint(1, 8))
+        legs: list[Holding] = []
+        signed: dict[ContractAtMultiplier, int] = {}
+        for index, contract in enumerate(picked):
+            side = rng.choice(["buy", "sell"])
+            for share in range(rng.choice([1, 1, 2])):
+                count = rng.randint(1, 5)
+                legs.append(Holding(f"L{index}-{share}", contract, side, count, 100))
+                key = (contract.occ_symbol, 100)
+                signed[key] = signed.get(key, 0) + (count if side == "buy" else -count)
+        held = Held(listed=tuple(leg.leg_id for leg in legs), holdings=tuple(legs))
+
+        assert D(sum(assignment_obligation(signed).values())).scaleb(-2) == backtest_obligation(held)
 
 
 def test_a_sold_put_at_665_shows_66500_dollars_beside_its_own_loss_bound_of_500() -> None:
@@ -486,20 +589,11 @@ def test_one_unknown_exit_estimate_makes_the_total_unknown_and_counted() -> None
     assert (picture.obligations.bots_holding, picture.obligations.bots_unpriced) == (2, 1)
 
 
-def test_a_bot_whose_estimate_could_not_be_worked_out_is_one_of_the_unknown() -> None:
-    picture = _picture(
-        _budget("10000", []), holdings={"a": SPREAD, "b": QQQ_SPREAD}, estimates={"a": _estimate(SPREAD, DEEP), "b": None},
-    )
-
-    close = picture.obligations.close_everything
-    assert close.state == "unknown" and "its exit estimate could not be worked out" in close.source
-    assert (picture.obligations.bots_holding, picture.obligations.bots_unpriced) == (2, 1)
-
-
 def test_a_bot_with_no_estimate_at_all_is_unknown_never_left_out_of_the_total() -> None:
     picture = _picture(_budget("10000", []), holdings={"a": SPREAD, "b": QQQ_SPREAD}, estimates={"a": _estimate(SPREAD, DEEP)})
 
-    assert picture.obligations.close_everything.state == "unknown"
+    close = picture.obligations.close_everything
+    assert close.state == "unknown" and "Stopped bot b: no exit estimate was read for it" in close.source
     assert picture.obligations.bots_unpriced == 1
 
 
@@ -547,9 +641,3 @@ def test_holdings_that_could_not_be_read_make_every_figure_standing_on_them_unkn
     # What stands on the cash is still told.
     assert picture.owned.broker_cash.state == "known" and picture.spoken_for.partition.state == "known"
     _adds_up(picture)
-
-
-def test_the_picture_informs_and_blocks_nothing() -> None:
-    picture = _picture(_budget("10000", []))
-
-    assert picture.note == INFORMS_NOTE

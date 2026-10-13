@@ -63,11 +63,10 @@ from app.broker.alpaca.clerk.funding import Figure, FigureState, Term, terms_add
 from app.broker.alpaca.clerk.live_envelope import OBSERVATION_MAX_AGE_MS, reading_is_fresh
 from app.broker.alpaca.clerk.money import ZERO, cents_spendable, display_cents, money_context
 from app.options.contract import OptionContract
+from app.options.event_allocation import assignment_cash_cents
 from app.options.requirement import ContractAtMultiplier, held_requirement_cents, with_contracts
 
 SpokenForKind = Literal["bot_free", "collateral", "orders", "outside", "fees", "unreserved", "rounding"]
-
-_THOUSANDTHS_PER_CENT = 10
 
 _ALPACA = "Alpaca's account answer"
 _BOOKS = "Clerk books"
@@ -200,8 +199,13 @@ def assignment_obligation(holdings: Mapping[ContractAtMultiplier, int]) -> dict[
       multiplier × contracts in whole cents); Alpaca, "Options Trading"
       (https://docs.alpaca.markets/docs/options-trading), whose assignment
       this is the exposure to.
-    Canonical implementation: this function; ``options.event_allocation``'s
-      ``_shares_and_cash_cents`` is the cash of one assignment that happened.
+    Canonical implementation: the cash of one assignment is
+      ``options.event_allocation.assignment_cash_cents``, called here for each
+      sold contract and summed by underlying. The Options Backtest states the
+      same figure in dollars
+      (``options_backtest.cover_book.assignment_obligation``) from the same
+      kernel; ``tests/broker/alpaca/clerk/test_account_picture.py`` holds the
+      two to one answer over the same holdings.
     Validated against: tests/broker/alpaca/clerk/test_account_picture.py.
 
     Refuses as ``ValueError`` an amount that is not whole cents, a count that
@@ -214,13 +218,7 @@ def assignment_obligation(holdings: Mapping[ContractAtMultiplier, int]) -> dict[
         if contracts >= 0:
             continue
         contract = OptionContract.from_occ_symbol(symbol)
-        cents, part_of_a_cent = divmod(-contracts * contract.strike_thousandths * multiplier, _THOUSANDTHS_PER_CENT)
-        if part_of_a_cent:
-            raise ValueError(
-                f"{-contracts} sold of {symbol} at a strike of {contract.strike} and {multiplier} shares a contract "
-                "do not come to whole cents; the amount is refused, never rounded"
-            )
-        obligation[contract.root] += cents
+        obligation[contract.root] += assignment_cash_cents(contract, contracts=-contracts, multiplier=multiplier)
     return dict(sorted(obligation.items()))
 
 
@@ -265,7 +263,7 @@ def account_picture(
     account_budget: AccountBudget,
     readings: AccountReadings,
     holdings_by_bot: Mapping[str, Mapping[ContractAtMultiplier, int]] | None,
-    exit_estimates: Mapping[str, ExitEstimate | None],
+    exit_estimates: Mapping[str, ExitEstimate],
     *,
     holdings_unread: str = "",
 ) -> AccountPicture:
@@ -275,8 +273,9 @@ def account_picture(
     ``holdings_by_bot`` is each bot's signed whole contracts by ``(OCC symbol,
     multiplier)``, stopped bots included, or ``None`` when the books could not
     be read, in which case ``holdings_unread`` says why and every figure that
-    stands on them is unknown. ``exit_estimates`` is each bot's exit estimate,
-    or ``None`` for a bot whose estimate could not be worked out.
+    stands on them is unknown. ``exit_estimates`` is each holding bot's exit
+    estimate, one whose figures are unknown for a bot that could not be priced;
+    a holding bot with none at all is counted as unknown too.
     """
     running = frozenset(item.strategy_instance_id for item in account_budget.deployments if item.active)
     net: dict[ContractAtMultiplier, int] | None = None
@@ -365,7 +364,7 @@ def _spoken_for(budget: AccountBudget, readings: AccountReadings, running: froze
                       f"{_BOOKS_AND_READING}: each entry order's unfilled cost and fee provision, and fills the "
                       "cash reading has not shown yet",
                       state, observed, by_bot),
-                _line("outside", "Outside the system",
+                _line("outside", "Outside purchases not in the cash yet",
                       f"{_BOOKS_AND_READING}: purchases by manual trades and by orders placed outside the system "
                       "that the cash reading has not shown yet",
                       state, observed,
@@ -374,7 +373,7 @@ def _spoken_for(budget: AccountBudget, readings: AccountReadings, running: froze
         else:
             lines += [
                 SpokenForLine("orders", "Held in entry orders", Figure.unknown(unsplit)),
-                SpokenForLine("outside", "Outside the system", Figure.unknown(unsplit)),
+                SpokenForLine("outside", "Outside purchases not in the cash yet", Figure.unknown(unsplit)),
             ]
         lines.append(_line(
             "fees", "Fees not posted yet",
@@ -392,7 +391,7 @@ def _unreserved(budget: AccountBudget, *, state: FigureState, as_of_ms: int, spl
     amount = cents_spendable(budget.available)
     orders = (
         [("Held in entry orders", -(budget.order_claims - budget.outside_claims)),
-         ("Outside the system", -budget.outside_claims)]
+         ("Outside purchases not in the cash yet", -budget.outside_claims)]
         if split_is_whole else [("Held in entry orders and outside activity", -budget.order_claims)]
     )
     exact = [
@@ -422,6 +421,17 @@ def _partition(budget: AccountBudget, readings: AccountReadings, lines: tuple[Sp
         )
     cash_cents = display_cents(budget.cash)
     drift = cash_cents - sum(line.figure.amount_cents or 0 for line in lines)
+    # The cash and every line but the floored one are rounded half-even, each off by at most half a cent, and the
+    # unreserved line floors, so it is off by less than a cent: together they can miss by no more than this many
+    # whole cents. Anything beyond is a claim missing from the lines and never rounding, and is not a line to add.
+    rounded = len(lines) - 1
+    if abs(drift) > (rounded + 2) // 2:
+        reason = "its lines miss the cash by more than rounding to whole cents can explain"
+        return SpokenFor(
+            Figure.unknown(f"The account's cash cannot be partitioned: {reason}"),
+            lines,
+            f"The lines cannot be added up to the account's cash: {reason}.",
+        )
     if drift:
         lines = (
             *lines,
@@ -450,15 +460,13 @@ def _concentration(net: Mapping[ContractAtMultiplier, int] | None, why: str, *, 
     if net is None:
         return Concentration(Figure.unknown(f"{_HOLDINGS}, which could not be read: {_said(why)}"), (), None)
     try:
-        groups = _by_underlying_and_expiry(net)
-        collateral = {group: held_requirement_cents(held) for group, held in groups.items()}
+        collateral = collateral_by_underlying_and_expiry(net)
+        # A contract belongs to exactly one underlying, so these subsets are disjoint and together are ``net``;
+        # underlyings are valued apart, so their figures add to the account's own.
         by_underlying: dict[str, dict[ContractAtMultiplier, int]] = defaultdict(dict)
-        for (root, _expiry), held in groups.items():
-            by_underlying[root].update(held)
-        # Underlyings are valued apart, so their figures add to the account's own.
-        terms = tuple(
-            Term(root, held_requirement_cents(held)) for root, held in sorted(by_underlying.items())
-        )
+        for key, contracts in net.items():
+            by_underlying[OptionContract.from_occ_symbol(key[0]).root][key] = contracts
+        terms = tuple(Term(root, held_requirement_cents(held)) for root, held in sorted(by_underlying.items()))
         account = held_requirement_cents(net)
     except ValueError as refused:
         # ``StructureMoneyRefused`` is one: the holdings' loss has no limit, or an amount is not whole cents.
@@ -478,7 +486,7 @@ def _obligations(
     net: Mapping[ContractAtMultiplier, int] | None,
     holdings_by_bot: Mapping[str, Mapping[ContractAtMultiplier, int]] | None,
     why: str,
-    exit_estimates: Mapping[str, ExitEstimate | None],
+    exit_estimates: Mapping[str, ExitEstimate],
     *, running: frozenset[str], now_ms: int,
 ) -> Obligations:
     unread = f"{_HOLDINGS}, which could not be read: {_said(why)}"
@@ -508,7 +516,7 @@ def _obligations(
 
 
 def _close_everything(
-    holding: Sequence[str], exit_estimates: Mapping[str, ExitEstimate | None], *, running: frozenset[str], now_ms: int,
+    holding: Sequence[str], exit_estimates: Mapping[str, ExitEstimate], *, running: frozenset[str], now_ms: int,
 ) -> tuple[Figure, int]:
     """The sum of the bots' net closes, and how many bots' estimates cannot be priced.
 
@@ -522,7 +530,7 @@ def _close_everything(
     for sid in holding:
         estimate = exit_estimates.get(sid)
         if estimate is None:
-            unpriced.append(f"{_bot_label(sid, running)}: its exit estimate could not be worked out")
+            unpriced.append(f"{_bot_label(sid, running)}: no exit estimate was read for it")
         elif estimate.net_close.state == "unknown":
             unpriced.append(f"{_bot_label(sid, running)}: {estimate.net_close.source}")
         else:

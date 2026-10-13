@@ -10,6 +10,7 @@ the quotes are the ones the bot page's exit estimate prices from.
 
 from __future__ import annotations
 
+import logging
 from decimal import Decimal
 from typing import Literal
 
@@ -22,7 +23,12 @@ from app.schemas.account_authority import AuthorityKind
 from app.schemas.deployment_budget import AccountPictureView
 from app.services.broker_v2_panel.exit_estimate_read import read_exit_estimates
 
-_SIMULATED_WORLDS: dict[str, Literal["Dry Run", "Live Shadow"]] = {"shadow": "Live Shadow", "synthetic": "Dry Run"}
+logger = logging.getLogger(__name__)
+
+# Every authority kind, so a new one is a KeyError here and never a simulated account called a real one's.
+_SIMULATED_WORLDS: dict[AuthorityKind, Literal["Dry Run", "Live Shadow"] | None] = {
+    "real_paper": None, "real_live": None, "shadow": "Live Shadow", "synthetic": "Dry Run",
+}
 
 
 def read_account_picture(
@@ -45,17 +51,31 @@ def read_account_picture(
             holdings = held_signed_contracts_by_bot(conn)
         except ValueError as unreadable:
             holdings, why = None, str(unreadable)
+            logger.warning(
+                "the books' option holdings cannot be counted; the picture's holdings figures are unknown",
+                exc_info=True, extra={"action": "account_picture_holdings_unreadable", "account_id": repo.account_id},
+            )
     estimates = {} if holdings is None else read_exit_estimates(repo, holdings, now_ms=now_ms)
     picture = account_picture(
         money.budget,
         AccountReadings(
             observed_at_ms=observed_at_ms, now_ms=now_ms, equity=equity,
-            simulated=_SIMULATED_WORLDS.get(world),
+            simulated=_SIMULATED_WORLDS[world],
         ),
         holdings,
         estimates,
         holdings_unread=why,
     )
+    if picture.spoken_for.partition.state == "unknown":
+        # A claim missing from the lines, or an order claim the books cannot split: a fault to repair, said here
+        # as well as to the owner.
+        logger.error(
+            "what is spoken for cannot be added up to the cash",
+            extra={
+                "action": "account_picture_partition_unknown", "account_id": repo.account_id,
+                "reason": picture.spoken_for.sentence,
+            },
+        )
     return AccountPictureView.from_picture(picture)
 
 

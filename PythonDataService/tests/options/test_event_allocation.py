@@ -27,6 +27,7 @@ from app.options.event_allocation import (
     OptionEventRefusal,
     OptionEventRefused,
     allocate_option_event,
+    assignment_cash_cents,
     expected_share_trade,
 )
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
@@ -337,6 +338,17 @@ def test_cash_that_is_not_whole_cents_is_refused_by_name_and_never_rounded() -> 
     assert from_the_rule.value.reason is OptionEventRefusal.CASH_NOT_WHOLE_CENTS
     assert from_the_rule.value.unmatched_contracts == 1
     assert from_the_share_trade.value.reason is OptionEventRefusal.CASH_NOT_WHOLE_CENTS
+
+
+def test_the_cash_of_an_assignment_is_strike_times_multiplier_times_contracts_unsigned_and_refused_when_not_whole() -> None:
+    """3 calls at 150 and 100 shares each: $45,000.00 of shares, whichever way the cash flows. 2 puts at 150 with
+    10 shares each: $3,000.00."""
+    assert assignment_cash_cents(_CALL, contracts=3, multiplier=100) == 4_500_000
+    assert assignment_cash_cents(_PUT, contracts=3, multiplier=100) == 4_500_000
+    assert assignment_cash_cents(_PUT, contracts=2, multiplier=10) == 300_000
+    with pytest.raises(OptionEventRefused) as refused:
+        assignment_cash_cents(_HALF_CENT_STRIKE, contracts=1, multiplier=1)
+    assert refused.value.reason is OptionEventRefusal.CASH_NOT_WHOLE_CENTS
 
 
 def test_an_events_cash_is_checked_on_its_total_whatever_the_books_hold() -> None:

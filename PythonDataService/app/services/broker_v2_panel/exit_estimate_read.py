@@ -19,11 +19,13 @@ invented from a mark, a fill or a share of the underlying (ADR 0076).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 
 from app.broker.alpaca.clerk.account_authority import simulated_account_named
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.exit_estimate import ExitEstimate, OwedClose, exit_estimate
+from app.broker.alpaca.clerk.funding import Figure
 from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes, KeptOptionQuotesUnavailable
 from app.broker.alpaca.clerk.sqlite.option_entry import held_option_legs
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -36,6 +38,8 @@ from app.options.requirement import ContractAtMultiplier
 from app.options.resolver import Chain
 from app.schemas.deployment_budget import ExitEstimateView, ExitLegQuoteView, FigureView
 from app.services.option_preview_views import contract_view
+
+logger = logging.getLogger(__name__)
 
 _LIVE_QUOTES = "Live option quotes from this Clerk's IBKR feed"
 _REAL_KEEPS_NONE = "real accounts keep no option quotes"
@@ -98,13 +102,31 @@ def read_exit_estimates(
 
     The legs are the account's own read of each bot's holdings, so no bot is
     read twice and the estimate is of exactly what the account's picture
-    counts. A bot holding none has none.
+    counts. A bot holding none has none. A bot whose legs cannot be worked
+    out has an estimate whose figures are unknown, with the reason, and is
+    logged: one bot never takes the account's picture down with it.
+
+    Each holding bot asks for its own owed closes (``_owed_closes``, one
+    ``held_contracts`` read of the account's positions per bot): an N+1 over
+    the bots that hold options, cheap while their positions say nothing is
+    owed and not worth a second read of the worklist for one account's few
+    bots (#3101 review).
     """
-    return {
-        sid: estimate_of_legs(repo, sid, dict(legs), now_ms=now_ms)
-        for sid, legs in sorted(holdings_by_bot.items())
-        if any(legs.values())
-    }
+    estimates: dict[str, ExitEstimate] = {}
+    for sid, legs in sorted(holdings_by_bot.items()):
+        if not any(legs.values()):
+            continue
+        try:
+            estimates[sid] = estimate_of_legs(repo, sid, dict(legs), now_ms=now_ms)
+        except ValueError as unworkable:
+            logger.warning(
+                "a bot's exit estimate could not be worked out; its figures are unknown",
+                exc_info=True,
+                extra={"action": "exit_estimate_unworkable", "account_id": repo.account_id, "strategy_instance_id": sid},
+            )
+            why = Figure.unknown(f"This bot's exit estimate could not be worked out: {str(unworkable).rstrip('.')}")
+            estimates[sid] = ExitEstimate(net_close=why, gross_buy_back=why, quotes=(), conditions=())
+    return estimates
 
 
 def estimate_of_legs(

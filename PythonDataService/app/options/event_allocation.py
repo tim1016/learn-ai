@@ -288,6 +288,31 @@ def expected_share_trade(
     return ShareTrade(root=contract.root, shares=shares, price=contract.strike, cash_cents=cash_cents)
 
 
+def assignment_cash_cents(contract: OptionContract, *, contracts: int, multiplier: int) -> int:
+    """The whole cents the shares of ``contracts`` assigned contracts trade for, unsigned: strike × multiplier × contracts.
+
+    What assignment of a sold contract obliges the account to pay (a put) or
+    receive (a call) for the shares: the one figure the account's picture and
+    the Options Backtest both state as the assignment obligation, each
+    converting the unit at its own edge (#3101).
+
+    Formula: cents = |cash of the trade ``expected_share_trade`` states for an
+      assignment| = n · m · K / 10 for ``K`` in thousandths of a dollar.
+    Reference: ADR 0076 decision 22; the cash of an assignment is
+      ``cash = -shares · K`` above.
+    Canonical implementation: this function over ``expected_share_trade``;
+      it adds no arithmetic of its own.
+    Validated against: tests/options/test_event_allocation.py, and
+      tests/broker/alpaca/clerk/test_account_picture.py (the same holdings
+      through the backtest's own figure).
+
+    Refuses as ``OptionEventRefused`` an amount that is not whole cents.
+    """
+    trade = expected_share_trade(OptionEventKind.ASSIGNED, contract, contracts=contracts, multiplier=multiplier)
+    assert trade is not None, "an assignment always trades shares"
+    return abs(trade.cash_cents)
+
+
 _BOUGHT = "bought"
 _SOLD = "sold"
 _THE_OTHER_SIDE = {_BOUGHT: _SOLD, _SOLD: _BOUGHT}

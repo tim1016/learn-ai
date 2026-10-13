@@ -34,7 +34,7 @@
 
   <section class="account-picture__part" [attr.aria-labelledby]="ids.concentration">
     <h3 [id]="ids.concentration">Where the collateral is</h3>
-    <app-figure-row label="The account's collateral" [figure]="concentration.account_collateral" [showProvenance]="true" />
+    <app-figure-row label="The account's collateral, of the bots' contracts" [figure]="concentration.account_collateral" [showProvenance]="true" />
     @if (groups.length > 0) {
       <ul class="account-picture__list account-picture__groups" aria-label="Collateral by underlying and expiry">
         @for (group of groups; track group.underlying + group.expiry_ms) {
