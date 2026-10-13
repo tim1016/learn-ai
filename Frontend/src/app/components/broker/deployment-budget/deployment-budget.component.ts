@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, input, resource }
 import type { ResourceTarget } from '../../../fleet/resource-target';
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
+import { ExitEstimateComponent } from '../exit-estimate/exit-estimate.component';
 import { FundingAnswerComponent } from '../funding-answer/funding-answer.component';
 import { MoneyBarComponent } from '../money-bar/money-bar.component';
 import { BrokerV2PanelService } from '../v2-panel/lib/broker-v2-panel.service';
@@ -23,12 +24,14 @@ let nextHeadingId = 0;
  * bot's still-held money with what it released; a finished bot has none.
  * Open gain or loss on shares is a note, never in the bar. A running bot's
  * `funding` (#3097) is the Clerk's own answer to whether it can fund its next
- * entry, shown beneath the statement exactly as Python wrote it.
+ * entry, shown beneath the statement exactly as Python wrote it. While the bot
+ * holds an option position its `exit_estimate` (#3100) says what getting out
+ * costs, in the same way.
  */
 @Component({
   selector: 'app-deployment-budget',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AuthoredUsdPipe, FundingAnswerComponent, MoneyBarComponent, TimestampDisplayComponent],
+  imports: [AuthoredUsdPipe, ExitEstimateComponent, FundingAnswerComponent, MoneyBarComponent, TimestampDisplayComponent],
   templateUrl: './deployment-budget.component.html',
   styleUrl: './deployment-budget.component.scss',
 })

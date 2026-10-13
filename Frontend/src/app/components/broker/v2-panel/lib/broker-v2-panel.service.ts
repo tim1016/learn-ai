@@ -96,6 +96,10 @@ export type DeploymentBudgetView = components['schemas']['DeploymentBudgetView']
  * Clerk's own answer, every dollar and word authored by Python. */
 export type FundingView = components['schemas']['FundingView'];
 export type FigureView = components['schemas']['FigureView'];
+/** What getting out of a held option position costs (#3100): both figures, the
+ * quotes behind them and what is not settled, every dollar and word authored by Python. */
+export type ExitEstimateView = components['schemas']['ExitEstimateView'];
+export type ExitLegQuoteView = components['schemas']['ExitLegQuoteView'];
 export type DeploymentBudgetInput = components['schemas']['DeploymentBudgetInput'];
 /** Where one account's money is (PRD #2560): every dollar string and every
  * slice width is Python-authored; the browser only draws it. */

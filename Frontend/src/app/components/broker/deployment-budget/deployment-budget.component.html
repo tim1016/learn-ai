@@ -23,6 +23,9 @@
       @if (report.funding; as funding) {
         <app-funding-answer [funding]="funding" />
       }
+      @if (report.exit_estimate; as exitEstimate) {
+        <app-exit-estimate [estimate]="exitEstimate" />
+      }
       @if (report.note) {
         <p class="deployment-budget__fine">{{ report.note }}</p>
       }
