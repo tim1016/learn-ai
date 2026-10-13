@@ -1,9 +1,12 @@
 """Whether one bot can fund one entry, which limit binds, and what it falls short by (#3097).
 
-One answer for the Clerk's admission and for the bot page, so a screen can
-never promise an entry the Clerk refuses. Every figure is whole cents. The
-need rounds up and each limit rounds down, the boundary the Clerk already
-acts at (``money.cents_required`` and ``money.cents_spendable``).
+One answer for the Clerk's admission and for the bot page, so the same entry
+at the same moment is never promised by a screen and refused by the Clerk.
+Every figure is whole cents. The need rounds up and each limit rounds down
+(``money.cents_required`` and ``money.cents_spendable``), the cent boundary
+Deploy acts at. The entry test compared exact decimals before #3097, so an
+entry that fits a limit only within the same cent is now refused; none is
+admitted that the exact comparison would have refused.
 
 Formula: admits = need <= free budget and need <= account headroom;
   free budget      = committed + realized - fees - held positions at cost
@@ -304,10 +307,12 @@ class _Room:
 def _admits(room: _Room, need: EntryNeed | None) -> bool | None:
     """The Clerk's rule on the bot's own two limits.
 
-    With no need an entry still costs at least a cent (an entry commitment is
-    above zero), so a known limit with no room admits nothing, and anything
-    else says nothing. A refusal a known limit makes stands whatever the
-    other is; a pass needs both known.
+    With no need, an entry that could be priced still commits at least a cent
+    (``app.options.requirement.entry_money`` refuses an entry whose
+    requirement plus premium is zero or less, and a share costs a positive
+    price), so a known limit with no room admits nothing, and anything else
+    says nothing. A refusal a known limit makes stands whatever the other is;
+    a pass needs both known.
     """
     required = 1 if need is None else need.commitment_cents
     if any(cents is not None and cents < required for cents in (room.free, room.headroom)):

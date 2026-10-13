@@ -588,10 +588,6 @@ class _NextEntry:
     eligible: bool
     headline: str
     detail: str
-    # What the next position would cost, when it could be priced.
-    required: Decimal | None = None
-    # What it falls short of the limit that binds, when that can be said.
-    shortfall_cents: int | None = None
     # The funding answer behind the verdict, once the bot is past the custody gates.
     funding: FundingAnswer | None = None
 
@@ -641,7 +637,7 @@ def _next_entry(
     now = repo.clock()
     # An option bot's entry is priced when its contracts are picked, and a share entry waits for a fresh
     # quote: with no need the answer still shows every limit and says when nothing can be entered.
-    required, need = None, None
+    need = None
     if not terms.trades_options:
         quote = prepared_top_of_book(terms.order_symbol, now)
         if quote is not None:
@@ -661,11 +657,8 @@ def _next_entry(
             )
         return _NextEntry(False, _WAITS, "Wait for a fresh IBKR price to judge the next position's cost.", funding=answer)
     if answer.admits is not True:
-        return _NextEntry(False, _WAITS, answer.sentence, required, shortfall_cents=answer.shortfall_cents, funding=answer)
-    return _NextEntry(
-        True, "Ready for its next entry", answer.sentence + _STILL_CHECKED_AT_THE_ORDER, required,
-        shortfall_cents=answer.shortfall_cents, funding=answer,
-    )
+        return _NextEntry(False, _WAITS, answer.sentence, funding=answer)
+    return _NextEntry(True, "Ready for its next entry", answer.sentence + _STILL_CHECKED_AT_THE_ORDER, funding=answer)
 
 
 def _broker_buying_power(runtime: ActiveClerkRuntime) -> Figure | None:
@@ -721,8 +714,8 @@ def _statement(own: DeploymentBudget, entry: _NextEntry | None) -> tuple[BudgetS
     shortfall = cents_required(max(Decimal(0), -own.free))
     if shortfall > 0:
         lines.append(BudgetStatementLine(label="Over its budget by", amount_usd=dollars(shortfall)))
-    if entry is not None and entry.shortfall_cents is not None:
-        lines.append(BudgetStatementLine(label="Short of its next entry", amount_usd=dollars(entry.shortfall_cents)))
+    if entry is not None and entry.funding is not None and entry.funding.shortfall_cents is not None:
+        lines.append(BudgetStatementLine(label="Short of its next entry", amount_usd=dollars(entry.funding.shortfall_cents)))
     return tuple(lines)
 
 

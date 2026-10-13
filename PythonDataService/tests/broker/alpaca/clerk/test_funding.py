@@ -352,6 +352,28 @@ def test_a_share_entry_rounds_up_to_the_cent_once_and_its_parts_add_up() -> None
     assert [(term.label, term.amount_cents) for term in need.terms] == [("Shares at the ask", 10_001), ("Fee provision", 1)]
 
 
+@pytest.mark.parametrize(
+    ("realized", "free_cents", "admits", "shortfall", "fits"),
+    [("0.0115", 10_001, False, 1, 0), ("0.0199", 10_001, False, 1, 0), ("0.02", 10_002, True, 0, 1)],
+)
+def test_an_entry_that_fits_a_limit_only_within_the_same_cent_is_refused_one_cent_short(
+    realized: str, free_cents: int, admits: bool, shortfall: int, fits: int,
+) -> None:
+    """A share at $100.001 with a one-cent fee provision needs $100.011, $100.02 rounded up. $100.0115 or
+    $100.0199 free is $100.01 rounded down: the exact comparison admitted both, the cent comparison refuses
+    both, $0.01 short. At $100.02 free it admits."""
+    need = EntryNeed.for_shares(requirement=D("100.011"), fee_provision_cents=1)
+    answer = _answer(_account(_bot("b", committed=100, realized=D(realized)), cash=1000), need=need)
+
+    assert need.commitment_cents == 10_002
+    assert answer.free_budget.amount_cents == free_cents
+    assert (answer.admits, answer.binding, answer.shortfall_cents, answer.fits) == (admits, "bot_budget", shortfall, fits)
+    if not admits:
+        assert answer.sentence == (
+            "This bot has only $100.01 free. The entry needs $100.02 including its fee provision. Shortfall: $0.01."
+        )
+
+
 def test_an_option_entry_as_admission_is_handed_it_splits_into_its_commitment_and_its_fee() -> None:
     need = EntryNeed.for_options(commitment_cents=19_300, fee_provision_cents=6)
 

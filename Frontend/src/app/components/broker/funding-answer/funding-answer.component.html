@@ -5,7 +5,7 @@
   }
   <ul class="funding-answer__limits">
     @for (row of rows(); track row.key) {
-      <li class="funding-answer__limit" [class.funding-answer__limit--binds]="row.binds" [attr.data-state]="row.figure.state">
+      <li class="funding-answer__limit" [class.funding-answer__limit--binds]="row.mark === 'binds'" [attr.data-state]="row.figure.state">
         <details>
           <summary>
             <span class="funding-answer__label">{{ row.label }}</span>
@@ -17,8 +17,8 @@
             } @else if (row.figure.state === 'unknown') {
               <span class="funding-answer__state">unknown</span>
             }
-            @if (row.binds) {
-              <span class="funding-answer__mark">binds</span>
+            @if (row.mark; as mark) {
+              <span class="funding-answer__mark">{{ mark }}</span>
             }
           </summary>
           <p class="funding-answer__source">{{ row.figure.source }}.</p>

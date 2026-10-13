@@ -1376,7 +1376,7 @@ def test_a_reading_past_its_age_limit_is_stale_on_the_page_and_the_entry_is_not_
 
     assert entry.funding is not None and entry.funding.account_headroom.state == "stale"
     assert entry.funding.account_headroom.amount_cents == 100_000
-    assert (entry.eligible, entry.funding.admits, entry.shortfall_cents) == (False, None, None)
+    assert (entry.eligible, entry.funding.admits, entry.funding.shortfall_cents) == (False, None, None)
     assert "Whether the entry fits is not said." in entry.detail
 
 

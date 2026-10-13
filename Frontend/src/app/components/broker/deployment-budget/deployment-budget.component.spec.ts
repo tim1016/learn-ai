@@ -65,6 +65,20 @@ const FUNDING_REFUSED: FundingView = {
   action: "Free another bot's budget, or add cash to the account.",
 };
 
+/** A $400.00 entry both limits cover: the budget has the least room, and nothing falls short of it. */
+const FUNDING_PASSES: FundingView = {
+  ...FUNDING_REFUSED,
+  account_headroom: { ...FUNDING_REFUSED.account_headroom, amount_usd: '1000.00', terms: [
+    { label: 'Unreserved account cash', amount_usd: '0.00' },
+    { label: "This bot's own claim", amount_usd: '1000.00' },
+  ] },
+  need: { commitment_usd: '400.00', terms: [{ label: 'Shares at the ask', amount_usd: '399.99' }, { label: 'Fee provision', amount_usd: '0.01' }] },
+  admits: true, binding: 'bot_budget', shortfall_usd: null, fits: 2, action: null,
+  sentence: 'This bot has $1,000.00 free and the account can fund $1,000.00 after protecting other positions, '
+    + "enough for the entry's $400.00 including its fee provision. "
+    + 'Passing our own limits does not guarantee that Alpaca accepts the order.',
+};
+
 /** The same answer when the account's reading is past its age limit: the amount last worked out, said stale. */
 const FUNDING_STALE: FundingView = {
   ...FUNDING_REFUSED,
@@ -204,7 +218,7 @@ interface LimitRowText {
   readonly label: string;
   readonly amount: string | null;
   readonly state: string | null;
-  readonly binds: boolean;
+  readonly mark: string | null;
   readonly terms: [string, string][];
 }
 
@@ -215,7 +229,7 @@ function limitRows(): LimitRowText[] {
     label: text(row, '.funding-answer__label') ?? '',
     amount: text(row, '.funding-answer__amount'),
     state: text(row, '.funding-answer__state'),
-    binds: row.querySelector('.funding-answer__mark') !== null,
+    mark: text(row, '.funding-answer__mark'),
     terms: Array.from(row.querySelectorAll('.funding-answer__terms > div')).map((term): [string, string] => [
       term.querySelector('dt')?.textContent?.trim() ?? '',
       term.querySelector('dd')?.textContent?.trim() ?? '',
@@ -312,26 +326,40 @@ describe("This bot's money", () => {
     expect(screen.getByText(/Short of this entry by/).textContent?.replace(/\s+/g, ' ').trim()).toBe('Short of this entry by $300.00');
     expect(limitRows()).toEqual([
       {
-        label: 'Free budget', amount: '$1,000.00', state: null, binds: false,
+        label: 'Free budget', amount: '$1,000.00', state: null, mark: null,
         terms: [['Budget set aside at deploy', '$1,000.00']],
       },
       {
-        label: 'Account headroom', amount: '$500.00', state: null, binds: true,
+        label: 'Account headroom', amount: '$500.00', state: null, mark: 'binds',
         terms: [['Unreserved account cash', '-$500.00'], ["This bot's own claim", '$1,000.00']],
       },
-      { label: 'Alpaca option buying power', amount: null, state: 'unknown', binds: false, terms: [] },
+      { label: 'Alpaca option buying power', amount: null, state: 'unknown', mark: null, terms: [] },
     ]);
     expect(screen.getByText(/read at Deploy and around each entry/)).toBeTruthy();
+  });
+
+  it('marks the limit with the least room as such, not as binding, when the entry passes', async () => {
+    await renderCard(vi.fn().mockResolvedValue({ ...RUNNING, funding: FUNDING_PASSES }));
+
+    await screen.findByText(FUNDING_PASSES.sentence);
+    expect(limitRows().map((row) => [row.label, row.mark])).toEqual([
+      ['Free budget', 'least room'],
+      ['Account headroom', null],
+      ['Alpaca option buying power', null],
+    ]);
+    expect(screen.queryByText('binds')).toBeNull();
+    expect(screen.queryByText(/Short of this entry/)).toBeNull();
+    expect(screen.queryByText(/What you can do/)).toBeNull();
   });
 
   it('says a stale figure is stale beside the amount it last had, and promises nothing', async () => {
     await renderCard(vi.fn().mockResolvedValue({ ...RUNNING, funding: FUNDING_STALE }));
 
     await screen.findByText(FUNDING_STALE.sentence);
-    expect(limitRows().map((row) => [row.label, row.amount, row.state, row.binds])).toEqual([
-      ['Free budget', '$1,000.00', null, true],
-      ['Account headroom', '$500.00', 'stale, as last read', false],
-      ['Alpaca option buying power', null, 'unknown', false],
+    expect(limitRows().map((row) => [row.label, row.amount, row.state, row.mark])).toEqual([
+      ['Free budget', '$1,000.00', null, 'least room'],
+      ['Account headroom', '$500.00', 'stale, as last read', null],
+      ['Alpaca option buying power', null, 'unknown', null],
     ]);
     expect(screen.queryByText(/Short of this entry/)).toBeNull();
     expect(screen.queryByText(/What you can do/)).toBeNull();
@@ -342,8 +370,8 @@ describe("This bot's money", () => {
 
     await screen.findByText(FUNDING_UNKNOWN.sentence);
     expect(limitRows()).toEqual([
-      { label: 'Free budget', amount: null, state: 'unknown', binds: false, terms: [] },
-      { label: 'Account headroom', amount: null, state: 'unknown', binds: false, terms: [] },
+      { label: 'Free budget', amount: null, state: 'unknown', mark: null, terms: [] },
+      { label: 'Account headroom', amount: null, state: 'unknown', mark: null, terms: [] },
     ]);
     expect(document.querySelector('.funding-answer')?.textContent).not.toContain('$');
   });

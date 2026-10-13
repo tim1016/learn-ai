@@ -14038,14 +14038,16 @@ export interface components {
          * FundingView
          * @description Whether a bot can fund an entry and which limit binds (``funding.funding_answer``, #3097).
          *
-         *     The Clerk's admission reads the same answer, so this view never promises
-         *     an entry the Clerk refuses. ``admits`` is the Clerk's own rule: ``None``
-         *     when there is no priced entry or a limit it depends on is not known.
-         *     ``binding`` is the known limit with the least room; ``fits`` is absent when
-         *     it cannot be said, and ``shortfall_usd`` unless something is short, never
-         *     "0.00". ``broker_buying_power`` is absent for a bot with no broker figure
-         *     (a Dry Run, a Live Shadow). Every dollar and every word is authored by
-         *     Python.
+         *     The Clerk's admission reads the same answer, so the same entry at the same
+         *     moment is never promised here and refused by the Clerk. ``admits`` is the
+         *     Clerk's own rule, in whole cents: ``None`` when there is no priced entry
+         *     or a limit it depends on is not known, and ``False`` with no entry priced
+         *     only when a known limit of the bot's own has under a cent of room, since
+         *     every entry commits at least that. ``binding`` is the known limit with
+         *     the least room; ``fits`` is absent when it cannot be said, and
+         *     ``shortfall_usd`` unless something is short, never "0.00".
+         *     ``broker_buying_power`` is absent for a bot with no broker figure (a Dry
+         *     Run, a Live Shadow). Every dollar and every word is authored by Python.
          */
         FundingView: {
             account_headroom: components["schemas"]["FigureView"];

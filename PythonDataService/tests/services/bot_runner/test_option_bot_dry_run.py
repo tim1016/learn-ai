@@ -1834,7 +1834,8 @@ async def test_an_option_bot_with_nothing_of_its_budget_free_waits_for_its_next_
 
     for waits in (nothing_free, over_its_budget):
         assert (waits.eligible, waits.headline) == (False, "Its next entry waits")
-        assert "nothing of its budget is free" in waits.detail.lower() and waits.required is None
+        assert "nothing of its budget is free" in waits.detail.lower()
+        assert waits.funding is not None and waits.funding.need is None
     assert a_cent_free.eligible and "picked" in a_cent_free.headline
     # Budget left, and an account with no cash to fund it: the account's limit is one the page shows and judges too.
     nothing_fundable = read_with("0", cash="0")

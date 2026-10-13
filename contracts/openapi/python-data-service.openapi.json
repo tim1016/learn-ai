@@ -18028,7 +18028,7 @@
       },
       "FundingView": {
         "additionalProperties": false,
-        "description": "Whether a bot can fund an entry and which limit binds (``funding.funding_answer``, #3097).\n\nThe Clerk's admission reads the same answer, so this view never promises\nan entry the Clerk refuses. ``admits`` is the Clerk's own rule: ``None``\nwhen there is no priced entry or a limit it depends on is not known.\n``binding`` is the known limit with the least room; ``fits`` is absent when\nit cannot be said, and ``shortfall_usd`` unless something is short, never\n\"0.00\". ``broker_buying_power`` is absent for a bot with no broker figure\n(a Dry Run, a Live Shadow). Every dollar and every word is authored by\nPython.",
+        "description": "Whether a bot can fund an entry and which limit binds (``funding.funding_answer``, #3097).\n\nThe Clerk's admission reads the same answer, so the same entry at the same\nmoment is never promised here and refused by the Clerk. ``admits`` is the\nClerk's own rule, in whole cents: ``None`` when there is no priced entry\nor a limit it depends on is not known, and ``False`` with no entry priced\nonly when a known limit of the bot's own has under a cent of room, since\nevery entry commits at least that. ``binding`` is the known limit with\nthe least room; ``fits`` is absent when it cannot be said, and\n``shortfall_usd`` unless something is short, never \"0.00\".\n``broker_buying_power`` is absent for a bot with no broker figure (a Dry\nRun, a Live Shadow). Every dollar and every word is authored by Python.",
         "properties": {
           "account_headroom": {
             "$ref": "#/components/schemas/FigureView"

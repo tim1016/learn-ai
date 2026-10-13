@@ -258,8 +258,8 @@ def test_an_account_overcommitted_by_collateral_can_fund_nothing_and_says_zero()
 
 
 def test_the_headroom_comparison_has_no_epsilon() -> None:
-    """One share at $100 with its one-cent fee provision needs $100.01. That much cash admits it; a
-    ten-billionth of a dollar less does not."""
+    """Pins the edge where the limit rounds down: one share at $100 with its one-cent fee provision needs
+    $100.01. Cash of exactly that admits it; a ten-billionth of a dollar less floors to $100.00 and does not."""
     from app.broker.alpaca.clerk.budgets import budget_entry_decision
     from tests.broker.alpaca.clerk.sqlite.conftest import NOON
 
@@ -269,3 +269,40 @@ def test_the_headroom_comparison_has_no_epsilon() -> None:
 
     assert decide("100.01").allowed
     assert not decide("100.0099999999").allowed
+
+
+@pytest.mark.parametrize(
+    ("realized", "exact_comparison_admits", "allowed"),
+    [("0.0109", False, False), ("0.0115", True, False), ("0.0199", True, False), ("0.02", True, True)],
+)
+def test_a_share_entry_that_fits_a_limit_only_within_the_same_cent_is_refused(
+    realized: str, exact_comparison_admits: bool, allowed: bool,
+) -> None:
+    """The entry test compares whole cents (#3097): the entry rounds up and each limit rounds down.
+
+    One share at $100.001 with its one-cent fee provision needs $100.011, which is $100.02 to the cent. A
+    $100.00 budget with $0.0115 realized has $100.0115 free, which is $100.01 to the cent: the exact
+    comparison admitted it and the cent comparison refuses it, $0.01 short. Nothing the exact comparison
+    refused is admitted ($100.0109), and at $100.02 free both admit.
+    """
+    from app.broker.alpaca.clerk.budgets import budget_entry_decision
+    from tests.broker.alpaca.clerk.sqlite.conftest import NOON
+
+    own = deployment_budget(
+        strategy_instance_id="a", committed_cents=10_000, active=True, realized_gross=realized,
+        fees=D(0), position_cost=D(0), pending_orders=D(0),
+    )
+    account = account_budget(cash=1000, deployments=[own], order_claims=D(0), fee_claims=D(0))
+
+    result = budget_entry_decision(
+        account, strategy_instance_id="a", quantity=1, price="100.001", at_ms=NOON, observed_at_ms=NOON,
+    )
+
+    assert result.required == D("100.011")
+    assert (result.required <= own.free) is exact_comparison_admits
+    assert result.allowed is allowed
+    assert not result.allowed or exact_comparison_admits, "the cent comparison never admits more than the exact one"
+    if not allowed:
+        assert result.detail == (
+            "This bot has only $100.01 free. The entry needs $100.02 including its fee provision. Shortfall: $0.01."
+        )
