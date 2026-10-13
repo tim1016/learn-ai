@@ -103,3 +103,18 @@ def test_a_re_entry_buys_the_fresh_contract_of_a_bought_leg_and_sells_that_of_a_
     )
     # Waiting for momentum names no verb, so it reads alike on both sides.
     assert phrases.reentry(on_momentum, "sell") == phrases.reentry(on_momentum, "buy")
+
+
+def test_a_partial_square_off_says_that_a_stopped_bought_leg_takes_the_sold_legs_it_protects_only_when_the_setup_sells() -> (
+    None
+):
+    only_the_stopped_leg = "Square off is partial: a stop closes only the leg that was stopped."
+
+    assert phrases.square_off("partial") == only_the_stopped_leg
+    assert phrases.square_off("partial", sells=False) == only_the_stopped_leg
+    assert phrases.square_off("partial", sells=True) == (
+        "Square off is partial: a stop closes only the leg that was stopped, and a stopped bought leg takes with it "
+        "any sold leg it protects, bought back in the same minute."
+    )
+    # A complete square-off closes every open leg already, the sold ones with the rest.
+    assert phrases.square_off("complete", sells=True) == phrases.square_off("complete")

@@ -22879,7 +22879,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "picked" | "pick_refused" | "starting_price_taken" | "no_starting_price" | "momentum_hit" | "entry_filled" | "entry_dropped" | "entry_refused_for_cash" | "entry_refused_for_cover" | "entry_refused_for_second_expiry" | "entry_refused_for_other_side" | "sale_not_taken_at_zero" | "stop_hit" | "squared_off" | "exit_time" | "close_filled" | "re_entry_earned" | "re_entry_blocked_by_cutoff" | "re_entry_lost" | "leg_cancelled" | "marked_not_sold" | "marked_not_bought_back";
+            kind: "picked" | "pick_refused" | "starting_price_taken" | "no_starting_price" | "momentum_hit" | "entry_filled" | "entry_dropped" | "entry_refused_for_cash" | "entry_refused_for_cover" | "entry_refused_for_second_expiry" | "entry_refused_for_other_side" | "sale_not_taken_at_zero" | "stop_hit" | "squared_off" | "closed_with_its_protection" | "exit_time" | "close_filled" | "re_entry_earned" | "re_entry_blocked_by_cutoff" | "re_entry_lost" | "leg_cancelled" | "marked_not_sold" | "marked_not_bought_back";
             /** Leg Id */
             leg_id: string;
             /** Price Usd */
@@ -22895,7 +22895,7 @@ export interface components {
              * Reason
              * @enum {string}
              */
-            reason: "stop" | "square_off" | "exit_time" | "marked_not_sold" | "marked_not_bought_back";
+            reason: "stop" | "square_off" | "closed_with_its_protection" | "exit_time" | "marked_not_sold" | "marked_not_bought_back";
         };
         /**
          * OptionsBacktestFillResponse
@@ -22912,7 +22912,7 @@ export interface components {
             /** Entry Number */
             entry_number: number;
             /** Exit Reason */
-            exit_reason?: ("stop" | "square_off" | "exit_time" | "marked_not_sold" | "marked_not_bought_back") | null;
+            exit_reason?: ("stop" | "square_off" | "closed_with_its_protection" | "exit_time" | "marked_not_sold" | "marked_not_bought_back") | null;
             /** Filled Usd */
             filled_usd: string;
             /**
@@ -23743,7 +23743,7 @@ export interface components {
              * Exit Reason
              * @enum {string}
              */
-            exit_reason: "stop" | "square_off" | "exit_time" | "marked_not_sold" | "marked_not_bought_back";
+            exit_reason: "stop" | "square_off" | "closed_with_its_protection" | "exit_time" | "marked_not_sold" | "marked_not_bought_back";
             /** Leg Id */
             leg_id: string;
             mark?: components["schemas"]["OptionsBacktestTradeMarkResponse"] | null;

@@ -181,6 +181,7 @@ def test_the_trades_are_counted_by_the_reason_they_left_with_every_reason_listed
     assert summary.exits_by_reason == (
         (ExitReason.STOP, 1),
         (ExitReason.SQUARE_OFF, 1),
+        (ExitReason.CLOSED_WITH_ITS_PROTECTION, 0),
         (ExitReason.EXIT_TIME, 4),
         (ExitReason.MARKED_NOT_SOLD, 1),
         (ExitReason.MARKED_NOT_BOUGHT_BACK, 0),

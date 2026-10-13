@@ -175,8 +175,8 @@ def setting_differences(a: OptionsBacktestSetup, b: OptionsBacktestSetup) -> tup
         "square off",
         a.square_off,
         b.square_off,
-        phrases.square_off(a.square_off),
-        phrases.square_off(b.square_off),
+        phrases.square_off(a.square_off, sells=a.sells),
+        phrases.square_off(b.square_off, sells=b.sells),
     )
 
     b_legs = {leg.leg_id: leg for leg in b.legs}

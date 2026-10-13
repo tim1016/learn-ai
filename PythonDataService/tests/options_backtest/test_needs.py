@@ -174,13 +174,17 @@ def test_a_new_way_to_close_a_leg_must_be_weighed_in_what_a_session_needs() -> N
     assert set(ExitReason) == {
         ExitReason.STOP,
         ExitReason.SQUARE_OFF,
+        # A sold leg taken along by the stop on the bought leg that protects it: ``stop_can_close`` says a stop on a
+        # bought leg of its kind reaches it, and the sessions the property test generates that sell reach it (#3107).
+        ExitReason.CLOSED_WITH_ITS_PROTECTION,
         ExitReason.EXIT_TIME,
         ExitReason.MARKED_NOT_SOLD,
         # A mark is how a session ends for a leg that was not closed. It decides nothing, so it is not a way to close.
         ExitReason.MARKED_NOT_BOUGHT_BACK,
     }, (
         "the replay's ways of closing a leg changed. ``needs._can_come_back`` reasons from them: only a stop on the "
-        "leg itself, or a complete square-off with a stop on some leg, closes a leg that can start a re-entry, and "
+        "leg itself, a stop on a bought leg that takes it along as its protection, or a complete square-off with a "
+        "stop on some leg, closes a leg that can start a re-entry, and "
         "the contracts a session needs follow from that. A new way to close a leg (a target, a trailing stop) may "
         "make a leg come back that ``_can_come_back`` says cannot, and then a session's needs are short and the "
         "run fails. Revisit ``_can_come_back``, extend the property test's generator to the new rule, and then "

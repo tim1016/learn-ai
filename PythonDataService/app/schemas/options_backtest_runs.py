@@ -51,7 +51,9 @@ RUN_SETUP_NAME_RULE = (
 
 SessionStatusWord = Literal["traded", "no_trade", "skipped", "incomplete"]
 SkipReasonWord = Literal["window_does_not_fit", "underlying_did_not_trade"]
-ExitReasonWord = Literal["stop", "square_off", "exit_time", "marked_not_sold", "marked_not_bought_back"]
+ExitReasonWord = Literal[
+    "stop", "square_off", "closed_with_its_protection", "exit_time", "marked_not_sold", "marked_not_bought_back"
+]
 PickRefusalWord = Literal[
     "chain_incomplete", "expiry_not_listed", "expiry_not_a_session", "strike_not_listed", "not_standard"
 ]

@@ -249,6 +249,11 @@ class OptionsBacktestSetup(BaseModel):
     fees: FeePolicy
     starting_cash_usd: Annotated[Decimal, Field(gt=0, max_digits=14, decimal_places=2)]
 
+    @property
+    def sells(self) -> bool:
+        """Whether any leg opens by a sale, which is what sends a replay through the cover book."""
+        return any(leg.side == "sell" for leg in self.legs)
+
     def window_fits(self, *, session_open_ms: int, session_close_ms: int) -> bool:
         """Whether a session with that open and close can trade this setup.
 
@@ -307,7 +312,9 @@ class OptionsBacktestSetup(BaseModel):
         """Whether some stop loss can close ``leg``, which is what earns it a re-entry.
 
         A stop closes the leg that carries it. Under a complete square-off it closes every open leg. And a sold leg
-        also leaves with a bought leg of its kind when that one is stopped, since protection is never let go first.
+        also leaves with a bought leg of its kind when that one is stopped, under either square-off, since protection
+        is never let go first: a stopped bought leg takes with it the sold legs it protects (#3107), which are then
+        closed and earn their re-entries as a stopped leg does.
         """
         stopped = [each for each in self.legs if each.stop_loss is not None]
         if leg.stop_loss is not None:

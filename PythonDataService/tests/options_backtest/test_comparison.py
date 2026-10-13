@@ -411,6 +411,24 @@ def test_a_sold_leg_only_one_run_has_is_said_with_the_sentences_the_description_
     assert described == " ".join(leg_sentences(LegSetup.model_validate(sold)))
 
 
+def test_a_partial_square_off_is_said_as_it_is_of_the_setup_that_has_it_and_a_setup_that_sells_takes_the_sold_legs() -> None:
+    # Bought legs only, a partial square-off closes the leg that was stopped. With a sold leg a stopped bought leg takes
+    # the sold legs it protects with it (#3107), and the comparison says it as the description does.
+    complete_buying = {"square_off": "complete", **BOUGHT_PAIR}
+    partial_selling = {"square_off": "partial", **SOLD_PAIR}
+    partial_buying = {"square_off": "partial", **BOUGHT_PAIR}
+
+    [_, _, selling_label, _, selling_words] = _differences(complete_buying, partial_selling)[0]
+    [(_, _, _, _, buying_words), *_] = _differences(complete_buying, partial_buying)
+
+    assert selling_label == "square off"
+    assert selling_words == (
+        "Square off is partial: a stop closes only the leg that was stopped, and a stopped bought leg takes with it "
+        "any sold leg it protects, bought back in the same minute."
+    )
+    assert buying_words == "Square off is partial: a stop closes only the leg that was stopped."
+
+
 # ── The sessions two runs share ──────────────────────────────────────────
 
 

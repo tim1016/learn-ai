@@ -111,9 +111,18 @@ def reentry(rule: ReentryOnStop, side: LegSide = "buy") -> str:
     return f"{fresh}, takes a new starting premium from it and waits for momentum again, {times}."
 
 
-def square_off(mode: str) -> str:
-    """``mode`` is ``partial`` or ``complete``, the two a setup's square-off is set to."""
+def square_off(mode: str, *, sells: bool = False) -> str:
+    """``mode`` is ``partial`` or ``complete``, the two a setup's square-off is set to.
+
+    ``sells`` is whether the setup has a sold leg. A partial square-off is then not only the leg that was stopped: a
+    bought leg that is stopped takes with it the sold legs it protects (#3107), and the sentence says so.
+    """
     if mode == "partial":
+        if sells:
+            return (
+                "Square off is partial: a stop closes only the leg that was stopped, and a stopped bought leg takes "
+                "with it any sold leg it protects, bought back in the same minute."
+            )
         return "Square off is partial: a stop closes only the leg that was stopped."
     return (
         "Square off is complete: a stop closes every open leg and cancels legs still waiting for momentum, "

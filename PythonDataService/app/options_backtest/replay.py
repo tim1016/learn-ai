@@ -1,14 +1,15 @@
-"""Replay one trading session of an options backtest setup (#3030, and #3106 for sold legs).
+"""Replay one trading session of an options backtest setup (#3030, and #3106 and #3107 for sold legs).
 
 Formula: cash change = Σ cash effect of every fill, each net of its fee: a buy takes its value and fee out, a sale
     brings its value less its fee in, whichever of a leg's two orders it is. A leg left open at the session's
     close is marked, not closed: a bought leg has paid out and not been paid back, and a sold leg has been paid
     and not bought back, so it is owed.
 Reference: the owner's rules in #3030 (the sixteen behaviours) and in #3095 (sold legs, covered, held with their
-  collateral out of what the run may spend). The arithmetic is ``fills.py``'s, and every question about cover,
-  collateral and cash for a setup that sells is ``cover_book.py``'s; this file decides what happens when.
+  collateral out of what the run may spend, stopped and closed with their protection). The arithmetic is
+  ``fills.py``'s, and every question about cover, collateral, cash and which sold legs go with a leaving bought leg
+  for a setup that sells is ``cover_book.py``'s; this file decides what happens when.
 Canonical implementation: this file, with ``fills.py`` for the prices and the money and ``cover_book.py`` for what is
-  held, what covers it, what it pledges and which fills may go together.
+  held, what covers it, what it pledges, which fills may go together and which sold legs leave with a bought one.
 Validated against: tests/options_backtest/test_replay_*.py, whose expectations are worked
   by hand from the rules and not taken from this code's output.
 
@@ -38,6 +39,21 @@ minute: the opening group, then the closing group. Rules, for a setup that sells
   minute. No cash is read there, and a close is never refused.
 * A sold leg never bought back is marked at its last traded close as an amount owed, and a bought leg still
   waiting for it is marked, not sold. The session is incomplete.
+* A sold leg's stop level is what it was sold for moved up by the rule, and a minute that closes at or above it hits
+  the stop. Under a partial square-off a stop closes only the leg that carries it, so a stop on a sold leg buys back
+  that leg and leaves the bought legs held.
+* **Protection.** When a bought leg's close is decided by a stop, the cover book is asked for the leaving plan over
+  what is held and not already being closed: the sold legs that must go with it, so that what remains is covered and
+  pledges no more than it did. Each gets a close order in the same minute and exit group, with the exit reason
+  ``closed_with_its_protection``, in the book's order: last listed first, the same kind and expiry before any other.
+  That is a policy by listed order and is not minimal: it can close more sold legs than another policy would. The
+  book is asked again of what would then be held until it has nothing to add, so that the sale is allowed in the
+  minute the buy-backs fill. A bought leg that protects nothing sold is sold freely. No cash is read when it is
+  decided, so nothing is re-planned when cash changes; the closing group makes the bought leg's sale wait until its
+  sold legs have been bought back.
+* A sold leg closed by its own stop, by a complete square-off or with its protection earns a re-entry on a bought
+  leg's terms: a rule, a count left, and a close decided no later than the cutoff. A re-entry joins an opening group
+  like any first entry and is refused like one, so a sold leg whose cover did not come back is refused for cover.
 
 Minute bars cannot show which of two contracts printed first inside a minute, so judging an opening group as one
 simulated atomic group, bought legs standing beside the sold legs they cover, is a modelling choice and not
@@ -68,6 +84,7 @@ from app.options_backtest.cover_book import (
     assignment_obligation,
     collateral,
     covers,
+    leaving_plan,
     may_leave,
 )
 from app.options_backtest.market import MinuteBar, Picked, PickRefused, SessionMarket
@@ -87,41 +104,13 @@ from app.options_backtest.results import (
     SessionStatus,
     SkipReason,
 )
-from app.options_backtest.setup import MS_PER_MINUTE, LegSetup, OptionsBacktestSetup
+from app.options_backtest.setup import MS_PER_MINUTE, LegSetup, OptionsBacktestSetup, StopLoss
 
 # The fee, in dollars, for one fill. The caller owns the policy.
 FeeFor = Callable[[Fill], Decimal]
 
 # What a setup that sells nothing holds against its positions: a bought option has no requirement, only its premium.
 _NOTHING_PLEDGED = Decimal(0)
-
-
-class SoldLegRulesNotReplayed(Exception):
-    """A setup sells a leg and a leg carries a stop loss or a re-entry rule, which the replay does not trade yet (#3107).
-
-    ``sold`` are the sold legs and ``ruled`` the legs that carry a stop loss or a re-entry rule, each in the setup's
-    order.
-    """
-
-    def __init__(self, sold: tuple[str, ...], ruled: tuple[str, ...]) -> None:
-        self.sold = sold
-        self.ruled = ruled
-        super().__init__(
-            f"a stop loss or a re-entry rule on a setup that sells is not replayed yet; "
-            f"sold: {', '.join(sold)}; carrying a rule: {', '.join(ruled)}"
-        )
-
-
-def refuse_sold_leg_rules(setup: OptionsBacktestSetup) -> None:
-    """``SoldLegRulesNotReplayed`` when ``setup`` has a sold leg and any leg carries a stop loss or a re-entry rule.
-
-    Asked before anything is fetched, and again by the replay, so no path replays a sold leg's stop as if it were a
-    bought leg's.
-    """
-    sold = tuple(leg.leg_id for leg in setup.legs if leg.side == "sell")
-    ruled = tuple(leg.leg_id for leg in setup.legs if leg.stop_loss is not None or leg.reentry_on_stop is not None)
-    if sold and ruled:
-        raise SoldLegRulesNotReplayed(sold, ruled)
 
 
 def entry_refusal(refusal: OpeningRefusal, *, cover_did_not_trade: bool = False) -> EntryRefusal:
@@ -217,8 +206,7 @@ def replay_session(
     the run, which carries it from one session to the next. ``fee_for`` gives the fee in dollars
     for each fill, entries and exits alike; it is also asked for an entry that is then refused for
     want of cash, since the fee is part of what the entry would cost. Raises ``ValueError`` for a
-    session whose open or close is not on a whole minute: no bar could close at its exit time, and
-    ``SoldLegRulesNotReplayed`` for a setup that sells and carries a stop loss or a re-entry rule.
+    session whose open or close is not on a whole minute: no bar could close at its exit time.
 
     The replay's own arithmetic runs in an exact decimal context: a hundred digits, with ``Inexact``
     trapped, so a figure too long to hold (a bar price of more than about a hundred digits) raises
@@ -226,7 +214,6 @@ def replay_session(
     ``pick`` and ``option_bar``) are the caller's code and run in the decimal context the caller had
     when it called, so a fee that rounds to the cent or a picker that rounds to a strike is ordinary use.
     """
-    refuse_sold_leg_rules(setup)
     if market.session_open_ms % MS_PER_MINUTE or market.session_close_ms % MS_PER_MINUTE:
         raise ValueError("a session opens and closes on a whole minute: bars are named by the minute they close")
     caller_context = getcontext().copy()
@@ -270,7 +257,7 @@ class _Session:
         self.money_steps: list[MoneyStep] = []
         self.groups = 0
         # Only a setup that sells asks the cover book anything: a bought option has no requirement and no cover.
-        self.sells = any(leg.side == "sell" for leg in setup.legs)
+        self.sells = setup.sells
 
     def run(self) -> SessionOutcome:
         if not self.setup.window_fits(session_open_ms=self.open_ms, session_close_ms=self.close_ms):
@@ -396,7 +383,7 @@ class _Session:
             entry=fill,
             entry_fee=fee,
             entry_decided_at_ms=leg.order_decided_at_ms,
-            stop_level=None if rule is None else fills.stop_level(rule, bought=fill.filled),
+            stop_level=None if rule is None else _stop_level_of(rule, fill),
             last_seen=Mark(t, taken.bar.close),
         )
         if leg.entries_filled > 0:
@@ -504,14 +491,21 @@ class _Session:
     def _stops(self, t: int, bars: dict[str, MinuteBar | None]) -> bool:
         """Decide the closes a stop calls for at ``t``. True when an exit was decided.
 
-        Every leg whose close at ``t`` is at or below its stop is one exit group. Under ``partial`` only
-        those legs are closed; under ``complete`` every open leg is, and every leg still waiting is cancelled.
+        Every leg whose close at ``t`` has reached its stop is one exit group: a bought leg at or below its stop
+        level, a sold leg at or above its own. Under ``partial`` only those legs are closed, and the sold legs that
+        must go with a bought leg that is leaving (see ``_close_with_protection``); under ``complete`` every open leg
+        is, and every leg still waiting is cancelled.
         """
         hit = self._legs_at_their_stop(bars)
         if not hit:
             return False
         group = self._next_group()
         complete = self.setup.square_off == "complete"
+        # What is held and not already being closed, before these stops are decided: the book protection is asked of.
+        # A complete square-off closes everything held, so no sold leg is left for it to protect.
+        standing = self._held(including_closing=False) if self.sells and not complete else None
+        leaving: list[str] = []
+        stopped_sold: list[str] = []
         for leg in self.legs:
             if leg.phase is _Phase.HELD:
                 position = _position_of(leg)
@@ -533,13 +527,45 @@ class _Session:
                 else:
                     continue
                 position.close = _CloseOrder(reason, group, t, earns_reentry=self._earns_reentry(leg, t))
+                (stopped_sold if leg.setup.side == "sell" else leaving).append(leg.setup.leg_id)
             elif complete and leg.phase is _Phase.WAITING:
                 leg.phase = _Phase.DONE
                 self._event(EventKind.LEG_CANCELLED, t, leg, reason=CancelReason.SQUARE_OFF)
+        if standing is not None and leaving:
+            # A sold leg stopped in this same minute is already leaving: it is no longer what protection is asked of.
+            self._close_with_protection(t, group, standing.without(stopped_sold), leaving)
         return True
 
+    def _close_with_protection(self, t: int, group: int, standing: Held, leaving: Sequence[str]) -> None:
+        """Give each sold leg that must go with the bought legs ``leaving`` a close order in their exit group.
+
+        ``standing`` is what is held and not already being closed, the leaving legs among it. Which sold legs go, and
+        in what order, is the cover book's (``leaving_plan``); the replay does not work it out. A leg already being
+        closed is not in ``standing``, and neither is any sold leg stopped in this minute: removing a closing bought
+        leg and leaving the sold legs that depend on it would hand the book a loss with no limit.
+
+        The book measures its plan against what is pledged before any of the plan's sold legs is bought back, and
+        the closing group measures a sale against what is pledged after the buy-backs fill. A sold leg that went can
+        have been what held the requirement up, so a leaving leg may still not be allowed to leave once the plan's
+        legs are gone, and its sale would then wait for the exit time. The book is therefore asked again of what
+        would then be held, until it has nothing to add: the sale fills in the minute the buy-backs do.
+        """
+        by_id = {leg.setup.leg_id: leg for leg in self.legs}
+        plan: list[str] = []
+        while more := leaving_plan(standing.without(plan), leaving):
+            plan.extend(more)
+        for leg_id in plan:
+            leg = by_id[leg_id]
+            position = _position_of(leg)
+            self._event(
+                EventKind.CLOSED_WITH_ITS_PROTECTION, t, leg, position=position, contract=position.attempt.contract
+            )
+            position.close = _CloseOrder(
+                ExitReason.CLOSED_WITH_ITS_PROTECTION, group, t, earns_reentry=self._earns_reentry(leg, t)
+            )
+
     def _legs_at_their_stop(self, bars: dict[str, MinuteBar | None]) -> dict[str, MinuteBar]:
-        """The bar of each open leg with a stop and no close pending whose close is at or below the stop."""
+        """The bar of each open leg with a stop and no close pending whose close has reached the stop."""
         hit: dict[str, MinuteBar] = {}
         for leg in self.legs:
             if leg.phase is not _Phase.HELD:
@@ -552,7 +578,7 @@ class _Session:
                 position.close is None
                 and position.stop_level is not None
                 and bar is not None
-                and fills.stop_hit(position.stop_level, close=bar.close)
+                and _stop_reached(position, bar.close)
             ):
                 hit[leg.setup.leg_id] = bar
         return hit
@@ -668,11 +694,15 @@ class _Session:
 
     # --- what is held, and what it pledges --------------------------------------------------------
 
-    def _held(self) -> Held:
-        """What the legs hold now, as the cover book reads it. Asked only of a setup that sells."""
+    def _held(self, *, including_closing: bool = True) -> Held:
+        """What the legs hold now, as the cover book reads it. Asked only of a setup that sells.
+
+        A leg whose close is decided is still held and still pledged, so it is in the answer unless
+        ``including_closing`` is false, which asks for what is held and not already being closed.
+        """
         holdings: list[Holding] = []
         for leg in self.legs:
-            if leg.phase is _Phase.HELD:
+            if leg.phase is _Phase.HELD and (including_closing or _position_of(leg).close is None):
                 entry = _position_of(leg).entry
                 holdings.append(
                     Holding(leg.setup.leg_id, entry.contract, entry.side, entry.contracts, entry.multiplier)
@@ -804,6 +834,21 @@ class _Session:
                 ),
             )
         )
+
+
+def _stop_level_of(rule: StopLoss, fill: Fill) -> Decimal:
+    """A bought leg's stop is a fall below what it paid and a sold leg's a rise above what it was sold for."""
+    if fill.side == "sell":
+        return fills.sold_stop_level(rule, sold=fill.filled)
+    return fills.stop_level(rule, bought=fill.filled)
+
+
+def _stop_reached(position: _Position, close: Decimal) -> bool:
+    """Whether a minute that closed at ``close`` has reached the position's stop, whichever way it was opened."""
+    assert position.stop_level is not None
+    if position.entry.side == "sell":
+        return fills.sold_stop_hit(position.stop_level, close=close)
+    return fills.stop_hit(position.stop_level, close=close)
 
 
 def _is_a_sale_to_open_at_nothing(fill: Fill) -> bool:

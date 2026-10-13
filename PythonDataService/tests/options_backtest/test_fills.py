@@ -14,6 +14,8 @@ from app.options_backtest.fills import (
     momentum_level,
     momentum_reached,
     order_value,
+    sold_stop_hit,
+    sold_stop_level,
     stop_hit,
     stop_level,
     trade_pnl,
@@ -151,6 +153,40 @@ def test_a_stop_is_hit_by_a_close_at_or_below_its_level_and_not_by_one_above() -
     assert stop_hit(level, close=D("1.94")) is False
     assert stop_hit(level, close=D("1.935")) is True
     assert stop_hit(level, close=D("1.93")) is True
+
+
+@pytest.mark.parametrize(
+    ("kind", "value", "level"),
+    [
+        ("percent", "25", "2.75"),  # 2.20 * (1 + 25/100) = 2.20 * 1.25
+        ("percent", "150", "5.50"),  # 2.20 * (1 + 150/100) = 2.20 * 2.5: no ceiling at 100
+        ("percent", "12.5", "2.475"),  # 2.20 * 1.125, and a level is not rounded to the price step
+        ("points", "0.50", "2.70"),  # 2.20 + 0.50
+        ("points", "3", "5.20"),  # 2.20 + 3
+    ],
+)
+def test_a_sold_legs_stop_sits_above_the_sale_price_by_the_rule_and_is_not_rounded(
+    kind: str, value: str, level: str
+) -> None:
+    rule = StopLoss(kind=kind, value=D(value))  # type: ignore[arg-type]
+
+    assert sold_stop_level(rule, sold=D("2.20")) == D(level)
+
+
+def test_a_sold_legs_stop_is_hit_by_a_close_at_or_above_its_level_and_not_by_one_below() -> None:
+    level = D("2.75")
+
+    assert sold_stop_hit(level, close=D("2.74")) is False
+    assert sold_stop_hit(level, close=D("2.75")) is True
+    assert sold_stop_hit(level, close=D("2.76")) is True
+
+
+def test_a_sold_legs_stop_is_the_bought_legs_stop_the_other_way_round() -> None:
+    # The same premium and the same rule: a bought leg's level is the same distance below it as a sold leg's is above.
+    rule = StopLoss(kind="points", value=D("0.50"))
+
+    assert stop_level(rule, bought=D("2.00")) == D("1.50")
+    assert sold_stop_level(rule, sold=D("2.00")) == D("2.50")
 
 
 @pytest.mark.parametrize(

@@ -650,3 +650,26 @@ def test_a_sale_decided_on_momentum_and_then_refused_for_cover_ends_its_lines_at
         (SP, "short", 0, sold_put.occ_symbol, D("2.00"), 5, 8),
         (MOM, "short", 0, sold_put.occ_symbol, D("2.500"), 5, 8),
     ]
+
+
+def test_a_sold_legs_stop_is_a_line_above_what_it_was_sold_for_until_the_close_that_bought_it_back_was_decided() -> None:
+    sold_put = contract("put", "500")
+    cover = contract("put", "495")
+    written = setup(leg("long", "put"), leg("short", "put", side="sell", stop=("percent", "25")))
+    market = TableMarket(
+        underlying=steady("500.00"),
+        picks=picked(("long", "500.00", cover), ("short", "500.00", sold_put)),
+        options={
+            cover: flat("1.00", 5, 60),
+            # Sold at the open of m6 at 2.00: the stop sits at 2.00 x 1.25 = 2.50, above the sale. m10 closes on it.
+            sold_put: {**flat("2.00", 5, 9), 10: ("2.00", "2.50"), **flat("2.60", 11, 60)},
+        },
+    )
+
+    outcome = replay(written, market)
+
+    # The line begins at the minute the sale filled and ends at the minute the buy-back was decided, and it is the level
+    # the trade stored: the price at or above which the leg is bought back.
+    assert _lines(levels_of(written, outcome), at(0)) == [(STOP, "short", 0, sold_put.occ_symbol, D("2.50"), 6, 10)]
+    short = next(trade for trade in outcome.trades if trade.leg_id == "short")
+    assert short.stop_level == D("2.50") > short.entry.filled

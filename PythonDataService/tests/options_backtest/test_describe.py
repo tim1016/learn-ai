@@ -564,3 +564,20 @@ def test_the_sentences_of_a_setup_that_sells_are_whole_sentences_one_to_an_item(
     for sentence in sentences:
         assert sentence.endswith(".") and sentence == sentence.strip(), sentence
         assert ". " not in sentence, sentence
+
+
+def test_a_partial_square_off_of_a_setup_that_sells_says_a_stopped_bought_leg_takes_the_sold_legs_it_protects() -> None:
+    # A stop on a bought leg that covers a sold one closes the sold leg too (#3107), so "only the leg that was stopped"
+    # would be untrue of a setup that sells. A setup that buys only is said as it always was, and so is a complete one.
+    selling = _setup(square_off="partial", legs=[_COVER, _leg(leg_id="short_call", side="sell")])
+    buying = _setup(square_off="partial", legs=[_COVER])
+    complete = _setup(square_off="complete", legs=[_COVER, _leg(leg_id="short_call", side="sell")])
+
+    assert describe_setup(selling, full_session=_CLOCK).square_off == (
+        "Square off is partial: a stop closes only the leg that was stopped, and a stopped bought leg takes with it "
+        "any sold leg it protects, bought back in the same minute.",
+    )
+    assert describe_setup(buying, full_session=_CLOCK).square_off == (
+        "Square off is partial: a stop closes only the leg that was stopped.",
+    )
+    assert "every open leg" in " ".join(describe_setup(complete, full_session=_CLOCK).square_off)

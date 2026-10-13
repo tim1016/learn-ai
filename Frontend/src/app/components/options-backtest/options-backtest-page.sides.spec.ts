@@ -181,3 +181,30 @@ describe('opening a stored setup that sells', () => {
     expect((screen.getByRole('switch', { name: 'Leg 2 stop loss' }) as HTMLInputElement).checked).toBe(true);
   });
 });
+
+describe('a re-entry on a leg with no stop of its own', () => {
+  it('on a sold leg is said to come back when it is closed with its protection, as the setup’s sentences say', async () => {
+    await renderPage(fakeService(vi));
+    addLeg('Call');
+    choose('Sell');
+    addLeg('Call');
+
+    flip('Leg 2 re-entry on SL');
+
+    // The server takes this setup when the bought call has a stop: that stop closes the sold call with it, and the sold
+    // call earns its re-entry. The hint must not say that nothing re-enters until the sold leg's own stop is on.
+    const hint = inLeg(2).getByRole('status').textContent ?? '';
+    expect(hint).toMatch(/closed with its protection \(a stop on the bought call that covers it takes it along\)/);
+    expect(hint).not.toMatch(/nothing re-enters/);
+  });
+
+  it('on a bought leg is said to come back with its own stop, or when a complete square off closes it', async () => {
+    await renderPage(fakeService(vi));
+    addLeg('Call');
+
+    flip('Leg 1 re-entry on SL');
+
+    const hint = inLeg(1).getByRole('status').textContent ?? '';
+    expect(hint).toMatch(/nothing re-enters until Stop loss is on, unless a complete square off closes this leg/);
+  });
+});

@@ -13,8 +13,7 @@ import pytest
 
 from app.options_backtest.fees import FeeRateNotPublished
 from app.options_backtest.picking import Listing
-from app.options_backtest.replay import SoldLegRulesNotReplayed
-from app.options_backtest.results import EventKind, SessionStatus, SkipReason
+from app.options_backtest.results import EventKind, ExitReason, SessionStatus, SkipReason
 from app.options_backtest.run import RunStopped, SessionDataMissing, run_sessions
 from app.options_backtest.session_market import MalformedBars
 from app.options_backtest.setup import FeePolicy
@@ -227,57 +226,32 @@ def test_estimated_fees_on_a_date_without_published_rates_are_refused_before_any
     assert data.asked == []
 
 
-@pytest.mark.parametrize(
-    ("legs", "ruled"),
-    [
-        # A stop on a bought leg, on a sold leg, and a re-entry rule (which a stop must be able to reach).
-        ((leg("long_call", stop=("percent", "25")), leg("short_call", side="sell")), ("long_call",)),
-        ((leg("long_call"), leg("short_call", side="sell", stop=("percent", "150"))), ("short_call",)),
-        (
-            (
-                leg("long_call", stop=("percent", "25"), reentry=("at_once", 1)),
-                leg("short_call", side="sell"),
-                leg("long_put", "put", stop=("points", "1")),
-            ),
-            ("long_call", "long_put"),
-        ),
-    ],
-)
-def test_a_setup_that_sells_and_carries_a_stop_or_a_re_entry_rule_is_refused_before_anything_is_read(
-    legs: tuple[dict[str, object], ...], ruled: tuple[str, ...]
-) -> None:
-    # No path may replay a sold leg's stop as if it were a bought leg's (#3107 replays it).
-    data = FakeRunData()
-
-    with pytest.raises(SoldLegRulesNotReplayed) as raised:
-        run_sessions(setup(*legs), [WED], data)
-
-    assert raised.value.sold == ("short_call",)
-    assert raised.value.ruled == ruled
-    assert data.asked == []
-
-
-def test_a_setup_that_sells_with_no_stop_and_no_re_entry_rule_is_not_refused() -> None:
+def test_a_setup_that_sells_and_carries_stops_and_a_re_entry_rule_runs_and_a_stop_on_the_cover_takes_the_sold_leg() -> None:
+    # A put 495 bought with a stop and a put 500 sold with a re-entry rule and no stop of its own, which the setup takes
+    # because the bought put's stop closes the sold leg with it. The 495's stop sits at 0.75 and minute 10 closes at
+    # 0.70; both fill at the open of minute 11, the 500 bought back at 2.10 and the 495 sold at 0.65.
     data = fake_data(
         {
             WED: Day(
                 underlying=steady("500.00"),
                 options={
-                    CALL_500: flat("2.00", 5, 61),
-                    ("call", 505): flat("1.00", 5, 61),
+                    ("put", 495): {**flat("1.00", 5, 9), 10: ("1.00", "0.70"), **flat("0.65", 11, 61)},
+                    ("put", 500): {**flat("2.20", 5, 10), **flat("2.10", 11, 61)},
                 },
             )
         }
     )
     spread = setup(
-        leg("long_call"),
-        {**leg("short_call", side="sell"), "strike": {"kind": "atm_offset", "steps": 1}},
-        slippage="0",
+        {**leg("long", "put", stop=("percent", "25")), "strike": {"kind": "atm_offset", "steps": -1}},
+        leg("short", "put", side="sell", reentry=("at_once", 1)),
     )
 
     result = run_sessions(spread, [WED], data)
 
-    assert [(trade.leg_id, trade.is_sold_leg) for trade in result.sessions[0].outcome.trades] == [
-        ("long_call", False),
-        ("short_call", True),
+    trades = result.sessions[0].outcome.trades
+    assert [(trade.leg_id, trade.exit_reason, trade.pnl_usd) for trade in trades] == [
+        ("long", ExitReason.STOP, Decimal("-35.00")),
+        ("short", ExitReason.CLOSED_WITH_ITS_PROTECTION, Decimal("10.00")),
     ]
+    assert dict(result.summary.exits_by_reason)[ExitReason.CLOSED_WITH_ITS_PROTECTION] == 1
+    assert result.summary.net_profit_usd == Decimal("-25.00")

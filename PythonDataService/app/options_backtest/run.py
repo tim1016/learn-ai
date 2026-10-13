@@ -39,7 +39,7 @@ from app.options_backtest import fills
 from app.options_backtest.data import RunData
 from app.options_backtest.fees import FeeRateNotPublished, fee_for_policy, unpublished_fee_types
 from app.options_backtest.needs import session_needs
-from app.options_backtest.replay import refuse_sold_leg_rules, replay_session
+from app.options_backtest.replay import replay_session
 from app.options_backtest.results import SessionOutcome, SessionStatus
 from app.options_backtest.session_market import DayMarket, bars_by_close, window_only_market
 from app.options_backtest.session_result import PinnedDay, SessionPins, SessionResult
@@ -168,7 +168,6 @@ class _Carried:
 
 
 def _check_the_run_can_start(setup: OptionsBacktestSetup, sessions: Sequence[date]) -> None:
-    refuse_sold_leg_rules(setup)
     if not sessions:
         raise ValueError("a run needs at least one session")
     if any(later <= earlier for earlier, later in pairwise(sessions)):
@@ -293,8 +292,7 @@ def run_sessions(
     ``on_session(done, total, day)`` is called after each session is replayed. ``should_stop()`` is asked before each
     session; when it says yes, ``RunStopped`` is raised and nothing is returned. Raises ``SessionDataMissing`` for a
     session whose data is not captured and ``FeeRateNotPublished`` before anything is read when the setup's fees are
-    estimated and some session is on a date the fee model has no rate for. ``SoldLegRulesNotReplayed`` before anything
-    is read when the setup has a sold leg and any leg carries a stop loss or a re-entry rule.
+    estimated and some session is on a date the fee model has no rate for.
     """
     _check_the_run_can_start(setup, sessions)
     run = _Run(setup, data, slippage_ladder)

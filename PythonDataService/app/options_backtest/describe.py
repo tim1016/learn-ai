@@ -73,7 +73,7 @@ def _what_happens_to_orders(setup: OptionsBacktestSetup) -> tuple[str, str]:
     A setup that sells has orders to open and to close of both sides, so it says them by which is which. A setup that
     only buys is said as it always was.
     """
-    if any(leg.side == "sell" for leg in setup.legs):
+    if setup.sells:
         return (
             "An order to open is dropped if its contract does not trade in that minute; "
             "an order to close is tried each minute until it does.",
@@ -170,7 +170,7 @@ def _when_it_opens(leg: LegSetup) -> str:
 
 
 def _square_off(setup: OptionsBacktestSetup) -> tuple[str, ...]:
-    return (phrases.square_off(setup.square_off),)
+    return (phrases.square_off(setup.square_off, sells=setup.sells),)
 
 
 def _costs(setup: OptionsBacktestSetup) -> tuple[str, ...]:

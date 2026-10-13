@@ -41,6 +41,7 @@ EventKindWord = Literal[
     "sale_not_taken_at_zero",
     "stop_hit",
     "squared_off",
+    "closed_with_its_protection",
     "exit_time",
     "close_filled",
     "re_entry_earned",

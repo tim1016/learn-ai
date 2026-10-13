@@ -9,13 +9,15 @@ Formula: buy fill   = ceil_to_step(seen · (1 + p/100))
           bought at its exit, or marked (#3106)
     stop level  = bought · (1 − v/100) for a percent stop, bought − v for a points stop;
                   hit by a close ≤ level
+    sold stop level = sold · (1 + v/100) for a percent stop, sold + v for a points stop, with ``sold`` the price the
+                  leg was sold for (#3107); hit by a close ≥ level
     momentum level from the starting price s = s · (1 ± v/100) or s ± v;
                   reached by a close ≥ level when it is up, ≤ level when it is down
   with p the slippage in percent, v a rule's value, and ``seen`` the open of the fill bar.
 Reference: the owner's rules in #3030 (behaviours 3 to 6 and 16) and in #3095 (a sold leg opens at the sale
-  price and closes at the buy price, and its profit is the sale price less the buy-back price or the mark). Nothing
-  outside the repo is ported: AlgoTest's own pages name the same triggers but fill at the trigger level, and this
-  does not.
+  price and closes at the buy price, its profit is the sale price less the buy-back price or the mark, and its stop
+  is a rise above what it was sold for, with no ceiling at 100 percent). Nothing outside the repo is ported:
+  AlgoTest's own pages name the same triggers but fill at the trigger level, and this does not.
 Canonical implementation: this file.
 Validated against: tests/options_backtest/test_fills.py, and through the replay in
   tests/options_backtest/test_replay_*.py.
@@ -120,8 +122,24 @@ def stop_level(rule: StopLoss, *, bought: Decimal) -> Decimal:
 
 
 def stop_hit(level: Decimal, *, close: Decimal) -> bool:
-    """Whether a minute that closed at ``close`` has reached a stop. A high or a low inside it never does."""
+    """Whether a minute that closed at ``close`` has reached a bought leg's stop. A high or a low inside it never does."""
     return close <= level
+
+
+def sold_stop_level(rule: StopLoss, *, sold: Decimal) -> Decimal:
+    """The premium at or above which a sold leg is bought back, from what it was sold for (#3107).
+
+    A percent stop has no ceiling: 150 percent puts the level at two and a half times the sale price.
+    """
+    with localcontext(EXACT):
+        if rule.kind == "percent":
+            return sold * (1 + rule.value / _HUNDRED)
+        return sold + rule.value
+
+
+def sold_stop_hit(level: Decimal, *, close: Decimal) -> bool:
+    """Whether a minute that closed at ``close`` has reached a sold leg's stop. A high or a low inside it never does."""
+    return close >= level
 
 
 def momentum_level(rule: Momentum, *, starting_price: Decimal) -> Decimal:

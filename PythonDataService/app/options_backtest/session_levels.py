@@ -1,7 +1,8 @@
 """The lines and marks a one-day timeline draws for a saved session, worked out from its stored trades and events (#3030).
 
 Formula: momentum level = starting price moved by the leg's momentum rule (``fills.momentum_level``); a stop level is
-    the one the trade stored. Nothing else is calculated here: each line is a stored figure and the two instants it
+    the one the trade stored, which for a sold leg is the price at or above which it is bought back
+    (``fills.sold_stop_level``). Nothing else is calculated here: each line is a stored figure and the two instants it
     applies between.
 Reference: ``app/options_backtest/replay.py`` for when each figure is set (and ``results.Event`` for what each event
   carries); ``fills.py`` for the momentum level.
@@ -22,8 +23,10 @@ Three kinds of line, each from one instant to another, both ends being minute cl
   as one that filled does; the refusal comes a minute later and moves nothing. A leg cancelled before it ever reached
   the level was waiting until it was cancelled, so its lines end at the cancel.
 * ``momentum``: the premium the leg waits for, between the same two instants.
-* ``stop``: the premium at or below which the position is sold, from the minute it filled (the replay reads the stop
-  on that very bar) until the minute the close that sold it was decided: a stop hit, or the exit time.
+* ``stop``: the premium at which the position is closed, from the minute it filled (the replay reads the stop on that
+  very bar) until the minute the close that closed it was decided: a stop hit, a square-off, the leg's protection
+  leaving, or the exit time. A bought leg's stop is the price at or below which it is sold, and a sold leg's (#3107) is
+  the price at or above which it is bought back, so it is drawn above the price it was sold for.
 
 A stored session that does not agree with itself (a trade with a starting price that no event took, or took on another
 contract or at another price, an attempt that waited and has no end) is not drawn from a guess:

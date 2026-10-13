@@ -36,6 +36,9 @@ class ExitReason(StrEnum):
     STOP = "stop"
     # Closed because another leg's stop closed everything (``complete``).
     SQUARE_OFF = "square_off"
+    # A sold leg bought back in the minute, and the exit group, of the bought leg that protects it, because that leg
+    # could not leave while this one was held (#3107).
+    CLOSED_WITH_ITS_PROTECTION = "closed_with_its_protection"
     EXIT_TIME = "exit_time"
     MARKED_NOT_SOLD = "marked_not_sold"
     # A sold leg never bought back: valued at its last traded close as an amount owed (#3106).
@@ -88,6 +91,7 @@ class EventKind(StrEnum):
     SALE_NOT_TAKEN_AT_ZERO = "sale_not_taken_at_zero"
     STOP_HIT = "stop_hit"
     SQUARED_OFF = "squared_off"
+    CLOSED_WITH_ITS_PROTECTION = "closed_with_its_protection"
     EXIT_TIME = "exit_time"
     CLOSE_FILLED = "close_filled"
     RE_ENTRY_EARNED = "re_entry_earned"
@@ -191,8 +195,9 @@ class Event:
     ``entry_number`` follows one rule, as ``LegTrade.entry_number`` counts: 0 for a leg's first entry,
     1 for its first re-entry, and so on.
 
-    - An event about a position (``entry_filled``, ``stop_hit``, ``squared_off``, ``exit_time``,
-      ``close_filled``, ``marked_not_sold``, ``marked_not_bought_back``) carries that position's entry number.
+    - An event about a position (``entry_filled``, ``stop_hit``, ``squared_off``, ``closed_with_its_protection``,
+      ``exit_time``, ``close_filled``, ``marked_not_sold``, ``marked_not_bought_back``) carries that position's entry
+      number.
     - An event about an attempt to enter (``picked``, ``pick_refused``, ``starting_price_taken``,
       ``no_starting_price``, ``momentum_hit``, ``entry_dropped``, ``entry_refused_for_cash``,
       ``entry_refused_for_cover``, ``entry_refused_for_second_expiry``, ``entry_refused_for_other_side``,
