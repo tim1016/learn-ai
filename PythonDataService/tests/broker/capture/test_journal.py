@@ -172,6 +172,159 @@ def test_multiple_records_append_to_same_day_file(tmp_path: Path) -> None:
     assert len(_read_records(path)) == 3
 
 
+def test_a_line_of_an_exchange_carries_when_its_request_began_and_when_its_answer_ended(tmp_path: Path) -> None:
+    journal = _fixed(tmp_path)
+
+    assert journal.record(
+        broker="alpaca",
+        endpoint=CaptureEndpoint.ORDERS,
+        method="post",
+        params={},
+        status=200,
+        raw_body=b"{}",
+        began_at_ms=_FIXED_MS - 250,
+        ended_at_ms=_FIXED_MS - 10,
+    )
+
+    [record] = _read_records(tmp_path / "alpaca" / "orders" / f"{_DAY}.jsonl")
+    # The line was written at the clock's instant, as it always was; the exchange's own times are beside it.
+    assert (record["began_at_ms"], record["ended_at_ms"], record["captured_at_ms"]) == (
+        _FIXED_MS - 250,
+        _FIXED_MS - 10,
+        _FIXED_MS,
+    )
+
+
+def test_a_line_with_no_exchange_times_and_no_request_body_is_written_as_it_always_was(tmp_path: Path) -> None:
+    journal = _fixed(tmp_path)
+
+    journal.record(
+        broker="alpaca",
+        endpoint=CaptureEndpoint.STREAM,
+        method="WS",
+        params={"stream": "trade_updates"},
+        status=0,
+        raw_body=b"{}",
+    )
+
+    [record] = _read_records(tmp_path / "alpaca" / "stream" / f"{_DAY}.jsonl")
+    assert set(record) == {"broker", "endpoint", "method", "params", "status", "captured_at_ms", "raw_body"}
+
+
+@pytest.mark.parametrize(
+    ("began", "ended"),
+    [(1, None), (None, 1), (5, 4), (-1, 3), (True, 3), ("1", 3)],
+    ids=["no end", "no beginning", "ends before it began", "negative", "a bool", "text"],
+)
+def test_exchange_times_that_are_not_both_whole_and_in_order_are_refused_and_counted(
+    tmp_path: Path, began: object, ended: object
+) -> None:
+    journal = _fixed(tmp_path)
+
+    ok = journal.record(
+        broker="alpaca",
+        endpoint=CaptureEndpoint.ORDERS,
+        method="post",
+        params={},
+        status=200,
+        raw_body=b"{}",
+        began_at_ms=began,  # type: ignore[arg-type]
+        ended_at_ms=ended,  # type: ignore[arg-type]
+    )
+
+    assert ok is False
+    assert journal.failure_count == 1
+    assert list(tmp_path.rglob("*.jsonl")) == []
+
+
+def test_a_utf8_json_request_body_is_kept_with_its_terms_and_the_answer_beside_it(tmp_path: Path) -> None:
+    journal = _fixed(tmp_path)
+    sent = {"symbol": "SPY261120C00450000", "qty": "1", "limit_price": "1.10"}
+
+    journal.record(
+        broker="alpaca",
+        endpoint=CaptureEndpoint.ORDERS,
+        method="post",
+        params={},
+        status=200,
+        raw_body=b'{"status":"new"}',
+        request_body=json.dumps(sent).encode("utf-8"),
+    )
+
+    [record] = _read_records(tmp_path / "alpaca" / "orders" / f"{_DAY}.jsonl")
+    # The terms as they were sent: a limit of "1.10" is not rewritten as 1.1.
+    assert json.loads(record["request_body"]) == sent
+    assert '"1.10"' in record["request_body"]
+    assert "request_body_encoding" not in record
+    assert record["raw_body"] == '{"status":"new"}'
+
+
+@pytest.mark.parametrize(
+    ("sent", "why"),
+    [
+        # Text a redactor cannot read keys from: the secret would survive as it was.
+        (b"api_key=sk-live-123456&symbol=SPY261120C00450000", "not JSON"),
+        # JSON in UTF-16 (with or without a byte-order mark): it parses as JSON elsewhere, and would be kept as base64.
+        (json.dumps({"api_key": "sk-live-123456", "symbol": "SPY261120C00450000"}).encode("utf-16"), "not UTF-8"),
+        (json.dumps({"api_key": "sk-live-123456"}).encode("utf-16-le"), "not JSON"),
+        (b"\xff\xfe\x00\x01not-text", "not UTF-8"),
+        # A JSON scalar has no keys to redact: a string holding a secret is not an object.
+        (b'"api_key=sk-live-123456"', "not a JSON object or array"),
+    ],
+    ids=["text", "utf-16 with a mark", "utf-16 without a mark", "not text at all", "a json string"],
+)
+def test_a_request_body_that_cannot_be_redacted_is_dropped_never_written_and_the_drop_is_logged(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, sent: bytes, why: str
+) -> None:
+    journal = _fixed(tmp_path)
+
+    with caplog.at_level("WARNING", logger="app.broker.capture.journal"):
+        ok = journal.record(
+            broker="alpaca",
+            endpoint=CaptureEndpoint.ORDERS,
+            method="post",
+            params={},
+            status=200,
+            raw_body=b'{"status":"accepted"}',
+            request_body=sent,
+        )
+
+    # The answer is evidence and is written; the body is not, in any encoding.
+    assert ok is True
+    path = tmp_path / "alpaca" / "orders" / f"{_DAY}.jsonl"
+    [record] = _read_records(path)
+    assert "request_body" not in record and "request_body_encoding" not in record
+    assert record["raw_body"] == '{"status":"accepted"}'
+    written = path.read_text(encoding="utf-8")
+    assert "sk-live-123456" not in written
+    assert base64.b64encode(sent).decode("ascii") not in written
+    [dropped] = [entry for entry in caplog.records if getattr(entry, "action", None) == "capture_request_body_dropped"]
+    assert (dropped.broker, dropped.endpoint) == ("alpaca", "orders")
+    assert why in dropped.reason
+    assert journal.failure_count == 0
+
+
+def test_a_secret_like_key_in_a_request_body_is_redacted_and_the_rest_is_kept(tmp_path: Path) -> None:
+    journal = _fixed(tmp_path)
+
+    journal.record(
+        broker="alpaca",
+        endpoint=CaptureEndpoint.ORDERS,
+        method="post",
+        params={},
+        status=200,
+        raw_body=b"{}",
+        request_body=b'{"symbol":"SPY261120C00450000","api_secret":"shh","legs":[{"token":"x","side":"buy"}]}',
+    )
+
+    [record] = _read_records(tmp_path / "alpaca" / "orders" / f"{_DAY}.jsonl")
+    body = json.loads(record["request_body"])
+    assert body["symbol"] == "SPY261120C00450000"
+    assert body["api_secret"] == REDACTED
+    assert body["legs"] == [{"token": REDACTED, "side": "buy"}]
+    assert "shh" not in record["request_body"]
+
+
 def test_capture_dir_read_from_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

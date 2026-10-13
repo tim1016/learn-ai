@@ -1,7 +1,7 @@
 # Fixture attribution — assignment, exercise and expiry activities (documentation examples)
 
 - **broker:** alpaca
-- **reference_kind:** `documentation_example`. **Not a recording.** To be replaced by a recording from an Alpaca account the first time one is assigned, exercises or lets an option expire.
+- **reference_kind:** `documentation_example`. **Not a recording.** To be joined by a recording from an Alpaca account the first time one is assigned, exercises or lets an option expire, beside it: this example stays.
 - **read on:** 2026-10-06
 - **regenerate:** `python -m scripts.fixture_generators.alpaca_documented_option_activities` (from `PythonDataService/`)
 - **the numbers:** these files pin the shape of a row. The shares, price and cash the examples print are held as reference outputs by golden fixture `OEV-001` (`tests/fixtures/golden/option-events/OEV-001/v1/`), which the same run writes from the same pages.

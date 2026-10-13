@@ -1,7 +1,7 @@
 # Fixture attribution — option contracts (documentation examples)
 
 - **broker:** alpaca
-- **reference_kind:** `documentation_example`. **Not a recording.** To be replaced by a recording from Alpaca Paper.
+- **reference_kind:** `documentation_example`. **Not a recording.** To be joined by a recording from Alpaca Paper, beside it: this example stays.
 - **read on:** 2026-10-06
 - **regenerate:** `python -m scripts.fixture_generators.alpaca_documented_option_examples` (from `PythonDataService/`)
 
