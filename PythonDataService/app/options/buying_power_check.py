@@ -27,12 +27,16 @@ Formula: every figure is whole cents and nothing is rounded but one share.
     So the share for what filled is recorded and nothing is judged by it.
   The tolerance is zero: every input is whole cents, and a difference inside
   the set-aside is over_reserved or unknown, neither of which holds anything.
+  A record the Clerk wrote with judgment switched off, whose pair was clean
+  (``rejudge``): the same two rows, applied to the record's own readings and
+  figures after the fact. Nothing is added to them.
 Reference: #2913, "Comparing with Alpaca", check 2 ("the fall in
   options_buying_power ... against requirement plus premium for the units
-  filled") and its four results; ADR 0076 decision 26. Alpaca's documents do
-  not say when the figure moves for an order that rests or is cancelled,
-  which is why the Clerk judges a pair only once its setting says the account
-  has shown it, and never judges a part fill inside its whole set-aside.
+  filled") and its four results; ADR 0076 decision 26; #3102 for the offline
+  judgment. Alpaca's documents do not say when the figure moves for an order
+  that rests or is cancelled, which is why the Clerk judges a pair only once
+  its setting says the account has shown it, and never judges a part fill
+  inside its whole set-aside.
 Canonical implementation: this file.
 Validated against: tests/options/test_buying_power_check.py (hand-derived
   cases, among them the PRD's $1.94 call, the screens' $193.00 fall, and two
@@ -41,8 +45,14 @@ Validated against: tests/options/test_buying_power_check.py (hand-derived
 
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
+from typing import Final, Protocol
+
+# The reason code the Clerk records for a clean pair it did not judge because the account's setting is off
+# (``entry_buying_power.NotComparedReason.JUDGMENT_NOT_SWITCHED_ON`` is this value). The Clerk writes it only
+# for a pair that passed every other test.
+JUDGMENT_NOT_SWITCHED_ON_REASON: Final = "JUDGMENT_NOT_SWITCHED_ON"
 
 
 class BuyingPowerCheckResult(StrEnum):
@@ -148,15 +158,102 @@ def judge_part_fill(*, first_cents: int, second_cents: int, commitment_cents: in
     return BuyingPowerCheckResult.UNKNOWN
 
 
+class ComparisonRecord(Protocol):
+    """What offline judgment reads of a recorded comparison. The Clerk's ``EntryBuyingPowerComparedFacts`` has all of it."""
+
+    @property
+    def reason_code(self) -> str | None: ...
+
+    @property
+    def contracts_asked(self) -> int: ...
+
+    @property
+    def contracts_filled(self) -> int: ...
+
+    @property
+    def commitment_cents(self) -> int: ...
+
+    @property
+    def set_aside_for_filled_cents(self) -> int | None: ...
+
+    @property
+    def cost_of_filled_cents(self) -> int | None: ...
+
+    @property
+    def first_buying_power(self) -> str | None: ...
+
+    @property
+    def second_buying_power(self) -> str | None: ...
+
+    @property
+    def fall_cents(self) -> int | None: ...
+
+
+def rejudge(record: ComparisonRecord) -> BuyingPowerCheckResult | None:
+    """What a recorded comparison comes to when it is judged now, or ``None`` when it is not this function's to judge.
+
+    Only a record whose stored reason is "judgment not switched on" is
+    judged. The Clerk writes that reason for a pair that passed every other
+    test and was held back by the account's setting alone, so the record's
+    readings and figures are a clean pair. The arithmetic is the Clerk's own,
+    over the record's own fields: ``judge_part_fill`` when contracts were left
+    unfilled, ``judge_fall`` otherwise. Every other record is ``None``, one
+    already judged included: it was never a clean pair, or it has its result.
+
+    It reads no books and writes none, and it raises no notice and holds no
+    bot. A record that says it was a clean pair and does not hold what that
+    needs (a reading that is missing or is not whole cents, a fall that is not
+    its readings' difference, contracts filled outside what was asked) is
+    damaged, and raises ``ValueError``: it is never read as "not applicable".
+    """
+    if record.reason_code != JUDGMENT_NOT_SWITCHED_ON_REASON:
+        return None
+    first_cents = _stated_cents(record.first_buying_power, "first_buying_power")
+    second_cents = _stated_cents(record.second_buying_power, "second_buying_power")
+    if record.fall_cents != first_cents - second_cents:
+        raise ValueError(
+            f"the record's fall is {record.fall_cents!r} cents but its readings differ by {first_cents - second_cents}"
+        )
+    asked, filled = record.contracts_asked, record.contracts_filled
+    if not 1 <= filled <= asked:
+        raise ValueError(f"{filled} contracts filled of {asked} asked for is not a clean pair judgment was held back on")
+    if filled < asked:
+        return judge_part_fill(first_cents=first_cents, second_cents=second_cents, commitment_cents=record.commitment_cents)
+    if record.cost_of_filled_cents is None or record.set_aside_for_filled_cents is None:
+        raise ValueError("the record states no cost of what filled, or no set-aside for it")
+    return judge_fall(
+        first_cents=first_cents,
+        second_cents=second_cents,
+        cost_of_filled_cents=record.cost_of_filled_cents,
+        set_aside_for_filled_cents=record.set_aside_for_filled_cents,
+    )
+
+
+def _stated_cents(stated: str | None, name: str) -> int:
+    """A reading as the Clerk recorded it (dollars, as Alpaca wrote it) in whole cents; refuses what is not."""
+    if stated is None:
+        raise ValueError(f"{name} is missing")
+    try:
+        cents = whole_cents(Decimal(stated))
+    except InvalidOperation as exc:
+        raise ValueError(f"{name} {stated!r} is not a number") from exc
+    if cents is None:
+        raise ValueError(f"{name} {stated!r} is not a whole number of cents")
+    return cents
+
+
 def _require_whole(value: int, name: str, *, least: int) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or value < least:
         raise ValueError(f"{name} is a whole number, {least} or more; got {value!r}")
 
 
 __all__ = [
+    "JUDGMENT_NOT_SWITCHED_ON_REASON",
     "BuyingPowerCheckResult",
+    "ComparisonRecord",
     "judge_fall",
     "judge_part_fill",
+    "rejudge",
     "requirement_for_filled_cents",
     "set_aside_for_filled_cents",
     "whole_cents",

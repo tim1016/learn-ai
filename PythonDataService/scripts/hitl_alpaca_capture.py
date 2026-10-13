@@ -38,7 +38,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import sys
 import time
 from collections.abc import Awaitable, Callable
@@ -67,6 +66,11 @@ from app.broker.alpaca.config import (  # noqa: E402
     alpaca_configuration_error_detail,
 )
 from app.broker.capture.journal import CaptureSettings, reset_capture_journal_for_testing  # noqa: E402
+from app.broker.capture.sanitize import (  # noqa: E402
+    AUTH_ACK_PLACEHOLDER,
+    sanitize_order_identifier,
+    sanitize_payload,
+)
 from app.broker_configuration.cli_binding import effective_alpaca_settings  # noqa: E402
 from app.engine.live.order_identity import (  # noqa: E402
     DEFAULT_ORDER_REF_MAX_LENGTH,
@@ -81,11 +85,6 @@ _TODAY_UTC = datetime.now(UTC).strftime("%Y-%m-%d")
 _JOURNAL_ENTRY_TIMEOUT_S = 5.0
 _JOURNAL_ENTRY_POLL_S = 0.05
 
-# Sentinel UUIDs used to replace real broker identifiers — structurally valid
-# so adapter code can parse them, but obviously not real.
-_UUID_SENTINEL_BASE = "00000000-0000-0000-0000-{:012d}"
-_ACCOUNT_NUMBER_SENTINEL = "PA0SANITIZED00001"
-
 # Alpaca's paper trade_updates websocket endpoint.
 _WS_PAPER_URL = "wss://paper-api.alpaca.markets/stream"
 
@@ -99,14 +98,7 @@ _HITL_OPERATOR = "hitl-gate"
 
 logger = logging.getLogger(__name__)
 
-# ── sanitization helpers ───────────────────────────────────────────────────────
-_UUID_RE = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-    re.IGNORECASE,
-)
-_ACCOUNT_NUMBER_RE = re.compile(r"\bPA[0-9A-Z]{8,15}\b")
-_ORDER_IDENTIFIER_KEYS = frozenset({"client_order_id", "order_ref"})
-_ORDER_IDENTIFIER_SENTINEL = "manual/hitl-gate/v1:SANITIZED0000000000001"
+# Sanitization is ``app.broker.capture.sanitize``'s, shared with the qualification kit's recordings.
 
 _FIXTURE_STEMS = {
     "account": "account",
@@ -147,51 +139,6 @@ _SYNTHETIC_PROVENANCE = {
         "All other frames are sanitized live paper-account captures."
     ),
 }
-
-
-def _sanitize_payload(raw: Any, *, uuid_map: dict[str, str] | None = None) -> Any:
-    """Recursively scrub UUIDs and account numbers from a parsed JSON structure.
-
-    UUIDs are replaced with deterministic sentinel values so tests that assert
-    on structural field presence remain valid. The same input UUID always maps
-    to the same sentinel within one call (stable within a fixture file).
-    """
-    if uuid_map is None:
-        uuid_map = {}
-
-    if isinstance(raw, dict):
-        return {
-            key: (
-                _sanitize_order_identifier(value)
-                if key in _ORDER_IDENTIFIER_KEYS and isinstance(value, str)
-                else _sanitize_payload(value, uuid_map=uuid_map)
-            )
-            for key, value in raw.items()
-        }
-    if isinstance(raw, list):
-        return [_sanitize_payload(item, uuid_map=uuid_map) for item in raw]
-    if isinstance(raw, str):
-        return _sanitize_str(raw, uuid_map)
-    return raw
-
-
-def _sanitize_str(value: str, uuid_map: dict[str, str]) -> str:
-    # Replace account numbers before UUIDs (non-overlapping).
-    value = _ACCOUNT_NUMBER_RE.sub(_ACCOUNT_NUMBER_SENTINEL, value)
-
-    def _replace_uuid(m: re.Match[str]) -> str:
-        orig = m.group(0).lower()
-        if orig not in uuid_map:
-            idx = len(uuid_map) + 1
-            uuid_map[orig] = _UUID_SENTINEL_BASE.format(idx)
-        return uuid_map[orig]
-
-    return _UUID_RE.sub(_replace_uuid, value)
-
-
-def _sanitize_order_identifier(value: str) -> str:
-    """Replace a linkable operator order identifier with a stable fixture token."""
-    return _ORDER_IDENTIFIER_SENTINEL if value else value
 
 
 # ── journal extraction ─────────────────────────────────────────────────────────
@@ -467,7 +414,7 @@ def _replace_fixtures_from_reads(journal_entries: dict[str, dict[str, Any]]) -> 
     )
     for family, entry in journal_entries.items():
         raw_payload = _extract_raw_body(entry)
-        sanitized = _sanitize_payload(raw_payload)
+        sanitized = sanitize_payload(raw_payload)
         _write_fixture(family, _with_preserved_synthetic_records(family, sanitized))
         _write_attribution(
             family,
@@ -629,7 +576,7 @@ def _write_order_fixtures(
     # The fresh read after a terminal lifecycle event is the authoritative
     # post-order account state. Supplemental synthetic rows retain edge cases
     # that a live account cannot guarantee on every capture.
-    sanitized_orders = _sanitize_payload(post_order_payload, uuid_map=uuid_map)
+    sanitized_orders = sanitize_payload(post_order_payload, uuid_map=uuid_map)
     _write_fixture(
         "orders",
         _with_preserved_synthetic_records("orders", sanitized_orders),
@@ -644,7 +591,7 @@ def _write_order_fixtures(
         ),
         extra=(
             f"## order_ref length cap proof\n\n"
-            f"- `order_ref` sent:   `{_sanitize_order_identifier(order_ref)}` ({len(order_ref)} chars)\n"
+            f"- `order_ref` sent:   `{sanitize_order_identifier(order_ref)}` ({len(order_ref)} chars)\n"
             f"- `DEFAULT_ORDER_REF_MAX_LENGTH`: {DEFAULT_ORDER_REF_MAX_LENGTH}\n"
             f"- Alpaca echoed `client_order_id` back UNTRUNCATED (exact match).\n"
             f"- Margin: {DEFAULT_ORDER_REF_MAX_LENGTH - len(order_ref)} chars spare.\n"
@@ -661,17 +608,12 @@ def _write_order_fixtures(
         if meta == "auth_ack":
             # Never commit auth acknowledgements that echo key material.
             # Write a structural placeholder instead.
-            safe_frames.append(
-                {
-                    "stream": "authorization",
-                    "data": {"status": "authorized", "action": "authenticate"},
-                }
-            )
+            safe_frames.append(dict(AUTH_ACK_PLACEHOLDER))
         elif meta == "subscribe_ack":
-            safe_frames.append(_sanitize_payload(frame, uuid_map=uuid_map))
+            safe_frames.append(sanitize_payload(frame, uuid_map=uuid_map))
         elif meta.startswith("lifecycle/"):
             # lifecycle/* — real event frames for our order.
-            safe_frames.append(_sanitize_payload(frame, uuid_map=uuid_map))
+            safe_frames.append(sanitize_payload(frame, uuid_map=uuid_map))
         else:
             # Frames from another order are deliberately excluded: they do not
             # demonstrate this gated submission's lifecycle and could leak an
