@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from pydantic import SecretStr
 
+from app.broker.capture.sanitize import ORDER_IDENTIFIER_SENTINEL
 from scripts import hitl_alpaca_capture as capture
 
 
@@ -89,16 +90,16 @@ def test_write_order_fixtures_redacts_identifiers_and_retains_only_synthetic_edg
 
     orders = json.loads((orders_dir / "orders.json").read_text())
     assert [order["client_order_id"] for order in orders] == [
-        capture._ORDER_IDENTIFIER_SENTINEL,
+        ORDER_IDENTIFIER_SENTINEL,
         "manual/hitl-gate/v1:SYNTHETIC00000000000001",
     ]
     order_attribution = (orders_dir / "attribution.md").read_text()
     assert raw_order_ref not in order_attribution
-    assert capture._ORDER_IDENTIFIER_SENTINEL in order_attribution
+    assert ORDER_IDENTIFIER_SENTINEL in order_attribution
 
     trade_updates = json.loads((fixture_root / "trade_updates" / "trade_updates.json").read_text())
     assert [frame["data"].get("event") for frame in trade_updates] == [None, "fill"]
-    assert trade_updates[1]["data"]["order"]["client_order_id"] == capture._ORDER_IDENTIFIER_SENTINEL
+    assert trade_updates[1]["data"]["order"]["client_order_id"] == ORDER_IDENTIFIER_SENTINEL
 
 
 @pytest.mark.asyncio
