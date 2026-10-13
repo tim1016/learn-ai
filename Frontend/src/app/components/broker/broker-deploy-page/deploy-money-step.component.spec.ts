@@ -317,7 +317,7 @@ const OVER_THE_ACCOUNT: FundingView = {
     terms: [{ label: 'Broker requirement and net premium', amount_usd: '799.91' }, { label: 'Fee provision', amount_usd: '0.09' }],
   },
   admits: false, binding: 'account_headroom', shortfall_usd: '200.00', fits: 0,
-  fits_sentence: `No whole entry fits right now under the account's headroom, the limit with the least room. ${COMPETES}`,
+  fits_sentence: `No whole entry fits right now under the account's headroom, the limit that refuses this budget. ${COMPETES}`,
   sentence: 'This budget is $900.00, but the account has only $700.00 unreserved. Shortfall: $200.00.',
   action: "Choose a smaller budget, free another bot's budget, or add cash to the account.",
 };

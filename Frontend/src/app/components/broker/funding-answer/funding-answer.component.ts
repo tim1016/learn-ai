@@ -10,8 +10,9 @@ interface LimitRow {
   readonly label: string;
   readonly figure: FigureView;
   readonly terms: NonNullable<FigureView['terms']>;
-  /** Set on the limit with the least room only: "binds" when Python says the entry falls short of it, and
-   * "least room" when it does not (the entry passes, or nothing is priced to fall short of). */
+  /** Set on the limit Python names as binding only: "binds" when the entry falls short of it (for a refusal,
+   * the limit that refuses, which need not have the least room), and "least room" when it does not (the
+   * entry passes, or nothing is priced to fall short of). */
   readonly mark: 'binds' | 'least room' | null;
 }
 
@@ -20,7 +21,7 @@ interface LimitRow {
  *
  * Purely presentational. Python authors the sentence, the action, the
  * shortfall and every figure with its terms; this card lists the limits in
- * the Clerk's own order, marks the limit with the least room (as binding only
+ * the Clerk's own order, marks the limit Python names (as binding only
  * where the answer carries a shortfall against it), and says a stale or
  * unknown figure is one. It compares nothing and adds nothing, so a row can
  * never disagree with the Clerk's verdict. It does not repeat the sentence:

@@ -127,6 +127,20 @@ def test_a_reading_admitted_at_one_instant_is_judged_by_that_instant_at_the_comm
     assert budget_repo.clock() - (NOON - OBSERVATION_MAX_AGE_MS + 10) > OBSERVATION_MAX_AGE_MS, "the reading went stale"
 
 
+def test_the_rechecks_refusal_of_a_budget_over_the_account_says_what_the_review_says(budget_repo) -> None:
+    """A $100 entry, a $1,000 budget and $900 unreserved: the account is $100 short of the budget it would set
+    aside. The Clerk is handed no buying power, and where Alpaca's figure covers the entry (the review's is $500
+    here) the review says exactly this too, so the commit never names a limit the review did not."""
+    with pytest.raises(BudgetUnavailable) as refused:
+        submit_budgeted_deploy(
+            budget_repo, strategy_instance_id="a", lifecycle_run_id="run-a", world="real_paper", committed_cents=100_000,
+            configuration_hash="seal-a", exit_terms_hash=canonical_sha256(TERMS.model_dump(mode="json")),
+            risk_revision=1, actor="owner", envelope=_gate(900), minimum_position_cost=Decimal(100),
+        )
+
+    assert str(refused.value) == "This budget is $1,000.00, but the account has only $900.00 unreserved. Shortfall: $100.00."
+
+
 def test_a_bot_whose_entries_are_priced_at_the_entry_is_asked_no_minimum_but_the_cash_still_holds(budget_repo) -> None:
     """An option bot is handed no minimum: its budget is held to what the account has and to nothing else here."""
 

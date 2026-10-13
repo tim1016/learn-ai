@@ -194,6 +194,88 @@ def test_buying_power_does_not_rescue_a_refusal_our_own_limits_make() -> None:
     assert (answer.admits, answer.binding, answer.shortfall_cents) == (False, "bot_budget", 30_000)
 
 
+def test_a_refusal_is_bound_by_the_limit_that_makes_it_and_not_by_a_smaller_figure_that_covers_the_entry() -> None:
+    """A $100 entry, a $1,000 budget, $900 unreserved and $500 of buying power.
+
+    Buying power is the smallest figure and covers the entry. The refusal is the account's: it cannot fund the
+    whole $1,000 budget it would set aside, and is $100 short of it. Naming buying power would list figures that
+    all cover the entry and offer no remedy."""
+    answer = _answer(_account(cash=900), amount=100_000, need=_need(10_000), broker=_broker(50_000))
+
+    assert (answer.free_budget.amount_cents, answer.account_headroom.amount_cents) == (100_000, 90_000)
+    assert answer.broker_buying_power is not None and answer.broker_buying_power.amount_cents == 50_000
+    assert (answer.admits, answer.binding, answer.shortfall_cents) == (False, "account_headroom", 10_000)
+    assert answer.sentence == "This budget is $1,000.00, but the account has only $900.00 unreserved. Shortfall: $100.00."
+    assert answer.action == "Choose a smaller budget, free another bot's budget, or add cash to the account."
+    # How many fit is counted under the limit that refuses, and says so.
+    assert answer.fits == 9
+    assert answer.fits_sentence is not None
+    assert answer.fits_sentence.startswith(
+        "9 whole entries fit right now under the account's headroom, the limit that refuses this budget."
+    )
+
+
+def test_the_refusal_reads_the_same_with_no_buying_power_figure_as_the_clerks_recheck_gives_it() -> None:
+    """The Clerk's re-check is handed no buying power. Where Alpaca's figure covers the entry it changes nothing
+    of the sentence, so the review and the commit say one thing."""
+    with_buying_power = _answer(_account(cash=900), amount=100_000, need=_need(10_000), broker=_broker(50_000))
+    without = _answer(_account(cash=900), amount=100_000, need=_need(10_000), broker=None)
+
+    assert with_buying_power.sentence == without.sentence
+    assert (without.binding, without.shortfall_cents, without.action) == (
+        "account_headroom", 10_000, with_buying_power.action,
+    )
+
+
+def test_a_budget_that_refuses_is_bound_by_the_budget_though_buying_power_is_smaller() -> None:
+    """A $500 budget against an $800 entry, $5,000 unreserved and $100 of buying power.
+
+    The budget is what refuses, short by $300. Buying power is the least room and is short too, and is said to be,
+    but it never refuses and is not what the refusal is bound by."""
+    answer = _answer(_account(cash=5000), amount=50_000, need=_need(80_000), broker=_broker(10_000))
+
+    assert (answer.admits, answer.binding, answer.shortfall_cents) == (False, "bot_budget", 30_000)
+    assert answer.sentence == (
+        "This budget is only $500.00. The entry needs $800.00 including its fee provision. Shortfall: $300.00. "
+        "Alpaca's option buying power is only $100.00, which would not cover the entry either."
+    )
+    assert answer.action == "Choose a budget of at least $800.00."
+
+
+def test_where_buying_power_is_short_and_nothing_else_is_the_answer_still_admits_and_buying_power_binds() -> None:
+    """Our own limits pass, so ``admits`` is true; Alpaca's figure is the least room and falls $300 short. That is
+    the case the Deploy stops on (the buying-power blocker is this verdict), and it has no action of ours."""
+    answer = _answer(_account(cash=5000), amount=100_000, need=_need(80_000), broker=_broker(50_000))
+
+    assert (answer.admits, answer.binding, answer.shortfall_cents, answer.action) == (
+        True, "broker_buying_power", 30_000, None,
+    )
+    assert answer.fits_sentence is not None and "the limit with the least room" in answer.fits_sentence
+
+
+def test_where_the_budget_and_the_account_both_refuse_the_one_short_by_more_is_named() -> None:
+    """$500 budget, $800 entry, $100 unreserved: the budget is $300 short and the account $700 short."""
+    answer = _answer(_account(cash=100), amount=50_000, need=_need(80_000), broker=_broker(1_000_000))
+
+    assert (answer.admits, answer.binding, answer.shortfall_cents) == (False, "account_headroom", 70_000)
+    assert answer.action == "Choose a smaller budget, free another bot's budget, or add cash to the account."
+
+
+def test_where_the_budget_and_the_account_are_short_by_the_same_the_budget_is_named() -> None:
+    """$500 budget, $800 entry, $500 unreserved: $300 short each. The budget is named first, as it always was."""
+    answer = _answer(_account(cash=500), amount=50_000, need=_need(80_000), broker=_broker(10_000))
+
+    assert (answer.admits, answer.binding, answer.shortfall_cents) == (False, "bot_budget", 30_000)
+    assert answer.action == "Choose a budget of at least $800.00."
+
+
+def test_a_budget_over_the_account_is_still_bound_by_the_account_when_the_account_is_not_the_smallest_figure() -> None:
+    """The mirror of the first: the budget covers its entry and is the smaller raw figure beside buying power."""
+    answer = _answer(_account(cash=900), amount=100_000, need=_need(10_000), broker=_broker(2_000_000))
+
+    assert (answer.admits, answer.binding, answer.shortfall_cents, answer.fits) == (False, "account_headroom", 10_000, 9)
+
+
 def test_a_buying_power_reading_older_than_the_limit_is_stale_with_its_time_and_never_a_pass() -> None:
     """Read 46 seconds ago: shown as stale at that time, counted nowhere, and the entry is not called covered."""
     read_at = NOON - OBSERVATION_MAX_AGE_MS - 1
