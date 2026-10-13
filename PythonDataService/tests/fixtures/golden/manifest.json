@@ -2507,9 +2507,9 @@
             "spy_contracts_as_of_2026-10-09_expiring_2026-10-09.json": "8e14a90b58e825b945cff991bce1ce01f843c7e248d2cd18b2608440375d57fc",
             "O_SPY261009C00777000_minute_2026-10-09.json": "4b7dadbf136f7dc95be09f1681cb9571b4b8ac9a453e8aafc20e47991aae3bcc",
             "O_SPY261009C00779000_minute_2026-10-09.json": "dcbd5be04c7625a32d4e5f9f29f8e6ecebea878d7d9d4bfd3af98b2be2446179",
-            "expected.json": "a0ddc0992ea175add7da250872c49c0dcf443611c0ec8b2529fe1e7515f1c2ce",
+            "expected.json": "9c17bf2bcf95b2ee406f5d80374fccdf95e57e83cfc786b67b15114c463262f7",
             "regenerate.py": "3587f1d179824d77e01ee50e3ea819fa975d8e75efb8edcb8cd77b33b60a876b",
-            "attribution.md": "8bc9d135c580084c2d2816ba3234a5e10e0b919b44f2851572b60fbd52510af0"
+            "attribution.md": "eacbe1ad404923fd3f0b390883c486d0f170ce25b084e7aac4cf8fb1c282ae1c"
           },
           "file_sha256": {
             "manifest.json": "82c8ebc763849ff87e1eec341df9bf22f239b6c86f3037dd3227522205f3f116",
@@ -2517,9 +2517,9 @@
             "spy_contracts_as_of_2026-10-09_expiring_2026-10-09.json": "729f12fd70ed6081d7fca851520a39d882fa728ae7eef9495dcb95306673f84a",
             "O_SPY261009C00777000_minute_2026-10-09.json": "7d3993fea4732c4184bbed1a3ee57f385bbdd46d724050d36d72e7a8b25ad6cc",
             "O_SPY261009C00779000_minute_2026-10-09.json": "600fd1ec5fa778713ee7476a0923125800ade63b3eab7c3586953972a3bd89f7",
-            "expected.json": "6e53718b97cce32e4c8cbeec3db93b9bdcf66e4e02c7fc5438791256f5eb75d0",
+            "expected.json": "c96ef2d905537216657e5089d5e903234e39bc7a4fe64f2c9816d61dbe075d07",
             "regenerate.py": "3587f1d179824d77e01ee50e3ea819fa975d8e75efb8edcb8cd77b33b60a876b",
-            "attribution.md": "8bc9d135c580084c2d2816ba3234a5e10e0b919b44f2851572b60fbd52510af0"
+            "attribution.md": "eacbe1ad404923fd3f0b390883c486d0f170ce25b084e7aac4cf8fb1c282ae1c"
           }
         }
       },

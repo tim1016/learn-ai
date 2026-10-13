@@ -626,21 +626,24 @@ async def test_a_call_credit_spread_is_sold_at_0936s_open_and_left_by_the_clock_
 async def test_a_stop_on_the_sold_leg_buys_it_back_alone_at_the_next_open_and_leaves_its_cover_for_the_exit_time(
     the_vendor: respx.MockRouter, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
-    # THE SAME SPREAD WITH A STOP LOSS OF 20 PERCENT ON THE SOLD LEG, WORKED BY HAND FROM THE RECORDED BYTES.
+    # THE SAME SPREAD WITH A STOP LOSS OF 18 PERCENT ON THE SOLD LEG, WORKED BY HAND FROM THE RECORDED BYTES.
     #
     # The entry is the one above: the 777 call sold at 0.99 and the 779 call bought at 0.36 at the open of the bar
     # closing 09:36, cash 10123.40, collateral 400.00.
     #
     # THE STOP. A sold leg's level is what it was SOLD FOR (the price filled, 0.99, and not the 1.00 seen) moved up by the
-    # rule: 0.99 x (1 + 20/100) = 1.188. It is hit by a minute that CLOSES at or above it, and a high inside a minute never
-    # does. The closes of the 777 call from the bar stamped 09:35 on stay under 1.188 until the bar stamped 11:18
-    # (t = 1791559080000), which closes at 1.20: {"o":1.1,"h":1.26,"l":1.09,"c":1.2}. (Before it the highest close is 1.15,
-    # the bar stamped 10:58; the bar stamped 11:17 closes at 1.10 and the bar stamped 11:18 has a high of 1.26.) So the stop
-    # is hit at the close at 11:19 = 1791559140000, at the price 1.20, and that decides the close of the sold leg.
+    # rule: 0.99 x (1 + 18/100) = 1.1682. It is hit by a minute that CLOSES at or above it, and a high inside a minute
+    # never does. 18 percent was chosen after reading the recorded bars, because it makes one bar tell the two readings
+    # apart: the 777 call's bar stamped 10:58 (t = 1791557880000) is {"o":1,"h":1.18,"l":0.99,"c":1.15}. Its high of 1.18
+    # is over 1.1682 and its close of 1.15 is under it, so a stop read on a high would be hit there and the rule is not.
+    # It is the only bar from the bar stamped 09:35 on, up to the one below, whose high reaches the level, and 1.15 is the
+    # highest close up to the one below. The closes stay under 1.1682 until the bar stamped 11:18 (t = 1791559080000),
+    # which closes at 1.20: {"o":1.1,"h":1.26,"l":1.09,"c":1.2}. So the stop is hit at the close at 11:19 = 1791559140000,
+    # at the price 1.20, and that decides the close of the sold leg.
     #
     # THE BUY-BACK fills at the OPEN of the bar closing at 11:20 (1791559200000), stamped 11:19: {"o":1.19,"h":1.28,
     # "l":1.14,"c":1.15}. 1.19 x 1.003 = 1.19357, up to 1.20: 1.20 x 100 x 2 = 240.00 and the fee 1.30 go out: -241.30.
-    # The level was 1.188 and the close that hit it 1.20: the fill is the next open, and it is not the level. Cash
+    # The level was 1.1682 and the close that hit it 1.20: the fill is the next open, and it is not the level. Cash
     # 10123.40 - 241.30 = 9882.10. The stop closes only the leg that carries it, so the 779 call stays held: a bought
     # call has no requirement, and the collateral is 0.00 where it was 400.00.
     #   Profit of the sold leg: (0.99 - 1.20) x 100 x 2 - 1.30 - 1.30 = -42.00 - 2.60 = -44.60.
@@ -650,7 +653,7 @@ async def test_a_stop_on_the_sold_leg_buys_it_back_alone_at_the_next_open_and_le
     # 10000.00 - 57.20 = 9942.80.
     await capture_the_recording()
 
-    result = await the_run(a_call_credit_spread(stop_percent="20"))
+    result = await the_run(a_call_credit_spread(stop_percent="18"))
 
     [session] = result.sessions
     assert session.status is SessionStatus.TRADED
@@ -659,8 +662,12 @@ async def test_a_stop_on_the_sold_leg_buys_it_back_alone_at_the_next_open_and_le
     # The same entry group as the spread held by the clock.
     assert what_a_group_did(session, ENTRY_FILL_MS) == the_key_group(ANSWER_KEY["entry"]["group"])
     # The stop on the sold leg alone.
-    assert short.stop_level == D("1.188") == D(ANSWER_KEY["stop_on_the_sold_leg"]["stop_level"])
+    assert short.stop_level == D("1.1682") == D(ANSWER_KEY["stop_on_the_sold_leg"]["stop_level"])
     assert short.exit_reason is ExitReason.STOP and short.exit_decided_at_ms == STOP_DECIDED_MS
+    # The bar stamped 10:58 has a high at the level and a close under it, and the stop was not hit there: it was read on
+    # a close. The bar is read from the recorded file by the standard library, as the one oracle here that is not our code.
+    bar_1058 = {row["t"]: row for row in recorded_rows(RECORDED_FILES[SOLD_CALL_PATH])}[1791557880000]
+    assert bar_1058["h"] >= short.stop_level > bar_1058["c"]
     [stop_hit] = [event for event in session.outcome.events if event.kind is EventKind.STOP_HIT]
     assert (stop_hit.at_ms, stop_hit.leg_id, stop_hit.price) == (STOP_DECIDED_MS, "short_call", D("1.20"))
     assert D(ANSWER_KEY["stop_on_the_sold_leg"]["stop_close"]) == stop_hit.price

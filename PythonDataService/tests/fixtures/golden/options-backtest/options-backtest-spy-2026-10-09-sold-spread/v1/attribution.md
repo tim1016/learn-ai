@@ -43,10 +43,13 @@ afterwards and changed in nothing else. What ties these files to that recording 
   dollars wide. Two strikes and not one, so that the setup's strike rule counts along the ladder more than one place.
 * **Both contracts traded in the minutes the scenes need.** The script refuses to write a fixture unless each call has a bar
   stamped 09:35 (the minute the entry fills in) and 15:30 (the minute the exit fills in). The minutes of the stop were not
-  known to the script: they come from the recorded closes, and the stop's percentage was chosen after reading the sold
-  call's closes so that the stop is hit once, well after the entry and well before the exit (20 percent; it is no
-  recommendation, and no other percentage was run against the code). A scratch run also asked the vendor for four other
-  contracts of the same session to see how they traded. None of those answers is kept or used.
+  known to the script: they come from the recorded bars, and the stop's percentage was chosen after reading the sold
+  call's bars, on purpose. **18 percent** puts the level at 0.99 x 1.18 = 1.1682, which the bar stamped 10:58 reaches with
+  its high (1.18) and not with its close (1.15), so that bar tells a stop read on the close from one read on the high; the
+  stop is then hit once, at the bar stamped 11:18, well after the entry and well before the exit. (At 20 percent, the
+  value first run against the code, the first bar with a high over the level is also the first with a close over it, and
+  the two readings cannot be told apart.) The percentage is no recommendation. A scratch run also asked the vendor for
+  four other contracts of the same session to see how they traded. None of those answers is kept or used.
 
 ## Regeneration
 
@@ -104,7 +107,7 @@ The setup: sell **2** at-the-money calls and buy **2** calls two listed strikes 
 09:35 (5 minutes after the open); exit by the clock at 15:30 (30 minutes before the close); a partial square-off; slippage
 **0.3 percent** (the page's default) and the price step 0.01; a fee of **0.65 a contract** on every fill; 10 000.00 of cash.
 The key keeps three scenes, `entry`, `stop_on_the_sold_leg` and `exit`, from two runs: the spread entered and left by the
-clock (`entry` and `exit`), and the same spread with a stop of 20 percent on the sold leg (`stop_on_the_sold_leg`). Every
+clock (`entry` and `exit`), and the same spread with a stop of 18 percent on the sold leg (`stop_on_the_sold_leg`). Every
 figure is exact `Decimal` arithmetic on recorded prices, so the tolerance is zero.
 
 **The bars used** (each named by its START; open, high, low, close):
@@ -114,6 +117,7 @@ figure is exact `Decimal` arithmetic on recorded prices, so the tolerance is zer
 | SPY | 09:34 | 776.57 | 776.77 | 776.54 | 776.55 |
 | 777 call | 09:35 | 1.00 | 1.07 | 0.94 | 0.98 |
 | 779 call | 09:35 | 0.35 | 0.38 | 0.33 | 0.33 |
+| 777 call | 10:58 | 1.00 | 1.18 | 0.99 | 1.15 |
 | 777 call | 11:18 | 1.10 | 1.26 | 1.09 | 1.20 |
 | 777 call | 11:19 | 1.19 | 1.28 | 1.14 | 1.15 |
 | 777 call | 15:30 | 1.90 | 1.92 | 1.84 | 1.88 |
@@ -145,12 +149,15 @@ there and fill at the open of the bar stamped 15:30 (it closes at 15:31, 1791574
 **The stop on the sold leg** (scene `stop_on_the_sold_leg`). The entry is the one above.
 
 1. The stop level is what the leg was **sold for** (the price filled, 0.99, not the 1.00 seen) moved up by the rule:
-   0.99 x (1 + 20/100) = **1.188**. It is hit by a minute that **closes** at or above it; a high inside a minute never does.
-2. From the bar stamped 09:35 on, the 777 call's closes stay under 1.188 up to the bar stamped 11:17 (the highest is 1.15,
-   the bar stamped 10:58). The bar stamped 11:18 closes at **1.20**, so the stop is hit at its close, 11:19
-   (1791559140000), and decides the sold leg's close.
+   0.99 x (1 + 18/100) = **1.1682**. It is hit by a minute that **closes** at or above it; a high inside a minute never
+   does.
+2. From the bar stamped 09:35 on, the 777 call's closes stay under 1.1682 up to the bar stamped 11:17 (the highest is
+   1.15, the bar stamped 10:58). The bar stamped 10:58 is the test of the rule: its high, 1.18, is over 1.1682 and its
+   close, 1.15, is under it, so it is **not** a hit, and it is the only bar before the next one whose high reaches the
+   level. The bar stamped 11:18 closes at **1.20**, so the stop is hit at its close, 11:19 (1791559140000), and decides the
+   sold leg's close.
 3. The buy-back fills at the open of the bar stamped 11:19 (it closes at 11:20, 1791559200000): 1.19 x 1.003 = 1.19357,
-   rounded up: **1.20** (the level was 1.188 and the close that hit it 1.20; the fill is the next open). 1.20 x 100 x 2 =
+   rounded up: **1.20** (the level was 1.1682 and the close that hit it 1.20; the fill is the next open). 1.20 x 100 x 2 =
    240.00 and the fee 1.30 go out: **-241.30**. Cash 10 123.40 - 241.30 = **9 882.10**.
 4. The stop closes only the leg that carries it. The 779 call stays held and a bought call has no requirement, so the
    collateral falls from 400.00 to **0.00**. Profit of the sold leg: (0.99 - 1.20) x 100 x 2 - 1.30 - 1.30 = **-44.60**.

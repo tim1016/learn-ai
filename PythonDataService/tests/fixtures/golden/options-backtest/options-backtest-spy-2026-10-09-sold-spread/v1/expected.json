@@ -37,7 +37,7 @@
       }
     },
     "stop_on_the_sold_leg": {
-      "stop_level": "1.188",
+      "stop_level": "1.1682",
       "stop_close": "1.20",
       "decided_at_ms": 1791559140000,
       "group": {
