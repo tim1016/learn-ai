@@ -2,8 +2,9 @@
 
 Formula: an ENTER is admitted by ``budgets.budget_entry_decision``: its entry
   requirement (``budgets.entry_requirement``: notional plus the recorded fee
-  provision) against its deployment's free budget and the account's cash
-  after every other claim, judged by ``sqlite/envelope_admission.py``; loss limit
+  provision) against its deployment's free budget and the account's headroom
+  for it (cash after every other claim and all option collateral,
+  ``budgets.account_headroom``), judged by ``sqlite/envelope_admission.py``; loss limit
   ``L = min(loss_fraction × last_equity, loss_usd)``; loss breached iff
   ``day_pnl <= −L``.
 Reference: ADR 0059 Decision 4; owner rulings 2026-09-08 (plan R1–R4).

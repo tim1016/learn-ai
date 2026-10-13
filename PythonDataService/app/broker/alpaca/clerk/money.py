@@ -169,18 +169,6 @@ def recorded_dollars(value: object) -> str:
     return dollars(display_cents(normalize_money(value)))
 
 
-def cash_admits(*, cash: object, claims: object, required: object) -> bool:
-    """Compare exact normalized money with no tolerance or display rounding."""
-    with money_context():
-        cash_value = normalize_money(cash)
-        # Claims/requirements can be products with up to 648 fractional places.
-        claim = claims if isinstance(claims, Decimal) else normalize_money(claims)
-        needed = required if isinstance(required, Decimal) else normalize_money(required)
-        if not claim.is_finite() or not needed.is_finite() or claim < ZERO or needed < ZERO:
-            raise MoneyInputError("Cash claims and requirements must be finite and nonnegative.")
-        return claim + needed <= cash_value
-
-
 def apportion_units(units: int, weights: Mapping[str, Decimal]) -> dict[str, int]:
     """Split whole units in proportion to exact weights, losing none.
 

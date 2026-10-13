@@ -4,7 +4,10 @@ Formula: balance = commitment + canonical FIFO gross realized P&L - fees;
 free = balance - signed open FIFO basis - option collateral - unfilled orders (including provisions);
 available = observed cash - sum(active max(free, 0)) - all order-overlap
 claims - fees not already reflected in cash or an order-overlap claim
-- option collateral (ADR 0076 decision 28).
+- option collateral (ADR 0076 decision 28);
+an entry is admitted when it fits free and fits the deployment's account
+headroom = available + its own max(free, 0), so the entry test and
+``available`` are one rule (#3096).
 A stopped deployment's release is the Stop's recorded fact (#2555), read back
 as ``DeploymentBudget.release``; it is never re-derived from later money.
 Reference: https://github.com/tim1016/learn-ai/issues/2540, Money contract.
@@ -20,7 +23,6 @@ from decimal import Decimal, Inexact, localcontext
 
 from app.broker.alpaca.clerk.money import (
     ZERO,
-    cash_admits,
     cents_required,
     cents_spendable,
     money_context,
@@ -131,6 +133,24 @@ def account_budget(
         )
 
 
+def account_headroom(account: AccountBudget, own: DeploymentBudget) -> Decimal:
+    """What the account can fund for one deployment: its unreserved cash plus that deployment's own claim.
+
+    ``account.available`` already subtracts every active deployment's free
+    claim, the order and fee claims, and all option collateral, a stopped
+    deployment's included. Adding back this deployment's own claim lets it
+    spend its own reservation once. Negative while the account is
+    over-committed.
+
+    Formula: headroom = available + own.cash_claim.
+    Reference: ADR 0076 decision 28; https://github.com/tim1016/learn-ai/issues/3096.
+    Canonical implementation: this function; the entry decisions below test against it.
+    Validated against: tests/broker/alpaca/clerk/test_budgets.py (the #3096 case, worked by hand).
+    """
+    with money_context():
+        return account.available + own.cash_claim
+
+
 def entry_requirement(*, quantity: object, price: object, at_ms: int) -> tuple[Decimal, int]:
     """One position's exact notional plus canonical, disclosed fee provision.
 
@@ -166,8 +186,10 @@ def budget_entry_decision(account: AccountBudget, *, strategy_instance_id: str, 
     """The same exact next-position cash rule for commitment and its read view.
 
     Required dollars include the canonical BUY fee provision. Other active
-    deployments retain their positive free claims; this deployment spends its
-    own claim once. Cash projections already own order/fill/fee overlap.
+    deployments retain their positive free claims, and option collateral held
+    by any deployment is out of reach; this deployment spends its own claim
+    once (``account_headroom``). Cash projections already own order/fill/fee
+    overlap.
     """
     required, fee_cents = entry_requirement(quantity=quantity, price=price, at_ms=at_ms)
     return _requirement_decision(account, strategy_instance_id=strategy_instance_id, required=required, fee_cents=fee_cents)
@@ -185,8 +207,8 @@ def option_entry_decision(
     priced here.
 
     Formula: admitted when commitment <= this deployment's free budget and
-      commitment + every other claim <= observed cash.
-    Reference: ADR 0076 decision 2; PRD #2540 admission.
+      commitment <= the account's headroom for it (``account_headroom``).
+    Reference: ADR 0076 decision 2 and decision 28; PRD #2540 admission.
     Canonical implementation: the rule is this file's (``_requirement_decision``).
     Validated against: tests/broker/alpaca/clerk/sqlite/test_option_entry_and_exit.py.
     """
@@ -202,15 +224,14 @@ def option_entry_decision(
 def _requirement_decision(
     account: AccountBudget, *, strategy_instance_id: str, required: Decimal, fee_cents: int,
 ) -> BudgetEntryDecision:
-    """Whether this deployment's budget and the account's cash cover ``required`` dollars. The caller holds the money context."""
+    """Whether this deployment's budget and the account's headroom for it cover ``required`` dollars. The caller holds the money context."""
     required_display = Decimal(cents_required(required)) / 100
     own = next((item for item in account.deployments if item.strategy_instance_id == strategy_instance_id), None)
     if own is None or not own.active:
         return BudgetEntryDecision(False, required, fee_cents, "This deployment is stopped. Review a fresh Deploy before creating new exposure.")
     if required > own.free:
         return BudgetEntryDecision(False, required, fee_cents, f"The next position needs {required_display:.2f} USD including estimated fees; this deployment has {Decimal(cents_spendable(own.free)) / 100:.2f} USD free.")
-    with money_context():
-        claims = account.active_free_claims - own.cash_claim + account.order_claims + account.fee_claims
-        if not cash_admits(cash=account.cash, claims=claims, required=required):
-            return BudgetEntryDecision(False, required, fee_cents, f"The next position needs {required_display:.2f} USD including estimated fees; account cash after other claims is {Decimal(cents_spendable(account.cash - claims)) / 100:.2f} USD.")
+    headroom = account_headroom(account, own)
+    if required > headroom:
+        return BudgetEntryDecision(False, required, fee_cents, f"The next position needs {required_display:.2f} USD including estimated fees; the account can fund {Decimal(max(0, cents_spendable(headroom))) / 100:.2f} USD for this deployment.")
     return BudgetEntryDecision(True, required, fee_cents, f"Current budget and cash cover the next position's estimated {required_display:.2f} USD including fees.")

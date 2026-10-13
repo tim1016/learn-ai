@@ -153,7 +153,7 @@ def test_two_instances_cannot_spend_the_same_cash(
     with pytest.raises(AdmissionBlockedError) as exc_info:
         _accept(envelope_repo, b, run_b, decision_id="d2", leg=_leg(quantity=6), envelope=after_fall)
     assert _refusal(exc_info) == LIVE_ENVELOPE_CASH_EXCEEDED
-    assert "account cash after other claims is 499.99 USD" in (exc_info.value.decision.why or "")
+    assert "the account can fund 499.99 USD for this deployment" in (exc_info.value.decision.why or "")
     # 4 shares need 400.01 of the 499.99 left.
     _accept(envelope_repo, b, run_b, decision_id="d3", leg=_leg(quantity=4), envelope=after_fall)
 
