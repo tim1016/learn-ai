@@ -96,9 +96,9 @@ def simulated_entry_fills(
     return tuple(fills)
 
 
-def _a_price_to_close_at(side: QuoteSide | None, *, buys: bool) -> bool:
+def a_price_to_close_at(side: QuoteSide | None, *, buys: bool) -> bool:
     """Whether a quote side is a price a close can be filled at. Nothing bid is a price to sell at, zero;
-    nothing offered is no price to buy at."""
+    nothing offered is no price to buy at. The exit estimate (#3100) asks the same question of each side."""
     if side is None or not side.price.is_finite() or side.price < 0:
         return False
     return side.price > 0 or not buys
@@ -127,7 +127,7 @@ def simulated_exit_fills(
         # The exit reverses the leg: what was bought is sold, what was sold is bought back.
         buys = leg.position == "short"
         side = None if quote is None else (quote.ask if buys else quote.bid)
-        priced = quote is not None and _a_price_to_close_at(side, buys=buys)
+        priced = quote is not None and a_price_to_close_at(side, buys=buys)
         usable = priced and generation is not None and quote_fault(
             quote, at_ms=at_ms, generation=generation, max_age_ms=max_age_ms, needs_a_bid=False
         ) is None

@@ -21,7 +21,9 @@ first leg for the whole.
 
 ``held_of_entry`` reads what a bot holds of one entry: each leg's contracts
 from the books, signed, and the whole structures they come to
-(``app.options.whole_units``).
+(``app.options.whole_units``). ``held_option_legs`` reads what a bot holds of
+every contract it has, whatever entry opened it: the legs an exit estimate is
+worked from (#3100).
 
 Formula: every figure here is ``app/options/entry.py``'s (``prepare_entry``)
   and ``app/broker/alpaca/option_fees.py``'s (the fee provision). This module
@@ -42,8 +44,10 @@ from typing import TYPE_CHECKING, Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.broker.alpaca.clerk.option_effects import OptionExitEvidence, RecordedQuote
-from app.broker.alpaca.clerk.sqlite.contract_terms import ContractTerms, order_contract_terms
+from app.broker.alpaca.clerk.sqlite import reads
+from app.broker.alpaca.clerk.sqlite.contract_terms import ContractTerms, contract_terms, order_contract_terms
 from app.broker.alpaca.clerk.sqlite.facts import EnterAcceptedFacts, ExitAcceptedFacts
+from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.option_order_legs import multi_leg_parent_line
 from app.broker.contract.models import OrderSide, OrderType
@@ -57,6 +61,7 @@ from app.options.contract import OptionContract
 from app.options.deadlines import CloseTerms
 from app.options.entry import PreparedEntry
 from app.options.quotes import HeldQuote
+from app.options.requirement import ContractAtMultiplier
 from app.options.structure import MAX_OPTION_LEGS, LegPosition, ResolvedLeg, ResolvedStructure
 from app.options.whole_units import LegContracts, WholeUnits, in_leg_direction, whole_units
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
@@ -623,6 +628,36 @@ def held_of_entry(repo: ClerkSqliteRepository, entry_order_ref: str) -> HeldOfEn
     )
 
 
+def held_option_legs(repo: ClerkSqliteRepository, strategy_instance_id: str) -> dict[ContractAtMultiplier, int]:
+    """What one bot holds of option contracts now: signed whole contracts by ``(OCC symbol, multiplier)``.
+
+    Bought above zero and sold below, each contract at the multiplier the
+    books recorded for it, which is the shape ``held_requirement_cents``
+    takes. Read from the positions that are not zero under the write fence, so
+    every contract is of one moment, and the bot's own entries are not read:
+    a bot holds a contract only through an entry of its own. A bot holding
+    none answers an empty mapping. Raises ``ValueError`` for a quantity that is
+    not whole contracts, as ``held_of_entry`` does: the books are then wrong,
+    and nothing is rounded.
+    """
+    with repo.write_fence() as conn:
+        held = [
+            position
+            for position in reads.held_option_contracts(conn)
+            if position.strategy_instance_id == strategy_instance_id and position_quantity_is_nonzero(position.quantity)
+        ]
+        recorded = {position.symbol: contract_terms(conn, position.symbol) for position in held}
+    legs: dict[ContractAtMultiplier, int] = {}
+    for position in held:
+        terms = recorded[position.symbol]
+        # ``held_option_contracts`` lists only contracts the books have recorded terms for.
+        assert terms is not None, f"{position.symbol} is held with no recorded terms"
+        legs[position.symbol, terms.multiplier] = _whole_contracts(
+            position.quantity, what=f"the position in {position.symbol}"
+        )
+    return legs
+
+
 __all__ = [
     "HeldLeg",
     "HeldOfEntry",
@@ -634,6 +669,7 @@ __all__ = [
     "OptionExitFacts",
     "OptionOrderTermsFacts",
     "held_of_entry",
+    "held_option_legs",
     "option_entry_contracts",
     "option_entry_facts",
     "option_entry_of_order",

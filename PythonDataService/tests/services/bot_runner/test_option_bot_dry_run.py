@@ -1775,6 +1775,40 @@ async def test_an_option_bots_page_shows_its_limits_while_no_entry_is_priced(flo
     )
 
 
+async def test_an_option_bots_page_says_what_getting_out_costs_while_it_holds_the_call_and_nothing_once_flat(
+    floor: Floor,
+) -> None:
+    """Held, the one call is sold at the bid kept for it: 4.08 a share, 100 shares, $408.00 comes back. Nothing
+    is sold short, so there is no buy-back to make, and the position is not a sold one, so no close is owed
+    before its expiry day (#3100). Once the EXIT has sold it the bot holds nothing and shows no estimate."""
+    held: dict[str, Any] = {}
+
+    def look(floor: Floor) -> None:
+        held["view"] = budget_deploy._budget_view(floor.runtime, SID)
+
+    await floor.run(_round_trip(after_the_entry=look))
+
+    estimate = held["view"].exit_estimate
+    assert estimate is not None
+    assert (estimate.net_close.state, estimate.net_close.amount_usd) == ("known", "-408.00")
+    assert estimate.net_close.source == "Quotes kept for this Dry Run"
+    assert [(term.label, term.amount_usd) for term in estimate.net_close.terms] == [
+        (f"Sell 1 {CALL} at the bid", "-408.00"),
+    ]
+    assert (estimate.gross_buy_back.state, estimate.gross_buy_back.amount_usd, estimate.gross_buy_back.terms) == (
+        "known", "0.00", (),
+    )
+    assert [(leg.contract.occ_symbol, leg.contracts, leg.state, leg.missing, leg.gap_usd) for leg in estimate.quotes] == [
+        (CALL, 1, "known", (), "0.04"),
+    ]
+    assert estimate.conditions == (
+        "Amounts are before fees. A positive amount is paid and a negative one comes back.",
+        "Alpaca's own expiry-day cutoff has not been verified.",
+    )
+    assert floor.holds() == {}
+    assert (await _money_view(floor)).exit_estimate is None
+
+
 async def test_an_option_bot_with_a_budget_of_one_cent_is_never_said_to_be_ready(
     on_the_floor: Callable[..., Floor],
 ) -> None:

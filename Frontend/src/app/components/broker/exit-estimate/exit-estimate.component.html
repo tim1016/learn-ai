@@ -1,0 +1,63 @@
+<section class="exit-estimate" [attr.aria-labelledby]="headingId">
+  <h4 [id]="headingId">What getting out costs</h4>
+  <ul class="exit-estimate__figures">
+    @for (row of figures(); track row.key) {
+      <li class="exit-estimate__figure" [attr.data-state]="row.figure.state">
+        <details>
+          <summary>
+            <span class="exit-estimate__label">{{ row.label }}</span>
+            @if (row.figure.amount_usd; as amount) {
+              <span class="exit-estimate__amount">{{ amount | authoredUsd }}</span>
+            }
+            @if (row.figure.state === 'stale') {
+              <span class="exit-estimate__state">stale, as last read</span>
+            } @else if (row.figure.state === 'unknown') {
+              <span class="exit-estimate__state">unknown</span>
+            }
+          </summary>
+          <p class="exit-estimate__source">{{ row.figure.source }}.</p>
+          @if (row.figure.as_of_ms; as asOf) {
+            <small>Oldest quote side received <app-timestamp-display [value]="asOf" mode="local" /></small>
+          }
+          @if (row.terms.length > 0) {
+            <dl class="exit-estimate__terms">
+              @for (term of row.terms; track term.label) {
+                <div>
+                  <dt>{{ term.label }}</dt>
+                  <dd>{{ term.amount_usd | authoredUsd }}</dd>
+                </div>
+              }
+            </dl>
+          }
+        </details>
+      </li>
+    }
+  </ul>
+  <ul class="exit-estimate__quotes" aria-label="The quotes behind these figures">
+    @for (row of legs(); track row.leg.contract.occ_symbol) {
+      <li class="exit-estimate__quote" [attr.data-state]="row.leg.state">
+        <app-option-contract [contract]="row.leg.contract" />
+        <span class="exit-estimate__held">{{ row.side }} {{ row.count }}</span>
+        @if (row.ageSeconds !== null) {
+          <span>{{ row.ageSeconds }} s old</span>
+        }
+        @if (row.missing; as missing) {
+          <span>{{ missing }}</span>
+        }
+        @if (row.leg.gap_usd; as gap) {
+          <span>gap {{ gap | authoredUsd }} a share</span>
+        }
+        @if (row.leg.state === 'stale') {
+          <span class="exit-estimate__state">stale</span>
+        } @else if (row.leg.state === 'unknown') {
+          <span class="exit-estimate__state">unknown</span>
+        }
+      </li>
+    }
+  </ul>
+  <ul class="exit-estimate__conditions">
+    @for (line of estimate().conditions; track line) {
+      <li>{{ line }}</li>
+    }
+  </ul>
+</section>
