@@ -415,3 +415,396 @@ def test_the_two_shipped_examples_still_validate() -> None:
     for example in EXAMPLE_SETUPS:
         assert example.setup is not None
         assert OptionsBacktestSetup.model_validate(example.setup.model_dump(mode="json")) == example.setup
+
+
+# ── A leg's side (#3105) ─────────────────────────────────────────────────
+
+# What setups dumped to on master at 90937b3c, before a leg had a side, written out here as text. A bought leg writes
+# no side, so these are what a setup of bought legs dumps to now, byte for byte: stored setups, stored runs and the
+# equality check of a finished run depend on it.
+_LEG_OF_THE_EXAMPLES = (
+    '{{"leg_id":"{name}","right":"{name}","contracts":1,"expiry":{{"kind":"this_week"}},"strike":{{"kind":"atm"}},'
+    '"stop_loss":{{"kind":"percent","value":"25"}},"momentum":{{"kind":"percent_up","value":"25"}},'
+    '"reentry_on_stop":{reentry}}}'
+)
+_THE_COSTS = (
+    '"slippage_percent":"0.3","price_step_usd":"0.01","fees":{"kind":"not_charged","per_contract_usd":null},'
+    '"starting_cash_usd":"10000"}'
+)
+_ONCE = '{"kind":"at_once","count":1}'
+_MASTER_BYTES: dict[str, str] = {
+    "SPY premium momentum, no re-entry": (
+        '{"version":1,"underlying":"SPY","entry":{"anchor":"open","offset_ms":300000},'
+        '"exit":{"anchor":"close","offset_ms":2760000},"no_reentry_after":null,"square_off":"complete","legs":['
+        + ",".join(_LEG_OF_THE_EXAMPLES.format(name=name, reentry="null") for name in ("call", "put"))
+        + "],"
+        + _THE_COSTS
+    ),
+    "SPY premium momentum, one re-entry": (
+        '{"version":1,"underlying":"SPY","entry":{"anchor":"open","offset_ms":300000},'
+        '"exit":{"anchor":"close","offset_ms":2760000},'
+        '"no_reentry_after":{"anchor":"close","offset_ms":3600000},"square_off":"complete","legs":['
+        + ",".join(_LEG_OF_THE_EXAMPLES.format(name=name, reentry=_ONCE) for name in ("call", "put"))
+        + "],"
+        + _THE_COSTS
+    ),
+}
+_A_PLAIN_SETUP_ON_MASTER = (
+    '{"version":1,"underlying":"SPY","entry":{"anchor":"open","offset_ms":300000},'
+    '"exit":{"anchor":"close","offset_ms":2760000},"no_reentry_after":null,"square_off":"complete","legs":['
+    '{"leg_id":"call","right":"call","contracts":1,"expiry":{"kind":"this_week"},"strike":{"kind":"atm"},'
+    '"stop_loss":null,"momentum":null,"reentry_on_stop":null}],' + _THE_COSTS
+)
+_A_BUSY_SETUP_ON_MASTER = (
+    '{"version":1,"underlying":"SPY","entry":{"anchor":"open","offset_ms":300000},'
+    '"exit":{"anchor":"close","offset_ms":2760000},'
+    '"no_reentry_after":{"anchor":"close","offset_ms":3600000},"square_off":"complete","legs":['
+    '{"leg_id":"call","right":"call","contracts":1,"expiry":{"kind":"this_week"},"strike":{"kind":"atm"},'
+    '"stop_loss":{"kind":"percent","value":"25"},"momentum":{"kind":"percent_up","value":"10"},'
+    '"reentry_on_stop":{"kind":"at_once","count":2}},'
+    '{"leg_id":"put","right":"put","contracts":3,"expiry":{"kind":"min_days","days":7},'
+    '"strike":{"kind":"atm_offset","steps":-2},"stop_loss":null,"momentum":null,"reentry_on_stop":null}],'
+    '"slippage_percent":"0.3","price_step_usd":"0.01","fees":{"kind":"per_contract","per_contract_usd":"0.65"},'
+    '"starting_cash_usd":"10000"}'
+)
+
+
+def _busy_setup() -> dict[str, Any]:
+    return _setup(
+        legs=[
+            _leg(
+                stop_loss={"kind": "percent", "value": "25"},
+                momentum={"kind": "percent_up", "value": "10"},
+                reentry_on_stop={"kind": "at_once", "count": 2},
+            ),
+            _leg(
+                leg_id="put",
+                right="put",
+                contracts=3,
+                expiry={"kind": "min_days", "days": 7},
+                strike={"kind": "atm_offset", "steps": -2},
+            ),
+        ],
+        no_reentry_after={"anchor": "close", "offset_ms": 60 * MS_PER_MINUTE},
+        fees={"kind": "per_contract", "per_contract_usd": "0.65"},
+    )
+
+
+def test_a_leg_with_no_side_is_bought() -> None:
+    setup = OptionsBacktestSetup.model_validate(_setup())
+
+    assert setup.legs[0].side == "buy"
+
+
+def test_the_two_shipped_examples_dump_to_the_bytes_they_dumped_to_before_a_leg_had_a_side() -> None:
+    from app.options_backtest.saved_setups import EXAMPLE_SETUPS
+
+    for example in EXAMPLE_SETUPS:
+        assert example.setup is not None
+        assert example.setup.model_dump_json() == _MASTER_BYTES[example.name], example.name
+
+
+@pytest.mark.parametrize(
+    ("written", "on_master"),
+    [
+        pytest.param(_setup(), _A_PLAIN_SETUP_ON_MASTER, id="the plain fixture setup"),
+        pytest.param(_busy_setup(), _A_BUSY_SETUP_ON_MASTER, id="a setup with every rule and two kinds of expiry"),
+        pytest.param(
+            _setup(legs=[_leg(side="buy")]),
+            _A_PLAIN_SETUP_ON_MASTER,
+            id="a side written as buy is the default and is not written back",
+        ),
+    ],
+)
+def test_a_setup_of_bought_legs_dumps_to_the_bytes_it_dumped_to_before_a_leg_had_a_side(
+    written: dict[str, Any], on_master: str
+) -> None:
+    setup = OptionsBacktestSetup.model_validate(written)
+
+    assert setup.model_dump_json() == on_master
+    assert "side" not in setup.model_dump(mode="json")["legs"][0]
+    assert "side" not in setup.model_dump(mode="python")["legs"][0]
+
+
+@pytest.mark.parametrize("stored", [*_MASTER_BYTES.values(), _A_PLAIN_SETUP_ON_MASTER, _A_BUSY_SETUP_ON_MASTER])
+def test_a_setup_stored_before_legs_had_a_side_opens_as_it_was_and_writes_back_the_same_bytes(stored: str) -> None:
+    opened = OptionsBacktestSetup.model_validate_json(stored)
+
+    assert all(leg.side == "buy" for leg in opened.legs)
+    assert opened.model_dump_json() == stored
+
+
+def test_a_sold_leg_writes_its_side_and_reads_back_as_sold() -> None:
+    sold = OptionsBacktestSetup.model_validate(
+        _setup(legs=[_leg(leg_id="long"), _leg(leg_id="short", side="sell", strike={"kind": "atm_offset", "steps": 2})])
+    )
+
+    dumped = sold.model_dump(mode="json")
+
+    assert [leg.get("side") for leg in dumped["legs"]] == [None, "sell"]
+    assert OptionsBacktestSetup.model_validate_json(sold.model_dump_json()) == sold
+    # The slippage ladder re-validates a dump taken in python mode, and the side must survive it.
+    assert OptionsBacktestSetup.model_validate(sold.model_dump(mode="python")) == sold
+    assert OptionsBacktestSetup.model_validate_json(sold.model_dump_json()).legs[1].side == "sell"
+
+
+def test_two_setups_that_differ_only_in_a_legs_side_are_not_equal() -> None:
+    bought = OptionsBacktestSetup.model_validate(_setup(legs=[_leg(leg_id="long"), _leg(leg_id="short")]))
+    sold = OptionsBacktestSetup.model_validate(_setup(legs=[_leg(leg_id="long"), _leg(leg_id="short", side="sell")]))
+
+    assert bought != sold
+    assert bought.model_dump_json() != sold.model_dump_json()
+
+
+@pytest.mark.parametrize("side", ["short", "BUY", "", None, 1])
+def test_a_side_that_is_neither_buy_nor_sell_is_refused(side: Any) -> None:
+    with pytest.raises(ValidationError):
+        OptionsBacktestSetup.model_validate(_setup(legs=[_leg(side=side)]))
+
+
+# Rule 2: a sold contract is covered by a bought contract of its kind, one for one.
+_LONG_CALL = _leg(leg_id="long_call")
+_SHORT_CALL = _leg(leg_id="short_call", side="sell")
+_LONG_PUT = _leg(leg_id="long_put", right="put")
+_SHORT_PUT = _leg(leg_id="short_put", right="put", side="sell")
+
+
+@pytest.mark.parametrize(
+    ("legs", "kind", "reason"),
+    [
+        ([_SHORT_CALL], "call", "a sold call and nothing bought"),
+        ([_LONG_PUT, _SHORT_CALL], "call", "a bought put does not cover a sold call"),
+        ([_LONG_CALL, _leg(leg_id="short_call", side="sell", contracts=2)], "call", "two sold against one bought"),
+        (
+            [_leg(leg_id="long_call", contracts=3), _SHORT_CALL, _leg(leg_id="more", side="sell", contracts=3)],
+            "call",
+            "sold legs of one kind add up",
+        ),
+        ([_LONG_CALL, _SHORT_PUT], "put", "a bought call does not cover a sold put"),
+        (
+            [_LONG_CALL, _SHORT_CALL, _LONG_PUT, _leg(leg_id="short_put", right="put", side="sell", contracts=2)],
+            "put",
+            "the put side alone is short",
+        ),
+    ],
+)
+def test_a_setup_that_sells_more_contracts_of_a_kind_than_it_buys_is_refused_and_the_sentence_names_the_kind(
+    legs: list[dict[str, Any]], kind: str, reason: str
+) -> None:
+    with pytest.raises(ValidationError) as caught:
+        OptionsBacktestSetup.model_validate(_setup(legs=legs))
+
+    message = str(caught.value)
+    assert f"sell more {kind} contracts than they buy" in message
+    assert f"a sold {kind} needs a bought {kind} to cover it" in message
+
+
+@pytest.mark.parametrize(
+    ("legs", "reason"),
+    [
+        ([_LONG_CALL, _SHORT_CALL], "one bought call covers one sold call"),
+        ([_leg(leg_id="long_call", contracts=2), _SHORT_CALL], "more bought than sold"),
+        ([_LONG_CALL, _SHORT_CALL, _LONG_PUT, _SHORT_PUT], "a pair of each kind"),
+        ([_LONG_PUT, _SHORT_PUT, _LONG_CALL], "a bought leg with nothing sold of its kind"),
+        (
+            [_leg(leg_id="a", contracts=1), _leg(leg_id="b", contracts=1), _leg(leg_id="s", contracts=2, side="sell")],
+            "two bought legs together cover a sold leg of two",
+        ),
+        ([_LONG_CALL, _LONG_PUT], "nothing sold at all"),
+    ],
+)
+def test_a_setup_that_buys_at_least_as_many_contracts_of_each_kind_as_it_sells_is_taken(
+    legs: list[dict[str, Any]], reason: str
+) -> None:
+    OptionsBacktestSetup.model_validate(_setup(legs=legs))
+
+
+# Rule 3: a setup with a sold leg carries one expiry rule on every leg.
+_SAME_DAY = {"kind": "same_day"}
+
+
+@pytest.mark.parametrize(
+    ("legs", "reason"),
+    [
+        ([_LONG_CALL, _leg(leg_id="short_call", side="sell", expiry=_SAME_DAY)], "a sold leg on another rule"),
+        ([_leg(leg_id="long_call", expiry=_SAME_DAY), _SHORT_CALL], "the bought leg on another rule"),
+        (
+            [
+                _leg(leg_id="long_call", expiry={"kind": "min_days", "days": 3}),
+                _leg(leg_id="short_call", side="sell", expiry={"kind": "min_days", "days": 4}),
+            ],
+            "one rule with two day counts",
+        ),
+        (
+            [_LONG_CALL, _SHORT_CALL, _leg(leg_id="long_put", right="put", expiry=_SAME_DAY)],
+            "a third leg that is not on the rule",
+        ),
+    ],
+)
+def test_a_setup_with_a_sold_leg_whose_legs_do_not_all_carry_one_expiry_rule_is_refused(
+    legs: list[dict[str, Any]], reason: str
+) -> None:
+    with pytest.raises(ValidationError) as caught:
+        OptionsBacktestSetup.model_validate(_setup(legs=legs))
+
+    assert "one expiry rule" in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("legs", "reason"),
+    [
+        ([_LONG_CALL, _SHORT_CALL], "the same rule"),
+        (
+            [
+                _leg(leg_id="long_call", expiry={"kind": "min_days", "days": 3}),
+                _leg(leg_id="short_call", side="sell", expiry={"kind": "min_days", "days": 3}),
+            ],
+            "the same rule with the same day count",
+        ),
+        (
+            [_leg(leg_id="a", expiry=_SAME_DAY), _leg(leg_id="b", right="put", expiry={"kind": "this_week"})],
+            "a setup that only buys may mix expiry rules, as it always could",
+        ),
+    ],
+)
+def test_one_expiry_rule_on_every_leg_is_taken_and_a_setup_that_only_buys_is_left_alone(
+    legs: list[dict[str, Any]], reason: str
+) -> None:
+    OptionsBacktestSetup.model_validate(_setup(legs=legs))
+
+
+# Rule 4: a percent stop is under 100 on a bought leg only.
+@pytest.mark.parametrize("value", ["100", "100.0001", "150", "1000", "99999999"])
+def test_a_percent_stop_of_a_hundred_or_more_is_refused_on_a_bought_leg_where_it_was_before(value: str) -> None:
+    with pytest.raises(ValidationError) as caught:
+        OptionsBacktestSetup.model_validate(_setup(legs=[_leg(stop_loss={"kind": "percent", "value": value})]))
+
+    [error] = caught.value.errors()
+    # The refusal stays at the stop loss, where the page puts it, though the check is the leg's.
+    assert error["loc"] == ("legs", 0, "stop_loss")
+    assert "under 100" in error["msg"]
+
+
+@pytest.mark.parametrize("value", ["100", "150", "1000", "99999999"])
+def test_a_percent_stop_of_a_hundred_or_more_is_taken_on_a_sold_leg(value: str) -> None:
+    setup = OptionsBacktestSetup.model_validate(
+        _setup(legs=[_LONG_CALL, _leg(leg_id="short_call", side="sell", stop_loss={"kind": "percent", "value": value})])
+    )
+
+    assert setup.legs[1].stop_loss is not None and setup.legs[1].stop_loss.value == Decimal(value)
+
+
+@pytest.mark.parametrize("side", ["buy", "sell"])
+@pytest.mark.parametrize("stop", [{"kind": "points", "value": "250"}, {"kind": "percent", "value": "99.9999"}])
+def test_a_stop_in_points_and_a_percent_below_a_hundred_are_taken_on_either_side(
+    side: str, stop: dict[str, Any]
+) -> None:
+    setup = OptionsBacktestSetup.model_validate(
+        _setup(legs=[_LONG_CALL, _leg(leg_id="other", side=side, stop_loss=stop)])
+    )
+
+    assert setup.legs[1].stop_loss is not None
+
+
+def test_a_percent_stop_is_judged_by_the_side_whatever_order_the_leg_is_written_in() -> None:
+    stop = {"kind": "percent", "value": "150"}
+
+    OptionsBacktestSetup.model_validate(
+        _setup(legs=[_LONG_CALL, {"stop_loss": stop, "side": "sell", **_leg(leg_id="short_call")}])
+    )
+    with pytest.raises(ValidationError):
+        OptionsBacktestSetup.model_validate(
+            _setup(legs=[{"stop_loss": stop, "side": "buy", **_leg(leg_id="long_call")}])
+        )
+
+
+# Rule 5: a sold leg's re-entry rule is reachable through its own stop, through a complete square-off with another
+# leg's stop, or through a stop on a bought leg of its kind.
+_STOP = {"kind": "percent", "value": "25"}
+_RE_ENTER = {"kind": "at_once", "count": 1}
+
+
+@pytest.mark.parametrize(
+    ("square_off", "legs", "taken", "reason"),
+    [
+        (
+            "partial",
+            [_LONG_CALL, _leg(leg_id="short_call", side="sell", reentry_on_stop=_RE_ENTER)],
+            False,
+            "no stop anywhere",
+        ),
+        (
+            "partial",
+            [_LONG_CALL, _leg(leg_id="short_call", side="sell", stop_loss=_STOP, reentry_on_stop=_RE_ENTER)],
+            True,
+            "its own stop",
+        ),
+        (
+            "complete",
+            [
+                _leg(leg_id="long_call", stop_loss=_STOP),
+                _leg(leg_id="short_call", side="sell", reentry_on_stop=_RE_ENTER),
+            ],
+            True,
+            "another leg's stop under a complete square-off",
+        ),
+        (
+            "partial",
+            [
+                _leg(leg_id="long_call", stop_loss=_STOP),
+                _leg(leg_id="short_call", side="sell", reentry_on_stop=_RE_ENTER),
+            ],
+            True,
+            "a stop on the bought leg of its kind: it leaves with its protection",
+        ),
+        (
+            "partial",
+            [
+                _leg(leg_id="long_put", right="put", stop_loss=_STOP),
+                _LONG_CALL,
+                _leg(leg_id="short_call", side="sell", reentry_on_stop=_RE_ENTER),
+            ],
+            False,
+            "a stop on a bought leg of the other kind does not reach it",
+        ),
+        (
+            "partial",
+            [
+                _leg(leg_id="long_call", contracts=2),
+                _leg(leg_id="other_short", side="sell", stop_loss=_STOP),
+                _leg(leg_id="short_call", side="sell", reentry_on_stop=_RE_ENTER),
+            ],
+            False,
+            "a stop on another sold leg does not reach it",
+        ),
+        (
+            "partial",
+            [
+                _leg(leg_id="long_call", reentry_on_stop=_RE_ENTER),
+                _leg(leg_id="short_call", side="sell", stop_loss=_STOP),
+            ],
+            False,
+            "a bought leg is not reached through a sold leg of its kind, as before",
+        ),
+    ],
+)
+def test_a_re_entry_rule_on_a_sold_leg_needs_a_stop_that_can_reach_it(
+    square_off: str, legs: list[dict[str, Any]], taken: bool, reason: str
+) -> None:
+    written = _setup(square_off=square_off, legs=legs)
+
+    if taken:
+        OptionsBacktestSetup.model_validate(written)
+        return
+    with pytest.raises(ValidationError) as caught:
+        OptionsBacktestSetup.model_validate(written)
+    assert "nothing can stop it out" in str(caught.value)
+
+
+def test_a_sold_legs_unreachable_re_entry_says_it_can_be_reached_through_a_bought_leg_of_its_kind() -> None:
+    written = _setup(legs=[_LONG_PUT, _leg(leg_id="short_put", right="put", side="sell", reentry_on_stop=_RE_ENTER)])
+
+    with pytest.raises(ValidationError) as caught:
+        OptionsBacktestSetup.model_validate(written)
+
+    assert "or a bought put, a stop loss" in str(caught.value)

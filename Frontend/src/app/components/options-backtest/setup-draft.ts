@@ -2,6 +2,7 @@ import type {
   Anchor,
   ExpiryKind,
   FeeKind,
+  LegSide,
   MomentumKind,
   OptionRight,
   ReentryKind,
@@ -23,12 +24,13 @@ const DEFAULT_EXIT_MINUTES_BEFORE_CLOSE = 15;
 const DEFAULT_NO_REENTRY_MINUTES_BEFORE_CLOSE = 60;
 
 /**
- * One leg as the page edits it. The contract (right, contracts, expiry,
+ * One leg as the page edits it. The contract (side, right, contracts, expiry,
  * strike) is fixed when the leg is added; the three rules are switched on and
  * off, and a rule that is off keeps its fields but sends nothing.
  */
 export interface LegDraft {
   id: string;
+  side: LegSide;
   right: OptionRight;
   contracts: number;
   expiryKind: ExpiryKind;
@@ -153,6 +155,8 @@ function heldAnchor(role: 'entry' | 'exit' | 'noReentry', clock: string, anchor:
 function legFromSetup(leg: ServedLeg): LegDraft {
   return {
     id: leg.leg_id,
+    // A bought leg is served with no side.
+    side: leg.side ?? 'buy',
     right: leg.right,
     contracts: leg.contracts,
     expiryKind: leg.expiry.kind,

@@ -6,11 +6,13 @@ sentence the setup's rules can write has to reach the owner whole, so each is tr
 the lists use, and the reason must end with the sentence's own last word.
 
 Hand-worked figures. A problem is "<where>: <what pydantic says>", where a place is the dotted path to the field, or
-``setup`` for the whole. The longest sentence the setup's own rules write is the re-entry rule's, about a leg whose id is
-32 letters (the longest the id's pattern allows): ``setup: Value error, leg '`` is 25 characters, the id 32, and
-``' has a re-entry rule and nothing can stop it out: give it a stop loss, or (when the square-off is complete) give
-another leg one, or take the re-entry rule off`` is 160, so 25 + 32 + 160 = 217. The window rule's is 203 and the
-repeated ids of four legs' 192. The cap is 240, so none is cut.
+``setup`` for the whole. The longest sentence the setup's own rules write is the re-entry rule's, about a sold call
+whose id is 32 letters (the longest the id's pattern allows): ``setup: Value error, leg '`` is 25 characters, the id
+32, and ``' has a re-entry rule and nothing can stop it out: give it, or a bought call, a stop loss, or (when the
+square-off is complete) give another leg one, or take the re-entry rule off`` is 179, so 25 + 32 + 179 = 236 (a bought
+leg's has ``give it a stop loss`` in its place, 160, so 217). The window rule's is 203, the repeated ids of four legs'
+192, the expiry rule's of a setup that sells, with two ids of 32 letters, 227, and the cover rule's 186. The cap is
+240, so none is cut.
 
 A problem that names something the owner stored of any size (an extra field, an unknown rule kind) is cut at the last
 space inside 240 characters (the 241st counts, since a space just past the end is a word boundary), or at the 240th when
@@ -254,6 +256,31 @@ SENTENCES = [
         "off",
         id="the same on a leg with the longest id: the longest sentence",
     ),
+    pytest.param(
+        setup_body(legs=[leg(leg_id="p", right="put", side="sell", contracts=1000), leg(leg_id="c", contracts=1000)]),
+        "setup",
+        "sold",
+        id="a sold put with nothing bought of its kind: the cover rule",
+    ),
+    pytest.param(
+        setup_body(
+            legs=[
+                leg(leg_id="c"),
+                leg(leg_id=LONG_ID, side="sell", reentry_on_stop={"kind": "at_once", "count": 1}),
+            ],
+            square_off="partial",
+        ),
+        "setup",
+        "off",
+        id="a sold call's re-entry rule no stop can reach, the longest id: the longest sentence",
+    ),
+    pytest.param(
+        setup_body(legs=[leg(leg_id="b" * 32), leg(leg_id=LONG_ID, side="sell", expiry={"kind": "same_day"})]),
+        "setup",
+        f"'{'b' * 32}'",
+        id="a sold leg and a bought one on different expiry rules, two ids of 32 letters",
+    ),
+    pytest.param(setup_body(legs=[leg(side="short")]), "legs.0.side", "'sell'", id="a side that is neither"),
     pytest.param(_legs_named("x", "x"), "setup", "x", id="a repeated leg id"),
     pytest.param(
         setup_body(legs=[leg(leg_id=each * 32) for each in "abcd" for _ in range(2)]),

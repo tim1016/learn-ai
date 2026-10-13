@@ -208,7 +208,90 @@ def test_the_reason_spells_out_five_problems_and_counts_the_rest() -> None:
     assert reason.endswith("and 3 more")
 
 
+# ── A setup stored before a leg had a side, and one that sells (#3105) ────
+
+# A saved setup as master wrote it at 90937b3c, before a leg had a side: no leg carries the key.
+_STORED_BEFORE_SIDES = (
+    '{"version":1,"underlying":"SPY","entry":{"anchor":"open","offset_ms":300000},'
+    '"exit":{"anchor":"close","offset_ms":2760000},"no_reentry_after":null,"square_off":"complete","legs":['
+    '{"leg_id":"call","right":"call","contracts":1,"expiry":{"kind":"this_week"},"strike":{"kind":"atm"},'
+    '"stop_loss":{"kind":"percent","value":"25"},"momentum":null,"reentry_on_stop":null}],'
+    '"slippage_percent":"0.3","price_step_usd":"0.01","fees":{"kind":"not_charged","per_contract_usd":null},'
+    '"starting_cash_usd":"10000"}'
+)
+
+
+class _ReadOnlyConnection:
+    """A connection that answers the two reads a listing makes with stored rows, and fails the test on any write."""
+
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
+        self.rows = rows
+        self.statements: list[str] = []
+
+    async def fetch(self, statement: str, *_args: Any) -> list[dict[str, Any]]:
+        self.statements.append(statement)
+        return self.rows
+
+    async def fetchrow(self, statement: str, *_args: Any) -> dict[str, Any] | None:
+        self.statements.append(statement)
+        return self.rows[0] if self.rows else None
+
+    async def execute(self, statement: str, *_args: Any) -> str:
+        raise AssertionError(f"a read wrote: {statement}")
+
+
+async def test_a_setup_stored_before_legs_had_a_side_opens_as_bought_and_reading_it_writes_nothing() -> None:
+    connection = _ReadOnlyConnection([{"name": "Old", "setup_json": _STORED_BEFORE_SIDES, "saved_at_ms": 5_000}])
+
+    listed = [each for each in await list_setups(connection) if each.name == "Old"]  # type: ignore[arg-type]
+    found = await get_setup(connection, "Old")  # type: ignore[arg-type]
+
+    assert len(listed) == 1 and found is not None
+    for opened in (listed[0], found):
+        assert opened.setup is not None and opened.cannot_open_reason is None
+        assert [leg.side for leg in opened.setup.legs] == ["buy"]
+        # What opening it holds writes back, were it ever saved again, is the bytes it was stored as.
+        assert opened.setup.model_dump_json() == _STORED_BEFORE_SIDES
+
+
+def test_a_stored_setup_that_sells_opens_as_sold_and_one_whose_sold_leg_is_uncovered_cannot_be_opened() -> None:
+    covered = _setup(legs=[_leg(leg_id="long_call"), _leg(leg_id="short_call", side="sell")])
+    stored = covered.model_dump_json()
+    uncovered = json.dumps(
+        _setup_body(legs=[_leg(leg_id="long_put", right="put"), _leg(leg_id="short_call", side="sell")])
+    )
+
+    opened = read_stored_setup("Selling", stored, 1_000)
+    refused = read_stored_setup("Uncovered", uncovered, 1_000)
+
+    assert '"side":"sell"' in stored
+    assert opened.setup is not None and [leg.side for leg in opened.setup.legs] == ["buy", "sell"]
+    assert opened.setup == covered
+    assert refused.setup is None and refused.cannot_open_reason is not None
+    assert "sell more call contracts than they buy" in refused.cannot_open_reason
+
+
 # ── Saved setups in Postgres ──────────────────────────────────────────────
+
+
+async def test_a_setup_that_sells_is_saved_with_its_side_and_a_setup_that_buys_with_none(conn, tag: str) -> None:
+    selling = _setup(legs=[_leg(leg_id="long_call"), _leg(leg_id="short_call", side="sell")])
+    buying = _setup()
+
+    await save_setup(conn, f"Selling {tag}", selling, saved_at_ms=1_000)
+    await save_setup(conn, f"Buying {tag}", buying, saved_at_ms=2_000)
+
+    stored = {
+        row["name"]: json.loads(row["setup_json"])
+        for row in await conn.fetch(
+            "SELECT name, setup_json::text AS setup_json FROM research_options_backtest_setups WHERE name LIKE $1",
+            f"%{tag}",
+        )
+    }
+    assert [leg.get("side") for leg in stored[f"Selling {tag}"]["legs"]] == [None, "sell"]
+    assert all("side" not in leg for leg in stored[f"Buying {tag}"]["legs"])
+    found = await get_setup(conn, f"Selling {tag}")
+    assert found is not None and found.setup == selling
 
 
 async def test_a_setup_reads_back_exactly_as_it_was_saved(conn, tag: str) -> None:

@@ -3,15 +3,16 @@ import { FormField, type FieldTree } from '@angular/forms/signals';
 import { ButtonModule } from 'primeng/button';
 import { InputText } from 'primeng/inputtext';
 
-import { EXPIRY_CHOICES, EXPIRY_HINTS, RIGHT_CHOICES, STRIKE_CHOICES } from '../choices';
+import { EXPIRY_CHOICES, EXPIRY_HINTS, RIGHT_CHOICES, SIDE_CHOICES, STRIKE_CHOICES } from '../choices';
 import { PillChoiceComponent } from '../controls/pill-choice.component';
 import { builderProblems, type BuilderField, type LegBuilder } from '../leg-draft';
 import type { SetupLimits } from '../options-backtest.types';
 import { legsFull } from '../setup-limits';
 
 /**
- * One row that reads left to right: Buy, call or put, contracts, expiry,
- * strike, and Add leg. Only buying exists. A leg's contract cannot be edited
+ * One row that reads left to right: Buy or Sell, call or put, contracts, expiry,
+ * strike, and Add leg. A sold leg needs a bought leg of its kind to cover it, which
+ * the server judges and a line under the row says. A leg's contract cannot be edited
  * once it is added, so what is out of range is said here, before the leg exists.
  */
 @Component({
@@ -29,6 +30,7 @@ export class LegBuilderCardComponent {
   readonly limits = input<SetupLimits | null>(null);
   readonly add = output();
 
+  protected readonly sides = SIDE_CHOICES;
   protected readonly rights = RIGHT_CHOICES;
   protected readonly expiries = EXPIRY_CHOICES;
   protected readonly strikes = STRIKE_CHOICES;

@@ -1,9 +1,9 @@
 """What an owner sets up for one options backtest (#3030).
 
-A setup is a trading window, one to eight bought option legs, and the cost
-assumptions the run is priced under. Each leg names how its contract is picked
-and may carry three rules of its own: a stop loss, a momentum entry and a
-re-entry after a stop.
+A setup is a trading window, one to eight option legs, and the cost
+assumptions the run is priced under. Each leg is bought or sold (#3105, part of
+#3095), names how its contract is picked and may carry three rules of its own: a
+stop loss, a momentum entry and a re-entry after a stop.
 
 The setup says nothing about dates: the same setup is replayed over whatever
 sessions a run asks for. Its times are distances from a session's open or its
@@ -15,7 +15,17 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Discriminator, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Discriminator,
+    Field,
+    SerializerFunctionWrapHandler,
+    ValidationInfo,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from app.options.contract import OptionRight
 
@@ -60,18 +70,14 @@ class SessionTime(BaseModel):
 
 
 class StopLoss(BaseModel):
-    """Sell a leg once its premium has fallen this far below what was paid for it."""
+    """Close a leg once its premium has moved this far against it: a fall for a bought leg, a rise for a sold one."""
 
     model_config = _Model
 
     kind: Literal["percent", "points"]
+    # A percent of 100 or more is refused on a bought leg alone, which is the leg's rule to hold:
+    # this model cannot see the side.
     value: _Positive
-
-    @model_validator(mode="after")
-    def _a_percent_leaves_something(self) -> StopLoss:
-        if self.kind == "percent" and self.value >= 100:
-            raise ValueError("a stop loss in percent must be under 100: a premium cannot fall below nothing")
-        return self
 
 
 class Momentum(BaseModel):
@@ -155,13 +161,19 @@ class StepsFromTheMoney(BaseModel):
 
 StrikeRule = Annotated[AtTheMoney | StepsFromTheMoney, Discriminator("kind")]
 
+# Whether a leg opens by buying its contract (and is sold to close) or by selling it (and is bought back to close).
+LegSide = Literal["buy", "sell"]
+
 
 class LegSetup(BaseModel):
-    """One bought option leg: how its contract is picked and the rules it carries."""
+    """One option leg, bought or sold: how its contract is picked and the rules it carries."""
 
     model_config = _Model
 
     leg_id: Annotated[str, Field(pattern=_LEG_ID_PATTERN)]
+    # A leg with no side is bought, and a bought leg writes none (``_omit_the_side_of_a_bought_leg``), so a setup of
+    # bought legs is stored and compared byte for byte as it was before a leg could be sold (#3105).
+    side: LegSide = "buy"
     right: OptionRight
     contracts: Annotated[int, Field(strict=True, ge=1, le=MAX_CONTRACTS)]
     expiry: ExpiryRule
@@ -169,6 +181,28 @@ class LegSetup(BaseModel):
     stop_loss: StopLoss | None = None
     momentum: Momentum | None = None
     reentry_on_stop: ReentryOnStop | None = None
+
+    # No return annotation: the leg's published schema stays this model's own fields (as ``ActionPlan``'s does).
+    @model_serializer(mode="wrap")
+    def _omit_the_side_of_a_bought_leg(self, handler: SerializerFunctionWrapHandler):
+        """Leave a bought leg's side out, and so out of every stored setup and every identity hashed from one."""
+        leg = handler(self)
+        if leg.get("side") == "buy":
+            leg.pop("side", None)
+        return leg
+
+    @field_validator("stop_loss")
+    @classmethod
+    def _a_bought_percent_stop_leaves_something(cls, rule: StopLoss | None, info: ValidationInfo) -> StopLoss | None:
+        """A bought leg's premium cannot fall to nothing or below, so its stop in percent is under 100.
+
+        A sold leg's premium can rise without limit, so its stop in percent has no ceiling. This is asked at the field,
+        after ``side`` is read, so the refusal stays located at ``stop_loss``.
+        """
+        bought = info.data.get("side", "buy") == "buy"
+        if bought and rule is not None and rule.kind == "percent" and rule.value >= 100:
+            raise ValueError("a stop loss in percent must be under 100: a premium cannot fall below nothing")
+        return rule
 
     @model_validator(mode="after")
     def _a_momentum_reentry_has_a_momentum_rule(self) -> LegSetup:
@@ -269,6 +303,19 @@ class OptionsBacktestSetup(BaseModel):
             )
         return self
 
+    def stop_can_close(self, leg: LegSetup) -> bool:
+        """Whether some stop loss can close ``leg``, which is what earns it a re-entry.
+
+        A stop closes the leg that carries it. Under a complete square-off it closes every open leg. And a sold leg
+        also leaves with a bought leg of its kind when that one is stopped, since protection is never let go first.
+        """
+        stopped = [each for each in self.legs if each.stop_loss is not None]
+        if leg.stop_loss is not None:
+            return True
+        if self.square_off == "complete" and stopped:
+            return True
+        return leg.side == "sell" and any(each.side == "buy" and each.right == leg.right for each in stopped)
+
     @model_validator(mode="after")
     def _a_reentry_rule_can_be_reached(self) -> OptionsBacktestSetup:
         """Refuse a re-entry rule that no stop could ever trigger, since the leg would carry it for nothing.
@@ -276,16 +323,53 @@ class OptionsBacktestSetup(BaseModel):
         A leg earns a re-entry when it is closed by a stop, and it is closed by a stop when its own stop loss is hit.
         Under a complete square-off a leg is also closed when another leg's stop is hit, and that close earns it its
         re-entries too. So a leg with a re-entry rule needs a stop loss of its own, or, under a complete square-off,
-        some other leg with one.
+        some other leg with one. A sold leg can also be reached through a stop on a bought leg of its kind
+        (``stop_can_close``).
         """
-        stops = [leg.leg_id for leg in self.legs if leg.stop_loss is not None]
         for leg in self.legs:
-            if leg.reentry_on_stop is None or leg.stop_loss is not None:
+            if leg.reentry_on_stop is None or self.stop_can_close(leg):
                 continue
-            if self.square_off == "complete" and any(each != leg.leg_id for each in stops):
-                continue
+            # A sold leg's sentence is the longest the setup writes (see ``saved_setups._REASON_PROBLEM_CHARS``).
+            own = f"give it, or a bought {leg.right}, a stop loss" if leg.side == "sell" else "give it a stop loss"
             raise ValueError(
-                f"leg {leg.leg_id!r} has a re-entry rule and nothing can stop it out: give it a stop loss, or "
+                f"leg {leg.leg_id!r} has a re-entry rule and nothing can stop it out: {own}, or "
                 "(when the square-off is complete) give another leg one, or take the re-entry rule off"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _a_sold_contract_is_covered_by_a_bought_one(self) -> OptionsBacktestSetup:
+        """Refuse, before any data is read, a setup that sells more contracts of a kind than it buys.
+
+        Nothing is sold that was not bought: a sold call is covered by a bought call, and a sold put by a bought put,
+        one contract for one. This is the early refusal only. Whether the contracts picked on a session cover each
+        other is judged on those contracts when the session is replayed.
+        """
+        for right in ("call", "put"):
+            sold = sum(leg.contracts for leg in self.legs if leg.right == right and leg.side == "sell")
+            bought = sum(leg.contracts for leg in self.legs if leg.right == right and leg.side == "buy")
+            if sold > bought:
+                raise ValueError(
+                    f"the legs sell more {right} contracts than they buy ({sold} sold, {bought} bought): "
+                    f"a sold {right} needs a bought {right} to cover it, so buy at least as many {right} contracts "
+                    "as are sold"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _a_setup_that_sells_has_one_expiry_rule(self) -> OptionsBacktestSetup:
+        """Refuse a setup with a sold leg whose legs do not all carry the same expiry rule.
+
+        A sold leg and what covers it expire together. Rules that are alike can still come to different dates, which
+        the picked contracts settle on a session; this catches the plain mismatch before anything runs.
+        """
+        if all(leg.side == "buy" for leg in self.legs):
+            return self
+        first = self.legs[0]
+        for leg in self.legs[1:]:
+            if leg.expiry != first.expiry:
+                raise ValueError(
+                    "a setup with a sold leg needs every leg on one expiry rule, so that what is sold and what "
+                    f"covers it expire together; leg {leg.leg_id!r} differs from leg {first.leg_id!r}"
+                )
         return self

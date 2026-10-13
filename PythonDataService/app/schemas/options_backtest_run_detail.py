@@ -68,6 +68,7 @@ SettingWord = Literal[
     "no_reentry_after",
     "square_off",
     "leg",
+    "leg_side",
     "leg_right",
     "leg_contracts",
     "leg_expiry",

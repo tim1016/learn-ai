@@ -68,6 +68,25 @@ function wholeSetupRefusal(setup: SetupRequest): string | null {
     const exitIsLater = entry.anchor === 'open' ? exit.offset_ms > entry.offset_ms : exit.offset_ms < entry.offset_ms;
     if (!exitIsLater) return 'the exit time must be after the entry time';
   }
+  return coverRefusal(setup);
+}
+
+/** A sold contract needs a bought one of its kind to cover it, and a setup that sells has one expiry rule on every leg. */
+function coverRefusal(setup: SetupRequest): string | null {
+  const contracts = (right: 'call' | 'put', side: 'buy' | 'sell') =>
+    setup.legs.filter((leg) => leg.right === right && (leg.side ?? 'buy') === side).reduce((sum, leg) => sum + leg.contracts, 0);
+  for (const right of ['call', 'put'] as const) {
+    const sold = contracts(right, 'sell');
+    const bought = contracts(right, 'buy');
+    if (sold > bought) {
+      return `the legs sell more ${right} contracts than they buy (${sold} sold, ${bought} bought): a sold ${right} needs a bought ${right} to cover it, so buy at least as many ${right} contracts as are sold`;
+    }
+  }
+  const [first] = setup.legs;
+  const differing = setup.legs.find((leg) => JSON.stringify(leg.expiry) !== JSON.stringify(first?.expiry));
+  if (setup.legs.some((leg) => leg.side === 'sell') && differing !== undefined) {
+    return `a setup with a sold leg needs every leg on one expiry rule, so that what is sold and what covers it expire together; leg '${differing.leg_id}' differs from leg '${first?.leg_id}'`;
+  }
   return null;
 }
 

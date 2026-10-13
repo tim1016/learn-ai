@@ -10,8 +10,8 @@ contract in it is one a pick can come to.
 A leg picks at the entry time. A leg that can come back after a stop picks afresh at the minute its re-entry
 starts, which is any minute after the entry time and before the exit time at which the underlying traded (the replay
 starts a re-entry only on a minute the underlying has a close, and enters nothing at or after the exit time). A leg
-can come back if it has a re-entry rule and something can close it: its own stop, or, under a complete square-off,
-a stop on any leg.
+can come back if it has a re-entry rule and something can close it (``OptionsBacktestSetup.stop_can_close``): its own
+stop, or, under a complete square-off, a stop on any leg, or, for a sold leg, a stop on a bought leg of its kind.
 
 A session the replay skips needs nothing. The reasons are the replay's own, in its order: the setup's window does not
 fit the session (the setup's ``window_fits`` is the one rule), and then the underlying has no bar closing at the
@@ -42,12 +42,7 @@ class SessionNeeds:
 
 def _can_come_back(setup: OptionsBacktestSetup, leg: LegSetup) -> bool:
     """Whether ``leg`` can start a re-entry: it has a rule for one and something can close it."""
-    if leg.reentry_on_stop is None:
-        return False
-    if leg.stop_loss is not None:
-        return True
-    # A complete square-off closes every open leg when any leg is stopped, and a closed leg earns its re-entry.
-    return setup.square_off == "complete" and any(other.stop_loss is not None for other in setup.legs)
+    return leg.reentry_on_stop is not None and setup.stop_can_close(leg)
 
 
 def session_needs(
