@@ -11,7 +11,7 @@
   @if (ready(); as check) {
     <p class="words">Checked <app-timestamp-display [value]="check.asked.start_ms" mode="date-et" granularity="date" /> – <app-timestamp-display [value]="lastDayAskedMs()" mode="date-et" granularity="date" /></p>
     <p class="words">The answer is read from what is already stored. Nothing was downloaded.</p>
-    @if (stale()) { <p class="stale" role="status">The setup or the dates have changed since this check, or a backtest has started. Check data again.</p> }
+    @if (stale()) { <p class="stale" role="status">The setup or the dates have changed since this check, or data has been downloaded, or a backtest has started. Check data again.</p> }
     <dl class="counts">
       @for (verdict of verdicts; track verdict) { <div><dt>{{ verdict | receiptLabel }}</dt><dd>{{ check.answer.counts[verdict] }}</dd></div> }
     </dl>

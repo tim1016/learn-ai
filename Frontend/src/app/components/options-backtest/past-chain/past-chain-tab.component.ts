@@ -1,4 +1,4 @@
-import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, Injector, input, linkedSignal, OnInit, resource, signal, untracked, viewChild } from '@angular/core';
+import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, Injector, input, linkedSignal, OnInit, output, resource, signal, untracked, viewChild } from '@angular/core';
 import { debounce, form } from '@angular/forms/signals';
 
 import { PastChainControlsComponent } from './past-chain-controls.component';
@@ -42,6 +42,8 @@ export class PastChainTabComponent implements OnInit {
   readonly startingUnderlying = input.required<string>();
   /** What the server holds a read and a download to; null until the page has them, and the server then judges alone. */
   readonly limits = input<SetupLimits | null>(null);
+  /** A download that may have changed what is stored has come back, so an answer of Check data no longer describes it. */
+  readonly downloaded = output();
 
   protected readonly model = signal<ChainControls>(NO_CONTROLS);
   // The strikes box is read once for what was typed: after a pause, when it is left, or on Enter.
@@ -234,7 +236,10 @@ export class PastChainTabComponent implements OnInit {
     const readAgain = await this.downloader.run({ underlying, tradingDateMs, request });
     // The tab may be gone by the time the server answers: there is nothing then to read again or to put the keyboard on.
     if (this.destroyed) return;
-    if (readAgain) this.generation.update((count) => count + 1);
+    if (readAgain) {
+      this.generation.update((count) => count + 1);
+      this.downloaded.emit();
+    }
     afterNextRender(() => this.downloadCard()?.focusResult(), { injector: this.injector });
   }
 

@@ -1,5 +1,5 @@
 import { etDayEndMs, etIsoDate, etMidnightMs } from '../../shared/date/et-midnight';
-import { UNBOUNDED, type DateBounds, type DateRange, type QuickRangeKey } from '../../shared/date-picker';
+import type { DateBounds, DateRange, QuickRangeKey } from '../../shared/date-picker';
 import { formatTimestampDisplay } from '../../shared/timestamp';
 import type { TestableStretch } from './options-backtest.types';
 
@@ -27,11 +27,18 @@ export function rangeInstants(range: DateRange): RangeInstants | null {
   return { start_ms: etMidnightMs(range.from), end_ms: etDayEndMs(range.to) };
 }
 
-/** The picker's bounds: nothing before the day option prices are available from, once the server has said it. */
-export function priceBounds(optionPricesFromMs: number | null): DateBounds {
-  if (optionPricesFromMs === null) return UNBOUNDED;
+/**
+ * The picker's bounds. A run downloads its own data, so they are the provider's: its oldest day to the last completed
+ * session (today's session can never be tested). Once the server has said from when option prices are available, the
+ * first day is the later of that day and the provider's.
+ */
+export function priceBounds(optionPricesFromMs: number | null, provider: DateBounds): DateBounds {
+  if (optionPricesFromMs === null) return provider;
+  const floor = etIsoDate(optionPricesFromMs);
+  if (provider.min !== null && provider.min >= floor) return provider;
   const first = formatTimestampDisplay(optionPricesFromMs, { mode: 'date-et', granularity: 'date' });
-  return { ...UNBOUNDED, min: etIsoDate(optionPricesFromMs), minReason: `Option prices are available from ${first}, so no earlier day can be picked.` };
+  // The first day is known from the server, so what the picker checks does not wait for the provider's history to be read.
+  return { ...provider, min: floor, minReason: `Option prices are available from ${first}, so no earlier day can be picked.`, unknown: null };
 }
 
 /** The dates of the longest stretch of sessions that can all be tested, as the picker holds them. */

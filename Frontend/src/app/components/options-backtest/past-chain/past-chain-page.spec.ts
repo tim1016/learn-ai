@@ -2,12 +2,13 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
-import { lettingGo, openExample, pickDates, reads } from '../testing/page-actions';
+import { checkButton, lettingGo, openExample, pickDates, reads } from '../testing/page-actions';
 import { fakeService } from '../testing/render-page';
+import { PastChainRefusedError } from './past-chain.service';
 import type { DownloadAnswer } from './past-chain.types';
 import { deferred } from './testing/deferred';
 import { chainDay, downloadAnswer, item, TRADING_DATE, TRADING_DATE_MS } from './testing/fixtures';
-import { fakeChainService, pickDate, showChain, typeStrikes } from './testing/render-chain';
+import { fakeChainService, pickDate, showChain, typeStrikes, type FakeChainService } from './testing/render-chain';
 import { renderPageWithChain, symbolPickers } from './testing/render-chain-page';
 
 const tab = (name: string) => screen.getByRole('tab', { name });
@@ -157,6 +158,53 @@ describe('the underlying of the tab and the underlying of the setup', () => {
     expect(chain.day.mock.calls[0]?.[0]).toMatchObject({ underlying: 'SPY' });
     expect(symbolPickers(view.fixture)[1]?.symbol()).toBe('SPY');
     expect(symbolPickers(view.fixture)[0]?.symbol()).toBe('IWM');
+  });
+});
+
+describe('a download on this tab and an answer of Check data', () => {
+  /** Checks the data of a range, then downloads the listing of one date on the Past chain tab, and comes back to the Backtest tab. */
+  async function downloadAfterACheck(chain: FakeChainService): Promise<void> {
+    await renderPageWithChain(vi, chain);
+    await openExample();
+    pickDates('2026-09-14', '2026-09-18');
+    await waitFor(() => expect(checkButton().disabled).toBe(false));
+    fireEvent.click(checkButton());
+    await screen.findByRole('region', { name: 'Check data' });
+    expect(screen.queryByText(/have changed since this check/)).toBeNull();
+    openChainTab();
+    await screen.findByRole('heading', { name: 'Past chain' });
+    pickDate(TRADING_DATE);
+    fireEvent.click(await screen.findByRole('button', { name: 'Download missing data' }));
+    await waitFor(() => expect(chain.download).toHaveBeenCalledTimes(1));
+    for (let settled = 0; settled < 5; settled += 1) await lettingGo();
+    showBacktest();
+  }
+
+  it('makes the answer stale: what is stored has changed since it was asked', async () => {
+    const chain = fakeChainService(vi, {
+      day: vi.fn(async () => chainDay({ listing_state: 'not_stored', expiries: [] })),
+      download: vi.fn(async () => downloadAnswer([item('listing', 'SPY', 'fetched')])),
+    });
+
+    await downloadAfterACheck(chain);
+
+    expect(await screen.findByText(/data has been downloaded/)).toBeTruthy();
+    expect(screen.getByText(/have changed since this check/)).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Check data' })).toBeTruthy();
+  });
+
+  it('is not made stale by a download the server refused before it fetched anything', async () => {
+    const chain = fakeChainService(vi, {
+      day: vi.fn(async () => chainDay({ listing_state: 'not_stored', expiries: [] })),
+      download: vi.fn(async () => {
+        throw new PastChainRefusedError('OPTIONS_BACKTEST_TOO_MANY_CONTRACTS', 'a download takes at most 60 contracts; 61 were named', 400);
+      }),
+    });
+
+    await downloadAfterACheck(chain);
+    await lettingGo();
+
+    expect(screen.queryByText(/have changed since this check/)).toBeNull();
   });
 });
 

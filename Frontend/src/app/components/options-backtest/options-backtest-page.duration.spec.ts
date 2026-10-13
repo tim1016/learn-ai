@@ -166,3 +166,32 @@ describe('the line beside the dates, and the lower bound', () => {
     expect(checkButton().disabled).toBe(false);
   });
 });
+
+describe('the upper bound', () => {
+  // The standard date world's clock is Monday 2026-09-21 at noon: that day's session is still open, so the last completed
+  // session is Friday 2026-09-18. A run is over completed sessions, and today's session is never testable.
+  it('refuses an end date after the last completed session, with the reason in words, before Check data has run', async () => {
+    await renderPage(fakeService(vi));
+    await openExample();
+
+    pickDates('2026-09-14', '2026-09-21');
+
+    expect(await screen.findByText('The last completed session is 2026-09-18.')).toBeTruthy();
+    await waitFor(() => expect(checkButton().disabled).toBe(true));
+    expect(screen.getByText('Check data and Start are available once both dates are picked.')).toBeTruthy();
+  });
+
+  it('still refuses it once Check data has answered and set the lower bound', async () => {
+    await renderPage(fakeService(vi));
+    await openExample();
+    pickDates('2026-09-14', '2026-09-18');
+    await waitFor(() => expect(checkButton().disabled).toBe(false));
+    fireEvent.click(checkButton());
+    await screen.findByText(/Option prices are available from/);
+
+    pickDates('2026-09-14', '2026-09-23');
+
+    expect(await screen.findByText('The last completed session is 2026-09-18.')).toBeTruthy();
+    await waitFor(() => expect(checkButton().disabled).toBe(true));
+  });
+});

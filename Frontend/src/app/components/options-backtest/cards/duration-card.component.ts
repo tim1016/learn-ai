@@ -1,6 +1,6 @@
-import { ChangeDetectionStrategy, Component, computed, ElementRef, input, output, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, ElementRef, inject, input, output, viewChild } from '@angular/core';
 
-import { DateRangePickerComponent, type DateRange } from '../../../shared/date-picker';
+import { DateRangePickerComponent, ProviderBoundsService, type DateRange } from '../../../shared/date-picker';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import { OFFERED_RANGES, priceBounds, type RangeChange } from '../duration';
 
@@ -8,7 +8,8 @@ import { OFFERED_RANGES, priceBounds, type RangeChange } from '../duration';
  * The dates a run covers, and from when option prices are available. The
  * dates are the picker's own `YYYY-MM-DD` and are not part of the setup. The
  * line beside them is the server's word, from the last Check data answer, and
- * its date is also the picker's lower bound, with the reason in words.
+ * its date is also the picker's lower bound, with the reason in words. The
+ * last day is the last completed session: today's can never be tested.
  */
 @Component({
   selector: 'app-options-backtest-duration-card',
@@ -34,6 +35,8 @@ export class DurationCardComponent {
     this.heading().nativeElement.focus();
   }
 
-  protected readonly bounds = computed(() => priceBounds(this.optionPricesFromMs()));
+  private readonly provider = inject(ProviderBoundsService);
+
+  protected readonly bounds = computed(() => priceBounds(this.optionPricesFromMs(), this.provider.bounds()));
   protected readonly quickRanges = OFFERED_RANGES;
 }

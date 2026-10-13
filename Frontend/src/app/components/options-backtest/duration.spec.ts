@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { etIsoDate, etMidnightMs, isoDateAfter } from '../../shared/date/et-midnight';
+import { UNBOUNDED, type DateBounds } from '../../shared/date-picker';
+import { providerBounds } from '../../shared/date-picker/provider-bounds.service';
 import { NO_DATES, OFFERED_RANGES, priceBounds, rangeInstants, rangeOfStretch } from './duration';
 import type { TestableStretch } from './options-backtest.types';
 import { sessionOpenMs } from '../../shared/date-picker/testing/fake-trading-calendar';
@@ -104,23 +106,40 @@ describe('the two instants of a range', () => {
 });
 
 describe('the picker’s bounds', () => {
-  it('have no lower bound until the server has said from when option prices are available', () => {
-    expect(priceBounds(null)).toMatchObject({ min: null, minReason: null });
+  // The provider's bound for a run over completed sessions: its oldest day to the last completed session.
+  const PROVIDER = providerBounds('2021-09-21', '2026-09-18');
+
+  it('are the provider’s until the server has said from when option prices are available: its oldest day, and the last completed session', () => {
+    expect(priceBounds(null, PROVIDER)).toEqual(PROVIDER);
+    expect(priceBounds(null, PROVIDER)).toMatchObject({ max: '2026-09-18', maxReason: 'The last completed session is 2026-09-18.' });
   });
 
-  it('start at the New York date of that instant, with the reason in words', () => {
-    const bounds = priceBounds(etMidnightMs('2025-10-15'));
+  it('start at the New York date of that instant, with the reason in words, and still end on the last completed session', () => {
+    const bounds = priceBounds(etMidnightMs('2025-10-15'), PROVIDER);
 
     expect(bounds.min).toBe('2025-10-15');
     expect(bounds.minReason).toBe('Option prices are available from 2025-10-15, so no earlier day can be picked.');
-    expect(bounds).toMatchObject({ max: null, unknown: null });
+    expect(bounds).toMatchObject({ max: '2026-09-18', maxReason: 'The last completed session is 2026-09-18.', unknown: null });
   });
 
   it('read an instant late on the evening before in New York as that evening’s date, not the next day’s', () => {
     // 2025-10-15 00:30 UTC is 2025-10-14 20:30 EDT.
-    const bounds = priceBounds(etMidnightMs('2025-10-15') - 3_600_000 * 3.5);
+    const bounds = priceBounds(etMidnightMs('2025-10-15') - 3_600_000 * 3.5, PROVIDER);
 
     expect(bounds.min).toBe('2025-10-14');
+  });
+
+  it('keep the provider’s oldest day when it is the later of the two, with its own reason', () => {
+    const later = providerBounds('2026-01-05', '2026-09-18');
+
+    expect(priceBounds(etMidnightMs('2025-10-15'), later)).toEqual(later);
+  });
+
+  it('keep checking the day option prices start from, and end nowhere, while the provider’s history has not been read', () => {
+    const unread: DateBounds = { ...UNBOUNDED, unknown: 'The provider’s history is being read.' };
+
+    expect(priceBounds(null, unread)).toEqual(unread);
+    expect(priceBounds(etMidnightMs('2025-10-15'), unread)).toMatchObject({ min: '2025-10-15', max: null, unknown: null });
   });
 });
 
