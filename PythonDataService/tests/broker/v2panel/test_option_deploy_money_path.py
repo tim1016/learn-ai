@@ -590,6 +590,11 @@ async def test_each_money_row_writes_out_in_dollars_exactly_the_cents_beside_it(
         ("headroom_left", 17_591, "$175.91"),
     ]
     assert review["figures_good_until_ms"] == review["quotes_read_ms"] + FIGURES_GOOD_FOR_MS
+    # A Dry Run's cash is its own: the row says so, and no other bot is said to draw on it.
+    assert {row["key"]: row["label"] for row in review["money_rows"]}["headroom_left"] == (
+        "Simulated cash left after one entry"
+    )
+    assert review["fits_sentence"] == "One whole entry fits right now with this budget as its starting cash."
 
 
 async def test_an_entry_that_would_be_skipped_right_now_is_said_beside_a_review_that_can_still_be_consented_to(

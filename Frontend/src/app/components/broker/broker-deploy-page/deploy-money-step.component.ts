@@ -221,6 +221,8 @@ export class DeployMoneyStepComponent {
   protected readonly funding = computed(() => this.answer()?.preview.funding ?? null);
   /** A refused amount's outcome line already says the answer's sentence; every other state says it here. */
   protected readonly sentenceHere = computed(() => this.amountView()?.state !== 'unavailable');
+  /** How many fit is said once: by the option review when it carries the sentence, else by the funding card. */
+  protected readonly fitsInTheReview = computed(() => Boolean(this.optionReview()?.fits_sentence));
   /** The asks this step has made by itself for the option review of these settings. */
   private readonly optionRechecks = linkedSignal({ source: this.context, computation: () => 0 });
 

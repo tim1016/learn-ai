@@ -78,7 +78,9 @@ from app.broker.alpaca.clerk.funding import (
     RequirementEffect,
     deploy_funding_answer,
     option_buying_power_figure,
+    requirement_effect,
 )
+from app.broker.alpaca.clerk.money import consent_cents
 from app.broker.alpaca.clerk.option_effects import (
     OptionEffectRefusal,
     OptionPlanRefused,
@@ -648,13 +650,19 @@ def with_account(
     Under the rows of the structure: what the budget has free after one
     entry, the change in the account's requirement (with the netting
     sentence when Alpaca would value the positions together and the bot does
-    not spend the saving), and the account's headroom left after one entry.
-    Then how many entries fit. Every figure is the funding answer's, with the
-    state it was given; a review with no figures of its own gets none.
+    not spend the saving), and the account's headroom left after one entry
+    (a Dry Run's cash is its own, and is said to be). Then how many entries
+    fit. Every figure is the funding answer's, with the state it was given;
+    a review with no figures of its own gets none.
+
+    Rows of these three kinds already on the review are replaced, so a
+    review that said why they could not be worked out (``review_for``) is
+    completed by the figures themselves.
     """
     if not review.money_rows:
         return review
-    rows = list(review.money_rows)
+    ours = ("budget_free", "incremental_requirement", "headroom_left")
+    rows = [row for row in review.money_rows if row.key not in ours]
     if funding is not None and funding.budget_left is not None:
         rows.append(_figure_row("budget_free", "Free in this budget after one entry", funding.budget_left))
     if requirement is not None:
@@ -665,7 +673,8 @@ def with_account(
             )
         )
     if funding is not None and funding.headroom_left is not None:
-        rows.append(_figure_row("headroom_left", "Account headroom left after one entry", funding.headroom_left))
+        headroom = "Simulated cash left after one entry" if funding.simulated else "Account headroom left after one entry"
+        rows.append(_figure_row("headroom_left", headroom, funding.headroom_left))
     return review.model_copy(
         update={
             "money_rows": tuple(rows),
@@ -897,12 +906,42 @@ async def review_for(
 
     Every blocker found is listed. A Deploy that something stops has no
     price: its budget is reviewed against nothing, so no review of it can be
-    consented to. The review carries the structure's own figures; the money
-    review completes it with the account's side (``with_account``).
+    consented to. The review carries the structure's own figures and the
+    account's side as far as it can be said without the account: what the
+    budget has free after one entry, and why each figure that needs the
+    account is not worked out. The money review completes it
+    (``with_account``) once it has read the account.
     """
     judged = await _judge(broker, account_id, request, every_blocker=True, patience_ms=0)
     review = review_of(request, judged.plan, judged.preview, blockers=judged.blockers, notes=judged.notes)
-    return review, _price(judged)
+    return _without_the_account(review, request, judged), _price(judged)
+
+
+def _without_the_account(review: OptionDeployReview, request: AlpacaPaperDeployRequest, judged: _Judged) -> OptionDeployReview:
+    """The review's account rows as they stand before the account is read: the budget row, and a reason for the rest.
+
+    The budget row is the funding answer's with no account asked, so it is
+    the figure the money review gives later. What needs the account (its
+    holdings and its headroom) says why it has no figure, never goes absent.
+    A review with no figures of its own is left as it is.
+    """
+    money = None if judged.preview is None else judged.preview.money
+    if judged.preview is None or money is None or not review.money_rows:
+        return review
+    now_ms = now_ms_utc()
+    amount = None if request.budget is None else consent_cents(request.budget.amount_usd)
+    funding = deploy_funding_answer(
+        None, amount_cents=amount,
+        need=EntryNeed.for_options(
+            commitment_cents=money.entry_commitment_cents, fee_provision_cents=money.fee_estimate_cents,
+        ),
+        broker_buying_power=judged.buying_power, observed_at_ms=now_ms, now_ms=now_ms,
+    )
+    unread = requirement_effect(
+        before_after_cents=None, why_not="the account's holdings are read once the money review can price this entry.",
+        entry_requirement_cents=money.broker_requirement_cents, as_of_ms=judged.preview.quotes_read_ms,
+    )
+    return with_account(review, funding, unread)
 
 
 def require_mode_open(request: AlpacaPaperDeployRequest) -> None:

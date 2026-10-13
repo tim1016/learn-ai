@@ -47,7 +47,7 @@
   @if (funding().shortfall_usd; as shortfall) {
     <p class="funding-answer__shortfall">{{ shortfallLabel() }} <strong>{{ shortfall | authoredUsd }}</strong></p>
   }
-  @if (funding().fits_sentence; as fits) {
+  @if (showFits() && funding().fits_sentence; as fits) {
     <p class="funding-answer__fits">{{ fits }}</p>
   }
 </div>

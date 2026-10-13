@@ -594,7 +594,7 @@ async def test_the_rows_of_one_bought_call_add_up_to_what_is_set_aside_and_price
     assert rows["set_aside"]["label"] == "Set aside for 2 structures"
     assert rows["set_aside"]["amount_usd"] == f"${rows['set_aside']['amount_cents'] / 100:,.2f}"
     assert rows["loss_at_expiry"]["amount_cents"] == 82_400 and "estimate" in rows["loss_at_expiry"]["label"]
-    assert "budget_free" not in rows, "the account's side is the money review's, which this test stands in for"
+    assert rows["budget_free"]["amount_cents"] == 100_000 - rows["set_aside"]["amount_cents"]
     assert (price.waiting, price.observed_at_ms) == (False, review["quotes_read_ms"])
     assert review["preview_state"] == "resolved" and review["blockers"] == []
     assert [pick["contract"]["occ_symbol"] for pick in review["picks"]] == [CALL_585.occ_symbol]
@@ -680,6 +680,31 @@ async def test_a_buying_power_reading_taken_during_the_review_is_judged_after_it
 
     [blocker] = seen["option_review"]["blockers"]
     assert blocker["gate_id"] == option_deploy.BUYING_POWER_SHORT
+
+
+async def test_a_deploy_that_buying_power_stops_still_shows_the_budget_row_and_says_why_the_rest_has_none(
+    deploy_app, floor: _Floor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing is priced for a Deploy that something stops, and no consent rests on its rows. What the budget has
+    left after one entry does not need the account, so it is shown; what does is unknown, and says why."""
+    app, _registry = deploy_app
+    floor.alpaca.buying_power = Decimal("500")
+
+    seen, price = await _review(
+        app, floor, monkeypatch, execution_mode="paper", budget={"amount_usd": "1000.00", "risk_revision": 0},
+    )
+
+    review = seen["option_review"]
+    rows = {row["key"]: row for row in review["money_rows"]}
+    assert [blocker["gate_id"] for blocker in review["blockers"]] == [option_deploy.BUYING_POWER_SHORT]
+    assert price.commitment_cents is None, "no price, so no consent rests on the rows"
+    assert (rows["budget_free"]["amount_cents"], rows["budget_free"]["state"]) == (
+        100_000 - rows["set_aside"]["amount_cents"], "known",
+    )
+    for key in ("incremental_requirement", "headroom_left"):
+        assert (rows[key]["amount_cents"], rows[key]["amount_usd"], rows[key]["state"]) == (None, None, "unknown")
+        assert rows[key]["note"], f"{key} says why it has no figure"
+    assert (review["fits"], review["fits_sentence"]) == (None, None)
 
 
 async def test_buying_power_alpaca_did_not_report_is_a_note_and_stops_nothing(

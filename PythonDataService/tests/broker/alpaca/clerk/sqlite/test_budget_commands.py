@@ -12,7 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable, ReleaseAtStop
-from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate
+from app.broker.alpaca.clerk.live_envelope import OBSERVATION_MAX_AGE_MS, AccountObservation, LiveEnvelopeGate
 from app.broker.alpaca.clerk.money import MoneyInputError
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite import budget_projection
@@ -54,10 +54,10 @@ def budget_repo(tmp_path: Path):
     repo.close()
 
 
-def _gate(cash: float = 1000) -> LiveEnvelopeGate:
+def _gate(cash: float = 1000, *, observed_at_ms: int = NOON) -> LiveEnvelopeGate:
     gate = LiveEnvelopeGate(values=None, custody_is_simulated=False)
     gate.publish(AccountObservation(
-        observed_at_ms=NOON, broker_cash_usd=cash, cash_available_usd=cash,
+        observed_at_ms=observed_at_ms, broker_cash_usd=cash, cash_available_usd=cash,
         last_equity_usd=cash, unrealized_pl_usd=0, position_count=0, risk_revision=1,
         equity_usd=cash, risk_cash_flow_evidence_complete=True,
         risk_cash_flow_window_start_ms=day_pnl_window_start_ms(NOON),
@@ -99,6 +99,32 @@ def test_the_rechecks_refusals_are_the_funding_answers_words_in_whole_cents(budg
     )
     assert _deploy(budget_repo, sid="b", cents=10_001).created is True
     assert budget_repo.deployment_budget("b")["committed_cents"] == 10_001
+
+
+def test_a_reading_admitted_at_one_instant_is_judged_by_that_instant_at_the_commit(
+    budget_repo, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reading is a hair inside its age limit and the clock steps past it once the account's budget has been
+    read. A priced need passes only on a verdict, so a second read of the clock for the answer would call the
+    reading stale and refuse a budget the admission had just let through."""
+    account_budget = budget_repo.account_budget
+
+    def budget_then_step(*args, **kwargs):
+        projection = account_budget(*args, **kwargs)
+        budget_repo.clock.advance(20)
+        return projection
+
+    monkeypatch.setattr(budget_repo, "account_budget", budget_then_step)
+
+    submission = submit_budgeted_deploy(
+        budget_repo, strategy_instance_id="a", lifecycle_run_id="run-a", world="real_paper", committed_cents=10_001,
+        configuration_hash="seal-a", exit_terms_hash=canonical_sha256(TERMS.model_dump(mode="json")),
+        risk_revision=1, actor="owner", envelope=_gate(observed_at_ms=NOON - OBSERVATION_MAX_AGE_MS + 10),
+        minimum_position_cost=Decimal("100.01"),
+    )
+
+    assert submission.created is True
+    assert budget_repo.clock() - (NOON - OBSERVATION_MAX_AGE_MS + 10) > OBSERVATION_MAX_AGE_MS, "the reading went stale"
 
 
 def test_a_bot_whose_entries_are_priced_at_the_entry_is_asked_no_minimum_but_the_cash_still_holds(budget_repo) -> None:

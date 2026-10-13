@@ -329,9 +329,13 @@ def _priced_preview(
         risk_revision = 0
         risk_summary = "Private simulated starting cash. Real-account daily loss limits and holds do not apply."
         account = None
+        now_ms = repo.clock()
     else:
         with repo.write_fence() as conn:
-            observation, policy = _account_admission(repo, runtime)
+            # One instant judges the reading's freshness and, below, the budget by it, so a reading admitted
+            # here is never called stale a moment later.
+            now_ms = repo.clock()
+            observation, policy = _account_admission(repo, runtime, now_ms=now_ms)
             # One read under the fence: the bar's free to deploy IS this
             # preview's unreserved cash, by construction.
             money = _read_account_money(repo, observation)
@@ -347,8 +351,6 @@ def _priced_preview(
                 except ValueError as exc:
                     holdings, holdings_problem = None, str(exc)
         account = money.budget
-    # Asked after the account was read: a reading is stamped when it was taken, so no earlier clock can judge it.
-    now_ms = repo.clock()
     answer = deploy_funding_answer(
         account, amount_cents=amount, need=priced.need, broker_buying_power=broker_buying_power,
         observed_at_ms=now_ms if observation is None else observation.observed_at_ms, now_ms=now_ms,
@@ -477,19 +479,22 @@ def same_symbol_note(account_id: str, request: AlpacaPaperDeployRequest) -> str 
     return f"Also traded here by {others[0]}{more}."
 
 
-def _account_admission(repo: ClerkSqliteRepository, runtime: ActiveClerkRuntime) -> tuple[AccountObservation, AccountRiskPolicy]:
-    """What a Deploy on the account's money is admitted against, or why not.
+def _account_admission(
+    repo: ClerkSqliteRepository, runtime: ActiveClerkRuntime, *, now_ms: int,
+) -> tuple[AccountObservation, AccountRiskPolicy]:
+    """What a Deploy on the account's money is admitted against at ``now_ms``, or why not.
 
-    The caller holds the custody fence. ``BudgetUnavailable`` carries the
-    owner-facing reason Deploy refuses on: the one statement the Deploy
-    preview and the account-money read (``deploy_refusal``) both give.
+    The caller holds the custody fence and says the instant, so what it then
+    judges by the same reading is judged at the same moment. ``BudgetUnavailable``
+    carries the owner-facing reason Deploy refuses on: the one statement the
+    Deploy preview and the account-money read (``deploy_refusal``) both give.
     """
     if repo.budget_authority_version() < 2:
         raise BudgetUnavailable("Switch this account to budgets in Settings before reviewing a deployment.")
     sync = runtime.envelope_sync
     if sync is None:
         raise BudgetUnavailable("Wait for account cash and risk observations; Settings shows the daily loss limit.")
-    risk = current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock())
+    risk = current_risk_readiness(repo, envelope=sync.envelope, now_ms=now_ms)
     if not risk.allowed:
         raise BudgetUnavailable(risk.detail)
     policy = sync.risk_snapshot().policy
@@ -917,7 +922,7 @@ def _account_money_view(account_id: str) -> AccountMoneyView:
         if view.state != "ready":
             return view
         try:
-            _account_admission(repo, runtime)
+            _account_admission(repo, runtime, now_ms=repo.clock())
         except BudgetUnavailable as refusal:
             return view.model_copy(update={"deploy_refusal": str(refusal)})
         return view

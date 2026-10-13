@@ -82,7 +82,12 @@
   </div>
 
   @if (funding(); as answer) {
-    <app-funding-answer [funding]="answer" [showSentence]="sentenceHere()" shortfallLabel="Short by" />
+    <app-funding-answer
+      [funding]="answer"
+      [showSentence]="sentenceHere()"
+      [showFits]="!fitsInTheReview()"
+      shortfallLabel="Short by"
+    />
   }
 
   @if (readyFacts(); as view) {

@@ -42,6 +42,9 @@ export class FundingAnswerComponent {
   readonly showSentence = input(false);
   /** What the shortfall is short of, for a host whose answer is not about one entry. */
   readonly shortfallLabel = input('Short of this entry by');
+  /** Says how many entries fit. A host whose own review already carries that sentence leaves it off, so it is
+   * on screen once. */
+  readonly showFits = input(true);
 
   protected readonly rows = computed<readonly LimitRow[]>(() => {
     const funding = this.funding();

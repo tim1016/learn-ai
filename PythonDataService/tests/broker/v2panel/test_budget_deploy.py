@@ -11,7 +11,12 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable, entry_requirement
-from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate, observation_is_fresh
+from app.broker.alpaca.clerk.live_envelope import (
+    OBSERVATION_MAX_AGE_MS,
+    AccountObservation,
+    LiveEnvelopeGate,
+    observation_is_fresh,
+)
 from app.broker.alpaca.clerk.money import MoneyInputError
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
@@ -158,6 +163,32 @@ def test_the_review_serves_the_funding_answer_it_judged_the_budget_by(authority)
     assert funding.need is not None and funding.need.commitment_usd == "100.02"
     assert (funding.admits, funding.binding, funding.shortfall_usd, funding.fits) == (True, "bot_budget", None, 4)
     assert funding.fits_sentence is not None and "never added up across bots" in funding.fits_sentence
+
+
+def test_a_reading_the_review_admitted_is_judged_by_that_same_instant_and_never_called_stale_after(
+    authority, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The clock steps a minute past the reading's age limit once the account has been read. A second read of the
+    clock for the answer would call the reading stale and refuse a budget the review had just admitted, the one
+    way the rule could refuse what it admitted before."""
+    repo, _runtime, _snapshot = authority
+    read = budget_deploy._read_account_money
+
+    def read_then_step(repo_, observation):
+        money = read(repo_, observation)
+        repo_.clock.advance(OBSERVATION_MAX_AGE_MS + 15_000)
+        return money
+
+    monkeypatch.setattr(budget_deploy, "_read_account_money", read_then_step)
+
+    preview = budget_deploy.preview_budget(
+        "BUDGET-PAPER", _request(budget=DeploymentBudgetInput(amount_usd="500", risk_revision=1)), resolved_parameters={},
+    )
+
+    assert repo.clock() > NOON + OBSERVATION_MAX_AGE_MS, "the clock did step past the limit"
+    assert preview.state == "ready" and preview.review_token is not None
+    assert preview.funding is not None
+    assert (preview.funding.account_headroom.state, preview.funding.admits) == ("known", True)
 
 
 def test_a_review_the_clerk_would_refuse_and_the_clerks_recheck_say_the_same_thing(authority) -> None:
@@ -1412,7 +1443,6 @@ def test_the_bot_page_serves_every_limit_with_its_terms_source_and_age(authority
 
 def test_a_reading_past_its_age_limit_is_stale_on_the_page_and_the_entry_is_not_promised(authority: tuple) -> None:
     """The bot's own books are current; the account's cash was read 46 seconds before the page asked."""
-    from app.broker.alpaca.clerk.live_envelope import OBSERVATION_MAX_AGE_MS
     from app.broker.alpaca.clerk.sqlite.risk_admission import current_risk_readiness
 
     repo, runtime, gate = _committed_view(authority)

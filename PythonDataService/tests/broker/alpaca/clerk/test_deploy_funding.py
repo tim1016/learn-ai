@@ -247,6 +247,9 @@ def test_with_no_account_read_only_alpacas_own_limit_is_judged() -> None:
     assert negative.shortfall_cents == 82_909 and "is -$5.00" in negative.sentence
     assert (unknown.binding, unknown.shortfall_cents, unknown.fits) == (None, None, None)
     assert unknown.sentence == "This account's money cannot be read right now, so what it can fund is unknown."
+    # How many fit is the account's to say: Alpaca's figure alone does not count it.
+    assert (short.fits, enough.fits, short.fits_sentence, enough.fits_sentence) == (None, None, None, None)
+    assert "did not read" in short.account_headroom.source
 
 
 # ---- no amount typed yet ---------------------------------------------------------------------------
@@ -373,6 +376,18 @@ def test_a_dry_run_has_no_account_limit_and_its_cash_is_the_amount_typed() -> No
         "This budget is only $824.08. The entry needs $824.09 including its fee provision. Shortfall: $0.01."
     )
     assert "account" not in short.sentence
+
+
+def test_a_dry_runs_cash_is_its_own_so_nothing_is_said_of_an_account_or_of_other_bots() -> None:
+    answer = _answer(None, amount=100_000, need=_need(82_409), simulated=True)
+
+    assert answer.simulated is True and _answer(_account(cash=5000), amount=100_000).simulated is False
+    assert answer.fits_sentence == "One whole entry fits right now with this budget as its starting cash."
+    assert "compete" not in (answer.fits_sentence or "") and "account" not in (answer.fits_sentence or "")
+    assert answer.headroom_left is not None
+    assert [(term.label, term.amount_cents) for term in answer.headroom_left.terms] == [
+        ("Simulated starting cash", 100_000), ("One entry", -82_409),
+    ]
 
 
 # ---- what one more entry does to the account's requirement -----------------------------------------------------

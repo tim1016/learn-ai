@@ -190,6 +190,8 @@ class FundingAnswer:
     the same account headroom. ``budget_left`` and ``headroom_left`` are what
     each limit leaves after one entry, given only by ``deploy_funding_answer``;
     a figure keeps its limit's state, so a stale limit leaves a stale one.
+    ``simulated`` marks a Dry Run's, whose cash is its own: no account limit
+    and no other bot draws on it, so nothing is said of either.
     """
 
     free_budget: Figure
@@ -205,6 +207,7 @@ class FundingAnswer:
     fits_sentence: str | None = None
     budget_left: Figure | None = None
     headroom_left: Figure | None = None
+    simulated: bool = False
 
 
 def funding_answer(
@@ -297,6 +300,9 @@ def deploy_funding_answer(
         # An untyped budget is no missing reading: the account's own figures still say what fits.
         judged = admits is not None or (amount_cents is None and (account is None or room.headroom is not None))
         shortfall, fits = _shortfall_and_fits(need, judged, binding, set_aside=amount_cents)
+        if account is None and not simulated:
+            # Alpaca's own limit can be judged alone, but how many fit is the account's to say.
+            fits = None
         name = None if binding is None else binding[0]
         return FundingAnswer(
             free, headroom, broker, need, admits=admits, binding=name, shortfall_cents=shortfall, fits=fits,
@@ -307,9 +313,12 @@ def deploy_funding_answer(
                 shortfall_cents=shortfall,
             ),
             action=_deploy_action(admits, name, need),
-            fits_sentence=_fits_sentence(fits, name),
+            fits_sentence=_fits_sentence(fits, name, simulated=simulated),
             budget_left=None if amount_cents is None else _left_after_one_entry(free, need, what="Budget typed in Deploy"),
-            headroom_left=_left_after_one_entry(headroom, need, what="Unreserved account cash"),
+            headroom_left=_left_after_one_entry(
+                headroom, need, what="Simulated starting cash" if simulated else "Unreserved account cash",
+            ),
+            simulated=simulated,
         )
 
 
@@ -428,7 +437,7 @@ def _simulated_cash(amount_cents: int | None, *, now_ms: int) -> Figure:
 def _unreserved_cash(account: AccountBudget | None, *, observed_at_ms: int, now_ms: int) -> Figure:
     """The account's unreserved cash: what is left once every claim on it is taken off what Alpaca reported."""
     if account is None:
-        return Figure.unknown(f"{_BOOKS_AND_READING}, which could not be read")
+        return Figure.unknown(f"{_BOOKS_AND_READING}, which this review did not read")
     amount = cents_spendable(account.available)
     exact = [
         ("Cash in the account", account.cash),
@@ -562,11 +571,17 @@ def _deploy_action(admits: bool | None, binding: LimitName | None, need: EntryNe
     return None
 
 
-def _fits_sentence(fits: int | None, binding: LimitName | None) -> str | None:
-    """How many whole entries fit, said with the caveat that every bot draws on the same account (PRD #3095, story 18)."""
+def _fits_sentence(fits: int | None, binding: LimitName | None, *, simulated: bool = False) -> str | None:
+    """How many whole entries fit, said with the caveat that every bot draws on the same account (PRD #3095, story 18).
+
+    A Dry Run's cash is its own, so it is counted against that cash and no
+    caveat is said: no other bot draws on it.
+    """
     if fits is None or binding is None:
         return None
     count = "No whole entry fits" if fits == 0 else "One whole entry fits" if fits == 1 else f"{fits:,} whole entries fit"
+    if simulated:
+        return f"{count} right now with this budget as its starting cash."
     return (
         f"{count} right now under {_LIMIT_WORDS[binding]}, the limit with the least room. Every bot competes "
         "for the same account headroom, so these counts are never added up across bots."

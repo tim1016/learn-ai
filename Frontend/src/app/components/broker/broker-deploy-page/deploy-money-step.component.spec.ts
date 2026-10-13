@@ -472,6 +472,26 @@ describe('Deploy step 3, Money: what one more structure changes (#3099)', () => 
     expect(screen.getByText(/Every bot competes for the same account headroom/)).toBeTruthy();
   });
 
+  it('says how many entries fit once when the review and the funding answer both carry it', async () => {
+    const both = { ...optionFacts(OPTION_REVIEW_WITH_BUDGET), funding: COVERED };
+    expect(both.option_review?.fits_sentence).toBe(COVERED.fits_sentence);
+
+    await renderOptions(both);
+
+    expect(occurrences(COVERED.fits_sentence ?? '')).toBe(1);
+    // The funding card is still there with its limits and its own sentence.
+    expect(limitRows().length).toBe(3);
+    expect(occurrences(COVERED.sentence)).toBe(1);
+  });
+
+  it('says how many entries fit from the funding answer when the review carries no sentence for it', async () => {
+    const review = { ...OPTION_REVIEW_WITH_BUDGET, fits: null, fits_sentence: null };
+
+    await renderOptions({ ...optionFacts(review), funding: COVERED });
+
+    expect(occurrences(COVERED.fits_sentence ?? '')).toBe(1);
+  });
+
   it('shows the price each pick is assumed at beside the time the quotes were read', async () => {
     await renderOptions(optionFacts(OPTION_REVIEW_PRICED));
 
