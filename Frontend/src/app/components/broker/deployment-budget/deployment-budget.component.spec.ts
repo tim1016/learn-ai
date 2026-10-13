@@ -96,6 +96,26 @@ const FUNDING_UNKNOWN: FundingView = {
   sentence: "This bot's budget cannot be read right now, so what it can fund is unknown.",
 };
 
+/** An option bot's entry is priced when its contracts are picked: both limits are shown and nothing is judged. */
+const FUNDING_UNPRICED: FundingView = {
+  ...FUNDING_REFUSED,
+  need: null, admits: null, binding: 'bot_budget', shortfall_usd: null, fits: null, action: null,
+  account_headroom: { ...FUNDING_REFUSED.account_headroom, amount_usd: '1000.00', terms: [
+    { label: 'Unreserved account cash', amount_usd: '0.00' },
+    { label: "This bot's own claim", amount_usd: '1000.00' },
+  ] },
+  sentence: 'This bot has $1,000.00 free and the account can fund $1,000.00 after protecting other positions.',
+};
+
+/** What Python adds to a pass on the bot page, after the funding sentence. */
+const STILL_CHECKED = ' Account risk is current. Order-time strategy, session and execution checks still apply.';
+
+/** The bot page as Python serves a priced entry: its `detail` is the funding sentence itself, and a pass
+ * follows the sentence with the note that order-time checks still apply. */
+function pricedEntry(funding: FundingView, headline: string, detail: string): DeploymentBudgetView {
+  return { ...RUNNING, headline, detail, funding };
+}
+
 const STOPPED_SEGMENT: MoneySegment = {
   kind: 'stopped', strategy_instance_id: 'spy-ema-b', label: 'held by stopped bot spy-ema-b', amount_usd: '670.43',
   share_bps: 10000, released_usd: '319.54', still_claimed_usd: '0.00', palette_index: 1,
@@ -237,6 +257,11 @@ function limitRows(): LimitRowText[] {
   }));
 }
 
+/** How many times `text` is on the page. */
+function occurrences(text: string): number {
+  return (document.body.textContent ?? '').split(text).length - 1;
+}
+
 async function expectAxeClean(): Promise<void> {
   const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
   expect(results.violations).toEqual([]);
@@ -318,10 +343,11 @@ describe("This bot's money", () => {
     ]);
   });
 
-  it('shows what the Clerk answered: the sentence, what to do, the shortfall and every limit with the binding one marked', async () => {
-    await renderCard(vi.fn().mockResolvedValue({ ...RUNNING, funding: FUNDING_REFUSED }));
+  it('shows what the Clerk answered: the sentence once, what to do, the shortfall and every limit with the binding one marked', async () => {
+    await renderCard(vi.fn().mockResolvedValue(pricedEntry(FUNDING_REFUSED, 'Its next entry waits', FUNDING_REFUSED.sentence)));
 
-    expect(await screen.findByText(FUNDING_REFUSED.sentence)).toBeTruthy();
+    await screen.findByText('Its next entry waits');
+    expect(occurrences(FUNDING_REFUSED.sentence)).toBe(1);
     expect(screen.getByText(/Free another bot's budget, or add cash to the account\./)).toBeTruthy();
     expect(screen.getByText(/Short of this entry by/).textContent?.replace(/\s+/g, ' ').trim()).toBe('Short of this entry by $300.00');
     expect(limitRows()).toEqual([
@@ -338,10 +364,13 @@ describe("This bot's money", () => {
     expect(screen.getByText(/read at Deploy and around each entry/)).toBeTruthy();
   });
 
-  it('marks the limit with the least room as such, not as binding, when the entry passes', async () => {
-    await renderCard(vi.fn().mockResolvedValue({ ...RUNNING, funding: FUNDING_PASSES }));
+  it('marks the limit with the least room as such, not as binding, when the entry passes, and says the sentence once', async () => {
+    const view = pricedEntry(FUNDING_PASSES, 'Ready for its next entry', FUNDING_PASSES.sentence + STILL_CHECKED);
+    await renderCard(vi.fn().mockResolvedValue(view));
 
-    await screen.findByText(FUNDING_PASSES.sentence);
+    await screen.findByText('Ready for its next entry');
+    expect(occurrences(FUNDING_PASSES.sentence)).toBe(1);
+    expect(screen.getByText(/Order-time strategy, session and execution checks still apply\./)).toBeTruthy();
     expect(limitRows().map((row) => [row.label, row.mark])).toEqual([
       ['Free budget', 'least room'],
       ['Account headroom', null],
@@ -353,9 +382,10 @@ describe("This bot's money", () => {
   });
 
   it('says a stale figure is stale beside the amount it last had, and promises nothing', async () => {
-    await renderCard(vi.fn().mockResolvedValue({ ...RUNNING, funding: FUNDING_STALE }));
+    await renderCard(vi.fn().mockResolvedValue(pricedEntry(FUNDING_STALE, 'Its next entry waits', FUNDING_STALE.sentence)));
 
-    await screen.findByText(FUNDING_STALE.sentence);
+    await screen.findByText('Its next entry waits');
+    expect(occurrences(FUNDING_STALE.sentence)).toBe(1);
     expect(limitRows().map((row) => [row.label, row.amount, row.state, row.mark])).toEqual([
       ['Free budget', '$1,000.00', null, 'least room'],
       ['Account headroom', '$500.00', 'stale, as last read', null],
@@ -366,14 +396,31 @@ describe("This bot's money", () => {
   });
 
   it('says an unknown figure is unknown, with no amount and no zero, and omits a broker row the bot has none of', async () => {
-    await renderCard(vi.fn().mockResolvedValue({ ...RUNNING, funding: FUNDING_UNKNOWN }));
+    await renderCard(vi.fn().mockResolvedValue(pricedEntry(FUNDING_UNKNOWN, 'Its next entry waits', FUNDING_UNKNOWN.sentence)));
 
-    await screen.findByText(FUNDING_UNKNOWN.sentence);
+    await screen.findByText('Its next entry waits');
+    expect(occurrences(FUNDING_UNKNOWN.sentence)).toBe(1);
     expect(limitRows()).toEqual([
       { label: 'Free budget', amount: null, state: 'unknown', mark: null, terms: [] },
       { label: 'Account headroom', amount: null, state: 'unknown', mark: null, terms: [] },
     ]);
     expect(document.querySelector('.funding-answer')?.textContent).not.toContain('$');
+  });
+
+  it('keeps an unpriced option entry’s own detail and still lists both limits', async () => {
+    const detail = 'Its next entry is in option contracts, and their cost is known only when they are picked at the entry.';
+    await renderCard(vi.fn().mockResolvedValue(
+      pricedEntry(FUNDING_UNPRICED, 'Its next entry is priced when its contracts are picked', detail),
+    ));
+
+    await screen.findByText(detail);
+    expect(occurrences(detail)).toBe(1);
+    expect(limitRows().map((row) => [row.label, row.amount, row.mark])).toEqual([
+      ['Free budget', '$1,000.00', 'least room'],
+      ['Account headroom', '$1,000.00', null],
+      ['Alpaca option buying power', null, null],
+    ]);
+    expect(screen.queryByText(/Short of this entry/)).toBeNull();
   });
 
   it('shows no funding block for a bot whose view carries none', async () => {

@@ -23,7 +23,9 @@ interface LimitRow {
  * the Clerk's own order, marks the limit with the least room (as binding only
  * where the answer carries a shortfall against it), and says a stale or
  * unknown figure is one. It compares nothing and adds nothing, so a row can
- * never disagree with the Clerk's verdict.
+ * never disagree with the Clerk's verdict. It does not repeat the sentence:
+ * the bot page's own detail already leads with it, so a host that shows no
+ * such detail renders `funding.sentence` itself.
  */
 @Component({
   selector: 'app-funding-answer',
