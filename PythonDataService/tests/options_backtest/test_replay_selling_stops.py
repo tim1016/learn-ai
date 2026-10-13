@@ -754,20 +754,20 @@ def test_a_complete_square_off_closes_bought_and_sold_legs_together_and_cancels_
 # ---- What the replay asks the book -------------------------------------------------------
 
 
-def test_the_replay_asks_the_book_for_a_plan_only_when_a_bought_leg_of_a_setup_that_sells_is_stopped(
+def test_the_replay_never_asks_the_book_for_a_plan_when_no_bought_leg_of_a_setup_that_sells_is_stopped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    asked: list[tuple[tuple[str, ...], list[str]]] = []
+    asked = 0
     real_plan = replay_module.leaving_plan
 
-    def recording(held: Held, leaving: Any) -> tuple[str, ...]:
-        leaving = list(leaving)
-        asked.append((tuple(holding.leg_id for holding in held.holdings), leaving))
+    def counting(held: Held, leaving: Any) -> tuple[str, ...]:
+        nonlocal asked
+        asked += 1
         return real_plan(held, leaving)
 
-    monkeypatch.setattr(replay_module, "leaving_plan", recording)
+    monkeypatch.setattr(replay_module, "leaving_plan", counting)
 
-    # A stop on the sold leg alone, a setup that buys only, and a stop that nothing is bought back for.
+    # A stop on the sold leg alone, and a setup that buys only.
     replay(setup(*_put_spread(short={"stop": STOP_25})), _stopped_sold_leg_market())
     bought_only = TableMarket(
         underlying=steady("500"),
@@ -775,12 +775,8 @@ def test_the_replay_asks_the_book_for_a_plan_only_when_a_bought_leg_of_a_setup_t
         options={CALL_500: {**flat("2.00", 5, 9), 10: ("2.00", "1.40"), **flat("1.40", 11, 61)}},
     )
     replay(setup(leg("call", stop=STOP_25)), bought_only)
-    assert asked == []
 
-    replay(setup(*_put_spread(long={"stop": STOP_25})), _a_spread_whose_cover_is_stopped())
-    # Held and not closing, the leaving leg among it. The answer is the short put, so the book is asked again of what
-    # would then be held, and has nothing to add.
-    assert asked == [(("long", "short"), ["long"]), (("long",), ["long"])]
+    assert asked == 0
 
 
 def _stopped_sold_leg_market() -> TableMarket:
@@ -823,7 +819,8 @@ def test_a_partial_square_off_that_takes_a_protected_sold_leg_along_says_so_and_
 
     assert sentences.square_off == (
         "Square off is partial: a stop closes only the leg that was stopped, and a stopped bought leg takes with it "
-        "any sold leg it protects, bought back in the same minute.",
+        "the sold legs it protects, closed in the same minute and exit group, last listed first, which can close more "
+        "legs than strictly needed.",
     )
     assert [trade.exit_reason for trade in outcome.trades[:2]] == [
         ExitReason.STOP,

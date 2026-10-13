@@ -377,7 +377,8 @@ def test_whatever_a_generated_session_with_stops_and_re_entries_does_it_is_never
     _the_stops_and_protections_are_what_they_say(outcome, scene.written, seed)
 
 
-def test_the_sessions_with_stops_reach_the_hard_cases_they_are_there_for() -> None:
+def _what_the_sessions_with_stops_reach() -> dict[str, int]:
+    """How many of the sessions reach each hard case."""
     reached: dict[str, int] = defaultdict(int)
     for seed in RULE_SEEDS:
         scene = _a_scene_with_stops(seed)
@@ -426,21 +427,33 @@ def test_the_sessions_with_stops_reach_the_hard_cases_they_are_there_for() -> No
         reached["a complete square-off"] += scene.written.square_off == "complete" and any(
             t.exit_reason is ExitReason.SQUARE_OFF for t in outcome.trades
         )
+    return dict(reached)
 
-    for hard in (
-        "stop_hit",
-        "closed_with_its_protection",
-        "re_entry_earned",
-        "re_entry_blocked_by_cutoff",
-        "a sold leg stopped by its own stop",
-        "a sold leg's re-entry filled",
-        "a sold leg's re-entry refused for cover",
-        "a cutoff blocked a sold leg",
-        "a bought and a sold leg stopped in one minute",
-        "a close that waited for a bar",
-        "a protection that waited for a bar",
-        "a fill far from the level the stop was read at",
-        "sold and bought legs of different contract counts",
-        "a complete square-off",
-    ):
-        assert reached[hard] > 0, f"no generated session reached {hard}: {dict(reached)}"
+
+# The least number of the RULE_SEEDS sessions that must reach each case, a little under what they reach. A change to
+# the generator that stopped it reaching one would leave the invariants above passing and proving less.
+_REACHED_AT_LEAST: dict[str, int] = {
+    "stop_hit": 90,
+    "closed_with_its_protection": 20,
+    "re_entry_earned": 50,
+    "re_entry_blocked_by_cutoff": 8,
+    "a sold leg stopped by its own stop": 18,
+    "a sold leg's re-entry filled": 8,
+    "a sold leg's re-entry refused for cover": 8,
+    "a cutoff blocked a sold leg": 3,
+    "a bought and a sold leg stopped in one minute": 2,
+    "a close that waited for a bar": 50,
+    "a protection that waited for a bar": 4,
+    "a fill far from the level the stop was read at": 18,
+    "sold and bought legs of different contract counts": 120,
+    "a complete square-off": 18,
+}
+
+
+def test_the_sessions_with_stops_reach_the_hard_cases_they_are_there_for() -> None:
+    reached = _what_the_sessions_with_stops_reach()
+
+    short = {
+        case: (reached.get(case, 0), floor) for case, floor in _REACHED_AT_LEAST.items() if reached.get(case, 0) < floor
+    }
+    assert not short, f"sessions reached fewer than they must (reached, floor): {short}; all: {reached}"

@@ -103,9 +103,17 @@ def momentum(rule: Momentum) -> str:
 
 
 def reentry(rule: ReentryOnStop, side: LegSide = "buy") -> str:
-    """What a leg does after a stop, as a sentence."""
+    """What a leg does after a stop, as a sentence.
+
+    A sold leg may have no stop of its own and still re-enter: a stop on the bought leg that protects it closes it
+    with that leg (#3107), so its sentence says the stop that closes it is its own or one that takes it along.
+    """
     times = f"up to {count(rule.count, 'time')} in a session"
-    fresh = "After a stop, picks a fresh contract by the same rules"
+    fresh = (
+        "After a stop closes it (its own, or one that takes it along), picks a fresh contract by the same rules"
+        if side == "sell"
+        else "After a stop, picks a fresh contract by the same rules"
+    )
     if rule.kind == "at_once":
         return f"{fresh} and {'sells' if side == 'sell' else 'buys'} it at once, {times}."
     return f"{fresh}, takes a new starting premium from it and waits for momentum again, {times}."
@@ -115,13 +123,15 @@ def square_off(mode: str, *, sells: bool = False) -> str:
     """``mode`` is ``partial`` or ``complete``, the two a setup's square-off is set to.
 
     ``sells`` is whether the setup has a sold leg. A partial square-off is then not only the leg that was stopped: a
-    bought leg that is stopped takes with it the sold legs it protects (#3107), and the sentence says so.
+    bought leg that is stopped takes with it the sold legs it protects (#3107). They are closed in its minute and exit
+    group, last listed first, which can close more legs than another rule would, and the sentence says so.
     """
     if mode == "partial":
         if sells:
             return (
                 "Square off is partial: a stop closes only the leg that was stopped, and a stopped bought leg takes "
-                "with it any sold leg it protects, bought back in the same minute."
+                "with it the sold legs it protects, closed in the same minute and exit group, last listed first, "
+                "which can close more legs than strictly needed."
             )
         return "Square off is partial: a stop closes only the leg that was stopped."
     return (

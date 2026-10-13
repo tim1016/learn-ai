@@ -484,7 +484,7 @@ def test_a_sold_legs_momentum_gates_the_sale() -> None:
     assert not any("The buy" in sentence for sentence in sentences)
 
 
-def test_a_sold_legs_re_entry_sells_the_fresh_contract_and_on_momentum_is_said_as_for_a_bought_leg() -> None:
+def test_a_sold_legs_re_entry_sells_the_fresh_contract_and_says_a_stop_that_takes_it_along_closes_it_too() -> None:
     at_once = _sold_leg_sentences(
         stop_loss={"kind": "percent", "value": "25"}, reentry_on_stop={"kind": "at_once", "count": 2}
     )
@@ -494,12 +494,15 @@ def test_a_sold_legs_re_entry_sells_the_fresh_contract_and_on_momentum_is_said_a
         reentry_on_stop={"kind": "on_momentum", "count": 1},
     )
 
+    # The leg may have no stop of its own (the stop of the bought leg that protects it closes it too), so the sentence
+    # does not say the stop is its own.
     assert at_once[-1] == (
-        "After a stop, picks a fresh contract by the same rules and sells it at once, up to 2 times in a session."
+        "After a stop closes it (its own, or one that takes it along), picks a fresh contract by the same rules and "
+        "sells it at once, up to 2 times in a session."
     )
     assert on_momentum[-1] == (
-        "After a stop, picks a fresh contract by the same rules, takes a new starting premium from it and waits for "
-        "momentum again, up to 1 time in a session."
+        "After a stop closes it (its own, or one that takes it along), picks a fresh contract by the same rules, takes "
+        "a new starting premium from it and waits for momentum again, up to 1 time in a session."
     )
 
 
@@ -575,7 +578,8 @@ def test_a_partial_square_off_of_a_setup_that_sells_says_a_stopped_bought_leg_ta
 
     assert describe_setup(selling, full_session=_CLOCK).square_off == (
         "Square off is partial: a stop closes only the leg that was stopped, and a stopped bought leg takes with it "
-        "any sold leg it protects, bought back in the same minute.",
+        "the sold legs it protects, closed in the same minute and exit group, last listed first, which can close more "
+        "legs than strictly needed.",
     )
     assert describe_setup(buying, full_session=_CLOCK).square_off == (
         "Square off is partial: a stop closes only the leg that was stopped.",

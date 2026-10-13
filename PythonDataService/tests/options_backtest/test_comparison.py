@@ -390,7 +390,8 @@ def test_a_re_entry_that_differs_between_a_bought_and_a_sold_leg_says_which_side
     assert reentry[0] is Setting.LEG_REENTRY
     assert reentry[3:] == (
         NOT_SET,
-        "After a stop, picks a fresh contract by the same rules and sells it at once, up to 1 time in a session.",
+        "After a stop closes it (its own, or one that takes it along), picks a fresh contract by the same rules and "
+        "sells it at once, up to 1 time in a session.",
     )
 
 
@@ -424,7 +425,8 @@ def test_a_partial_square_off_is_said_as_it_is_of_the_setup_that_has_it_and_a_se
     assert selling_label == "square off"
     assert selling_words == (
         "Square off is partial: a stop closes only the leg that was stopped, and a stopped bought leg takes with it "
-        "any sold leg it protects, bought back in the same minute."
+        "the sold legs it protects, closed in the same minute and exit group, last listed first, which can close more "
+        "legs than strictly needed."
     )
     assert buying_words == "Square off is partial: a stop closes only the leg that was stopped."
 

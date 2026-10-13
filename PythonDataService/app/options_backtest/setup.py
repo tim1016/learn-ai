@@ -370,7 +370,7 @@ class OptionsBacktestSetup(BaseModel):
         A sold leg and what covers it expire together. Rules that are alike can still come to different dates, which
         the picked contracts settle on a session; this catches the plain mismatch before anything runs.
         """
-        if all(leg.side == "buy" for leg in self.legs):
+        if not self.sells:
             return self
         first = self.legs[0]
         for leg in self.legs[1:]:

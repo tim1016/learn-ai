@@ -54,7 +54,7 @@ from app.options_backtest.data_check import LAKE_REASON_WORDS
 from app.options_backtest.fees import FeeRateNotPublished
 from app.options_backtest.fetching import DownloadFailed
 from app.options_backtest.lake_data import UnderlyingDayUnreadable
-from app.options_backtest.results import SessionStatus
+from app.options_backtest.results import ExitReason, SessionStatus
 from app.options_backtest.run import RunResult, SessionDataMissing
 from app.options_backtest.saved_runs import DbRunStore, NewRun, RunFailure, create_run, get_run, read_result
 from app.options_backtest.service import (
@@ -359,6 +359,51 @@ async def test_estimated_fees_on_a_date_without_published_rates_fail_the_run_bef
         session_window_for_date(day).open_ms_utc for day in june
     ]
     assert vendor.vendor_requests == 0
+
+
+@respx.mock
+async def test_a_setup_that_sells_and_carries_a_stop_on_its_bought_leg_runs_and_is_saved_whole(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # A call 500 bought with a stop and a call 505 sold, for the day itself. The bought call's stop sits at
+    # 4.02 x 0.75 = 3.015 and minute 10 closes at 2.90, so at minute 11 the sold call is bought back at 2.00 x 1.003 =
+    # 2.006, up to 2.01, and the bought call sold at 2.80 x 0.997 = 2.7916, down to 2.79. Each fill costs 0.65.
+    scene = {
+        WED: Day(
+            underlying=steady("500.20"),
+            options={
+                CALL_500: {**flat("4.00", 5, 9), 10: ("4.00", "2.90"), **flat("2.80", 11, 345)},
+                ("call", 505): flat("2.00", 5, 345),
+            },
+        )
+    }
+    Vendor(scene).mount()
+    same_day = {"kind": "same_day"}
+    selling = setup_of(
+        legs=[
+            leg(leg_id="long_call", expiry=same_day, stop_loss={"kind": "percent", "value": "25"}),
+            leg(leg_id="short_call", side="sell", expiry=same_day, strike={"kind": "atm_offset", "steps": 1}),
+        ],
+        square_off="partial",
+        fees=FeePolicy(kind="per_contract", per_contract_usd=D("0.65")).model_dump(mode="json"),
+        slippage_percent="0.3",
+    )
+    store, job = FakeStore(), Job()
+
+    returned = await _execute(store, job, setup=selling, sessions=[WED])
+
+    [(_, saved, _)] = store.completed
+    assert returned is saved and store.failed == [] and store.cancelled == []
+    [session] = saved.sessions
+    assert session.status is SessionStatus.TRADED
+    assert [(trade.leg_id, trade.exit_reason) for trade in session.outcome.trades] == [
+        ("long_call", ExitReason.STOP),
+        ("short_call", ExitReason.CLOSED_WITH_ITS_PROTECTION),
+    ]
+    # Long: bought 4.02, sold 2.79: (2.79 - 4.02) x 100 - 1.30 = -124.30. Short: sold 1.99, bought back 2.01:
+    # (1.99 - 2.01) x 100 - 1.30 = -3.30.
+    assert [trade.pnl_usd for trade in session.outcome.trades] == [D("-124.30"), D("-3.30")]
+    assert saved.summary.net_profit_usd == D("-127.60")
 
 
 # ── A failure in the download ────────────────────────────────────────────
