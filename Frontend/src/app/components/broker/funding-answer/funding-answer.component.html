@@ -1,0 +1,45 @@
+<div class="funding-answer">
+  <p class="funding-answer__sentence">{{ funding().sentence }}</p>
+  @if (funding().action; as action) {
+    <p class="funding-answer__action"><strong>What you can do:</strong> {{ action }}</p>
+  }
+  <ul class="funding-answer__limits">
+    @for (row of rows(); track row.key) {
+      <li class="funding-answer__limit" [class.funding-answer__limit--binds]="row.binds" [attr.data-state]="row.figure.state">
+        <details>
+          <summary>
+            <span class="funding-answer__label">{{ row.label }}</span>
+            @if (row.figure.amount_usd; as amount) {
+              <span class="funding-answer__amount">{{ amount | authoredUsd }}</span>
+            }
+            @if (row.figure.state === 'stale') {
+              <span class="funding-answer__state">stale, as last read</span>
+            } @else if (row.figure.state === 'unknown') {
+              <span class="funding-answer__state">unknown</span>
+            }
+            @if (row.binds) {
+              <span class="funding-answer__mark">binds</span>
+            }
+          </summary>
+          <p class="funding-answer__source">{{ row.figure.source }}.</p>
+          @if (row.figure.as_of_ms; as asOf) {
+            <small>As of <app-timestamp-display [value]="asOf" mode="local" /></small>
+          }
+          @if (row.terms.length > 0) {
+            <dl class="funding-answer__terms">
+              @for (term of row.terms; track term.label) {
+                <div>
+                  <dt>{{ term.label }}</dt>
+                  <dd>{{ term.amount_usd | authoredUsd }}</dd>
+                </div>
+              }
+            </dl>
+          }
+        </details>
+      </li>
+    }
+  </ul>
+  @if (funding().shortfall_usd; as shortfall) {
+    <p class="funding-answer__shortfall">Short of this entry by <strong>{{ shortfall | authoredUsd }}</strong></p>
+  }
+</div>

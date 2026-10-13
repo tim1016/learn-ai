@@ -15,6 +15,7 @@ from pydantic import (
 )
 
 from app.broker.alpaca.clerk.account_money import FULL_BAR_BPS, SegmentKind
+from app.broker.alpaca.clerk.funding import EntryNeed, Figure, FundingAnswer, Term
 from app.broker.alpaca.clerk.models import EpochMs
 from app.broker.alpaca.clerk.money import consent_cents, dollars
 from app.schemas.account_authority import AuthorityKind
@@ -287,6 +288,113 @@ class BudgetStatementLine(BaseModel):
     total: bool = False
 
 
+class FigureTermView(BaseModel):
+    """One labelled amount a figure is made of, signed."""
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    label: str
+    amount_usd: str
+
+    @classmethod
+    def from_term(cls, term: Term) -> FigureTermView:
+        return cls(label=term.label, amount_usd=dollars(term.amount_cents))
+
+
+class FigureView(BaseModel):
+    """One number the owner compares against another, with its source and age (#3097).
+
+    ``known`` and ``stale`` carry an amount and the terms that add up to it;
+    a stale amount is the last one worked out. ``unknown`` carries neither,
+    never "0.00", and ``source`` says where it would come from.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal["known", "stale", "unknown"]
+    amount_usd: str | None = None
+    source: str
+    as_of_ms: EpochMs | None = None
+    terms: tuple[FigureTermView, ...] = ()
+
+    @classmethod
+    def from_figure(cls, figure: Figure) -> FigureView:
+        return cls(
+            state=figure.state,
+            amount_usd=None if figure.amount_cents is None else dollars(figure.amount_cents),
+            source=figure.source, as_of_ms=figure.as_of_ms,
+            terms=tuple(FigureTermView.from_term(term) for term in figure.terms),
+        )
+
+    @model_validator(mode="after")
+    def terms_add_up_to_the_amount(self) -> FigureView:
+        if self.state == "unknown":
+            if self.amount_usd is not None or self.terms:
+                raise ValueError("an unknown figure states no amount and no terms")
+        elif self.amount_usd is None:
+            raise ValueError("a known or stale figure states its amount")
+        elif sum(_cents(term.amount_usd) for term in self.terms) != _cents(self.amount_usd):
+            raise ValueError("a figure's terms add up to its amount")
+        return self
+
+
+class EntryNeedView(BaseModel):
+    """What one entry commits, and the parts that make it."""
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    commitment_usd: str
+    terms: tuple[FigureTermView, ...]
+
+    @classmethod
+    def from_need(cls, need: EntryNeed) -> EntryNeedView:
+        return cls(
+            commitment_usd=dollars(need.commitment_cents),
+            terms=tuple(FigureTermView.from_term(term) for term in need.terms),
+        )
+
+    @model_validator(mode="after")
+    def parts_add_up_to_the_commitment(self) -> EntryNeedView:
+        if sum(_cents(term.amount_usd) for term in self.terms) != _cents(self.commitment_usd):
+            raise ValueError("an entry's parts add up to its commitment")
+        return self
+
+
+class FundingView(BaseModel):
+    """Whether a bot can fund an entry and which limit binds (``funding.funding_answer``, #3097).
+
+    The Clerk's admission reads the same answer, so this view never promises
+    an entry the Clerk refuses. ``admits`` is the Clerk's own rule: ``None``
+    when there is no priced entry or a limit it depends on is not known.
+    ``binding`` is the known limit with the least room; ``fits`` is absent when
+    it cannot be said, and ``shortfall_usd`` unless something is short, never
+    "0.00". ``broker_buying_power`` is absent for a bot with no broker figure
+    (a Dry Run, a Live Shadow). Every dollar and every word is authored by
+    Python.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    free_budget: FigureView
+    account_headroom: FigureView
+    broker_buying_power: FigureView | None = None
+    need: EntryNeedView | None = None
+    admits: bool | None = None
+    binding: Literal["bot_budget", "account_headroom", "broker_buying_power"] | None = None
+    shortfall_usd: str | None = None
+    fits: int | None = Field(default=None, ge=0)
+    sentence: str
+    action: str | None = None
+
+    @classmethod
+    def from_answer(cls, answer: FundingAnswer) -> FundingView:
+        return cls(
+            free_budget=FigureView.from_figure(answer.free_budget),
+            account_headroom=FigureView.from_figure(answer.account_headroom),
+            broker_buying_power=None if answer.broker_buying_power is None else FigureView.from_figure(answer.broker_buying_power),
+            need=None if answer.need is None else EntryNeedView.from_need(answer.need),
+            admits=answer.admits, binding=answer.binding,
+            shortfall_usd=dollars(answer.shortfall_cents) if answer.shortfall_cents else None,
+            fits=answer.fits, sentence=answer.sentence, action=answer.action,
+        )
+
+
 class DeploymentBudgetView(BaseModel):
     """All dollars are authored by Python, including display rounding.
 
@@ -316,6 +424,9 @@ class DeploymentBudgetView(BaseModel):
     statement: tuple[BudgetStatementLine, ...] = ()
     # The fine print under the statement, when there is any.
     note: str | None = None
+    # Whether the bot can fund its next entry and which limit binds: the
+    # answer the Clerk's admission reads (#3097). Only a running bot has one.
+    funding: FundingView | None = None
 
     @model_validator(mode="after")
     def segment_is_this_bots_own(self) -> DeploymentBudgetView:

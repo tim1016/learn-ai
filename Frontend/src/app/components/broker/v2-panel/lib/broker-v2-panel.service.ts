@@ -92,6 +92,10 @@ export function uncommittedClaim(status: DeploySubmissionStatus): DeploySubmissi
 }
 export type DeploymentBudgetPreview = components['schemas']['DeploymentBudgetPreview'];
 export type DeploymentBudgetView = components['schemas']['DeploymentBudgetView'];
+/** Whether a bot can fund its next entry and which limit binds (#3097): the
+ * Clerk's own answer, every dollar and word authored by Python. */
+export type FundingView = components['schemas']['FundingView'];
+export type FigureView = components['schemas']['FigureView'];
 export type DeploymentBudgetInput = components['schemas']['DeploymentBudgetInput'];
 /** Where one account's money is (PRD #2560): every dollar string and every
  * slice width is Python-authored; the browser only draws it. */

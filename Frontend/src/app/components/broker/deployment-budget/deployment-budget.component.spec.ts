@@ -4,7 +4,12 @@ import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 import { resourceTarget } from '../../../fleet/resource-target';
-import { BrokerV2PanelService, type DeploymentBudgetView, type MoneySegment } from '../v2-panel/lib/broker-v2-panel.service';
+import {
+  BrokerV2PanelService,
+  type DeploymentBudgetView,
+  type FundingView,
+  type MoneySegment,
+} from '../v2-panel/lib/broker-v2-panel.service';
 import { type BotOpenPnl, DeploymentBudgetComponent } from './deployment-budget.component';
 
 const TARGET = resourceTarget('alpaca', 'clrk_spec', { accountId: 'PA9', bindingGeneration: 3, routingEpoch: 4 });
@@ -28,6 +33,53 @@ const RUNNING: DeploymentBudgetView = {
   },
   note: 'The budget limits new entries. Market fills and losses can go past it.',
   observed_at_ms: 1_800_000_000_000,
+};
+
+const READ_AT = 1_799_999_990_000;
+
+/** The Clerk's answer for an $800.00 entry: $1,000.00 free, the account can fund $500.00, Alpaca's figure is
+ * not read for this view. Python marks the account's headroom as the limit that binds. */
+const FUNDING_REFUSED: FundingView = {
+  free_budget: {
+    state: 'known', amount_usd: '1000.00', source: 'Clerk books', as_of_ms: 1_800_000_000_000,
+    terms: [{ label: 'Budget set aside at deploy', amount_usd: '1000.00' }],
+  },
+  account_headroom: {
+    state: 'known', amount_usd: '500.00', source: 'Clerk books and the account reading', as_of_ms: READ_AT,
+    terms: [
+      { label: 'Unreserved account cash', amount_usd: '-500.00' },
+      { label: "This bot's own claim", amount_usd: '1000.00' },
+    ],
+  },
+  broker_buying_power: {
+    state: 'unknown', terms: [],
+    source: "Not read for this view. Alpaca's option buying power is read at Deploy and around each entry",
+  },
+  need: {
+    commitment_usd: '800.00',
+    terms: [{ label: 'Shares at the ask', amount_usd: '799.99' }, { label: 'Fee provision', amount_usd: '0.01' }],
+  },
+  admits: false, binding: 'account_headroom', shortfall_usd: '300.00', fits: 0,
+  sentence: 'This bot has $1,000.00 free, but the account can fund only $500.00 after protecting other positions. '
+    + 'The entry needs $800.00 including its fee provision. Shortfall: $300.00.',
+  action: "Free another bot's budget, or add cash to the account.",
+};
+
+/** The same answer when the account's reading is past its age limit: the amount last worked out, said stale. */
+const FUNDING_STALE: FundingView = {
+  ...FUNDING_REFUSED,
+  account_headroom: { ...FUNDING_REFUSED.account_headroom, state: 'stale' },
+  admits: null, binding: 'bot_budget', shortfall_usd: null, fits: null, action: null,
+  sentence: "This bot has $1,000.00 free. The account's headroom for it was last read more than 45 seconds ago, "
+    + 'so it is not counted here. Whether the entry fits is not said. The entry needs $800.00 including its fee provision.',
+};
+
+/** Nothing could be worked out: no amount for any limit, never "$0.00". */
+const FUNDING_UNKNOWN: FundingView = {
+  free_budget: { state: 'unknown', source: 'Clerk books, which hold no budget for this bot', terms: [] },
+  account_headroom: { state: 'unknown', source: 'Clerk books and the account reading, which could not be read for this bot', terms: [] },
+  broker_buying_power: null, need: null, admits: null, binding: null, shortfall_usd: null, fits: null, action: null,
+  sentence: "This bot's budget cannot be read right now, so what it can fund is unknown.",
 };
 
 const STOPPED_SEGMENT: MoneySegment = {
@@ -148,6 +200,29 @@ function parts(container: Element): [string, string][] {
     .map((part) => [part.className, part.style.flexGrow]);
 }
 
+interface LimitRowText {
+  readonly label: string;
+  readonly amount: string | null;
+  readonly state: string | null;
+  readonly binds: boolean;
+  readonly terms: [string, string][];
+}
+
+/** Each limit the funding block lists, as it reads on the page and with the terms it opens to. */
+function limitRows(): LimitRowText[] {
+  const text = (row: Element, selector: string) => row.querySelector(selector)?.textContent?.trim() ?? null;
+  return Array.from(document.querySelectorAll('.funding-answer__limit')).map((row) => ({
+    label: text(row, '.funding-answer__label') ?? '',
+    amount: text(row, '.funding-answer__amount'),
+    state: text(row, '.funding-answer__state'),
+    binds: row.querySelector('.funding-answer__mark') !== null,
+    terms: Array.from(row.querySelectorAll('.funding-answer__terms > div')).map((term): [string, string] => [
+      term.querySelector('dt')?.textContent?.trim() ?? '',
+      term.querySelector('dd')?.textContent?.trim() ?? '',
+    ]),
+  }));
+}
+
 async function expectAxeClean(): Promise<void> {
   const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
   expect(results.violations).toEqual([]);
@@ -229,6 +304,57 @@ describe("This bot's money", () => {
     ]);
   });
 
+  it('shows what the Clerk answered: the sentence, what to do, the shortfall and every limit with the binding one marked', async () => {
+    await renderCard(vi.fn().mockResolvedValue({ ...RUNNING, funding: FUNDING_REFUSED }));
+
+    expect(await screen.findByText(FUNDING_REFUSED.sentence)).toBeTruthy();
+    expect(screen.getByText(/Free another bot's budget, or add cash to the account\./)).toBeTruthy();
+    expect(screen.getByText(/Short of this entry by/).textContent?.replace(/\s+/g, ' ').trim()).toBe('Short of this entry by $300.00');
+    expect(limitRows()).toEqual([
+      {
+        label: 'Free budget', amount: '$1,000.00', state: null, binds: false,
+        terms: [['Budget set aside at deploy', '$1,000.00']],
+      },
+      {
+        label: 'Account headroom', amount: '$500.00', state: null, binds: true,
+        terms: [['Unreserved account cash', '-$500.00'], ["This bot's own claim", '$1,000.00']],
+      },
+      { label: 'Alpaca option buying power', amount: null, state: 'unknown', binds: false, terms: [] },
+    ]);
+    expect(screen.getByText(/read at Deploy and around each entry/)).toBeTruthy();
+  });
+
+  it('says a stale figure is stale beside the amount it last had, and promises nothing', async () => {
+    await renderCard(vi.fn().mockResolvedValue({ ...RUNNING, funding: FUNDING_STALE }));
+
+    await screen.findByText(FUNDING_STALE.sentence);
+    expect(limitRows().map((row) => [row.label, row.amount, row.state, row.binds])).toEqual([
+      ['Free budget', '$1,000.00', null, true],
+      ['Account headroom', '$500.00', 'stale, as last read', false],
+      ['Alpaca option buying power', null, 'unknown', false],
+    ]);
+    expect(screen.queryByText(/Short of this entry/)).toBeNull();
+    expect(screen.queryByText(/What you can do/)).toBeNull();
+  });
+
+  it('says an unknown figure is unknown, with no amount and no zero, and omits a broker row the bot has none of', async () => {
+    await renderCard(vi.fn().mockResolvedValue({ ...RUNNING, funding: FUNDING_UNKNOWN }));
+
+    await screen.findByText(FUNDING_UNKNOWN.sentence);
+    expect(limitRows()).toEqual([
+      { label: 'Free budget', amount: null, state: 'unknown', binds: false, terms: [] },
+      { label: 'Account headroom', amount: null, state: 'unknown', binds: false, terms: [] },
+    ]);
+    expect(document.querySelector('.funding-answer')?.textContent).not.toContain('$');
+  });
+
+  it('shows no funding block for a bot whose view carries none', async () => {
+    const { container } = await renderCard(vi.fn().mockResolvedValue(STOPPED));
+
+    await screen.findByText('Stopped · still holds shares');
+    expect(container.querySelector('app-funding-answer')).toBeNull();
+  });
+
   it('draws no slice for a finished bot, which holds no money', async () => {
     const { container } = await renderCard(vi.fn().mockResolvedValue(FINISHED));
 
@@ -302,7 +428,11 @@ describe("This bot's money", () => {
     expect(screen.getByRole('button', { name: "Refresh this bot's money" })).toBeTruthy();
   });
 
-  it.each([['running', RUNNING], ['stopped', STOPPED]])('has no detectable accessibility violations when %s', async (_name, view) => {
+  it.each([
+    ['running', RUNNING],
+    ['stopped', STOPPED],
+    ['running with its funding answer', { ...RUNNING, funding: FUNDING_REFUSED }],
+  ])('has no detectable accessibility violations when %s', async (_name, view) => {
     await renderCard(vi.fn().mockResolvedValue(view), { holdsShares: true, openPnl: openPnl('12.50', 'gain') });
     await screen.findByText(view.headline);
 

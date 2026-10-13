@@ -818,7 +818,8 @@ def test_a_spread_one_bot_holds_pledges_cash_that_another_bots_entry_would_spend
 
         def asks(cents: int) -> bool:
             return option_entry_decision(
-                budget, strategy_instance_id="bot-b", commitment_cents=cents, fee_provision_cents=0
+                budget, strategy_instance_id="bot-b", commitment_cents=cents, fee_provision_cents=0,
+                at_ms=NOON, observed_at_ms=NOON,
             ).allowed
 
         assert not asks(80_000)

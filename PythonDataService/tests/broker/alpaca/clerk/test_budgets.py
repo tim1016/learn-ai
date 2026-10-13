@@ -89,10 +89,11 @@ def test_entry_affordability_uses_exact_position_and_fee_not_positive_free_cash(
     own = deployment_budget(strategy_instance_id="a", committed_cents=1, active=True,
         realized_gross=0, fees=D(0), position_cost=D(0), pending_orders=D(0))
     pool = account_budget(cash=1000, deployments=[own], order_claims=D(0), fee_claims=D(0))
-    result = budget_entry_decision(pool, strategy_instance_id="a", quantity=1, price=100, at_ms=NOON)
+    result = budget_entry_decision(pool, strategy_instance_id="a", quantity=1, price=100, at_ms=NOON, observed_at_ms=NOON)
     assert not result.allowed
     assert result.required == D("100.01") and result.fee_cents == 1
-    assert "0.01 USD free" in result.detail
+    assert "This bot has only $0.01 free." in result.detail
+    assert "Shortfall: $100.00." in result.detail
 
 
 def test_affordability_copy_rounds_required_cash_up_and_spendable_cash_down() -> None:
@@ -102,10 +103,13 @@ def test_affordability_copy_rounds_required_cash_up_and_spendable_cash_down() ->
     own = deployment_budget(strategy_instance_id="a", committed_cents=10_001, active=True,
         realized_gross="0.0009", fees=D(0), position_cost=D(0), pending_orders=D(0))
     pool = account_budget(cash=1000, deployments=[own], order_claims=D(0), fee_claims=D(0))
-    result = budget_entry_decision(pool, strategy_instance_id="a", quantity=1, price="100.001", at_ms=NOON)
+    result = budget_entry_decision(
+        pool, strategy_instance_id="a", quantity=1, price="100.001", at_ms=NOON, observed_at_ms=NOON,
+    )
     assert not result.allowed
     assert result.required == D("100.011")
-    assert "needs 100.02 USD" in result.detail and "100.01 USD free" in result.detail
+    assert "needs $100.02" in result.detail and "has only $100.01 free" in result.detail
+    assert "Shortfall: $0.01." in result.detail
 
 
 # One cash rule (#3096). An entry is admitted when it fits its bot's free budget and the account's
@@ -127,8 +131,11 @@ def _bot(
 
 
 def _asks_in_contracts(account: AccountBudget, strategy_instance_id: str, cents: int) -> BudgetEntryDecision:
+    from tests.broker.alpaca.clerk.sqlite.conftest import NOON
+
     return option_entry_decision(
         account, strategy_instance_id=strategy_instance_id, commitment_cents=cents, fee_provision_cents=0,
+        at_ms=NOON, observed_at_ms=NOON,
     )
 
 
@@ -158,8 +165,10 @@ def test_an_entry_is_refused_when_collateral_held_by_another_bot_leaves_the_acco
 
     assert not decision.allowed
     assert decision.required == D(800)
-    assert "needs 800.00 USD" in decision.detail
-    assert "the account can fund 500.00 USD for this deployment" in decision.detail
+    assert decision.detail == (
+        "This bot has $1,000.00 free, but the account can fund only $500.00 after protecting other positions. "
+        "The entry needs $800.00 including its fee provision. Shortfall: $300.00."
+    )
     assert _admitted_up_to(account, "b", 50_000)
 
 
@@ -191,12 +200,13 @@ def test_an_entry_in_shares_is_held_to_the_headroom_an_entry_in_contracts_is() -
     a = _bot("a", realized=-1000, position_cost=500, collateral=1000)
     account = account_budget(cash=1500, deployments=[a, _bot("b")], order_claims=D(0), fee_claims=D(0))
 
-    five = budget_entry_decision(account, strategy_instance_id="b", quantity=5, price=100, at_ms=NOON)
-    four = budget_entry_decision(account, strategy_instance_id="b", quantity=4, price=100, at_ms=NOON)
+    five = budget_entry_decision(account, strategy_instance_id="b", quantity=5, price=100, at_ms=NOON, observed_at_ms=NOON)
+    four = budget_entry_decision(account, strategy_instance_id="b", quantity=4, price=100, at_ms=NOON, observed_at_ms=NOON)
 
     assert not five.allowed
     assert five.required == D("500.01")
-    assert "the account can fund 500.00 USD for this deployment" in five.detail
+    assert "the account can fund only $500.00 after protecting other positions" in five.detail
+    assert "Shortfall: $0.01." in five.detail
     assert four.allowed
 
 
@@ -235,14 +245,16 @@ def test_a_bots_own_collateral_is_not_charged_a_second_time() -> None:
 
 def test_an_account_overcommitted_by_collateral_can_fund_nothing_and_says_zero() -> None:
     """The reproduced account with $900 of cash: unreserved -$1,100, so B can be funded -$100. The
-    sentence says $0.00, not a negative amount."""
+    sentence says the account can fund nothing and names the $100.00 it is over-committed by; a
+    one-cent entry is then $100.01 short, which is what it would take to fund it."""
     a = _bot("a", realized=-1000, position_cost=500, collateral=1000)
     account = account_budget(cash=900, deployments=[a, _bot("b")], order_claims=D(0), fee_claims=D(0))
 
     decision = _asks_in_contracts(account, "b", 1)
 
     assert not decision.allowed
-    assert "the account can fund 0.00 USD for this deployment" in decision.detail
+    assert "the account can fund nothing for it after protecting other positions, because it is $100.00 over-committed" in decision.detail
+    assert "The entry needs $0.01 including its fee provision. Shortfall: $100.01." in decision.detail
 
 
 def test_the_headroom_comparison_has_no_epsilon() -> None:
@@ -253,7 +265,7 @@ def test_the_headroom_comparison_has_no_epsilon() -> None:
 
     def decide(cash: str) -> BudgetEntryDecision:
         account = account_budget(cash=cash, deployments=[_bot("a")], order_claims=D(0), fee_claims=D(0))
-        return budget_entry_decision(account, strategy_instance_id="a", quantity=1, price=100, at_ms=NOON)
+        return budget_entry_decision(account, strategy_instance_id="a", quantity=1, price=100, at_ms=NOON, observed_at_ms=NOON)
 
     assert decide("100.01").allowed
     assert not decide("100.0099999999").allowed

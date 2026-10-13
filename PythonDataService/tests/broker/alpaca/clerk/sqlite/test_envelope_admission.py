@@ -106,7 +106,7 @@ def test_a_market_enter_beyond_cash_is_refused_and_nothing_is_written(
     with pytest.raises(AdmissionBlockedError) as exc_info:
         _accept(envelope_repo, sid, run_id, decision_id="d1", leg=_leg(quantity=1_001), envelope=_gate())
     assert _refusal(exc_info) == LIVE_ENVELOPE_CASH_EXCEEDED
-    assert "100100.01 USD" in (exc_info.value.decision.why or "")
+    assert "The entry needs $100,100.01 including its fee provision." in (exc_info.value.decision.why or "")
     assert envelope_repo.control_meta_snapshot().control_revision == before
     assert _order_claims(envelope_repo) == 0
 
@@ -135,7 +135,7 @@ def test_the_entry_requirement_includes_the_fee_provision(
     with pytest.raises(AdmissionBlockedError) as exc_info:
         _accept(envelope_repo, sid, run_id, decision_id="d1", leg=_leg(quantity=100), envelope=_gate(cash=10_000.0))
     assert _refusal(exc_info) == LIVE_ENVELOPE_CASH_EXCEEDED
-    assert "10000.01 USD" in (exc_info.value.decision.why or "")
+    assert "The entry needs $10,000.01 including its fee provision." in (exc_info.value.decision.why or "")
     assert _accept(
         envelope_repo, sid, run_id, decision_id="d2", leg=_leg(quantity=100), envelope=_gate(cash=10_000.01)
     ).created
@@ -153,7 +153,7 @@ def test_two_instances_cannot_spend_the_same_cash(
     with pytest.raises(AdmissionBlockedError) as exc_info:
         _accept(envelope_repo, b, run_b, decision_id="d2", leg=_leg(quantity=6), envelope=after_fall)
     assert _refusal(exc_info) == LIVE_ENVELOPE_CASH_EXCEEDED
-    assert "the account can fund 499.99 USD for this deployment" in (exc_info.value.decision.why or "")
+    assert "the account can fund only $499.99 after protecting other positions" in (exc_info.value.decision.why or "")
     # 4 shares need 400.01 of the 499.99 left.
     _accept(envelope_repo, b, run_b, decision_id="d3", leg=_leg(quantity=4), envelope=after_fall)
 
