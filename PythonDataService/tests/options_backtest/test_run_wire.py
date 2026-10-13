@@ -351,7 +351,7 @@ def test_capital_evidence_the_cash_ladder_and_the_stamps_are_sent_as_exact_strin
     ]
     assert ladder[1].capital_evidence == capital
     assert figures.stamps == wire.OptionsBacktestRunStampsResponse(
-        replay_rules_version=1,
+        replay_rules_version=2,
         requirement_rule="alpaca_covered_positions",
         requirement_rule_read_at_ms=1_791_777_600_000,
     )

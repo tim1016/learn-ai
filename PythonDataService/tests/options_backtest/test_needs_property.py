@@ -22,6 +22,8 @@ from decimal import Decimal
 from functools import cache
 from typing import Any
 
+import pytest
+
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.options.contract import OptionContract
 from app.options_backtest.market import MinuteBar, Picked, PickRefused
@@ -35,8 +37,11 @@ from tests.options_backtest._market import after_open, before_close
 from tests.options_backtest._run_data import HALF_DAY, D, close_ms, listing_on
 
 SEEDS = range(500)
-# Setups that sell (#3107), with seeds of their own so that their premiums are not those of the first family.
+# Setups that sell (#3107), with seeds of their own so that their premiums are not those of the first family. Every pull
+# request runs a sample of them: the three seeds that between them reach every case the checks below count (chosen
+# again and again as the seed that adds the most cases not yet reached) and every tenth. All 200 run in the daily run.
 SELLING_SEEDS = range(10_000, 10_200)
+SELLING_SAMPLE = tuple(sorted({10_004, 10_022, 10_090, *range(10_000, 10_200, 10)}))
 SLIPPAGES = ("0", "0.3", "1", "5")
 # A Wednesday: this week's expiry is that Friday and a week's is the Wednesday after, all of them listed.
 # One seed in six is the half day instead (it closes 180 minutes early), where a window counted from the close
@@ -278,9 +283,8 @@ def _check_one_seed(seed: int, seen: _Seen, *, selling: bool = False) -> None:
                 for each in setup_at_zero.legs
                 if each.side == "sell" and each.stop_loss is None and each.reentry_on_stop is not None
             }
-            seen.a_sold_leg_came_back_by_its_protection_alone += (
-                setup_at_zero.square_off == "partial"
-                and any(trade.leg_id in by_protection_alone and trade.entry_number > 0 for trade in outcome.trades)
+            seen.a_sold_leg_came_back_by_its_protection_alone += setup_at_zero.square_off == "partial" and any(
+                trade.leg_id in by_protection_alone and trade.entry_number > 0 for trade in outcome.trades
             )
     missing = market.asked - needs.contracts
     assert not missing, f"{where}: the replay asked for {sorted(c.occ_symbol for c in missing)} which were not needed"
@@ -316,9 +320,9 @@ def _all_seeds() -> _Seen:
 
 
 @cache
-def _all_selling_seeds() -> _Seen:
+def _selling_sessions(seeds: tuple[int, ...]) -> _Seen:
     seen = _Seen()
-    for seed in SELLING_SEEDS:
+    for seed in seeds:
         _check_one_seed(seed, seen, selling=True)
     return seen
 
@@ -339,14 +343,29 @@ def test_the_random_sessions_reach_the_cases_that_make_a_set_too_small() -> None
     assert seen.a_re_entry_picked_a_fresh_contract >= 50
 
 
-def test_no_replay_of_a_setup_that_sells_reads_a_contract_that_was_not_needed() -> None:
+def test_no_replay_of_a_sample_of_setups_that_sell_reads_a_contract_that_was_not_needed() -> None:
     # The same proof for setups with sold legs (#3107): a sold leg that re-enters, or is closed with its protection and
     # then re-enters, picks afresh at a later minute, and what it picks must be in what the session needs.
-    assert _all_selling_seeds().sessions == len(SELLING_SEEDS)
+    assert _selling_sessions(SELLING_SAMPLE).sessions == len(SELLING_SAMPLE)
 
 
-def test_the_random_sessions_that_sell_reach_the_closes_and_the_re_entries_that_make_a_set_too_small() -> None:
-    seen = _all_selling_seeds()
+def test_the_sample_of_sessions_that_sell_reaches_the_closes_and_the_re_entries_that_make_a_set_too_small() -> None:
+    seen = _selling_sessions(SELLING_SAMPLE)
+    assert seen.traded >= 10
+    assert seen.re_entries >= 5
+    assert seen.a_re_entry_picked_a_fresh_contract >= 8
+    assert seen.closed_with_its_protection >= 2
+    assert seen.a_sold_leg_came_back_by_its_protection_alone >= 1
+
+
+@pytest.mark.slow  # all 200 seeds: this runs in the daily run, and every pull request runs the sample above
+def test_no_replay_over_many_random_setups_that_sell_reads_a_contract_that_was_not_needed() -> None:
+    assert _selling_sessions(tuple(SELLING_SEEDS)).sessions == len(SELLING_SEEDS)
+
+
+@pytest.mark.slow  # all 200 seeds: runs in the daily run
+def test_the_random_setups_that_sell_reach_the_closes_and_the_re_entries_that_make_a_set_too_small() -> None:
+    seen = _selling_sessions(tuple(SELLING_SEEDS))
     assert seen.traded >= 120
     assert seen.re_entries >= 60
     assert seen.a_re_entry_picked_a_fresh_contract >= 60

@@ -22,7 +22,12 @@ from datetime import date
 from app.utils.session_anchors import et_midnight_ms
 
 # 1: bought legs and covered sold legs, by the clock (ADR 0078 as amended by #3104, #3105, #3106 and #3108).
-REPLAY_RULES_VERSION = 1
+# 2: a sold leg has its own stop, a stop on a bought leg closes the sold legs it protects with it, and a sold leg
+#    re-enters (ADR 0078 as amended by #3107). A setup that sells and carries a stop or a re-entry rule was refused
+#    under 1, so no run made under 1 would have another figure; the version says which rules a result was made under,
+#    and a setup that sells with stops now trades them, with closes (and so cash, collateral and capital evidence)
+#    that version 1 never made.
+REPLAY_RULES_VERSION = 2
 # The name of the requirement rule, as a result says it.
 REQUIREMENT_RULE = "alpaca_covered_positions"
 # New York midnight of the day the rule's page was read, as every date-anchored value is an instant.

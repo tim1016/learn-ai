@@ -24,7 +24,7 @@ from app.options_backtest.capital_evidence import (
     CapitalSession,
 )
 from app.options_backtest.cash_ladder import DEFAULT_CASH_LADDER, ladder_levels
-from app.options_backtest.results import SessionStatus
+from app.options_backtest.results import ExitReason, SessionStatus
 from app.options_backtest.run import run_sessions
 from app.options_backtest.run_stamps import RunStamps, current_stamps
 from app.options_backtest.setup import MS_PER_MINUTE, FeePolicy, OptionsBacktestSetup
@@ -48,7 +48,7 @@ from tests.options_backtest._run_data import (
 )
 
 D = Decimal
-CALL_500 = ("call", 500)
+CALL_500, CALL_505 = ("call", 500), ("call", 505)
 PUT_495, PUT_500 = ("put", 495), ("put", 500)
 
 
@@ -189,6 +189,99 @@ def test_a_buy_back_alone_that_cost_more_than_the_free_cash_before_it_is_counted
     assert (evidence.sessions_tested, evidence.sessions_funded_continuously) == (1, 1)
     assert evidence.least_free_cash_usd == least_free
     assert result.sessions[0].status is SessionStatus.TRADED
+
+
+def test_a_stop_on_a_sold_leg_whose_buy_back_is_unfunded_ends_the_evidence_at_that_close() -> None:
+    # The spread of the setup above with a stop of 25 percent on the sold put, from 500.00 of cash. Minute 6: the 495
+    # put is bought at 1.00 and the 500 put sold at 2.20 (500.00 -> 620.00, 500.00 pledged, 120.00 free). The stop sits
+    # at 2.20 x 1.25 = 2.75, and minute 10 closes at 2.80, so the stop decides a buy-back, which fills at the open of
+    # minute 11 at 8.00: 620.00 - 800.00 = -180.00. The bought put alone pledges nothing, and it is sold at the exit time.
+    day = Day(
+        underlying=steady("500.00"),
+        options={
+            PUT_495: flat("1.00", 5, 61),
+            PUT_500: {**flat("2.20", 5, 9), 10: ("2.20", "2.80"), **flat("8.00", 11, 61)},
+        },
+    )
+    stopped = changed(
+        setup(
+            {**leg("long", "put"), "strike": {"kind": "atm_offset", "steps": -1}},
+            leg("short", "put", side="sell", stop=("percent", "25")),
+        ),
+        starting_cash_usd="500",
+    )
+
+    result = run_sessions(stopped, [WED], fake_data({WED: day}))
+
+    assert [(trade.leg_id, trade.exit_reason) for trade in result.sessions[0].outcome.trades] == [
+        ("long", ExitReason.EXIT_TIME),
+        ("short", ExitReason.STOP),
+    ]
+    assert result.summary.capital_evidence == CapitalEvidence(
+        sessions_tested=1,
+        sessions_funded_continuously=0,
+        ended_by=CapitalInvalidEvent(CapitalInvalidKind.UNFUNDED_CLOSE, OPEN_MS[WED], close_ms(WED, 11), D("-180.00")),
+        most_collateral_held_usd=D("500.00"),
+        # The opening only, which came before the event: 500.00 - 120.00.
+        cash_needed_usd=D("380.00"),
+        cash_needed_is_incomplete=False,
+        least_free_cash_usd=D("-180.00"),
+        largest_assignment_obligation_usd=D("50000"),
+        # The buy-back cost 800.00 against 120.00 free, with the bought put still held.
+        closes_relied_on_own_relief=1,
+    )
+    # The totals keep the session: (2.20 - 8.00) x 100 = -580.00 on the sold put, and the bought put made nothing.
+    assert result.summary.net_profit_usd == D("-580.00")
+
+
+def test_a_stop_on_a_bought_leg_whose_protection_close_is_unfunded_ends_the_evidence_at_that_close() -> None:
+    # A put spread (495 bought with a stop, 500 sold) beside a call spread (500 sold, 505 bought), from 500.00 of cash.
+    # Minute 6: -100.00 + 220.00 + 250.00 - 100.00 = +270.00, so 770.00 with 500.00 pledged (the wider of two spreads
+    # of 5, since only one side of them can lose). The bought put's stop sits at 0.75 and minute 10 closes at 0.70: the
+    # sold put goes with it, and at the open of minute 11 it is bought back at 8.00 and the bought put sold at 0.65:
+    # 770.00 - 800.00 + 65.00 = 35.00, against the 500.00 the call spread still pledges.
+    day = Day(
+        underlying=steady("500.00"),
+        options={
+            PUT_495: {**flat("1.00", 5, 9), 10: ("1.00", "0.70"), **flat("0.65", 11, 61)},
+            PUT_500: {**flat("2.20", 5, 10), **flat("8.00", 11, 61)},
+            CALL_500: flat("2.50", 5, 61),
+            CALL_505: flat("1.00", 5, 61),
+        },
+    )
+    written = changed(
+        setup(
+            {**leg("long_put", "put", stop=("percent", "25")), "strike": {"kind": "atm_offset", "steps": -1}},
+            leg("short_put", "put", side="sell"),
+            {**leg("long_call", "call"), "strike": {"kind": "atm_offset", "steps": 1}},
+            leg("short_call", "call", side="sell"),
+        ),
+        starting_cash_usd="500",
+    )
+
+    result = run_sessions(written, [WED], fake_data({WED: day}))
+
+    assert [(trade.leg_id, trade.exit_reason) for trade in result.sessions[0].outcome.trades] == [
+        ("long_put", ExitReason.STOP),
+        ("short_put", ExitReason.CLOSED_WITH_ITS_PROTECTION),
+        ("long_call", ExitReason.EXIT_TIME),
+        ("short_call", ExitReason.EXIT_TIME),
+    ]
+    assert result.summary.capital_evidence == CapitalEvidence(
+        sessions_tested=1,
+        sessions_funded_continuously=0,
+        ended_by=CapitalInvalidEvent(CapitalInvalidKind.UNFUNDED_CLOSE, OPEN_MS[WED], close_ms(WED, 11), D("-465.00")),
+        most_collateral_held_usd=D("500.00"),
+        # The opening, before the event: 500.00 - 270.00.
+        cash_needed_usd=D("230.00"),
+        cash_needed_is_incomplete=False,
+        # 35.00 less the 500.00 the call spread pledges.
+        least_free_cash_usd=D("-465.00"),
+        # The sold put and the sold call, 500 x 100 each, before the group.
+        largest_assignment_obligation_usd=D("100000"),
+        # The bought put went in the same group: no bought put stayed held, so the buy-back was not under cover.
+        closes_relied_on_own_relief=0,
+    )
 
 
 def test_a_bought_options_run_shows_no_collateral_and_a_cash_need_equal_to_what_it_paid_fees_included() -> None:
@@ -490,7 +583,7 @@ def test_a_new_run_is_stamped_with_the_version_of_the_rules_and_the_name_and_dat
     result = a_selling_run()
 
     assert result.summary.stamps == RunStamps(
-        replay_rules_version=1,
+        replay_rules_version=2,
         requirement_rule="alpaca_covered_positions",
         # New York midnight of 2026-10-12, when Alpaca's page was read: EDT, so 04:00 UTC, 20,738 days after the epoch.
         requirement_rule_read_at_ms=1_791_777_600_000,

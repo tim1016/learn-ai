@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import random
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -47,7 +48,11 @@ from tests.options_backtest._market import (
 )
 
 SEEDS = range(150)
+# The sessions with stops (#3107). Every pull request runs a sample of them: the three seeds that between them reach
+# every hard case (taken from the 250 by choosing, again and again, the seed that adds the most cases not yet reached),
+# and every tenth. The other seeds are the same test marked slow, which the daily run runs.
 RULE_SEEDS = range(250)
+RULE_SAMPLE = tuple(sorted({1, 96, 161, *range(0, 250, 10)}))
 SOON, LATER = date(2026, 10, 9), date(2026, 10, 16)
 STRIKES = (490, 495, 500, 505, 510)
 LAST_MINUTE_OF_BARS = 90
@@ -365,7 +370,13 @@ def _the_stops_and_protections_are_what_they_say(outcome: SessionOutcome, writte
         assert taken <= allowed, f"seed {seed}, leg {each.leg_id}: {taken} entries when {allowed} are allowed"
 
 
-@pytest.mark.parametrize("seed", RULE_SEEDS)
+def _the_sample_every_pr_and_the_rest_daily(seeds: Iterable[int], sample: Iterable[int]) -> list[Any]:
+    """The seeds as parameters: those of the sample run in every pull request, the others are marked slow."""
+    in_every_pr = set(sample)
+    return [seed if seed in in_every_pr else pytest.param(seed, marks=pytest.mark.slow) for seed in seeds]
+
+
+@pytest.mark.parametrize("seed", _the_sample_every_pr_and_the_rest_daily(RULE_SEEDS, RULE_SAMPLE))
 def test_whatever_a_generated_session_with_stops_and_re_entries_does_it_is_never_uncovered_and_is_what_was_held(
     seed: int,
 ) -> None:
@@ -377,62 +388,96 @@ def test_whatever_a_generated_session_with_stops_and_re_entries_does_it_is_never
     _the_stops_and_protections_are_what_they_say(outcome, scene.written, seed)
 
 
-def _what_the_sessions_with_stops_reach() -> dict[str, int]:
-    """How many of the sessions reach each hard case."""
-    reached: dict[str, int] = defaultdict(int)
-    for seed in RULE_SEEDS:
-        scene = _a_scene_with_stops(seed)
-        outcome = replay(scene.written, scene.market, cash=scene.cash, fee_for=fee_per_contract(scene.fee))
-        sold = {each.leg_id for each in scene.written.legs if each.side == "sell"}
-        by_leg = {each.leg_id: each for each in scene.written.legs}
-        stops = [event for event in outcome.events if event.kind is EventKind.STOP_HIT]
-        for kind in ("stop_hit", "closed_with_its_protection", "re_entry_earned", "re_entry_blocked_by_cutoff"):
-            reached[kind] += any(event.kind.value == kind for event in outcome.events)
-        reached["a sold leg stopped by its own stop"] += any(event.leg_id in sold for event in stops)
-        reached["a sold leg's re-entry filled"] += any(t.is_sold_leg and t.entry_number > 0 for t in outcome.trades)
-        reached["a sold leg's re-entry refused for cover"] += any(
+def _hard_cases_reached_by(seed: int) -> set[str]:
+    """Which of the hard cases the session of this seed reaches."""
+    scene = _a_scene_with_stops(seed)
+    outcome = replay(scene.written, scene.market, cash=scene.cash, fee_for=fee_per_contract(scene.fee))
+    sold = {each.leg_id for each in scene.written.legs if each.side == "sell"}
+    by_leg = {each.leg_id: each for each in scene.written.legs}
+    stops = [event for event in outcome.events if event.kind is EventKind.STOP_HIT]
+    reached = {
+        kind
+        for kind in ("stop_hit", "closed_with_its_protection", "re_entry_earned", "re_entry_blocked_by_cutoff")
+        if any(event.kind.value == kind for event in outcome.events)
+    }
+    cases = {
+        "a sold leg stopped by its own stop": any(event.leg_id in sold for event in stops),
+        "a sold leg's re-entry filled": any(t.is_sold_leg and t.entry_number > 0 for t in outcome.trades),
+        "a sold leg's re-entry refused for cover": any(
             event.kind is EventKind.ENTRY_REFUSED_FOR_COVER and event.leg_id in sold and event.entry_number > 0
             for event in outcome.events
-        )
-        reached["a cutoff blocked a sold leg"] += any(
+        ),
+        "a cutoff blocked a sold leg": any(
             event.kind is EventKind.RE_ENTRY_BLOCKED_BY_CUTOFF and event.leg_id in sold for event in outcome.events
-        )
-        reached["a bought and a sold leg stopped in one minute"] += any(
+        ),
+        "a bought and a sold leg stopped in one minute": any(
             {event.leg_id in sold for event in stops if event.at_ms == minute} == {True, False}
             for minute in {event.at_ms for event in stops}
-        )
-        reached["a close that waited for a bar"] += any(
+        ),
+        "a close that waited for a bar": any(
             isinstance(t.exit, Fill) and t.exit.bar_close_ms - t.exit_decided_at_ms > 60_000 for t in outcome.trades
-        )
-        reached["a protection that waited for a bar"] += any(
+        ),
+        "a protection that waited for a bar": any(
             t.exit_reason is ExitReason.CLOSED_WITH_ITS_PROTECTION
             and isinstance(t.exit, Fill)
             and t.exit.bar_close_ms - t.exit_decided_at_ms > 60_000
             for t in outcome.trades
-        )
-        reached["a fill far from the level the stop was read at"] += any(
+        ),
+        "a fill far from the level the stop was read at": any(
             t.exit_reason is ExitReason.STOP
             and t.stop_level is not None
             and abs(t.exit_price - t.stop_level) >= t.stop_level / 2
             for t in outcome.trades
-        )
-        reached["sold and bought legs of different contract counts"] += any(
+        ),
+        "sold and bought legs of different contract counts": any(
             each.side == "sell"
             and any(
                 other.side == "buy" and other.right == each.right and other.contracts != each.contracts
                 for other in by_leg.values()
             )
             for each in by_leg.values()
-        )
-        reached["a complete square-off"] += scene.written.square_off == "complete" and any(
-            t.exit_reason is ExitReason.SQUARE_OFF for t in outcome.trades
-        )
+        ),
+        "a complete square-off": scene.written.square_off == "complete"
+        and any(t.exit_reason is ExitReason.SQUARE_OFF for t in outcome.trades),
+    }
+    return reached | {case for case, reached_it in cases.items() if reached_it}
+
+
+def _what_the_sessions_with_stops_reach(seeds: Iterable[int]) -> dict[str, int]:
+    """How many of the sessions of these seeds reach each hard case."""
+    reached: dict[str, int] = defaultdict(int)
+    for seed in seeds:
+        for case in _hard_cases_reached_by(seed):
+            reached[case] += 1
     return dict(reached)
 
 
-# The least number of the RULE_SEEDS sessions that must reach each case, a little under what they reach. A change to
-# the generator that stopped it reaching one would leave the invariants above passing and proving less.
-_REACHED_AT_LEAST: dict[str, int] = {
+def _short_of(reached: dict[str, int], floors: dict[str, int]) -> dict[str, tuple[int, int]]:
+    """Each case that fewer sessions reached than its floor, as ``(reached, floor)``."""
+    return {case: (reached.get(case, 0), floor) for case, floor in floors.items() if reached.get(case, 0) < floor}
+
+
+# The least number of the sample's sessions that must reach each case, a little under what they reach. A change to the
+# generator that stopped it reaching one would leave the invariants above passing and proving less.
+_THE_SAMPLE_REACHES_AT_LEAST: dict[str, int] = {
+    "stop_hit": 10,
+    "closed_with_its_protection": 3,
+    "re_entry_earned": 6,
+    "re_entry_blocked_by_cutoff": 2,
+    "a sold leg stopped by its own stop": 3,
+    "a sold leg's re-entry filled": 1,
+    "a sold leg's re-entry refused for cover": 2,
+    "a cutoff blocked a sold leg": 2,
+    "a bought and a sold leg stopped in one minute": 1,
+    "a close that waited for a bar": 8,
+    "a protection that waited for a bar": 2,
+    "a fill far from the level the stop was read at": 3,
+    "sold and bought legs of different contract counts": 12,
+    "a complete square-off": 3,
+}
+
+# The same for all 250 seeds, which the daily run runs.
+_THE_FAMILY_REACHES_AT_LEAST: dict[str, int] = {
     "stop_hit": 90,
     "closed_with_its_protection": 20,
     "re_entry_earned": 50,
@@ -450,10 +495,16 @@ _REACHED_AT_LEAST: dict[str, int] = {
 }
 
 
-def test_the_sessions_with_stops_reach_the_hard_cases_they_are_there_for() -> None:
-    reached = _what_the_sessions_with_stops_reach()
+def test_the_sample_of_sessions_with_stops_reaches_the_hard_cases_they_are_there_for() -> None:
+    reached = _what_the_sessions_with_stops_reach(RULE_SAMPLE)
 
-    short = {
-        case: (reached.get(case, 0), floor) for case, floor in _REACHED_AT_LEAST.items() if reached.get(case, 0) < floor
-    }
+    short = _short_of(reached, _THE_SAMPLE_REACHES_AT_LEAST)
+    assert not short, f"the sample reached fewer than it must (reached, floor): {short}; all: {reached}"
+
+
+@pytest.mark.slow  # all 250 seeds: this runs in the daily run, and every pull request runs the sample above
+def test_the_whole_family_of_sessions_with_stops_reaches_the_hard_cases_they_are_there_for() -> None:
+    reached = _what_the_sessions_with_stops_reach(RULE_SEEDS)
+
+    short = _short_of(reached, _THE_FAMILY_REACHES_AT_LEAST)
     assert not short, f"sessions reached fewer than they must (reached, floor): {short}; all: {reached}"
