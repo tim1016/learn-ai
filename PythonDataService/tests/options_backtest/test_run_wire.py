@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from typing import get_args, get_type_hints
@@ -22,6 +23,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.lean_sidecar.trading_calendar import session_window_for_date
+from app.options_backtest.capital_evidence import CapitalInvalidKind
 from app.options_backtest.data_check import (
     NOT_YET_KNOWN,
     ContractNeeds,
@@ -47,6 +49,7 @@ from app.options_backtest.setup import FeePolicy
 from app.options_backtest.statistics import Drawdown, Ratio
 from app.research.persistence.schema import DDL_V20
 from app.schemas import options_backtest_runs as wire
+from tests.options_backtest._a_selling_run import a_selling_run
 from tests.options_backtest._run_data import fake_data
 from tests.options_backtest.test_service import SESSION_OF_THE_RANGE, THU, TUE, the_scene, the_setup
 
@@ -114,6 +117,7 @@ def _stored(result: RunResult, *, status: str = "complete") -> StoredRun:
             list(get_args(get_type_hints(Drawdown)["measured_at"])),
         ),
         (wire.RunStatusWord, list(get_args(PresentedStatus))),
+        (wire.CapitalInvalidKindWord, [member.value for member in CapitalInvalidKind]),
     ],
 )
 def test_each_closed_set_on_the_wire_is_exactly_the_members_of_the_enum_it_comes_from(
@@ -314,6 +318,68 @@ def test_the_ladder_goes_lowest_first_and_the_tolerance_says_a_loss_at_no_slippa
         None,
         "0",
         False,
+    )
+
+
+def test_capital_evidence_the_cash_ladder_and_the_stamps_are_sent_as_exact_strings_apart_from_every_total() -> None:
+    selling = a_selling_run()
+
+    figures = wire.OptionsBacktestRunDetailResponse.from_stored(_stored(selling)).figures
+
+    assert figures is not None
+    capital = figures.capital_evidence
+    assert capital is not None
+    # The spread of the selling run: Wednesday closes, Thursday ends with both legs marked.
+    assert (capital.sessions_tested, capital.sessions_funded_continuously) == (2, 1)
+    assert capital.ended_by == wire.OptionsBacktestCapitalInvalidEventResponse(
+        kind="position_marked", session_open_ms=selling.sessions[1].session_open_ms
+    )
+    assert (capital.most_collateral_held_usd, capital.cash_needed_usd, capital.least_free_cash_usd) == (
+        "500.00",
+        "380.00",
+        "9620.00",
+    )
+    assert Decimal(capital.largest_assignment_obligation_usd) == D("50000")
+    assert (capital.cash_needed_is_incomplete, capital.closes_relied_on_own_relief) == (False, 0)
+    ladder = figures.cash_ladder
+    assert ladder is not None
+    assert [(level.multiple, Decimal(level.starting_cash_usd), level.is_setups_own) for level in ladder] == [
+        ("0.5", D("5000"), False),
+        ("1", D("10000"), True),
+        ("2", D("20000"), False),
+        ("4", D("40000"), False),
+    ]
+    assert ladder[1].capital_evidence == capital
+    assert figures.stamps == wire.OptionsBacktestRunStampsResponse(
+        replay_rules_version=1,
+        requirement_rule="alpaca_covered_positions",
+        requirement_rule_read_at_ms=1_791_777_600_000,
+    )
+    assert figures.net_profit_usd == "10.00"
+
+
+def test_a_run_stored_before_capital_evidence_is_sent_with_each_of_the_three_as_not_recorded_and_its_figures_as_they_were(
+    result: RunResult,
+) -> None:
+    recorded = _stored(result)
+    old = StoredRun(
+        record=recorded.record,
+        setup=recorded.setup,
+        figures=RunFigures(
+            replace(result.summary, capital_evidence=None, cash_ladder=None, stamps=None),
+            result.slippage,
+            result.slippage_tolerance,
+        ),
+    )
+
+    now = wire.OptionsBacktestRunDetailResponse.from_stored(recorded).figures
+    then = wire.OptionsBacktestRunDetailResponse.from_stored(old).figures
+
+    assert now is not None and then is not None
+    assert (then.capital_evidence, then.cash_ladder, then.stamps) == (None, None, None)
+    assert now.capital_evidence is not None and now.cash_ladder is not None and now.stamps is not None
+    assert then.model_dump(exclude={"capital_evidence", "cash_ladder", "stamps"}) == now.model_dump(
+        exclude={"capital_evidence", "cash_ladder", "stamps"}
     )
 
 

@@ -4,6 +4,8 @@ import type { RunDetail } from '../options-backtest.types';
 import type { DayRequest } from '../run-detail/day-request';
 import { SessionViewComponent } from '../run-detail/session/session-view.component';
 import { RunTradesComponent } from '../run-detail/trades/run-trades.component';
+import { CapitalEvidenceComponent } from './capital-evidence.component';
+import { CashLadderComponent } from './cash-ladder.component';
 import { RunBannerComponent } from './run-banner.component';
 import { RunDayTableComponent } from './run-day-table.component';
 import { RunDrawdownComponent } from './run-drawdown.component';
@@ -14,9 +16,10 @@ import { SlippageToleranceComponent } from './slippage-tolerance.component';
 
 /**
  * The result of a complete run, top to bottom: the banner that says how the
- * fills were made, the headline figures, the largest falls, the sessions and
- * what did not trade, the slippage tolerance, and the day and month tables.
- * It shows the server's figures and works out none.
+ * fills were made, the headline figures, the largest falls, the capital
+ * evidence, the sessions and what did not trade, the slippage tolerance, the
+ * cash ladder, and the day and month tables. It shows the server's figures and
+ * works out none.
  */
 @Component({
   selector: 'app-options-backtest-run-result',
@@ -24,8 +27,10 @@ import { SlippageToleranceComponent } from './slippage-tolerance.component';
     RunBannerComponent,
     RunHeadlineComponent,
     RunDrawdownComponent,
+    CapitalEvidenceComponent,
     RunSessionsComponent,
     SlippageToleranceComponent,
+    CashLadderComponent,
     RunDayTableComponent,
     RunMonthTableComponent,
     RunTradesComponent,

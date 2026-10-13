@@ -22736,6 +22736,68 @@ export interface components {
             unit_label: string;
         };
         /**
+         * OptionsBacktestCapitalEvidenceResponse
+         * @description How far the cash provably carried a run, and each figure of its money on its own.
+         *
+         *     None of the five figures stands in for another, and none is the drawdown, which is marked equity's at the ends of
+         *     sessions. The totals keep every session whatever this says.
+         */
+        OptionsBacktestCapitalEvidenceResponse: {
+            /** Cash Needed Is Incomplete */
+            cash_needed_is_incomplete: boolean;
+            /** Cash Needed Usd */
+            cash_needed_usd: string;
+            /** Closes Relied On Own Relief */
+            closes_relied_on_own_relief: number;
+            ended_by?: components["schemas"]["OptionsBacktestCapitalInvalidEventResponse"] | null;
+            /** Largest Assignment Obligation Usd */
+            largest_assignment_obligation_usd: string;
+            /** Least Free Cash Usd */
+            least_free_cash_usd: string;
+            /** Most Collateral Held Usd */
+            most_collateral_held_usd: string;
+            /** Sessions Funded Continuously */
+            sessions_funded_continuously: number;
+            /** Sessions Tested */
+            sessions_tested: number;
+        };
+        /**
+         * OptionsBacktestCapitalInvalidEventResponse
+         * @description The first event that ended capital evidence, named by its session and, for a close, its minute.
+         */
+        OptionsBacktestCapitalInvalidEventResponse: {
+            /** At Ms */
+            at_ms?: number | null;
+            /** Free Cash After Usd */
+            free_cash_after_usd?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "unfunded_close" | "position_marked";
+            /** Session Open Ms */
+            session_open_ms: number;
+        };
+        /**
+         * OptionsBacktestCashLevelResponse
+         * @description The whole run replayed at one starting cash. No level is called safe.
+         */
+        OptionsBacktestCashLevelResponse: {
+            capital_evidence: components["schemas"]["OptionsBacktestCapitalEvidenceResponse"];
+            /** Entries Filled */
+            entries_filled: number;
+            /** Entries Refused For Cash */
+            entries_refused_for_cash: number;
+            /** Is Setups Own */
+            is_setups_own: boolean;
+            /** Multiple */
+            multiple: string;
+            /** Net Profit Usd */
+            net_profit_usd: string;
+            /** Starting Cash Usd */
+            starting_cash_usd: string;
+        };
+        /**
          * OptionsBacktestCheckDataRequest
          * @description A setup and the half-open range ``[start_ms, end_ms)`` to check: New York midnight of the first date to the
          *     New York midnight after the last, as Grid Search's window is.
@@ -23286,6 +23348,9 @@ export interface components {
             by_day: components["schemas"]["OptionsBacktestDayRowResponse"][];
             /** By Month */
             by_month: components["schemas"]["OptionsBacktestMonthRowResponse"][];
+            capital_evidence?: components["schemas"]["OptionsBacktestCapitalEvidenceResponse"] | null;
+            /** Cash Ladder */
+            cash_ladder?: components["schemas"]["OptionsBacktestCashLevelResponse"][] | null;
             daily_win_rate?: components["schemas"]["OptionsBacktestRateResponse"] | null;
             drawdown_by_dollars?: components["schemas"]["OptionsBacktestDrawdownResponse"] | null;
             drawdown_by_fraction?: components["schemas"]["OptionsBacktestDrawdownResponse"] | null;
@@ -23334,6 +23399,7 @@ export interface components {
             skipped_by_reason: components["schemas"]["OptionsBacktestSkipCountResponse"][];
             /** Slippage Paid Usd */
             slippage_paid_usd: string;
+            stamps?: components["schemas"]["OptionsBacktestRunStampsResponse"] | null;
             /** Starting Cash Usd */
             starting_cash_usd: string;
             /** Total Fees Usd */
@@ -23395,6 +23461,18 @@ export interface components {
             status: "running" | "complete" | "failed" | "cancelled" | "interrupted";
             /** Underlying */
             underlying: string;
+        };
+        /**
+         * OptionsBacktestRunStampsResponse
+         * @description The rules a run was made under: today's, and no evidence of what a broker required on a session's date.
+         */
+        OptionsBacktestRunStampsResponse: {
+            /** Replay Rules Version */
+            replay_rules_version: number;
+            /** Requirement Rule */
+            requirement_rule: string;
+            /** Requirement Rule Read At Ms */
+            requirement_rule_read_at_ms: number;
         };
         /**
          * OptionsBacktestRunTotalsResponse

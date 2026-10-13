@@ -102,6 +102,10 @@ def _the_same_all_the_way_down(saved: Any, original: Any, path: str = "result") 
         assert str(saved) == str(original), f"{path}: reads {saved!s}, written {original!s}"
     elif is_dataclass(original):
         for field in fields(original):
+            if not field.compare:
+                # ``SessionOutcome.money_steps`` is not stored with a run (#3106), so a run read back has none; it is
+                # left out of equality and out of this walk, and everything else is held as strictly as before.
+                continue
             _the_same_all_the_way_down(
                 getattr(saved, field.name), getattr(original, field.name), f"{path}.{field.name}"
             )
@@ -120,6 +124,38 @@ def _the_same_all_the_way_down(saved: Any, original: Any, path: str = "result") 
         assert isinstance(original, Enum | str | int | bool | date | type(None)), (
             f"{path}: unexpected {type(original).__name__}"
         )
+
+
+def _as_read_back(saved: RunResult) -> RunResult:
+    """What ``read_result`` rebuilds of a run: every session without its money steps, which a run does not store."""
+    return replace(
+        saved,
+        sessions=tuple(replace(s, outcome=replace(s.outcome, money_steps=())) for s in saved.sessions),
+    )
+
+
+@pytest.mark.parametrize("make", [a_busy_run, a_selling_run])
+def test_a_run_read_back_without_its_money_steps_passes_the_walk_and_a_changed_digit_still_fails_it(
+    make: Callable[[], RunResult],
+) -> None:
+    # No database is needed: the walk is held to the shape a read gives back, with the steps a replay holds left off.
+    # The walk runs on every pull request, so the two tests that use it against a database cannot fail here unseen.
+    saved = make()
+    assert any(session.outcome.money_steps for session in saved.sessions), (
+        "the run has money steps, or this proves less"
+    )
+    read = _as_read_back(saved)
+    assert read == saved
+
+    _the_same_all_the_way_down(read, saved)
+
+    first, *rest = read.sessions
+    trade, *later = first.outcome.trades
+    off_by_a_cent = replace(
+        first, outcome=replace(first.outcome, trades=(replace(trade, pnl_usd=trade.pnl_usd + D("0.01")), *later))
+    )
+    with pytest.raises(AssertionError, match="pnl_usd"):
+        _the_same_all_the_way_down(replace(read, sessions=(off_by_a_cent, *rest)), saved)
 
 
 # ── The exact round trip ─────────────────────────────────────────────────

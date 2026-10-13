@@ -1,5 +1,17 @@
 import { sessionOpenMs } from '../../../shared/date-picker/testing/fake-trading-calendar';
-import type { DayRow, MonthRow, RunBanner, RunDetail, RunFigures, RunListItem, SlippagePoint, ServedSetup } from '../options-backtest.types';
+import type {
+  CapitalEvidence,
+  CashLevel,
+  DayRow,
+  MonthRow,
+  RunBanner,
+  RunDetail,
+  RunFigures,
+  RunListItem,
+  RunStamps,
+  ServedSetup,
+  SlippagePoint,
+} from '../options-backtest.types';
 import { exampleBody } from './fixtures';
 
 /**
@@ -73,6 +85,69 @@ export const MONTH_ROWS: MonthRow[] = [
   },
 ];
 
+/** The cash carried a run of ten sessions whole: a credit spread 5 wide that needed 380.00 of the cash it had. */
+export function capitalEvidence(changes: Partial<CapitalEvidence> = {}): CapitalEvidence {
+  return {
+    sessions_tested: 10,
+    sessions_funded_continuously: 10,
+    ended_by: null,
+    most_collateral_held_usd: '500.00',
+    cash_needed_usd: '380.00',
+    cash_needed_is_incomplete: false,
+    least_free_cash_usd: '9620.00',
+    largest_assignment_obligation_usd: '50000',
+    closes_relied_on_own_relief: 0,
+    ...changes,
+  };
+}
+
+/** Half the setup's cash, the same, double and four times: the smallest cannot enter, and the others can. */
+export const CASH_LADDER: CashLevel[] = [
+  {
+    multiple: '0.5',
+    starting_cash_usd: '5000.0',
+    is_setups_own: false,
+    entries_filled: 0,
+    entries_refused_for_cash: 24,
+    net_profit_usd: '0',
+    capital_evidence: capitalEvidence({ cash_needed_usd: '0', cash_needed_is_incomplete: true, least_free_cash_usd: '5000.0', most_collateral_held_usd: '0', largest_assignment_obligation_usd: '0' }),
+  },
+  {
+    multiple: '1',
+    starting_cash_usd: '10000',
+    is_setups_own: true,
+    entries_filled: 12,
+    entries_refused_for_cash: 2,
+    net_profit_usd: '1234.56',
+    capital_evidence: capitalEvidence({ cash_needed_is_incomplete: true }),
+  },
+  {
+    multiple: '2',
+    starting_cash_usd: '20000',
+    is_setups_own: false,
+    entries_filled: 14,
+    entries_refused_for_cash: 0,
+    net_profit_usd: '1500.00',
+    capital_evidence: capitalEvidence({ sessions_funded_continuously: 7, ended_by: { kind: 'position_marked', session_open_ms: sessionOpenMs('2026-09-17'), at_ms: null, free_cash_after_usd: null }, cash_needed_usd: '500.00' }),
+  },
+  {
+    multiple: '4',
+    starting_cash_usd: '40000',
+    is_setups_own: false,
+    entries_filled: 14,
+    entries_refused_for_cash: 0,
+    net_profit_usd: '1500.00',
+    capital_evidence: capitalEvidence({ cash_needed_usd: '500.00' }),
+  },
+];
+
+/** New York midnight of 2026-10-12, the day the requirement rule's page was read. */
+export const RUN_STAMPS: RunStamps = {
+  replay_rules_version: 1,
+  requirement_rule: 'alpaca_covered_positions',
+  requirement_rule_read_at_ms: 1_791_777_600_000,
+};
+
 export function figures(changes: Partial<RunFigures> = {}): RunFigures {
   return {
     sessions_tested: 10,
@@ -132,6 +207,9 @@ export function figures(changes: Partial<RunFigures> = {}): RunFigures {
     re_entries_lost: 6,
     by_day: DAY_ROWS,
     by_month: MONTH_ROWS,
+    capital_evidence: capitalEvidence({ cash_needed_is_incomplete: true }),
+    cash_ladder: CASH_LADDER,
+    stamps: RUN_STAMPS,
     ...changes,
   };
 }

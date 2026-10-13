@@ -6,7 +6,8 @@ Reference: the owner's rules in #3030: an incomplete day stays in the totals at 
   survives is read from replays at a ladder of slippage values, not from re-pricing fills.
 Canonical implementation: this file.
 Validated against: tests/options_backtest/test_run_cash.py (the cash carried over sessions), and
-  tests/options_backtest/test_run_slippage.py (the ladder and the figure drawn from it).
+  tests/options_backtest/test_run_slippage.py (the ladder and the figure drawn from it), and
+  tests/options_backtest/test_run_capital.py (the capital evidence of a run and the cash ladder).
 
 A run takes the sessions in date order and reads one at a time: the underlying's day and the listing, then the
 contracts ``session_needs`` names, then the replay, and then it lets go of them. Only a ``SessionResult`` is kept, so
@@ -19,6 +20,13 @@ the same data, with that value's own carried cash. A different slippage moves a 
 starts, and can turn a cash refusal, so re-pricing the fills of one replay would be wrong exactly where it matters.
 The contracts a session can read do not depend on slippage, so one set of loaded days serves every value.
 
+The cash ladder (#3108) is the same idea for starting cash. The run is replayed once more at each level, a multiple of
+the setup's starting cash, at the setup's own slippage and carrying that level's own cash from session to session,
+on the same loaded days. The level equal to the setup's cash is the run itself and is not replayed again. A level
+reports the entries it filled and had refused for cash, its net profit and its capital evidence; none is called safe.
+The run's own capital evidence is the evidence of that level: it is worked at run time from the money steps of each
+replay, never read off a stored run, whose sessions carry none.
+
 Cash and a leg marked. A bought leg marked, not sold, has paid out and not been paid back; the next session starts
 with its mark in cash, and the session's profit counts it at its mark. A sold leg marked, not bought back, has been
 paid and owes its mark: the next session starts with that mark out of its cash. The outcome signs the mark that way
@@ -28,7 +36,7 @@ paid and owes its mark: the next session starts with that mark out of its cash. 
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal, localcontext
 from itertools import pairwise
@@ -36,11 +44,14 @@ from itertools import pairwise
 from app.lean_sidecar.trading_calendar import SessionWindow, expected_sessions, session_window_for_date
 from app.options.contract import OptionContract
 from app.options_backtest import fills
+from app.options_backtest.capital_evidence import CapitalSession, capital_evidence
+from app.options_backtest.cash_ladder import DEFAULT_CASH_LADDER, CashLevel, ladder_levels
 from app.options_backtest.data import RunData
 from app.options_backtest.fees import FeeRateNotPublished, fee_for_policy, unpublished_fee_types
 from app.options_backtest.needs import session_needs
 from app.options_backtest.replay import replay_session
 from app.options_backtest.results import SessionOutcome, SessionStatus
+from app.options_backtest.run_stamps import current_stamps
 from app.options_backtest.session_market import DayMarket, bars_by_close, window_only_market
 from app.options_backtest.session_result import PinnedDay, SessionPins, SessionResult
 from app.options_backtest.setup import OptionsBacktestSetup
@@ -167,6 +178,34 @@ class _Carried:
             self.winning_sessions += pnl > 0
 
 
+@dataclass
+class _CashLevel:
+    """One starting-cash level's run so far: the cash it carries and what it has made, and each session's money."""
+
+    multiple: Decimal
+    starting_cash: Decimal
+    # The level whose cash is the setup's own: its outcomes are the run's own, and it is not replayed again.
+    is_setups_own: bool
+    carried: _Carried
+    sessions: list[CapitalSession] = field(default_factory=list)
+
+    def take(self, session_open_ms: int, outcome: SessionOutcome) -> None:
+        self.carried.take(outcome)
+        self.sessions.append(CapitalSession.of_outcome(session_open_ms, outcome))
+
+    def result(self) -> CashLevel:
+        return CashLevel(
+            multiple=self.multiple,
+            starting_cash_usd=self.starting_cash,
+            is_setups_own=self.is_setups_own,
+            # Every filled entry is exactly one leg trade, whether it was sold, marked or still held at the close.
+            entries_filled=self.carried.trades,
+            entries_refused_for_cash=sum(len(session.refused_for_cash_at_ms) for session in self.sessions),
+            net_profit_usd=self.carried.net_profit,
+            capital_evidence=capital_evidence(self.sessions, starting_cash=self.starting_cash),
+        )
+
+
 def _check_the_run_can_start(setup: OptionsBacktestSetup, sessions: Sequence[date]) -> None:
     if not sessions:
         raise ValueError("a run needs at least one session")
@@ -199,28 +238,42 @@ def _ladder(setup: OptionsBacktestSetup, requested: Sequence[Decimal]) -> dict[D
 class _Run:
     """One run's state: what it reads from, how it prices fees, and each ladder value's run so far."""
 
-    def __init__(self, setup: OptionsBacktestSetup, data: RunData, requested: Sequence[Decimal]) -> None:
+    def __init__(
+        self,
+        setup: OptionsBacktestSetup,
+        data: RunData,
+        requested: Sequence[Decimal],
+        cash_multiples: Sequence[Decimal],
+    ) -> None:
         self.setup = setup
         self.data = data
         self.fee_for = fee_for_policy(setup.fees)
         self.ladder = _ladder(setup, requested)
         self.own = self.ladder[setup.slippage_percent]
+        # The cash ladder, each level's cash once, lowest first, at the setup's own slippage.
+        self.cash_levels = {
+            cash: _CashLevel(multiple, cash, cash == setup.starting_cash_usd, _Carried(setup, cash))
+            for cash, multiple in ladder_levels(setup.starting_cash_usd, cash_multiples).items()
+        }
 
     def replay(self, day: date) -> SessionResult:
-        """Replay one session at every ladder value, carry each value's cash on, and keep the setup's own result.
+        """Replay one session at every ladder value and cash level, carry each one's cash on, and keep the own result.
 
         Everything read is local to this call, so nothing of it outlives the session.
         """
         window = session_window_for_date(day)
         if self.setup.window_fits(session_open_ms=window.open_ms_utc, session_close_ms=window.close_ms_utc):
-            outcomes, pins = self._replay_with_data(day, window)
+            outcomes, at_cash, pins = self._replay_with_data(day, window)
         else:
             # Nothing is read for a session the window rule skips, so that a data check that needs nothing there agrees.
             skipped = replay_session(self.setup, window_only_market(day), cash_usd=self.own.cash, fee_for=self.fee_for)
             outcomes, pins = dict.fromkeys(self.ladder, skipped), SessionPins(None, None, ())
+            at_cash = dict.fromkeys(self.cash_levels, skipped)
         cash_before = self.own.cash
         for value, carried in self.ladder.items():
             carried.take(outcomes[value])
+        for cash, level in self.cash_levels.items():
+            level.take(window.open_ms_utc, at_cash[cash])
         return SessionResult(
             window.open_ms_utc,
             window.close_ms_utc,
@@ -230,7 +283,13 @@ class _Run:
             pins,
         )
 
-    def _replay_with_data(self, day: date, window: SessionWindow) -> tuple[dict[Decimal, SessionOutcome], SessionPins]:
+    def levels(self) -> tuple[CashLevel, ...]:
+        """The cash ladder as it stands: each level's figures and capital evidence, lowest cash first."""
+        return tuple(level.result() for level in self.cash_levels.values())
+
+    def _replay_with_data(
+        self, day: date, window: SessionWindow
+    ) -> tuple[dict[Decimal, SessionOutcome], dict[Decimal, SessionOutcome], SessionPins]:
         underlying, listing = self.data.underlying_day(day), self.data.listing(day)
         if underlying is None or listing is None:
             raise SessionDataMissing(day, underlying=underlying is None, listing=listing is None, contracts=())
@@ -270,12 +329,19 @@ class _Run:
             else replay_session(carried.setup, market, cash_usd=carried.cash, fee_for=self.fee_for)
             for value, carried in self.ladder.items()
         }
+        # The level at the setup's own cash is the replay above. A skipped session is skipped at every cash.
+        at_cash = {
+            cash: replayed
+            if level.is_setups_own or replayed.status is SessionStatus.SKIPPED
+            else replay_session(self.setup, market, cash_usd=level.carried.cash, fee_for=self.fee_for)
+            for cash, level in self.cash_levels.items()
+        }
         pins = SessionPins(
             underlying.sha256,
             listing.sha256,
             tuple(PinnedDay(contract, found.sha256) for contract, found in days.items()),
         )
-        return outcomes, pins
+        return outcomes, at_cash, pins
 
 
 def run_sessions(
@@ -284,10 +350,14 @@ def run_sessions(
     data: RunData,
     *,
     slippage_ladder: Sequence[Decimal] = DEFAULT_SLIPPAGE_LADDER,
+    cash_ladder: Sequence[Decimal] = DEFAULT_CASH_LADDER,
     on_session: Callable[[int, int, date], None] = _ignore_progress,
     should_stop: Callable[[], bool] = _never_stop,
 ) -> RunResult:
     """Replay ``setup`` over ``sessions`` (in date order, each a NYSE session) reading what it needs from ``data``.
+
+    ``cash_ladder`` is the levels of the cash ladder as multiples of the setup's starting cash, each above zero; the
+    setup's own cash is always among them. ``ValueError`` for another multiple, before anything is read.
 
     ``on_session(done, total, day)`` is called after each session is replayed. ``should_stop()`` is asked before each
     session; when it says yes, ``RunStopped`` is raised and nothing is returned. Raises ``SessionDataMissing`` for a
@@ -295,7 +365,7 @@ def run_sessions(
     estimated and some session is on a date the fee model has no rate for.
     """
     _check_the_run_can_start(setup, sessions)
-    run = _Run(setup, data, slippage_ladder)
+    run = _Run(setup, data, slippage_ladder, cash_ladder)
     kept: list[SessionResult] = []
     for done, day in enumerate(sessions):
         if should_stop():
@@ -313,5 +383,12 @@ def run_sessions(
         )
         for value, carried in run.ladder.items()
     )
-    summary = summarize_run(kept, starting_cash_usd=setup.starting_cash_usd)
+    levels = run.levels()
+    own_level = next(level for level in levels if level.is_setups_own)
+    summary = replace(
+        summarize_run(kept, starting_cash_usd=setup.starting_cash_usd),
+        capital_evidence=own_level.capital_evidence,
+        cash_ladder=levels,
+        stamps=current_stamps(),
+    )
     return RunResult(setup, tuple(kept), summary, points, slippage_tolerance(points))

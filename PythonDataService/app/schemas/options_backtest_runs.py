@@ -16,7 +16,10 @@ from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.options_backtest.capital_evidence import CapitalEvidence, CapitalInvalidEvent
+from app.options_backtest.cash_ladder import CashLevel
 from app.options_backtest.data_check import DataCheck, Problem, SessionCheck, SessionVerdict, TestableStretch
+from app.options_backtest.run_stamps import RunStamps
 from app.options_backtest.saved_runs import FailureItem, Headline, RunFailure, RunRecord, StoredRun
 from app.options_backtest.saved_setups import SETUP_NAME_PATTERN
 from app.options_backtest.setup import OptionsBacktestSetup
@@ -57,6 +60,7 @@ ExitReasonWord = Literal[
 PickRefusalWord = Literal[
     "chain_incomplete", "expiry_not_listed", "expiry_not_a_session", "strike_not_listed", "not_standard"
 ]
+CapitalInvalidKindWord = Literal["unfunded_close", "position_marked"]
 RunStatusWord = Literal["running", "complete", "failed", "cancelled", "interrupted"]
 VerdictWord = Literal["ready", "needs_download", "cannot_be_tested"]
 ProblemCodeWord = Literal[
@@ -342,6 +346,112 @@ class OptionsBacktestMonthRowResponse(BaseModel):
         )
 
 
+class OptionsBacktestCapitalInvalidEventResponse(BaseModel):
+    """The first event that ended capital evidence, named by its session and, for a close, its minute."""
+
+    kind: CapitalInvalidKindWord
+    session_open_ms: Ms
+    # The minute of an unfunded closing group; ``None`` for a session that ended with a position marked.
+    at_ms: Ms | None = None
+    # Free cash after an unfunded closing group, below zero; ``None`` for a session that ended marked.
+    free_cash_after_usd: str | None = None
+
+    @classmethod
+    def from_event(cls, event: CapitalInvalidEvent) -> Self:
+        return cls(
+            kind=event.kind.value,  # type: ignore[arg-type]
+            session_open_ms=event.session_open_ms,
+            at_ms=event.at_ms,
+            free_cash_after_usd=_exact_or_none(event.free_cash_after_usd),
+        )
+
+
+class OptionsBacktestCapitalEvidenceResponse(BaseModel):
+    """How far the cash provably carried a run, and each figure of its money on its own.
+
+    None of the five figures stands in for another, and none is the drawdown, which is marked equity's at the ends of
+    sessions. The totals keep every session whatever this says.
+    """
+
+    sessions_tested: int
+    # The sessions that ended before the event that ended capital evidence, or all of them when there was none.
+    sessions_funded_continuously: int
+    # ``None`` when the cash carried the whole run.
+    ended_by: OptionsBacktestCapitalInvalidEventResponse | None = None
+    most_collateral_held_usd: str
+    # The cash this path needed over the continuously funded stretch: true of this recorded path only, and never a
+    # minimum or a safe amount.
+    cash_needed_usd: str
+    # An entry in that stretch was refused for cash, so a larger starting cash would have traded a different path.
+    cash_needed_is_incomplete: bool
+    # The least free cash seen, below zero included.
+    least_free_cash_usd: str
+    # The largest assignment obligation held: sold contracts times strike times multiplier, gross, and not a loss.
+    largest_assignment_obligation_usd: str
+    # Closes that bought back a sold leg with its cover held and for more than the free cash before them.
+    closes_relied_on_own_relief: int
+
+    @classmethod
+    def from_evidence(cls, evidence: CapitalEvidence) -> Self:
+        return cls(
+            sessions_tested=evidence.sessions_tested,
+            sessions_funded_continuously=evidence.sessions_funded_continuously,
+            ended_by=None
+            if evidence.ended_by is None
+            else OptionsBacktestCapitalInvalidEventResponse.from_event(evidence.ended_by),
+            most_collateral_held_usd=exact(evidence.most_collateral_held_usd),
+            cash_needed_usd=exact(evidence.cash_needed_usd),
+            cash_needed_is_incomplete=evidence.cash_needed_is_incomplete,
+            least_free_cash_usd=exact(evidence.least_free_cash_usd),
+            largest_assignment_obligation_usd=exact(evidence.largest_assignment_obligation_usd),
+            closes_relied_on_own_relief=evidence.closes_relied_on_own_relief,
+        )
+
+
+class OptionsBacktestCashLevelResponse(BaseModel):
+    """The whole run replayed at one starting cash. No level is called safe."""
+
+    # The level as a multiple of the setup's starting cash, and the cash it started with.
+    multiple: str
+    starting_cash_usd: str
+    # The level whose cash is the setup's own: this level is the run's own result.
+    is_setups_own: bool
+    entries_filled: int
+    entries_refused_for_cash: int
+    net_profit_usd: str
+    capital_evidence: OptionsBacktestCapitalEvidenceResponse
+
+    @classmethod
+    def from_level(cls, level: CashLevel) -> Self:
+        return cls(
+            multiple=exact(level.multiple),
+            starting_cash_usd=exact(level.starting_cash_usd),
+            is_setups_own=level.is_setups_own,
+            entries_filled=level.entries_filled,
+            entries_refused_for_cash=level.entries_refused_for_cash,
+            net_profit_usd=exact(level.net_profit_usd),
+            capital_evidence=OptionsBacktestCapitalEvidenceResponse.from_evidence(level.capital_evidence),
+        )
+
+
+class OptionsBacktestRunStampsResponse(BaseModel):
+    """The rules a run was made under: today's, and no evidence of what a broker required on a session's date."""
+
+    replay_rules_version: int
+    # The requirement rule that held the collateral, by name.
+    requirement_rule: str
+    # New York midnight of the day the requirement rule's page was read.
+    requirement_rule_read_at_ms: Ms
+
+    @classmethod
+    def from_stamps(cls, stamps: RunStamps) -> Self:
+        return cls(
+            replay_rules_version=stamps.replay_rules_version,
+            requirement_rule=stamps.requirement_rule,
+            requirement_rule_read_at_ms=stamps.requirement_rule_read_at_ms,
+        )
+
+
 class OptionsBacktestRunFiguresResponse(BaseModel):
     """Every figure of a complete run, each named for what it counts. A trade is one leg round trip."""
 
@@ -387,6 +497,12 @@ class OptionsBacktestRunFiguresResponse(BaseModel):
     re_entries_lost: int
     by_day: list[OptionsBacktestDayRowResponse]
     by_month: list[OptionsBacktestMonthRowResponse]
+    # Whether the cash could have carried the run, apart from every figure above, which it never changes. ``None`` on
+    # each reads "not recorded": the run was stored before they were.
+    capital_evidence: OptionsBacktestCapitalEvidenceResponse | None = None
+    # The run replayed at each starting-cash level, lowest cash first, the setup's own among them.
+    cash_ladder: list[OptionsBacktestCashLevelResponse] | None = None
+    stamps: OptionsBacktestRunStampsResponse | None = None
 
     @classmethod
     def from_summary(cls, summary: RunSummary) -> Self:
@@ -443,6 +559,13 @@ class OptionsBacktestRunFiguresResponse(BaseModel):
             re_entries_lost=summary.re_entries_lost,
             by_day=[OptionsBacktestDayRowResponse.from_row(row) for row in summary.by_day],
             by_month=[OptionsBacktestMonthRowResponse.from_row(row) for row in summary.by_month],
+            capital_evidence=None
+            if summary.capital_evidence is None
+            else OptionsBacktestCapitalEvidenceResponse.from_evidence(summary.capital_evidence),
+            cash_ladder=None
+            if summary.cash_ladder is None
+            else [OptionsBacktestCashLevelResponse.from_level(level) for level in summary.cash_ladder],
+            stamps=None if summary.stamps is None else OptionsBacktestRunStampsResponse.from_stamps(summary.stamps),
         )
 
 

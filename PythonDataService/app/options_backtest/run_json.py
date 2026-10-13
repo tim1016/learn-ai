@@ -2,8 +2,8 @@
 
 Formula: none. Every ``Decimal`` is written as its text and read back from it; a rate is its numerator and denominator;
   an enum is its value; a contract is its OCC symbol; a "by reason" list is a list of ``[value, count]`` pairs.
-Reference: ``app/options_backtest/statistics.py``, ``run.py``, ``results.py`` and ``session_result.py``, whose
-  dataclasses these are the other way round.
+Reference: ``app/options_backtest/statistics.py``, ``run.py``, ``results.py``, ``session_result.py``,
+  ``capital_evidence.py``, ``cash_ladder.py`` and ``run_stamps.py``, whose dataclasses these are the other way round.
 Canonical implementation: this file.
 Validated against: tests/options_backtest/test_run_json.py, and the exact round trip of a whole run through the database in
   tests/options_backtest/test_saved_runs.py.
@@ -12,6 +12,10 @@ No float and no date is anywhere in it: a session is identified by its open in `
 Every field here that holds a time is an integer of milliseconds. The one place a date can appear, in words, is an
 event's ``detail`` (see ``events_to_json``). Reading raises ``KeyError`` or ``ValueError`` for JSON that is not what
 this module writes.
+
+One exception, and only one: the three keys a summary gained with #3108 (``capital_evidence``, ``cash_ladder`` and
+``stamps``) are read as "not recorded" when they are absent, because a run stored before it has none and must open all
+the same with every figure it had. A summary that has none of them writes none of them, so its JSON is what it was.
 """
 
 from __future__ import annotations
@@ -22,9 +26,12 @@ from enum import StrEnum
 from typing import Any
 
 from app.options.contract import OptionContract
+from app.options_backtest.capital_evidence import CapitalEvidence, CapitalInvalidEvent, CapitalInvalidKind
+from app.options_backtest.cash_ladder import CashLevel
 from app.options_backtest.market import PickRefusal
 from app.options_backtest.results import Event, EventKind, ExitReason, SessionStatus, SkipReason
 from app.options_backtest.run import SlippagePoint, SlippageTolerance
+from app.options_backtest.run_stamps import RunStamps
 from app.options_backtest.session_result import PinnedDay, SessionPins
 from app.options_backtest.statistics import DayRow, Drawdown, MonthRow, Ratio, RunSummary
 
@@ -160,8 +167,101 @@ def _month_from_json(data: Json) -> MonthRow:
     )
 
 
-def summary_to_json(summary: RunSummary) -> Json:
+# ── What the cash could carry (#3108) ────────────────────────────────────
+
+
+def _capital_invalid_to_json(event: CapitalInvalidEvent | None) -> Json | None:
+    if event is None:
+        return None
     return {
+        "kind": event.kind.value,
+        "session_open_ms": event.session_open_ms,
+        "at_ms": event.at_ms,
+        "free_cash_after_usd": _optional_text(event.free_cash_after_usd),
+    }
+
+
+def _capital_invalid_from_json(data: Json | None) -> CapitalInvalidEvent | None:
+    if data is None:
+        return None
+    return CapitalInvalidEvent(
+        kind=CapitalInvalidKind(data["kind"]),
+        session_open_ms=data["session_open_ms"],
+        at_ms=data["at_ms"],
+        free_cash_after_usd=_optional_decimal(data["free_cash_after_usd"]),
+    )
+
+
+def _capital_to_json(evidence: CapitalEvidence) -> Json:
+    return {
+        "sessions_tested": evidence.sessions_tested,
+        "sessions_funded_continuously": evidence.sessions_funded_continuously,
+        "ended_by": _capital_invalid_to_json(evidence.ended_by),
+        "most_collateral_held_usd": str(evidence.most_collateral_held_usd),
+        "cash_needed_usd": str(evidence.cash_needed_usd),
+        "cash_needed_is_incomplete": evidence.cash_needed_is_incomplete,
+        "least_free_cash_usd": str(evidence.least_free_cash_usd),
+        "largest_assignment_obligation_usd": str(evidence.largest_assignment_obligation_usd),
+        "closes_relied_on_own_relief": evidence.closes_relied_on_own_relief,
+    }
+
+
+def _capital_from_json(data: Json) -> CapitalEvidence:
+    return CapitalEvidence(
+        sessions_tested=data["sessions_tested"],
+        sessions_funded_continuously=data["sessions_funded_continuously"],
+        ended_by=_capital_invalid_from_json(data["ended_by"]),
+        most_collateral_held_usd=Decimal(data["most_collateral_held_usd"]),
+        cash_needed_usd=Decimal(data["cash_needed_usd"]),
+        cash_needed_is_incomplete=data["cash_needed_is_incomplete"],
+        least_free_cash_usd=Decimal(data["least_free_cash_usd"]),
+        largest_assignment_obligation_usd=Decimal(data["largest_assignment_obligation_usd"]),
+        closes_relied_on_own_relief=data["closes_relied_on_own_relief"],
+    )
+
+
+def _cash_level_to_json(level: CashLevel) -> Json:
+    return {
+        "multiple": str(level.multiple),
+        "starting_cash_usd": str(level.starting_cash_usd),
+        "is_setups_own": level.is_setups_own,
+        "entries_filled": level.entries_filled,
+        "entries_refused_for_cash": level.entries_refused_for_cash,
+        "net_profit_usd": str(level.net_profit_usd),
+        "capital_evidence": _capital_to_json(level.capital_evidence),
+    }
+
+
+def _cash_level_from_json(data: Json) -> CashLevel:
+    return CashLevel(
+        multiple=Decimal(data["multiple"]),
+        starting_cash_usd=Decimal(data["starting_cash_usd"]),
+        is_setups_own=data["is_setups_own"],
+        entries_filled=data["entries_filled"],
+        entries_refused_for_cash=data["entries_refused_for_cash"],
+        net_profit_usd=Decimal(data["net_profit_usd"]),
+        capital_evidence=_capital_from_json(data["capital_evidence"]),
+    )
+
+
+def _stamps_to_json(stamps: RunStamps) -> Json:
+    return {
+        "replay_rules_version": stamps.replay_rules_version,
+        "requirement_rule": stamps.requirement_rule,
+        "requirement_rule_read_at_ms": stamps.requirement_rule_read_at_ms,
+    }
+
+
+def _stamps_from_json(data: Json) -> RunStamps:
+    return RunStamps(
+        replay_rules_version=data["replay_rules_version"],
+        requirement_rule=data["requirement_rule"],
+        requirement_rule_read_at_ms=data["requirement_rule_read_at_ms"],
+    )
+
+
+def summary_to_json(summary: RunSummary) -> Json:
+    written: Json = {
         "sessions_tested": summary.sessions_tested,
         "sessions_traded": summary.sessions_traded,
         "sessions_no_trade": summary.sessions_no_trade,
@@ -198,9 +298,21 @@ def summary_to_json(summary: RunSummary) -> Json:
         "by_day": [_day_to_json(day) for day in summary.by_day],
         "by_month": [_month_to_json(month) for month in summary.by_month],
     }
+    # A key a summary has no value for is left out and not written as null: its JSON is then what it always was.
+    if summary.capital_evidence is not None:
+        written["capital_evidence"] = _capital_to_json(summary.capital_evidence)
+    if summary.cash_ladder is not None:
+        written["cash_ladder"] = [_cash_level_to_json(level) for level in summary.cash_ladder]
+    if summary.stamps is not None:
+        written["stamps"] = _stamps_to_json(summary.stamps)
+    return written
 
 
 def summary_from_json(data: Json) -> RunSummary:
+    # The three keys of #3108 are the only ones read as "not recorded" when absent: a run stored before them has none.
+    capital = data.get("capital_evidence")
+    ladder = data.get("cash_ladder")
+    stamps = data.get("stamps")
     return RunSummary(
         sessions_tested=data["sessions_tested"],
         sessions_traded=data["sessions_traded"],
@@ -237,6 +349,9 @@ def summary_from_json(data: Json) -> RunSummary:
         re_entries_lost=data["re_entries_lost"],
         by_day=tuple(_day_from_json(day) for day in data["by_day"]),
         by_month=tuple(_month_from_json(month) for month in data["by_month"]),
+        capital_evidence=None if capital is None else _capital_from_json(capital),
+        cash_ladder=None if ladder is None else tuple(_cash_level_from_json(level) for level in ladder),
+        stamps=None if stamps is None else _stamps_from_json(stamps),
     )
 
 

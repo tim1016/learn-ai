@@ -40407,6 +40407,157 @@
         "title": "OptionWholeNumberTerm",
         "type": "object"
       },
+      "OptionsBacktestCapitalEvidenceResponse": {
+        "description": "How far the cash provably carried a run, and each figure of its money on its own.\n\nNone of the five figures stands in for another, and none is the drawdown, which is marked equity's at the ends of\nsessions. The totals keep every session whatever this says.",
+        "properties": {
+          "cash_needed_is_incomplete": {
+            "title": "Cash Needed Is Incomplete",
+            "type": "boolean"
+          },
+          "cash_needed_usd": {
+            "title": "Cash Needed Usd",
+            "type": "string"
+          },
+          "closes_relied_on_own_relief": {
+            "title": "Closes Relied On Own Relief",
+            "type": "integer"
+          },
+          "ended_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionsBacktestCapitalInvalidEventResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "largest_assignment_obligation_usd": {
+            "title": "Largest Assignment Obligation Usd",
+            "type": "string"
+          },
+          "least_free_cash_usd": {
+            "title": "Least Free Cash Usd",
+            "type": "string"
+          },
+          "most_collateral_held_usd": {
+            "title": "Most Collateral Held Usd",
+            "type": "string"
+          },
+          "sessions_funded_continuously": {
+            "title": "Sessions Funded Continuously",
+            "type": "integer"
+          },
+          "sessions_tested": {
+            "title": "Sessions Tested",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sessions_tested",
+          "sessions_funded_continuously",
+          "most_collateral_held_usd",
+          "cash_needed_usd",
+          "cash_needed_is_incomplete",
+          "least_free_cash_usd",
+          "largest_assignment_obligation_usd",
+          "closes_relied_on_own_relief"
+        ],
+        "title": "OptionsBacktestCapitalEvidenceResponse",
+        "type": "object"
+      },
+      "OptionsBacktestCapitalInvalidEventResponse": {
+        "description": "The first event that ended capital evidence, named by its session and, for a close, its minute.",
+        "properties": {
+          "at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At Ms"
+          },
+          "free_cash_after_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free Cash After Usd"
+          },
+          "kind": {
+            "enum": [
+              "unfunded_close",
+              "position_marked"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Session Open Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "session_open_ms"
+        ],
+        "title": "OptionsBacktestCapitalInvalidEventResponse",
+        "type": "object"
+      },
+      "OptionsBacktestCashLevelResponse": {
+        "description": "The whole run replayed at one starting cash. No level is called safe.",
+        "properties": {
+          "capital_evidence": {
+            "$ref": "#/components/schemas/OptionsBacktestCapitalEvidenceResponse"
+          },
+          "entries_filled": {
+            "title": "Entries Filled",
+            "type": "integer"
+          },
+          "entries_refused_for_cash": {
+            "title": "Entries Refused For Cash",
+            "type": "integer"
+          },
+          "is_setups_own": {
+            "title": "Is Setups Own",
+            "type": "boolean"
+          },
+          "multiple": {
+            "title": "Multiple",
+            "type": "string"
+          },
+          "net_profit_usd": {
+            "title": "Net Profit Usd",
+            "type": "string"
+          },
+          "starting_cash_usd": {
+            "title": "Starting Cash Usd",
+            "type": "string"
+          }
+        },
+        "required": [
+          "multiple",
+          "starting_cash_usd",
+          "is_setups_own",
+          "entries_filled",
+          "entries_refused_for_cash",
+          "net_profit_usd",
+          "capital_evidence"
+        ],
+        "title": "OptionsBacktestCashLevelResponse",
+        "type": "object"
+      },
       "OptionsBacktestCheckDataRequest": {
         "additionalProperties": false,
         "description": "A setup and the half-open range ``[start_ms, end_ms)`` to check: New York midnight of the first date to the\nNew York midnight after the last, as Grid Search's window is.",
@@ -41833,6 +41984,30 @@
             "title": "By Month",
             "type": "array"
           },
+          "capital_evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionsBacktestCapitalEvidenceResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cash_ladder": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/OptionsBacktestCashLevelResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash Ladder"
+          },
           "daily_win_rate": {
             "anyOf": [
               {
@@ -41969,6 +42144,16 @@
           "slippage_paid_usd": {
             "title": "Slippage Paid Usd",
             "type": "string"
+          },
+          "stamps": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionsBacktestRunStampsResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "starting_cash_usd": {
             "title": "Starting Cash Usd",
@@ -42189,6 +42374,32 @@
           "fee_policy"
         ],
         "title": "OptionsBacktestRunListItemResponse",
+        "type": "object"
+      },
+      "OptionsBacktestRunStampsResponse": {
+        "description": "The rules a run was made under: today's, and no evidence of what a broker required on a session's date.",
+        "properties": {
+          "replay_rules_version": {
+            "title": "Replay Rules Version",
+            "type": "integer"
+          },
+          "requirement_rule": {
+            "title": "Requirement Rule",
+            "type": "string"
+          },
+          "requirement_rule_read_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Requirement Rule Read At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "replay_rules_version",
+          "requirement_rule",
+          "requirement_rule_read_at_ms"
+        ],
+        "title": "OptionsBacktestRunStampsResponse",
         "type": "object"
       },
       "OptionsBacktestRunTotalsResponse": {
