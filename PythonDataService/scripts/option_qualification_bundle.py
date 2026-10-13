@@ -113,10 +113,16 @@ class BundleRefused(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class Gap:
-    """One piece the bundle could not read, and why."""
+    """One piece the bundle could not read, and why.
+
+    ``journal`` is whether the piece is journal evidence: a recording made from
+    the bundle carries those gaps forward, since the lines it was made from are
+    short by exactly them.
+    """
 
     piece: str
     why: str
+    journal: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,7 +268,7 @@ def _read_journal(
     lines: dict[tuple[str, str], list[str]] = {}
     absent: list[str] = []
     if not (capture_dir / broker).is_dir():
-        gaps.append(Gap("the capture journal", f"there is no {broker} journal under {capture_dir}"))
+        gaps.append(Gap("the capture journal", f"there is no {broker} journal under {capture_dir}", journal=True))
         return lines, absent
     for family in CaptureEndpoint:
         for day in _days(window):
@@ -280,7 +286,7 @@ def _lines_of(path: Path, window: _Window, piece: str, gaps: list[Gap]) -> list[
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
-        gaps.append(Gap(f"journal {piece}", f"could not be read: {exc}"))
+        gaps.append(Gap(f"journal {piece}", f"could not be read: {exc}", journal=True))
         return []
     kept: list[str] = []
     for number, text_line in enumerate(text.splitlines(), start=1):
@@ -292,7 +298,13 @@ def _lines_of(path: Path, window: _Window, piece: str, gaps: list[Gap]) -> list[
             line = None
         inside = _in_window(line, window) if isinstance(line, dict) else None
         if inside is None:
-            gaps.append(Gap(f"journal {piece} line {number}", "is not a journal line this bundle can place in time"))
+            gaps.append(
+                Gap(
+                    f"journal {piece} line {number}",
+                    "is not a journal line this bundle can place in time",
+                    journal=True,
+                )
+            )
         elif inside:
             kept.append(text_line)
     return kept
@@ -559,9 +571,12 @@ def write_bundle(
 def write_recordings(*, bundle_dir: Path, out_dir: Path) -> BundleResult:
     """Write a bundle's journal lines, sanitised, as recordings into the new folder ``out_dir``.
 
-    A line that cannot be sanitised is left out and named. Nothing is
-    written when a sanitised line still carries the bundle's account id: it
-    would be committed.
+    A line that cannot be sanitised is left out and named, and so is a body
+    that is opaque text: only JSON can have its keys told, and only JSON is
+    written. The journal gaps the source bundle itself recorded are carried
+    forward, so a recording's provenance says what its source lacked. Either
+    kind makes the command exit 3. Nothing is written when a sanitised line
+    still carries the bundle's account id: it would be committed.
     """
     try:
         manifest = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))
@@ -572,14 +587,17 @@ def write_recordings(*, bundle_dir: Path, out_dir: Path) -> BundleResult:
     account_id = manifest.get("account_id")
     if not isinstance(account_id, str) or not account_id:
         raise BundleRefused(f"{bundle_dir}'s manifest names no account")
+    source_gaps = _journal_gaps_of(manifest, bundle_dir)
     folder = _new_folder(out_dir, reading=(bundle_dir,))
 
-    gaps: list[Gap] = []
+    left_out: list[Gap] = []
     uuid_map: dict[str, str] = {}
     written: dict[str, list[str]] = {}
     journal_dir = bundle_dir / "journal"
     if not journal_dir.is_dir():
-        gaps.append(Gap("the bundle's journal", "the bundle holds no journal folder, so there is nothing to record"))
+        left_out.append(
+            Gap("the bundle's journal", "the bundle holds no journal folder, so there is nothing to record", journal=True)
+        )
     for family_dir in sorted(path for path in journal_dir.glob("*") if path.is_dir()):
         for day_file in sorted(family_dir.glob("*.jsonl")):
             for number, text in enumerate(day_file.read_text(encoding="utf-8").splitlines(), start=1):
@@ -589,7 +607,7 @@ def write_recordings(*, bundle_dir: Path, out_dir: Path) -> BundleResult:
                 try:
                     recording = sanitize_recording(json.loads(text), uuid_map=uuid_map, account_ids=(account_id,))
                 except (ValueError, TypeError) as exc:
-                    gaps.append(Gap(piece, f"was left out: {exc}"))
+                    left_out.append(Gap(piece, f"was not sanitised, so it is left out: {exc}", journal=True))
                     continue
                 encoded = json.dumps(recording, ensure_ascii=False)
                 if re.search(rf"(?<![A-Za-z0-9]){re.escape(account_id)}(?![A-Za-z0-9])", encoded):
@@ -597,15 +615,50 @@ def write_recordings(*, bundle_dir: Path, out_dir: Path) -> BundleResult:
                 written.setdefault(family_dir.name, []).append(encoded)
     for family, lines in written.items():
         atomic_write_bytes(folder / f"{family}.jsonl", ("\n".join(lines) + "\n").encode("utf-8"))
+    absent = manifest.get("journal_files_absent")
     atomic_write_bytes(
         folder / "attribution.md",
-        _attribution(manifest, {family: len(lines) for family, lines in written.items()}, gaps).encode("utf-8"),
+        _attribution(
+            manifest,
+            {family: len(lines) for family, lines in written.items()},
+            source_gaps,
+            left_out,
+            [name for name in absent if isinstance(name, str)] if isinstance(absent, list) else [],
+        ).encode("utf-8"),
     )
-    return BundleResult(out_dir=folder, not_read=tuple(gaps))
+    return BundleResult(out_dir=folder, not_read=(*source_gaps, *left_out))
 
 
-def _attribution(manifest: dict[str, Any], counts: dict[str, int], gaps: list[Gap]) -> str:
-    left_out = [f"- {gap.piece}: {gap.why}" for gap in gaps] or ["- None."]
+def _journal_gaps_of(manifest: dict[str, Any], bundle_dir: Path) -> list[Gap]:
+    """The journal gaps the source bundle recorded, as gaps of a recording made from it.
+
+    A manifest whose gaps cannot be read says nothing honest about what its
+    journal lacks, so a recording is not made from it.
+    """
+    recorded = manifest.get("not_read")
+    if not isinstance(recorded, list):
+        raise BundleRefused(f"{bundle_dir}'s manifest does not say what it could not read, so it is not recorded")
+    carried: list[Gap] = []
+    for item in recorded:
+        if not isinstance(item, dict) or not isinstance(item.get("piece"), str) or not isinstance(item.get("why"), str):
+            raise BundleRefused(f"{bundle_dir}'s manifest holds a gap that cannot be read, so it is not recorded")
+        if item.get("journal") is True:
+            carried.append(
+                Gap(item["piece"], f"the source bundle could not read it: {item['why']}", journal=True)
+            )
+    return carried
+
+
+def _attribution(
+    manifest: dict[str, Any],
+    counts: dict[str, int],
+    source_gaps: list[Gap],
+    left_out: list[Gap],
+    absent: list[str],
+) -> str:
+    inherited = [f"- {gap.piece}: {gap.why}" for gap in source_gaps] or ["- None."]
+    not_sanitised = [f"- {gap.piece}: {gap.why}" for gap in left_out] or ["- None."]
+    no_file = [f"- `{name}`" for name in absent] or ["- None."]
     return "\n".join(
         [
             "# Recordings attribution: option orders on Alpaca Paper",
@@ -625,9 +678,20 @@ def _attribution(manifest: dict[str, Any], counts: dict[str, int], gaps: list[Ga
             "",
             *(f"- `{family}.jsonl`: {count}" for family, count in sorted(counts.items())),
             "",
-            "## Left out",
+            "## Not sanitised, and left out",
             "",
-            *left_out,
+            "A line whose body is opaque text, a bare JSON string or not UTF-8 is not written: only JSON can have "
+            "its keys told, so a secret in anything else cannot be found.",
+            "",
+            *not_sanitised,
+            "",
+            "## Journal evidence the source bundle could not read",
+            "",
+            *inherited,
+            "",
+            "## Journal files the source bundle found absent",
+            "",
+            *no_file,
             "",
             "Held beside the documented examples in `tests/fixtures/alpaca_documented/`, never in place of them.",
             "",
@@ -683,8 +747,9 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"Option qualification bundle refused: {exc}\n")
         return 2
     sys.stdout.write(f"Written to {result.out_dir}\n")
+    label = "Not read" if args.operation == "bundle" else "Not recorded"
     for gap in result.not_read:
-        sys.stdout.write(f"Not read: {gap.piece}: {gap.why}\n")
+        sys.stdout.write(f"{label}: {gap.piece}: {gap.why}\n")
     return 3 if result.not_read else 0
 
 

@@ -113,10 +113,31 @@ def test_an_authorization_acknowledgement_is_replaced_by_a_structural_placeholde
     }
 
 
-def test_a_body_that_is_not_json_is_scrubbed_as_text() -> None:
-    recording = sanitize_recording({"raw_body": f"order {_ORDER} for {_ACCOUNT} not found"}, uuid_map={})
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Opaque text with a secret and a client order id that is not a UUID: replacing UUIDs would pass both.
+        "api_key=PKSECRET&client_order_id=my-order-7",
+        f"order {_ORDER} for {_ACCOUNT} not found",
+        "<html><body>502 Bad Gateway</body></html>",
+        '"api_key=PKSECRET"',
+    ],
+    ids=["a form with a key", "plain text with a uuid and an account", "html", "a bare json string"],
+)
+@pytest.mark.parametrize("field", ["raw_body", "request_body"])
+def test_a_body_that_is_not_json_is_refused_and_nothing_of_it_is_passed(text: str, field: str) -> None:
+    line = {"status": 502, field: text}
 
-    assert recording["raw_body"] == f"order {UUID_SENTINEL_BASE.format(1)} for {ACCOUNT_NUMBER_SENTINEL} not found"
+    with pytest.raises(ValueError, match="cannot be sanitised"):
+        sanitize_recording(line, uuid_map={}, account_ids=(_ACCOUNT,))
+
+    # The line it came from is untouched.
+    assert line[field] == text
+
+
+@pytest.mark.parametrize("body", ["", "  ", "null", "204", "true"])
+def test_a_body_with_nothing_in_it_to_leak_is_passed(body: str) -> None:
+    assert sanitize_recording({"raw_body": body}, uuid_map={})["raw_body"] == body
 
 
 def test_a_body_that_cannot_be_read_as_text_is_refused_not_passed() -> None:

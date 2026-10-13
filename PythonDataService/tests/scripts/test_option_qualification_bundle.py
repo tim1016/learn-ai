@@ -423,6 +423,102 @@ async def test_a_line_that_cannot_be_sanitised_is_left_out_and_named(paper: Pape
     assert len((tmp_path / "recordings" / "orders.jsonl").read_text().splitlines()) == 1
 
 
+async def test_opaque_text_bodies_are_never_written_and_each_refusal_is_reported_and_exits_three(
+    paper: Paper, tmp_path: Path
+) -> None:
+    captures = tmp_path / "captures"
+    _journal_line(captures, NOON + 1_000, body=b'{"fine":true}')
+    # Text with a key and a client order id that is not a UUID, a plain-text body, and a bare JSON string.
+    _journal_line(captures, NOON + 2_000, body=b"api_key=PKTHEKEY&client_order_id=my-order-7")
+    _journal_line(captures, NOON + 3_000, body=b"upstream connect error or disconnect/reset before headers")
+    _journal_line(captures, NOON + 4_000, body=b'"api_key=PKTHEKEY"')
+    _journal_line(captures, NOON + 5_000, body=b'{"also":"fine"}')
+    bundle = _write(paper, tmp_path, out_dir=tmp_path / "bundle").out_dir
+    day = utc_day(NOON + 1_000)
+
+    recorded = kit.write_recordings(bundle_dir=bundle, out_dir=tmp_path / "recordings")
+
+    assert [gap.piece for gap in recorded.not_read] == [f"orders/{day}.jsonl line {n}" for n in (2, 3, 4)]
+    assert all("was not sanitised, so it is left out" in gap.why for gap in recorded.not_read)
+    written = {path.name: path.read_text() for path in (tmp_path / "recordings").iterdir()}
+    # Only the two lines that are JSON are there, and nothing of the three that are not.
+    assert [json.loads(text)["raw_body"] for text in written["orders.jsonl"].splitlines()] == [
+        '{"fine": true}',
+        '{"also": "fine"}',
+    ]
+    for text in written.values():
+        for opaque in ("PKTHEKEY", "my-order-7", "upstream connect error"):
+            assert opaque not in text
+    attribution = written["attribution.md"]
+    assert "## Not sanitised, and left out" in attribution
+    assert all(f"orders/{day}.jsonl line {n}" in attribution for n in (2, 3, 4))
+    exit_code = kit.main(["recordings", "--bundle-dir", str(bundle), "--out-dir", str(tmp_path / "second")])
+    assert exit_code == 3
+
+
+async def test_a_body_that_is_opaque_text_in_every_line_writes_no_recording_of_that_family(
+    paper: Paper, tmp_path: Path
+) -> None:
+    _journal_line(tmp_path / "captures", NOON + 1_000, body=b"api_key=PKTHEKEY")
+    bundle = _write(paper, tmp_path, out_dir=tmp_path / "bundle").out_dir
+
+    recorded = kit.write_recordings(bundle_dir=bundle, out_dir=tmp_path / "recordings")
+
+    assert len(recorded.not_read) == 1
+    assert sorted(path.name for path in (tmp_path / "recordings").iterdir()) == ["attribution.md"]
+
+
+async def test_the_journal_gaps_of_the_source_bundle_are_carried_into_the_recordings_and_exit_three(
+    paper: Paper, tmp_path: Path
+) -> None:
+    captures = tmp_path / "captures"
+    day = utc_day(NOON + 1_000)
+    _journal_line(captures, NOON + 1_000, body=b'{"fine":true}')
+    day_file = captures / "alpaca" / "orders" / f"{day}.jsonl"
+    day_file.write_text(day_file.read_text() + "this is not a journal line\n")
+    bundle = _write(paper, tmp_path, out_dir=tmp_path / "bundle")
+    assert [gap.piece for gap in bundle.not_read] == [f"journal orders/{day}.jsonl line 2"]
+
+    recorded = kit.write_recordings(bundle_dir=bundle.out_dir, out_dir=tmp_path / "recordings")
+
+    # Every line of the journal that was read is recorded; the source's own gap is not forgotten.
+    assert [gap.piece for gap in recorded.not_read] == [f"journal orders/{day}.jsonl line 2"]
+    attribution = (tmp_path / "recordings" / "attribution.md").read_text()
+    section = attribution.split("## Journal evidence the source bundle could not read\n", 1)[1].split("\n## ", 1)[0]
+    assert f"journal orders/{day}.jsonl line 2" in section
+    assert "the source bundle could not read it" in section
+    assert "- None." not in section
+    exit_code = kit.main(["recordings", "--bundle-dir", str(bundle.out_dir), "--out-dir", str(tmp_path / "second")])
+    assert exit_code == 3
+
+
+async def test_a_gap_in_the_books_is_not_a_gap_in_the_recordings(paper: Paper, tmp_path: Path) -> None:
+    _journal_line(tmp_path / "captures", NOON + 1_000, body=b'{"fine":true}')
+    bundle = _write(paper, tmp_path, out_dir=tmp_path / "bundle", artifacts_root=tmp_path / "no-such-lane")
+    assert [gap.piece for gap in bundle.not_read] == ["the Clerk's books"]
+
+    recorded = kit.write_recordings(bundle_dir=bundle.out_dir, out_dir=tmp_path / "recordings")
+
+    assert recorded.not_read == ()
+    exit_code = kit.main(["recordings", "--bundle-dir", str(bundle.out_dir), "--out-dir", str(tmp_path / "second")])
+    assert exit_code == 0
+
+
+async def test_a_manifest_that_does_not_say_what_it_could_not_read_is_not_recorded(
+    paper: Paper, tmp_path: Path
+) -> None:
+    _journal_line(tmp_path / "captures", NOON + 1_000, body=b'{"fine":true}')
+    bundle = _write(paper, tmp_path, out_dir=tmp_path / "bundle").out_dir
+    manifest = json.loads((bundle / "manifest.json").read_text())
+    del manifest["not_read"]
+    (bundle / "manifest.json").write_text(json.dumps(manifest))
+
+    with pytest.raises(kit.BundleRefused, match="does not say what it could not read"):
+        kit.write_recordings(bundle_dir=bundle, out_dir=tmp_path / "recordings")
+
+    assert not (tmp_path / "recordings").exists()
+
+
 def test_an_offline_unknown_is_not_a_judgment_and_the_entry_stays_as_unknown_as_it_was_recorded() -> None:
     comparison = {
         "recorded": True,

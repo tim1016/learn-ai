@@ -177,10 +177,20 @@ it, so the experiment cannot reach a spread otherwise. It is one line in that
 lane's env file, for that Clerk only. A lane has its own env file, so nothing
 else changes.
 
-1. Check the line is not already there, then add it:
+1. Check the line is not already there, then add it. `grep -c` exits `1` when
+   it finds nothing, which is the result wanted here, so that status is let
+   through and any other (`2`: the file is missing or unreadable) still stops
+   you:
 
    ```bash
-   grep -c '^ALPACA_MULTI_LEG_OPTION_ORDERS_ENABLED=' "$ENV_FILE"     # 0
+   grep -c '^ALPACA_MULTI_LEG_OPTION_ORDERS_ENABLED=' "$ENV_FILE" || [ $? -eq 1 ]
+   ```
+
+   It must print `0`. If it prints `1` the line is already there: do not add a
+   second, and read its value with the container check in step 4 before going
+   on. Then add it:
+
+   ```bash
    printf 'ALPACA_MULTI_LEG_OPTION_ORDERS_ENABLED=true\n' >> "$ENV_FILE"
    chmod 600 "$ENV_FILE"
    ```
@@ -314,6 +324,18 @@ dashboard, inside the stated exposure of section 5 (an order from outside to
 the Clerk; the journal's `orders` file records how Alpaca reports its net
 price and its fill). Write both readings in the step log. Only then may C or D
 run as a bot.
+
+That hand-placed order is **its own step, a sign check, and not a pass of any
+shape**. Take it between B and C, once B's overlapping pass has been closed and
+the account reads flat again (section 1). Place it, read its answer, and
+**close whatever it filled at once, by hand, at Alpaca**, then read the account
+flat again (no position, no working order) and acknowledge what the account's
+Home lists of it as orders from outside. It is never left open to serve as
+an overlapping position: an overlap is made on purpose, by a bot's own
+structure, in each shape's second pass, and a leftover hand-placed fill would
+make C's flat-account pass something other than flat. Make its bundle like any
+step's; the Clerk compares only a bot's entries, so it has no comparison, and
+it is named in the step log as a sign check.
 
 **A step** is: deploy the test bot with the structure and the four order terms,
 let it enter, see the entry through to its end, close it, and see the money
@@ -471,8 +493,15 @@ POLYGON_API_KEY= DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m scripts.option
 Recordings are added **beside** `tests/fixtures/alpaca_documented/` and the
 tests that mutate an answer into a hostile one. Nothing there is removed or
 swapped out: a recording shows one account on one day, and those cover states
-Paper never produced. A recording whose line could not be sanitised is named in
-the output and left out.
+Paper never produced.
+
+Only JSON can have its keys told, so only JSON is written. A line whose body is
+opaque text, a bare JSON string or not UTF-8 is **not sanitised, and is left
+out**: it is named in the output and in the attribution, and nothing of it is
+written. The journal gaps the source bundle itself recorded are carried into
+the attribution too. Either one makes the command exit `3`, and a recording set
+with an exit of `3` is read through, and its gaps accepted by the owner, before
+anything in it is committed.
 
 **Done:** every step has a bundle whose summary's **Not read** section is either
 empty or explained in the step log, and the recordings of the steps worth
@@ -614,6 +643,8 @@ shown.
 | Bundle **Not read:** a journal line | A line that is not a journal line it can place in time | Keep it as it is; the journal is append-only and is never edited. Note it in the step log. |
 | Bundle refused: *lies inside*, or *not empty* | The folder is the Clerk's, the journal's, or already holds a bundle | Choose a new folder. |
 | Recordings refused: *still carries the account id* | A sanitised line still holds the account id (as a key, for one) | Nothing was written. Read the line in the bundle, tell the owner, and do not commit it. |
+| Recordings exit `3`, **Not recorded:** a line, *not sanitised, so it is left out* | The line's body is opaque text, a bare JSON string or not UTF-8: only JSON can be sanitised | Nothing of it was written. Leave it out; the attribution names it. Do not paste it into a fixture by hand. |
+| Recordings exit `3`, **Not recorded:** a piece the *source bundle could not read* | The bundle that the recordings come from lost journal evidence | The attribution carries it forward. Make the bundle again from the journal if the cause is mended, or have the owner accept the gap. |
 | An entry's comparison reads *unknown* for a reason other than judgment off | The pair was not clean (another order moved, cash moved, a reading failed or was stale, the outcome was not proven) | It stays unknown with its reason in the bundle. Repeat the step on a quieter account; never promote an unknown. |
 | A notice that Alpaca took more than the bot set aside | Judgment is on for this Clerk (it must not be) and a pair judged *under-reserved* | Read section 3 step 4. The bot's own page has the owner's review; do not review it until the cause is classified. |
 | Fees unresolved: every bot on the account waits | The first posted fee row of an option day cannot be attributed yet | Read the account's Home line for it. This is why the account is set aside. Record it as a finding. |

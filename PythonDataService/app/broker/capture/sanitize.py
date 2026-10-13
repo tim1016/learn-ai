@@ -19,8 +19,10 @@ not by a copy of it:
 - every number, timestamp, status string and symbol is kept verbatim: the
   adapter maps those, and sanitising must not disturb them.
 
-A body this cannot read as text is refused, not passed: a line that cannot be
-inspected is not one that has been made safe.
+A body this cannot read as JSON is refused, not passed (``sanitize_recording``
+raises): a line that cannot be inspected for its keys is not one that has been
+made safe, and opaque text with its UUIDs replaced is not sanitised. The caller
+leaves such a line out and names it.
 """
 
 from __future__ import annotations
@@ -111,9 +113,10 @@ def sanitize_recording(
     """One journal line as a recording fit to commit; the line it came from is untouched.
 
     The line keeps its shape, its times and its status. Its ``params`` and
-    its bodies are scrubbed by the rules above. A body that is not JSON is
-    scrubbed as text. Raises ``ValueError`` for a line with a body that is not
-    UTF-8 text: it cannot be inspected, so it is not passed.
+    its bodies are scrubbed by the rules above. Raises ``ValueError``, and
+    returns nothing of the line, for one whose body cannot be made safe: not
+    UTF-8 text, not JSON, or a bare JSON string. Opaque text is never passed
+    with only its UUIDs and account ids replaced.
     """
     if line.get("body_encoding"):
         raise ValueError("a body that is not UTF-8 text cannot be inspected, so it is not sanitised")
@@ -129,11 +132,17 @@ def sanitize_recording(
 
 
 def _sanitize_body(text: str, uuid_map: dict[str, str], account_ids: Sequence[str]) -> str:
+    if not text.strip():
+        # An empty body (a 204's) holds nothing to leak.
+        return text
     try:
         parsed = json.loads(text)
-    except ValueError:
-        # Not JSON: its keys cannot be told, so it is scrubbed as the text it is.
-        return sanitize_str(text, uuid_map, account_ids)
+    except ValueError as exc:
+        # Opaque text: its keys cannot be told, so a secret in it cannot be found. Replacing the account ids and
+        # UUIDs in it would pass it off as sanitised while ``api_key=...`` or a client order id went through.
+        raise ValueError("a body that is not JSON cannot be sanitised: a secret in its text cannot be told") from exc
+    if isinstance(parsed, str):
+        raise ValueError("a body that is a bare JSON string cannot be sanitised: a secret in its text cannot be told")
     if isinstance(parsed, dict) and parsed.get("stream") == "authorization":
         parsed = AUTH_ACK_PLACEHOLDER
     scrubbed = sanitize_payload(redact_value(parsed), uuid_map=uuid_map, account_ids=account_ids)
