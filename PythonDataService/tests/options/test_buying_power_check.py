@@ -142,6 +142,8 @@ def test_what_was_set_aside_for_a_part_fill_is_its_share_by_contracts_rounded_up
 def test_more_contracts_filled_than_asked_for_is_refused_not_scaled() -> None:
     with pytest.raises(ValueError, match="2 contracts filled of 1"):
         set_aside_for_filled_cents(commitment_cents=19_406, contracts_asked=1, contracts_filled=2)
+    with pytest.raises(ValueError, match="2 structures filled of 1"):
+        requirement_for_filled_cents(requirement_cents=50_000, units_asked=1, units_filled=2)
 
 
 # ── offline judgment of a record the Clerk wrote with its setting off (#3102) ─────────────────
@@ -262,8 +264,6 @@ def test_a_record_that_says_it_was_a_clean_pair_and_is_not_one_is_refused_never_
 ) -> None:
     with pytest.raises(ValueError, match=complaint):
         rejudge(_recorded(**changes))
-    with pytest.raises(ValueError, match="2 structures filled of 1"):
-        requirement_for_filled_cents(requirement_cents=50_000, units_asked=1, units_filled=2)
 
 
 def test_a_requirement_is_shared_by_whole_structures_and_never_rounded() -> None:

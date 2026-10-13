@@ -138,33 +138,40 @@ def _rows(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...]) -> list[d
     return [dict(row) for row in conn.execute(sql, params).fetchall()]
 
 
-def _read_books(
-    account_dir: Path, bot: str, window: _Window, gaps: list[Gap]
-) -> tuple[list[dict[str, Any]], dict[str, int]] | None:
-    """The bot's option orders with their legs, executions and comparison, or ``None`` when no books were read."""
+@dataclass(frozen=True, slots=True)
+class _Books:
+    """What the Clerk's books gave for the bot, or why nothing can be said of its entries."""
+
+    orders: list[dict[str, Any]]
+    multipliers: dict[str, int]
+    # Why the bot's entries were not assessed: the books were not read, or the bot is not on them, or its
+    # orders could not be read. ``None`` when they were, and an empty ``orders`` then means it made none.
+    not_assessed: str | None = None
+
+
+def _read_books(account_dir: Path, bot: str, window: _Window, gaps: list[Gap]) -> _Books:
+    """The bot's option orders with their legs, executions and comparison."""
     db_path = account_dir / DB_FILENAME
     if not db_path.is_file():
         gaps.append(Gap("the Clerk's books", f"there is no {DB_FILENAME} for this account at {db_path}"))
-        return None
+        return _Books([], {}, "the Clerk's books were not read, so nothing can be said of the bot's entries")
     try:
         with query_only_snapshot(db_path) as conn:
             return _orders_of(conn, bot, window, gaps)
     except sqlite3.Error as exc:
         gaps.append(Gap("the Clerk's books", f"{db_path} could not be read: {exc}"))
-        return None
+        return _Books([], {}, "the Clerk's books were not read, so nothing can be said of the bot's entries")
 
 
-def _orders_of(
-    conn: sqlite3.Connection, bot: str, window: _Window, gaps: list[Gap]
-) -> tuple[list[dict[str, Any]], dict[str, int]]:
+def _orders_of(conn: sqlite3.Connection, bot: str, window: _Window, gaps: list[Gap]) -> _Books:
     if conn.execute("SELECT 1 FROM strategy_instances WHERE strategy_instance_id = ?", (bot,)).fetchone() is None:
         gaps.append(Gap("the bot", f"{bot!r} is not a bot on this account's books"))
-        return [], {}
+        return _Books([], {}, f"{bot!r} is not a bot on this account's books, so nothing can be said of its entries")
     try:
         orders = _rows(conn, _OPTION_ORDERS_SQL, (bot, window.from_ms, window.to_ms))
     except sqlite3.Error as exc:
         gaps.append(Gap("the bot's option orders", f"could not be read: {exc}"))
-        return [], {}
+        return _Books([], {}, "the bot's option orders could not be read, so nothing can be said of its entries")
     multipliers: dict[str, int] = {}
     for order in orders:
         order_ref = order["order_ref"]
@@ -185,7 +192,7 @@ def _orders_of(
         order["comparison"] = (
             _comparison_of(conn, order, gaps) if order["role"] == _ENTRY_ROLE else None
         )
-    return orders, multipliers
+    return _Books(orders, multipliers)
 
 
 def _piece(conn: sqlite3.Connection, gaps: list[Gap], piece: str, sql: str, params: tuple[Any, ...]) -> list[dict]:
@@ -344,10 +351,13 @@ def _entry_line(order: dict[str, Any]) -> str:
 
 
 def _summary(
-    *, account_id: str, bot: str, window: _Window, made_at_ms: int, orders: list[dict[str, Any]] | None,
+    *, account_id: str, bot: str, window: _Window, made_at_ms: int, books: _Books,
     journal: dict[tuple[str, str], list[str]], absent: list[str], gaps: list[Gap],
 ) -> str:
-    entries = [order for order in orders or [] if order["role"] == _ENTRY_ROLE]
+    orders = books.orders
+    # A section that cannot be assessed says so and why. It never reads as "nothing" or "none".
+    not_assessed = None if books.not_assessed is None else f"Not assessed: {books.not_assessed} (see Not read)."
+    entries = [order for order in orders if order["role"] == _ENTRY_ROLE]
     judged_by_clerk: Counter[str] = Counter()
     judged_offline: Counter[str] = Counter()
     unknown: Counter[NotComparedReason] = Counter()
@@ -372,8 +382,8 @@ def _summary(
         "## What was compared",
         "",
     ]
-    if orders is None:
-        parts.append("The Clerk's books were not read, so nothing can be said of the bot's entries (see Not read).")
+    if not_assessed is not None:
+        parts.append(not_assessed)
     else:
         parts += [
             f"- Option orders of the bot in the window: {len(orders)}; entries among them: {len(entries)}.",
@@ -384,12 +394,16 @@ def _summary(
             f"- Entries nobody has judged: {sum(unknown.values())}",
         ]
     parts += ["", "## What was unknown and why", ""]
-    if not unknown:
+    if not_assessed is not None:
+        parts.append(not_assessed)
+    elif not unknown:
         parts.append("Nothing was unknown.")
     for reason, count in sorted(unknown.items(), key=lambda item: (-item[1], item[0].value)):
         parts.append(f"- {count} x `{reason.value}`: {REASON_SENTENCES[reason]}")
     parts += ["", "## Entries", ""]
-    if entries:
+    if not_assessed is not None:
+        parts.append(not_assessed)
+    elif entries:
         parts += [
             "| Entry | Contract | The Clerk recorded | Judged | Commitment | "
             "Account requirement change | Alpaca's fall |",
@@ -404,7 +418,9 @@ def _summary(
         result, judge, _ = _how_it_came_to(entry["comparison"])
         if result in _DISCREPANCIES:
             found.append((entry, BuyingPowerCheckResult(result), judge))
-    if not found:
+    if not_assessed is not None:
+        parts.append(not_assessed)
+    elif not found:
         parts.append("None. No judged entry differs from what it cost, and nothing here says one does.")
     for entry, result, judge in found:
         stored = entry["comparison"]["stored"]
@@ -478,7 +494,6 @@ def write_bundle(
     gaps: list[Gap] = []
 
     books = _read_books(account_dir, bot, window, gaps)
-    orders, multipliers = (None, {}) if books is None else books
     journal, absent = _read_journal(capture_dir, broker, window, gaps)
 
     comparisons = [
@@ -488,23 +503,29 @@ def write_bundle(
             "contract": order["contract_symbol"] or [leg["symbol"] for leg in order["legs"]],
             **order["comparison"],
         }
-        for order in orders or []
+        for order in books.orders
         if order["comparison"] is not None
     ]
     # The comparison is ``comparisons.json``'s; an order's own file does not hold it twice.
-    option_orders = None if orders is None else [{k: v for k, v in o.items() if k != "comparison"} for o in orders]
+    option_orders = (
+        None
+        if books.not_assessed is not None
+        else [{key: value for key, value in order.items() if key != "comparison"} for order in books.orders]
+    )
     for (family, day), lines in journal.items():
         atomic_write_bytes(folder / "journal" / family / f"{day}.jsonl", ("\n".join(lines) + "\n").encode("utf-8"), mode=0o600)
     atomic_write_bytes(folder / "comparisons.json", _json_bytes(comparisons), mode=0o600)
     atomic_write_bytes(
         folder / "option_orders.json",
-        _json_bytes({"orders": option_orders, "multipliers": multipliers, "read": orders is not None}),
+        _json_bytes(
+            {"orders": option_orders, "multipliers": books.multipliers, "read": books.not_assessed is None}
+        ),
         mode=0o600,
     )
     atomic_write_bytes(
         folder / "summary.md",
         _summary(
-            account_id=account_id, bot=bot, window=window, made_at_ms=made, orders=orders, journal=journal,
+            account_id=account_id, bot=bot, window=window, made_at_ms=made, books=books, journal=journal,
             absent=absent, gaps=gaps,
         ).encode("utf-8"),
         mode=0o600,
@@ -523,6 +544,7 @@ def write_bundle(
                 "made_at_ms": made,
                 "journal_lines": {f"{family}/{day}": len(lines) for (family, day), lines in sorted(journal.items())},
                 "journal_files_absent": absent,
+                "not_assessed": books.not_assessed,
                 "not_read": [asdict(gap) for gap in gaps],
             }
         ),

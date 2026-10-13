@@ -7,6 +7,7 @@ tests install the hook on a plain Session and drive it with ``responses``.
 
 from __future__ import annotations
 
+import base64
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -245,6 +246,34 @@ def test_a_stock_order_submit_keeps_no_body(tmp_path: Path) -> None:
 
     [record] = _records(tmp_path, "orders")
     assert "request_body" not in record
+
+
+@responses.activate
+@pytest.mark.parametrize(
+    "sent",
+    [
+        # JSON of an option order in UTF-16: ``json.loads`` reads it, so it reaches the journal as an order's body.
+        json.dumps({"symbol": _CALL, "qty": "1", "api_key": "sk-live-123456"}).encode("utf-16"),
+        # Form text that is not JSON at all, on the same path.
+        f"symbol={_CALL}&qty=1&api_key=sk-live-123456".encode(),
+    ],
+    ids=["utf-16 json", "form text"],
+)
+def test_an_order_body_the_journal_cannot_redact_never_reaches_it_and_the_answer_still_does(
+    tmp_path: Path, sent: bytes
+) -> None:
+    session = Session()
+    install_capture_hook(session, _journal(tmp_path))
+    responses.add(responses.POST, f"{_BASE}/v2/orders", body=b'{"status":"accepted"}', status=200)
+
+    session.post(f"{_BASE}/v2/orders", data=sent)
+
+    [record] = _records(tmp_path, "orders")
+    assert record["raw_body"] == '{"status":"accepted"}'
+    assert "request_body" not in record
+    [written] = [path.read_text(encoding="utf-8") for path in tmp_path.rglob("*.jsonl")]
+    assert "sk-live-123456" not in written
+    assert base64.b64encode(sent).decode("ascii") not in written
 
 
 @responses.activate

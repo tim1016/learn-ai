@@ -119,10 +119,9 @@ def test_a_body_that_is_not_json_is_scrubbed_as_text() -> None:
     assert recording["raw_body"] == f"order {UUID_SENTINEL_BASE.format(1)} for {ACCOUNT_NUMBER_SENTINEL} not found"
 
 
-@pytest.mark.parametrize("field", ["body_encoding", "request_body_encoding"])
-def test_a_body_that_cannot_be_read_as_text_is_refused_not_passed(field: str) -> None:
+def test_a_body_that_cannot_be_read_as_text_is_refused_not_passed() -> None:
     with pytest.raises(ValueError, match="cannot be inspected"):
-        sanitize_recording({"raw_body": "/+4=", field: "base64"}, uuid_map={})
+        sanitize_recording({"raw_body": "/+4=", "body_encoding": "base64"}, uuid_map={})
 
 
 def test_one_map_across_lines_gives_one_order_one_identity() -> None:

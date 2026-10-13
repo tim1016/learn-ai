@@ -40,7 +40,7 @@ runbook, nor the PRD, nor an earlier "yes" supplies it.
 | What you want | Follow |
 |---|---|
 | Pick the account and see that it can run option orders | [1. Choose the account](#1-choose-the-account) and [2. What must be true first](#2-what-must-be-true-first) |
-| Turn the temporary setting on for one Clerk | [3. The temporary setting](#3-the-temporary-setting) |
+| Turn the temporary setting on for one Clerk, and see that its journal carries the times | [3. The temporary setting](#3-the-temporary-setting) |
 | See that Deploy's own check reads that setting | [4. Check the setting reaches Deploy](#4-check-the-setting-reaches-deploy) |
 | Ask for the go-ahead | [5. The owner's go-ahead](#5-the-owners-go-ahead) |
 | Send the orders and see them through | [6. The experiments](#6-the-experiments) |
@@ -138,14 +138,33 @@ Check each, and write the answer in the step log (section 7).
    ```bash
    python3 scripts/alpaca_onboarding_gates.py status --mode paper --require deploy --symbol SPY --container "$LANE"
    ```
-5. **The kit is in the lane's image.** The bundle script ships in the runtime
-   image, so a lane built before it merged does not have it:
+5. **The lane runs the kit's code.** Two things must be the kit's: the capture
+   journal's hook, which writes the times and an option order's body, and the
+   bundle script. Which is true depends on the compose overlay the lane runs
+   under:
+   - **`compose.fleet.yaml`** (the production topology) bakes `app/` and
+     `scripts/` into a read-only image. A lane built before the kit merged has
+     the old hook, which records no times and no body, and nothing in that
+     image can be mounted over it from here. **The image must be rebuilt**, with
+     `--build`, from a checkout that has the kit:
+
+     ```bash
+     podman compose --project-name learn-ai-fleet -f compose.yaml -f compose.fleet.yaml --profile fleet \
+       up -d --build --no-deps --force-recreate "$LANE"
+     ```
+
+   - **`compose.fleet.dev.yaml`** bind-mounts `./PythonDataService/app`, so the
+     lane runs the checkout's `app/` once it is recreated or restarted. Only the
+     scripts come from the image; section 7 has the way to run the bundle
+     script without a rebuild, which works under this overlay only.
+
+   Do not rely on this step alone: section 3 step 5 reads a fresh journal line
+   from the running lane before anything is sent. The bundle script's presence
+   is the other half:
 
    ```bash
    podman exec "$LANE" test -f /app/scripts/option_qualification_bundle.py && echo present
    ```
-
-   If this prints nothing, section 7 gives a way to run it without rebuilding.
 
 **Done:** the level, the line budget, the hour, the Gateway and the kit are each
 confirmed and written down. None of them is guessed from a green container.
@@ -167,7 +186,10 @@ else changes.
    ```
 
 2. **Recreate** the lane. A restart does not reload an env file; the container
-   keeps the environment it was created with.
+   keeps the environment it was created with. These are the commands of the
+   `compose.fleet.dev.yaml` topology; under `compose.fleet.yaml` use the
+   `--project-name learn-ai-fleet -f compose.yaml -f compose.fleet.yaml
+   --profile fleet` context of section 2 step 5, with `--build` there.
 
    ```bash
    COMPOSE_ARGS=(--file compose.yaml)
@@ -196,8 +218,25 @@ else changes.
    Live setting absent or `false`, `IBKR_BROKER_ENABLED=true` and
    `IBKR_READONLY=true`. Anything else: stop, and put the file back as it was.
 
-**Done:** the container carries the one line and the other two settings are
-off, read from the container.
+5. **Read a fresh journal line from the running lane, before the go-ahead.** The
+   journal is what the whole experiment is judged by, and a lane that runs
+   older code writes lines with no times and no order bodies. This is found out
+   only after orders are sent unless it is looked for now. The Clerk reads the
+   account every few seconds, so a new `account` line appears without anything
+   being sent. After the lane is up again, and after the wait in step 3:
+
+   ```bash
+   podman exec "$LANE" sh -c 'tail -n 1 "/app/artifacts/alpaca_clerk/broker_captures/alpaca/account/$(date -u +%Y-%m-%d).jsonl"' \
+     | grep -c '"began_at_ms"'
+   ```
+
+   It must print `1`. `0` means the line was written by code without the kit,
+   or no line is new: stop, do not ask for the go-ahead, and rebuild as section
+   2 step 5 says for this overlay. Do not paste the line anywhere: it holds the
+   account's figures.
+
+**Done:** the container carries the one line, the other two settings are off,
+and a fresh journal line carries `began_at_ms`: all read from the running lane.
 
 ## 4. Check the setting reaches Deploy
 
@@ -388,9 +427,14 @@ with pieces it could not read (the summary names each under **Not read**), and
 `2` when it was refused and wrote nothing. A folder that is not new or empty is
 refused; so is one inside the Clerk's folder or the journal.
 
-If section 2 found the kit missing from the image, run it in a one-off
-container that mounts this checkout's scripts, shares the lane's volumes, and
-has no network at all:
+If section 2 found the bundle script missing from the image **and the lane runs
+under `compose.fleet.dev.yaml`**, run it in a one-off container that mounts this
+checkout's scripts, shares the lane's volumes (which include the bind-mounted
+`app/`), and has no network at all. Under `compose.fleet.yaml` this does not
+work: `app/` is baked into the image, an image without the kit has no `rejudge`
+or `utc_day`, and the script fails with an ImportError only after orders were
+sent. That is why section 3 step 5 checks before the go-ahead, and why the
+image is rebuilt there instead:
 
 ```bash
 IMAGE=$(podman inspect "$LANE" --format '{{.ImageName}}')
@@ -547,6 +591,10 @@ proof of them.
   is what ADR 0076 decision 26 waits for. A recorded pair shows one account on
   one day.
 
+**Done:** every item above that applies to what was run is written into the
+amendment as unverified, with the attempts made, and none of them is stated as
+shown.
+
 ## 12. Troubleshooting
 
 | Message or symptom | Meaning | Recovery and completion check |
@@ -558,6 +606,8 @@ proof of them.
 | Deploy row `OPTION_DEPLOY_CONTRACT_REFERENCE_NOT_READ`, or the contract is not listed | Alpaca's contract reference did not answer, or does not list the picked contract | Wait and review again, or pick a structure on another expiry. The answer is in the journal's `option_contracts` file. |
 | Deploy row `OPTION_DEPLOY_NOT_PRICED` | No entry of the structure can be priced yet | Check the Gateway and the underlying's live data; review again in a few seconds. |
 | The Clerk answers 503 right after a restart | The lease trap: the previous process's execution lease had not yet expired | Wait up to a minute; do not restart again inside it. Then the roster check. |
+| Section 3 step 5 prints `0`: a fresh `account` journal line has no `began_at_ms` | The lane runs code from before the kit: under `compose.fleet.yaml` the image is stale, under `compose.fleet.dev.yaml` the checkout's `app/` is not the kit's | Do not ask for the go-ahead. Rebuild with `--build` (production overlay) or recreate from a checkout that has the kit (dev overlay), wait for the lease, and read a fresh line again. |
+| Bundle script fails with an ImportError (`rejudge`, `utc_day`) | The code in the image is older than the script | Rebuild the image (section 2 step 5); mounting only the scripts works under `compose.fleet.dev.yaml` only. |
 | Bundle exit `3`, **Not read:** the Clerk's books | No `clerk.db` for that account id under the artifacts root | Check `--artifacts-root` and `--account-id` (the number the lane's card shows). The journal part was still written. |
 | Bundle **Not read:** the bot | The id is not a bot on that account's books | Use the bot id on the bot's page. |
 | Bundle **Not read:** the capture journal | No `alpaca` journal under the capture directory | `--capture-dir` must be the lane's `BROKER_CAPTURE_DIR`. |
@@ -584,8 +634,10 @@ made from it.
 
 Stated here and **not verified when this was written**, each for the first run
 to settle: that the setting set in a lane's env file reaches Deploy's own check
-in the fleet (section 4); the command that runs the bundle without a rebuilt
-image (section 7); the controls an order from outside is reviewed with, which
+in the fleet (section 4); the rebuild command under `compose.fleet.yaml`
+(section 2 step 5) and the command that runs the bundle without a rebuilt
+image under `compose.fleet.dev.yaml` (section 7); the controls an order from
+outside is reviewed with, which
 this runbook names by what they show; the sign Alpaca reports for a received
 order (section 6); and how Alpaca moves its option buying power (section 11).
 Nothing in this runbook has been run against Alpaca.

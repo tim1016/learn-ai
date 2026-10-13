@@ -79,6 +79,21 @@ def _json(folder: Path, name: str) -> Any:
     return json.loads((folder / name).read_text(encoding="utf-8"))
 
 
+def _section(summary: str, heading: str) -> str:
+    """The text of one ``## heading`` section of a summary, up to the next."""
+    _, _, rest = summary.partition(f"## {heading}\n")
+    return rest.split("\n## ", 1)[0].strip()
+
+
+def _assert_nothing_is_said_of_the_entries(summary: str, why: str) -> None:
+    """Every section about the bot's entries says it was not assessed, and why; none reads as nothing or none."""
+    for heading in ("What was compared", "What was unknown and why", "Entries", "Discrepancy"):
+        section = _section(summary, heading)
+        assert section.startswith("Not assessed: ") and why in section, f"{heading}: {section!r}"
+    assert "Nothing was unknown." not in summary
+    assert "None. No judged entry differs" not in summary
+
+
 def _fingerprints(*roots: Path) -> dict[str, str]:
     """Every file under the roots by path and content hash, but for SQLite's shared-memory index, which a reader moves."""
     return {
@@ -232,9 +247,9 @@ async def test_a_piece_that_cannot_be_read_is_named_in_the_summary_and_the_rest_
     assert "the Clerk's books" in pieces
     assert f"journal orders/{day}.jsonl line 2" in pieces
     summary = (result.out_dir / "summary.md").read_text()
-    assert "The Clerk's books were not read, so nothing can be said of the bot's entries" in summary
     assert "## Not read" in summary and "no clerk.db for this account" in summary
     assert "Nothing was left unread." not in summary
+    _assert_nothing_is_said_of_the_entries(summary, "the Clerk's books were not read")
     # The journal's good line is there all the same.
     assert len((result.out_dir / "journal" / "orders" / f"{day}.jsonl").read_text().splitlines()) == 1
     assert _json(result.out_dir, "option_orders.json")["read"] is False
@@ -257,7 +272,28 @@ async def test_a_bot_the_books_do_not_know_is_named_and_not_read_as_a_bot_with_n
     result = _write(paper, tmp_path, bot="no-such-bot")
 
     assert "the bot" in {gap.piece for gap in result.not_read}
-    assert "not a bot on this account's books" in (result.out_dir / "summary.md").read_text()
+    summary = (result.out_dir / "summary.md").read_text()
+    assert "not a bot on this account's books" in summary
+    _assert_nothing_is_said_of_the_entries(summary, "'no-such-bot' is not a bot on this account's books")
+    manifest = _json(result.out_dir, "manifest.json")
+    assert manifest["not_assessed"] is not None
+    assert _json(result.out_dir, "option_orders.json")["read"] is False
+
+
+async def test_a_bot_that_made_no_option_order_in_the_window_is_assessed_and_says_none_and_nothing(
+    paper: Paper, tmp_path: Path
+) -> None:
+    _journal_line(tmp_path / "captures", NOON + 1_000)
+
+    result = _write(paper, tmp_path)
+
+    summary = (result.out_dir / "summary.md").read_text()
+    assert result.not_read == ()
+    assert "Not assessed" not in summary
+    assert "Nothing was unknown." in _section(summary, "What was unknown and why")
+    assert _section(summary, "Discrepancy").startswith("None.")
+    assert _json(result.out_dir, "manifest.json")["not_assessed"] is None
+    assert _json(result.out_dir, "option_orders.json") == {"multipliers": {}, "orders": [], "read": True}
 
 
 async def test_a_record_the_books_hold_and_this_build_cannot_read_is_named_not_dropped(

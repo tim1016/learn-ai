@@ -237,9 +237,9 @@ def test_exchange_times_that_are_not_both_whole_and_in_order_are_refused_and_cou
     assert list(tmp_path.rglob("*.jsonl")) == []
 
 
-def test_a_request_body_is_kept_as_it_was_sent_and_the_answer_beside_it(tmp_path: Path) -> None:
+def test_a_utf8_json_request_body_is_kept_with_its_terms_and_the_answer_beside_it(tmp_path: Path) -> None:
     journal = _fixed(tmp_path)
-    sent = b'{"symbol":"SPY261120C00450000","qty":"1","limit_price":"1.10"}'
+    sent = {"symbol": "SPY261120C00450000", "qty": "1", "limit_price": "1.10"}
 
     journal.record(
         broker="alpaca",
@@ -248,33 +248,60 @@ def test_a_request_body_is_kept_as_it_was_sent_and_the_answer_beside_it(tmp_path
         params={},
         status=200,
         raw_body=b'{"status":"new"}',
-        request_body=sent,
+        request_body=json.dumps(sent).encode("utf-8"),
     )
 
     [record] = _read_records(tmp_path / "alpaca" / "orders" / f"{_DAY}.jsonl")
-    # Byte for byte: a limit of 1.10 is not rewritten as 1.1.
-    assert record["request_body"].encode("utf-8") == sent
+    # The terms as they were sent: a limit of "1.10" is not rewritten as 1.1.
+    assert json.loads(record["request_body"]) == sent
+    assert '"1.10"' in record["request_body"]
     assert "request_body_encoding" not in record
     assert record["raw_body"] == '{"status":"new"}'
 
 
-def test_a_request_body_that_is_not_utf8_falls_back_to_base64(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("sent", "why"),
+    [
+        # Text a redactor cannot read keys from: the secret would survive as it was.
+        (b"api_key=sk-live-123456&symbol=SPY261120C00450000", "not JSON"),
+        # JSON in UTF-16 (with or without a byte-order mark): it parses as JSON elsewhere, and would be kept as base64.
+        (json.dumps({"api_key": "sk-live-123456", "symbol": "SPY261120C00450000"}).encode("utf-16"), "not UTF-8"),
+        (json.dumps({"api_key": "sk-live-123456"}).encode("utf-16-le"), "not JSON"),
+        (b"\xff\xfe\x00\x01not-text", "not UTF-8"),
+        # A JSON scalar has no keys to redact: a string holding a secret is not an object.
+        (b'"api_key=sk-live-123456"', "not a JSON object or array"),
+    ],
+    ids=["text", "utf-16 with a mark", "utf-16 without a mark", "not text at all", "a json string"],
+)
+def test_a_request_body_that_cannot_be_redacted_is_dropped_never_written_and_the_drop_is_logged(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, sent: bytes, why: str
+) -> None:
     journal = _fixed(tmp_path)
-    sent = b"\xff\xfe\x00\x01not-text"
 
-    journal.record(
-        broker="alpaca",
-        endpoint=CaptureEndpoint.ORDERS,
-        method="post",
-        params={},
-        status=400,
-        raw_body=b"{}",
-        request_body=sent,
-    )
+    with caplog.at_level("WARNING", logger="app.broker.capture.journal"):
+        ok = journal.record(
+            broker="alpaca",
+            endpoint=CaptureEndpoint.ORDERS,
+            method="post",
+            params={},
+            status=200,
+            raw_body=b'{"status":"accepted"}',
+            request_body=sent,
+        )
 
-    [record] = _read_records(tmp_path / "alpaca" / "orders" / f"{_DAY}.jsonl")
-    assert record["request_body_encoding"] == "base64"
-    assert base64.b64decode(record["request_body"]) == sent
+    # The answer is evidence and is written; the body is not, in any encoding.
+    assert ok is True
+    path = tmp_path / "alpaca" / "orders" / f"{_DAY}.jsonl"
+    [record] = _read_records(path)
+    assert "request_body" not in record and "request_body_encoding" not in record
+    assert record["raw_body"] == '{"status":"accepted"}'
+    written = path.read_text(encoding="utf-8")
+    assert "sk-live-123456" not in written
+    assert base64.b64encode(sent).decode("ascii") not in written
+    [dropped] = [entry for entry in caplog.records if getattr(entry, "action", None) == "capture_request_body_dropped"]
+    assert (dropped.broker, dropped.endpoint) == ("alpaca", "orders")
+    assert why in dropped.reason
+    assert journal.failure_count == 0
 
 
 def test_a_secret_like_key_in_a_request_body_is_redacted_and_the_rest_is_kept(tmp_path: Path) -> None:

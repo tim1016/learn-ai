@@ -96,7 +96,9 @@ def _option_order_body(request: PreparedRequest | None, path: str) -> bytes | No
     Only a POST to the orders path with a JSON body of an option order. A
     stock order's body, a cancel and every read are left out: the journal
     keeps a request's body for the one case where the answer alone does not
-    show the order's own terms.
+    show the order's own terms. Whether the body may be kept is the journal's
+    to say, and it keeps only UTF-8 JSON: ``json.loads`` here also reads other
+    encodings, which the journal then drops.
     """
     if request is None or (request.method or "").upper() != "POST" or not path.rstrip("/").endswith("/orders"):
         return None

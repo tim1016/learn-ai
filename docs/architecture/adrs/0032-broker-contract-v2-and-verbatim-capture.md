@@ -177,8 +177,13 @@ spec).
    request does.** The answer to a submit does not show the terms the order
    was sent with (its legs' sides and intents, its net limit's sign). A stock
    order, a cancel and every read keep nothing: the body is kept for the one
-   case where the answer cannot stand for it. The body is journaled as sent;
-   a secret-like key in it is redacted, as in a query.
+   case where the answer cannot stand for it. The journal accepts it only as
+   UTF-8 JSON, an object or an array: parsed, a secret-like key's value
+   redacted as in a query, and written again. A body that is anything else
+   (text, a scalar, UTF-16, bytes) cannot be redacted, so it is never written,
+   as text or as base64: it is dropped and logged
+   (`capture_request_body_dropped`), and the answer's line is written all the
+   same.
 3. **The option contract reference has a family of its own,**
    `option_contracts`, so that the listing every option entry is checked
    against is journaled like every other answer.

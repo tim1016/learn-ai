@@ -19,10 +19,12 @@ with an optional ``"body_encoding":"base64"`` when the body is not valid UTF-8.
 A line of a request and its answer may also carry the two times of the
 exchange, ``"began_at_ms"`` (the request was sent) and ``"ended_at_ms"`` (the
 answer had been read whole), and, for an option order's submit only, the body
-that was sent as ``"request_body"`` (``"request_body_encoding":"base64"`` when
-it is not valid UTF-8). ``captured_at_ms`` is when the line was written, as it
-always was. A stream frame has no exchange and carries none of the three. No
-header is ever a field of a line (ADR 0032, amendment 2).
+that was sent as ``"request_body"``: kept only as UTF-8 JSON, parsed,
+redacted of secret-like keys and written again. A body that is anything else
+cannot be redacted, so it is dropped and logged (``capture_request_body_dropped``).
+``captured_at_ms`` is when the line was written, as it always was. A stream
+frame has no exchange and carries none of the three. No header is ever a field
+of a line (ADR 0032, amendment 2).
 
 Invariants:
 
@@ -154,21 +156,23 @@ def _encode_body(raw_body: bytes) -> tuple[str, str | None]:
         return base64.b64encode(raw_body).decode("ascii"), "base64"
 
 
-def _redact_request_body(text: str) -> str:
-    """The request body as it is journaled: verbatim, unless it holds a secret-like key.
+def _journaled_request_body(raw: bytes) -> tuple[str | None, str | None]:
+    """``(text, None)`` for a request body the journal may keep, ``(None, why)`` for one it may not.
 
-    A body that is not JSON is kept as sent, since its keys cannot be told.
-    One that is JSON is rewritten, with the value of every secret-like key
-    redacted, only when it has one; otherwise its bytes are untouched.
+    A body is kept only as UTF-8 JSON, an object or an array: parsed, with the
+    value of every secret-like key redacted, and written again. A body whose
+    keys cannot be told (text that is not JSON, a scalar, anything that is not
+    UTF-8) cannot be redacted, so it is never written: not as text, not as base64.
     """
     try:
-        parsed = json.loads(text)
+        parsed = json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        return None, "the body is not UTF-8"
     except ValueError:
-        return text
+        return None, "the body is not JSON"
     if not isinstance(parsed, (dict, list)):
-        return text
-    redacted = redact_value(parsed)
-    return text if redacted == parsed else json.dumps(redacted, ensure_ascii=False)
+        return None, "the body is not a JSON object or array"
+    return json.dumps(redact_value(parsed), ensure_ascii=False), None
 
 
 def _exchange_times(began_at_ms: int | None, ended_at_ms: int | None) -> dict[str, int]:
@@ -232,8 +236,9 @@ class CaptureJournal:
         caller's request unaffected, per the phase-1 read-path failure policy.
 
         ``began_at_ms`` and ``ended_at_ms`` are the exchange's own times, given
-        together; ``request_body`` is the body that was sent. A line that has
-        none of them is written without them, and reads as it always did.
+        together; ``request_body`` is the body that was sent, kept only as
+        UTF-8 JSON and otherwise dropped and logged. A line that has none of
+        them is written without them, and reads as it always did.
         """
         try:
             broker_component = _safe_component(broker, "broker")
@@ -254,12 +259,20 @@ class CaptureJournal:
                 record["body_encoding"] = body_encoding
             record.update(_exchange_times(began_at_ms, ended_at_ms))
             if request_body is not None:
-                request_text, request_encoding = _encode_body(request_body)
-                if request_encoding is None:
-                    record["request_body"] = _redact_request_body(request_text)
+                sent, dropped_because = _journaled_request_body(request_body)
+                if sent is not None:
+                    record["request_body"] = sent
                 else:
-                    record["request_body"] = request_text
-                    record["request_body_encoding"] = request_encoding
+                    # The answer's line is evidence all the same; the body is not, because it cannot be redacted.
+                    logger.warning(
+                        "broker capture dropped a request body it could not redact",
+                        extra={
+                            "action": "capture_request_body_dropped",
+                            "broker": broker,
+                            "endpoint": endpoint,
+                            "reason": dropped_because,
+                        },
+                    )
 
             line = json.dumps(record, ensure_ascii=False, default=str)
             path = self._path_for(broker_component, endpoint_component, captured_at_ms)

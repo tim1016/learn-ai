@@ -115,7 +115,7 @@ def sanitize_recording(
     scrubbed as text. Raises ``ValueError`` for a line with a body that is not
     UTF-8 text: it cannot be inspected, so it is not passed.
     """
-    if line.get("body_encoding") or line.get("request_body_encoding"):
+    if line.get("body_encoding"):
         raise ValueError("a body that is not UTF-8 text cannot be inspected, so it is not sanitised")
     recording = dict(line)
     if "params" in recording:
