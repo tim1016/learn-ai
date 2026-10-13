@@ -16,6 +16,7 @@ from app.options.requirement import (
     StructureMoneyRefused,
     broker_requirement,
     entry_money,
+    incremental_account_requirement,
     natural_net_price,
     round_trip_cost,
     round_trip_cost_is_over_limit,
@@ -267,3 +268,60 @@ def test_a_cost_is_not_judged_against_figures_that_cannot_be_an_entrys(
 def test_a_structure_its_money_could_not_be_worked_out_for_is_refused(legs: tuple[ResolvedLeg, ...], reason: str) -> None:
     with pytest.raises(ValidationError, match=reason):
         ResolvedStructure(legs=legs)
+
+
+# ── what an entry adds to the account (ADR 0076 decision 28) ─────────────
+
+_BOUGHT_CALL_SPREAD = (_leg("long_100", "long", "call", "100"), _leg("short_110", "short", "call", "110"))
+_SOLD_CALL_SPREAD = (_leg("short_190", "short", "call", "190"), _leg("long_200", "long", "call", "200"))
+
+
+def test_a_first_five_dollar_spread_on_a_flat_account_adds_its_whole_requirement() -> None:
+    assert incremental_account_requirement((), _sold_call_spread().legs, _ONE_STRUCTURE) == (0, 50_000)
+
+
+def test_a_bought_spread_on_a_flat_account_adds_nothing() -> None:
+    assert incremental_account_requirement((), _BOUGHT_CALL_SPREAD, _ONE_STRUCTURE) == (0, 0)
+
+
+def test_alpacas_two_spreads_that_need_1000_apart_need_nothing_together() -> None:
+    """The page's four-call example: the sold $190/$200 spread needs $1,000 and the bought $100/$110 one nothing."""
+    apart = (
+        incremental_account_requirement((), _SOLD_CALL_SPREAD, _ONE_STRUCTURE)[1]
+        + incremental_account_requirement((), _BOUGHT_CALL_SPREAD, _ONE_STRUCTURE)[1]
+    )
+    together = incremental_account_requirement((), (*_SOLD_CALL_SPREAD, *_BOUGHT_CALL_SPREAD), _ONE_STRUCTURE)
+
+    assert apart == 100_000
+    assert together == (0, 0)
+
+
+def test_an_entry_that_nets_against_what_is_held_shows_the_requirement_it_released_not_the_commitment() -> None:
+    """The account holds the sold spread; entering the bought one takes its $1,000 requirement to nothing."""
+    held = _SOLD_CALL_SPREAD
+
+    assert incremental_account_requirement(held, (*held, *_BOUGHT_CALL_SPREAD), _ONE_STRUCTURE) == (100_000, 0)
+
+
+def test_the_holdings_are_the_accounts_whole_and_not_the_entrys_alone() -> None:
+    """A second sold spread beside the first is counted with it, on the same expiry: $1,000 more, not $500 alone."""
+    first = (_leg("a_short", "short", "call", "450"), _leg("a_long", "long", "call", "455"))
+    second = (_leg("b_short", "short", "call", "460"), _leg("b_long", "long", "call", "465"))
+
+    assert incremental_account_requirement(first, (*first, *second), _ONE_STRUCTURE) == (50_000, 100_000)
+
+
+def test_the_requirement_is_in_the_sizes_own_multiplier() -> None:
+    assert incremental_account_requirement((), _sold_call_spread().legs, EntrySize(multiplier=10, units=1)) == (0, 5_000)
+
+
+@pytest.mark.parametrize("uncovered_in", ["before", "after"])
+def test_holdings_with_a_loss_that_has_no_limit_are_refused_whichever_side_they_are_on(uncovered_in: str) -> None:
+    uncovered = (_leg("lone_short", "short", "call", "450"),)
+    covered = _sold_call_spread().legs
+    before, after = (uncovered, covered) if uncovered_in == "before" else (covered, uncovered)
+
+    with pytest.raises(StructureMoneyRefused) as refused:
+        incremental_account_requirement(before, after, _ONE_STRUCTURE)
+
+    assert refused.value.reason is StructureMoneyRefusal.LOSS_UNBOUNDED

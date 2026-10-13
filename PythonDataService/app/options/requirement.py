@@ -6,6 +6,8 @@ Formula: with ``s_i`` = +1 for a bought leg and -1 for a sold one, ``r_i`` its
   payoff(p)   = Σ s_i · r_i · (max(p - K_i, 0) for a call, max(K_i - p, 0) for a put)
   requirement = N · m · max(0, -min over p ≥ 0 of payoff(p))
   portfolio requirement = Σ_underlying max_expiry(requirement for that expiry's holdings)
+  incremental account requirement = (portfolio requirement of the account's holdings
+    before an entry, and of them once it has filled)
   premium     = N · m · net price,  net price = Σ s_i · r_i · price_i   (positive is paid)
   commitment  = requirement + premium + fee provision
   loss at expiry (estimate) = max(0, premium - N · m · min over p ≥ 0 of payoff(p))
@@ -218,6 +220,39 @@ def portfolio_broker_requirement(legs: Sequence[ResolvedLeg], size: EntrySize) -
         cents = _payoff_cents(max(0, -_lowest_legs_payoff_thousandths(held)), size)
         by_underlying[root] = max(by_underlying.get(root, 0), cents)
     return sum(by_underlying.values())
+
+
+def incremental_account_requirement(
+    held_before: Sequence[ResolvedLeg], held_after: Sequence[ResolvedLeg], size: EntrySize
+) -> tuple[int, int]:
+    """The account's collateral before and after an entry, in whole cents: ``(before, after)``.
+
+    Both holdings are the account's own, signed, as legs: every contract
+    held by any bot of the account, bought as ``long`` and sold as
+    ``short``, ratios counting contracts. Alpaca values the account
+    together, so what an entry adds to the account (``after - before``) can
+    be less than the requirement of the entry's own legs, down to zero or
+    below. The bot's own commitment (``entry_money``) is independent of the
+    account's other holdings and never says that.
+
+    Formula: before = portfolio requirement(held_before) and after =
+      portfolio requirement(held_after), each ``portfolio_broker_requirement``.
+      A flat account entering a first $5-wide spread of 100 shares is
+      ``(0, 50_000)``.
+    Reference: Alpaca, "Options Level 3 Trading"
+      (https://docs.alpaca.markets/docs/options-level-3-trading, read
+      2026-10-08): positions are valued together, so two spreads that need
+      $1,000 apart can need $0 together; ADR 0076 decision 28.
+    Canonical implementation: this function over ``portfolio_broker_requirement``;
+      it adds no arithmetic of its own.
+    Validated against: tests/options/test_requirement.py (the page's
+      documented pair, and a first spread on a flat account) and golden
+      fixture OSM-002 through ``portfolio_broker_requirement``.
+
+    Refuses what ``portfolio_broker_requirement`` refuses, whichever of the
+    two holdings it is in.
+    """
+    return portfolio_broker_requirement(held_before, size), portfolio_broker_requirement(held_after, size)
 
 
 def _markets(structure: ResolvedStructure, quotes: Mapping[str, LegQuote]) -> dict[str, LegQuote]:

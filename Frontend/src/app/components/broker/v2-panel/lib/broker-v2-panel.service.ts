@@ -120,6 +120,12 @@ export type BotEndInput = components['schemas']['BotEndInput'];
 /** A bot's end in the backend's words: the headline, what happens, and any moved time. */
 export type BotEndView = components['schemas']['BotEndView'];
 export type BotEndPreviewRequest = components['schemas']['BotEndPreviewRequest'];
+/** A bot's option entries beside Alpaca's option buying power (ADR 0076 decision 26):
+ * every figure, count and sentence is Python-authored; the browser only draws them. */
+export type OptionBuyingPowerChecks = components['schemas']['OptionBuyingPowerChecksResponse'];
+export type OptionBuyingPowerCheck = components['schemas']['OptionBuyingPowerCheck'];
+/** The owner's review of a bot's under-reserved notice, and the comparisons as they then stand. */
+export type OptionBuyingPowerHoldReview = components['schemas']['OptionBuyingPowerHoldReviewResponse'];
 
 /**
  * HTTP client for the broker-v2 panel surface.
@@ -499,6 +505,29 @@ export class BrokerV2PanelService {
       this.http.post<HistoricalExecutionRecoveryReceipt>(
         operationUrl('custody_historical_recovery_confirm', { ...target, sid }),
         this.commandBody(target, 'custody_command', { plan, confirmation_token: plan.confirmation_token }),
+      ),
+    );
+  }
+
+  /** One bot's option entries beside Alpaca's option buying power, newest first, with the counts over all
+   * of them and the notice that holds the bot when one does. Reads the Clerk's books only. */
+  getOptionBuyingPowerChecks(target: ResourceTarget, sid: string): Promise<OptionBuyingPowerChecks> {
+    return firstValueFrom(
+      this.http.get<OptionBuyingPowerChecks>(operationUrl('custody_option_buying_power_checks', { ...target, sid })),
+    );
+  }
+
+  /**
+   * The owner has reviewed one bot's under-reserved notice: end it and let the bot enter again.
+   * The only way that notice ends. It sends nothing to Alpaca and reduces nothing; asked for a bot
+   * with no notice open it changes nothing and says so. `target` is frozen by the caller, whose
+   * durable key it carries.
+   */
+  reviewOptionBuyingPowerHold(target: ResourceTarget, sid: string): Promise<OptionBuyingPowerHoldReview> {
+    return firstValueFrom(
+      this.http.post<OptionBuyingPowerHoldReview>(
+        operationUrl('custody_option_buying_power_hold_review', { ...target, sid }),
+        this.commandBody(target, 'custody_command', {}),
       ),
     );
   }

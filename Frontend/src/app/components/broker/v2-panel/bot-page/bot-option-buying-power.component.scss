@@ -1,0 +1,97 @@
+@use '../../../../styles/filled-controls' as *;
+
+:host { display: block; min-width: 0; }
+
+.obp {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+
+  p { margin: 0; }
+}
+
+.obp__title { margin: 0; color: var(--text-primary); font-size: var(--fs-md); }
+
+.obp__counts { color: var(--text-primary); font-size: var(--fs-sm); font-weight: var(--fw-semi); }
+
+.obp__reasons {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0 0 0 var(--space-4);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.obp__hold {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border-light);
+  border-left: 3px solid var(--bear);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  font-size: var(--fs-xs);
+
+  h4 { margin: 0; color: var(--text-primary); font-size: var(--fs-sm); }
+}
+
+.obp__review { justify-self: start; @include soft-button; }
+
+.obp__entries {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.obp__entry {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border-light);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  font-size: var(--fs-xs);
+
+  &.is-held { border-left-color: var(--bear); }
+}
+
+.obp__entry-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+
+  code { color: var(--text-subtle); font-size: var(--fs-xxs); overflow-wrap: anywhere; }
+}
+
+.obp__chip {
+  margin-left: auto;
+  color: var(--bear);
+  font-size: var(--fs-xxs);
+  font-weight: var(--fw-semi);
+  text-transform: uppercase;
+}
+
+.obp__figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: var(--space-2);
+  margin: 0;
+
+  div { display: grid; gap: 0.1rem; }
+  dt { color: var(--text-subtle); font-size: var(--fs-xxs); text-transform: uppercase; }
+  dd { margin: 0; font-size: var(--fs-xs); font-weight: var(--fw-semi); }
+}
+
+.obp__note { color: var(--text-secondary); font-size: var(--fs-xs); }
+
+.obp__error { margin: 0; color: var(--bear); font-size: var(--fs-xs); }

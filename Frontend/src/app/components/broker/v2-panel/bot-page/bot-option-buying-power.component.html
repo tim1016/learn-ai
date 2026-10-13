@@ -1,0 +1,106 @@
+@if (checks.error() && page() === null) {
+  <p class="obp__error" role="alert">Could not load this bot’s comparison with Alpaca.</p>
+}
+
+@if (page(); as state) {
+  <section class="obp" aria-labelledby="obp-title">
+    <h3 id="obp-title" class="obp__title">Alpaca option buying power</h3>
+
+    <p class="obp__counts">{{ state.counts.sentence }}</p>
+    @if (state.counts.not_compared_by_reason.length > 0) {
+      <ul class="obp__reasons" aria-label="Why entries were not compared">
+        @for (reason of state.counts.not_compared_by_reason; track reason.reason_code) {
+          <li><strong>{{ reason.count }}</strong> {{ reason.sentence }}</li>
+        }
+      </ul>
+    }
+
+    @if (state.hold; as hold) {
+      <div class="obp__hold" role="status">
+        <h4>{{ hold.headline }}</h4>
+        <p>{{ hold.explanation }}</p>
+        <p>{{ hold.impact }}</p>
+        <p>{{ hold.next_step }}</p>
+        <p class="obp__note">Raised <app-timestamp-display [value]="hold.raised_at_ms" mode="local" /></p>
+        <button
+          type="button"
+          class="obp__review"
+          [disabled]="busy()"
+          [attr.aria-busy]="reviewing()"
+          (click)="confirming.set(true)"
+        >{{ reviewing() ? 'Recording the review…' : 'Review this notice…' }}</button>
+        @if (refusal(); as refused) {
+          <app-bot-end-refusal [refusal]="refused" announce />
+        }
+      </div>
+    }
+
+    @if (state.checks.length > 0) {
+      <ol class="obp__entries" aria-label="Option entries, newest first">
+        @for (check of state.checks; track check.order_ref) {
+          <li class="obp__entry" [class.is-held]="check.holds">
+            <div class="obp__entry-head">
+              <strong>{{ check.result_label }}</strong>
+              <code>{{ check.contract }}</code>
+              @if (check.holds) {
+                <span class="obp__chip">Named by the notice</span>
+              }
+            </div>
+            <p>{{ check.sentence }}</p>
+            <dl class="obp__figures">
+              <div><dt>Set aside for the entry</dt><dd>{{ money(check.set_aside.dollars) }}</dd></div>
+              @if (check.first_reading; as first) {
+                <div>
+                  <dt>Option buying power before</dt>
+                  <dd>
+                    {{ first.buying_power ? money(first.buying_power.dollars) : 'No figure stated' }}
+                    <span class="obp__note">read <app-timestamp-display [value]="first.ended_ms" mode="local" granularity="time" /></span>
+                  </dd>
+                </div>
+              }
+              @if (check.second_reading; as second) {
+                <div>
+                  <dt>Option buying power after</dt>
+                  <dd>
+                    {{ second.buying_power ? money(second.buying_power.dollars) : 'No figure stated' }}
+                    <span class="obp__note">read <app-timestamp-display [value]="second.ended_ms" mode="local" granularity="time" /></span>
+                  </dd>
+                </div>
+              }
+              @if (check.fall; as fall) {
+                <div><dt>Change in the figure</dt><dd>{{ money(fall.dollars) }}</dd></div>
+              }
+              @if (check.account_requirement_before; as before) {
+                @if (check.account_requirement_after; as after) {
+                  <div>
+                    <dt>Account requirement</dt>
+                    <dd>
+                      {{ money(before.dollars) }} to {{ money(after.dollars) }}
+                      @if (check.account_requirement_change; as change) {
+                        <span class="obp__note">({{ money(change.dollars) }})</span>
+                      }
+                    </dd>
+                  </div>
+                }
+              }
+            </dl>
+            <p class="obp__note">{{ check.account_requirement_sentence }}</p>
+          </li>
+        }
+      </ol>
+    }
+  </section>
+}
+
+@if (confirming() && page()?.hold; as hold) {
+  <app-typed-halt-confirm
+    heading="Review this notice"
+    [message]="hold.headline"
+    [accountId]="accountId()"
+    [consequence]="hold.review_consequence"
+    requiredToken=""
+    confirmLabel="Mark as reviewed"
+    (confirmed)="confirmReview()"
+    (cancelled)="confirming.set(false)"
+  />
+}

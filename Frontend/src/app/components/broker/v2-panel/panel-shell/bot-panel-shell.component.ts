@@ -46,7 +46,11 @@ import type {
   PanelActionTrigger,
 } from '../lib/broker-v2-panel.types';
 import { FEED_CONTINUITY_NOT_RECORDED, feedContinuityFor } from '../lib/broker-v2-panel.types';
-import { BrokerV2PanelService, type BotEndInput } from '../lib/broker-v2-panel.service';
+import {
+  BrokerV2PanelService,
+  type BotEndInput,
+  type OptionBuyingPowerHoldReview,
+} from '../lib/broker-v2-panel.service';
 import { BotPanelLiveStore } from '../lib/bot-panel-live-store.service';
 import { orderSymbol } from '../../../../shared/bot-instrument/bot-instrument.component';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
@@ -84,6 +88,7 @@ import { BotPageHeaderComponent } from '../bot-page/bot-page-header.component';
 import { BotPageNoticesComponent } from '../bot-page/bot-page-notices.component';
 import { BotToolbarComponent } from '../bot-page/bot-toolbar.component';
 import { BotHealthGroupsComponent } from '../bot-page/bot-health-groups.component';
+import { BotOptionBuyingPowerComponent } from '../bot-page/bot-option-buying-power.component';
 import { BotOrderRecordsComponent } from '../bot-page/bot-order-records.component';
 import { BotSetupComponent } from '../bot-page/bot-setup.component';
 import { OperatorRunHistoryComponent } from '../bot-run-history/operator-run-history.component';
@@ -253,6 +258,7 @@ const RUN_TAPE_PADDING_MS = 15 * 60_000;
     BotEndCardComponent,
     SettleOrderTicketComponent,
     BotHealthGroupsComponent,
+    BotOptionBuyingPowerComponent,
     BotOrderRecordsComponent,
     BotPageHeaderComponent,
     BotPageNoticesComponent,
@@ -890,6 +896,34 @@ export class BotPanelShellComponent {
       await this.panelSvc.editBotEnd(this.commandTarget(fencedTarget(this.target(), fence)), this.sid(), choice);
     } catch (error) {
       this.refreshLaneIfStale(deriveActionRejection(error, 'This bot’s end could not be changed.'));
+      throw error;
+    } finally {
+      // Never rejects: the live store keeps a failed read as its error state.
+      await this.liveStore.refresh();
+      this.actionPending.set(false);
+    }
+  };
+
+  /**
+   * Record the owner's review of this bot's under-reserved notice (#3098): a
+   * command like every other this page sends -- bound to the lane the owner
+   * was shown (#2068) and one at a time. It sends nothing to Alpaca and
+   * changes no order. The option card shows the refusal it rejects with, and
+   * the panel is re-read whatever the answer.
+   */
+  protected readonly reviewOptionBuyingPowerHold = async (): Promise<OptionBuyingPowerHoldReview> => {
+    if (this.actionPending()) throw new Error(ACTION_ALREADY_PENDING_MESSAGE);
+    const fence = this.openFence();
+    const verdict = laneFenceVerdict(fence, this.fleetDirectory.lane(this.broker(), this.clerkId()));
+    if (!verdict.ok) throw new Error(verdict.message);
+    this.actionPending.set(true);
+    try {
+      return await this.panelSvc.reviewOptionBuyingPowerHold(
+        this.commandTarget(fencedTarget(this.target(), fence)),
+        this.sid(),
+      );
+    } catch (error) {
+      this.refreshLaneIfStale(deriveActionRejection(error, 'This notice could not be reviewed.'));
       throw error;
     } finally {
       // Never rejects: the live store keeps a failed read as its error state.

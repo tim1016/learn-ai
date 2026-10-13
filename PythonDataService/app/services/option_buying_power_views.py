@@ -1,13 +1,17 @@
 """A bot's option entries beside Alpaca's option buying power, as a page is served them (ADR 0076 decision 26).
 
-Reads the Clerk's books and authors every word. Nothing is computed here:
-each figure is the comparison's own record (``ENTRY_BUYING_POWER_COMPARED``),
-and an entry with no record yet says so by name.
+Reads the Clerk's books and authors every word. Nothing is computed here but
+the counts and one subtraction: each figure is the comparison's own record
+(``ENTRY_BUYING_POWER_COMPARED``), and an entry with no record yet says so by
+name. The counts are over every option entry of the bot, so an entry nobody
+compared is never silent.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from decimal import Decimal
+from itertools import islice
 from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.money import dollars
@@ -20,15 +24,17 @@ from app.schemas.option_buying_power_check import (
     OptionBuyingPowerAmount,
     OptionBuyingPowerCheck,
     OptionBuyingPowerChecksResponse,
+    OptionBuyingPowerCounts,
     OptionBuyingPowerHold,
     OptionBuyingPowerHoldEntry,
     OptionBuyingPowerReading,
+    OptionBuyingPowerReasonCount,
 )
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 
-# How many of a bot's entries one answer carries, newest first.
+# How many of a bot's entries one answer lists, newest first. The counts are over all of them.
 CHECKS_SERVED = 20
 
 RESULT_LABELS: dict[BuyingPowerCheckResult, str] = {
@@ -97,6 +103,13 @@ REASON_SENTENCES: dict[NotComparedReason, str] = {
     NotComparedReason.NOT_COMPARED_YET: "The comparison for this entry has not been made yet.",
 }
 
+_REQUIREMENT_NOT_RECORDED = "The account's own option requirement was not recorded across this entry."
+
+REVIEW_CONSEQUENCE = (
+    "Once you have reviewed it, this bot may open new option entries again. Nothing is sent to Alpaca "
+    "and no order changes."
+)
+
 
 def option_buying_power_checks(
     repo: ClerkSqliteRepository, *, strategy_instance_id: str, simulation: bool, judged: bool
@@ -109,18 +122,18 @@ def option_buying_power_checks(
             "WHERE o.role = 'ENTRY' AND e.strategy_instance_id = ? AND ("
             "EXISTS (SELECT 1 FROM order_contracts bound WHERE bound.order_ref=o.order_ref) OR "
             "EXISTS (SELECT 1 FROM option_order_legs leg WHERE leg.parent_order_ref=o.order_ref)) "
-            "ORDER BY o.submitted_at_ms DESC, o.order_ref DESC LIMIT ?",
-            (strategy_instance_id, CHECKS_SERVED),
+            "ORDER BY o.submitted_at_ms DESC, o.order_ref DESC",
+            (strategy_instance_id,),
         ).fetchall()
+        recorded = [_recorded(repo, row["effect_operation_id"]) for row in rows]
         cause = under_reserved_cause(repo, strategy_instance_id=strategy_instance_id)
         held = frozenset() if cause is None else frozenset(entry.order_ref for entry in cause.entries)
         checks = [
             check
-            for row in rows
+            for row, facts in islice(zip(rows, recorded, strict=True), CHECKS_SERVED)
             if (
                 check := _check(
-                    repo, order_ref=row["order_ref"], effect_operation_id=row["effect_operation_id"],
-                    simulation=simulation, held=held,
+                    repo, order_ref=row["order_ref"], facts=facts, simulation=simulation, held=held,
                 )
             )
             is not None
@@ -142,6 +155,7 @@ def option_buying_power_checks(
                 explanation=notice["explanation"],
                 impact=notice["operator_impact"],
                 next_step=notice["next_step"],
+                review_consequence=REVIEW_CONSEQUENCE,
                 raised_at_ms=notice["observed_at_ms"],
                 entries=[
                     OptionBuyingPowerHoldEntry(
@@ -152,19 +166,54 @@ def option_buying_power_checks(
                 ],
             )
         ),
+        counts=_counts(recorded, simulation=simulation),
         checks=checks,
     )
 
 
+def _recorded(repo: ClerkSqliteRepository, effect_operation_id: str) -> EntryBuyingPowerComparedFacts | None:
+    """One entry's comparison record, or ``None`` when none is on the books."""
+    recorded = repo.first_effect_transition(effect_operation_id=effect_operation_id, transition_kind=COMPARED_KIND)
+    return None if recorded is None else EntryBuyingPowerComparedFacts.from_facts_json(recorded["facts_json"])
+
+
+def _counts(recorded: list[EntryBuyingPowerComparedFacts | None], *, simulation: bool) -> OptionBuyingPowerCounts:
+    """How many entries came to a result and, for the rest, why not: an entry with no record counts as that."""
+    unmade = NotComparedReason.SIMULATION if simulation else NotComparedReason.NOT_COMPARED_YET
+    reasons: Counter[NotComparedReason] = Counter()
+    for facts in recorded:
+        if facts is None:
+            reasons[unmade] += 1
+        elif facts.reason_code is not None:
+            reasons[NotComparedReason(facts.reason_code)] += 1
+    total, not_compared = len(recorded), sum(reasons.values())
+    compared = total - not_compared
+    return OptionBuyingPowerCounts(
+        entries=total,
+        compared=compared,
+        not_compared=not_compared,
+        not_compared_by_reason=[
+            OptionBuyingPowerReasonCount(reason_code=reason.value, sentence=REASON_SENTENCES[reason], count=count)
+            for reason, count in sorted(reasons.items(), key=lambda item: (-item[1], item[0].value))
+        ],
+        sentence=(
+            "This bot has made no option entry."
+            if total == 0
+            else f"{compared} of {total} option {'entry was' if total == 1 else 'entries were'} compared with "
+            f"Alpaca's option buying power, {not_compared} not."
+        ),
+    )
+
+
 def _check(
-    repo: ClerkSqliteRepository, *, order_ref: str, effect_operation_id: str, simulation: bool, held: frozenset[str]
+    repo: ClerkSqliteRepository, *, order_ref: str, facts: EntryBuyingPowerComparedFacts | None, simulation: bool,
+    held: frozenset[str],
 ) -> OptionBuyingPowerCheck | None:
     entry = option_entry_of_order(repo, order_ref)
     if entry is None:
         return None
-    recorded = repo.first_effect_transition(effect_operation_id=effect_operation_id, transition_kind=COMPARED_KIND)
     set_aside = _amount(entry.money.entry_commitment_cents)
-    if recorded is None:
+    if facts is None:
         reason = NotComparedReason.SIMULATION if simulation else NotComparedReason.NOT_COMPARED_YET
         return OptionBuyingPowerCheck(
             order_ref=order_ref, contract=", ".join(leg.symbol for leg in entry.leg_terms), result="unknown",
@@ -172,8 +221,9 @@ def _check(
             sentence=REASON_SENTENCES[reason], contracts_asked=sum(entry.units * leg.ratio for leg in entry.legs), contracts_filled=None,
             set_aside=set_aside, set_aside_for_filled=None, premium_paid=None, first_reading=None,
             second_reading=None, sent_at_ms=None, fall=None, compared_at_ms=None, holds=False,
+            account_requirement_before=None, account_requirement_after=None, account_requirement_change=None,
+            account_requirement_sentence=_REQUIREMENT_NOT_RECORDED,
         )
-    facts = EntryBuyingPowerComparedFacts.from_facts_json(recorded["facts_json"])
     result = BuyingPowerCheckResult(facts.result)
     return OptionBuyingPowerCheck(
         order_ref=order_ref,
@@ -193,6 +243,27 @@ def _check(
         fall=_amount(facts.fall_cents),
         compared_at_ms=facts.compared_at_ms,
         holds=order_ref in held,
+        account_requirement_before=_amount(facts.account_requirement_before_cents),
+        account_requirement_after=_amount(facts.account_requirement_after_cents),
+        account_requirement_change=_amount(_requirement_change(facts)),
+        account_requirement_sentence=_requirement_sentence(facts),
+    )
+
+
+def _requirement_change(facts: EntryBuyingPowerComparedFacts) -> int | None:
+    before, after = facts.account_requirement_before_cents, facts.account_requirement_after_cents
+    return None if before is None or after is None else after - before
+
+
+def _requirement_sentence(facts: EntryBuyingPowerComparedFacts) -> str:
+    before, after = facts.account_requirement_before_cents, facts.account_requirement_after_cents
+    if before is None or after is None:
+        return _REQUIREMENT_NOT_RECORDED
+    change = after - before
+    moved = "did not change" if change == 0 else f"{'rose' if change > 0 else 'fell'} by ${dollars(abs(change))}"
+    return (
+        f"The account's option requirement, over every contract the books hold for its bots, {moved} across this "
+        f"entry: ${dollars(before)} before and ${dollars(after)} after."
     )
 
 
