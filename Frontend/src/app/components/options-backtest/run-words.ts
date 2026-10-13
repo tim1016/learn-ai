@@ -1,6 +1,6 @@
 import { formatReceiptLabel } from '../../shared/pipes/receipt-label.pipe';
 import type { JobEventRecord, JobState } from '../../services/jobs.service';
-import type { CapitalEvidence, CapitalInvalidEvent, SlippageTolerance } from './options-backtest.types';
+import type { CapitalEvidence, CapitalInvalidEvent, EntryRefusalCount, SlippageTolerance } from './options-backtest.types';
 
 /**
  * Words and small shapes for a run on screen. Every figure stays the
@@ -94,4 +94,40 @@ export function requirementRuleWords(rule: string): string {
 /** A month as `YYYY-MM`, from the year and month the server counts it by. */
 export function monthLabel(year: number, month: number): string {
   return `${year}-${String(month).padStart(2, '0')}`;
+}
+
+/**
+ * The reasons an entry is refused for, apart from cash, each with its words and in the order they are read (#3109). The
+ * cover that did not trade is an illiquid wing and the cover not yet held is a rule of the setup, so the two are told apart.
+ */
+const ENTRY_REFUSAL_WORDS: Readonly<Record<string, string>> = {
+  cover_did_not_trade: 'Entries refused: their cover did not trade',
+  cover_not_yet_held: 'Entries refused: their cover was not yet held',
+  second_expiry: 'Entries refused for a second expiry',
+  other_side: 'Entries refused for a contract held on the other side',
+  sale_at_zero: 'Sales to open not taken at zero',
+};
+
+/** One count of "What did not trade": what it counts and how many, or null when the run was saved before it was counted. */
+export interface RefusalRow {
+  readonly reason: string;
+  readonly label: string;
+  readonly count: number | null;
+}
+
+/** A reason in words. A reason this page has no words for is shown as a receipt label, never as its raw token. */
+export function entryRefusalWords(reason: string): string {
+  return ENTRY_REFUSAL_WORDS[reason] ?? formatReceiptLabel(reason);
+}
+
+/**
+ * Each refusal of an entry with its count, in the order they are read. A run saved before they were counted has none
+ * to show, and each reads as not recorded; that is not a count of zero.
+ */
+export function entryRefusalRows(counts: readonly EntryRefusalCount[] | null | undefined): readonly RefusalRow[] {
+  const known = Object.keys(ENTRY_REFUSAL_WORDS);
+  if (counts == null) return known.map((reason) => ({ reason, label: entryRefusalWords(reason), count: null }));
+  const counted = new Map<string, number>(counts.map((each) => [each.reason, each.count]));
+  const reasons = [...known.filter((reason) => counted.has(reason)), ...[...counted.keys()].filter((reason) => !known.includes(reason))];
+  return reasons.map((reason) => ({ reason, label: entryRefusalWords(reason), count: counted.get(reason) ?? 0 }));
 }

@@ -26,6 +26,10 @@ batch at a time, so that a run of any size is never held whole (``run_detail.exp
   last bar its contract traded in), ``exit_seen_usd`` is empty, and ``exit_fee_usd`` is ``0`` because no order was
   made. So a sum of ``exit_price_usd`` over every row adds sale prices to buy-back prices to marks: add the rows of one
   ``exit_kind`` at a time.
+* ``side`` is the last column (#3109): ``buy`` for a leg that opened by a purchase and ``sell`` for one that opened by a
+  sale, the side of the entry fill. It says how the rest of the row reads: a ``sell`` leg's ``entry_*`` columns are a
+  sale and its ``exit_*`` columns a buy-back, and a ``sell`` leg whose ``exit_kind`` is ``mark`` is owed. A run stored
+  before sold legs has it too, ``buy`` on every row.
 """
 
 from __future__ import annotations
@@ -73,6 +77,7 @@ CSV_HEADER: tuple[str, ...] = (
     "entry_fee_usd",
     "exit_fee_usd",
     "pnl_usd",
+    "side",
 )
 
 
@@ -120,6 +125,7 @@ def _row(stored: StoredTrade) -> list[str | int]:
         _text(trade.entry_fee_usd),
         _text(trade.exit_fee_usd),
         _text(trade.pnl_usd),
+        entry.side,
     ]
 
 

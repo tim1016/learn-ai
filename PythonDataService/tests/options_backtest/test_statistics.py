@@ -29,6 +29,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.lean_sidecar.trading_calendar import expected_sessions
+from app.options.contract import OptionContract
 from app.options_backtest.market import PickRefusal, PickRefused
 from app.options_backtest.results import (
     EntryRefusal,
@@ -389,6 +390,171 @@ def test_each_count_of_what_did_not_trade_is_its_own_figure_when_no_two_counts_a
         (PickRefusal.STRIKE_NOT_LISTED, 3),  # 2 in session 5, 1 in 7
         (PickRefusal.NOT_STANDARD, 0),
     )
+
+
+def test_each_refusal_of_a_sale_or_its_cover_is_its_own_count_and_apart_from_the_count_for_cash() -> None:
+    """Hand-written sessions: 1 cover that did not trade, 2 not yet held, 3 second expiry, 4 other side, 5 sale at zero.
+
+    The cash count, which every run has always had, is 6 and is not among them. Zero counts are listed too.
+    """
+    cover, second = EventKind.ENTRY_REFUSED_FOR_COVER, EventKind.ENTRY_REFUSED_FOR_SECOND_EXPIRY
+    other, zero = EventKind.ENTRY_REFUSED_FOR_OTHER_SIDE, EventKind.SALE_NOT_TAKEN_AT_ZERO
+    sessions = [
+        a_session(
+            SEP_29,
+            "10000.00",
+            status=SessionStatus.NO_TRADE,
+            events=_many(cover, 1, reason=EntryRefusal.COVER_DID_NOT_TRADE.value)
+            + _many(cover, 2, reason=EntryRefusal.COVER_NOT_YET_HELD.value)
+            + _many(second, 1, reason=EntryRefusal.SECOND_EXPIRY.value),
+        ),
+        a_session(
+            SEP_30,
+            "10000.00",
+            status=SessionStatus.NO_TRADE,
+            events=_many(second, 2, reason=EntryRefusal.SECOND_EXPIRY.value, entry_number=1)
+            + _many(other, 4, reason=EntryRefusal.OTHER_SIDE.value)
+            + _many(zero, 5, reason=EntryRefusal.SALE_AT_ZERO.value)
+            + _many(EventKind.ENTRY_REFUSED_FOR_CASH, 6, reason=EntryRefusal.CASH_SHORT.value),
+        ),
+    ]
+
+    summary = summarize_run(sessions, starting_cash_usd=STARTING)
+
+    assert summary.entries_refused_by_reason == (
+        (EntryRefusal.OTHER_SIDE, 4),
+        (EntryRefusal.SECOND_EXPIRY, 3),
+        (EntryRefusal.COVER_DID_NOT_TRADE, 1),
+        (EntryRefusal.COVER_NOT_YET_HELD, 2),
+        (EntryRefusal.SALE_AT_ZERO, 5),
+    )
+    assert summary.entries_refused_for_cash == 6
+
+
+def test_a_run_that_only_buys_counts_each_refusal_of_a_sale_as_none_and_not_as_not_recorded() -> None:
+    summary = summarize_run(_scene(), starting_cash_usd=STARTING)
+
+    # Recorded and zero is a different thing from "not recorded", which is a run stored before they were counted.
+    assert summary.entries_refused_by_reason == (
+        (EntryRefusal.OTHER_SIDE, 0),
+        (EntryRefusal.SECOND_EXPIRY, 0),
+        (EntryRefusal.COVER_DID_NOT_TRADE, 0),
+        (EntryRefusal.COVER_NOT_YET_HELD, 0),
+        (EntryRefusal.SALE_AT_ZERO, 0),
+    )
+
+
+def test_a_refusal_event_with_no_reason_is_not_counted_by_a_guess() -> None:
+    session = a_session(
+        SEP_29,
+        "10000.00",
+        status=SessionStatus.NO_TRADE,
+        events=(an_event(EventKind.ENTRY_REFUSED_FOR_COVER, "short"),),
+    )
+
+    with pytest.raises(ValueError, match="carries no reason"):
+        summarize_run([session], starting_cash_usd=STARTING)
+
+
+PUT_495, PUT_500 = contract("put", "495"), contract("put", "500")
+PUT_500_LATER = OptionContract.of(root="SPY", expiry_date=date(2026, 10, 16), right="put", strike=D("500"))
+
+
+def _a_covered_spread() -> TableMarket:
+    return TableMarket(
+        underlying=steady("500"),
+        picks=picked(("long", "500", PUT_495), ("short", "500", PUT_500)),
+        options={PUT_495: flat("1.00", 5, 61), PUT_500: flat("2.20", 5, 61)},
+    )
+
+
+def test_a_sold_leg_closed_with_its_protection_is_counted_by_that_name_and_not_as_a_stop() -> None:
+    # The cover's stop (25 percent under 1.00 is 0.75) is hit at minute 10, which closes the sold leg with it.
+    cover = {**flat("1.00", 5, 9), 10: ("1.00", "0.70"), **flat("0.70", 11, 61)}
+    market = TableMarket(
+        underlying=steady("500"),
+        picks=picked(("long", "500", PUT_495), ("short", "500", PUT_500)),
+        options={PUT_495: cover, PUT_500: flat("2.20", 5, 61)},
+    )
+    outcome = replay(setup(leg("long", "put", stop=("percent", "25")), leg("short", "put", side="sell")), market)
+
+    summary = summarize_run([a_session_of(SEP_29, outcome, "10000.00")], starting_cash_usd=STARTING)
+
+    # One stop, the cover's, and one sold leg that went with it: each under its own name.
+    assert dict(summary.exits_by_reason) == {
+        ExitReason.STOP: 1,
+        ExitReason.SQUARE_OFF: 0,
+        ExitReason.CLOSED_WITH_ITS_PROTECTION: 1,
+        ExitReason.EXIT_TIME: 0,
+        ExitReason.MARKED_NOT_SOLD: 0,
+        ExitReason.MARKED_NOT_BOUGHT_BACK: 0,
+    }
+
+
+def test_a_run_whose_sessions_each_refuse_a_sale_for_another_reason_counts_each_by_its_reason() -> None:
+    sold = leg("short", "put", side="sell")
+    cover_did_not_trade = replay(
+        setup(leg("long", "put"), sold),
+        TableMarket(
+            underlying=steady("500"),
+            picks=picked(("long", "500", PUT_495), ("short", "500", PUT_500)),
+            # The cover traded at minute 5 and not at minute 6, where the orders fill.
+            options={PUT_495: {5: ("1.00", "1.00"), **flat("1.00", 7, 61)}, PUT_500: flat("2.20", 5, 61)},
+        ),
+    )
+    cover_not_yet_held = replay(
+        setup(leg("long", "put", momentum=("percent_up", "25")), sold),
+        TableMarket(
+            underlying=steady("500"),
+            picks=picked(("long", "500", PUT_495), ("short", "500", PUT_500)),
+            # The cover waits for 1.25 and the sale does not wait: it finds no cover held at minute 6.
+            options={
+                PUT_495: {**flat("1.00", 5, 7), 8: ("1.00", "1.30"), **flat("1.30", 9, 61)},
+                PUT_500: flat("2.20", 5, 61),
+            },
+        ),
+    )
+    second_expiry = replay(
+        setup(leg("long", "put"), sold),
+        TableMarket(
+            underlying=steady("500"),
+            picks=picked(("long", "500", PUT_495), ("short", "500", PUT_500_LATER)),
+            options={PUT_495: flat("1.00", 5, 61), PUT_500_LATER: flat("2.20", 5, 61)},
+        ),
+    )
+    other_side = replay(
+        setup(leg("a", "put"), leg("b", "put", side="sell")),
+        TableMarket(
+            underlying=steady("500"),
+            picks=picked(("a", "500", PUT_500), ("b", "500", PUT_500)),
+            options={PUT_500: flat("2.00", 5, 61)},
+        ),
+    )
+    sale_at_zero = replay(
+        setup(leg("long", "put"), sold, slippage="0.3"),
+        TableMarket(
+            underlying=steady("500"),
+            picks=picked(("long", "500", PUT_495), ("short", "500", PUT_500)),
+            # 0.01 x (1 - 0.003) = 0.00997, rounded down to the cent: nothing.
+            options={PUT_495: flat("1.00", 5, 61), PUT_500: flat("0.01", 5, 61)},
+        ),
+    )
+    covered = replay(setup(leg("long", "put"), sold), _a_covered_spread())
+    days = (SEP_29, SEP_30, OCT_1, OCT_2, OCT_5, OCT_6)
+    outcomes = (cover_did_not_trade, cover_not_yet_held, second_expiry, other_side, sale_at_zero, covered)
+    sessions = [a_session_of(day, outcome, "10000.00") for day, outcome in zip(days, outcomes, strict=True)]
+
+    summary = summarize_run(sessions, starting_cash_usd=STARTING)
+
+    # One session made each refusal once; the sixth traded the spread and refused nothing.
+    assert summary.entries_refused_by_reason == (
+        (EntryRefusal.OTHER_SIDE, 1),
+        (EntryRefusal.SECOND_EXPIRY, 1),
+        (EntryRefusal.COVER_DID_NOT_TRADE, 1),
+        (EntryRefusal.COVER_NOT_YET_HELD, 1),
+        (EntryRefusal.SALE_AT_ZERO, 1),
+    )
+    assert summary.entries_refused_for_cash == 0
 
 
 CALL, CALL_498 = contract("call", "500"), contract("call", "498")

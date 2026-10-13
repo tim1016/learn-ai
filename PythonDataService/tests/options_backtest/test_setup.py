@@ -408,10 +408,10 @@ def test_a_leg_with_a_re_entry_rule_needs_a_stop_that_can_reach_it(
     assert "nothing can stop it out" in message and "give it a stop loss" in message
 
 
-def test_the_two_shipped_examples_still_validate() -> None:
+def test_the_three_shipped_examples_still_validate() -> None:
     from app.options_backtest.saved_setups import EXAMPLE_SETUPS
 
-    assert [example.setup is not None for example in EXAMPLE_SETUPS] == [True, True]
+    assert [example.setup is not None for example in EXAMPLE_SETUPS] == [True, True, True]
     for example in EXAMPLE_SETUPS:
         assert example.setup is not None
         assert OptionsBacktestSetup.model_validate(example.setup.model_dump(mode="json")) == example.setup
@@ -496,10 +496,13 @@ def test_a_leg_with_no_side_is_bought() -> None:
     assert setup.legs[0].side == "buy"
 
 
-def test_the_two_shipped_examples_dump_to_the_bytes_they_dumped_to_before_a_leg_had_a_side() -> None:
+def test_the_two_shipped_examples_that_buy_dump_to_the_bytes_they_dumped_to_before_a_leg_had_a_side() -> None:
     from app.options_backtest.saved_setups import EXAMPLE_SETUPS
 
-    for example in EXAMPLE_SETUPS:
+    # The third example sells, so it has no bytes from before a leg could be sold: only the sold leg writes a side.
+    buying = [example for example in EXAMPLE_SETUPS if example.name in _MASTER_BYTES]
+    assert len(buying) == 2
+    for example in buying:
         assert example.setup is not None
         assert example.setup.model_dump_json() == _MASTER_BYTES[example.name], example.name
 

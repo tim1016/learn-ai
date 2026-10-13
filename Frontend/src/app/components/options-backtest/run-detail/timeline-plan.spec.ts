@@ -6,6 +6,7 @@ import { buildTimelinePlan, NO_MINUTES, NO_REASON_GIVEN, UNPLACEABLE } from './t
 import {
   at, CALL_585, CALL_CLOSES, PUT_585, SCENE_LEVELS, SERIES_WORDS, sessionDetail, shownSeries, skippedSession, withheldSeries,
 } from './testing/detail-fixtures';
+import { owedSession, PUT_580, spreadSession } from './testing/selling-fixtures';
 
 /** Chart seconds of the close of the bar `minute` minutes after the toy session's open. */
 const sec = (minute: number) => at(minute) / 1000;
@@ -174,8 +175,8 @@ describe('the plan of a traded day: the fills and the marks', () => {
     const twice = buildTimelinePlan(
       sessionDetail({
         fills: [
-          { kind: 'entry', leg_id: 'call', entry_number: 0, contract: CALL_585.symbol, contracts: 1, bar_close_ms: at(8), seen_usd: '2.55', filled_usd: '2.57', exit_reason: null },
-          { kind: 'entry', leg_id: 'call_2', entry_number: 0, contract: CALL_585.symbol, contracts: 1, bar_close_ms: at(8), seen_usd: '2.55', filled_usd: '2.58', exit_reason: null },
+          { kind: 'entry', side: 'buy', leg_id: 'call', entry_number: 0, contract: CALL_585.symbol, contracts: 1, bar_close_ms: at(8), seen_usd: '2.55', filled_usd: '2.57', exit_reason: null },
+          { kind: 'entry', side: 'buy', leg_id: 'call_2', entry_number: 0, contract: CALL_585.symbol, contracts: 1, bar_close_ms: at(8), seen_usd: '2.55', filled_usd: '2.58', exit_reason: null },
         ],
         marks: [],
       }),
@@ -393,3 +394,75 @@ describe('the plan of a day with a series the server withholds', () => {
   });
 });
 
+
+describe('the plan of a covered spread: a sold leg’s fills, its stop and its mark (#3109)', () => {
+  const plan = buildTimelinePlan(spreadSession());
+  const hosts = plan.series.filter((each) => each.role === 'fills');
+  const sold = "SPY Oct 16 '26 585 Put";
+  const cover = "SPY Oct 16 '26 580 Put";
+
+  it('points each arrow the way the order traded, and names it by the side: a sale to open down, a buy-back up', () => {
+    expect(plan.panes.map((pane) => pane.caption)).toEqual(['SPY', cover, sold]);
+    expect(hosts.map((host) => host.pane)).toEqual([1, 2]);
+    // The cover is a bought leg: it reads as a bought leg always has.
+    expect(hosts[0].markers).toEqual([
+      { id: 'fill:SPY261016P00580000:long_put:0:entry', time: sec(4), price: 1.42, shape: 'arrowUp', token: 'series-green', text: 'Bought' },
+      { id: 'fill:SPY261016P00580000:long_put:0:exit', time: sec(12), price: 1.12, shape: 'arrowDown', token: 'series-orange', text: 'Sold' },
+    ]);
+    // The sold leg opened by a sale, which points down, and closed by a purchase, which points up. Colour still says
+    // whether the fill opened or closed the leg.
+    expect(hosts[1].markers).toEqual([
+      { id: 'fill:SPY261016P00585000:short_put:0:entry', time: sec(4), price: 2.18, shape: 'arrowDown', token: 'series-green', text: 'Sold to open' },
+      { id: 'fill:SPY261016P00585000:short_put:0:exit', time: sec(10), price: 3.32, shape: 'arrowUp', token: 'series-orange', text: 'Bought back' },
+    ]);
+  });
+
+  it('draws a sold leg’s stop above the price it was sold for, from the minute it filled to the minute the buy-back was decided', () => {
+    const stops = plan.series.filter((each) => each.role === 'level');
+
+    expect(stops.map((stop) => [stop.pane, stop.lineStyle, timesOf(stop), valuesOf(stop)])).toEqual([[2, 'large-dashed', [sec(4), sec(9)], [3.27, 3.27]]]);
+    const soldAt = hosts[1].markers[0].price;
+    expect(valuesOf(stops[0])[0]).toBeGreaterThan(soldAt);
+  });
+
+  it('says the sale to open and the buy-back in the tooltip in the same words as the legend', () => {
+    expect(plan.tips.get(sec(4))).toContain(`Sold to open ${sold} (contracts: 1): filled $2.18, seen $2.20`);
+    expect(plan.tips.get(sec(4))).toContain(`Bought ${cover} (contracts: 1): filled $1.42, seen $1.40`);
+    expect(plan.tips.get(sec(10))).toContain(`Bought back ${sold} (contracts: 1): filled $3.32, seen $3.30 (Stop)`);
+    expect(plan.tips.get(sec(12))).toContain(`Sold ${cover} (contracts: 1): filled $1.12, seen $1.10 (Exit Time)`);
+  });
+
+  it('names in the legend of each pane the fills it holds, with the arrow each is drawn as', () => {
+    expect(plan.panes.map((pane) => pane.entries.map((entry) => `${entry.name} (${entry.drawn})`))).toEqual([
+      ['Minute closes (solid line)'],
+      ['Minute closes (solid line)', 'Bought (up arrow)', 'Sold (down arrow)'],
+      ['Minute closes (solid line)', 'Sold to open (down arrow)', 'Bought back (up arrow)', 'Stop level (long dashes)'],
+    ]);
+    // A glyph for each marker, pointing the way it traded: a sale down and a purchase up, whichever opened the leg.
+    expect(plan.panes[2].entries.filter((entry) => entry.sample === 'marker').map((entry) => entry.glyph)).toEqual(['▼', '▲']);
+  });
+
+  it('draws a sold leg that was never bought back as a mark that says it is owed, beside the cover that was not sold', () => {
+    const owed = buildTimelinePlan(owedSession());
+    const marks = owed.series.filter((each) => each.role === 'fills').flatMap((host) => host.markers).filter((marker) => marker.shape === 'square');
+
+    expect(marks.map((marker) => [marker.id, marker.price, marker.text])).toEqual([
+      ['mark:SPY261016P00580000:long_put:0', 1, 'Marked, not sold'],
+      ['mark:SPY261016P00585000:short_put:0', 2.4, 'Marked, owed'],
+    ]);
+    expect(owed.tips.get(sec(10))).toContain(`Marked, owed: ${sold} at $2.40`);
+    expect(owed.tips.get(sec(10))).toContain(`Marked, not sold: ${cover} at $1.00`);
+    expect(owed.panes.map((pane) => pane.entries.filter((entry) => entry.key.startsWith('mark')).map((entry) => entry.name))).toEqual([
+      [],
+      ['Marked, not sold'],
+      ['Marked, owed'],
+    ]);
+  });
+
+  it('counts an owed mark the page could not place among the marks not drawn, by its own name', () => {
+    const odd = buildTimelinePlan(owedSession({ marks: [{ ...owedSession().marks[1], price_usd: 'NaN' }] }));
+
+    expect(odd.notDrawn.map((each) => [each.what, each.symbol, each.message])).toEqual([['Marked, owed', PUT_585.symbol, UNPLACEABLE]]);
+    expect(PUT_580.symbol).not.toBe(PUT_585.symbol);
+  });
+});

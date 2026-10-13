@@ -1,4 +1,4 @@
-"""Setups an owner saves by name, and the two that ship (#3030).
+"""Setups an owner saves by name, and the three that ship (#3030, and #3109 for the one that sells).
 
 Python owns the table (``research/persistence/schema.py`` version 19). The
 functions take a connection, the way ``research/backtest_runs/repository.py``
@@ -6,7 +6,7 @@ does. A setup is stored as the JSON the page sent; reading it back validates
 it again, so a row that no longer validates under a later rule is still
 listed, marked as one that cannot be opened and why, and never dropped.
 
-The two examples are defined here, not stored: they are listed with the saved
+The three examples are defined here, not stored: they are listed with the saved
 ones and can be neither overwritten nor deleted.
 """
 
@@ -29,6 +29,7 @@ from app.options_backtest.setup import (
     OptionsBacktestSetup,
     ReentryOnStop,
     SessionTime,
+    StepsFromTheMoney,
     StopLoss,
     ThisWeekExpiryRule,
 )
@@ -112,12 +113,48 @@ def _spy_premium_momentum(*, no_reentry_after: SessionTime | None, re_enters: bo
     )
 
 
+def _spy_covered_put_spread() -> OptionsBacktestSetup:
+    """A put credit spread five strikes wide: one put sold at the money, covered by one bought five strikes below.
+
+    The sold put's stop is a doubling of its premium, and under a partial square-off it closes that leg alone and
+    leaves the bought put held, which covers nothing then and is sold at the exit time.
+    """
+    return OptionsBacktestSetup(
+        underlying="SPY",
+        entry=SessionTime(anchor="open", offset_ms=5 * MS_PER_MINUTE),
+        exit=SessionTime(anchor="close", offset_ms=46 * MS_PER_MINUTE),
+        square_off="partial",
+        legs=(
+            LegSetup(
+                leg_id="long_put",
+                side="buy",
+                right="put",
+                contracts=1,
+                expiry=ThisWeekExpiryRule(kind="this_week"),
+                strike=StepsFromTheMoney(kind="atm_offset", steps=-5),
+            ),
+            LegSetup(
+                leg_id="short_put",
+                side="sell",
+                right="put",
+                contracts=1,
+                expiry=ThisWeekExpiryRule(kind="this_week"),
+                strike=AtTheMoney(kind="atm"),
+                stop_loss=StopLoss(kind="percent", value=Decimal(100)),
+            ),
+        ),
+        slippage_percent=Decimal("0.3"),
+        fees=FeePolicy(kind="not_charged"),
+        starting_cash_usd=Decimal(10000),
+    )
+
+
 def _example(name: str, setup: OptionsBacktestSetup) -> SavedSetup:
     return SavedSetup(name=name, example=True, saved_at_ms=None, setup=setup, cannot_open_reason=None)
 
 
 # The strategy #3030 started from, twice: with no re-entry rule on its legs, and with each leg coming back once
-# after a stop until an hour before the close.
+# after a stop until an hour before the close. Then a covered put spread, which sells (#3109).
 EXAMPLE_SETUPS: tuple[SavedSetup, ...] = (
     _example("SPY premium momentum, no re-entry", _spy_premium_momentum(no_reentry_after=None, re_enters=False)),
     _example(
@@ -126,6 +163,7 @@ EXAMPLE_SETUPS: tuple[SavedSetup, ...] = (
             no_reentry_after=SessionTime(anchor="close", offset_ms=60 * MS_PER_MINUTE), re_enters=True
         ),
     ),
+    _example("SPY covered put spread, sold", _spy_covered_put_spread()),
 )
 _EXAMPLE_BY_NAME = {example.name: example for example in EXAMPLE_SETUPS}
 

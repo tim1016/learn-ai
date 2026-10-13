@@ -229,8 +229,8 @@ describe('the one-day chart, what it hands to the library', () => {
 const FULL_DAY = 390;
 function fullDayWithMarkersAtBothEnds() {
   return buildTimelinePlan(fullDay({
-    fills: [{ kind: 'entry', leg_id: 'put', entry_number: 0, contract: PUT_585.symbol, contracts: 1, bar_close_ms: at(1), seen_usd: '1.40', filled_usd: '1.42', exit_reason: null }],
-    marks: [{ leg_id: 'put', entry_number: 0, contract: PUT_585.symbol, bar_close_ms: at(FULL_DAY), price_usd: '1.25' }],
+    fills: [{ kind: 'entry', side: 'buy', leg_id: 'put', entry_number: 0, contract: PUT_585.symbol, contracts: 1, bar_close_ms: at(1), seen_usd: '1.40', filled_usd: '1.42', exit_reason: null }],
+    marks: [{ leg_id: 'put', entry_number: 0, contract: PUT_585.symbol, bar_close_ms: at(FULL_DAY), price_usd: '1.25', owed: false }],
   }));
 }
 

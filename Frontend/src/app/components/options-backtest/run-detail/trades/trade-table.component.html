@@ -23,7 +23,7 @@
             }
           </td>
           <td>{{ t.leg_id }}</td>
-          <td>{{ row.attempt }}</td>
+          <td>{{ row.attempt }}@if (row.opening; as words) { <span class="side">{{ words }}</span> }</td>
           <td><app-option-contract [contract]="row.contract" /></td>
           <td class="num">{{ t.contracts }}</td>
           <td><app-timestamp-display [value]="t.entry_decided_at_ms" mode="et" granularity="time" /></td>
@@ -33,14 +33,14 @@
           <td class="num">@if (t.starting_price_usd; as price) { {{ price | authoredUsd }} } @else { <ng-container [ngTemplateOutlet]="absent" /> }</td>
           <td class="num">@if (t.momentum_level_usd; as price) { {{ price | authoredUsd }} } @else { <ng-container [ngTemplateOutlet]="absent" /> }</td>
           <td class="num">@if (t.stop_level_usd; as price) { {{ price | authoredUsd }} } @else { <ng-container [ngTemplateOutlet]="absent" /> }</td>
-          <td>{{ t.exit_reason | receiptLabel }}</td>
+          <td>{{ t.exit_reason | receiptLabel }}@if (row.closing; as words) { <span class="side">{{ words }}</span> }</td>
           <td><app-timestamp-display [value]="t.exit_decided_at_ms" mode="et" granularity="time" /></td>
           @if (t.sale; as sale) {
             <td><app-timestamp-display [value]="sale.bar_close_ms" mode="et" granularity="minute" /></td>
             <td class="num">{{ sale.seen_usd | authoredUsd }}</td>
             <td class="num">{{ sale.filled_usd | authoredUsd }}</td>
           } @else if (t.mark; as mark) {
-            <td colspan="3" class="marked">Marked at {{ mark.price_usd | authoredUsd }}, not sold, last traded in the minute ending <app-timestamp-display [value]="mark.bar_close_ms" mode="et" granularity="minute" /></td>
+            <td colspan="3" class="marked">Marked at {{ mark.price_usd | authoredUsd }}, {{ row.markedAs }}, last traded in the minute ending <app-timestamp-display [value]="mark.bar_close_ms" mode="et" granularity="minute" /></td>
           }
           <td class="num">{{ t.entry_fee_usd | authoredUsd }}</td>
           <td class="num">{{ t.exit_fee_usd | authoredUsd }}</td>
