@@ -40,6 +40,8 @@ export class PastChainTabComponent implements OnInit {
 
   /** The setup's underlying at the moment the tab was first opened. Later changes of it are not followed. */
   readonly startingUnderlying = input.required<string>();
+  /** The trading date, `YYYY-MM-DD`, the tab is first opened on; none when empty. Later changes of it are not followed. */
+  readonly startingDate = input('');
   /** What the server holds a read and a download to; null until the page has them, and the server then judges alone. */
   readonly limits = input<SetupLimits | null>(null);
   /** A download that may have changed what is stored has come back, so an answer of Check data no longer describes it. */
@@ -208,7 +210,7 @@ export class PastChainTabComponent implements OnInit {
   }
 
   ngOnInit(): void {
-    this.model.update((controls) => ({ ...controls, underlying: this.startingUnderlying() }));
+    this.model.update((controls) => ({ ...controls, underlying: this.startingUnderlying(), date: this.startingDate() }));
   }
 
   protected pickExpiry(expiryMs: number): void {

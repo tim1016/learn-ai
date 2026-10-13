@@ -27,6 +27,19 @@ describe('the Past chain tab, before a date is picked', () => {
   });
 });
 
+describe('the Past chain tab, started on a date', () => {
+  it('reads that day at once, with the date in its field, as if it had been picked', async () => {
+    const service = fakeChainService(vi);
+
+    await renderChainTab(service, 'SPY', null, TRADING_DATE);
+
+    await screen.findByRole('table', { name: /Every expiry the listing held/ });
+    expect(service.day).toHaveBeenCalledTimes(1);
+    expect(service.day.mock.calls[0]?.[0]).toEqual({ underlying: 'SPY', tradingDateMs: TRADING_DATE_MS });
+    expect((screen.getByLabelText('Trading date') as HTMLInputElement).value).toBe(TRADING_DATE);
+  });
+});
+
 describe('the listing of a picked date', () => {
   it('is read for the underlying and the New York midnight of the date', async () => {
     const service = fakeChainService(vi);
