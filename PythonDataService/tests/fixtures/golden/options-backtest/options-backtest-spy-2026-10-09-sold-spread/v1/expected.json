@@ -1,0 +1,128 @@
+{
+  "trading_date": "2026-10-09",
+  "starting_cash_usd": "10000.00",
+  "scenes": {
+    "entry": {
+      "decided_at_ms": 1791552900000,
+      "group": {
+        "kind": "opening",
+        "fills": [
+          {
+            "leg": "short_call",
+            "contract": "O:SPY261009C00777000",
+            "side": "sell",
+            "contracts": 2,
+            "bar_close_ms": 1791552960000,
+            "seen": "1.00",
+            "filled": "0.99",
+            "fee_usd": "1.30"
+          },
+          {
+            "leg": "long_call",
+            "contract": "O:SPY261009C00779000",
+            "side": "buy",
+            "contracts": 2,
+            "bar_close_ms": 1791552960000,
+            "seen": "0.35",
+            "filled": "0.36",
+            "fee_usd": "1.30"
+          }
+        ],
+        "fees_usd": "2.60",
+        "cash_before_usd": "10000.00",
+        "cash_after_usd": "10123.40",
+        "collateral_before_usd": "0.00",
+        "collateral_after_usd": "400.00",
+        "closed_profit_usd": "0.00"
+      }
+    },
+    "stop_on_the_sold_leg": {
+      "stop_level": "1.188",
+      "stop_close": "1.20",
+      "decided_at_ms": 1791559140000,
+      "group": {
+        "kind": "closing",
+        "fills": [
+          {
+            "leg": "short_call",
+            "contract": "O:SPY261009C00777000",
+            "side": "buy",
+            "contracts": 2,
+            "bar_close_ms": 1791559200000,
+            "seen": "1.19",
+            "filled": "1.20",
+            "fee_usd": "1.30"
+          }
+        ],
+        "fees_usd": "1.30",
+        "cash_before_usd": "10123.40",
+        "cash_after_usd": "9882.10",
+        "collateral_before_usd": "400.00",
+        "collateral_after_usd": "0.00",
+        "closed_profit_usd": "-44.60"
+      },
+      "then_the_exit_time_sells_the_cover": {
+        "decided_at_ms": 1791574200000,
+        "group": {
+          "kind": "closing",
+          "fills": [
+            {
+              "leg": "long_call",
+              "contract": "O:SPY261009C00779000",
+              "side": "sell",
+              "contracts": 2,
+              "bar_close_ms": 1791574260000,
+              "seen": "0.32",
+              "filled": "0.31",
+              "fee_usd": "1.30"
+            }
+          ],
+          "fees_usd": "1.30",
+          "cash_before_usd": "9882.10",
+          "cash_after_usd": "9942.80",
+          "collateral_before_usd": "0.00",
+          "collateral_after_usd": "0.00",
+          "closed_profit_usd": "-12.60"
+        },
+        "total_profit_usd": "-57.20",
+        "ending_cash_usd": "9942.80"
+      }
+    },
+    "exit": {
+      "decided_at_ms": 1791574200000,
+      "group": {
+        "kind": "closing",
+        "fills": [
+          {
+            "leg": "short_call",
+            "contract": "O:SPY261009C00777000",
+            "side": "buy",
+            "contracts": 2,
+            "bar_close_ms": 1791574260000,
+            "seen": "1.90",
+            "filled": "1.91",
+            "fee_usd": "1.30"
+          },
+          {
+            "leg": "long_call",
+            "contract": "O:SPY261009C00779000",
+            "side": "sell",
+            "contracts": 2,
+            "bar_close_ms": 1791574260000,
+            "seen": "0.32",
+            "filled": "0.31",
+            "fee_usd": "1.30"
+          }
+        ],
+        "fees_usd": "2.60",
+        "cash_before_usd": "10123.40",
+        "cash_after_usd": "9800.80",
+        "collateral_before_usd": "400.00",
+        "collateral_after_usd": "0.00",
+        "closed_profit_usd": "-199.20"
+      },
+      "total_profit_usd": "-199.20",
+      "ending_cash_usd": "9800.80"
+    }
+  }
+}

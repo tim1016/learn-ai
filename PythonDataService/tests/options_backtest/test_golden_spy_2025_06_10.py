@@ -35,10 +35,9 @@ import asyncio
 import hashlib
 import importlib.util
 import json
-import re
 import sys
 import zipfile
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -69,7 +68,8 @@ from app.options_backtest.setup import (
     StrikeRule,
     ThisWeekExpiryRule,
 )
-from tests._helpers.fake_lake_catalog import FakeCatalog, launcher_responder
+from tests._helpers.fake_lake_catalog import FakeCatalog
+from tests.options_backtest._golden_vendor import recorded_vendor, requests_to_the_vendor
 from tests.options_backtest._lake import fake_catalog as fake_catalog
 from tests.options_backtest._lake import raw_root
 from tests.options_backtest._lake import the_clock_is_fixed as the_clock_is_fixed
@@ -105,8 +105,6 @@ RECORDED_FILES = {
 # for the whole listing as of the date.
 BARS_QUERY = {"adjusted": "false", "sort": "asc", "limit": "50000"}
 LISTING_QUERY = {"underlying_ticker": "SPY", "as_of": "2025-06-10", "limit": "1000"}
-# The key the lake's fetchers hold in these tests (the suite's lake fixture sets it), as the bearer token they must send.
-THE_KEY = "test-key"
 
 STORED_STOCK_FILE = "equity/usa/minute/spy/20250610_trade.zip"
 STORED_LISTING_FILE = "option/usa/listing/spy/20250610_contracts.zip"
@@ -125,47 +123,15 @@ def recorded_rows(name: str) -> list[dict]:
     return body["results"]
 
 
-def the_recorded_answer(path: str) -> Callable[[httpx.Request], httpx.Response]:
-    """The vendor's recorded bytes for ``path``, after checking how the request carried the key.
-
-    The option fetchers send the key in an ``Authorization: Bearer`` header and never in a URL, so every request for
-    the listing or for an option's bars must hold that header and no ``apiKey`` in its query. The key is the one the
-    suite's lake fixture gives the settings (``tests/_helpers/fake_lake_catalog.py``). The stock pipeline's request for the
-    underlying is not checked: that older fetcher puts the key in the URL, which is known and not part of this fixture.
-    """
-
-    def answer(request: httpx.Request) -> httpx.Response:
-        if path != STOCK_PATH:
-            assert request.headers.get("authorization") == f"Bearer {THE_KEY}", f"the key is not in the header of {path}"
-            assert "apikey" not in {param.lower() for param in request.url.params}, f"the key is in the URL of {path}"
-        return httpx.Response(200, content=recorded(RECORDED_FILES[path]), headers={"content-type": "application/json"})
-
-    return answer
-
-
 @pytest.fixture
 def the_vendor() -> Iterator[respx.MockRouter]:
     """The vendor, answering each recorded request with the recorded bytes. A request for any other path fails.
 
-    The LEAN launcher the stock pipeline asks for the exchange calendar is served by the suite's stand-in.
+    Every option request must carry the key in the ``Authorization`` header and in no URL (``_golden_vendor``). The LEAN
+    launcher the stock pipeline asks for the exchange calendar is served by the suite's stand-in.
     """
-    with respx.mock(assert_all_called=False) as router:
-        for path in RECORDED_FILES:
-            router.get(host="api.polygon.io", path=path).mock(side_effect=the_recorded_answer(path))
-        router.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(side_effect=launcher_responder())
+    with recorded_vendor(RECORDING, RECORDED_FILES, STOCK_PATH) as router:
         yield router
-
-
-def requests_to_the_vendor(router: respx.MockRouter) -> list[tuple[str, dict[str, str]]]:
-    """Each request made to Polygon, as its path and its query (the stock request's key left out, as a key is no fact)."""
-    return [
-        (
-            call.request.url.path,
-            {k: v for k, v in call.request.url.params.items() if call.request.url.path != STOCK_PATH or k != "apiKey"},
-        )
-        for call in router.calls
-        if call.request.url.host == "api.polygon.io"
-    ]
 
 
 def stored_rows(tmp_lake: Path, captured: OptionCaptureResult) -> list[str]:
@@ -228,7 +194,7 @@ async def test_the_listing_is_captured_whole_by_the_lakes_own_function_and_asked
     result = await ensure_option_listing("SPY", TRADING_DATE)
 
     assert result.failure is None, result.failure
-    assert requests_to_the_vendor(the_vendor) == [(LISTING_PATH, LISTING_QUERY)]
+    assert requests_to_the_vendor(the_vendor, STOCK_PATH) == [(LISTING_PATH, LISTING_QUERY)]
     listing = await off_the_loop(read_option_listing, "SPY", TRADING_DATE)
     assert listing is not None
     # 316 objects in the recorded body's ``results``, 158 of them calls and 158 puts.
@@ -249,7 +215,7 @@ async def test_each_contract_day_is_stored_with_exactly_the_bars_the_vendor_sent
     stored = await capture_the_recording()
 
     assert [stored.listing.failure, *(each.failure for each in stored.days.values())] == [None] * 4
-    asked = requests_to_the_vendor(the_vendor)
+    asked = requests_to_the_vendor(the_vendor, STOCK_PATH)
     for path in (CALL_600_PATH, PUT_600_PATH, CALL_680_PATH):
         assert (path, BARS_QUERY) in asked
     # Five answers were recorded and five requests were made, one for each: the listing, the three contracts and the
@@ -356,7 +322,7 @@ async def test_the_underlying_is_fetched_by_the_stock_pipeline_unadjusted_and_st
 
     # One request for SPY's day, asking for raw bars, and the stock pipeline (an older code than the option fetchers) is
     # driven here for real: ``materialize_engine_run`` on the respx vendor, the suite's fake catalog and launcher.
-    assert requests_to_the_vendor(the_vendor).count((STOCK_PATH, BARS_QUERY)) == 1
+    assert requests_to_the_vendor(the_vendor, STOCK_PATH).count((STOCK_PATH, BARS_QUERY)) == 1
     assert stored.underlying.fetched_artifact_count > 0 and stored.underlying.incomplete_summary is None
     assert (raw_root(tmp_lake) / STORED_STOCK_FILE).is_file()
     held = await off_the_loop(LakeRunData("SPY").underlying_day, TRADING_DATE)
@@ -758,6 +724,90 @@ async def test_an_entry_into_a_minute_the_contract_did_not_trade_is_dropped_with
         Event(EventKind.ENTRY_DROPPED, 1749569340000, "leg", 0),
     )
     assert session.outcome.cash_change_usd == 0
+    assert (session.cash_before_usd, session.cash_after_usd) == (D("10000.00"), D("10000.00"))
+    assert result.summary.entries_dropped == 1 and result.summary.net_profit_usd == D("0")
+
+
+# ── f. A sold leg whose cover did not trade (#3110) ──────────────────────────────────────────────────────────
+
+
+def the_listing_without_the_calls_between(low: int, high: int) -> bytes:
+    """The recorded listing's bytes with the calls struck strictly between ``low`` and ``high`` left out of it.
+
+    Every other row, put or call, is as recorded. The far call at 680 is 56 listed strikes above the money, which no
+    strike rule reaches (a leg steps at most 50). With the strikes between 600 and 680 left out of what the vendor is made
+    to say, the call struck at 680 is the first listed call above the money: the recording's own never-traded call is
+    then the one a leg can ask for. The recorded files themselves are not touched.
+    """
+    body = json.loads(recorded(RECORDED_FILES[LISTING_PATH]))
+    body["results"] = [
+        row for row in body["results"] if not (row["contract_type"] == "call" and low < row["strike_price"] < high)
+    ]
+    return json.dumps(body, separators=(",", ":")).encode()
+
+
+async def test_a_sold_at_the_money_call_whose_far_call_cover_never_traded_is_refused_because_its_cover_did_not_trade(
+    the_vendor: respx.MockRouter, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
+    # THE SCENE, WORKED BY HAND FROM THE RECORDED BYTES AND THE RULES (ADR 0078 decision 4, the opening group).
+    #
+    # Two legs, one contract each, for this week's expiry: ``short``, the call at the money, sold; and ``cover``, the call
+    # one listed strike above the money, bought, which is to cover it. Entry 09:35, exit 10:00, no slippage, no fee.
+    #
+    # Decision at 09:35 (1749562500000), as in the main trade: SPY closes 600.375, the money is 600, and the expiry is the
+    # listed Friday 2025-06-13. ``short`` is O:SPY250613C00600000. In the listing served here (the recorded one without the
+    # calls struck from 601 to 679) the first call above 600 is 680, so ``cover`` is O:SPY250613C00680000, which the
+    # recording holds as listed and never traded: a captured day with no bar.
+    #
+    # The orders fill in the bar closing at 09:36 (1749562560000), stamped 09:35. ``short`` has that bar: {"o":4.05,...}, so
+    # its sale would fill at 4.05 (no slippage, and 4.05 is on the 0.01 step). ``cover`` has no bar anywhere in the day, so
+    # its order is dropped. A sold leg is opened only with cover held or opening in the same minute, and the one bought call
+    # in play found no bar, so ``short`` is refused for cover, and the reason is the cover's trade: its cover did not trade,
+    # not that no cover was held. The refusal carries the price the sale would have filled at, 4.05. Both legs are done for
+    # the day: no fill, no trade, and the exit at 10:00 finds nothing held. 10000.00 before and after.
+    the_vendor.get(host="api.polygon.io", path=LISTING_PATH).mock(
+        return_value=httpx.Response(
+            200, content=the_listing_without_the_calls_between(600, 680), headers={"content-type": "application/json"}
+        )
+    )
+    await capture_the_recording()
+    expiry = ThisWeekExpiryRule(kind="this_week")
+    setup = OptionsBacktestSetup(
+        underlying="SPY",
+        entry=SessionTime(anchor="open", offset_ms=ENTRY_0935_MS),
+        exit=SessionTime(anchor="open", offset_ms=EXIT_1000_MS),
+        square_off="partial",
+        legs=(
+            LegSetup(
+                leg_id="short", side="sell", right="call", contracts=1, expiry=expiry, strike=AtTheMoney(kind="atm")
+            ),
+            LegSetup(
+                leg_id="cover",
+                right="call",
+                contracts=1,
+                expiry=expiry,
+                strike=StepsFromTheMoney(kind="atm_offset", steps=1),
+            ),
+        ),
+        slippage_percent=D(0),
+        fees=FeePolicy(kind="not_charged"),
+        starting_cash_usd=D("10000.00"),
+    )
+
+    result = await the_run(setup)
+
+    [session] = result.sessions
+    assert session.status is SessionStatus.NO_TRADE
+    assert session.outcome.trades == ()
+    # Each thing that happened, once. The two events of the fill minute are told in the order the legs are listed, which
+    # is not a rule of the book, so they are compared as a set.
+    assert len(session.outcome.events) == 4
+    assert set(session.outcome.events) == {
+        Event(EventKind.PICKED, 1749562500000, "short", 0, CALL_600),
+        Event(EventKind.PICKED, 1749562500000, "cover", 0, CALL_680),
+        Event(EventKind.ENTRY_REFUSED_FOR_COVER, 1749562560000, "short", 0, None, D("4.05"), "cover_did_not_trade"),
+        Event(EventKind.ENTRY_DROPPED, 1749562560000, "cover", 0),
+    }
     assert (session.cash_before_usd, session.cash_after_usd) == (D("10000.00"), D("10000.00"))
     assert result.summary.entries_dropped == 1 and result.summary.net_profit_usd == D("0")
 
