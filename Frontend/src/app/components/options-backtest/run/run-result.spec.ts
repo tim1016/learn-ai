@@ -167,6 +167,77 @@ describe('the sessions and what did not trade', () => {
     expect(within(section).getByText('Strike Not Listed: 2')).toBeTruthy();
     expect(within(section).getByText('Also counted under the causes above; not to be added to them.')).toBeTruthy();
   });
+
+  const refusals = (section: HTMLElement) =>
+    [
+      'Entries refused: their cover did not trade',
+      'Entries refused: their cover was not yet held',
+      'Entries refused for a second expiry',
+      'Entries refused for a contract held on the other side',
+      'Sales to open not taken at zero',
+    ].map((label) => (within(section).getByText(label, { selector: 'dt' }).nextElementSibling as HTMLElement).textContent?.trim());
+
+  it('counts each refusal of a sale and of its cover under its own name, the cover that did not trade apart from the cover not yet held (#3109)', async () => {
+    await renderResult(
+      {},
+      {
+        entries_refused_by_reason: [
+          { reason: 'other_side', count: 4 },
+          { reason: 'second_expiry', count: 3 },
+          { reason: 'cover_did_not_trade', count: 1 },
+          { reason: 'cover_not_yet_held', count: 2 },
+          { reason: 'sale_at_zero', count: 5 },
+        ],
+      },
+    );
+
+    const section = screen.getByRole('region', { name: 'What did not trade' });
+
+    expect(refusals(section)).toEqual(['1', '2', '3', '4', '5']);
+    // The count for cash is its own, as it was.
+    expect((within(section).getByText('Entries refused for cash', { selector: 'dt' }).nextElementSibling as HTMLElement).textContent).toBe('2');
+  });
+
+  it('reads each of them as not recorded on a run saved before they were counted, and not as none', async () => {
+    await renderResult({}, { entries_refused_by_reason: undefined });
+
+    const section = screen.getByRole('region', { name: 'What did not trade' });
+
+    expect(refusals(section)).toEqual(['not recorded', 'not recorded', 'not recorded', 'not recorded', 'not recorded']);
+  });
+
+  it('shows a reason this page has no words for as a receipt label, never as its raw token', async () => {
+    await renderResult({}, { entries_refused_by_reason: [{ reason: 'cash_short' as never, count: 7 }] });
+
+    const section = screen.getByRole('region', { name: 'What did not trade' });
+
+    expect(within(section).getByText('Cash Short', { selector: 'dt' }).nextElementSibling?.textContent?.trim()).toBe('7');
+    expect(section.textContent).not.toContain('cash_short');
+  });
+});
+
+describe('the three statements of a result that sells (#3109)', () => {
+  const STATEMENTS = [
+    'Legs opened in the same minute are treated as one group, and minute bars cannot show which of them printed first. A sold leg’s cover is judged as if it were held beside it, which is a modelling choice and not observed coverage.',
+    'The requirement held against what is sold is Alpaca’s published rule for covered positions as of today, worked out by this system.',
+    'This result claims nothing about whether a broker would have accepted these orders.',
+  ];
+
+  it('shows each as the server wrote it, after the lines that say how the fills were made', async () => {
+    await renderResult({ banner: runBanner({ statements: STATEMENTS }) });
+
+    const banner = screen.getByRole('note', { name: 'How these figures were made' });
+
+    expect([...banner.querySelectorAll('p')].map((line) => reads(line)).slice(4)).toEqual(STATEMENTS);
+  });
+
+  it('shows none on a result that only buys', async () => {
+    await renderResult({ banner: runBanner({ statements: [] }) });
+
+    const banner = screen.getByRole('note', { name: 'How these figures were made' });
+
+    expect(banner.querySelectorAll('p')).toHaveLength(4);
+  });
 });
 
 describe('the slippage tolerance', () => {

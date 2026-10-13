@@ -22,6 +22,9 @@
   <dl class="counts">
     <div><dt>Sessions without momentum</dt><dd>{{ figures().sessions_without_momentum }}</dd></div>
     <div><dt>Entries refused for cash</dt><dd>{{ figures().entries_refused_for_cash }}</dd></div>
+    @for (row of refusals(); track row.reason) {
+      <div><dt>{{ row.label }}</dt><dd>@if (row.count !== null) { {{ row.count }} } @else { <span class="not-recorded">not recorded</span> }</dd></div>
+    }
     <div><dt>Re-entries blocked by the cutoff</dt><dd>{{ figures().re_entries_blocked_by_cutoff }}</dd></div>
     <div><dt>Entries dropped</dt><dd>{{ figures().entries_dropped }}</dd></div>
     <div>

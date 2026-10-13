@@ -1799,7 +1799,7 @@ backtest still stands (Option structures).
 - **Saved setup** — a setup kept by name, for the owner to reopen. Saving under a
   name again replaces it. An **example setup** ships with the product and can be
   neither overwritten nor deleted: the #3030 strategy, without a re-entry rule and
-  with one. A saved setup that no longer passes the current rules stays listed as
+  with one, and a covered put spread that sells. A saved setup that no longer passes the current rules stays listed as
   **cannot be opened**, with the reason.
 - **Leg** — one call or put, bought or sold (a leg with no side is bought): a
   number of contracts, a rule for its expiry, a rule for its strike, and three

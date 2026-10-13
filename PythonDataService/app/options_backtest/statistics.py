@@ -25,6 +25,11 @@ name. The drawdown is measured on the equity at the end of each session, and not
 What the cash could carry is a verdict apart from these totals, which keep every session at its mark. The capital
 evidence, the cash ladder and the stamps a run carries beside them come from ``capital_evidence.py``,
 ``cash_ladder.py`` and ``run_stamps.py``: ``summarize_run`` leaves them unrecorded, and no figure here depends on them.
+
+The refusals a setup that sells can meet (#3109) are counted from the events, each reason on its own and apart from the
+count for cash: a sold leg whose cover did not trade or was not yet held, a second expiry, a contract held on the other
+side, and a sale to open at nothing. Every run made now lists all five, zeros included; a run stored before they were
+counted has none, which reads "not recorded" and is not a count of zero.
 """
 
 from __future__ import annotations
@@ -41,12 +46,30 @@ from app.options_backtest import fills
 from app.options_backtest.capital_evidence import CapitalEvidence
 from app.options_backtest.cash_ladder import CashLevel
 from app.options_backtest.market import PickRefusal
-from app.options_backtest.results import EventKind, ExitReason, Fill, LegTrade, SessionStatus, SkipReason
+from app.options_backtest.results import (
+    ENTRY_REFUSAL_EVENTS,
+    EntryRefusal,
+    Event,
+    EventKind,
+    ExitReason,
+    Fill,
+    LegTrade,
+    SessionStatus,
+    SkipReason,
+)
 from app.options_backtest.run_stamps import RunStamps
 from app.options_backtest.session_result import SessionResult
 
 _PLACES = 6
 _UNIT_IN_THE_LAST_PLACE = 10**_PLACES
+
+# The refusals of an entry that are counted by their reason, listed in the order the enum has them. Cash has its own
+# count (``entries_refused_for_cash``), which every run has always had, so it is not among them.
+_ENTRY_REFUSALS_BY_REASON: tuple[EntryRefusal, ...] = tuple(
+    refusal for refusal in EntryRefusal if refusal is not EntryRefusal.CASH_SHORT
+)
+# The events those refusals are told in.
+_ENTRY_REFUSAL_EVENT_KINDS = frozenset(ENTRY_REFUSAL_EVENTS[refusal] for refusal in _ENTRY_REFUSALS_BY_REASON)
 
 
 @dataclass(frozen=True)
@@ -201,12 +224,25 @@ class RunSummary:
     capital_evidence: CapitalEvidence | None = None
     cash_ladder: tuple[CashLevel, ...] | None = None
     stamps: RunStamps | None = None
+    # --- the entries a setup that sells can have refused (#3109), each reason on its own and every reason listed, zeros
+    # included: the cover that did not trade and the cover not yet held, a second expiry, a contract held on the other
+    # side, and a sale to open that would have filled at nothing. None reads "not recorded": the run was stored before
+    # these were counted.
+    entries_refused_by_reason: tuple[tuple[EntryRefusal, int], ...] | None = None
 
 
-def _counts[E: StrEnum](members: type[E], seen: Iterable[E]) -> tuple[tuple[E, int], ...]:
-    """How many times each member of an enum was seen, every member listed in its own order, zeros included."""
+def _counts[E: StrEnum](members: Iterable[E], seen: Iterable[E]) -> tuple[tuple[E, int], ...]:
+    """How many times each member was seen, every member listed in the order given, zeros included."""
     counter = Counter(seen)
     return tuple((member, counter[member]) for member in members)
+
+
+def _refusal_of(event: Event) -> EntryRefusal:
+    """The reason an entry-refusal event carries. Each of them always has its refusal as its reason, so one without it
+    is a fault in whatever wrote it and is not counted by a guess."""
+    if event.reason is None:
+        raise ValueError(f"the {event.kind.value} event of leg {event.leg_id!r} at {event.at_ms} carries no reason")
+    return EntryRefusal(event.reason)
 
 
 def _wins_losses_even(trades: Iterable[LegTrade]) -> tuple[int, int, int]:
@@ -382,4 +418,8 @@ def summarize_run(sessions: Sequence[SessionResult], *, starting_cash_usd: Decim
         re_entries_lost=kinds[EventKind.RE_ENTRY_LOST],
         by_day=days,
         by_month=_month_rows(sessions, days),
+        entries_refused_by_reason=_counts(
+            _ENTRY_REFUSALS_BY_REASON,
+            (_refusal_of(event) for event in events if event.kind in _ENTRY_REFUSAL_EVENT_KINDS),
+        ),
     )

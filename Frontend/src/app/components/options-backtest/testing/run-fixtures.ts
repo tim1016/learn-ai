@@ -205,6 +205,14 @@ export function figures(changes: Partial<RunFigures> = {}): RunFigures {
     ],
     legs_without_a_starting_price: 5,
     re_entries_lost: 6,
+    // A run that only buys refuses no sale and no cover: each reason is recorded, and each count is zero.
+    entries_refused_by_reason: [
+      { reason: 'other_side', count: 0 },
+      { reason: 'second_expiry', count: 0 },
+      { reason: 'cover_did_not_trade', count: 0 },
+      { reason: 'cover_not_yet_held', count: 0 },
+      { reason: 'sale_at_zero', count: 0 },
+    ],
     by_day: DAY_ROWS,
     by_month: MONTH_ROWS,
     capital_evidence: capitalEvidence({ cash_needed_is_incomplete: true }),
@@ -229,6 +237,7 @@ export function runBanner(changes: Partial<RunBanner> = {}): RunBanner {
     fee_policy_kind: 'not_charged',
     fee_per_contract_usd: null,
     fee_policy: 'Fees are not charged.',
+    statements: [],
     ...changes,
   };
 }

@@ -36,7 +36,13 @@ from tests.options_backtest.setup_fixtures import setup_body as _setup_body
 from tests.options_backtest.setup_fixtures import tag as tag
 from tests.options_backtest.setup_fixtures import unique as unique
 
-_EXAMPLE_NAMES = ("SPY premium momentum, no re-entry", "SPY premium momentum, one re-entry")
+_EXAMPLE_NAMES = (
+    "SPY premium momentum, no re-entry",
+    "SPY premium momentum, one re-entry",
+    "SPY covered put spread, sold",
+)
+# The two that are the strategy the page started from, and the one that sells.
+_PREMIUM_MOMENTUM = EXAMPLE_SETUPS[:2]
 
 
 class _NoDatabase:
@@ -49,14 +55,14 @@ class _NoDatabase:
 # ── The shipped examples ──────────────────────────────────────────────────
 
 
-def test_two_examples_ship_and_both_are_the_strategy_the_page_started_from() -> None:
+def test_three_examples_ship_and_the_first_two_are_the_strategy_the_page_started_from() -> None:
     assert tuple(example.name for example in EXAMPLE_SETUPS) == _EXAMPLE_NAMES
     assert all(
         example.example and example.saved_at_ms is None and example.cannot_open_reason is None
         for example in EXAMPLE_SETUPS
     )
 
-    for example in EXAMPLE_SETUPS:
+    for example in _PREMIUM_MOMENTUM:
         setup = example.setup
         assert setup is not None
         assert setup.underlying == "SPY"
@@ -97,7 +103,7 @@ def test_the_example_named_one_re_entry_re_enters_once_at_once_until_an_hour_bef
 
 
 def test_the_two_examples_differ_only_in_their_re_entry_rules() -> None:
-    no_re_entry, one_re_entry = (example.setup for example in EXAMPLE_SETUPS)
+    no_re_entry, one_re_entry = (example.setup for example in _PREMIUM_MOMENTUM)
 
     came_back = no_re_entry.model_copy(
         update={
@@ -109,6 +115,28 @@ def test_the_two_examples_differ_only_in_their_re_entry_rules() -> None:
         }
     )
     assert came_back == one_re_entry
+
+
+def test_the_third_example_sells_a_put_spread_covered_one_for_one_and_stops_only_the_sold_leg() -> None:
+    covered = EXAMPLE_SETUPS[2].setup
+    assert covered is not None
+
+    assert covered.sells
+    assert covered.underlying == "SPY" and covered.square_off == "partial"
+    assert (covered.slippage_percent, covered.fees.kind, covered.starting_cash_usd) == (
+        Decimal("0.3"),
+        "not_charged",
+        Decimal("10000"),
+    )
+    bought, sold = covered.legs
+    # One put bought five strikes below the money covers the one sold at the money: the cover rule is met by the setup.
+    assert (bought.side, bought.right, bought.contracts, bought.strike.kind) == ("buy", "put", 1, "atm_offset")
+    assert bought.strike.steps == -5
+    assert (sold.side, sold.right, sold.contracts, sold.strike.kind) == ("sell", "put", 1, "atm")
+    assert bought.expiry == sold.expiry
+    # A sold leg's percent stop has no ceiling at 100: this one lets its premium double before it is bought back.
+    assert sold.stop_loss is not None and (sold.stop_loss.kind, sold.stop_loss.value) == ("percent", Decimal(100))
+    assert bought.stop_loss is None and bought.momentum is None and bought.reentry_on_stop is None
 
 
 async def test_an_example_cannot_be_saved_over_or_deleted() -> None:
@@ -345,8 +373,8 @@ async def test_the_list_has_the_examples_first_then_saved_setups_newest_first(co
 
     listed = await list_setups(conn)
 
-    assert tuple(s.name for s in listed[:2]) == _EXAMPLE_NAMES
-    assert all(s.example for s in listed[:2]) and not any(s.example for s in listed[2:])
+    assert tuple(s.name for s in listed[:3]) == _EXAMPLE_NAMES
+    assert all(s.example for s in listed[:3]) and not any(s.example for s in listed[3:])
     mine = [s.name for s in listed if s.name.endswith(tag)]
     assert mine == [f"Newest {tag}", f"A same stamp {tag}", f"B same stamp {tag}", f"Middle {tag}", f"Oldest {tag}"]
 

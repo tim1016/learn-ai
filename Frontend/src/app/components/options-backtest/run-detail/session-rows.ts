@@ -1,6 +1,6 @@
 import type { OptionContract } from '../../../shared/option-contract/option-contract.component';
 import type { SessionDetail, SessionEvent, SessionFill, SessionLevel, SessionMark, TradeContract } from './run-detail.types';
-import { attemptWords, contractOf, FILL_WORDS, knownContracts, LEVEL_WORDS, MARK_WORDS } from './words';
+import { attemptWords, contractOf, fillWords, knownContracts, LEVEL_WORDS, markWords } from './words';
 
 /**
  * The rows of the lists beside the one-day chart. They are the chart's text equivalent: every fact the chart shows (each
@@ -83,8 +83,8 @@ export function fillRows(session: SessionDetail): FillRow[] {
   return session.fills.map((fill, place) => ({
     key: `${place}:${fill.contract}:${fill.leg_id}:${fill.entry_number}:${fill.kind}`,
     fill,
-    name: FILL_WORDS[fill.kind].name,
-    drawn: FILL_WORDS[fill.kind].drawn,
+    name: fillWords(fill).name,
+    drawn: fillWords(fill).drawn,
     instrument: instrumentOf(fill.contract, known),
     attempt: attemptWords(fill.entry_number),
   }));
@@ -95,8 +95,8 @@ export function markRows(session: SessionDetail): MarkRow[] {
   return session.marks.map((mark, place) => ({
     key: `${place}:${mark.contract}:${mark.leg_id}:${mark.entry_number}`,
     mark,
-    name: MARK_WORDS.name,
-    drawn: MARK_WORDS.drawn,
+    name: markWords(mark).name,
+    drawn: markWords(mark).drawn,
     instrument: instrumentOf(mark.contract, known),
     attempt: attemptWords(mark.entry_number),
   }));

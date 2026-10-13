@@ -41245,6 +41245,31 @@
         "title": "OptionsBacktestDrawdownResponse",
         "type": "object"
       },
+      "OptionsBacktestEntryRefusalCountResponse": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "reason": {
+            "enum": [
+              "other_side",
+              "second_expiry",
+              "cover_did_not_trade",
+              "cover_not_yet_held",
+              "sale_at_zero"
+            ],
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "count"
+        ],
+        "title": "OptionsBacktestEntryRefusalCountResponse",
+        "type": "object"
+      },
       "OptionsBacktestEventResponse": {
         "description": "One thing that happened in the session, in the order it happened.\n\n``entry_number`` follows the replay's one rule: an event about a position carries that position's number, and an\nevent about an attempt to enter carries the number that entry has or would have. ``detail`` is the one place the\nreplay writes prose (a refused pick says why). It is the backend's words for the owner, stored and served exactly\nas written, even when they name a date; nothing else on the wire names one, since a session is its open.",
         "properties": {
@@ -41388,7 +41413,7 @@
         "type": "object"
       },
       "OptionsBacktestFillResponse": {
-        "description": "An order that filled, to mark on the bar it filled in. ``seen_usd`` is that bar's open and ``filled_usd`` what the\norder filled at after slippage and the price step. ``exit_reason`` is why a sale was made; ``null`` for an entry.",
+        "description": "An order that filled, to mark on the bar it filled in. ``seen_usd`` is that bar's open and ``filled_usd`` what the\norder filled at after slippage and the price step. ``exit_reason`` is why a leg was closed; ``null`` for an entry.\n\n``kind`` says whether the order opened or closed the leg and ``side`` which way it traded: a bought leg's entry is a\nbuy and its exit a sale, a sold leg's entry is a sale and its exit a buy-back. The two together name it.",
         "properties": {
           "bar_close_ms": {
             "maximum": 253402300799999.0,
@@ -41447,10 +41472,19 @@
           "seen_usd": {
             "title": "Seen Usd",
             "type": "string"
+          },
+          "side": {
+            "enum": [
+              "buy",
+              "sell"
+            ],
+            "title": "Side",
+            "type": "string"
           }
         },
         "required": [
           "kind",
+          "side",
           "leg_id",
           "entry_number",
           "contract",
@@ -41504,6 +41538,13 @@
           "slippage_percent": {
             "title": "Slippage Percent",
             "type": "string"
+          },
+          "statements": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Statements",
+            "type": "array"
           }
         },
         "required": [
@@ -41512,7 +41553,8 @@
           "slippage_percent",
           "price_step_usd",
           "fee_policy_kind",
-          "fee_policy"
+          "fee_policy",
+          "statements"
         ],
         "title": "OptionsBacktestFillsBannerResponse",
         "type": "object"
@@ -41704,7 +41746,7 @@
         "type": "object"
       },
       "OptionsBacktestMarkResponse": {
-        "description": "A leg valued and not sold: the last bar its contract traded in and that bar's close. It is not a fill.",
+        "description": "A leg valued and not closed: the last bar its contract traded in and that bar's close. It is not a fill.\n\n``owed`` is true for a leg that was sold to open and never bought back: its mark is an amount owed. It is false for\na bought leg that was never sold: its mark is what it is worth.",
         "properties": {
           "bar_close_ms": {
             "maximum": 253402300799999.0,
@@ -41725,6 +41767,10 @@
             "title": "Leg Id",
             "type": "string"
           },
+          "owed": {
+            "title": "Owed",
+            "type": "boolean"
+          },
           "price_usd": {
             "title": "Price Usd",
             "type": "string"
@@ -41735,7 +41781,8 @@
           "entry_number",
           "contract",
           "bar_close_ms",
-          "price_usd"
+          "price_usd",
+          "owed"
         ],
         "title": "OptionsBacktestMarkResponse",
         "type": "object"
@@ -42286,6 +42333,20 @@
           "entries_dropped": {
             "title": "Entries Dropped",
             "type": "integer"
+          },
+          "entries_refused_by_reason": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/OptionsBacktestEntryRefusalCountResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entries Refused By Reason"
           },
           "entries_refused_for_cash": {
             "title": "Entries Refused For Cash",
@@ -83295,7 +83356,7 @@
     },
     "/api/research/options-backtest/runs/{run_id}/trades.csv": {
       "get": {
-        "description": "Every leg trade of a complete run as a CSV: ``unix_ts`` (the entry fill's bar close, ms UTC) first, one readable\nNew York time beside it, every other instant in a ``*_ms`` column, money and prices as exact decimal text.\n\nThe whole run, however many trades it has: the page size of the trades route does not apply. A run that is not\ncomplete is a 409.\n\n``exit_kind`` tells a leg that was closed by a sale (``sale``) or by a buy-back (``buy_back``) from one marked\n(``mark``). For a mark, ``exit_price_usd`` is the mark and not a price anything traded at, ``exit_seen_usd`` is\nempty and ``exit_fee_usd`` is ``0``; a sum of ``exit_price_usd`` over every row therefore mixes sales, buy-backs\nand marks.",
+        "description": "Every leg trade of a complete run as a CSV: ``unix_ts`` (the entry fill's bar close, ms UTC) first, one readable\nNew York time beside it, every other instant in a ``*_ms`` column, money and prices as exact decimal text.\n\nThe whole run, however many trades it has: the page size of the trades route does not apply. A run that is not\ncomplete is a 409.\n\n``exit_kind`` tells a leg that was closed by a sale (``sale``) or by a buy-back (``buy_back``) from one marked\n(``mark``). For a mark, ``exit_price_usd`` is the mark and not a price anything traded at, ``exit_seen_usd`` is\nempty and ``exit_fee_usd`` is ``0``; a sum of ``exit_price_usd`` over every row therefore mixes sales, buy-backs\nand marks. ``side``, the last column, is the side the leg opened on: ``sell`` for a sold leg, whose entry is a sale\nand whose mark is an amount owed.",
         "operationId": "export_the_trades_api_research_options_backtest_runs__run_id__trades_csv_get",
         "parameters": [
           {

@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from app.lean_sidecar.trading_calendar import session_window_for_date
-from app.options_backtest.describe import describe_setup
+from app.options_backtest.describe import describe_setup, result_statements
 from app.options_backtest.saved_setups import EXAMPLE_SETUPS
 from app.options_backtest.session_clock import SessionClock
 from app.options_backtest.setup import MS_PER_MINUTE
@@ -360,7 +360,7 @@ def test_no_slippage_is_said_as_no_slippage_not_as_a_zero_percent_move() -> None
 
 
 def test_the_example_named_no_re_entry_says_nothing_of_re_entry_and_the_other_one_says_it() -> None:
-    no_re_entry, one_re_entry = (describe_setup(example.setup, full_session=_CLOCK) for example in EXAMPLE_SETUPS)
+    no_re_entry, one_re_entry = (describe_setup(example.setup, full_session=_CLOCK) for example in EXAMPLE_SETUPS[:2])
 
     assert "re-entry" not in " ".join(no_re_entry.window)
     assert all("After a stop" not in " ".join(leg.sentences) for leg in no_re_entry.legs)
@@ -368,9 +368,29 @@ def test_the_example_named_no_re_entry_says_nothing_of_re_entry_and_the_other_on
     assert all(re.search(r"buys it at once, up to 1 time\b", " ".join(leg.sentences)) for leg in one_re_entry.legs)
 
 
-def test_both_examples_fit_a_full_day() -> None:
+def test_every_example_fits_a_full_day() -> None:
     for example in EXAMPLE_SETUPS:
         assert describe_setup(example.setup, full_session=_CLOCK).notices == ()
+
+
+def test_the_example_that_sells_says_which_leg_buys_and_which_is_sold_and_when_the_sold_one_is_bought_back() -> None:
+    covered = describe_setup(EXAMPLE_SETUPS[2].setup, full_session=_CLOCK)
+
+    bought, sold = (" ".join(leg.sentences) for leg in covered.legs)
+    assert bought.startswith("Leg long_put: buys 1 put")
+    assert sold.startswith("Leg short_put: sells to open 1 at-the-money put")
+    assert "bought back" in sold and "needs one bought put" in sold
+    # Only the sold leg carries the stop, and it is a rise in its premium.
+    assert "Sells once" not in bought and "Bought back once a minute closes" in sold
+
+
+def test_a_setup_that_sells_has_three_statements_to_make_of_its_result_and_one_that_buys_has_none() -> None:
+    statements = result_statements(EXAMPLE_SETUPS[2].setup)
+
+    assert len(statements) == 3 and len(set(statements)) == 3
+    assert all(statement.endswith(".") for statement in statements)
+    assert result_statements(EXAMPLE_SETUPS[0].setup) == ()
+    assert result_statements(EXAMPLE_SETUPS[1].setup) == ()
 
 
 def _every_sentence(setup: Any) -> list[str]:

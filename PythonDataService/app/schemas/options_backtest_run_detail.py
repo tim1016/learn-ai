@@ -379,9 +379,14 @@ class OptionsBacktestLevelResponse(BaseModel):
 
 class OptionsBacktestFillResponse(BaseModel):
     """An order that filled, to mark on the bar it filled in. ``seen_usd`` is that bar's open and ``filled_usd`` what the
-    order filled at after slippage and the price step. ``exit_reason`` is why a sale was made; ``null`` for an entry."""
+    order filled at after slippage and the price step. ``exit_reason`` is why a leg was closed; ``null`` for an entry.
+
+    ``kind`` says whether the order opened or closed the leg and ``side`` which way it traded: a bought leg's entry is a
+    buy and its exit a sale, a sold leg's entry is a sale and its exit a buy-back. The two together name it.
+    """
 
     kind: FillKindWord
+    side: Literal["buy", "sell"]
     leg_id: str
     entry_number: int = Field(ge=0)
     contract: str
@@ -395,6 +400,7 @@ class OptionsBacktestFillResponse(BaseModel):
     def from_fill(cls, fill: ChartedFill) -> Self:
         return cls(
             kind=fill.kind,
+            side=fill.side,
             leg_id=fill.leg_id,
             entry_number=fill.entry_number,
             contract=fill.contract.occ_symbol,
@@ -407,13 +413,18 @@ class OptionsBacktestFillResponse(BaseModel):
 
 
 class OptionsBacktestMarkResponse(BaseModel):
-    """A leg valued and not sold: the last bar its contract traded in and that bar's close. It is not a fill."""
+    """A leg valued and not closed: the last bar its contract traded in and that bar's close. It is not a fill.
+
+    ``owed`` is true for a leg that was sold to open and never bought back: its mark is an amount owed. It is false for
+    a bought leg that was never sold: its mark is what it is worth.
+    """
 
     leg_id: str
     entry_number: int = Field(ge=0)
     contract: str
     bar_close_ms: Ms
     price_usd: str
+    owed: bool
 
     @classmethod
     def from_mark(cls, mark: ChartedMark) -> Self:
@@ -423,6 +434,7 @@ class OptionsBacktestMarkResponse(BaseModel):
             contract=mark.contract.occ_symbol,
             bar_close_ms=mark.bar_close_ms,
             price_usd=exact(mark.price),
+            owed=mark.owed,
         )
 
 
