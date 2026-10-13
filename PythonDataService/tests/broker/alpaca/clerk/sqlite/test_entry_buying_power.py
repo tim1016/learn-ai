@@ -486,11 +486,9 @@ async def test_an_account_read_the_listing_outruns_is_still_the_first_reading_if
 
     monkeypatch.setattr(paper.account, "get_option_account", a_turn_behind_the_listing)
     _a_venue_whose_hand_over_takes_a_turn(paper, monkeypatch)
-    taken_at = paper.clock()
 
     order_ref = await paper.resting()
-    # The entry did not wait: it was sent at the clock it was asked at.
-    assert paper.venue.option_submit_calls == [order_ref] and paper.clock() == taken_at
+    assert paper.venue.option_submit_calls == [order_ref]
     await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
     paper.account.buying_power = Decimal("99806.00")
     found = await paper.compared(order_ref)
@@ -1580,6 +1578,45 @@ async def test_an_entry_being_sent_while_a_new_clerks_first_round_runs_is_not_ta
         recorded_meanwhile = await paper.clerk.compare_entries_with_buying_power()
     finally:
         # Whatever was found, the send is let go: an entry left waiting would hold the account open.
+        alpaca_answers.set()
+        sent = await entering
+
+    [order_ref] = sent.child_order_refs
+    assert recorded_meanwhile == () and paper.comparisons(order_ref) == []
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+    paper.account.buying_power = Decimal("99806.00")
+    assert (await paper.compared(order_ref)).result == "consistent"
+
+
+@pytest.mark.usefixtures("judged")
+async def test_an_entry_whose_account_read_is_going_on_is_not_taken_for_one_a_restart_left(
+    paper: Paper, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    read = OptionAccount.get_option_account
+
+    async def a_turn_behind_the_listing() -> BrokerOptionAccountSnapshot:
+        await asyncio.sleep(0)
+        return await read(paper.account)
+
+    monkeypatch.setattr(paper.account, "get_option_account", a_turn_behind_the_listing)
+    alpaca_answers = asyncio.Event()
+    send = paper.venue.submit_option_order
+
+    async def a_send_that_waits(order: Any, *, client_order_id: str) -> Any:
+        await alpaca_answers.wait()
+        return await send(order, client_order_id=client_order_id)
+
+    monkeypatch.setattr(paper.venue, "submit_option_order", a_send_that_waits)
+    watch = paper.clerk._buying_power
+    entering = asyncio.ensure_future(paper.enter())
+    try:
+        for _ in range(50):
+            await asyncio.sleep(0)
+        # The reading is neither kept nor dropped yet: it is taken at the send.
+        assert paper.venue.option_submit_calls == [] and not entering.done()
+        assert watch._first == {} and len(watch._going_on) == 1
+        recorded_meanwhile = await paper.clerk.compare_entries_with_buying_power()
+    finally:
         alpaca_answers.set()
         sent = await entering
 

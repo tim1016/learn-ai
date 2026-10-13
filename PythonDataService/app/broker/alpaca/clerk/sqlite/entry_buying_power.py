@@ -198,6 +198,12 @@ class _Completed:
     account_ms: int | None = None
     transfers_ms: int | None = None
 
+    def account_finished(self, ms: int) -> None:
+        self.account_ms = ms
+
+    def transfers_finished(self, ms: int) -> None:
+        self.transfers_ms = ms
+
     @property
     def ended_ms(self) -> int | None:
         """When the later of the two finished, or ``None`` while either has not."""
@@ -339,14 +345,14 @@ class EntryBuyingPowerWatch:
         """
         held = self._first.pop(key, None)
         going_on = self._going_on.pop(key, None)
-        if order_ref is None or order_ref in self._watched:
-            if going_on is not None:
+        taken = order_ref is not None and order_ref not in self._watched
+        if going_on is not None:
+            if taken and held is None:
+                held = (self._reading_at_send(going_on, sent_at_ms=sent_at_ms), going_on.transfers_from_ms)
+            else:
                 going_on.cancel()
+        if not taken:
             return
-        if held is None and going_on is not None:
-            held = (self._reading_at_send(going_on, sent_at_ms=sent_at_ms), going_on.transfers_from_ms)
-        elif going_on is not None:
-            going_on.cancel()
         first, transfers_from_ms = (
             held if held is not None else (None, et_midnight_ms(et_date_at_ms(self._repo.clock())))
         )
@@ -446,7 +452,8 @@ class EntryBuyingPowerWatch:
         of the event loop, and a port that answers at once has answered by
         the time this returns. Python 3.12's eager tasks are needed to
         start both reads before a listing port that also answers without
-        yielding; a pending read is cancelled as soon as that listing ends.
+        yielding. A read still pending when that listing ends goes on to the
+        entry's send (``finish_first``, #3136).
         """
         loop = asyncio.get_running_loop()
         began_ms = self._repo.clock()
@@ -468,8 +475,8 @@ class EntryBuyingPowerWatch:
             ),
             loop=loop, eager_start=True,
         )
-        self._note_when_done(account, lambda ms: setattr(completed, "account_ms", ms))
-        self._note_when_done(transfers, lambda ms: setattr(completed, "transfers_ms", ms))
+        self._note_when_done(account, completed.account_finished)
+        self._note_when_done(transfers, completed.transfers_finished)
         return ReadingBegun(
             began_ms=began_ms,
             began_after_sequence=began_after_sequence,
@@ -513,7 +520,9 @@ class EntryBuyingPowerWatch:
         Kept only when both reads had finished, and the later of them had finished no later than the
         order was handed to the port: an answer that reached the Clerk after that cannot be the
         account as it stood before the order. Anything else is cancelled and is not ready, as a
-        reading the listing outran always was.
+        reading the listing outran always was. For an order the Clerk took and never handed over
+        (``sent_at_ms`` is ``None``) there is no order to be before: a finished reading is kept, and
+        the entry's record says it bought nothing.
         """
         ended_ms = begun.completed.ended_ms
         finished = (
