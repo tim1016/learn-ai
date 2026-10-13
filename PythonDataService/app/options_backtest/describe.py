@@ -192,6 +192,26 @@ def fee_policy_sentence(fees: FeePolicy) -> str:
     return "Fees are not charged, so results are before fees."
 
 
+def result_statements(setup: OptionsBacktestSetup) -> tuple[str, ...]:
+    """What the result of a run of ``setup`` must not be taken for, in three sentences; none for a setup that only buys.
+
+    A setup that sells is replayed under three choices the owner could mistake for facts: the legs that open in one
+    minute are judged as one group, because minute bars cannot show which contract printed first; the requirement held
+    against what is sold is Alpaca's published rule for covered positions, worked out here; and nothing in the replay
+    asks a broker, so the result says nothing of whether one would have taken these orders (#3109, PRD #3095).
+    """
+    if not setup.sells:
+        return ()
+    return (
+        "Legs opened in the same minute are treated as one group, and minute bars cannot show which of them printed "
+        "first. A sold leg's cover is judged as if it were held beside it, which is a modelling choice and not "
+        "observed coverage.",
+        "The requirement held against what is sold is Alpaca's published rule for covered positions as of today, "
+        "worked out by this system.",
+        "This result claims nothing about whether a broker would have accepted these orders.",
+    )
+
+
 def _fees(fees: FeePolicy) -> tuple[str, ...]:
     if fees.kind == "estimated":
         return (fee_policy_sentence(fees), "A session from before those rates exist cannot be run with this choice.")

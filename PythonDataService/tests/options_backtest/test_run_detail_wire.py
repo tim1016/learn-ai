@@ -407,9 +407,9 @@ def test_a_price_of_twenty_six_digits_is_sent_as_those_digits_by_every_model_tha
     event = wire.OptionsBacktestEventResponse.from_event(Event(EventKind.ENTRY_FILLED, OPEN_MS, "call", 0, CALL, long))
     level = wire.OptionsBacktestLevelResponse.from_level(Level(LevelKind.STOP, "call", 0, CALL, long, OPEN_MS, OPEN_MS))
     fill = wire.OptionsBacktestFillResponse.from_fill(
-        ChartedFill("entry", "call", 0, CALL, 1, OPEN_MS, long, long, None)
+        ChartedFill("entry", "buy", "call", 0, CALL, 1, OPEN_MS, long, long, None)
     )
-    mark = wire.OptionsBacktestMarkResponse.from_mark(ChartedMark("call", 0, CALL, OPEN_MS, long))
+    mark = wire.OptionsBacktestMarkResponse.from_mark(ChartedMark("call", 0, CALL, OPEN_MS, long, False))
     series = wire.OptionsBacktestSeriesResponse.from_series(Series("SPY", None, (SeriesPoint(OPEN_MS, long),), None))
     assert {
         event.price_usd,
@@ -496,7 +496,7 @@ def test_a_session_of_a_run_whose_setup_was_lost_says_why_beside_everything_else
 
 
 def test_a_fill_is_sent_with_the_price_seen_apart_from_the_price_it_filled_at() -> None:
-    fill = ChartedFill("entry", "call", 0, CALL, 1, OPEN_MS, D("2.00"), D("2.02"), None)
+    fill = ChartedFill("entry", "buy", "call", 0, CALL, 1, OPEN_MS, D("2.00"), D("2.02"), None)
 
     sent = wire.OptionsBacktestFillResponse.from_fill(fill)
 

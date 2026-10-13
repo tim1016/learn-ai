@@ -6,7 +6,9 @@ import type { RunBanner } from '../options-backtest.types';
 /**
  * What the owner must not mistake the figures for: fills are simulated from
  * trade prices, bid and ask are not available, and a slippage and a fee
- * policy were assumed. It sits above the figures and is never collapsed.
+ * policy were assumed. A result that sells carries three more statements the
+ * server wrote, and the page shows them as they are (#3109). It sits above the
+ * figures and is never collapsed.
  */
 @Component({
   selector: 'app-options-backtest-run-banner',

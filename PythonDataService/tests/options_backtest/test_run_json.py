@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from typing import Any
 
 from app.options_backtest import run_json
-from app.options_backtest.results import ExitReason
+from app.options_backtest.results import EntryRefusal, ExitReason
 from tests.options_backtest._a_run import a_busy_run, what_the_busy_run_reaches
 
 
@@ -58,6 +59,44 @@ def test_a_summary_stored_before_a_sold_leg_could_be_closed_with_its_protection_
         (ExitReason.MARKED_NOT_SOLD, 1),
         (ExitReason.MARKED_NOT_BOUGHT_BACK, 0),
     )
+
+
+def test_the_refusals_counted_by_reason_ride_in_the_stored_summary_and_come_back_equal() -> None:
+    summary = replace(
+        a_busy_run().summary,
+        entries_refused_by_reason=(
+            (EntryRefusal.OTHER_SIDE, 4),
+            (EntryRefusal.SECOND_EXPIRY, 3),
+            (EntryRefusal.COVER_DID_NOT_TRADE, 1),
+            (EntryRefusal.COVER_NOT_YET_HELD, 2),
+            (EntryRefusal.SALE_AT_ZERO, 0),
+        ),
+    )
+
+    written = json.loads(json.dumps(run_json.summary_to_json(summary)))
+
+    assert written["entries_refused_by_reason"] == [
+        ["other_side", 4],
+        ["second_expiry", 3],
+        ["cover_did_not_trade", 1],
+        ["cover_not_yet_held", 2],
+        ["sale_at_zero", 0],
+    ]
+    assert run_json.summary_from_json(written) == summary
+
+
+def test_a_summary_stored_before_refusals_were_counted_by_reason_reads_them_as_not_recorded_and_writes_none() -> None:
+    summary = a_busy_run().summary
+    assert summary.entries_refused_by_reason is not None
+    old = json.loads(json.dumps(run_json.summary_to_json(summary)))
+    del old["entries_refused_by_reason"]
+
+    read = run_json.summary_from_json(old)
+
+    assert read.entries_refused_by_reason is None
+    assert read == replace(summary, entries_refused_by_reason=None)
+    # Its JSON is the JSON it always was, and not a key of null.
+    assert run_json.summary_to_json(read) == old
 
 
 def test_a_session_is_identified_by_its_open_and_no_date_is_written() -> None:

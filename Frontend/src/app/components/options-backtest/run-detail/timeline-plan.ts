@@ -4,7 +4,7 @@ import { formatReceiptLabel } from '../../../shared/pipes/receipt-label.pipe';
 import type { ChartSeriesColorToken } from '../../../shared/trading-chart/chart-series-color-tokens';
 import { axisPrice } from './series-geometry';
 import type { SeriesPoint, SeriesReason, SessionDetail, SessionFill, SessionLevel, SessionMark, SessionSeries, TradeContract } from './run-detail.types';
-import { contractOf, FILL_WORDS, knownContracts, legAttempt, LEVEL_WORDS, MARK_WORDS } from './words';
+import { contractOf, fillWords, knownContracts, legAttempt, LEVEL_WORDS, markWords } from './words';
 
 /**
  * What the one-day chart is handed, worked out from the server's session answer and nothing else. A pure function: the
@@ -18,7 +18,10 @@ import { contractOf, FILL_WORDS, knownContracts, legAttempt, LEVEL_WORDS, MARK_W
  * - A series of no values at all holds one slot for every minute of the session (the "clock"), so a gap keeps its width
  *   and every pane keeps the same time axis.
  * - A series the server withholds is not given to the chart. Its levels, fills and marks are not drawn on an empty pane.
- * - A level is drawn only between the two instants the server gave it.
+ * - A level is drawn only between the two instants the server gave it. A sold leg's stop is the server's level, which is
+ *   above the price it was sold for, so it is drawn above it.
+ * - A fill's arrow points the way the order traded, and its words are the side's: a sale to open points down and a
+ *   buy-back up, and a mark of a sold leg says it is owed (#3109). Colour says only whether the fill opened or closed.
  * - Colours are token ids; the wrapper resolves them to colours at the library's boundary.
  * - Every price a person reads from the chart (a tip) is the server's text, put through the shared formatter, found by
  *   the instant. The only numbers here are positions, from `axisPrice`, in `value` and `price` fields that are never printed.
@@ -339,7 +342,7 @@ function addFills(
     // A contract whose series is not drawn has no pane: nothing of it goes on the chart or into its tooltip.
     if (pane === undefined) continue;
     const words = contractWords(fill.contract, known);
-    const kind = FILL_WORDS[fill.kind];
+    const kind = fillWords(fill);
     const why = fill.exit_reason == null ? '' : ` (${formatReceiptLabel(fill.exit_reason)})`;
     tips.add(seconds(fill.bar_close_ms), `${kind.name} ${words} (contracts: ${fill.contracts}): filled ${money(fill.filled_usd)}, seen ${money(fill.seen_usd)}${why}`);
     const price = axisPrice(fill.filled_usd);
@@ -348,11 +351,15 @@ function addFills(
       continue;
     }
     fills += 1;
-    const entry = fill.kind === 'entry';
+    // Colour says whether the fill opened or closed the leg; the arrow points the way the order traded, so a sale to
+    // open points down and a buy-back up.
+    const opening = fill.kind === 'entry';
+    const buying = fill.side === 'buy';
+    const token = opening ? TOKENS.entry : TOKENS.exit;
     place(
       pane,
-      { id: fillKey(fill), time: seconds(fill.bar_close_ms), price, shape: entry ? 'arrowUp' : 'arrowDown', token: entry ? TOKENS.entry : TOKENS.exit, text: kind.name },
-      { key: `fill:${fill.kind}`, name: kind.name, drawn: kind.drawn, token: entry ? TOKENS.entry : TOKENS.exit, sample: 'marker', lineStyle: 'solid', glyph: entry ? '▲' : '▼' },
+      { id: fillKey(fill), time: seconds(fill.bar_close_ms), price, shape: buying ? 'arrowUp' : 'arrowDown', token, text: kind.name },
+      { key: `fill:${fill.kind}:${fill.side}`, name: kind.name, drawn: kind.drawn, token, sample: 'marker', lineStyle: 'solid', glyph: buying ? '▲' : '▼' },
     );
   }
 
@@ -360,17 +367,18 @@ function addFills(
     const pane = paneOf.get(mark.contract);
     if (pane === undefined) continue;
     const words = contractWords(mark.contract, known);
-    tips.add(seconds(mark.bar_close_ms), `${MARK_WORDS.name}: ${words} at ${money(mark.price_usd)}`);
+    const kind = markWords(mark);
+    tips.add(seconds(mark.bar_close_ms), `${kind.name}: ${words} at ${money(mark.price_usd)}`);
     const price = axisPrice(mark.price_usd);
     if (price === null) {
-      notDrawn.push({ key: markKey(mark), what: MARK_WORDS.name, symbol: mark.contract, ofUnderlying: false, contract: known.get(mark.contract) ?? null, reason: null, message: UNPLACEABLE, listedBelow: true });
+      notDrawn.push({ key: markKey(mark), what: kind.name, symbol: mark.contract, ofUnderlying: false, contract: known.get(mark.contract) ?? null, reason: null, message: UNPLACEABLE, listedBelow: true });
       continue;
     }
     marks += 1;
     place(
       pane,
-      { id: markKey(mark), time: seconds(mark.bar_close_ms), price, shape: 'square', token: TOKENS.mark, text: MARK_WORDS.name },
-      { key: 'mark', name: MARK_WORDS.name, drawn: MARK_WORDS.drawn, token: TOKENS.mark, sample: 'marker', lineStyle: 'solid', glyph: '■' },
+      { id: markKey(mark), time: seconds(mark.bar_close_ms), price, shape: 'square', token: TOKENS.mark, text: kind.name },
+      { key: mark.owed ? 'mark:owed' : 'mark', name: kind.name, drawn: kind.drawn, token: TOKENS.mark, sample: 'marker', lineStyle: 'solid', glyph: '■' },
     );
   }
 

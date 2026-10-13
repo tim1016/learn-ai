@@ -30,19 +30,23 @@ Three kinds of line, each from one instant to another, both ends being minute cl
 
 A stored session that does not agree with itself (a trade with a starting price that no event took, or took on another
 contract or at another price, an attempt that waited and has no end) is not drawn from a guess:
-``SessionRecordInconsistent``. The replay cannot make one.
+``SessionRecordInconsistent``. The replay cannot make one. Every event that names a contract and belongs to a stored
+trade, the trade of its leg and entry number, is held to it (#3086): it must name the trade's contract, and an event that
+says which way an order traded must agree with the trade's fills: an entry fill is on the side the leg trades (the
+trade's entry side), a close fill is on the other, and a leg marked as owed was sold to open.
 
 With no setup (a run whose stored setup no longer validates) every line that comes from a stored figure is still drawn:
 the stops, and each starting price. The momentum line of an attempt that never filled is the only one left out, since
 its level comes from the leg's rule; the lines of one leg that begin together are ordered by the leg's id.
 
-A leg marked and not sold has no sale to draw: it is a mark, the last bar its contract traded in and that bar's close.
+A leg marked and not sold, or sold and not bought back, has no close to draw: it is a mark, the last bar its contract
+traded in and that bar's close, and it says whether it is owed.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -59,7 +63,7 @@ from app.options_backtest.results import (
     LegTrade,
     SessionOutcome,
 )
-from app.options_backtest.setup import OptionsBacktestSetup
+from app.options_backtest.setup import LegSetup, OptionsBacktestSetup
 
 
 class LevelKind(StrEnum):
@@ -93,9 +97,14 @@ class Level:
 
 @dataclass(frozen=True)
 class ChartedFill:
-    """An order that filled, to be marked on the bar it filled in: the price seen is that bar's open."""
+    """An order that filled, to be marked on the bar it filled in: the price seen is that bar's open.
+
+    ``kind`` says whether it opened or closed the leg and ``side`` which way it traded, so a sold leg's entry is an
+    ``entry`` on the ``sell`` side and its buy-back an ``exit`` on the ``buy`` side (#3109).
+    """
 
     kind: Literal["entry", "exit"]
+    side: Literal["buy", "sell"]
     leg_id: str
     entry_number: int
     contract: OptionContract
@@ -109,17 +118,73 @@ class ChartedFill:
 
 @dataclass(frozen=True)
 class ChartedMark:
-    """A leg valued and not sold: the last bar its contract traded in, and that bar's close."""
+    """A leg valued and not closed: the last bar its contract traded in, and that bar's close.
+
+    ``owed`` is whether the leg was sold to open, so its mark is an amount owed and not a value held (#3109).
+    """
 
     leg_id: str
     entry_number: int
     contract: OptionContract
     bar_close_ms: int
     price: Decimal
+    owed: bool
 
 
 def _inconsistent(leg_id: str, entry_number: int, what: str) -> SessionRecordInconsistent:
     return SessionRecordInconsistent(f"leg {leg_id!r}, entry {entry_number}: {what}")
+
+
+def _side_disagreement(kind: EventKind, trade: LegTrade, leg: LegSetup | None) -> str | None:
+    """What an event says of the way an order traded that its trade's fills do not bear out, or ``None``.
+
+    Only the kinds that say which way an order traded are asked: an entry fill (the leg's side, which is the trade's
+    entry side), a close fill (the other side, and a fill), a mark (no fill, and owed exactly when the leg opened by
+    a sale) and a leg closed with its protection (a sold leg). ``leg`` is ``None`` when the run's setup is lost.
+    """
+    opened = trade.entry.side
+    leaving = trade.exit
+    if kind is EventKind.ENTRY_FILLED:
+        if leg is not None and leg.side != opened:
+            return f"its entry filled on the {opened} side and the setup's leg trades on the {leg.side} side"
+    elif kind is EventKind.CLOSE_FILLED:
+        if not isinstance(leaving, Fill):
+            return "its close filled and the trade was marked, not closed"
+        if leaving.side == opened:
+            return f"its close traded on the {leaving.side} side, which is the side the leg opened on"
+    elif kind in (EventKind.MARKED_NOT_SOLD, EventKind.MARKED_NOT_BOUGHT_BACK):
+        if isinstance(leaving, Fill):
+            return "it was marked and the trade was closed by a fill"
+        if (kind is EventKind.MARKED_NOT_BOUGHT_BACK) != (opened == "sell"):
+            marked_as = "owed" if kind is EventKind.MARKED_NOT_BOUGHT_BACK else "held"
+            return f"it was marked as {marked_as} and the leg opened on the {opened} side"
+    elif kind is EventKind.CLOSED_WITH_ITS_PROTECTION and opened != "sell":
+        return "it was closed with its protection and only a sold leg is, and the leg opened on the buy side"
+    return None
+
+
+def _check_events_against_trades(
+    legs: Mapping[str, LegSetup], trade_of: Mapping[tuple[str, int], LegTrade], events: Sequence[Event]
+) -> None:
+    """Hold every event that names a contract and belongs to a stored trade to that trade (#3086).
+
+    An event belongs to the trade of its leg and entry number, when there is one: an attempt that never filled has
+    none, and an event of it has nothing to be held to here.
+    """
+    for event in events:
+        if event.contract is None:
+            continue
+        trade = trade_of.get((event.leg_id, event.entry_number))
+        if trade is None:
+            continue
+        if event.contract != trade.contract:
+            raise _inconsistent(
+                event.leg_id,
+                event.entry_number,
+                f"its {event.kind.value} event is of a different contract from the trade's",
+            )
+        if (why := _side_disagreement(event.kind, trade, legs.get(event.leg_id))) is not None:
+            raise _inconsistent(event.leg_id, event.entry_number, f"its {event.kind.value} event disagrees: {why}")
 
 
 def _ended_at(leg_id: str, entry_number: int, events: Sequence[Event]) -> int:
@@ -153,6 +218,7 @@ def levels_of(setup: OptionsBacktestSetup | None, outcome: SessionOutcome) -> tu
     legs = {} if setup is None else {leg.leg_id: leg for leg in setup.legs}
     place = {} if setup is None else {leg.leg_id: at for at, leg in enumerate(setup.legs)}
     trade_of = {(trade.leg_id, trade.entry_number): trade for trade in outcome.trades}
+    _check_events_against_trades(legs, trade_of, outcome.events)
     events_of: dict[tuple[str, int], list[Event]] = defaultdict(list)
     for event in outcome.events:
         events_of[(event.leg_id, event.entry_number)].append(event)
@@ -228,7 +294,7 @@ def levels_of(setup: OptionsBacktestSetup | None, outcome: SessionOutcome) -> tu
 
 
 def fills_of(trades: Sequence[LegTrade]) -> tuple[ChartedFill, ...]:
-    """Each trade's entry and, when it was sold, its sale, by the bar they filled in.
+    """Each trade's entry and, when it was closed, its sale or buy-back, by the bar they filled in.
 
     Fills in one bar come in the order of their trades (the sort is stable and they are added trade by trade), and a
     trade's sale is always in a later bar than its entry.
@@ -241,6 +307,7 @@ def fills_of(trades: Sequence[LegTrade]) -> tuple[ChartedFill, ...]:
                 entry.bar_close_ms,
                 ChartedFill(
                     "entry",
+                    entry.side,
                     trade.leg_id,
                     trade.entry_number,
                     trade.contract,
@@ -259,6 +326,7 @@ def fills_of(trades: Sequence[LegTrade]) -> tuple[ChartedFill, ...]:
                     sale.bar_close_ms,
                     ChartedFill(
                         "exit",
+                        sale.side,
                         trade.leg_id,
                         trade.entry_number,
                         trade.contract,
@@ -275,9 +343,16 @@ def fills_of(trades: Sequence[LegTrade]) -> tuple[ChartedFill, ...]:
 
 
 def marks_of(trades: Sequence[LegTrade]) -> tuple[ChartedMark, ...]:
-    """The legs marked and not sold, in the order of their trades."""
+    """The legs marked and not closed, in the order of their trades: a bought leg not sold, a sold leg owed."""
     return tuple(
-        ChartedMark(trade.leg_id, trade.entry_number, trade.contract, trade.exit.bar_close_ms, trade.exit_price)
+        ChartedMark(
+            trade.leg_id,
+            trade.entry_number,
+            trade.contract,
+            trade.exit.bar_close_ms,
+            trade.exit_price,
+            trade.is_sold_leg,
+        )
         for trade in trades
         if not isinstance(trade.exit, Fill)
     )

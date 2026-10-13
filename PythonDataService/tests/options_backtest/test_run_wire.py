@@ -33,7 +33,7 @@ from app.options_backtest.data_check import (
     SessionVerdict,
 )
 from app.options_backtest.market import PickRefusal
-from app.options_backtest.results import ExitReason, SessionStatus, SkipReason
+from app.options_backtest.results import EntryRefusal, ExitReason, SessionStatus, SkipReason
 from app.options_backtest.run import RunResult, run_sessions
 from app.options_backtest.saved_runs import (
     FailureItem,
@@ -104,6 +104,8 @@ def _stored(result: RunResult, *, status: str = "complete") -> StoredRun:
         (wire.SkipReasonWord, [member.value for member in SkipReason]),
         (wire.ExitReasonWord, [member.value for member in ExitReason]),
         (wire.PickRefusalWord, [member.value for member in PickRefusal]),
+        # Refused for cash has its own count, which every run has always had, so it is not one of these.
+        (wire.EntryRefusalWord, [member.value for member in EntryRefusal if member is not EntryRefusal.CASH_SHORT]),
         (wire.VerdictWord, [member.value for member in SessionVerdict]),
         (wire.ProblemCodeWord, [member.value for member in ProblemCode]),
         (wire.MissingWord, [member.value for member in DataKind]),
@@ -391,6 +393,68 @@ def test_the_banner_states_the_facts_the_result_must_not_hide(result: RunResult)
     assert (banner.slippage_percent, banner.price_step_usd) == ("0.3", "0.01")
     assert (banner.fee_policy_kind, banner.fee_per_contract_usd) == ("per_contract", "0.65")
     assert banner.fee_policy == "Fees are $0.65 per contract traded."
+
+
+def test_a_result_of_a_setup_that_sells_carries_the_three_statements_and_one_that_only_buys_carries_none(
+    result: RunResult,
+) -> None:
+    sells = wire.OptionsBacktestRunDetailResponse.from_stored(_stored(a_selling_run())).banner
+    buys = wire.OptionsBacktestRunDetailResponse.from_stored(_stored(result)).banner
+
+    assert sells is not None and buys is not None
+    assert buys.statements == []
+    # Legs opened in one minute as one group, the requirement as the published rule of today worked out here, and no
+    # claim that a broker would have taken the orders.
+    assert len(sells.statements) == 3
+    first, second, third = sells.statements
+    assert "same minute" in first and "one group" in first and "printed first" in first
+    assert "published rule for covered positions" in second and "worked out by this system" in second
+    assert "claims nothing about whether a broker would have accepted" in third
+
+
+def test_the_refusals_of_a_sale_are_sent_each_with_its_own_count_and_not_recorded_on_a_run_stored_before_them() -> None:
+    selling = a_selling_run()
+    recorded = _stored(selling)
+    old = StoredRun(
+        record=recorded.record,
+        setup=recorded.setup,
+        figures=RunFigures(
+            replace(selling.summary, entries_refused_by_reason=None), selling.slippage, selling.slippage_tolerance
+        ),
+    )
+
+    now = wire.OptionsBacktestRunDetailResponse.from_stored(recorded).figures
+    then = wire.OptionsBacktestRunDetailResponse.from_stored(old).figures
+
+    assert now is not None and then is not None
+    assert [(each.reason, each.count) for each in now.entries_refused_by_reason or []] == [
+        ("other_side", 0),
+        ("second_expiry", 0),
+        ("cover_did_not_trade", 0),
+        ("cover_not_yet_held", 0),
+        ("sale_at_zero", 0),
+    ]
+    # Not recorded is not zero: a run stored before they were counted has no list at all, and every other figure is as
+    # it was.
+    assert then.entries_refused_by_reason is None
+    assert then.model_dump(exclude={"entries_refused_by_reason"}) == now.model_dump(
+        exclude={"entries_refused_by_reason"}
+    )
+
+
+def test_the_exits_of_a_selling_run_are_counted_by_their_own_names_among_the_six_reasons() -> None:
+    figures = wire.OptionsBacktestRunDetailResponse.from_stored(_stored(a_selling_run())).figures
+
+    assert figures is not None
+    # Wednesday's two legs left at the exit time; Thursday's were marked, one not sold and one not bought back.
+    assert [(each.reason, each.count) for each in figures.exits_by_reason] == [
+        ("stop", 0),
+        ("square_off", 0),
+        ("closed_with_its_protection", 0),
+        ("exit_time", 2),
+        ("marked_not_sold", 1),
+        ("marked_not_bought_back", 1),
+    ]
 
 
 def test_the_run_carries_its_setup_whole_and_no_trades(result: RunResult) -> None:

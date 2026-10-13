@@ -6072,7 +6072,8 @@ export interface paths {
          *     ``exit_kind`` tells a leg that was closed by a sale (``sale``) or by a buy-back (``buy_back``) from one marked
          *     (``mark``). For a mark, ``exit_price_usd`` is the mark and not a price anything traded at, ``exit_seen_usd`` is
          *     empty and ``exit_fee_usd`` is ``0``; a sum of ``exit_price_usd`` over every row therefore mixes sales, buy-backs
-         *     and marks.
+         *     and marks. ``side``, the last column, is the side the leg opened on: ``sell`` for a sold leg, whose entry is a sale
+         *     and whose mark is an amount owed.
          */
         get: operations["export_the_trades_api_research_options_backtest_runs__run_id__trades_csv_get"];
         put?: never;
@@ -22989,6 +22990,16 @@ export interface components {
             /** Trough Session Open Ms */
             trough_session_open_ms: number;
         };
+        /** OptionsBacktestEntryRefusalCountResponse */
+        OptionsBacktestEntryRefusalCountResponse: {
+            /** Count */
+            count: number;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "other_side" | "second_expiry" | "cover_did_not_trade" | "cover_not_yet_held" | "sale_at_zero";
+        };
         /**
          * OptionsBacktestEventResponse
          * @description One thing that happened in the session, in the order it happened.
@@ -23032,7 +23043,10 @@ export interface components {
         /**
          * OptionsBacktestFillResponse
          * @description An order that filled, to mark on the bar it filled in. ``seen_usd`` is that bar's open and ``filled_usd`` what the
-         *     order filled at after slippage and the price step. ``exit_reason`` is why a sale was made; ``null`` for an entry.
+         *     order filled at after slippage and the price step. ``exit_reason`` is why a leg was closed; ``null`` for an entry.
+         *
+         *     ``kind`` says whether the order opened or closed the leg and ``side`` which way it traded: a bought leg's entry is a
+         *     buy and its exit a sale, a sold leg's entry is a sale and its exit a buy-back. The two together name it.
          */
         OptionsBacktestFillResponse: {
             /** Bar Close Ms */
@@ -23056,6 +23070,11 @@ export interface components {
             leg_id: string;
             /** Seen Usd */
             seen_usd: string;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "buy" | "sell";
         };
         /**
          * OptionsBacktestFillsBannerResponse
@@ -23079,6 +23098,8 @@ export interface components {
             price_step_usd: string;
             /** Slippage Percent */
             slippage_percent: string;
+            /** Statements */
+            statements: string[];
         };
         /**
          * OptionsBacktestJobAcceptedResponse
@@ -23182,7 +23203,10 @@ export interface components {
         };
         /**
          * OptionsBacktestMarkResponse
-         * @description A leg valued and not sold: the last bar its contract traded in and that bar's close. It is not a fill.
+         * @description A leg valued and not closed: the last bar its contract traded in and that bar's close. It is not a fill.
+         *
+         *     ``owed`` is true for a leg that was sold to open and never bought back: its mark is an amount owed. It is false for
+         *     a bought leg that was never sold: its mark is what it is worth.
          */
         OptionsBacktestMarkResponse: {
             /** Bar Close Ms */
@@ -23193,6 +23217,8 @@ export interface components {
             entry_number: number;
             /** Leg Id */
             leg_id: string;
+            /** Owed */
+            owed: boolean;
             /** Price Usd */
             price_usd: string;
         };
@@ -23377,6 +23403,8 @@ export interface components {
             ending_cash_usd: string;
             /** Entries Dropped */
             entries_dropped: number;
+            /** Entries Refused By Reason */
+            entries_refused_by_reason?: components["schemas"]["OptionsBacktestEntryRefusalCountResponse"][] | null;
             /** Entries Refused For Cash */
             entries_refused_for_cash: number;
             /** Exits By Reason */

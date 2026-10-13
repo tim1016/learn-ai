@@ -30,7 +30,11 @@ from tests.options_backtest.setup_fixtures import tag as tag
 from tests.options_backtest.setup_fixtures import unique as unique
 
 PREFIX = "/api/research/options-backtest"
-_EXAMPLE_NAMES = ["SPY premium momentum, no re-entry", "SPY premium momentum, one re-entry"]
+_EXAMPLE_NAMES = [
+    "SPY premium momentum, no re-entry",
+    "SPY premium momentum, one re-entry",
+    "SPY covered put spread, sold",
+]
 # 2026-10-12 is a Monday and a full session; with "now" there, the clock is read from it.
 _NOW = date(2026, 10, 12)
 _FULL_DAY = session_window_for_date(_NOW)
@@ -340,10 +344,16 @@ async def test_a_saved_setup_is_listed_after_the_examples_and_reads_back_as_it_w
     assert saved.json()["name"] == name and saved.json()["example"] is False
     assert saved.json()["cannot_open_reason"] is None
     rows = listed.json()
-    assert [row["name"] for row in rows[:2]] == _EXAMPLE_NAMES
+    assert [row["name"] for row in rows[:3]] == _EXAMPLE_NAMES
     assert all(
-        row["example"] is True and row["saved_at_ms"] is None and row["cannot_open_reason"] is None for row in rows[:2]
+        row["example"] is True and row["saved_at_ms"] is None and row["cannot_open_reason"] is None for row in rows[:3]
     )
+    # The third sells: its legs are served with their sides, and only the sold one writes one.
+    covered = rows[2]["setup"]
+    assert [(each["leg_id"], each.get("side", "buy")) for each in covered["legs"]] == [
+        ("long_put", "buy"),
+        ("short_put", "sell"),
+    ]
     [mine] = [row for row in rows if row["name"] == name]
     assert mine["saved_at_ms"] == saved.json()["saved_at_ms"]
     assert mine["setup"] == saved.json()["setup"]
@@ -401,7 +411,7 @@ async def test_a_stored_setup_that_no_longer_validates_is_listed_with_the_reason
     assert rows[fine]["setup"] is not None and rows[fine]["cannot_open_reason"] is None
     assert rows[stale]["setup"] is None and rows[stale]["saved_at_ms"] == 1_000
     assert "version" in rows[stale]["cannot_open_reason"]
-    assert [name for name in rows][:2] == _EXAMPLE_NAMES
+    assert [name for name in rows][:3] == _EXAMPLE_NAMES
 
 
 async def test_no_stored_row_can_make_the_list_fail_whatever_its_json_or_its_stamp_holds(
