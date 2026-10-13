@@ -185,7 +185,21 @@ def no_active_children(monkeypatch):
 
 
 @pytest.mark.slow
-def test_a_spawned_worker_returns_the_serial_answer_exactly(tmp_path: Path, no_active_children, monkeypatch) -> None:
+@pytest.mark.parametrize("extra_distribution", [False, True])
+def test_a_spawned_worker_returns_the_serial_answer_exactly(
+    tmp_path: Path, no_active_children, monkeypatch, extra_distribution: bool
+) -> None:
+    from app.research.sweep.identity import environment_digest
+
+    if extra_distribution:
+        # Startup imports may add bundled libraries to sys.path (setuptools
+        # does this). A spawned interpreter must see that same environment.
+        vendor = tmp_path / "vendor"
+        metadata = vendor / "research_path_probe-1.0.dist-info"
+        metadata.mkdir(parents=True)
+        (metadata / "METADATA").write_text("Metadata-Version: 2.1\nName: research-path-probe\nVersion: 1.0\n")
+        monkeypatch.syspath_prepend(str(vendor))
+    identity = {**_runtime_identity(), "environment_digest": environment_digest()}
     write_root, _lake, manifest = _reference_lake(tmp_path)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))  # this process's settings object
     monkeypatch.setenv("LEAN_DATA_WRITE_ROOT", str(write_root))  # the child reads env, not the object
@@ -200,7 +214,7 @@ def test_a_spawned_worker_returns_the_serial_answer_exactly(tmp_path: Path, no_a
         strategy_key="sma_crossover",
         execution=_assumptions(),
         manifest=manifest,
-        identity=_runtime_identity(),
+        identity=identity,
         job_id="job-worker-test",
         generation=1,
         on_checkpoint=checkpoints.append,
@@ -208,7 +222,7 @@ def test_a_spawned_worker_returns_the_serial_answer_exactly(tmp_path: Path, no_a
     try:
         task = task_wire(_serial_item(), strategy_key="sma_crossover",
                          execution=_assumptions(),
-                         manifest=manifest, identity=_runtime_identity())
+                         manifest=manifest, identity=identity)
         message = worker.run_task(task, silence_bound_s=120.0)
     finally:
         worker.close()
