@@ -13727,6 +13727,16 @@
             "title": "Entry Eligible",
             "type": "boolean"
           },
+          "exit_estimate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExitEstimateView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "funding": {
             "anyOf": [
               {
@@ -16191,6 +16201,103 @@
           "countdown_state_persistable"
         ],
         "title": "ExitEligibilityContract",
+        "type": "object"
+      },
+      "ExitEstimateView": {
+        "additionalProperties": false,
+        "description": "What getting out of the bot's held option position costs at the quotes held, before fees (#3100).\n\n``net_close`` is closing everything as one order and ``gross_buy_back``\nbuying the sold legs back alone: two figures, because Alpaca can ask\nfor far more buying power for the second than the first suggests. Each\nis known, stale or unknown with its terms and source, never \"0.00\" for\na figure that is not known. ``quotes`` says how far each leg's quote can\nbe trusted, and ``conditions`` what is not settled. It informs and\nblocks nothing. Every dollar and every word is authored by Python.",
+        "properties": {
+          "conditions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Conditions",
+            "type": "array"
+          },
+          "gross_buy_back": {
+            "$ref": "#/components/schemas/FigureView"
+          },
+          "net_close": {
+            "$ref": "#/components/schemas/FigureView"
+          },
+          "quotes": {
+            "items": {
+              "$ref": "#/components/schemas/ExitLegQuoteView"
+            },
+            "title": "Quotes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "net_close",
+          "gross_buy_back",
+          "quotes",
+          "conditions"
+        ],
+        "title": "ExitEstimateView",
+        "type": "object"
+      },
+      "ExitLegQuoteView": {
+        "additionalProperties": false,
+        "description": "How far the quote behind one held contract's exit price can be trusted (#3100).\n\n``state`` is the leg's own: unknown when the side its close fills at is no\nprice, stale when that side is past the age a held contract's mark is\nallowed, known otherwise. ``age_ms`` is that side's age and is absent\nwhen no side arrived; ``missing`` lists every side that has not arrived;\n``gap_usd`` is the ask less the bid in dollars a share, exactly as\nquoted, and absent unless both sides arrived.",
+        "properties": {
+          "age_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age Ms"
+          },
+          "contract": {
+            "$ref": "#/components/schemas/OptionContractView"
+          },
+          "contracts": {
+            "title": "Contracts",
+            "type": "integer"
+          },
+          "gap_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gap Usd"
+          },
+          "missing": {
+            "default": [],
+            "items": {
+              "enum": [
+                "bid",
+                "ask"
+              ],
+              "type": "string"
+            },
+            "title": "Missing",
+            "type": "array"
+          },
+          "state": {
+            "enum": [
+              "known",
+              "stale",
+              "unknown"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "contract",
+          "contracts",
+          "state"
+        ],
+        "title": "ExitLegQuoteView",
         "type": "object"
       },
       "ExitTerms": {

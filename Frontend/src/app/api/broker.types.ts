@@ -12362,6 +12362,7 @@ export interface components {
              * @default false
              */
             entry_eligible?: boolean;
+            exit_estimate?: components["schemas"]["ExitEstimateView"] | null;
             funding?: components["schemas"]["FundingView"] | null;
             /** Headline */
             headline: string;
@@ -13341,6 +13342,56 @@ export interface components {
              * @enum {string}
              */
             rule?: "fixed_bar_count_countdown" | "level_true";
+        };
+        /**
+         * ExitEstimateView
+         * @description What getting out of the bot's held option position costs at the quotes held, before fees (#3100).
+         *
+         *     ``net_close`` is closing everything as one order and ``gross_buy_back``
+         *     buying the sold legs back alone: two figures, because Alpaca can ask
+         *     for far more buying power for the second than the first suggests. Each
+         *     is known, stale or unknown with its terms and source, never "0.00" for
+         *     a figure that is not known. ``quotes`` says how far each leg's quote can
+         *     be trusted, and ``conditions`` what is not settled. It informs and
+         *     blocks nothing. Every dollar and every word is authored by Python.
+         */
+        ExitEstimateView: {
+            /** Conditions */
+            conditions: string[];
+            gross_buy_back: components["schemas"]["FigureView"];
+            net_close: components["schemas"]["FigureView"];
+            /** Quotes */
+            quotes: components["schemas"]["ExitLegQuoteView"][];
+        };
+        /**
+         * ExitLegQuoteView
+         * @description How far the quote behind one held contract's exit price can be trusted (#3100).
+         *
+         *     ``state`` is the leg's own: unknown when the side its close fills at is no
+         *     price, stale when that side is past the age a held contract's mark is
+         *     allowed, known otherwise. ``age_ms`` is that side's age and is absent
+         *     when no side arrived; ``missing`` lists every side that has not arrived;
+         *     ``gap_usd`` is the ask less the bid in dollars a share, exactly as
+         *     quoted, and absent unless both sides arrived.
+         */
+        ExitLegQuoteView: {
+            /** Age Ms */
+            age_ms?: number | null;
+            contract: components["schemas"]["OptionContractView"];
+            /** Contracts */
+            contracts: number;
+            /** Gap Usd */
+            gap_usd?: string | null;
+            /**
+             * Missing
+             * @default []
+             */
+            missing?: ("bid" | "ask")[];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "known" | "stale" | "unknown";
         };
         /**
          * ExitTerms

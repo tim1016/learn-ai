@@ -89,6 +89,7 @@ from app.schemas.exit_terms import ExitTerms
 from app.schemas.option_deploy import OptionDeployReview
 from app.services.broker_v2_panel.bot_custody import bot_clerk_runtime
 from app.services.broker_v2_panel.deploy_submissions import DeploySubmission, bot_name_note
+from app.services.broker_v2_panel.exit_estimate_read import exit_estimate_view, read_exit_estimate, read_quotes_ahead
 from app.services.broker_v2_panel.panel_errors import PanelRunnerError, PanelUnavailableError
 from app.services.broker_v2_panel.sqlite_panel_source import home_roster
 from app.services.market_liveness import prepared_top_of_book, status_stream_connected
@@ -641,6 +642,8 @@ class _EntryConfiguration(BaseModel):
 def _budget_view(runtime: ActiveClerkRuntime, sid: str) -> DeploymentBudgetView:
     repo = runtime.sqlite_repository
     assert repo is not None
+    # A simulated account's kept quotes are read from their file before the fence, never under it.
+    read_quotes_ahead(repo)
     with repo.write_fence():
         return _fenced_budget_view(runtime, sid)
 
@@ -860,6 +863,8 @@ def _fenced_budget_view(runtime: ActiveClerkRuntime, sid: str) -> DeploymentBudg
         entry = _next_entry(runtime, repo, money.budget, sid, risk, read.observed_at_ms) if own.active else None
         headline, detail = (entry.headline, entry.detail) if entry is not None else _stopped_copy(own)
         segment = bot_segment(money, sid)
+        # What getting out costs, while the bot holds an option contract: a stopped bot's included.
+        exit_cost = read_exit_estimate(repo, sid, now_ms=repo.clock())
         with money_context():
             return DeploymentBudgetView(
                 state="ready", headline=headline, detail=detail,
@@ -870,6 +875,7 @@ def _fenced_budget_view(runtime: ActiveClerkRuntime, sid: str) -> DeploymentBudg
                 statement=_statement(own, entry),
                 note="The budget limits new entries. Market fills and losses can go past it." if own.active else None,
                 funding=None if entry is None or entry.funding is None else FundingView.from_answer(entry.funding),
+                exit_estimate=None if exit_cost is None else exit_estimate_view(exit_cost),
             )
     except (BudgetUnavailable, MoneyInputError, RateNotPinnedError, ValidationError, SimulationEvidenceUnavailable) as exc:
         return DeploymentBudgetView(

@@ -66,13 +66,20 @@ from app.broker.alpaca.clerk.option_effects import RecordedQuote
 from app.broker.alpaca.paths import resolve_contained_path, safe_path_component
 from app.broker.contract.errors import BrokerUnavailable
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
+from app.marketdata.feed import DELIVERY_ALLOWANCE_MS
 from app.options.quotes import HeldQuote, receipt_times
+from app.services.decision_clock import SOURCE_BAR_MS
 from app.services.jsonl_wal import JsonlWal
 from app.utils.advisory_lock import advisory_file_lock
 from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
 
 KEPT_OPTION_QUOTES_FILENAME = "kept_option_quotes.jsonl"
 _KEEP_LOCK = threading.RLock()
+
+# How old a quote may be and still stand for a held contract's mark: a share bar's length and the delivery
+# allowance a decision on that bar is given (ADR 0076 decision 28). The simulated account's mark and the
+# exit estimate's quotes (#3100) are held to this one limit.
+HELD_MARK_MAX_AGE_MS = SOURCE_BAR_MS + DELIVERY_ALLOWANCE_MS
 
 # A file of fewer rows than this is never cut back: reading it whole costs
 # nothing worth saving. Above it, the file is cut once it has doubled since
@@ -466,6 +473,7 @@ class KeptOptionQuotes:
 
 __all__ = [
     "COMPACT_ABOVE_ROWS",
+    "HELD_MARK_MAX_AGE_MS",
     "KEPT_OPTION_QUOTES_FILENAME",
     "KeptOptionQuote",
     "KeptOptionQuotes",
