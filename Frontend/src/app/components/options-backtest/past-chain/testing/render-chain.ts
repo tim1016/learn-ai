@@ -27,9 +27,9 @@ export function fakeChainService(spy: Spy, changes: Partial<FakeChainService> = 
   };
 }
 
-export async function renderChainTab(service: FakeChainService, startingUnderlying = 'SPY', limits: SetupLimits | null = null) {
+export async function renderChainTab(service: FakeChainService, startingUnderlying = 'SPY', limits: SetupLimits | null = null, startingDate = '') {
   const view = await render(PastChainTabComponent, {
-    inputs: { startingUnderlying, limits },
+    inputs: { startingUnderlying, limits, startingDate },
     providers: [...fakePickerWorld().providers, { provide: PastChainService, useValue: service }],
   });
   await view.fixture.whenStable();

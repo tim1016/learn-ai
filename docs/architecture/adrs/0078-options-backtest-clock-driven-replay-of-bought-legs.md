@@ -366,7 +366,6 @@ Why. The lake moves on: a file can change, be replaced or go. A saved run that f
 - Historical bid and ask, and anything priced from quotes.
 - Entries triggered by a stock signal, and any link to Deploy or Golden Search.
 - A numerical match with AlgoTest.
-- Moving the Data Lab past-chain inspector onto the new past-chain query. It is left as it is.
 - Whether a run's job route, `POST /api/jobs-internal/options-backtest`, carries the control secret. Its download phase spends vendor requests and writes the lake, as the past chain's download does. Today it is not on the control manifest, and the manifest lists no `/api/jobs-internal` route but the pool drain.
 
 ## Consequences
@@ -385,6 +384,7 @@ Why. The lake moves on: a file can change, be replaced or go. A saved run that f
 - Option runs and the stock run history are separate lists.
 - Research schema versions 19 and 20 add the tables for saved setups and runs.
 - Two older lake fetchers still put the vendor key in the URL, and the lake work found that they can drop the paging cursor on a later page. Neither is changed here.
+- What an underlying had listed on a past date is asked one way: `GET /api/research/options-backtest/past-chain/…`. The Data Lab's options companion shows this page's Past chain tab (#3087), so the Data Lab inspector that scanned daily bars for same-day expiries at whole-dollar strikes is gone. What it showed from daily bars (open, close, previous close, change) and its minute-bar drill-down for one contract are not carried over: the route gives one price per contract, the last trade in the minute ending a time, and reads the lake only.
 
 ## Open questions for the owner
 

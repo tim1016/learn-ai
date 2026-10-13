@@ -10,7 +10,7 @@ import {
 import { RouterLink } from '@angular/router';
 
 import { RunSessionService } from '../../../services/run-session.service';
-import { PastChainInspectorComponent } from '../past-chain-inspector/past-chain-inspector.component';
+import { PastChainTabComponent } from '../../options-backtest/past-chain/past-chain-tab.component';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 
 import { DataLabWorkspaceStore } from '../data-lab-workspace-store';
@@ -41,7 +41,7 @@ import { columnsForPayload } from './export-csv-options';
   selector: 'app-data-lab-export',
   imports: [
     RouterLink,
-    PastChainInspectorComponent,
+    PastChainTabComponent,
     AssetIdentityComponent,
     ExportColumnPickerComponent,
   ],
@@ -381,7 +381,7 @@ export class ExportComponent {
     { key: 'includeStockQuotes', label: 'stock_quotes.csv' },
   ];
 
-  /** Latest committed window date for the past-chain inspector. */
+  /** Latest committed window date, `YYYY-MM-DD`: the day the options companion's Past chain opens on. */
   readonly analysisDate = computed(() => {
     const window = this.store.committedWindow();
     if (!window) return '';
