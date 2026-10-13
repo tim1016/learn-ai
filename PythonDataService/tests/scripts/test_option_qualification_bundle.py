@@ -468,6 +468,92 @@ async def test_a_body_that_is_opaque_text_in_every_line_writes_no_recording_of_t
     assert sorted(path.name for path in (tmp_path / "recordings").iterdir()) == ["attribution.md"]
 
 
+async def test_distinct_drops_a_poll_that_repeats_the_one_before_and_keeps_a_change_back(
+    paper: Paper, tmp_path: Path
+) -> None:
+    captures = tmp_path / "captures"
+    ask_a, ask_b = b'{"ask":"a"}', b'{"ask":"b"}'
+    # One request polled four times: empty, empty, an order, empty again. The second empty is a repeat; the
+    # third is a change and the fourth is a change back, so both stay. A different request with the same
+    # answer is a different poll, not a repeat.
+    for at, body, request in [
+        (1_000, b"[]", ask_a),
+        (2_000, b"[]", ask_a),
+        (3_000, b'[{"id":"one"}]', ask_a),
+        (4_000, b"[]", ask_a),
+        (5_000, b"[]", ask_b),
+    ]:
+        _journal_line(captures, NOON + at, body=body, request_body=request)
+    bundle = _write(paper, tmp_path, out_dir=tmp_path / "bundle").out_dir
+
+    kit.write_recordings(bundle_dir=bundle, out_dir=tmp_path / "all")
+    kit.write_recordings(bundle_dir=bundle, out_dir=tmp_path / "distinct", distinct=True)
+
+    assert len((tmp_path / "all" / "orders.jsonl").read_text().splitlines()) == 5
+    kept = [json.loads(text) for text in (tmp_path / "distinct" / "orders.jsonl").read_text().splitlines()]
+    assert [(line["captured_at_ms"] - NOON, line["raw_body"]) for line in kept] == [
+        (1_000, "[]"),
+        (3_000, '[{"id": "one"}]'),
+        (4_000, "[]"),
+        (5_000, "[]"),
+    ]
+    section = (tmp_path / "distinct" / "attribution.md").read_text().split("## Repeated polls dropped\n", 1)[1]
+    assert "- `orders.jsonl`: 1" in section.split("\n## ", 1)[0]
+    assert "## Repeated polls dropped" not in (tmp_path / "all" / "attribution.md").read_text()
+
+
+async def test_distinct_drops_a_page_through_that_repeats_the_last_and_keeps_the_one_that_changed(
+    paper: Paper, tmp_path: Path
+) -> None:
+    captures = tmp_path / "captures"
+    page_one = (b'{"page":1}', b'{"answer":1}')
+    page_two = (b'{"page":2}', b'{"answer":2}')
+    page_two_changed = (b'{"page":2}', b'{"answer":2,"new":true}')
+    # The account's activities are read a page at a time: the same two requests, answered the same way each
+    # pass, until the last pass has a new row on its second page.
+    polls = [page_one, page_two] * 3 + [page_one, page_two_changed]
+    for at, (request, body) in enumerate(polls, start=1):
+        _journal_line(captures, NOON + at * 1_000, body=body, request_body=request)
+    bundle = _write(paper, tmp_path, out_dir=tmp_path / "bundle").out_dir
+
+    kit.write_recordings(bundle_dir=bundle, out_dir=tmp_path / "distinct", distinct=True)
+
+    kept = [json.loads(text) for text in (tmp_path / "distinct" / "orders.jsonl").read_text().splitlines()]
+    assert [(line["captured_at_ms"] - NOON) // 1_000 for line in kept] == [1, 2, 7, 8]
+    assert json.loads(kept[-1]["raw_body"]) == {"answer": 2, "new": True}
+
+
+async def test_only_writes_the_named_families_and_says_which_it_left_out(paper: Paper, tmp_path: Path) -> None:
+    captures = tmp_path / "captures"
+    _journal_line(captures, NOON + 1_000, body=b'{"fine":true}')
+    _journal_line(captures, NOON + 2_000, CaptureEndpoint.STREAM, body=b'{"stream":"trade_updates"}')
+    bundle = _write(paper, tmp_path, out_dir=tmp_path / "bundle").out_dir
+
+    recorded = kit.write_recordings(bundle_dir=bundle, out_dir=tmp_path / "recordings", only=("orders",))
+
+    assert recorded.not_read == ()
+    assert sorted(path.name for path in (tmp_path / "recordings").iterdir()) == ["attribution.md", "orders.jsonl"]
+    attribution = (tmp_path / "recordings" / "attribution.md").read_text()
+    section = attribution.split("## Families left out\n", 1)[1].split("\n## ", 1)[0]
+    assert "- `stream`" in section and "not a gap in the journal" in section
+    exit_code = kit.main(
+        ["recordings", "--bundle-dir", str(bundle), "--out-dir", str(tmp_path / "second"), "--only", "orders", "--distinct"]
+    )
+    assert exit_code == 0
+
+
+async def test_a_family_the_bundle_has_no_journal_of_is_refused_rather_than_written_as_nothing(
+    paper: Paper, tmp_path: Path
+) -> None:
+    _journal_line(tmp_path / "captures", NOON + 1_000, body=b'{"fine":true}')
+    bundle = _write(paper, tmp_path, out_dir=tmp_path / "bundle").out_dir
+
+    with pytest.raises(kit.BundleRefused, match="has no stream"):
+        kit.write_recordings(bundle_dir=bundle, out_dir=tmp_path / "recordings", only=("orders", "stream"))
+
+    assert not (tmp_path / "recordings").exists()
+
+
 async def test_the_journal_gaps_of_the_source_bundle_are_carried_into_the_recordings_and_exit_three(
     paper: Paper, tmp_path: Path
 ) -> None:

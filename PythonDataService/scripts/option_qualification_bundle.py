@@ -35,7 +35,8 @@ Usage, from ``PythonDataService/`` or the lane container's ``/app``::
         --from-ms 1760000000000 --to-ms 1760003600000 --out-dir <new folder>
 
     python -m scripts.option_qualification_bundle recordings \\
-        --bundle-dir <that folder> --out-dir <new folder under tests/fixtures/alpaca/>
+        --bundle-dir <that folder> --out-dir <new folder under tests/fixtures/alpaca/> \\
+        [--distinct] [--only orders stream ...]
 
 Exit: 0 when everything was read, 3 when the folder was written with pieces
 unread (named), 2 when the command was refused and nothing was written.
@@ -568,7 +569,9 @@ def write_bundle(
 # ── recordings ───────────────────────────────────────────────────────────
 
 
-def write_recordings(*, bundle_dir: Path, out_dir: Path) -> BundleResult:
+def write_recordings(
+    *, bundle_dir: Path, out_dir: Path, distinct: bool = False, only: tuple[str, ...] = ()
+) -> BundleResult:
     """Write a bundle's journal lines, sanitised, as recordings into the new folder ``out_dir``.
 
     A line that cannot be sanitised is left out and named, and so is a body
@@ -577,6 +580,12 @@ def write_recordings(*, bundle_dir: Path, out_dir: Path) -> BundleResult:
     forward, so a recording's provenance says what its source lacked. Either
     kind makes the command exit 3. Nothing is written when a sanitised line
     still carries the bundle's account id: it would be committed.
+
+    A day's journal is mostly the same answers polled again (one page-through
+    of the account's activities is three polls of about thirty kilobytes).
+    ``distinct`` drops a run of polls that repeats, request and answer, the
+    run kept just before it, counting what it dropped in the attribution;
+    ``only`` writes just the named families and says which it left out.
     """
     try:
         manifest = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))
@@ -598,7 +607,15 @@ def write_recordings(*, bundle_dir: Path, out_dir: Path) -> BundleResult:
         left_out.append(
             Gap("the bundle's journal", "the bundle holds no journal folder, so there is nothing to record", journal=True)
         )
-    for family_dir in sorted(path for path in journal_dir.glob("*") if path.is_dir()):
+    families = sorted(path for path in journal_dir.glob("*") if path.is_dir())
+    unknown = sorted(set(only) - {path.name for path in families})
+    if unknown:
+        raise BundleRefused(f"{bundle_dir}'s journal has no {', '.join(unknown)}; nothing was written")
+    dropped: Counter[str] = Counter()
+    for family_dir in families:
+        if only and family_dir.name not in only:
+            continue
+        polls: list[tuple[str, str]] = []
         for day_file in sorted(family_dir.glob("*.jsonl")):
             for number, text in enumerate(day_file.read_text(encoding="utf-8").splitlines(), start=1):
                 if not text.strip():
@@ -612,7 +629,17 @@ def write_recordings(*, bundle_dir: Path, out_dir: Path) -> BundleResult:
                 encoded = json.dumps(recording, ensure_ascii=False)
                 if re.search(rf"(?<![A-Za-z0-9]){re.escape(account_id)}(?![A-Za-z0-9])", encoded):
                     raise BundleRefused(f"{piece} still carries the account id after sanitising; nothing was written")
-                written.setdefault(family_dir.name, []).append(encoded)
+                # A poll is what was asked and what came back, not when.
+                poll = json.dumps(
+                    {key: recording.get(key) for key in ("method", "params", "request_body", "status", "raw_body")},
+                    sort_keys=True,
+                )
+                polls.append((encoded, poll))
+        if not polls:
+            continue
+        kept = _without_repeated_runs([poll for _, poll in polls]) if distinct else [True] * len(polls)
+        dropped[family_dir.name] = kept.count(False)
+        written[family_dir.name] = [encoded for (encoded, _), keep in zip(polls, kept, strict=True) if keep]
     for family, lines in written.items():
         atomic_write_bytes(folder / f"{family}.jsonl", ("\n".join(lines) + "\n").encode("utf-8"))
     absent = manifest.get("journal_files_absent")
@@ -624,9 +651,39 @@ def write_recordings(*, bundle_dir: Path, out_dir: Path) -> BundleResult:
             source_gaps,
             left_out,
             [name for name in absent if isinstance(name, str)] if isinstance(absent, list) else [],
+            repeats_dropped={family: count for family, count in dropped.items() if count} if distinct else None,
+            families_left_out=[path.name for path in families if only and path.name not in only],
         ).encode("utf-8"),
     )
     return BundleResult(out_dir=folder, not_read=(*source_gaps, *left_out))
+
+
+_LONGEST_RUN = 8
+
+
+def _without_repeated_runs(polls: list[str]) -> list[bool]:
+    """Which polls to keep: not a run of up to ``_LONGEST_RUN`` that repeats, whole, the polls kept just before it.
+
+    A poll that asked and got what the poll before it did is a run of one and
+    drops. So does a page-through of several pages that answers as the last
+    page-through did. A poll that differs is kept, and a ``[]`` that follows an
+    order is a change back to what it was, not a repeat of it.
+    """
+    keep = [True] * len(polls)
+    kept: list[int] = []
+    position = 0
+    while position < len(polls):
+        for length in range(1, _LONGEST_RUN + 1):
+            run = polls[position : position + length]
+            if len(kept) >= length and len(run) == length and run == [polls[at] for at in kept[-length:]]:
+                for at in range(position, position + length):
+                    keep[at] = False
+                position += length
+                break
+        else:
+            kept.append(position)
+            position += 1
+    return keep
 
 
 def _journal_gaps_of(manifest: dict[str, Any], bundle_dir: Path) -> list[Gap]:
@@ -655,10 +712,35 @@ def _attribution(
     source_gaps: list[Gap],
     left_out: list[Gap],
     absent: list[str],
+    *,
+    repeats_dropped: dict[str, int] | None = None,
+    families_left_out: list[str] | None = None,
 ) -> str:
     inherited = [f"- {gap.piece}: {gap.why}" for gap in source_gaps] or ["- None."]
     not_sanitised = [f"- {gap.piece}: {gap.why}" for gap in left_out] or ["- None."]
     no_file = [f"- `{name}`" for name in absent] or ["- None."]
+    compaction: list[str] = []
+    if repeats_dropped is not None:
+        compaction = [
+            "## Repeated polls dropped",
+            "",
+            "A poll, or a page-through of up to eight polls, that asked the same and got the same status and body "
+            "as the polls kept just before it is not written. The lines above are where an answer changed, not "
+            "how often it was asked.",
+            "",
+            *(f"- `{family}.jsonl`: {count}" for family, count in sorted(repeats_dropped.items())),
+            *([] if repeats_dropped else ["- None."]),
+            "",
+        ]
+    if families_left_out:
+        compaction += [
+            "## Families left out",
+            "",
+            "Chosen when the recording was made, so their absence is not a gap in the journal.",
+            "",
+            *(f"- `{family}`" for family in families_left_out),
+            "",
+        ]
     return "\n".join(
         [
             "# Recordings attribution: option orders on Alpaca Paper",
@@ -678,6 +760,7 @@ def _attribution(
             "",
             *(f"- `{family}.jsonl`: {count}" for family, count in sorted(counts.items())),
             "",
+            *compaction,
             "## Not sanitised, and left out",
             "",
             "A line whose body is opaque text, a bare JSON string or not UTF-8 is not written: only JSON can have "
@@ -725,6 +808,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     recordings = operations.add_parser("recordings", help="Write a bundle's journal lines, sanitised, as recordings.")
     recordings.add_argument("--bundle-dir", type=Path, required=True)
     recordings.add_argument("--out-dir", type=Path, required=True, help="A new or empty folder.")
+    recordings.add_argument(
+        "--distinct",
+        action="store_true",
+        help="Drop a poll, or a page-through, that repeats the polls kept just before it (same request, same answer).",
+    )
+    recordings.add_argument(
+        "--only", nargs="+", default=(), metavar="FAMILY", help="Write only these journal families (e.g. orders stream)."
+    )
     return parser.parse_args(argv)
 
 
@@ -742,7 +833,9 @@ def main(argv: list[str] | None = None) -> int:
                 out_dir=args.out_dir,
             )
         else:
-            result = write_recordings(bundle_dir=args.bundle_dir, out_dir=args.out_dir)
+            result = write_recordings(
+                bundle_dir=args.bundle_dir, out_dir=args.out_dir, distinct=args.distinct, only=tuple(args.only)
+            )
     except (BundleRefused, OSError) as exc:
         sys.stderr.write(f"Option qualification bundle refused: {exc}\n")
         return 2
