@@ -34,7 +34,7 @@ from app.broker.alpaca.clerk.active_authority import (
     set_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.sealed_ledger import append_canonical_jsonl_line
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import DEFAULT_LEASE_TTL_MS, ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.synthetic_activation import (
     SyntheticActivationInvalid,
@@ -216,7 +216,9 @@ async def test_boot_waits_out_its_dead_predecessor_s_lease_at_production_cadence
         elapsed_ms = now_ms_utc() - started_ms
 
         assert get_clerk_runtime(SIM_ACCOUNT) is not None
-        assert 1_400 <= elapsed_ms < 5_000
+        # The ceiling only has to tell a poll from sleeping a whole production
+        # lease lifetime; a loaded xdist worker took 7 s here (#3133).
+        assert 1_400 <= elapsed_ms < DEFAULT_LEASE_TTL_MS // 2
         assert await restarted_lane.start_refusal() is None
     finally:
         # The restored authority lets go first; the dead handle's close only
