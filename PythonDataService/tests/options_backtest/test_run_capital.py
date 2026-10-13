@@ -16,7 +16,12 @@ from decimal import Decimal
 import pytest
 
 from app.options_backtest import run as run_module
-from app.options_backtest.capital_evidence import CapitalEvidence, CapitalInvalidEvent, CapitalInvalidKind
+from app.options_backtest.capital_evidence import (
+    CapitalEvidence,
+    CapitalInvalidEvent,
+    CapitalInvalidKind,
+    CapitalSession,
+)
 from app.options_backtest.cash_ladder import DEFAULT_CASH_LADDER
 from app.options_backtest.results import SessionStatus
 from app.options_backtest.run import run_sessions
@@ -450,3 +455,28 @@ def test_a_run_stored_before_this_change_reads_as_not_recorded_and_its_figures_a
     assert read.net_profit_usd == D("-120.00") and read.entries_refused_for_cash == 2
     # And a summary with none of the three writes none of them: its JSON is the JSON it always was.
     assert run_json.summary_to_json(read) == old
+
+
+# ── A session read back from storage is never asked ──────────────────────
+
+
+def test_a_session_read_back_with_trades_and_no_money_steps_is_refused_and_not_read_as_funded_through() -> None:
+    # A saved run keeps no money steps (#3106), so a traded session read back has none, as one that filled nothing has.
+    # Asked, it would answer "funded through every session, needing nothing": it is refused instead.
+    replayed = a_selling_run().sessions[0].outcome
+    assert replayed.trades and replayed.money_steps
+    read_back = replace(replayed, money_steps=())
+
+    assert CapitalSession.of_outcome(OPEN_MS[WED], replayed).money_steps == replayed.money_steps
+    with pytest.raises(ValueError, match="read back from storage"):
+        CapitalSession.of_outcome(OPEN_MS[WED], read_back)
+
+
+def test_a_session_that_made_no_trade_has_no_money_steps_and_is_not_refused() -> None:
+    skipped = run_sessions(the_selling_setup(), [WED], fake_data({WED: Day(underlying=steady("500.00", 6, 390))}))
+    outcome = skipped.sessions[0].outcome
+    assert outcome.trades == () and outcome.money_steps == ()
+
+    assert CapitalSession.of_outcome(OPEN_MS[WED], outcome) == CapitalSession(
+        OPEN_MS[WED], SessionStatus.SKIPPED, (), ()
+    )

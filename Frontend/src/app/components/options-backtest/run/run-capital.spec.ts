@@ -40,15 +40,25 @@ describe('the capital block', () => {
 
     expect(capital().querySelector('.sentence')?.textContent).toBe('Funded continuously through session 10 of 10: the cash carried the whole run.');
     expect(paragraph(/^Nothing ended it/, capital())).toBeTruthy();
-    expect(reads(tile('Most collateral held'))).toBe('Most collateral held $500.00');
+    expect(reads(tile('Most collateral held'))).toBe('Most collateral held $500.00 Over every session the replay ran.');
     expect(reads(tile('Cash this path needed'))).toBe(
-      'Cash this path needed $380.00 True of this recorded path only. It is not a minimum and not a safe amount.',
+      'Cash this path needed $380.00 Over the funded stretch only, the steps before the event. True of this recorded path only. It is not a minimum and not a safe amount.',
     );
-    expect(reads(tile('Least free cash seen'))).toBe('Least free cash seen $9,620.00 Below zero is included.');
+    expect(reads(tile('Least free cash seen'))).toBe('Least free cash seen $9,620.00 Over every session the replay ran. Below zero is included.');
     expect(reads(tile('Largest assignment obligation held'))).toBe(
-      'Largest assignment obligation held $50,000.00 Sold contracts times strike times multiplier, gross. It is not a loss.',
+      'Largest assignment obligation held $50,000.00 Over every session the replay ran. Sold contracts times strike times multiplier, gross. It is not a loss.',
     );
     expect(tile('Closes that relied on their own relief').querySelector('.big')?.textContent).toBe('0');
+  });
+
+  it('says which figure is over the funded stretch and which are over every session the replay ran', async () => {
+    await renderResult({ capital_evidence: AN_UNFUNDED_CLOSE });
+
+    const scopeOf = (name: string) => tile(name).querySelector('.scope')?.textContent;
+    expect(scopeOf('Cash this path needed')).toBe('Over the funded stretch only, the steps before the event.');
+    for (const name of ['Most collateral held', 'Least free cash seen', 'Largest assignment obligation held', 'Closes that relied on their own relief']) {
+      expect(scopeOf(name), name).toBe('Over every session the replay ran.');
+    }
   });
 
   it('names an unfunded close with its session and its minute in New York, and the free cash it left', async () => {

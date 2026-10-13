@@ -277,11 +277,26 @@ def test_a_buy_back_that_cost_no_more_than_the_free_cash_before_it_did_not_rely_
     assert one_cent_more.closes_relied_on_own_relief == 1
 
 
-def test_a_buy_back_with_its_cover_sold_in_the_same_group_is_not_a_buy_back_under_cover() -> None:
-    # The whole close of ``_spread_closed_whole`` costs 90.00 against 9,620.00 free, and the cover goes with it.
-    evidence = capital_evidence([_spread_closed_whole(OPEN_1, "500.00")], starting_cash=D("500.00"))
+@pytest.mark.parametrize(("cover_stayed_held", "relied"), [(False, 0), (True, 1)])
+def test_a_close_relied_on_its_own_relief_only_when_the_cover_stayed_held_whatever_it_cost(
+    cover_stayed_held: bool, relied: int
+) -> None:
+    # 500.00 of cash; the spread opens to 620.00 with 500.00 pledged, so 120.00 is free. The close takes 620.00 to
+    # 380.00: 240.00, which is more than the 120.00 free before it either way. It is funded (380.00 is not under 0).
+    # Whole, the cover is sold in the same group (it goes with the sold leg) so none stayed held and the close did not
+    # rely on its own relief. Had the cover stayed held, a cost of 240.00 against 120.00 free would have.
+    session = _session(
+        OPEN_1,
+        (
+            _opening(OPEN_1 + 6 * MINUTE, "500.00", "620.00"),
+            _closing(OPEN_1 + 61 * MINUTE, "620.00", "380.00", "500.00", "0", under_cover=cover_stayed_held),
+        ),
+    )
 
-    assert evidence.closes_relied_on_own_relief == 0
+    evidence = capital_evidence([session], starting_cash=D("500.00"))
+
+    assert evidence.closes_relied_on_own_relief == relied
+    assert evidence.ended_by is None
 
 
 # ── A session ending with a position marked ends the evidence at that session ──

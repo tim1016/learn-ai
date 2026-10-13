@@ -99,8 +99,17 @@ class CapitalSession:
 
     @classmethod
     def of_outcome(cls, session_open_ms: int, outcome: SessionOutcome) -> CapitalSession:
-        """A replayed session as capital evidence reads it. Only a replay has its money steps: a session read back
-        from storage has none, which is indistinguishable from a session that filled nothing."""
+        """A replayed session as capital evidence reads it.
+
+        Only a replay has its money steps. A session read back from storage has none, which for a session that traded
+        would read as funded through and needing nothing, so an outcome with trades and no steps is refused.
+        """
+        if outcome.trades and not outcome.money_steps:
+            raise ValueError(
+                "this session has trades and no money steps: it was read back from storage, which keeps none "
+                "(#3106), so what its cash carried cannot be worked from it. Capital evidence is worked as a run "
+                "is replayed."
+            )
         return cls(
             session_open_ms=session_open_ms,
             status=outcome.status,
