@@ -13,9 +13,10 @@ Every field here that holds a time is an integer of milliseconds. The one place 
 event's ``detail`` (see ``events_to_json``). Reading raises ``KeyError`` or ``ValueError`` for JSON that is not what
 this module writes.
 
-One exception, and only one: the three keys a summary gained with #3108 (``capital_evidence``, ``cash_ladder`` and
-``stamps``) are read as "not recorded" when they are absent, because a run stored before it has none and must open all
-the same with every figure it had. A summary that has none of them writes none of them, so its JSON is what it was.
+One exception, and only one: the keys a summary gained after it was first written are read as "not recorded" when
+they are absent, because a run stored before them has none and must open all the same with every figure it had. They
+are ``capital_evidence``, ``cash_ladder`` and ``stamps`` (#3108) and ``entries_refused_by_reason`` (#3109). A summary
+that has none of them writes none of them, so its JSON is what it was.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ from app.options.contract import OptionContract
 from app.options_backtest.capital_evidence import CapitalEvidence, CapitalInvalidEvent, CapitalInvalidKind
 from app.options_backtest.cash_ladder import CashLevel
 from app.options_backtest.market import PickRefusal
-from app.options_backtest.results import Event, EventKind, ExitReason, SessionStatus, SkipReason
+from app.options_backtest.results import EntryRefusal, Event, EventKind, ExitReason, SessionStatus, SkipReason
 from app.options_backtest.run import SlippagePoint, SlippageTolerance
 from app.options_backtest.run_stamps import RunStamps
 from app.options_backtest.session_result import PinnedDay, SessionPins
@@ -305,14 +306,17 @@ def summary_to_json(summary: RunSummary) -> Json:
         written["cash_ladder"] = [_cash_level_to_json(level) for level in summary.cash_ladder]
     if summary.stamps is not None:
         written["stamps"] = _stamps_to_json(summary.stamps)
+    if summary.entries_refused_by_reason is not None:
+        written["entries_refused_by_reason"] = _counts_to_json(summary.entries_refused_by_reason)
     return written
 
 
 def summary_from_json(data: Json) -> RunSummary:
-    # The three keys of #3108 are the only ones read as "not recorded" when absent: a run stored before them has none.
+    # The keys of #3108 and #3109 are the only ones read as "not recorded" when absent: a run stored before them has none.
     capital = data.get("capital_evidence")
     ladder = data.get("cash_ladder")
     stamps = data.get("stamps")
+    refused = data.get("entries_refused_by_reason")
     return RunSummary(
         sessions_tested=data["sessions_tested"],
         sessions_traded=data["sessions_traded"],
@@ -352,6 +356,7 @@ def summary_from_json(data: Json) -> RunSummary:
         capital_evidence=None if capital is None else _capital_from_json(capital),
         cash_ladder=None if ladder is None else tuple(_cash_level_from_json(level) for level in ladder),
         stamps=None if stamps is None else _stamps_from_json(stamps),
+        entries_refused_by_reason=None if refused is None else _counts_from_json(EntryRefusal, refused),
     )
 
 

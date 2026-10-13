@@ -3,4 +3,5 @@
   <p>{{ banner().bid_and_ask_are_available ? 'Bid and ask are available.' : 'Bid and ask are not available.' }}</p>
   <p>Slippage assumed: {{ banner().slippage_percent }}%. Price step: {{ banner().price_step_usd | authoredUsd }}.</p>
   <p>Fees: {{ banner().fee_policy }}</p>
+  @for (statement of banner().statements; track statement) { <p>{{ statement }}</p> }
 </aside>

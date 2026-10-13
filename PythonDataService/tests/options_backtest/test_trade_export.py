@@ -36,7 +36,7 @@ HEADER_LINE = (
     "unix_ts,time_america_new_york,session_open_ms,trade_number,leg_id,entry_number,contract,underlying,right,strike_usd,"
     "expiry_ms,contracts,multiplier,starting_price_usd,momentum_level_usd,stop_level_usd,entry_decided_at_ms,"
     "entry_seen_usd,entry_filled_usd,exit_reason,exit_group,exit_decided_at_ms,exit_kind,exit_bar_close_ms,"
-    "exit_seen_usd,exit_price_usd,entry_fee_usd,exit_fee_usd,pnl_usd"
+    "exit_seen_usd,exit_price_usd,entry_fee_usd,exit_fee_usd,pnl_usd,side"
 )
 
 
@@ -99,7 +99,7 @@ def _rows(payload: bytes) -> list[list[str]]:
 def test_the_header_is_fixed_and_begins_with_the_unix_time_and_one_readable_time_named_for_its_zone() -> None:
     assert ",".join(CSV_HEADER) == HEADER_LINE
     assert CSV_HEADER[:2] == ("unix_ts", "time_america_new_york")
-    assert len(CSV_HEADER) == len(set(CSV_HEADER)) == 29
+    assert len(CSV_HEADER) == len(set(CSV_HEADER)) == 30
     # Every other instant is a whole number of milliseconds in a column that says so, and money says dollars.
     assert [name for name in CSV_HEADER if name.endswith("_ms")] == [
         "session_open_ms",
@@ -119,11 +119,11 @@ THE_TWO_TRADES_CSV = (
     + "\r\n"
     + "1791380460000,2026-10-07 09:41:00,1791379800000,2,call,1,SPY261007C00500500,SPY,call,500.5,1791403200000,"
     "2,100,4.00,5.0000,4.080,1791380400000,5.0,5.02,stop,3,1791381000000,sale,1791381060000,3.9,3.88,"
-    "1.30,1.30,-230.60"
+    "1.30,1.30,-230.60,buy"
     + "\r\n"
     + "1791380160000,2026-10-07 09:36:00,1791379800000,0,put,0,SPY261007P00500000,SPY,put,500,1791403200000,"
     "1,100,,,,1791380100000,2.00,2.00,marked_not_sold,1,1791383400000,mark,1791385800000,,1.75,"
-    "0.65,0,-25.65" + "\r\n"
+    "0.65,0,-25.65,buy" + "\r\n"
 )
 
 
@@ -171,6 +171,16 @@ def test_a_sold_leg_bought_back_is_a_buy_back_and_one_marked_as_owed_is_a_mark_w
         "",
         "2.40",
     )
+    # The side is the one thing that says a sold leg's entry is a sale and its mark is owed (#3109).
+    assert (back["side"], owes["side"]) == ("sell", "sell")
+
+
+def test_the_side_is_the_last_column_and_a_bought_leg_has_buy_whether_it_was_sold_or_marked() -> None:
+    assert CSV_HEADER[-1] == "side"
+
+    [_, sold_row, marked_row] = _rows(trades_csv([_sold(), _marked()]))
+
+    assert (sold_row[-1], marked_row[-1]) == ("buy", "buy")
 
 
 def test_a_run_with_no_trade_is_the_header_alone() -> None:
@@ -181,7 +191,7 @@ def test_every_row_has_one_cell_for_every_column_and_the_first_is_the_entry_fill
     rows = _rows(trades_csv([_sold(), _marked(), _sold()]))
 
     assert rows[0] == list(CSV_HEADER)
-    assert [len(row) for row in rows] == [29, 29, 29, 29]
+    assert [len(row) for row in rows] == [30, 30, 30, 30]
     assert [int(row[0]) for row in rows[1:]] == [OPEN_MS + 660_000, OPEN_MS + 360_000, OPEN_MS + 660_000]
 
 

@@ -226,13 +226,13 @@ export const SCENE_LEVELS: readonly SessionLevel[] = [
 ];
 
 export const SCENE_FILLS: readonly SessionFill[] = [
-  { kind: 'entry', leg_id: 'put', entry_number: 0, contract: PUT_585.symbol, contracts: 2, bar_close_ms: at(4), seen_usd: '1.40', filled_usd: '1.42', exit_reason: null },
-  { kind: 'entry', leg_id: 'call', entry_number: 0, contract: CALL_585.symbol, contracts: 1, bar_close_ms: at(8), seen_usd: '2.55', filled_usd: '2.57', exit_reason: null },
-  { kind: 'exit', leg_id: 'call', entry_number: 0, contract: CALL_585.symbol, contracts: 1, bar_close_ms: at(11), seen_usd: '1.84', filled_usd: '1.82', exit_reason: 'stop' },
+  { kind: 'entry', side: 'buy', leg_id: 'put', entry_number: 0, contract: PUT_585.symbol, contracts: 2, bar_close_ms: at(4), seen_usd: '1.40', filled_usd: '1.42', exit_reason: null },
+  { kind: 'entry', side: 'buy', leg_id: 'call', entry_number: 0, contract: CALL_585.symbol, contracts: 1, bar_close_ms: at(8), seen_usd: '2.55', filled_usd: '2.57', exit_reason: null },
+  { kind: 'exit', side: 'sell', leg_id: 'call', entry_number: 0, contract: CALL_585.symbol, contracts: 1, bar_close_ms: at(11), seen_usd: '1.84', filled_usd: '1.82', exit_reason: 'stop' },
 ];
 
 export const SCENE_MARKS: readonly SessionMark[] = [
-  { leg_id: 'put', entry_number: 0, contract: PUT_585.symbol, bar_close_ms: at(10), price_usd: '1.25' },
+  { leg_id: 'put', entry_number: 0, contract: PUT_585.symbol, bar_close_ms: at(10), price_usd: '1.25', owed: false },
 ];
 
 /**

@@ -13,10 +13,11 @@ from decimal import Decimal
 import pytest
 
 from app.options.contract import OptionContract
-from app.options_backtest.results import EventKind, ExitReason, SessionOutcome
+from app.options_backtest.results import Event, EventKind, ExitReason, Fill, SessionOutcome
 from app.options_backtest.run import RunResult, run_sessions
 from app.options_backtest.session_levels import (
     ChartedFill,
+    ChartedMark,
     Level,
     LevelKind,
     SessionRecordInconsistent,
@@ -24,6 +25,8 @@ from app.options_backtest.session_levels import (
     levels_of,
     marks_of,
 )
+from app.options_backtest.setup import OptionsBacktestSetup
+from tests.options_backtest._a_selling_run import a_selling_run
 from tests.options_backtest._detail_scene import (
     CALL_500,
     FRI_CALL_500,
@@ -673,3 +676,229 @@ def test_a_sold_legs_stop_is_a_line_above_what_it_was_sold_for_until_the_close_t
     assert _lines(levels_of(written, outcome), at(0)) == [(STOP, "short", 0, sold_put.occ_symbol, D("2.50"), 6, 10)]
     short = next(trade for trade in outcome.trades if trade.leg_id == "short")
     assert short.stop_level == D("2.50") > short.entry.filled
+
+
+# ── A sold leg's fills and mark say which way they traded (#3109) ────────
+
+
+def _a_credit_spread(*, long_stop: tuple[str, str] | None = None) -> tuple[OptionsBacktestSetup, SessionOutcome]:
+    """A put 495 bought and a put 500 sold at minute 5, both closed at the exit time (minute 60), or, with a stop on the
+    bought put, closed together when its premium falls: the sold leg goes with its protection."""
+    sold_put, cover = contract("put", "500"), contract("put", "495")
+    written = setup(leg("long", "put", stop=long_stop), leg("short", "put", side="sell"))
+    if long_stop is None:
+        cover_prices = flat("1.00", 5, 60)
+    else:
+        # A stop of 25 percent on 1.00 puts the level at 0.75; minute 10 closes at 0.70, so the stop is hit at minute 10.
+        cover_prices = {**flat("1.00", 5, 9), 10: ("1.00", "0.70"), **flat("0.70", 11, 60)}
+    market = TableMarket(
+        underlying=steady("500.00"),
+        picks=picked(("long", "500.00", cover), ("short", "500.00", sold_put)),
+        options={
+            cover: {**cover_prices, 61: ("0.60", "0.60")},
+            sold_put: {**flat("2.20", 5, 60), 61: ("1.50", "1.50")},
+        },
+    )
+    return written, replay(written, market)
+
+
+def test_a_sold_legs_fills_are_charted_on_the_side_they_traded_and_its_closing_fill_is_a_purchase() -> None:
+    written, outcome = _a_credit_spread()
+
+    assert [(f.kind, f.side, f.leg_id, f.filled) for f in fills_of(outcome.trades)] == [
+        ("entry", "buy", "long", D("1.00")),
+        ("entry", "sell", "short", D("2.20")),
+        ("exit", "sell", "long", D("0.60")),
+        ("exit", "buy", "short", D("1.50")),
+    ]
+    assert marks_of(outcome.trades) == ()
+    assert levels_of(written, outcome) == ()
+
+
+def test_a_sold_leg_marked_and_not_bought_back_is_an_owed_mark_and_a_bought_leg_marked_is_not() -> None:
+    thursday = a_selling_run().sessions[1].outcome
+
+    marks = marks_of(thursday.trades)
+
+    # The sold put 500 stopped trading at minute 60, so it is owed at its last close, 2.40; the 495 that covers it may not
+    # leave it bare and is marked at its last close, 1.00.
+    assert [(m.leg_id, m.contract.strike, m.price, m.owed) for m in marks] == [
+        ("long", D("495"), D("1.00"), False),
+        ("short", D("500"), D("2.40"), True),
+    ]
+    assert all(isinstance(mark, ChartedMark) for mark in marks)
+
+
+def test_a_session_that_agrees_with_itself_is_drawn_whatever_the_side_of_its_legs() -> None:
+    for written, outcome in (_a_credit_spread(), _a_credit_spread(long_stop=("percent", "25"))):
+        levels_of(written, outcome)
+    selling = a_selling_run()
+    for session in selling.sessions:
+        levels_of(selling.setup, session.outcome)
+
+
+# ── Every event that names a contract is held to its trade's contract and side (#3086) ──
+
+# The kinds of event that name a contract. The replay writes no contract on a refusal, a re-entry or a cancel.
+_NAMES_A_CONTRACT = (
+    EventKind.PICKED,
+    EventKind.STARTING_PRICE_TAKEN,
+    EventKind.NO_STARTING_PRICE,
+    EventKind.MOMENTUM_HIT,
+    EventKind.ENTRY_FILLED,
+    EventKind.STOP_HIT,
+    EventKind.SQUARED_OFF,
+    EventKind.CLOSED_WITH_ITS_PROTECTION,
+    EventKind.EXIT_TIME,
+    EventKind.CLOSE_FILLED,
+    EventKind.MARKED_NOT_SOLD,
+    EventKind.MARKED_NOT_BOUGHT_BACK,
+)
+
+
+def test_no_kind_the_replay_writes_a_contract_on_is_missing_from_the_kinds_checked_below(scene: RunResult) -> None:
+    outcomes = [
+        *(session.outcome for session in scene.sessions),
+        *(session.outcome for session in a_selling_run().sessions),
+        _a_credit_spread()[1],
+        _a_credit_spread(long_stop=("percent", "25"))[1],
+    ]
+
+    named = {event.kind for outcome in outcomes for event in outcome.events if event.contract is not None}
+
+    assert named <= set(_NAMES_A_CONTRACT)
+    # And no event of a kind that is not a refusal, a re-entry or a cancel has been left out of the list.
+    assert set(_NAMES_A_CONTRACT).isdisjoint(
+        {
+            EventKind.PICK_REFUSED,
+            EventKind.ENTRY_DROPPED,
+            EventKind.ENTRY_REFUSED_FOR_CASH,
+            EventKind.ENTRY_REFUSED_FOR_COVER,
+            EventKind.ENTRY_REFUSED_FOR_SECOND_EXPIRY,
+            EventKind.ENTRY_REFUSED_FOR_OTHER_SIDE,
+            EventKind.SALE_NOT_TAKEN_AT_ZERO,
+            EventKind.RE_ENTRY_EARNED,
+            EventKind.RE_ENTRY_BLOCKED_BY_CUTOFF,
+            EventKind.RE_ENTRY_LOST,
+            EventKind.LEG_CANCELLED,
+        }
+    )
+
+
+@pytest.mark.parametrize("kind", _NAMES_A_CONTRACT, ids=lambda kind: kind.value)
+def test_an_event_that_names_another_contract_than_its_trades_cannot_be_drawn(
+    scene: RunResult, kind: EventKind
+) -> None:
+    outcome = scene.sessions[0].outcome
+    trade = next(t for t in outcome.trades if (t.leg_id, t.entry_number) == ("call", 0))
+    assert trade.contract == OptionContract.from_occ_symbol(CALL_500)
+    elsewhere = OptionContract.from_occ_symbol(PUT_500)
+    existing = [e for e in outcome.events if e.kind is kind and (e.leg_id, e.entry_number) == ("call", 0)]
+    if existing:
+        # An event of this kind the replay wrote, hand-edited to name another contract.
+        broken = replace(
+            outcome, events=tuple(replace(e, contract=elsewhere) if e is existing[0] else e for e in outcome.events)
+        )
+    else:
+        # A kind this trade never had: an event of it, naming another contract, hand-written into the session.
+        broken = replace(outcome, events=(*outcome.events, Event(kind, trade.entry.bar_close_ms, "call", 0, elsewhere)))
+
+    with pytest.raises(SessionRecordInconsistent, match=r"leg 'call', entry 0: .*different contract"):
+        levels_of(scene.setup, broken)
+
+
+def test_an_event_of_an_attempt_that_never_filled_has_no_trade_to_be_held_to() -> None:
+    written = setup(leg("call"))
+    market = TableMarket(
+        underlying=steady("500.00"),
+        picks=_picks(("call", CALL)),
+        options={CALL: {5: ("2.00", "2.00"), 6: ("2.00", "2.00")}},
+    )
+    outcome = replay(written, market, cash="100")
+    assert outcome.trades == ()
+    picked_event = next(e for e in outcome.events if e.kind is EventKind.PICKED)
+    elsewhere = replace(picked_event, contract=PUT)
+
+    # The pick names the put, and the attempt was refused for cash: there is no trade to disagree with.
+    levels_of(written, replace(outcome, events=tuple(elsewhere if e is picked_event else e for e in outcome.events)))
+
+
+def test_an_entry_fill_on_the_side_a_leg_does_not_trade_cannot_be_drawn() -> None:
+    written, outcome = _a_credit_spread()
+    # The setup's short leg sells; its stored trade says it opened on the buy side, and its entry_filled event says it
+    # filled.
+    short = next(t for t in outcome.trades if t.leg_id == "short")
+    wrong = replace(short, entry=replace(short.entry, side="buy"))
+    broken = replace(outcome, trades=tuple(wrong if t is short else t for t in outcome.trades))
+
+    with pytest.raises(SessionRecordInconsistent, match=r"leg 'short', entry 0: .*entry_filled.*sell side"):
+        levels_of(written, broken)
+
+
+def test_a_close_fill_on_the_side_the_leg_opened_on_cannot_be_drawn() -> None:
+    written, outcome = _a_credit_spread()
+    short = next(t for t in outcome.trades if t.leg_id == "short")
+    assert isinstance(short.exit, Fill) and short.exit.side == "buy"
+    # A sold leg is closed by a purchase. A close that traded on the sell side, as its entry did, is the other leg's.
+    wrong = replace(short, exit=replace(short.exit, side="sell"))
+    broken = replace(outcome, trades=tuple(wrong if t is short else t for t in outcome.trades))
+
+    with pytest.raises(SessionRecordInconsistent, match=r"leg 'short', entry 0: .*close_filled.*opened on"):
+        levels_of(written, broken)
+
+
+def test_a_close_that_filled_on_a_trade_that_was_marked_cannot_be_drawn() -> None:
+    thursday = a_selling_run().sessions[1].outcome
+    long = next(t for t in thursday.trades if t.leg_id == "long")
+    assert not isinstance(long.exit, Fill)
+    event = Event(EventKind.CLOSE_FILLED, long.exit.bar_close_ms, "long", 0, long.contract, D("1.00"))
+
+    with pytest.raises(SessionRecordInconsistent, match=r"leg 'long', entry 0: .*close_filled.*marked, not closed"):
+        levels_of(None, replace(thursday, events=(*thursday.events, event)))
+
+
+def test_a_mark_owed_by_a_leg_that_opened_by_a_purchase_cannot_be_drawn() -> None:
+    thursday = a_selling_run().sessions[1].outcome
+    # The bought leg's stored mark is relabelled as an amount owed: its event now says it was never bought back.
+    owed = tuple(
+        replace(e, kind=EventKind.MARKED_NOT_BOUGHT_BACK) if e.kind is EventKind.MARKED_NOT_SOLD else e
+        for e in thursday.events
+    )
+
+    with pytest.raises(SessionRecordInconsistent, match=r"leg 'long', entry 0: .*marked_not_bought_back.*buy side"):
+        levels_of(None, replace(thursday, events=owed))
+
+
+def test_a_mark_held_by_a_leg_that_opened_by_a_sale_cannot_be_drawn() -> None:
+    thursday = a_selling_run().sessions[1].outcome
+    held = tuple(
+        replace(e, kind=EventKind.MARKED_NOT_SOLD) if e.kind is EventKind.MARKED_NOT_BOUGHT_BACK else e
+        for e in thursday.events
+    )
+
+    with pytest.raises(SessionRecordInconsistent, match=r"leg 'short', entry 0: .*marked_not_sold.*sell side"):
+        levels_of(None, replace(thursday, events=held))
+
+
+def test_a_mark_event_on_a_trade_that_closed_by_a_fill_cannot_be_drawn() -> None:
+    written, outcome = _a_credit_spread()
+    short = next(t for t in outcome.trades if t.leg_id == "short")
+    event = Event(EventKind.MARKED_NOT_BOUGHT_BACK, short.exit.bar_close_ms, "short", 0, short.contract, D("1.50"))
+
+    with pytest.raises(SessionRecordInconsistent, match=r"leg 'short', entry 0: .*marked.*closed by a fill"):
+        levels_of(written, replace(outcome, events=(*outcome.events, event)))
+
+
+def test_a_close_with_its_protection_of_a_leg_that_opened_by_a_purchase_cannot_be_drawn() -> None:
+    _, outcome = _a_credit_spread(long_stop=("percent", "25"))
+    assert [e.leg_id for e in outcome.events if e.kind is EventKind.CLOSED_WITH_ITS_PROTECTION] == ["short"]
+    short = next(t for t in outcome.trades if t.leg_id == "short")
+    assert short.exit_reason is ExitReason.CLOSED_WITH_ITS_PROTECTION
+    # The sold leg's entry is relabelled a purchase: only a sold leg is closed with its protection.
+    wrong = replace(short, entry=replace(short.entry, side="buy"))
+    broken = replace(outcome, trades=tuple(wrong if t is short else t for t in outcome.trades))
+
+    with pytest.raises(
+        SessionRecordInconsistent, match=r"leg 'short', entry 0: .*closed_with_its_protection.*buy side"
+    ):
+        levels_of(None, broken)

@@ -6,6 +6,7 @@ import { reads } from '../../testing/page-actions';
 import type { DayRequest } from '../day-request';
 import type { LegTrade } from '../run-detail.types';
 import { FOUR_TRADES, markedTrade, stoppedTrade, TUESDAY_OPEN } from '../testing/detail-fixtures';
+import { coverTrade, owedTrade, soldTrade } from '../testing/selling-fixtures';
 import { TradeTableComponent } from './trade-table.component';
 
 async function renderTable(options: { trades?: readonly LegTrade[]; canOpenDay?: boolean } = {}) {
@@ -185,5 +186,39 @@ describe('the table of leg trades, opening a day', () => {
 
     expect(listener).toHaveBeenCalledTimes(2);
     expect(listener.mock.calls[0][0]).not.toBe(listener.mock.calls[1][0]);
+  });
+});
+
+describe('the table of leg trades, a sold leg (#3109)', () => {
+  it('says a sold leg was sold to open and bought back, in the cells that say how a leg entered and why it left', async () => {
+    await renderTable({ trades: [coverTrade(), soldTrade()] });
+
+    const [cover, sold] = bodyRows().map((row) => cells(row));
+    // The bought leg's cells are the ones a bought leg has always had.
+    expect(cover.slice(1, 3)).toEqual(['long_put', 'first entry']);
+    expect(cover[12]).toBe('Exit Time');
+    expect(sold.slice(1, 3)).toEqual(['short_put', 'first entry Sold to open']);
+    expect(sold[12]).toBe('Stop Bought back');
+    // The buy-back is the exit, with its own prices and minute; the stop level is above the price it was sold for.
+    expect(sold.slice(7, 12)).toEqual(['$2.20', '$2.18', '— none', '— none', '$3.27']);
+    expect(sold.slice(13, 17)).toEqual(['09:39:00 ET', '09:40 ET', '$3.30', '$3.32']);
+    expect(sold[19]).toBe('-$114.00');
+  });
+
+  it('says a sold leg’s mark is owed and not bought back, where a bought leg’s is not sold', async () => {
+    await renderTable({ trades: [markedTrade(), owedTrade()] });
+
+    const [bought, sold] = bodyRows().map((row) => cells(row));
+    expect(bought[14]).toBe('Marked at $1.25, not sold, last traded in the minute ending 15:58 ET');
+    expect(sold[12]).toBe('Marked Not Bought Back');
+    expect(sold[14]).toBe('Marked at $2.40, owed, not bought back, last traded in the minute ending 09:40 ET');
+    expect(sold[2]).toBe('first entry Sold to open');
+  });
+
+  it('adds no word to a bought leg’s row', async () => {
+    await renderTable({ trades: [...FOUR_TRADES] });
+
+    expect(document.body.textContent).not.toMatch(/Sold to open|Bought back|owed/);
+    expect(bodyRows().every((row) => row.querySelector('.side') === null)).toBe(true);
   });
 });

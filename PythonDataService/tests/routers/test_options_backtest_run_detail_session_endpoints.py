@@ -624,6 +624,41 @@ async def test_a_stored_starting_price_taken_on_another_contract_than_its_trade_
     assert other.status_code == 200
 
 
+async def test_a_stored_fill_event_on_another_contract_than_its_trade_is_the_same_coded_500(
+    client: httpx.AsyncClient,
+    save_run: SaveRun,
+    scene: RunResult,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    is_the_job_alive: Any,
+) -> None:
+    wednesday = scene.sessions[0]
+    # The call leg's first entry filled on the 500 call. Hand-edited to name the 500 put, the event and its trade agree
+    # on the leg and the entry number and on nothing else (#3086).
+    filled = next(
+        e
+        for e in wednesday.outcome.events
+        if e.kind is EventKind.ENTRY_FILLED and e.leg_id == "call" and e.entry_number == 0
+    )
+    events = tuple(
+        replace(e, contract=OptionContract.from_occ_symbol(PUT_500)) if e is filled else e
+        for e in wednesday.outcome.events
+    )
+    broken = replace(
+        scene, sessions=(replace(wednesday, outcome=replace(wednesday.outcome, events=events)), *scene.sessions[1:])
+    )
+    run_id = await save_run(broken, "fill-on-another-contract")
+
+    response = await _get(client, run_id, WED_OPEN_MS)
+    other = await _get(client, run_id, THU_OPEN_MS)
+
+    assert response.status_code == 500, response.text
+    assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_STORED_SESSION_INCONSISTENT"
+    assert "leg 'call', entry 0" in response.json()["detail"]["message"]
+    assert "entry_filled" in response.json()["detail"]["message"]
+    assert other.status_code == 200
+
+
 async def test_a_stored_setup_edited_into_another_valid_one_without_a_leg_that_waited_is_the_coded_500_and_not_a_bare_one(
     client: httpx.AsyncClient,
     conn: asyncpg.Connection,

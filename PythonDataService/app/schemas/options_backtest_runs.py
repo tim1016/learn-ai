@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.options_backtest.capital_evidence import CapitalEvidence, CapitalInvalidEvent
 from app.options_backtest.cash_ladder import CashLevel
 from app.options_backtest.data_check import DataCheck, Problem, SessionCheck, SessionVerdict, TestableStretch
+from app.options_backtest.describe import result_statements
 from app.options_backtest.run_stamps import RunStamps
 from app.options_backtest.saved_runs import FailureItem, Headline, RunFailure, RunRecord, StoredRun
 from app.options_backtest.saved_setups import SETUP_NAME_PATTERN
@@ -60,6 +61,8 @@ ExitReasonWord = Literal[
 PickRefusalWord = Literal[
     "chain_incomplete", "expiry_not_listed", "expiry_not_a_session", "strike_not_listed", "not_standard"
 ]
+# The refusals of an entry that a run counts by their reason. Refused for cash has its own count.
+EntryRefusalWord = Literal["other_side", "second_expiry", "cover_did_not_trade", "cover_not_yet_held", "sale_at_zero"]
 CapitalInvalidKindWord = Literal["unfunded_close", "position_marked"]
 RunStatusWord = Literal["running", "complete", "failed", "cancelled", "interrupted"]
 VerdictWord = Literal["ready", "needs_download", "cannot_be_tested"]
@@ -283,6 +286,11 @@ class OptionsBacktestPickRefusalCountResponse(BaseModel):
     count: int
 
 
+class OptionsBacktestEntryRefusalCountResponse(BaseModel):
+    reason: EntryRefusalWord
+    count: int
+
+
 class OptionsBacktestDayRowResponse(BaseModel):
     """One session of the by-day table. Won, lost and break-even count trades, not sessions."""
 
@@ -503,6 +511,9 @@ class OptionsBacktestRunFiguresResponse(BaseModel):
     # The run replayed at each starting-cash level, lowest cash first, the setup's own among them.
     cash_ladder: list[OptionsBacktestCashLevelResponse] | None = None
     stamps: OptionsBacktestRunStampsResponse | None = None
+    # The entries refused for any reason but cash, each reason with its own count, every reason listed, zeros included.
+    # ``None`` reads "not recorded": the run was stored before they were counted.
+    entries_refused_by_reason: list[OptionsBacktestEntryRefusalCountResponse] | None = None
 
     @classmethod
     def from_summary(cls, summary: RunSummary) -> Self:
@@ -566,6 +577,12 @@ class OptionsBacktestRunFiguresResponse(BaseModel):
             if summary.cash_ladder is None
             else [OptionsBacktestCashLevelResponse.from_level(level) for level in summary.cash_ladder],
             stamps=None if summary.stamps is None else OptionsBacktestRunStampsResponse.from_stamps(summary.stamps),
+            entries_refused_by_reason=None
+            if summary.entries_refused_by_reason is None
+            else [
+                OptionsBacktestEntryRefusalCountResponse(reason=reason.value, count=count)  # type: ignore[arg-type]
+                for reason, count in summary.entries_refused_by_reason
+            ],
         )
 
 
@@ -605,6 +622,10 @@ class OptionsBacktestFillsBannerResponse(BaseModel):
     fee_per_contract_usd: str | None = None
     # The fee policy in a sentence, written when the run was made.
     fee_policy: str
+    # What a result of a setup that sells must not be taken for, in sentences the backend wrote (#3109): how legs opened
+    # in one minute are judged, what the requirement is, and that no broker's acceptance is claimed. Empty for a setup
+    # that sells nothing.
+    statements: list[str]
 
 
 class OptionsBacktestRunFailureItemResponse(BaseModel):
@@ -741,6 +762,7 @@ class OptionsBacktestRunDetailResponse(OptionsBacktestRunListItemResponse):
                 fee_policy_kind=setup.fees.kind,
                 fee_per_contract_usd=_exact_or_none(setup.fees.per_contract_usd),
                 fee_policy=stored.record.fee_policy_text,
+                statements=list(result_statements(setup)),
             ),
             figures=None if figures is None else OptionsBacktestRunFiguresResponse.from_summary(figures.summary),
             slippage=[]

@@ -40,6 +40,8 @@ export type CapitalEvidence = Schemas['OptionsBacktestCapitalEvidenceResponse'];
 export type CapitalInvalidEvent = Schemas['OptionsBacktestCapitalInvalidEventResponse'];
 export type CashLevel = Schemas['OptionsBacktestCashLevelResponse'];
 export type RunStamps = Schemas['OptionsBacktestRunStampsResponse'];
+/** How many entries were refused for one reason other than cash (#3109). A run saved before they were counted has none. */
+export type EntryRefusalCount = Schemas['OptionsBacktestEntryRefusalCountResponse'];
 
 /** The body of a run's job without its id: the jobs boundary adds `job_id`. */
 export type RunStartRequest = Omit<Schemas['OptionsBacktestJobRequest'], 'job_id'>;
