@@ -101,6 +101,26 @@ def test_the_accounts_holdings_are_each_contract_netted_across_its_bots_at_its_r
     assert held == {(C580, 100): 0, (C585, 100): 2, (SMALL_C500, 10): -3}
 
 
+def test_each_bots_holdings_are_read_apart_at_their_recorded_multipliers_and_a_flat_bot_has_none(
+    books: ClerkSqliteRepository,
+) -> None:
+    """The account's picture counts by bot (#3101): nothing nets across bots, and a bot that closed out is flat."""
+    _hold(books, "bot-a", C580, -1)
+    _hold(books, "bot-b", C580, 1)
+    _hold(books, "bot-a", C585, 2)
+    _hold(books, "bot-b", SMALL_C500, -3, multiplier=10)
+    _hold(books, "bot-b", C590, 1)
+    _hold(books, "bot-b", C590, -1)
+
+    with books.write_fence() as conn:
+        by_bot = account_option_requirement.held_signed_contracts_by_bot(conn)
+
+    assert by_bot == {
+        "bot-a": {(C580, 100): -1, (C585, 100): 2},
+        "bot-b": {(C580, 100): 1, (SMALL_C500, 10): -3},
+    }
+
+
 def test_an_entrys_contracts_are_added_to_the_holdings_count_by_count_and_never_laid_over_them() -> None:
     """The account holds one bought 585 and one sold 580; the entry sells the 585 and buys a 590."""
     held = {(C585, 100): 1, (C580, 100): -1}

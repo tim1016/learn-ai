@@ -104,6 +104,9 @@ export type DeploymentBudgetInput = components['schemas']['DeploymentBudgetInput
 /** Where one account's money is (PRD #2560): every dollar string and every
  * slice width is Python-authored; the browser only draws it. */
 export type AccountMoneyView = components['schemas']['AccountMoneyView'];
+/** What the account owns, what is spoken for and where it is concentrated (#3101),
+ * every dollar and word authored by Python. */
+export type AccountPictureView = components['schemas']['AccountPictureView'];
 export type MoneySegment = components['schemas']['MoneySegment'];
 export type DeployBotView = components['schemas']['AlpacaPaperDeployView'];
 export type DeployBotStrategy = components['schemas']['AlpacaPaperDeployStrategy'];

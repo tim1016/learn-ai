@@ -24,7 +24,7 @@ import {
   type LaneAttentionState,
 } from '../../../services/lane-attention.service';
 import type { ResourceTarget } from '../../../fleet/resource-target';
-import { fakeAccountMoney, unavailableAccountMoney } from '../../../testing/account-money-fixtures';
+import { fakeAccountMoney, fakeAccountPicture, unavailableAccountMoney } from '../../../testing/account-money-fixtures';
 import { fakeBotPanelView, fakeCatalogBot, fakeSqliteBotActions } from '../../../testing/bot-panel-fixtures';
 import { GalleryLiveStore } from '../../broker/v2-panel/gallery/lib/gallery-live-store.service';
 import { BrokerV2PanelService, type AccountMoneyView } from '../../broker/v2-panel/lib/broker-v2-panel.service';
@@ -299,6 +299,33 @@ describe('AlpacaHomeComponent', () => {
     expect(await within(money).findByText(/Alpaca has not confirmed this account’s cash recently\./)).toBeTruthy();
     expect(within(money).queryByRole('list')).toBeNull();
     expect(money.textContent).not.toContain('$0.00');
+  });
+
+  it('draws the account’s picture under the bar: what it owns, what is spoken for, where it is concentrated (#3101)', async () => {
+    await renderHome({ money: fakeAccountMoney({ account_id: TEST_ACCOUNT_ID, picture: fakeAccountPicture() }) });
+
+    const money = screen.getByRole('region', { name: 'Where the money is' });
+    for (const part of [
+      'What the account owns', 'What is spoken for', 'Where the collateral is',
+      'What it could be obliged to, and what getting out costs',
+    ]) {
+      expect(within(money).getByRole('region', { name: part })).toBeTruthy();
+    }
+    const spoken = within(money).getByRole('region', { name: 'What is spoken for' });
+    expect(within(spoken).getByText('Unreserved cash').closest('summary')?.textContent).toContain('$98,329.57');
+    // The bar's own legend is untouched beside it.
+    expect(within(money).getByRole('list', { name: 'Where the money is' })).toBeTruthy();
+    expect(within(money).queryByRole('status')).toBeNull();
+  });
+
+  it('says why the picture is absent, in the backend’s words, and still draws the bar', async () => {
+    const reason = 'What this account owns and what is spoken for could not be worked out. The fault is logged for repair.';
+    await renderHome({ money: fakeAccountMoney({ account_id: TEST_ACCOUNT_ID, picture_detail: reason }) });
+
+    const money = screen.getByRole('region', { name: 'Where the money is' });
+    expect(within(money).getByRole('status').textContent).toContain(reason);
+    expect(within(money).getByRole('list', { name: 'Where the money is' })).toBeTruthy();
+    expect(within(money).queryByRole('region', { name: 'What the account owns' })).toBeNull();
   });
 
   it('never shows one account’s bots under another after a switch (review B1)', async () => {

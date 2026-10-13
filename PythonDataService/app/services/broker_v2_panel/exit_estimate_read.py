@@ -19,7 +19,7 @@ invented from a mark, a fill or a share of the underlying (ADR 0076).
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from app.broker.alpaca.clerk.account_authority import simulated_account_named
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
@@ -32,6 +32,7 @@ from app.broker.alpaca.clerk.sqlite.simulated_account import read_kept_option_qu
 from app.broker.alpaca.market_liveness import get_option_quotes
 from app.options.contract import OptionContract
 from app.options.quotes import HeldQuote
+from app.options.requirement import ContractAtMultiplier
 from app.options.resolver import Chain
 from app.schemas.deployment_budget import ExitEstimateView, ExitLegQuoteView, FigureView
 from app.services.option_preview_views import contract_view
@@ -87,7 +88,30 @@ def read_exit_estimate(repo: ClerkSqliteRepository, strategy_instance_id: str, *
         ) from exc
     if not legs:
         return None
-    symbols = sorted(symbol for symbol, _ in legs)
+    return estimate_of_legs(repo, strategy_instance_id, legs, now_ms=now_ms)
+
+
+def read_exit_estimates(
+    repo: ClerkSqliteRepository, holdings_by_bot: Mapping[str, Mapping[ContractAtMultiplier, int]], *, now_ms: int,
+) -> dict[str, ExitEstimate]:
+    """What getting out costs for each bot that holds an option contract, from the holdings the caller read (#3101).
+
+    The legs are the account's own read of each bot's holdings, so no bot is
+    read twice and the estimate is of exactly what the account's picture
+    counts. A bot holding none has none.
+    """
+    return {
+        sid: estimate_of_legs(repo, sid, dict(legs), now_ms=now_ms)
+        for sid, legs in sorted(holdings_by_bot.items())
+        if any(legs.values())
+    }
+
+
+def estimate_of_legs(
+    repo: ClerkSqliteRepository, strategy_instance_id: str, legs: dict[ContractAtMultiplier, int], *, now_ms: int,
+) -> ExitEstimate:
+    """The estimate for ``legs`` a bot holds, priced from the quotes its account keeps or is shown."""
+    symbols = sorted(symbol for (symbol, _), contracts in legs.items() if contracts)
     simulated = simulated_account_named(repo.account_id)
     if simulated is None:
         quotes, quotes_from, none_held = _live_quotes(symbols)
@@ -165,4 +189,4 @@ def _owed_closes(repo: ClerkSqliteRepository, strategy_instance_id: str, *, now_
     return tuple(closes)
 
 
-__all__ = ["exit_estimate_view", "read_exit_estimate", "read_quotes_ahead"]
+__all__ = ["estimate_of_legs", "exit_estimate_view", "read_exit_estimate", "read_exit_estimates", "read_quotes_ahead"]

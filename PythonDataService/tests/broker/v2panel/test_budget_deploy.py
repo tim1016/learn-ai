@@ -577,6 +577,11 @@ def _segments(view) -> list[tuple[str, str, str, int]]:
     return [(segment.kind, segment.label, segment.amount_usd, segment.share_bps) for segment in view.segments]
 
 
+def _bar_only(view: AccountMoneyView) -> AccountMoneyView:
+    """The view as the Deploy review draws it: the account's own read adds its picture and changes nothing else (#3101)."""
+    return view.model_copy(update={"picture": None, "picture_detail": None})
+
+
 def _hold_one_share(repo: ClerkSqliteRepository, gate: LiveEnvelopeGate) -> None:
     """Bot ``view`` buys 1 SPY at $100; the reading's cash has not seen it yet."""
     from app.broker.alpaca.clerk.sqlite.enter import accept_enter
@@ -615,7 +620,7 @@ async def test_free_to_deploy_is_the_deploy_previews_unreserved_cash_and_money_a
 
     preview = budget_deploy.preview_budget(repo.account_id, _request(), resolved_parameters={})
     assert view.free_to_deploy_usd == preview.unreserved_usd == "800.00"
-    assert preview.money_after == view  # no amount yet: today's bar, read from the same observation
+    assert preview.money_after == _bar_only(view)  # no amount yet: today's bar, read from the same observation
 
     request = _request(budget=DeploymentBudgetInput(amount_usd="300", risk_revision=1))
     after = budget_deploy.preview_budget(repo.account_id, request, resolved_parameters={}).money_after
@@ -652,7 +657,7 @@ async def test_a_refused_amount_still_returns_the_bar_the_money_step_draws(autho
         )
         assert refused.state == "unavailable" and why in refused.detail
         assert refused.review_token is None and refused.unreserved_usd == "800.00"
-        assert refused.money_after == today  # the bar, with no new slice
+        assert refused.money_after == _bar_only(today)  # the bar, with no new slice
     dry = _request(execution_mode="dry_run", budget=DeploymentBudgetInput(amount_usd="2000", risk_revision=0))
     assert budget_deploy.preview_budget(repo.account_id, dry, resolved_parameters={}).money_after is None
 
@@ -782,6 +787,79 @@ def _ready_money_view() -> AccountMoneyView:
         stopped_holding_count=0, open_pnl_usd="0.00",
         segments=(MoneySegment(kind="free", label="free to deploy", amount_usd="1.00", share_bps=10_000),),
     )
+
+
+def test_the_accounts_money_read_carries_its_picture_and_the_deploy_review_does_not(authority: tuple) -> None:
+    """#3101: $1,000.00 of cash, bot ``view`` with $200.00 free. The review draws the same bar without the picture."""
+    repo, _, _ = _committed_view(authority)
+
+    view = budget_deploy._account_money_view(repo.account_id)
+
+    picture = view.picture
+    assert view.state == "ready" and picture is not None and view.picture_detail is None
+    assert (picture.owned.broker_cash.amount_usd, picture.owned.marked_equity.amount_usd) == ("1000.00", "1000.00")
+    assert [(line.kind, line.figure.amount_usd) for line in picture.spoken_for.lines] == [
+        ("bot_free", "200.00"), ("collateral", "0.00"), ("orders", "0.00"), ("outside", "0.00"), ("fees", "0.00"),
+        ("unreserved", "800.00"),
+    ]
+    assert picture.spoken_for.lines[0].figure.terms[0].label == "Bot view"
+    assert picture.spoken_for.lines[-1].figure.amount_usd == view.free_to_deploy_usd
+    # Nothing is held in options: the picture's other parts say so, and are known.
+    assert (picture.concentration.groups, picture.obligations.assignment.amount_usd) == ((), "0.00")
+    preview = budget_deploy.preview_budget(repo.account_id, _request(), resolved_parameters={})
+    assert preview.money_after is not None and preview.money_after.picture is None
+    assert preview.money_after == _bar_only(view)
+
+
+def test_a_fault_in_the_picture_is_logged_and_never_takes_the_bar_down(
+    authority: tuple, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    repo, _, _ = _committed_view(authority)
+    whole = budget_deploy._account_money_view(repo.account_id)
+
+    def broken(*args: object, **kwargs: object) -> None:
+        raise ValueError("a figure's terms add up to its amount")
+
+    monkeypatch.setattr(budget_deploy, "read_account_picture", broken)
+    view = budget_deploy._account_money_view(repo.account_id)
+
+    assert view.state == "ready" and view.picture is None
+    assert view.picture_detail is not None and "could not be worked out" in view.picture_detail
+    assert view.model_copy(update={"picture": None, "picture_detail": None}) == _bar_only(whole)
+    assert [record.__dict__.get("action") for record in caplog.records if record.levelname == "ERROR"] == [
+        "account_picture_unavailable",
+    ]
+
+
+def test_a_picture_is_either_shown_or_the_reason_there_is_none_and_never_beside_a_bar_that_is_not_drawn(
+    authority: tuple,
+) -> None:
+    repo, _, _ = _committed_view(authority)
+    picture = budget_deploy._account_money_view(repo.account_id).picture
+    assert picture is not None
+
+    with pytest.raises(ValidationError, match="shown or the reason there is none"):
+        AccountMoneyView.model_validate(
+            {**_ready_money_view().model_dump(), "picture": picture.model_dump(), "picture_detail": "no"}
+        )
+    with pytest.raises(ValidationError, match="never bar figures"):
+        AccountMoneyView(state="unavailable", detail="x", world="real_paper", account_id="PA", picture=picture)
+    with pytest.raises(ValidationError, match="never bar figures"):
+        AccountMoneyView(state="legacy", detail="x", world="real_paper", account_id="PA", picture_detail="no")
+
+
+def test_what_is_spoken_for_must_add_up_to_the_cash_on_the_wire() -> None:
+    from app.schemas.deployment_budget import FigureTermView, FigureView, SpokenForLineView, SpokenForView
+
+    line = SpokenForLineView(
+        kind="unreserved", label="Unreserved cash", figure=FigureView(
+            state="known", amount_usd="9.99", source="s", terms=(FigureTermView(label="cash", amount_usd="9.99"),),
+        ),
+    )
+    cash = FigureView(state="known", amount_usd="10.00", source="s", terms=(FigureTermView(label="all", amount_usd="10.00"),))
+
+    with pytest.raises(ValidationError, match="add up to the cash"):
+        SpokenForView(partition=cash, lines=(line,), sentence="x")
 
 
 async def test_open_pnl_is_canonical_fifo_or_withheld_with_its_reason(authority: tuple) -> None:

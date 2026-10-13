@@ -75,6 +75,7 @@ from app.schemas.action_plan import ActionPlan, traded_instrument
 from app.schemas.broker_bots import AlpacaPaperDeployRequest
 from app.schemas.deployment_budget import (
     AccountMoneyView,
+    AccountPictureView,
     BudgetDeployCommandReceipt,
     BudgetStatementLine,
     DeployBudgetConsent,
@@ -87,6 +88,7 @@ from app.schemas.deployment_budget import (
 )
 from app.schemas.exit_terms import ExitTerms
 from app.schemas.option_deploy import OptionDeployReview
+from app.services.broker_v2_panel.account_picture_read import read_account_picture
 from app.services.broker_v2_panel.bot_custody import bot_clerk_runtime
 from app.services.broker_v2_panel.deploy_submissions import DeploySubmission, bot_name_note
 from app.services.broker_v2_panel.exit_estimate_read import exit_estimate_view, read_exit_estimate, read_quotes_ahead
@@ -912,6 +914,9 @@ def _account_money_view(account_id: str) -> AccountMoneyView:
     repo = runtime.sqlite_repository
     assert repo is not None
     world = runtime.account_authority_kind
+    # A simulated account's kept quotes are read from their file before the fence, never under it: the
+    # picture prices every holding bot's exit from them.
+    read_quotes_ahead(repo)
     with repo.write_fence():
         if repo.budget_authority_version() < 2:
             return AccountMoneyView(
@@ -924,7 +929,7 @@ def _account_money_view(account_id: str) -> AccountMoneyView:
         observation = None if sync is None else sync.display_observation(repo.clock())
         if observation is None:
             return AccountMoneyView(state="unavailable", detail=_NO_FRESH_READING, world=world, account_id=account_id)
-        view = _money_view(repo, observation, world=world, account_id=account_id)
+        view = _money_view(repo, observation, world=world, account_id=account_id, with_picture=True)
         if view.state != "ready":
             return view
         try:
@@ -936,14 +941,17 @@ def _account_money_view(account_id: str) -> AccountMoneyView:
 
 def _money_view(
     repo: ClerkSqliteRepository, observation: AccountObservation, *, world: AuthorityKind, account_id: str,
-    money: AccountMoney | None = None, new_cents: int | None = None,
+    money: AccountMoney | None = None, new_cents: int | None = None, with_picture: bool = False,
 ) -> AccountMoneyView:
     """Draw the account's bar in Python-authored dollars, or say why it cannot be.
 
     The caller holds the custody fence, or passes the ``money`` it read under
     it. ``new_cents`` is an admitted Deploy, carved out of free to deploy as a
     ``new`` slice. The broker's own equity and day P&L ride along whenever
-    they are known, whether or not the bar can be drawn.
+    they are known, whether or not the bar can be drawn. ``with_picture`` adds
+    what the account owns, what is spoken for and where it is concentrated
+    (#3101): the account's own money read asks for it, and a Deploy's bar
+    does not, which draws the same bar either way.
     """
     broker = _broker_figures(repo, observation)
     try:
@@ -963,8 +971,12 @@ def _money_view(
     detail = "Cash plus shares at the price paid."
     if money.unvalued:
         detail += " Not on the bar: " + "; ".join(money.unvalued) + "."
+    picture, picture_detail = (
+        _account_picture(repo, money, observation, world=world, account_id=account_id) if with_picture else (None, None)
+    )
     return AccountMoneyView(
         state="ready", detail=detail, world=world, account_id=account_id, **broker,
+        picture=picture, picture_detail=picture_detail,
         total_usd=dollars(bar.total_cents), cash_usd=dollars(bar.cash_cents),
         free_to_deploy_usd=dollars(bar.cents_of("free")), in_bots_usd=dollars(bar.cents_of("bot")),
         held_by_stopped_usd=dollars(bar.cents_of("stopped")), outside_bots_usd=dollars(bar.cents_of("outside")),
@@ -973,6 +985,24 @@ def _money_view(
         open_pnl_usd=open_pnl, open_pnl_detail=open_pnl_detail,
         segments=tuple(_segment_view(segment) for segment in bar.segments),
     )
+
+
+def _account_picture(
+    repo: ClerkSqliteRepository, money: AccountMoney, observation: AccountObservation, *, world: AuthorityKind,
+    account_id: str,
+) -> tuple[AccountPictureView | None, str | None]:
+    """The account's picture, or why there is none: a fault in it never takes the bar down with it."""
+    try:
+        picture = read_account_picture(
+            repo, money, world=world, observed_at_ms=observation.observed_at_ms,
+            equity=_known_usd(observation.equity_usd),
+        )
+    except ValueError:
+        logger.exception("The account's picture could not be worked out", extra={
+            "action": "account_picture_unavailable", "account_id": account_id,
+        })
+        return None, "What this account owns and what is spoken for could not be worked out. The fault is logged for repair."
+    return picture, None
 
 
 def _broker_figures(repo: ClerkSqliteRepository, observation: AccountObservation) -> dict[str, object]:

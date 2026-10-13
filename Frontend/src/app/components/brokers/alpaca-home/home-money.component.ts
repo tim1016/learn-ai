@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
+import { AccountPictureComponent } from '../../broker/account-picture/account-picture.component';
 import { MoneyBarComponent } from '../../broker/money-bar/money-bar.component';
 import type { AccountMoneyState } from '../../broker/v2-panel/lib/account-money-state';
 
@@ -16,11 +17,15 @@ import type { AccountMoneyState } from '../../broker/v2-panel/lib/account-money-
  * When Deploy would refuse a new bot on this money, the backend's refusal
  * sits beside the bar, so free to deploy never reads as spendable when it is
  * not (PRD #2560 story 12).
+ *
+ * Under the bar sits the account's picture (#3101): what it owns, what is
+ * spoken for, where its collateral is and what it could be obliged to. When
+ * the backend could not work it out it says why, in place of the picture.
  */
 @Component({
   selector: 'app-home-money',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AuthoredUsdPipe, MoneyBarComponent, RouterLink],
+  imports: [AccountPictureComponent, AuthoredUsdPipe, MoneyBarComponent, RouterLink],
   templateUrl: './home-money.component.html',
   styleUrl: './home-money.component.scss',
 })

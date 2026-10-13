@@ -409,7 +409,7 @@ def _free_budget(own: DeploymentBudget | None, *, now_ms: int) -> Figure:
     if collateral:
         exact.append(("Collateral held against sold options", -collateral))
     exact.append(("Waiting in entry orders", -own.pending_orders))
-    return Figure(amount, "known", _BOOKS, now_ms, _terms_adding_to(amount, exact))
+    return Figure(amount, "known", _BOOKS, now_ms, terms_adding_to(amount, exact))
 
 
 def _headroom(
@@ -423,7 +423,7 @@ def _headroom(
     amount = cents_spendable(account_headroom(account, own))
     exact = [("Unreserved account cash", account.available), ("This bot's own claim", own.cash_claim)]
     fresh = reading_is_fresh(observed_at_ms, now_ms=now_ms, max_age_ms=OBSERVATION_MAX_AGE_MS)
-    return Figure(amount, "known" if fresh else "stale", _BOOKS_AND_READING, observed_at_ms, _terms_adding_to(amount, exact))
+    return Figure(amount, "known" if fresh else "stale", _BOOKS_AND_READING, observed_at_ms, terms_adding_to(amount, exact))
 
 
 def _typed_budget(amount_cents: int | None, *, now_ms: int) -> Figure:
@@ -454,7 +454,7 @@ def _unreserved_cash(account: AccountBudget | None, *, observed_at_ms: int, now_
     if account.option_collateral:
         exact.append(("Collateral held against sold options", -account.option_collateral))
     fresh = reading_is_fresh(observed_at_ms, now_ms=now_ms, max_age_ms=OBSERVATION_MAX_AGE_MS)
-    return Figure(amount, "known" if fresh else "stale", _BOOKS_AND_READING, observed_at_ms, _terms_adding_to(amount, exact))
+    return Figure(amount, "known" if fresh else "stale", _BOOKS_AND_READING, observed_at_ms, terms_adding_to(amount, exact))
 
 
 def _left_after_one_entry(limit: Figure, need: EntryNeed | None, *, what: str) -> Figure | None:
@@ -480,7 +480,7 @@ def _aged(figure: Figure | None, *, now_ms: int) -> Figure | None:
     return replace(figure, state="stale")
 
 
-def _terms_adding_to(amount_cents: int, exact: Sequence[tuple[str, Decimal]]) -> tuple[Term, ...]:
+def terms_adding_to(amount_cents: int, exact: Sequence[tuple[str, Decimal]]) -> tuple[Term, ...]:
     """Each exact term rounded to the cent, and one visible rounding term when they would not add up to ``amount_cents``."""
     terms = [Term(label, display_cents(value)) for label, value in exact]
     drift = amount_cents - sum(term.amount_cents for term in terms)

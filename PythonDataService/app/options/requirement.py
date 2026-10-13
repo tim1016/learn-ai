@@ -302,6 +302,22 @@ def incremental_account_requirement(
     return held_requirement_cents(held_before), held_requirement_cents(held_after)
 
 
+def with_contracts(
+    held: Mapping[ContractAtMultiplier, int], added: Mapping[ContractAtMultiplier, int]
+) -> dict[ContractAtMultiplier, int]:
+    """``held`` with ``added`` filled on top: the signed counts of one contract add, they never replace.
+
+    A contract the account already holds and an entry also takes has one
+    count, the sum: replacing it would drop the account's side of it and
+    misstate the requirement. The one way holdings are put together: an
+    entry's contracts onto the account's, and one bot's onto another's.
+    """
+    after = dict(held)
+    for key, count in added.items():
+        after[key] = after.get(key, 0) + count
+    return after
+
+
 def _markets(structure: ResolvedStructure, quotes: Mapping[str, LegQuote]) -> dict[str, LegQuote]:
     """Each leg's quote, once it is a market that can be crossed: a bid of zero or more, under an ask above zero."""
     _require_one_entry_per_leg(structure, quotes)

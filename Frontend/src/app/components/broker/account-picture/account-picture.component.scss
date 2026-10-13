@@ -1,0 +1,66 @@
+.account-picture {
+  display: grid;
+  gap: var(--space-4);
+  p, ul, h3 { margin: 0; }
+}
+
+.account-picture__part {
+  display: grid;
+  gap: var(--space-2);
+  h3 {
+    color: var(--text-secondary);
+    font-size: var(--fs-xs);
+    letter-spacing: var(--ls-caps);
+    text-transform: uppercase;
+  }
+}
+
+.account-picture__total {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  color: var(--text-primary);
+}
+
+.account-picture__amount {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+/* Stale and unknown are said in words and set apart in italic, so a figure that is not current is never read as one. */
+.account-picture__state {
+  font-size: var(--fs-xs);
+  font-style: italic;
+}
+
+.account-picture__note {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.account-picture__list,
+.account-picture__conditions {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0;
+  list-style: none;
+}
+
+.account-picture__conditions {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.account-picture__group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--fs-sm);
+}
+
+.account-picture__expiry {
+  color: var(--text-secondary);
+}
