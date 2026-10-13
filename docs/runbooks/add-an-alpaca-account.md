@@ -21,6 +21,7 @@ outage, or restore the retired IBKR bot-control pages. This is the owner's
 | Recover Paper after a developer reset or activate a fresh Paper account | [Offline Paper activation](#4-offline-paper-activation) |
 | Enable a strategy and launch Paper or Live Shadow | [Launch a bot](#5-launch-a-bot) |
 | Remove a saved profile, disable a lane, or remove an account | [Removal](#6-removal) |
+| Qualify option orders on a Paper account (the first ones this system sends) | [Qualify option orders on Paper](qualify-option-orders-on-paper.md) |
 | Understand a refusal | [Troubleshooting](#7-troubleshooting) |
 
 A **profile** is saved configuration. A **lane** is a dedicated worker and its

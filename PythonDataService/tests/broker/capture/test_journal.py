@@ -172,6 +172,132 @@ def test_multiple_records_append_to_same_day_file(tmp_path: Path) -> None:
     assert len(_read_records(path)) == 3
 
 
+def test_a_line_of_an_exchange_carries_when_its_request_began_and_when_its_answer_ended(tmp_path: Path) -> None:
+    journal = _fixed(tmp_path)
+
+    assert journal.record(
+        broker="alpaca",
+        endpoint=CaptureEndpoint.ORDERS,
+        method="post",
+        params={},
+        status=200,
+        raw_body=b"{}",
+        began_at_ms=_FIXED_MS - 250,
+        ended_at_ms=_FIXED_MS - 10,
+    )
+
+    [record] = _read_records(tmp_path / "alpaca" / "orders" / f"{_DAY}.jsonl")
+    # The line was written at the clock's instant, as it always was; the exchange's own times are beside it.
+    assert (record["began_at_ms"], record["ended_at_ms"], record["captured_at_ms"]) == (
+        _FIXED_MS - 250,
+        _FIXED_MS - 10,
+        _FIXED_MS,
+    )
+
+
+def test_a_line_with_no_exchange_times_and_no_request_body_is_written_as_it_always_was(tmp_path: Path) -> None:
+    journal = _fixed(tmp_path)
+
+    journal.record(
+        broker="alpaca",
+        endpoint=CaptureEndpoint.STREAM,
+        method="WS",
+        params={"stream": "trade_updates"},
+        status=0,
+        raw_body=b"{}",
+    )
+
+    [record] = _read_records(tmp_path / "alpaca" / "stream" / f"{_DAY}.jsonl")
+    assert set(record) == {"broker", "endpoint", "method", "params", "status", "captured_at_ms", "raw_body"}
+
+
+@pytest.mark.parametrize(
+    ("began", "ended"),
+    [(1, None), (None, 1), (5, 4), (-1, 3), (True, 3), ("1", 3)],
+    ids=["no end", "no beginning", "ends before it began", "negative", "a bool", "text"],
+)
+def test_exchange_times_that_are_not_both_whole_and_in_order_are_refused_and_counted(
+    tmp_path: Path, began: object, ended: object
+) -> None:
+    journal = _fixed(tmp_path)
+
+    ok = journal.record(
+        broker="alpaca",
+        endpoint=CaptureEndpoint.ORDERS,
+        method="post",
+        params={},
+        status=200,
+        raw_body=b"{}",
+        began_at_ms=began,  # type: ignore[arg-type]
+        ended_at_ms=ended,  # type: ignore[arg-type]
+    )
+
+    assert ok is False
+    assert journal.failure_count == 1
+    assert list(tmp_path.rglob("*.jsonl")) == []
+
+
+def test_a_request_body_is_kept_as_it_was_sent_and_the_answer_beside_it(tmp_path: Path) -> None:
+    journal = _fixed(tmp_path)
+    sent = b'{"symbol":"SPY261120C00450000","qty":"1","limit_price":"1.10"}'
+
+    journal.record(
+        broker="alpaca",
+        endpoint=CaptureEndpoint.ORDERS,
+        method="post",
+        params={},
+        status=200,
+        raw_body=b'{"status":"new"}',
+        request_body=sent,
+    )
+
+    [record] = _read_records(tmp_path / "alpaca" / "orders" / f"{_DAY}.jsonl")
+    # Byte for byte: a limit of 1.10 is not rewritten as 1.1.
+    assert record["request_body"].encode("utf-8") == sent
+    assert "request_body_encoding" not in record
+    assert record["raw_body"] == '{"status":"new"}'
+
+
+def test_a_request_body_that_is_not_utf8_falls_back_to_base64(tmp_path: Path) -> None:
+    journal = _fixed(tmp_path)
+    sent = b"\xff\xfe\x00\x01not-text"
+
+    journal.record(
+        broker="alpaca",
+        endpoint=CaptureEndpoint.ORDERS,
+        method="post",
+        params={},
+        status=400,
+        raw_body=b"{}",
+        request_body=sent,
+    )
+
+    [record] = _read_records(tmp_path / "alpaca" / "orders" / f"{_DAY}.jsonl")
+    assert record["request_body_encoding"] == "base64"
+    assert base64.b64decode(record["request_body"]) == sent
+
+
+def test_a_secret_like_key_in_a_request_body_is_redacted_and_the_rest_is_kept(tmp_path: Path) -> None:
+    journal = _fixed(tmp_path)
+
+    journal.record(
+        broker="alpaca",
+        endpoint=CaptureEndpoint.ORDERS,
+        method="post",
+        params={},
+        status=200,
+        raw_body=b"{}",
+        request_body=b'{"symbol":"SPY261120C00450000","api_secret":"shh","legs":[{"token":"x","side":"buy"}]}',
+    )
+
+    [record] = _read_records(tmp_path / "alpaca" / "orders" / f"{_DAY}.jsonl")
+    body = json.loads(record["request_body"])
+    assert body["symbol"] == "SPY261120C00450000"
+    assert body["api_secret"] == REDACTED
+    assert body["legs"] == [{"token": REDACTED, "side": "buy"}]
+    assert "shh" not in record["request_body"]
+
+
 def test_capture_dir_read_from_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

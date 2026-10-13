@@ -16,13 +16,22 @@ rotated by UTC day. One line per response::
 
 with an optional ``"body_encoding":"base64"`` when the body is not valid UTF-8.
 
+A line of a request and its answer may also carry the two times of the
+exchange, ``"began_at_ms"`` (the request was sent) and ``"ended_at_ms"`` (the
+answer had been read whole), and, for an option order's submit only, the body
+that was sent as ``"request_body"`` (``"request_body_encoding":"base64"`` when
+it is not valid UTF-8). ``captured_at_ms`` is when the line was written, as it
+always was. A stream frame has no exchange and carries none of the three. No
+header is ever a field of a line (ADR 0032, amendment 2).
+
 Invariants:
 
 - **Verbatim.** ``raw_body`` round-trips to the exact response bytes.
 - **All responses, including errors.** A 403 is evidence too.
 - **No secrets.** ``params`` carries query/body parameters only; secret-like
-  keys are redacted here as defence in depth (the vendor capture hook is the
-  first line — it never forwards auth headers or key material).
+  keys are redacted here as defence in depth, in a request body too (the
+  vendor capture hook is the first line — it never forwards auth headers or
+  key material).
 - **Non-fatal on the read path (phase 1).** A capture failure logs ERROR and
   increments an observable counter; it never breaks the caller's request. The
   phase-2 order path flips this to fail-closed (no journal → no order).
@@ -84,6 +93,9 @@ class CaptureEndpoint(StrEnum):
     PORTFOLIO_HISTORY = "portfolio_history"
     ASSETS = "assets"
     CLOCK = "clock"
+    # Alpaca's reference of option contracts (``/v2/options/contracts``): the listing an option entry is checked
+    # against before it is sent.
+    OPTION_CONTRACTS = "option_contracts"
     STREAM = "stream"
 
 
@@ -108,8 +120,8 @@ class CaptureSettings(BaseSettings):
 _default_clock = now_ms_utc
 
 
-def _utc_day(captured_at_ms: int) -> str:
-    """Return the UTC calendar day (``YYYY-MM-DD``) for a ms timestamp."""
+def utc_day(captured_at_ms: int) -> str:
+    """Return the UTC calendar day (``YYYY-MM-DD``) for a ms timestamp: the name of the day file a line lands in."""
     return datetime.fromtimestamp(captured_at_ms / 1000, tz=UTC).strftime("%Y-%m-%d")
 
 
@@ -119,18 +131,18 @@ def _redact_params(params: Mapping[str, Any]) -> dict[str, Any]:
         key: (
             REDACTED
             if _SECRET_KEY.search(str(key))
-            else _redact_value(value)
+            else redact_value(value)
         )
         for key, value in params.items()
     }
 
 
-def _redact_value(value: Any) -> Any:
+def redact_value(value: Any) -> Any:
     """Redact nested mappings and sequences without changing scalar values."""
     if isinstance(value, Mapping):
         return _redact_params(value)
     if isinstance(value, (list, tuple)):
-        return [_redact_value(item) for item in value]
+        return [redact_value(item) for item in value]
     return value
 
 
@@ -140,6 +152,37 @@ def _encode_body(raw_body: bytes) -> tuple[str, str | None]:
         return raw_body.decode("utf-8"), None
     except UnicodeDecodeError:
         return base64.b64encode(raw_body).decode("ascii"), "base64"
+
+
+def _redact_request_body(text: str) -> str:
+    """The request body as it is journaled: verbatim, unless it holds a secret-like key.
+
+    A body that is not JSON is kept as sent, since its keys cannot be told.
+    One that is JSON is rewritten, with the value of every secret-like key
+    redacted, only when it has one; otherwise its bytes are untouched.
+    """
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return text
+    if not isinstance(parsed, (dict, list)):
+        return text
+    redacted = redact_value(parsed)
+    return text if redacted == parsed else json.dumps(redacted, ensure_ascii=False)
+
+
+def _exchange_times(began_at_ms: int | None, ended_at_ms: int | None) -> dict[str, int]:
+    """The two times of one exchange, whole and in order; both or neither."""
+    if began_at_ms is None and ended_at_ms is None:
+        return {}
+    if began_at_ms is None or ended_at_ms is None:
+        raise ValueError("an exchange has both the time its request began and the time its answer ended, or neither")
+    for name, value in (("began_at_ms", began_at_ms), ("ended_at_ms", ended_at_ms)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{name} is int64 ms UTC, zero or more; got {value!r}")
+    if ended_at_ms < began_at_ms:
+        raise ValueError(f"a request cannot end ({ended_at_ms}) before it began ({began_at_ms})")
+    return {"began_at_ms": began_at_ms, "ended_at_ms": ended_at_ms}
 
 
 class CaptureJournal:
@@ -178,12 +221,19 @@ class CaptureJournal:
         params: Mapping[str, Any] | None,
         status: int,
         raw_body: bytes,
+        began_at_ms: int | None = None,
+        ended_at_ms: int | None = None,
+        request_body: bytes | None = None,
     ) -> bool:
         """Append one capture line. Never raises — returns ``True`` on success.
 
         A failure (bad path component, unwritable directory, serialization
         error) logs ERROR and increments :pyattr:`failure_count` but leaves the
         caller's request unaffected, per the phase-1 read-path failure policy.
+
+        ``began_at_ms`` and ``ended_at_ms`` are the exchange's own times, given
+        together; ``request_body`` is the body that was sent. A line that has
+        none of them is written without them, and reads as it always did.
         """
         try:
             broker_component = _safe_component(broker, "broker")
@@ -202,6 +252,14 @@ class CaptureJournal:
             }
             if body_encoding is not None:
                 record["body_encoding"] = body_encoding
+            record.update(_exchange_times(began_at_ms, ended_at_ms))
+            if request_body is not None:
+                request_text, request_encoding = _encode_body(request_body)
+                if request_encoding is None:
+                    record["request_body"] = _redact_request_body(request_text)
+                else:
+                    record["request_body"] = request_text
+                    record["request_body_encoding"] = request_encoding
 
             line = json.dumps(record, ensure_ascii=False, default=str)
             path = self._path_for(broker_component, endpoint_component, captured_at_ms)
@@ -223,7 +281,7 @@ class CaptureJournal:
     def _path_for(self, broker: str, endpoint: str, captured_at_ms: int) -> Path:
         """Resolve the day file, guaranteeing it stays under the journal root."""
         root = self._root.resolve()
-        path = (root / broker / endpoint / f"{_utc_day(captured_at_ms)}.jsonl").resolve()
+        path = (root / broker / endpoint / f"{utc_day(captured_at_ms)}.jsonl").resolve()
         # Defence in depth: components are already charset-validated, so this
         # can only fail on a symlinked root — treat that as a fatal capture bug.
         if not str(path).startswith(str(root)):

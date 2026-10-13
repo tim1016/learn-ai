@@ -157,3 +157,40 @@ spec).
   capture journal — it records a market-data-vs-execution separation the panel
   depends on, so a future reader does not mistake the IBKR bridge for an
   execution coupling.
+
+## Amendment 2 — the journal records an exchange's two times and an option order's own body
+
+- **Date:** 2026-10-13
+- **Context:** Issue #3102, part D of PRD #3095 (the qualification of option
+  orders on Paper). The comparison of an option entry with Alpaca's option
+  buying power is judged by what was asked of Alpaca and when it was answered,
+  and the journal could say neither.
+
+### Decision
+
+1. **A line of a request and its answer carries both times.** `began_at_ms`
+   is when the request was sent and `ended_at_ms` is when the answer had been
+   read whole, from one wall-clock reading and monotonic durations, so the two
+   are in order. `captured_at_ms` is unchanged: when the line was written.
+   A stream frame has no exchange and carries neither.
+2. **An option order's submit keeps the body that was sent, and no other
+   request does.** The answer to a submit does not show the terms the order
+   was sent with (its legs' sides and intents, its net limit's sign). A stock
+   order, a cancel and every read keep nothing: the body is kept for the one
+   case where the answer cannot stand for it. The body is journaled as sent;
+   a secret-like key in it is redacted, as in a query.
+3. **The option contract reference has a family of its own,**
+   `option_contracts`, so that the listing every option entry is checked
+   against is journaled like every other answer.
+4. **No header is ever a field of a line.** The hook reads the response body,
+   the URL, the method and the query, and the body of an option order's submit.
+   This was already so; it is now a test.
+
+### Consequences
+
+- A line written before this amendment reads as it did: every new field is
+  absent from it. Nothing that reads the journal needs to change.
+- A recording taken from the journal is sanitised by one module
+  (`app.broker.capture.sanitize`) before it is committed, whichever script
+  took it. The documented examples in `tests/fixtures/alpaca_documented/` stay
+  beside recordings and are not replaced by them.
