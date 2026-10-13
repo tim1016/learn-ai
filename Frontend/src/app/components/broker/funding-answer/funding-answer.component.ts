@@ -25,7 +25,8 @@ interface LimitRow {
  * unknown figure is one. It compares nothing and adds nothing, so a row can
  * never disagree with the Clerk's verdict. It does not repeat the sentence:
  * the bot page's own detail already leads with it, so a host that shows no
- * such detail renders `funding.sentence` itself.
+ * such detail renders `funding.sentence` itself (`showSentence`). How many entries fit is Python's own
+ * sentence, with the caveat that every bot competes for the same account headroom (#3099).
  */
 @Component({
   selector: 'app-funding-answer',
@@ -36,6 +37,11 @@ interface LimitRow {
 })
 export class FundingAnswerComponent {
   readonly funding = input.required<FundingView>();
+  /** Says Python's sentence above the limits. A host that already shows the sentence (the bot page's own
+   * detail, a refused amount's outcome line) leaves it off, so it is on screen once. */
+  readonly showSentence = input(false);
+  /** What the shortfall is short of, for a host whose answer is not about one entry. */
+  readonly shortfallLabel = input('Short of this entry by');
 
   protected readonly rows = computed<readonly LimitRow[]>(() => {
     const funding = this.funding();

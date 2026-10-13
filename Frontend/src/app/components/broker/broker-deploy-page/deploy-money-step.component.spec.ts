@@ -9,8 +9,10 @@ import {
   type AccountMoneyView,
   type DeployBotBody,
   type DeploymentBudgetPreview,
+  type FundingView,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { DeployMoneyStepComponent, type MoneyReview } from './deploy-money-step.component';
+import { OPTION_REVIEW_PRICED, OPTION_REVIEW_WITH_BUDGET } from './option-deploy.fixtures';
 
 const TARGET = resourceTarget('alpaca', 'clrk_spec', { accountId: 'PA9', bindingGeneration: 3, routingEpoch: 4 });
 const BODY: DeployBotBody = {
@@ -291,5 +293,231 @@ describe('Deploy step 3, Money', () => {
     expect(await screen.findByText('Enter a positive dollar amount with at most two decimal places.')).toBeTruthy();
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(previewBudget).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** The account's side as the backend answers it for a $900.00 budget on $700.00 unreserved and an $800.00 entry. */
+const READ_AT = 1_800_000_000_000;
+const COMPETES = 'Every bot competes for the same account headroom, so these counts are never added up across bots.';
+const OVER_THE_ACCOUNT: FundingView = {
+  free_budget: {
+    state: 'known', amount_usd: '900.00', source: 'The budget typed in Deploy', as_of_ms: READ_AT,
+    terms: [{ label: 'Budget typed in Deploy', amount_usd: '900.00' }],
+  },
+  account_headroom: {
+    state: 'known', amount_usd: '700.00', source: 'Clerk books and the account reading', as_of_ms: READ_AT,
+    terms: [{ label: 'Cash in the account', amount_usd: '1000.00' }, { label: 'Set aside for running bots', amount_usd: '-300.00' }],
+  },
+  broker_buying_power: {
+    state: 'known', amount_usd: '5000.00', source: "Alpaca's account answer", as_of_ms: READ_AT,
+    terms: [{ label: 'Option buying power', amount_usd: '5000.00' }],
+  },
+  need: {
+    commitment_usd: '800.00',
+    terms: [{ label: 'Broker requirement and net premium', amount_usd: '799.91' }, { label: 'Fee provision', amount_usd: '0.09' }],
+  },
+  admits: false, binding: 'account_headroom', shortfall_usd: '200.00', fits: 0,
+  fits_sentence: `No whole entry fits right now under the account's headroom, the limit with the least room. ${COMPETES}`,
+  sentence: 'This budget is $900.00, but the account has only $700.00 unreserved. Shortfall: $200.00.',
+  action: "Choose a smaller budget, free another bot's budget, or add cash to the account.",
+};
+
+/** The same account with a $1,000.00 budget: it passes, one entry fits, and Alpaca's reading is stale. */
+const COVERED: FundingView = {
+  ...OVER_THE_ACCOUNT,
+  free_budget: { ...OVER_THE_ACCOUNT.free_budget, amount_usd: '1000.00', terms: [{ label: 'Budget typed in Deploy', amount_usd: '1000.00' }] },
+  account_headroom: { ...OVER_THE_ACCOUNT.account_headroom, amount_usd: '5000.00' },
+  broker_buying_power: {
+    state: 'stale', amount_usd: '5000.00', source: "Alpaca's account answer", as_of_ms: READ_AT - 46_000,
+    terms: [{ label: 'Option buying power', amount_usd: '5000.00' }],
+  },
+  admits: true, binding: 'bot_budget', shortfall_usd: null, fits: 1, action: null,
+  fits_sentence: `One whole entry fits right now under the bot's budget, the limit with the least room. ${COMPETES}`,
+  sentence: "This budget is $1,000.00 and the account has $5,000.00 unreserved, enough for the entry's $800.00 including its fee provision. "
+    + 'Passing our own limits does not guarantee that Alpaca accepts the order.',
+};
+
+function limitRows(): { label: string; amount: string | null; state: string | null; mark: string | null }[] {
+  const text = (row: Element, selector: string) => row.querySelector(selector)?.textContent?.trim() ?? null;
+  return Array.from(document.querySelectorAll('.funding-answer__limit')).map((row) => ({
+    label: text(row, '.funding-answer__label') ?? '',
+    amount: text(row, '.funding-answer__amount'),
+    state: text(row, '.funding-answer__state'),
+    mark: text(row, '.funding-answer__mark'),
+  }));
+}
+
+function occurrences(text: string): number {
+  return (document.body.textContent ?? '').split(text).length - 1;
+}
+
+describe('Deploy step 3, Money: the funding answer beside the budget (#3099)', () => {
+  it('shows a refused budget’s limits with the binding one marked, the shortfall, what to do and its sentence once', async () => {
+    const previewBudget = vi.fn().mockImplementation(async (_target, body: DeployBotBody) =>
+      body.budget
+        ? { ...FACTS, state: 'unavailable', review_token: null, budget_usd: null, detail: OVER_THE_ACCOUNT.sentence, funding: OVER_THE_ACCOUNT }
+        : FACTS);
+    await setup(previewBudget);
+
+    fireEvent.input(screen.getByLabelText('Dollar budget (USD)'), { target: { value: '900.00' } });
+
+    await vi.waitFor(() => expect(limitRows().length).toBe(3));
+    expect(limitRows()).toEqual([
+      { label: 'Free budget', amount: '$900.00', state: null, mark: null },
+      { label: 'Account headroom', amount: '$700.00', state: null, mark: 'binds' },
+      { label: 'Alpaca option buying power', amount: '$5,000.00', state: null, mark: null },
+    ]);
+    expect(occurrences(OVER_THE_ACCOUNT.sentence)).toBe(1);
+    expect(screen.getByText(/Choose a smaller budget, free another bot's budget, or add cash to the account\./)).toBeTruthy();
+    expect(screen.getByText(/Short by/).textContent?.replace(/\s+/g, ' ').trim()).toBe('Short by $200.00');
+  });
+
+  it('says that a budget which passes is no promise, shows how many fit, and says every bot competes for the headroom', async () => {
+    const previewBudget = vi.fn().mockImplementation(async (_target, body: DeployBotBody) =>
+      body.budget ? reviewed(body.budget.amount_usd, { detail: 'Ready.', funding: COVERED }) : FACTS);
+    await setup(previewBudget);
+
+    fireEvent.input(screen.getByLabelText('Dollar budget (USD)'), { target: { value: '1000.00' } });
+
+    expect(await screen.findByText(/Passing our own limits does not guarantee that Alpaca accepts the order\./)).toBeTruthy();
+    expect(occurrences(COVERED.sentence)).toBe(1);
+    expect(occurrences(COVERED.fits_sentence ?? '')).toBe(1);
+    expect(limitRows().map((row) => [row.label, row.mark])).toEqual([
+      ['Free budget', 'least room'], ['Account headroom', null], ['Alpaca option buying power', null],
+    ]);
+    expect(screen.queryByText(/Short by/)).toBeNull();
+  });
+
+  it('says a stale buying-power reading is stale with the time it was read, and never as a limit that passes', async () => {
+    const previewBudget = vi.fn().mockImplementation(async (_target, body: DeployBotBody) =>
+      body.budget ? reviewed(body.budget.amount_usd, { funding: COVERED }) : FACTS);
+    await setup(previewBudget);
+
+    fireEvent.input(screen.getByLabelText('Dollar budget (USD)'), { target: { value: '1000.00' } });
+
+    await vi.waitFor(() => expect(limitRows().length).toBe(3));
+    const stale = document.querySelectorAll('.funding-answer__limit')[2];
+    expect(stale.getAttribute('data-state')).toBe('stale');
+    expect(stale.querySelector('.funding-answer__state')?.textContent?.trim()).toBe('stale, as last read');
+    expect(stale.querySelector('.funding-answer__time')?.textContent?.trim()).not.toBe('');
+    expect(stale.querySelector('.funding-answer__mark')).toBeNull();
+  });
+
+  it('says an unknown buying-power reading is unknown, with no amount and no zero', async () => {
+    const unknown: FundingView = {
+      ...COVERED,
+      broker_buying_power: {
+        state: 'unknown', source: "Alpaca's account answer, which did not carry option buying power",
+        as_of_ms: READ_AT, terms: [],
+      },
+    };
+    const previewBudget = vi.fn().mockImplementation(async (_target, body: DeployBotBody) =>
+      body.budget ? reviewed(body.budget.amount_usd, { funding: unknown }) : FACTS);
+    await setup(previewBudget);
+
+    fireEvent.input(screen.getByLabelText('Dollar budget (USD)'), { target: { value: '1000.00' } });
+
+    await vi.waitFor(() => expect(limitRows().length).toBe(3));
+    expect(limitRows()[2]).toEqual({ label: 'Alpaca option buying power', amount: null, state: 'unknown', mark: null });
+  });
+
+  it('shows the account’s side before any amount is typed, with the budget unknown and never zero', async () => {
+    const noAmount: FundingView = {
+      ...COVERED,
+      free_budget: { state: 'unknown', source: 'The budget typed in Deploy, which has no amount yet', terms: [] },
+      admits: null, binding: 'account_headroom', shortfall_usd: null, fits: 6,
+      sentence: 'The account has $5,000.00 unreserved. The entry needs $800.00 including its fee provision.',
+      fits_sentence: `6 whole entries fit right now under the account's headroom, the limit with the least room. ${COMPETES}`,
+    };
+    await setup(vi.fn().mockResolvedValue({ ...FACTS, funding: noAmount }));
+
+    await vi.waitFor(() => expect(limitRows().length).toBe(3));
+    expect(limitRows()[0]).toEqual({ label: 'Free budget', amount: null, state: 'unknown', mark: null });
+    expect(screen.getByText(/The account has \$5,000\.00 unreserved\./)).toBeTruthy();
+    expect(screen.getByText(/6 whole entries fit right now/)).toBeTruthy();
+  });
+});
+
+describe('Deploy step 3, Money: what one more structure changes (#3099)', () => {
+  const optionFacts = (review: DeploymentBudgetPreview['option_review']): DeploymentBudgetPreview => ({
+    ...FACTS, minimum_budget_usd: '824.09', estimated_price_usd: null, option_review: review,
+  });
+
+  async function renderOptions(preview: DeploymentBudgetPreview) {
+    await render(DeployMoneyStepComponent, {
+      inputs: { target: TARGET, body: BODY },
+      providers: [{ provide: BrokerV2PanelService, useValue: { previewBudget: vi.fn().mockResolvedValue(preview) } }],
+    });
+    await screen.findByText('Set aside for 2 structures');
+  }
+
+  function rows(): { label: string; text: string }[] {
+    return Array.from(document.querySelectorAll('.option-money__rows > div')).map((row) => ({
+      label: row.querySelector('dt')?.textContent?.trim() ?? '',
+      text: (row.querySelector('dd')?.textContent ?? '').replace(/\s+/g, ' ').trim(),
+    }));
+  }
+
+  it('lists the requirement a structure adds, the budget and the headroom left, then how many entries fit', async () => {
+    await renderOptions(optionFacts(OPTION_REVIEW_WITH_BUDGET));
+
+    expect(rows().map((row) => row.label)).toEqual([
+      'Set aside for 2 structures', 'Premium', "Alpaca's requirement", 'Fees (estimate)',
+      'Loss at expiry, if held, before fees (estimate)', 'Free in this budget after one entry',
+      "What this adds to the account's requirement", 'Account headroom left after one entry',
+    ]);
+    expect(rows().at(-2)?.text).toBe('$0.00');
+    expect(rows().at(-1)?.text).toBe('$4,175.91');
+    expect(screen.getByText(/One whole entry fits right now under the bot's budget/)).toBeTruthy();
+    expect(screen.getByText(/Every bot competes for the same account headroom/)).toBeTruthy();
+  });
+
+  it('shows the price each pick is assumed at beside the time the quotes were read', async () => {
+    await renderOptions(optionFacts(OPTION_REVIEW_PRICED));
+
+    expect(screen.getByText('at $4.12')).toBeTruthy();
+    expect(screen.getByText(/priced at its ask and each sold one at its bid/)).toBeTruthy();
+    expect(screen.getByText(/IBKR quotes read/)).toBeTruthy();
+  });
+
+  it('says what Alpaca’s netting would save and that the bot does not spend it', async () => {
+    const netting = 'Alpaca values the account\'s positions together, so the account\'s requirement would fall by $500.00, '
+      + 'though this structure requires $500.00 alone. The bot still sets aside $500.00: it does not spend the $1,000.00 that netting saves.';
+    const review: DeploymentBudgetPreview['option_review'] = {
+      ...OPTION_REVIEW_WITH_BUDGET,
+      money_rows: (OPTION_REVIEW_WITH_BUDGET.money_rows ?? []).map((row) =>
+        row.key === 'incremental_requirement' ? { ...row, amount_cents: -50_000, amount_usd: '-$500.00', note: netting } : row),
+    };
+
+    await renderOptions(optionFacts(review));
+
+    const row = rows().find((candidate) => candidate.label === "What this adds to the account's requirement");
+    expect(row?.text).toBe(`-$500.00${netting}`);
+  });
+
+  it('says a figure that is stale is stale with the time it was read, and one that is unknown is unknown and says why', async () => {
+    const review: DeploymentBudgetPreview['option_review'] = {
+      ...OPTION_REVIEW_WITH_BUDGET,
+      money_rows: (OPTION_REVIEW_WITH_BUDGET.money_rows ?? []).map((row) => {
+        if (row.key === 'headroom_left') return { ...row, state: 'stale' as const, as_of_ms: READ_AT - 60_000 };
+        if (row.key === 'incremental_requirement') {
+          return {
+            ...row, amount_cents: null, amount_usd: null, state: 'unknown' as const,
+            note: 'The structure sells more calls than it buys, so its loss grows without limit as the price rises.',
+          };
+        }
+        return row;
+      }),
+    };
+
+    await renderOptions(optionFacts(review));
+
+    const stale = rows().find((row) => row.label === 'Account headroom left after one entry');
+    const unknown = rows().find((row) => row.label === "What this adds to the account's requirement");
+    expect(stale?.text).toMatch(/^\$4,175\.91 stale, as last read/);
+    expect(unknown?.text).toBe(
+      'unknownThe structure sells more calls than it buys, so its loss grows without limit as the price rises.',
+    );
+    expect(unknown?.text).not.toContain('$');
   });
 });

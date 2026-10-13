@@ -11,24 +11,35 @@
         <li>
           <strong>{{ pick.side_label }} {{ pick.ratio }}</strong>
           <app-option-contract [contract]="pick.contract" />
+          <span class="option-money__price">at {{ pick.price_usd }}</span>
         </li>
       }
     </ul>
+    @if (told.prices_sentence; as prices) { <p class="option-money__said">{{ prices }}</p> }
   }
 
   @if ((told.money_rows ?? []).length > 0) {
     <dl class="option-money__rows">
       @for (row of told.money_rows; track row.key) {
-        <div [class.option-money__part]="row.part_of_set_aside">
+        <div [class.option-money__part]="row.part_of_set_aside" [attr.data-state]="row.state ?? 'known'">
           <dt>{{ row.label }}</dt>
           <dd>
             @if (row.amount_usd; as dollars) { <span class="option-money__amount">{{ dollars }}</span> }
+            @if (row.state === 'stale') {
+              <span class="option-money__figure-state">
+                stale, as last read
+                @if (row.as_of_ms; as readAt) { <app-timestamp-display [value]="readAt" mode="local" granularity="time" /> }
+              </span>
+            } @else if (row.state === 'unknown') {
+              <span class="option-money__figure-state">unknown</span>
+            }
             @if (row.note; as note) { <span class="option-money__note">{{ note }}</span> }
           </dd>
         </div>
       }
     </dl>
     <p class="option-money__said">{{ told.money_sentence }}</p>
+    @if (told.fits_sentence; as fits) { <p class="option-money__said">{{ fits }}</p> }
   }
 
   @if (told.entry_sentence; as entry) { <p class="option-money__said">{{ entry }}</p> }

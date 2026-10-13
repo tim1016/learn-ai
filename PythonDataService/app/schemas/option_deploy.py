@@ -92,7 +92,16 @@ class OptionDeployNote(BaseModel):
     detail: str
 
 
-MoneyRowKey = Literal["set_aside", "premium", "broker_requirement", "fees", "loss_at_expiry", "budget_free"]
+MoneyRowKey = Literal[
+    "set_aside",
+    "premium",
+    "broker_requirement",
+    "fees",
+    "loss_at_expiry",
+    "budget_free",
+    "incremental_requirement",
+    "headroom_left",
+]
 
 
 class OptionMoneyRow(BaseModel):
@@ -112,6 +121,10 @@ class OptionMoneyRow(BaseModel):
     note: str | None
     # The premium, the requirement and the fees: the three rows that add up to what is set aside.
     part_of_set_aside: bool
+    # A figure worked out from a reading is stale past that reading's age limit and unknown when it cannot be
+    # worked out; ``note`` then says why, and ``as_of_ms`` when the reading was taken (#3099).
+    state: Literal["known", "stale", "unknown"] = "known"
+    as_of_ms: EpochMs | None = None
 
 
 class OptionPickedContract(BaseModel):
@@ -123,6 +136,9 @@ class OptionPickedContract(BaseModel):
     side_label: str
     ratio: int
     contract: OptionContractView
+    # The price a share of it is assumed at, in dollars: the ask for a leg that is bought and the bid for one
+    # that is sold, as quoted when ``quotes_read_ms`` says.
+    price_usd: str
 
 
 # The structure preview's own states, and one more that is the review's: the preview was not asked.
@@ -164,6 +180,12 @@ class OptionDeployReview(BaseModel):
     money_sentence: str
     # Said when an entry made right now would be skipped though the structure can be deployed.
     entry_sentence: str | None
+    # What the prices above are, when there are any.
+    prices_sentence: str | None = None
+    # How many whole entries of this size fit under the limit that binds, and what that count is not: every
+    # bot competes for the same account headroom (#3099). ``None`` when no budget or account can say.
+    fits: int | None = None
+    fits_sentence: str | None = None
     blockers: tuple[OptionDeployBlocker, ...] = ()
     notes: tuple[OptionDeployNote, ...] = ()
 

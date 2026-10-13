@@ -4,6 +4,7 @@
   p, dl, dd, ul { margin: 0; }
 }
 
+.funding-answer__sentence,
 .funding-answer__action {
   color: var(--text-primary);
 }
@@ -50,6 +51,11 @@
   font-style: italic;
 }
 
+.funding-answer__time {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+
 .funding-answer__mark {
   font-size: var(--fs-xs);
   font-weight: 600;
@@ -76,4 +82,9 @@
 
 .funding-answer__shortfall {
   color: var(--text-primary);
+}
+
+.funding-answer__fits {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
 }

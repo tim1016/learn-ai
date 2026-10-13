@@ -85,6 +85,37 @@ def test_duplicate_deploy_returns_same_pending_and_launched_command(budget_repo)
     assert len([row for row in budget_repo.custody_transitions() if row["transition_kind"] == "DEPLOY_COMMITTED"]) == 1
 
 
+def test_the_rechecks_refusals_are_the_funding_answers_words_in_whole_cents(budget_repo) -> None:
+    """The cash is $1,000.00 and one position needs $100.01: a budget a cent over the cash or a cent under the
+    position is refused in the one rule's words, and the figures on either edge are admitted."""
+    with pytest.raises(BudgetUnavailable) as refused_over:
+        _deploy(budget_repo, cents=100_001)
+    with pytest.raises(BudgetUnavailable) as refused_under:
+        _deploy(budget_repo, sid="b", cents=10_000)
+
+    assert str(refused_over.value) == "This budget is $1,000.01, but the account has only $1,000.00 unreserved. Shortfall: $0.01."
+    assert str(refused_under.value) == (
+        "This budget is only $100.00. The entry needs $100.01 including its fee provision. Shortfall: $0.01."
+    )
+    assert _deploy(budget_repo, sid="b", cents=10_001).created is True
+    assert budget_repo.deployment_budget("b")["committed_cents"] == 10_001
+
+
+def test_a_bot_whose_entries_are_priced_at_the_entry_is_asked_no_minimum_but_the_cash_still_holds(budget_repo) -> None:
+    """An option bot is handed no minimum: its budget is held to what the account has and to nothing else here."""
+
+    def deploy(cents: int):
+        return submit_budgeted_deploy(
+            budget_repo, strategy_instance_id="a", lifecycle_run_id="run-a", world="real_paper", committed_cents=cents,
+            configuration_hash="seal-a", exit_terms_hash=canonical_sha256(TERMS.model_dump(mode="json")),
+            risk_revision=1, actor="owner", envelope=_gate(), minimum_position_cost=Decimal(0),
+        )
+
+    with pytest.raises(BudgetUnavailable, match=r"This budget is \$1,000\.01, but the account has only \$1,000\.00 unreserved"):
+        deploy(100_001)
+    assert deploy(1).created is True
+
+
 def test_response_loss_then_changed_amount_is_a_conflict(budget_repo) -> None:
     _deploy(budget_repo, cents=60_000)
     with pytest.raises(DurableConflictError):

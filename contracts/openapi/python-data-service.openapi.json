@@ -13512,6 +13512,16 @@
             ],
             "title": "Estimated Price Usd"
           },
+          "funding": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FundingView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "minimum_budget_usd": {
             "anyOf": [
               {
@@ -18092,6 +18102,17 @@
               }
             ],
             "title": "Fits"
+          },
+          "fits_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fits Sentence"
           },
           "free_budget": {
             "$ref": "#/components/schemas/FigureView"
@@ -37416,6 +37437,28 @@
             ],
             "title": "Figures Good Until Ms"
           },
+          "fits": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fits"
+          },
+          "fits_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fits Sentence"
+          },
           "money_rows": {
             "default": [],
             "items": {
@@ -37497,6 +37540,17 @@
               }
             ],
             "title": "Preview State"
+          },
+          "prices_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prices Sentence"
           },
           "quotes_read_ms": {
             "anyOf": [
@@ -38275,6 +38329,20 @@
             ],
             "title": "Amount Usd"
           },
+          "as_of_ms": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of Ms"
+          },
           "key": {
             "enum": [
               "set_aside",
@@ -38282,7 +38350,9 @@
               "broker_requirement",
               "fees",
               "loss_at_expiry",
-              "budget_free"
+              "budget_free",
+              "incremental_requirement",
+              "headroom_left"
             ],
             "title": "Key",
             "type": "string"
@@ -38305,6 +38375,16 @@
           "part_of_set_aside": {
             "title": "Part Of Set Aside",
             "type": "boolean"
+          },
+          "state": {
+            "default": "known",
+            "enum": [
+              "known",
+              "stale",
+              "unknown"
+            ],
+            "title": "State",
+            "type": "string"
           }
         },
         "required": [
@@ -38429,6 +38509,10 @@
             "title": "Number",
             "type": "integer"
           },
+          "price_usd": {
+            "title": "Price Usd",
+            "type": "string"
+          },
           "ratio": {
             "title": "Ratio",
             "type": "integer"
@@ -38442,7 +38526,8 @@
           "number",
           "side_label",
           "ratio",
-          "contract"
+          "contract",
+          "price_usd"
         ],
         "title": "OptionPickedContract",
         "type": "object"

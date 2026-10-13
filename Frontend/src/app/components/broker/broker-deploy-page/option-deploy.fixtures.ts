@@ -48,11 +48,13 @@ export const OPTION_REVIEW_PRICED: OptionDeployReview = {
   "ask_again_in_ms": null,
   "quotes_read_ms": 1791297062400,
   "figures_good_until_ms": 1791297122400,
+  "prices_sentence": "Each bought contract is priced at its ask and each sold one at its bid, as quoted when the quotes were read. The bot picks again at every entry, and the prices move.",
   "picks": [
     {
       "number": 1,
       "side_label": "Buy",
       "ratio": 1,
+      "price_usd": "$4.12",
       "contract": {
         "occ_symbol": "SPY261009C00585000",
         "underlying": "SPY",
@@ -102,8 +104,30 @@ export const OPTION_REVIEW_PRICED: OptionDeployReview = {
       "amount_usd": "$824.00",
       "note": "At expiry, if held, before fees. An estimate: it takes every leg as held to expiry and never exercised or assigned early.",
       "part_of_set_aside": false
+    },
+    {
+      "key": "incremental_requirement",
+      "label": "What this adds to the account's requirement",
+      "amount_cents": 0,
+      "amount_usd": "$0.00",
+      "note": null,
+      "part_of_set_aside": false,
+      "state": "known",
+      "as_of_ms": 1791297062400
+    },
+    {
+      "key": "headroom_left",
+      "label": "Account headroom left after one entry",
+      "amount_cents": 417591,
+      "amount_usd": "$4,175.91",
+      "note": null,
+      "part_of_set_aside": false,
+      "state": "known",
+      "as_of_ms": 1791297062400
     }
   ],
+  "fits": 6,
+  "fits_sentence": "6 whole entries fit right now under the account's headroom, the limit with the least room. Every bot competes for the same account headroom, so these counts are never added up across bots.",
   "money_sentence": "The budget decides whether an entry may start. It is not a cap on what you can spend or lose. A market exit can do worse than these figures.",
   "entry_sentence": "Nothing in these picks or their prices would stop an entry right now. An entry is also held to the budget, to the account and to the quotes at its own moment.",
   "blockers": [],
@@ -126,11 +150,13 @@ export const OPTION_REVIEW_WITH_BUDGET: OptionDeployReview = {
   "ask_again_in_ms": null,
   "quotes_read_ms": 1791297062400,
   "figures_good_until_ms": 1791297122400,
+  "prices_sentence": "Each bought contract is priced at its ask and each sold one at its bid, as quoted when the quotes were read. The bot picks again at every entry, and the prices move.",
   "picks": [
     {
       "number": 1,
       "side_label": "Buy",
       "ratio": 1,
+      "price_usd": "$4.12",
       "contract": {
         "occ_symbol": "SPY261009C00585000",
         "underlying": "SPY",
@@ -187,9 +213,33 @@ export const OPTION_REVIEW_WITH_BUDGET: OptionDeployReview = {
       "amount_cents": 17591,
       "amount_usd": "$175.91",
       "note": null,
-      "part_of_set_aside": false
+      "part_of_set_aside": false,
+      "state": "known",
+      "as_of_ms": 1791297062400
+    },
+    {
+      "key": "incremental_requirement",
+      "label": "What this adds to the account's requirement",
+      "amount_cents": 0,
+      "amount_usd": "$0.00",
+      "note": null,
+      "part_of_set_aside": false,
+      "state": "known",
+      "as_of_ms": 1791297062400
+    },
+    {
+      "key": "headroom_left",
+      "label": "Account headroom left after one entry",
+      "amount_cents": 417591,
+      "amount_usd": "$4,175.91",
+      "note": null,
+      "part_of_set_aside": false,
+      "state": "known",
+      "as_of_ms": 1791297062400
     }
   ],
+  "fits": 1,
+  "fits_sentence": "One whole entry fits right now under the bot's budget, the limit with the least room. Every bot competes for the same account headroom, so these counts are never added up across bots.",
   "money_sentence": "The budget decides whether an entry may start. It is not a cap on what you can spend or lose. A market exit can do worse than these figures.",
   "entry_sentence": "Nothing in these picks or their prices would stop an entry right now. An entry is also held to the budget, to the account and to the quotes at its own moment.",
   "blockers": [],
@@ -326,11 +376,13 @@ export const OPTION_REVIEW_BLOCKED_WITH_ROWS: OptionDeployReview = {
   "ask_again_in_ms": null,
   "quotes_read_ms": 1791297062400,
   "figures_good_until_ms": 1791297122400,
+  "prices_sentence": "Each bought contract is priced at its ask and each sold one at its bid, as quoted when the quotes were read. The bot picks again at every entry, and the prices move.",
   "picks": [
     {
       "number": 1,
       "side_label": "Buy",
       "ratio": 1,
+      "price_usd": "$4.12",
       "contract": {
         "occ_symbol": "SPY261009C00585000",
         "underlying": "SPY",
@@ -427,11 +479,13 @@ export const OPTION_REVIEW_NO_FIX: OptionDeployReview = {
   "ask_again_in_ms": null,
   "quotes_read_ms": 1791297062400,
   "figures_good_until_ms": 1791297122400,
+  "prices_sentence": "Each bought contract is priced at its ask and each sold one at its bid, as quoted when the quotes were read. The bot picks again at every entry, and the prices move.",
   "picks": [
     {
       "number": 1,
       "side_label": "Buy",
       "ratio": 1,
+      "price_usd": "$4.12",
       "contract": {
         "occ_symbol": "SPY261009C00585000",
         "underlying": "SPY",
@@ -471,11 +525,13 @@ export const OPTION_REVIEW_THAT_PAYS: OptionDeployReview = {
   "ask_again_in_ms": null,
   "quotes_read_ms": 1791297062400,
   "figures_good_until_ms": 1791297122400,
+  "prices_sentence": "Each bought contract is priced at its ask and each sold one at its bid, as quoted when the quotes were read. The bot picks again at every entry, and the prices move.",
   "picks": [
     {
       "number": 1,
       "side_label": "Sell",
       "ratio": 1,
+      "price_usd": "$5.00",
       "contract": {
         "occ_symbol": "SPY261009C00585000",
         "underlying": "SPY",
@@ -488,6 +544,7 @@ export const OPTION_REVIEW_THAT_PAYS: OptionDeployReview = {
       "number": 2,
       "side_label": "Buy",
       "ratio": 1,
+      "price_usd": "$1.93",
       "contract": {
         "occ_symbol": "SPY261009C00590000",
         "underlying": "SPY",
@@ -595,6 +652,7 @@ export const OPTION_REVIEW_ENTRY_SKIPPED: OptionDeployReview = {
       "number": 1,
       "side_label": "Buy",
       "ratio": 1,
+      "price_usd": "$5.00",
       "contract": {
         "occ_symbol": "SPY261009C00585000",
         "underlying": "SPY",

@@ -15,7 +15,10 @@ export type OptionDeployReview = components['schemas']['OptionDeployReview'];
  * note, in the order the rows came; the sentences; the notes. Nothing is
  * added up, signed or named here. A premium carries no sign: its note says
  * paid or received. The rows the server marks as part of what is set aside
- * are drawn under the set-aside row, in its order.
+ * are drawn under the set-aside row, in its order. A row whose figure is
+ * stale is said so with the time it was read, and one that is unknown says
+ * so beside the note that tells why (#3099). Each pick shows the price it is
+ * assumed at, and how many entries fit comes in the server's sentence.
  *
  * A review whose preview read no quotes carries no picks, no rows and no
  * read time, and this shows none. What stops a Deploy is not said here: the

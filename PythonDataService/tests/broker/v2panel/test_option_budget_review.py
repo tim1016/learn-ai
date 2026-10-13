@@ -52,7 +52,10 @@ def test_a_budget_under_one_entry_is_refused_in_an_entrys_words_and_one_that_cov
     reviewed = _review(covers)
 
     assert too_little.state == "unavailable" and too_little.review_token is None
-    assert "One entry sets aside $194.10 right now" in too_little.detail
+    assert too_little.detail == (
+        "This budget is only $194.09. The entry needs $194.10 including its fee provision. Shortfall: $0.01."
+    )
+    assert too_little.funding is not None and too_little.funding.action == "Choose a budget of at least $194.10."
     assert reviewed.state == "ready" and reviewed.review_token is not None
     accepted = covers.model_copy(update={"budget": covers.budget.model_copy(update={"review_token": reviewed.review_token})})
     consent = budget_deploy.resolve_consent(_ACCOUNT, accepted, resolved_parameters={}, option_entry=_PRICED)

@@ -12280,6 +12280,7 @@ export interface components {
             detail: string;
             /** Estimated Price Usd */
             estimated_price_usd?: string | null;
+            funding?: components["schemas"]["FundingView"] | null;
             /** Minimum Budget Usd */
             minimum_budget_usd?: string | null;
             money_after?: components["schemas"]["AccountMoneyView"] | null;
@@ -14061,6 +14062,8 @@ export interface components {
             broker_buying_power?: components["schemas"]["FigureView"] | null;
             /** Fits */
             fits?: number | null;
+            /** Fits Sentence */
+            fits_sentence?: string | null;
             free_budget: components["schemas"]["FigureView"];
             need?: components["schemas"]["EntryNeedView"] | null;
             /** Sentence */
@@ -21743,6 +21746,10 @@ export interface components {
             entry_sentence: string | null;
             /** Figures Good Until Ms */
             figures_good_until_ms: number | null;
+            /** Fits */
+            fits?: number | null;
+            /** Fits Sentence */
+            fits_sentence?: string | null;
             /**
              * Money Rows
              * @default []
@@ -21770,6 +21777,8 @@ export interface components {
             preview_sentence: string | null;
             /** Preview State */
             preview_state: ("plan_refused" | "no_quote_source" | "feed_not_up" | "no_quote_line" | "listing_not_read" | "quotes_arriving" | "underlying_quote_unusable" | "pricing_inputs_unknown" | "search_not_done" | "not_resolved" | "resolved") | "not_asked";
+            /** Prices Sentence */
+            prices_sentence?: string | null;
             /** Quotes Read Ms */
             quotes_read_ms: number | null;
             /** Structure In A Sentence */
@@ -22015,17 +22024,25 @@ export interface components {
             amount_cents: number | null;
             /** Amount Usd */
             amount_usd: string | null;
+            /** As Of Ms */
+            as_of_ms?: number | null;
             /**
              * Key
              * @enum {string}
              */
-            key: "set_aside" | "premium" | "broker_requirement" | "fees" | "loss_at_expiry" | "budget_free";
+            key: "set_aside" | "premium" | "broker_requirement" | "fees" | "loss_at_expiry" | "budget_free" | "incremental_requirement" | "headroom_left";
             /** Label */
             label: string;
             /** Note */
             note: string | null;
             /** Part Of Set Aside */
             part_of_set_aside: boolean;
+            /**
+             * State
+             * @default known
+             * @enum {string}
+             */
+            state?: "known" | "stale" | "unknown";
         };
         /**
          * OptionOrderTermDefaults
@@ -22070,6 +22087,8 @@ export interface components {
             contract: components["schemas"]["OptionContractView"];
             /** Number */
             number: number;
+            /** Price Usd */
+            price_usd: string;
             /** Ratio */
             ratio: number;
             /** Side Label */
