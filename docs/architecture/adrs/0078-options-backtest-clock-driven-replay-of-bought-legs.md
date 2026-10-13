@@ -42,6 +42,8 @@ What it shares with the engine. The canonical calendar. The option fee model. Th
 
 **Amended by #3104 (2026-10-12):** it also takes the canonical portfolio requirement (`portfolio_broker_requirement`, ADR 0076 decisions 3 and 28) and the leg shape that function reads (`ResolvedLeg` and `EntrySize`), both pure, for the cover book (`app/options_backtest/cover_book.py`, PRD #3095). The backtest asks the one requirement the bots hold and does not copy it. The money path's code is not edited for it.
 
+**Amended by #3101 (2026-10-13):** it also takes one more pure import, `app.options.event_allocation.assignment_cash_cents` (ADR 0076 decision 22), the cash an assignment moves: strike x multiplier x contracts in whole cents. The cover book's `assignment_obligation` and the account picture's (`app/broker/alpaca/clerk/account_picture.py`) both call it, so the number has one kernel and a parity test; the stored `largest_assignment_obligation_usd` string is now two decimals (`66500.00`, not `66500.000`), the same value.
+
 *To change:* moving any of it under `app/engine/` moves Golden Search's identity.
 
 ### 3. The plan's data decides what a fill is
