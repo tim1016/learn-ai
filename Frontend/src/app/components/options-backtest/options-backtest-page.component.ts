@@ -187,11 +187,13 @@ export class OptionsBacktestPageComponent {
   protected readonly check = this.checkFlow.state;
   protected readonly pricesFromMs = this.checkFlow.pricesFromMs;
   protected readonly rangeProblem = computed(() => this.checkFlow.refusal() ?? this.launch.refusal());
-  /** What a check would be asked with now, and a stamp to tell whether an answer still describes it: the setup, the dates, and how many backtests have started since. */
+  /** How many downloads on the Past chain tab may have changed what is stored. */
+  private readonly chainDownloads = signal(0);
+  /** What a check would be asked with now, and a stamp to tell whether an answer still describes it: the setup, the dates, and how many backtests have started and chain downloads have come back since. */
   private readonly asking = computed(() => {
     const setup = this.readBack();
     const range = this.instants();
-    return setup === null || range === null ? null : { setup, range, stamp: JSON.stringify([setup, range, this.launch.runsStarted()]) };
+    return setup === null || range === null ? null : { setup, range, stamp: JSON.stringify([setup, range, this.launch.runsStarted(), this.chainDownloads()]) };
   });
   protected readonly checkIsStale = computed(() => {
     const state = this.check();
@@ -237,6 +239,8 @@ export class OptionsBacktestPageComponent {
 
   // Import and export.
   protected readonly importNotice = signal<ImportNotice | null>(null);
+  /** Counts what has put a setup into the form or begun to: a file chosen, a saved setup opened, a run's setup taken. An import that finds the count moved on is not the latest. */
+  private setupReplacements = 0;
   protected readonly canExport = computed(() => this.readBack() !== null);
   /** What the setup waits for before it can be exported, checked or run: to be complete, or to be read back by the server. */
   private readonly waitingFor = computed<'complete' | 'read-back' | null>(() => {
@@ -313,6 +317,11 @@ export class OptionsBacktestPageComponent {
     this.start();
   }
 
+  /** A download on the Past chain tab came back: what is stored for an underlying and a date may have changed, so an answer of Check data is stale. */
+  protected chainDownloaded(): void {
+    this.chainDownloads.update((count) => count + 1);
+  }
+
   protected setTab(tab: string | number | undefined): void {
     if (tab === 'backtest' || tab === 'history' || tab === 'chain') this.activeTab.set(tab);
   }
@@ -321,6 +330,7 @@ export class OptionsBacktestPageComponent {
   protected useRunSetup(setup: ServedSetup): void {
     const clock = this.clock();
     if (clock === null) return;
+    this.setupReplacements += 1;
     this.draft.set(draftFromSetup(setup, clock));
     this.saveModel.set({ name: '' });
     this.names.clear();
@@ -347,6 +357,7 @@ export class OptionsBacktestPageComponent {
   protected open(item: SavedSetup): void {
     const clock = this.clock();
     if (clock === null || item.setup == null) return;
+    this.setupReplacements += 1;
     const opened = draftFromSetup(item.setup, clock);
     this.draft.set(opened);
     this.saveModel.set({ name: item.example ? '' : item.name });
@@ -426,7 +437,10 @@ export class OptionsBacktestPageComponent {
     chooser.value = '';
     const clock = this.clock();
     if (file === null || clock === null) return;
+    // The server's reading of a file can take long, and the owner may choose another file or open a saved setup meanwhile: only the latest is applied.
+    const mine = (this.setupReplacements += 1);
     const read = await readSetupFile(file);
+    if (mine !== this.setupReplacements) return;
     if (!read.ok) {
       this.importNotice.set({ kind: 'refused', title: `${file.name} was not loaded.`, reasons: [read.message] });
       return;
@@ -435,9 +449,12 @@ export class OptionsBacktestPageComponent {
     try {
       described = await this.service.describe(read.json);
     } catch (error) {
-      this.importNotice.set({ kind: 'refused', title: `${file.name} was not loaded: it is not a setup the page can open.`, reasons: reasonsOf(error) });
+      if (mine === this.setupReplacements) {
+        this.importNotice.set({ kind: 'refused', title: `${file.name} was not loaded: it is not a setup the page can open.`, reasons: reasonsOf(error) });
+      }
       return;
     }
+    if (mine !== this.setupReplacements) return;
     // The form is made from the setup as the server read the file, so what the file left out is filled in by the server.
     this.draft.set(draftFromSetup(described.setup, clock));
     this.saveModel.set({ name: '' });

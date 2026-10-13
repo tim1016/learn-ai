@@ -2,10 +2,11 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { SetupInvalidError } from './options-backtest.service';
-import type { SavedSetup, SetupRequest } from './options-backtest.types';
+import type { SavedSetup, SetupRequest, SetupSummary } from './options-backtest.types';
+import { deferred } from './past-chain/testing/deferred';
 import { EXAMPLE_ONE_REENTRY, exampleBody, readBackOf, servedExamples, servedSaved, summaryFor } from './testing/fixtures';
 import { MAX_SETUP_FILE_BYTES } from './setup-file';
-import { press, typeInto } from './testing/page-actions';
+import { lettingGo, press, typeInto } from './testing/page-actions';
 import { fakeService, renderPage, sentencesFor, type FakeDownload } from './testing/render-page';
 
 function readText(blob: Blob): Promise<string> {
@@ -219,6 +220,46 @@ describe('import', () => {
     expect(row.getAttribute('aria-current')).toBeNull();
     expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).toBe('');
     expect((screen.getByLabelText('Slippage (percent)') as HTMLInputElement).value).toBe('0.3');
+  });
+
+  // The server's reading of a file takes as long as the data plane is busy: an earlier file can be read back after a later one.
+  it('lets the last file chosen win when an earlier one is read back more slowly', async () => {
+    const slow = deferred<SetupSummary>();
+    const first = { ...exampleBody(), slippage_percent: 0.45 };
+    const second = { ...exampleBody(), slippage_percent: 0.55 };
+    const service = fakeService(vi, {
+      describe: vi.fn((body: unknown) => ((body as SetupRequest).slippage_percent === 0.45 ? slow.promise : Promise.resolve(sentencesFor(body as SetupRequest)))),
+    });
+    await renderPage(service, download());
+    chooseFile(JSON.stringify(first), 'first.json');
+    await waitFor(() => expect(service.describe).toHaveBeenCalledWith(first));
+
+    chooseFile(JSON.stringify(second), 'second.json');
+    await screen.findByText(/second\.json was loaded/);
+    slow.resolve(sentencesFor(first));
+    for (let settled = 0; settled < 5; settled += 1) await lettingGo();
+
+    expect((screen.getByLabelText('Slippage (percent)') as HTMLInputElement).value).toBe('0.55');
+    expect(screen.queryByText(/first\.json was loaded/)).toBeNull();
+    expect(screen.getByText(/second\.json was loaded/)).toBeTruthy();
+  });
+
+  it('is not applied over a saved setup that was opened while the file was being read back', async () => {
+    const slow = deferred<SetupSummary>();
+    const late = { ...exampleBody(), slippage_percent: 0.45 };
+    const service = fakeService(vi, {
+      describe: vi.fn((body: unknown) => ((body as SetupRequest).slippage_percent === 0.45 ? slow.promise : Promise.resolve(sentencesFor(body as SetupRequest)))),
+    });
+    await renderPage(service, download());
+    chooseFile(JSON.stringify(late), 'late.json');
+    await waitFor(() => expect(service.describe).toHaveBeenCalledWith(late));
+
+    await openExample();
+    slow.resolve(sentencesFor(late));
+    for (let settled = 0; settled < 5; settled += 1) await lettingGo();
+
+    expect((screen.getByLabelText('Slippage (percent)') as HTMLInputElement).value).toBe('0.3');
+    expect(screen.queryByText(/late\.json was loaded/)).toBeNull();
   });
 
   it('says so, and changes nothing, for a file that is not JSON', async () => {

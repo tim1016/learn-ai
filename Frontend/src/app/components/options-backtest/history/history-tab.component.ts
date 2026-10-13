@@ -13,6 +13,7 @@ import type { RunListItem, ServedSetup } from '../options-backtest.types';
 import { RUN_POLL_MS } from '../run-poll';
 import { CompareViewComponent } from '../run-detail/compare/compare-view.component';
 import { RunPanelComponent } from '../run/run-panel.component';
+import { RUNS_LISTED } from './runs-listed';
 
 let nextHintId = 0;
 
@@ -47,9 +48,30 @@ export class HistoryTabComponent {
   /** A run was deleted: the Backtest tab must not go on showing it. */
   readonly deleted = output<number>();
 
-  private readonly list = resource({ loader: () => this.service.runs() });
-  protected readonly runs = computed<RunListItem[]>(() => (this.list.hasValue() ? this.list.value() : []));
+  private readonly listed = inject(RUNS_LISTED);
+  /** How many runs the list asks for: one page, and a page more each time older runs are asked for, up to the most the server lists. */
+  private readonly limit = signal(this.listed.page);
+  // The loader is not reactive: a larger `limit` is read when the list is read again. The limit a list was read with
+  // travels with it, so that the note about older runs never describes a list that is still being read.
+  private readonly list = resource({
+    loader: async () => {
+      const limit = this.limit();
+      return { limit, runs: await this.service.runs({ limit }) };
+    },
+  });
+  protected readonly runs = computed<RunListItem[]>(() => (this.list.hasValue() ? this.list.value().runs : []));
+  /** What the list says when the server may have left older runs out (it listed as many as were asked for), or null when the list is whole. */
+  protected readonly cutShort = computed<{ readonly note: string; readonly canShowOlder: boolean } | null>(() => {
+    if (!this.list.hasValue()) return null;
+    const { limit, runs } = this.list.value();
+    if (runs.length < limit) return null;
+    const shown = `Showing the newest ${runs.length.toLocaleString('en-US')} runs`;
+    if (limit < this.listed.most) return { note: `${shown}. There may be older ones.`, canShowOlder: true };
+    return { note: `${shown}, the most the server lists. Delete runs here to bring older ones into view.`, canShowOlder: false };
+  });
   protected readonly loading = computed(() => !this.list.hasValue() && this.list.error() === undefined);
+  /** Whether the list is being read again, so that Show older runs is not pressed twice for one page. */
+  protected readonly reading = computed(() => this.list.isLoading());
   protected readonly listProblem = computed(() => {
     const error: unknown = this.list.error();
     return error === undefined ? null : extractServerMessage(error, 'The runs could not be read.');
@@ -97,6 +119,12 @@ export class HistoryTabComponent {
   }
 
   protected retry(): void {
+    this.list.reload();
+  }
+
+  /** Asks for a page more of the runs, newest first; the runs already on screen stay while it is read. */
+  protected showOlder(): void {
+    this.limit.update((limit) => (limit + this.listed.page > this.listed.most ? this.listed.most : limit + this.listed.page));
     this.list.reload();
   }
 

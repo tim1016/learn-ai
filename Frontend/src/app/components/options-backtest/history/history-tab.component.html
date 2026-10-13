@@ -58,6 +58,12 @@
           </tbody>
         </table>
       </div>
+      @if (cutShort(); as cut) {
+        <p class="muted" role="status">{{ cut.note }}</p>
+        @if (cut.canShowOlder) {
+          <button pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="reading()" (click)="showOlder()">Show older runs</button>
+        }
+      }
     }
   }
 </section>
