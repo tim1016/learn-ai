@@ -87,6 +87,26 @@ class SimulationEvidenceUnavailable(BrokerUnavailable):
     """A simulated world cannot prove its cash, marks or retained risk baseline."""
 
 
+def read_kept_option_quotes_ahead(kept: KeptOptionQuotes, *, account_id: str) -> None:
+    """Read an account's kept option quotes before the custody lock is taken, never under it.
+
+    What is kept is then already in memory when a mark, or an exit estimate
+    (#3100), asks for it. A file that cannot be read is not an error of a
+    reading that marks no contract: the mark, or the estimate, says so when
+    one is needed. An account that never kept a quote has no file, and
+    reading it writes none.
+    """
+    try:
+        kept.refresh()
+    except KeptOptionQuotesUnavailable:
+        logger.warning(
+            "the option quotes kept for a simulated account cannot be read; an open contract cannot be marked "
+            "or its exit priced",
+            exc_info=True,
+            extra={"action": "kept_option_quotes_unreadable", "account_id": account_id},
+        )
+
+
 class SimulationBaseline(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -169,21 +189,7 @@ class SimulatedAccountProjection:
         return KeptOptionQuotes.of_account(artifacts_root=self.artifacts_root, account_id=self.repo.account_id)
 
     def _read_kept_option_quotes_ahead(self) -> None:
-        """Read the account's kept option quotes before the custody lock is taken, never under it.
-
-        What is kept is then already in memory when a mark is asked for. A
-        file that cannot be read is not an error of a reading that marks no
-        contract: the mark itself says so when one is needed. An account
-        that never kept a quote has no file, and reading it writes none.
-        """
-        try:
-            self._kept_option_quotes().refresh()
-        except KeptOptionQuotesUnavailable:
-            logger.warning(
-                "the option quotes kept for a simulated account cannot be read; an open contract cannot be marked",
-                exc_info=True,
-                extra={"action": "kept_option_quotes_unreadable", "account_id": self.repo.account_id},
-            )
+        read_kept_option_quotes_ahead(self._kept_option_quotes(), account_id=self.repo.account_id)
 
     def _option_mark(self, symbol: str, *, at_ms: int) -> KeptOptionQuote:
         """The quote an open option contract is marked from at ``at_ms``, or the reading is unavailable.

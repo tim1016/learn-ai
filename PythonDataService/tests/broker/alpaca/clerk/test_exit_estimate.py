@@ -243,7 +243,8 @@ def test_a_position_with_no_sold_leg_has_a_buy_back_of_zero_known_and_no_note_ab
     assert (estimate.gross_buy_back.state, estimate.gross_buy_back.amount_cents, estimate.gross_buy_back.terms) == (
         "known", 0, (),
     )
-    assert estimate.gross_buy_back.as_of_ms == NOON
+    # No quote was used for it, so it claims no quote's age.
+    assert estimate.gross_buy_back.as_of_ms is None
     assert (estimate.net_close.state, estimate.net_close.amount_cents) == ("known", -950_000)
     assert BUY_BACK_ALONE_LINE not in estimate.conditions
 
@@ -319,6 +320,23 @@ def test_a_close_the_clerk_has_stopped_making_by_itself_is_said_to_be_the_owners
     )
 
 
+def test_a_close_a_session_ended_on_is_told_with_its_time_beside_the_one_owed_next() -> None:
+    missed = et_minute_of_day_ms(date(2026, 9, 7), 15 * 60 + 50)
+    owed = et_minute_of_day_ms(date(2026, 9, 8), 15 * 60 + 50)
+    estimate = _estimate(
+        {(BOUGHT, 100): 1}, {BOUGHT: _quote("95.00", "95.10")},
+        owed_closes=(OwedClose(CloseKind.SOLD_LEG, owed), OwedClose(CloseKind.SOLD_LEG, missed, missed=True)),
+    )
+
+    assert estimate.conditions == (
+        FEES_LINE,
+        "This system's own close of the position was due at Mon Sep 7, 15:50 ET: a sold option is not held "
+        "overnight. That session ended with the position still held.",
+        "This system closes the position itself at Tue Sep 8, 15:50 ET: a sold option is not held overnight.",
+        CUTOFF_LINE,
+    )
+
+
 def test_a_close_that_could_not_be_read_is_said_and_never_taken_for_none_owed() -> None:
     estimate = _estimate({(BOUGHT, 100): 1}, {BOUGHT: _quote("95.00", "95.10")}, owed_closes=None)
 
@@ -345,11 +363,16 @@ def test_each_legs_quality_is_its_state_age_missing_sides_and_gap() -> None:
     ]
 
 
-def test_a_crossed_quote_shows_its_gap_below_zero_as_quoted() -> None:
-    estimate = _estimate({(BOUGHT, 100): 1}, {BOUGHT: _quote("95.10", "95.00")})
+def test_a_crossed_quote_is_no_price_and_says_so_while_its_gap_shows_below_zero_as_quoted() -> None:
+    """A bid above its ask is a quote the repo refuses for a decision (``quote_fault``): nothing is stated from it."""
+    estimate = _estimate(SPREAD, {SOLD: _quote("99.90", "100.00"), BOUGHT: _quote("95.10", "95.00")})
 
-    [quality] = estimate.quotes
-    assert quality.gap == D("-0.10")
+    assert estimate.net_close.state == "unknown"
+    assert f"{BOUGHT}: its bid is above its ask, so the quote is crossed" in estimate.net_close.source
+    # The sold leg's quote is whole, so what it takes to buy it back alone is still known.
+    assert (estimate.gross_buy_back.state, estimate.gross_buy_back.amount_cents) == ("known", 1_000_000)
+    crossed = next(quality for quality in estimate.quotes if quality.symbol == BOUGHT)
+    assert (crossed.state, crossed.gap) == ("unknown", D("-0.10"))
 
 
 # ---- what the caller may hand it --------------------------------------------------------------------

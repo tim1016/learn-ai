@@ -13,24 +13,27 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal as D
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
-from app.broker.alpaca.clerk.exit_estimate import CLOSE_UNREAD_LINE, CUTOFF_LINE, FEES_LINE, OwedClose
+from app.broker.alpaca.clerk.exit_estimate import BUY_BACK_ALONE_LINE, CLOSE_UNREAD_LINE, CUTOFF_LINE, FEES_LINE
 from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
 from app.broker.alpaca.clerk.sqlite.contract_terms import ContractTerms
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.scheduled_close import CloseStanding
-from app.options.deadlines import CloseKind
+from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import EXIT_STUCK_REASON_CODE, ExitStuckCause
+from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
+from app.options.deadlines import CloseTerms
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
 from app.options.resolver import Chain, FeedState, WatchedContract
 from app.services.broker_v2_panel import exit_estimate_read
 from app.services.broker_v2_panel.exit_estimate_read import exit_estimate_view, read_exit_estimate, read_quotes_ahead
+from app.utils.et_words import et_when_words
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON
 from tests.broker.alpaca.clerk.sqlite.option_custody_fixtures import accept_option_order, fill, open_option_books
 from tests.broker.alpaca.clerk.sqlite.several_legs_fixtures import RECEIVED_PICKS, RECEIVED_SPREAD, call
@@ -42,7 +45,26 @@ world = _world_fixture
 C580, C585 = call(580).occ_symbol, call(585).occ_symbol
 GENERATION = 4
 LIVE = "Live option quotes from this Clerk's IBKR feed"
-CLOSE_AT_1550 = "This system closes the position itself at Tue Sep 8, 15:50 ET: a sold option is not held overnight."
+# ``NOON`` is a Tuesday's. A structure with a sold leg is closed a fixed lead before each session's own close.
+TUESDAY, WEDNESDAY = date(2026, 9, 8), date(2026, 9, 9)
+NOT_OVERNIGHT = "a sold option is not held overnight"
+HALF_AN_HOUR_MS = 30 * 60_000
+HOUR_MS = 60 * 60_000
+
+
+def _closes_itself(day: date, *, now_ms: int) -> str:
+    """The line that says the Clerk closes the position on ``day``'s session by its own clock."""
+    when = et_when_words(session_close_ms_utc(day) - CloseTerms().sold_leg_close_lead_ms, now_ms=now_ms)
+    return f"This system closes the position itself at {when}: {NOT_OVERNIGHT}."
+
+
+def _missed(day: date, *, now_ms: int) -> str:
+    """The line that says ``day``'s close was due and the session ended with the position still held."""
+    when = et_when_words(session_close_ms_utc(day) - CloseTerms().sold_leg_close_lead_ms, now_ms=now_ms)
+    return (
+        f"This system's own close of the position was due at {when}: {NOT_OVERNIGHT}. "
+        "That session ended with the position still held."
+    )
 
 
 def _quote(bid: str | None, ask: str | None, *, age_ms: int = 1_000, generation: int = GENERATION) -> HeldQuote:
@@ -97,8 +119,10 @@ async def test_a_real_accounts_estimate_is_priced_from_the_live_quotes_and_names
     assert [(quality.symbol, quality.contracts, quality.age_ms) for quality in estimate.quotes] == [
         (C580, -2, 1_000), (C585, 2, 1_000),
     ]
-    # The entry is held with a sold leg, so a close is owed before this session's close: ten minutes before it.
-    assert estimate.conditions[-2:] == (CLOSE_AT_1550, CUTOFF_LINE) and estimate.conditions[0] == FEES_LINE
+    # The entry is held with a sold leg, so a close is owed before this session's close.
+    assert estimate.conditions == (
+        FEES_LINE, BUY_BACK_ALONE_LINE, _closes_itself(TUESDAY, now_ms=NOON), CUTOFF_LINE,
+    )
 
 
 async def test_a_real_account_with_no_live_quote_states_no_price_and_says_the_run_is_not_asking(
@@ -225,47 +249,108 @@ async def test_an_unknown_figure_is_served_with_no_amount_and_never_zero(
 
 
 # ---- what the close owes -------------------------------------------------------------------------------------
+#
+# Real books throughout: the Clerk's own read of what is held says what is owed and what was missed, and the
+# estimate says what that read says. Times come from the trading calendar, never from a session literal.
 
 
-async def test_only_a_close_still_owed_is_named(world, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A close the session ended on, and one that left the bot flat, are not owed."""
+async def _held_spread_read_at(world, monkeypatch: pytest.MonkeyPatch, now_ms: int) -> Any:
     books, _ = world
     await opened(world, RECEIVED_SPREAD, RECEIVED_PICKS, units=2)
     _supervisor(monkeypatch, short=_quote("5.30", "5.35"), long=_quote("2.20", "2.24"))
-    states = [
-        SimpleNamespace(standing=standing, kind=CloseKind.SOLD_LEG, due_ms=NOON + offset, left_to_owner=offset == 0)
-        for offset, standing in enumerate(CloseStanding)
-    ]
-    monkeypatch.setattr(exit_estimate_read, "scheduled_close_state", lambda *_args, **_kwargs: tuple(states))
-
-    owed = exit_estimate_read._owed_closes(books, "bot-a", now_ms=NOON)
-
-    assert owed is not None
-    assert {close.due_ms - NOON for close in owed} == {
-        offset for offset, standing in enumerate(CloseStanding) if standing not in (CloseStanding.MISSED, CloseStanding.FLAT)
-    }
-    assert all(isinstance(close, OwedClose) for close in owed)
-    # The close the Clerk has stopped making by itself is carried as the owner's.
-    assert {close.due_ms - NOON for close in owed if close.left_to_owner} == {0}
+    estimate = read_exit_estimate(books, "bot-a", now_ms=now_ms)
+    assert estimate is not None
+    return estimate
 
 
-async def test_a_close_that_cannot_be_read_is_said_and_logged_and_is_not_taken_for_none_owed(
-    world, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+async def test_a_close_the_session_ended_on_is_still_told_with_its_time_after_the_session_that_missed_it(
+    world, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """An hour after Tuesday's close the spread is still held: the close due before it was missed, and
+    nothing is owed in a session that has ended. The missed close is the one line the page has."""
+    after_the_close = session_close_ms_utc(TUESDAY) + HOUR_MS
+
+    estimate = await _held_spread_read_at(world, monkeypatch, after_the_close)
+
+    assert estimate.conditions == (
+        FEES_LINE, BUY_BACK_ALONE_LINE, _missed(TUESDAY, now_ms=after_the_close), CUTOFF_LINE,
+    )
+
+
+@pytest.mark.parametrize("offset_ms", [-HALF_AN_HOUR_MS, HALF_AN_HOUR_MS], ids=["before the open", "after the open"])
+async def test_the_next_sessions_close_is_owed_beside_the_one_missed_and_neither_hides_the_other(
+    world, monkeypatch: pytest.MonkeyPatch, offset_ms: int,
+) -> None:
+    """The morning after, Wednesday's close is owed and Tuesday's was missed. The Clerk's own read reports
+    the missed one first, and the estimate states both."""
+    now = session_open_ms_utc(WEDNESDAY) + offset_ms
+
+    estimate = await _held_spread_read_at(world, monkeypatch, now)
+
+    assert estimate.conditions == (
+        FEES_LINE, BUY_BACK_ALONE_LINE, _missed(TUESDAY, now_ms=now), _closes_itself(WEDNESDAY, now_ms=now),
+        CUTOFF_LINE,
+    )
+
+
+async def test_a_close_the_clerk_has_stopped_making_by_itself_is_said_to_be_the_owners(
+    world, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Its EXIT_STUCK episode is open on the books: the Clerk sends no sale of its own for this bot."""
     books, _ = world
     await opened(world, RECEIVED_SPREAD, RECEIVED_PICKS, units=2)
     _supervisor(monkeypatch, short=_quote("5.30", "5.35"), long=_quote("2.20", "2.24"))
+    raise_uncertainty(
+        books, strategy_instance_id="bot-a", reason_code=EXIT_STUCK_REASON_CODE,
+        headline="A stuck EXIT exhausted automatic re-drives",
+        explanation="2 contracts remain attributed after 3 automatic EXIT re-drives.",
+        operator_impact="New exposure stays on hold for this strategy and automatic re-drives stopped.",
+        next_step="Run Reconcile now, then execute the presented safe flatten.",
+        cause_facts=ExitStuckCause(
+            symbol=C580, attributed_qty=2.0, redrive_count=3, first_observed_at_ms=NOON,
+        ).to_mapping(),
+        severity="error",
+    )
 
-    def unreadable(*_args: Any, **_kwargs: Any) -> Any:
-        raise LookupError("a held contract's entry could not be read")
+    estimate = read_exit_estimate(books, "bot-a", now_ms=NOON)
 
-    monkeypatch.setattr(exit_estimate_read, "scheduled_close_state", unreadable)
+    assert estimate is not None
+    when = et_when_words(session_close_ms_utc(TUESDAY) - CloseTerms().sold_leg_close_lead_ms, now_ms=NOON)
+    assert estimate.conditions == (
+        FEES_LINE,
+        BUY_BACK_ALONE_LINE,
+        f"A close of the position is due at {when}: {NOT_OVERNIGHT}. This system has stopped exiting this bot "
+        "by itself, so the close is yours to make.",
+        CUTOFF_LINE,
+    )
+
+
+async def test_a_position_held_with_no_readable_entry_says_its_close_could_not_be_read_and_logs_why(
+    books: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A sold contract on the books that no entry of the bot opened: the Clerk's read of what is owed cannot
+    tell, and the estimate says so. It is never taken for a close not owed."""
+    _hold(books, C580, -1)
+    _supervisor(monkeypatch, short=_quote("5.30", "5.35"))
 
     with caplog.at_level(logging.ERROR):
         estimate = read_exit_estimate(books, "bot-a", now_ms=NOON)
 
-    assert estimate is not None and CLOSE_UNREAD_LINE in estimate.conditions
-    assert any(getattr(record, "action", "") == "exit_estimate_scheduled_close_unreadable" for record in caplog.records)
+    assert estimate is not None
+    assert estimate.conditions == (FEES_LINE, BUY_BACK_ALONE_LINE, CLOSE_UNREAD_LINE, CUTOFF_LINE)
+    assert any(getattr(record, "action", "") == "scheduled_close_holding_unreadable" for record in caplog.records)
+
+
+async def test_a_bought_position_that_owes_no_close_before_its_expiry_has_none_named(
+    books: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One bought call expiring a week and more later: nothing is owed today, and none is said to be."""
+    _hold(books, C585, 1)
+    _supervisor(monkeypatch, long=_quote("2.20", "2.24"))
+
+    estimate = read_exit_estimate(books, "bot-a", now_ms=NOON)
+
+    assert estimate is not None and estimate.conditions == (FEES_LINE, CUTOFF_LINE)
 
 
 # ---- what nothing holds, and what the books cannot count ------------------------------------------------------
@@ -371,7 +456,7 @@ def test_quotes_kept_that_cannot_be_read_make_the_figures_unknown_and_never_fail
 
     assert estimate is not None and estimate.net_close.state == "unknown"
     assert "the option quotes kept for this Dry Run cannot be read" in estimate.net_close.source
-    assert any(getattr(record, "action", "") == "exit_estimate_kept_quotes_unreadable" for record in caplog.records)
+    assert any(getattr(record, "action", "") == "kept_option_quotes_unreadable" for record in caplog.records)
 
 
 def test_a_real_account_reads_nothing_ahead(books: ClerkSqliteRepository) -> None:

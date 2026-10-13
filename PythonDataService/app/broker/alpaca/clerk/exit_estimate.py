@@ -33,11 +33,13 @@ The module reads no clock but ``now_ms``, no books and no broker. It takes
 what the caller read: the legs held, the newest quote held for each contract,
 and the closes the Clerk owes the position. It informs and blocks nothing.
 
-A side's age is its own receipt, as a simulated close tells the age of the
-quote it was priced from (``simulated_fill``). The simulated account holds a
-mark to the same limit from its hand-over, which a quiet contract's bid can
-outlive: such a side reads stale here while the mark beside it is fresh. That
-errs toward saying a figure is not current, never toward saying it is.
+A side's age counts from its own receipt, not from its hand-over, as a
+simulated close tells the age of the quote it was priced from
+(``simulated_fill``). The simulated account holds a mark to the same limit
+from its hand-over, which a quiet contract's bid can outlive: such a side
+reads stale here while the mark beside it is fresh. That errs toward saying a
+figure is not current, never toward saying it is. A crossed quote (a bid above
+its ask) is no price either, as ``app.options.quotes.quote_fault`` has it.
 """
 
 from __future__ import annotations
@@ -77,16 +79,18 @@ _WHY_OWED: dict[CloseKind, str] = {
 
 @dataclass(frozen=True, slots=True)
 class OwedClose:
-    """A close the Clerk owes the position: what it is for, and when it is due.
+    """A close the Clerk owes the position, or one a session ended on: what it is for, and when it was due.
 
     ``left_to_owner`` is set when the Clerk has stopped exiting this bot by
     itself, so the close is the owner's to make and nothing here says the
-    Clerk will make it.
+    Clerk will make it. ``missed`` is set for a close whose session ended with
+    the position still held.
     """
 
     kind: CloseKind
     due_ms: int
     left_to_owner: bool = False
+    missed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,8 +101,8 @@ class LegQuality:
     price, stale when that side is past its limit, known otherwise. ``age_ms``
     is that side's age, ``None`` when no side arrived. ``missing`` lists every
     side that has not arrived, used or not, and ``gap`` is the quote's ask less
-    its bid a share, ``None`` unless both sides arrived. A crossed quote shows
-    as a gap below zero, as quoted.
+    its bid a share, ``None`` unless both sides arrived. A crossed quote is
+    unknown, and shows its gap below zero as quoted.
     """
 
     symbol: str
@@ -167,7 +171,7 @@ def exit_estimate(
         gross_buy_back=(
             _figure(sold, now_ms=now_ms, quotes_from=quotes_from)
             if sold
-            else Figure(0, "known", _NO_SOLD_LEG, now_ms)
+            else Figure(0, "known", _NO_SOLD_LEG)
         ),
         quotes=tuple(leg.quality for leg in worked),
         conditions=_conditions(has_sold_leg=bool(sold), owed_closes=owed_closes, now_ms=now_ms),
@@ -216,6 +220,8 @@ def _work(
         return unknown(
             f"its quote is {quote.data_type.value.replace('_', ' ')} data, not live", age_ms=age_ms, missing=missing, gap=gap
         )
+    if gap is not None and gap < 0:
+        return unknown("its bid is above its ask, so the quote is crossed", age_ms=age_ms, missing=missing, gap=gap)
     if used is None:
         return unknown(f"no {side} has arrived", age_ms=age_ms, missing=missing, gap=gap)
     if not a_price_to_close_at(used, buys=buys):
@@ -260,10 +266,16 @@ def _conditions(*, has_sold_leg: bool, owed_closes: Sequence[OwedClose] | None, 
         lines.append(BUY_BACK_ALONE_LINE)
     if owed_closes is None:
         lines.append(CLOSE_UNREAD_LINE)
-    for close in sorted(set(owed_closes or ()), key=lambda owed: (owed.due_ms, owed.kind.value, owed.left_to_owner)):
+    closes = sorted(set(owed_closes or ()), key=lambda owed: (owed.due_ms, owed.kind.value, owed.left_to_owner, owed.missed))
+    for close in closes:
         when = et_when_words(close.due_ms, now_ms=now_ms)
         why = _WHY_OWED[close.kind]
-        if close.left_to_owner:
+        if close.missed:
+            lines.append(
+                f"This system's own close of the position was due at {when}: {why}. "
+                "That session ended with the position still held."
+            )
+        elif close.left_to_owner:
             lines.append(
                 f"A close of the position is due at {when}: {why}. This system has stopped exiting this bot by "
                 "itself, so the close is yours to make."

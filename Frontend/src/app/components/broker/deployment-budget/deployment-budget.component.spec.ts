@@ -115,7 +115,7 @@ const EXIT_ESTIMATE: ExitEstimateView = {
     terms: [{ label: 'Sell 1 SPY261016C00585000 at the bid', amount_usd: '-408.00' }],
   },
   gross_buy_back: {
-    state: 'known', amount_usd: '0.00', source: 'No sold leg is held, so nothing is bought back', as_of_ms: READ_AT, terms: [],
+    state: 'known', amount_usd: '0.00', source: 'No sold leg is held, so nothing is bought back', terms: [],
   },
   quotes: [{
     contract: {

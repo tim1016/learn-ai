@@ -19,7 +19,6 @@ invented from a mark, a fill or a share of the underlying (ADR 0076).
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Sequence
 
 from app.broker.alpaca.clerk.account_authority import simulated_account_named
@@ -28,15 +27,14 @@ from app.broker.alpaca.clerk.exit_estimate import ExitEstimate, OwedClose, exit_
 from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes, KeptOptionQuotesUnavailable
 from app.broker.alpaca.clerk.sqlite.option_entry import held_option_legs
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.scheduled_close import CloseStanding, scheduled_close_state
+from app.broker.alpaca.clerk.sqlite.scheduled_close import held_contracts
+from app.broker.alpaca.clerk.sqlite.simulated_account import read_kept_option_quotes_ahead
 from app.broker.alpaca.market_liveness import get_option_quotes
 from app.options.contract import OptionContract
 from app.options.quotes import HeldQuote
 from app.options.resolver import Chain
 from app.schemas.deployment_budget import ExitEstimateView, ExitLegQuoteView, FigureView
 from app.services.option_preview_views import contract_view
-
-logger = logging.getLogger(__name__)
 
 _LIVE_QUOTES = "Live option quotes from this Clerk's IBKR feed"
 _REAL_KEEPS_NONE = "real accounts keep no option quotes"
@@ -72,14 +70,7 @@ def read_quotes_ahead(repo: ClerkSqliteRepository) -> None:
     """
     if simulated_account_named(repo.account_id) is None:
         return
-    try:
-        KeptOptionQuotes.beside(repo.db_path).refresh()
-    except KeptOptionQuotesUnavailable:
-        logger.warning(
-            "the option quotes kept for a simulated account cannot be read; its exit estimate is unknown",
-            exc_info=True,
-            extra={"action": "exit_estimate_kept_quotes_unreadable", "account_id": repo.account_id},
-        )
+    read_kept_option_quotes_ahead(KeptOptionQuotes.beside(repo.db_path), account_id=repo.account_id)
 
 
 def read_exit_estimate(repo: ClerkSqliteRepository, strategy_instance_id: str, *, now_ms: int) -> ExitEstimate | None:
@@ -152,29 +143,26 @@ def _live_quotes(symbols: Sequence[str]) -> tuple[dict[str, HeldQuote | None], s
 
 
 def _owed_closes(repo: ClerkSqliteRepository, strategy_instance_id: str, *, now_ms: int) -> tuple[OwedClose, ...] | None:
-    """The closes the Clerk owes this bot's position: the screens' own read of them (``scheduled_close_state``).
+    """The closes the Clerk owes this bot's position, and any a session ended on: its own read of what is held.
 
-    A close already missed, and one that left the bot flat, are not owed.
-    ``None`` when the books' account of them cannot be read, which is said
-    and logged, never taken for "none owed".
+    ``held_contracts`` is the one read the Clerk's scheduled closes act on.
+    The close owed in the session now (or the next one, before it opens)
+    and the close missed in the session that ended are both carried, each
+    from its own field, so that a missed close never hides the owed one. A
+    contract whose entry could not be read makes the closes unknown:
+    ``None``, which is said and never taken for none owed (``held_contracts``
+    logs why).
     """
-    try:
-        states = scheduled_close_state(repo, strategy_instance_id, now_ms=now_ms)
-    except (LookupError, ValueError, AssertionError):
-        logger.exception(
-            "a bot's scheduled close could not be read; its exit estimate says so",
-            extra={
-                "action": "exit_estimate_scheduled_close_unreadable",
-                "account_id": repo.account_id,
-                "strategy_instance_id": strategy_instance_id,
-            },
-        )
+    read = held_contracts(repo, now_ms, strategy_instance_id=strategy_instance_id)
+    if strategy_instance_id in read.unread:
         return None
-    return tuple(
-        OwedClose(state.kind, state.due_ms, left_to_owner=state.left_to_owner)
-        for state in states
-        if state.standing not in (CloseStanding.MISSED, CloseStanding.FLAT)
-    )
+    closes: list[OwedClose] = []
+    for item in read.held:
+        if item.owed is not None:
+            closes.append(OwedClose(item.owed.kind, item.owed.due_ms, left_to_owner=item.left_to_owner))
+        if item.missed is not None:
+            closes.append(OwedClose(item.missed.kind, item.missed.due_ms, missed=True))
+    return tuple(closes)
 
 
 __all__ = ["exit_estimate_view", "read_exit_estimate", "read_quotes_ahead"]

@@ -178,5 +178,10 @@ describe('What getting out costs', () => {
       ['-$9,500.00', null, 'Quotes kept for this Dry Run.'],
       ['$0.00', null, 'No sold leg is held, so nothing is bought back.'],
     ]);
+    // The amount that rests on a quote says how old the oldest side of it is. The zero rests on none, and
+    // says nothing of a quote's age.
+    const [closed, bought] = Array.from(document.querySelectorAll('.exit-estimate__figure'));
+    expect(closed.textContent).toContain('Oldest quote side received');
+    expect(bought.textContent).not.toContain('Oldest quote side received');
   });
 });
