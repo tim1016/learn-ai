@@ -631,6 +631,61 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
     expect(screen.getByText('Set this bot’s exit allowance, band multiple and spread cap in How.')).toBeTruthy();
   });
 
+  it('names an exit term that is typed but out of range, rather than reading all three as unset', async () => {
+    const { fixture } = await renderWorkflow(mockService({ ...DEPLOY_VIEW, default_exit_terms: null }));
+    const how = stepRegion('How');
+    // Empty fields are unset, not wrong: nothing to flag until a value is typed.
+    expect(within(how).queryByRole('alert')).toBeNull();
+
+    fireEvent.input(within(how).getByRole('spinbutton', { name: 'Exit allowance (bps)' }), { target: { value: '0.2' } });
+    fireEvent.input(within(how).getByRole('spinbutton', { name: 'Band multiple' }), { target: { value: '1' } });
+    fireEvent.input(within(how).getByRole('spinbutton', { name: 'Spread cap (bps)' }), { target: { value: '0.2' } });
+    await fixture.whenStable();
+
+    // The backend's spread cap floor is 1 bps: 0.2 is filled in and still refused.
+    expect(within(how).getByRole('alert').textContent).toBe('Spread cap must be between 1 and 1,000 bps.');
+    expect(within(how).getByText('Needs valid exit terms')).toBeTruthy();
+    expect(document.getElementById('deploy-submit-guidance')?.textContent)
+      .toBe('Spread cap must be between 1 and 1,000 bps.');
+
+    fireEvent.input(within(how).getByRole('spinbutton', { name: 'Spread cap (bps)' }), { target: { value: '1' } });
+    await fixture.whenStable();
+
+    expect(within(how).queryByRole('alert')).toBeNull();
+    expect(within(how).getByText('Ready')).toBeTruthy();
+  });
+
+  it('puts the range the typed term broke in the Can’t-deploy list, in place of "enter all three"', async () => {
+    const view: DeployBotView = {
+      ...DEPLOY_VIEW,
+      default_exit_terms: null,
+      readiness_checks: [
+        ...DEPLOY_VIEW.readiness_checks,
+        {
+          ...DEPLOY_VIEW.readiness_checks[0],
+          gate_id: 'deploy.exit_terms',
+          label: 'Exit terms',
+          ready: false,
+          headline: 'Set this bot’s exit terms before deploying.',
+          recovery: 'Enter exit allowance, band multiple and spread cap.',
+        },
+      ],
+    };
+    const { fixture } = await renderWorkflow(mockService(view));
+    const blockers = screen.getByRole('region', { name: 'Can’t deploy yet · 1 thing' });
+    // Nothing typed: the backend's own words stand.
+    expect(within(blockers).getByText('Fix: Enter exit allowance, band multiple and spread cap.')).toBeTruthy();
+
+    const how = stepRegion('How');
+    fireEvent.input(within(how).getByRole('spinbutton', { name: 'Exit allowance (bps)' }), { target: { value: '0.2' } });
+    fireEvent.input(within(how).getByRole('spinbutton', { name: 'Band multiple' }), { target: { value: '1' } });
+    fireEvent.input(within(how).getByRole('spinbutton', { name: 'Spread cap (bps)' }), { target: { value: '0.2' } });
+    await fixture.whenStable();
+
+    expect(within(blockers).getByText('Fix: Spread cap must be between 1 and 1,000 bps.')).toBeTruthy();
+    expect(within(blockers).queryByText('Fix: Enter exit allowance, band multiple and spread cap.')).toBeNull();
+  });
+
   it('reviews the name the backend will author, the trade, the account, the exits, the budget and the loss limit', async () => {
     await renderWorkflow();
     // Before a preview the name is only promised, in the owner's words.
