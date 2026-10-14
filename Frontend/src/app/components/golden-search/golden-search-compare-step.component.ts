@@ -206,10 +206,8 @@ function isEvidenceTab(target: string): target is EvidenceTab {
 
 /** Each chart a summary row links to, and where it lives: this step's own grid, or an evidence tab. */
 const LINKED_CHARTS: readonly { readonly chart: GoldenSearchChartId; readonly home: 'step' | EvidenceTab }[] = [
-  { chart: 'side-by-side', home: 'step' },
   { chart: 'neighbor-tornado', home: 'step' },
   { chart: 'cost-stress', home: 'step' },
-  { chart: 'concentration-curve', home: 'months' },
   { chart: 'without-best', home: 'months' },
 ];
 

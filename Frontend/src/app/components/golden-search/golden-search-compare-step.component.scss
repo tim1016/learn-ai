@@ -4,7 +4,6 @@ p { margin: 0; }
 .pending { color: var(--text-secondary); font-size: var(--fs-sm); }
 .panel { display: grid; gap: var(--space-2); background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: var(--radius); padding: var(--space-4); min-width: 0; }
 .caption { color: var(--text-secondary); font-size: var(--fs-xs); }
-.caption strong { color: var(--text-primary); }
 .caption--end { text-align: right; }
 .side { display: grid; gap: var(--space-4); min-width: 0; }
 .muted { color: var(--text-secondary); font-size: var(--fs-xs); }

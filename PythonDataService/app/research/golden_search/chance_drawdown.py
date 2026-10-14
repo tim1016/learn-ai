@@ -36,7 +36,6 @@ it recommends no capital or position size.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -54,8 +53,6 @@ from app.research.golden_search.chance import (
 from app.research.golden_search.chance_compare import _missing, admit_run, failed_component, series_digest
 from app.research.golden_search.selection import Metrics
 from app.research.monte_carlo.stationary import CHUNK_REPLICATIONS, stationary_index_chunks
-
-logger = logging.getLogger(__name__)
 
 #: What a stored drawdown reading calls itself; a change to the reading's shape or interpretation needs a new one.
 SCHEMA_DRAWDOWN = "golden-search-chance-drawdown/v1"

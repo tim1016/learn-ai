@@ -1,4 +1,4 @@
-<fieldset class="methods" [disabled]="readonly()">
+<fieldset class="methods">
   <legend class="sr-only">Search method</legend>
   @for (option of methods; track option.id) {
     <label class="method" [class.method--chosen]="option.id === method()">

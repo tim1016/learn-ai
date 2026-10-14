@@ -465,21 +465,6 @@ async def insert_trial(
     )
 
 
-async def insert_trial_fenced(
-    conn: asyncpg.Connection,
-    study_id: str,
-    attempt: int,
-    *,
-    stage: str,
-    kind: str,
-    payload: Mapping[str, Any],
-    fold_index: int | None = None,
-) -> None:
-    async with conn.transaction():
-        await fence.lock_current_attempt(conn, table=STUDIES, record_id=study_id, attempt=attempt)
-        await insert_trial(conn, study_id, stage=stage, kind=kind, payload={**payload, "attempt": attempt}, fold_index=fold_index)
-
-
 async def insert_trials_fenced(conn: asyncpg.Connection, study_id: str, attempt: int, trials: Sequence[Mapping[str, Any]]) -> None:
     """Append a procedure's path (``{stage, fold_index, kind, payload}`` each) in one fenced transaction."""
     async with conn.transaction():
