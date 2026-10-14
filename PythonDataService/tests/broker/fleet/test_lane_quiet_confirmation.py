@@ -330,6 +330,24 @@ def test_staleness_is_the_confirmations_own_age_not_the_sessions(
         fleet_service.retire_clerk(clerk_id=lane.clerk_id)
 
 
+def test_a_clock_stepped_back_past_the_confirmation_is_not_a_fresh_one(
+    fleet_service: FleetControlService, clock: FrozenClock, control_dir: Path
+) -> None:
+    """Receipt refuses an instant from the future, so a confirmation can only
+    sit ahead of the clock after the clock stepped back. Its age is then
+    unknowable, and an unknowable age is never fresh: the gate used to read
+    the negative age as inside the window and answer quiet."""
+    lane, session, _drained = drained_lane(fleet_service, clock, control_dir, "q12b")
+    confirm_quiet(fleet_service, lane, session, observed_at_ms=clock())
+    clock.advance(fleet_service.lane_quiet_valid_for_ms + 1)
+    with pytest.raises(ClerkLaneQuietUnproven, match="past the"):
+        fleet_service.check_lane_quiet(clerk_id=lane.clerk_id)
+    clock.advance(-fleet_service.lane_quiet_valid_for_ms - 1 - 600_000)
+
+    with pytest.raises(ClerkLaneQuietUnproven, match="ahead of the coordinator's clock"):
+        fleet_service.check_lane_quiet(clerk_id=lane.clerk_id)
+
+
 def test_a_confirmation_inside_the_window_still_passes(
     fleet_service: FleetControlService, clock: FrozenClock, control_dir: Path
 ) -> None:

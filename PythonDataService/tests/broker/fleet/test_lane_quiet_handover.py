@@ -101,6 +101,40 @@ def test_a_release_covered_by_a_fresh_quiet_confirmation_records_present(
     assert released.lane_confirmation == LaneConfirmationState.PRESENT
 
 
+def test_a_confirmation_that_commits_while_the_release_waits_for_the_lock_still_records_present(
+    fleet_service: FleetControlService, clock: FrozenClock, control_dir: Path
+) -> None:
+    """The ceremony is a separate process whose ``BEGIN IMMEDIATE`` can wait
+    on the coordinator's writes; the lane's next beat can commit a fresh
+    confirmation in that gap. The gate reads the clock inside the lock, so
+    that confirmation is age 0, never a negative age that would record the
+    release ``absent`` — which re-reservation refuses for good."""
+    from contextlib import contextmanager
+
+    lane, session = _drained(fleet_service, clock, control_dir, "lockwait")
+    _confirm(fleet_service, lane, session, observed_at_ms=clock())
+    store = fleet_service._store
+    real_transaction = store.transaction
+    pending = [True]
+
+    @contextmanager
+    def transaction_after_the_lanes_next_beat():
+        if pending:
+            pending.clear()
+            clock.advance(3)
+            _confirm(fleet_service, lane, session, observed_at_ms=clock())
+        with real_transaction() as conn:
+            yield conn
+
+    store.transaction = transaction_after_the_lanes_next_beat
+    try:
+        released = _release(fleet_service)
+    finally:
+        store.transaction = real_transaction
+
+    assert released.lane_confirmation == LaneConfirmationState.PRESENT
+
+
 @pytest.mark.parametrize("evidence", ["none", "not_quiet", "stale"])
 def test_a_release_without_fresh_quiet_evidence_still_releases_but_records_absent(
     evidence: str,

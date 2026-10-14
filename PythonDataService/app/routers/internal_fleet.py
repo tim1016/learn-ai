@@ -50,7 +50,7 @@ from app.broker.fleet.errors import (
     FleetControlError,
     FleetControlPlaneNotInstalled,
 )
-from app.broker.fleet.presence import matches_service_token
+from app.broker.fleet.identity import same_secret
 from app.broker.fleet.records import AccountAssignmentRecord
 from app.broker.fleet.service import FleetControlService
 from app.config import settings
@@ -109,12 +109,19 @@ async def production_history_batch_provider(
 router = APIRouter(prefix="/internal/fleet", tags=["internal-fleet"], include_in_schema=False)
 
 
+# The agent instance id and the reported state and account id land in four
+# registry tables and in the directory observation. What this build sends is
+# under 40 chars (``agnt_`` plus 24 hex; ``binding_confirmed``; an account id),
+# so a longer value is a bad client, refused at the edge rather than stored.
+_AGENT_FIELD_MAX_CHARS = 128
+
+
 class RegistrationRequest(BaseModel):
     """One agent registration: durable identity plus this process's facts."""
 
     clerk_id: str = Field(min_length=1)
     worker_key: str = Field(min_length=1)
-    agent_instance_id: str | None = None
+    agent_instance_id: str | None = Field(default=None, max_length=_AGENT_FIELD_MAX_CHARS)
     endpoint_ref: str | None = None
     adapter_version: str | None = None
     fleet_protocol_version: int
@@ -124,10 +131,10 @@ class ObservationRequest(BaseModel):
     """One heartbeat: observations only, never a confirmation."""
 
     clerk_id: str = Field(min_length=1)
-    agent_instance_id: str = Field(min_length=1)
+    agent_instance_id: str = Field(min_length=1, max_length=_AGENT_FIELD_MAX_CHARS)
     reported_binding_generation: int | None = None
-    reported_account_id: str | None = None
-    reported_state: str | None = None
+    reported_account_id: str | None = Field(default=None, max_length=_AGENT_FIELD_MAX_CHARS)
+    reported_state: str | None = Field(default=None, max_length=_AGENT_FIELD_MAX_CHARS)
     reported_summary: dict[str, Any] | None = None
 
 
@@ -153,7 +160,7 @@ class ConfirmRequest(BaseModel):
     clerk_id: str = Field(min_length=1)
     external_account_id: str = Field(min_length=1)
     binding_generation: int = Field(ge=1)
-    agent_instance_id: str = Field(min_length=1)
+    agent_instance_id: str = Field(min_length=1, max_length=_AGENT_FIELD_MAX_CHARS)
     routing_epoch: int = Field(ge=1)
     effective_profile_id: str | None = None
     effective_revision: int | None = None
@@ -170,7 +177,7 @@ class LaneQuietRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     clerk_id: str = Field(min_length=1)
-    agent_instance_id: str = Field(min_length=1)
+    agent_instance_id: str = Field(min_length=1, max_length=_AGENT_FIELD_MAX_CHARS)
     routing_epoch: int = Field(ge=1)
     observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     runner_idle: bool
@@ -237,7 +244,7 @@ def _authorized_agent(
     if (
         not isinstance(expected, str)
         or not expected
-        or not matches_service_token(token, expected)
+        or not same_secret(token, expected)
         or header_clerk_id != clerk_id
     ):
         logger.warning(

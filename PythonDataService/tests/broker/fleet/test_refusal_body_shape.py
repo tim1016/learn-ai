@@ -354,6 +354,47 @@ async def test_internal_fleet_refuses_a_wrong_agent_token_flat_not_nested(
 
 
 @pytest.mark.asyncio
+async def test_internal_fleet_refuses_a_non_ascii_agent_token_as_a_403_not_a_500(
+    control_dir: Path,
+) -> None:
+    """Starlette decodes header bytes as Latin-1 and ``hmac.compare_digest``
+    raises ``TypeError`` for a non-ASCII ``str``: for a clerk with a token
+    mapping that answered 500 (unauthenticated, and 500-vs-403 told a caller
+    whether a clerk id held a mapping)."""
+    app, service = _build_internal_fleet_app(control_dir, {_CLERK_ID: _TOKEN})
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(
+                f"/internal/fleet/clerks/{_CLERK_ID}/volume-expectation",
+                headers={
+                    "X-Fleet-Agent-Token": "caf\xe9".encode("latin-1"),
+                    "X-Fleet-Clerk-Id": _CLERK_ID,
+                },
+            )
+        assert response.status_code == 403
+        _assert_flat_refusal(response.json(), expected_reason=FleetAgentTokenRefused.reason)
+    finally:
+        service.close()
+
+
+@pytest.mark.asyncio
+async def test_internal_fleet_refuses_an_unbounded_agent_instance_id(control_dir: Path) -> None:
+    """An agent-supplied identifier lands in four registry tables; the edge
+    bounds it instead of storing a runaway value."""
+    app, service = _build_internal_fleet_app(control_dir, {_CLERK_ID: _TOKEN})
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/internal/fleet/sessions/observe",
+                headers={"X-Fleet-Agent-Token": _TOKEN, "X-Fleet-Clerk-Id": _CLERK_ID},
+                json={"clerk_id": _CLERK_ID, "agent_instance_id": "a" * 129},
+            )
+        assert response.status_code == 422
+    finally:
+        service.close()
+
+
+@pytest.mark.asyncio
 async def test_internal_fleet_accepts_a_correctly_mapped_agent_token(
     control_dir: Path, tmp_path: Path
 ) -> None:

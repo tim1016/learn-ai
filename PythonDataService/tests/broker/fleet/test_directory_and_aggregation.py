@@ -97,6 +97,56 @@ def test_every_entry_carries_only_the_allowed_fields_and_never_the_worker_key(
     )
 
 
+@pytest.mark.parametrize(
+    "stored",
+    [
+        '{"authority_state":"real_paper","endpoint_mode":"sandbox"}',
+        "null",
+        "[]",
+        '"text"',
+        "not json",
+    ],
+)
+def test_one_unreadable_stored_summary_withholds_that_lanes_summary_not_the_roster(
+    control_dir: Path,
+    clock: FrozenClock,
+    fleet_service,
+    caplog: pytest.LogCaptureFixture,
+    stored: str,
+) -> None:
+    """A build that rejects what an earlier build stored (a vocabulary that
+    grew and rolled back, a lowered length cap) must not 500 every lane's
+    directory read: ingest refuses at the door, the read never did."""
+    good = _live(fleet_service, control_dir.parent, "fake_alpha", "good")
+    bad = _live(fleet_service, control_dir.parent, "fake_alpha", "bad")
+    store = fleet_service._store
+    bad_session = store.read_session(bad.clerk_id)
+    with store.transaction() as conn:
+        store.touch_session(
+            conn,
+            clerk_id=bad.clerk_id,
+            agent_instance_id=bad_session.agent_instance_id,
+            last_seen_at_ms=clock(),
+            reported_binding_generation=3,
+            reported_account_id=None,
+            reported_state=None,
+            reported_summary_json=stored,
+        )
+
+    with caplog.at_level("WARNING", logger="app.broker.fleet.records"):
+        entries = {entry["clerk_id"]: entry for entry in fleet_service.directory()["clerks"]}
+
+    assert set(entries) == {good.clerk_id, bad.clerk_id}
+    assert entries[bad.clerk_id]["lifecycle_state"] == "ready"
+    assert "endpoint_mode" not in entries[bad.clerk_id]["provider_summary"]
+    assert fleet_service.describe_clerk(bad.clerk_id).clerk_id == bad.clerk_id
+    assert any(
+        getattr(record, "action", None) == "lane_summary_unreadable"
+        and getattr(record, "clerk_id", None) == bad.clerk_id
+        for record in caplog.records
+    )
+
+
 def test_capability_evidence_differs_by_provider_and_undeclared_actions_refuse(
     fleet_service,
 ) -> None:
