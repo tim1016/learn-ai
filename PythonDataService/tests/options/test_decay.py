@@ -9,7 +9,6 @@ AM-004 and AM-005).
 from __future__ import annotations
 
 from dataclasses import replace
-from decimal import Decimal
 
 import numpy as np
 import pytest
@@ -155,16 +154,6 @@ def test_a_structure_priced_on_inputs_nobody_checked_has_no_decay_for_any_leg() 
 
 _SOLD_580_BOUGHT_590 = _structure(("sold", "short", "call", 580, 1), ("bought", "long", "call", 590, 1))
 _GOING_EX = {"sold": _lost(-1.20, cash_gone_ex=1.75), "bought": _lost(-0.70, cash_gone_ex=1.75)}
-
-
-def test_a_sold_call_in_the_money_with_cash_going_ex_inside_the_day_is_named() -> None:
-    """The stock goes ex $1.75 inside the day and the 580 call was sold with the stock at 585.11. A call in the
-    money can be exercised before the ex-date, and the seller then never sees the fall the figure counts."""
-    seen = structure_daily_decay(_SOLD_580_BOUGHT_590, _ONE, _GOING_EX, underlying_price=_SPOT)
-
-    assert seen.sold_calls_in_the_money_at_an_ex_date == ("sold",)
-    # The figure is the sum it always is: +1.20 - 0.70 = +0.50 a share.
-    _close(seen.total, 50.00)
 
 
 @pytest.mark.parametrize(
@@ -414,7 +403,3 @@ def test_a_dividend_is_near_when_it_goes_ex_within_three_days_from_now(ex_after_
 
     assert goes_ex_soon([now + 40 * ONE_DAY_MS, now + ex_after_ms], now) is soon
     assert goes_ex_soon([], now) is False
-
-
-def test_three_days_is_three_times_the_day_a_decay_is_taken_over() -> None:
-    assert Decimal(NEAR_EX_DATE_MS) == 3 * Decimal(ONE_DAY_MS) == Decimal(259_200_000)

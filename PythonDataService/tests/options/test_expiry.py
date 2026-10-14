@@ -29,6 +29,22 @@ def test_option_expiry_anchor_stays_at_16_00_on_a_half_day() -> None:
     assert option_expiry_anchor_ms(half_day) - session_close_ms_utc(half_day) == 3 * _HOUR_MS
 
 
+@pytest.mark.parametrize(
+    ("expiry_date", "anchor_ms"),
+    [
+        pytest.param(date(2026, 3, 8), _utc(2026, 3, 8, 20), id="the day the clocks go forward"),
+        pytest.param(date(2026, 11, 1), _utc(2026, 11, 1, 21), id="the day the clocks go back"),
+    ],
+)
+def test_option_expiry_anchor_is_16_00_on_the_two_days_new_york_changes_its_clocks(
+    expiry_date: date, anchor_ms: int
+) -> None:
+    # Midnight to 16:00 is 15 or 17 hours on these days, not 16. The same instants are pinned in
+    # Frontend/src/app/shared/option-contract/option-expiry-date.spec.ts, which names this file as its parity.
+    assert option_expiry_anchor_ms(expiry_date) == anchor_ms
+    assert option_expiry_date(anchor_ms) == expiry_date
+
+
 @pytest.mark.parametrize("expiry_date", [date(2025, 1, 17), date(2025, 7, 18), date(2026, 3, 9), date(2026, 11, 2)])
 def test_option_expiry_date_reads_back_the_date_an_anchor_names(expiry_date: date) -> None:
     assert option_expiry_date(option_expiry_anchor_ms(expiry_date)) == expiry_date
