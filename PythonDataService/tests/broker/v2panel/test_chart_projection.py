@@ -645,6 +645,32 @@ async def test_fetch_complete_history_batch_polygon_auth_error_returns_notice_wi
     assert batch.overlay_notices[0].message == "Polygon 401 for SPY: bad key"
 
 
+async def test_the_widening_walk_ends_at_its_deadline_with_a_notice_and_no_bars() -> None:
+    """A walk that outlasts its deadline stops and says so, rather than running on after the Clerk gave up."""
+    stopped = asyncio.Event()
+
+    async def _source(symbol, start, end, multiplier, timespan):
+        try:
+            await asyncio.sleep(3600)
+        finally:
+            stopped.set()
+        return []
+
+    batch = await history_batch_walk.fetch_complete_history_batch(
+        symbol="SPY",
+        timeframe="1m",
+        required_bar_count=300,
+        as_of_ms=_NOW,
+        bar_source=_source,
+        today=et_date_at_ms(_NOW),
+        deadline_s=0.05,
+    )
+
+    assert batch.bars == []
+    assert [notice.code for notice in batch.overlay_notices] == ["polygon_fetch_error"]
+    assert stopped.is_set()
+
+
 async def test_build_history_chart_forwards_batch_notices_with_no_bars_fabricated() -> None:
     """``build_history_chart`` no longer classifies anything itself (#2204):
     whatever ``batch_provider`` returns -- healthy or notice-only -- passes
@@ -771,12 +797,29 @@ def test_live_chart_markers_match_googl_fixture_fills_today() -> None:
     ]
 
 
-def test_live_window_falls_back_when_market_closed() -> None:
-    # 2023-11-18 15:00 UTC is a Saturday → not a session → the day fallback.
-    saturday_ms = 1_700_319_600_000
-    open_ms, close_ms = live_window(saturday_ms)
-    assert open_ms <= saturday_ms < close_ms
-    assert close_ms - open_ms == 86_400_000
+@pytest.mark.parametrize(
+    ("now_ms", "open_ms", "close_ms"),
+    [
+        # Saturday 10:00 EST, where the UTC day and the New York day coincide.
+        (1_700_319_600_000, 1_700_283_600_000, 1_700_370_000_000),
+        # Saturday 21:00 EST is already Sunday in UTC.
+        (1_700_359_200_000, 1_700_283_600_000, 1_700_370_000_000),
+        # Saturday 21:00 EDT is already Sunday in UTC.
+        (1_718_499_600_000, 1_718_424_000_000, 1_718_510_400_000),
+        # Christmas Monday 21:00 EST: a weekday holiday is no session either.
+        (1_703_556_000_000, 1_703_480_400_000, 1_703_566_800_000),
+        # Sunday 2023-11-05, the day the clocks go back: a 25-hour day.
+        (1_699_236_000_000, 1_699_156_800_000, 1_699_246_800_000),
+        # Sunday 2024-03-10, the day the clocks go forward: a 23-hour day.
+        (1_710_118_800_000, 1_710_046_800_000, 1_710_129_600_000),
+    ],
+    ids=["sat-10-est", "sat-21-est", "sat-21-edt", "holiday-21-est", "dst-ends", "dst-begins"],
+)
+def test_live_window_falls_back_to_the_new_york_day_when_market_closed(
+    now_ms: int, open_ms: int, close_ms: int
+) -> None:
+    """A closed day's window is the New York calendar day, midnight to midnight, not the UTC day."""
+    assert live_window(now_ms) == (open_ms, close_ms)
 
 
 async def test_live_snapshot_uses_its_captured_sqlite_fills(
@@ -881,6 +924,73 @@ async def test_active_history_uses_sqlite_chart_evidence_not_legacy_journal(
 
     assert calls == [("alpaca", "paper-account", SID, _NOW - 86_400_000, _NOW)]
     assert [marker.order_ref for marker in result.fill_markers] == [expected_fills[0].order_ref]
+
+
+async def test_a_sparse_symbols_candles_keep_the_fills_they_reach_back_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Candles that start before the planned fill window still draw the fills under them.
+
+    A symbol that prints in few minutes needs more sessions to fill 300 bars
+    than the plan counted, so its first candle starts before the window the
+    fills were first read for.
+    """
+    monkeypatch.setattr(chart_projection_service, "_INDICATOR_WARMUP_BARS", 0)
+    planned_from_ms, _ = history_fill_window("1m", _NOW)
+    first_candle_ms = planned_from_ms - 20 * 3_600_000
+    bars = [
+        PolygonBar(t_ms=start_ms, open=1.0, high=2.0, low=0.5, close=1.5, volume=10, vwap=1.2, n=3)
+        for start_ms in (
+            *(first_candle_ms + i * 60_000 for i in range(30)),
+            *(planned_from_ms + 3_600_000 + i * 60_000 for i in range(270)),
+        )
+    ]
+    fills = (
+        _sqlite_fill(event_key="before-the-first-candle", filled_at_ms=first_candle_ms - 60_000),
+        _sqlite_fill(event_key="under-the-early-candles", filled_at_ms=first_candle_ms + 5 * 60_000),
+        _sqlite_fill(event_key="inside-the-plan", filled_at_ms=planned_from_ms + 2 * 3_600_000),
+    )
+    status = BotStatusView(
+        strategy_instance_id=SID,
+        broker="alpaca",
+        symbol="SPY",
+        mode="trade",
+        quantity=1,
+        running=True,
+        phase="ON_DUTY",
+        desired_state="RUNNING",
+        active_run_id="run-1",
+        duty_outcome=None,
+        binding_created_at_ms=_NOW - 60_000,
+        last_transition_at_ms=_NOW - 60_000,
+    )
+
+    async def validate_account(_broker: str, account_id: str) -> str:
+        return account_id
+
+    async def chart_evidence(
+        _broker: str, _account_id: str, _sid: str, *, from_ms: int, to_ms: int
+    ) -> SimpleNamespace:
+        window = tuple(fill for fill in fills if from_ms <= fill.filled_at_ms < to_ms)
+        return SimpleNamespace(status=status, fills=SimpleNamespace(fills=window))
+
+    async def _source(symbol, start, end, multiplier, timespan):
+        return bars
+
+    monkeypatch.setattr(panel_chart_data_source, "validate_account", validate_account)
+    monkeypatch.setattr(panel_chart_data_source, "now_ms_utc", lambda: _NOW)
+    monkeypatch.setattr(panel_chart_data_source, "read_sqlite_chart_evidence", chart_evidence)
+    monkeypatch.setattr(
+        panel_chart_data_source,
+        "build_history_batch_provider",
+        lambda: _batch_provider_from_source(_source),
+    )
+
+    result = await panel_chart_data_source.get_history_chart("alpaca", "paper-account", SID, "1m")
+
+    assert result.from_ms == first_candle_ms
+    assert len(result.bars) == 300
+    assert [marker.event_key for marker in result.fill_markers] == ["under-the-early-candles", "inside-the-plan"]
 
 
 @pytest.mark.parametrize(
@@ -1280,25 +1390,27 @@ async def test_a_run_window_tape_shows_that_runs_minutes_and_fills_only() -> Non
 def test_a_run_window_is_held_to_the_run_give_or_take_half_an_hour() -> None:
     later = _RUN_END + 3_600_000
     assert run_chart_window(
-        _RUN_START - 30 * 60_000, _RUN_END + 30 * 60_000,
+        _RUN_START - 30 * 60_000, _RUN_END + 30 * 60_000, timeframe="1m",
         run_started_at_ms=_RUN_START, run_ended_at_ms=_RUN_END, now_ms=later,
     ) == (_RUN_START - 30 * 60_000, _RUN_END + 30 * 60_000)
     # A running bot's run ends now; the window ends no later than now.
     assert run_chart_window(
-        _RUN_START, _RUN_START + 20 * 60_000,
+        _RUN_START, _RUN_START + 20 * 60_000, timeframe="1m",
         run_started_at_ms=_RUN_START, run_ended_at_ms=None, now_ms=_RUN_START + 60_000,
     ) == (_RUN_START, _RUN_START + 60_000)
     with pytest.raises(ChartWindowError, match="within this bot's latest run"):
         run_chart_window(
-            _RUN_START - 31 * 60_000, _RUN_END,
+            _RUN_START - 31 * 60_000, _RUN_END, timeframe="1m",
             run_started_at_ms=_RUN_START, run_ended_at_ms=_RUN_END, now_ms=later,
         )
     with pytest.raises(ChartWindowError, match="has not started a run"):
-        run_chart_window(_RUN_START, _RUN_END, run_started_at_ms=None, run_ended_at_ms=None, now_ms=later)
+        run_chart_window(
+            _RUN_START, _RUN_END, timeframe="1m", run_started_at_ms=None, run_ended_at_ms=None, now_ms=later
+        )
     # A running bot's window wholly in its next half hour would end before it starts.
     with pytest.raises(ChartWindowError, match="must start before now"):
         run_chart_window(
-            _RUN_START + 10 * 60_000, _RUN_START + 20 * 60_000,
+            _RUN_START + 10 * 60_000, _RUN_START + 20 * 60_000, timeframe="1m",
             run_started_at_ms=_RUN_START, run_ended_at_ms=None, now_ms=_RUN_START,
         )
 

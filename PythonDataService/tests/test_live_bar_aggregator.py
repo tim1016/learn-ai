@@ -337,6 +337,38 @@ async def test_ensure_subscribed_replays_todays_persisted_bars(
     await aggregator.shutdown()
 
 
+async def test_an_evening_restart_replays_the_new_york_days_bars_across_the_utc_boundary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A restart between 20:00 and 24:00 ET reads the session's files, not the next UTC date's.
+
+    Tuesday 2026-10-13 21:00 ET is already Wednesday 01:00 UTC. The session's
+    bars sit in Tuesday's UTC file, and a bar after 20:00 ET sits in
+    Wednesday's: both belong to the New York day the wall is showing.
+    """
+    monkeypatch.setattr(agg_mod, "get_client", lambda: _FakeClient())
+    monkeypatch.setattr(agg_mod, "now_ms_utc", lambda: 1_791_939_600_000)  # 2026-10-13 21:00 ET
+    persistence = BarPersistence(root=tmp_path)
+    in_session = [1_791_900_000_000, 1_791_900_060_000]  # 10:00 and 10:01 ET, Tuesday's UTC file
+    after_eight = 1_791_937_800_000  # 20:30 ET, Wednesday's UTC file
+    for start_ms in (*in_session, after_eight):
+        persistence.append("SPY", "1m", _bar("SPY", start_ms, 100.0))
+
+    aggregator = LiveBarAggregator(persistence=persistence)
+
+    async def fake_stream(_client, _symbol, **_kw) -> AsyncIterator[IbkrMinuteBar]:
+        await asyncio.sleep(3600)
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(agg_mod, "stream_minute_bars", fake_stream)
+
+    state = await aggregator.ensure_subscribed("SPY")
+
+    assert [b.start_ms for b in state.bars] == [*in_session, after_eight]
+
+    await aggregator.shutdown()
+
+
 async def test_pump_drops_partial_first_bar_at_stream_boundary(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -386,7 +418,7 @@ async def test_pump_drops_partial_first_bar_at_stream_boundary(
 
 
 def _bar_date():
-    """UTC date of the anchor timestamp used in Slice 4 tests."""
+    """UTC date of the anchor timestamp used in Slice 4 tests; its New York day spans that UTC date."""
     from datetime import date
 
     # 2026-04-01 00:00:00 UTC anchor matches the ms values above.

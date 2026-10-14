@@ -11,7 +11,9 @@ every served panel passes through (#2635).
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from datetime import timedelta
 from decimal import Decimal
+from fractions import Fraction
 from typing import Final, Literal
 
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
@@ -24,6 +26,7 @@ from app.broker.v2panel.vocabulary import (
     hold_reason_for,
 )
 from app.engine.strategy.registry import strategy_experimental_notice
+from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.schemas.account_authority import SIMULATED_AUTHORITY_KINDS, AuthorityKind
 from app.schemas.action_plan import TradedInstrumentView
 from app.schemas.bot_end import BotEndView
@@ -80,11 +83,43 @@ from app.services.source_bar_ledger import (
     RetainedStartupJoin,
     RetainedWarmupJoin,
 )
+from app.utils.session_anchors import et_date_at_ms
 
-# A decision older than this is rendered ``decision_stale``. One trading day
-# in ms — a decision older than the current session cannot be trusted to
-# describe the live pipeline.
-STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000
+
+def decision_is_stale(last_decision_at_ms: int, now_ms: int) -> bool:
+    """True when more than one whole regular session has passed since the last decision.
+
+    The silence is counted in market time, from the canonical NYSE calendar.
+    Each session the interval ``(last_decision_at_ms, now_ms]`` overlaps adds
+    the share of its own open-to-close span that the interval covers, so an
+    early close is one whole session at its real length, and a night, a
+    weekend or a holiday adds nothing. A decision is stale once those shares
+    total more than 1.
+
+    One session is the "one trading day" this flag has always meant. On
+    ordinary weekdays 24 wall-clock hours hold exactly one session of market
+    time, so the rule agrees with the flat 24 hours it replaces there; it
+    differs where that was wrong: a bot whose last decision was Friday's
+    close is not late at Monday 08:00, nor across a holiday. The bound is not
+    tighter because the health card is not given a bot's bar length: a
+    shorter one would call every hourly bot late each morning until its first
+    bar closed.
+
+    A decision stamped after ``now_ms`` is not stale.
+    """
+    first_day = et_date_at_ms(last_decision_at_ms)
+    silence = Fraction(0)
+    for offset in range((et_date_at_ms(now_ms) - first_day).days + 1):
+        try:
+            session = session_window_for_date(first_day + timedelta(days=offset))
+        except LookupError:  # a weekend or a holiday: no market time passes
+            continue
+        covered = min(now_ms, session.close_ms_utc) - max(last_decision_at_ms, session.open_ms_utc)
+        if covered > 0:
+            silence += Fraction(covered, session.close_ms_utc - session.open_ms_utc)
+            if silence > 1:
+                return True
+    return False
 
 
 def _duty_outcome_view(status: BotStatusView) -> DutyOutcomeView | None:
@@ -110,7 +145,7 @@ def _build_health_card(
     now_ms: int,
 ) -> BotHealthCard:
     desired_state = status.desired_state
-    decision_stale = last_decision_at_ms is not None and now_ms - last_decision_at_ms > STALE_THRESHOLD_MS
+    decision_stale = last_decision_at_ms is not None and decision_is_stale(last_decision_at_ms, now_ms)
     return BotHealthCard(
         strategy_instance_id=status.strategy_instance_id,
         phase=status.phase,

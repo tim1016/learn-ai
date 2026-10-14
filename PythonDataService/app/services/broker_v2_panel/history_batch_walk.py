@@ -24,11 +24,14 @@ is the exact widen-backward-until-satisfied loop, unchanged in behavior.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from app.broker.fleet.history_batch import HISTORY_BATCH_INNER_TIMEOUT_S
 from app.data_lake.polygon_fetcher import (
     PolygonBar,
     PolygonFetchError,
@@ -49,6 +52,8 @@ from app.services.polygon_notice_classifier import (
 )
 from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import now_ms_utc
+
+logger = logging.getLogger(__name__)
 
 _ET = ZoneInfo("America/New_York")
 
@@ -192,6 +197,7 @@ async def fetch_complete_history_batch(
     as_of_ms: int,
     bar_source: HistoryBarSource,
     today: date,
+    deadline_s: float = HISTORY_BATCH_INNER_TIMEOUT_S,
 ) -> HistoryBatchResponse:
     """Run the full backward Polygon widening walk to completion (issue #2204).
 
@@ -214,19 +220,46 @@ async def fetch_complete_history_batch(
     complete, well-formed batch back. Notice codes come from the shared
     ``polygon_notice_classifier`` vocabulary, the same one the LIVE overlay
     uses, so the two panes cannot drift onto different codes.
+
+    The whole walk is bounded by ``deadline_s``, the same bound the Clerk
+    waits for this answer (``HISTORY_BATCH_INNER_TIMEOUT_S``): each vendor
+    call has its own 30 s timeout, but a widening walk makes up to a dozen of
+    them, and one that outlasted the Clerk's wait would run on with nobody to
+    hand its bars to. A walk that reaches the deadline is cancelled and
+    degrades like any other vendor failure: a ``polygon_fetch_error`` notice
+    with no bars.
     """
     plan = _plan_history_walk(timeframe, as_of_ms, required_bar_count)
     notices = []
     try:
-        polygon_bars = await _fetch_history_bars(
-            symbol=symbol,
-            plan=plan,
-            bar_source=bar_source,
-            floor=polygon_history_floor(today),
+        polygon_bars = await asyncio.wait_for(
+            _fetch_history_bars(
+                symbol=symbol,
+                plan=plan,
+                bar_source=bar_source,
+                floor=polygon_history_floor(today),
+            ),
+            timeout=deadline_s,
         )
     except PolygonFetchError as exc:
         polygon_bars = []
         notices.append(notice_view(classify_polygon_exception(exc)))
+    except TimeoutError:
+        polygon_bars = []
+        logger.warning(
+            "History walk reached its deadline before the bar budget was met",
+            extra={"action": "history_walk_deadline_exceeded", "symbol": symbol, "deadline_s": deadline_s},
+        )
+        notices.append(
+            notice_view(
+                classify_polygon_exception(
+                    PolygonFetchError(
+                        f"Polygon history for {symbol} did not finish within {deadline_s:g} seconds.",
+                        status_code=None,
+                    )
+                )
+            )
+        )
     bars = [
         _polygon_bar_to_chart_bar(bar, end_ms=_history_bar_end_ms(bar, plan))
         for bar in polygon_bars

@@ -379,6 +379,7 @@ def _panel(
     authority_account_id: str | None = None,
     account_mode: Literal["paper", "live"] = "paper",
     feed_continuity_events: tuple[RetainedContinuityEvent, ...] | None = (),
+    now_ms: int = _NOW,
 ):
     resolved_exposure = {"SPY": 100.0} if exposure is None else exposure
     return build_panel(
@@ -396,7 +397,7 @@ def _panel(
         last_bar_at_ms=last_bar_at_ms,
         journal_tail_ref=f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/decisions",
         journal_tail_seq=(decision.seq if decision is not None else None),
-        now_ms=_NOW,
+        now_ms=now_ms,
 
         sealed_program=sealed_program,
         program_build=program_build or _default_program_build(status.strategy_key),
@@ -1416,6 +1417,27 @@ def test_trade_health_does_not_relabel_a_later_fill_as_a_evaluated_bar() -> None
     )
 
     assert panel.health.last_bar_at_ms == _NOW - 60_000
+
+
+@pytest.mark.parametrize(
+    ("decided_at_ms", "now_ms", "stale"),
+    [
+        # Friday 2025-11-21 15:59 ET, read Monday 08:00 ET: a weekend is not silence.
+        (1_763_758_740_000, 1_763_989_200_000, False),
+        # Monday 09:35 ET, read Tuesday 09:40 ET: more than a whole session with no decision.
+        (1_763_994_900_000, 1_764_081_600_000, True),
+    ],
+    ids=["weekend-before-the-open", "a-session-and-more"],
+)
+def test_a_decision_is_late_by_session_time_not_wall_clock_hours(
+    decided_at_ms: int, now_ms: int, stale: bool
+) -> None:
+    decision = decision_receipt(seq=1, ts_ms=decided_at_ms, outcome="no_action", reason_code="NO_ACTION")
+
+    panel = _panel(_status(mode="trade"), _clerk_status(), decision, now_ms=now_ms)
+
+    assert panel.health.last_decision_at_ms == decided_at_ms
+    assert panel.health.decision_stale is stale
 
 
 def _station_states(adapted: BotPanelView) -> dict[str, str]:
