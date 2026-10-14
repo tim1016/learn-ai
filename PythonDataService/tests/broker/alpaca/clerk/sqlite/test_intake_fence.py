@@ -491,3 +491,32 @@ async def test_off_loop_abandoned_fold_error_is_logged_not_dropped(
         record for record in caplog.records if record.name.endswith("intake_fence")
     )
     assert record.intake_fence_event == "abandoned_hop_error"
+
+
+async def test_off_loop_abandoned_fold_that_raised_timeout_error_does_not_poison_the_fence(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A finished worker's own ``TimeoutError`` is its outcome, not the bound elapsing."""
+    fence = ReentrantAsyncLock()
+    fold_started = threading.Event()
+    fold_release = threading.Event()
+
+    def timing_out_fold() -> None:
+        fold_started.set()
+        fold_release.wait(timeout=10)
+        raise TimeoutError("the fold's own deadline")
+
+    task = asyncio.create_task(fence.off_loop(timing_out_fold))
+    await asyncio.get_running_loop().run_in_executor(None, fold_started.wait, 10)
+    with caplog.at_level(logging.ERROR):
+        task.cancel()
+        fold_release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    async with fence:
+        assert fence.held_by_current_task()
+    record = next(
+        record for record in caplog.records if record.name.endswith("intake_fence")
+    )
+    assert record.intake_fence_event == "abandoned_hop_error"

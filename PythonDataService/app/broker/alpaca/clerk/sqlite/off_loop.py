@@ -118,6 +118,10 @@ async def finish_abandoned_hop(
         hop.add_done_callback(_outcome_retriever(log_outcome))
         return "recancelled"
     except TimeoutError:
+        if hop.done():
+            # The worker finished: this is its own ``TimeoutError``, not the bound elapsing.
+            log_outcome(None if hop.cancelled() else hop.exception())
+            return "completed"
         hop.add_done_callback(_outcome_retriever(log_outcome))
         return "timeout"
     except Exception as error:
