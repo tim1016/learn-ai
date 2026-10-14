@@ -1972,7 +1972,7 @@ async def test_reconcile_account_skips_a_claim_contended_order_but_still_resolve
 
 
 async def test_reconcile_account_defers_an_effect_whose_claim_was_lost_after_its_cancel(
-    repo: ClerkSqliteRepository,
+    repo: ClerkSqliteRepository, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A cancel that reached the broker but lost its claim before the answer could be
     folded leaves its effect non-terminal. The pass defers that one effect, as it does a
@@ -2015,11 +2015,18 @@ async def test_reconcile_account_defers_an_effect_whose_claim_was_lost_after_its
                 repo._conn.commit()
 
     trade = _ClaimGoneAfterTheCancel()
-    result = await reconcile_account(
-        repo, read=_FakeRead(orders=[], positions=[]), trade=trade, pricing=UNPRICEABLE_RECOVERY
-    )
+    with caplog.at_level(logging.WARNING):
+        result = await reconcile_account(
+            repo, read=_FakeRead(orders=[], positions=[]), trade=trade, pricing=UNPRICEABLE_RECOVERY
+        )
 
     assert trade.cancel_calls, "the cancel must have reached the broker for its claim to be lost after it"
+    # The deferral is greppable by its class name and names the effect it deferred.
+    assert [
+        record.effect_operation_id
+        for record in caplog.records
+        if "ClaimLostAfterBrokerIO" in record.getMessage()
+    ] == [exit_accepted.effect_operation_id]
     exit_after = repo.effect_operation(exit_accepted.effect_operation_id)
     assert exit_after is not None and exit_after.state not in ("succeeded", "failed", "rejected")
     assert repo.order(later_ref).broker_order_id is not None  # type: ignore[union-attr]

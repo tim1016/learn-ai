@@ -43,7 +43,6 @@ from app.broker.alpaca.clerk.sqlite.repository import DB_FILENAME, MIRROR_FILENA
 from app.broker.alpaca.clerk.sqlite.repository_lifecycle import (
     assert_wal_filesystem_supported,
     exclusive_recovery_fence,
-    remove_database_file_created_here,
     startup_recovery_fence,
 )
 from app.broker.alpaca.paths import fsync_directory, fsync_directory_chain
@@ -816,8 +815,8 @@ def _reset_authority_fenced(
             # aside. Everything in the account directory now was made by this call, so it
             # goes, and the old files go back rather than stay beside an empty clerk.db that
             # ``open`` would read as corrupt.
-            remove_database_file_created_here(account_dir / DB_FILENAME)
-            (account_dir / MIRROR_FILENAME).unlink(missing_ok=True)
+            for name in (*_sqlite_family(DB_FILENAME), MIRROR_FILENAME):
+                (account_dir / name).unlink(missing_ok=True)
             _restore_preserved_database(account_dir=account_dir, preserved=preserved)
             raise
         EstablishedAccountsRegistry(accounts_root).record(

@@ -99,7 +99,17 @@ class ClaimedBrokerIO:
         try:
             self._renew()
         except (ExecutionLeaseLost, OperationClaimError) as lost:
-            raise _lost_after_broker_io(lost, str(lost)) from lost
+            failure = _lost_after_broker_io(lost, str(lost))
+            if isinstance(failure, ClaimLostAfterBrokerIO):
+                logger.warning(
+                    "ClaimLostAfterBrokerIO: the operation claim was lost after a broker call; "
+                    "the effect stays open for the sweep's lookup",
+                    extra={
+                        "action": "claim_lost_after_broker_io",
+                        "effect_operation_id": self.effect_operation_id,
+                    },
+                )
+            raise failure from lost
 
     def _fold_unknown_of_cancelled_call(
         self, *, order_ref: str, why: str, transition_kind: str = "ORDER_SUBMIT_UNCERTAIN"

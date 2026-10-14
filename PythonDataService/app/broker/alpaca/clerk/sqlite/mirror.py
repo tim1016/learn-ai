@@ -130,6 +130,12 @@ class MirrorFile:
         try:
             with self._path.open("rb") as handle:
                 end = handle.seek(0, os.SEEK_END)
+                if end == 0:
+                    return b""
+                # Every append but a torn one finds its newline here: one byte, not a block.
+                handle.seek(end - 1)
+                if handle.read(1) == b"\n":
+                    return b""
                 tail = b""
                 while end > 0:
                     start = max(0, end - _TAIL_BLOCK_BYTES)
