@@ -489,7 +489,7 @@ describe('CohortFlattenDrawerComponent', () => {
     const answer = deferred<CohortActionResult>();
     const service = fakeService([QQQ_COHORT]);
     service.runCohortFlatten = vi.fn(() => answer.promise);
-    await open(service);
+    const { fixture } = await open(service);
     const user = userEvent.setup();
     await screen.findAllByRole('checkbox');
 
@@ -497,7 +497,9 @@ describe('CohortFlattenDrawerComponent', () => {
     await vi.waitFor(() => expect(service.runCohortFlatten).toHaveBeenCalledOnce());
     await user.click(screen.getByRole('button', { name: 'Close flatten a cohort' }));
     answer.reject(new Error('network down'));
-    await vi.waitFor(() => expect(screen.queryByRole('status', { name: /sent/ })).toBeNull());
+    // The wave has ended once its progress line is gone: only then can its failure have been drawn.
+    await vi.waitFor(() => expect(document.querySelector('.cohort-flatten__progress')).toBeNull());
+    await fixture.whenStable();
 
     expect(screen.queryByText(/did not reach a result/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Retry this batch' })).toBeNull();

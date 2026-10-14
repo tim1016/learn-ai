@@ -95,9 +95,11 @@ export class ExtendedFlattenTicketComponent {
   /** When this browser received ``pricing`` (its own clock). */
   readonly quoteReceivedAtMs = input.required<number>();
   readonly pending = input(false);
-  /** The host is asking the Clerk to price a limit right now. When this ends with no matching answer the
-   * price check failed (the host names why), and the ticket stops saying "Pricing…". */
+  /** The host is asking the Clerk to price a limit right now: no second Review is made beside it. */
   readonly checkInFlight = input(false);
+  /** How many of the host's price checks have ended. A count survives an end the browser never saw as a state:
+   * when it moves past where Review left it with no matching answer, that check failed (the host names why). */
+  readonly checksEnded = input(0);
   /** The reviewed price and the quote it was reviewed against. */
   readonly send = output<SqliteExtendedLimitConfirmation>();
   readonly refresh = output();
@@ -112,7 +114,7 @@ export class ExtendedFlattenTicketComponent {
   /** The price the Clerk was asked to evaluate, until its answer arrives. */
   private readonly awaitingPrice = signal<number | null>(null);
   private requestedFrom: SqliteExtendedLimitPricing | null = null;
-  private checkWasInFlight = false;
+  private checksEndedAtReview = 0;
   protected readonly reviewed = signal<ReviewedLimit | null>(null);
   private readonly displayClock = toSignal(timer(0, 1_000), { initialValue: 0 });
 
@@ -124,20 +126,15 @@ export class ExtendedFlattenTicketComponent {
     effect(() => {
       const evaluation = this.pricing().proposal;
       const wanted = this.awaitingPrice();
-      const inFlight = this.checkInFlight();
+      const ended = this.checksEnded();
       if (wanted === null || this.pricing() === this.requestedFrom || !evaluation || evaluation.limit_price !== wanted) {
         // No answer to the price asked for. A check that has ended with none failed: stop waiting for it.
         untracked(() => {
-          if (inFlight) this.checkWasInFlight = true;
-          else if (this.checkWasInFlight) {
-            this.checkWasInFlight = false;
-            if (wanted !== null) this.awaitingPrice.set(null);
-          }
+          if (wanted !== null && ended > this.checksEndedAtReview) this.awaitingPrice.set(null);
         });
         return;
       }
       untracked(() => {
-        this.checkWasInFlight = false;
         this.awaitingPrice.set(null);
         if (evaluation.outside_band && !evaluation.override_acknowledged) return;
         const pricing = this.pricing();
@@ -195,7 +192,7 @@ export class ExtendedFlattenTicketComponent {
   });
   protected readonly canReview = computed(
     () =>
-      this.limitPrice() !== null && !this.quoteStale() && !this.pending() && !this.checking(),
+      this.limitPrice() !== null && !this.quoteStale() && !this.pending() && !this.checking() && !this.checkInFlight(),
   );
   /** Why the reviewed order can no longer be sent as reviewed, or ``null``. */
   protected readonly reviewInvalid = computed<string | null>(() => {
@@ -228,6 +225,7 @@ export class ExtendedFlattenTicketComponent {
     const limitPrice = this.limitPrice();
     if (limitPrice === null || !this.canReview()) return;
     this.requestedFrom = this.pricing();
+    this.checksEndedAtReview = this.checksEnded();
     this.awaitingPrice.set(limitPrice);
     this.priceCheck.emit(limitPrice);
   }
@@ -236,6 +234,7 @@ export class ExtendedFlattenTicketComponent {
     const price = this.limitPrice();
     if (price === null || !this.canReview()) return;
     this.requestedFrom = this.pricing();
+    this.checksEndedAtReview = this.checksEnded();
     this.awaitingPrice.set(price);
     this.overridePriceCheck.emit(price);
   }

@@ -448,6 +448,8 @@ export class BotPanelShellComponent {
   });
   /** The price the Clerk is being asked to read, while it is being asked. */
   protected readonly flattenPriceCheck = signal<number | null>(null);
+  /** How many price checks have ended; the ticket tells a failed one by this moving with no answer. */
+  protected readonly flattenPriceChecksEnded = signal(0);
   protected readonly historicalRecoveryDraft = linkedSignal({
     source: this.routeIdentity,
     computation: (): HistoricalExecutionRecoveryDraft | null => null,
@@ -1330,6 +1332,7 @@ export class BotPanelShellComponent {
       await this.refreshFlattenQuote(true, limitPrice, bandOverride);
     } finally {
       this.flattenPriceCheck.set(null);
+      this.flattenPriceChecksEnded.update((count) => count + 1);
     }
   }
 

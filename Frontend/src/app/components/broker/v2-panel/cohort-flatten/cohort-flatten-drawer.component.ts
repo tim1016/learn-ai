@@ -369,7 +369,6 @@ export class CohortFlattenDrawerComponent {
   protected onClose(): void {
     // Every route out of the drawer comes through here, so the next open
     // starts a new wave: nothing that could act on a bot outlives the drawer.
-    this.closes += 1;
     this.choice.set(null);
     this.pending.set(null);
     this.sent.set(null);
@@ -380,26 +379,29 @@ export class CohortFlattenDrawerComponent {
     this.closed.emit();
   }
 
-  /** How many times the drawer has been closed: a wave's answer that lands after a close belongs to no open drawer. */
-  private closes = 0;
-
   private async send(wave: SentWave): Promise<void> {
-    const openedAt = this.closes;
     this.submitting.set(true);
     this.dispatchFailure.set(null);
     this.focusAfterRender(() => this.progress()?.nativeElement.focus());
     try {
       const result = await this.panelService.runCohortFlatten(wave.target, wave.request);
-      // What ran ran: the roster reads again whether or not this drawer is still open.
-      if (result.applied_count + result.replayed_count > 0) this.flattened.emit();
-      if (openedAt !== this.closes) return;
+      // What ran, or may have run, ran: the roster reads again whether or not this drawer is still open.
+      if (result.applied_count + result.replayed_count > 0 || result.legs.some((leg) => leg.outcome === 'unknown')) {
+        this.flattened.emit();
+      }
+      // `onClose` clears `sent`: a wave answered after that belongs to no open drawer.
+      if (this.sent() !== wave) return;
       this.outcome.set(result);
       this.focusAfterRender(() => this.outcomePanel()?.focus());
     } catch (error) {
-      if (openedAt !== this.closes) return;
+      const failure = dispatchFailureOf(error);
+      if (this.sent() !== wave) {
+        // No answer came back and nobody is looking: the wave may have run, so the roster reads again.
+        if (failure.kind === 'unknown') this.flattened.emit();
+        return;
+      }
       // Keep the last typed outcome: its receipts are proof of what already
       // ran, and a failed retry proves nothing about them.
-      const failure = dispatchFailureOf(error);
       this.dispatchFailure.set(failure);
       if (failure.kind === 'refused' && failure.reasonCode === 'clerk_binding_generation_conflict') {
         // The fence the operator acted on is provably stale: re-read the

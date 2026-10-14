@@ -1513,6 +1513,28 @@ describe('BotPanelShellComponent', () => {
         .toContain('No order has been submitted.');
     });
 
+    it('stops saying Pricing… when the Clerk’s price check fails, and names why beside the ticket', async () => {
+      const observedAtMs = Date.now();
+      mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
+      brokersMock.checkSqliteRecoveryActionInFull.mockImplementation(async () => EXTENDED_CHECK_WITH_READING(observedAtMs));
+      const fixture = await prepareFlatten();
+      const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
+      // From here the Clerk cannot price the operator's own limit.
+      brokersMock.checkSqliteRecoveryActionInFull.mockRejectedValue(new HttpErrorResponse({
+        status: 503,
+        error: { detail: { message: 'The Clerk could not read its quote.', why: null, next_action: null } },
+      }));
+      fireEvent.input(within(ticket).getByLabelText('Limit price (USD)'), { target: { value: '478.50' } });
+
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Review limit order' }));
+      await settle(fixture);
+
+      expect(within(ticket).queryByRole('button', { name: 'Pricing…' })).toBeNull();
+      expect((within(ticket).getByRole('button', { name: 'Review limit order' }) as HTMLButtonElement).disabled).toBe(false);
+      expect(screen.getByText(/Quote refresh failed: The Clerk could not read its quote\./)).toBeTruthy();
+      expect(mockService.executeExtendedSafeFlatten).not.toHaveBeenCalled();
+    });
+
     it('closes the ticket and fails the Sell step when a refresh finds the plan gone', async () => {
       mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
       brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValueOnce(EXTENDED_CHECK_WITH_READING(Date.now()));

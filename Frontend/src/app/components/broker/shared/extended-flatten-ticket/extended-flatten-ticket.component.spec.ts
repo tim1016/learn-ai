@@ -274,11 +274,11 @@ describe('ExtendedFlattenTicketComponent', () => {
     expect(priceCheck).not.toHaveBeenCalled();
   });
 
-  it('accepts a price at Alpaca’s precision', async () => {
+  it.each(['511.30', '100', '1', '0.4567', '0.5'])('accepts %s, a price at Alpaca’s precision', async (typed) => {
     atNow();
     const { fixture } = await renderTicket();
 
-    fireEvent.input(limitInput(), { target: { value: '511.30' } });
+    fireEvent.input(limitInput(), { target: { value: typed } });
     fixture.detectChanges();
 
     expect(button('Review limit order').hasAttribute('disabled')).toBe(false);
@@ -296,12 +296,48 @@ describe('ExtendedFlattenTicketComponent', () => {
 
     // The host's check ended and no proposal for that price arrived: it failed, and says why beside the ticket.
     fixture.componentRef.setInput('checkInFlight', false);
+    fixture.componentRef.setInput('checksEnded', 1);
     fixture.detectChanges();
     await fixture.whenStable();
     fixture.detectChanges();
 
     expect(button('Review limit order').hasAttribute('disabled')).toBe(false);
     expect(screen.queryByText('Pricing…')).toBeNull();
+  });
+
+  it('stops saying Pricing… for a check that ended before the browser ever drew it in flight', async () => {
+    atNow();
+    const { fixture } = await renderTicket();
+    fireEvent.click(button('Review limit order'));
+    fixture.detectChanges();
+    expect(button('Pricing…').hasAttribute('disabled')).toBe(true);
+
+    // The host's check started and failed inside one turn: only its end count moved.
+    fixture.componentRef.setInput('checksEnded', 1);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(button('Review limit order').hasAttribute('disabled')).toBe(false);
+  });
+
+  it('asks for no second review while the host’s check is still out, so a good answer is not dropped', async () => {
+    atNow();
+    const { fixture, priceCheck } = await renderTicket();
+    fireEvent.click(button('Review limit order'));
+    fixture.componentRef.setInput('checkInFlight', true);
+    fixture.detectChanges();
+    // The operator edits the price while the first check is out.
+    fireEvent.input(limitInput(), { target: { value: '511.10' } });
+    fixture.detectChanges();
+
+    expect(button('Review limit order').hasAttribute('disabled')).toBe(true);
+    expect(priceCheck).toHaveBeenCalledTimes(1);
+
+    fixture.componentRef.setInput('checkInFlight', false);
+    fixture.componentRef.setInput('checksEnded', 1);
+    fixture.detectChanges();
+    expect(button('Review limit order').hasAttribute('disabled')).toBe(false);
   });
 
   it('moves focus to Send when reviewing and back to Review on cancel', async () => {

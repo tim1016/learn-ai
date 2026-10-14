@@ -91,11 +91,11 @@ export const COHORT_FLATTEN_COPY = {
   // ── Outcome ─────────────────────────────────────────────────────────────
   outcomeRegion: 'Flatten outcome',
   outcomeSummary: (
-    counts: { applied: number; replayed: number; refused: number; failed: number; unknown?: number },
+    counts: { applied: number; replayed: number; refused: number; failed: number; unknown: number },
     sent: number,
   ) =>
     `Applied ${counts.applied}, replayed ${counts.replayed}, refused ${counts.refused}, ` +
-    `failed ${counts.failed}${counts.unknown ? `, outcome unknown ${counts.unknown}` : ''} of ${sent} sent.`,
+    `failed ${counts.failed}${counts.unknown > 0 ? `, outcome unknown ${counts.unknown}` : ''} of ${sent} sent.`,
   outcomeLabel: {
     applied: 'Applied',
     replayed: 'Replayed (already applied)',

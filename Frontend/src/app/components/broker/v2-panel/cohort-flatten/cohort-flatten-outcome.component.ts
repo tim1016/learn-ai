@@ -47,15 +47,17 @@ export class CohortFlattenOutcomeComponent {
 
   protected readonly summary = computed(() => {
     const result = this.result();
-    // The backend folds an unknown outcome into `failed_count`; a leg that may have run is not a failure.
-    const unknown = result.legs.filter((leg) => leg.outcome === 'unknown').length;
+    // The backend folds an unknown outcome into `failed_count`; a leg that may have run is not a failure,
+    // so these two are read from the legs themselves.
+    const legsWith = (outcome: CohortActionResult['legs'][number]['outcome']): number =>
+      result.legs.filter((leg) => leg.outcome === outcome).length;
     return COHORT_FLATTEN_COPY.outcomeSummary(
       {
         applied: result.applied_count,
         replayed: result.replayed_count,
         refused: result.refused_count,
-        failed: Math.max(0, result.failed_count - unknown),
-        unknown,
+        failed: legsWith('failed'),
+        unknown: legsWith('unknown'),
       },
       this.requested().length,
     );

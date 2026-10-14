@@ -782,8 +782,8 @@ describe('DualPaneChartComponent', () => {
     const user = userEvent.setup();
     // A blocked-site-data browser throws from the accessor, not only from getItem/setItem.
     const blocked = () => { throw new DOMException('blocked', 'SecurityError'); };
-    const read = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(blocked);
-    const write = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(blocked);
+    // The component reads `globalThis.localStorage`: replace that, whatever the host's Storage is made of.
+    vi.stubGlobal('localStorage', { getItem: blocked, setItem: blocked, removeItem: blocked });
     try {
       await render(DualPaneChartComponent, {
         inputs: { symbol: 'SPY', liveBars: [], histBars: [] },
@@ -793,8 +793,7 @@ describe('DualPaneChartComponent', () => {
       await user.click(screen.getByRole('button', { name: 'ET' }));
       expect(screen.getByRole('button', { name: 'ET' }).getAttribute('aria-pressed')).toBe('true');
     } finally {
-      read.mockRestore();
-      write.mockRestore();
+      vi.unstubAllGlobals();
     }
   });
 
