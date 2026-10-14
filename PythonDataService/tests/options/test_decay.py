@@ -18,7 +18,6 @@ from app.options import decay
 from app.options.american import ONE_DAY_MS, AmericanDailyDecay, CashDividend, american_daily_decay, years_from_ms
 from app.options.contract import OptionContract
 from app.options.decay import (
-    NEAR_EX_DATE_MS,
     DecayNotEstimated,
     LegDecay,
     decay_not_estimated,
@@ -392,8 +391,8 @@ def test_an_input_the_pricer_refuses_a_day_later_is_no_decay_with_the_pricers_ow
     [
         pytest.param(1, True, id="a millisecond from now"),
         pytest.param(ONE_DAY_MS, True, id="a day out"),
-        pytest.param(NEAR_EX_DATE_MS, True, id="exactly three days out"),
-        pytest.param(NEAR_EX_DATE_MS + 1, False, id="a millisecond past three days"),
+        pytest.param(3 * ONE_DAY_MS, True, id="exactly three days out"),
+        pytest.param(3 * ONE_DAY_MS + 1, False, id="a millisecond past three days"),
         pytest.param(0, False, id="going ex this instant: it has gone"),
         pytest.param(-ONE_DAY_MS, False, id="gone ex yesterday"),
     ],

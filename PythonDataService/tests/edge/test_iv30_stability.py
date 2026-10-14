@@ -266,12 +266,11 @@ class TestNormalizedHealthParity:
 
 
 class TestNormalizedHealthTargetTenor:
-    """The normalized health path must score the caller's requested tenor —
-    a 28-day target on a chain bracketed by [21, 35] should produce a
-    different baseline σ than the default 30-day target on the same chain
-    (variance-time interpolation weights differ). Without threading the
-    ``target_calendar_days`` through, non-default tenors silently fell
-    back to 30 (CodeRabbit P2 on PR 47)."""
+    """The normalized health path must score the caller's requested tenor,
+    so ``target_calendar_days`` is threaded through to the VIX-style
+    baseline rather than silently falling back to 30 (CodeRabbit P2 on
+    PR 47). A target outside the chain's bracket is refused instead of
+    being clamped, which is what shows the argument arrives."""
 
     def test_target_outside_bracket_raises(
         self, chain1: list[OptionQuote], chain2: list[OptionQuote]

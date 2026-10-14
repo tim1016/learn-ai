@@ -98,8 +98,9 @@ class TestSurfaceQuery:
         iv_first = surface.volatility(100.0, ttms[0])
         iv_second = surface.volatility(100.0, ttms[1])
 
-        # Linear in total variance, so the interpolated vol lies between its two neighbors.
-        assert min(iv_first, iv_second) <= iv <= max(iv_first, iv_second)
+        # Linear in total variance, so the interpolated vol lies strictly between its two neighbors
+        # (the two expiries' vols differ on this skewed chain).
+        assert min(iv_first, iv_second) < iv < max(iv_first, iv_second)
 
     def test_extrapolation_flat(self, surface: VolSurface) -> None:
         """Query outside fitted range should extrapolate flat."""

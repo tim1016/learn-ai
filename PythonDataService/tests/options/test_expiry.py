@@ -40,7 +40,8 @@ def test_option_expiry_anchor_is_16_00_on_the_two_days_new_york_changes_its_cloc
     expiry_date: date, anchor_ms: int
 ) -> None:
     # Midnight to 16:00 is 15 or 17 hours on these days, not 16. The same instants are pinned in
-    # Frontend/src/app/shared/option-contract/option-expiry-date.spec.ts, which names this file as its parity.
+    # Frontend/src/app/shared/option-contract/option-expiry-date.spec.ts, whose parity claim names
+    # expiry.py::option_expiry_anchor_ms.
     assert option_expiry_anchor_ms(expiry_date) == anchor_ms
     assert option_expiry_date(anchor_ms) == expiry_date
 
