@@ -262,6 +262,48 @@ describe('ExtendedFlattenTicketComponent', () => {
     expect(priceCheck).not.toHaveBeenCalled();
   });
 
+  it.each(['511.289', '0.12345'])('refuses %s: the price shown rounds, the price sent would not', async (typed) => {
+    atNow();
+    const { fixture, priceCheck } = await renderTicket();
+
+    fireEvent.input(limitInput(), { target: { value: typed } });
+    fixture.detectChanges();
+
+    expect(screen.getByRole('status').textContent).toContain('two decimals, or four below $1');
+    expect(button('Review limit order').hasAttribute('disabled')).toBe(true);
+    expect(priceCheck).not.toHaveBeenCalled();
+  });
+
+  it('accepts a price at Alpaca’s precision', async () => {
+    atNow();
+    const { fixture } = await renderTicket();
+
+    fireEvent.input(limitInput(), { target: { value: '511.30' } });
+    fixture.detectChanges();
+
+    expect(button('Review limit order').hasAttribute('disabled')).toBe(false);
+  });
+
+  it('stops saying Pricing… when the Clerk’s price check ends with no answer', async () => {
+    atNow();
+    const { fixture } = await renderTicket();
+    fireEvent.click(button('Review limit order'));
+    fixture.componentRef.setInput('checkInFlight', true);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(button('Pricing…').hasAttribute('disabled')).toBe(true);
+
+    // The host's check ended and no proposal for that price arrived: it failed, and says why beside the ticket.
+    fixture.componentRef.setInput('checkInFlight', false);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(button('Review limit order').hasAttribute('disabled')).toBe(false);
+    expect(screen.queryByText('Pricing…')).toBeNull();
+  });
+
   it('moves focus to Send when reviewing and back to Review on cancel', async () => {
     atNow();
     const { fixture } = await renderTicket();

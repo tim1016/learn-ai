@@ -369,6 +369,7 @@ export class CohortFlattenDrawerComponent {
   protected onClose(): void {
     // Every route out of the drawer comes through here, so the next open
     // starts a new wave: nothing that could act on a bot outlives the drawer.
+    this.closes += 1;
     this.choice.set(null);
     this.pending.set(null);
     this.sent.set(null);
@@ -379,16 +380,23 @@ export class CohortFlattenDrawerComponent {
     this.closed.emit();
   }
 
+  /** How many times the drawer has been closed: a wave's answer that lands after a close belongs to no open drawer. */
+  private closes = 0;
+
   private async send(wave: SentWave): Promise<void> {
+    const openedAt = this.closes;
     this.submitting.set(true);
     this.dispatchFailure.set(null);
     this.focusAfterRender(() => this.progress()?.nativeElement.focus());
     try {
       const result = await this.panelService.runCohortFlatten(wave.target, wave.request);
-      this.outcome.set(result);
+      // What ran ran: the roster reads again whether or not this drawer is still open.
       if (result.applied_count + result.replayed_count > 0) this.flattened.emit();
+      if (openedAt !== this.closes) return;
+      this.outcome.set(result);
       this.focusAfterRender(() => this.outcomePanel()?.focus());
     } catch (error) {
+      if (openedAt !== this.closes) return;
       // Keep the last typed outcome: its receipts are proof of what already
       // ran, and a failed retry proves nothing about them.
       const failure = dispatchFailureOf(error);

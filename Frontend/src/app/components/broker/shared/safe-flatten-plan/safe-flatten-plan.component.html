@@ -101,7 +101,7 @@
         <ng-template #body let-leg>
           <tr>
             <td><code>{{ leg.strategy_instance_id }}</code></td>
-            <td>{{ leg.symbol | receiptLabel }}</td>
+            <td><app-asset-identity [symbol]="leg.symbol" size="xs" /></td>
             <td>{{ leg.side | receiptLabel }}</td>
             <td class="text-right tabular-nums">{{ leg.quantity }}</td>
             <td><app-timestamp-display [value]="leg.position_updated_at_ms" mode="local" /></td>

@@ -447,7 +447,7 @@ export class BotPanelShellComponent {
     onCleanup(() => clearInterval(timer));
   });
   /** The price the Clerk is being asked to read, while it is being asked. */
-  private readonly flattenPriceCheck = signal<number | null>(null);
+  protected readonly flattenPriceCheck = signal<number | null>(null);
   protected readonly historicalRecoveryDraft = linkedSignal({
     source: this.routeIdentity,
     computation: (): HistoricalExecutionRecoveryDraft | null => null,

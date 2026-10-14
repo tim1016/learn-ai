@@ -95,6 +95,9 @@ export class ExtendedFlattenTicketComponent {
   /** When this browser received ``pricing`` (its own clock). */
   readonly quoteReceivedAtMs = input.required<number>();
   readonly pending = input(false);
+  /** The host is asking the Clerk to price a limit right now. When this ends with no matching answer the
+   * price check failed (the host names why), and the ticket stops saying "Pricing…". */
+  readonly checkInFlight = input(false);
   /** The reviewed price and the quote it was reviewed against. */
   readonly send = output<SqliteExtendedLimitConfirmation>();
   readonly refresh = output();
@@ -109,6 +112,7 @@ export class ExtendedFlattenTicketComponent {
   /** The price the Clerk was asked to evaluate, until its answer arrives. */
   private readonly awaitingPrice = signal<number | null>(null);
   private requestedFrom: SqliteExtendedLimitPricing | null = null;
+  private checkWasInFlight = false;
   protected readonly reviewed = signal<ReviewedLimit | null>(null);
   private readonly displayClock = toSignal(timer(0, 1_000), { initialValue: 0 });
 
@@ -120,8 +124,20 @@ export class ExtendedFlattenTicketComponent {
     effect(() => {
       const evaluation = this.pricing().proposal;
       const wanted = this.awaitingPrice();
-      if (wanted === null || this.pricing() === this.requestedFrom || !evaluation || evaluation.limit_price !== wanted) return;
+      const inFlight = this.checkInFlight();
+      if (wanted === null || this.pricing() === this.requestedFrom || !evaluation || evaluation.limit_price !== wanted) {
+        // No answer to the price asked for. A check that has ended with none failed: stop waiting for it.
+        untracked(() => {
+          if (inFlight) this.checkWasInFlight = true;
+          else if (this.checkWasInFlight) {
+            this.checkWasInFlight = false;
+            if (wanted !== null) this.awaitingPrice.set(null);
+          }
+        });
+        return;
+      }
       untracked(() => {
+        this.checkWasInFlight = false;
         this.awaitingPrice.set(null);
         if (evaluation.outside_band && !evaluation.override_acknowledged) return;
         const pricing = this.pricing();
@@ -150,7 +166,9 @@ export class ExtendedFlattenTicketComponent {
     const text = this.limitText().trim();
     if (!PLAIN_DECIMAL.test(text)) return null;
     const value = Number(text);
-    return value > 0 ? value : null;
+    // A price shown as `formatLimitPrice` shows it is the price that is sent: one with more decimals than
+    // Alpaca's precision would read rounded on screen and go out exact, for the Clerk to refuse.
+    return value > 0 && Number(formatLimitPrice(value)) === value ? value : null;
   });
   protected readonly isSell = computed(() => this.pricing().side === 'sell');
   protected readonly phaseLabel = computed(() =>

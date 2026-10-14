@@ -82,8 +82,12 @@ interface IndicatorLoadState {
 const TIME_ZONE_STORAGE_KEY = 'broker-v2.chart-timezone.v1';
 
 function persistedChartTimeZone(): ChartTimeZone {
-  if (typeof localStorage === 'undefined') return 'local';
-  return localStorage.getItem(TIME_ZONE_STORAGE_KEY) === 'et' ? 'et' : 'local';
+  try {
+    return globalThis.localStorage?.getItem(TIME_ZONE_STORAGE_KEY) === 'et' ? 'et' : 'local';
+  } catch {
+    // Storage unreadable (blocked site data): the chart opens on the viewer's local clock.
+    return 'local';
+  }
 }
 
 /** Formats the chart-library's seconds-UTC boundary for the crosshair readout. */
@@ -571,8 +575,10 @@ export class DualPaneChartComponent implements AfterViewInit {
 
   protected selectTimeZone(timeZone: ChartTimeZone): void {
     this.timeZone.set(timeZone);
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(TIME_ZONE_STORAGE_KEY, timeZone);
+    try {
+      globalThis.localStorage?.setItem(TIME_ZONE_STORAGE_KEY, timeZone);
+    } catch {
+      // Storage blocked: the choice applies for this visit only.
     }
   }
 

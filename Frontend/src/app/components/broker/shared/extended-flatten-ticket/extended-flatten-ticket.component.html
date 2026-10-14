@@ -82,7 +82,7 @@
   <p id="extended-flatten-limit-note" class="m-0 text-xs" role="status"
     [style.color]="limitPrice() === null || reading?.outside_band === true ? 'var(--bear)' : null">
     @if (limitPrice() === null) {
-      Enter a positive price like 512.30.
+      Enter a positive price like 512.30: two decimals, or four below $1.
     } @else if (reading?.outside_band === true && quote.band_limit_price !== null) {
       This limit is {{ reading.through_book_bps | number: '1.1-1' }} bps through the {{ bookSideLabel() }}, beyond this bot’s {{ reading.band_cap_bps | number: '1.1-1' }} bps cap.
     } @else if (reading) {
