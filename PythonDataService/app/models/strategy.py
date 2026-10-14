@@ -162,6 +162,8 @@ class StrategyAnalyzeResponse(BaseModel):
     strategy_cost: float = 0
     pop: float = 0
     expected_value: float = 0
+    # Per share, over the whole expiry payoff: a side with no limit is
+    # +/-MAX_PROFIT_CAP (`strategy_engine.py`), which the UI shows as unlimited.
     max_profit: float = 0
     max_loss: float = 0
     breakevens: list[float] = []

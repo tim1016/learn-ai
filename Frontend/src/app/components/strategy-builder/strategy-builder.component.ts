@@ -21,6 +21,7 @@ import {
 } from '../../utils/black-scholes';
 import { parseOccForDisplay, OccDisplayParts } from '../../utils/occ-ticker';
 import { getMinAllowedDate } from '../../utils/date-validation';
+import { payoffAtExpiry, payoffBreakevens, payoffExtremes, PayoffExtremes, PayoffLeg } from '../../utils/strategy-payoff';
 import { ExpirationRibbonComponent } from '../options-chain-v2/expiration-ribbon/expiration-ribbon.component';
 import { CandlestickChartComponent } from '../../shared/charts/candlestick-chart/candlestick-chart.component';
 import { VolumeChartComponent } from '../../shared/charts/volume-chart/volume-chart.component';
@@ -678,34 +679,26 @@ export class StrategyBuilderComponent implements OnDestroy {
     const grid = this.priceGrid();
     if (grid.length === 0 || currentLegs.length === 0 || currentLegs.some(l => l.strike <= 0)) return [];
 
-    return grid.map(price => {
-      let totalPnl = 0;
-      for (const leg of currentLegs) {
-        const intrinsic = leg.optionType === 'call'
-          ? Math.max(price - leg.strike, 0)
-          : Math.max(leg.strike - price, 0);
-        totalPnl += leg.position === 'long'
-          ? (intrinsic - leg.premium) * leg.quantity
-          : (leg.premium - intrinsic) * leg.quantity;
-      }
-      return { price, pnl: totalPnl };
-    });
+    return grid.map(price => ({ price, pnl: payoffAtExpiry(currentLegs, price) }));
   });
 
-  liveBreakevens = computed<number[]>(() => {
-    const curve = this.livePayoffCurve();
-    if (curve.length < 2) return [];
+  /**
+   * The legs the payoff figures are read from: every enabled leg, or null
+   * while none is enabled or a strike is not above zero (the curve is empty
+   * then too).
+   */
+  private payoffLegs = computed<PayoffLeg[] | null>(() => {
+    const enabled = this.legs().filter(l => l.enabled);
+    return enabled.length === 0 || enabled.some(l => l.strike <= 0) ? null : enabled;
+  });
 
-    const breakevens: number[] = [];
-    for (let i = 0; i < curve.length - 1; i++) {
-      const p1 = curve[i];
-      const p2 = curve[i + 1];
-      if ((p1.pnl <= 0 && p2.pnl > 0) || (p1.pnl >= 0 && p2.pnl < 0)) {
-        const ratio = Math.abs(p1.pnl) / (Math.abs(p1.pnl) + Math.abs(p2.pnl));
-        breakevens.push(Math.round((p1.price + (p2.price - p1.price) * ratio) * 100) / 100);
-      }
-    }
-    return breakevens;
+  /**
+   * Breakevens of the whole expiry payoff, not of the chart window: a long
+   * strangle's can lie outside ±5 % of its strikes' midpoint.
+   */
+  liveBreakevens = computed<number[]>(() => {
+    const legs = this.payoffLegs();
+    return legs === null ? [] : payoffBreakevens(legs);
   });
 
   currentPnlCurve = computed<PayoffPoint[]>(() => {
@@ -761,27 +754,14 @@ export class StrategyBuilderComponent implements OnDestroy {
   });
 
   /**
-   * Right-tail unboundedness flags derived analytically from the leg
-   * structure. Puts can't produce unbounded P&L because the underlying
-   * is bounded below by 0; only net call exposure does. A net long-call
-   * position (sum of long-call quantities > sum of short-call) → max
-   * profit unbounded as S → ∞; the inverse → max loss unbounded.
-   *
-   * This replaces the old behaviour of taking max/min of the chart-grid
-   * curve, which silently capped unbounded payoffs at the right edge of
-   * the visible window (e.g. a long call would report a finite "Max
-   * Profit" equal to its P&L at spot × 1.05 instead of the textbook ∞).
+   * Per-share extremes of the whole expiry payoff, read at price 0, at the
+   * strikes and from the net long call quantity above the highest strike
+   * (ADR 0068 exception 1). Infinite where a side has no limit. The chart
+   * window plays no part: a short put loses at S = 0, far below the window.
    */
-  payoffTailFlags = computed<{ profitUnbounded: boolean; lossUnbounded: boolean }>(() => {
-    let netCallQty = 0;
-    for (const leg of this.legs()) {
-      if (!leg.enabled || leg.optionType !== 'call') continue;
-      netCallQty += (leg.position === 'long' ? 1 : -1) * leg.quantity;
-    }
-    return {
-      profitUnbounded: netCallQty > 0,
-      lossUnbounded: netCallQty < 0,
-    };
+  private liveExtremes = computed<PayoffExtremes | null>(() => {
+    const legs = this.payoffLegs();
+    return legs === null ? null : payoffExtremes(legs);
   });
 
   /**
@@ -791,18 +771,14 @@ export class StrategyBuilderComponent implements OnDestroy {
    * summary values in the drawer share consistent dollar units.
    */
   liveMaxProfit = computed<number | null>(() => {
-    const curve = this.livePayoffCurve();
-    if (curve.length === 0) return null;
-    if (this.payoffTailFlags().profitUnbounded) return Number.POSITIVE_INFINITY;
-    return Math.max(...curve.map(p => p.pnl)) * 100;
+    const extremes = this.liveExtremes();
+    return extremes === null ? null : extremes.maxProfit * 100;
   });
 
   /** Symmetric counterpart of {@link liveMaxProfit}. */
   liveMaxLoss = computed<number | null>(() => {
-    const curve = this.livePayoffCurve();
-    if (curve.length === 0) return null;
-    if (this.payoffTailFlags().lossUnbounded) return Number.NEGATIVE_INFINITY;
-    return Math.min(...curve.map(p => p.pnl)) * 100;
+    const extremes = this.liveExtremes();
+    return extremes === null ? null : extremes.maxLoss * 100;
   });
 
   /**
@@ -816,22 +792,21 @@ export class StrategyBuilderComponent implements OnDestroy {
 
   /**
    * Analysis Results card uses the backend per-share values (× 100 for
-   * per-contract dollars), but still defers to leg-derived
-   * unboundedness flags — `analyzeOptionsStrategy` returns a finite
-   * grid-clamped value for unbounded payoffs the same way the live
-   * curve does, so we override to ∞ when the legs say so.
+   * per-contract dollars), but still defers to the legs for a side with
+   * no limit — `analyzeOptionsStrategy` carries that side as a finite
+   * cap, so we override to ∞ when the legs say so.
    */
   analysisMaxProfitDisplay = computed<string>(() => {
     const r = this.analysisResult();
     if (!r) return '—';
-    if (this.payoffTailFlags().profitUnbounded) return '∞';
+    if (this.liveExtremes()?.maxProfit === Number.POSITIVE_INFINITY) return '∞';
     return formatPayoffExtremum(r.maxProfit * 100);
   });
 
   analysisMaxLossDisplay = computed<string>(() => {
     const r = this.analysisResult();
     if (!r) return '—';
-    if (this.payoffTailFlags().lossUnbounded) return '−∞';
+    if (this.liveExtremes()?.maxLoss === Number.NEGATIVE_INFINITY) return '−∞';
     return formatPayoffExtremum(r.maxLoss * 100);
   });
 

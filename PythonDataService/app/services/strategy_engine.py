@@ -1,9 +1,9 @@
 """Options strategy analysis engine.
 
-Formula: POP (Probability of Profit) and EV (Expected Value) under the BS-M lognormal model. Per-leg payoff curves at expiry; current-time PnL by composing per-leg theoretical values from `bs_greeks.py`; Greek curves per-spot grid; per-leg diagnostic table. Aggregates into a strategy-level response shape consumed by Strategy Lab.
+Formula: POP (Probability of Profit) and EV (Expected Value) under the BS-M lognormal model. Per-leg payoff curves at expiry; max profit, max loss and breakevens of the expiry payoff, read at price 0, at the strikes and from the net long call quantity above the highest strike (the payoff is piecewise linear, so no price window enters); current-time PnL by composing per-leg theoretical values from `bs_greeks.py`; Greek curves per-spot grid; per-leg diagnostic table. Aggregates into a strategy-level response shape consumed by Strategy Lab.
 Reference: Hull, Options Futures and Other Derivatives (10e), §11–12 (payoff diagrams), §19 (Greek Letters); composes the canonical Python options authorities (`bs_greeks.py`, `quantlib_pricer.py`, `volatility/solver.py`).
 Canonical implementation: this file (`AnalyzeOptionsStrategy`). The Frontend `OptionsStrategyLabComponent` consumes this response and is now a passthrough since Phase 1.2 (commit 451394d).
-Validated against: PythonDataService/tests/test_strategy_engine.py (POP, EV, strategy Greeks across spreads, single-legs, time-decay).
+Validated against: PythonDataService/tests/test_strategy_engine.py (POP, EV, strategy Greeks across spreads, single-legs, time-decay; max profit, max loss and breakevens hand-derived). The browser copy of the payoff extremes and breakevens, `Frontend/src/app/utils/strategy-payoff.ts` (ADR 0068 exception 1), is checked against this file by `tests/contracts/test_strategy_payoff_parity_fixture.py`.
 
 All probability math lives here — Black-Scholes lognormal model
 for POP (Probability of Profit) and EV (Expected Value).
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import math
+from dataclasses import dataclass
 
 import numpy as np
 from scipy.stats import lognorm, norm
@@ -74,47 +75,84 @@ def compute_payoff_curve(
     ]
 
 
-def find_breakevens(
-    legs: list[StrategyLeg],
-    spot_price: float,
-    price_range_pct: float,
-) -> list[float]:
-    """Find prices where payoff crosses zero using sign-change detection."""
-    low = spot_price * (1.0 - price_range_pct)
-    high = spot_price * (1.0 + price_range_pct)
-    prices = np.linspace(max(low, 0.01), high, 2000)
-    payoffs = np.array([compute_payoff_at_expiry(legs, float(p)) for p in prices])
+def _payoff_knots(legs: list[StrategyLeg]) -> list[tuple[float, float]]:
+    """(price, payoff) at 0 and at each distinct strike, ascending.
+
+    The expiry payoff is piecewise linear in the price and turns only at the
+    strikes, so between two of these prices it is a straight line.
+    """
+    prices = sorted({0.0, *(leg.strike for leg in legs)})
+    return [(price, compute_payoff_at_expiry(legs, price)) for price in prices]
+
+
+def _tail_slope(legs: list[StrategyLeg]) -> float:
+    """Slope of the expiry payoff above the highest strike: the net long call quantity.
+
+    Puts are worthless up there, so only calls move the payoff.
+    """
+    return float(sum((1 if leg.position == "long" else -1) * leg.quantity for leg in legs if leg.option_type == "call"))
+
+
+def find_breakevens(legs: list[StrategyLeg]) -> list[float]:
+    """Prices above zero where the expiry payoff changes sign, over the whole payoff.
+
+    A price where the payoff only touches zero and turns back is not one. Where
+    the payoff sits at zero over a stretch and then leaves it on the other side,
+    the breakeven is the price where it first reaches zero.
+    """
+    knots = _payoff_knots(legs)
+    tail_slope = _tail_slope(legs)
 
     breakevens: list[float] = []
-    for i in range(len(payoffs) - 1):
-        if payoffs[i] * payoffs[i + 1] < 0:
-            # Linear interpolation between adjacent points
-            p1, p2 = float(prices[i]), float(prices[i + 1])
-            y1, y2 = payoffs[i], payoffs[i + 1]
-            be = p1 - y1 * (p2 - p1) / (y2 - y1)
-            breakevens.append(round(be, 4))
+    last: tuple[float, float] | None = None  # the latest knot whose payoff is not zero
+    zero_from: float | None = None  # first price of the zeros since `last`
+    for price, pnl in knots:
+        if pnl == 0:
+            if zero_from is None:
+                zero_from = price
+            continue
+        if last is not None and (last[1] > 0) != (pnl > 0):
+            if zero_from is not None:
+                breakevens.append(zero_from)
+            else:
+                breakevens.append(last[0] - last[1] * (price - last[0]) / (pnl - last[1]))
+        last, zero_from = (price, pnl), None
 
-    return sorted(breakevens)
+    # Above the highest strike the payoff is a line of the tail slope, or holds
+    # the highest strike's value when there is none: a flat tail never crosses.
+    if last is not None and tail_slope != 0 and (last[1] > 0) != (tail_slope > 0):
+        if zero_from is not None:
+            breakevens.append(zero_from)
+        else:
+            breakevens.append(last[0] - last[1] / tail_slope)
+
+    return [round(be, 4) for be in breakevens]
 
 
-def compute_max_profit_loss(
-    legs: list[StrategyLeg],
-    spot_price: float,
-    price_range_pct: float,
-) -> tuple[float, float]:
-    """Compute max profit and max loss over the price range."""
-    low = spot_price * (1.0 - price_range_pct)
-    high = spot_price * (1.0 + price_range_pct)
-    prices = np.linspace(max(low, 0.01), high, 2000)
-    payoffs = [compute_payoff_at_expiry(legs, float(p)) for p in prices]
+@dataclass(frozen=True, slots=True)
+class PayoffExtremes:
+    """The most the expiry payoff gains and loses per share at any price at or above zero.
 
-    max_profit = max(payoffs)
-    max_loss = min(payoffs)
+    ``math.inf`` for a gain with no limit, ``-math.inf`` for a loss with none.
+    """
 
-    if max_profit > MAX_PROFIT_CAP:
-        max_profit = MAX_PROFIT_CAP
+    max_profit: float
+    max_loss: float
 
-    return round(max_profit, 4), round(max_loss, 4)
+
+def compute_max_profit_loss(legs: list[StrategyLeg]) -> PayoffExtremes:
+    """Max profit and max loss of the expiry payoff over every price at or above zero.
+
+    The payoff is piecewise linear, so its extremes are at zero and at the
+    strikes, or without limit above the highest strike when the net long call
+    quantity is not zero. No price window enters.
+    """
+    values = [pnl for _, pnl in _payoff_knots(legs)]
+    tail_slope = _tail_slope(legs)
+
+    max_profit = math.inf if tail_slope > 0 else round(max(values), 4)
+    max_loss = -math.inf if tail_slope < 0 else round(min(values), 4)
+    return PayoffExtremes(max_profit=max_profit, max_loss=max_loss)
 
 
 def weighted_iv(legs: list[StrategyLeg]) -> float:
@@ -205,7 +243,7 @@ def compute_pop(
         return 1.0 if pnl_now > 0 else 0.0
 
     t = ttm_years
-    breakevens = find_breakevens(legs, spot_price, 0.50)
+    breakevens = find_breakevens(legs)
 
     if not breakevens:
         # No breakevens: entire range is profit or loss
@@ -634,9 +672,12 @@ def analyze_strategy(request: StrategyAnalyzeRequest) -> StrategyAnalyzeResponse
             request.curve_points,
         )
 
-        breakevens = find_breakevens(request.legs, request.spot_price, request.price_range_pct)
+        breakevens = find_breakevens(request.legs)
 
-        max_profit, max_loss = compute_max_profit_loss(request.legs, request.spot_price, request.price_range_pct)
+        extremes = compute_max_profit_loss(request.legs)
+        # The response is a finite number: a side with no limit is carried as the cap.
+        max_profit = MAX_PROFIT_CAP if math.isinf(extremes.max_profit) else extremes.max_profit
+        max_loss = -MAX_PROFIT_CAP if math.isinf(extremes.max_loss) else extremes.max_loss
 
         pop = compute_pop(request.legs, request.spot_price, request.risk_free_rate, ttm_years)
 

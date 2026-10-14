@@ -12,6 +12,7 @@ from app.models.strategy import StrategyAnalyzeRequest, StrategyLeg
 from app.options.expiry import option_expiry_anchor_ms, option_expiry_dte_days, time_to_expiry_years
 from app.services.bs_greeks import bs_european_price
 from app.services.strategy_engine import (
+    MAX_PROFIT_CAP,
     analyze_strategy,
     compute_d2,
     compute_expected_value,
@@ -25,6 +26,7 @@ from app.services.strategy_engine import (
     weighted_iv,
 )
 from app.utils.session_anchors import et_midnight_ms
+from scripts.regenerate_strategy_payoff_parity_fixture import CASES as PARITY_CASES
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -125,18 +127,18 @@ class TestStrategyCost:
 
 class TestBreakevens:
     def test_bull_call_spread_single_breakeven(self):
-        bes = find_breakevens(bull_call_spread(), 102, 0.30)
+        bes = find_breakevens(bull_call_spread())
         assert len(bes) == 1
         assert bes[0] == pytest.approx(103.0, abs=0.1)
 
     def test_long_straddle_two_breakevens(self):
-        bes = find_breakevens(long_straddle(), 100, 0.30)
+        bes = find_breakevens(long_straddle())
         assert len(bes) == 2
         assert bes[0] == pytest.approx(91.0, abs=0.1)
         assert bes[1] == pytest.approx(109.0, abs=0.1)
 
     def test_bear_put_spread_single_breakeven(self):
-        bes = find_breakevens(bear_put_spread(), 102, 0.30)
+        bes = find_breakevens(bear_put_spread())
         assert len(bes) == 1
         assert bes[0] == pytest.approx(102.5, abs=0.1)
 
@@ -148,14 +150,98 @@ class TestBreakevens:
 
 class TestMaxProfitLoss:
     def test_bull_call_spread(self):
-        max_p, max_l = compute_max_profit_loss(bull_call_spread(), 102, 0.30)
+        extremes = compute_max_profit_loss(bull_call_spread())
+        max_p, max_l = extremes.max_profit, extremes.max_loss
         assert max_p == pytest.approx(2.0, abs=0.01)
         assert max_l == pytest.approx(-3.0, abs=0.01)
 
     def test_long_straddle(self):
-        max_p, max_l = compute_max_profit_loss(long_straddle(), 100, 0.30)
+        extremes = compute_max_profit_loss(long_straddle())
+        max_p, max_l = extremes.max_profit, extremes.max_loss
         assert max_p > 0
         assert max_l == pytest.approx(-9.0, abs=0.05)
+
+
+# Hand-derived per share, by case name (#3186): the most a structure can gain or
+# lose is read at 0, at the strikes and from the slope above the highest strike,
+# so a leg whose strike sits far from spot cannot hide its loss. The legs are the
+# parity fixture's own (`scripts/regenerate_strategy_payoff_parity_fixture.py`),
+# so the number the browser is held to is arithmetic here, not only the canonical's
+# word. (max_profit, max_loss, breakevens); None is a side with no limit.
+_WHOLE_PAYOFF_EXPECTED = {
+    # S=0: 5 - 590. Above 590 the put expires worthless and the credit is kept.
+    "short_put_590_at_5": (5.0, -585.0, [585.0]),
+    "short_put_590_at_5_times_3": (15.0, -1755.0, [585.0]),
+    "long_call_100_at_5": (None, -5.0, [105.0]),
+    "short_call_100_at_5": (5.0, None, [105.0]),
+    # Credit 3. At S<=580: 3 - 10. Breakeven where 590 - S = 3.
+    "bull_put_spread_590_580": (3.0, -7.0, [587.0]),
+    # Strikes 200 apart: debit 100, so -100 at S<=400 and 200 - 100 above 600.
+    "wide_bull_call_spread_400_600": (100.0, -100.0, [500.0]),
+    # Debit 20 between the strikes; breakevens 570 - 20 and 610 + 20; the call has no limit.
+    "long_strangle_570_610_at_10": (None, -20.0, [550.0, 630.0]),
+    # Debit 9 at 100; breakevens 100 -/+ 9; the call has no limit.
+    "long_straddle_100": (None, -9.0, [91.0, 109.0]),
+    # Payoff is S - 101 at every price: -101 at S=0, breakeven 101.
+    "synthetic_long_100": (None, -101.0, [101.0]),
+    # Debit 1. Peak 10 - 1 at 110, then the two short calls outrun the long one.
+    "ratio_call_spread_100_110x2": (9.0, None, [101.0, 119.0]),
+    # Wings 20 wide, credit 4: the loss is 20 - 4 on either side.
+    "iron_condor_wide_wings": (4.0, -16.0, [496.0, 524.0]),
+    # Reaches 0 at 105 and falls again: touches zero, never crosses.
+    "touches_zero_at_a_strike": (0.0, None, []),
+    # Zero from 105 to 110, then rising: the breakeven is where zero is first reached.
+    "crosses_zero_along_a_flat_stretch": (None, -5.0, [105.0]),
+}
+
+
+def _parity_legs(name: str) -> list[StrategyLeg]:
+    return [_leg(strike, kind, pos, premium, qty=qty) for strike, kind, pos, premium, qty in PARITY_CASES[name]]
+
+
+class TestExtremesAndBreakevensFromTheWholePayoff:
+    def test_every_parity_case_has_a_hand_derived_answer(self):
+        assert set(_WHOLE_PAYOFF_EXPECTED) == set(PARITY_CASES)
+
+    @pytest.mark.parametrize("name", list(_WHOLE_PAYOFF_EXPECTED))
+    def test_max_profit_and_loss(self, name):
+        max_profit, max_loss, _ = _WHOLE_PAYOFF_EXPECTED[name]
+        got = compute_max_profit_loss(_parity_legs(name))
+        want_profit = math.inf if max_profit is None else max_profit
+        want_loss = -math.inf if max_loss is None else max_loss
+        assert got.max_profit == pytest.approx(want_profit, abs=1e-9, rel=0)
+        assert got.max_loss == pytest.approx(want_loss, abs=1e-9, rel=0)
+
+    @pytest.mark.parametrize("name", list(_WHOLE_PAYOFF_EXPECTED))
+    def test_breakevens(self, name):
+        _, _, breakevens = _WHOLE_PAYOFF_EXPECTED[name]
+        got = find_breakevens(_parity_legs(name))
+        assert len(got) == len(breakevens)
+        for g, w in zip(got, breakevens, strict=True):
+            assert g == pytest.approx(w, abs=1e-9, rel=0)
+
+    def test_the_response_carries_the_whole_loss_of_a_short_put(self):
+        req = StrategyAnalyzeRequest(
+            symbol="SPY",
+            legs=_parity_legs("short_put_590_at_5"),
+            expiration_ms=option_expiry_anchor_ms(date(2026, 12, 31)),
+            spot_price=590,
+        )
+        result = analyze_strategy(req)
+        assert result.max_loss == pytest.approx(-585.0, abs=1e-9, rel=0)
+        assert result.max_profit == pytest.approx(5.0, abs=1e-9, rel=0)
+        assert result.breakevens == pytest.approx([585.0], abs=1e-9, rel=0)
+
+    def test_the_response_carries_a_side_with_no_limit_as_the_cap(self):
+        req = StrategyAnalyzeRequest(
+            symbol="SPY",
+            legs=_parity_legs("synthetic_long_100"),
+            expiration_ms=option_expiry_anchor_ms(date(2026, 12, 31)),
+            spot_price=100,
+        )
+        result = analyze_strategy(req)
+        assert result.max_profit == MAX_PROFIT_CAP
+        assert result.max_loss == pytest.approx(-101.0, abs=1e-9, rel=0)
 
 
 # ---------------------------------------------------------------------------
@@ -465,13 +551,14 @@ class TestIronCondorPayoff:
 
     def test_breakevens(self):
         """Iron condor has two breakevens."""
-        bes = find_breakevens(iron_condor(), 100, 0.30)
+        bes = find_breakevens(iron_condor())
         assert len(bes) == 2
         assert bes[0] == pytest.approx(92.0, abs=0.2)
         assert bes[1] == pytest.approx(108.0, abs=0.2)
 
     def test_max_profit_loss_values(self):
-        max_p, max_l = compute_max_profit_loss(iron_condor(), 100, 0.30)
+        extremes = compute_max_profit_loss(iron_condor())
+        max_p, max_l = extremes.max_profit, extremes.max_loss
         assert max_p == pytest.approx(3.0, abs=0.05)
         assert max_l == pytest.approx(-2.0, abs=0.05)
 
@@ -511,7 +598,7 @@ class TestNakedPut:
         assert pnl_at_50 < -40  # large loss
 
     def test_single_breakeven(self):
-        bes = find_breakevens(naked_put(), 100, 0.50)
+        bes = find_breakevens(naked_put())
         assert len(bes) == 1
         assert bes[0] == pytest.approx(93.0, abs=0.2)
 
