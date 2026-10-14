@@ -393,7 +393,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Broker-neutral clerk fleet directory (§10.1)
+         * Broker-neutral clerk fleet directory
          * @description Every lane across production providers, from the registry projection.
          */
         get: operations["list_broker_clerks_api_broker_clerks_get"];
@@ -1875,7 +1875,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * One broker's clerk lanes (§10.2)
+         * One broker's clerk lanes
          * @description The same projection filtered to one provider.
          */
         get: operations["list_broker_clerks_for_broker_api_brokers__broker__clerks_get"];
