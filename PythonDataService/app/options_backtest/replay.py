@@ -572,8 +572,10 @@ class _Session:
                 continue
             position = _position_of(leg)
             bar = bars.get(leg.setup.leg_id)
-            # A leg with a close pending and a bar this minute was just sold by the fill step, so ``close is None``
-            # always holds here today. It stays because it states the rule: a leg already being closed is not stopped.
+            # A bought leg whose sale the cover book holds back (``may_leave``, in ``_fill_closes``) stays HELD with its
+            # close pending and a bar every minute, so ``close is None`` does not always hold here. It is what keeps
+            # that leg from being stopped again each minute: ``_stops`` would decide an exit in every one of them and
+            # ``_enter`` would not run in any.
             if (
                 position.close is None
                 and position.stop_level is not None
