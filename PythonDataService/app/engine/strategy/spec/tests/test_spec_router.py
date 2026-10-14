@@ -244,7 +244,7 @@ async def test_backtest_rejects_unsupported_spec_feature_with_400() -> None:
 
 
 async def test_backtest_answers_400_for_a_spec_that_declares_predictions_it_cannot_load() -> None:
-    """F2-1: this route has no prediction set to pair a ``predictions`` block with; that is the
+    """This route has no prediction set to pair a ``predictions`` block with; that is the
     caller's spec, so 400 with the reason, not an unhandled ValueError."""
     app.dependency_overrides[get_data_source_factory] = _make_synthetic_factory
 
@@ -271,7 +271,7 @@ async def test_backtest_answers_400_for_a_spec_that_declares_predictions_it_cann
 
 
 async def test_a_data_source_that_cannot_be_built_is_reported_and_logged(caplog: pytest.LogCaptureFixture) -> None:
-    """E-3: the failure was returned to the caller and left no trace in the service's own log."""
+    """The failure was returned to the caller and left no trace in the service's own log."""
 
     def _factory_that_fails(symbol: str, start: date, end: date) -> object:
         raise RuntimeError("the lake is down")
