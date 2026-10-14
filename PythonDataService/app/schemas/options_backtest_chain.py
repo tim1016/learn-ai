@@ -17,7 +17,12 @@ from typing import Annotated, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.options.contract import MAX_STRIKE_THOUSANDTHS, OptionContract
-from app.options_backtest.chain_download import DownloadItem, DownloadReason, FetchRefusal
+from app.options_backtest.chain_download import (
+    MAX_CONTRACTS_PER_DOWNLOAD,
+    DownloadItem,
+    DownloadReason,
+    FetchRefusal,
+)
 from app.options_backtest.classification import ExpiryTag
 from app.options_backtest.past_chain import ChainContract, ChainDay, ChainExpiry, ChainSession, ChainSide
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
@@ -260,7 +265,9 @@ class PastChainDownloadRequest(BaseModel):
     trading_date_ms: TimestampMs
     # The expiry the page is looking at. When given, every contract must expire on it. It captures nothing itself.
     expiry_ms: TimestampMs | None = None
-    contracts: list[str] = Field(default_factory=list)
+    # The most a download takes, served by the limits route; the page slices to it. A longer list is refused here, before
+    # a symbol of it is parsed on the event loop.
+    contracts: list[str] = Field(default_factory=list, max_length=MAX_CONTRACTS_PER_DOWNLOAD)
 
 
 class PastChainDownloadItem(BaseModel):
