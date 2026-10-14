@@ -145,3 +145,34 @@ def test_fill_without_a_non_blank_execution_id_fails_fast(execution_id: str | No
                 "execution_id": execution_id,
             }
         )
+
+
+def test_a_multi_leg_parents_fill_has_no_execution_of_its_own_and_maps_as_the_parent_moving() -> None:
+    """2026-10-14, the first several-leg order on Paper (#3103).
+
+    A bull call spread's ``fill`` frame carried no top-level ``execution_id``: Alpaca states the parent's net
+    price and quantity at the top level and each leg's execution in ``legs``. Refused as a fill without an
+    execution, it marked the stream's evidence unhealthy and held every reduction on the account.
+    """
+    event = from_alpaca_trade_update(
+        {
+            "at": "2026-10-14T15:59:03.724373Z",
+            "event": "fill",
+            "event_id": "01KP-FIXTURE-EVENT",
+            "timestamp": "2026-10-14T15:59:03.721579799Z",
+            "price": "2.13",
+            "qty": "1",
+            "position_qtys": {"SPY261016C00771000": "1", "SPY261016C00776000": "-1"},
+            "legs": [
+                {"execution_id": "exec-buy-leg", "qty": "1", "price": "3.31", "order_id": "leg-1",
+                 "symbol": "SPY261016C00771000", "timestamp": "2026-10-14T15:59:03.721579799Z"},
+                {"execution_id": "exec-sell-leg", "qty": "1", "price": "1.18", "order_id": "leg-2",
+                 "symbol": "SPY261016C00776000", "timestamp": "2026-10-14T15:59:03.721579799Z"},
+            ],
+            "order": {"order_class": "mleg", "symbol": "", "status": "filled"},
+        }
+    )
+
+    # No execution identity, and none of the parent's net figures offered as an execution slice.
+    assert (event.event_type, event.execution_id, event.price, event.quantity) == ("fill", None, None, None)
+    assert event.occurred_at_ms > 0

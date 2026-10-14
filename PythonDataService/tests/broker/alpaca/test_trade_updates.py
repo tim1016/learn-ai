@@ -800,6 +800,30 @@ async def test_malformed_embedded_order_is_parse_error_not_stream_abort(tmp_path
     assert len(events) == 1
 
 
+async def test_a_multi_leg_parents_fill_is_applied_and_leaves_the_evidence_healthy(tmp_path: Path) -> None:
+    """The first several-leg order on Paper (#3103): its parent's ``fill`` has legs, not an execution of its own.
+
+    It was refused as a fill without an execution_id, counted a parse error and marked the stream's evidence
+    unhealthy, which raised the account's stream-health hold and blocked the spread's exit.
+    """
+    frame = _load_frames()[2]
+    assert frame["data"]["event"] == "fill"
+    frame["data"].pop("execution_id", None)
+    frame["data"]["legs"] = [
+        {"execution_id": "exec-buy-leg", "qty": "1", "price": "3.31", "symbol": "SPY261016C00771000"},
+        {"execution_id": "exec-sell-leg", "qty": "1", "price": "1.18", "symbol": "SPY261016C00776000"},
+    ]
+    frame["data"]["order"]["order_class"] = "mleg"
+    frame["data"]["order"]["symbol"] = ""
+    consumer, clerk, _ = await _consumer(tmp_path, [frame])
+    await _warm(clerk)
+
+    await consumer.run()
+
+    assert consumer.counters.parse_errors == 0
+    assert consumer.counters.events_applied == 1
+
+
 async def test_unmappable_frame_degrades_gate_health_until_valid_frame(
     tmp_path: Path,
 ) -> None:
