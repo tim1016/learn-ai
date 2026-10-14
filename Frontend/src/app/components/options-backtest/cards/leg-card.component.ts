@@ -11,13 +11,17 @@ import type { ReentryKind } from '../options-backtest.types';
 import type { LegDraft } from '../setup-draft';
 import { legKey, NO_PROBLEMS, type FieldProblems, type LegField } from '../setup-problems';
 
+const ON_MOMENTUM_REASON = 'On momentum can be chosen once Simple momentum is on: it asks the momentum rule again.';
+
 /** The problems about a leg's contract, shown under its contract line. */
 const CONTRACT_FIELDS: readonly LegField[] = ['leg', 'contracts', 'expiry', 'strike'];
 
 /**
  * One leg: its contract line, copy and delete, and its three rules. A rule
- * that is switched off shows its fields greyed and sends nothing. Re-entering
- * on momentum is offered only while the leg has a momentum rule to ask again.
+ * that is switched off is one line, its switch, and sends nothing; the values
+ * typed into it are kept and come back when it is switched on. Re-entering on
+ * momentum is offered only while the leg has a momentum rule to ask again, and
+ * the choice says so as hover text.
  */
 @Component({
   selector: 'app-options-backtest-leg-card',
@@ -34,6 +38,8 @@ export class LegCardComponent {
   readonly canCopy = input(true);
   readonly copied = output();
   readonly removed = output();
+  /** Something in the card took the keyboard, so the page can show where this leg is read back. */
+  readonly focused = output();
 
   protected readonly stopLossChoices = STOP_LOSS_CHOICES;
   protected readonly momentumChoices = MOMENTUM_CHOICES;
@@ -42,16 +48,12 @@ export class LegCardComponent {
   protected readonly leg = computed(() => this.legForm()().value());
   protected readonly name = computed(() => `Leg ${this.position() + 1}`);
   protected readonly line = computed(() => contractLine(this.leg()));
-  protected readonly reasonId = computed(() => `ob-${this.leg().id}-reentry-reason`);
+  protected readonly onMomentumReason = ON_MOMENTUM_REASON;
   protected readonly unavailableReentry = computed<readonly ReentryKind[]>(() => (this.leg().momentumOn ? [] : ['on_momentum']));
   protected readonly contractProblem = computed(() => this.problemsAt(CONTRACT_FIELDS));
   protected readonly stopLossProblem = computed(() => this.problemsAt(['stopLoss', 'stopLossValue']));
   protected readonly momentumProblem = computed(() => this.problemsAt(['momentum', 'momentumValue']));
   protected readonly reentryProblem = computed(() => this.problemsAt(['reentry', 'reentryCount']));
-  /** The re-entry choice is described by why on momentum is unavailable, and by what is wrong with the re-entry. */
-  protected readonly reentryKindDescribedBy = computed(() =>
-    [this.leg().momentumOn ? null : this.reasonId(), this.reentryProblem() === null ? null : this.problemId('reentry')].flatMap((id) => id ?? []).join(' ') || null,
-  );
 
   private readonly heading = viewChild.required('heading', { read: ElementRef<HTMLElement> });
   private readonly deleteButton = viewChild.required('deleteButton', { read: ElementRef<HTMLElement> });

@@ -6,5 +6,8 @@ p { margin: 0; }
 .block, .notice { max-width: 75ch; line-height: 1.55; text-wrap: pretty; }
 .block { display: grid; gap: var(--space-1); }
 .legs { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
-.block--leg { padding: var(--space-3) var(--space-4); background: var(--bg-elevated); border-inline-start: 3px solid var(--accent); border-radius: var(--radius); }
+.block--leg { grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: var(--space-3); padding: var(--space-3) var(--space-4); background: var(--bg-elevated); border-inline-start: 3px solid var(--accent); border-radius: var(--radius); }
+// The number a leg's card carries, so "Leg 1" above and the server's name for the leg below read as one leg.
+.number { display: inline-grid; place-items: center; width: 1.75rem; height: 1.75rem; border-radius: var(--radius-pill); background: var(--accent-soft); color: var(--text-primary); font-weight: var(--fw-semi); }
+.sentences { display: grid; gap: var(--space-1); min-width: 0; }
 .notice { border: 1px solid var(--warn); border-radius: var(--radius); background: var(--warn-soft); padding: var(--space-2) var(--space-3); color: var(--text-primary); }

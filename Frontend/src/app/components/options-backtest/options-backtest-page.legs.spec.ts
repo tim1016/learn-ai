@@ -104,7 +104,7 @@ describe('a leg’s three rules', () => {
     expect(service.describe.mock.calls.length).toBe(calls);
   });
 
-  it('a momentum rule sends its kind and value, and nothing once it is switched off, with its fields greyed', async () => {
+  it('a momentum rule sends its kind and value, and nothing once it is switched off, its fields folded away but kept', async () => {
     const service = fakeService(vi);
     await renderPage(service);
     addLeg();
@@ -116,10 +116,13 @@ describe('a leg’s three rules', () => {
     flip('Leg 1 simple momentum');
 
     await waitFor(() => expect(lastLeg(service)).not.toHaveProperty('momentum'));
-    const value = screen.getByLabelText<HTMLInputElement>('Leg 1 momentum value');
-    expect(value.disabled).toBe(true);
-    expect(value.value).toBe('4');
-    expect((screen.getByRole('group', { name: 'Leg 1 momentum direction' }) as HTMLFieldSetElement).disabled).toBe(true);
+    expect(screen.queryByLabelText('Leg 1 momentum value')).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Leg 1 momentum direction' })).toBeNull();
+
+    flip('Leg 1 simple momentum');
+
+    expect(screen.getByLabelText<HTMLInputElement>('Leg 1 momentum value').value).toBe('4');
+    expect(within(screen.getByRole('group', { name: 'Leg 1 momentum direction' })).getByRole<HTMLInputElement>('radio', { name: 'Points down' }).checked).toBe(true);
   });
 
   it('a re-entry sends its kind and its count as a number', async () => {
@@ -133,12 +136,15 @@ describe('a leg’s three rules', () => {
     await waitFor(() => expect(lastLeg(service)).toMatchObject({ reentry_on_stop: { kind: 'at_once', count: 3 } }));
   });
 
-  it('shows the three rules switched off on a new leg, each with its fields greyed', async () => {
+  it('shows the three rules switched off on a new leg, each as its switch alone', async () => {
     await renderPage(fakeService(vi));
     addLeg();
 
     for (const field of ['Leg 1 stop loss value', 'Leg 1 momentum value', 'Leg 1 re-entries']) {
-      expect(isDisabled(screen.getByLabelText(field))).toBe(true);
+      expect(screen.queryByLabelText(field)).toBeNull();
+    }
+    for (const group of ['Leg 1 stop loss unit', 'Leg 1 momentum direction', 'Leg 1 re-entry kind']) {
+      expect(screen.queryByRole('group', { name: group })).toBeNull();
     }
     for (const rule of ['Leg 1 stop loss', 'Leg 1 simple momentum', 'Leg 1 re-entry on SL']) {
       expect((screen.getByRole('switch', { name: rule }) as HTMLInputElement).checked).toBe(false);
@@ -149,15 +155,17 @@ describe('a leg’s three rules', () => {
 describe('re-entering on momentum', () => {
   const reentryKind = () => screen.getByRole('group', { name: 'Leg 1 re-entry kind' });
 
-  it('cannot be chosen while the leg has no momentum rule, and the page says why', async () => {
+  it('cannot be chosen while the leg has no momentum rule, and says why as hover text on the choice', async () => {
     await renderPage(fakeService(vi));
     addLeg();
     flip('Leg 1 re-entry on SL');
 
-    expect(within(reentryKind()).getByRole<HTMLInputElement>('radio', { name: 'On momentum' }).disabled).toBe(true);
+    const onMomentum = within(reentryKind()).getByRole<HTMLInputElement>('radio', { name: 'On momentum' });
+    expect(onMomentum.disabled).toBe(true);
+    expect(onMomentum.closest('label')?.title).toMatch(/once Simple momentum is on/);
     const reasonId = reentryKind().getAttribute('aria-describedby');
     expect(reasonId).not.toBeNull();
-    expect(document.getElementById(reasonId ?? '')?.textContent?.trim()).not.toBe('');
+    expect(document.getElementById(reasonId ?? '')?.textContent?.trim()).toMatch(/once Simple momentum is on/);
   });
 
   it('can be chosen once momentum is on, and then needs no explanation', async () => {
@@ -172,6 +180,7 @@ describe('re-entering on momentum', () => {
 
     const onMomentum = within(reentryKind()).getByRole<HTMLInputElement>('radio', { name: 'On momentum' });
     expect(onMomentum.disabled).toBe(false);
+    expect(onMomentum.closest('label')?.title).toBe('');
     expect(reentryKind().getAttribute('aria-describedby')).toBeNull();
     fireEvent.click(onMomentum);
 

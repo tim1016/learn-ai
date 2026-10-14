@@ -120,7 +120,6 @@ describe('a problem is tied to its field', () => {
   it('in a leg’s stop loss, momentum and re-entry', async () => {
     await renderPage(fakeService(vi));
     addLeg();
-    expect(screen.getByLabelText('Leg 1 stop loss value').getAttribute('aria-describedby')).toBeNull();
 
     flip('Leg 1 stop loss');
     flip('Leg 1 simple momentum');

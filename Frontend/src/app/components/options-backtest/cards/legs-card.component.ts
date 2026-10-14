@@ -34,6 +34,8 @@ export class LegsCardComponent {
   readonly add = output();
   readonly legCopied = output<string>();
   readonly legRemoved = output<string>();
+  /** The id of the leg a field of which took the keyboard. */
+  readonly legFocused = output<string>();
 
   private readonly cards = viewChildren(LegCardComponent);
   private readonly builder = viewChild.required(LegBuilderCardComponent);
