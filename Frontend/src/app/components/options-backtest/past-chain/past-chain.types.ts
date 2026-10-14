@@ -9,7 +9,6 @@ export type ChainDay = Schemas['PastChainDayResponse'];
 export type ExpirySummary = Schemas['PastChainExpirySummary'];
 export type ExpiryTag = Schemas['PastChainExpiryTag'];
 export type TagSeries = ExpiryTag['series'];
-export type ListingState = ChainDay['listing_state'];
 /** Why the lake would fetch nothing for the session now, in its own words; absent or null when it would fetch. */
 export type FetchRefusal = NonNullable<ChainDay['fetch_refusal']>;
 
@@ -17,15 +16,12 @@ export type FetchRefusal = NonNullable<ChainDay['fetch_refusal']>;
 export type ChainExpiry = Schemas['PastChainExpiryResponse'];
 export type ChainSide = Schemas['PastChainSide'];
 export type ChainContract = Schemas['PastChainContract'];
-export type PriceState = ChainContract['price_state'];
 export type UnderlyingPrice = Schemas['PastChainUnderlyingPrice'];
-export type UnderlyingState = UnderlyingPrice['state'];
 
 /** A download: what to capture, and how each thing came out. */
 export type DownloadRequest = Schemas['PastChainDownloadRequest'];
 export type DownloadAnswer = Schemas['PastChainDownloadResponse'];
 export type DownloadItem = Schemas['PastChainDownloadItem'];
-export type DownloadReason = NonNullable<DownloadItem['reason']>;
 
 /** The session of a trading date as an answer states it: the instants it opens and closes at. */
 export interface SessionBounds {
