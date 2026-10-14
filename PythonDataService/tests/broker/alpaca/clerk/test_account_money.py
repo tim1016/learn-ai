@@ -22,7 +22,9 @@ from app.broker.alpaca.clerk.account_money import (
     account_money,
     bot_parts,
     bot_segment,
+    holdings_text,
     money_bar,
+    quantity_text,
     release_at_stop,
     share_bps,
 )
@@ -343,3 +345,28 @@ def test_basis_points_follow_the_fee_rule_and_lift_a_tiny_slice_to_one() -> None
     assert share_bps({"x": 0, "y": 0}, empty=None) == {"x": 0, "y": 0}
     with pytest.raises(ValueError):
         share_bps({"x": -1}, empty="x")
+
+
+@pytest.mark.parametrize(
+    ("quantity", "text"),
+    [
+        pytest.param(1234567, "1234567", id="seven whole digits (was 1234570)"),
+        pytest.param(1234567.0, "1234567", id="seven whole digits as a float"),
+        pytest.param(D("1234567"), "1234567", id="seven whole digits as a Decimal"),
+        pytest.param(D("1E+2"), "100", id="exponent form, no scientific text"),
+        pytest.param(100, "100", id="the per-effect cap"),
+        pytest.param(4.0, "4", id="a whole float"),
+        pytest.param(0.5, "0.5", id="half a share"),
+        pytest.param(D("0.125"), "0.125", id="an exact fraction"),
+        pytest.param(0.123456789, "0.123456789", id="nine places (was 0.123457)"),
+        pytest.param(1234567.123456789, "1234567.123456789", id="whole and nine places (was 1234570)"),
+        pytest.param(0.30000000000000004, "0.3", id="float storage noise below the broker's step"),
+        pytest.param(-8, "-8", id="a short keeps its sign"),
+    ],
+)
+def test_a_share_count_prints_exactly_to_the_brokers_finest_step(quantity: float | D, text: str) -> None:
+    assert quantity_text(quantity) == text
+
+
+def test_the_holdings_note_prints_each_count_exactly() -> None:
+    assert holdings_text({"SPY": 1234567, "QQQ": D("0.5")}) == "0.5 QQQ, 1234567 SPY"

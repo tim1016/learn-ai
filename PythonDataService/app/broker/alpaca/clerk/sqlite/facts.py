@@ -45,6 +45,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExecutionCoverageConflictCause,
 )
 from app.broker.contract.options import OptionOrderRequest
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.program_leg import LegShape
@@ -52,6 +53,14 @@ if TYPE_CHECKING:
     from app.schemas.market_liveness import TopOfBookQuote
 
 FACTS_SCHEMA_VERSION = 1
+
+
+def _is_instant_ms(value: object) -> bool:
+    """Whether ``value`` is a whole ``int64 ms UTC`` the domain admits: zero to ``MAX_TIMESTAMP_MS`` (ADR 0022 (g)).
+
+    ``type(...) is int`` also refuses a flag, which is an ``int`` to ``isinstance``.
+    """
+    return type(value) is int and 0 <= value <= MAX_TIMESTAMP_MS
 
 
 @dataclass(frozen=True)
@@ -91,8 +100,8 @@ class ExitRecoveryEvaluatedFacts:
         if facts.outcome not in {"failure", "hold", "accepted"}:
             raise ValueError("Unknown exit recovery outcome")
         for value in (facts.last_checked_at_ms, facts.failure_elapsed_ms, facts.first_failure_at_ms, facts.allowed_from_ms):
-            if value is not None and (type(value) is not int or value < 0):
-                raise ValueError("Exit recovery times must be non-negative integer milliseconds")
+            if value is not None and not _is_instant_ms(value):
+                raise ValueError("Exit recovery times must be integer milliseconds within the admissible instant range")
         return facts
 
 
@@ -240,6 +249,8 @@ class EnterAcceptedFacts:
     def to_facts_json(self) -> str:
         facts = asdict(self)
         if self.cash_reference_price is None:
+            if self.fee_provision_cents != 0:
+                raise ValueError("an ENTER's fee provision needs the cash reference it was provisioned against")
             facts.pop("cash_reference_price")
             facts.pop("fee_provision_cents")
         if self.option is None:
@@ -273,10 +284,14 @@ class EntrySettledFacts:
     def __post_init__(self) -> None:
         if self.settlement not in ("entered", "discarded"):
             raise ValueError(f"an entry is settled as entered or discarded; got {self.settlement!r}")
-        for name in ("units_asked", "units_filled", "until_ms", "settled_at_ms"):
+        for name in ("units_asked", "units_filled"):
             value = getattr(self, name)
             if type(value) is not int or value < 0:
                 raise ValueError(f"{name} is a whole number, zero or more; got {value!r}")
+        for name in ("until_ms", "settled_at_ms"):
+            value = getattr(self, name)
+            if not _is_instant_ms(value):
+                raise ValueError(f"{name} is int64 ms UTC, zero to the last admissible instant; got {value!r}")
 
     def to_facts_json(self) -> str:
         return canonicalize(asdict(self))
@@ -349,17 +364,20 @@ class EntryBuyingPowerComparedFacts:
             raise ValueError("a comparison names its reason exactly when its result is unknown")
         if self.holds and self.result != "under_reserved_unexplained":
             raise ValueError("only an under-reserved comparison holds a bot")
-        for name in ("contracts_asked", "contracts_filled", "commitment_cents", "compared_at_ms"):
+        for name in ("contracts_asked", "contracts_filled", "commitment_cents"):
             value = getattr(self, name)
             if type(value) is not int or value < 0:
                 raise ValueError(f"{name} is a whole number, zero or more; got {value!r}")
-        for name in (
-            "set_aside_for_filled_cents", "cost_of_filled_cents", "first_began_ms",
-            "first_ended_ms", "sent_at_ms", "second_began_ms", "second_ended_ms",
-        ):
+        if not _is_instant_ms(self.compared_at_ms):
+            raise ValueError(f"compared_at_ms is int64 ms UTC, zero to the last admissible instant; got {self.compared_at_ms!r}")
+        for name in ("set_aside_for_filled_cents", "cost_of_filled_cents"):
             value = getattr(self, name)
             if value is not None and (type(value) is not int or value < 0):
                 raise ValueError(f"{name} is a whole number, zero or more, or absent; got {value!r}")
+        for name in ("first_began_ms", "first_ended_ms", "sent_at_ms", "second_began_ms", "second_ended_ms"):
+            value = getattr(self, name)
+            if value is not None and not _is_instant_ms(value):
+                raise ValueError(f"{name} is int64 ms UTC, zero to the last admissible instant, or absent; got {value!r}")
         if self.fall_cents is not None and type(self.fall_cents) is not int:
             raise ValueError(f"fall_cents is whole cents or absent; got {self.fall_cents!r}")
         if self.premium_paid_cents is not None and type(self.premium_paid_cents) is not int:
@@ -554,7 +572,7 @@ class ScheduledCloseFacts:
         kind, times = value["kind"], (value["due_ms"], value["session_open_ms"])
         if not isinstance(kind, str) or not kind:
             raise ValueError("a scheduled close's kind is a name")
-        if any(isinstance(time, bool) or not isinstance(time, int) or time < 0 for time in times):
+        if not all(_is_instant_ms(time) for time in times):
             raise ValueError("a scheduled close's times are int64 ms UTC")
         return cls(kind=kind, due_ms=times[0], session_open_ms=times[1])
 
@@ -586,7 +604,7 @@ class DecisionPricingFacts:
         bar_identity, decided_at_ms = value["bar_identity"], value["decided_at_ms"]
         if not isinstance(bar_identity, str) or not bar_identity:
             raise ValueError("a decision's pricing bar is named by its identity")
-        if isinstance(decided_at_ms, bool) or not isinstance(decided_at_ms, int) or decided_at_ms < 0:
+        if not _is_instant_ms(decided_at_ms):
             raise ValueError("the decision's close is int64 ms UTC")
         return cls(bar_identity=bar_identity, decided_at_ms=decided_at_ms)
 
@@ -1593,7 +1611,13 @@ def validate_execution_slice_facts(facts: ExecutionSliceFilledFacts) -> None:
         _require_finite_nonnegative(facts.fee, field="fee")
     elif facts.fee is not None:
         raise ValueError("not_reported fee_fidelity requires fee=None")
-    if isinstance(facts.source_event_at_ms, bool) or not isinstance(facts.source_event_at_ms, int):
+    # Only the ceiling is added: a stored slice replays through this check, and what it accepted
+    # at or below ``MAX_TIMESTAMP_MS`` it still accepts.
+    if (
+        isinstance(facts.source_event_at_ms, bool)
+        or not isinstance(facts.source_event_at_ms, int)
+        or facts.source_event_at_ms > MAX_TIMESTAMP_MS
+    ):
         raise ValueError("source_event_at_ms must be an int64 millisecond timestamp")
 
 

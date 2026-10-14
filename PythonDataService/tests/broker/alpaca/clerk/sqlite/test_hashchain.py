@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 
+from app.broker.alpaca.clerk.sqlite import schema
 from app.broker.alpaca.clerk.sqlite.hashchain import (
     GENESIS,
+    PAYLOAD_COLUMNS,
     canonical_payload,
     canonicalize,
     compute_row_hash,
     verify_chain,
 )
+from app.broker.alpaca.clerk.sqlite.writes import _NON_KEY_TRANSITION_COLUMNS
 
 _ROW = {
     "authority_generation": 1,
@@ -80,3 +84,45 @@ def test_verify_chain_detects_a_tampered_row() -> None:
     row1["operation_state"] = "accepted"  # tamper after hashing
 
     assert verify_chain([row1]) == 1
+
+
+def test_every_stored_column_but_the_chain_keys_is_hashed() -> None:
+    """A column added to the table and the write list but not to ``PAYLOAD_COLUMNS`` would be stored un-hashed."""
+    conn = sqlite3.connect(":memory:")
+    try:
+        schema.apply_schema(conn)
+        stored = tuple(row[1] for row in conn.execute("PRAGMA table_info(custody_transitions)"))
+    finally:
+        conn.close()
+
+    assert tuple(c for c in stored if c not in ("sequence", "prev_hash", "row_hash")) == PAYLOAD_COLUMNS
+    assert PAYLOAD_COLUMNS == _NON_KEY_TRANSITION_COLUMNS
+
+
+def test_a_row_with_non_ascii_text_hashes_to_the_digest_it_always_did() -> None:
+    """The literal digest pins ``ensure_ascii=True``: the same row hashed as UTF-8 text would differ.
+
+    The literals were computed once with this module as it stands; they are the format, not a derivation of it.
+    """
+    row = dict(
+        _ROW,
+        authority_generation=3,
+        run_id="run-1",
+        transition_kind="OPERATOR_NOTE",
+        summary_code="OPERATOR_NOTE",
+        clerk_observed_at_ms=1788883200000,
+        recorded_at_ms=1788883200001,
+        facts_json='{"note":"caf\u00e9 \u2713"}',
+    )
+
+    payload = canonical_payload(row)
+
+    assert payload == (
+        r'{"authority_generation":3,"broker_order_id":null,"broker_state":null,"clerk_observed_at_ms":1788883200000,'
+        r'"command_id":null,"custody_owner":"ACCOUNT_CLERK","effect_operation_id":null,'
+        r'"execution_authority":"ACCOUNT_CLERK","facts_json":"{\"note\":\"caf\u00e9 \u2713\"}",'
+        r'"facts_schema_version":1,"operation_state":"succeeded","order_ref":null,"proof_reference":null,'
+        r'"recorded_at_ms":1788883200001,"run_id":"run-1","source_event_at_ms":null,'
+        r'"strategy_instance_id":"spy-bot","summary_code":"OPERATOR_NOTE","transition_kind":"OPERATOR_NOTE"}'
+    )
+    assert compute_row_hash(GENESIS, payload) == "16fb0ce616a610c6958a8e6a7a10e345475b8293af4eff7bdfeb88a027c59f4d"
