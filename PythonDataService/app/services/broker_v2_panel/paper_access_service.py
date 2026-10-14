@@ -19,11 +19,17 @@ async def prepare_paper_access(
     actor: str,
     reason: str,
 ) -> CanaryActivationPlan:
-    """Validate account scope and prepare a read-only exact-pairing plan."""
-    await validate_account(broker, account_id)
+    """Validate account scope and prepare a read-only exact-pairing plan.
+
+    The plan names the broker's spelling of the account, not the route's: the
+    Deploy view and Start admission look a pairing up under that spelling, so
+    one recorded under the route's other casing would be confirmed as enabled
+    and never found.
+    """
+    real_account_id = await validate_account(broker, account_id)
     return plan_canary_activation(
         program_key=program_key,
-        account_id=account_id,
+        account_id=real_account_id,
         actor=actor,
         reason=reason,
     )
@@ -37,9 +43,9 @@ async def confirm_paper_access(
     plan: CanaryActivationPlan,
     confirmation_token: str,
 ) -> CanaryAdmissionEvent:
-    """Apply only the plan bound to this route's exact account and program."""
-    await validate_account(broker, account_id)
-    if plan.account_id != account_id or plan.program_key != program_key:
+    """Apply only the plan bound to this route's account, in the broker's spelling, and program."""
+    real_account_id = await validate_account(broker, account_id)
+    if plan.account_id != real_account_id or plan.program_key != program_key:
         raise CanaryActivationRefused(
             "the reviewed Paper-access plan does not match this strategy and account"
         )
