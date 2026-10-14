@@ -29,9 +29,6 @@ export type Point = Readonly<Record<string, PointValue>>;
 // ---------------------------------------------------------------- capabilities
 
 export type CapabilityKnob = Schemas['GoldenSearchCapabilityKnob'];
-export type KnobKind = CapabilityKnob['kind'];
-export type FixedControl = Schemas['GoldenSearchFixedControl'];
-export type KnobConstraint = Schemas['GoldenSearchConstraint'];
 export type KnobPair = readonly [string, string];
 export type StrategyCapability = Schemas['GoldenSearchCapability'];
 
@@ -45,11 +42,6 @@ export type StrategyCapability = Schemas['GoldenSearchCapability'];
 export type KnobPlan = Schemas['GoldenSearchKnobPlan'];
 export type KnobMode = KnobPlan['mode'];
 export type GoldenSearchMethod = Schemas['GoldenSearchProtocol']['method'];
-/** `max_drawdown_ceiling` is a fraction of peak equity, in (0, 1]. */
-export type SelectionPolicy = Schemas['GoldenSearchSelectionPolicy'];
-export type ZoomSettings = Schemas['GoldenSearchZoomSettings'];
-export type ExecutionAssumptions = Schemas['GoldenSearchExecution'];
-export type StressScenario = Schemas['GoldenSearchStressScenario'];
 
 export type IncumbentRef = Omit<Schemas['GoldenSearchIncumbent'], 'params'> & { params: Point };
 
@@ -76,7 +68,6 @@ export type SummaryLink = Schemas['GoldenSearchSummaryLink'];
 
 export type ExposureView = Schemas['GoldenSearchExposure'];
 export type ExposureState = ExposureView['state'];
-export type ExposureClaim = NonNullable<Schemas['GoldenSearchStudySummary']['exposure_claim']>;
 
 /**
  * `GET /defaults`: a full plan prefilled, plus the incumbent's name, the
@@ -104,9 +95,6 @@ export interface DefaultsLayout {
   range_end_ms?: number;
 }
 
-export type StageEstimate = Schemas['GoldenSearchStageEstimate'];
-export type StudyEstimate = Schemas['GoldenSearchEstimate'];
-export type RunUpView = Schemas['GoldenSearchRunUp'];
 /** `POST /preflight`: protocol problems are refusals in the body, never a 400. */
 export type GoldenSearchPreflight = Schemas['GoldenSearchPreflight'];
 
@@ -121,20 +109,12 @@ export type CandidateKey = Schemas['GoldenSearchEvidenceCandidate']['key'];
 export type ExamOutcome = NonNullable<StudySummary['exam_outcome']>;
 export type RetainKind = 'keep_current' | 'wait_for_fresh_data' | 'retain_exploration';
 
-export type StudyReceiptSummary = Schemas['GoldenSearchReceiptSummary'];
-export type StudyGuidance = Schemas['GoldenSearchGuidance'];
 export type StudyProgress = Schemas['GoldenSearchProgress'];
-export type StageDispatch = Schemas['GoldenSearchDispatch'];
-export type StudyDecision = Schemas['GoldenSearchDecision'];
 /** Returns and drawdowns are fractions, as the engine reports them. */
 export type Metrics = Schemas['GoldenSearchMetrics'];
 
 /** One refinement round of one knob; `invalid`, `results` and `objectives` arrive as two-element arrays. */
 export type ZoomRound = Schemas['GoldenSearchZoomRound'];
-/** One searched knob's outcome over the whole procedure, authored in Python from its rounds. */
-export type KnobSummary = Schemas['GoldenSearchKnobSummary'];
-export type StopReason = KnobSummary['stop_reason'];
-export type ProcedureCounts = Schemas['GoldenSearchProcedureCounts'];
 
 /** The recent-window procedure. */
 export type ProcedureView = Omit<Schemas['GoldenSearchProcedureView'], 'winner'> & { winner: Point };
@@ -143,27 +123,20 @@ export type SearchView = Omit<Schemas['GoldenSearchSearchView'], 'winner'> & { w
 
 /** One fold; `incumbent_test_metrics` is the frozen incumbent on the same test window, the benchmark every fold is read against. */
 export type ValidationFold = Omit<Schemas['GoldenSearchValidationFold'], 'winner'> & { winner: Point | null };
-export type FoldRunStatus = ValidationFold['status'];
-/** `compute_verdict(...).as_dict()`: the legacy five-label summary with its coverage. */
-export type ValidationVerdict = Schemas['GoldenSearchVerdict'];
 /** Growth of 1 linked across test folds, minus 1; `linked_return` is null once a fold is missing (the line breaks). */
 export type LinkedFoldReturn = Schemas['GoldenSearchLinkedReturn'];
-export type ValidationSummaryPills = Schemas['GoldenSearchSummaryPills'];
 /** `incumbent_linked` is the frozen incumbent's test returns linked the same way; `incomplete` when the budget stopped the stage. */
 export type ValidationView = Omit<Schemas['GoldenSearchValidationView'], 'folds'> & { folds: ValidationFold[] };
 
 /** `center` marks the candidate's own value in a neighborhood. */
 export type NeighborRow = Schemas['GoldenSearchNeighborRow'];
 export type EvidenceCellStatus = NeighborRow['status'];
-export type CandidateNeighborhood = Schemas['GoldenSearchNeighborhood'];
 export type StressResult = Schemas['GoldenSearchStressResult'];
 export type Finding = Schemas['GoldenSearchFinding'];
 export type Recommendation = Schemas['GoldenSearchRecommendation'];
 export type PairMapCell = Schemas['GoldenSearchPairCell'];
 /** A two-knob landscape: rows are `y_knob`'s values, columns `x_knob`'s, cells row-major. */
 export type PairMap = Schemas['GoldenSearchPairMap'];
-export type IntervalMs = Schemas['GoldenSearchWindow'];
-export type EvidenceScope = Schemas['GoldenSearchEvidenceScope'];
 
 /**
  * One candidate on the development scope. `guidance` comes from a closed copy
@@ -266,14 +239,11 @@ export interface StudyListFilters {
 }
 
 
-export type DailyEquityPoint = Schemas['GoldenSearchEquityPoint'];
 export type DrawdownPoint = Schemas['GoldenSearchDrawdownPoint'];
 /** `return_fraction` is null when the month started without positive equity to divide by. */
 export type MonthlyResult = Schemas['GoldenSearchMonthlyResult'];
 /** One development trade with its net of commission, running net profit and decision bars held; `pnl` is before fees. */
 export type TradeRecord = Schemas['GoldenSearchTradeRecord'];
-/** The development run's trade charts, or why its trades cannot be drawn (they do not add up to its net profit, say). */
-export type TradeCharts = Schemas['GoldenSearchTradeChartsMeasured'] | Schemas['GoldenSearchTradeChartsMissing'];
 export type MeasuredTradeCharts = Schemas['GoldenSearchTradeChartsMeasured'];
 export type TradeHistogram = Schemas['GoldenSearchHistogram'];
 export type MeasuredEntryRsi = Schemas['GoldenSearchEntryRsiMeasured'];
@@ -295,7 +265,6 @@ export type MeasuredConcentration = Schemas['GoldenSearchConcentrationMeasured']
 export type ChanceReadings = Schemas['GoldenSearchEvidenceCandidate']['chance'];
 export type ChanceComparison = ChanceReadings['comparison'];
 export type MeasuredChanceComparison = Schemas['GoldenSearchChanceComparisonMeasured'];
-export type ChanceComparisonLabel = MeasuredChanceComparison['label'];
 export type ChanceProfitability = ChanceReadings['profitability'];
 export type MeasuredChanceProfitability = Schemas['GoldenSearchChanceProfitabilityMeasured'];
 export type ChanceRehearsal = ChanceReadings['rehearsal'];
@@ -312,7 +281,6 @@ export type MeasuredChanceFitToFitDirection = FinalChance['fit_to_fit'] & { stat
 export type ChanceBasis = Schemas['GoldenSearchChanceBasis'];
 /** The candidate a development chart draws: its key for colour and walkthrough targets, its label for words. */
 export type CandidateRef = Pick<EvidenceCandidate, 'key' | 'label'>;
-export type CandidateRunDetail = Schemas['GoldenSearchRunDetail'];
 
 /** A final-test run's measure beside the development period's, with the change. */
 export type FinalMeasure = Schemas['GoldenSearchFinalMeasure'];
@@ -341,7 +309,6 @@ export type KnobDrift = Schemas['GoldenSearchKnobDrift'];
 
 /** What asked for a run: the step, and for a walk-forward or evidence run which part of it. */
 export type RunGroupKey = Schemas['GoldenSearchRunGroup']['key'];
-export type RunGroup = Schemas['GoldenSearchRunGroup'];
 /** One engine run of a study (#2930), under the step that first asked for it. */
 export type StudyRun = Schemas['GoldenSearchRun'];
 export type RunsPage = Schemas['GoldenSearchRunsPage'];
@@ -371,16 +338,12 @@ export type RunCurves = Schemas['GoldenSearchRunCurves'];
 /** `GET /studies/{id}/candidates/{key}`: the development detail run, plus the exam's once it ran. */
 export type CandidateDetail = Omit<Schemas['GoldenSearchCandidateDetail'], 'point'> & { point: Point };
 
-/** What the research said when the version was approved; preserved forever, never upgraded by approval. */
-export type QualificationResearch = Schemas['GoldenQualificationResearch'];
-
 /**
  * `GET /api/research/golden-qualifications/{id}/deploy-offer`; `parameters` is
  * canonical without `symbol`. Only a `ready` status may be applied;
  * `unverifiable` means its status could not be read.
  */
 export type QualificationDeployOffer = Omit<Schemas['GoldenQualificationDeployOffer'], 'parameters'> & { parameters: Point };
-export type QualificationStatus = QualificationDeployOffer['status'];
 
 /** Statuses whose stage run still owns (or is waiting for) a worker. */
 export const LIVE_STATUSES: readonly PresentedStatus[] = ['queued', 'running'];

@@ -17,5 +17,4 @@ import type { Metrics } from './golden-search.types';
 })
 export class GoldenSearchMetricsComponent {
   readonly metrics = input<Metrics | null>(null);
-  readonly compact = input(false);
 }

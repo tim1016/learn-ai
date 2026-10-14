@@ -35,7 +35,6 @@ the test opens.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable, Mapping
 from fractions import Fraction
 from math import ceil
@@ -71,8 +70,6 @@ from app.research.golden_search.selection import Metrics
 from app.research.grid_search.service import window_dates
 from app.research.monte_carlo.stationary import CHUNK_REPLICATIONS, stationary_index_chunks
 from app.research.sweep.ranking import RankingMeasure
-
-logger = logging.getLogger(__name__)
 
 #: What a stored rehearsal calls itself; a change to the reading's shape or interpretation needs a new one.
 SCHEMA_REHEARSAL = "golden-search-chance-rehearsal/v1"

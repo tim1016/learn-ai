@@ -26,7 +26,7 @@ from app.data_lake.catalog_client import CatalogUnavailableError
 from app.engine.engine import EvaluationBoundaryError
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract
 from app.research.golden_search import qualifications
-from app.research.golden_search.proof import BlobStore, ProofMismatchError, ProofRecord, default_blob_store, reprove
+from app.research.golden_search.proof import ProofMismatchError, ProofRecord, default_blob_store, reprove
 from app.research.golden_search.qualifications import GoldenDefault, QualificationEvent, QualificationRow
 from app.research.persistence.db import with_connection
 from app.schemas.run_admission import QUALIFICATION_REVOKED, QUALIFICATION_STALE, QUALIFICATION_UNJUDGEABLE
@@ -251,7 +251,6 @@ async def reprove_qualification(
     qualification_id: str,
     idempotency_key: str,
     actor: str,
-    blob_store: BlobStore | None = None,
 ) -> JudgedQualification:
     """Replay a version's restored proof under the code running now and append the re-proof.
 
@@ -301,7 +300,7 @@ async def reprove_qualification(
         reproved = await asyncio.to_thread(
             reprove,
             record,
-            blob_store or default_blob_store(),
+            default_blob_store(),
             artifact_digest=artifact_digest,
             wiring_digest=wiring_digest,
         )

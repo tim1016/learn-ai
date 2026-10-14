@@ -50,7 +50,6 @@ STAGE_STATES: dict[StageName, StudyState] = {
     "qualification": "qualification_pending",
 }
 RUNNING_STATES: frozenset[str] = frozenset(STAGE_STATES.values())
-TERMINAL_STATES: frozenset[str] = frozenset({"approved", "retained", "closed"})
 # Evaluation rows name the step that asked for them; a stage may run more than one step.
 STAGE_STEPS: dict[StageName, tuple[str, ...]] = {
     "search": ("search", "pair_audit", "recent"),
