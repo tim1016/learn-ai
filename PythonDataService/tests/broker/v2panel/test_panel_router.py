@@ -1299,6 +1299,7 @@ async def test_a_finished_runs_tape_reads_that_runs_window_and_refuses_another(
         run = await client.get(url, params={"timeframe": "1m", "from_ms": _T0 - 600_000, "to_ms": _T0 + 120_000})
         elsewhere = await client.get(url, params={"timeframe": "1m", "from_ms": _T0 - 86_400_000, "to_ms": _T0})
         half = await client.get(url, params={"timeframe": "1m", "from_ms": _T0})
+        daily = await client.get(url, params={"timeframe": "1d", "from_ms": _T0 - 600_000, "to_ms": _T0 + 120_000})
 
     assert run.status_code == 200, run.text
     body = run.json()
@@ -1311,6 +1312,11 @@ async def test_a_finished_runs_tape_reads_that_runs_window_and_refuses_another(
         "The window must lie within this bot's latest run, give or take 30 minutes."
     )
     assert (half.status_code, half.json()["detail"]["message"]) == (422, "A run window needs both from_ms and to_ms.")
+    # A daily bar starts at midnight, before any run window: refused, never an empty tape with no notice.
+    assert (daily.status_code, daily.json()["detail"]["message"]) == (
+        422,
+        "A run window is drawn on 1-minute bars; ask for the 1m timeframe.",
+    )
 
 
 async def test_lost_execution_lease_is_an_authored_blocker_not_a_raw_500(

@@ -16,11 +16,12 @@ from app.services.live_bar_aggregator import LiveLineStatus
 
 # A Saturday (market closed) so ``live_window`` takes its deterministic
 # calendar-day fallback instead of a real NYSE session lookup — mirrors
-# ``test_chart_projection.py``'s ``test_live_window_falls_back_when_market_closed``.
+# ``test_chart_projection.py``'s ``test_live_window_falls_back_to_the_new_york_day_when_market_closed``.
 _NOW = 1_700_319_600_000
 _DEFAULT_LINE = LiveLineStatus(status="streaming", last_bar_ms=1_700_000_000_000)
-_OPEN_MS = 1_700_265_600_000
-_CLOSE_MS = _OPEN_MS + 86_400_000
+# That Saturday's New York day: 2023-11-18 00:00 EST to 2023-11-19 00:00 EST.
+_OPEN_MS = 1_700_283_600_000
+_CLOSE_MS = 1_700_370_000_000
 
 
 def _fill(

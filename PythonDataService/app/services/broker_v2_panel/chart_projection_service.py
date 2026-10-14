@@ -38,7 +38,6 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Protocol
 
 from app.broker.alpaca.clerk.fills import FillRecord
@@ -65,7 +64,7 @@ from app.schemas.fleet_history_batch import HistoryBatchQuery, HistoryBatchRespo
 from app.services.dataset_service import INDICATOR_CONFIGS
 from app.services.indicator_warmup_policy import configured_indicator_warmup_bars
 from app.services.live_chart_window import ChartFeedState, ChartFeedStatus, ChartWindowResult
-from app.utils.session_anchors import et_date_at_ms
+from app.utils.session_anchors import et_date_at_ms, et_day_end_ms, et_midnight_ms
 
 MS_PER_DAY = 86_400_000
 
@@ -222,8 +221,10 @@ def live_window(now_ms: int) -> tuple[int, int]:
 
     "Today" is the canonical NY trading date. On a session day the window is the
     real session open→close (respecting half-days); when the market is closed
-    (weekend/holiday) it falls back to the NY calendar day so the response still
-    carries the day's persisted bars and markers without fabricating a session.
+    (weekend/holiday) it falls back to the NY calendar day, ET midnight to the
+    next ET midnight (23 or 25 hours across a clock change), so the response
+    still carries the day's persisted bars and markers without fabricating a
+    session.
 
     This is the single source of the live window: the caller uses it to bound
     the resolver fetch AND passes the same window into :func:`build_live_chart`,
@@ -233,11 +234,8 @@ def live_window(now_ms: int) -> tuple[int, int]:
     session = current_trading_session_window(now_ms)
     if session is not None:
         return session.open_ms_utc, session.close_ms_utc
-    day_start = datetime.fromtimestamp(now_ms / 1000, tz=UTC)
-    open_ms = int(
-        day_start.replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000
-    )
-    return open_ms, open_ms + MS_PER_DAY
+    day = et_date_at_ms(now_ms)
+    return et_midnight_ms(day), et_day_end_ms(day)
 
 
 @dataclass(frozen=True)
@@ -476,6 +474,7 @@ def run_chart_window(
     from_ms: int,
     to_ms: int,
     *,
+    timeframe: ChartHistoryTimeframe,
     run_started_at_ms: int | None,
     run_ended_at_ms: int | None,
     now_ms: int,
@@ -484,7 +483,12 @@ def run_chart_window(
 
     A finished run's tape shows that run, not today's after-hours: the window
     may reach ``RUN_WINDOW_PADDING_MS`` either side of the run, never further.
+    The tape is of 1-minute bars: a daily bar starts at midnight, before any
+    window inside a session, so on ``1d`` the window would draw no bar and say
+    nothing, and the coarser bars cut the window's edges.
     """
+    if timeframe != "1m":
+        raise ChartWindowError("A run window is drawn on 1-minute bars; ask for the 1m timeframe.")
     if run_started_at_ms is None:
         raise ChartWindowError("This bot has not started a run, so it has no run window.")
     if to_ms <= from_ms:
