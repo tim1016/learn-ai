@@ -14,9 +14,11 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -44,12 +46,13 @@ from app.services import market_liveness
 from app.services.bot_binding_authority import SyntheticBindingAuthority
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_dry_run import DryRunActivityJournal
-from app.services.market_liveness import compose_market_liveness
+from app.services.bot_runtime import DecisionFenceFeed
+from app.services.market_liveness import compose_market_liveness, unknown_market_liveness
 from app.services.source_bar_ledger import SourceBarLedger
 from app.utils.timestamps import now_ms_utc
 from tests._helpers.bot_runner.custody import _SID, _T0
 from tests._helpers.bot_runner.doubles import _FakeClerk
-from tests._helpers.bot_runner.market import patch_wall_clock_to_the_fed_bar
+from tests._helpers.bot_runner.market import _tradable_market_liveness, patch_wall_clock_to_the_fed_bar
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests._helpers.market_quotes import publish_quotes
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
@@ -178,13 +181,16 @@ async def run(tmp_path: Path) -> AsyncIterator[Any]:
         wait_ms: int | None = 20,
         binding: BrokerBotBinding | None = None,
         synthesized: bool = False,
+        fenced_by: asyncio.Event | None = None,
     ) -> _Ran:
         # A Live Shadow's Clerk fills its own orders, and says so.
         clerk.simulates_fills = synthesized
         feed = _ScriptedFeed(script)
+        # Stop's fence, as ``execute_bot_run`` puts it in front of the strategy's stream only.
+        run_feed = feed if fenced_by is None else DecisionFenceFeed(feed, fenced_by)
         started = time.monotonic()
         await bot_trade_strategy.run_trade_bot(
-            binding or _binding(), feed, source_bars=ledger, pricing_feed=feed, pricing_bar_wait_ms=wait_ms
+            binding or _binding(), run_feed, source_bars=ledger, pricing_feed=feed, pricing_bar_wait_ms=wait_ms
         )
         took_s = time.monotonic() - started
         receipts = [
@@ -475,6 +481,52 @@ async def test_a_bot_that_trades_another_asset_refuses_to_run_without_that_asset
         repo.close()
 
 
+def _signal_round_trip() -> list[_Step]:
+    """A bot that trades what it listens to: ENTER on the second green bar, EXIT three bars on."""
+    return [
+        _Step(_green_bar(_FIRST_GREEN_MS)),
+        _Step(_green_bar(_ENTER_MS)),
+        _Step(_red_bar(_ENTER_MS + 60_000)),
+        _Step(_red_bar(_ENTER_MS + 120_000)),
+        _Step(_red_bar(_EXIT_MS)),
+    ]
+
+
+async def test_a_stopped_bot_observes_the_decision_bar_and_sends_nothing_to_the_clerk(run: Any) -> None:
+    """C-1: Stop's fence closed while the decision bar was on its way; the candidate is blocked, never sent."""
+    gate = asyncio.Event()
+    gate.set()
+    ran = await run(
+        [_Step(_green_bar(_FIRST_GREEN_MS)), _Step(_green_bar(_ENTER_MS), on_delivery=gate.clear)],
+        binding=_binding(trades=SIGNAL),
+        fenced_by=gate,
+    )
+
+    assert ran.calls == []
+    assert [reason for reason, _words in ran.blocked()] == ["STOPPED_OBSERVE_ONLY"]
+
+
+async def test_an_exit_reaches_the_clerk_with_the_market_liveness_unknown(
+    run: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C-2: the liveness gate is for ENTER only (#1671 AC3); an EXIT never waits on liveness evidence."""
+    reads: list[str] = []
+
+    def _liveness(symbol: str, observed_at_ms: int) -> Any:
+        reads.append(symbol)
+        if len(reads) == 1:
+            return _tradable_market_liveness(symbol, observed_at_ms)
+        return unknown_market_liveness(symbol, observed_at_ms=observed_at_ms)
+
+    monkeypatch.setattr(bot_trade_strategy, "market_liveness_fact", _liveness)
+
+    ran = await run(_signal_round_trip(), binding=_binding(trades=SIGNAL))
+
+    assert [call["purpose"] for call in ran.calls] == ["ENTER", "EXIT"]
+    assert ran.blocked() == []
+    assert reads == [SIGNAL], "only the ENTER read the liveness evidence"
+
+
 _DRY_RUN_SID = "dry-spy-qqq"
 
 
@@ -551,3 +603,85 @@ async def test_a_dry_run_records_the_asset_it_traded_and_that_assets_price(tmp_p
     finally:
         await close_synthetic_clerk_runtimes()
         market_liveness.reset_market_liveness_store_for_testing()
+
+
+@asynccontextmanager
+async def _a_dry_run_on_its_synthetic_clerk(tmp_path: Path) -> AsyncIterator[tuple[BrokerBotBinding, Any, DryRunActivityJournal, SourceBarLedger]]:
+    """A Dry Run that trades what it listens to: its own synthetic Clerk, registered, with its journal and ledger."""
+    clock = _TestClock(NOON)
+    binding = BrokerBotBinding(
+        strategy_instance_id=_DRY_RUN_SID, strategy_key="deployment_validation", broker="alpaca", symbol=SIGNAL,
+        mode="dry_run", quantity=1, action_plan=alpaca_v1_action_plan(SIGNAL), run_id="run-dry", created_at_ms=0,
+        sealed_account_id=synthetic_account_id_for_strategy(_DRY_RUN_SID), exit_terms=DEPLOY_EXIT_TERMS,
+        budget_consent=DeployBudgetConsent(
+            committed_cents=100_000, risk_revision=0, actor="owner", request_fingerprint="reviewed", world="synthetic",
+        ),
+    )
+    market_liveness.reset_market_liveness_store_for_testing()
+    publish_quotes(NOON, SPY=100.0)
+    authority = SyntheticBindingAuthority(
+        binding=binding, artifacts_root=tmp_path, lifecycle_repo_for=lambda _sid: pytest.fail("never read"),
+        runtime_in_use=lambda _sid: True, brokers={}, clock=clock,
+    )
+    try:
+        await authority.ensure_recoverable()
+        runtime = get_clerk_runtime(binding.sealed_account_id or "")
+        assert runtime is not None and runtime.clerk is not None
+        await runtime.clerk.register_strategy_run(binding)
+        clock.value = NOON + 1_000
+        bars = authority.source_bars()
+        try:
+            yield binding, runtime.clerk, DryRunActivityJournal(tmp_path / "instance"), bars
+        finally:
+            bars.close()
+    finally:
+        await close_synthetic_clerk_runtimes()
+        market_liveness.reset_market_liveness_store_for_testing()
+
+
+async def test_a_stopped_dry_run_observes_the_decision_bar_and_sends_nothing_to_its_clerk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C-1: the Dry Run runner's own Stop fence branch; no simulated fill, no journal row."""
+    gate = asyncio.Event()
+    gate.set()
+    async with _a_dry_run_on_its_synthetic_clerk(tmp_path) as (binding, clerk, journal, bars):
+        sent: list[str] = []
+        real_execute = clerk.execute_for_instance
+
+        async def _watched(**kwargs: Any) -> Any:
+            sent.append(kwargs["purpose"])
+            return await real_execute(**kwargs)
+
+        monkeypatch.setattr(clerk, "execute_for_instance", _watched)
+        script = [_Step(_green_bar(NOON - 60_000)), _Step(_green_bar(NOON), on_delivery=gate.clear)]
+        feed = _ScriptedFeed(script)
+
+        await bot_trade_strategy.run_dry_run_bot(
+            binding, DecisionFenceFeed(feed, gate), journal, source_bars=bars, pricing_feed=feed
+        )
+
+        assert sent == []
+        assert journal.tail(5) == []
+
+
+async def test_a_dry_run_discards_an_entry_its_clerk_rejected_and_journals_no_fill(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C-3: a REJECTED receipt is final; the staged candidate is discarded, never committed as a fill."""
+    from app.broker.alpaca.clerk.models import EffectOperationState
+
+    async with _a_dry_run_on_its_synthetic_clerk(tmp_path) as (binding, clerk, journal, bars):
+        asked: list[str] = []
+
+        async def _reject(**kwargs: Any) -> Any:
+            asked.append(kwargs["purpose"])
+            return SimpleNamespace(state=EffectOperationState.REJECTED, child_order_refs=())
+
+        monkeypatch.setattr(clerk, "execute_for_instance", _reject)
+        feed = _ScriptedFeed([_Step(_green_bar(NOON - 60_000)), _Step(_green_bar(NOON))])
+
+        await bot_trade_strategy.run_dry_run_bot(binding, feed, journal, source_bars=bars, pricing_feed=feed)
+
+        assert asked == ["ENTER"]
+        assert journal.tail(5) == []

@@ -889,6 +889,30 @@ async def test_a_stop_at_its_end_whose_registration_is_gone_says_its_outcome_sta
     assert "stays provisional" in said.getMessage()
 
 
+async def test_the_end_watch_loop_carries_a_due_end_forward_and_survives_a_failed_look(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F-A-18: the loop itself, not one look. A look that failed is logged; the next look fences the bot."""
+    from app.services import bot_runner
+
+    monkeypatch.setattr(bot_runner, "_END_WATCH_INTERVAL_S", 0.01)
+    clock = _Clock()
+    registry = _registry(tmp_path, _FakeFeed([_bar(_T0)], mode="hold"), now_ms=clock)
+    clerk = _end_clerk(registry)
+    await _deploy(registry)
+    clerk.fail_next = True
+
+    watch = registry.start_end_watch()
+    assert registry.start_end_watch() is watch, "a second start is the same watch"
+    clock.move_to(_END.end_at_ms)
+    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
+
+    assert clerk.passes == 2, "the failed look, then the pass that fenced the bot"
+    assert not watch.done()
+    await registry.stop_all()
+    assert watch.done(), "service shutdown ends the watch"
+
+
 # ── a stopped Dry Run's end ──────────────────────────────────────────────────
 
 
