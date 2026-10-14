@@ -420,11 +420,13 @@ _ANCHOR_2027_03_06 = option_expiry_anchor_ms(date(2027, 3, 6))
 class TestTimeToExpiry:
     def test_measures_to_the_anchor_not_the_whole_day(self):
         assert time_to_expiry_years(_ANCHOR_2027_03_06, _LATE_EVENING_ET_2027_03_05) == pytest.approx(
-            16.5 / 24 / 365
+            16.5 / 24 / 365, abs=1e-9, rel=0
         )
 
     def test_dte_days_is_the_same_instant_in_days(self):
-        assert option_expiry_dte_days(_ANCHOR_2027_03_06, _LATE_EVENING_ET_2027_03_05) == pytest.approx(16.5 / 24)
+        assert option_expiry_dte_days(_ANCHOR_2027_03_06, _LATE_EVENING_ET_2027_03_05) == pytest.approx(
+            16.5 / 24, abs=1e-9, rel=0
+        )
 
     def test_an_expired_contract_is_zero(self):
         assert time_to_expiry_years(option_expiry_anchor_ms(date(2027, 2, 19)), _LATE_EVENING_ET_2027_03_05) == 0.0
