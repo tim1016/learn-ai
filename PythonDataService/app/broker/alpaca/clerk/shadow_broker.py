@@ -60,6 +60,7 @@ not rediscover them in production:
 from __future__ import annotations
 
 import logging
+import sqlite3
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -129,13 +130,23 @@ from app.services.session_authority import (
     declared_session_bounds,
     scheduled_extended_session_bounds,
 )
-from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger, SourceBarLedgerMissingError
+from app.services.source_bar_ledger import (
+    RetainedSourceBar,
+    SourceBarLedger,
+    SourceBarLedgerCorruptError,
+    SourceBarLedgerMissingError,
+)
 from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import Clock, now_ms_utc
+
+logger = logging.getLogger(__name__)
 
 SHADOW_BROKER_ID = "shadow"
 _RESTING = "new"
 _TERMINAL = frozenset({"filled", "canceled", "expired", "rejected"})
+# What one instance's evidence ledger raises when it cannot be read: never written, a file that is not
+# a ledger (or holds another account's rows), or one SQLite cannot open. It is that instance's alone.
+_EVIDENCE_LEDGER_UNREADABLE = (OSError, SourceBarLedgerMissingError, SourceBarLedgerCorruptError, sqlite3.DatabaseError)
 
 
 class ShadowFillBindingError(RuntimeError):
@@ -311,7 +322,15 @@ class ShadowOrderBook:
         limit, and an older price anchors no limit.
         """
         account_id = self._evidence_namespace_for(client_order_id)
-        retained_bar = self._evidence.latest_for_symbol(account_id, symbol=symbol)
+        try:
+            retained_bar = self._evidence.latest_for_symbol(account_id, symbol=symbol)
+        except _EVIDENCE_LEDGER_UNREADABLE:
+            logger.warning(
+                "shadow recovery cannot read its instance's evidence ledger; the EXIT is left unpriced",
+                extra={"action": "shadow_recovery_ledger_unreadable", "account_id": account_id, "symbol": symbol},
+                exc_info=True,
+            )
+            return False
         sent_at_ms = self._clock()
         if not recovery_bar_in_send_session(retained_bar, now_ms=sent_at_ms, extended_window=self._window):
             return False
@@ -567,12 +586,26 @@ class ShadowOrderBook:
                 continue
             leg, anchor, cancel_at_ms = settlable
             client_order_id = record.order.client_order_id or record.order.order_id
-            bars = self._evidence.bars_after(
-                anchor.evidence_account_id,
-                provider=anchor.provider,
-                symbol=record.order.symbol,
-                start_ms=anchor.decision_bar_end_ms,
-            )
+            try:
+                bars = self._evidence.bars_after(
+                    anchor.evidence_account_id,
+                    provider=anchor.provider,
+                    symbol=record.order.symbol,
+                    start_ms=anchor.decision_bar_end_ms,
+                )
+            except _EVIDENCE_LEDGER_UNREADABLE:
+                # One book serves every instance on this authority: an instance that lost its ledger
+                # leaves its own order resting, undecided, and stops no other bot's read, submit or cancel.
+                logger.warning(
+                    "shadow settlement cannot read an instance's evidence ledger; its order is left resting",
+                    extra={
+                        "action": "shadow_settlement_ledger_unreadable",
+                        "account_id": anchor.evidence_account_id,
+                        "client_order_id": client_order_id,
+                    },
+                    exc_info=True,
+                )
+                continue
             fill = limit_touch_fill(
                 leg,
                 decision_bar_end_ms=anchor.decision_bar_end_ms,

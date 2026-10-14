@@ -599,6 +599,66 @@ async def test_the_guarded_port_carries_an_extended_recovery_legs_flag_to_the_bo
     assert guarded.bind_latest_recovery_bar(f"{NAMESPACE}:recovery", symbol="SPY", side="sell") is True
 
 
+OTHER_SID = "other-bot"
+OTHER_NAMESPACE = f"learn-ai/{OTHER_SID}/v1"
+
+
+def _damage_evidence_ledger(ledger: SourceBarLedger, damage: str) -> None:
+    """Close one instance's evidence ledger, then lose it (``missing``) or ruin it (``corrupt``)."""
+    ledger.close()
+    if damage == "missing":
+        for path in ledger.path.parent.iterdir():
+            path.unlink()
+    else:
+        ledger.path.write_bytes(b"this is not a sqlite database " * 64)
+        for sidecar in (ledger.path.with_name(ledger.path.name + "-wal"), ledger.path.with_name(ledger.path.name + "-shm")):
+            sidecar.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("damage", ["missing", "corrupt"])
+async def test_one_instances_unreadable_evidence_ledger_does_not_stop_the_shared_book(
+    world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock], tmp_path: Path, damage: str,
+) -> None:
+    """One book serves every bot on the authority: a resting order whose own
+    instance lost its evidence ledger waits, and no other bot's read, submit
+    or cancel fails with it."""
+    ports, bars, _live, clock = world
+    other = SourceBarLedger(artifacts_root=tmp_path, account_id=shadow_evidence_account_id_for_strategy(OTHER_SID))
+    ports.trade.bind_evaluated_bar(f"{OTHER_NAMESPACE}:rest", _retain(other, minute=1020, close="100.00", phase="POST"))
+    await ports.trade.submit(_extended_leg(99.00), client_order_id=f"{OTHER_NAMESPACE}:rest")
+    ports.trade.bind_evaluated_bar(f"{NAMESPACE}:rest", _retain(bars, minute=1020, close="100.00", phase="POST"))
+    await ports.trade.submit(_extended_leg(100.50), client_order_id=f"{NAMESPACE}:rest")
+    _damage_evidence_ledger(other, damage)
+    touching = _retain(bars, minute=1021, close="100.60", low="100.40", phase="POST")
+    clock.now_ms = touching.end_ms + 1
+
+    statuses = {order.client_order_id: order.status for order in await ports.read.list_orders()}
+    assert statuses == {f"{OTHER_NAMESPACE}:rest": "new", f"{NAMESPACE}:rest": "filled"}
+    assert [(position.symbol, position.quantity) for position in await ports.read.list_positions()] == [("SPY", 1.0)]
+
+    ports.trade.bind_evaluated_bar(f"{NAMESPACE}:next", _retain(bars, minute=1022, close="100.00", phase="POST"))
+    resting = await ports.trade.submit(_extended_leg(99.00), client_order_id=f"{NAMESPACE}:next")
+    assert resting.status == "new"
+    await ports.trade.cancel(resting.order_id)
+    canceled = await ports.trade.get_order_by_client_order_id(f"{NAMESPACE}:next")
+    assert canceled is not None and canceled.status == "canceled"
+
+
+@pytest.mark.parametrize("damage", ["missing", "corrupt"])
+async def test_a_recovery_with_no_readable_evidence_ledger_is_unbound_not_an_error(
+    world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock], tmp_path: Path, damage: str,
+) -> None:
+    """``False`` is how the book says the instance retained nothing it may price a
+    recovery EXIT from (the simulated broker's own answer for it)."""
+    ports, _bars, _live, clock = world
+    if damage == "corrupt":
+        other = SourceBarLedger(artifacts_root=tmp_path, account_id=shadow_evidence_account_id_for_strategy(OTHER_SID))
+        clock.now_ms = _retain(other, minute=601, close="100.00").end_ms + 1
+        _damage_evidence_ledger(other, damage)
+
+    assert ports.trade.bind_latest_recovery_bar(f"{OTHER_NAMESPACE}:recovery", symbol="SPY", side="sell") is False
+
+
 async def test_shadow_limit_expires_at_the_calendar_early_close(tmp_path: Path) -> None:
     from app.services.session_authority import scheduled_extended_session_bounds
     day = date(2026, 11, 27)
