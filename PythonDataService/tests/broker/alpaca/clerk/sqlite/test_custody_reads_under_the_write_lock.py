@@ -19,6 +19,8 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+import pytest
+
 from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.external_orders import acknowledge_external_order, observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import ReconciliationAttemptedFacts
@@ -185,11 +187,12 @@ def _steps_to_read_every_outside_order(root: Path, *, orders: int, journal_rows:
 
 
 def test_reading_every_outside_order_walks_the_journal_once_however_many_orders_there_are(tmp_path: Path) -> None:
-    few = _steps_to_read_every_outside_order(tmp_path / "few", orders=2, journal_rows=2000)
-    many = _steps_to_read_every_outside_order(tmp_path / "many", orders=14, journal_rows=2000)
+    few = _steps_to_read_every_outside_order(tmp_path / "few", orders=2, journal_rows=6000)
+    many = _steps_to_read_every_outside_order(tmp_path / "many", orders=14, journal_rows=6000)
 
-    # The same journal read for twelve more orders: one walk, not one more walk per order.
-    assert many < 2 * few, (few, many)
+    # The same journal read for twelve more orders: one walk of it, not one more walk per order. Each
+    # order still costs its own lookups, so the two are not equal; a walk per order would cost seven times.
+    assert many < 1.5 * few, (few, many)
 
 
 # ── the correction lookup ────────────────────────────────────────────────────
@@ -209,27 +212,7 @@ def _raised_by(execution_id: object) -> str:
     return json.dumps({"reason_code": "EXECUTION_COVERAGE_CONFLICT", "cause_facts": {"execution_id": execution_id}})
 
 
-def _correction_uncertainty_exists_as_it_was_read(conn: sqlite3.Connection, execution_id: str) -> bool:
-    """The lookup before it was a keyed query: every raised record, parsed in Python, in sequence order."""
-    rows = conn.execute(
-        "SELECT facts_json FROM custody_transitions WHERE transition_kind = 'UNCERTAINTY_RAISED'"
-    ).fetchall()
-    for row in rows:
-        facts = json.loads(row["facts_json"])
-        if facts.get("cause_facts", {}).get("execution_id") == execution_id:
-            return True
-    return False
-
-
-def _answer(read: Callable[[sqlite3.Connection, str], bool], conn: sqlite3.Connection, execution_id: str) -> object:
-    try:
-        return read(conn, execution_id)
-    except (ValueError, sqlite3.Error):
-        # An unreadable record is refused by both, as a JSON decode error or as SQLite's malformed-JSON one.
-        return "refused"
-
-
-def test_the_correction_lookup_answers_as_it_did_on_a_ledger_of_mixed_records(tmp_path: Path) -> None:
+def test_the_correction_lookup_answers_from_the_raised_records_that_name_the_execution(tmp_path: Path) -> None:
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
     try:
         conn = repo._conn
@@ -239,18 +222,16 @@ def test_the_correction_lookup_answers_as_it_did_on_a_ledger_of_mixed_records(tm
         _raise_row(conn, json.dumps({"cause_facts": {"orders": ["order-a"]}}))
         _raise_row(conn, json.dumps({"reason_code": "EXIT_NOT_FLAT"}))
         _raise_row(conn, _raised_by(7))
+        # JSON that is no object names no execution. The lookup once failed on it with an AttributeError;
+        # no writer produces one.
+        _raise_row(conn, "[1, 2]")
         _raise_row(conn, _raised_by("exec-wanted"))
         conn.commit()
 
-        well_formed = {
-            execution_id: _answer(reads.correction_uncertainty_exists, conn, execution_id)
+        assert {
+            execution_id: reads.correction_uncertainty_exists(conn, execution_id)
             for execution_id in ("exec-wanted", "exec-other", "exec-only-in-a-fill", "7", "exec-absent")
-        }
-        assert well_formed == {
-            execution_id: _answer(_correction_uncertainty_exists_as_it_was_read, conn, execution_id)
-            for execution_id in well_formed
-        }
-        assert well_formed == {
+        } == {
             "exec-wanted": True,
             "exec-other": True,
             "exec-only-in-a-fill": False,
@@ -258,18 +239,12 @@ def test_the_correction_lookup_answers_as_it_did_on_a_ledger_of_mixed_records(tm
             "exec-absent": False,
         }
 
-        # A record that cannot be read stops the lookup only where it is reached: after a match it is never read.
+        # A record that is not JSON stops the lookup only where it is reached: after a match it is never read.
         _raise_row(conn, "{not json")
         conn.commit()
-        unreadable_after = {
-            execution_id: _answer(reads.correction_uncertainty_exists, conn, execution_id)
-            for execution_id in ("exec-wanted", "exec-absent")
-        }
-        assert unreadable_after == {
-            execution_id: _answer(_correction_uncertainty_exists_as_it_was_read, conn, execution_id)
-            for execution_id in unreadable_after
-        }
-        assert unreadable_after == {"exec-wanted": True, "exec-absent": "refused"}
+        assert reads.correction_uncertainty_exists(conn, "exec-wanted") is True
+        with pytest.raises(sqlite3.OperationalError):
+            reads.correction_uncertainty_exists(conn, "exec-absent")
     finally:
         repo.close()
 

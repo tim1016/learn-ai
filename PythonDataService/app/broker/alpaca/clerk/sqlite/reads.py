@@ -94,7 +94,9 @@ _EXTERNAL_ORDER_COLUMNS: tuple[str, ...] = (
 
 #: What the journal says of each outside order, from one walk of it (#3216): the
 #: sequence of its first observation, of its newest one, and of its latest
-#: review. The records' times and facts are read by those sequences below.
+#: review. The records' times and facts are read by those sequences below. No
+#: index serves ``broker_order_id``, so a read of one order walks the journal
+#: too; only the bulk read shares that one walk across every order.
 _EXTERNAL_ORDER_PROVENANCE_SQL = (
     "SELECT broker_order_id, "
     "MIN(CASE WHEN transition_kind = 'EXTERNAL_ORDER_OBSERVED' THEN sequence END) AS observation_sequence, "
