@@ -10,7 +10,7 @@
 
 **No P0.** **One P1 candidate, [#3165](https://github.com/tim1016/learn-ai/issues/3165) (F1):** the reconciliation sweep task ends on `OverflowError` after 1,024 consecutive failed passes, nothing in the runtime notices a finished tap, and the bot page's "Last check against Alpaca" row keeps showing a green "Clean". The mechanism is reproduced; the severity turns on whether a frozen timestamp is read as enough of a cue. It was filed at once, per the map's contract, and is the owner's to confirm or downgrade.
 
-**One cut PR** ([#PRNUM](https://github.com/tim1016/learn-ai/pull/PRNUM)): delete-only, 11 files, +16 −128, nine dead-machinery rows (two commits: the cut, then the independent reviewer's Minors). 7,914 tests under `tests/broker/alpaca`, `tests/broker/fleet`, `tests/contracts` and `tests/broker/v2panel` pass.
+**One cut PR** ([#3166](https://github.com/tim1016/learn-ai/pull/3166)): delete-only, 11 files, +16 −128, nine dead-machinery rows (two commits: the cut, then the independent reviewer's Minors). 7,914 tests under `tests/broker/alpaca`, `tests/broker/fleet`, `tests/contracts` and `tests/broker/v2panel` pass.
 
 Of the rest: P2 defects, all fail-closed or self-correcting, each with a fix direction (F2–F10, F12–F17, F19–F21, F25); owner rulings, build or drop (F10, F12, F21–F24, F31–F33); six dead-machinery clusters that cannot be cut from here, each with its reason (F11 waits on #3151, F39 on #3153, F22 and F23 on an owner ruling, F31 on a store census, F32 on the money-trail rule); and a list of tests that fail the bar.
 
