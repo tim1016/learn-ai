@@ -41,6 +41,7 @@
         <ng-content />
       }
       @if (choice() !== 'same') {
+        @if (checkFailure(); as failed) { <em role="status">{{ failed }}</em> }
         @if (warning(); as told) {
           <div class="traded-asset__warning" role="note">
             <span aria-hidden="true">!</span>

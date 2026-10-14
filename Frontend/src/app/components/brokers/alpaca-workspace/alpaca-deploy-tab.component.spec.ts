@@ -138,7 +138,8 @@ describe('AlpacaDeployTabComponent', () => {
     const lane = testLane({ clerk_id: 'clrk_deploy_tab', effective_binding_generation: 3, routing_epoch: 7 });
     const directory = provideFleetDirectory({ observed_at_ms: 1, clerks: [lane] });
     const preview = vi.fn<BrokerV2PanelService['previewStartAdmission']>().mockRejectedValueOnce(new HttpErrorResponse({
-      status: 409, error: { detail: { reason: 'clerk_binding_generation_conflict', message: 'Account binding changed.' } },
+      // The fleet coordinator's refusals are flat, not nested under `detail`.
+      status: 409, error: { reason: 'clerk_binding_generation_conflict', message: 'Account binding changed.' },
     })).mockResolvedValue({
       operation: 'START', allowed: false, reason_code: 'CLERK_HOLD_ACTIVE',
       explanation: 'Preview reached the reviewed account.', next_step: null,

@@ -26,6 +26,8 @@ export class DeployLaunchReceiptComponent {
   readonly botLink = input<AccountWorkspaceLink | null>(null);
 
   protected readonly dryRun = computed(() => this.receipt().world === 'synthetic');
+  /** The bot never launched: nothing is set aside and nothing is running. */
+  protected readonly failed = computed(() => this.receipt().status === 'failed');
   protected readonly worldWording = computed(() => DEPLOY_WORLDS[deployWorldOf(this.receipt().world)].wording);
 
   private readonly panel = viewChild.required<ElementRef<HTMLElement>>('panel');

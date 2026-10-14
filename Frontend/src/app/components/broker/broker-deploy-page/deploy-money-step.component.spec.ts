@@ -217,10 +217,13 @@ describe('Deploy step 3, Money', () => {
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(screen.getByText(priceWait.detail)).toBeTruthy();
+    expect(screen.queryByText(/Checking again by itself has stopped/)).toBeNull();
 
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     const bounded = previewBudget.mock.calls.length;
     expect(bounded).toBeGreaterThan(1);
+    // The wait line says the automatic checks are over and the owner's refresh is what is left.
+    expect(screen.getByText(/Checking again by itself has stopped; use Refresh money to ask again/)).toBeTruthy();
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(previewBudget).toHaveBeenCalledTimes(bounded);
 
