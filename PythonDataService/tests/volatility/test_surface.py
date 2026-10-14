@@ -86,7 +86,7 @@ class TestSurfaceBuilder:
         ttm = 90 / 365
         w_shape = {90.0: 0.30, 95.0: 0.20, 100.0: 0.35, 105.0: 0.20, 110.0: 0.30}
         records = [
-            {"strike": k, "ttm": ttm, "option_price": _bs_price(spot, k, ttm, rate, vol, is_call), "is_call": is_call}
+            {"strike": k, "ttm": ttm, "option_price": bs_price(spot, k, ttm, rate, vol, is_call), "is_call": is_call}
             for k, vol in w_shape.items()
             for is_call in (True, False)
         ]
