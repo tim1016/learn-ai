@@ -133,16 +133,24 @@ class DueClose:
 def close_due_on(structure: ResolvedStructure, session: date, terms: CloseTerms) -> DueClose | None:
     """The close a held structure owes on ``session``, or None when it owes none that day.
 
+    A date the calendar has no session on owes none: a day with no session
+    has no close (ADR 0076 decision 20). The Clerk asks this of the date of
+    its own clock, which need not be a session's.
+
     A structure with a sold leg owes one every session it is held. One holding
     a contract that expires on the session owes the expiry-day close. When
     both apply, the earlier binds: a close takes every leg, so there is
     nothing left for the later one.
     """
     owed = []
-    if any(leg.contract.expiry_date == session for leg in structure.legs):
-        owed.append(DueClose(CloseKind.EXPIRY_DAY, close_deadline_ms(session, terms)))
-    if structure.has_sold_leg:
-        owed.append(DueClose(CloseKind.SOLD_LEG, sold_leg_close_ms(session, terms)))
+    try:
+        if any(leg.contract.expiry_date == session for leg in structure.legs):
+            owed.append(DueClose(CloseKind.EXPIRY_DAY, close_deadline_ms(session, terms)))
+        if structure.has_sold_leg:
+            owed.append(DueClose(CloseKind.SOLD_LEG, sold_leg_close_ms(session, terms)))
+    except LookupError:
+        # The calendar has no session on ``session``, so no close is counted back from one.
+        return None
     return min(owed, key=lambda close: close.due_ms, default=None)
 
 
@@ -152,8 +160,9 @@ def entry_cutoff_on(structure: ResolvedStructure, session: date, terms: CloseTer
     An entry is opened only when its whole life ends before the close its
     structure would owe that day: the wait for its fill, the time to prove
     a cancel, and a margin. For one bought contract expiring on ``session``
-    this is ``entry_cutoff_ms``. Raises ``LookupError`` when a contract
-    expires on ``session`` and the calendar has no session that day.
+    this is ``entry_cutoff_ms``. On a date the calendar has no session on
+    there is no close and so no cutoff: whether an order may be sent that
+    day is the session's to say, not a cutoff's.
     """
     due = close_due_on(structure, session, terms)
     if due is None:

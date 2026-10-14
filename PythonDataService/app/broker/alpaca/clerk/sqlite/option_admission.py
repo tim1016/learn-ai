@@ -205,8 +205,10 @@ def entry_past_cutoff(structure: ResolvedStructure, *, now_ms: int, terms: Close
     counted back from the calendar's session close, so a half day's cutoff
     is a half day's. A structure that would owe no close today has none.
 
-    Asked only of a contract that still trades in a session that is open:
-    the expiry and the session are each asked before this.
+    Asked only of a contract that still trades: each leg's expiry is asked
+    before this. Whether the session is open is a question of the Clerk's
+    own, asked after this one at admission: on a date with no session there
+    is no close and no cutoff here, and that question refuses the entry.
     """
     cutoff_ms = entry_cutoff_on(structure, et_date_at_ms(now_ms), terms)
     if cutoff_ms is None or now_ms < cutoff_ms:

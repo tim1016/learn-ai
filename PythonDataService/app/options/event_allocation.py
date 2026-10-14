@@ -390,6 +390,7 @@ def allocate_option_event(
     # A plain string is read as the kind it spells, or refused: never taken for an assignment.
     kind = OptionEventKind(kind)
     _require_a_change(position_change)
+    _require_an_instant("an event's date", event_date_ms)
     _require_whole("a contract's multiplier", multiplier, at_least=1)
     _require_one_contract_and_distinct_lots(contract, lots)
     contracts = abs(position_change)

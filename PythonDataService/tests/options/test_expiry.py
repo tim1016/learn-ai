@@ -6,6 +6,7 @@ import pytest
 
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.options.expiry import option_expiry_anchor_ms, option_expiry_date
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 _HOUR_MS = 3_600_000
 
@@ -45,6 +46,21 @@ def test_option_expiry_date_reads_back_the_date_an_anchor_names(expiry_date: dat
 def test_option_expiry_date_refuses_an_instant_that_is_not_an_anchor(off_anchor_ms: int) -> None:
     with pytest.raises(ValueError, match="is not an option expiry"):
         option_expiry_date(off_anchor_ms)
+
+
+@pytest.mark.parametrize(
+    "out_of_range_ms",
+    [
+        pytest.param(10**20, id="past what the platform's clock holds, which was an OSError"),
+        pytest.param(-(10**20), id="before it, which was an OSError"),
+        pytest.param(MAX_TIMESTAMP_MS + 1, id="the first millisecond past year 9999"),
+        pytest.param(-1, id="before 1970"),
+    ],
+)
+def test_option_expiry_date_refuses_an_instant_outside_the_range_as_a_value_error(out_of_range_ms: int) -> None:
+    """A vendor's integer can be anything. Its caller catches ``ValueError``, and no other error escapes it."""
+    with pytest.raises(ValueError, match=rf"is not an option expiry: .* from 0 to {MAX_TIMESTAMP_MS}"):
+        option_expiry_date(out_of_range_ms)
 
 
 def test_the_refusal_says_what_the_instant_is_and_proposes_no_other_date() -> None:
