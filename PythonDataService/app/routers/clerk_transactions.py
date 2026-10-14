@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Path, Query, status
 
+from app.broker.alpaca.clerk.sqlite.projection_errors import InvalidTimelineCursor
+from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseLost, RepositoryPoisoned
 from app.schemas.clerk_transaction_projection import (
     ClerkCustodyWindowSummary,
     ClerkTransactionHistoryResponse,
@@ -17,7 +20,9 @@ from app.schemas.clerk_transaction_projection import (
 )
 from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
 from app.services.sqlite_clerk_transaction_projection import (
+    ClerkTransactionAccountNotActive,
     ExternalOrderAcknowledgementNotFound,
+    InvalidTransactionHistoryCursor,
     sqlite_acknowledge_external_order,
     sqlite_transaction_detail,
     sqlite_transaction_history,
@@ -25,6 +30,14 @@ from app.services.sqlite_clerk_transaction_projection import (
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 router = APIRouter(prefix="/api/accounts", tags=["clerk-transactions"])
+logger = logging.getLogger(__name__)
+
+
+def _account_not_active() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={"reason": "sqlite_account_not_active"},
+    )
 
 
 @router.post(
@@ -49,8 +62,13 @@ async def acknowledge_external_order_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="External order observation was not found for this account.",
         ) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except ClerkTransactionAccountNotActive as exc:
+        raise _account_not_active() from exc
+    except (ExecutionLeaseLost, RepositoryPoisoned) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"reason": "sqlite_authority_unavailable", "message": str(exc)},
+        ) from exc
     if acknowledged is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -98,7 +116,14 @@ async def get_clerk_transaction_history(
                 "Activated SQLite Clerk transaction history is unavailable"
             )
         return sqlite_page
-    except ClerkTransactionProjectionUnavailable:
+    except ClerkTransactionAccountNotActive as exc:
+        raise _account_not_active() from exc
+    except ClerkTransactionProjectionUnavailable as exc:
+        logger.warning(
+            "Clerk transaction history projection unavailable: %s",
+            exc,
+            extra={"action": "clerk_transaction_history_unavailable", "account_id": account_id},
+        )
         # Availability is a backend-authored UI state, not a browser-side
         # inference from an HTTP failure. The canonical Clerk evidence remains
         # durable even while this downstream read model is unavailable.
@@ -122,7 +147,7 @@ async def get_clerk_transaction_history(
             rows=[],
             next_cursor=None,
         )
-    except ValueError as exc:
+    except (InvalidTransactionHistoryCursor, InvalidTimelineCursor) as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
 
@@ -152,6 +177,8 @@ async def get_clerk_transaction_detail(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Clerk transaction projection unavailable.",
         ) from exc
+    except ClerkTransactionAccountNotActive as exc:
+        raise _account_not_active() from exc
     if sqlite_row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

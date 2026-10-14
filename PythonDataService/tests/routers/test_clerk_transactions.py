@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -15,10 +16,12 @@ from app.broker.alpaca.clerk.sqlite.external_orders import (
     record_unfoldable_broker_order,
 )
 from app.broker.alpaca.clerk.sqlite.models import ExternalOrderResource
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseLost, RepositoryPoisoned
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.models import BrokerOrder
 from app.routers.clerk_transactions import router
+from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
+from app.services.sqlite_clerk_transaction_projection import InvalidTransactionHistoryCursor
 
 pytestmark = pytest.mark.asyncio
 
@@ -84,6 +87,104 @@ async def test_transaction_detail_surfaces_unavailable_without_active_authority(
 
     assert response.status_code == 503
     assert response.json()["detail"] == "Clerk transaction projection unavailable."
+
+
+async def test_foreign_account_transaction_detail_returns_typed_404(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = object()
+    set_active_clerk_runtime(ActiveClerkRuntime(
+        authority_kind="sqlite",
+        clerk=SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper"),  # type: ignore[arg-type]
+    ))
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/accounts/PA-OTHER/transactions/some-op")
+    finally:
+        set_active_clerk_runtime(None)
+        repo.close()
+    assert response.status_code == 404
+    assert response.json()["detail"] == {"reason": "sqlite_account_not_active"}
+
+
+async def test_history_rejects_a_malformed_cursor_from_the_active_clerk(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = object()
+    set_active_clerk_runtime(ActiveClerkRuntime(
+        authority_kind="sqlite",
+        clerk=SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper"),  # type: ignore[arg-type]
+    ))
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/accounts/PA-TEST/transactions", params={"cursor": "invalid"})
+    finally:
+        set_active_clerk_runtime(None)
+        repo.close()
+    assert response.status_code == 422
+    assert response.json()["detail"] == "transaction history cursor is invalid"
+
+
+async def test_history_logs_projection_failure_while_preserving_degraded_page(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    import app.routers.clerk_transactions as module
+
+    def fail(**_kwargs: object) -> None:
+        raise ClerkTransactionProjectionUnavailable("fold provenance missing")
+
+    monkeypatch.setattr(module, "sqlite_transaction_history", fail)
+    app = FastAPI()
+    app.include_router(router)
+    with caplog.at_level(logging.WARNING, logger=module.__name__):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/accounts/PA-TEST/transactions")
+    assert response.status_code == 200
+    assert response.json()["projection_available"] is False
+    assert any(record.action == "clerk_transaction_history_unavailable" and "fold provenance missing" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_status"),
+    [(InvalidTransactionHistoryCursor("bad cursor"), 422), (ValueError("bad fold"), 500)],
+)
+async def test_history_distinguishes_client_cursor_from_server_fold_error(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception, expected_status: int,
+) -> None:
+    import app.routers.clerk_transactions as module
+
+    def fail(**_kwargs: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(module, "sqlite_transaction_history", fail)
+    app = FastAPI()
+    app.include_router(router)
+    async with AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test") as client:
+        response = await client.get("/api/accounts/PA-TEST/transactions")
+    assert response.status_code == expected_status
+
+
+@pytest.mark.parametrize("failure", [ExecutionLeaseLost("lease lost"), RepositoryPoisoned("poisoned")])
+async def test_external_order_acknowledgement_reports_unavailable_authority(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception,
+) -> None:
+    import app.routers.clerk_transactions as module
+
+    def fail(**_kwargs: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(module, "sqlite_acknowledge_external_order", fail)
+    app = FastAPI()
+    app.include_router(router)
+    async with AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test") as client:
+        response = await client.post(
+            "/api/accounts/PA-TEST/transactions/external-orders/external-1/acknowledge",
+            json={"operator": "operator-1"},
+        )
+    assert response.status_code == 503
+    assert response.json()["detail"]["reason"] == "sqlite_authority_unavailable"
 
 
 # Alpaca's stored spelling and the fleet's canonical route spelling (#2220).
