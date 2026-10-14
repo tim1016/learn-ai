@@ -80,6 +80,7 @@ from app.services.broker_v2_panel.catalog_projection_service import (
     sqlite_catalog_rollup,
 )
 from app.services.broker_v2_panel.panel_authority_guard import reject_mixed_authority
+from app.services.broker_v2_panel.panel_errors import PanelUnavailableError
 from app.services.broker_v2_panel.panel_projection_service import open_pnl_fields, select_primary_action
 from app.services.session_authority import SessionAuthorityState
 
@@ -1086,7 +1087,8 @@ def _working_order_view(
         or order.filled_quantity is None
     ):
         raise SqlitePanelAdapterUnavailable(
-            f"SQLite order {order.order_ref!r} lacks durable leg or fill evidence"
+            "This bot's working orders could not be shown.",
+            detail=f"SQLite order {order.order_ref!r} lacks durable leg or fill evidence.",
         )
     return WorkingOrderView(
         order_ref=order.order_ref,
@@ -1157,8 +1159,12 @@ def recent_fill_view(
     )
 
 
-class SqlitePanelAdapterUnavailable(RuntimeError):
-    """The active SQLite panel cannot safely present an incomplete fold."""
+class SqlitePanelAdapterUnavailable(PanelUnavailableError):
+    """The active SQLite panel cannot safely present an incomplete fold.
+
+    The panel's own typed refusal (503): the page and the action that builds
+    it answer in words, never the global 500.
+    """
 
 
 def _require_coherent_economic_snapshot(
@@ -1172,7 +1178,8 @@ def _require_coherent_economic_snapshot(
         or economics.control_revision != projection.control_revision
     ):
         raise SqlitePanelAdapterUnavailable(
-            "SQLite custody and economic projections do not share one authority revision"
+            "This bot's custody and money could not be read together.",
+            detail="SQLite custody and economic projections do not share one authority revision.",
         )
 
 

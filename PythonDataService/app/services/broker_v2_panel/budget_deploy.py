@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import re
 import sqlite3
 from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -68,6 +69,7 @@ from app.broker.alpaca.clerk.sqlite.simulated_account import SimulationEvidenceU
 from app.broker.alpaca.clerk.sqlite.uncertainty import admit_new_exposure
 from app.broker.alpaca.regulatory_fees import RateNotPinnedError
 from app.broker_configuration.runtime import get_broker_configuration_service
+from app.engine.live.identity import INSTANCE_ID_PATTERN
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.options.requirement import ContractAtMultiplier, incremental_account_requirement, with_contracts
 from app.schemas.account_authority import AuthorityKind
@@ -89,10 +91,10 @@ from app.schemas.deployment_budget import (
 from app.schemas.exit_terms import ExitTerms
 from app.schemas.option_deploy import OptionDeployReview
 from app.services.broker_v2_panel.account_picture_read import read_account_picture
-from app.services.broker_v2_panel.bot_custody import bot_clerk_runtime
+from app.services.broker_v2_panel.bot_custody import bot_clerk_runtime, bot_is_known
 from app.services.broker_v2_panel.deploy_submissions import DeploySubmission, bot_name_note
 from app.services.broker_v2_panel.exit_estimate_read import exit_estimate_view, read_exit_estimate, read_quotes_ahead
-from app.services.broker_v2_panel.panel_errors import PanelRunnerError, PanelUnavailableError
+from app.services.broker_v2_panel.panel_errors import PanelRunnerError, PanelUnavailableError, UnknownBotError
 from app.services.broker_v2_panel.sqlite_panel_source import home_roster
 from app.services.market_liveness import prepared_top_of_book, status_stream_connected
 
@@ -616,7 +618,23 @@ def _command_receipt(runtime: ActiveClerkRuntime, account_id: str, submission: D
 
 
 async def budget_view(account_id: str, sid: str) -> DeploymentBudgetView:
+    """One bot's money, from the authority that custodies it.
+
+    ``UnknownBotError`` (404) for an id no bot could have and for one that
+    nothing holds. A bot something does hold that has no budget row is an
+    earlier deployment, and reads ``legacy``.
+    """
+    if re.fullmatch(INSTANCE_ID_PATTERN, sid) is None:
+        raise UnknownBotError(
+            f"Bot id '{sid}' is not a valid strategy instance id.",
+            detail="A bot's id is one path segment of letters, digits, '_', '.' or '-'.",
+        )
     async with _deployment_runtime(account_id, sid) as runtime:
+        if not bot_is_known("alpaca", sid):
+            raise UnknownBotError(
+                f"No bot '{sid}' is bound to broker 'alpaca'.",
+                detail="Deploy the bot first; bindings are broker-tagged.",
+            )
         return _budget_view(runtime, sid)
 
 

@@ -38,6 +38,7 @@ from app.services.broker_v2_panel.action_execution_service import (
     execute_action,
 )
 from app.services.broker_v2_panel.panel_data_source import run_action
+from app.services.broker_v2_panel.panel_errors import PanelUnavailableError
 
 _SID = "bot-alpha"
 
@@ -620,20 +621,92 @@ async def test_retired_action_receipts_stay_history_and_never_block_the_next_com
     assert len(persisted) == 2
 
 
-async def test_an_unreadable_ledger_refuses_every_command_and_keeps_its_file(tmp_path: Path) -> None:
+_TRUNCATED_RECEIPT = json.dumps(
+    {"\u001f".join((_SID, "archive", "truncated")): {"state": "succeeded", "result": {"action_id": "archive"}}}
+)
+
+
+@pytest.mark.parametrize(
+    "ledger",
+    [_TRUNCATED_RECEIPT, '{"not": "closed', "[]", json.dumps({"no-separator": {"state": "failed"}})],
+    ids=["a-receipt-missing-its-fields", "not-json", "not-an-object", "a-key-that-is-no-compound"],
+)
+async def test_an_unreadable_ledger_refuses_every_command_and_keeps_its_file(tmp_path: Path, ledger: str) -> None:
     """A load failure must not mark the ledger loaded: the next command would
-    start from an empty ledger and overwrite the bot's receipt history."""
+    start from an empty ledger and overwrite the bot's receipt history.
+
+    The refusal is the panel's own typed 503: nothing was sent, and the client
+    gets words rather than the validator's or the parser's own text.
+    """
     path = tmp_path / "panel_action_receipts.json"
-    compound = "\u001f".join((_SID, "archive", "truncated"))
-    path.write_text(json.dumps({compound: {"state": "succeeded", "result": {"action_id": "archive"}}}), encoding="utf-8")
-    original = path.read_text(encoding="utf-8")
+    path.write_text(ledger, encoding="utf-8")
     store = DurableIdempotencyStore(path)
 
     for _ in range(2):
-        with pytest.raises(ValidationError):
+        with pytest.raises(PanelUnavailableError) as refused:
             await store.reserve_or_get(_SID, "archive", "next-command")
 
-    assert path.read_text(encoding="utf-8") == original
+    assert refused.value.http_status == 503
+    assert "Nothing was sent" in (refused.value.detail or "")
+    assert str(path) not in str(refused.value) + (refused.value.detail or "")
+    assert path.read_text(encoding="utf-8") == ledger
+
+
+async def test_a_reservation_that_cannot_be_written_does_not_leave_the_key_in_flight(tmp_path: Path) -> None:
+    """Nothing ran, so the key is free: no in-memory ``in_flight`` that answers "still processing"."""
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("", encoding="utf-8")
+    store = DurableIdempotencyStore(blocker / "panel_action_receipts.json", wait_timeout_s=0)
+
+    with pytest.raises(PanelUnavailableError) as refused:
+        await store.reserve_or_get(_SID, "archive", "first")
+    assert refused.value.http_status == 503
+    assert (_SID, "archive", "first") not in store._records
+
+    blocker.unlink()
+    assert await store.reserve_or_get(_SID, "archive", "first") is None
+
+
+class _LedgerWhoseReleaseYields(IdempotencyStore):
+    """A ledger whose release gives the loop a turn, as a disk write does, so a
+    second same-key POST reaches the key while the first is being rejected."""
+
+    async def release(self, sid: str, action_id: str, key: str) -> None:
+        await asyncio.sleep(0)
+        await super().release(sid, action_id, key)
+
+
+async def test_a_post_waiting_on_a_first_rejected_before_it_ran_takes_the_key_and_runs_once() -> None:
+    """The waiter owns the reservation it proceeds under: a third POST under
+    the key replays its receipt instead of running the performer again."""
+    calls = 0
+
+    async def _perform(_operator: str, _reason: str | None) -> str:
+        nonlocal calls
+        calls += 1
+        return "archived"
+
+    store = _LedgerWhoseReleaseYields()
+    arguments = {
+        "sid": _SID,
+        "current_revision": 42,
+        "current_concurrency_token": "token",
+        "performers": {"archive": _perform},
+        "operator_identity": "op",
+        "store": store,
+    }
+    first, second = await asyncio.gather(
+        execute_action(_request(key="shared", token="stale"), **arguments),
+        execute_action(_request(key="shared"), **arguments),
+        return_exceptions=True,
+    )
+    third = await execute_action(_request(key="shared"), **arguments)
+
+    assert isinstance(first, StaleRevisionError)
+    assert not isinstance(second, BaseException) and second.applied is True
+    assert third.applied is False
+    assert third.receipt_id == second.receipt_id
+    assert calls == 1
 
 
 async def test_durable_store_keeps_receipts_beside_the_instance_artifacts(tmp_path: Path) -> None:

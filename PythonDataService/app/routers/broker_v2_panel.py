@@ -30,6 +30,7 @@ from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
+from app.broker.alpaca.clerk.sqlite.projection_errors import InvalidTimelineCursor
 from app.broker.contract.models import US_EQUITY_SYMBOL_PATTERN
 from app.config import settings
 from app.schemas.bot_end import BotEndInput, BotEndPreviewRequest, BotEndView
@@ -105,6 +106,7 @@ from app.services.broker_v2_panel.action_execution_service import (
     IdempotencyKeyConflictError,
     StaleRevisionError,
 )
+from app.services.broker_v2_panel.bot_custody import bot_custody_facade
 from app.services.broker_v2_panel.chart_projection_service import (
     ChartTimeframeError,
     ChartWindowError,
@@ -549,6 +551,8 @@ async def read_deployment_budget_scoped(broker: str, account_id: str, sid: str) 
         return await budget_deploy.budget_view(account_id, sid)
     except BudgetUnavailable as error:
         _raise_alpaca_deploy_error(budget_deploy.budget_error(error))
+    except panel_errors.PanelDataError as error:
+        _raise_panel_error(error)
 
 
 @router.get(
@@ -1116,20 +1120,37 @@ async def _read_evidence(
 ) -> EvidencePage:
     try:
         await panel_scope.validate_account_scope(broker, account_id, sid)
+        # Where the bot is custodied -- a Dry Run's own simulator, not the
+        # account's, which has never held it (hurdle H33).
+        async with bot_custody_facade(broker, sid) as facade:
+            if facade is None:
+                raise panel_errors.PanelUnavailableError(
+                    "This bot's Clerk is unavailable.",
+                    detail="Restore the account's Clerk, then refresh.",
+                )
+            return read_evidence_page(
+                facade=facade,
+                account_id=account_id,
+                sid=sid,
+                transaction_ref=transaction_ref,
+                cursor=cursor,
+                page_size=page_size,
+                operator_identity=settings.PANEL_OPERATOR_IDENTITY,
+                client_hint=client_hint,
+            )
     except panel_errors.PanelDataError as error:
         _raise_panel_error(error)
-    # read_evidence_page is outside the try/except: it raises only OSError
-    # (audit log write failure, which is logged-and-swallowed inside) and does
-    # not raise PanelDataError, so wrapping it here would mask real I/O errors.
-    return read_evidence_page(
-        account_id=account_id,
-        sid=sid,
-        transaction_ref=transaction_ref,
-        cursor=cursor,
-        page_size=page_size,
-        operator_identity=settings.PANEL_OPERATOR_IDENTITY,
-        client_hint=client_hint,
-    )
+    except InvalidTimelineCursor as error:
+        # A cursor is the page's own: one that is malformed, stale, or minted
+        # for another scope is the client's to drop, as on the Clerk timeline.
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "The evidence cursor is not valid.",
+                "why": str(error),
+                "next_action": "Reload this bot's evidence from its first page.",
+            },
+        ) from error
 
 
 @router.get(

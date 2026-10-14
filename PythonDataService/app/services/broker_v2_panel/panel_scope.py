@@ -18,9 +18,11 @@ from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerAccountSnapshot
 from app.schemas.broker_bots import BotStatusView
 from app.services.bot_runner import BotRunnerError, get_bot_task_registry
+from app.services.bot_runner_errors import InvalidStrategyInstanceIdError
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_v2_panel.panel_errors import (
     AccountMismatchError,
+    BotRunnerUnavailableError,
     PanelUnavailableError,
     UnknownBotError,
 )
@@ -66,14 +68,13 @@ async def validate_account_scope(broker: str, account_id: str, sid: str) -> None
 def bot_status(broker: str, sid: str) -> BotStatusView:
     registry = get_bot_task_registry()
     if registry is None:
-        raise PanelUnavailableError(
-            "The bot runner is not available.",
-            detail="The service is still starting or has shut down.",
-        )
+        raise BotRunnerUnavailableError
     try:
         return registry.status(broker, sid)
     except BotRunnerError as exc:
-        if exc.http_status == 404:
+        # An id the runner could never hold a binding for is as unknown as one
+        # it holds none for: the panel and its actions answer both 404.
+        if exc.http_status == 404 or isinstance(exc, InvalidStrategyInstanceIdError):
             raise UnknownBotError(str(exc), detail=exc.detail) from exc
         raise PanelUnavailableError(str(exc), detail=exc.detail) from exc
 

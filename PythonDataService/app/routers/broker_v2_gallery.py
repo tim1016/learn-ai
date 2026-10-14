@@ -62,6 +62,7 @@ from fastapi.responses import StreamingResponse
 from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.fleet.internal_http import DEFAULT_MAX_EVENT_BYTES
+from app.routers.broker_v2_panel import _raise_panel_error
 from app.schemas.broker_v2_gallery import (
     GalleryBarsPage,
     GalleryLiveSnapshot,
@@ -75,7 +76,7 @@ from app.services.broker_v2_panel.gallery_hub import (
     GalleryFillSource,
     GalleryHub,
 )
-from app.services.broker_v2_panel.panel_errors import PanelUnavailableError, UnknownBotError
+from app.services.broker_v2_panel.panel_errors import PanelDataError, PanelUnavailableError, UnknownBotError
 from app.services.broker_v2_panel.stream_frame_budget import frame_budget_bytes
 from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
 
@@ -185,7 +186,10 @@ async def get_gallery_hub(broker: str, account_id: str) -> GalleryHub:
     summary="Versioned REST bootstrap for the aggregated bot gallery wall",
 )
 async def get_gallery_snapshot(hub: GalleryHub = Depends(get_gallery_hub)) -> GalleryLiveSnapshot:
-    return await hub.build_snapshot()
+    try:
+        return await hub.build_snapshot()
+    except PanelDataError as error:
+        _raise_panel_error(error)
 
 
 def _latest_bar_start_ms(symbol_bars: list[GallerySymbolBars]) -> dict[str, int]:
@@ -288,7 +292,9 @@ async def _keepalive_while(task: asyncio.Future[Any], *, since: float) -> AsyncI
         yield ": keepalive\n\n"
 
 
-async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> AsyncIterator[str]:
+async def _gallery_event_source(
+    hub: GalleryHub, *, cursor: str | None, snapshot: GalleryLiveSnapshot
+) -> AsyncIterator[str]:
     """The gallery stream, ended by a named ``refused`` event when a frame
     cannot fit the coordinator's cap. The client stops reconnecting and says
     the wall is not live; it never sees an open stream that carries no
@@ -300,7 +306,7 @@ async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> Async
     reconnects from its cursor) (#3217).
     """
     try:
-        async for frame in _gallery_frames(hub, cursor=cursor):
+        async for frame in _gallery_frames(hub, cursor=cursor, snapshot=snapshot):
             yield frame
     except GalleryCollectTimeoutError:
         # Authored here, never the exception's own text: a stream payload built
@@ -322,14 +328,9 @@ async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> Async
         yield _sse_frame("refused", payload)
 
 
-async def _gallery_frames(hub: GalleryHub, *, cursor: str | None) -> AsyncIterator[str]:
-    first_collect = asyncio.ensure_future(hub.build_snapshot())
-    try:
-        async for keepalive in _keepalive_while(first_collect, since=time.monotonic()):
-            yield keepalive
-        snapshot = first_collect.result()
-    finally:
-        first_collect.cancel()
+async def _gallery_frames(
+    hub: GalleryHub, *, cursor: str | None, snapshot: GalleryLiveSnapshot
+) -> AsyncIterator[str]:
     epoch = snapshot.stream_epoch
     current_id = f"{epoch}:{snapshot.surface_version}"
     requested_epoch = cursor.rsplit(":", 1)[0] if cursor and ":" in cursor else None
@@ -408,8 +409,15 @@ async def stream_gallery(
     cursor: str | None = Query(default=None, max_length=128),
     hub: GalleryHub = Depends(get_gallery_hub),
 ) -> StreamingResponse:
+    # The first read is made before the 200 is committed, so an account the
+    # panel refuses answers as that refusal -- not as a stream that opens and
+    # then dies.
+    try:
+        snapshot = await hub.build_snapshot()
+    except PanelDataError as error:
+        _raise_panel_error(error)
     return StreamingResponse(
-        _gallery_event_source(hub, cursor=cursor),
+        _gallery_event_source(hub, cursor=cursor, snapshot=snapshot),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

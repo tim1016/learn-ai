@@ -104,6 +104,7 @@ from app.services.broker_v2_panel.catalog_projection_service import (
 )
 from app.services.broker_v2_panel.market_pulse import build_market_pulse
 from app.services.broker_v2_panel.panel_errors import (
+    BotRunnerUnavailableError,
     DryRunRestoringError,
     PanelUnavailableError,
     UnknownBotError,
@@ -195,10 +196,7 @@ async def selected_panel_authority(
     resolved = await validate_account(broker, account_id)
     registry = get_bot_task_registry()
     if registry is None:
-        raise PanelUnavailableError(
-            "The bot runner is not available.",
-            detail="The service is still starting or has shut down.",
-        )
+        raise BotRunnerUnavailableError
     try:
         binding = registry.binding_for_control(broker, sid)
     except (RunnerUnknownBotError, InvalidStrategyInstanceIdError) as exc:
@@ -377,7 +375,9 @@ async def get_catalog(broker: str, account_id: str, *, home: bool = False) -> li
         )
     registry = get_bot_task_registry()
     if registry is None:
-        return sqlite_catalog
+        # Dry Run and rehearsal rows are the runner's: without it the roster
+        # is not partial, it is unavailable.
+        raise BotRunnerUnavailableError
     synthetic_rows: list[BotCatalogView] = []
     bindings = registry.bindings_for_broker(broker)
     for binding in bindings:

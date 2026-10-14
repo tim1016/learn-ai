@@ -12,6 +12,8 @@ blocked leg comes back as a typed refusal without aborting its siblings.
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -38,6 +40,7 @@ from app.schemas.broker_v2_panel import (
     PanelActionResult,
 )
 from app.services.bot_runner import set_bot_task_registry
+from app.services.bot_start_admission import DRY_RUN_RESTORING_SENTENCE, SyntheticAccountRestoring
 from app.services.broker_v2_panel import cohort_execution, cohort_flatten, panel_data_source
 from app.services.broker_v2_panel.action_execution_service import (
     ActionOutcomeUnknownError,
@@ -578,6 +581,49 @@ async def test_presentation_groups_multi_member_cohorts_with_real_leg_facts(
             assert leg["revision"] == presented["revision"]
             if not presented["enabled"]:
                 assert leg["enabled"] is False
+
+
+class _OneRestoringDryRunRegistry(_MixedLivenessRegistry):
+    """The last cohort member is a Dry Run whose simulator is still being restored after a restart (#2684)."""
+
+    def binding_for_control(self, broker, sid):
+        binding = super().binding_for_control(broker, sid)
+        if sid != _COHORT_SIDS[-1]:
+            return binding
+        return SimpleNamespace(**{**vars(binding), "mode": "dry_run"})
+
+    @asynccontextmanager
+    async def synthetic_runtime_for_projection(self, _binding):
+        raise SyntheticAccountRestoring
+        yield  # pragma: no cover -- a context manager must name its yield
+
+
+async def test_one_member_that_cannot_be_read_is_an_unavailable_leg_not_the_views_503(
+    cohort_api: FastAPI, tmp_path
+) -> None:
+    """The stop-wave remedy surface must open while one Dry Run is still restoring.
+
+    The member is listed as its own row on Home; here it is a leg that cannot
+    be armed, saying why, beside siblings whose legs are still armed.
+    """
+    set_bot_task_registry(
+        _OneRestoringDryRunRegistry(tmp_path, sids=(*_COHORT_SIDS, _LONER_SID))  # type: ignore[arg-type]
+    )
+
+    async with _client(cohort_api) as client:
+        response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/cohort-flatten")
+
+    assert response.status_code == 200, response.text
+    [cohort] = response.json()["cohorts"]
+    by_sid = {leg["strategy_instance_id"]: leg for leg in cohort["legs"]}
+    assert list(by_sid) == list(_COHORT_SIDS)
+    restoring = by_sid[_COHORT_SIDS[-1]]
+    assert (restoring["enabled"], restoring["action_id"], restoring["concurrency_token"]) == (False, None, None)
+    assert restoring["blocker_headline"] == DRY_RUN_RESTORING_SENTENCE[0]
+    # What the stranded sibling presents is untouched by its neighbour's trouble.
+    assert by_sid[_STRANDED_SID]["enabled"] is True
+    assert by_sid[_STRANDED_SID]["exposure"] == {"SPY": 10.0}
+    assert cohort["enabled_count"] == 1
 
 
 async def test_posting_legs_round_trips_typed_per_leg_outcomes(

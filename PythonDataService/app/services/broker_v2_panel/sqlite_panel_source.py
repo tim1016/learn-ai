@@ -50,6 +50,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     ExecutionLeaseLost,
     ExecutionLeaseLostAfterBrokerIO,
+    RepositoryPoisoned,
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.lean_sidecar.trading_calendar import current_trading_session_window
@@ -73,6 +74,7 @@ from app.services.broker_v2_panel.action_execution_service import (
     StaleRevisionError,
     get_idempotency_store,
     outcome_unknown_after_broker_io,
+    outcome_unknown_after_performer_failure,
 )
 from app.services.broker_v2_panel.catalog_projection_service import (
     SqliteCatalogProjectionUnavailable,
@@ -541,10 +543,56 @@ def read_sqlite_decision_receipts(
     # call as a durable `SqliteDecisionReceipts.append` mutation; this is a
     # plain in-memory list of already-read display DTOs, not a repository
     # handle.
-    adapted_views: list[DecisionReceipt] = [
-        _decision_receipt_from_resource(resource) for resource in resources
-    ]
+    adapted_views: list[DecisionReceipt] = []
+    for resource in resources:
+        try:
+            adapted_views.append(_decision_receipt_from_resource(resource))
+        except SqlitePanelDecisionUnavailable as exc:
+            # A decision row is display evidence, and the page that shows it
+            # is the operator's control surface: one receipt this build cannot
+            # read is shown as unreadable, never allowed to take every other
+            # row and every action down with it.
+            logger.warning(
+                "A decision receipt could not be read; it is shown as unreadable",
+                extra={
+                    "action": "panel_decision_receipt_unreadable",
+                    "strategy_instance_id": strategy_instance_id,
+                    "receipt_seq": resource.seq,
+                    "reason": str(exc),
+                },
+            )
+            unreadable = _unreadable_decision_receipt(resource)
+            if unreadable is not None:
+                adapted_views.append(unreadable)
     return adapted_views
+
+
+#: The reason a decision row carries when its stored receipt cannot be read.
+UNREADABLE_RECEIPT_REASON_CODE = "RECEIPT_UNREADABLE"
+
+
+def _unreadable_decision_receipt(resource: DecisionReceiptResource) -> DecisionReceipt | None:
+    """The row for a receipt this build cannot read: what its own columns say, and nothing of its facts.
+
+    ``None`` when even its columns say what this build cannot name (an
+    outcome from a newer build): that row is left out, as an explanation this
+    build cannot read is (``_facts_explanation``).
+    """
+    try:
+        return DecisionReceipt.model_validate(
+            {
+                "seq": resource.seq,
+                "ts_ms": resource.observed_at_ms,
+                "bar_ref": "",
+                "outcome": resource.outcome,
+                "reason_code": UNREADABLE_RECEIPT_REASON_CODE,
+                "intent_id": resource.intent_id or "",
+                "order_ref": resource.order_ref or "",
+                "explanation_unreadable": True,
+            }
+        )
+    except ValueError:
+        return None
 
 
 def _decision_receipt_from_resource(
@@ -1126,7 +1174,23 @@ async def execute_sqlite_panel_action(
             )
         if isinstance(exc, RecoveryExecutionError):
             raise ActionNotAvailableError(str(exc)) from exc
-        raise
+        if isinstance(exc, (ExecutionLeaseLost, RepositoryPoisoned, SqlitePanelBotNotFound)):
+            # Answered by the caller from the raw condition: the ADR 0050
+            # revival names the lost lease or the poison
+            # (panel_data_source.run_action), and a bot that vanished is 404.
+            raise
+        # Whatever else a started performer raised: the shared executor's
+        # typed unknown outcome, never the exception's own text as a 500.
+        logger.error(
+            "A panel action's performer failed; its outcome is unknown",
+            exc_info=exc,
+            extra={
+                "action": "panel_action_performer_failed",
+                "action_id": request.action_id,
+                "strategy_instance_id": strategy_instance_id,
+            },
+        )
+        raise outcome_unknown_after_performer_failure() from exc
 
     outcome = PanelActionResult(
         action_id=request.action_id,

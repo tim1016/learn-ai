@@ -39,6 +39,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 from app.broker.v2panel.vocabulary import ActionId
 from app.engine.live.identity import strategy_instance_artifact_dir
 from app.schemas.broker_v2_panel import PanelActionReceipt, PanelActionRequest, PanelActionResult
+from app.services.broker_v2_panel.panel_errors import PanelUnavailableError
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -337,6 +338,18 @@ def outcome_unknown_after_broker_io(
     )
 
 
+def outcome_unknown_after_performer_failure() -> ActionOutcomeUnknownError:
+    """A performer began and failed outside every typed refusal: its outcome is unknown.
+
+    Both executors answer it the same way, so the client never meets the
+    performer's own exception text and the burned key says why it is burned.
+    """
+    return ActionOutcomeUnknownError(
+        "The command did not return a terminal receipt.",
+        detail=("Its outcome is unknown. Inspect Clerk evidence before issuing another lifecycle command."),
+    )
+
+
 class AuthorityPoisonedError(ActionExecutionError):
     """A transition committed but its mirror finalize was unconfirmed (503).
 
@@ -422,7 +435,10 @@ class IdempotencyStore:
 
         If None: key is new, caller should execute and then call complete() or fail().
         If record with state in_flight: waits (up to 5 s) for the first
-            execution to finish, then returns the resolved record.
+            execution to finish, then returns the resolved record. A first
+            caller that released the key (rejected before it ran) leaves it
+            free: the waiter then reserves it itself and gets None, so what
+            it executes under is a reservation it holds.
         If record with state succeeded/failed: returns immediately.
 
         ``request_digest`` binds the key to what the request said (#2854). A
@@ -432,31 +448,31 @@ class IdempotencyStore:
         nothing, instead of answering with the first request's receipt.
         """
         compound = (sid, action_id, key)
-        async with self._lock:
-            existing = self._records.get(compound)
-            if existing is None:
-                record = IdempotencyRecord(state="in_flight", request_digest=request_digest)
-                self._records[compound] = record
-                return None
-            if existing.request_digest != request_digest:
-                raise IdempotencyKeyConflictError(
-                    "This idempotency key was already used for a different request.",
-                    detail=(
-                        "The request first sent under this key said something else. Nothing "
-                        "was changed. Send this request under a new key."
-                    ),
-                )
-            if existing.state != "in_flight":
-                return existing
-            # in_flight — capture the event to wait on outside the lock
-            event = existing._event
+        waited = False
+        while True:
+            async with self._lock:
+                existing = self._records.get(compound)
+                if existing is None:
+                    record = IdempotencyRecord(state="in_flight", request_digest=request_digest)
+                    self._records[compound] = record
+                    return None
+                if existing.request_digest != request_digest:
+                    raise IdempotencyKeyConflictError(
+                        "This idempotency key was already used for a different request.",
+                        detail=(
+                            "The request first sent under this key said something else. Nothing "
+                            "was changed. Send this request under a new key."
+                        ),
+                    )
+                if existing.state != "in_flight" or waited:
+                    return existing
+                # in_flight — capture the event to wait on outside the lock
+                event = existing._event
 
-        # Wait outside the lock so the first caller can complete/fail
-        with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(event.wait(), timeout=self._wait_timeout_s)
-
-        async with self._lock:
-            return self._records.get(compound)
+            # Wait outside the lock so the first caller can complete/fail/release
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(event.wait(), timeout=self._wait_timeout_s)
+            waited = True
 
     async def complete(self, sid: str, action_id: str, key: str, result: PanelActionResult) -> None:
         compound = (sid, action_id, key)
@@ -517,6 +533,27 @@ class DurableIdempotencyStore(IdempotencyStore):
         if not self._path.is_file():
             self._loaded = True
             return
+        try:
+            records = self._read_records()
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            # Never marked loaded: the next command would start from an empty
+            # ledger and write over the bot's receipt history. The file is
+            # left as it is, and every command is refused until it reads.
+            logger.error(
+                "A bot's panel-command ledger could not be read",
+                extra={"action": "panel_action_ledger_unreadable", "ledger_path": str(self._path), "error": str(exc)},
+            )
+            raise PanelUnavailableError(
+                "This bot's command record could not be read.",
+                detail=(
+                    "Its saved command receipts are unreadable, so no command can be checked against "
+                    "them. Nothing was sent. The record has been left as it is."
+                ),
+            ) from exc
+        self._records.update(records)
+        self._loaded = True
+
+    def _read_records(self) -> dict[tuple[str, str, str], IdempotencyRecord]:
         raw = json.loads(self._path.read_text(encoding="utf-8"))
         legacy_observed_at_ms = self._path.stat().st_mtime_ns // 1_000_000
         # Decode the whole ledger before adopting any of it: a record that
@@ -552,8 +589,7 @@ class DurableIdempotencyStore(IdempotencyStore):
                     ),
                     request_digest=payload.get("request_digest"),
                 )
-        self._records.update(records)
-        self._loaded = True
+        return records
 
     def _persist(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -585,7 +621,24 @@ class DurableIdempotencyStore(IdempotencyStore):
         self._load()
         record = await super().reserve_or_get(sid, action_id, key, request_digest=request_digest)
         if record is None:
-            self._persist()
+            try:
+                self._persist()
+            except OSError as exc:
+                # Nothing ran under this reservation, and the file still holds
+                # what it held: free the key rather than leave an in-memory
+                # ``in_flight`` that answers "still processing" for good.
+                await super().release(sid, action_id, key)
+                logger.error(
+                    "A bot's panel-command ledger could not be written",
+                    extra={"action": "panel_action_ledger_unwritable", "ledger_path": str(self._path), "error": str(exc)},
+                )
+                raise PanelUnavailableError(
+                    "This bot's command record could not be saved.",
+                    detail=(
+                        "Its command receipts could not be written, so no command can be recorded. "
+                        "Nothing was sent."
+                    ),
+                ) from exc
         return record
 
     async def complete(self, sid: str, action_id: str, key: str, result: PanelActionResult) -> None:
@@ -794,10 +847,7 @@ async def execute_action(
         # re-fire an action that may have partially applied.
         if reserved_fresh:
             await ledger.fail(sid, request.action_id, request.idempotency_key, str(err))
-        raise ActionOutcomeUnknownError(
-            "The command did not return a terminal receipt.",
-            detail=("Its outcome is unknown. Inspect Clerk evidence before issuing another lifecycle command."),
-        ) from err
+        raise outcome_unknown_after_performer_failure() from err
 
     result = PanelActionResult(
         action_id=request.action_id,

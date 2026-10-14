@@ -91,6 +91,7 @@ from app.services.broker_v2_panel import panel_data_source
 from app.services.broker_v2_panel.channel_health import evaluate_channel_health
 from app.services.broker_v2_panel.feed_continuity_projection import build_feed_continuity, build_startup_join
 from app.services.broker_v2_panel.panel_authority_guard import MixedAuthorityAggregateError
+from app.services.broker_v2_panel.panel_errors import PanelDataError
 from app.services.broker_v2_panel.panel_projection_service import (
     build_panel,
     open_pnl_fields,
@@ -2792,8 +2793,12 @@ def test_a_dry_run_panel_with_activity_from_a_different_synthetic_authority_is_n
     )
     projection = replace(_rail_projection(orders=()), account_id=f"sim:{SID}")
 
-    with pytest.raises(MixedAuthorityAggregateError):
+    with pytest.raises(MixedAuthorityAggregateError) as refused:
         adapt_sqlite_panel(base, projection)
+
+    assert isinstance(refused.value, PanelDataError)
+    assert refused.value.http_status == 503
+    assert "sim:other-bot" in (refused.value.detail or "")
 
 
 _SHADOW_ACCT = "shadow:9LIVE0001"
