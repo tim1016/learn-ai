@@ -226,6 +226,37 @@ async def test_a_lane_server_error_keeps_its_body_in_the_log_and_is_named_unreac
 
 
 @pytest.mark.asyncio
+async def test_a_lane_server_error_with_an_unreadable_stored_summary_is_still_named_unreachable(
+    fleet, secret
+) -> None:
+    """The 5xx wording reads the lane's last-beat summary; a stored value this
+    build refuses must fall back to the generic copy, not turn the named gap
+    into a 500 for the whole page."""
+    service, deliveries, _paper, live, _unbound = fleet
+    store = service._store
+    session = store.read_session(live.clerk_id)
+    with store.transaction() as conn:
+        store.touch_session(
+            conn,
+            clerk_id=live.clerk_id,
+            agent_instance_id=session.agent_instance_id,
+            last_seen_at_ms=session.last_seen_at_ms,
+            reported_binding_generation=None,
+            reported_account_id=None,
+            reported_state=None,
+            reported_summary_json="[]",
+        )
+    deliveries[live.clerk_id] = _ScriptedDelivery(answer={"detail": "boom"}, status_code=503)
+
+    async with AsyncClient(transport=ASGITransport(app=_app(service, deliveries)), base_url="http://test") as client:
+        response = await client.get(_ROUTE, headers=secret)
+
+    assert response.status_code == 200
+    (gap,) = (gap for gap in response.json()["gaps"] if gap["clerk_id"] == live.clerk_id)
+    assert gap["reason_code"] == "clerk_unreachable"
+
+
+@pytest.mark.asyncio
 async def test_a_lane_answering_something_that_is_not_a_bot_history_is_named_unreadable(fleet, secret) -> None:
     service, deliveries, _paper, live, _unbound = fleet
     deliveries[live.clerk_id] = _ScriptedDelivery(answer={"bots": "not a list"})

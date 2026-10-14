@@ -17,7 +17,6 @@ blindly (ADR 0062 addendum, item 7).
 
 from __future__ import annotations
 
-import hmac
 import logging
 import re
 from collections.abc import AsyncIterator, Callable, Mapping
@@ -26,6 +25,7 @@ from dataclasses import dataclass, field
 import httpx
 from starlette.datastructures import Headers
 
+from app.broker.fleet.identity import same_secret
 from app.broker.fleet.internal_http import (
     FleetStreamError,
     SseEvent,
@@ -58,7 +58,7 @@ def lane_forward_is_authorized(headers: Headers) -> bool:
         return False
     if "x-fleet-clerk-id" not in headers or "x-fleet-broker" not in headers:
         return False
-    return hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
+    return same_secret(supplied, expected)
 
 
 class DeliveryIdentityMismatch(Exception):

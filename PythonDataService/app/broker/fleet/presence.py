@@ -25,7 +25,7 @@ token (ADR 0062 addendum, item 5).
 
 from __future__ import annotations
 
-import hmac
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -48,6 +48,8 @@ from app.broker.fleet.internal_http import (
 )
 from app.broker.fleet.records import AccountAssignmentRecord
 from app.broker.fleet.service import FleetControlService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -558,10 +560,13 @@ class RemotePresence:
                 "fleet_protocol_version": fleet_protocol_version,
             },
         )
-        return SessionInfo(
-            agent_instance_id=str(body["agent_instance_id"]),
-            routing_epoch=int(body["routing_epoch"]),
-        )
+        try:
+            instance_id = body["agent_instance_id"]
+            if not isinstance(instance_id, str) or not instance_id:
+                raise TypeError(f"agent_instance_id must be a non-empty string, got {instance_id!r}")
+            return SessionInfo(agent_instance_id=instance_id, routing_epoch=int(body["routing_epoch"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise _malformed_answer("/internal/fleet/sessions", exc) from exc
 
     async def reserve(
         self, *, broker: str, clerk_id: str, external_account_id: str
@@ -576,7 +581,7 @@ class RemotePresence:
                 "external_account_id": external_account_id,
             },
         )
-        return _assignment_from_body(body)
+        return _assignment_from_body(body, path="/internal/fleet/assignments/reserve")
 
     async def confirm(
         self,
@@ -605,7 +610,7 @@ class RemotePresence:
                 "effective_revision": effective_revision,
             },
         )
-        return _assignment_from_body(body)
+        return _assignment_from_body(body, path="/internal/fleet/assignments/confirm")
 
     async def observe(
         self,
@@ -684,11 +689,6 @@ class RemotePresence:
         """Each call builds a client; nothing persists."""
 
 
-def matches_service_token(presented: str, expected: str) -> bool:
-    """Constant-time comparison for internal transport tokens."""
-    return hmac.compare_digest(presented, expected)
-
-
 def _refusal(response: object, message: str) -> FleetControlError:
     """Classify a coordinator's 4xx by its reason code, never its status class.
 
@@ -764,27 +764,47 @@ def _error_body(response: object) -> dict[str, object] | None:
     return body if isinstance(body, dict) else None
 
 
-def _assignment_from_body(body: dict[str, object]) -> AccountAssignmentRecord:
+def _malformed_answer(path: str, exc: Exception) -> FleetPresenceError:
+    """A 200 whose fields do not parse: the coordinator misbehaving, not a refusal.
+
+    ``_post`` already translates a body that is not a JSON object; a field
+    that is missing or mistyped belongs to the same family, so the heartbeat
+    loop retries it instead of ending the beat on a bare ``KeyError`` (it
+    catches only ``FleetControlError``). Logged here, where the field is known.
+    """
+    logger.warning(
+        "The fleet coordinator answered 200 with a field that does not parse",
+        extra={"action": "fleet_presence_malformed_answer", "path": path, "error": repr(exc)},
+    )
+    return FleetPresenceError(
+        f"The fleet coordinator returned a malformed answer for {path}: {exc!r}",
+    )
+
+
+def _assignment_from_body(body: dict[str, object], *, path: str) -> AccountAssignmentRecord:
     """Map the internal surface's assignment JSON to its record."""
     from app.broker.fleet.records import AssignmentState
 
-    return AccountAssignmentRecord(
-        broker=str(body["broker"]),
-        canonical_external_account_id=str(body["canonical_external_account_id"]),
-        clerk_id=str(body["clerk_id"]),
-        assignment_generation=int(body["assignment_generation"]),
-        state=AssignmentState(str(body["state"])),
-        effective_profile_id=_optional_str(body, "effective_profile_id"),
-        effective_revision=_optional_int(body, "effective_revision"),
-        confirmed_binding_generation=_optional_int(body, "confirmed_binding_generation"),
-        confirmed_profile_id=_optional_str(body, "confirmed_profile_id"),
-        confirmed_revision=_optional_int(body, "confirmed_revision"),
-        confirmed_at_ms=_optional_int(body, "confirmed_at_ms"),
-        confirmed_agent_instance_id=_optional_str(body, "confirmed_agent_instance_id"),
-        confirmed_routing_epoch=_optional_int(body, "confirmed_routing_epoch"),
-        recorded_at_ms=int(body.get("recorded_at_ms", 0)),
-        updated_at_ms=int(body.get("updated_at_ms", 0)),
-    )
+    try:
+        return AccountAssignmentRecord(
+            broker=str(body["broker"]),
+            canonical_external_account_id=str(body["canonical_external_account_id"]),
+            clerk_id=str(body["clerk_id"]),
+            assignment_generation=int(body["assignment_generation"]),
+            state=AssignmentState(str(body["state"])),
+            effective_profile_id=_optional_str(body, "effective_profile_id"),
+            effective_revision=_optional_int(body, "effective_revision"),
+            confirmed_binding_generation=_optional_int(body, "confirmed_binding_generation"),
+            confirmed_profile_id=_optional_str(body, "confirmed_profile_id"),
+            confirmed_revision=_optional_int(body, "confirmed_revision"),
+            confirmed_at_ms=_optional_int(body, "confirmed_at_ms"),
+            confirmed_agent_instance_id=_optional_str(body, "confirmed_agent_instance_id"),
+            confirmed_routing_epoch=_optional_int(body, "confirmed_routing_epoch"),
+            recorded_at_ms=int(body["recorded_at_ms"]),
+            updated_at_ms=int(body["updated_at_ms"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise _malformed_answer(path, exc) from exc
 
 
 def _optional_str(body: dict[str, object], key: str) -> str | None:
@@ -809,5 +829,4 @@ __all__ = [
     "LocalPresence",
     "RemotePresence",
     "SessionInfo",
-    "matches_service_token",
 ]

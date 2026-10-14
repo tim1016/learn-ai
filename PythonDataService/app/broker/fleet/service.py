@@ -35,7 +35,6 @@ The load-bearing invariants, each with a test:
 from __future__ import annotations
 
 import asyncio
-import hmac
 import ipaddress
 import logging
 import re
@@ -82,6 +81,7 @@ from app.broker.fleet.identity import (
     new_service_token,
     new_volume_id,
     new_worker_key,
+    same_secret,
 )
 from app.broker.fleet.internal_http import address_is_private
 from app.broker.fleet.provider import (
@@ -590,8 +590,8 @@ class FleetControlService:
         clerk = self._require_clerk(clerk_id)
         if clerk.lifecycle_state == StoredLifecycleState.RETIRED:
             return clerk
-        now = self._clock()
         with self._store.transaction() as conn:
+            now = self._clock()
             held = [
                 assignment
                 for assignment in self._store.list_assignments_for_clerk_on(conn, clerk_id)
@@ -1048,6 +1048,11 @@ class FleetControlService:
           them does not walk the ceremony once per item.
 
         ``force_retire_clerk`` remains the exit for a lane that cannot answer.
+
+        ``now`` is read once the write lock is held, never before it: a
+        ceremony that captured the clock and then waited on ``BEGIN IMMEDIATE``
+        would otherwise meet a confirmation committed after its ``now`` as a
+        negative age, and a release would record ``absent`` for good.
         """
         session = self._store.read_session_on(conn, clerk.clerk_id)
         confirmation = (
@@ -1072,6 +1077,16 @@ class FleetControlService:
                 "their exit.",
             )
         age_ms = now - confirmation.observed_at_ms
+        if age_ms < 0:
+            # ``confirm_lane_quiet`` refuses an instant ahead of the clock, so
+            # a negative age means the clock stepped back after the answer
+            # landed. An age that cannot be established is never fresh.
+            raise ClerkLaneQuietUnproven(
+                f"Clerk {clerk.clerk_id}'s lane-quiet confirmation is stale: it was "
+                f"observed {-age_ms} ms ahead of the coordinator's clock, so its age "
+                "cannot be established.",
+                next_step="Wait for the lane's next confirmation, or run force-retire.",
+            )
         if age_ms > self._lane_quiet_valid_for_ms:
             raise ClerkLaneQuietUnproven(
                 f"Clerk {clerk.clerk_id}'s lane-quiet confirmation is stale: observed "
@@ -1175,7 +1190,7 @@ class FleetControlService:
     ) -> ClerkSessionRecord:
         """Install the clerk's one current agent session, bumping the epoch.
 
-        The worker key is compared with ``hmac.compare_digest``. A restart of
+        The worker key is compared in constant time (``same_secret``). A restart of
         the same clerk presents a new instance id and supersedes the previous
         session under a higher epoch (the idempotent same-clerk
         recovery); the archived session keeps the epoch history auditable.
@@ -1202,7 +1217,7 @@ class FleetControlService:
         — always supplies it.
         """
         clerk = self._require_clerk(clerk_id)
-        if not hmac.compare_digest(clerk.worker_key, worker_key):
+        if not same_secret(worker_key, clerk.worker_key):
             raise ClerkIdentityMismatch(
                 f"The worker key presented for clerk {clerk_id} does not match its "
                 "registry identity.",
@@ -1907,17 +1922,9 @@ class FleetControlService:
             return self._released_history_record(
                 broker=broker, canonical=canonical, generation=expected_assignment_generation
             )
-        now = self._clock()
-        released = replace(
-            existing,
-            state=AssignmentState.RELEASED,
-            updated_at_ms=now,
-            attested_operator=bounded_operator,
-            attested_change_ref=bounded_change_ref,
-            attested_at_ms=now,
-        )
         accepted = False
         with self._store.transaction() as conn:
+            now = self._clock()
             # The predecessor gates read inside the same write transaction as
             # the transition: a drain entered (or an attempt opened) between
             # the outer read and this commit is the state this ceremony
@@ -1934,7 +1941,12 @@ class FleetControlService:
             )
             self._require_command_quiet(conn, existing.clerk_id)
             released = replace(
-                released,
+                existing,
+                state=AssignmentState.RELEASED,
+                updated_at_ms=now,
+                attested_operator=bounded_operator,
+                attested_change_ref=bounded_change_ref,
+                attested_at_ms=now,
                 lane_confirmation=self._handover_lane_confirmation(
                     conn, predecessor, now=now
                 ),
@@ -2006,9 +2018,9 @@ class FleetControlService:
             )
         self._verify_volume(successor, successor_volume_root)
         canonical = self._adapter(broker).canonical_account_id(external_account_id)
-        now = self._clock()
         try:
             with self._store.transaction() as conn:
+                now = self._clock()
                 existing = self._store.read_assignment_on(
                     conn, broker=broker, canonical_account_id=canonical
                 )
@@ -2562,8 +2574,8 @@ class FleetControlService:
                     "lifecycle_state": str(effective_state),
                     "multiple_effective_assignments": multiple_effective,
                 }
-                reported_summary = ProviderSummaryObservation.parse(
-                    session.reported_summary_json
+                reported_summary = ProviderSummaryObservation.parse_stored(
+                    session.reported_summary_json, clerk_id=clerk.clerk_id
                 )
                 if reported_summary is not None:
                     observation["reported_summary"] = {

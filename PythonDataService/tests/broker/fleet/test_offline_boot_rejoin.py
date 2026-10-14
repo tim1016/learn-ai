@@ -214,6 +214,84 @@ async def test_a_version_fence_refusal_is_not_unavailability(
         service.close()
 
 
+_WELL_FORMED_ASSIGNMENT = {
+    "broker": "alpaca",
+    "canonical_external_account_id": "PA-1",
+    "clerk_id": "clrk_000000000000000000000000",
+    "assignment_generation": 1,
+    "state": "reserved",
+    "recorded_at_ms": 1,
+    "updated_at_ms": 2,
+}
+
+
+@pytest.mark.parametrize(
+    ("call", "body"),
+    [
+        ("register", {"routing_epoch": 1}),
+        ("register", {"agent_instance_id": "agnt_1", "routing_epoch": "first"}),
+        ("register", {"agent_instance_id": None, "routing_epoch": 1}),
+        ("register", {"agent_instance_id": "", "routing_epoch": 1}),
+        ("reserve", {k: v for k, v in _WELL_FORMED_ASSIGNMENT.items() if k != "broker"}),
+        ("reserve", {**_WELL_FORMED_ASSIGNMENT, "state": "adopted"}),
+        ("reserve", {k: v for k, v in _WELL_FORMED_ASSIGNMENT.items() if k != "recorded_at_ms"}),
+        ("confirm", {**_WELL_FORMED_ASSIGNMENT, "assignment_generation": None}),
+    ],
+    ids=[
+        "register_no_instance",
+        "register_epoch_not_a_number",
+        "register_null_instance",
+        "register_empty_instance",
+        "reserve_no_broker",
+        "reserve_unknown_state",
+        "reserve_no_recorded_instant",
+        "confirm_generation_null",
+    ],
+)
+async def test_a_200_whose_fields_do_not_parse_is_presence_unavailability(
+    monkeypatch: pytest.MonkeyPatch, call: str, body: dict[str, object]
+) -> None:
+    """The heartbeat loop catches only ``FleetControlError`` and ends the beat
+    on anything else ("lane presence has stopped until this process
+    restarts"), so a coordinator answering 200 with a missing or mistyped
+    field must reach it as the presence family, never as a bare
+    ``KeyError`` or ``ValueError``. A missing instant used to default to 0."""
+    monkeypatch.setattr(
+        presence_module,
+        "build_internal_client",
+        lambda **_: httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)),
+            base_url="http://coordinator",
+        ),
+    )
+    presence = RemotePresence(base_url=COORDINATOR_URL, agent_service_token=CLERK_TOKEN)
+    clerk_id = "clrk_000000000000000000000000"
+
+    with pytest.raises(FleetPresenceError, match="malformed answer"):
+        if call == "register":
+            await presence.register(
+                clerk_id=clerk_id,
+                worker_key="wkrk_x",
+                agent_instance_id="agnt_1",
+                endpoint_ref=None,
+                adapter_version="a.1",
+                fleet_protocol_version=FLEET_PROTOCOL_VERSION,
+            )
+        elif call == "reserve":
+            await presence.reserve(broker="alpaca", clerk_id=clerk_id, external_account_id="PA-1")
+        else:
+            await presence.confirm(
+                broker="alpaca",
+                clerk_id=clerk_id,
+                external_account_id="PA-1",
+                binding_generation=1,
+                agent_instance_id="agnt_1",
+                routing_epoch=1,
+                effective_profile_id=None,
+                effective_revision=None,
+            )
+
+
 async def test_a_mixed_build_restarting_against_a_reachable_coordinator_refuses_to_boot(
     control_dir: Path,
     clock: FrozenClock,

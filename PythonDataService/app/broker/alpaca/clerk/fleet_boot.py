@@ -1290,7 +1290,7 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
             raise
         except Exception:
             # Anything other than a FleetControlError anywhere in the loop is
-            # unexpected (a malformed coordinator response, a raw sqlite3
+            # unexpected (a malformed volume expectation, a raw sqlite3
             # error from the local store, a transport or filesystem error on
             # the repair path above) and ends the beat — but silently, unless
             # announced right here: the task simply stops, and nothing notices
@@ -1392,8 +1392,8 @@ async def stop_heartbeat(boot: FleetLaneBoot | None) -> None:
     already stopped) is a no-op, not a refusal.
 
     ``_beat`` logs a ``FleetControlError`` around its observation and retries
-    (re-registering the session); anything else (a malformed coordinator
-    response, a raw ``sqlite3`` error from the local store) is logged at the
+    (re-registering the session); anything else (a malformed volume
+    expectation, a raw ``sqlite3`` error from the local store) is logged at the
     point of death — never silently — and still ends the task, with that
     exception stored on it. ``cancel()`` is a no-op on a task that's already
     done, so awaiting it would re-raise that stored exception here — the

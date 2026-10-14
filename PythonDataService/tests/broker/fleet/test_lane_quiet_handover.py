@@ -101,6 +101,42 @@ def test_a_release_covered_by_a_fresh_quiet_confirmation_records_present(
     assert released.lane_confirmation == LaneConfirmationState.PRESENT
 
 
+def test_a_confirmation_that_commits_while_the_release_waits_for_the_lock_still_records_present(
+    fleet_service: FleetControlService, clock: FrozenClock, control_dir: Path
+) -> None:
+    """The ceremony is a separate process whose ``BEGIN IMMEDIATE`` can wait
+    on the coordinator's writes; the lane's next beat can commit a fresh
+    confirmation in that gap. The gate reads the clock inside the lock, so
+    that confirmation is age 0, never a negative age that would record the
+    release ``absent`` — which re-reservation refuses for good."""
+    from contextlib import contextmanager
+
+    lane, session = _drained(fleet_service, clock, control_dir, "lockwait")
+    _confirm(fleet_service, lane, session, observed_at_ms=clock())
+    store = fleet_service._store
+    real_transaction = store.transaction
+    pending = [True]
+
+    @contextmanager
+    def transaction_after_the_lanes_next_beat():
+        if pending:
+            pending.clear()
+            clock.advance(3)
+            _confirm(fleet_service, lane, session, observed_at_ms=clock())
+        with real_transaction() as conn:
+            yield conn
+
+    store.transaction = transaction_after_the_lanes_next_beat
+    try:
+        released = _release(fleet_service)
+    finally:
+        store.transaction = real_transaction
+
+    assert released.lane_confirmation == LaneConfirmationState.PRESENT
+    assert released.updated_at_ms == clock()
+    assert released.attested_at_ms == clock()
+
+
 @pytest.mark.parametrize("evidence", ["none", "not_quiet", "stale"])
 def test_a_release_without_fresh_quiet_evidence_still_releases_but_records_absent(
     evidence: str,
@@ -255,6 +291,44 @@ def test_a_quiet_drained_lane_is_reassigned_in_one_transaction(
     assert old_lane is not None
     assert old_lane.lifecycle_state == StoredLifecycleState.RETIRED
     assert old_lane.lane_confirmation == LaneConfirmationState.PRESENT
+
+
+def test_reassignment_uses_the_clock_after_waiting_for_the_transaction(
+    fleet_service: FleetControlService, clock: FrozenClock, control_dir: Path
+) -> None:
+    from contextlib import contextmanager
+
+    lane, session = _drained(fleet_service, clock, control_dir, "m-lockwait")
+    _confirm(fleet_service, lane, session, observed_at_ms=clock())
+    successor = _successor(fleet_service, control_dir, "m-lockwait-next")
+    store = fleet_service._store
+    real_transaction = store.transaction
+    pending = [True]
+
+    @contextmanager
+    def transaction_after_the_lanes_next_beat():
+        if pending:
+            pending.clear()
+            clock.advance(3)
+            _confirm(fleet_service, lane, session, observed_at_ms=clock())
+        with real_transaction() as conn:
+            yield conn
+
+    store.transaction = transaction_after_the_lanes_next_beat
+    try:
+        moved = _reassign(fleet_service, successor)
+    finally:
+        store.transaction = real_transaction
+
+    history = fleet_service._store.list_assignment_history(
+        broker="fake_alpha", canonical_account_id=ACCOUNT
+    )
+    released = next(row for row in history if row.state == AssignmentState.RELEASED)
+    old_lane = fleet_service._store.read_clerk(lane.clerk_id)
+    assert released.updated_at_ms == clock()
+    assert released.attested_at_ms == clock()
+    assert moved.updated_at_ms == clock()
+    assert old_lane is not None and old_lane.retired_at_ms == clock()
 
 
 @pytest.mark.parametrize(

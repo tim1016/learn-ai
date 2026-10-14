@@ -10,6 +10,7 @@ format check is the only parsing anyone — including this package — performs.
 
 from __future__ import annotations
 
+import hmac
 import re
 import secrets
 
@@ -30,7 +31,7 @@ def new_worker_key() -> str:
     """A fresh durable worker identity (ADR 0060's deferred mechanism, designed).
 
     Longer than the public identifiers because it never crosses the public
-    API (ADR 0062 Decision 3) and is compared with ``hmac.compare_digest`` where an
+    API (ADR 0062 Decision 3) and is compared with ``same_secret`` where an
     agent presents it.
     """
     return f"wkrk_{secrets.token_hex(16)}"
@@ -58,6 +59,19 @@ def new_service_token() -> str:
     return f"svct_{secrets.token_hex(16)}"
 
 
+def same_secret(presented: str, expected: str) -> bool:
+    """Constant-time equality for two secrets, answering ``False`` for any ``str``.
+
+    Compared as UTF-8 bytes: ``hmac.compare_digest`` raises ``TypeError`` for a
+    non-ASCII ``str`` (Starlette decodes header bytes as Latin-1), which a
+    route would answer 500 instead of the refusal it owes. ``surrogatepass``
+    keeps a lone surrogate from a JSON body a mismatch rather than an error.
+    """
+    return hmac.compare_digest(
+        presented.encode("utf-8", "surrogatepass"), expected.encode("utf-8", "surrogatepass")
+    )
+
+
 def is_clerk_id(value: object) -> bool:
     """Whether the value is a well-formed opaque clerk identity."""
     return isinstance(value, str) and _CLERK_ID.fullmatch(value) is not None
@@ -71,4 +85,5 @@ __all__ = [
     "new_service_token",
     "new_volume_id",
     "new_worker_key",
+    "same_secret",
 ]

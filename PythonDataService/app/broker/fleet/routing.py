@@ -87,7 +87,9 @@ def _lane_server_error(
     ``unavailable`` did not start and needs a restart, never a retry. Any
     other 5xx keeps the generic copy, with ``next_step``.
     """
-    summary = ProviderSummaryObservation.parse(session.reported_summary_json)
+    summary = ProviderSummaryObservation.parse_stored(
+        session.reported_summary_json, clerk_id=clerk_id
+    )
     authority_state = None if summary is None else summary.authority_state
     if authority_state == "reconnecting":
         return ClerkUnreachable(
