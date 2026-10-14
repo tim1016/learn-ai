@@ -35,7 +35,7 @@ qty = floor( (tpv * (1 - FreePortfolioValuePercentage) - order_fee) / price )
 with `FreePortfolioValuePercentage = 0.0025` — LEAN's documented default
 free-portfolio-value buffer. This is the `lean_set_holdings` sizing model
 ported in `app/engine/execution/sizing.py`; the parity test
-`tests/engine/execution/test_sizing.py` asserts exact reproduction.
+`tests/engine/test_sizing.py` asserts exact reproduction.
 
 ## Regeneration
 

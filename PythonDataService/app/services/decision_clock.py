@@ -33,8 +33,7 @@ from app.services.session_authority import extended_session_bounds_ms
 from app.utils.timestamps import ny_datetime, to_ms_utc
 
 if TYPE_CHECKING:
-    # Type-only, matching ``run_replay_proof.py``'s existing guard on this same
-    # symbol: importing ``bot_binding_repository`` at runtime would drag the
+    # Type-only: importing ``bot_binding_repository`` at runtime would drag the
     # whole broker/clerk stack into what is otherwise a pure calendar module,
     # for the sake of one annotation.
     from app.services.bot_binding_repository import BrokerBotBinding

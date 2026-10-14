@@ -2,10 +2,10 @@
 
 The canonical implementation lives in
 ``app.research.parity.ibkr_commission`` (see its module docstring for the
-formula and reference). Engine execution code imports from here so the
-``app.engine.*`` package has no inbound dependency on ``app.research.*``;
-the reconciler and the engine therefore share one fee implementation
-without crossing the layer boundary in the wrong direction.
+formula and reference). Engine execution code imports from here, so this
+one file is the engine's only import of ``app.research.*`` for fees and the
+reconciler and the engine share one fee implementation (an identity pinned
+by ``test_commission_reexport.py``).
 
 Provenance:
   Formula: see app/research/parity/ibkr_commission.py

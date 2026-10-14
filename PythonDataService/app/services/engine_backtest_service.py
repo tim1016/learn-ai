@@ -235,10 +235,10 @@ def _apply_overrides(strategy: Strategy, req: EngineBacktestRequest) -> None:
         # warmup boundary is supplied that is earlier than the evaluation
         # start, which ``execute_engine_backtest`` hands to the engine
         # separately so scoring is scoped to ``from_date`` onward.
-        d = datetime.strptime(data_start, "%Y-%m-%d")
+        d = _parse_iso_date(data_start, "data_start")
         strategy.set_start_date(d.year, d.month, d.day)
     if req.to_date:
-        d = datetime.strptime(req.to_date, "%Y-%m-%d")
+        d = _parse_iso_date(req.to_date, "to_date")
         strategy.set_end_date(d.year, d.month, d.day)
     if req.initial_cash is not None:
         strategy.set_cash(req.initial_cash)
@@ -344,26 +344,23 @@ def _format_trade(index: int, trade: Any) -> EngineTradeResponse:
     )
 
 
-def _format_trade_record(index: int, trade: Any, cumulative_pnl_pct: float) -> TradeRecord:
-    raw_indicators = getattr(trade, "indicators", None) or {}
+def _format_trade_record(index: int, trade: Any) -> TradeRecord:
     return TradeRecord(
         trade_number=index,
-        trade_type="Buy",  # engine strategies are long-only for now
         entry_timestamp=trade.entry_time_ms,
         exit_timestamp=trade.exit_time_ms,
         entry_price=float(trade.entry_price),
         exit_price=float(trade.exit_price),
-        pnl=float(trade.pnl_pts),
+        # Dollars, as LEAN's trade ledger is: ``pnl_pts`` is per share.
+        pnl=float(trade.pnl_pts) * trade.quantity,
         pnl_pct=float(trade.pnl_pct),
-        cumulative_pnl_pct=cumulative_pnl_pct,
         signal_reason=getattr(trade, "signal_reason", "") or "",
-        indicator_snapshot={k: float(v) for k, v in raw_indicators.items()},
     )
 
 
 def _parse_iso_date(value: str, field_name: str) -> date:
     try:
-        return datetime.strptime(value, "%Y-%m-%d").date()
+        return date.fromisoformat(value)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -454,6 +451,10 @@ def _reader_and_engine(
     )
 
 
+class ReceiptDriftError(ValueError):
+    """A run's receipted input changed or is gone: the same data is no longer there to read."""
+
+
 def _profile_dividends(
     request: EngineBacktestRequest,
     data_roots: list[Path],
@@ -483,13 +484,13 @@ def _profile_dividends(
         receipted = data_manifest.get(key)
         if receipted is not None:
             if found is None:
-                raise ValueError(f"the run's receipted factor file is gone: {key}")
+                raise ReceiptDriftError(f"the run's receipted factor file is gone: {key}")
             # One read, verified, then parsed from those same bytes: a
             # replacement between a hash and a re-open cannot produce cash
             # that passed no receipt check (#3000 review).
             payload = found[0].read_bytes()
             if hashlib.sha256(payload).hexdigest() != receipted:
-                raise ValueError(f"the factor file changed under the run's receipt: {key}")
+                raise ReceiptDriftError(f"the factor file changed under the run's receipt: {key}")
             return dividends_from_factor_bytes(payload, symbol, data_start, to_date)
     if found is None:
         return []
@@ -571,7 +572,12 @@ def replay_engine_run(
     strategy = registration.build(validated_params)
     if not hasattr(strategy, "evaluate_signal_bar"):
         raise SavedRunNotReplayable(f"Strategy '{request.strategy_name}' records no decisions to replay.")
-    _reader, engine = _reader_and_engine(request, fill_mode=fill_mode, data_roots=data_roots, data_manifest=data_manifest)
+    try:
+        _reader, engine = _reader_and_engine(
+            request, fill_mode=fill_mode, data_roots=data_roots, data_manifest=data_manifest
+        )
+    except ReceiptDriftError as exc:
+        raise SavedRunNotReplayable(f"The data this run was receipted on has changed: {exc}") from exc
     _override_after_initialize(strategy, request)
     record_staged_decisions(strategy, record)
     engine.run(strategy, evaluation_start_ms=_evaluation_start_ms(request), retain_bars=False)
@@ -829,6 +835,16 @@ def _execute_engine_backtest_core(
             },
         )
 
+    # A rule between parameters that per-field bounds cannot state (MACD fast
+    # below slow): Deploy checks it before sealing, and so does the backtest,
+    # which otherwise built the strategy and failed inside ``initialize``.
+    refusal = None if registration.params_refusal is None else registration.params_refusal(validated_params)
+    if refusal is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"strategy": request.strategy_name, "params_refusal": refusal},
+        )
+
     _resolve_legacy_data_policy(request, validated_params)
 
     fill_mode = _parse_fill_mode(request.fill_mode)
@@ -895,10 +911,18 @@ def _execute_engine_backtest_core(
             detail=f"compatibility_fixture_unavailable: {exc}",
         ) from exc
 
-    reader, engine = _reader_and_engine(
-        request, fill_mode=fill_mode, data_roots=data_roots, data_manifest=data_manifest,
-        decoded_cache=decoded_cache, admission=admission,
-    )
+    try:
+        reader, engine = _reader_and_engine(
+            request, fill_mode=fill_mode, data_roots=data_roots, data_manifest=data_manifest,
+            decoded_cache=decoded_cache, admission=admission,
+        )
+    except ReceiptDriftError as exc:
+        # The run's receipted factor file changed or is gone (``_profile_dividends``):
+        # the same refusal, with the same status, as a fixture that differs from its receipt.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"compatibility_fixture_unavailable: {exc}",
+        ) from exc
     _override_after_initialize(strategy, request)
 
     # Decompose the old monolithic "simulating" phase into the two stages
@@ -983,11 +1007,7 @@ def _lean_parity_statistics(*, result: BacktestResult, trades: list[LoggedTrade]
             df = pd.DataFrame(bar_records)
 
             # Convert LoggedTrade → TradeRecord
-            cum_pnl = 0.0
-            trade_records: list[TradeRecord] = []
-            for i, t in enumerate(trades):
-                cum_pnl += float(t.pnl_pct)
-                trade_records.append(_format_trade_record(i + 1, t, cum_pnl))
+            trade_records: list[TradeRecord] = [_format_trade_record(i + 1, t) for i, t in enumerate(trades)]
 
             lean_stats = compute_lean_statistics(
                 df=df,
@@ -995,6 +1015,8 @@ def _lean_parity_statistics(*, result: BacktestResult, trades: list[LoggedTrade]
                 start_capital=float(result.initial_cash),
                 risk_free_rate=0.0,
                 benchmark_returns=None,
+                total_fees=float(result.total_fees),
+                total_orders=len(result.order_events),
             )
 
             from dataclasses import asdict as _dc_asdict
@@ -1058,6 +1080,10 @@ def _validation_analytics(
         ):
             start_day = date.fromisoformat(request.from_date)
             end_day = date.fromisoformat(request.to_date) + timedelta(days=1)
+            # UTC midnight on purpose: the LEAN twin anchors the same window at
+            # UTC midnight (``lean_sidecar_persistence``), and a pair's
+            # horizons must share their endpoints. Both move together or not
+            # at all (left for that reason, #3219).
             validation_equity = build_compatibility_equity_curve(
                 validation_trades,
                 start_ms_utc=int(datetime.combine(start_day, datetime.min.time(), tzinfo=UTC).timestamp() * 1000),
@@ -1405,7 +1431,9 @@ def _persist_and_dispatch_companion(
     )
     save = persist_engine_response_sync(
         response=response,
-        symbol=strategy.ctx.symbols[0] if strategy.ctx.symbols else "SPY",
+        # The engine refuses a run with no symbol before it starts, so there is
+        # always one; a plausible default would persist a wrong ticker.
+        symbol=strategy.ctx.symbols[0],
         start_date=resolved_configuration.start_date,
         end_date=resolved_configuration.end_date,
         resolution=resolved_configuration.resolution,

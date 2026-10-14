@@ -335,7 +335,8 @@ async def iv30_parametric(req: Iv30LiveRequest) -> Iv30LiveResponse:
     if sigma is None:
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
-            "iv30_atm_50d returned None — should not happen with two valid expiries",
+            f"No solved expiry sits below and at-or-above {req.target_calendar_days} days, so a "
+            f"{req.target_calendar_days}-day IV cannot be interpolated; got expiries {sorted(series.index.tolist())} days",
         )
 
     # Provenance for the parametric path: count-share by source across the

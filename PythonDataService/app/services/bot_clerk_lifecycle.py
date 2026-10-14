@@ -63,9 +63,12 @@ async def register_alpaca_duty_run(
     clerk = _clerk_for_binding(binding)
     if clerk is None:
         raise ActiveClerkUnavailableError("The Alpaca Clerk is not installed.")
-    if admission_snapshot is None or not isinstance(clerk, RevisionBoundRunRegistrar):
+    if admission_snapshot is None:
         await clerk.register_strategy_run(binding, run_owner=run_owner)
         return
+    if not isinstance(clerk, RevisionBoundRunRegistrar):
+        # Registering without the snapshot would drop the custody cut the Start was admitted under.
+        raise ActiveClerkUnavailableError("The active Clerk cannot bind a run to its admission snapshot.")
     try:
         await clerk.register_strategy_run(
             binding, admission_snapshot=admission_snapshot, run_owner=run_owner

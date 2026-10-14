@@ -1,6 +1,6 @@
 """Extended backtest statistics.
 
-Formula: Sharpe = mean(daily_returns)/stddev(daily_returns) · √252; MaxDrawdown = max_t(running_peak_t - equity_t); per-trade win rate, profit factor, expected value, average winning/losing trade duration. All annualized with TRADING_DAYS_PER_YEAR=252.
+Formula: Sharpe = mean(daily_returns)/stddev(daily_returns) · √252; MaxDrawdown = max_t((running_peak_t - equity_t) / running_peak_t); per-trade win rate, profit factor, expected value, average winning/losing trade duration. All annualized with TRADING_DAYS_PER_YEAR=252.
 Reference: Sharpe (1994) "The Sharpe Ratio", Journal of Portfolio Management 21(1) §IV; Bacon, *Practical Portfolio Performance Measurement* (2e), §8.2 for max drawdown; standard portfolio statistics.
 Canonical implementation: this file. The former .NET backtest duplicates were removed in Phase 3, and the .NET portfolio snapshot metrics in #2756.
 Validated against: `PythonDataService/tests/test_statistics.py::TestMaxDrawdown` and
@@ -91,14 +91,7 @@ class TradeStatistics:
 
 @dataclass(frozen=True)
 class PortfolioStatistics:
-    """Per-period / equity-curve metrics.
-
-    MAE/MFE are placeholders: computing them correctly requires
-    intra-trade bar data, which the engine does not currently retain.
-    They're exposed as ``None`` here so downstream code can depend on a
-    stable shape, and will be populated once the engine stores per-bar
-    equity during open positions.
-    """
+    """Per-period / equity-curve metrics."""
 
     net_profit: float
     net_profit_pct: float
@@ -107,8 +100,6 @@ class PortfolioStatistics:
     sortino_ratio: float | None
     calmar_ratio: float | None
     cagr: float | None
-    mae_pct: float | None  # Maximum Adverse Excursion — needs intra-trade data
-    mfe_pct: float | None  # Maximum Favorable Excursion — needs intra-trade data
 
 
 # ---------------------------------------------------------------------------
@@ -479,67 +470,23 @@ def validate_trade_log(trades: Sequence[_TradeLike]) -> list[ValidationError]:
                         )
                 except (TypeError, ValueError):
                     pass
-    if trades:
-        winning = sum(1 for t in trades if float(t.pnl_pct) > 0)
-        win_rate = winning / len(trades)
-        if not (0 <= win_rate <= 1):
-            errors.append(
-                ValidationError(
-                    code="invalid_win_rate",
-                    message=f"Computed win_rate {win_rate} not in [0, 1]",
-                )
-            )
     return errors
 
 
-def validate_statistics(stats: dict[str, float | int | None]) -> list[ValidationError]:
-    errors: list[ValidationError] = []
-    if "win_rate" in stats and stats["win_rate"] is not None:
-        wr = float(stats["win_rate"])
-        if not (0 <= wr <= 1):
-            errors.append(
-                ValidationError(
-                    code="invalid_win_rate_bounds",
-                    message=f"win_rate {wr} not in [0, 1]",
-                )
-            )
-    if "max_drawdown_pct" in stats and stats["max_drawdown_pct"] is not None:
-        mdd = float(stats["max_drawdown_pct"])
-        if not (0 <= mdd <= 1):
-            errors.append(
-                ValidationError(
-                    code="invalid_max_drawdown_bounds",
-                    message=f"max_drawdown_pct {mdd} not in [0, 1]",
-                )
-            )
-    if "profit_factor" in stats and stats["profit_factor"] is not None:
-        pf = float(stats["profit_factor"])
-        if pf < 0:
-            errors.append(
-                ValidationError(
-                    code="negative_profit_factor",
-                    message=f"profit_factor {pf} is negative",
-                )
-            )
-    if "sharpe_ratio" in stats and stats["sharpe_ratio"] is not None:
-        sr = float(stats["sharpe_ratio"])
-        if math.isnan(sr):
-            errors.append(
-                ValidationError(
-                    code="nan_sharpe",
-                    message="sharpe_ratio is NaN",
-                )
-            )
-    if "sortino_ratio" in stats and stats["sortino_ratio"] is not None:
-        sort = float(stats["sortino_ratio"])
-        if math.isnan(sort):
-            errors.append(
-                ValidationError(
-                    code="nan_sortino",
-                    message="sortino_ratio is NaN",
-                )
-            )
-    return errors
+def _cagr_and_calmar(
+    initial_cash: float, final_equity: float, max_dd: float, trading_days: int | None,
+) -> tuple[float | None, float | None]:
+    """Compound annual growth, and that growth per unit of max drawdown.
+
+    CAGR needs only the span and the two equities, so a run with no drawdown
+    at all (a monotonic win) still has one; Calmar divides by the drawdown, so
+    it has none there.
+    """
+    if not trading_days or trading_days <= 0 or initial_cash <= 0 or final_equity <= 0:
+        return None, None
+    years = trading_days / TRADING_DAYS_PER_YEAR
+    cagr = (final_equity / initial_cash) ** (1 / years) - 1
+    return cagr, (cagr / max_dd if max_dd > 0 else None)
 
 
 def compute_portfolio_statistics(
@@ -568,8 +515,6 @@ def compute_portfolio_statistics(
     net_profit = final_equity - initial_cash
     net_profit_pct = (net_profit / initial_cash) if initial_cash > 0 else 0.0
 
-    cagr: float | None = None
-
     if equity_curve:
         curve = [float(p.equity) for p in equity_curve]
         max_dd = _max_drawdown(curve)
@@ -579,13 +524,7 @@ def compute_portfolio_statistics(
         sharpe = _sharpe(daily_rets, TRADING_DAYS_PER_YEAR)
         sortino = _sortino(daily_rets, TRADING_DAYS_PER_YEAR)
 
-        calmar: float | None = None
-        if max_dd > 0 and trading_days and trading_days > 0:
-            years = trading_days / TRADING_DAYS_PER_YEAR
-            if years > 0 and initial_cash > 0 and final_equity > 0:
-                ann_return = (final_equity / initial_cash) ** (1 / years) - 1
-                calmar = ann_return / max_dd
-                cagr = ann_return
+        cagr, calmar = _cagr_and_calmar(initial_cash, final_equity, max_dd, trading_days)
     else:
         curve = _equity_curve_from_trades(initial_cash, trades)
         max_dd = _max_drawdown(curve)
@@ -599,13 +538,7 @@ def compute_portfolio_statistics(
         sharpe = _sharpe(returns, periods_per_year)
         sortino = _sortino(returns, periods_per_year)
 
-        calmar: float | None = None
-        if max_dd > 0 and trading_days and trading_days > 0:
-            years = trading_days / TRADING_DAYS_PER_YEAR
-            if years > 0 and initial_cash > 0 and final_equity > 0:
-                ann_return = (final_equity / initial_cash) ** (1 / years) - 1
-                calmar = ann_return / max_dd
-                cagr = ann_return
+        cagr, calmar = _cagr_and_calmar(initial_cash, final_equity, max_dd, trading_days)
 
     return PortfolioStatistics(
         net_profit=net_profit,
@@ -615,8 +548,6 @@ def compute_portfolio_statistics(
         sortino_ratio=sortino,
         calmar_ratio=calmar,
         cagr=cagr,
-        mae_pct=None,
-        mfe_pct=None,
     )
 
 
@@ -707,13 +638,5 @@ def summarize(
         "annual_standard_deviation": _finite_or_none(annual_standard_deviation),
         "drawdown_recovery": _drawdown_recovery_days(initial_cash, trades),
         "probabilistic_sharpe_ratio": _finite_or_none(_probabilistic_sharpe_ratio(metric_returns)),
-        "mae_pct": _finite_or_none(ps.mae_pct),
-        "mfe_pct": _finite_or_none(ps.mfe_pct),
     }
-    import logging
-
-    logger = logging.getLogger(__name__)
-    stat_errors = validate_statistics(result)
-    for error in stat_errors:
-        logger.warning("[STATS] %s: %s", error.code, error.message)
     return result

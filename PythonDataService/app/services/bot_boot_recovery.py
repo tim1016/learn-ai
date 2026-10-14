@@ -24,7 +24,7 @@ from app.engine.live.bot_lifecycle_state import (
     BotLifecycleStateCorruptError,
     BotLifecycleStateRepo,
 )
-from app.engine.live.desired_state import DesiredState, DesiredStateRepo
+from app.engine.live.desired_state import DesiredState, DesiredStateCorruptError, DesiredStateRepo
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_lifecycle_projection import (
     AlpacaLifecycleAuthorityUnavailableError,
@@ -57,6 +57,11 @@ class BootRecoveryReport(BaseModel):
     # a foreign binding is refused one at a time, and the instances the
     # installed authority does custody stay startable.
     foreign_instances: tuple[str, ...] = ()
+    # Bots whose ``desired_state.json`` could not be read. Control intent is
+    # never guessed at, so each is left as its files say; the sweep goes on
+    # with the lane's other bots, and a Start of the bot still answers its
+    # unknown process state (#3159 ruling 7).
+    unreadable_instances: tuple[str, ...] = ()
 
 
 class BootAuthorityPreparationError(RuntimeError):
@@ -197,7 +202,7 @@ class BotBootRecovery:
                 raise BootAuthorityPreparationError(
                     f"SQLite boot authority step {step_name!r} failed"
                 ) from exc
-        interrupted, authority_unavailable, foreign = await self._repair_lifecycle_artifacts(
+        interrupted, authority_unavailable, foreign, unreadable = await self._repair_lifecycle_artifacts(
             provenance
         )
         # Account-wide on purpose: this is a boot summary of the whole
@@ -211,6 +216,7 @@ class BotBootRecovery:
             completed_at_ms=self._now_ms(),
             authority_unavailable_instances=tuple(authority_unavailable),
             foreign_instances=tuple(foreign),
+            unreadable_instances=tuple(unreadable),
         )
         logger.info(
             "Boot recovery sweep complete",
@@ -220,6 +226,7 @@ class BotBootRecovery:
                 "unresolved_intents": report.unresolved_intents,
                 "authority_unavailable": list(report.authority_unavailable_instances),
                 "foreign": list(report.foreign_instances),
+                "unreadable": list(report.unreadable_instances),
             },
         )
         return report
@@ -247,17 +254,19 @@ class BotBootRecovery:
 
     async def _repair_lifecycle_artifacts(
         self, provenance: RecoverySweepProvenance
-    ) -> tuple[list[str], list[str], list[str]]:
+    ) -> tuple[list[str], list[str], list[str], list[str]]:
         """Repair every managed candidate.
 
         Returns the bots that received interrupted evidence; the bots left
-        unprojected because no lifecycle authority was installed; and the
-        bots left as their own files say because the installed authority
-        does not custody the account they are sealed on.
+        unprojected because no lifecycle authority was installed; the bots
+        left as their own files say because the installed authority does not
+        custody the account they are sealed on; and the bots left as their own
+        files say because their desired state could not be read.
         """
         interrupted: list[str] = []
         authority_unavailable: list[str] = []
         foreign: list[str] = []
+        unreadable: list[str] = []
         try:
             candidates = sorted(
                 set(self._recovery_candidates()),
@@ -313,9 +322,25 @@ class BotBootRecovery:
                 )
                 authority_unavailable.append(candidate.strategy_instance_id)
                 continue
+            except DesiredStateCorruptError as exc:
+                # One bot's unreadable control intent refuses that bot, never
+                # the lane: it used to abort the whole startup and leave a
+                # good bot sorted after it unrepaired. The caller's per-bot
+                # paths (a restored Dry Run, a dead-run settle) still raise it.
+                logger.warning(
+                    "Boot sweep left a bot as its files say: its desired state is corrupt",
+                    extra={
+                        "action": "boot_sweep_corrupt_desired_state",
+                        "strategy_instance_id": candidate.strategy_instance_id,
+                        "run_id": candidate.run_id,
+                        "path": str(exc.path),
+                    },
+                )
+                unreadable.append(candidate.strategy_instance_id)
+                continue
             if recorded_interruption:
                 interrupted.append(candidate.strategy_instance_id)
-        return interrupted, authority_unavailable, foreign
+        return interrupted, authority_unavailable, foreign, unreadable
 
     def foreign_binding(self, strategy_instance_id: str) -> ForeignBinding | None:
         """Why the installed primary authority does not custody this binding, if so.

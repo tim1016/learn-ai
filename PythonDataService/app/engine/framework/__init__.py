@@ -6,6 +6,7 @@ set_holdings() / liquidate() directly continue to work unchanged. New strategies
 can optionally emit Insights (structured predictions) that are tracked and
 scored by the InsightManager.
 
-Phase 1: Insight data model + InsightManager + scoring
-Phase 2: AlphaModel interface + built-in alpha models
+Today the package holds the Insight data model, the InsightManager and
+the scorer (``insight.py``, ``insight_manager.py``, ``insight_scorer.py``).
+The AlphaModel interface and built-in alpha models were cut in #2752.
 """

@@ -16,6 +16,8 @@ Coverage:
 
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -204,10 +206,8 @@ async def test_backtest_rejects_unsupported_spec_feature_with_400() -> None:
     not as a 200 + ``success=false``. Otherwise API consumers cannot
     distinguish a client-side spec mistake from a transient run failure.
 
-    The unsupported feature surfaces from inside ``engine.run()`` (when
-    entry actually fires and ``_submit_entry`` is called), not from
-    ``SpecAlgorithm.__init__``, so the run-time exception path must
-    convert it to 4xx — which is what the route handler does.
+    The constructor refuses it (an entry that never fires used to
+    return a 200 with zero trades), and the route turns that into 4xx.
     """
     app.dependency_overrides[get_data_source_factory] = _make_synthetic_factory
 
@@ -219,7 +219,7 @@ async def test_backtest_rejects_unsupported_spec_feature_with_400() -> None:
             spec_payload["symbols"] = [SYMBOL]
             # Replace the SetHoldings sizing with a Phase-2 FixedContracts
             # value. The schema accepts it (forward-compat); the
-            # evaluator raises NotImplementedError when entry fires.
+            # evaluator's constructor raises NotImplementedError.
             spec_payload["entry"]["size"] = {"kind": "FixedContracts", "value": 1}
 
             resp = await client.post(
@@ -239,6 +239,63 @@ async def test_backtest_rejects_unsupported_spec_feature_with_400() -> None:
     )
     body = resp.json()
     assert "unsupported feature" in body["detail"].lower()
+
+
+async def test_backtest_answers_400_for_a_spec_that_declares_predictions_it_cannot_load() -> None:
+    """This route has no prediction set to pair a ``predictions`` block with; that is the
+    caller's spec, so 400 with the reason, not an unhandled ValueError."""
+    app.dependency_overrides[get_data_source_factory] = _make_synthetic_factory
+
+    try:
+        async with await _client() as client:
+            spec_payload = (await client.get("/api/spec-strategy/fixtures/sma_crossover")).json()
+            spec_payload["symbols"] = [SYMBOL]
+            spec_payload["predictions"] = [{"id": "p", "prediction_set_id": "ps_probe"}]
+
+            resp = await client.post(
+                "/api/spec-strategy/backtest",
+                json={
+                    "spec": spec_payload,
+                    "start_date": "2024-01-02",
+                    "end_date": "2024-12-31",
+                    "initial_cash": 100000.0,
+                },
+            )
+    finally:
+        app.dependency_overrides.pop(get_data_source_factory, None)
+
+    assert resp.status_code == 400, resp.text
+    assert "declares predictions" in resp.json()["detail"]
+
+
+async def test_a_data_source_that_cannot_be_built_is_reported_and_logged(caplog: pytest.LogCaptureFixture) -> None:
+    """The failure was returned to the caller and left no trace in the service's own log."""
+
+    def _factory_that_fails(symbol: str, start: date, end: date) -> object:
+        raise RuntimeError("the lake is down")
+
+    app.dependency_overrides[get_data_source_factory] = lambda: _factory_that_fails
+    try:
+        async with await _client() as client:
+            spec_payload = (await client.get("/api/spec-strategy/fixtures/sma_crossover")).json()
+            spec_payload["symbols"] = [SYMBOL]
+            with caplog.at_level("ERROR", logger="app.routers.spec_strategy"):
+                resp = await client.post(
+                    "/api/spec-strategy/backtest",
+                    json={
+                        "spec": spec_payload,
+                        "start_date": "2024-01-02",
+                        "end_date": "2024-12-31",
+                        "initial_cash": 100000.0,
+                    },
+                )
+    finally:
+        app.dependency_overrides.pop(get_data_source_factory, None)
+
+    body = resp.json()
+    assert (resp.status_code, body["success"]) == (200, False)
+    assert "data source unavailable: the lake is down" in body["error"]
+    assert any(record.exc_info and "the lake is down" in str(record.exc_info[1]) for record in caplog.records)
 
 
 async def test_backtest_rejects_malformed_spec() -> None:

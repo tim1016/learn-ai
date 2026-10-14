@@ -382,7 +382,7 @@ def test_v2_seal_appends_without_rewriting_v1_identity_bytes(tmp_path: Path) -> 
             "program_build": binding.program_build,
         }
     )
-    repository.record_launch(resumed, launch_reason="resume")
+    repository.record_launch(resumed, launch_reason="deploy")
 
     assert instance_path.read_bytes() == original_v1_bytes
     assert configuration_hash(restored) == configuration_hash(binding)
@@ -1162,3 +1162,11 @@ def test_a_source_read_that_fails_during_the_drift_comparison_refuses_with_a_res
     assert proof.state == "UNPROVEN"
     assert "Restart needed" in proof.explanation
     assert "Restart the service" in proof.next_step
+
+
+def test_parameters_the_strategy_rejects_are_a_typed_seal_refusal_not_a_raw_validation_error() -> None:
+    """Start catches ``SignalProgramSealError`` only; a raw pydantic error escaped its decision."""
+    binding = _binding(strategy_params={"gap": "not-a-number"}, strategy_param_origins={"gap": "deploy_override"})
+
+    with pytest.raises(SignalProgramSealError, match=r"not valid for ema_crossover_signal: gap"):
+        build_start_program_seal(binding, _validation(), parameter_origins=binding.strategy_param_origins)
