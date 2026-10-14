@@ -325,18 +325,24 @@ the hold as a verdict field, never as a third custody state.
 
 The Settings page's daily loss limit section has a **Clear hold** button. The
 same release by hand is two calls: read the two revisions the clear is fenced
-on, then post them back.
+on, then post them back through the fleet coordinator. Choose `CLERK_ID` from
+the active Alpaca lane in `GET /api/broker-clerks` and replace the two numeric
+values in the POST with `risk_revision` and `selection_generation` from the
+first response. The fleet coordinator listens on port 8100 by default
+(`FLEET_COORDINATOR_PORT`); Clerk agents have no public host port.
 
 ```
-curl -H "X-Data-Plane-Control-Secret: $DATA_PLANE_CONTROL_SECRET" http://localhost:8000/api/brokers/alpaca/configuration/risk-limits
+BASE_URL="http://127.0.0.1:${FLEET_COORDINATOR_PORT:-8100}/api/brokers/alpaca/clerks/${CLERK_ID}/configuration/risk-limits"
+curl -H "X-Data-Plane-Control-Secret: $DATA_PLANE_CONTROL_SECRET" "$BASE_URL"
 curl -X POST -H "X-Data-Plane-Control-Secret: $DATA_PLANE_CONTROL_SECRET" -H "Content-Type: application/json" \
-  -d '{"expected_risk_revision": <risk_revision>, "expected_selection_generation": <selection_generation>}' \
-  http://localhost:8000/api/brokers/alpaca/configuration/risk-limits/clear-hold
+  -d '{"command_context":{"capability":"configuration_manage"},"expected_risk_revision":<risk_revision>,"expected_selection_generation":<selection_generation>}' \
+  "$BASE_URL/clear-hold"
 ```
 
 `PythonDataService/app/services/alpaca_live_envelope.py::clear_loss_hold`,
-reached through `PythonDataService/app/routers/broker_configuration.py`
-(`POST /risk-limits/clear-hold`) and
+reached through the coordinator's clerk-scoped route, then
+`PythonDataService/app/routers/broker_configuration.py`
+(`POST /configuration/risk-limits/clear-hold`) and
 `app/broker_configuration/account_risk.py::clear_account_risk_hold`, is the
 ADR 0011 §6 shape: it re-observes the account and refuses while the breach
 still stands, rather than trusting the caller.
