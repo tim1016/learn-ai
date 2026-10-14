@@ -1,4 +1,4 @@
-"""Spec values that can only fail inside ``engine.run`` are refused where the spec is read (F2-2, F2-3).
+"""Spec values that can only fail inside ``engine.run`` are refused where the spec is read (#3219).
 
 Reproduced before: ``TimeOfDay.after="45am"`` answered ``success=false`` with
 ``invalid literal for int() with base 10``, ``tz="Mars/Phobos"`` with
@@ -30,7 +30,7 @@ def _time_of_day(**values: str) -> dict:
     return {"kind": "TimeOfDay", **values}
 
 
-@pytest.mark.parametrize("value", ["45am", "9:30", "24:00", "09:60", "0930", ""])
+@pytest.mark.parametrize("value", ["45am", "24:00", "09:60", "0930", "", "9:3x", "1:2:3"])
 def test_a_clock_time_that_is_not_hh_mm_is_refused(value: str) -> None:
     with pytest.raises(ValidationError, match="HH:MM"):
         S.TimeOfDay.model_validate(_time_of_day(after=value))
@@ -38,15 +38,17 @@ def test_a_clock_time_that_is_not_hh_mm_is_refused(value: str) -> None:
         S.TimeOfDay.model_validate(_time_of_day(before=value))
 
 
-def test_a_time_zone_that_does_not_exist_is_refused() -> None:
+@pytest.mark.parametrize("zone", ["Mars/Phobos", "America", "x" * 300])
+def test_a_time_zone_that_does_not_exist_is_refused(zone: str) -> None:
     with pytest.raises(ValidationError, match="IANA time zone"):
-        S.TimeOfDay.model_validate(_time_of_day(after="09:45", tz="Mars/Phobos"))
+        S.TimeOfDay.model_validate(_time_of_day(after="09:45", tz=zone))
 
 
 def test_a_well_formed_time_of_day_is_accepted() -> None:
     node = S.TimeOfDay.model_validate(_time_of_day(after="09:45", before="15:45", tz="America/Chicago"))
 
     assert (node.after, node.before, node.tz) == ("09:45", "15:45", "America/Chicago")
+    assert S.TimeOfDay.model_validate(_time_of_day(after="9:30")).after == "9:30"  # the primitive reads it
 
 
 def test_macd_with_fast_not_shorter_than_slow_is_refused_and_the_defaults_are_checked_too() -> None:

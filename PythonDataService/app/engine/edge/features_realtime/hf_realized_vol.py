@@ -45,7 +45,7 @@ date's, and every bar of that date carries the same value (the ffill onto the
 bar grid in :func:`hf_realized_vol_trd252`). On an intraday index a bar at
 09:15 ET therefore holds a figure that includes the date's later bars; the
 value is valid as of the date's session close. A consumer deciding intraday
-must read the previous date's value (shift one session) instead (#3219 G-2).
+must read the previous date's value (shift one session) instead (#3219).
 """
 
 from __future__ import annotations

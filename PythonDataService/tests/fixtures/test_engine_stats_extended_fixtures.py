@@ -192,7 +192,7 @@ class TestENG004CAGR:
 
 
     def test_cagr_exists_for_a_run_with_no_drawdown(self) -> None:
-        """E-2: a monotonic win has no drawdown; its CAGR is still the oracle's and its Calmar is absent."""
+        """A monotonic win has no drawdown; its CAGR is still the oracle's and its Calmar is absent."""
         inp, out, atol, _rtol = _load("ENG-004")
         for i in range(len(inp)):
             initial = float(inp["initial_cash"][i].as_py())

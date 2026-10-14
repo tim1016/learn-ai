@@ -19,7 +19,7 @@ import time
 from bisect import bisect_left
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from itertools import pairwise, takewhile
 from pathlib import Path
@@ -451,6 +451,10 @@ def _reader_and_engine(
     )
 
 
+class ReceiptDriftError(ValueError):
+    """A run's receipted input changed or is gone: the same data is no longer there to read."""
+
+
 def _profile_dividends(
     request: EngineBacktestRequest,
     data_roots: list[Path],
@@ -480,13 +484,13 @@ def _profile_dividends(
         receipted = data_manifest.get(key)
         if receipted is not None:
             if found is None:
-                raise ValueError(f"the run's receipted factor file is gone: {key}")
+                raise ReceiptDriftError(f"the run's receipted factor file is gone: {key}")
             # One read, verified, then parsed from those same bytes: a
             # replacement between a hash and a re-open cannot produce cash
             # that passed no receipt check (#3000 review).
             payload = found[0].read_bytes()
             if hashlib.sha256(payload).hexdigest() != receipted:
-                raise ValueError(f"the factor file changed under the run's receipt: {key}")
+                raise ReceiptDriftError(f"the factor file changed under the run's receipt: {key}")
             return dividends_from_factor_bytes(payload, symbol, data_start, to_date)
     if found is None:
         return []
@@ -572,7 +576,7 @@ def replay_engine_run(
         _reader, engine = _reader_and_engine(
             request, fill_mode=fill_mode, data_roots=data_roots, data_manifest=data_manifest
         )
-    except ValueError as exc:
+    except ReceiptDriftError as exc:
         raise SavedRunNotReplayable(f"The data this run was receipted on has changed: {exc}") from exc
     _override_after_initialize(strategy, request)
     record_staged_decisions(strategy, record)
@@ -912,7 +916,7 @@ def _execute_engine_backtest_core(
             request, fill_mode=fill_mode, data_roots=data_roots, data_manifest=data_manifest,
             decoded_cache=decoded_cache, admission=admission,
         )
-    except ValueError as exc:
+    except ReceiptDriftError as exc:
         # The run's receipted factor file changed or is gone (``_profile_dividends``):
         # the same refusal, with the same status, as a fixture that differs from its receipt.
         raise HTTPException(
@@ -1074,12 +1078,16 @@ def _validation_analytics(
             and request.from_date is not None
             and request.to_date is not None
         ):
-            # Date-anchored endpoints resolve through the NY zone, as every
-            # other anchor here does: the window is ET days, not UTC days.
+            start_day = date.fromisoformat(request.from_date)
+            end_day = date.fromisoformat(request.to_date) + timedelta(days=1)
+            # UTC midnight on purpose: the LEAN twin anchors the same window at
+            # UTC midnight (``lean_sidecar_persistence``), and a pair's
+            # horizons must share their endpoints. Both move together or not
+            # at all (#3219 E-8 is left for that reason).
             validation_equity = build_compatibility_equity_curve(
                 validation_trades,
-                start_ms_utc=et_midnight_ms(date.fromisoformat(request.from_date)),
-                end_ms_utc=et_day_end_ms(date.fromisoformat(request.to_date)),
+                start_ms_utc=int(datetime.combine(start_day, datetime.min.time(), tzinfo=UTC).timestamp() * 1000),
+                end_ms_utc=int(datetime.combine(end_day, datetime.min.time(), tzinfo=UTC).timestamp() * 1000),
                 initial_equity=float(result.initial_cash),
             )
         validation_analytics = compute_engine_validation_analytics(

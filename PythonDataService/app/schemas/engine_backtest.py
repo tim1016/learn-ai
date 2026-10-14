@@ -224,7 +224,7 @@ class EngineBacktestRequest(BaseModel):
     @field_validator("from_date", "to_date", "warmup_from_date")
     @classmethod
     def _a_date_is_a_calendar_date(cls, value: str | None) -> str | None:
-        """The pattern admits ``2024-02-30``; refuse it here as a 422, not a late 400 or a failed run (E-6)."""
+        """The pattern admits ``2024-02-30``; refuse it here as a 422, not a late 400 or a failed run."""
         if value is not None:
             try:
                 date.fromisoformat(value)
@@ -235,7 +235,7 @@ class EngineBacktestRequest(BaseModel):
     @field_validator("to_date")
     @classmethod
     def _the_window_ends_where_the_calendar_can_schedule(cls, value: str | None) -> str | None:
-        """``9999-12-31`` spent tens of seconds building sessions with the engine gate held, then overflowed (E-4)."""
+        """``9999-12-31`` spent tens of seconds building sessions with the engine gate held, then overflowed."""
         if value is not None and date.fromisoformat(value) > LAST_SCHEDULABLE_DATE:
             raise ValueError(f"to_date must not be past {LAST_SCHEDULABLE_DATE.isoformat()}, the last date the NYSE calendar can schedule")
         return value
@@ -243,7 +243,7 @@ class EngineBacktestRequest(BaseModel):
     @field_validator("initial_cash")
     @classmethod
     def _starting_cash_is_positive(cls, value: float | None) -> float | None:
-        """Zero cash passes ``ge=0`` and then fails every run at its first equity point (E-5)."""
+        """Zero cash passes ``ge=0`` and then fails every run at its first equity point."""
         if value is not None and value <= 0:
             raise ValueError("initial_cash must be greater than zero")
         return value

@@ -204,7 +204,7 @@ async def test_backtest_rejects_unsupported_spec_feature_with_400() -> None:
     not as a 200 + ``success=false``. Otherwise API consumers cannot
     distinguish a client-side spec mistake from a transient run failure.
 
-    The constructor refuses it (F2-3: an entry that never fires used to
+    The constructor refuses it (an entry that never fires used to
     return a 200 with zero trades), and the route turns that into 4xx.
     """
     app.dependency_overrides[get_data_source_factory] = _make_synthetic_factory

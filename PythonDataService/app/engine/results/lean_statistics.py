@@ -955,10 +955,12 @@ def compute_lean_statistics(
         ts.average_losing_trade_duration = _avg_duration(losses)
 
     # ═══ Runtime Statistics (BRH.cs) ═══
+    # From the run's starting capital, not the curve's first sample: a trade
+    # that exits on the first bar's date has already moved the first sample.
     stats.equity = port.end_equity
     stats.fees = total_fees
-    stats.net_profit = port.end_equity - port.start_equity
-    stats.total_return = port.total_net_profit
+    stats.net_profit = port.end_equity - start_capital
+    stats.total_return = stats.net_profit / start_capital if start_capital else 0.0
     stats.total_orders = total_orders if total_orders is not None else 2 * n_trades  # an entry and an exit each
 
     return stats

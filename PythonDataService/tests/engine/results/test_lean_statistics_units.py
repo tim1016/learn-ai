@@ -1,4 +1,4 @@
-"""The Strategy Lab "LEAN native statistics" panel reads dollars, not per-share points (E-1, ruling 8 of #3159).
+"""The Strategy Lab "LEAN native statistics" panel reads dollars, not per-share points (#3219, ruling 8 of #3159).
 
 Reproduction before the fix: a 100-share winner of +$2.00 per share (a real
 $200) showed ``trade.total_profit_loss`` 2.0, ``runtime.net_profit`` 2000.0
@@ -68,3 +68,20 @@ def test_orders_default_to_an_entry_and_an_exit_per_closed_trade() -> None:
 
     assert stats.total_orders == 2
     assert stats.fees == 0.0
+
+
+def test_net_profit_is_measured_from_starting_capital_when_a_trade_exits_on_the_first_bar_date() -> None:
+    """The curve's first sample already holds that exit; net profit must still be end less starting capital."""
+    first_day_trade = LoggedTrade(
+        entry_time_ms=_ms(8, 14, 30), entry_price=Decimal("100"), exit_time_ms=_ms(8, 19, 55),
+        exit_price=Decimal("102"), quantity=100, pnl_pts=Decimal("2"), pnl_pct=Decimal("0.02"), result="WIN",
+    )
+    later_trade = _winner(quantity=50)
+    trades = [_format_trade_record(1, first_day_trade), _format_trade_record(2, later_trade)]
+
+    stats = compute_lean_statistics(_daily_bars(), trades, start_capital=START_CAPITAL, total_fees=3.0)
+
+    # $200 + $100 gross, less $3 of commission: what the engine's own net_profit would read.
+    assert stats.net_profit == pytest.approx(297.0, abs=ATOL, rel=0)
+    assert stats.equity == pytest.approx(START_CAPITAL + 297.0, abs=ATOL, rel=0)
+    assert stats.total_return == pytest.approx(297.0 / START_CAPITAL, abs=ATOL, rel=0)

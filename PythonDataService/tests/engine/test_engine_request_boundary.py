@@ -1,4 +1,4 @@
-"""The engine backtest request refuses what can only fail late or hold the engine gate (E-4, E-5, E-6).
+"""The engine backtest request refuses what can only fail late or hold the engine gate (#3219).
 
 Each of these used to pass the schema: ``to_date="9999-12-31"`` walked every
 day to an ``OverflowError`` after about 21 s with the one-backtest gate held,
@@ -56,7 +56,7 @@ def test_starting_cash_must_be_greater_than_zero(value: float) -> None:
 
 
 def test_a_params_rule_the_deploy_path_enforces_refuses_the_backtest_too() -> None:
-    """F1-7: MACD fast >= slow was refused at Deploy only; Engine Lab built the strategy and failed in initialize."""
+    """MACD fast >= slow was refused at Deploy only; Engine Lab built the strategy and failed in initialize."""
     from fastapi import HTTPException
 
     from app.engine.strategy.registry import _STRATEGY_REGISTRY

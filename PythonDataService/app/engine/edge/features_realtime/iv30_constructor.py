@@ -48,7 +48,7 @@ def iv30_atm_50d(iv_by_expiry: pd.Series, target_days: int = 30) -> float | None
     Returns None unless one expiry sits below ``target_days`` and one at or
     above it: an IV read off a single side is not a constant-maturity number,
     and labelling the nearest expiry's IV as one would be a silent
-    extrapolation (#3219 G-4).
+    extrapolation (#3219).
 
     Output σ is on ACT/365 basis (the input σ values come from our IV solver
     which uses ``TTM = days / 365``). For comparison against trailing/forward
@@ -58,6 +58,8 @@ def iv30_atm_50d(iv_by_expiry: pd.Series, target_days: int = 30) -> float | None
         return None
     days = iv_by_expiry.index.to_numpy()
     if not ((days < target_days).any() and (days >= target_days).any()):
+        if (days == target_days).any():
+            return float(iv_by_expiry.loc[target_days])  # an expiry exactly on the target is the answer
         return None
     t1_days = int(days[days < target_days].max())
     t2_days = int(days[days >= target_days].min())

@@ -104,8 +104,12 @@ def test_iv30_atm_50d_picks_straddling_expiries():
 
 @pytest.mark.parametrize("expiries", [{40: 0.30, 60: 0.32}, {7: 0.18, 14: 0.19}])
 def test_iv30_atm_50d_is_none_when_the_expiries_do_not_straddle_the_target(expiries):
-    """G-4: a one-sided set used to answer the nearest expiry's IV as if it were a 30-day number."""
+    """A one-sided set used to answer the nearest expiry's IV as if it were a 30-day number."""
     assert iv30_atm_50d(pd.Series(expiries), target_days=30) is None
+
+
+def test_iv30_atm_50d_returns_an_expiry_that_sits_exactly_on_the_target_with_none_below():
+    np.testing.assert_allclose(iv30_atm_50d(pd.Series({30: 0.25, 45: 0.28}), target_days=30), 0.25, atol=1e-12)
 
 
 def test_iv30_atm_50d_accepts_an_expiry_exactly_at_the_target():

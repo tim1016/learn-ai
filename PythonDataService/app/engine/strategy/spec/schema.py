@@ -20,7 +20,7 @@ authors can write forward-compatible JSON without round-tripping it.
 from __future__ import annotations
 
 import json
-import re
+from datetime import time
 from pathlib import Path
 from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
@@ -33,7 +33,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 # No ``"expr": "ema5 - ema10"`` strings anywhere. Storage is the AST; UIs may
 # render the AST as text, but the serialized form is structural.
 # ---------------------------------------------------------------------------
-_HH_MM = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d")
 
 class _OperandBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -190,8 +189,14 @@ class TimeOfDay(_ConditionBase):
     @classmethod
     def _clock_time(cls, value: str | None) -> str | None:
         """Refused here, not inside ``engine.run`` as a 200 ``success=false`` with ``invalid literal for int()``."""
-        if value is not None and not _HH_MM.fullmatch(value):
-            raise ValueError(f"{value!r} is not an HH:MM clock time (00:00 to 23:59)")
+        if value is not None:
+            try:
+                hour, minute = value.split(":")
+                if not (hour.isascii() and hour.isdigit() and minute.isascii() and minute.isdigit()):
+                    raise ValueError(value)
+                time(int(hour), int(minute))
+            except ValueError as exc:
+                raise ValueError(f"{value!r} is not an HH:MM clock time (00:00 to 23:59)") from exc
         return value
 
     @field_validator("tz")
@@ -199,7 +204,7 @@ class TimeOfDay(_ConditionBase):
     def _known_zone(cls, value: str) -> str:
         try:
             ZoneInfo(value)
-        except (KeyError, ValueError) as exc:
+        except (KeyError, ValueError, OSError) as exc:
             raise ValueError(f"{value!r} is not an IANA time zone") from exc
         return value
 
