@@ -17,7 +17,7 @@ import { TransactionRailComponent } from '../operator-lens/transaction-rail.comp
 import { JournalTailComponent } from '../operator-lens/journal-tail.component';
 
 /**
- * The bot page's Order records fold body (#2563): the bot's working orders,
+ * The bot page's Order records section (#2563): the bot's working orders,
  * the selected order's recorded path, and the audit trail.
  *
  * The audit trail reloads only for a new journal cursor or lane provenance —
