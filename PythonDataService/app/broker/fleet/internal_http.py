@@ -89,11 +89,10 @@ class FleetTransportRefused(Exception):
 #: Hosts proven to resolve entirely to private addresses, cached through the
 #: canonical ``TtlCache`` (``app/utils/throttle.py``) instead of a
 #: hand-rolled cache: insertion-ordered ``OrderedDict``, per-entry TTL, and
-#: bounded FIFO eviction, at the same 300s/512-entry magnitudes the
-#: option-contracts cache already uses (``app/routers/broker.py``). The
-#: Async callers run the boundary check in a worker thread before dispatch;
-#: synchronous callers already run in a worker thread. Proven verdicts are
-#: cached so repeated requests do not repeat DNS. Only *private* verdicts are cached; a refusal
+#: bounded FIFO eviction, with a 300s/512-entry bound. Async callers run
+#: the boundary check in a worker thread before dispatch; synchronous
+#: callers already run in a worker thread. Proven private verdicts are
+#: cached so repeated requests do not repeat DNS. A refusal
 #: always re-resolves on the next call (see ``enforce_private_http_target``)
 #: — cache keys come from approved-endpoint rows and compose config, never
 #: from request data.

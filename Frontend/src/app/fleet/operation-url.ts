@@ -45,6 +45,7 @@ const PARAM_FIELD: Readonly<Record<string, keyof OperationTarget>> = {
   command_id: 'commandId',
   program_key: 'programKey',
   submission_key: 'submissionKey',
+  symbol: 'symbol',
 };
 
 /** `{name}` or `{name:converter}` — the converter (today only `path`) is
@@ -69,6 +70,7 @@ export interface OperationTarget {
   readonly commandId?: string;
   readonly programKey?: string;
   readonly submissionKey?: string;
+  readonly symbol?: string;
 }
 
 function lookupOperation(operationId: OperationId): CatalogOperation {
