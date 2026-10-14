@@ -82,6 +82,9 @@ export class BotPanelLiveStore {
   private stream: SnapshotStream | null = null;
   private fallbackTimer: ReturnType<typeof setInterval> | null = null;
   private request: LivePanelRequest | null = null;
+  /** Who the snapshot on screen belongs to. `stop()` leaves it: a restart for another bot or account must not
+   * show the previous one's panel until its own read lands. */
+  private shownFor: LivePanelRequest | null = null;
   private generation = 0;
   private transactionRequest = 0;
   /** Orders liveness (stall / recovered) facts. The stream delivers in order;
@@ -89,6 +92,11 @@ export class BotPanelLiveStore {
    * liveness fact and must not overwrite it (#2353 review). */
   private livenessSequence = 0;
   private selectedRail: BotPanelLiveSnapshot['panel']['rail'] | null = null;
+  /** The transaction the operator selected, and the journal position its rail was read at (D-F1). */
+  private selectedRef: string | null = null;
+  private selectedTailSeq: number | null = null;
+  /** The journal position a read of the selected rail is out for, so one move is asked about once. */
+  private askedTailSeq: number | null | undefined;
 
   readonly snapshot = this.currentSnapshot.asReadonly();
   readonly status = this.currentStatus.asReadonly();
@@ -99,24 +107,30 @@ export class BotPanelLiveStore {
 
   async start(request: LivePanelRequest): Promise<void> {
     const generation = ++this.generation;
-    const identityChanged = this.request !== null && (
-      this.request.broker !== request.broker
-      || this.request.clerkId !== request.clerkId
-      || this.request.accountId !== request.accountId
-      || this.request.sid !== request.sid
-      || this.request.bindingGeneration !== request.bindingGeneration
-      || this.request.routingEpoch !== request.routingEpoch
+    const shown = this.shownFor;
+    const identityChanged = shown !== null && (
+      shown.broker !== request.broker
+      || shown.clerkId !== request.clerkId
+      || shown.accountId !== request.accountId
+      || shown.sid !== request.sid
+      || shown.bindingGeneration !== request.bindingGeneration
+      || shown.routingEpoch !== request.routingEpoch
     );
     if (identityChanged) {
       this.transactionRequest += 1;
       this.selectedRail = null;
+      this.selectedRef = null;
+      this.selectedTailSeq = null;
       this.currentSnapshot.set(null);
       this.currentError.set(null);
       this.currentStall.set(null);
       this.currentNotFound.set(null);
     }
     this.stopTransport();
+    // A read that was out for the rail belongs to the generation just superseded: ask again on the next move.
+    this.askedTailSeq = undefined;
     this.request = request;
+    this.shownFor = request;
     this.currentStatus.set('connecting');
     await this.fetchAndAdopt(request, generation, 'Live snapshot is unavailable.');
     if (!this.isCurrent(generation)) return;
@@ -138,6 +152,9 @@ export class BotPanelLiveStore {
     if (request === null) return;
     const generation = this.generation;
     const transactionRequest = ++this.transactionRequest;
+    // Named at once: a journal move that lands while this read is out re-reads *this* order, not the last one.
+    this.selectedRef = transactionRef;
+    this.askedTailSeq = this.currentSnapshot()?.panel.journal_tail_seq ?? null;
     try {
       const panel = await this.panelService.getPanel(
         this.readTarget(request),
@@ -146,11 +163,15 @@ export class BotPanelLiveStore {
       );
       if (!this.isCurrentTransaction(generation, transactionRequest)) return;
       this.selectedRail = panel.rail;
+      this.selectedTailSeq = panel.journal_tail_seq ?? null;
+      this.askedTailSeq = undefined;
       this.currentSnapshot.update((current) => current === null
         ? current
         : { ...current, panel: { ...current.panel, rail: panel.rail } });
     } catch (error) {
       if (!this.isCurrentTransaction(generation, transactionRequest)) return;
+      // The rail stays as it was read, and the next journal move (or the next poll) asks again.
+      this.askedTailSeq = undefined;
       this.currentError.set(
         error instanceof Error ? error.message : 'Transaction evidence is unavailable.',
       );
@@ -259,6 +280,12 @@ export class BotPanelLiveStore {
     const current = this.currentSnapshot();
     const adopted = adoptVersionedSnapshot(current, candidate);
     if (adopted !== current) this.currentSnapshot.set(adopted);
+    // The journal moved on past where the selected rail was read: that path no longer describes the order. It is
+    // kept on screen while it is read again, asked once per move, and asked again if that read fails.
+    const tailSeq = adopted.panel.journal_tail_seq ?? null;
+    if (this.selectedRef !== null && tailSeq !== this.selectedTailSeq && tailSeq !== this.askedTailSeq) {
+      void this.selectTransaction(this.selectedRef);
+    }
     this.currentError.set(null);
     this.currentNotFound.set(null);
     // Any delivered snapshot, even one at the current version, proves the
@@ -317,7 +344,13 @@ export class BotPanelLiveStore {
 
   private startFallback(): void {
     if (this.fallbackTimer !== null) return;
-    this.fallbackTimer = setInterval(() => void this.refresh(), FALLBACK_POLL_MS);
+    // Per timer, so a poll left over from a stopped generation never holds the next one's ticks.
+    let reading = false;
+    this.fallbackTimer = setInterval(() => {
+      if (reading) return;
+      reading = true;
+      void this.refresh().finally(() => { reading = false; });
+    }, FALLBACK_POLL_MS);
   }
 
   private stopFallback(): void {
