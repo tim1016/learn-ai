@@ -134,6 +134,8 @@ export class OptionsBacktestPageComponent {
   });
   private readonly legsCard = viewChild(LegsCardComponent);
   private readonly readBackPane = viewChild<ElementRef<HTMLElement>>('readBackPane');
+  /** The leg that took the keyboard while the read-back had no sentences. It is shown the once the read-back has them. */
+  private legAwaitingReadBack: string | null = null;
   protected readonly builder = signal(newLegBuilder());
   protected readonly builderForm = form(this.builder);
 
@@ -263,6 +265,14 @@ export class OptionsBacktestPageComponent {
     effect(() => {
       const body = this.body();
       untracked(() => this.checker.show(body));
+    });
+    effect(() => {
+      if (this.summary().kind !== 'ready') return;
+      untracked(() => {
+        const waiting = this.legAwaitingReadBack;
+        this.legAwaitingReadBack = null;
+        if (waiting !== null) this.afterRender(() => this.scrollReadBackTo(waiting));
+      });
     });
     inject(DestroyRef).onDestroy(() => this.checker.stop());
     // Coming back to the page while a backtest is going: show it, so that no second one is started.
@@ -399,11 +409,20 @@ export class OptionsBacktestPageComponent {
     this.afterRender(() => (left === 0 ? this.legsCard()?.focusAdd() : this.legsCard()?.focusDelete(Math.min(at, left - 1))));
   }
 
-  /** A leg took the keyboard: the rail shows where the server says that leg, so a long read-back is not scrolled by hand. */
+  /**
+   * A leg took the keyboard: the rail shows where the server says that leg, so a long read-back is not scrolled by hand.
+   * While the setup is being read back again there are no sentences to show, so the leg is shown once there are.
+   */
   protected showInReadBack(legId: string): void {
+    this.legAwaitingReadBack = this.scrollReadBackTo(legId) ? null : legId;
+  }
+
+  private scrollReadBackTo(legId: string): boolean {
     const pane = this.readBackPane()?.nativeElement;
     const block = pane === undefined ? null : legBlock(pane, legId);
-    if (pane !== undefined && block !== null) bringIntoView(pane, block);
+    if (pane === undefined || block === null) return false;
+    bringIntoView(pane, block);
+    return true;
   }
 
   private afterRender(move: () => void): void {
