@@ -664,6 +664,7 @@ shown.
 | Deploy says *Deployment is blocked until Clerk channels are installed and healthy*, or admission refuses `CLERK_CUSTODY_BROKER_UNREACHABLE` | A channel sample or one Alpaca read failed (a restart in the last two minutes, a network blip, one timed-out read) | Wait a minute and refresh money. It cleared on its own every time on 2026-10-14. |
 | After a Clerk restart every bot is *Needs attention - ended without a clean exit* and a held position shows *No bot is managing* | A restart ends every bot run; nothing resumes the strategy. The position and its holding are found unchanged; only the end time's sale is still owed | Reload the bot page (a command opened before the restart is refused with *lane was rebound*), then **Flatten**: one closing order. Deploy again for a new bot. |
 | `reduce blocked: STREAM_HEALTH_HOLD` with a several-leg position held | A several-leg parent's `fill` frame could not be mapped (fixed in #3173) and marked the stream's evidence unhealthy | Pull the fix and restart the lane; the hold is re-sampled. |
+| Fees unresolved after a spread: *Account fill coverage is incomplete*, every fee *account-unattributed*, and the spread's legs held only from the order lookup (no execution named) | A spread filled before #3177 was deployed: its legs' executions came only in the parent's `fill` frame, which was not credited | Pull the fix and restart: spreads after it are credited when the frame arrives. For legs already booked: stop the lane, copy its account store, boot the lane's own image with a wrapper that hands the parent's recorded `fill` frame (the capture journal's `stream` file) to the consumer, then start the lane again. Each leg's execution is credited and the population is explained (done once on 2026-10-14; `test_a_parents_fill_frame_that_arrives_after_the_legs_were_read_by_lookup_explains_their_cumulative`). Check the account's Home no longer lists the fee evidence. |
 
 ## Repair record: 2026-10-13
 
@@ -749,6 +750,12 @@ The second day, on the same flat Paper account (option level 3), after #3137 and
   carry theirs), so the adapter refused it, the stream's evidence went unhealthy and the account's
   stream-health hold blocked the spread's exit (#3173). A follow-up (#3174) covers the parent's
   frames opening an outcome-unknown episode until the next pass.
+- **Found, fixed, repaired.** A filled spread then read as an outstanding intent and held Deploy
+  (#3176). Its legs' executions came only in the parent's frame, which was not credited, so the
+  four leg fills were held from the order lookup and every fee on the account read unattributed
+  and refused every entry (#3177 credits each leg from the frame). The four already booked were
+  repaired once by handing the two recorded parent frames to the lane's own consumer with the
+  account's store copied first (see Troubleshooting); the account then showed free to deploy.
 - **Procedure facts.** Bot pages poll heavily and slow the lane (see Troubleshooting); watch a step
   from the capture journal's `orders` file instead (`option_orders` in the bundle) with the pages
   closed. Each deploy needs a fresh money review inside about a minute and the acknowledgement ticked
