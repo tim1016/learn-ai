@@ -65,9 +65,10 @@ on this chain, written by `scripts/build_iv30_golden.py`.
 
 ## Assumptions
 
-- **Half-spread:** `max($0.05, 0.5 % of close)`; a contract with close below
-  $0.05 is treated as zero-bid (`half_spread_policy` in the sidecar). The
-  test rebuilds the quotes from `close` with the same rule.
+- **Half-spread:** `max($0.05, 0.005 * max(call close, put close, 1.0))` per
+  strike, shared by both legs; a contract with close below $0.05 is treated as
+  zero-bid (the sidecar's `half_spread_policy` string abbreviates this as
+  "0.5% of close"). The test rebuilds the quotes from `close` with the same rule.
 - **Rate:** FRED-derived, one rate for both expiries. **Dividend:** Polygon
   trailing twelve months; used by the parametric number only.
 - **Bar timing:** daily close as of 2024-12-20; no intraday NBBO. Expiries are

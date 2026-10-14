@@ -112,21 +112,6 @@ class Registry:
             )
         return path
 
-    def exists_on_disk(self, fixture_id: str) -> bool:
-        """Return True if all active version files exist on disk."""
-        try:
-            fixture = self.get(fixture_id)
-            files = fixture.active_files
-            if files is None:
-                return False
-            for key in ("input", "output", "attribution"):
-                path = self.fixture_dir(fixture_id) / getattr(files, key)
-                if not path.exists():
-                    return False
-            return True
-        except (FixtureNotFoundError, VersionFileNotFoundError):
-            return False
-
 
 # Module-level default registry (loads on first use)
 default = Registry()

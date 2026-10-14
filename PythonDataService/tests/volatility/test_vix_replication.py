@@ -195,10 +195,10 @@ class TestSpyGoldenFixture:
     frozen chain, reproduces the value recorded in the meta sidecar, and that
     sanity checks on the absolute number hold for that date.
 
-    On 2024-12-20 the published VIX index closed at ~17.5%. Our replication
-    on the SPY chain should land within a few vol points of that — confirming
-    we are computing the same construct CBOE publishes, just from a single
-    underlying instead of the SPX chain.
+    On 2024-12-20 the published VIX index closed at ~17.5% (figure not
+    re-verified here). Our replication on the SPY chain should land within a
+    few vol points of that, which is a sanity band on the construct, not an
+    equivalence check: IV-003 and RV-004 are the independent CBOE oracles.
 
     The ATM-parametric IV30 (15.58%) lands ~170 bps below VIX-style (17.31%)
     because of SPY skew — VIX integrates OTM puts that trade higher than
