@@ -482,7 +482,7 @@ describe('GoldenSearchPlanFormComponent', () => {
   it.each([
     { plan: 'a fixed-floor plan', policy: undefined, hidden: ['expected_trades_per_year'] },
     { plan: 'a frequency plan', policy: frequencyProtocol(), hidden: ['policy.min_trades', 'exam_min_trades'] },
-  ])('every field the server can refuse links to an input the form renders, for $plan', async ({ policy, hidden }) => {
+  ])('every input the form links a refusal to is rendered, for $plan', async ({ policy, hidden }) => {
     const service = fakeService();
     if (policy) service.defaults.mockResolvedValue(defaults({ policy: policy.policy, exam_min_trades: policy.exam_min_trades, expected_trades_per_year: policy.expected_trades_per_year }));
     const { view } = await renderForm(service);

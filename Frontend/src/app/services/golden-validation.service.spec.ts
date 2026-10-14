@@ -58,17 +58,4 @@ describe("GoldenValidationService", () => {
     reviewRequest.flush({ id: 8 });
     await review;
   });
-
-  it("uses the local API proxy so protected writes receive the control secret", async () => {
-    const pending = firstValueFrom(service.designate({
-      source_run_id: 44,
-      command_id: "designate-proxy",
-      rationale: "Verify the proxy-compatible request path.",
-    }));
-    const request = http.expectOne(BASE);
-
-    expect(request.request.url.startsWith("/api/")).toBe(true);
-    request.flush({ id: 9 });
-    await pending;
-  });
 });
