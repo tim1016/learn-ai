@@ -23,6 +23,8 @@ import { etIsoDate } from '../../../shared/date/et-midnight';
 import { daysBetween } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
 import { optionExpiryAnchorMs, optionExpiryDate } from '../../../shared/option-contract/option-expiry-date';
 import { formatTimestampDisplay } from '../../../shared/timestamp/timestamp-display';
+import { errorMessage } from '../../../shared/errors/error-message';
+import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 
 interface ChainRow {
   strike: number;
@@ -66,7 +68,7 @@ const EM_DASH = '—';
   selector: 'app-options-lab-chain',
   standalone: true,
   imports: [ExpirationRibbonComponent, DecimalPipe, AssetIdentityComponent,
-    SymbolPickerComponent,],
+    SymbolPickerComponent, TimestampDisplayComponent,],
   templateUrl: './options-lab-chain.component.html',
   styleUrls: ['./options-lab-chain.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -87,6 +89,16 @@ export class OptionsLabChainComponent implements OnInit {
   chainLoading = signal(false);
   initialLoad = signal(true);
   error = signal<string | null>(null);
+  /** When the chain on screen last arrived (`int64 ms UTC`); null before the first one. */
+  chainAsOfMs = signal<number | null>(null);
+  /** Why the latest background refresh failed, so quotes older than it read as stale. */
+  refreshError = signal<string | null>(null);
+  /** Counts expiration fetches; only the latest may write the page. */
+  private expirationsRequest = 0;
+  /** Counts chain fetches; only the latest may write the page. */
+  private chainRequest = 0;
+  /** A silent poll is awaiting its reply: it sets no `chainLoading`, so it needs its own guard. */
+  private pollInFlight = false;
 
   availableExpirations = signal<number[]>([]);
   selectedExpiration = signal<number | null>(null);
@@ -256,6 +268,8 @@ export class OptionsLabChainComponent implements OnInit {
     const t = this.ticker().trim().toUpperCase();
     if (!t) return;
 
+    // A late reply for a ticker the user has since left must not write this one's page.
+    const request = ++this.expirationsRequest;
     this.expirationsLoading.set(true);
     this.error.set(null);
     this.availableExpirations.set([]);
@@ -263,12 +277,16 @@ export class OptionsLabChainComponent implements OnInit {
     this.underlying.set(null);
     this.allContracts.set([]);
     this.stockSnapshot.set(null);
+    this.chainAsOfMs.set(null);
+    this.refreshError.set(null);
 
     try {
       const [expirations, snapshotResult] = await Promise.all([
         firstValueFrom(this.market.getOptionsExpirations(t)),
         firstValueFrom(this.market.getStockSnapshot(t)).catch(() => null),
       ]);
+
+      if (request !== this.expirationsRequest) return;
 
       if (snapshotResult?.success && snapshotResult.snapshot) {
         this.stockSnapshot.set(snapshotResult.snapshot);
@@ -285,16 +303,24 @@ export class OptionsLabChainComponent implements OnInit {
         this.initialLoad.set(false);
       }
     } catch (err) {
-      this.error.set(err instanceof Error ? err.message : String(err));
-      this.initialLoad.set(false);
+      if (request === this.expirationsRequest) {
+        this.error.set(errorMessage(err));
+        this.initialLoad.set(false);
+      }
     } finally {
-      this.expirationsLoading.set(false);
+      // Only the latest fetch ends the loading state it started.
+      if (request === this.expirationsRequest) this.expirationsLoading.set(false);
     }
   }
 
   async onExpirationSelected(expirationMs: number): Promise<void> {
     if (expirationMs === this.selectedExpiration()) return;
     this.selectedExpiration.set(expirationMs);
+    // The previous expiry's quotes must not stay under the new selection if
+    // this fetch fails.
+    this.allContracts.set([]);
+    this.chainAsOfMs.set(null);
+    this.refreshError.set(null);
     await this.fetchChainSnapshot(false);
   }
 
@@ -302,26 +328,44 @@ export class OptionsLabChainComponent implements OnInit {
     const t = this.ticker().trim().toUpperCase();
     const exp = this.selectedExpiration();
     if (!t || !exp) return;
+    if (silent && this.pollInFlight) return;
 
+    const request = ++this.chainRequest;
+    // A late reply for a ticker or expiration the user has since left must not
+    // overwrite the chain now on screen.
+    const current = () => request === this.chainRequest
+      && this.selectedExpiration() === exp
+      && this.ticker().trim().toUpperCase() === t;
+    // A silent poll's failure is no banner: it marks the quotes on screen stale.
+    const fail = (reason: string) => (silent ? this.refreshError : this.error).set(reason);
+
+    this.pollInFlight = silent;
     if (!silent) this.chainLoading.set(true);
     if (!silent) this.error.set(null);
 
     try {
       const result = await firstValueFrom(this.market.getOptionsChainSnapshot(t, exp));
+      if (!current()) return;
       if (!result.success) {
-        if (!silent) this.error.set(result.error ?? 'Failed to fetch options snapshot');
+        fail(result.error ?? 'Failed to fetch options snapshot');
         return;
       }
       this.underlying.set(result.underlying);
       this.allContracts.set(result.contracts);
+      this.chainAsOfMs.set(Date.now());
+      this.refreshError.set(null);
       // Clear any stale error from a prior failed load now that fresh
       // data is in hand — keeps banner state in sync after a recovery.
       this.error.set(null);
     } catch (err) {
-      if (!silent) this.error.set(err instanceof Error ? err.message : String(err));
+      if (current()) fail(errorMessage(err));
     } finally {
-      this.chainLoading.set(false);
-      this.initialLoad.set(false);
+      // Only the latest fetch ends the state it started.
+      if (request === this.chainRequest) {
+        this.pollInFlight = false;
+        this.chainLoading.set(false);
+        this.initialLoad.set(false);
+      }
     }
   }
 

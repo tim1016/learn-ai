@@ -33,6 +33,7 @@ import { MarketDataService } from '../../services/market-data.service';
 import { etIsoDate } from '../../shared/date/et-midnight';
 import { optionExpiryAnchorMs } from '../../shared/option-contract/option-expiry-date';
 import { formatTimestampDisplay } from '../../shared/timestamp/timestamp-display';
+import { errorMessage } from '../../shared/errors/error-message';
 import { createAppChart } from '../../shared/charts/chart-utils';
 import {
   bsDelta, bsGamma,
@@ -169,6 +170,9 @@ export class PricingLabComponent implements OnDestroy {
   );
   readonly underlying = signal<{ ticker: string; price: number } | null>(null);
   readonly allContracts = signal<SnapshotContractResult[]>([]);
+  /** Count expiration / chain fetches; only the latest may write the page. */
+  private expirationsRequest = 0;
+  private chainRequest = 0;
 
   // ── Selected contract ────────────────────────────────────────
   readonly selectedContract = signal<SnapshotContractResult | null>(null);
@@ -337,12 +341,23 @@ export class PricingLabComponent implements OnDestroy {
     const t = this.ticker().trim().toUpperCase();
     if (!t) return;
     this.ticker.set(t);
+    // A late reply for a ticker the user has since left must not write this one's selectors.
+    const request = ++this.expirationsRequest;
+    // Abandon the old ticker's chain fetch too: its loading state ends here.
+    this.chainRequest++;
+    this.chainLoading.set(false);
     this.expirationsLoading.set(true);
+    this.statusMessage.set(null);
+    this.availableExpirations.set([]);
+    this.selectedExpiration.set(null);
+    this.allContracts.set([]);
+    this.underlying.set(null);
     this.selectedContract.set(null);
     this.serverResult.set(null);
 
     try {
       const exps = await firstValueFrom(this.marketData.getOptionsExpirations(t));
+      if (request !== this.expirationsRequest) return;
       this.availableExpirations.set(exps);
 
       const todayAnchor = optionExpiryAnchorMs(etIsoDate(Date.now()));
@@ -352,21 +367,36 @@ export class PricingLabComponent implements OnDestroy {
         await this.fetchChain(t, nearest);
       }
     } catch (err) {
-      console.error('[PricingLab] Error fetching expirations:', err);
+      if (request === this.expirationsRequest) {
+        this.statusMessage.set({ type: 'error', text: `Could not load expirations for ${t}: ${errorMessage(err)}` });
+      }
     } finally {
-      this.expirationsLoading.set(false);
+      // Only the latest fetch ends the loading state it started.
+      if (request === this.expirationsRequest) this.expirationsLoading.set(false);
     }
   }
 
   async fetchChain(ticker: string, expirationMs: number): Promise<void> {
+    const request = ++this.chainRequest;
     this.chainLoading.set(true);
+    this.statusMessage.set(null);
     this.selectedContract.set(null);
     this.serverResult.set(null);
+    // The old expiry's strikes must not stay in the selectors if this fetch fails.
+    this.allContracts.set([]);
 
     try {
       const snap = await firstValueFrom(
         this.marketData.getOptionsChainSnapshot(ticker, expirationMs),
       );
+      if (request !== this.chainRequest) return;
+      if (!snap.success) {
+        this.statusMessage.set({
+          type: 'error',
+          text: `Could not load the ${ticker} chain: ${snap.error ?? 'no reason given'}`,
+        });
+        return;
+      }
       if (snap.underlying) {
         this.underlying.set({
           ticker: snap.underlying.ticker ?? ticker,
@@ -381,9 +411,11 @@ export class PricingLabComponent implements OnDestroy {
       }
       this.allContracts.set(snap.contracts ?? []);
     } catch (err) {
-      console.error('[PricingLab] Error fetching chain:', err);
+      if (request === this.chainRequest) {
+        this.statusMessage.set({ type: 'error', text: `Could not load the ${ticker} chain: ${errorMessage(err)}` });
+      }
     } finally {
-      this.chainLoading.set(false);
+      if (request === this.chainRequest) this.chainLoading.set(false);
     }
   }
 

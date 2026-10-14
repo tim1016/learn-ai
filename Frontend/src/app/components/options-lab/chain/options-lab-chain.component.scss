@@ -168,6 +168,11 @@
     font-weight: 600;
     font-size: 10px;
   }
+  .exp-asof {
+    color: var(--ol-fg-muted);
+
+    &.stale { color: var(--ol-neg); }
+  }
 }
 
 // ─── Banner ─────────────────────────────────────────────────

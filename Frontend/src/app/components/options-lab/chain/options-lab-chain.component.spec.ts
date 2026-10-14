@@ -1,4 +1,4 @@
-import { TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import {
   HttpTestingController,
@@ -37,6 +37,7 @@ function drainAll(httpMock: HttpTestingController): void {
 
 describe('OptionsLabChainComponent', () => {
   let component: OptionsLabChainComponent;
+  let fixture: ComponentFixture<OptionsLabChainComponent>;
   let httpMock: HttpTestingController;
 
   beforeEach(() => {
@@ -50,7 +51,7 @@ describe('OptionsLabChainComponent', () => {
         ...fakePickerWorld().providers,
       ],
     });
-    const fixture = TestBed.createComponent(OptionsLabChainComponent);
+    fixture = TestBed.createComponent(OptionsLabChainComponent);
     component = fixture.componentInstance;
     httpMock = TestBed.inject(HttpTestingController);
   });
@@ -212,5 +213,147 @@ describe('OptionsLabChainComponent', () => {
 
     await fetchPromise;
     expect(component.error()).toBeNull();
+  });
+
+  // ── Failures and stale data are shown, not hidden (#3221) ──
+  describe('failures and stale quotes', () => {
+    const NEAR = 4_070_984_400_000;
+    const FAR = 4_073_576_400_000;
+
+    function pending(needle: string, ticker?: string) {
+      return httpMock.match(r => {
+        const b = r.body as { query?: string; variables?: { underlyingTicker?: string; ticker?: string } } | null;
+        return r.url === 'http://localhost:5000/graphql'
+          && b?.query?.includes(needle) === true
+          && (ticker === undefined || (b.variables?.underlyingTicker ?? b.variables?.ticker) === ticker);
+      });
+    }
+
+    function chainReply(strike: number, price: number) {
+      return {
+        data: {
+          getOptionsChainSnapshot: {
+            success: true,
+            underlying: { ticker: 'SPY', price, change: 0, changePercent: 0 },
+            contracts: [makeContract('call', strike), makeContract('put', strike)],
+            count: 2, riskFreeRate: null, dividendYield: null, rateSource: null, dividendSource: null, error: null,
+          },
+        },
+      };
+    }
+
+    function chainFailure(error: string) {
+      return {
+        data: {
+          getOptionsChainSnapshot: {
+            success: false, underlying: null, contracts: [], count: 0,
+            riskFreeRate: null, dividendYield: null, rateSource: null, dividendSource: null, error,
+          },
+        },
+      };
+    }
+
+    function expirationsReply(expirations: number[]) {
+      return { data: { getOptionsExpirations: { success: true, expirations, count: expirations.length, error: null } } };
+    }
+
+    const noSnapshot = { data: { getStockSnapshot: { success: false, snapshot: null, error: null } } };
+
+    async function settle(): Promise<void> {
+      await new Promise(resolve => setTimeout(resolve, 0));
+      fixture.detectChanges();
+    }
+
+    /** Render the page and let its first expirations + chain load finish. */
+    async function openPage(): Promise<void> {
+      fixture.detectChanges();
+      pending('getOptionsExpirations')[0].flush(expirationsReply([NEAR, FAR]));
+      pending('getStockSnapshot')[0].flush(noSnapshot);
+      await settle();
+      pending('getOptionsChainSnapshot')[0].flush(chainReply(720, 723.77));
+      await settle();
+    }
+
+    function text(selector: string): string | null {
+      return fixture.nativeElement.querySelector(selector)?.textContent?.replace(/\s+/g, ' ').trim() ?? null;
+    }
+
+    it('shows the reason when the expirations lookup fails, not just an empty chain', async () => {
+      fixture.detectChanges();
+      pending('getOptionsExpirations')[0].flush({
+        data: { getOptionsExpirations: { success: false, expirations: [], count: 0, error: 'Polygon rate limited' } },
+      });
+      pending('getStockSnapshot')[0].flush(noSnapshot);
+      await settle();
+
+      expect(text('.banner.error')).toContain('Polygon rate limited');
+    });
+
+    it('marks the quotes stale, with the reason, when a background refresh fails', async () => {
+      await openPage();
+      expect(text('.exp-asof')).toContain('Quotes as of');
+      expect(fixture.nativeElement.querySelector('.exp-asof.stale')).toBeNull();
+
+      const refresh = component.fetchChainSnapshot(true);
+      pending('getOptionsChainSnapshot')[0].flush(chainFailure('Gateway timeout'));
+      await refresh;
+      fixture.detectChanges();
+
+      expect(text('.exp-asof.stale')).toContain('refresh failed: Gateway timeout');
+      expect(fixture.nativeElement.querySelector('.banner.error')).toBeNull();
+      expect(component.rows().length).toBe(1);
+
+      const recovery = component.fetchChainSnapshot(true);
+      pending('getOptionsChainSnapshot')[0].flush(chainReply(720, 724));
+      await recovery;
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelector('.exp-asof.stale')).toBeNull();
+    });
+
+    it('does not start a second background refresh while one is still pending', async () => {
+      await openPage();
+
+      const first = component.fetchChainSnapshot(true);
+      const second = component.fetchChainSnapshot(true);
+
+      const requests = pending('getOptionsChainSnapshot');
+      expect(requests.length).toBe(1);
+      requests[0].flush(chainReply(720, 725));
+      await Promise.all([first, second]);
+    });
+
+    it('drops a background reply that lands after the user moved to another ticker', async () => {
+      await openPage();
+      const poll = component.fetchChainSnapshot(true);
+      component.onTickerPicked('QQQ');
+
+      pending('getOptionsChainSnapshot', 'SPY')[0].flush(chainReply(111, 999));
+      await poll;
+      expect(component.allContracts()).toEqual([]);
+      expect(component.underlying()).toBeNull();
+
+      pending('getOptionsExpirations', 'QQQ')[0].flush(expirationsReply([NEAR]));
+      pending('getStockSnapshot', 'QQQ')[0].flush(noSnapshot);
+      await settle();
+      pending('getOptionsChainSnapshot', 'QQQ')[0].flush(chainReply(222, 480));
+      await settle();
+
+      expect(component.allContracts().map(c => c.strikePrice)).toEqual([222, 222]);
+    });
+
+    it('drops the previous expiry\'s quotes at once, and says so when the new chain fails', async () => {
+      await openPage();
+
+      const picking = component.onExpirationSelected(FAR);
+      expect(component.allContracts()).toEqual([]);
+
+      pending('getOptionsChainSnapshot')[0].flush(chainFailure('Snapshot unavailable'));
+      await picking;
+      fixture.detectChanges();
+
+      expect(text('.banner.error')).toContain('Snapshot unavailable');
+      expect(fixture.nativeElement.querySelector('.exp-asof')).toBeNull();
+    });
   });
 });

@@ -198,6 +198,134 @@ describe('StrategyBuilderComponent', () => {
     });
   });
 
+  // ── Failures and stale data are shown, not hidden (#3221) ──────
+  describe('failed and superseded fetches', () => {
+    function expirationsReply(expirations: number[]) {
+      return { data: { getOptionsExpirations: { success: true, expirations, count: expirations.length, error: null } } };
+    }
+
+    function snapshotReply(price: number, contracts: SnapshotContractResult[]) {
+      return {
+        data: {
+          getOptionsChainSnapshot: {
+            success: true,
+            underlying: { ticker: 'SPY', price, change: 0, changePercent: 0 },
+            contracts, count: contracts.length,
+            riskFreeRate: 0.04, dividendYield: null, rateSource: 'FRED', dividendSource: null, error: null,
+          },
+        },
+      };
+    }
+
+    function contract(strike: number): SnapshotContractResult {
+      return {
+        ticker: `O:SPY${strike}C`, contractType: 'call', strikePrice: strike, expirationMs: 4_070_984_400_000,
+        breakEvenPrice: null, impliedVolatility: 0.2, openInterest: 10, greeks: null, day: null,
+        lastTrade: null, lastQuote: { bid: 4.9, ask: 5.1, bidSize: 1, askSize: 1, midpoint: 5, timeframe: null },
+      };
+    }
+
+    function flushByTicker(needle: string, ticker: string, body: object): void {
+      const req = httpMock.match(r => {
+        const b = r.body as { query?: string; variables?: { underlyingTicker?: string; ticker?: string } } | null;
+        return b?.query?.includes(needle) === true
+          && (b.variables?.underlyingTicker ?? b.variables?.ticker) === ticker;
+      });
+      expect(req.length).toBe(1);
+      req[0].flush(body);
+    }
+
+    it('shows the vendor failure when expirations cannot be loaded', async () => {
+      component.ticker.set('SPY');
+      const promise = component.fetchExpirations();
+
+      expectGraphQL(httpMock, 'getOptionsExpirations').flush({
+        data: { getOptionsExpirations: { success: false, expirations: [], count: 0, error: 'Polygon rate limited' } },
+      });
+      expectGraphQLOptional(httpMock, 'getStockSnapshot')?.flush({ data: { getStockSnapshot: { success: false, snapshot: null, error: 'x' } } });
+      await promise;
+
+      expect(component.error()).toContain('Polygon rate limited');
+      expect(component.availableExpirations()).toEqual([]);
+      expect(component.expirationsLoading()).toBe(false);
+    });
+
+    it('keeps the new ticker\'s expirations when the previous ticker\'s reply lands last', async () => {
+      const aaplExpiry = optionExpiryAnchorMs(etIsoDate(Date.now() + 10 * 86400000));
+      const msftExpiry = optionExpiryAnchorMs(etIsoDate(Date.now() + 20 * 86400000));
+      component.ticker.set('AAPL');
+      const first = component.fetchExpirations();
+      component.ticker.set('MSFT');
+      const second = component.fetchExpirations();
+
+      flushByTicker('getOptionsExpirations', 'MSFT', expirationsReply([msftExpiry]));
+      flushByTicker('getStockSnapshot', 'MSFT', { data: { getStockSnapshot: { success: false, snapshot: null, error: null } } });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      flushByTicker('getOptionsChainSnapshot', 'MSFT', snapshotReply(400, [contract(400)]));
+      await second;
+
+      flushByTicker('getOptionsExpirations', 'AAPL', expirationsReply([aaplExpiry]));
+      flushByTicker('getStockSnapshot', 'AAPL', { data: { getStockSnapshot: { success: false, snapshot: null, error: null } } });
+      await first;
+
+      expect(component.availableExpirations()).toEqual([msftExpiry]);
+      expect(component.selectedExpiration()).toBe(msftExpiry);
+      expect(component.allContracts().map(c => c.strikePrice)).toEqual([400]);
+      expect(component.expirationsLoading()).toBe(false);
+    });
+
+    it('drops the previous expiry\'s chain on selection, so a failed fetch leaves nothing to build legs from', async () => {
+      component.ticker.set('SPY');
+      component.allContracts.set([contract(100)]);
+      component.legs.set([{ strike: 100, optionType: 'call', position: 'long', premium: 5, iv: 0.2, quantity: 1, enabled: true }]);
+
+      const selecting = component.onExpirationSelected(4_078_000_000_000);
+
+      expect(component.allContracts()).toEqual([]);
+      expect(component.legs()).toEqual([]);
+      expectGraphQL(httpMock, 'getOptionsChainSnapshot').flush({
+        data: {
+          getOptionsChainSnapshot: {
+            success: false, underlying: null, contracts: [], count: 0,
+            riskFreeRate: null, dividendYield: null, rateSource: null, dividendSource: null, error: 'Snapshot unavailable',
+          },
+        },
+      });
+      await selecting;
+
+      expect(component.error()).toBe('Snapshot unavailable');
+      expect(component.allContracts()).toEqual([]);
+    });
+
+    describe('the 8-leg cap', () => {
+      function fullStrategy(): void {
+        component.legs.set(Array.from({ length: 8 }, (_, i) => ({
+          strike: 90 + i, optionType: 'call' as const, position: 'long' as const,
+          premium: 5, iv: 0.2, quantity: 1, enabled: true,
+        })));
+      }
+
+      it('says so when a ninth leg is refused', () => {
+        fullStrategy();
+
+        component.addLegFromChain(contract(200), 'call', 'long');
+
+        expect(component.legs().length).toBe(8);
+        expect(component.error()).toContain('at most 8 legs');
+      });
+
+      it('still adds a lot to a leg that is already in the strategy', () => {
+        fullStrategy();
+
+        component.addLegFromChain(contract(90), 'call', 'long');
+
+        expect(component.legs().length).toBe(8);
+        expect(component.legs()[0].quantity).toBe(2);
+        expect(component.error()).toBeNull();
+      });
+    });
+  });
+
   // ── SB-C: Analyze workflow ─────────────────────────────────────
   describe('SB-C: analyzeStrategy → resolver call → result rendering', () => {
     function seedReadyState(): void {
@@ -456,6 +584,20 @@ describe('StrategyBuilderComponent', () => {
       component.toggleChainDensity();
       expect(component.chainDensity()).toBe('quick');
       expect(localStorage.getItem('sb.chainDensity')).toBe('quick');
+    });
+
+    it('opens on the default and still toggles when the browser blocks storage', () => {
+      const blocked = () => { throw new DOMException('Storage is blocked.', 'SecurityError'); };
+      vi.stubGlobal('localStorage', { getItem: blocked, setItem: blocked });
+      try {
+        const page = TestBed.createComponent(StrategyBuilderComponent).componentInstance;
+        expect(page.chainDensity()).toBe('quick');
+
+        page.toggleChainDensity();
+        expect(page.chainDensity()).toBe('greeks');
+      } finally {
+        vi.unstubAllGlobals();
+      }
     });
   });
 
