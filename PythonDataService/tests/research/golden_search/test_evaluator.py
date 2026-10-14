@@ -397,6 +397,48 @@ def test_final_chance_propagates_a_durable_evidence_integrity_failure() -> None:
         _final_chance_for(ctx, _CorruptDetailEvaluator(), fit, completed, None)
 
 
+def test_run_exam_propagates_a_durable_evidence_integrity_failure_from_the_fit_to_fit_reading(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fit-to-fit reading resamples the same durable details the per-fit readings do, so corrupt bytes fail the exam too (#3039)."""
+    from types import SimpleNamespace
+
+    from app.research.golden_search import stages
+    from app.research.golden_search.protocol import SelectionPolicy
+    from app.research.golden_search.selection import Metrics
+
+    completed = Metrics(status="completed", total_trades=40, net_profit=1.0, total_return_pct=0.01, sharpe_ratio=1.0, max_drawdown_pct=0.01, win_rate=1.0)
+    incumbent_params = {"symbol": "SPY", "gap": 0.2}
+
+    class _Evaluator:
+        def evaluate(self, points, **_kwargs):
+            return [completed for _ in points]
+
+        def detail_of(self, point, *, window):
+            if point is incumbent_params:
+                return None
+            raise EvidenceIntegrityError("evaluation k: no recorded detail payload")
+
+    fits = [
+        {"key": "all_period", "same_as": [], "point": {"symbol": "SPY", "gap": 0.3}, "point_hash": "a"},
+        {"key": "recent", "same_as": [], "point": {"symbol": "SPY", "gap": 0.4}, "point_hash": "b"},
+    ]
+    ctx = SimpleNamespace(
+        results={"exam": {"fits": fits}},
+        row=SimpleNamespace(budget_cap=5000),
+        protocol=SimpleNamespace(policy=SelectionPolicy(objective="sharpe_ratio", min_trades=30, max_drawdown_ceiling=0.2), incumbent=SimpleNamespace(params=incumbent_params)),
+        final=(0, 1),
+        floors=SimpleNamespace(at=lambda window, final: 30, frequency_based=False),
+        evaluator=lambda **_kwargs: _Evaluator(),
+        on_phase=lambda phase: None,
+        cancel_check=lambda: None,
+    )
+    monkeypatch.setattr(stages, "stage_total", lambda row, stage: 0)
+    monkeypatch.setattr(stages, "_development_metrics", lambda ctx, point_digest: None)
+    monkeypatch.setattr(stages, "_final_chance_for", lambda *args: {})
+
+    with pytest.raises(EvidenceIntegrityError, match="no recorded detail payload"):
+        stages.run_exam(ctx)
+
+
 # ── The ordered ready-batch seam (#3040) ─────────────────────────────────
 
 

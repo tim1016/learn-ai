@@ -707,6 +707,18 @@ def test_interval_lengths_below_one_month_are_refused() -> None:
     assert refused.value.code == "INTERVALS_INVALID"
 
 
+@pytest.mark.parametrize("params", [{"gap": "wide"}, {"gap": None}, {"gap": True}, {"gap": float("nan")}, {"bogus": 1}])
+def test_an_incumbent_that_is_not_numbers_for_declared_knobs_is_refused_not_raised(params: dict[str, object]) -> None:
+    request = plan_request("SPY")
+    request["seed"] = dict(request["incumbent"]["params"])  # a clean seed, so only the incumbent is wrong
+    request["incumbent"]["params"] = {**request["incumbent"]["params"], **params}
+
+    plan = review_plan(protocol_from_request(request), roots=[])
+
+    assert [refusal.code for refusal in plan.refusals] == ["INCUMBENT_INVALID"]
+    assert (plan.refusals[0].field or "").startswith("incumbent.params")
+
+
 def test_a_lock_refused_for_several_reasons_carries_every_refusal(tmp_path: Path) -> None:
     request = plan_request("SPY", budget_cap=10)
     request["zoom"]["points"] = 2

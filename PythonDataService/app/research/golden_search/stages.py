@@ -28,7 +28,7 @@ from app.research.golden_search import repository as repo
 from app.research.golden_search.actions import authorize
 from app.research.golden_search.activity import TradeFloors
 from app.research.golden_search.budget import PROOF_EVALUATIONS
-from app.research.golden_search.chance_approval import chance_weakness_items
+from app.research.golden_search.chance_approval import approval_weakness
 from app.research.golden_search.chance_compare import (
     development_readings,
     failed_component,
@@ -36,13 +36,7 @@ from app.research.golden_search.chance_compare import (
     incumbent_readings,
 )
 from app.research.golden_search.chance_drawdown import drawdown_reading
-from app.research.golden_search.chance_final import (
-    SELECTION_NOTE,
-    FinalChanceScope,
-    carry_over_reading,
-    fit_to_fit_reading,
-    stored_final_chance,
-)
+from app.research.golden_search.chance_final import SELECTION_NOTE, carry_over_reading, fit_to_fit_reading
 from app.research.golden_search.chance_rehearsal import failed_rehearsal, rehearsal_reading
 from app.research.golden_search.concentration import concentration
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, point_hash
@@ -67,7 +61,6 @@ from app.research.golden_search.evidence import (
 from app.research.golden_search.exam_rules import judge_exam
 from app.research.golden_search.final_test import fit_for, fit_label, pick_of, recorded_fits
 from app.research.golden_search.grid_procedure import neighbor_probes, pair_grid, run_grid
-from app.research.golden_search.guidance import research_weakness
 from app.research.golden_search.models import STAGE_ESTIMATES, STAGE_STATES, StageName, StudyRow
 from app.research.golden_search.procedure_history import (
     FoldWindow,
@@ -138,7 +131,6 @@ class StageContext:
     cancel_check: Callable[[], object]
     on_phase: Callable[[str], None]
     on_progress: Callable[[int, int], None]
-    on_log: Callable[[str], None]
     results: dict[str, Any] = field(default_factory=dict)
     # The code identity that passed this run's refusal check, sealed into
     # every spawned worker's task: the child runs the code that was checked,
@@ -838,6 +830,8 @@ def run_exam(ctx: StageContext) -> tuple[str, dict[str, Any]]:
             exam["chance"] = {"fit_to_fit": _missing_single_fit()}
     except JobCancelled:
         raise  # cancellation stops the stage; it is never recorded as a reading
+    except EvidenceIntegrityError:
+        raise  # corrupted durable evidence fails the exam; a failed component would conclude over it (#3039)
     except Exception as exc:  # a diagnostic failure the stage records; it never fails the exam itself
         exam["chance"] = {"fit_to_fit": failed_component(exc, "fit-to-fit")}
     return "awaiting_review", exam
@@ -886,13 +880,7 @@ def run_qualification(ctx: StageContext, binding: ApprovalBinding, blob_store: A
     # The same chance authority the approval intent and the page read (#3015): the stored components of the fit
     # the decision named, retained with the qualification so the acknowledgement's evidence is immutable. The
     # scope binds each record to this study's frozen protocol and the chosen fit's point identity (#3024).
-    chance = stored_final_chance(chosen, FinalChanceScope.for_protocol(ctx.protocol, point_hash=chosen["point_hash"]))
-    chance_items = chance_weakness_items(
-        ctx.results.get("chance_approval"),
-        chance,
-        positive_net_required=bool(ctx.protocol.policy.require_positive_net),
-    )
-    weakness = research_weakness(chosen["outcome"], exam["claim"], exam["exposure_state"]) + [item["code"] for item in chance_items]
+    chance, chance_items, weakness = approval_weakness(ctx.protocol, exam, chosen, ctx.results.get("chance_approval"))
     request = binding.request_type(
         study_id=ctx.row.id,
         strategy_key=ctx.row.strategy_key,
@@ -1013,7 +1001,6 @@ def execute_stage(
     cancel_check: Callable[[], object] = lambda: None,
     on_phase: Callable[[str], None] = lambda phase: None,
     on_progress: Callable[[int, int], None] = lambda done, total: None,
-    on_log: Callable[[str], None] = lambda message: None,
     identity: CodeIdentity | None = None,
 ) -> StageOutcome:
     """Run the stage a guarded command authorized, on the calling worker thread.
@@ -1061,7 +1048,6 @@ def execute_stage(
         cancel_check=cancel_check,
         on_phase=on_phase,
         on_progress=on_progress,
-        on_log=on_log,
         results=dict(row.results),
         identity=identity,
         dispatch_factory=dispatch_factory,
@@ -1107,7 +1093,6 @@ def execute_stage(
             cancel_check=cancel_check,
             on_phase=on_phase,
             on_progress=on_progress,
-            on_log=on_log,
             identity=identity,
         )
     return StageOutcome(study_id=study_id, stage=stage, state=state)

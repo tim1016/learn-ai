@@ -5,10 +5,12 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pytest
 
 from app.research.golden_search.exam_rules import judge_exam, retention
 from app.research.golden_search.protocol import SelectionPolicy
 from app.research.golden_search.selection import Metrics
+from app.research.sweep.ranking import RANKING_MEASURES, RankingMeasure
 from tests._helpers.golden_search import metrics
 
 _POLICY = SelectionPolicy(objective="sharpe_ratio", min_trades=30, max_drawdown_ceiling=0.2)
@@ -94,6 +96,16 @@ def test_judge_exam_a_missing_or_failed_incumbent_is_never_a_pass() -> None:
         assert judgement.outcome == "not_enough_evidence"
     no_incumbent = judge_exam(metrics(1.5), None, policy=_POLICY, exam_min_trades=30, development_objective=2.0)
     assert no_incumbent.outcome == "not_enough_evidence"
+
+
+@pytest.mark.parametrize("objective", RANKING_MEASURES)
+def test_judge_exam_compares_with_the_incumbent_under_every_ranking_measure(objective: RankingMeasure) -> None:
+    # A measure the ranking contract allows but this module has no words for would raise here instead of judging.
+    policy = SelectionPolicy(objective=objective, min_trades=30, max_drawdown_ceiling=0.2)
+
+    judgement = judge_exam(metrics(1.5), metrics(1.0), policy=policy, exam_min_trades=30, development_objective=2.0)
+
+    assert _statuses(judgement)["BEATS_INCUMBENT"] == "pass"
 
 
 def test_judge_exam_undefined_drawdown_or_net_is_not_available_not_a_pass() -> None:

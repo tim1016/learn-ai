@@ -20,7 +20,7 @@ import hashlib
 import logging
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -40,13 +40,12 @@ from app.research.golden_search.actions import (
     unclaimed,
 )
 from app.research.golden_search.activity import DEFAULT_EXPECTED_TRADES_PER_YEAR, TradeFloors
-from app.research.golden_search.chance_approval import chance_weakness_items
-from app.research.golden_search.chance_final import FinalChanceScope, stored_final_chance
+from app.research.golden_search.chance_approval import approval_weakness
 from app.research.golden_search.declarations import declaration_for, point_hash, unavailable_reason
 from app.research.golden_search.exposure_rules import EXPOSURE_EXPLANATIONS, claim_for, exposure_state
 from app.research.golden_search.final_test import fit_for, fits_to_test, recorded_fits
 from app.research.golden_search.fold_charts import fold_charts
-from app.research.golden_search.guidance import params_sentence, research_weakness, weakness_words
+from app.research.golden_search.guidance import params_sentence, weakness_words
 from app.research.golden_search.models import (
     COMMANDS,
     RETAIN_KINDS,
@@ -62,6 +61,8 @@ from app.research.golden_search.planning import (
     DEFAULT_FINAL_MONTHS,
     DEFAULT_TEST_MONTHS,
     DEFAULT_TRAINING_MONTHS,
+    _canonical_or_raw,
+    _qualified_seed_refusals,
     default_final_interval,
     default_protocol,
     fit_range,
@@ -82,6 +83,7 @@ from app.research.golden_search.protocol import (
     IMPORTANCE_LOW,
     GoldenSearchProtocol,
     IncumbentRef,
+    ProtocolRefusal,
 )
 from app.research.golden_search.run_curves import (
     MAX_CURVES,
@@ -398,12 +400,60 @@ async def lock_study(
     existing = await _locked_by(key, request_sha256(protocol.as_dict()))
     if existing is not None:
         return existing
+    await _require_verified_incumbent(protocol)
     new = await asyncio.to_thread(prepare_lock, protocol, idempotency_key=key, roots=roots, identity=identity)
     row, command = await with_connection(repo.insert_study, new)
     if command.request_sha256 != new.request_sha256:
         raise _lock_conflict(row)
     logger.info("golden search study locked", extra={"action": "golden_search_study_locked", "study_id": row.id})
     return row
+
+
+async def _require_verified_incumbent(protocol: GoldenSearchProtocol) -> None:
+    """Refuse a plan whose incumbent label is not what the server holds, or whose seed is the stored default's tuple.
+
+    A request names its own incumbent, and the label picks the leakage gate that applies (#2696), so the label is
+    checked against the server's records instead of trusted: a registry incumbent is the registry's point, and a
+    qualification incumbent names a stored qualification of this strategy and stock holding exactly these
+    settings. The seed is held off the stored default's tuple whatever the request calls its incumbent.
+    """
+    if declaration_for(protocol.strategy_key) is None or not _SYMBOL.match(protocol.symbol):
+        return  # review_plan names a strategy with no declaration and a symbol that is not a ticker
+    from app.research.golden_search import qualifications
+
+    incumbent, subject = protocol.incumbent, (protocol.strategy_key, protocol.symbol)
+    named = stored_default = None
+    async with connection() as conn:
+        if incumbent.source == "qualification" and incumbent.qualification_id:
+            named = await qualifications.get_qualification(conn, incumbent.qualification_id)
+        pointer = await qualifications.get_default(conn, *subject)
+        if pointer is not None and pointer.qualification_id is not None:
+            stored_default = await qualifications.get_qualification(conn, pointer.qualification_id)
+
+    def canonical(params: Mapping[str, Any]) -> dict[str, Any]:
+        return _canonical_or_raw(*subject, params)
+
+    refusals: list[ProtocolRefusal] = []
+    if incumbent.source == "registry" and dict(incumbent.params) != registry_incumbent(*subject).params:
+        message = "A registry incumbent is the registry's validated point; this plan names other settings."
+        refusals.append(ProtocolRefusal("INCUMBENT_INVALID", "incumbent.params", message))
+    if incumbent.source == "qualification":
+        if named is None or (named.program_key, named.symbol) != subject:
+            message = f"No qualification {incumbent.qualification_id!r} exists for {protocol.strategy_key} on {protocol.symbol}."
+            refusals.append(ProtocolRefusal("INCUMBENT_INVALID", "incumbent.qualification_id", message))
+        elif dict(incumbent.params) != canonical(named.params):
+            message = f"The incumbent's settings are not the ones qualification {named.id} holds."
+            refusals.append(ProtocolRefusal("INCUMBENT_INVALID", "incumbent.params", message))
+    if stored_default is not None and not _qualified_seed_refusals(protocol):
+        held = replace(protocol, incumbent=IncumbentRef("qualification", stored_default.id, canonical(stored_default.params)))
+        refusals.extend(_qualified_seed_refusals(held))
+    if refusals:
+        raise GoldenSearchRefusal(
+            "; ".join(refusal.message for refusal in refusals),
+            code=refusals[0].code,
+            field=refusals[0].field,
+            refusals=tuple(refusal.as_dict() for refusal in refusals),
+        )
 
 
 def _run_at_lock_key(lock_key: str) -> str:
@@ -809,6 +859,7 @@ async def run_command(
                 code="REVISION_SUBJECT_CHANGED",
                 field="payload.protocol",
             )
+        await _require_verified_incumbent(protocol)
         prepared = await asyncio.to_thread(prepare_lock, protocol, idempotency_key=key, parent_study_id=study_id, roots=roots, identity=identity)
     async with connection() as conn, conn.transaction():
         # Commands on one study serialize on its row lock, so the key is checked once the lock is held:
@@ -979,13 +1030,7 @@ async def _approve(conn: Any, row: StudyRow, body: Mapping[str, Any]) -> Command
     # The scope is the frozen protocol plus the chosen fit's point identity, so a stored record that belongs to
     # another fit, window, capital or objective never reads as this approval's evidence (#3024).
     protocol = GoldenSearchProtocol.from_dict(row.protocol)
-    chance = stored_final_chance(chosen, FinalChanceScope.for_protocol(protocol, point_hash=chosen["point_hash"]))
-    chance_items = chance_weakness_items(
-        row.results.get("chance_approval"),
-        chance,
-        positive_net_required=bool(protocol.policy.require_positive_net),
-    )
-    weakness = research_weakness(chosen["outcome"], exam["claim"], exam["exposure_state"]) + [item["code"] for item in chance_items]
+    _, chance_items, weakness = approval_weakness(protocol, exam, chosen, row.results.get("chance_approval"))
     if weakness and not weak_ack:
         raise GoldenSearchRefusal(
             "This evidence is weak: " + weakness_words(exam, chosen, chance_items) + "; approving needs your explicit acceptance of it.",
@@ -1075,7 +1120,6 @@ def run_stage(
     cancel_check: Callable[[], object] = lambda: None,
     on_phase: Callable[[str], None] = lambda phase: None,
     on_progress: Callable[[int, int], None] = lambda done, total: None,
-    on_log: Callable[[str], None] = lambda message: None,
     identity: CodeIdentity | None = None,
     dispatch_factory: Callable[[Any], Any] | None = None,
 ) -> StageOutcome:
@@ -1092,7 +1136,6 @@ def run_stage(
         cancel_check=cancel_check,
         on_phase=on_phase,
         on_progress=on_progress,
-        on_log=on_log,
         identity=identity,
     )
 
