@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from contextlib import suppress
 
 from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
@@ -156,22 +155,23 @@ class ReconciliationSweep:
         for task in tasks:
             task.cancel()
         for task in tasks:
-            with suppress(asyncio.CancelledError):
-                try:
-                    await task
-                except Exception:
-                    # Awaiting a task that ended on an error re-raises it, and that would
-                    # abort the runtime's close before it stops its other taps and closes
-                    # the repository (#3165). It was reported where it died.
-                    logger.error(
-                        "alpaca sqlite reconciliation sweep task had ended on an error before stop",
-                        extra={
-                            "action": "reconcile_sweep_stop_found_error",
-                            "account_id": self._repo.account_id,
-                            "task": task.get_name(),
-                        },
-                        exc_info=True,
-                    )
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                # Awaiting a task that ended on an error re-raises it, and that would abort
+                # the runtime's close before it stops its other taps and closes the
+                # repository (#3165).
+                logger.error(
+                    "alpaca sqlite sweep task ended on an error; stop continues",
+                    extra={
+                        "action": "reconcile_sweep_stop_found_error",
+                        "account_id": self._repo.account_id,
+                        "task": task.get_name(),
+                    },
+                    exc_info=True,
+                )
         self._task = None
         self._lease_task = None
 

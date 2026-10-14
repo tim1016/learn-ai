@@ -608,7 +608,7 @@ def _channel_line(channel: ChannelHealthView, *, running: bool) -> HealthLineVie
     )
 
 
-def _account_lines(panel: BotPanelView, *, now_ms: int) -> list[HealthLineView]:
+def _account_lines(panel: BotPanelView, *, sweep_pass_at_ms: int | None, now_ms: int) -> list[HealthLineView]:
     clerk = panel.clerk
     running = panel.health.running
     lines = [_channel_line(channel, running=running) for channel in clerk.channels]
@@ -642,11 +642,11 @@ def _account_lines(panel: BotPanelView, *, now_ms: int) -> list[HealthLineView]:
     state: HealthLineState = "idle" if verdict is None else ("ok" if verdict == "clean" else "attention")
     value = clerk.reconciliation_verdict_label or "Not checked yet"
     note: str | None = None
-    checked_at_ms = clerk.last_sweep_at_ms
-    # The verdict is read from durable rows, not from a live sweep, so a clean answer ages: past the bound
-    # custody proofs age at, the account has not been checked since (#3165).
-    if state == "ok" and checked_at_ms is not None and now_ms - checked_at_ms > SWEEP_LIVENESS_BOUND_MS:
-        state, note, value = "attention", f"Last answer was {value}, at", "Not re-checked"
+    # The verdict is read from durable rows, not from a live sweep, so a clean answer ages with the periodic
+    # pass: past the bound custody proofs age at, the sweep is not running (#3165). ``None`` is a lane with no
+    # periodic sweep (a Dry Run's own account) or one whose first pass is not done: nothing to be overdue.
+    if state == "ok" and sweep_pass_at_ms is not None and now_ms - sweep_pass_at_ms > SWEEP_LIVENESS_BOUND_MS:
+        state, note, value = "attention", f"Last answer was {value}, at", "Overdue"
     lines.append(
         HealthLineView(
             key="reconciliation",
@@ -654,15 +654,20 @@ def _account_lines(panel: BotPanelView, *, now_ms: int) -> list[HealthLineView]:
             state=state,
             value=value,
             note=note,
-            at_ms=checked_at_ms,
+            at_ms=clerk.last_sweep_at_ms,
         )
     )
     return lines
 
 
-def health_groups(panel: BotPanelView, run: RunFacts, *, now_ms: int) -> BotHealthGroupsView:
+def health_groups(
+    panel: BotPanelView, run: RunFacts, *, sweep_pass_at_ms: int | None, now_ms: int
+) -> BotHealthGroupsView:
     """Health split in two: this run's own facts, and the account's facts right now."""
-    return BotHealthGroupsView(run=_run_lines(panel, run), account=_account_lines(panel, now_ms=now_ms))
+    return BotHealthGroupsView(
+        run=_run_lines(panel, run),
+        account=_account_lines(panel, sweep_pass_at_ms=sweep_pass_at_ms, now_ms=now_ms),
+    )
 
 
 def bot_page_view(
@@ -671,6 +676,7 @@ def bot_page_view(
     *,
     bot_owns_custody_problem: bool,
     execution_coverage_complete: bool,
+    sweep_pass_at_ms: int | None,
     now_ms: int,
 ) -> BotPageView:
     """Everything the bot page leads with, from the adapted panel and its run's facts."""
@@ -684,7 +690,7 @@ def bot_page_view(
         status=status,
         summary=run_summary(panel, run, now_ms=now_ms),
         toolbar=toolbar_actions(panel, status=status),
-        health=health_groups(panel, run, now_ms=now_ms),
+        health=health_groups(panel, run, sweep_pass_at_ms=sweep_pass_at_ms, now_ms=now_ms),
     )
 
 
