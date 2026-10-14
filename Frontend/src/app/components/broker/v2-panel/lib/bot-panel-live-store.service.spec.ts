@@ -368,6 +368,82 @@ describe('BotPanelLiveStore', () => {
     await vi.waitFor(() => expect(stations()).toEqual(['Filled']));
   });
 
+  it('keeps the click when the journal moves while a newly selected order is still being read (D-F1)', async () => {
+    service.getLiveSnapshot.mockResolvedValue(snapshot(2, 'epoch-a', 5));
+    const railAt = (ref: string, station: string) => ({
+      rail: { transaction_ref: ref, stations: [{ label: station }] },
+    }) as unknown as BotPanelLiveSnapshot['panel'];
+    const second = deferred<BotPanelLiveSnapshot['panel']>();
+    service.getPanel
+      .mockResolvedValueOnce({ ...railAt('tx-1', 'One'), journal_tail_seq: 5 })
+      .mockReturnValueOnce(second.promise)
+      .mockResolvedValueOnce({ ...railAt('tx-2', 'Two'), journal_tail_seq: 6 });
+    const store = TestBed.inject(BotPanelLiveStore);
+    await store.start({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA-1', sid: 'sid-1', resolution: '5s' });
+    await store.selectTransaction('tx-1');
+    const selecting = store.selectTransaction('tx-2');
+
+    // The journal moves while tx-2's read is out: the re-read is for tx-2, not for the order selected before it.
+    StubEventSource.instances[0].emit('snapshot', JSON.stringify(snapshot(3, 'epoch-a', 6)));
+    await vi.waitFor(() => expect(service.getPanel).toHaveBeenCalledTimes(3));
+    expect(service.getPanel).toHaveBeenLastCalledWith(expect.anything(), 'sid-1', 'tx-2');
+    second.resolve({ ...railAt('tx-2', 'stale'), journal_tail_seq: 5 });
+    await selecting;
+    await vi.waitFor(() => {
+      const rail = store.snapshot()?.panel.rail as unknown as { transaction_ref: string };
+      expect(rail.transaction_ref).toBe('tx-2');
+    });
+  });
+
+  it('reads the selected rail again on the next move when the first re-read failed (D-F1)', async () => {
+    service.getLiveSnapshot.mockResolvedValue(snapshot(2, 'epoch-a', 5));
+    const railAt = (station: string) => ({
+      rail: { transaction_ref: 'tx-1', stations: [{ label: station }] },
+    }) as unknown as BotPanelLiveSnapshot['panel'];
+    service.getPanel
+      .mockResolvedValueOnce({ ...railAt('Submitted'), journal_tail_seq: 5 })
+      .mockRejectedValueOnce(new Error('stalled'))
+      .mockResolvedValueOnce({ ...railAt('Filled'), journal_tail_seq: 7 });
+    const store = TestBed.inject(BotPanelLiveStore);
+    await store.start({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA-1', sid: 'sid-1', resolution: '5s' });
+    await store.selectTransaction('tx-1');
+    const source = StubEventSource.instances[0];
+
+    source.emit('snapshot', JSON.stringify(snapshot(3, 'epoch-a', 6)));
+    await vi.waitFor(() => expect(service.getPanel).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(store.error()).toBe('stalled'));
+
+    // The re-read failed and the rail still says what it said; the next snapshot asks again.
+    source.emit('snapshot', JSON.stringify(snapshot(4, 'epoch-a', 6)));
+    await vi.waitFor(() => expect(service.getPanel).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => {
+      const stations = store.snapshot()?.panel.rail.stations as unknown as { label: string }[];
+      expect(stations.map((s) => s.label)).toEqual(['Filled']);
+    });
+  });
+
+  it('does not coalesce an explicit refresh behind a poll read, and polls again once it answers (D-F6)', async () => {
+    vi.useFakeTimers();
+    const store = TestBed.inject(BotPanelLiveStore);
+    await store.start({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA-1', sid: 'sid-1', resolution: '5s' });
+    const poll = deferred<BotPanelLiveSnapshot>();
+    service.getLiveSnapshot.mockReturnValueOnce(poll.promise);
+    StubEventSource.instances[0].emit('error');
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(service.getLiveSnapshot).toHaveBeenCalledTimes(2);
+
+    // After a Stop the page awaits its own fresh read: it is its own request, not the stuck poll.
+    service.getLiveSnapshot.mockResolvedValueOnce(snapshot(9));
+    await store.refresh();
+    expect(service.getLiveSnapshot).toHaveBeenCalledTimes(3);
+    expect(store.snapshot()?.surface_version).toBe(9);
+
+    // The poll answers: the next tick asks again.
+    poll.resolve(snapshot(1));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(service.getLiveSnapshot.mock.calls.length).toBeGreaterThan(3);
+  });
+
   it('does not ask again while a poll read has not answered (D-F6)', async () => {
     vi.useFakeTimers();
     const store = TestBed.inject(BotPanelLiveStore);

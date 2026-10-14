@@ -588,9 +588,28 @@ describe('GalleryLiveStore', () => {
       const pending = http.match('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot');
       expect(pending).toHaveLength(1);
 
-      // Four more poll ticks pass with that read still unanswered: none is sent beside it.
+      // Two more poll ticks pass with that read still unanswered: none is sent beside it.
       await vi.advanceTimersByTimeAsync(10_000);
       http.expectNone('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot');
+
+      // It answers: the next tick asks again.
+      pending[0].flush(snapshot({ surface_version: 2 }));
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(http.match('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot')).toHaveLength(1);
+    });
+
+    it('abandons a bootstrap read that never answers instead of hanging the wall (D-F6)', async () => {
+      vi.useFakeTimers();
+      const store = TestBed.inject(GalleryLiveStore);
+      const http = TestBed.inject(HttpTestingController);
+      const starting = store.start('alpaca', 'clrk_spec', 'PA-1');
+      http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot');
+
+      await vi.advanceTimersByTimeAsync(15_001);
+      await starting;
+
+      // The read gave up, and the stream opened regardless: the wall is not stuck waiting on it.
+      expect(StubEventSource.instances).toHaveLength(1);
     });
 
     it('isolates same-account Clerks and ignores a queued frame from the prior lane', async () => {

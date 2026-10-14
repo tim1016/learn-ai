@@ -193,11 +193,9 @@ export class GalleryLiveStore {
   /** The lane's reason code when it refused the stream (#2328); `null` otherwise. */
   readonly refusalReason = this.refusalReasonState.asReadonly();
 
-  private request: GalleryRequest | null = null;
   /** Whose tiles are on screen. `stop()` clears `request`, never this: a restart for another account must not
    * show the previous one's candles until its own bootstrap lands. */
   private shownFor: GalleryRequest | null = null;
-  private pollInFlight = false;
   private connection: AuthenticatedSseConnection | null = null;
   private fallbackTimer: ReturnType<typeof setInterval> | null = null;
   private resyncTimer: ReturnType<typeof setTimeout> | null = null;
@@ -233,7 +231,6 @@ export class GalleryLiveStore {
       bindingGeneration,
       routingEpoch,
     };
-    this.request = request;
     this.shownFor = request;
     const generation = ++this.generation;
     if (identityChanged) {
@@ -257,7 +254,6 @@ export class GalleryLiveStore {
 
   stop(): void {
     this.generation += 1;
-    this.request = null;
     this.closeTransport();
     this.statusState.set('connecting');
   }
@@ -509,10 +505,12 @@ export class GalleryLiveStore {
 
   private startFallback(generation: number, request: GalleryRequest): void {
     if (this.fallbackTimer !== null) return;
+    // Per timer, so a poll left over from a stopped generation never holds the next one's ticks.
+    let reading = false;
     this.fallbackTimer = setInterval(() => {
-      if (this.pollInFlight) return;
-      this.pollInFlight = true;
-      void this.bootstrap(generation, request).finally(() => { this.pollInFlight = false; });
+      if (reading) return;
+      reading = true;
+      void this.bootstrap(generation, request).finally(() => { reading = false; });
     }, FALLBACK_POLL_MS);
   }
 
