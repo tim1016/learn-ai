@@ -11,6 +11,9 @@ import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { GoldenSearchService } from './golden-search.service';
 import type { StrategyCapability, StudyListFilters, StudySummary } from './golden-search.types';
 
+/** How many of the newest studies one read asks for; a full page may be cut short of older ones. */
+const HISTORY_LIMIT = 100;
+
 /**
  * Golden Search history (#2696): every study, newest first, filterable by
  * strategy and instrument, hidden studies on request. Each row says enough to
@@ -36,6 +39,8 @@ export class GoldenSearchHistoryComponent {
   /** Every instrument any listing has shown: the symbol filter's closed universe (a filter must not trigger a backfill). */
   private readonly seenSymbols = signal<readonly string[]>([]);
 
+  protected readonly limit = HISTORY_LIMIT;
+  protected readonly capped = computed(() => this.rows().length >= HISTORY_LIMIT);
   protected readonly displayNames = computed(() => new Map(this.capabilities().map((c) => [c.strategy_key, c.display_name])));
   protected readonly symbolUniverse = computed<readonly TickerOption[]>(() => this.seenSymbols().map((symbol) => ({ symbol, name: symbol })));
 
@@ -50,7 +55,7 @@ export class GoldenSearchHistoryComponent {
     const generation = ++this.generation;
     this.loading.set(true);
     try {
-      const rows = await this.service.list(this.filters());
+      const rows = await this.service.list({ ...this.filters(), limit: HISTORY_LIMIT });
       if (generation !== this.generation) return;
       this.rows.set(rows);
       this.seenSymbols.update((seen) => [...new Set([...seen, ...rows.map((row) => row.symbol)])].sort());

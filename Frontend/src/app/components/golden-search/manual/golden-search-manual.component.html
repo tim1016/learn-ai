@@ -19,9 +19,8 @@
     <hr />
     <a routerLink="/docs/golden-search-guide">Full chart reference</a>
     <a routerLink="/strategy-docs">Strategy reference</a>
-    <a routerLink="/strategy-lab/docs">Metric explanations</a>
-    <a routerLink="/data-quality">Check data quality</a>
-    <a routerLink="/engine/docs">Engine assumptions</a>
+    <a routerLink="/strategy-lab/docs">Metrics and engine assumptions</a>
+    <a routerLink="/data-lab/validate">Check data quality</a>
   </nav>
   <div class="chapters" data-span="9">
     @for (step of steps; track step.id; let index = $index) {
@@ -40,7 +39,6 @@
       <p>Open Presentation report in the study. Share its link, or use Print / save PDF. Start with the conclusion and the final-test exposure, then explain what the charts support.</p>
       <ol><li>State the strategy, dates, capital, costs and the decision being considered.</li><li>Show tests over time before the development winner.</li><li>Show each final fit against the frozen incumbent, including failed rules.</li><li>Show uncertainty beside the observed result, with missing readings visible.</li><li>End with the next decision: retain, collect fresh data, or consider qualification. A report is evidence, not approval to trade.</li></ol>
       <p>Use <strong>Review this study</strong> for a guided tour. <strong>About this chart</strong> opens the reference beside a chart; <strong>Walk me through it</strong> explains its marks. <strong>Show as table</strong> reveals the recorded values when you need to verify a number.</p>
-      <p class="checkpoint"><strong>Current reading limitation.</strong> The version-1 Sharpe rehearsal rank compares different return conventions. The presentation report excludes it; use the final checks and paired resampling while the <a href="https://github.com/tim1016/learn-ai/issues/3025">tracked repair</a> is open.</p>
       @if (study()) { <a [routerLink]="studyRoute()" [queryParams]="{ view: 'report' }">Open your presentation report</a> }
     </section>
   </div>

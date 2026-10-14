@@ -1,7 +1,7 @@
 export const MANUAL_STEPS = [
   {
     id: 'plan', title: 'Plan', question: 'What would convince you before you see the answer?',
-    action: 'Choose the declared strategy and instrument. Set the search ranges, training and test months, final-test length, trade activity, drawdown limit, fills and costs. Read Plan check, fix every refusal, then Run research. Lock only saves the plan without starting it.',
+    action: 'Choose the declared strategy and instrument. Set the search ranges, training and test months, final-test length, trade activity, drawdown limit, fills and costs. Read the problems listed under the plan, fix every refusal, then Run research. Lock only saves the plan without starting it.',
     read: 'Use the window map to check the actual dates. The calendar may leave months out to fit whole folds. Check coverage and the final-test exposure label; previously used dates make the result exploratory.',
     stop: 'Freeze the rules before searching. A minimum trade count is an activity floor, not a statistical confidence guarantee. Do not lower the floor after seeing a poor result.',
     links: [{label: 'Window map', anchor: 'window-map'}, {label: 'Data coverage', anchor: 'data-coverage'}, {label: 'Trade minimums', anchor: 'trade-minimums'}],
@@ -22,7 +22,7 @@ export const MANUAL_STEPS = [
   },
   {
     id: 'compare', title: 'Compare', question: 'Is there enough evidence to spend the final look?',
-    action: 'Select each candidate card: all-period fit, recent fit and current settings. Review equity, neighbors, pair maps, cost stresses and concentration. Read the decision summary, then the three chance panels. Retain current settings is a valid decision.',
+    action: 'Select each candidate card: all-period fit, recent fit and current settings. Review equity, neighbors, pair maps, cost stresses and concentration. Read the decision summary, then the three chance panels. Keep current settings is a valid decision.',
     read: 'The difference band asks whether the fit beats the incumbent under resampling. Zero is a tie. Rehearsal asks how often the frozen rules survive different test lengths. Drawdown asks how severe session-close falls may be under the model.',
     stop: '10,000 resamples are not 10,000 independent market histories. They reshuffle recorded session returns, do not rerun fills, and do not correct for choosing the winner. A high support label is not a chance of future success; missing readings require attention.',
     links: [{label: 'Equity and fall', anchor: 'equity-and-fall'}, {label: 'Cost stresses', anchor: 'cost-stress'}, {label: 'Chance comparison', anchor: 'chance-comparison'}, {label: 'Rehearsal', anchor: 'chance-rehearsal'}, {label: 'Drawdown uncertainty', anchor: 'chance-drawdown'}],

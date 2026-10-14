@@ -42,10 +42,5 @@ export class GoldenSearchReportComponent {
     const exam = this.study().results.exam;
     return exam?.fits.find(fit => fit.key === (this.selected() ?? exam.chosen_key)) ?? exam?.fits[0] ?? null;
   });
-  protected readonly incompatibleRank = computed(() => {
-    const carry = this.fit()?.chance.carry_over;
-    // #3025: v1 ranks engine Sharpe against session-close, zero-risk-free rehearsals.
-    return carry?.status === 'measured' && carry.basis.schema_version === 'golden-search-chance-carry-over/v1' && carry.basis.objective.measure === 'sharpe_ratio';
-  });
   protected print(): void { window.print(); }
 }

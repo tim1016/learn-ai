@@ -37,6 +37,28 @@ describe('GoldenSearchHistoryComponent', () => {
     expect(rows[3].textContent).not.toContain('Held back');
   });
 
+  it('says the list stops at the newest 100 studies when the answer is exactly that long', async () => {
+    const list = vi.fn(async (_filters: StudyListFilters) => Array.from({ length: 100 }, (_, index) => summary({ id: `study-${String(index).padStart(4, '0')}-aaaa` })));
+    await render(GoldenSearchHistoryComponent, {
+      inputs: { capabilities: [emaCapability()] },
+      providers: [provideRouter([]), ...fakePickerWorld().providers, { provide: GoldenSearchService, useValue: { list } }],
+    });
+
+    expect(await screen.findByText(/newest 100 studies/i)).toBeTruthy();
+    expect(list.mock.lastCall?.[0].limit).toBe(100);
+  });
+
+  it('says nothing about a cap when fewer studies than one page come back', async () => {
+    const list = vi.fn(async (_filters: StudyListFilters) => [summary()]);
+    await render(GoldenSearchHistoryComponent, {
+      inputs: { capabilities: [emaCapability()] },
+      providers: [provideRouter([]), ...fakePickerWorld().providers, { provide: GoldenSearchService, useValue: { list } }],
+    });
+
+    await screen.findAllByRole('row');
+    expect(screen.queryByText(/newest 100 studies/i)).toBeNull();
+  });
+
   it('asks the server again for each filter, hidden studies only on request', async () => {
     const list = vi.fn(async (_filters: StudyListFilters) => [summary()]);
     await render(GoldenSearchHistoryComponent, {

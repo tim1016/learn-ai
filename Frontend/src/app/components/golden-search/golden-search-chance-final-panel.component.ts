@@ -47,8 +47,6 @@ export class GoldenSearchChanceFinalPanelComponent {
   readonly chance = input.required<FinalChance>();
   /** The frozen plan's positive-net rule, read from the study — never inferred from a metric (#3026). */
   readonly positiveNetRequired = input.required<boolean>();
-  /** A presentation may exclude a stored diagnostic while retaining final paired support (#3031). */
-  readonly showCarryOver = input(true);
 
   protected readonly comparisonMeasured = computed<MeasuredChanceComparison | null>(() => {
     const comparison = this.chance().comparison;
