@@ -435,17 +435,15 @@ def _recent_activity_views(
         # kind decides, and the two worlds that synthesize are named once in
         # ``SIMULATED_AUTHORITY_KINDS``.
         simulated = authority_kind in SIMULATED_AUTHORITY_KINDS
-        # Fills of a Clerk authority are the SQLite adapter's economics.
-        decision_views, fill_views = (
-            _recent_decision_views(
-                decision_receipts,
-                simulated=simulated,
-                authority_account_id=authority_account_id,
-                authority_kind=authority_kind,
-                render_explanation=render_explanation,
-            ),
-            [],
+        decision_views = _recent_decision_views(
+            decision_receipts,
+            simulated=simulated,
+            authority_account_id=authority_account_id,
+            authority_kind=authority_kind,
+            render_explanation=render_explanation,
         )
+        # Fills of a Clerk authority are the SQLite adapter's economics.
+        fill_views = []
     reject_mixed_authority(
         authority_account_id=authority_account_id,
         authority_kind=authority_kind,
@@ -624,8 +622,8 @@ def build_panel(
     adapter resolves it.
 
     ``authority_account_id`` names the exact Clerk account authority this
-    evidence cut (``recent_decisions``/``recent_fills``) was actually read
-    from. Callers with a selected SQLite facade (``panel_data_source.
+    evidence cut (``recent_decisions`` and a Dry Run's simulated fills) was
+    actually read from. Callers with a selected SQLite facade (``panel_data_source.
     _get_panel_with_entries_from_authority``) pass the facade's real
     ``account_id`` so the row-level authority label can never drift from
     which physically account-scoped repository the evidence came from — the
@@ -743,7 +741,7 @@ def build_panel(
         clerk=clerk,
         # The rail's stations, the revision and the working orders are the
         # SQLite adapter's too (``adapt_sqlite_panel``).
-        rail=TransactionRail(transaction_ref=selected_transaction_ref, stations=[]),
+        rail=TransactionRail(transaction_ref=selected_transaction_ref or None, stations=[]),
         journal_tail_ref=journal_tail_ref,
         journal_tail_seq=journal_tail_seq,
         # Commands are the SQLite adapter's (``adapt_sqlite_panel``), which

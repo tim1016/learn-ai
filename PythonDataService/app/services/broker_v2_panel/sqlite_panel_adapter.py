@@ -106,7 +106,7 @@ def adapt_sqlite_panel(
     flatten_verdict: SessionAuthorityState | LegRefusal | None = None,
     pass_proof: InstanceCustodyProof | None = None,
 ) -> BotPanelView:
-    """Replace JSONL-derived custody fields with one SQLite fold snapshot.
+    """Replace the panel's custody, rail and economics fields with one SQLite fold snapshot.
 
     ``account_mode`` is the mode the projection's authority learned from the
     broker (the facade's ``account_mode``); it labels each fill ``real_paper``
@@ -214,9 +214,8 @@ def _lifecycle_actions(panel: BotPanelView, projection: ClerkProjection) -> list
     liveness and phase, the Clerk card's freeze and the SQLite exposure it was
     built from. The working-order count is the Clerk's own
     (``projection.working_order_refs``), the set the commit-time check reads.
-    The pre-adaptation projection's list comes from the legacy order journal,
-    which nothing writes any more, so a working order never disabled the
-    button (#2635).
+    The pre-adaptation projection carries no working orders, so only that
+    count can disable the button (#2635).
     """
     if panel.health.running:
         return []

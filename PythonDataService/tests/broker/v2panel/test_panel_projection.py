@@ -756,7 +756,6 @@ def test_sqlite_adapter_replaces_legacy_custody_with_fold_projection() -> None:
     assert all(station.state == "not_applicable" for station in adapted.rail.stations)
     assert adapted.working_orders[0].order_ref == "order:enter"
     assert adapted.working_orders[0].filled_quantity is None
-    assert adapted.recent_fills == []
 
 
 def _monotonic_test_clock(start_ms: int) -> Callable[[], int]:
