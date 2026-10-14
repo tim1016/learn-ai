@@ -456,6 +456,10 @@ async def test_external_order_acknowledgement_endpoint_durably_releases_only_ext
             observed_at_ms=1_700_000_000_000,
         ),
     )
+    # The hold is ACTIVE before the review, so the release assertion below can fail.
+    assert (
+        repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD") is not None
+    )
     broker = _NoBroker()
     set_active_clerk_runtime(
         ActiveClerkRuntime(
@@ -478,6 +482,6 @@ async def test_external_order_acknowledgement_endpoint_durably_releases_only_ext
         assert response.status_code == 200
         assert response.json()["external_order_id"] == observed.external_order_id
         assert repo.external_order("external-1").acknowledged_at_ms is not None  # type: ignore[union-attr]
-        assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER") is None
+        assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD") is None
     finally:
         repo.close()
