@@ -396,11 +396,17 @@ _ORDER_WORKING_NEXT_STEP = (
     "If the order is your own, cancel it at the broker. Or mark it reviewed: the bot's own orders then go on "
     "while it has filled nothing. Anything it fills is held for again until it is booked."
 )
+# Where the owner's word goes: the bot's page has no control for the ending, and the account desk's list
+# cannot end it (it is one bot's), so the one road is the bot's recovery-actions route (#3217).
+_END_IT_BY_ROUTE = (
+    f'No page ends it yet: send the action "{END_EXPIRED_OPTION_LABEL}" for that bot to '
+    "POST /api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/recovery-actions/execute."
+)
 # Once it has ended with a fill that these books cannot book against the bot:
 _FILL_NEVER_BOOKED_NEXT_STEP = (
     "Nothing will book this fill, and marking the order reviewed does not release it. The account stays held "
     "for as long as its positions differ from the broker's. Once the contract has expired and the session after "
-    f'its last has closed, you can end the contract at your word with "{END_EXPIRED_OPTION_LABEL}": what it cost '
+    f"its last has closed, you can end the contract at your word. {_END_IT_BY_ROUTE} What it cost "
     "is then booked as a loss, and what the order sold it for stays in the account's cash, on no bot's books."
 )
 # What the owner does about an expired contract still on a real account's books, by what its
@@ -408,7 +414,7 @@ _FILL_NEVER_BOOKED_NEXT_STEP = (
 _EXPIRED_NEXT_STEP = (
     "Nothing to send. The Clerk books the contract's end from the broker's record of it, when one that can be "
     "booked is read. Once the next session has closed and the broker shows none of the contract, you can end it "
-    f'at your word with "{END_EXPIRED_OPTION_LABEL}": it is then counted as worth nothing, and what it cost is '
+    f"at your word. {_END_IT_BY_ROUTE} It is then counted as worth nothing, and what it cost is "
     "booked as a loss."
 )
 # One with a row in the way that may be its end. It names no ending: none is made while the row stands.
@@ -432,8 +438,8 @@ _NEXT_STEPS: dict[str, str] = {
 # The same hold on a simulated account, which has no broker to send a record.
 _SIMULATED_NEXT_STEPS: dict[str, str] = {
     OPTION_EXPIRED_NOT_SETTLED_REASON_CODE: (
-        "Nothing to send, and no price will come by itself. You can end the contract at your word with "
-        f'"{END_EXPIRED_OPTION_LABEL}": it is then counted as worth nothing, and what it cost is booked as a loss.'
+        "Nothing to send, and no price will come by itself. You can end the contract at your word. "
+        f"{_END_IT_BY_ROUTE} It is then counted as worth nothing, and what it cost is booked as a loss."
     ),
 }
 # What a hold means for the bot, where the family's own sentence would not be true.
