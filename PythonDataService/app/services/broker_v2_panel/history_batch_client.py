@@ -33,6 +33,7 @@ Alpaca-clerk-shaped types transitively through ``chart_projection_service``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import httpx
@@ -112,7 +113,6 @@ class RemoteHistoryBatchClient:
 
     def __init__(self, *, base_url: str, clerk_id: str, agent_service_token: str) -> None:
         """Bind the internal destination and this clerk's transport identity."""
-        enforce_private_http_target(base_url)
         self._base_url = base_url.rstrip("/")
         self._clerk_id = clerk_id
         self._token = agent_service_token
@@ -130,6 +130,14 @@ class RemoteHistoryBatchClient:
         needs headroom, not the connection itself).
         """
         request = HistoryBatchRequest(clerk_id=self._clerk_id, **query.model_dump())
+        try:
+            await asyncio.to_thread(enforce_private_http_target, self._base_url)
+        except FleetTransportRefused as exc:
+            logger.warning(
+                "History-batch coordinator destination is no longer private",
+                extra={"action": "history_batch_destination_refused", "error_type": type(exc).__name__},
+            )
+            return _unavailable_batch(query.as_of_ms)
         client = build_internal_client(read_timeout_s=HISTORY_BATCH_INNER_TIMEOUT_S)
         try:
             response = await client.post(
@@ -258,14 +266,9 @@ def _degraded_provider_after(exc: Exception) -> HistoryBatchProvider:
 
 
 #: Built once per process, on first use, and cached (issue #2204 gate F7):
-#: ``RemoteHistoryBatchClient.__init__`` calls ``enforce_private_http_target``,
-#: which can do a blocking DNS lookup -- this must not repeat on every
-#: history request. Mirrors how ``RemotePresence`` is a one-time
-#: construction, not a per-call one; unlike ``RemotePresence``, a
-#: construction failure here never becomes a boot refusal (a live Clerk's
-#: chart history degrading is acceptable; a live Clerk refusing to start
-#: over it is not) -- ``_degraded_provider_after`` converts it into a
-#: provider that answers ``coordinator_unavailable`` per request instead.
+#: Construction failures become a cached degraded provider. Destination
+#: checks run asynchronously on each request and use the private-host TTL
+#: cache; a refused address returns ``coordinator_unavailable`` for that read.
 _CACHED_PROVIDER: HistoryBatchProvider | None = None
 
 

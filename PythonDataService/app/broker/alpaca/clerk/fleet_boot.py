@@ -107,7 +107,7 @@ from app.broker.fleet.errors import (
     FleetRegistryUnavailable,
 )
 from app.broker.fleet.identity import new_agent_instance_id
-from app.broker.fleet.internal_http import FleetTransportRefused
+from app.broker.fleet.internal_http import FleetTransportRefused, enforce_private_http_target
 from app.broker.fleet.presence import (
     FleetLaneDraining,
     FleetLaneRetired,
@@ -466,6 +466,7 @@ async def open_fleet_lane(
                 "A remote fleet presence requires FLEET_AGENT_SERVICE_TOKEN.",
             )
         try:
+            await asyncio.to_thread(enforce_private_http_target, settings.COORDINATOR_URL)
             presence = RemotePresence(
                 base_url=settings.COORDINATOR_URL,
                 agent_service_token=settings.AGENT_SERVICE_TOKEN,

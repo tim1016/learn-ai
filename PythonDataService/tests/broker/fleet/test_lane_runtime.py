@@ -225,47 +225,6 @@ async def test_every_read_slot_held_a_command_is_admitted_without_the_queue_dead
         assert _status(status) == 200
 
 
-async def test_internal_history_batch_read_draws_read_not_command_capacity(
-    tmp_path: Path,
-) -> None:
-    """The coordinator's history-batch POST is a read for capacity purposes.
-
-    Reached through this middleware whenever a ``combined``-role process
-    mounts both the coordinator's internal surface and the clerk lane
-    runtime (issue #2204). It must not compete with real commands for the
-    (typically much smaller) command pool merely because it is spelled POST.
-    """
-    from app.broker.fleet.history_batch import INTERNAL_HISTORY_BATCH_PATH
-
-    entered = asyncio.Event()
-    release = asyncio.Event()
-
-    async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
-        entered.set()
-        await release.wait()
-        await send({"type": "http.response.start", "status": 200, "headers": []})
-        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
-
-    runtime = FleetLaneRuntimeMiddleware(
-        app,
-        config=_config(requests=1, commands=1, queue=0, timeout_ms=0),
-        evidence=CompatibilityReadEvidence(tmp_path, clock=lambda: 1),
-    )
-    held = asyncio.create_task(
-        _invoke(runtime, method="POST", path=INTERNAL_HISTORY_BATCH_PATH)
-    )
-    await entered.wait()
-
-    # The one read slot is held by the internal history-batch call above, so
-    # a second one of the same shape must be refused -- proving it drew from
-    # the read pool, not the untouched command pool.
-    refused = await _invoke(runtime, method="POST", path=INTERNAL_HISTORY_BATCH_PATH)
-    assert _status(refused) == 503
-
-    release.set()
-    assert _status(await held) == 200
-
-
 @pytest.mark.parametrize("internal_read", ["/internal/fleet/history/batch", "/internal/fleet/option-model-inputs"])
 async def test_a_held_internal_read_takes_the_read_slot_and_leaves_the_command_slot_free(
     tmp_path: Path, internal_read: str
