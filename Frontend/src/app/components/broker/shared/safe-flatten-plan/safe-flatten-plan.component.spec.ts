@@ -38,7 +38,8 @@ describe('SafeFlattenPlanComponent', () => {
     expect(screen.getByRole('region', {
       name: 'Prepared safe-flatten reduction plan',
     })).toBeTruthy();
-    expect(screen.getByText('Spy')).toBeTruthy();
+    // A symbol renders as the symbol (app-asset-identity), never as a receipt label.
+    expect(screen.getByText('SPY')).toBeTruthy();
     expect(screen.getByText('Sell')).toBeTruthy();
     expect(screen.getByText('1.25')).toBeTruthy();
     expect(screen.getByText('spy-bot')).toBeTruthy();

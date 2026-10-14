@@ -778,6 +778,25 @@ describe('DualPaneChartComponent', () => {
     expect(localStorage.getItem('broker-v2.chart-timezone.v1')).toBe('et');
   });
 
+  it('still draws, on the local clock, when the browser refuses its storage', async () => {
+    const user = userEvent.setup();
+    // A blocked-site-data browser throws from the accessor, not only from getItem/setItem.
+    const blocked = () => { throw new DOMException('blocked', 'SecurityError'); };
+    // The component reads `globalThis.localStorage`: replace that, whatever the host's Storage is made of.
+    vi.stubGlobal('localStorage', { getItem: blocked, setItem: blocked, removeItem: blocked });
+    try {
+      await render(DualPaneChartComponent, {
+        inputs: { symbol: 'SPY', liveBars: [], histBars: [] },
+      });
+
+      expect(screen.getByRole('button', { name: 'Local' }).getAttribute('aria-pressed')).toBe('true');
+      await user.click(screen.getByRole('button', { name: 'ET' }));
+      expect(screen.getByRole('button', { name: 'ET' }).getAttribute('aria-pressed')).toBe('true');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('formats exchange-time labels with America/New_York and the shared ET marker', () => {
     const seconds = 1_741_524_000;
     const expected = formatTimestampDisplay(seconds * 1_000, {

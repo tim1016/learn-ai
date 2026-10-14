@@ -385,13 +385,23 @@ export class CohortFlattenDrawerComponent {
     this.focusAfterRender(() => this.progress()?.nativeElement.focus());
     try {
       const result = await this.panelService.runCohortFlatten(wave.target, wave.request);
+      // What ran, or may have run, ran: the roster reads again whether or not this drawer is still open.
+      if (result.applied_count + result.replayed_count > 0 || result.legs.some((leg) => leg.outcome === 'unknown')) {
+        this.flattened.emit();
+      }
+      // `onClose` clears `sent`: a wave answered after that belongs to no open drawer.
+      if (this.sent() !== wave) return;
       this.outcome.set(result);
-      if (result.applied_count + result.replayed_count > 0) this.flattened.emit();
       this.focusAfterRender(() => this.outcomePanel()?.focus());
     } catch (error) {
+      const failure = dispatchFailureOf(error);
+      if (this.sent() !== wave) {
+        // No answer came back and nobody is looking: the wave may have run, so the roster reads again.
+        if (failure.kind === 'unknown') this.flattened.emit();
+        return;
+      }
       // Keep the last typed outcome: its receipts are proof of what already
       // ran, and a failed retry proves nothing about them.
-      const failure = dispatchFailureOf(error);
       this.dispatchFailure.set(failure);
       if (failure.kind === 'refused' && failure.reasonCode === 'clerk_binding_generation_conflict') {
         // The fence the operator acted on is provably stale: re-read the
