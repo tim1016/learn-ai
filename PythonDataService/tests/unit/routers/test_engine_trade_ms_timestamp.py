@@ -66,10 +66,9 @@ def test_format_trade_emits_numeric_timestamps() -> None:
 
 
 def test_format_trade_record_emits_numeric_timestamps_for_lean_statistics() -> None:
-    formatted = _format_trade_record(1, _logged_trade(), cumulative_pnl_pct=0.01)
+    formatted = _format_trade_record(1, _logged_trade())
 
     assert formatted.entry_timestamp == 1_748_629_800_000
     assert formatted.exit_timestamp == 1_748_633_400_000
     assert isinstance(formatted.entry_timestamp, int)
     assert isinstance(formatted.exit_timestamp, int)
-    assert formatted.cumulative_pnl_pct == pytest.approx(0.01, abs=1e-12, rel=0)

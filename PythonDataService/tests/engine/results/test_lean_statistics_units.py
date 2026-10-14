@@ -40,14 +40,14 @@ def _winner(quantity: int = 100) -> LoggedTrade:
 
 
 def test_a_trade_record_carries_dollars_not_per_share_points() -> None:
-    record = _format_trade_record(1, _winner(quantity=100), cumulative_pnl_pct=0.02)
+    record = _format_trade_record(1, _winner(quantity=100))
 
     assert record.pnl == pytest.approx(200.0, abs=ATOL, rel=0)
     assert record.pnl_pct == pytest.approx(0.02, abs=ATOL, rel=0)
 
 
 def test_the_native_statistics_of_a_100_share_winner_are_in_dollars() -> None:
-    trades = [_format_trade_record(1, _winner(quantity=100), cumulative_pnl_pct=0.02)]
+    trades = [_format_trade_record(1, _winner(quantity=100))]
 
     stats = compute_lean_statistics(_daily_bars(), trades, start_capital=START_CAPITAL, total_fees=2.0, total_orders=2)
 
@@ -62,7 +62,7 @@ def test_the_native_statistics_of_a_100_share_winner_are_in_dollars() -> None:
 
 
 def test_orders_default_to_an_entry_and_an_exit_per_closed_trade() -> None:
-    trades = [_format_trade_record(1, _winner(), cumulative_pnl_pct=0.02)]
+    trades = [_format_trade_record(1, _winner())]
 
     stats = compute_lean_statistics(_daily_bars(), trades, start_capital=START_CAPITAL)
 

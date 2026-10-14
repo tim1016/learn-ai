@@ -344,11 +344,9 @@ def _format_trade(index: int, trade: Any) -> EngineTradeResponse:
     )
 
 
-def _format_trade_record(index: int, trade: Any, cumulative_pnl_pct: float) -> TradeRecord:
-    raw_indicators = getattr(trade, "indicators", None) or {}
+def _format_trade_record(index: int, trade: Any) -> TradeRecord:
     return TradeRecord(
         trade_number=index,
-        trade_type="Buy",  # engine strategies are long-only for now
         entry_timestamp=trade.entry_time_ms,
         exit_timestamp=trade.exit_time_ms,
         entry_price=float(trade.entry_price),
@@ -356,9 +354,7 @@ def _format_trade_record(index: int, trade: Any, cumulative_pnl_pct: float) -> T
         # Dollars, as LEAN's trade ledger is: ``pnl_pts`` is per share.
         pnl=float(trade.pnl_pts) * trade.quantity,
         pnl_pct=float(trade.pnl_pct),
-        cumulative_pnl_pct=cumulative_pnl_pct,
         signal_reason=getattr(trade, "signal_reason", "") or "",
-        indicator_snapshot={k: float(v) for k, v in raw_indicators.items()},
     )
 
 
@@ -1007,11 +1003,7 @@ def _lean_parity_statistics(*, result: BacktestResult, trades: list[LoggedTrade]
             df = pd.DataFrame(bar_records)
 
             # Convert LoggedTrade → TradeRecord
-            cum_pnl = 0.0
-            trade_records: list[TradeRecord] = []
-            for i, t in enumerate(trades):
-                cum_pnl += float(t.pnl_pct)
-                trade_records.append(_format_trade_record(i + 1, t, cum_pnl))
+            trade_records: list[TradeRecord] = [_format_trade_record(i + 1, t) for i, t in enumerate(trades)]
 
             lean_stats = compute_lean_statistics(
                 df=df,
