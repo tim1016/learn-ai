@@ -1,6 +1,7 @@
 """An option structure enters through the real Dry Run Clerk and its retained simulation (#2913)."""
 
 from collections.abc import Mapping
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -10,6 +11,7 @@ from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryStanding
 from app.options.named_structures import NamedStructure
 from app.options.structure_catalogue import starting_plan
 from app.schemas.action_plan import ActionPlan
+from app.services.session_authority import et_minute_of_day_ms
 from tests.broker.alpaca.clerk.sqlite.several_legs_fixtures import (
     PAID_PICKS,
     PAID_SPREAD,
@@ -99,3 +101,17 @@ async def test_every_catalogue_structure_is_refused_whole_when_one_leg_has_no_qu
     )
     assert receipt.state is EffectOperationState.REJECTED and missing in receipt.explanation
     assert dry_run.held() == {} and dry_run.fills() == []
+
+
+async def test_a_structure_with_a_sold_leg_handed_over_on_a_day_with_no_session_is_refused_as_the_market_closed(
+    dry_run: _DryRun,
+) -> None:
+    """The Saturday after the fixture's Tuesday. A day with no session has no close, so no entry cutoff to be
+    past (ADR 0076 decision 20), and the Clerk's session check refuses the entry."""
+    dry_run.wait(et_minute_of_day_ms(date(2026, 9, 12), 12 * 60) - dry_run.clock())
+
+    receipt = await dry_run.enter(evidence(dry_run.clock(), PAID_PICKS), decision="no-session-entry", plan=PAID_SPREAD)
+
+    assert receipt.state is EffectOperationState.REJECTED
+    assert receipt.explanation.startswith("MARKET_CLOSED: "), receipt.explanation
+    assert dry_run.orders() == 0 and dry_run.held() == {}
