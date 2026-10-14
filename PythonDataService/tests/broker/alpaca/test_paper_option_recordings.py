@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 from datetime import date
 from decimal import Decimal
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -449,7 +450,7 @@ def test_a_spreads_debit_and_credit_move_cash_and_option_buying_power_together_b
     figures = _account_figures(step)
 
     assert all(cash == buying_power for cash, buying_power in figures)
-    assert [later[0] - earlier[0] for earlier, later in zip(figures, figures[1:], strict=False)] == [
+    assert [later[0] - earlier[0] for earlier, later in pairwise(figures)] == [
         Decimal(move) for move in moves
     ]
 
