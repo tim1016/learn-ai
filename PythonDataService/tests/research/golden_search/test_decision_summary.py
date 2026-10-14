@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 
@@ -11,6 +11,7 @@ from app.research.golden_search.decision_summary import decision_summaries
 from app.research.golden_search.exposure_rules import EXPOSURE_EXPLANATIONS
 from app.research.golden_search.planning import protocol_from_request
 from app.research.golden_search.protocol import recent_window_ms
+from app.schemas.golden_search import GoldenSearchDecisionSummary, GoldenSearchSummaryLink, GoldenSearchSummaryRow
 from tests._helpers.golden_search_study import frequency_plan_request
 
 PROTOCOL = protocol_from_request(frequency_plan_request("SPY"))
@@ -186,3 +187,23 @@ def test_every_row_links_to_its_evidence() -> None:
         "concentration": ("chart", "without-best"),
         "final_exposure": ("step", "decision"),
     }
+
+
+def test_the_wire_schema_names_exactly_the_rows_and_links_the_summary_builds() -> None:
+    recent = {
+        "window": {"start_ms": RECENT[0], "end_ms": RECENT[1]},
+        "procedure": {"stop_reason": "no_improvement", "winner_metrics": _metrics(trades=RECENT_FLOOR)},
+        "counts": {},
+        "incomplete": False,
+    }
+    [summary] = decision_summaries(
+        _results(_candidate("recent"), recent=recent),
+        floors=FLOORS,
+        development=DEVELOPMENT,
+        exposure={"state": "not_opened", "explanation": ""},
+    )
+
+    GoldenSearchDecisionSummary.model_validate(summary)
+    rows = summary["rows"]
+    assert {row["key"] for row in rows} == set(get_args(GoldenSearchSummaryRow.model_fields["key"].annotation))
+    assert {row["link"]["target"] for row in rows} == set(get_args(GoldenSearchSummaryLink.model_fields["target"].annotation))

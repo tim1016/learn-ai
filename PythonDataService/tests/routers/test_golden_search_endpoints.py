@@ -23,12 +23,14 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+import asyncpg
 import httpx
 import pytest
 import redis
 from httpx import ASGITransport
 
 from app.config import settings
+from app.data_lake.catalog_client import CatalogUnavailableError
 from app.jobs.phases import JOB_PHASES
 from app.main import app
 from app.research.golden_search import planning, stages
@@ -193,6 +195,90 @@ async def test_defaults_refuse_a_month_count_below_one_at_the_schema(client: htt
     response = await client.get(f"{BASE}/defaults", params={"strategy_key": "ema_crossover_signal", "symbol": "SPY", "final_months": 0})
 
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("field", "months"),
+    [
+        pytest.param("training_months", 10**12, id="training-past-the-calendar"),
+        pytest.param("training_months", 2**70, id="training-past-a-c-long"),
+        pytest.param("training_months", 121, id="training-past-the-defaults-ceiling"),
+        pytest.param("training_months", 0, id="training-below-one"),
+        pytest.param("test_months", 10**12, id="test-past-the-calendar"),
+        pytest.param("test_months", 61, id="test-past-the-defaults-ceiling"),
+        pytest.param("test_months", 0, id="test-below-one"),
+    ],
+)
+async def test_a_month_count_the_defaults_route_would_refuse_is_a_422_at_preflight_and_lock(
+    client: httpx.AsyncClient, field: str, months: int
+) -> None:
+    plan = _sealed_plan(**{field: months})
+
+    preflight = await client.post(f"{BASE}/preflight", json=plan)
+    lock = await client.post(f"{BASE}/studies", json={"protocol": plan, "idempotency_key": "k"})
+
+    assert (preflight.status_code, lock.status_code) == (422, 422), (preflight.text, lock.text)
+
+
+async def test_the_largest_month_counts_the_defaults_route_lays_out_are_reviewed_as_data(client: httpx.AsyncClient) -> None:
+    response = await client.post(f"{BASE}/preflight", json=_sealed_plan(training_months=120, test_months=60))
+
+    assert response.status_code == 200, response.text
+    assert "FOLDS_INVALID" in {refusal["code"] for refusal in response.json()["refusals"]}
+
+
+async def test_a_qualification_id_longer_than_any_the_server_mints_is_a_422(client: httpx.AsyncClient) -> None:
+    response = await client.get(f"/api/research/golden-qualifications/{'q' * 65}/deploy-offer")
+
+    assert response.status_code == 422, response.text
+
+
+@pytest.mark.parametrize(
+    "unreachable",
+    [
+        pytest.param(CatalogUnavailableError("could not reach the catalog Postgres (ConnectionRefusedError: 10.9.8.7:5432)"), id="catalog-unreachable"),
+        pytest.param(asyncpg.ConnectionDoesNotExistError("connection to 10.9.8.7:5432 was closed in the middle of operation"), id="connection-lost"),
+        pytest.param(ConnectionRefusedError("[Errno 61] Connect call failed ('10.9.8.7', 5432)"), id="refused-once-the-pool-was-up"),
+    ],
+)
+async def test_a_research_store_that_cannot_be_reached_is_a_503_that_names_neither_host_nor_setting(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, unreachable: Exception
+) -> None:
+    async def summaries(**_: Any) -> list[Any]:
+        raise unreachable
+
+    monkeypatch.setattr(golden_search_router.service, "summaries", summaries)
+
+    response = await client.get(f"{BASE}/studies")
+
+    assert response.status_code == 503, response.text
+    detail = response.json()["detail"]
+    assert (detail["code"], detail["study"], detail["refusals"]) == ("RESEARCH_STORE_UNAVAILABLE", None, [])
+    assert detail["message"]
+    assert "10.9.8.7" not in response.text and "5432" not in response.text
+
+
+async def test_a_lake_with_no_database_configured_answers_a_read_503_without_naming_the_setting(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "POSTGRES_URL", "")
+
+    response = await client.get(f"{BASE}/studies", params={"symbol": "SPY"})
+
+    assert response.status_code == 503, response.text
+    assert "POSTGRES" not in response.text.upper()
+
+
+async def test_a_failure_that_is_not_the_store_being_unreachable_still_answers_500(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def summaries(**_: Any) -> list[Any]:
+        raise RuntimeError("a defect, not an outage")
+
+    monkeypatch.setattr(golden_search_router.service, "summaries", summaries)
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test") as unguarded:
+        response = await unguarded.get(f"{BASE}/studies")
+
+    assert response.status_code == 500
 
 
 @pytest.mark.parametrize(

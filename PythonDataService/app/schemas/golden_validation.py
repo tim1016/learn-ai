@@ -8,10 +8,14 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.research.backtest_runs.evidence_provenance import EvidenceApplicability
 from app.research.golden_validation.service import GoldenValidationDossier
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
+# ``research_validation_golden_runs.id`` and ``source_run_id`` are INTEGER columns: a larger id would reach the driver as a 500.
+MAX_RUN_ID = 2**31 - 1
 
 
 class DesignateGoldenRunRequest(BaseModel):
-    source_run_id: int = Field(gt=0)
+    source_run_id: int = Field(gt=0, le=MAX_RUN_ID)
     command_id: str = Field(min_length=1, max_length=200)
     label: str | None = Field(default=None, max_length=120)
     rationale: str = Field(min_length=3, max_length=4000)
@@ -64,7 +68,7 @@ class GoldenReviewResponse(BaseModel):
     quantconnect_backtest_id: str | None
     authorized_program_version: str | None
     reviewed_by: str
-    reviewed_at_ms: int
+    reviewed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     expected_evidence_revision: str
 
 
@@ -76,7 +80,7 @@ class GoldenValidationResponse(BaseModel):
     symbol: str
     rationale: str
     designated_by: str
-    designated_at_ms: int
+    designated_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     state: str
     validation_case: dict[str, Any]
     evidence_state: str

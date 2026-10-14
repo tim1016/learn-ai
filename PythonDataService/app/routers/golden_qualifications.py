@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query, status
+from typing import Annotated
+
+from fastapi import APIRouter, HTTPException, Path, Query, status
 
 from app.research.golden_search import qualification_service
 from app.research.golden_search.qualification_service import JudgedQualification, QualificationRefusal
@@ -18,6 +20,8 @@ from app.schemas.golden_qualifications import (
 from app.services.strategy_validation_manifest import local_strategy_validation_actor
 
 router = APIRouter()
+# Minted ids are ``gq-`` and 32 hex characters; the bound is only a ceiling on what a path may ask the store to look up.
+QualificationId = Annotated[str, Path(min_length=1, max_length=64)]
 
 
 def _refusal(exc: QualificationRefusal) -> HTTPException:
@@ -67,19 +71,19 @@ async def list_golden_defaults(
 
 
 @router.get("/{qualification_id}", response_model=GoldenQualificationDetail)
-async def get_golden_qualification(qualification_id: str) -> GoldenQualificationDetail:
+async def get_golden_qualification(qualification_id: QualificationId) -> GoldenQualificationDetail:
     return GoldenQualificationDetail.from_judged(await _judged(qualification_id))
 
 
 @router.get("/{qualification_id}/deploy-offer", response_model=GoldenQualificationDeployOffer)
-async def get_golden_qualification_deploy_offer(qualification_id: str) -> GoldenQualificationDeployOffer:
+async def get_golden_qualification_deploy_offer(qualification_id: QualificationId) -> GoldenQualificationDeployOffer:
     """The exact tuple for Deploy. Answered whatever the status; Deploy applies only a ready one."""
     return GoldenQualificationDeployOffer.from_judged(await _judged(qualification_id))
 
 
 @router.post("/{qualification_id}/revoke", response_model=GoldenQualificationDetail)
 async def revoke_golden_qualification(
-    qualification_id: str, body: RevokeQualificationRequest
+    qualification_id: QualificationId, body: RevokeQualificationRequest
 ) -> GoldenQualificationDetail:
     try:
         judged = await qualification_service.revoke(
@@ -95,7 +99,7 @@ async def revoke_golden_qualification(
 
 @router.post("/{qualification_id}/reprove", response_model=GoldenQualificationDetail)
 async def reprove_golden_qualification(
-    qualification_id: str, body: ReproveQualificationRequest
+    qualification_id: QualificationId, body: ReproveQualificationRequest
 ) -> GoldenQualificationDetail:
     try:
         judged = await qualification_service.reprove_qualification(
