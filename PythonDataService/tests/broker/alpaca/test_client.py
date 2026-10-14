@@ -287,8 +287,20 @@ async def test_a_non_object_2xx_answer_to_an_order_submission_stays_unknown_insi
 
 @pytest.mark.parametrize(
     "answer",
-    [{}, {"client_order_id": "manual/inkant/v1:someone-else"}, {"client_order_id": None}],
-    ids=["empty-object", "another-client-order-id", "null-client-order-id"],
+    [
+        {},
+        {"client_order_id": "manual/inkant/v1:someone-else"},
+        {"client_order_id": None},
+        {"code": 40010001, "message": "qty must be > 0"},
+        {"id": " ", "status": "accepted"},
+    ],
+    ids=[
+        "empty-object",
+        "another-client-order-id",
+        "null-client-order-id",
+        "error-shaped-body",
+        "blank-order-id",
+    ],
 )
 async def test_a_2xx_submission_answer_that_does_not_name_the_order_sent_keeps_the_window_open(
     make_api_error: ApiErrorFactory, answer: dict[str, Any]
@@ -317,11 +329,17 @@ async def test_a_2xx_submission_answer_that_does_not_name_the_order_sent_keeps_t
         await client.get_order_by_client_order_id(_ORDER_BODY["client_order_id"])
 
 
-@pytest.mark.parametrize("names_the_order", [True, False], ids=["names-the-order", "carries-no-client-order-id"])
-async def test_a_2xx_submission_answer_that_names_the_order_or_carries_no_name_closes_the_window(
-    names_the_order: bool,
-) -> None:
-    answer = {"id": "broker-order-1", **({"client_order_id": _ORDER_BODY["client_order_id"]} if names_the_order else {})}
+@pytest.mark.parametrize(
+    "shape",
+    ["id-and-client-order-id", "client-order-id-only", "id-only"],
+)
+async def test_a_2xx_submission_answer_that_names_the_order_sent_closes_the_window(shape: str) -> None:
+    """Alpaca's answer carries both; an answer that names the order by either one is that order's."""
+    answer: dict[str, Any] = {"status": "accepted"}
+    if shape != "client-order-id-only":
+        answer["id"] = "broker-order-1"
+    if shape != "id-only":
+        answer["client_order_id"] = _ORDER_BODY["client_order_id"]
     fake = _FakeAlpaca()
     fake.post = lambda path, data=None: answer  # type: ignore[method-assign]
     client = _client(fake)

@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.broker.alpaca.adapter import (
+    _NON_FINITE_RENOTE_S,
     et_date_to_ms,
     occurred_at_ms,
     opt_bool,
@@ -106,6 +107,31 @@ def test_an_optional_informational_figure_that_is_not_finite_reads_absent_with_o
         "sma",
         logging.WARNING,
     )
+
+
+def test_a_persistently_non_finite_figure_is_logged_once_per_field_per_window(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The account is read every few seconds: one bad figure must not write four lines a minute (#3216)."""
+    now = [1_000.0]
+    monkeypatch.setattr("app.broker.alpaca.adapter.monotonic", lambda: now[0])
+
+    with caplog.at_level(logging.WARNING, logger="app.broker.alpaca.adapter"):
+        for _ in range(5):
+            assert opt_finite_or_none("NaN", field="sma") is None
+        assert [record.field for record in caplog.records] == ["sma"]
+
+        # Another field is its own fault; the figure's reads in between do not re-arm the first.
+        assert opt_finite_or_none("inf", field="last_equity") is None
+        assert opt_finite_or_none(1.0, field="sma") == 1.0
+        assert opt_finite_or_none("NaN", field="sma") is None
+        assert [record.field for record in caplog.records] == ["sma", "last_equity"]
+
+        # Still bad an hour on: said again, once.
+        now[0] += _NON_FINITE_RENOTE_S
+        assert opt_finite_or_none("NaN", field="sma") is None
+        assert opt_finite_or_none("NaN", field="sma") is None
+    assert [record.field for record in caplog.records] == ["sma", "last_equity", "sma"]
 
 
 @pytest.mark.parametrize(("value", "expected"), [(None, None), ("", None), ("0", 0.0), (-3, -3.0), ("1.25", 1.25)], ids=repr)

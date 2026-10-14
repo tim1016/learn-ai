@@ -187,6 +187,48 @@ def test_an_order_that_shows_no_fill_and_states_no_fill_count_still_reads_zero(
     assert order.filled_quantity == 0.0
 
 
+@pytest.mark.parametrize("price", ["0", 0, "0.0", 0.0, "0.00"], ids=repr)
+def test_a_zero_fill_price_is_no_fill_and_the_order_still_reads_zero_filled(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    price: object,
+) -> None:
+    """A price of zero cannot be a fill (#3216): a canceled order that states it has filled nothing."""
+    open_order = {k: v for k, v in load_alpaca_fixture("orders", "orders.json")[1].items() if k != "filled_qty"}
+
+    order = from_alpaca_order(
+        {**open_order, "status": "canceled", "filled_avg_price": price}, observed_at_ms=_OBSERVED
+    )
+
+    assert order.unreadable_fields == ()
+    assert order.filled_quantity == 0.0
+
+
+@pytest.mark.parametrize(
+    ("price", "unreadable"),
+    [
+        ("101.5", ("filled_qty",)),
+        (0.01, ("filled_qty",)),
+        # A multi-leg credit fills at a negative average price: a fill, not "no price".
+        ("-1.25", ("filled_qty",)),
+        ("not-a-price", ("filled_avg_price", "filled_qty")),
+        (True, ("filled_avg_price", "filled_qty")),
+    ],
+    ids=repr,
+)
+def test_a_nonzero_or_unparseable_fill_price_shows_a_fill(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    price: object,
+    unreadable: tuple[str, ...],
+) -> None:
+    open_order = {k: v for k, v in load_alpaca_fixture("orders", "orders.json")[1].items() if k != "filled_qty"}
+
+    order = from_alpaca_order(
+        {**open_order, "status": "canceled", "filled_avg_price": price}, observed_at_ms=_OBSERVED
+    )
+
+    assert order.unreadable_fields == unreadable
+
+
 @pytest.mark.parametrize("status", ["filled", "partially_filled"])
 def test_a_fill_state_order_that_states_its_fill_count_is_readable(
     load_alpaca_fixture: AlpacaFixtureLoader,

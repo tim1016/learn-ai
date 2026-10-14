@@ -96,6 +96,23 @@ def _ms_to_utc(after_ms: int) -> datetime:
     return datetime.fromtimestamp(after_ms / 1000, tz=UTC)
 
 
+def _answer_names_the_order_sent(answer: Mapping[str, Any], client_order_id: str) -> bool:
+    """Whether a 2xx order answer is plainly the order that was sent (#3216).
+
+    It states the client order id sent, or carries a non-blank order ``id``
+    and no other client order id. An empty object, an error-shaped body
+    (``{"code": ..., "message": ...}``) and an answer under another client
+    order id are not: they close no visibility window. An answer with an id
+    and no client order id passes because Alpaca's real answers carry both
+    and the fakes' carry an id.
+    """
+    stated = answer.get("client_order_id", client_order_id)
+    if stated != client_order_id:
+        return False
+    order_id = answer.get("id")
+    return "client_order_id" in answer or (isinstance(order_id, str) and bool(order_id.strip()))
+
+
 def _install_session_timeout(session: Session, *, timeout_s: float) -> None:
     """Give every SDK request finite connect and read timeouts.
 
@@ -649,15 +666,13 @@ class AlpacaTradingClient:
             # uncertainty through that explicit consistency window.
             self._mark_submission_uncertain(client_order_id)
             raise
-        if not result or ("client_order_id" in result and result["client_order_id"] != client_order_id):
-            # Alpaca answered, but not as the order that was sent (an empty answer, or another client
+        if _answer_names_the_order_sent(result, client_order_id):
+            self._clear_uncertain_submission(client_order_id)
+        else:
+            # Alpaca answered, but not as the order that was sent (empty, error-shaped, or another client
             # order id): the caller folds that as unknown and looks the order up at once, and a lagging
             # lookup index would read as "absent". Only an answer that names the order closes the window.
-            # An answer with no client order id key at all is taken as naming it: many fakes carry none
-            # (#3216).
             self._mark_submission_uncertain(client_order_id)
-        else:
-            self._clear_uncertain_submission(client_order_id)
         return result
 
     def _submit_order_with_body(self, client: Any, order: dict[str, Any]) -> dict[str, Any]:

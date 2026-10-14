@@ -24,6 +24,8 @@ import re
 from collections.abc import Callable, Mapping
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from threading import Lock
+from time import monotonic
 from typing import Any, Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -128,19 +130,46 @@ def opt_finite_or_none(value: Any, *, field: str) -> float | None:
     risk-reducing path (the Clerk's install, a flatten's cover proof) reads
     the same answer, and ``None`` is already what each of them takes an
     absent figure for: unmarked, unjudgeable, an unknown amount. One
-    structured warning names the field. A required figure, a boolean and
-    text that is not a number still raise.
+    structured warning names the field, once per field per hour: the
+    account is read every few seconds, and a persistently bad figure would
+    bury the lines that changed what the account accepts. A required figure,
+    a boolean and text that is not a number still raise.
     """
     if value is None or value == "":
         return None
     number = _parse_float(value)
     if math.isfinite(number):
         return number
-    logger.warning(
-        "An Alpaca figure that is not a finite number was read as absent",
-        extra={"action": "alpaca_optional_figure_not_finite", "field": field, "value": str(number)},
-    )
+    if _first_note_of_a_non_finite_figure(field):
+        logger.warning(
+            "An Alpaca figure that is not a finite number was read as absent",
+            extra={"action": "alpaca_optional_figure_not_finite", "field": field, "value": str(number)},
+        )
     return None
+
+
+# When each field's non-finite warning was last written, so a bad figure is logged once per window
+# rather than on every read. Guarded: the adapter is reached from the event loop and from worker threads.
+_NON_FINITE_RENOTE_S = 3600.0
+_non_finite_noted_at: dict[str, float] = {}
+_non_finite_noted_lock = Lock()
+
+
+def _first_note_of_a_non_finite_figure(field: str) -> bool:
+    """Whether ``field``'s non-finite warning is due: the first, or the first since the window passed."""
+    now = monotonic()
+    with _non_finite_noted_lock:
+        noted_at = _non_finite_noted_at.get(field)
+        if noted_at is not None and now - noted_at < _NON_FINITE_RENOTE_S:
+            return False
+        _non_finite_noted_at[field] = now
+        return True
+
+
+def reset_non_finite_notes_for_testing() -> None:
+    """Forget which non-finite figures were logged, so a test sees its own warning."""
+    with _non_finite_noted_lock:
+        _non_finite_noted_at.clear()
 
 
 def str_or_blank(value: Any) -> str:
@@ -457,11 +486,20 @@ def _shows_a_fill(payload: Mapping[str, Any], status: str) -> bool:
     """Whether an order row says it holds a fill: a fill state, or a fill price or time of any status.
 
     A canceled or expired order can have filled in part, and shows it by its
-    fill price or time. Such a row must state ``filled_qty`` (#3216).
+    fill price or time. Such a row must state ``filled_qty`` (#3216). A fill
+    price of zero is no fill; a nonzero one is, and so is one that will not
+    parse. A multi-leg credit fills at a negative average price, so only zero
+    is refused as evidence.
     """
-    return status.strip().lower() in _FILL_STATUSES or any(
-        payload.get(key) not in (None, "") for key in ("filled_avg_price", "filled_at")
-    )
+    if status.strip().lower() in _FILL_STATUSES or payload.get("filled_at") not in (None, ""):
+        return True
+    price = payload.get("filled_avg_price")
+    if price in (None, ""):
+        return False
+    try:
+        return _parse_float(price) != 0
+    except (TypeError, ValueError):
+        return True
 
 
 def parse_order_link_id(value: Any) -> str | None:
