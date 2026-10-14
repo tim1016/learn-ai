@@ -117,6 +117,20 @@ def test_neighbors_name_the_knob_that_loses_and_never_pass_an_unrecorded_run() -
     assert _rows(_results(_candidate("incumbent")), "incumbent")["neighbors"]["status"] == "missing"
 
 
+def test_neighbors_that_were_all_invalid_or_outside_the_domain_are_missing_not_a_pass() -> None:
+    center = {"value": 0.2, "status": "center", "metrics": _metrics(net=100.0), "reason": None}
+    invalid = {"value": 0.15, "status": "invalid", "metrics": None, "reason": "fast must stay below slow"}
+    outside = {"value": 0.25, "status": "outside_domain", "metrics": None, "reason": None}
+    tested = {"value": 6.0, "status": "tested", "metrics": _metrics(net=50.0), "reason": None}
+
+    nothing_tested = [{"knob": "gap", "rows": [invalid, center, outside], "one_sided": False}]
+    assert _rows(_results(_candidate(neighbors=nothing_tested)))["neighbors"]["status"] == "missing"
+
+    # One knob with no testable neighbor beside a knob whose neighbors were tested still reads from what was tested.
+    one_knob_tested = [*nothing_tested, {"knob": "hold_bars", "rows": [tested], "one_sided": False}]
+    assert _rows(_results(_candidate(neighbors=one_knob_tested)))["neighbors"]["status"] == "meets"
+
+
 def test_stress_names_the_scenario_that_turns_a_loss_and_never_passes_an_unrecorded_run() -> None:
     def stressed(*nets: float | None) -> list[dict[str, Any]]:
         return [{"scenario": f"s{i}", "label": f"Stress {i}", "metrics": None if net is None else _metrics(net=net)} for i, net in enumerate(nets)]

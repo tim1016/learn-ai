@@ -38,7 +38,10 @@ from app.research.golden_search.chance_compare import (
     series_digest,
     stored_chance,
 )
+from app.research.golden_search.chance_drawdown import stored_drawdown
+from app.research.golden_search.chance_rehearsal import stored_rehearsal
 from app.research.golden_search.selection import Metrics
+from app.schemas.golden_search import GoldenSearchChance
 from app.utils.session_anchors import et_midnight_ms
 
 CAPITAL = 100_000.0
@@ -435,11 +438,15 @@ def test_a_legacy_record_reads_not_measured_per_component_without_backfill() -> 
     assert absent["profitability"]["code"] == NOT_MEASURED[0]
 
 
-def test_a_malformed_stored_component_says_why_it_is_unavailable() -> None:
+def test_a_malformed_stored_component_reads_unavailable_and_never_breaks_the_response() -> None:
     malformed = stored_chance({"chance": {"comparison": "garbage", "profitability": {"status": "measured", "label": "mixed"}}})
+    # Not a record at all reads as never measured; a record that fails the served contract says it failed it.
     assert malformed["comparison"]["status"] == "missing"
     assert malformed["comparison"]["code"] == NOT_MEASURED[0]
-    assert malformed["profitability"]["status"] == "measured"
+    assert malformed["profitability"]["status"] == "missing"
+    assert malformed["profitability"]["code"] == "invalid_record"
+    # What a study page is served satisfies its wire model: a malformed sibling never fails the whole response.
+    GoldenSearchChance.model_validate({**malformed, "rehearsal": stored_rehearsal({}), "drawdown": stored_drawdown({})})
 
 
 def test_series_digest_distinguishes_inputs_and_ignores_object_identity() -> None:

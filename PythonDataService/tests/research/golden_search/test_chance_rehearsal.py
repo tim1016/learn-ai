@@ -231,6 +231,10 @@ def test_undefined_objectives_count_as_undefined_never_as_passing() -> None:
     assert first["passes"]["pass_objective"] == 0
     assert first["undefined"]["undefined_objective"] == 10_000
     assert first["passes"]["pass_joint"] == 0
+    # The sentence says the comparison could not be computed on any path, not that a measured 0% of paths passed it.
+    assert "undefined for the objective comparison with the current settings (10,000 of 10,000)" in reading["guidance"]
+    # A ladder whose every rule was defined on every path says nothing of the kind.
+    assert "could not be computed" not in _reading(_smooth(60, 14), _smooth(60, 15), exits=(0, 1, 2))["guidance"]
 
 
 def test_the_drawdown_rule_reads_session_closes_a_per_bar_breach_is_not_its_concern() -> None:
@@ -278,3 +282,7 @@ def test_same_settings_missing_incumbent_and_legacy_records() -> None:
     measured = _reading(_smooth(60, 19), _smooth(60, 20))
     partial = stored_rehearsal({"chance": {"rehearsal": copy.deepcopy(measured)}})
     assert partial == measured
+    # A measured record that fails the served contract reads unavailable instead of failing the study page.
+    torn = copy.deepcopy(measured)
+    del torn["rungs"]
+    assert stored_rehearsal({"chance": {"rehearsal": torn}})["code"] == "invalid_record"

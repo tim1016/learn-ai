@@ -941,7 +941,8 @@ async def test_a_fit_that_failed_the_final_test_needs_the_written_acceptance_and
     # Both fits' final comparisons sit inside the fake landscape's noise, so the chance weakness rides beside
     # the exam codes — the passing fit's acknowledgement covers it (#3015).
     assert [item["code"] for item in fits["all_period"]["weakness"]] == ["CHANCE_WITHIN_NOISE"]
-    assert [item["code"] for item in fits["recent"]["weakness"]] == ["EXAM_DOES_NOT_MEET_RULES", "CHANCE_WITHIN_NOISE", "CHANCE_WITHIN_NOISE"]
+    # The comparison and the profitability are both inside the noise: one code, one acknowledgement naming both.
+    assert [item["code"] for item in fits["recent"]["weakness"]] == ["EXAM_DOES_NOT_MEET_RULES", "CHANCE_WITHIN_NOISE"]
     # The study reads by its strongest result until a fit is named.
     assert detail["exam_outcome"] == "meets_rules" and detail["guidance"]["headline"] == "Approve the settings you want to use"
 
@@ -1249,7 +1250,7 @@ async def test_defaults_offer_the_ready_default_qualification_as_the_incumbent(
     )
 
     ready = await service.defaults(
-        "ema_crossover_signal", symbol, lake_coverage=_no_lake_history, running_digest=lambda contract: "a" * 64
+        "ema_crossover_signal", symbol, lake_coverage=_no_lake_history, running_digest=lambda strategy_key: "a" * 64
     )
     assert ready["incumbent"] == {"source": "qualification", "qualification_id": f"q-{unique}", "params": point}
     assert ready["incumbent_label"].startswith("Golden configuration")
@@ -1263,7 +1264,7 @@ async def test_defaults_offer_the_ready_default_qualification_as_the_incumbent(
     assert [item["code"] for item in leaked["refusals"]] == ["SEED_IS_QUALIFIED"]
 
     stale = await service.defaults(
-        "ema_crossover_signal", symbol, lake_coverage=_no_lake_history, running_digest=lambda contract: "b" * 64
+        "ema_crossover_signal", symbol, lake_coverage=_no_lake_history, running_digest=lambda strategy_key: "b" * 64
     )
     assert stale["incumbent"]["source"] == "registry"
     assert stale["incumbent_label"] == "Registry validated point (the Golden Search default is not ready)"

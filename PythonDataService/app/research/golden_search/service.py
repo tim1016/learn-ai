@@ -29,7 +29,7 @@ import asyncpg
 import redis
 
 from app.engine.data.availability import unbroken_run_start
-from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.research.golden_search import repository as repo
 from app.research.golden_search.actions import (
     LIVE_PRESENTATIONS,
@@ -46,7 +46,7 @@ from app.research.golden_search.declarations import declaration_for, point_hash,
 from app.research.golden_search.exposure_rules import EXPOSURE_EXPLANATIONS, claim_for, exposure_state
 from app.research.golden_search.final_test import fit_for, fits_to_test, recorded_fits
 from app.research.golden_search.fold_charts import fold_charts
-from app.research.golden_search.guidance import params_sentence, research_weakness
+from app.research.golden_search.guidance import params_sentence, research_weakness, weakness_words
 from app.research.golden_search.models import (
     COMMANDS,
     RETAIN_KINDS,
@@ -191,10 +191,11 @@ async def exposure_view(symbol: str, start_ms: int, end_ms: int, *, exclude_stud
     }
 
 
-def _running_artifact_digest(contract: SignalProgramContract) -> str:
-    from app.services.signal_program_admission import running_artifact_digest
+def _running_artifact_digest(strategy_key: str) -> str | None:
+    # The drift- and anchor-checked digest approval, Deploy and admission judge by; ``None`` when it cannot be named.
+    from app.research.golden_search.qualification_service import running_artifact_digest_for
 
-    return running_artifact_digest(contract)
+    return running_artifact_digest_for(strategy_key)
 
 
 @dataclass(frozen=True)
@@ -210,12 +211,13 @@ async def resolve_incumbent(
     strategy_key: str,
     symbol: str,
     *,
-    running_digest: Callable[[SignalProgramContract], str] = _running_artifact_digest,
+    running_digest: Callable[[str], str | None] = _running_artifact_digest,
 ) -> IncumbentChoice:
     """The active default qualification when it is ready for the running program, else the registry point.
 
     An unreadable qualification store falls back to the registry point and
-    says so in the label; it never reports that no default exists.
+    says so in the label; it never reports that no default exists. So does a
+    process that cannot name its own running build.
     """
     from app.research.golden_search import qualifications
 
@@ -237,7 +239,12 @@ async def resolve_incumbent(
             exc_info=True,
         )
         return IncumbentChoice(ref=registry, label=f"{REGISTRY_LABEL} (the Golden Search default could not be read)")
-    if row is None or qualifications.qualification_status(row, events, running_digest(contract)) != "ready":
+    if row is None:
+        return IncumbentChoice(ref=registry, label=f"{REGISTRY_LABEL} (the Golden Search default is not ready)")
+    running = running_digest(strategy_key)
+    if running is None:
+        return IncumbentChoice(ref=registry, label=f"{REGISTRY_LABEL} (the Golden Search default cannot be judged: this service cannot name the build it is running)")
+    if qualifications.qualification_status(row, events, running) != "ready":
         return IncumbentChoice(ref=registry, label=f"{REGISTRY_LABEL} (the Golden Search default is not ready)")
     return IncumbentChoice(
         ref=IncumbentRef(source="qualification", qualification_id=row.id, params=dict(row.params)),
@@ -305,7 +312,7 @@ async def defaults(
     range_end_ms: int | None = None,
     now_ms: int | None = None,
     lake_coverage: Callable[[str], Awaitable[LakeSessions | None]] = lake_sessions,
-    running_digest: Callable[[SignalProgramContract], str] = _running_artifact_digest,
+    running_digest: Callable[[str], str | None] = _running_artifact_digest,
 ) -> dict[str, Any]:
     """A complete starting plan with the intervals computed here, the incumbent's name and settings, and the final interval's exposure.
 
@@ -981,7 +988,7 @@ async def _approve(conn: Any, row: StudyRow, body: Mapping[str, Any]) -> Command
     weakness = research_weakness(chosen["outcome"], exam["claim"], exam["exposure_state"]) + [item["code"] for item in chance_items]
     if weakness and not weak_ack:
         raise GoldenSearchRefusal(
-            "This evidence is weak (" + ", ".join(weakness) + "); approving needs your explicit acceptance of it.",
+            "This evidence is weak: " + weakness_words(exam, chosen, chance_items) + "; approving needs your explicit acceptance of it.",
             code="WEAKNESS_ACKNOWLEDGEMENT_REQUIRED",
             field="acknowledge_research_weakness",
         )

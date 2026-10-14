@@ -49,6 +49,7 @@ from fractions import Fraction
 from typing import Any
 
 import numpy as np
+from pydantic import TypeAdapter, ValidationError
 
 from app.jobs.progress import JobCancelled
 from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc
@@ -67,6 +68,12 @@ from app.research.golden_search.protocol import canonical_json
 from app.research.golden_search.selection import Metrics
 from app.research.monte_carlo.stationary import CHUNK_REPLICATIONS, stationary_index_chunks
 from app.research.sweep.ranking import RankingMeasure
+from app.schemas.golden_search import (
+    GoldenSearchChanceComparison,
+    GoldenSearchChanceDrawdown,
+    GoldenSearchChanceProfitability,
+    GoldenSearchChanceRehearsal,
+)
 from app.utils.session_anchors import et_date_at_ms
 
 logger = logging.getLogger(__name__)
@@ -645,6 +652,32 @@ _NOT_MEASURED_BY_COMPONENT: dict[str, tuple[str, str]] = {
 #: The statuses a stored chance component may carry; anything else reads as unsupported rather than guessed at (#3011).
 KNOWN_STATUSES = frozenset({"measured", "same_settings", "baseline", "missing", "failed"})
 
+#: The served contract of each development component, so a malformed stored record never reaches the study page.
+_SERVED = {
+    "comparison": TypeAdapter(GoldenSearchChanceComparison),
+    "profitability": TypeAdapter(GoldenSearchChanceProfitability),
+    "rehearsal": TypeAdapter(GoldenSearchChanceRehearsal),
+    "drawdown": TypeAdapter(GoldenSearchChanceDrawdown),
+}
+
+
+def served_record(component: str, record: Mapping[str, Any]) -> dict[str, Any]:
+    """One stored development component as the study page is served it, or a named unavailable when it cannot be.
+
+    A record that fails the wire contract the response is validated under would fail the whole response, so it
+    reads ``missing`` with an ``invalid_record`` code instead — logged, never repaired and never written back.
+    """
+    try:
+        _SERVED[component].validate_python(record)
+    except ValidationError as exc:
+        first = exc.errors()[0]["loc"] if exc.errors() else ()
+        logger.warning(
+            "golden search stored chance record fails the served contract; serving it as unavailable",
+            extra={"action": "golden_search_stored_chance_invalid", "component": component, "location": ".".join(str(part) for part in first)},
+        )
+        return _missing(("invalid_record", f"The stored {component} reading fails validation and is shown as unavailable rather than guessed at."))
+    return dict(record)
+
 
 def stored_chance(candidate: Mapping[str, Any]) -> dict[str, Any]:
     """The chance components of one stored evidence candidate, each normalized independently.
@@ -658,7 +691,7 @@ def stored_chance(candidate: Mapping[str, Any]) -> dict[str, Any]:
     for component in ("comparison", "profitability"):
         record = (stored or {}).get(component)
         if isinstance(record, Mapping) and record.get("status") in KNOWN_STATUSES:
-            components[component] = dict(record)
+            components[component] = served_record(component, record)
         elif isinstance(record, Mapping):
             unsupported = record.get("status")
             components[component] = _missing(
