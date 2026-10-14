@@ -143,15 +143,6 @@ class GuardedBrokerReadPort:
         self._assert_unfenced("read_option_event_activities")
         return await self._inner.read_option_event_activities(after_ms=after_ms, resume=resume)
 
-    async def list_assets(
-        self,
-        *,
-        status: str | None = None,
-        limit: int | None = 100,
-    ) -> list[BrokerAsset]:
-        self._assert_unfenced("list_assets")
-        return await self._inner.list_assets(status=status, limit=limit)
-
     async def get_asset(self, symbol: str) -> BrokerAsset | None:
         self._assert_unfenced("get_asset")
         return await self._inner.get_asset(symbol)

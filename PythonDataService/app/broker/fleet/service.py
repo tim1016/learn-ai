@@ -85,7 +85,6 @@ from app.broker.fleet.identity import (
 )
 from app.broker.fleet.internal_http import address_is_private
 from app.broker.fleet.provider import (
-    FLEET_PROTOCOL_VERSION,
     PRODUCTION_PROVIDER_ADAPTERS,
     BrokerProviderAdapter,
     Capability,
@@ -2882,7 +2881,6 @@ __all__ = [
     "DEFAULT_DEPLOYMENT_NAMESPACE",
     "DEFAULT_DRAIN_DEADLINE_MS",
     "DEFAULT_SESSION_STALE_AFTER_MS",
-    "FLEET_PROTOCOL_VERSION",
     "FleetControlService",
     "ProvisionedClerk",
 ]

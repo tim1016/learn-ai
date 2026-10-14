@@ -103,7 +103,6 @@ class _FakePort:
         self.portfolio_history_calls = 0
         self.orders_call: dict[str, str | int | None] | None = None
         self.activities_call: dict[str, int | None] | None = None
-        self.assets_call: dict[str, str | int | None] | None = None
 
     async def get_account(self) -> BrokerAccountSnapshot:
         self.account_calls += 1
@@ -158,17 +157,6 @@ class _FakePort:
             raise self._error
         assert self._evidence is not None
         return self._evidence
-
-    async def list_assets(
-        self,
-        *,
-        status: str | None = None,
-        limit: int = 100,
-    ) -> list[BrokerAsset]:
-        if self._error is not None:
-            raise self._error
-        self.assets_call = {"status": status, "limit": limit}
-        return self._assets
 
     async def get_asset(self, symbol: str) -> BrokerAsset | None:
         if self._error is not None:

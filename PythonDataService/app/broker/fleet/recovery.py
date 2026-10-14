@@ -23,10 +23,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from app.broker.fleet.confirmation import (
-    ConfirmationEvidenceError,
-    read_confirmation_evidence,
-)
+from app.broker.fleet.confirmation import read_confirmation_evidence
 from app.broker.fleet.errors import (
     ClerkAssignmentConflict,
     ClerkIdentityMismatch,
@@ -509,10 +506,7 @@ def reconcile_restored_lane(
         )
     clerk = service._require_clerk(clerk_id)
     service.verify_clerk_volume(clerk_id=clerk_id, volume_root=volume_root)
-    try:
-        evidence = read_confirmation_evidence(volume_root)
-    except ConfirmationEvidenceError:
-        raise
+    evidence = read_confirmation_evidence(volume_root)
     if evidence is None:
         raise ClerkIdentityMismatch(
             f"Clerk {clerk_id} has no durable confirmation evidence on its own volume.",
