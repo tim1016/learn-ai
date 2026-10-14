@@ -20,7 +20,8 @@ import { ExpirationRibbonComponent } from '../../options-chain-v2/expiration-rib
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
 import { etIsoDate } from '../../../shared/date/et-midnight';
-import { optionExpiryAnchorMs } from '../../../shared/option-contract/option-expiry-date';
+import { daysBetween } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
+import { optionExpiryAnchorMs, optionExpiryDate } from '../../../shared/option-contract/option-expiry-date';
 import { formatTimestampDisplay } from '../../../shared/timestamp/timestamp-display';
 
 interface ChainRow {
@@ -106,15 +107,17 @@ export class OptionsLabChainComponent implements OnInit {
     return this.underlying()?.price ?? 0;
   });
 
-  spotChange = computed(() => this.underlying()?.change ?? 0);
-  spotChangePct = computed(() => this.underlying()?.changePercent ?? 0);
+  // The stock snapshot's own move on the day. The chain's `underlying.change`
+  // is the first contract's break-even delta, not a spot move (#3221).
+  spotChange = computed(() => this.stockSnapshot()?.todaysChange ?? null);
+  spotChangePct = computed(() => this.stockSnapshot()?.todaysChangePercent ?? null);
 
   daysToExpiry = computed(() => {
     const exp = this.selectedExpiration();
     if (!exp) return 0;
-    // The anchor instant from the wire — never a 16:00 built in the browser's
-    // own zone (#2934).
-    return Math.max(Math.ceil((exp - Date.now()) / 86_400_000), 0);
+    // Calendar days between today's New York date and the date the anchor
+    // names, so the whole of expiry day reads 0 DTE (#3221).
+    return Math.max(daysBetween(etIsoDate(Date.now()), optionExpiryDate(exp)), 0);
   });
 
   expirationLabel = computed(() => {
@@ -221,7 +224,7 @@ export class OptionsLabChainComponent implements OnInit {
   });
 
   spotChangeClass = computed(() => {
-    const c = this.spotChange();
+    const c = this.spotChange() ?? 0;
     if (c > 0) return 'pos';
     if (c < 0) return 'neg';
     return 'flat';

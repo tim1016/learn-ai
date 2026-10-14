@@ -184,7 +184,8 @@
       <span class="text-sm text-slate-300">
         <strong class="text-white">{{ c.contractType === 'call' ? 'CALL' : 'PUT' }}</strong>
         Strike: <strong>${{ c.strikePrice | number:'1.2-2' }}</strong>
-        &middot; IV: <strong>{{ (c.impliedVolatility ?? 0) * 100 | number:'1.1-1' }}%</strong>
+        @let iv = c.impliedVolatility;
+        &middot; IV: <strong>{{ iv === null || iv === undefined ? '—' : (iv * 100 | number:'1.1-1') + '%' }}</strong>
         @if (c.lastQuote?.midpoint; as mid) {
           &middot; Mid: <strong>${{ mid | number:'1.2-2' }}</strong>
         }

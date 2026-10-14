@@ -1,4 +1,5 @@
 import { Component, computed, input, output, ChangeDetectionStrategy } from '@angular/core';
+import { etIsoDate } from '../../../shared/date/et-midnight';
 import { optionExpiryDate } from '../../../shared/option-contract/option-expiry-date';
 
 interface MonthGroup {
@@ -24,7 +25,8 @@ export class ExpirationRibbonComponent {
 
   private readonly MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-  currentYear = new Date().getFullYear();
+  // The year of today's New York date, the zone `group.year` is read in.
+  currentYear = Number(etIsoDate(Date.now()).slice(0, 4));
 
   monthGroups = computed<MonthGroup[]>(() => {
     const exps = this.expirations();
