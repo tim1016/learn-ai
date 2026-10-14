@@ -368,7 +368,7 @@ async def test_stop_fence_mode_is_captured_at_the_decision_bar() -> None:
 
 @pytest.mark.parametrize(("gate_open", "expected"), [(True, EvaluationMode.DECIDE), (False, EvaluationMode.OBSERVE_ONLY)])
 def test_a_bar_the_feed_never_yielded_takes_the_fence_as_it_stands(gate_open: bool, expected: EvaluationMode) -> None:
-    """F-A-6: with Stop's fence closed, an unseen bar only observes; it is not read as DECIDE."""
+    """With Stop's fence closed, an unseen bar only observes; it is not read as DECIDE."""
     gate = asyncio.Event()
     if gate_open:
         gate.set()
@@ -378,7 +378,7 @@ def test_a_bar_the_feed_never_yielded_takes_the_fence_as_it_stands(gate_open: bo
 
 
 def test_a_fence_that_raises_attribute_error_is_not_read_as_a_decide() -> None:
-    """C-6: only a feed with no fence decides by default; a fence that fails inside is not swallowed."""
+    """Only a feed with no fence decides by default; a fence that fails inside is not swallowed."""
     from app.services.bot_trade_strategy import _evaluation_mode_for
 
     class _FenceThatFails:

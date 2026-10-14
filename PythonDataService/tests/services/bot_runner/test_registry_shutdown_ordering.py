@@ -327,7 +327,7 @@ async def test_stop_all_stops_every_bot_when_a_cancelled_bots_task_reaps_itself_
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """F-A-1: the first bot's task unwinds and leaves the bot dict while the second bot's STOP awaits."""
+    """The first bot's task unwinds and leaves the bot dict while the second bot's STOP awaits."""
     clerk = _YieldingStopClerk(_custody_proof(exposure={}))
     registry = _registry(tmp_path, _FakeFeed([_bar(_T0)], mode="hold"))
     set_alpaca_clerk(clerk)
@@ -352,7 +352,7 @@ async def test_stop_all_cancels_a_stop_at_a_bots_end_that_outlives_its_wait(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """F-A-3: a stop waiting out its custody proof is abandoned, not left pending past shutdown."""
+    """A stop waiting out its custody proof is abandoned, not left pending past shutdown."""
     from app.services import bot_runner
 
     monkeypatch.setattr(bot_runner, "_STOP_TIMEOUT_S", 0.05)

@@ -1,4 +1,4 @@
-"""A terminal outcome the lifecycle projection refused is said, not dropped (B-2).
+"""A terminal outcome the lifecycle projection refused is said, not dropped.
 
 The receipt is written before the projection, so a refused projection leaves
 the outcome on disk and the duty settle projects it later; what was missing

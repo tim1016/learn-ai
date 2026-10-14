@@ -159,7 +159,7 @@ async def test_a_trade_run_records_who_ended_it_beside_its_custody_proof(
 
 
 async def test_a_run_is_not_registered_without_its_admission_snapshot_on_a_clerk_that_cannot_bind_it() -> None:
-    """F-A-5: dropping the snapshot would register the run outside the custody cut it was admitted under."""
+    """Dropping the snapshot would register the run outside the custody cut it was admitted under."""
     from types import SimpleNamespace
 
     from app.services.bot_clerk_lifecycle import register_alpaca_duty_run

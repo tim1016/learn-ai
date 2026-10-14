@@ -940,7 +940,7 @@ async def test_a_dry_run_its_owner_wants_running_keeps_its_end_for_its_run(tmp_p
 async def test_a_stopped_dry_runs_end_stays_a_candidate_when_its_record_cannot_be_written(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A write that failed is looked at again, and the look still reaches every other bot (F-A-21)."""
+    """A write that failed is looked at again, and the look still reaches every other bot."""
     clock = _Clock()
     registry = _registry(tmp_path, None, now_ms=clock)
     _stopped_dry_run(registry, tmp_path, desired=DesiredState.STOPPED)
@@ -1013,7 +1013,7 @@ class _PassThatLeavesTheRunActive:
 async def test_the_end_watch_asks_a_dry_run_again_while_its_run_is_still_active_after_a_pass(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str, passes: int,
 ) -> None:
-    """F-A-2: a Dry Run's Clerk has no periodic sweep to be the pass's "next pass tries again"."""
+    """A Dry Run's Clerk has no periodic sweep to be the pass's "next pass tries again"."""
     clock = _Clock()
     registry = await _deployed(tmp_path, clock)
     managed = registry._bots[_SID]
