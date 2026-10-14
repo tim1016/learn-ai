@@ -28,8 +28,12 @@
               <p>{{ lead.summary.text }}</p>
               @if (panel().health.running) {
                 <p class="bot-header__feed">
-                  {{ panel().feed_continuity.provider_label }} live · updated
-                  <app-timestamp-display [value]="panel().updated_at_ms" mode="local" granularity="time" />
+                  {{ panel().feed_continuity.provider_label }} {{ feedWord() }}
+                  @let lastBarAtMs = feed().latest_bar_at_ms;
+                  @if (lastBarAtMs !== null) {
+                    · updated
+                    <app-timestamp-display [value]="lastBarAtMs" mode="local" granularity="time" />
+                  }
                 </p>
               }
             </div>
