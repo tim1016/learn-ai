@@ -33,7 +33,7 @@ from app.broker.fleet.provider import (
 )
 from app.broker.fleet.records import LANE_COUNT_KEYS
 
-_ADAPTER_VERSION = "alpaca-fleet.13"
+_ADAPTER_VERSION = "alpaca-fleet.14"
 
 
 def _op(
@@ -231,6 +231,51 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             "GET",
             "/market-status-snapshot",
             capability=Capability.MARKET_STATUS_READ,
+        ),
+        # IBKR is the read-only market-data feed for every Alpaca clerk
+        # (ADR 0062). These clerk-scoped routes select the lane's own Gateway
+        # session without making the coordinator a market-data client.
+        _op(
+            "ibkr_health_read",
+            "GET",
+            "/market-data/ibkr/health",
+            capability=Capability.MARKET_STATUS_READ,
+            readiness=_CONFIGURATION,
+            agent_path="/api/broker/health",
+        ),
+        _op(
+            "ibkr_expirations_read",
+            "GET",
+            "/market-data/ibkr/expirations/{symbol}",
+            capability=Capability.MARKET_STATUS_READ,
+            readiness=_CONFIGURATION,
+            agent_path="/api/broker/expirations/{symbol}",
+        ),
+        _op(
+            "ibkr_strikes_read",
+            "GET",
+            "/market-data/ibkr/strikes/{symbol}",
+            capability=Capability.MARKET_STATUS_READ,
+            readiness=_CONFIGURATION,
+            agent_path="/api/broker/strikes/{symbol}",
+        ),
+        _op(
+            "ibkr_option_chain_stream",
+            "GET",
+            "/market-data/ibkr/option-chain/{symbol}",
+            capability=Capability.STREAM_SUBSCRIBE,
+            readiness=_CONFIGURATION,
+            stream=OperationStream.SSE,
+            agent_path="/api/broker/option-chain/{symbol}",
+        ),
+        _op(
+            "ibkr_option_surface_stream",
+            "GET",
+            "/market-data/ibkr/option-surface/{symbol}",
+            capability=Capability.STREAM_SUBSCRIBE,
+            readiness=_CONFIGURATION,
+            stream=OperationStream.SSE,
+            agent_path="/api/broker/option-surface/{symbol}",
         ),
         # ── Configuration family (repair stays reachable without a binding) ──
         _op(

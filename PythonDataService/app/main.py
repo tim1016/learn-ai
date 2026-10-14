@@ -1416,10 +1416,17 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     # carries its own prefix so we mount it bare.
     app.include_router(research_divergence.router)
 
-# Interactive Brokers paper-trading endpoints (Phase 1: read-only chain).
-# Router carries its own /api/broker prefix.
+# IBKR owns market data for Alpaca lanes (ADR 0062). The coordinator routes
+# clerk-scoped reads to the named clerk; only that clerk opens a Gateway
+# session. Connection lifecycle controls retain the combined posture.
 if _FLEET_ROLE == "combined":
     app.include_router(broker.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
+elif _FLEET_ROLE == "clerk_agent":
+    app.include_router(
+        broker.read_router,
+        prefix="/api/broker",
+        dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
+    )
 # Broker System v2 read surface (/api/brokers/{broker}/...). Broker account,
 # position, order, activity, asset, and clock evidence is sensitive operator
 # data, so every v2 read requires the always-on data-plane control secret.
