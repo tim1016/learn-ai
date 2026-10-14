@@ -8,13 +8,12 @@
       <li
         class="custody-stage"
         [class.custody-stage--recorded]="stage.state === 'recorded'"
-        [class.custody-stage--awaiting]="stage.state === 'awaiting'"
       >
         <span class="custody-stage__marker" aria-hidden="true">{{ stage.code }}</span>
         <div class="custody-stage__copy">
           <div class="custody-stage__title-row">
             <strong>{{ stage.label }}</strong>
-            <span>{{ stage.state === 'recorded' ? 'Recorded' : stage.state === 'awaiting' ? 'Awaiting' : 'Not recorded' }}</span>
+            <span>{{ stage.state === 'recorded' ? 'Recorded' : 'Not recorded' }}</span>
           </div>
           <span>{{ stage.explanation }}</span>
           <app-timestamp-display [value]="stage.timestamp" mode="local" fallback="Not recorded" />

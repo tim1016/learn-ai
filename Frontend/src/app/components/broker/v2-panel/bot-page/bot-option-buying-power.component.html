@@ -1,5 +1,6 @@
 @if (checks.error() && page() === null) {
   <p class="obp__error" role="alert">Could not load this bot’s comparison with Alpaca.</p>
+  <button type="button" (click)="retryRead()" [disabled]="checks.isLoading()">Try again</button>
 }
 
 @if (page(); as state) {

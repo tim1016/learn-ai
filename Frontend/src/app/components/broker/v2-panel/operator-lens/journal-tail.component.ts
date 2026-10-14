@@ -33,6 +33,8 @@ const ALL_KINDS = '' as const;
 export class JournalTailComponent {
   readonly evidencePage = input<EvidencePage | null>(null);
   readonly loading = input(false);
+  /** The read failed: the host says so, and this tail draws neither a count nor "No journal entries". */
+  readonly failed = input(false);
 
   /** Emits when user selects a row — carries the order_ref to select on the rail. */
   readonly transactionSelected = output<string>();

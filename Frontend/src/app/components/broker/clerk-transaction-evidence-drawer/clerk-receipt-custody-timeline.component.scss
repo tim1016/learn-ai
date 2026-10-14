@@ -14,7 +14,6 @@
 .custody-stage--recorded:not(:last-child)::after { background: var(--bull); }
 .custody-stage__marker { position: relative; z-index: 1; display: grid; width: 1.5rem; height: 1.5rem; place-items: center; border: 1px solid var(--border-strong); border-radius: 50%; background: var(--bg-surface); color: var(--text-secondary); font-family: var(--font-mono); font-size: .62rem; font-weight: 700; }
 .custody-stage--recorded .custody-stage__marker { border-color: var(--bull); background: color-mix(in srgb, var(--bull) 18%, var(--bg-surface)); color: var(--bull); }
-.custody-stage--awaiting .custody-stage__marker { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
 .custody-stage__copy { display: grid; gap: .2rem; min-width: 0; font-size: .73rem; }
 .custody-stage__title-row { align-items: baseline; gap: .35rem; }
 .custody-stage__title-row strong { color: var(--text-primary); font-size: .78rem; }

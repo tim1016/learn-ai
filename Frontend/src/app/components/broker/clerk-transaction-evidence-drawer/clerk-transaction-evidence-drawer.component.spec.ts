@@ -260,6 +260,71 @@ describe('ClerkTransactionEvidenceDrawerComponent', () => {
     expect(text).toContain('Custody subject');
     expect(text).toContain('manual-operator:operator-42');
   });
+
+  /** Render the drawer on one receipt, as the desk opens it. */
+  async function renderReceipt(overrides: Partial<ClerkTransactionDetail>) {
+    const broker = {
+      accountTransaction: vi.fn().mockResolvedValue(detail('PA1', 'ctxn_x', {}, [], overrides)),
+    };
+    TestBed.configureTestingModule({
+      providers: [provideZonelessChangeDetection(), { provide: BrokersService, useValue: broker }],
+    });
+    const fixture = TestBed.createComponent(ClerkTransactionEvidenceDrawerComponent);
+    fixture.componentRef.setInput('target', target('PA1'));
+    fixture.componentRef.setInput('accountId', 'PA1');
+    fixture.componentRef.setInput('transaction', summary('PA1', 'ctxn_x'));
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  it('says a custody marker nobody wrote is not recorded, never that it is awaited', async () => {
+    const host = await renderReceipt({
+      custody_timeline: { ...custodyTimeline(), broker_write_started_at_ms: null, broker_ack_recorded_at_ms: null,
+        economic_terminal_recorded_at_ms: null },
+    });
+
+    expect(host.textContent).toContain('Broker write started');
+    expect(host.textContent).not.toContain('Awaiting');
+    expect(host.querySelectorAll('.custody-stage--recorded')).toHaveLength(1);
+  });
+
+  it('words the first marker of an order the Clerk only observed as an observation', async () => {
+    const host = await renderReceipt({
+      transaction_origin: 'external',
+      custody_timeline: { ...custodyTimeline(), broker_write_started_at_ms: null },
+    });
+
+    expect(host.textContent).toContain('Order observed');
+    expect(host.textContent).not.toContain('The Clerk durably accepted the instruction.');
+  });
+
+  it('says the origin is not recorded rather than calling an unlabelled receipt manual', async () => {
+    const host = await renderReceipt({ transaction_origin: undefined });
+
+    const origin = Array.from(host.querySelectorAll('dt')).find((dt) => dt.textContent === 'Origin');
+    expect(origin?.nextElementSibling?.textContent?.trim()).toBe('Not recorded');
+  });
+
+  it('shows an execution\'s instrument as not recorded and writes a missing side and type out', async () => {
+    const host = await renderReceipt({
+      order_instruction: {
+        symbol: 'SPY', sec_type: 'STK', action: null, quantity: 2, order_type: null,
+        limit_price: 511.2899999999, stop_price: null, time_in_force: 'day', outside_rth: false,
+      },
+      execution_price: 511.1,
+    });
+    accordionHeader(host, 'Instruction and execution').click();
+
+    const rows = Array.from(host.querySelectorAll('.receipt-table tbody tr'));
+    const cells = (label: string) => Array.from(
+      rows.find((row) => row.querySelector('th')?.textContent === label)?.querySelectorAll('td') ?? [],
+    ).map((cell) => cell.textContent?.trim());
+    expect(cells('Instrument')).toEqual(['SPY', 'Not recorded']);
+    expect(cells('Side and type')[0]).toBe('Not recorded');
+    expect(cells('Price')).toEqual(['$511.29', '$511.10']);
+  });
 });
 
 function accordionHeader(host: HTMLElement, label: string): HTMLElement {

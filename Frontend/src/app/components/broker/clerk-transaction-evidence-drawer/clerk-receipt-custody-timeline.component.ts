@@ -3,7 +3,7 @@ import { ChangeDetectionStrategy, Component, computed, input } from '@angular/co
 import type { ClerkCustodyTimeline } from '../../../api/clerk-transaction-history.types';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 
-type CustodyStageState = 'recorded' | 'awaiting' | 'not_recorded';
+type CustodyStageState = 'recorded' | 'not_recorded';
 
 interface CustodyStage {
   readonly code: 'A0' | 'A1' | 'A2' | 'A3';
@@ -23,16 +23,20 @@ interface CustodyStage {
 })
 export class ClerkReceiptCustodyTimelineComponent {
   readonly timeline = input<ClerkCustodyTimeline | null>(null);
-  protected readonly stages = computed(() => buildCustodyStages(this.timeline()));
+  /** The order was placed outside the Clerk: it observed it, and accepted no instruction. */
+  readonly external = input(false);
+  protected readonly stages = computed(() => buildCustodyStages(this.timeline(), this.external()));
   protected readonly trackStage = (_: number, stage: CustodyStage): string => stage.code;
 }
 
-function buildCustodyStages(timeline: ClerkCustodyTimeline | null): readonly CustodyStage[] {
+function buildCustodyStages(timeline: ClerkCustodyTimeline | null, external: boolean): readonly CustodyStage[] {
   const stages = [
     {
       code: 'A0' as const,
-      label: 'Custody accepted',
-      explanation: 'The Clerk durably accepted the instruction.',
+      label: external ? 'Order observed' : 'Custody accepted',
+      explanation: external
+        ? 'The Clerk first recorded this order. It was placed outside the Clerk, which accepted no instruction for it.'
+        : 'The Clerk durably accepted the instruction.',
       timestamp: timeline?.a0_custody_accepted_at_ms ?? null,
     },
     {
@@ -54,17 +58,10 @@ function buildCustodyStages(timeline: ClerkCustodyTimeline | null): readonly Cus
       timestamp: timeline?.economic_terminal_recorded_at_ms ?? null,
     },
   ];
-  const lastRecorded = stages.reduce(
-    (latest, stage, index) => stage.timestamp === null ? latest : index,
-    -1,
-  );
-
-  return stages.map((stage, index) => ({
+  // A marker with no timestamp is not recorded. Which one comes next is not inferred: no producer
+  // promises the stages in order, and an order whose outcome is unknown has none after A0.
+  return stages.map((stage) => ({
     ...stage,
-    state: stage.timestamp !== null
-      ? 'recorded'
-      : index === lastRecorded + 1
-        ? 'awaiting'
-        : 'not_recorded',
+    state: stage.timestamp !== null ? 'recorded' : 'not_recorded',
   }));
 }

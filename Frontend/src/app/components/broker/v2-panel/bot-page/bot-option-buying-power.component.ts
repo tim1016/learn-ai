@@ -97,6 +97,10 @@ export class BotOptionBuyingPowerComponent {
     () => (this.checks.hasValue() ? this.checks.value() : null),
   );
 
+  protected retryRead(): void {
+    this.checks.reload();
+  }
+
   protected readonly confirming = signal(false);
   protected readonly reviewing = signal(false);
   protected readonly busy = computed(() => this.reviewing() || this.locked());
@@ -105,9 +109,8 @@ export class BotOptionBuyingPowerComponent {
   constructor() {
     effect(() => {
       this.journalTailSeq();
-      untracked(() => {
-        if (this.checks.hasValue()) this.checks.reload();
-      });
+      // Also after a failed read: a new custody record is a reason to ask again, not only to refresh.
+      untracked(() => void this.checks.reload());
     });
   }
 

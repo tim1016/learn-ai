@@ -24,13 +24,16 @@
       </div>
     </section>
 
-    <app-clerk-receipt-custody-timeline [timeline]="receipt.custody_timeline" />
+    <app-clerk-receipt-custody-timeline
+      [timeline]="receipt.custody_timeline"
+      [external]="receipt.transaction_origin === 'external'"
+    />
 
     <section class="receipt-facts" aria-labelledby="receiptFactsTitle">
       <h3 id="receiptFactsTitle">Receipt facts</h3>
       <dl>
         <div><dt>Broker</dt><dd>{{ receipt.broker | receiptLabel }}</dd></div>
-        <div><dt>Origin</dt><dd>{{ (receipt.transaction_origin ?? 'manual') | receiptLabel }}</dd></div>
+        <div><dt>Origin</dt><dd>@if (receipt.transaction_origin; as origin) { {{ origin | receiptLabel }} } @else { Not recorded }</dd></div>
         <div><dt>Custody account</dt><dd><code>{{ receipt.account_id }}</code></dd></div>
         @if (receipt.subject_id; as subjectId) {
           <div><dt>Custody subject</dt><dd><code>{{ subjectId }}</code></dd></div>

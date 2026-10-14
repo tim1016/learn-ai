@@ -8,7 +8,7 @@ import {
 
 import type { ClerkTransactionDetail } from '../../../api/clerk-transaction-history.types';
 import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
-import { formatReceiptValue, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import { formatReceiptLabel, formatReceiptValue, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 
 interface ReceiptEntry {
@@ -35,6 +35,18 @@ interface ReceiptEntry {
 })
 export class ClerkReceiptEvidenceAccordionsComponent {
   readonly detail = input.required<ClerkTransactionDetail>();
+  /** The instruction's side and order type, each only when it was recorded. */
+  protected readonly sideAndType = computed(() => {
+    const instruction = this.detail().order_instruction;
+    const parts = [instruction?.action, instruction?.order_type]
+      .filter((part): part is string => typeof part === 'string' && part !== '')
+      .map((part) => formatReceiptLabel(part));
+    return parts.length === 0 ? 'Not recorded' : parts.join(' · ');
+  });
+  /** A recorded price at Alpaca's precision, so a float's tail is not shown as if it were fact. */
+  protected price(value: number | null | undefined): string | null {
+    return value === null || value === undefined ? null : `$${value.toFixed(value >= 1 ? 2 : 4)}`;
+  }
   protected readonly receiptEntries = computed(() => receiptEntries(this.detail().receipt));
   protected readonly trackEvent = (_: number, event: ClerkTransactionDetail['events'][number]): string => event.event_id;
   protected readonly trackReceipt = (_: number, entry: ReceiptEntry): string => entry.key;

@@ -318,4 +318,40 @@ describe('BotOptionBuyingPowerComponent (#3098)', () => {
     await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
     expect(screen.getByRole('region', { name: 'Alpaca option buying power' })).toBeTruthy();
   });
+
+  it('reads again after a failed read, by itself on the next record and when asked', async () => {
+    const { read, fixture } = await renderCard(page(), { journalTailSeq: 7 });
+    await screen.findByRole('region', { name: 'Alpaca option buying power' });
+    // A fresh card whose first read failed: no page, an alert, and a way to ask again.
+    read.mockRejectedValueOnce(new HttpErrorResponse({ status: 503, error: null }));
+    fixture.componentRef.setInput('broker', 'alpaca');
+    fixture.componentRef.setInput('sid', 'bot-2');
+    await fixture.whenStable();
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(read).toHaveBeenCalledTimes(2);
+
+    fixture.componentRef.setInput('journalTailSeq', 8);
+    await fixture.whenStable();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(3));
+    expect(await screen.findByRole('region', { name: 'Alpaca option buying power' })).toBeTruthy();
+  });
+
+  it('offers Try again on a failed first read', async () => {
+    const read = vi.fn<(target: unknown, sid: string) => Promise<OptionBuyingPowerChecks>>()
+      .mockRejectedValueOnce(new HttpErrorResponse({ status: 503, error: null }))
+      .mockResolvedValue(page());
+    await render(BotOptionBuyingPowerComponent, {
+      inputs: {
+        broker: 'alpaca', clerkId: 'clrk_spec0000000000000000aa', accountId: 'PA-1', sid: 'bot-1',
+        journalTailSeq: 7, review: vi.fn<Review>(), locked: false,
+      },
+      providers: [provideFleetDirectory(), { provide: BrokerV2PanelService, useValue: { getOptionBuyingPowerChecks: read } }],
+    });
+    await screen.findByRole('alert');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByRole('region', { name: 'Alpaca option buying power' })).toBeTruthy();
+    expect(read).toHaveBeenCalledTimes(2);
+  });
 });

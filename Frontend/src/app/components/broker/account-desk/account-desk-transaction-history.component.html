@@ -156,12 +156,12 @@
             <td class="request-cell">{{ row.request }}</td>
             <td>{{ row.execution }}</td>
             <td><span class="status-pill">{{ row.status }}</span></td>
-            <td>{{ row.origin | receiptLabel }}</td>
+            <td>@if (row.origin; as origin) { {{ origin | receiptLabel }} } @else { Not recorded }</td>
             <td class="numeric">
               @if (!row.feesReported) {
                 <span class="muted">Not reported</span>
               } @else {
-                {{ row.fee === null ? '—' : (row.fee | currency: 'USD') }}
+                {{ row.fee === null ? '—' : (row.fee | currency: 'USD' : 'symbol' : '1.2-6') }}
               }
             </td>
             <td class="evidence-cell">

@@ -43,6 +43,7 @@
   <app-journal-tail
     [evidencePage]="journalPage.hasValue() ? journalPage.value() : null"
     [loading]="journalPage.isLoading()"
+    [failed]="journalPage.error() !== undefined"
     (transactionSelected)="transactionSelected.emit($event)"
   />
 </div>
