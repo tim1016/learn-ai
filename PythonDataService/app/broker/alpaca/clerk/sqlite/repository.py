@@ -141,6 +141,10 @@ class HashChainBroken(ClerkSqliteError):
     """Startup check 8 (annex §9): a stored row's hash disagrees with its recomputation."""
 
 
+class DatabaseBehindMirror(ClerkSqliteError):
+    """Startup check 9 (annex §9): the mirror finalized sequences the database does not hold."""
+
+
 class ExecutionLeaseHeld(ClerkSqliteError):
     """Topology fence: another live process already holds this account's lease."""
 
