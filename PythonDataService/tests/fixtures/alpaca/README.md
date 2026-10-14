@@ -42,8 +42,10 @@ recordings`, run on a bundle the qualification runbook
 (`docs/runbooks/qualify-option-orders-on-paper.md`) tells how to make. They sit
 here beside `tests/fixtures/alpaca_documented/`, whose examples stay. The first
 set, `option_paper_recordings/` (runs of one bought SPY call: two on 2026-10-13
-and two on 2026-10-14, #3103), is read by `tests/broker/alpaca/test_paper_option_recordings.py`; its
-`attribution.md` files say which polls and which families were left out.
+and two on 2026-10-14, and three of a bull call spread on 2026-10-14: one bought,
+one bought and closed, and two bots' spreads held at once, #3103), is read by
+`tests/broker/alpaca/test_paper_option_recordings.py`; its `attribution.md`
+files say which polls and which families were left out.
 
 The `fill_visibility/` subdirectory is a different capture: the measured
 fill-to-cash visibility evidence for the live envelope's grace (#2487),
