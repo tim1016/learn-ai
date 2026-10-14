@@ -46,7 +46,7 @@ from app.research.golden_search.declarations import declaration_for, point_hash,
 from app.research.golden_search.exposure_rules import EXPOSURE_EXPLANATIONS, claim_for, exposure_state
 from app.research.golden_search.final_test import fit_for, fits_to_test, recorded_fits
 from app.research.golden_search.fold_charts import fold_charts
-from app.research.golden_search.guidance import params_sentence, research_weakness
+from app.research.golden_search.guidance import params_sentence, research_weakness, weakness_words
 from app.research.golden_search.models import (
     COMMANDS,
     RETAIN_KINDS,
@@ -981,7 +981,7 @@ async def _approve(conn: Any, row: StudyRow, body: Mapping[str, Any]) -> Command
     weakness = research_weakness(chosen["outcome"], exam["claim"], exam["exposure_state"]) + [item["code"] for item in chance_items]
     if weakness and not weak_ack:
         raise GoldenSearchRefusal(
-            "This evidence is weak (" + ", ".join(weakness) + "); approving needs your explicit acceptance of it.",
+            "This evidence is weak: " + weakness_words(exam, chosen, chance_items) + "; approving needs your explicit acceptance of it.",
             code="WEAKNESS_ACKNOWLEDGEMENT_REQUIRED",
             field="acknowledge_research_weakness",
         )

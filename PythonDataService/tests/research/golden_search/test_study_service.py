@@ -941,7 +941,8 @@ async def test_a_fit_that_failed_the_final_test_needs_the_written_acceptance_and
     # Both fits' final comparisons sit inside the fake landscape's noise, so the chance weakness rides beside
     # the exam codes — the passing fit's acknowledgement covers it (#3015).
     assert [item["code"] for item in fits["all_period"]["weakness"]] == ["CHANCE_WITHIN_NOISE"]
-    assert [item["code"] for item in fits["recent"]["weakness"]] == ["EXAM_DOES_NOT_MEET_RULES", "CHANCE_WITHIN_NOISE", "CHANCE_WITHIN_NOISE"]
+    # The comparison and the profitability are both inside the noise: one code, one acknowledgement naming both.
+    assert [item["code"] for item in fits["recent"]["weakness"]] == ["EXAM_DOES_NOT_MEET_RULES", "CHANCE_WITHIN_NOISE"]
     # The study reads by its strongest result until a fit is named.
     assert detail["exam_outcome"] == "meets_rules" and detail["guidance"]["headline"] == "Approve the settings you want to use"
 
