@@ -174,7 +174,16 @@ def build_start_program_seal(
         raise SignalProgramSealError(validation.explanation, next_step=validation.next_step)
 
     requested = binding.strategy_params or {}
-    validated = registration.param_schema.model_validate({**requested, "symbol": binding.symbol})
+    try:
+        validated = registration.param_schema.model_validate({**requested, "symbol": binding.symbol})
+    except ValidationError as exc:
+        # A typed refusal, so Start answers UNPROVEN instead of raising out of its decision.
+        first = exc.errors(include_url=False, include_context=False, include_input=False)[0]
+        where = ".".join(str(part) for part in first["loc"]) or "parameters"
+        raise SignalProgramSealError(
+            f"The bot's strategy parameters are not valid for {binding.strategy_key}: {where}: {first['msg']}",
+            next_step="Deploy the bot again with parameters the strategy accepts.",
+        ) from exc
     effective = validated.model_dump(mode="json")
     origins = parameter_origins or {}
     parameters: dict[str, ResolvedSignalParameter] = {}

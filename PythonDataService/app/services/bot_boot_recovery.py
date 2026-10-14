@@ -24,7 +24,7 @@ from app.engine.live.bot_lifecycle_state import (
     BotLifecycleStateCorruptError,
     BotLifecycleStateRepo,
 )
-from app.engine.live.desired_state import DesiredState, DesiredStateRepo
+from app.engine.live.desired_state import DesiredState, DesiredStateCorruptError, DesiredStateRepo
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_lifecycle_projection import (
     AlpacaLifecycleAuthorityUnavailableError,
@@ -440,7 +440,23 @@ class BotBootRecovery:
             return False
 
         desired_repo = self._desired_repo_for(strategy_instance_id)
-        desired_state = desired_repo.read_state()
+        try:
+            desired_state = desired_repo.read_state()
+        except DesiredStateCorruptError as exc:
+            # Control intent that cannot be read is never guessed at, and it is
+            # that bot's alone: the bot is left as its files say, its Start
+            # refuses on the same file, and the lane's other bots are still
+            # repaired and startable (ruling 7, #3159).
+            logger.warning(
+                "Boot sweep skipping a bot whose desired state is corrupt",
+                extra={
+                    "action": "boot_sweep_corrupt_desired_state",
+                    "strategy_instance_id": strategy_instance_id,
+                    "run_id": run_id,
+                    "path": str(exc.path),
+                },
+            )
+            return False
         if (
             record is not None
             and record.phase is BotLifecyclePhase.OFF_DUTY
