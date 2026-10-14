@@ -18,7 +18,7 @@ from app.broker.alpaca.clerk.active_authority import (
     primary_custody_world,
 )
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
-from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus
+from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus, ReconciliationVerdict
 from app.broker.alpaca.clerk.sqlite.account_eligibility import (
     AccountEligibilityCondition,
     account_eligibility_condition,
@@ -46,6 +46,11 @@ from app.schemas.clerk_custody import CustodyDiagnosis
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
+
+# The hold reasons a sweep itself raises: it found a broker order the account's
+# records cannot explain. ``UNKNOWN_HOLD`` is a cause this build cannot name, which
+# fails closed the same way. The other causes are not reconciliation findings.
+_SWEEP_FINDING_HOLD_REASONS = frozenset({"UNEXPLAINED_ORDER_HOLD", "UNKNOWN_HOLD"})
 
 
 def active_sqlite_facade(broker: str = "alpaca") -> SqliteAlpacaClerkFacade | None:
@@ -288,12 +293,7 @@ def sqlite_clerk_status(
         for operation in projection.operations
     )
     latest = projection.latest_reconciliation
-    if projection.uncertainties:
-        verdict = "stale"
-    elif hold is not None:
-        verdict = "unexplained_order"
-    else:
-        verdict = "clean"
+    verdict = _last_check_verdict(projection, last_clean_pass_at_ms=last_clean_pass_at_ms)
     checked_at_ms = max(
         (
             at_ms
@@ -333,6 +333,35 @@ def sqlite_clerk_status(
         # Derived from the id and the primary's world, never asserted (slice 4 / slice 7, R12).
         authority_kind=authority_kind_in_world(projection.account_id, _labelled_custody_world()),
     )
+
+
+def _last_check_verdict(
+    projection: ClerkProjection, *, last_clean_pass_at_ms: int | None
+) -> ReconciliationVerdict:
+    """What the account's last check found, for the card's "Last check against Alpaca" line.
+
+    The reconciliation's own outcome decides it, not whether something is held:
+    a stream-health or loss hold is raised by a channel or the loss envelope,
+    and says nothing about what a sweep found (#3217). Two things still fail
+    it closed: an open uncertainty is not proven, and an unexplained-order
+    hold (or one this build cannot name) is the sweep's own finding, kept
+    until reviewed. Otherwise the last attempt speaks: one that ended
+    ``STILL_UNKNOWN`` did not settle, unless a newer clean pass has since.
+    A resolved attempt, success or failure, is settled.
+    """
+    if projection.uncertainties:
+        return "stale"
+    if any(
+        hold_reason_for(active=True, stored_code=hold.reason_code) in _SWEEP_FINDING_HOLD_REASONS
+        for hold in projection.holds
+    ):
+        return "unexplained_order"
+    latest = projection.latest_reconciliation
+    if latest is None or latest.outcome != "STILL_UNKNOWN":
+        return "clean"
+    if last_clean_pass_at_ms is not None and last_clean_pass_at_ms >= latest.attempted_at_ms:
+        return "clean"
+    return "stale"
 
 
 def _operation_requires_reconciliation(operation: ProjectedOperation) -> bool:
