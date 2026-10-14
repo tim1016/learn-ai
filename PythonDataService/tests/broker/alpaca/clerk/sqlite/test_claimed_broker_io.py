@@ -10,10 +10,12 @@ import pytest
 from app.broker.alpaca.clerk.sqlite import claimed_broker_io
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 from app.broker.alpaca.clerk.sqlite.repository import (
+    ClaimLostAfterBrokerIO,
     ExecutionLeaseLost,
     ExecutionLeaseLostAfterBrokerIO,
     OperationClaimError,
 )
+from app.broker.contract.errors import BrokerUnavailable
 
 
 class _Repo:
@@ -172,18 +174,33 @@ async def test_a_claim_proven_lost_during_send_is_reported_as_post_broker_io_los
     assert trade.submitted == ["c-1"]
 
 
+class _UnavailableTrade(_Trade):
+    """A broker that cannot be reached, so what the call did there is unknown."""
+
+    async def submit(self, leg: Any, *, client_order_id: str) -> Any:
+        await super().submit(leg, client_order_id=client_order_id)
+        raise BrokerUnavailable("response lost", broker="alpaca")
+
+    async def cancel(self, broker_order_id: str) -> None:
+        await super().cancel(broker_order_id)
+        raise BrokerUnavailable("response lost", broker="alpaca")
+
+
 async def test_a_claim_lost_after_a_submit_names_the_broker_call_that_already_happened() -> None:
     trade = _Trade()
-    with pytest.raises(ExecutionLeaseLostAfterBrokerIO):
+    with pytest.raises(ClaimLostAfterBrokerIO) as lost:
         await _io(_Repo(claim_gone_from_call=2), trade).submit(object(), client_order_id="c-1")
 
-    # The broker answered; a plain claim error would read as "another owner holds it, defer".
+    # The broker answered, so a plain claim error ("nothing was sent") would be untrue. The claim
+    # is still not the lease: the sweep defers such an effect, it does not fail its pass over it.
     assert trade.submitted == ["c-1"]
+    assert isinstance(lost.value, OperationClaimError)
+    assert not isinstance(lost.value, ExecutionLeaseLost)
 
 
 async def test_a_claim_lost_after_a_cancel_names_the_broker_call_too() -> None:
     trade = _Trade()
-    with pytest.raises(ExecutionLeaseLostAfterBrokerIO):
+    with pytest.raises(ClaimLostAfterBrokerIO):
         await _io(_Repo(claim_gone_from_call=2), trade).cancel("b-1", order_ref="c-1")
 
     assert trade.cancelled == ["b-1"]
@@ -194,8 +211,52 @@ async def test_a_claim_lost_before_the_broker_is_called_is_the_plain_claim_error
     with pytest.raises(OperationClaimError) as lost:
         await _io(_Repo(claim_gone_from_call=1), trade).submit(object(), client_order_id="c-1")
 
-    assert not isinstance(lost.value, ExecutionLeaseLostAfterBrokerIO)
+    assert not isinstance(lost.value, ClaimLostAfterBrokerIO)
     assert trade.submitted == []
+
+
+@pytest.mark.parametrize("call", ["submit", "cancel"])
+async def test_a_claim_lost_after_a_broker_error_still_names_the_broker_call(call: str) -> None:
+    """A transport error leaves the outcome unknown; it must not read as "nothing was sent"."""
+    trade = _UnavailableTrade()
+    io = _io(_Repo(claim_gone_from_call=2), trade)
+
+    with pytest.raises(ClaimLostAfterBrokerIO):
+        if call == "submit":
+            await io.submit(object(), client_order_id="c-1")
+        else:
+            await io.cancel("b-1", order_ref="c-1")
+
+
+@pytest.mark.parametrize("call", ["submit", "cancel"])
+async def test_a_lease_lost_after_a_broker_error_still_names_the_broker_call(call: str) -> None:
+    trade = _UnavailableTrade()
+    io = _io(_Repo(lose_on_call=2), trade)
+
+    with pytest.raises(ExecutionLeaseLostAfterBrokerIO):
+        if call == "submit":
+            await io.submit(object(), client_order_id="c-1")
+        else:
+            await io.cancel("b-1", order_ref="c-1")
+
+
+async def test_a_claim_proven_lost_during_a_send_is_the_claim_error_not_a_lease_loss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(claimed_broker_io, "_SEND_CLAIM_RENEWAL_S", 0.01)
+    repo = _Repo(claim_gone_from_call=2)
+    trade = _HangingTrade()
+    task = asyncio.create_task(_io(repo, trade).submit(object(), client_order_id="c-1"))
+    await trade.in_flight.wait()
+    for _ in range(200):
+        if repo.calls >= 2:
+            break
+        await asyncio.sleep(0.005)
+    trade.release.set()
+
+    with pytest.raises(ClaimLostAfterBrokerIO) as lost:
+        await task
+    assert not isinstance(lost.value, ExecutionLeaseLost)
 
 
 class _HangingTrade(_Trade):
@@ -204,16 +265,18 @@ class _HangingTrade(_Trade):
     def __init__(self) -> None:
         super().__init__()
         self.in_flight = asyncio.Event()
+        self.release = asyncio.Event()
 
     async def submit(self, leg: Any, *, client_order_id: str) -> Any:
         self.submitted.append(client_order_id)
         self.in_flight.set()
-        await asyncio.Event().wait()
+        await self.release.wait()
+        return object()
 
     async def cancel(self, broker_order_id: str) -> None:
         self.cancelled.append(broker_order_id)
         self.in_flight.set()
-        await asyncio.Event().wait()
+        await self.release.wait()
 
 
 @pytest.fixture

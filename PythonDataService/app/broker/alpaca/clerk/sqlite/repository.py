@@ -164,14 +164,15 @@ class ExecutionLeaseLost(ClerkSqliteError):
 
 
 class ExecutionLeaseLostAfterBrokerIO(ExecutionLeaseLost):
-    """The lease was found lost only *after* a broker call succeeded.
+    """The lease was found lost only *after* a broker call was made.
 
     Raised by ``ClaimedBrokerIO``'s post-I/O renewal in place of the base
     class. The distinction is the whole point: a lease lost before any
     mutation means "nothing applied" (the key is released and a retry is
     honest), but here an order may already be placed or cancelled without
     its receipt folded, so the outcome is unknown -- the key is burned and
-    no retry is offered.
+    no retry is offered. A claim found lost at that point is
+    :class:`ClaimLostAfterBrokerIO`.
     """
 
 
@@ -190,6 +191,19 @@ class RepositoryPoisoned(ClerkSqliteError):
 
 class OperationClaimError(ClerkSqliteError):
     """Scope D: an ``effect_operations`` claim attempt found a live owner."""
+
+
+class ClaimLostAfterBrokerIO(OperationClaimError):
+    """The operation claim was found lost only *after* a broker call was made.
+
+    The claim-side twin of :class:`ExecutionLeaseLostAfterBrokerIO`: an order
+    may already be placed or cancelled with no receipt folded, so the outcome
+    is unknown and a panel action burns its key. It stays an
+    ``OperationClaimError`` and is no ``ExecutionLeaseLost``: the account's
+    lease is healthy, the effect stays non-terminal, and every sweep step that
+    defers an effect whose claim is contended defers this one the same way --
+    the next pass's exact lookup folds what the broker holds.
+    """
 
 
 class ClerkSqliteRepository(

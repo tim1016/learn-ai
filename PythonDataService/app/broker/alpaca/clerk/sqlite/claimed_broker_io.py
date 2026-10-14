@@ -38,6 +38,7 @@ from app.broker.alpaca.clerk.sqlite.option_order_evidence import (
 )
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain, trade_port_folds_simulated_evidence
 from app.broker.alpaca.clerk.sqlite.repository import (
+    ClaimLostAfterBrokerIO,
     ClerkSqliteRepository,
     ExecutionLeaseLost,
     ExecutionLeaseLostAfterBrokerIO,
@@ -57,10 +58,16 @@ logger = logging.getLogger(__name__)
 
 def _lost_after_broker_io(
     lost: ExecutionLeaseLost | OperationClaimError, message: str
-) -> ExecutionLeaseLostAfterBrokerIO:
-    """The error for a lease, or a claim, found lost once the broker had acted."""
-    account_id = lost.account_id if isinstance(lost, ExecutionLeaseLost) else None
-    return ExecutionLeaseLostAfterBrokerIO(message, account_id=account_id)
+) -> ExecutionLeaseLostAfterBrokerIO | ClaimLostAfterBrokerIO:
+    """The error for a lease, or a claim, found lost once a broker call was made.
+
+    A lease loss stays a lease loss. A claim loss stays an
+    ``OperationClaimError``: the sweep defers such an effect and moves on to
+    the next, and it is no reason to fail the pass.
+    """
+    if isinstance(lost, ExecutionLeaseLost):
+        return ExecutionLeaseLostAfterBrokerIO(message, account_id=lost.account_id)
+    return ClaimLostAfterBrokerIO(message)
 
 
 @dataclass(frozen=True)
@@ -83,12 +90,12 @@ class ClaimedBrokerIO:
             )
 
     def _renew_after_io(self) -> None:
-        """The broker already acted. A lease or a claim lost here is not
+        """A broker call was made. A lease or a claim lost here is not
         "nothing applied": the response cannot be folded (folding is itself a
         mutation the lost lease refuses), so the caller must report the
         outcome unknown rather than release its key and invite a retry. A
         plain ``OperationClaimError`` would read as "another owner holds it,
-        defer", which is only true of a claim never acquired."""
+        nothing was sent", which is only true of a claim never acquired."""
         try:
             self._renew()
         except (ExecutionLeaseLost, OperationClaimError) as lost:
@@ -116,7 +123,8 @@ class ClaimedBrokerIO:
             )
         except (ExecutionLeaseLost, OperationClaimError):
             logger.error(
-                "alpaca broker call was cancelled after it lost its claim; its unknown outcome is not folded",
+                "alpaca broker call was cancelled after its lease or operation claim was lost; "
+                "its unknown outcome is not folded",
                 extra={
                     "action": "claimed_io_cancelled_unfolded",
                     "effect_operation_id": self.effect_operation_id,
@@ -178,7 +186,8 @@ class ClaimedBrokerIO:
                 )
                 raise
             except BrokerError:
-                self._renew()
+                # The call was made, and a transport error leaves its outcome unknown.
+                self._renew_after_io()
                 raise
             self._renew_after_io()
             return observed
@@ -323,7 +332,8 @@ class ClaimedBrokerIO:
             )
             raise
         except BrokerError:
-            self._renew()
+            # The call was made, and a transport error leaves its outcome unknown.
+            self._renew_after_io()
             raise
         self._renew_after_io()
 
