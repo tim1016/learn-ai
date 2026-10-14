@@ -373,6 +373,10 @@ async def get_portfolio_history_proof(
         raise history_result
     history = history_result
     if isinstance(positions_result, BaseException):
+        logger.warning(
+            "Portfolio history proof unavailable: positions read failed",
+            extra={"action": "portfolio_history_proof_unavailable", "failure_class": type(positions_result).__name__},
+        )
         return _history_without_proof(
             history,
             "Current positions could not be read, so this period cannot be checked against the recorded trades.",
@@ -380,11 +384,19 @@ async def get_portfolio_history_proof(
     positions = positions_result
     sqlite = active_sqlite_facade(broker)
     if sqlite is None:
+        logger.warning(
+            "Portfolio history proof unavailable: Clerk authority missing",
+            extra={"action": "portfolio_history_proof_unavailable", "failure_class": "ClerkAuthorityMissing"},
+        )
         return _history_without_proof(
             history,
             "The Clerk's order records are not available on this account right now.",
         )
     if not history.timestamps:
+        logger.warning(
+            "Portfolio history proof unavailable: empty broker history",
+            extra={"action": "portfolio_history_proof_unavailable", "failure_class": "EmptyBrokerHistory"},
+        )
         return _history_without_proof(
             history,
             "Alpaca reported no account values for this period.",
@@ -398,12 +410,20 @@ async def get_portfolio_history_proof(
             marks=current_position_marks(positions),
             position_quantities={position.symbol.upper(): position.quantity for position in positions},
         )
-    except (ClerkTransactionProjectionUnavailable, EconomicProjectionError):
+    except (ClerkTransactionProjectionUnavailable, EconomicProjectionError) as exc:
+        logger.warning(
+            "Portfolio history proof unavailable: Clerk records read failed",
+            extra={"action": "portfolio_history_proof_unavailable", "failure_class": type(exc).__name__},
+        )
         return _history_without_proof(
             history,
             "The Clerk's trade records could not be read for this period.",
         )
     if attribution is None:
+        logger.warning(
+            "Portfolio history proof unavailable: Clerk records changed",
+            extra={"action": "portfolio_history_proof_unavailable", "failure_class": "ChangedClerkRecords"},
+        )
         return _history_without_proof(
             history,
             "The Clerk's records changed while this period was checked. Refresh to retry.",

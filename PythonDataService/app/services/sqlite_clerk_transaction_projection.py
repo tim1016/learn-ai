@@ -72,6 +72,14 @@ class ExternalOrderAcknowledgementNotFound(ValueError):
     """The active SQLite authority has no requested external-order observation."""
 
 
+class ClerkTransactionAccountNotActive(ValueError):
+    """The requested account is outside this Clerk's active custody."""
+
+
+class InvalidTransactionHistoryCursor(ValueError):
+    """The supplied history cursor is malformed or belongs to another scope."""
+
+
 def sqlite_transaction_history(
     *,
     account_id: str,
@@ -129,7 +137,7 @@ def sqlite_transaction_history(
         feed_headline="SQLite custody projection live",
         feed_detail=(
             "This operation-first page comes directly from the active Account Clerk's "
-            "materialized folds; the retired Postgres projection was not consulted."
+            "materialized folds."
         ),
         high_water_journal_seq=page.high_water_sequence,
         lag_records=0,
@@ -336,7 +344,7 @@ def _active_clerk(account_id: str) -> SqliteAlpacaClerkFacade | None:
     if not account_route_matches_custody(
         account_id, clerk.account_id, shadow=runtime.authority_kind == "shadow",
     ):
-        raise ValueError("Requested account is not the active SQLite authority")
+        raise ClerkTransactionAccountNotActive("Requested account is not the active SQLite authority")
     return clerk
 
 
@@ -469,7 +477,7 @@ def _all_transaction_history(
         feed_headline="SQLite custody projection live",
         feed_detail=(
             "This page is a single SQLite keyset projection of bot operations and external "
-            "observations; retired Postgres and broker order-history reads were not consulted."
+            "observations."
         ),
         high_water_journal_seq=high_water_sequence,
         lag_records=0,
@@ -694,7 +702,7 @@ def _decode_all_history_cursor(
             raise ValueError("cursor scope or shape is invalid")
         return recorded_at_ms, source, identity
     except (KeyError, TypeError, ValueError, UnicodeDecodeError) as exc:
-        raise ValueError("transaction history cursor is invalid") from exc
+        raise InvalidTransactionHistoryCursor("transaction history cursor is invalid") from exc
 
 
 def _external_summary_row(

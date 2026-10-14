@@ -453,8 +453,9 @@ _OPERATOR_IMPACTS: dict[str, str] = {
 }
 # What the owner does about a hold only an acknowledgement ends, for a bot's hold and for the account's.
 _ACKNOWLEDGE_IT = (
-    "Compare {whose} positions with the broker's. When they agree, acknowledge the notice: the Clerk then "
-    "compares them once more itself, and refuses while they differ."
+    "Compare {whose} positions with the broker's. When they agree, use the operator API "
+    "POST .../option-event-holds/acknowledge for this account or bot. The Clerk compares "
+    "the positions again and refuses the acknowledgement while they differ."
 )
 if set(_HOLD_COPY) != set(OPTION_EVENT_HOLD_REASON_CODES):
     # A hold with no words of its own could not be raised at all.
