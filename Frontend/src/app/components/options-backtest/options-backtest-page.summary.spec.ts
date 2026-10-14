@@ -431,4 +431,46 @@ describe('the read-back beside the leg cards', () => {
     expect(pane.scrollTop).toBe(360);
     expect(pageScroll).not.toHaveBeenCalled();
   });
+
+  it('shows a leg that took the keyboard while the read-back was being refreshed once the refreshed sentences are there', async () => {
+    let hold = false;
+    const gate: { release: (() => void) | null } = { release: null };
+    const service = fakeService(vi, {
+      describe: vi.fn((body: unknown) =>
+        hold
+          ? new Promise<SetupSummary>((resolve) => {
+              gate.release = () => resolve(sentencesFor(body as SetupRequest));
+            })
+          : Promise.resolve(sentencesFor(body as SetupRequest)),
+      ),
+    });
+    await renderPage(service);
+    addLeg('Call');
+    addLeg('Put');
+    const summary = await screen.findByRole('region', { name: 'In plain words' });
+    await waitFor(() => expect(blocks(summary)).toHaveLength(2));
+    const pane = summary.closest<HTMLElement>('.rail__read');
+    if (pane === null) throw new Error('the read-back has no scrolling pane');
+    Object.defineProperty(pane, 'scrollHeight', { value: 1000, configurable: true });
+    Object.defineProperty(pane, 'clientHeight', { value: 200, configurable: true });
+    // jsdom has no layout: the pane is 200px high and the second leg's box lies below its edge.
+    const geometry = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      if (this === pane) return { top: 0, bottom: 200 } as DOMRect;
+      if (this instanceof HTMLElement && this.dataset['legId'] === 'put') return { top: 500, bottom: 560 } as DOMRect;
+      return { top: 0, bottom: 0 } as DOMRect;
+    });
+    try {
+      hold = true;
+      typeInto('Slippage (percent)', '0.5');
+      await waitFor(() => expect(blocks(summary)).toHaveLength(0));
+
+      fireEvent.focusIn(screen.getByRole('switch', { name: 'Leg 2 stop loss' }));
+      expect(pane.scrollTop).toBe(0);
+      gate.release?.();
+
+      await waitFor(() => expect(pane.scrollTop).toBe(360));
+    } finally {
+      geometry.mockRestore();
+    }
+  });
 });
