@@ -272,3 +272,42 @@ async def test_a_parent_fill_frame_with_no_execution_books_nothing_and_the_next_
     assert multi_paper.outcome(parent).standing is EntryStanding.FILLED
     assert sorted(multi_paper.held().values()) == [1.0, 1.0]
     assert multi_paper.repo.active_uncertainties() == []
+
+
+async def test_each_leg_credited_by_its_execution_is_not_credited_again_by_the_lookup_and_the_fee_population_is_complete(
+    multi_paper: SeveralLegsPaper,
+) -> None:
+    """#3103: the legs of a filled parent hold exact executions, so no cumulative is left to explain."""
+    from app.broker.alpaca.clerk.sqlite import fee_evidence
+
+    parent = await multi_paper.resting(units=1)
+    multi_paper.venue.legs_fill(parent, (1, 1))
+    children = multi_paper.venue.option_orders[parent]["legs"]
+    sink = SqliteTradeUpdateEvidenceSink(repo=multi_paper.repo, intake=multi_paper.clerk.intake, reconciler=multi_paper.clerk)
+    for number, child in enumerate(children, start=1):
+        disposition = await sink.record_lifecycle_event(
+            client_order_id=child["client_order_id"],
+            event=adapter.from_alpaca_trade_update(
+                {
+                    "event": "fill", "timestamp_ms": multi_paper.clock(), "execution_id": f"leg-{number}-execution",
+                    "price": "1.5", "qty": "1", "order": child,
+                }
+            ),
+            event_key=f"exec:leg-{number}-execution",
+            order=adapter.from_alpaca_order(child),
+            recovery_source=None,
+            recovery_window_limit=None,
+        )
+        assert disposition == "order_event"
+
+    await multi_paper.pass_()
+
+    sources = {
+        fill["evidence_source"]
+        for leg in multi_paper.repo.order_legs(parent)
+        for fill in multi_paper.repo.fills_for_order(leg.order_ref)
+    }
+    assert "cumulative_recovery" not in sources
+    assert len([f for leg in multi_paper.repo.order_legs(parent) for f in multi_paper.repo.fills_for_order(leg.order_ref)]) == 2
+    _, explained = fee_evidence._witnessed_executions(multi_paper.repo._conn)
+    assert explained is True

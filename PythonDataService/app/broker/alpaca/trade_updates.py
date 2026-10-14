@@ -709,6 +709,49 @@ class TradeUpdatesConsumer:
         # this terminal order is recognized as stale regardless of its key.
         if order_id and _is_terminal(order) and terminal_state is not None:
             self._terminal_orders.setdefault(order_id, set()).add(terminal_state)
+        if (
+            not from_gap_reconcile
+            and event.event_type in {"fill", "partial_fill"}
+            and adapter.is_a_multi_leg_parents_fill(data)
+        ):
+            await self._credit_the_legs_of_a_parents_fill(data)
+
+    async def _credit_the_legs_of_a_parents_fill(self, data: dict[str, Any]) -> None:
+        """A several-leg parent's fill frame names each leg's execution; each is that leg's own exact fill (#3103).
+
+        Alpaca sends no frame of its own for a leg, so without this the legs hold only the cumulative
+        the REST lookup credits: it names no execution, the account's fee population stays incomplete
+        and every entry on the account is refused. Each leg's execution goes through the one handler
+        a single-leg order's frame does (its own dedup key is the execution id).
+        """
+        executions = data.get("legs")
+        order = data.get("order")
+        if not isinstance(executions, list) or not isinstance(order, dict):
+            return
+        leg_orders = {
+            str(leg.get("id")): leg for leg in (order.get("legs") or []) if isinstance(leg, dict) and leg.get("id")
+        }
+        for execution in executions:
+            leg_order = leg_orders.get(str(execution.get("order_id"))) if isinstance(execution, dict) else None
+            if leg_order is None:
+                self._counters.parse_errors += 1
+                self._mark_evidence_health(False)
+                logger.warning(
+                    "alpaca trade_updates parent fill names a leg execution with no leg order",
+                    extra={"action": "trade_updates_leg_execution_unmapped"},
+                )
+                continue
+            filled_all = adapter.opt_float(leg_order.get("filled_qty")) == adapter.opt_float(leg_order.get("qty"))
+            await self._handle_trade_update(
+                {
+                    "event": "fill" if filled_all else "partial_fill",
+                    "timestamp": execution.get("timestamp") or data.get("timestamp"),
+                    "execution_id": execution.get("execution_id"),
+                    "price": execution.get("price"),
+                    "qty": execution.get("qty"),
+                    "order": leg_order,
+                }
+            )
 
     # ── Reconnect gap-reconcile ──────────────────────────────────────────────
 

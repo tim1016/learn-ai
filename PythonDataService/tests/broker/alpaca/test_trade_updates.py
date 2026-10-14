@@ -800,28 +800,58 @@ async def test_malformed_embedded_order_is_parse_error_not_stream_abort(tmp_path
     assert len(events) == 1
 
 
-async def test_a_multi_leg_parents_fill_is_not_a_parse_error_and_leaves_the_evidence_healthy(tmp_path: Path) -> None:
-    """The first several-leg order on Paper (#3103): its parent's ``fill`` has legs, not an execution of its own.
+async def test_a_multi_leg_parents_fill_credits_each_leg_its_own_exact_execution(tmp_path: Path) -> None:
+    """#3103: Alpaca sends no frame of its own for a leg; the parent's fill frame names each leg's execution.
 
-    It was refused as a fill without an execution_id, counted a parse error and marked the stream's evidence
-    unhealthy, which raised the account's stream-health hold and blocked the spread's exit.
+    Without it the legs hold only the cumulative the REST lookup credits, which names no execution:
+    the account's fee population stays incomplete and every entry on the account is refused.
     """
     frame = _load_frames()[2]
-    assert frame["data"]["event"] == "fill"
+    parent = frame["data"]["order"]
+    parent["order_class"] = "mleg"
+    parent["symbol"] = ""
+    parent["legs"] = [
+        {**parent, "id": f"leg-order-{n}", "client_order_id": f"{_OWNED_COID}~{n}", "symbol": symbol, "side": side,
+         "order_class": "simple", "legs": None, "qty": "1", "filled_qty": "1", "status": "filled"}
+        for n, (symbol, side) in enumerate((("SPY261016C00771000", "buy"), ("SPY261016C00776000", "sell")), start=1)
+    ]
     frame["data"].pop("execution_id", None)
     frame["data"]["legs"] = [
-        {"execution_id": "exec-buy-leg", "qty": "1", "price": "3.31", "symbol": "SPY261016C00771000"},
-        {"execution_id": "exec-sell-leg", "qty": "1", "price": "1.18", "symbol": "SPY261016C00776000"},
+        {"execution_id": "exec-buy-leg", "qty": "1", "price": "3.31", "order_id": "leg-order-1",
+         "symbol": "SPY261016C00771000", "timestamp": "2026-10-14T15:59:03.721579799Z"},
+        {"execution_id": "exec-sell-leg", "qty": "1", "price": "1.18", "order_id": "leg-order-2",
+         "symbol": "SPY261016C00776000", "timestamp": "2026-10-14T15:59:03.721579799Z"},
     ]
-    frame["data"]["order"]["order_class"] = "mleg"
-    frame["data"]["order"]["symbol"] = ""
     consumer, clerk, _ = await _consumer(tmp_path, [frame])
     await _warm(clerk)
 
     await consumer.run()
 
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    exact = [
+        (e.event.execution_id, e.event.price, e.event.quantity, e.broker_order.symbol)
+        for e in entries
+        if getattr(e.event, "execution_id", None) is not None
+    ]
+    assert exact == [("exec-buy-leg", 3.31, 1.0, "SPY261016C00771000"), ("exec-sell-leg", 1.18, 1.0, "SPY261016C00776000")]
     assert consumer.counters.parse_errors == 0
     assert consumer.evidence_health.healthy is True
+
+
+async def test_a_leg_execution_that_names_no_leg_order_is_a_parse_error_not_a_credit(tmp_path: Path) -> None:
+    frame = _load_frames()[2]
+    frame["data"].pop("execution_id", None)
+    frame["data"]["order"]["order_class"] = "mleg"
+    frame["data"]["order"]["symbol"] = ""
+    frame["data"]["order"]["legs"] = []
+    frame["data"]["legs"] = [{"execution_id": "orphan", "qty": "1", "price": "1", "order_id": "no-such-leg"}]
+    consumer, clerk, _ = await _consumer(tmp_path, [frame])
+    await _warm(clerk)
+
+    await consumer.run()
+
+    assert consumer.counters.parse_errors == 1
+    assert consumer.evidence_health.healthy is False
 
 
 async def test_unmappable_frame_degrades_gate_health_until_valid_frame(
