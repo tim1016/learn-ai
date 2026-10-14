@@ -797,6 +797,8 @@ class PolygonClientService:
         self,
         underlying_asset: str,
         expiration_ms: int | None = None,
+        expiration_ms_gte: int | None = None,
+        expiration_ms_lte: int | None = None,
     ) -> dict[str, Any]:
         """Fetch snapshot of options chain for an underlying asset.
 
@@ -805,21 +807,37 @@ class PolygonClientService:
             expiration_ms: Filter to only this expiry, as the anchor instant
                            (16:00 New York time on the expiry date, ADR 0022 (i)).
                            Defaults to today's listed expiry if not specified.
+            expiration_ms_gte: Inclusive lower bound of a window of expiries, as an
+                           anchor instant. Replaces the single-expiry default.
+            expiration_ms_lte: Inclusive upper bound of that window, likewise.
+                           A window and ``expiration_ms`` are not combined.
         """
         try:
-            # Default to today's ET date to avoid fetching thousands of contracts
-            expiration_date = (
-                option_expiry_date(expiration_ms).isoformat() if expiration_ms is not None else et_date_at_ms(now_ms_utc()).isoformat()
-            )
+            if expiration_ms is not None and (expiration_ms_gte is not None or expiration_ms_lte is not None):
+                raise ValueError("pass one expiry or a window of expiries, not both")
 
-            logger.info(f"Fetching options chain snapshot for {underlying_asset}, expiration={expiration_date}")
+            # A window when asked for; else one expiry, defaulting to today's ET
+            # date to avoid fetching thousands of contracts.
+            expiry_filter: dict[str, str] = {}
+            if expiration_ms_gte is not None:
+                expiry_filter["expiration_date.gte"] = option_expiry_date(expiration_ms_gte).isoformat()
+            if expiration_ms_lte is not None:
+                expiry_filter["expiration_date.lte"] = option_expiry_date(expiration_ms_lte).isoformat()
+            if not expiry_filter:
+                expiry_filter["expiration_date"] = (
+                    option_expiry_date(expiration_ms) if expiration_ms is not None else et_date_at_ms(now_ms_utc())
+                ).isoformat()
+
+            logger.info(f"Fetching options chain snapshot for {underlying_asset}, expiration={expiry_filter}")
 
             contracts = []
             underlying_info = None
 
-            params: dict[str, Any] = {}
-            if expiration_date:
-                params["expiration_date"] = expiration_date
+            params: dict[str, Any] = dict(expiry_filter)
+            if "expiration_date" not in expiry_filter:
+                # A window holds thousands of contracts and the vendor pages at 10
+                # unless told otherwise; 250 is its largest page.
+                params["limit"] = 250
 
             for snapshot in self.client.list_snapshot_options_chain(
                 underlying_asset=underlying_asset,

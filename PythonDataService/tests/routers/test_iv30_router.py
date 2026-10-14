@@ -243,3 +243,63 @@ class TestPolygonFailureModes:
                 "/api/edge/iv30/vix-style", json={"symbol": "SPY"}
             )
             assert resp.status_code == 502
+
+
+@pytest.fixture
+def vendor_chain(monkeypatch):
+    """The route's real client, over a fake SDK that filters expiries as the vendor does (#3221).
+
+    The chain lists expiries 21..42 days out, which straddle 30, and one at 120 days that
+    no IV30 needs.
+    """
+    from app.routers import iv30 as iv30_router_module
+    from app.services.rate_dividend_service import RateAndDividend
+    from tests._helpers.polygon_snapshot_sdk import VendorFilteringSnapshotSdk
+
+    spot, sigma, rate = 591.0, 0.20, 0.045
+    contracts = _bs_chain_contracts(
+        spot=spot, sigma=sigma, rate=rate, asof=datetime.now(tz=UTC),
+        expiry_days=[21, 28, 35, 42, 120], strikes=[float(k) for k in range(540, 651, 5)],
+    )
+    monkeypatch.setattr(
+        iv30_router_module.polygon_client, "client", VendorFilteringSnapshotSdk(contracts, spot=spot)
+    )
+    with patch(
+        "app.routers.iv30.get_rate_and_dividend",
+        return_value=RateAndDividend(
+            rate=rate, dividend_yield=0.012, source_rate="FRED", source_dividend="Polygon TTM"
+        ),
+    ):
+        yield {"sigma": sigma}
+
+
+class TestLiveRoutesAgainstAVendorThatFiltersExpiries:
+    """The routes used to ask for today's expiry only, which the pairing drops: 502 "got 0"."""
+
+    async def test_vix_style_finds_the_straddle_around_30_days(self, client, vendor_chain):
+        resp = await client.post("/api/edge/iv30/vix-style", json={"symbol": "SPY", "target_calendar_days": 30})
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["expiries_used_calendar_days"] == [28, 35]
+        assert abs(body["iv30_act365"] - vendor_chain["sigma"]) < 0.01
+
+    async def test_parametric_finds_the_straddle_around_30_days(self, client, vendor_chain):
+        resp = await client.post("/api/edge/iv30/parametric", json={"symbol": "SPY", "target_calendar_days": 30})
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert {28, 35} <= set(body["expiries_used_calendar_days"])
+        assert abs(body["iv30_act365"] - vendor_chain["sigma"]) < 0.01
+
+    async def test_a_lower_case_symbol_is_the_upper_case_ticker(self, client, vendor_chain):
+        resp = await client.post("/api/edge/iv30/vix-style", json={"symbol": " spy ", "target_calendar_days": 30})
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["symbol"] == "SPY"
+
+    @pytest.mark.parametrize("symbol", ["", "../SPY", "SPY/QQQ", "A" * 13])
+    async def test_a_symbol_that_is_not_a_ticker_is_a_422(self, client, symbol):
+        resp = await client.post("/api/edge/iv30/vix-style", json={"symbol": symbol})
+
+        assert resp.status_code == 422

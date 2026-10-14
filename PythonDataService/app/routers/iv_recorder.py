@@ -16,8 +16,9 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from app.schemas.broker_bots import normalized_symbol
 from app.services.iv_recorder import (
     SLOT_CHOICES,
     get_iv_store,
@@ -38,6 +39,12 @@ class SnapshotRequest(BaseModel):
     ticker: str = Field(..., min_length=1)
     slot: str = Field(..., description=f"One of {SLOT_CHOICES}")
     target_calendar_days: int = Field(30, ge=1, le=180)
+
+    @field_validator("ticker", mode="before")
+    @classmethod
+    def _normalize_ticker(cls, value: object) -> object:
+        # The ticker names a store file, so ``spy`` must not become a second history beside ``SPY``.
+        return normalized_symbol(value) if isinstance(value, str) else value
 
 
 class RecordedSnapshotItem(BaseModel):

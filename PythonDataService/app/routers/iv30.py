@@ -20,18 +20,19 @@ UI can show the inputs that drove the number.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.engine.edge.features_realtime.iv30_constructor import iv30_atm_50d
-from app.options.expiry import option_expiry_date
+from app.options.expiry import option_expiry_anchor_ms, option_expiry_date
+from app.schemas.broker_bots import normalized_symbol
 from app.services.polygon_client import PolygonClientService
 from app.services.rate_dividend_service import RateAndDividend, get_rate_and_dividend
 from app.utils.session_anchors import et_date_at_ms
-from app.utils.timestamps import to_ms_utc
+from app.utils.timestamps import now_ms_utc, to_ms_utc
 from app.volatility.iv_provenance import IvProvenance
 from app.volatility.price_normalization import (
     NormalizedOptionPrice,
@@ -59,6 +60,11 @@ class Iv30LiveRequest(BaseModel):
         False,
         description="If True, response includes per-strike contributions for the VIX-style route.",
     )
+
+    @field_validator("symbol", mode="before")
+    @classmethod
+    def _normalize_symbol(cls, value: object) -> object:
+        return normalized_symbol(value) if isinstance(value, str) else value
 
 
 class IvProvenancePayload(BaseModel):
@@ -180,6 +186,31 @@ def _rate_and_dividend(req: Iv30LiveRequest, spot: float) -> RateAndDividend:
     return rd
 
 
+# How far past the target the live snapshot reaches. A monthly-only underlying lists
+# an expiry every 28 to 35 days, so this keeps the first expiry above the target in it.
+_STRADDLE_REACH_DAYS = 35
+
+
+def snapshot_around_target(
+    polygon: PolygonClientService,
+    symbol: str,
+    target_calendar_days: int,
+    asof: datetime | None = None,
+) -> dict:
+    """The live chain over the expiries that can straddle ``target_calendar_days``.
+
+    The client's default is today's single expiry, which the pairing drops (0 days), so
+    every live IV30 answered "got 0" expiries (#3221). This asks for the window from
+    tomorrow to the target plus ``_STRADDLE_REACH_DAYS`` instead.
+    """
+    today = et_date_at_ms(to_ms_utc(asof) if asof is not None else now_ms_utc())
+    return polygon.list_snapshot_options_chain(
+        underlying_asset=symbol,
+        expiration_ms_gte=option_expiry_anchor_ms(today + timedelta(days=1)),
+        expiration_ms_lte=option_expiry_anchor_ms(today + timedelta(days=target_calendar_days + _STRADDLE_REACH_DAYS)),
+    )
+
+
 # ── Routes ──────────────────────────────────────────────────────────────────
 
 
@@ -192,7 +223,7 @@ async def iv30_vix_style(req: Iv30LiveRequest) -> Iv30LiveResponse:
     called against SPY. The provenance object reports
     ``variance_contribution_synthetic ≈ 0`` and ``opra_mid`` ≈ 100% mix.
     """
-    snapshot = polygon_client.list_snapshot_options_chain(underlying_asset=req.symbol)
+    snapshot = snapshot_around_target(polygon_client, req.symbol, req.target_calendar_days)
     underlying = snapshot.get("underlying") or {}
     contracts = snapshot.get("contracts") or []
 
@@ -236,7 +267,7 @@ async def iv30_vix_style(req: Iv30LiveRequest) -> Iv30LiveResponse:
         dividend_source=rd.source_dividend,
         expiries_used_calendar_days=[t1_days, t2_days],
         iv_provenance=_provenance_to_payload(prov),
-        snapshot_ts_ms=int(asof.timestamp() * 1000),
+        snapshot_ts_ms=to_ms_utc(asof),
     )
 
 
@@ -250,7 +281,7 @@ async def iv30_parametric(req: Iv30LiveRequest) -> Iv30LiveResponse:
     ATM legs have real quotes, with ``strike_coverage_score = 0`` because
     no wing is sampled.
     """
-    snapshot = polygon_client.list_snapshot_options_chain(underlying_asset=req.symbol)
+    snapshot = snapshot_around_target(polygon_client, req.symbol, req.target_calendar_days)
     underlying = snapshot.get("underlying") or {}
     contracts = snapshot.get("contracts") or []
 
@@ -342,7 +373,7 @@ async def iv30_parametric(req: Iv30LiveRequest) -> Iv30LiveResponse:
         dividend_source=rd.source_dividend,
         expiries_used_calendar_days=expiries_used,
         iv_provenance=_provenance_to_payload(prov),
-        snapshot_ts_ms=int(asof.timestamp() * 1000),
+        snapshot_ts_ms=to_ms_utc(asof),
     )
 
 
