@@ -1055,8 +1055,14 @@ describe('BotPanelShellComponent', () => {
       'sid-001',
       HISTORICAL_RECOVERY_PLAN,
     );
-    expect(mockService.confirmHistoricalExecutionRecovery.mock.calls[0][0])
-      .toBe(mockService.prepareHistoricalExecutionRecovery.mock.calls[0][0]);
+    // The fleet ledger pins an idempotency key to one operation: confirm must not reuse prepare's,
+    // and must address the same lane the operator was shown.
+    const prepared = mockService.prepareHistoricalExecutionRecovery.mock.calls[0][0];
+    const confirmed = mockService.confirmHistoricalExecutionRecovery.mock.calls[0][0];
+    expect(prepared.idempotencyKey).toEqual(expect.any(String));
+    expect(confirmed.idempotencyKey).toEqual(expect.any(String));
+    expect(confirmed.idempotencyKey).not.toBe(prepared.idempotencyKey);
+    expect({ ...confirmed, idempotencyKey: null }).toEqual({ ...prepared, idempotencyKey: null });
     expect(screen.getByText(/recorded exact evidence without changing economic totals/i)).toBeTruthy();
     expect(mockService.runBotAction).not.toHaveBeenCalledWith(
       expect.objectContaining({

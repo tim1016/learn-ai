@@ -969,7 +969,7 @@ export class BotPanelShellComponent {
       return;
     }
     if (action.action_id === 'recover_exact_execution_evidence') {
-      await this.prepareHistoricalExecutionRecovery(action, this.commandTarget(target), sid);
+      await this.prepareHistoricalExecutionRecovery(action, target, sid);
       return;
     }
     this.actionPending.set(true);
@@ -1446,8 +1446,10 @@ export class BotPanelShellComponent {
     this.actionPending.set(true);
     this.actionReceipt.set(null);
     try {
+      // Prepare and confirm are two fleet operations and the routing ledger pins a key to one
+      // operation, so each step mints its own: the draft holds the target un-keyed.
       const receipt = await this.panelSvc.confirmHistoricalExecutionRecovery(
-        draft.target,
+        this.commandTarget(draft.target),
         draft.sid,
         draft.plan,
       );
@@ -1484,7 +1486,7 @@ export class BotPanelShellComponent {
     this.historicalRecoveryDraft.set(null);
     try {
       const plan = await this.panelSvc.prepareHistoricalExecutionRecovery(
-        target,
+        this.commandTarget(target),
         sid,
         action.concurrency_token,
       );
