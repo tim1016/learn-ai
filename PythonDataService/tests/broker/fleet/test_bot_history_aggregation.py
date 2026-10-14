@@ -285,13 +285,30 @@ async def test_an_account_filter_naming_no_lane_is_a_named_gap_never_an_empty_li
     assert deliveries[paper.clerk_id].requests == [] and deliveries[live.clerk_id].requests == []
 
 
-def test_the_history_read_outlasts_the_fleet_default_and_the_fan_out_outlasts_it() -> None:
+@pytest.mark.asyncio
+async def test_the_history_read_outlasts_the_fleet_default_and_the_fan_out_outlasts_it(
+    fleet, secret, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """One account's history reads every Dry Run's own database; the
     coordinator waits a little longer than the lane read, so a slow lane's own
     named failure arrives before the fan-out gives up on it."""
     from app.broker.alpaca.clerk.fleet_adapter import ALPACA_OPERATIONS
     from app.broker.fleet.internal_http import BOT_HISTORY_READ_TIMEOUT_S, DEFAULT_INTERNAL_TIMEOUT_S
-
     (operation,) = (op for op in ALPACA_OPERATIONS if op.operation_id == "bot_history_read")
     assert operation.read_timeout_s == BOT_HISTORY_READ_TIMEOUT_S > DEFAULT_INTERNAL_TIMEOUT_S
     assert operation.requires_effective_account
+
+    service, deliveries, *_ = fleet
+    original = service.aggregate_lane_reads_async
+    lane_timeouts: list[float] = []
+
+    async def capture_bound(*args, lane_timeout_s: float):
+        lane_timeouts.append(lane_timeout_s)
+        return await original(*args, lane_timeout_s=lane_timeout_s)
+
+    monkeypatch.setattr(service, "aggregate_lane_reads_async", capture_bound)
+    async with AsyncClient(transport=ASGITransport(app=_app(service, deliveries)), base_url="http://test") as client:
+        response = await client.get(_ROUTE, headers=secret)
+
+    assert response.status_code == 200
+    assert lane_timeouts == [BOT_HISTORY_READ_TIMEOUT_S + 5.0]

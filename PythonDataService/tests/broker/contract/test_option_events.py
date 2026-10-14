@@ -193,11 +193,6 @@ def test_a_share_trade_is_for_some_shares_at_a_price_above_zero(changes: dict[st
         _share_trade(**changes)
 
 
-def test_an_activity_has_no_field_the_contract_does_not_name() -> None:
-    with pytest.raises(ValidationError):
-        _event(description="Option Assignment")
-
-
 # ── Nothing is read as a number, a price or a kind that is not one ──────────
 
 

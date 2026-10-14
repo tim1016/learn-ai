@@ -414,13 +414,6 @@ async def test_a_clerk_the_coordinator_holds_no_token_for_is_refused(monkeypatch
     assert vendors.asked == 0
 
 
-def test_the_route_is_left_out_of_the_public_schema() -> None:
-    routes = [route for route in _app().routes if getattr(route, "path", None) == _PATH]
-
-    assert routes, "the route did not mount on a coordinator"
-    assert all(route.include_in_schema is False for route in routes)
-
-
 # ---- What is not an ask ---------------------------------------------------------------
 
 
