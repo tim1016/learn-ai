@@ -122,7 +122,7 @@ async def test_list_orders_speaks_the_vendors_query_category(tmp_path: Path) -> 
 async def test_cancel_leaves_a_terminal_order_exactly_as_it_was(
     tmp_path: Path, limit_price: float, status: str
 ) -> None:
-    """A terminal order is never re-stamped, as the shadow book's own ``cancel`` leaves it (F33)."""
+    """A terminal order is never re-stamped, as the shadow book's own ``cancel`` leaves it."""
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
     retained = ledger.append(_bar(), run_id="run-a")
     now_ms = [retained.end_ms]
