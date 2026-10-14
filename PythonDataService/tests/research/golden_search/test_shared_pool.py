@@ -334,14 +334,141 @@ def test_startup_refuses_a_pool_that_cannot_fit_the_pid_envelope(monkeypatch: py
         _pool(monkeypatch, workers=8)
 
 
-def test_worker_profiles_declare_the_operator_widths() -> None:
-    assert "serial parity" in shared_pool_module.worker_profile(1)
-    assert "rollout" in shared_pool_module.worker_profile(4)
-    assert "qualification envelope" in shared_pool_module.worker_profile(8)
-    assert "rollout" in shared_pool_module.worker_profile(6), "an undeclared width runs under the widest declared profile below it"
+def test_an_undeclared_width_runs_under_the_widest_declared_profile_below_it() -> None:
+    profile = shared_pool_module.worker_profile
+    assert profile(3) == profile(2)
+    assert profile(6) == profile(4)
+    assert profile(8) != profile(4), "a declared width is its own profile"
+
+
+# ── Cancellation never stalls the pool (#3048) ────────────────────────────
+
+
+def _facts_read_within(pool: SharedWorkerPool, seconds: float) -> bool:
+    """Whether another thread's ``facts()`` returns in time — that is, whether the pool lock is free."""
+    read = threading.Event()
+
+    def read_facts() -> None:
+        pool.facts()
+        read.set()
+
+    threading.Thread(target=read_facts, daemon=True).start()
+    return read.wait(timeout=seconds)
+
+
+def test_stopping_one_owners_children_never_blocks_another_owners_facts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The pool lock is held to pick the lanes, never across a child's stop (#3048).
+
+    Every owner's offer, consume, delivery and facts read go through that
+    lock, so a stop that waits on a slow child used to stall all of them.
+    """
+    stopping = threading.Event()
+    release_stop = threading.Event()
+    release_run = threading.Event()
+    mid_run = threading.Semaphore(0)
+
+    class _SlowStopChild(_FakeChild):
+        def cancel(self) -> None:
+            stopping.set()
+            release_stop.wait(timeout=10.0)
+            self.closed = True
+
+    def spawn(context) -> _FakeChild:
+        child = _SlowStopChild(context)
+
+        def execute(task: dict[str, Any]) -> dict[str, Any]:
+            mid_run.release()
+            release_run.wait(timeout=10.0)
+            return _gap_message(task)
+
+        child.execute = execute
+        return child
+
+    monkeypatch.setattr(shared_pool_module, "ResearchWorker", spawn)
+    pool = SharedWorkerPool(
+        workers=2, submission_bound=4,
+        payload_bound_bytes=shared_pool_module.DEFAULT_PAYLOAD_BOUND_BYTES,
+        result_bound_bytes=shared_pool_module.DEFAULT_RESULT_BOUND_BYTES,
+    )
+    owner = _register(pool)
+    sibling = _register(pool)
+
+    try:
+        assert owner.offer(1, _crafted_item(0.1)) and owner.offer(1, _crafted_item(0.2))
+        for _ in range(2):
+            assert mid_run.acquire(timeout=5.0), "both of the owner's items began"
+        threading.Thread(target=owner.interrupt_running, daemon=True).start()
+        assert stopping.wait(timeout=5.0), "the owner's children were told to stop"
+
+        read_in_time = _facts_read_within(pool, 2.0)
+    finally:
+        release_stop.set()
+        release_run.set()
+        owner.close()
+        sibling.close()
+        pool.close()
+
+    assert read_in_time, "another owner's facts read waited behind the stop of this owner's children"
+
+
+def test_replacing_a_dead_child_never_blocks_another_owners_facts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A between-tasks corpse is reaped outside the pool lock (#3048)."""
+    reaping = threading.Event()
+    release_reap = threading.Event()
+    children: list[_FakeChild] = []
+
+    class _SlowReapChild(_FakeChild):
+        def close(self) -> None:
+            reaping.set()
+            release_reap.wait(timeout=10.0)
+            self.closed = True
+
+    def spawn(context) -> _FakeChild:
+        child = _SlowReapChild(context)
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(shared_pool_module, "ResearchWorker", spawn)
+    pool = SharedWorkerPool(
+        workers=1, submission_bound=2,
+        payload_bound_bytes=shared_pool_module.DEFAULT_PAYLOAD_BOUND_BYTES,
+        result_bound_bytes=shared_pool_module.DEFAULT_RESULT_BOUND_BYTES,
+    )
+    owner = _register(pool)
+
+    try:
+        assert owner.offer(1, _crafted_item(0.1))
+        first = owner.arrived.get(timeout=5.0)
+        owner.consume(first[0], first[1])
+        children[0].lost = "died between tasks"
+        assert owner.offer(1, _crafted_item(0.2)), "the lane replaces the corpse before this item runs"
+        assert reaping.wait(timeout=5.0), "the lane began reaping the corpse"
+
+        read_in_time = _facts_read_within(pool, 2.0)
+    finally:
+        release_reap.set()
+        owner.close()
+        pool.close()
+
+    assert read_in_time, "another owner's facts read waited behind the reap of a dead child"
 
 
 # ── Drain (#3048 AC 10) ───────────────────────────────────────────────────
+
+
+def test_draining_a_pool_that_is_already_closed_answers_with_its_facts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A second drain finds the pool closed and reports it — it never waits on its own lock (#3048 AC 10)."""
+    pool, _ = _pool(monkeypatch, workers=1)
+    pool.close()
+    answers: queue.SimpleQueue[dict] = queue.SimpleQueue()
+    threading.Thread(target=lambda: answers.put(pool.drain(wait_s=1.0)), daemon=True).start()
+
+    try:
+        facts = answers.get(timeout=5.0)
+    except queue.Empty:
+        pytest.fail("drain() of a closed pool never returned")
+
+    assert facts["closing"] is True
 
 
 def test_drain_refuses_new_owners_finishes_owned_work_and_closes(monkeypatch: pytest.MonkeyPatch) -> None:

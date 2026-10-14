@@ -95,24 +95,23 @@ _PRESSURE_PROBE_S = 5.0
 _TASKS_PER_LANE = 8
 _BASE_TASKS = 32
 
-# The operator profiles (#3048): the declared widths, each inside ADR
-# 0077's envelope. One is the serial parity runtime; four is the initial
+# The operator profiles (#3048): the declared pool widths, each inside ADR
+# 0077's envelope. Two is the smallest sharing width; four is the initial
 # rollout; eight is the qualification envelope — eight CPUs, 16 GiB and
-# the 512-PID cap the compose service pins. A configured width between
-# profiles runs inside the same envelope under the widest declared
-# profile at or below it — declared at startup, never silent.
+# the 512-PID cap the compose service pins. One lane is the serial runtime
+# and builds no pool. A configured width between profiles runs inside the
+# same envelope under the widest declared profile at or below it — declared
+# at startup with the width itself, never silent.
 WORKER_PROFILES: dict[int, str] = {
-    1: "serial parity — one lane, the runtime #3044 shipped",
-    2: "two lanes — the smallest sharing width",
-    4: "four lanes — the initial rollout profile",
-    8: "eight lanes — the qualification envelope (8 CPUs / 16 GiB / PID 512, ADR 0077)",
+    2: "two-lane profile, the smallest sharing width",
+    4: "four-lane profile, the initial rollout",
+    8: "eight-lane profile, the qualification envelope (8 CPUs / 16 GiB / PID 512, ADR 0077)",
 }
 
 
 def worker_profile(count: int) -> str:
-    """The declared profile a configured width runs under (#3048)."""
-    widest = max((width for width in WORKER_PROFILES if width <= count), default=1)
-    return WORKER_PROFILES[widest]
+    """The declared profile a pool of ``count`` lanes (two or more) runs under (#3048)."""
+    return WORKER_PROFILES[max(width for width in WORKER_PROFILES if width <= count)]
 
 
 class PoolDrainingError(RuntimeError):
@@ -581,14 +580,16 @@ class SharedWorkerPool:
         """This lane's live child, or ``None`` once a between-tasks death is cleaned up (#3065 review)."""
         with self._state_changed:
             worker = lane.worker
-            if worker is not None and worker.lost_reason() is not None:
-                worker.close()
-                lane.worker = None
-                # The replacement child starts with an empty cache: the dead
-                # one's warm hints must not outlive it (#3048 review).
-                lane.resident.clear()
-                return None
-            return worker
+            if worker is None or worker.lost_reason() is None:
+                return worker
+            lane.worker = None
+            # The replacement child starts with an empty cache: the dead
+            # one's warm hints must not outlive it (#3048 review).
+            lane.resident.clear()
+        # Only this lane's thread reaps its own slot; the reap waits on the
+        # child, so it runs outside the lock every owner's calls go through.
+        worker.close()
+        return None
 
     def _record_residency(self, lane: _Lane, message: dict[str, Any]) -> None:
         """Fold a child's reported decode delta — additions and removals — into this lane's warm hints (#3048).
@@ -662,14 +663,16 @@ class SharedWorkerPool:
     def _cancel_owner_children(self, owner: _OwnerState) -> None:
         """Stop the children running this owner's items; its queued entries die at take time.
 
-        Held under the pool lock across the cancels, deliberately: a lane
-        can only finish its item and take another owner's through the
-        lock's busy-flag transition, so the children cancelled here are
-        still running this owner's items when their cancel lands — a
-        snapshot-then-release window would let a persistent child move on
-        to a sibling's item and take a misfired kill as a fabricated retry
-        (#3048 review).
+        The lanes are picked and their children detached under the pool
+        lock, deliberately: a lane can only finish its item and take
+        another owner's through the lock's busy-flag transition, and a lane
+        that no longer holds the child can never hand it a sibling's item —
+        a persistent child would otherwise move on and take a misfired kill
+        as a fabricated retry (#3048 review). The stops run after the lock
+        is released: every owner's offer, consume, delivery and facts read
+        goes through it, and a stop waits on the child's reap.
         """
+        stopping: list[ResearchWorker] = []
         with self._state_changed:
             for lane in self._lanes:
                 if lane.current is None or lane.current.owner is not owner:
@@ -677,9 +680,15 @@ class SharedWorkerPool:
                 worker = lane.worker
                 if worker is None:
                     continue
-                stopper = threading.Thread(target=worker.cancel, daemon=True)
-                stopper.start()
-                stopper.join(timeout=5.0)
+                lane.worker = None
+                lane.resident.clear()  # the replacement child starts cold (#3048 review)
+                stopping.append(worker)
+        stoppers = [threading.Thread(target=worker.cancel, daemon=True) for worker in stopping]
+        for stopper in stoppers:
+            stopper.start()
+        deadline = time.monotonic() + 5.0
+        for stopper in stoppers:
+            stopper.join(timeout=max(deadline - time.monotonic(), 0.0))
 
     def drain(self, *, wait_s: float = 60.0) -> dict[str, Any]:
         """The operator's capacity handoff (#3048 AC 10): stop assignments, finish or interrupt, reap.
@@ -691,16 +700,15 @@ class SharedWorkerPool:
         capacity change itself is a restart at the new profile.
         """
         with self._state_changed:
-            if self._closing:
-                return self.facts()
-            self._draining = True
-            deadline = time.monotonic() + wait_s
-            while time.monotonic() < deadline:
-                # Assigned-but-unpopped entries are in flight too: closing
-                # ahead of the lane's wakeup would silently vanish them.
-                if all(lane.current is None and not lane.assignments for lane in self._lanes):
-                    break
-                self._state_changed.wait(timeout=_LANE_POLL_S)
+            if not self._closing:
+                self._draining = True
+                deadline = time.monotonic() + wait_s
+                while time.monotonic() < deadline:
+                    # Assigned-but-unpopped entries are in flight too: closing
+                    # ahead of the lane's wakeup would silently vanish them.
+                    if all(lane.current is None and not lane.assignments for lane in self._lanes):
+                        break
+                    self._state_changed.wait(timeout=_LANE_POLL_S)
         self.close()
         return self.facts()
 
