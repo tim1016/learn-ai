@@ -524,7 +524,10 @@ async def test_an_exit_reaches_the_clerk_with_the_market_liveness_unknown(
 
     assert [call["purpose"] for call in ran.calls] == ["ENTER", "EXIT"]
     assert ran.blocked() == []
-    assert reads == [SIGNAL], "only the ENTER read the liveness evidence"
+    # The evidence was tradable for the first read only. The EXIT went out
+    # all the same: it never waited on the gate (ENTER-only is #1671 AC3; the
+    # inverted gate, an ungated ENTER, is test_trade_bot_liveness_gating's).
+    assert reads == [SIGNAL]
 
 
 _DRY_RUN_SID = "dry-spy-qqq"
@@ -663,6 +666,14 @@ async def test_a_stopped_dry_run_observes_the_decision_bar_and_sends_nothing_to_
 
         assert sent == []
         assert journal.tail(5) == []
+        blocked = [
+            json.loads(receipt.facts_json)["reason_code"]
+            for receipt in clerk.repository.decision_receipt_tail(
+                strategy_instance_id=binding.strategy_instance_id, limit=10
+            )
+            if receipt.outcome == "blocked"
+        ]
+        assert blocked == ["STOPPED_OBSERVE_ONLY"]
 
 
 async def test_a_dry_run_discards_an_entry_its_clerk_rejected_and_journals_no_fill(
@@ -679,9 +690,13 @@ async def test_a_dry_run_discards_an_entry_its_clerk_rejected_and_journals_no_fi
             return SimpleNamespace(state=EffectOperationState.REJECTED, child_order_refs=())
 
         monkeypatch.setattr(clerk, "execute_for_instance", _reject)
-        feed = _ScriptedFeed([_Step(_green_bar(NOON - 60_000)), _Step(_green_bar(NOON))])
+        # A third green bar: a discarded candidate leaves the strategy flat, so it enters again;
+        # a candidate that had been committed would leave it in position and send nothing.
+        feed = _ScriptedFeed(
+            [_Step(_green_bar(NOON - 60_000)), _Step(_green_bar(NOON)), _Step(_green_bar(NOON + 60_000))]
+        )
 
         await bot_trade_strategy.run_dry_run_bot(binding, feed, journal, source_bars=bars, pricing_feed=feed)
 
-        assert asked == ["ENTER"]
+        assert asked == ["ENTER", "ENTER"]
         assert journal.tail(5) == []

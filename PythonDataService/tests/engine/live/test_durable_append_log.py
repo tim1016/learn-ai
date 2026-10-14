@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -115,12 +116,14 @@ def test_a_directory_swapped_for_a_symlink_after_the_path_was_proven_is_not_foll
     root.mkdir()
     outside.mkdir()
     (root / "ledger").symlink_to(outside, target_is_directory=True)
-    # The swap won the race: the proof's ``realpath`` still saw the path as it was before the link.
-    monkeypatch.setattr(durable_append_log.os.path, "realpath", os.path.abspath)
+    with monkeypatch.context() as swapped:
+        # The swap won the race: the proof's ``realpath`` still saw the path as it was before the link.
+        swapped.setattr(durable_append_log.os.path, "realpath", lambda path, **_kw: os.path.abspath(path))
 
-    with pytest.raises(OSError):  # ELOOP or ENOTDIR by platform; either is the refusal
-        create(root / "ledger" / "claim.json", "{}", trusted_root=root)
+        with pytest.raises(OSError) as refused:
+            create(root / "ledger" / "claim.json", "{}", trusted_root=root)
 
+    assert refused.value.errno in {errno.ELOOP, errno.ENOTDIR}  # which one is the platform's; either is the refusal
     assert list(outside.iterdir()) == []
 
 
