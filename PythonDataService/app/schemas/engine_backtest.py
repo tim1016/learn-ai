@@ -8,14 +8,16 @@ they live here rather than in either (#1999).
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.responses import LeanStatisticsResponse
 from app.research.backtest_runs.evidence_provenance import RunEvidenceProvenance
 from app.schemas.engine_validation import EngineValidationAnalyticsResponse
 from app.schemas.run_verdict import RunVerdict
+from app.utils.session_anchors import LAST_SCHEDULABLE_DATE
 
 COMMISSION_PER_ORDER_DESCRIPTION = (
     "Flat fee per order. 0, the default, charges no fees: Alpaca charges no "
@@ -61,10 +63,11 @@ class EngineBacktestRequest(BaseModel):
             "(the open of the first minute at or after the decision bar's close)"
         ),
     )
-    commission_per_order: float = Field(0.0, ge=0, description=COMMISSION_PER_ORDER_DESCRIPTION)
+    commission_per_order: float = Field(0.0, ge=0, allow_inf_nan=False, description=COMMISSION_PER_ORDER_DESCRIPTION)
     slippage_per_share: float = Field(
         0.0,
         ge=0,
+        allow_inf_nan=False,
         description=(
             "Per-share slippage applied against the trade direction at fill. "
             "Defaults to 0 to preserve LEAN-parity for bit-exact runs; pass a "
@@ -130,7 +133,7 @@ class EngineBacktestRequest(BaseModel):
             "bars_consumed carries the bar count the curve would have had."
         ),
     )
-    initial_cash: float | None = Field(None, ge=0)
+    initial_cash: float | None = Field(None, ge=0, allow_inf_nan=False)
     # Strategy-specific parameters — validated per-strategy against the
     # corresponding ``StrategyParamsBase`` subclass in the registry. Left
     # untyped here because the schema varies per strategy.
@@ -217,6 +220,33 @@ class EngineBacktestRequest(BaseModel):
             strategy_bars=_EngineBarsSpecModel(timespan=timespan, multiplier=1),
         )
         return self
+
+    @field_validator("from_date", "to_date", "warmup_from_date")
+    @classmethod
+    def _a_date_is_a_calendar_date(cls, value: str | None) -> str | None:
+        """The pattern admits ``2024-02-30``; refuse it here as a 422, not a late 400 or a failed run (E-6)."""
+        if value is not None:
+            try:
+                date.fromisoformat(value)
+            except ValueError as exc:
+                raise ValueError(f"{value!r} is not a calendar date") from exc
+        return value
+
+    @field_validator("to_date")
+    @classmethod
+    def _the_window_ends_where_the_calendar_can_schedule(cls, value: str | None) -> str | None:
+        """``9999-12-31`` spent tens of seconds building sessions with the engine gate held, then overflowed (E-4)."""
+        if value is not None and date.fromisoformat(value) > LAST_SCHEDULABLE_DATE:
+            raise ValueError(f"to_date must not be past {LAST_SCHEDULABLE_DATE.isoformat()}, the last date the NYSE calendar can schedule")
+        return value
+
+    @field_validator("initial_cash")
+    @classmethod
+    def _starting_cash_is_positive(cls, value: float | None) -> float | None:
+        """Zero cash passes ``ge=0`` and then fails every run at its first equity point (E-5)."""
+        if value is not None and value <= 0:
+            raise ValueError("initial_cash must be greater than zero")
+        return value
 
     @model_validator(mode="after")
     def _validate_warmup_window(self) -> EngineBacktestRequest:

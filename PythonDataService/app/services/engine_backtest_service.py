@@ -19,7 +19,7 @@ import time
 from bisect import bisect_left
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 from itertools import pairwise, takewhile
 from pathlib import Path
@@ -235,10 +235,10 @@ def _apply_overrides(strategy: Strategy, req: EngineBacktestRequest) -> None:
         # warmup boundary is supplied that is earlier than the evaluation
         # start, which ``execute_engine_backtest`` hands to the engine
         # separately so scoring is scoped to ``from_date`` onward.
-        d = datetime.strptime(data_start, "%Y-%m-%d")
+        d = _parse_iso_date(data_start, "data_start")
         strategy.set_start_date(d.year, d.month, d.day)
     if req.to_date:
-        d = datetime.strptime(req.to_date, "%Y-%m-%d")
+        d = _parse_iso_date(req.to_date, "to_date")
         strategy.set_end_date(d.year, d.month, d.day)
     if req.initial_cash is not None:
         strategy.set_cash(req.initial_cash)
@@ -364,7 +364,7 @@ def _format_trade_record(index: int, trade: Any, cumulative_pnl_pct: float) -> T
 
 def _parse_iso_date(value: str, field_name: str) -> date:
     try:
-        return datetime.strptime(value, "%Y-%m-%d").date()
+        return date.fromisoformat(value)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -572,7 +572,12 @@ def replay_engine_run(
     strategy = registration.build(validated_params)
     if not hasattr(strategy, "evaluate_signal_bar"):
         raise SavedRunNotReplayable(f"Strategy '{request.strategy_name}' records no decisions to replay.")
-    _reader, engine = _reader_and_engine(request, fill_mode=fill_mode, data_roots=data_roots, data_manifest=data_manifest)
+    try:
+        _reader, engine = _reader_and_engine(
+            request, fill_mode=fill_mode, data_roots=data_roots, data_manifest=data_manifest
+        )
+    except ValueError as exc:
+        raise SavedRunNotReplayable(f"The data this run was receipted on has changed: {exc}") from exc
     _override_after_initialize(strategy, request)
     record_staged_decisions(strategy, record)
     engine.run(strategy, evaluation_start_ms=_evaluation_start_ms(request), retain_bars=False)
@@ -896,10 +901,18 @@ def _execute_engine_backtest_core(
             detail=f"compatibility_fixture_unavailable: {exc}",
         ) from exc
 
-    reader, engine = _reader_and_engine(
-        request, fill_mode=fill_mode, data_roots=data_roots, data_manifest=data_manifest,
-        decoded_cache=decoded_cache, admission=admission,
-    )
+    try:
+        reader, engine = _reader_and_engine(
+            request, fill_mode=fill_mode, data_roots=data_roots, data_manifest=data_manifest,
+            decoded_cache=decoded_cache, admission=admission,
+        )
+    except ValueError as exc:
+        # The run's receipted factor file changed or is gone (``_profile_dividends``):
+        # the same refusal, with the same status, as a fixture that differs from its receipt.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"compatibility_fixture_unavailable: {exc}",
+        ) from exc
     _override_after_initialize(strategy, request)
 
     # Decompose the old monolithic "simulating" phase into the two stages
@@ -1059,12 +1072,12 @@ def _validation_analytics(
             and request.from_date is not None
             and request.to_date is not None
         ):
-            start_day = date.fromisoformat(request.from_date)
-            end_day = date.fromisoformat(request.to_date) + timedelta(days=1)
+            # Date-anchored endpoints resolve through the NY zone, as every
+            # other anchor here does: the window is ET days, not UTC days.
             validation_equity = build_compatibility_equity_curve(
                 validation_trades,
-                start_ms_utc=int(datetime.combine(start_day, datetime.min.time(), tzinfo=UTC).timestamp() * 1000),
-                end_ms_utc=int(datetime.combine(end_day, datetime.min.time(), tzinfo=UTC).timestamp() * 1000),
+                start_ms_utc=et_midnight_ms(date.fromisoformat(request.from_date)),
+                end_ms_utc=et_day_end_ms(date.fromisoformat(request.to_date)),
                 initial_equity=float(result.initial_cash),
             )
         validation_analytics = compute_engine_validation_analytics(
@@ -1408,7 +1421,9 @@ def _persist_and_dispatch_companion(
     )
     save = persist_engine_response_sync(
         response=response,
-        symbol=strategy.ctx.symbols[0] if strategy.ctx.symbols else "SPY",
+        # The engine refuses a run with no symbol before it starts, so there is
+        # always one; a plausible default would persist a wrong ticker.
+        symbol=strategy.ctx.symbols[0],
         start_date=resolved_configuration.start_date,
         end_date=resolved_configuration.end_date,
         resolution=resolved_configuration.resolution,
