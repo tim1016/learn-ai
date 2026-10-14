@@ -338,6 +338,13 @@ async def test_a_parents_fill_frame_that_arrives_after_the_legs_were_read_by_loo
     await multi_paper.pass_()
     _, before_explained = fee_evidence._witnessed_executions(multi_paper.repo._conn)
     assert before_explained is False
+
+    def _leg_fills() -> list[dict]:
+        return [
+            fill for leg in multi_paper.repo.order_legs(parent) for fill in multi_paper.repo.fills_for_order(leg.order_ref)
+        ]
+
+    booked_at = sorted(fill["source_event_at_ms"] for fill in _leg_fills())
     sink = SqliteTradeUpdateEvidenceSink(repo=multi_paper.repo, intake=multi_paper.clerk.intake, reconciler=multi_paper.clerk)
 
     def _no_frames() -> None:
@@ -347,15 +354,14 @@ async def test_a_parents_fill_frame_that_arrives_after_the_legs_were_read_by_loo
         read=multi_paper.account, frame_source=_no_frames, evidence_sink=sink, clock=multi_paper.clock
     )
     order = deepcopy(multi_paper.venue.option_orders[parent])
-    timestamp = "2026-09-18T16:00:00.500Z"
     frame = {
         "event": "fill",
-        "timestamp": timestamp,
+        "timestamp": order["updated_at"],
         "price": "6.28",
         "qty": order["filled_qty"],
         "legs": [
             {"execution_id": f"leg-{number}-execution", "qty": "1", "price": leg["filled_avg_price"],
-             "order_id": leg["id"], "symbol": leg["symbol"], "timestamp": timestamp}
+             "order_id": leg["id"], "symbol": leg["symbol"], "timestamp": leg["filled_at"]}
             for number, leg in enumerate(order["legs"], start=1)
         ],
         "order": order,
@@ -367,5 +373,6 @@ async def test_a_parents_fill_frame_that_arrives_after_the_legs_were_read_by_loo
     ids, explained = fee_evidence._witnessed_executions(multi_paper.repo._conn)
     assert {"leg-1-execution", "leg-2-execution"} <= ids
     assert explained is True
+    assert sorted(fill["source_event_at_ms"] for fill in _leg_fills()) == booked_at
     assert sorted(multi_paper.held().values()) == [1.0, 1.0]
     assert multi_paper.repo.active_uncertainties() == []
