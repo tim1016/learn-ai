@@ -50,10 +50,22 @@ export function payoffAtExpiry(legs: readonly PayoffLeg[], price: number): numbe
   return total;
 }
 
-/** Price and payoff at 0 and at each distinct strike, ascending. Between two of them the payoff is a line. */
+/**
+ * Prices and premiums carry at most four decimals, so a payoff this close to
+ * zero is float noise on an exact zero (9.70 - 5.0 - 4.70 is 8.9e-16 in doubles).
+ */
+const PAYOFF_ZERO = 1e-9;
+
+/**
+ * Price and payoff at 0 and at each distinct strike, ascending. Between two of
+ * them the payoff is a line. A payoff within `PAYOFF_ZERO` of zero is zero.
+ */
 function payoffKnots(legs: readonly PayoffLeg[]): { price: number; pnl: number }[] {
   const prices = [...new Set([0, ...legs.map(l => l.strike)])].sort((a, b) => a - b);
-  return prices.map(price => ({ price, pnl: payoffAtExpiry(legs, price) }));
+  return prices.map(price => {
+    const pnl = payoffAtExpiry(legs, price);
+    return { price, pnl: Math.abs(pnl) <= PAYOFF_ZERO ? 0 : pnl };
+  });
 }
 
 /** Slope of the payoff above the highest strike: the net long call quantity. Puts are worthless up there. */

@@ -674,22 +674,21 @@ export class StrategyBuilderComponent implements OnDestroy {
     this.legs().some(l => l.enabled) && this.timeToExpiry() <= 0,
   );
 
-  livePayoffCurve = computed<PayoffPoint[]>(() => {
-    const currentLegs = this.legs().filter(l => l.enabled);
-    const grid = this.priceGrid();
-    if (grid.length === 0 || currentLegs.length === 0 || currentLegs.some(l => l.strike <= 0)) return [];
-
-    return grid.map(price => ({ price, pnl: payoffAtExpiry(currentLegs, price) }));
-  });
-
   /**
-   * The legs the payoff figures are read from: every enabled leg, or null
-   * while none is enabled or a strike is not above zero (the curve is empty
-   * then too).
+   * The legs the payoff curve and figures are read from: every enabled leg,
+   * or null while none is enabled or a strike is not above zero.
    */
   private payoffLegs = computed<PayoffLeg[] | null>(() => {
     const enabled = this.legs().filter(l => l.enabled);
     return enabled.length === 0 || enabled.some(l => l.strike <= 0) ? null : enabled;
+  });
+
+  livePayoffCurve = computed<PayoffPoint[]>(() => {
+    const legs = this.payoffLegs();
+    const grid = this.priceGrid();
+    if (grid.length === 0 || legs === null) return [];
+
+    return grid.map(price => ({ price, pnl: payoffAtExpiry(legs, price) }));
   });
 
   /**

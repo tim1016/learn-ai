@@ -75,14 +75,21 @@ def compute_payoff_curve(
     ]
 
 
+# Prices and premiums carry at most four decimals, so a payoff this close to zero
+# is float noise on an exact zero (9.70 - 5.0 - 4.70 is 8.9e-16 in doubles).
+_PAYOFF_ZERO = 1e-9
+
+
 def _payoff_knots(legs: list[StrategyLeg]) -> list[tuple[float, float]]:
     """(price, payoff) at 0 and at each distinct strike, ascending.
 
     The expiry payoff is piecewise linear in the price and turns only at the
-    strikes, so between two of these prices it is a straight line.
+    strikes, so between two of these prices it is a straight line. A payoff
+    within ``_PAYOFF_ZERO`` of zero is zero.
     """
     prices = sorted({0.0, *(leg.strike for leg in legs)})
-    return [(price, compute_payoff_at_expiry(legs, price)) for price in prices]
+    payoffs = [compute_payoff_at_expiry(legs, price) for price in prices]
+    return [(price, 0.0 if abs(pnl) <= _PAYOFF_ZERO else pnl) for price, pnl in zip(prices, payoffs, strict=True)]
 
 
 def _tail_slope(legs: list[StrategyLeg]) -> float:

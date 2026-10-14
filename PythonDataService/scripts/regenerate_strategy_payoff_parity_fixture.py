@@ -65,6 +65,28 @@ CASES: Final[dict[str, list[tuple[float, str, str, float, int]]]] = {
         (105, "call", "short", 0.0, 1),
         (110, "call", "long", 0.0, 1),
     ],
+    # The same, with a stretch of zeros between two strikes that is left upward at 120.
+    "crosses_zero_along_an_interior_flat_stretch": [
+        (100, "call", "long", 5.0, 1),
+        (105, "call", "short", 0.0, 1),
+        (110, "call", "long", 0.0, 1),
+        (120, "call", "long", 0.0, 1),
+    ],
+    # Zero at S=0 and up to 100: nothing before it to cross from.
+    "zero_from_s_zero": [(100, "call", "long", 0.0, 1)],
+    # The cases below land on an exact zero through cents that doubles do not hold
+    # (9.70 - 5.0 - 4.70 is 8.9e-16): a payoff that is zero, not a sign change.
+    # Debit 5 equals the width: the payoff rises to 0 at 110 and stays there.
+    "debit_equals_width_call_spread_105_110": [(105, "call", "long", 9.7, 1), (110, "call", "short", 4.7, 1)],
+    # Even money: 0 up to 100, peak 5 at 105, then down with slope -2 through 107.5.
+    "even_money_ratio_call_spread_100_105x3": [(100, "call", "long", 2.1, 1), (105, "call", "short", 0.7, 3)],
+    # Zero net cost, so the payoff is exactly 0 at 120 with gains either side: a touch.
+    "zero_net_cost_touch_at_120": [
+        (120, "put", "long", 14.9, 1),
+        (120, "call", "long", 7.95, 1),
+        (105, "put", "short", 9.0, 2),
+        (95, "put", "short", 4.85, 1),
+    ],
 }
 
 # Python rounds what it returns to 4 dp (an error of at most 5e-5); the browser

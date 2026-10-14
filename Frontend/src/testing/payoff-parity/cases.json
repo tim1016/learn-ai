@@ -341,6 +341,153 @@
           105.0
         ]
       }
+    },
+    {
+      "name": "crosses_zero_along_an_interior_flat_stretch",
+      "legs": [
+        {
+          "strike": 100,
+          "option_type": "call",
+          "position": "long",
+          "premium": 5.0,
+          "quantity": 1
+        },
+        {
+          "strike": 105,
+          "option_type": "call",
+          "position": "short",
+          "premium": 0.0,
+          "quantity": 1
+        },
+        {
+          "strike": 110,
+          "option_type": "call",
+          "position": "long",
+          "premium": 0.0,
+          "quantity": 1
+        },
+        {
+          "strike": 120,
+          "option_type": "call",
+          "position": "long",
+          "premium": 0.0,
+          "quantity": 1
+        }
+      ],
+      "expected": {
+        "max_profit": null,
+        "max_loss": -5.0,
+        "breakevens": [
+          105.0
+        ]
+      }
+    },
+    {
+      "name": "zero_from_s_zero",
+      "legs": [
+        {
+          "strike": 100,
+          "option_type": "call",
+          "position": "long",
+          "premium": 0.0,
+          "quantity": 1
+        }
+      ],
+      "expected": {
+        "max_profit": null,
+        "max_loss": 0.0,
+        "breakevens": []
+      }
+    },
+    {
+      "name": "debit_equals_width_call_spread_105_110",
+      "legs": [
+        {
+          "strike": 105,
+          "option_type": "call",
+          "position": "long",
+          "premium": 9.7,
+          "quantity": 1
+        },
+        {
+          "strike": 110,
+          "option_type": "call",
+          "position": "short",
+          "premium": 4.7,
+          "quantity": 1
+        }
+      ],
+      "expected": {
+        "max_profit": 0.0,
+        "max_loss": -5.0,
+        "breakevens": []
+      }
+    },
+    {
+      "name": "even_money_ratio_call_spread_100_105x3",
+      "legs": [
+        {
+          "strike": 100,
+          "option_type": "call",
+          "position": "long",
+          "premium": 2.1,
+          "quantity": 1
+        },
+        {
+          "strike": 105,
+          "option_type": "call",
+          "position": "short",
+          "premium": 0.7,
+          "quantity": 3
+        }
+      ],
+      "expected": {
+        "max_profit": 5.0,
+        "max_loss": null,
+        "breakevens": [
+          107.5
+        ]
+      }
+    },
+    {
+      "name": "zero_net_cost_touch_at_120",
+      "legs": [
+        {
+          "strike": 120,
+          "option_type": "put",
+          "position": "long",
+          "premium": 14.9,
+          "quantity": 1
+        },
+        {
+          "strike": 120,
+          "option_type": "call",
+          "position": "long",
+          "premium": 7.95,
+          "quantity": 1
+        },
+        {
+          "strike": 105,
+          "option_type": "put",
+          "position": "short",
+          "premium": 9.0,
+          "quantity": 2
+        },
+        {
+          "strike": 95,
+          "option_type": "put",
+          "position": "short",
+          "premium": 4.85,
+          "quantity": 1
+        }
+      ],
+      "expected": {
+        "max_profit": null,
+        "max_loss": -185.0,
+        "breakevens": [
+          92.5
+        ]
+      }
     }
   ]
 }

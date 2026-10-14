@@ -192,6 +192,17 @@ _WHOLE_PAYOFF_EXPECTED = {
     "touches_zero_at_a_strike": (0.0, None, []),
     # Zero from 105 to 110, then rising: the breakeven is where zero is first reached.
     "crosses_zero_along_a_flat_stretch": (None, -5.0, [105.0]),
+    # Payoff at 0/100/105/110/120 is -5/-5/0/0/10: the zeros are left upward.
+    "crosses_zero_along_an_interior_flat_stretch": (None, -5.0, [105.0]),
+    # Zero up to 100 then rising: nothing to cross from.
+    "zero_from_s_zero": (None, 0.0, []),
+    # 105: 5 - 9.7 + 4.7 = 0 and flat above: the loss is 9.7 - 4.7, and zero is touched, not crossed.
+    "debit_equals_width_call_spread_105_110": (0.0, -5.0, []),
+    # 0 up to 100 (-2.1 + 3 x 0.7), 5 at 105, then slope 1 - 3 = -2: zero again at 105 + 5/2.
+    "even_money_ratio_call_spread_100_105x3": (5.0, None, [107.5]),
+    # Cost 14.9 + 7.95 - 18.0 - 4.85 = 0. 15 at 105, 5 at 95, slope 2 below: 5 - 2 x 95 = -185 at S=0,
+    # zero at 95 - 5/2 = 92.5. At 120 it is 0 with 120 - S above below and S - 120 above: a touch.
+    "zero_net_cost_touch_at_120": (None, -185.0, [92.5]),
 }
 
 
