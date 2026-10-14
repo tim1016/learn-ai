@@ -1,8 +1,8 @@
 """The refusals of a saved run's routes that carry a code of their own, with no database (#3221).
 
 Every assertion of these codes was in a test that needs a database attested as disposable
-(``test_options_backtest_run_detail_{compare,hostile_requests,session,}_endpoints.py``), so a pull request never fired
-them and only the daily run did. The real routes, ``run_detail`` and ``saved_runs`` run here over a fake connection
+(``test_options_backtest_run_detail_{compare,session,}_endpoints.py`` and
+``test_options_backtest_run_detail_hostile_requests.py``), so a pull request never fired them and only the daily run did. The real routes, ``run_detail`` and ``saved_runs`` run here over a fake connection
 (``tests/options_backtest/_fake_connection.py``), which answers the few statements they send and refuses any other.
 
 Hand-worked: run 41 and run 42 are complete runs of one session each, stored with the setup of

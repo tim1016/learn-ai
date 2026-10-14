@@ -267,7 +267,9 @@ class StockFetchDouble:
         self.calls.append(arguments)
         if self._error is not None:
             raise self._error
-        bars = self._bars or [stock_bar(FRIDAY_OPEN_MS, "600.00", "600.50", "599.75", "600.25")]
+        bars = (
+            [stock_bar(FRIDAY_OPEN_MS, "600.00", "600.50", "599.75", "600.25")] if self._bars is None else self._bars
+        )
         # Called from a worker thread, which has no loop of its own.
         asyncio.run(
             store_underlying_day(

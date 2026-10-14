@@ -86,6 +86,8 @@ export class RunPanelComponent {
   );
 
   protected readonly canUseSetup = computed(() => this.detail()?.setup != null && this.setupBlockedWhy() === null);
+  /** Why the form cannot take the setup of this run just now, for a run that has one to take; null otherwise. */
+  protected readonly setupWaitsWhy = computed(() => (this.detail()?.setup != null ? this.setupBlockedWhy() : null));
   /** Why a run that was read has no setup the page can open, in the server's words; null while the run has one or is not yet read. */
   protected readonly noSetupWhy = computed(() => {
     const detail = this.detail();

@@ -541,6 +541,17 @@ describe('a run whose setup the server cannot open', () => {
     expect(used).toEqual([]);
   });
 
+  it('says why the setup is not the form’s to take yet only when the run has a setup to take', async () => {
+    const service = fakeService(vi);
+    readsAs(service, runWithoutSetup());
+    const { view } = await renderRun(runItem({ status: 'complete' }), { service, showSetup: true });
+    view.fixture.componentRef.setInput('setupBlockedWhy', 'The form cannot take a setup until the session times have been read.');
+
+    const section = await screen.findByRole('region', { name: 'The setup this run used' });
+    expect(await within(section).findByText(SETUP_CANNOT_OPEN_REASON)).toBeTruthy();
+    expect(within(section).queryByText(/until the session times have been read/)).toBeNull();
+  });
+
   it('says nothing about a setup, and offers none, until the run has been read', async () => {
     const service = fakeService(vi);
     service.run.mockImplementation(() => new Promise<RunDetail>(() => undefined));

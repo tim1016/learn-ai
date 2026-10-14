@@ -245,10 +245,6 @@ def _reason_of(event: Event) -> str:
     return event.reason
 
 
-def _refusal_of(event: Event) -> EntryRefusal:
-    return EntryRefusal(_reason_of(event))
-
-
 def _wins_losses_even(trades: Iterable[LegTrade]) -> tuple[int, int, int]:
     won = lost = even = 0
     for trade in trades:
@@ -424,6 +420,6 @@ def summarize_run(sessions: Sequence[SessionResult], *, starting_cash_usd: Decim
         by_month=_month_rows(sessions, days),
         entries_refused_by_reason=_counts(
             _ENTRY_REFUSALS_BY_REASON,
-            (_refusal_of(event) for event in events if event.kind in _ENTRY_REFUSAL_EVENT_KINDS),
+            (EntryRefusal(_reason_of(event)) for event in events if event.kind in _ENTRY_REFUSAL_EVENT_KINDS),
         ),
     )

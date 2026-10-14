@@ -573,9 +573,10 @@ class _Session:
             position = _position_of(leg)
             bar = bars.get(leg.setup.leg_id)
             # A bought leg whose sale the cover book holds back (``may_leave``, in ``_fill_closes``) stays HELD with its
-            # close pending and a bar every minute, so ``close is None`` does not always hold here. It is what keeps
-            # that leg from being stopped again each minute: ``_stops`` would decide an exit in every one of them and
-            # ``_enter`` would not run in any.
+            # close pending and a bar every minute, so ``close is None`` does not always hold here. Without it
+            # ``_stops`` would report an exit, and take an exit-group number, in every minute the sale waits; that
+            # skips ``_enter``, and a waiting momentum leg would be entered later (no second stop is recorded: ``_stops``
+            # skips a leg that has a close pending).
             if (
                 position.close is None
                 and position.stop_level is not None
