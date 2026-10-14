@@ -434,7 +434,10 @@ ten minutes past the entry's deadline), make the bundle:
 ```bash
 TO_MS=$(( $(date -u +%s) * 1000 ))
 OUT="/app/artifacts/alpaca_clerk/qualification/$STEP"
-podman exec "$LANE" python -m scripts.option_qualification_bundle bundle \
+IMAGE=$(podman inspect "$LANE" --format '{{.ImageName}}')
+podman run --rm --network none --volumes-from "$LANE" -e POLYGON_API_KEY= \
+  -v "$PWD/PythonDataService/scripts:/app/scripts:ro,z" "$IMAGE" \
+  python -m scripts.option_qualification_bundle bundle \
   --artifacts-root /app/artifacts/alpaca_clerk --account-id "$ACCOUNT_ID" --bot "$BOT" \
   --from-ms "$FROM_MS" --to-ms "$TO_MS" \
   --capture-dir /app/artifacts/alpaca_clerk/broker_captures --out-dir "$OUT"
@@ -442,10 +445,12 @@ podman cp "$LANE:$OUT" "$EVIDENCE/$STEP"
 cat "$EVIDENCE/$STEP/summary.md"
 ```
 
-**Run it in the one-off container below, not in the lane, when the lane carries
-its memory cap** (768 MiB under both fleet compose files): on 2026-10-14 the
-command run in the lane was killed (exit 137), took the lane's main process with
-it (`OOMKilled`), and the restart ended both bots' runs.
+**Never run the bundle with `podman exec` in the lane.** The lane carries a
+768 MiB memory cap under both fleet compose files: on 2026-10-14 the command run
+there was killed (exit 137), took the lane's main process with it
+(`OOMKilled`), and the restart ended both bots' runs. The one-off container
+above has its own memory, shares the lane's volumes (which include the
+bind-mounted `app/`), mounts this checkout's scripts, and has no network at all.
 
 The window is `[from, to)`. The command only reads the Clerk's store (read-only
 and query-only: it takes no lease) and the journal, and writes the one new
@@ -454,24 +459,10 @@ with pieces it could not read (the summary names each under **Not read**), and
 `2` when it was refused and wrote nothing. A folder that is not new or empty is
 refused; so is one inside the Clerk's folder or the journal.
 
-If section 2 found the bundle script missing from the image **and the lane runs
-under `compose.fleet.dev.yaml`**, run it in a one-off container that mounts this
-checkout's scripts, shares the lane's volumes (which include the bind-mounted
-`app/`), and has no network at all. Under `compose.fleet.yaml` this does not
-work: `app/` is baked into the image, an image without the kit has no `rejudge`
-or `utc_day`, and the script fails with an ImportError only after orders were
-sent. That is why section 3 step 5 checks before the go-ahead, and why the
-image is rebuilt there instead:
-
-```bash
-IMAGE=$(podman inspect "$LANE" --format '{{.ImageName}}')
-podman run --rm --network none --volumes-from "$LANE" -e POLYGON_API_KEY= \
-  -v "$PWD/PythonDataService/scripts:/app/scripts:ro,z" "$IMAGE" \
-  python -m scripts.option_qualification_bundle bundle \
-  --artifacts-root /app/artifacts/alpaca_clerk --account-id "$ACCOUNT_ID" --bot "$BOT" \
-  --from-ms "$FROM_MS" --to-ms "$TO_MS" \
-  --capture-dir /app/artifacts/alpaca_clerk/broker_captures --out-dir "$OUT"
-```
+Under `compose.fleet.yaml` `app/` is baked into the image: an image without the
+kit has no `rejudge` or `utc_day`, and the script fails with an ImportError only
+after orders were sent. That is why section 3 step 5 checks before the
+go-ahead, and why the image is rebuilt there instead.
 
 **Read the summary before anything else.** It states what was compared, what
 was unknown and why, any discrepancy, and what could not be read. An entry the
