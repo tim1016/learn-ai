@@ -109,6 +109,36 @@ def test_a_confirmed_quiet_lane_retires_on_the_normal_path(
     assert retired.retire_change_ref is None
 
 
+def test_retirement_uses_the_clock_after_waiting_for_the_transaction(
+    fleet_service: FleetControlService, clock: FrozenClock, control_dir: Path
+) -> None:
+    from contextlib import contextmanager
+
+    lane, session, _drained = drained_lane(fleet_service, clock, control_dir, "retire-wait")
+    confirm_quiet(fleet_service, lane, session, observed_at_ms=clock())
+    store = fleet_service._store
+    real_transaction = store.transaction
+    pending = [True]
+
+    @contextmanager
+    def transaction_after_the_lanes_next_beat():
+        if pending:
+            pending.clear()
+            clock.advance(3)
+            confirm_quiet(fleet_service, lane, session, observed_at_ms=clock())
+        with real_transaction() as conn:
+            yield conn
+
+    store.transaction = transaction_after_the_lanes_next_beat
+    try:
+        retired = fleet_service.retire_clerk(clerk_id=lane.clerk_id)
+    finally:
+        store.transaction = real_transaction
+
+    assert retired.lane_confirmation == LaneConfirmationState.PRESENT
+    assert retired.retired_at_ms == clock()
+
+
 def test_a_lane_that_never_confirmed_still_refuses_and_names_the_gate(
     fleet_service: FleetControlService, clock: FrozenClock, control_dir: Path
 ) -> None:

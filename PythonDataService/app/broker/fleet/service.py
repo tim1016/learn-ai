@@ -590,8 +590,8 @@ class FleetControlService:
         clerk = self._require_clerk(clerk_id)
         if clerk.lifecycle_state == StoredLifecycleState.RETIRED:
             return clerk
-        now = self._clock()
         with self._store.transaction() as conn:
+            now = self._clock()
             held = [
                 assignment
                 for assignment in self._store.list_assignments_for_clerk_on(conn, clerk_id)
@@ -635,7 +635,7 @@ class FleetControlService:
                 # as the file's standing pattern against that rule relaxing,
                 # not as a live race. The store-level tests pin the scoping
                 # where it can still fail.
-                self._require_lane_quiet(conn, live, now=self._clock())
+                self._require_lane_quiet(conn, live, now=now)
                 updated = self._store.retire_clerk_row(
                     conn,
                     clerk_id=clerk_id,
@@ -1922,17 +1922,9 @@ class FleetControlService:
             return self._released_history_record(
                 broker=broker, canonical=canonical, generation=expected_assignment_generation
             )
-        now = self._clock()
-        released = replace(
-            existing,
-            state=AssignmentState.RELEASED,
-            updated_at_ms=now,
-            attested_operator=bounded_operator,
-            attested_change_ref=bounded_change_ref,
-            attested_at_ms=now,
-        )
         accepted = False
         with self._store.transaction() as conn:
+            now = self._clock()
             # The predecessor gates read inside the same write transaction as
             # the transition: a drain entered (or an attempt opened) between
             # the outer read and this commit is the state this ceremony
@@ -1949,9 +1941,14 @@ class FleetControlService:
             )
             self._require_command_quiet(conn, existing.clerk_id)
             released = replace(
-                released,
+                existing,
+                state=AssignmentState.RELEASED,
+                updated_at_ms=now,
+                attested_operator=bounded_operator,
+                attested_change_ref=bounded_change_ref,
+                attested_at_ms=now,
                 lane_confirmation=self._handover_lane_confirmation(
-                    conn, predecessor, now=self._clock()
+                    conn, predecessor, now=now
                 ),
             )
             accepted = self._store.cas_update_assignment(
@@ -2021,9 +2018,9 @@ class FleetControlService:
             )
         self._verify_volume(successor, successor_volume_root)
         canonical = self._adapter(broker).canonical_account_id(external_account_id)
-        now = self._clock()
         try:
             with self._store.transaction() as conn:
+                now = self._clock()
                 existing = self._store.read_assignment_on(
                     conn, broker=broker, canonical_account_id=canonical
                 )
@@ -2075,7 +2072,7 @@ class FleetControlService:
                         conn, existing.clerk_id, now=now
                     )
                     self._require_command_quiet(conn, existing.clerk_id)
-                    self._require_lane_quiet(conn, predecessor, now=self._clock())
+                    self._require_lane_quiet(conn, predecessor, now=now)
                     released = replace(
                         existing,
                         state=AssignmentState.RELEASED,

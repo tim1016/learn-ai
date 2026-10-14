@@ -109,10 +109,8 @@ async def production_history_batch_provider(
 router = APIRouter(prefix="/internal/fleet", tags=["internal-fleet"], include_in_schema=False)
 
 
-# The agent instance id and the reported state and account id land in four
-# registry tables and in the directory observation. What this build sends is
-# under 40 chars (``agnt_`` plus 24 hex; ``binding_confirmed``; an account id),
-# so a longer value is a bad client, refused at the edge rather than stored.
+# Agent instance ids and reported states use bounded agent-owned vocabulary.
+# Account ids are opaque broker-owned values and keep the reservation contract.
 _AGENT_FIELD_MAX_CHARS = 128
 
 
@@ -133,7 +131,7 @@ class ObservationRequest(BaseModel):
     clerk_id: str = Field(min_length=1)
     agent_instance_id: str = Field(min_length=1, max_length=_AGENT_FIELD_MAX_CHARS)
     reported_binding_generation: int | None = None
-    reported_account_id: str | None = Field(default=None, max_length=_AGENT_FIELD_MAX_CHARS)
+    reported_account_id: str | None = None
     reported_state: str | None = Field(default=None, max_length=_AGENT_FIELD_MAX_CHARS)
     reported_summary: dict[str, Any] | None = None
 

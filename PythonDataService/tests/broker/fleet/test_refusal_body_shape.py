@@ -394,6 +394,24 @@ async def test_internal_fleet_refuses_an_unbounded_agent_instance_id(control_dir
         service.close()
 
 
+def test_internal_fleet_observation_accepts_an_account_id_accepted_by_reservation() -> None:
+    from app.routers.internal_fleet import ObservationRequest, ReserveRequest
+
+    account_id = "A" * 129
+    reserved = ReserveRequest.model_validate(
+        {"broker": "alpaca", "clerk_id": _CLERK_ID, "external_account_id": account_id}
+    )
+    observed = ObservationRequest.model_validate(
+        {
+            "clerk_id": _CLERK_ID,
+            "agent_instance_id": "agent-1",
+            "reported_account_id": reserved.external_account_id,
+        }
+    )
+
+    assert observed.reported_account_id == reserved.external_account_id
+
+
 @pytest.mark.asyncio
 async def test_internal_fleet_accepts_a_correctly_mapped_agent_token(
     control_dir: Path, tmp_path: Path
