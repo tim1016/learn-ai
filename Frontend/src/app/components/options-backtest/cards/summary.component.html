@@ -2,7 +2,7 @@
   <div class="card__head"><h2 id="ob-summary-title">In plain words</h2></div>
   <p class="status" role="status" aria-live="polite" [class.status--bad]="failure() !== null">{{ statusText() }}</p>
   @if (failure() !== null) { <button type="button" class="again" (click)="retry.emit()">Try again</button> }
-  @if (summary(); as text) { <app-options-backtest-setup-sentences [summary]="text" /> }
+  @if (summary(); as text) { <app-options-backtest-setup-sentences [summary]="text" [(fillsOpen)]="fillsOpen" /> }
   @if (otherProblems().length > 0) {
     <p id="ob-whole-setup" class="problem">These problems are about the setup as a whole, or a part this page has no field for:</p>
     <ul class="sentences" aria-labelledby="ob-whole-setup">

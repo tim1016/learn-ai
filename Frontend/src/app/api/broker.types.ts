@@ -27282,10 +27282,13 @@ export interface components {
          *
          *     Each block is a list of whole sentences, one to an item, built as a list: the page shows them as they are and never
          *     splits or rebuilds them. ``setup`` is the setup normalised, with every default filled, as a run would be given it.
+         *     ``window`` is what the setup sets; ``fills`` is how the engine fills an order, which no setting changes.
          */
         SetupDescriptionResponse: {
             /** Costs */
             costs: string[];
+            /** Fills */
+            fills: string[];
             /** Legs */
             legs: components["schemas"]["LegDescriptionResponse"][];
             /** Notices */

@@ -62,10 +62,12 @@ class SetupDescriptionResponse(BaseModel):
 
     Each block is a list of whole sentences, one to an item, built as a list: the page shows them as they are and never
     splits or rebuilds them. ``setup`` is the setup normalised, with every default filled, as a run would be given it.
+    ``window`` is what the setup sets; ``fills`` is how the engine fills an order, which no setting changes.
     """
 
     setup: OptionsBacktestSetup
     window: list[str]
+    fills: list[str]
     legs: list[LegDescriptionResponse]
     square_off: list[str]
     costs: list[str]
@@ -77,6 +79,7 @@ class SetupDescriptionResponse(BaseModel):
         return cls(
             setup=served_setup(setup),
             window=list(description.window),
+            fills=list(description.fills),
             legs=[LegDescriptionResponse(leg_id=leg.leg_id, sentences=list(leg.sentences)) for leg in description.legs],
             square_off=list(description.square_off),
             costs=list(description.costs),

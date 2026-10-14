@@ -60,6 +60,10 @@ def _window(**changes: Any) -> str:
     return " ".join(describe_setup(_setup(**changes), full_session=_CLOCK).window)
 
 
+def _fills(**changes: Any) -> str:
+    return " ".join(describe_setup(_setup(**changes), full_session=_CLOCK).fills)
+
+
 def _costs(**changes: Any) -> str:
     return " ".join(describe_setup(_setup(**changes), full_session=_CLOCK).costs)
 
@@ -72,20 +76,27 @@ def test_the_window_gives_each_time_as_a_distance_and_as_the_clock_on_a_full_day
     assert re.search(r"exit is read 46 minutes before the close", window) and _before_close(46) in window
 
 
-def test_the_window_says_the_times_are_when_a_rule_is_read_and_an_order_fills_a_minute_on() -> None:
-    window = _window()
+def test_the_fills_say_the_times_are_when_a_rule_is_read_and_an_order_fills_a_minute_on() -> None:
+    fills = _fills()
 
-    assert "next minute's opening trade" in window
-    # The times are not the fills: the window never says the setup "starts" or "buys" at them.
-    assert not re.search(r"\b(starts|buys)\b", window, re.IGNORECASE)
-    assert re.search(r"at the exit.*sold.*cancelled.*nothing more is bought", window, re.IGNORECASE)
+    assert "next minute's opening trade" in fills
+    # The times are not the fills: neither block says the setup "starts" or "buys" at them.
+    assert not re.search(r"\b(starts|buys)\b", f"{_window()} {fills}", re.IGNORECASE)
+    assert re.search(r"at the exit.*sold.*cancelled.*nothing more is bought", fills, re.IGNORECASE)
 
 
-def test_the_window_says_a_buy_is_dropped_and_a_sale_is_tried_again_when_the_contract_does_not_trade() -> None:
-    window = _window()
+def test_the_fills_say_a_buy_is_dropped_and_a_sale_is_tried_again_when_the_contract_does_not_trade() -> None:
+    fills = _fills()
 
-    assert re.search(r"a buy is dropped if its contract does not trade", window, re.IGNORECASE)
-    assert re.search(r"a sale is tried each minute until it does", window, re.IGNORECASE)
+    assert re.search(r"a buy is dropped if its contract does not trade", fills, re.IGNORECASE)
+    assert re.search(r"a sale is tried each minute until it does", fills, re.IGNORECASE)
+
+
+def test_the_window_keeps_to_what_the_setup_sets_and_leaves_the_engines_fill_rules_to_the_fills() -> None:
+    window = _window(no_reentry_after=_before_close_time(60))
+
+    assert "next minute" not in window and "closes early" not in window and "dropped" not in window
+    assert "next minute" in _fills()
 
 
 def test_a_re_entry_cutoff_at_the_open_is_said_as_the_open() -> None:
@@ -100,12 +111,12 @@ def test_a_re_entry_cutoff_says_it_leaves_first_entries_alone_and_no_cutoff_says
     assert "First entries" not in _window()
 
 
-def test_the_window_says_what_an_early_close_does_to_it() -> None:
-    window = _window()
+def test_the_fills_say_what_an_early_close_does_to_the_times() -> None:
+    fills = _fills()
 
-    assert re.search(r"closes early", window)
-    assert re.search(r"keep their distance from the open and the close", window)
-    assert re.search(r"no longer fit is skipped", window)
+    assert re.search(r"closes early", fills)
+    assert re.search(r"keep their distance from the open and the close", fills)
+    assert re.search(r"no longer fit is skipped", fills)
 
 
 def test_a_re_entry_on_momentum_says_it_takes_a_new_starting_premium() -> None:
@@ -397,6 +408,7 @@ def _every_sentence(setup: Any) -> list[str]:
     described = describe_setup(setup, full_session=_CLOCK)
     return [
         *described.window,
+        *described.fills,
         *(sentence for leg in described.legs for sentence in leg.sentences),
         *described.square_off,
         *described.costs,
@@ -432,8 +444,9 @@ def test_the_blocks_have_the_sentences_the_setup_gives_rise_to_and_no_more() -> 
     cutoff = describe_setup(_setup(no_reentry_after=_before_close_time(60)), full_session=_CLOCK)
     estimated = describe_setup(_setup(fees={"kind": "estimated"}), full_session=_CLOCK)
 
-    # The window: trades, entry, exit, early close, fills, dropped buy, the exit; the cutoff adds two more.
-    assert len(plain.window) == 7 and len(cutoff.window) == 9
+    # The window: trades, entry, exit; the cutoff adds two more. The fills: early close, fills, dropped buy, the exit.
+    assert len(plain.window) == 3 and len(cutoff.window) == 5
+    assert len(plain.fills) == 4 and len(cutoff.fills) == 4
     # A plain leg: what it buys, and when it buys. Square off: one. Costs: fills, fees, cash; estimated adds one.
     assert [len(leg.sentences) for leg in plain.legs] == [2]
     assert len(plain.square_off) == 1
@@ -554,16 +567,18 @@ def test_a_bought_legs_sentences_are_what_they_were_with_every_rule_on() -> None
 
 
 def test_a_setup_that_sells_says_which_orders_open_and_which_close_and_a_setup_that_buys_is_said_as_it_was() -> None:
-    buys = describe_setup(_setup(), full_session=_CLOCK).window
-    sells = describe_setup(_setup(legs=[_COVER, _leg(leg_id="short_call", side="sell")]), full_session=_CLOCK).window
+    buying = describe_setup(_setup(), full_session=_CLOCK)
+    selling = describe_setup(_setup(legs=[_COVER, _leg(leg_id="short_call", side="sell")]), full_session=_CLOCK)
+    buys, sells = buying.fills, selling.fills
 
+    assert selling.window == buying.window
     assert re.search(r"A buy is dropped.*a sale is tried each minute until it does", " ".join(buys))
     assert "At the exit, whatever is open is sold, legs still waiting are cancelled and nothing more is bought." in buys
     assert len(sells) == len(buys)
     assert re.search(r"order to open is dropped.*order to close is tried each minute", " ".join(sells))
     assert re.search(r"a bought leg still open is sold, a sold leg still open is bought back", " ".join(sells))
     assert not any("A buy is dropped" in sentence or "whatever is open is sold" in sentence for sentence in sells)
-    assert sells[:5] == buys[:5]
+    assert sells[:2] == buys[:2]
 
 
 def test_the_sentences_of_a_setup_that_sells_are_whole_sentences_one_to_an_item() -> None:

@@ -129,7 +129,7 @@ export function readBackOf(body: SetupRequest): ServedSetup {
 }
 
 export function summaryFor(text: string): SetupSummary {
-  return { window: [`${text} window.`], legs: [], square_off: [`${text} square off.`], costs: [`${text} costs.`], notices: [], setup: exampleBody() };
+  return { window: [`${text} window.`], fills: [`${text} fills.`], legs: [], square_off: [`${text} square off.`], costs: [`${text} costs.`], notices: [], setup: exampleBody() };
 }
 
 const HOUR_MS = 60 * 60 * 1000;

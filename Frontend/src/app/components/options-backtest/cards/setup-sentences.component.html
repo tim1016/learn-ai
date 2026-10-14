@@ -3,6 +3,14 @@
   <div class="block">
     @for (sentence of summary().window; track $index) { <p class="sentence">{{ sentence }}</p> }
   </div>
+  @if (summary().fills.length > 0) {
+    <details #fills class="fills" [open]="fillsOpen()" (toggle)="fillsOpen.set(fills.open)">
+      <summary>How orders fill <span class="count">{{ summary().fills.length }} {{ summary().fills.length === 1 ? 'rule' : 'rules' }}</span></summary>
+      <div class="block">
+        @for (sentence of summary().fills; track $index) { <p class="sentence">{{ sentence }}</p> }
+      </div>
+    </details>
+  }
   <ul class="legs">
     @for (leg of summary().legs; track leg.leg_id; let position = $index) {
       <li class="block block--leg" [attr.data-leg-id]="leg.leg_id">

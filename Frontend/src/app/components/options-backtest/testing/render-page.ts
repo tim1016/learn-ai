@@ -36,6 +36,7 @@ export interface FakeService {
 export function sentencesFor(body: SetupRequest): SetupSummary {
   return {
     window: [`Window for ${body.underlying}.`],
+    fills: ['Orders fill a minute on.', 'An order to open is dropped when its contract does not trade.'],
     legs: body.legs.map((leg) => ({ leg_id: leg.leg_id, sentences: [`Sentence for leg ${leg.leg_id}.`] })),
     square_off: [`Square off is ${body.square_off}.`],
     costs: [`Costs start from ${body.starting_cash_usd}.`],
