@@ -30,6 +30,13 @@ from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
+from app.broker.alpaca.clerk.sqlite.facts import ExitReducingOrderCreatedFacts
+from app.broker.alpaca.clerk.sqlite.models import TransitionInput
+from app.broker.alpaca.clerk.sqlite.order_evidence import (
+    fold_failed,
+    fold_order_acknowledgement,
+    fold_order_evidence,
+)
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     ClerkProjection,
     ProjectedCommand,
@@ -46,7 +53,8 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
 )
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.contract.models import BrokerOrderLeg, OrderSide
+from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
+from app.engine.live.order_identity import build_bot_order_namespace, build_order_ref
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.marketdata.feed import FeedContinuityEvent
 from app.schemas.broker_bots import BotStatusView
@@ -57,6 +65,7 @@ from app.schemas.broker_v2_panel import (
     PanelAction,
     RecentDecisionView,
     RecentFillView,
+    StationView,
 )
 from app.schemas.live_runs import BotDutyOutcomeView
 from app.schemas.run_admission import (
@@ -1626,6 +1635,362 @@ def test_fill_station_requires_actual_fill_not_a_terminal_broker_state() -> None
     assert _station_states(filled)["FILL"] == "satisfied"
 
 
+def _rail_order(
+    broker_state: str | None,
+    *,
+    broker_order_id: str | None = "broker-1",
+    filled_quantity: float | None = None,
+    may_fill: bool = True,
+) -> ProjectedOrder:
+    return ProjectedOrder(
+        order_ref="order:enter",
+        client_order_id="order:enter",
+        broker_order_id=broker_order_id,
+        role="ENTRY",
+        broker_state=broker_state,
+        submitted_at_ms=_NOW - 350,
+        updated_at_ms=_NOW - 300,
+        filled_quantity=filled_quantity,
+        may_fill=may_fill,
+    )
+
+
+def _rail_by_station(
+    orders: tuple[ProjectedOrder, ...],
+    *,
+    operation_state: str,
+    terminal_receipt_id: str | None = None,
+) -> dict[str, StationView]:
+    adapted = adapt_sqlite_panel(
+        _panel(_status(), _clerk_status()),
+        _rail_projection(
+            orders=orders, operation_state=operation_state, terminal_receipt_id=terminal_receipt_id
+        ),
+    )
+    return {station.station_id: station for station in adapted.rail.stations}
+
+
+def _broker_order(
+    client_order_id: str, *, status: str, order_id: str, side: str = "buy", filled_quantity: float = 0.0
+) -> BrokerOrder:
+    """One broker snapshot of an order, as a trade update or a REST read reports it."""
+    return BrokerOrder(
+        broker="alpaca", order_id=order_id, client_order_id=client_order_id, symbol="SPY",
+        asset_class="us_equity", side=side, order_type="market", time_in_force="day", quantity=1,
+        filled_quantity=filled_quantity, limit_price=None, stop_price=None,
+        filled_avg_price=100.0 if filled_quantity else None, status=status, submitted_at_ms=_NOW,
+        created_at_ms=_NOW, updated_at_ms=_NOW + 5, filled_at_ms=None, canceled_at_ms=None,
+        expired_at_ms=None, events=[], observed_at_ms=_NOW + 5,
+    )
+
+
+def _accepted_entry(repo: ClerkSqliteRepository, decision_id: str = "dec-entry"):
+    return accept_enter(
+        repo, account_id=ACCT, strategy_instance_id=SID, decision_id=decision_id,
+        lifecycle_run_id="run-1", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+    )
+
+
+def _real_panel(repo: ClerkSqliteRepository, *, selected_ref: str | None = None) -> BotPanelView:
+    """The panel served for what the real Clerk has recorded, the newest operation's rail by default."""
+    reader = SqliteClerkProjectionReader.from_repository(repo)
+    try:
+        projection = reader.bot_snapshot(SID)
+    finally:
+        reader.close()
+    assert projection is not None
+    base = _panel(_status(), _clerk_status())
+    base = base.model_copy(
+        update={"rail": base.rail.model_copy(update={"transaction_ref": selected_ref})}
+    )
+    return adapt_sqlite_panel(base, projection, repository=repo)
+
+
+def _real_rail(repo: ClerkSqliteRepository, *, selected_ref: str | None = None) -> dict[str, StationView]:
+    panel = _real_panel(repo, selected_ref=selected_ref)
+    return {station.station_id: station for station in panel.rail.stations}
+
+
+def _exit_of_a_filled_entry(
+    repo: ClerkSqliteRepository, *, reducing_status: str | None, reducing_filled: float = 0.0,
+    fail_exit: bool = False,
+) -> SimpleNamespace:
+    """A filled entry and the EXIT closing it; the EXIT links the entry beside its own reducing order.
+
+    Returns the two operations' ids and the entry's and the reducing order's refs.
+    """
+    entered = _accepted_entry(repo)
+    fold_order_evidence(
+        repo, effect_operation_id=entered.effect_operation_id,
+        order=_broker_order(entered.order_ref, status="filled", order_id="broker-entry", filled_quantity=1.0),
+    )
+    exited = accept_exit(
+        repo, account_id=ACCT, strategy_instance_id=SID, decision_id="dec-exit",
+        lifecycle_run_id="run-1", entry_order_ref=entered.order_ref,
+    )
+    effect = repo.effect_operation(exited.effect_operation_id)
+    assert effect is not None
+    reducing_ref = build_order_ref(build_bot_order_namespace(SID), "reduce-1")
+    repo.append_transition(
+        TransitionInput(
+            strategy_instance_id=SID, run_id=effect.run_id, command_id=effect.command_id,
+            effect_operation_id=exited.effect_operation_id, order_ref=reducing_ref,
+            transition_kind="EXIT_REDUCING_ORDER_CREATED", custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK", operation_state="in_progress",
+            clerk_observed_at_ms=repo.clock(), summary_code="EXIT_REDUCING_ORDER_CREATED",
+            facts_json=ExitReducingOrderCreatedFacts(symbol="SPY", side="SELL", quantity=1.0).to_facts_json(),
+        )
+    )
+    if reducing_status is not None:
+        fold_order_evidence(
+            repo, effect_operation_id=exited.effect_operation_id,
+            order=_broker_order(
+                reducing_ref, status=reducing_status, order_id="broker-reduce", side="sell",
+                filled_quantity=reducing_filled,
+            ),
+        )
+    if fail_exit:
+        fold_failed(
+            repo, effect_operation_id=exited.effect_operation_id, order_ref=reducing_ref,
+            summary_code="ORDER_SUBMIT_FAILED", reason="Alpaca refused the order.", why="test",
+        )
+    return SimpleNamespace(
+        enter_operation_id=entered.effect_operation_id,
+        exit_operation_id=exited.effect_operation_id,
+        entry_order_ref=entered.order_ref,
+        reducing_order_ref=reducing_ref,
+    )
+
+
+def test_a_failed_entry_that_never_reached_the_broker_is_blocked_once() -> None:
+    """#3217: the rail said "Waiting - expected to progress" for an order that had ended. The
+    station where it stopped carries the alert; the one after it is blocked by it, not a second alarm."""
+    stations = _rail_by_station(
+        (_rail_order(None, broker_order_id=None),),
+        operation_state="failed",
+        terminal_receipt_id="receipt:enter",
+    )
+
+    assert {station_id: station.state for station_id, station in stations.items()} == {
+        "SIGNAL": "satisfied",
+        "INTENT": "satisfied",
+        "SUBMIT_GATE": "satisfied",
+        "BROKER_ACK": "blocked",
+        "FILL": "blocked",
+        "RECONCILED": "satisfied",
+    }
+    ack, fill = stations["BROKER_ACK"], stations["FILL"]
+    assert ack.blocker is not None
+    assert ack.blocker.condition.id == "ORDER_NEVER_ACKNOWLEDGED"
+    assert ack.blocker.condition.severity == "warning"
+    assert "failed" in ack.blocker.detail
+    assert fill.blocker is None
+    assert (ack.state_label, fill.state_label) == ("Blocked", "Blocked")
+    assert ack.evidence_at_ms == fill.evidence_at_ms == _NOW - 300
+
+
+def test_a_working_order_keeps_fill_waiting_even_beside_a_failed_operation() -> None:
+    """Blocked is for an ending. An order the broker still holds may fill."""
+    for operation_state in ("in_progress", "failed"):
+        stations = _rail_by_station((_rail_order("accepted"),), operation_state=operation_state)
+
+        assert stations["FILL"].state == "waiting"
+        assert stations["FILL"].blocker is None
+
+
+def test_an_order_canceled_after_a_partial_execution_reads_filled_not_blocked() -> None:
+    stations = _rail_by_station(
+        (_rail_order("canceled", filled_quantity=3.0, may_fill=False),), operation_state="in_progress"
+    )
+
+    assert stations["FILL"].state == "satisfied"
+
+
+def test_an_operation_whose_outcome_is_unknown_stays_unknown_not_blocked() -> None:
+    stations = _rail_by_station(
+        (_rail_order(None, broker_order_id=None),), operation_state="unknown"
+    )
+
+    assert stations["BROKER_ACK"].state == "unknown_stale"
+    assert stations["FILL"].state == "unknown_stale"
+
+
+def test_an_ended_order_is_not_called_unfilled_without_the_books_to_prove_it() -> None:
+    """The Clerk's own proof of zero fill reads its books; with none to read, the order is over
+    and its fill is unknown, never "blocked"."""
+    stations = _rail_by_station(
+        (_rail_order("canceled", may_fill=False),), operation_state="in_progress"
+    )
+
+    assert stations["FILL"].state == "unknown_stale"
+    assert stations["FILL"].blocker is None
+
+
+@pytest.mark.parametrize("broker_state", ["canceled", "expired", "rejected"])
+def test_an_order_the_broker_ended_with_no_fill_is_blocked_at_fill_as_a_warning(
+    tmp_path: Path, broker_state: str
+) -> None:
+    """The Clerk folds the entry to failed only on a later observation, so the rail does not
+    wait on that: the broker's ending, with no execution reported or recorded, is the fact."""
+    repo = _real_repo(tmp_path)
+    try:
+        entered = _accepted_entry(repo)
+        fold_order_acknowledgement(
+            repo, effect_operation_id=entered.effect_operation_id,
+            order=_broker_order(entered.order_ref, status=broker_state, order_id="broker-1"),
+        )
+        stations = _real_rail(repo)
+    finally:
+        repo.close()
+
+    assert stations["BROKER_ACK"].state == "satisfied"
+    fill = stations["FILL"]
+    assert fill.state == "blocked"
+    assert fill.blocker is not None
+    assert fill.blocker.condition.severity == "warning"
+    assert broker_state in fill.blocker.detail
+    assert "changed no position" not in fill.blocker.detail
+
+
+def test_a_fill_the_broker_reported_and_the_books_lack_is_not_read_as_unfilled(tmp_path: Path) -> None:
+    """#3217: broker partial fill, then canceled, execution slice not landed. The Clerk calls that
+    outcome unknown (``entry_outcome``) and does not fold the entry to failed; the rail must not
+    say the order ended without a fill."""
+    repo = _real_repo(tmp_path)
+    try:
+        entered = _accepted_entry(repo)
+        fold_order_acknowledgement(
+            repo, effect_operation_id=entered.effect_operation_id,
+            order=_broker_order(
+                entered.order_ref, status="canceled", order_id="broker-1", filled_quantity=1.0
+            ),
+        )
+        assert repo.order_fills_short_of_broker_cumulative(entered.order_ref) is True
+        stations = _real_rail(repo)
+    finally:
+        repo.close()
+
+    assert stations["FILL"].state == "unknown_stale"
+    assert stations["FILL"].blocker is None
+
+
+def test_a_failed_operation_outside_the_bounded_window_reads_blocked_too(tmp_path: Path) -> None:
+    """The audit trail selects an old order by ref; its rail comes from the stored-key join, which
+    reads the operation through the projection reader the window is built with."""
+    repo = _real_repo(tmp_path)
+    try:
+        failed = _accepted_entry(repo, "dec-failed")
+        fold_failed(
+            repo,
+            effect_operation_id=failed.effect_operation_id,
+            order_ref=failed.order_ref,
+            summary_code="ORDER_SUBMIT_FAILED",
+            reason="Alpaca refused the order.",
+            why="test",
+        )
+        newest = _accepted_entry(repo, "dec-newest")
+        reader = SqliteClerkProjectionReader.from_repository(repo)
+        try:
+            windowed = reader.bot_snapshot(SID, operation_limit=1)
+        finally:
+            reader.close()
+        assert windowed is not None
+        assert [op.effect_operation_id for op in windowed.operations] == [newest.effect_operation_id]
+
+        base = _panel(_status(), _clerk_status())
+        base = base.model_copy(
+            update={"rail": base.rail.model_copy(update={"transaction_ref": failed.effect_operation_id})}
+        )
+
+        adapted = adapt_sqlite_panel(base, windowed, repository=repo)
+    finally:
+        repo.close()
+
+    assert adapted.rail.transaction_ref == failed.effect_operation_id
+    states = _station_states(adapted)
+    assert (states["BROKER_ACK"], states["FILL"]) == ("blocked", "blocked")
+
+
+def test_an_exit_that_failed_is_not_satisfied_by_the_entry_it_closes(tmp_path: Path) -> None:
+    """#3217: an EXIT links the entries it closes, so a filled entry satisfied BROKER_ACK and FILL
+    whatever became of the exit, and the newest operation after a stop is the EXIT."""
+    repo = _real_repo(tmp_path)
+    try:
+        refs = _exit_of_a_filled_entry(repo, reducing_status=None, fail_exit=True)
+        exit_stations = _real_rail(repo)
+        enter_stations = _real_rail(repo, selected_ref=refs.enter_operation_id)
+    finally:
+        repo.close()
+
+    assert exit_stations["BROKER_ACK"].state == "blocked"
+    assert exit_stations["FILL"].state == "blocked"
+    assert exit_stations["BROKER_ACK"].blocker is not None
+    assert exit_stations["FILL"].blocker is None
+    # The entry's own rail still reads what happened to the entry.
+    assert (enter_stations["BROKER_ACK"].state, enter_stations["FILL"].state) == ("satisfied", "satisfied")
+
+
+def test_an_order_ref_selects_the_operation_that_sent_it_not_the_exit_that_links_it(tmp_path: Path) -> None:
+    """The audit trail sends an order's ref, and the EXIT is the newest operation in the window.
+    The entry's ref reads the ENTER's rail, as it does when the ENTER is outside the window; the
+    reducing order's ref reads the EXIT's."""
+    repo = _real_repo(tmp_path)
+    try:
+        refs = _exit_of_a_filled_entry(repo, reducing_status=None, fail_exit=True)
+        by_entry = _real_panel(repo, selected_ref=refs.entry_order_ref).rail
+        by_reducing = _real_panel(repo, selected_ref=refs.reducing_order_ref).rail
+    finally:
+        repo.close()
+
+    entry_states = {station.station_id: station.state for station in by_entry.stations}
+    reducing_states = {station.station_id: station.state for station in by_reducing.stations}
+    assert by_entry.transaction_ref == refs.enter_operation_id
+    assert (entry_states["BROKER_ACK"], entry_states["FILL"]) == ("satisfied", "satisfied")
+    assert by_reducing.transaction_ref == refs.exit_operation_id
+    assert (reducing_states["BROKER_ACK"], reducing_states["FILL"]) == ("blocked", "blocked")
+
+
+@pytest.mark.parametrize("reducing_status", ["rejected", "canceled"])
+def test_an_exit_whose_reducing_order_the_broker_ended_reads_blocked_at_fill(
+    tmp_path: Path, reducing_status: str
+) -> None:
+    repo = _real_repo(tmp_path)
+    try:
+        _exit_of_a_filled_entry(repo, reducing_status=reducing_status)
+        stations = _real_rail(repo)
+    finally:
+        repo.close()
+
+    assert stations["BROKER_ACK"].state == "satisfied"
+    fill = stations["FILL"]
+    assert fill.state == "blocked"
+    assert fill.blocker is not None
+    assert reducing_status in fill.blocker.detail
+
+
+def test_an_exit_whose_reducing_order_is_working_waits_at_fill_whatever_its_entry_did(tmp_path: Path) -> None:
+    repo = _real_repo(tmp_path)
+    try:
+        _exit_of_a_filled_entry(repo, reducing_status="accepted")
+        stations = _real_rail(repo)
+    finally:
+        repo.close()
+
+    assert stations["BROKER_ACK"].state == "satisfied"
+    assert stations["FILL"].state == "waiting"
+
+
+def test_an_exit_whose_reducing_order_filled_reads_filled(tmp_path: Path) -> None:
+    repo = _real_repo(tmp_path)
+    try:
+        _exit_of_a_filled_entry(repo, reducing_status="filled", reducing_filled=1.0)
+        stations = _real_rail(repo)
+    finally:
+        repo.close()
+
+    assert (stations["BROKER_ACK"].state, stations["FILL"].state) == ("satisfied", "satisfied")
+
+
 def test_panel_composes_cards() -> None:
     decision = decision_receipt(seq=3, ts_ms=_NOW - 500, outcome="entered", reason_code="CROSS_UP")
     panel = _panel(_status(), _clerk_status(), decision)
@@ -3140,17 +3505,77 @@ def test_sqlite_status_has_no_last_check_before_any_receipt_or_clean_pass() -> N
     assert sqlite_clerk_status(_rail_projection(orders=()), last_clean_pass_at_ms=None).latest_reconciliation is None
 
 
-def test_sqlite_status_that_is_not_clean_keeps_its_receipts_time() -> None:
-    """A clean pass did not see what holds the account, so it does not date a status that is not clean."""
-    hold = ProjectedHold(
-        hold_id="hold:stream", scope="ACCOUNT", strategy_instance_id=None,
-        reason_code="STREAM_HEALTH_HOLD", opened_at_ms=_NOW - 9_000, evidence_refs=(),
+def _account_hold(reason_code: str) -> ProjectedHold:
+    return ProjectedHold(
+        hold_id=f"hold:{reason_code}", scope="ACCOUNT", strategy_instance_id=None,
+        reason_code=reason_code, opened_at_ms=_NOW - 9_000, evidence_refs=(),
     )
-    projection = replace(_exposure_projection(orders=()), holds=(hold,))
+
+
+@pytest.mark.parametrize("reason_code", ["STREAM_HEALTH_HOLD", "LIVE_ENVELOPE_LOSS_HOLD"])
+def test_a_hold_the_sweep_did_not_find_does_not_change_what_the_last_check_found(reason_code: str) -> None:
+    """#3217: a stream-health or loss hold read "Last check against Alpaca: Unexplained order"
+    beside a reconciliation that had resolved. Those holds are not reconciliation findings."""
+    projection = replace(_exposure_projection(orders=()), holds=(_account_hold(reason_code),))
+
+    status = sqlite_clerk_status(projection, last_clean_pass_at_ms=None)
+
+    assert status.hold.active is True
+    assert status.latest_reconciliation == ReconciliationSummary(verdict="clean", recorded_at_ms=_NOW - 100)
+
+
+def test_an_unexplained_order_hold_is_what_the_last_check_found() -> None:
+    projection = replace(
+        _exposure_projection(orders=()), holds=(_account_hold("UNEXPLAINED_ORDER_HOLD"),)
+    )
 
     status = sqlite_clerk_status(projection, last_clean_pass_at_ms=_NOW - 4_000)
 
-    assert status.latest_reconciliation == ReconciliationSummary(verdict="unexplained_order", recorded_at_ms=_NOW - 100)
+    assert status.latest_reconciliation == ReconciliationSummary(
+        verdict="unexplained_order", recorded_at_ms=_NOW - 100
+    )
+
+
+@pytest.mark.parametrize(
+    ("pass_at_ms", "verdict", "recorded_at_ms"),
+    [
+        pytest.param(None, "stale", _NOW - 100, id="no-pass"),
+        # A clean pass older than the receipt did not see what the receipt left open,
+        # so it does not date a status that is not clean.
+        pytest.param(_NOW - 4_000, "stale", _NOW - 100, id="older-pass-does-not-date-it"),
+        pytest.param(_NOW - 50, "clean", _NOW - 50, id="a-newer-clean-pass-settles-it"),
+    ],
+)
+def test_a_reconciliation_that_could_not_settle_is_not_a_clean_check(
+    pass_at_ms: int | None, verdict: str, recorded_at_ms: int
+) -> None:
+    """#3217: with nothing held or uncertain, an attempt that ended STILL_UNKNOWN read "Clean"."""
+    base = _exposure_projection(orders=())
+    projection = replace(
+        base, latest_reconciliation=replace(base.latest_reconciliation, outcome="STILL_UNKNOWN")
+    )
+
+    status = sqlite_clerk_status(projection, last_clean_pass_at_ms=pass_at_ms)
+
+    assert status.latest_reconciliation == ReconciliationSummary(
+        verdict=verdict, recorded_at_ms=recorded_at_ms
+    )
+
+
+def test_an_open_uncertainty_keeps_a_resolved_check_from_reading_clean() -> None:
+    uncertainty = ProjectedUncertainty(
+        uncertainty_id="uncertainty:1", scope="CUSTODY_SUBJECT", severity="error",
+        blocks_new_exposure=True, allows_reduction=True, custody_owner="ACCOUNT_CLERK",
+        strategy_instance_id=SID, reason_code="ORDER_OUTCOME_UNKNOWN",
+        headline="An order's outcome is unknown", explanation="The Clerk could not confirm it.",
+        operator_impact="New exposure is paused.", next_step="Reconcile now.",
+        observed_at_ms=_NOW - 1_000, evidence_age_ms=1_000, evidence_refs=("order:enter",),
+    )
+    projection = replace(_exposure_projection(orders=()), uncertainties=(uncertainty,))
+
+    status = sqlite_clerk_status(projection, last_clean_pass_at_ms=_NOW - 50)
+
+    assert status.latest_reconciliation == ReconciliationSummary(verdict="stale", recorded_at_ms=_NOW - 100)
 
 
 def test_operator_stop_keeps_its_own_copy_even_with_exposure() -> None:
