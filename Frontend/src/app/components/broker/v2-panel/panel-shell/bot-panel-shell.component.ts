@@ -18,8 +18,7 @@ import {
   untracked,
   viewChild,
 } from '@angular/core';
-import { toSignal } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { MessageService } from 'primeng/api';
 
 import type {
@@ -294,16 +293,11 @@ export class BotPanelShellComponent {
   private readonly brokers = inject(BrokersService);
   private readonly liveStore = inject(BotPanelLiveStore);
   private readonly destroyRef = inject(DestroyRef);
-  private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly messageService = inject(MessageService);
   private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly titleContext = inject(WorkspaceTitleContextService);
   private readonly injector = inject(Injector);
-
-  private readonly queryParams = toSignal(this.route.queryParamMap, {
-    initialValue: this.route.snapshot.queryParamMap,
-  });
 
   // ── The way back ─────────────────────────────────────────────────────────
   // A bot's page sits inside the account workspace, under Home (PRD #2560):

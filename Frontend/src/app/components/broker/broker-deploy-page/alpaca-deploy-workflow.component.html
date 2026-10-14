@@ -97,7 +97,6 @@
           @if (selectedStrategy(); as strategy) {
             <app-deploy-paper-access
               [target]="deployTarget(view.account_id)"
-              [accountId]="view.account_id"
               [strategy]="strategy"
               [modeLabel]="brokerModeLabel()"
               (accessChanged)="paperAccessChanged()"

@@ -8,9 +8,6 @@
 
 import type { components } from '../../../../api/broker.types';
 
-// ── Channel health state (closed vocabulary) ─────────────────────────────────
-
-export type ChannelState = 'healthy' | 'unhealthy' | 'unknown';
 export type StationState =
   | 'satisfied'
   | 'waiting'
@@ -48,11 +45,8 @@ export type BotCatalogView = components['schemas']['BotCatalogView'];
 export type ExposureNoticeView = components['schemas']['ExposureNoticeView'];
 export type StartupJoinView = components['schemas']['StartupJoinView'];
 export type BotHealthCard = components['schemas']['BotHealthCard'];
-export type ChannelHealthView = components['schemas']['ChannelHealthView'];
 export type FeedContinuityView = components['schemas']['FeedContinuityView'];
-export type ClerkCard = components['schemas']['ClerkCard'];
 export type StationView = components['schemas']['StationView'];
-export type ReadinessCheckView = components['schemas']['ReadinessCheckView'];
 export type TransactionRail = components['schemas']['TransactionRail'];
 export type PanelAction = components['schemas']['PanelAction'];
 

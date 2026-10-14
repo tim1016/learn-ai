@@ -55,20 +55,3 @@ describe('intersectAll', () => {
     expect(intersectAll([])).toEqual([]);
   });
 });
-
-describe('projected line-count cap budget', () => {
-  // Mirrors the backend cap and the inline projection in the component:
-  // lines = 1 (underlying) + expiries × strikes × 2.
-  // This guards the implicit contract — if either side changes, this
-  // test points at it.
-  const project = (expiries: number, strikes: number): number =>
-    1 + expiries * strikes * 2;
-
-  it('keeps the default ±5 × 2 monthlies config under 100', () => {
-    expect(project(2, 11)).toBeLessThan(100);
-  });
-
-  it('rejects 5 expiries × 11 strikes × 2 sides (over cap)', () => {
-    expect(project(5, 11)).toBeGreaterThan(100);
-  });
-});

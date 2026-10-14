@@ -101,7 +101,6 @@ export class BrokerOptionsChainComponent {
   readonly selectedStrikes = signal<ReadonlySet<number>>(new Set());
   readonly strikesLoading = signal(false);
   readonly setupError = signal<unknown>(null);
-  readonly setupLoading = signal(false);
   readonly paused = signal(false);
 
   readonly selectedStrikesCount = computed(() => this.selectedStrikes().size);
@@ -214,7 +213,6 @@ export class BrokerOptionsChainComponent {
 
   async loadExpirations(): Promise<void> {
     if (!this.canStream()) return;
-    this.setupLoading.set(true);
     this.setupError.set(null);
     try {
       const result = await this.broker.expirations(this.symbol());
@@ -229,8 +227,6 @@ export class BrokerOptionsChainComponent {
       if (next) this.selectedExpiry.set(next.ms);
     } catch (err) {
       this.setupError.set(err);
-    } finally {
-      this.setupLoading.set(false);
     }
   }
 

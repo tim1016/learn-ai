@@ -57,7 +57,6 @@ type PaperAccessFlow =
   templateUrl: "./deploy-paper-access.component.html",
 })
 export class DeployPaperAccessComponent {
-  readonly accountId = input.required<string>();
   readonly target = input.required<ResourceTarget>();
   readonly strategy = input.required<DeployBotStrategy>();
   /**

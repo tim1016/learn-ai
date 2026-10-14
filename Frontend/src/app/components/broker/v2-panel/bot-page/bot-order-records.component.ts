@@ -20,9 +20,8 @@ import { JournalTailComponent } from '../operator-lens/journal-tail.component';
  * The bot page's Order records fold body (#2563): the bot's working orders,
  * the selected order's recorded path, and the audit trail.
  *
- * The audit trail is read from the server only once `activated` turns true
- * (the host sets it when the fold is first opened), then reloads only for a
- * new journal cursor or lane provenance — panel polling alone is inert.
+ * The audit trail reloads only for a new journal cursor or lane provenance —
+ * panel polling alone is inert.
  */
 @Component({
   selector: 'app-bot-order-records',
@@ -43,8 +42,6 @@ export class BotOrderRecordsComponent {
   readonly clerkId = input.required<string>();
   readonly accountId = input.required<string>();
   readonly sid = input.required<string>();
-  /** True once the owner has opened the fold; never falls back to false. */
-  readonly activated = input(false);
 
   readonly transactionSelected = output<string>();
 
@@ -62,17 +59,15 @@ export class BotOrderRecordsComponent {
   });
 
   protected readonly journalPage = resource({
-    params: () => this.activated()
-      ? [
-          this.broker(),
-          this.clerkId(),
-          this.accountId(),
-          this.sid(),
-          this.target().bindingGeneration ?? '',
-          this.target().routingEpoch ?? '',
-          this.panel().journal_tail_seq ?? 'empty',
-        ].join('|')
-      : undefined,
+    params: () => [
+      this.broker(),
+      this.clerkId(),
+      this.accountId(),
+      this.sid(),
+      this.target().bindingGeneration ?? '',
+      this.target().routingEpoch ?? '',
+      this.panel().journal_tail_seq ?? 'empty',
+    ].join('|'),
     loader: () =>
       this.panelSvc.getEvidence(this.target(), this.sid(), {
         pageSize: 24,
