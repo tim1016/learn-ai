@@ -344,6 +344,7 @@ def test_a_spreads_debit_moves_cash_and_option_buying_power_together_and_the_acc
 _CLEAN_PASS = "B2-bull-call-spread-clean-pass"
 _OVERLAP = "B3-overlap-spread"
 _RESTARTED = "B4-spread-restart-scheduled-close"
+_SPREAD_LONG, _SPREAD_SHORT = "SPY261016C00768000", "SPY261016C00773000"
 # step -> (long leg, short leg, the net limit each order was sent at (None: a market order), the net price each
 # order filled at as Alpaca states it). Entries and exits are in the order they were sent.
 _SPREAD_PASSES: dict[str, tuple[str, str, tuple[str | None, ...], tuple[str, ...]]] = {
@@ -356,9 +357,8 @@ _SPREAD_PASSES: dict[str, tuple[str, str, tuple[str | None, ...], tuple[str, ...
     _RESTARTED: ("SPY261016C00768000", "SPY261016C00773000", ("2.31", None), ("2.31", "-2.43")),
 }
 _SPREAD_PASS = pytest.mark.parametrize("step", sorted(_SPREAD_PASSES))
-_SPREAD_PASS_WITH_FEED = pytest.mark.parametrize(
-    "step", sorted(step for step in _SPREAD_PASSES if (_RECORDINGS / step / "activities.jsonl").exists())
-)
+# The steps whose recordings keep the activity feed. B4's was left out on purpose (6 MB of polls).
+_SPREAD_PASS_WITH_FEED = pytest.mark.parametrize("step", [_CLEAN_PASS, _OVERLAP])
 
 
 def _fill_frames(step: str) -> list[dict[str, Any]]:
@@ -479,10 +479,18 @@ def test_two_bots_spreads_held_at_once_are_one_account_position_of_two_of_each_l
 
 def test_the_clerks_own_scheduled_close_sends_a_spread_held_through_a_restart_out_at_ten_to_four_as_one_order() -> None:
     """2026-10-14: the run had ended at the restart; the close owed by what is held was sent on time anyway."""
-    frames = _frames(_RESTARTED)
-    close = [data for data in frames if data["order"]["type"] == "market"]
+    records = [_body(line) for line in _lines(_RESTARTED, "stream")]
+    kinds = [
+        data["event"] if "event" in (data := body.get("data", {})) else body["stream"] for body in records
+    ]
+    # Entry, then the stream authorises and listens again (the Clerk came back up), then the exit's three frames.
+    assert kinds == ["pending_new", "new", "fill", "authorization", "listening", "pending_new", "new", "fill"]
 
-    assert [data["event"] for data in close] == ["pending_new", "new", "fill"]
+    entry_fill, close_fill = records[2]["data"], records[7]["data"]
+    assert entry_fill["position_qtys"] == {_SPREAD_LONG: "1", _SPREAD_SHORT: "-1"}
+    assert records[5]["data"]["order"]["type"] == "market"
     # 15:50:00 ET, ten minutes before the session's close: the frame stamps the close within its first second.
-    assert close[0]["timestamp"].startswith("2026-10-14T19:50:00.")
-    assert Decimal(close[-1]["price"]) == Decimal("-2.43")
+    assert records[5]["data"]["timestamp"].startswith("2026-10-14T19:50:00.")
+    assert Decimal(close_fill["price"]) == Decimal("-2.43")
+    # Both legs are flat after the one closing order.
+    assert close_fill["position_qtys"] == {_SPREAD_LONG: "0", _SPREAD_SHORT: "0"}

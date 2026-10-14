@@ -610,8 +610,9 @@ time, anything not promoted is off, and the amendment lists what stays unverifie
 Write these into the amendment as unverified; do not let a clean run read as
 proof of them.
 
-- **Regulatory fees.** Paper takes the clearing fee at the fill ($0.03 a contract
-  on 2026-10-14) and posts the regulatory fees the morning after, as non-trade
+- **Regulatory fees.** Paper takes the OCC clearing fee at the fill ($0.025 a contract,
+  the order's total rounded up to the cent: $0.03 for one contract, $0.05 for two, on
+  2026-10-14) and posts the regulatory fees the morning after, as non-trade
   `FEE` rows dated the trading day. A same-day run shows none of those rows, so
   what this system's fee model estimates for a spread's legs is checked only
   against the next morning's. Fee accounting stays unverified until then.
@@ -666,7 +667,7 @@ shown.
 | Fees unresolved after a spread: *Account fill coverage is incomplete*, every fee *account-unattributed*, and the spread's legs held only from the order lookup (no execution named) | A spread filled before #3177 was deployed: its legs' executions came only in the parent's `fill` frame, which was not credited | Pull the fix and restart: spreads after it are credited when the frame arrives. For legs already booked: stop the lane, copy its account store, boot the lane's own image with a wrapper that hands the parent's recorded `fill` frame (the capture journal's `stream` file) to the consumer, then start the lane again. Each leg's execution is credited and the population is explained (done once on 2026-10-14; `test_a_parents_fill_frame_that_arrives_after_the_legs_were_read_by_lookup_explains_their_cumulative`). Check the account's Home no longer lists the fee evidence. |
 | A bot's entry is refused `RECONCILIATION_IN_PROGRESS` ("Account reconciliation is proving fresh broker truth") two seconds after another bot's entry on the same bar | Two bots decided on the same signal in the same second; the second's decision reached the lane while the first's order was being proven. Under a lagging lane (event loop unserved 1 to 4 s) it happened 2 of 2 times on 2026-10-14 | Nothing was sent; the bot decides again on the next bar. For an overlapping pass, wait for a bar where one bot holds and the other enters (it came a minute later). Close the bot pages first. |
 | An entry's comparison reads *unknown, FIRST_READING_FAILED* (or *CASH_MOVEMENT_UNREAD*) although Alpaca answered in under 100 ms | The first reading's 1.5 s bound ran out while the lane's event loop was stalled: the account call began late and its answer was discarded | Not a discrepancy and never promoted. Close the bot pages and repeat the step; the lane's log has "the account's option buying power could not be read" at the same second. |
-| A stopped bot holds a two-leg structure and its warning says *Use Flatten to close this position* with no Flatten button; the bot page's Sell answers *Flatten is offered for a stopped bot holding one position* | The stranded-position warning offers Flatten only when the bot holds exactly one position, and a safe flatten sends one single-contract exit per leg, never one `mleg` order | Do not close the legs one by one at Alpaca. The Clerk closes the structure itself at its scheduled close, 10 minutes before the session's close for a held sold leg (page: *This system closes the position itself at ...*), as one order. Seen on 2026-10-14: sent 15:50:00 ET, filled in 6 seconds. |
+| A stopped bot holds a two-leg structure and its warning says *Use Flatten to close this position* with no Flatten button; the bot page's Sell answers *Flatten is offered for a stopped bot holding one position* | The stranded-position warning offers Flatten only when the bot holds exactly one position, and a safe flatten sends one single-contract exit per leg, never one `mleg` order | Do not close the legs one by one at Alpaca. The Clerk closes the structure itself at its scheduled close, 10 minutes before the session's close for a held sold leg (page: *This system closes the position itself at ...*), as one order. Seen on 2026-10-14: sent 15:50:00 ET, filled 0.17 seconds later. |
 
 ## Repair record: 2026-10-13
 
@@ -746,8 +747,8 @@ The second day, on the same flat Paper account (option level 3), after #3137 and
   by exactly the limit less the fill ($1.00) and the unspent half of the fee provision ($0.05).
   A restart with a spread held kept the position and the bot's holding; the run ended, and the
   Clerk's own scheduled close (10 minutes before the session's close, owed by what is held) was
-  sent at 15:50:00 ET as one `mleg` market order and filled 6 seconds later at a net -2.43, the
-  account flat (`B4-spread-restart-scheduled-close`). The entry's comparison read *unknown, the
+  sent at 15:50:00 ET as one `mleg` market order and filled 0.17 seconds after it was sent, at a
+  net -2.43, the account flat (`B4-spread-restart-scheduled-close`). The entry's comparison read *unknown, the
   Clerk restarted before the second reading*, as it should.
 - **Not observable here.** An entry that rests until the deadline's cancel: Paper filled a limit at
   the ask 0.5 s after accepting it, even with the shortest 1 s wait (and its stream answer reached
