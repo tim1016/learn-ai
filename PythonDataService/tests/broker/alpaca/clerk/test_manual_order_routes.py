@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import httpx
 import pytest
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from httpx import ASGITransport
 
 from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, set_active_clerk_runtime
@@ -190,9 +192,12 @@ def api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     app = FastAPI()
     # Production-shaped: app.main registers this too (#2067) -- the
     # control-secret guard raises a FleetControlError from a dependency.
-    from app.utils.error_handlers import install_fleet_control_error_handler
+    from app.utils.error_handlers import install_fleet_control_error_handler, request_validation_exception_handler
 
     install_fleet_control_error_handler(app)
+    # Also production-shaped: without it FastAPI's own 422 cannot encode a
+    # rejected ``Infinity``/``NaN`` and the refusal surfaces as a 500 (#3169).
+    app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
     app.include_router(router)
     try:
         yield app, repo, port, health
@@ -736,4 +741,57 @@ async def test_an_extended_hours_manual_leg_is_refused_at_the_boundary(api) -> N
     # answers with the unsupported-shape message.
     assert "regular-session" in submitted.json()["detail"]["message"]
     assert repo.manual_order_ticket(TICKET_ID) is None, "no ticket may be reserved"
+    assert port.submit_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["quantity", "limit_price"])
+@pytest.mark.parametrize("literal", ["Infinity", "-Infinity", "NaN"])
+async def test_a_non_finite_leg_number_is_refused_before_a_ticket_or_a_port_call(
+    api: tuple[FastAPI, ClerkSqliteRepository, FakeAlpacaPort, dict[str, bool]],
+    field: str,
+    literal: str,
+) -> None:
+    """#3169: Python's JSON parser takes the bare ``Infinity``/``NaN`` literals.
+
+    ``Infinity > 0`` held, so an infinite quantity passed the leg's ``gt=0``
+    bound, was stored, reached the broker port, and left a row the account
+    projection could not read -- the account's Clerk status then answered 503.
+    An infinite limit price raised a raw ``TypeError`` (a 500) instead.
+    """
+    app, repo, port, _health = api
+    instruction: dict[str, object] = {
+        "symbol": "SPY",
+        "side": "buy",
+        "quantity": 1,
+        "order_type": "limit",
+        "limit_price": 499.5,
+    }
+    instruction[field] = "__NON_FINITE__"
+    legs = [{"leg_id": LEG_ID, "instruction": instruction}]
+    # httpx's ``json=`` refuses non-finite floats, so the literal goes in raw.
+    preview_body = json.dumps({"ticket_id": TICKET_ID, "legs": legs}).replace('"__NON_FINITE__"', literal)
+    submit_body = json.dumps({"legs": legs, "preview_token": "0" * 64}).replace('"__NON_FINITE__"', literal)
+    json_header = {"content-type": "application/json"}
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        preview = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-orders/preview",
+            headers={**_headers(), **json_header},
+            content=preview_body,
+        )
+        submitted = await client.put(
+            f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-order-tickets/{TICKET_ID}",
+            headers={**_headers(), **json_header},
+            content=submit_body,
+        )
+
+    for refused in (preview, submitted):
+        assert refused.status_code == 422
+        (error,) = refused.json()["detail"]
+        assert error["type"] == "finite_number"
+        assert error["loc"][-1] == field
+    assert repo.manual_order_ticket(TICKET_ID) is None, "no ticket may be reserved"
+    assert port.account_calls == 0
+    assert port.asset_lookup_calls == []
     assert port.submit_calls == []
