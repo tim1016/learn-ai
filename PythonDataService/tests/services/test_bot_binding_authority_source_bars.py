@@ -249,7 +249,8 @@ async def test_projection_cannot_activate_a_new_private_authority_or_prepare_con
         assert runtime.clerk is None
         assert runtime.startup_failure.reason_code == "SYNTHETIC_ACTIVATION_REQUIRED"
     assert SyntheticActivationStore(tmp_path).latest(authority.account_id) is None
-    assert not (tmp_path / "accounts" / "alpaca" / authority.account_id / "clerk.db").exists()
+    # A read creates nothing of the account's: not its Clerk store, and not its source-bar ledger.
+    assert not (tmp_path / "accounts" / "alpaca" / authority.account_id).exists()
 
 
 async def test_cold_projection_and_concurrent_start_share_lifecycle_fence(tmp_path: Path) -> None:
@@ -318,10 +319,127 @@ async def test_admission_promotes_a_cold_projection_before_it_becomes_in_use(tmp
     try:
         async with selector.for_binding(binding).runtime_for_projection() as runtime:
             assert runtime.envelope_sync._task is None
+            assert runtime.deadline_keeper._task is None
             await selector.for_binding(binding).ensure_recoverable()
             in_use = True
             assert runtime.envelope_sync.risk_snapshot().observation.cash_available_usd == Decimal(500)
+            # An operating account keeps its scheduled closes: the keeper runs as it does on a fresh opening.
+            assert runtime.deadline_keeper._task is not None and not runtime.deadline_keeper._task.done()
         assert get_clerk_runtime(f"sim:{sid}") is runtime
         assert runtime.envelope_sync._task is not None and not runtime.envelope_sync._task.done()
+        assert runtime.deadline_keeper._task is not None and not runtime.deadline_keeper._task.done()
+    finally:
+        await close_synthetic_clerk_runtimes()
+
+
+async def test_promoting_an_orphans_read_runs_the_recovery_the_read_skipped(tmp_path: Path) -> None:
+    """A read of an unbound orphan opens it without recovery; operating it then recovers it first.
+
+    The orphan's run is still ACTIVE on disk when the read opens it. Promoted
+    in the same task, the opening must retire that run exactly as a fresh
+    operating opening does, before its scheduled closes are kept.
+    """
+    from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
+    from app.services.bot_binding_authority import BindingAuthoritySelector
+    from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
+    from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS
+
+    sid = "promoted-orphan-read"
+    binding = _trade_binding(sid).model_copy(update={
+        "mode": "dry_run", "sealed_account_id": f"sim:{sid}", "exit_terms": TERMS,
+    })
+    selector = BindingAuthoritySelector(artifacts_root=tmp_path, lifecycle_repo_for=lambda _: None,
+        real_projector=cast(AlpacaLifecycleProjector, object()), external_start_guard=None,
+        runtime_in_use=lambda _: False, clock=_TestClock(NOON))
+    deployed = selector.for_binding(binding)
+    try:
+        await deployed.ensure_recoverable()
+        await get_clerk_runtime(f"sim:{sid}").clerk.register_strategy_run(binding)
+        # The process died with the run ACTIVE: nothing stopped it, nothing recovered it.
+        await deployed.release_if_unused()
+
+        orphan = selector.unbound_dry_run(sid)
+        async with orphan.runtime_for_projection() as read:
+            assert read.sqlite_repository.active_run(sid) is not None
+            assert read.deadline_keeper._task is None
+            await orphan.ensure_recoverable()
+            assert read.sqlite_repository.active_run(sid) is None
+            assert read.deadline_keeper._task is not None and not read.deadline_keeper._task.done()
+    finally:
+        await close_synthetic_clerk_runtimes()
+
+
+def _dry_run_authority(tmp_path: Path, sid: str):
+    """The selector and the Dry Run binding of ``sid``; no bot's task ever owns the account."""
+    from app.services.bot_binding_authority import BindingAuthoritySelector
+    from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
+    from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS
+
+    binding = _trade_binding(sid).model_copy(update={
+        "mode": "dry_run", "sealed_account_id": f"sim:{sid}", "exit_terms": TERMS,
+    })
+    selector = BindingAuthoritySelector(artifacts_root=tmp_path, lifecycle_repo_for=lambda _: None,
+        real_projector=cast(AlpacaLifecycleProjector, object()), external_start_guard=None,
+        runtime_in_use=lambda _: False, clock=_TestClock(NOON))
+    return selector, binding
+
+
+async def test_a_custody_guard_that_commits_nothing_leaves_a_new_dry_run_no_open_authority(tmp_path: Path) -> None:
+    """#3217: a preview, or a Start that is refused, of a Dry Run with no bot in it keeps nothing open.
+
+    Custody is read from the account's own Clerk, so the guard opens it; with
+    no bot registered in the account when the guard ends, it is released
+    instead of staying registered, heartbeating and sampling for the life of
+    the process.
+    """
+    from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
+
+    sid = "guard-first-time"
+    selector, binding = _dry_run_authority(tmp_path, sid)
+    try:
+        async with selector.for_binding(binding).start_custody_guard() as (snapshot, _policy, _terms):
+            assert snapshot.account_id == f"sim:{sid}"
+            assert get_clerk_runtime(f"sim:{sid}") is not None
+        assert get_clerk_runtime(f"sim:{sid}") is None
+    finally:
+        await close_synthetic_clerk_runtimes()
+
+
+async def test_a_custody_guard_whose_start_registered_its_bot_keeps_the_authority_open(tmp_path: Path) -> None:
+    """The account stays open though no bot's task is in the runner's table: its run-end pass is still owed.
+
+    A bot that ends while its Start is still inside the guard is reaped from
+    the runner's table before its own run-end release has taken the account's
+    lock, which the guard holds.
+    """
+    from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
+
+    sid = "guard-registered"
+    selector, binding = _dry_run_authority(tmp_path, sid)
+    try:
+        async with selector.for_binding(binding).start_custody_guard():
+            opened = get_clerk_runtime(f"sim:{sid}")
+            await opened.clerk.register_strategy_run(binding)
+        assert get_clerk_runtime(f"sim:{sid}") is opened is not None
+    finally:
+        await close_synthetic_clerk_runtimes()
+
+
+async def test_a_custody_guard_leaves_an_activated_dry_run_s_authority_to_its_caller(tmp_path: Path) -> None:
+    """Archive retires a stopped Dry Run's bot through the authority its guard opened, after the guard ends."""
+    from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
+
+    sid = "guard-activated"
+    selector, binding = _dry_run_authority(tmp_path, sid)
+    try:
+        previous = selector.for_binding(binding)
+        await previous.ensure_recoverable()
+        await previous.release_if_unused()
+        assert get_clerk_runtime(f"sim:{sid}") is None
+
+        async with selector.for_binding(binding).start_custody_guard():
+            pass
+
+        assert get_clerk_runtime(f"sim:{sid}") is not None
     finally:
         await close_synthetic_clerk_runtimes()

@@ -605,7 +605,7 @@ async def test_an_orphan_whose_binding_cannot_be_read_is_skipped_and_its_sibling
 
     monkeypatch.setattr(booting, "_read_binding", _unreadable_for_one)
 
-    with caplog.at_level(logging.ERROR, logger=bot_runner.__name__):
+    with caplog.at_level(logging.INFO, logger=bot_runner.__name__):
         restoring = booting.start_dry_run_restoration()
         await asyncio.wait_for(restoring, timeout=10.0)
 
@@ -614,7 +614,7 @@ async def test_an_orphan_whose_binding_cannot_be_read_is_skipped_and_its_sibling
     assert unmatched.exc_info is not None
     # Skipped, not opened; the sibling is restored as though nothing happened.
     assert get_clerk_runtime("sim:orphan-unmatched") is None
-    assert get_clerk_runtime("sim:orphan-ok") is not None
+    assert [record.strategy_instance_id for record in _logged(caplog, "boot_dry_run_restored")] == ["orphan-ok"]
     assert _logged(caplog, "boot_dry_run_restoration_failed") == []
 
 
@@ -632,7 +632,7 @@ async def test_an_orphan_whose_recovery_raises_is_its_own_failure(
 
     monkeypatch.setattr(SqliteAlpacaClerkFacade, "recover", _recovery_raises_for_one)
 
-    with caplog.at_level(logging.ERROR, logger=bot_runner.__name__):
+    with caplog.at_level(logging.INFO, logger=bot_runner.__name__):
         restoring = booting.start_dry_run_restoration()
         await asyncio.wait_for(restoring, timeout=10.0)
 
@@ -642,7 +642,34 @@ async def test_an_orphan_whose_recovery_raises_is_its_own_failure(
     assert "startup recovery failed" in failed.error_detail
     assert failed.exc_info is not None
     assert get_clerk_runtime("sim:orphan-broken") is None
-    assert get_clerk_runtime("sim:orphan-ok") is not None
+    assert [record.strategy_instance_id for record in _logged(caplog, "boot_dry_run_restored")] == ["orphan-ok"]
+
+
+async def test_boot_retires_the_run_an_orphan_was_left_with_and_keeps_its_account_closed(
+    tmp_path: Path, booting: BotTaskRegistry,
+) -> None:
+    """#3217: restoration is what retires the run a crash left; no bot ever opens an orphan's account after."""
+    sid = "orphan-with-a-run"
+    binding = _dry_run_binding().model_copy(
+        update={"strategy_instance_id": sid, "sealed_account_id": f"sim:{sid}", "budget_consent": None}
+    )
+    deploying = BotTaskRegistry(tmp_path, feed_resolver=lambda: None, boot_recovery_required=False)
+    authority = deploying._authority_for(binding)
+    await authority.ensure_recoverable()
+    runtime = get_clerk_runtime(f"sim:{sid}")
+    assert runtime is not None and runtime.clerk is not None
+    await runtime.clerk.register_strategy_run(binding)
+    # The process died with the run ACTIVE and no binding recorded.
+    await authority.release_if_unused()
+
+    await asyncio.wait_for(booting.start_dry_run_restoration(), timeout=10.0)
+
+    assert get_clerk_runtime(f"sim:{sid}") is None
+    repository = ClerkSqliteRepository.open(account_id=f"sim:{sid}", artifacts_root=tmp_path)
+    try:
+        assert repository.active_run(sid) is None
+    finally:
+        repository.close()
 
 
 async def test_a_lease_held_dry_run_panel_shows_only_the_owner_sentence(

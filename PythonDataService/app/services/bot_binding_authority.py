@@ -37,7 +37,10 @@ from app.broker.alpaca.clerk.active_authority import (
     select_synthetic_clerk_runtime,
     unregister_clerk_runtime,
 )
-from app.broker.alpaca.clerk.active_runtime import DEFAULT_EXECUTION_LEASE_WAIT_TIMEOUT_S
+from app.broker.alpaca.clerk.active_runtime import (
+    DEFAULT_EXECUTION_LEASE_WAIT_TIMEOUT_S,
+    DEFAULT_STARTUP_RECOVERY_TIMEOUT_S,
+)
 from app.broker.alpaca.clerk.models import ReconciliationCut
 from app.broker.alpaca.clerk.shadow_authority import open_graduated_shadow_store
 from app.broker.alpaca.clerk.shadow_broker import ShadowBookUnreadable, open_book_orders
@@ -232,11 +235,16 @@ class SyntheticRuntimeAccess:
     fail-fast check: every other task asking for the account is answered at
     once with :class:`SyntheticAccountRestoring` instead of queueing behind
     the restoration's lease wait; the restorer passes by its identity.
+
+    ``unrecovered`` is the runtime a read composed without the store's
+    startup recovery, until an operating opening gives it that recovery in
+    place (#3217).
     """
 
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     owner: asyncio.Task | None = field(default=None, init=False)
     restorer: asyncio.Task | None = field(default=None, init=False)
+    unrecovered: ActiveClerkRuntime | None = field(default=None, init=False)
 
     def is_restoring(self) -> bool:
         return self.restorer is not None
@@ -281,6 +289,27 @@ class _SyntheticAccount:
     def source_bars(self) -> SourceBarLedger:
         return SourceBarLedger(artifacts_root=self.artifacts_root, account_id=self.account_id)
 
+    def is_activated(self) -> bool:
+        """Whether a Start ever activated this account.
+
+        A ledger that cannot be read answers no: opening the account names
+        what is wrong with it, and nothing is created on that way.
+        """
+        try:
+            return SyntheticActivationStore(self.artifacts_root).latest(self.account_id) is not None
+        except IsolatedActivationInvalid:
+            return False
+
+    def holds_a_registered_strategy(self) -> bool:
+        """Whether a Start has registered this bot in the account's open store.
+
+        The store's own record, not whether a task runs on it: a run that
+        ended is still the account's, and its run-end pass is still owed.
+        """
+        runtime = get_clerk_runtime(self.account_id)
+        repository = None if runtime is None else runtime.sqlite_repository
+        return repository is not None and repository.strategy_instance(self.strategy_instance_id) is not None
+
     async def ensure_operating(self, *, lease_wait_s: float) -> None:
         """Compose this account for operation -- its full recovery included -- or raise why it cannot be."""
         try:
@@ -324,6 +353,7 @@ class _SyntheticAccount:
             if runtime is not None:
                 unregister_clerk_runtime(self.account_id)
                 await runtime.close()
+            self.runtime_access.unrecovered = None
             self.brokers.pop(self.account_id, None)
 
     async def open(self, opening: SyntheticOpening, *, lease_wait_s: float = 0.0) -> ActiveClerkRuntime:
@@ -335,13 +365,8 @@ class _SyntheticAccount:
         existing = get_clerk_runtime(self.account_id)
         if existing is not None:
             if operating:
-                await self._prepare_budget_runtime(existing)
-                if existing.envelope_sync is not None:
-                    if self.budget_consent is None:
-                        await existing.envelope_sync.tick()
-                    existing.envelope_sync.start()
+                await self._operate(existing)
             return existing
-        broker = SyntheticBroker(account_id=self.account_id, source_bars=self.source_bars(), clock=self.clock)
         if operating:
             await activate_synthetic_clerk_authority(
                 account_id=self.account_id,
@@ -350,6 +375,14 @@ class _SyntheticAccount:
                 execution_lease_wait_timeout_s=lease_wait_s,
                 execution_lease_retry_interval_s=BOOT_EXECUTION_LEASE_RETRY_INTERVAL_S,
             )
+        # Building the source-bar ledger creates the account's directory and
+        # store, so only an activated account gets one: a read of one no Start
+        # has activated creates nothing (#3217).
+        broker = SyntheticBroker(
+            account_id=self.account_id,
+            source_bars=self.source_bars() if self.is_activated() else None,
+            clock=self.clock,
+        )
         runtime = await select_synthetic_clerk_runtime(
             account_id=self.account_id,
             read=broker,
@@ -366,9 +399,30 @@ class _SyntheticAccount:
         if runtime.clerk is not None:
             register_clerk_runtime(runtime)
             self.brokers[self.account_id] = broker
+            if opening is SyntheticOpening.READ_ONLY:
+                self.runtime_access.unrecovered = runtime
             if operating:
                 await self._prepare_budget_runtime(runtime)
         return runtime
+
+    async def _operate(self, runtime: ActiveClerkRuntime) -> None:
+        """Make a runtime already composed for a read the operating one.
+
+        Everything an operating opening starts is started here, in the same
+        order: the account's sampling, then -- for a runtime a read composed
+        without it -- the store's startup recovery, then the deadline keeper,
+        which acts at once on whatever recovery left owed (#3217).
+        """
+        await self._prepare_budget_runtime(runtime)
+        if runtime.envelope_sync is not None:
+            if self.budget_consent is None:
+                await runtime.envelope_sync.tick()
+            runtime.envelope_sync.start()
+        if runtime.clerk is not None and self.runtime_access.unrecovered is runtime:
+            await asyncio.wait_for(runtime.clerk.recover(), timeout=DEFAULT_STARTUP_RECOVERY_TIMEOUT_S)
+            self.runtime_access.unrecovered = None
+        if runtime.deadline_keeper is not None:
+            runtime.deadline_keeper.start()
 
     async def _prepare_budget_runtime(self, runtime: ActiveClerkRuntime) -> None:
         consent = self.budget_consent
@@ -516,18 +570,32 @@ class SyntheticBindingAuthority(BindingAuthority):
     @asynccontextmanager
     async def _start_custody_guard(self, *, project: bool = False) -> AsyncIterator[AdmissionCustodyCut]:
         async with self.runtime_access.hold():
-            runtime = await self._account.open(SyntheticOpening.OPERATE)
-            clerk = runtime.clerk
-            if clerk is None:
-                raise StartAdmissionUnavailable(
-                    "Dry Run synthetic Clerk activation failed.",
-                    detail=(runtime.startup_failure.recovery if runtime.startup_failure is not None else "Retry activation."),
+            account = self._account
+            first_opening = not account.is_activated()
+            runtime = await account.open(SyntheticOpening.OPERATE)
+            try:
+                clerk = runtime.clerk
+                if clerk is None:
+                    raise StartAdmissionUnavailable(
+                        "Dry Run synthetic Clerk activation failed.",
+                        detail=(runtime.startup_failure.recovery if runtime.startup_failure is not None else "Retry activation."),
+                    )
+                admission = (
+                    clerk.start_admission_projection if project else clerk.start_admission_snapshot
                 )
-            admission = (
-                clerk.start_admission_projection if project else clerk.start_admission_snapshot
-            )
-            async with admission(self.binding.strategy_instance_id) as snapshot:
-                yield snapshot, clerk.program_leg_policy, clerk.exit_terms_for_instance(self.binding.strategy_instance_id)
+                async with admission(self.binding.strategy_instance_id) as snapshot:
+                    yield snapshot, clerk.program_leg_policy, clerk.exit_terms_for_instance(self.binding.strategy_instance_id)
+            finally:
+                if first_opening and not account.holds_a_registered_strategy():
+                    # An account no Start had ever opened is opened here only to
+                    # read custody from. A preview, or a Start that is refused,
+                    # ends with no bot registered in it, and it is released
+                    # rather than kept open for the life of the process; a Start
+                    # that went through registered its bot, so it stays and its
+                    # run releases it (#3217). An account already activated is
+                    # its caller's to release: Archive retires its bot through
+                    # it after this guard ends.
+                    await account.release_if_unused()
 
 
 @dataclass(frozen=True)
@@ -562,7 +630,14 @@ class UnboundDryRunAuthority:
         return self._account.held_for_request(SyntheticOpening.READ_ONLY)
 
     async def ensure_recoverable(self, *, lease_wait_s: float = 0.0) -> None:
-        await self._account.ensure_operating(lease_wait_s=lease_wait_s)
+        account = self._account
+        async with account.runtime_access.hold():
+            composed_here = get_clerk_runtime(account.account_id) is None
+            await account.ensure_operating(lease_wait_s=lease_wait_s)
+            if composed_here:
+                # The recovery has retired the run the crash left, and no bot
+                # will ever run on this account: nothing keeps it open (#3217).
+                await account.release_if_unused()
 
 
 class RehearsalRecordsUnavailable(Exception):
