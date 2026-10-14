@@ -134,29 +134,30 @@ SCENARIOS: Final[list[dict[str, Any]]] = [
 ]
 
 # What the browser copy is held to, per quantity, with the reason. The browser's normal CDF is
-# Abramowitz & Stegun 7.1.26 (|error| < 1.5e-7); the canonical's is scipy's, exact to machine
-# precision. Each atol sits between the largest difference measured over this fixture
-# (2026-10-14) and the most the CDF's error can reach through that quantity. The strategy
-# figures also carry the rounding of what the canonical returns: 4 dp for payoff and P&L,
-# 6 dp for aggregate Greeks.
+# built on Abramowitz & Stegun 7.1.26, whose erf is within 1.5e-7, so N = (1 + erf) / 2 is
+# within 7.5e-8 (measured |normCdf - Phi| over [-8, 8]: 7.0e-8); the canonical's is scipy's,
+# exact to machine precision. Each atol sits above the largest difference measured over this
+# fixture (2026-10-14) and within a small multiple of the most the CDF's error can reach
+# through that quantity. The strategy figures also carry the rounding of what the canonical
+# returns: 4 dp for payoff and P&L, 6 dp for aggregate Greeks.
 TOLERANCE: Final[dict[str, dict[str, Any]]] = {
     "price": {
         "atol": 2e-5,
         "rtol": 0.0,
-        "why": "CDF error through S + K <= 220 on this grid is at most 3.3e-5; measured 1.5e-5",
+        "why": "CDF error 7.5e-8 through S + K <= 220 on this grid is at most 1.7e-5; measured 1.5e-5",
     },
-    "delta": {"atol": 1e-7, "rtol": 0.0, "why": "N(d1) itself: CDF error at most 1.5e-7; measured 6.9e-8"},
+    "delta": {"atol": 1e-7, "rtol": 0.0, "why": "N(d1) itself: CDF error at most 7.5e-8; measured 6.9e-8"},
     "gamma": {"atol": 1e-12, "rtol": 0.0, "why": "no CDF term, float rounding only; measured 2.8e-17"},
     "theta": {
         "atol": 2e-9,
         "rtol": 0.0,
-        "why": "CDF error scaled by r*K*e^-rT/365 <= 1.4e-2 is at most 2.1e-9; measured 9.5e-10",
+        "why": "CDF error scaled by r*K*e^-rT/365 <= 1.4e-2 is at most 1.0e-9; measured 9.5e-10",
     },
     "vega": {"atol": 1e-12, "rtol": 0.0, "why": "no CDF term, float rounding only; measured 1.1e-16"},
     "rho": {
         "atol": 1e-7,
         "rtol": 0.0,
-        "why": "CDF error scaled by K*T*e^-rT/100 <= 1 is at most 1.5e-7; measured 6.7e-8",
+        "why": "CDF error scaled by K*T*e^-rT/100 <= 1 is at most 7.5e-8; measured 6.7e-8",
     },
     "strategy_expiry_payoff": {
         "atol": 1e-9,
@@ -171,7 +172,7 @@ TOLERANCE: Final[dict[str, dict[str, Any]]] = {
     "strategy_delta": {
         "atol": 2e-6,
         "rtol": 0.0,
-        "why": "6 dp rounding (5e-7) plus CDF error 1.5e-7 over the widest case's 8 contract-legs; measured 8.4e-7",
+        "why": "6 dp rounding (5e-7) plus CDF error 7.5e-8 over the widest case's 8 contract-legs (6e-7); measured 8.4e-7",
     },
     "strategy_gamma": {"atol": 1e-6, "rtol": 0.0, "why": "one 6 dp step, the canonical's rounding; measured 5.0e-7"},
     "strategy_theta": {"atol": 1e-6, "rtol": 0.0, "why": "one 6 dp step, the canonical's rounding; measured 4.7e-7"},
@@ -317,16 +318,21 @@ def _attribution() -> str:
         "server's curve grid for the expiry payoff, the current-time P&L unshifted and under the page's three "
         "what-ifs (T+5d, IV+10%, IV-10%), and the aggregate delta, gamma, theta and vega.\n"
         "- Breakevens, max profit and max loss are pinned by "
-        "`Frontend/src/testing/payoff-parity/cases.json` (#3186), not repeated here.\n\n"
+        "`Frontend/src/testing/payoff-parity/cases.json` (#3186), not repeated here.\n"
+        "- Aggregate strategy rho is not held: `compute_greek_curves` returns no rho, so there is no canonical "
+        "aggregate to compare. Rho is held per option, in `cases`.\n\n"
         "## Tolerance\n\n"
         "Held per quantity, in `output.json`'s `tolerance` block, with the reason for each. The browser copy's "
-        "error floor is its Abramowitz & Stegun 7.1.26 normal CDF (`|error| < 1.5e-7`); the canonical's "
-        "`scipy.stats.norm.cdf` is exact to machine precision. Each `atol` sits between the largest difference "
-        "measured over this fixture and the most the CDF's error can reach through that quantity: price "
-        "`2e-5`, delta and rho `1e-7`, theta `2e-9`, gamma and vega `1e-12` (no CDF term). The strategy "
-        "figures also carry the rounding of what the canonical returns (4 dp for payoff and P&L, 6 dp for "
-        "aggregate Greeks), so P&L is held to one 4 dp step and strategy gamma, theta and vega to one 6 dp "
-        "step.\n\n"
+        "error floor is its normal CDF, built on Abramowitz & Stegun 7.1.26: that erf is within `1.5e-7`, so "
+        "N = (1 + erf) / 2 is within `7.5e-8` (the largest `|normCdf - Phi|` measured over [-8, 8] is `7.0e-8`). "
+        "The canonical's `scipy.stats.norm.cdf` is exact to machine precision. Each `atol` sits above the "
+        "largest difference measured over this fixture and within a small multiple of the most the CDF's "
+        "error can reach through that quantity: price `2e-5`, delta and rho `1e-7`, theta `2e-9`, gamma and "
+        "vega `1e-12` (no CDF term). The strategy figures also carry the rounding of what the canonical "
+        "returns (4 dp for payoff and P&L, 6 dp for aggregate Greeks), so P&L is held to one 4 dp step and "
+        "strategy gamma, theta and vega to one 6 dp step. The ceilings are pinned in "
+        "`Frontend/src/app/utils/black-scholes.parity.spec.ts`, so a regeneration cannot loosen one "
+        "silently.\n\n"
         "## Timestamps\n\n"
         "None. Time left is `ttm_days / 365` years, as `time_to_expiry_years` measures it.\n\n"
         "## Regeneration\n\n"
@@ -365,7 +371,7 @@ def _manifest_entry() -> dict[str, Any]:
             "rtol": 0.0,
             "note": (
                 "The canonical re-evaluated against the stored values: strict float, 1e-9. The browser copy is "
-                "held looser, per quantity, to its Abramowitz & Stegun CDF (|error| < 1.5e-7) and to the "
+                "held looser, per quantity, to its Abramowitz & Stegun CDF (|error| < 7.5e-8) and to the "
                 "canonical's own 4 dp / 6 dp rounding of strategy figures: price 2e-5, delta and rho 1e-7, "
                 "theta 2e-9, gamma and vega 1e-12, strategy P&L 1e-4. Each is in output.json with its reason."
             ),

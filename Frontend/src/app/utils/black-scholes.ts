@@ -6,7 +6,7 @@
  *   vega and rho per 1 point. The dividend yield is 0, as on the server. At T ≤ 0 or σ ≤ 0
  *   an option is worth its intrinsic value, as `strategy_engine.py` prices a leg.
  * Reference: Hull, Options Futures and Other Derivatives (10e), §15.8 and §19; the normal
- *   CDF is Abramowitz & Stegun 7.1.26 (|error| < 1.5e-7).
+ *   CDF is built on Abramowitz & Stegun 7.1.26 (erf within 1.5e-7, so the CDF within 7.5e-8).
  * Canonical implementation: PythonDataService/app/services/bs_greeks.py (price, Greeks) and
  *   PythonDataService/app/services/strategy_engine.py (strategy P&L and Greek curves). This copy
  *   is ADR 0068 exception 1: the builder re-prices a 1,200-point grid on every leg edit.

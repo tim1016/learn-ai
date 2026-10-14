@@ -2552,7 +2552,7 @@
       "tolerance": {
         "atol": 1e-09,
         "rtol": 0.0,
-        "note": "The canonical re-evaluated against the stored values: strict float, 1e-9. The browser copy is held looser, per quantity, to its Abramowitz & Stegun CDF (|error| < 1.5e-7) and to the canonical's own 4 dp / 6 dp rounding of strategy figures: price 2e-5, delta and rho 1e-7, theta 2e-9, gamma and vega 1e-12, strategy P&L 1e-4. Each is in output.json with its reason."
+        "note": "The canonical re-evaluated against the stored values: strict float, 1e-9. The browser copy is held looser, per quantity, to its Abramowitz & Stegun CDF (|error| < 7.5e-8) and to the canonical's own 4 dp / 6 dp rounding of strategy figures: price 2e-5, delta and rho 1e-7, theta 2e-9, gamma and vega 1e-12, strategy P&L 1e-4. Each is in output.json with its reason."
       },
       "active_version": 1,
       "versions": {
@@ -2564,12 +2564,12 @@
           "justification": "Initial fixture. Replaces Frontend/scripts/generate-bs-parity-fixture.py, which carried its own inline Black-Scholes copy; this one imports bs_greeks.py and strategy_engine.py, and adds Greeks, strategy P&L, what-if shifts and the expiry payoff to the 360-case price grid (#3221).",
           "content_sha256": {
             "input.json": "2e472a5aa8509305bfa1bedc5319c219742850be89dbcb220bd5dc51fd60292a",
-            "output.json": "0820767c0587fbcea5da186d5d1e143d8195b9181425d1f0487de9a1564965e1"
+            "output.json": "f7a0681f9889f992d381a0b43e7a5f4cc91b7fbe5085f04b5d609483e6d20a53"
           },
           "file_sha256": {
             "input.json": "a4ecd0d329d19c00457e051d55f8ef1160e58480021495d3c5da688ea7a1714d",
-            "output.json": "4384b02b953f9e5ee047ac0ebab918b738c104208fdf3d232ca519ca0226e1a4",
-            "attribution.md": "fa6f18030231e169cfb897c7e52a069f6a760bc9102f55758f406439eff45da4"
+            "output.json": "c94e50c6564e6d183f5277a21d91c988b396e401f26a15bbad6fa41b68db38be",
+            "attribution.md": "8f73ab301007730f427085384dde9ab54e23811da648b9a16fc82c635c29979e"
           }
         }
       },

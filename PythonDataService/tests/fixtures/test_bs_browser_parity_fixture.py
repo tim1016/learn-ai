@@ -16,8 +16,9 @@ from typing import Any
 from scripts.fixture_generators.bs_browser_parity import FRONTEND_COPY, build_documents
 
 FIXTURE_DIR = Path(__file__).parent / "golden" / "options-pricing" / "BS-008" / "v1"
-# Manifest BS-008: strict float. The canonical is re-evaluated here, so only platform ulps and
-# an occasional last-digit flip of a 4 or 6 dp rounding are left to allow for.
+# Manifest BS-008: strict float. The canonical is re-evaluated here, so only platform ulps are
+# left to allow for. A flipped last digit of a 4 or 6 dp rounding (1e-4, 1e-6) is far above
+# this and fails: it means the canonical moved, and the fixture is to be regenerated.
 ATOL = 1e-9
 
 

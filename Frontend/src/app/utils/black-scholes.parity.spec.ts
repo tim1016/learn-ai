@@ -10,8 +10,9 @@
  * `PythonDataService/scripts/fixture_generators/bs_browser_parity.py` writes it
  * from the canonical, and `tests/fixtures/test_bs_browser_parity_fixture.py`
  * re-checks it against the canonical on every Python run. Each quantity has its
- * own tolerance in the file, with the reason: the browser's normal CDF is
- * Abramowitz & Stegun 7.1.26 (|error| < 1.5e-7), the canonical's is exact.
+ * own tolerance in the file, with the reason: the browser's normal CDF is built
+ * on Abramowitz & Stegun 7.1.26 (erf within 1.5e-7, so the CDF within 7.5e-8),
+ * the canonical's is exact.
  *
  * Max profit, max loss and breakevens are held by `strategy-payoff.parity.spec.ts`.
  */
@@ -89,14 +90,46 @@ function missesOf(checks: (string | null)[]): string[] {
   return checks.filter((message): message is string => message !== null);
 }
 
+/**
+ * The loosest tolerance each quantity may be held to. They are pinned here as well as in the
+ * generated fixture, so a regeneration cannot loosen one without an edit to this file.
+ */
+const TOLERANCE_CEILING: Record<string, number> = {
+  price: 2e-5,
+  delta: 1e-7,
+  gamma: 1e-12,
+  theta: 2e-9,
+  vega: 1e-12,
+  rho: 1e-7,
+  strategy_expiry_payoff: 1e-9,
+  strategy_pnl: 1e-4,
+  strategy_delta: 2e-6,
+  strategy_gamma: 1e-6,
+  strategy_theta: 1e-6,
+  strategy_vega: 1e-6,
+};
+
 describe('black-scholes.ts — frontend ↔ Python parity', () => {
-  it('holds every quantity to a tolerance that is absolute', () => {
+  it('holds every quantity to an absolute tolerance no looser than its ceiling', () => {
     expect(fixture.schema_version).toBe(2);
-    expect(fixture.cases.length).toBe(fixture.n_cases);
+    expect(Object.keys(fixture.tolerance).sort()).toEqual(Object.keys(TOLERANCE_CEILING).sort());
     for (const [quantity, tolerance] of Object.entries(fixture.tolerance)) {
       expect(tolerance.rtol, quantity).toBe(0);
+      expect(tolerance.atol, quantity).toBeLessThanOrEqual(TOLERANCE_CEILING[quantity]);
       expect(tolerance.why.length, quantity).toBeGreaterThan(0);
     }
+  });
+
+  it('holds the cases it is meant to, so an emptied fixture cannot pass', () => {
+    expect(fixture.cases.length).toBe(360);
+    expect(fixture.n_cases).toBe(360);
+    expect(fixture.cases.filter(c => c.expected_greeks !== undefined).length).toBe(180);
+    expect(fixture.scenarios.map(s => s.name)).toEqual(['now', 'time_plus_5', 'iv_up_10', 'iv_down_10']);
+    expect(fixture.strategies.length).toBe(5);
+    for (const strategy of fixture.strategies) {
+      expect(strategy.prices.length, strategy.name).toBeGreaterThan(0);
+    }
+    expect(fixture.strategies.reduce((points, s) => points + s.prices.length, 0)).toBe(29);
   });
 
   it('prices every case of the grid like the canonical', () => {
