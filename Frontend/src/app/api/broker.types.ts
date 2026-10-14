@@ -17953,9 +17953,10 @@ export interface components {
             kind: "tab" | "chart" | "step";
             /**
              * Target
-             * @description An evidence tab of the Compare step (trades, months), a Compare chart (neighbor-tornado, cost-stress) or a study step (search, test, decision).
+             * @description An evidence tab of the Compare step (trades), a Compare chart (neighbor-tornado, cost-stress, without-best) or a study step (search, test, decision).
+             * @enum {string}
              */
-            target: string;
+            target: "trades" | "search" | "test" | "decision" | "neighbor-tornado" | "cost-stress" | "without-best";
         };
         /** GoldenSearchSummaryPills */
         GoldenSearchSummaryPills: {
@@ -17974,8 +17975,11 @@ export interface components {
          * @description One kind of evidence for a candidate; a result the study did not record is ``missing``, never ``meets``.
          */
         GoldenSearchSummaryRow: {
-            /** Key */
-            key: string;
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "development_activity" | "recent_activity" | "test_over_time" | "neighbors" | "stress" | "concentration" | "final_exposure";
             /** Label */
             label: string;
             link: components["schemas"]["GoldenSearchSummaryLink"];
@@ -40440,6 +40444,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
                 };
             };
         };

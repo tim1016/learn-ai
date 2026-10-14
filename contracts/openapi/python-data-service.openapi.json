@@ -14140,6 +14140,7 @@
           },
           "source_run_id": {
             "exclusiveMinimum": 0.0,
+            "maximum": 2147483647.0,
             "title": "Source Run Id",
             "type": "integer"
           }
@@ -19662,6 +19663,8 @@
             "type": "string"
           },
           "reviewed_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
             "title": "Reviewed At Ms",
             "type": "integer"
           },
@@ -26203,11 +26206,15 @@
           },
           "testMonths": {
             "default": 2,
+            "maximum": 60.0,
+            "minimum": 1.0,
             "title": "Testmonths",
             "type": "integer"
           },
           "trainingMonths": {
             "default": 6,
+            "maximum": 120.0,
+            "minimum": 1.0,
             "title": "Trainingmonths",
             "type": "integer"
           },
@@ -28185,7 +28192,16 @@
             "type": "string"
           },
           "target": {
-            "description": "An evidence tab of the Compare step (trades, months), a Compare chart (neighbor-tornado, cost-stress) or a study step (search, test, decision).",
+            "description": "An evidence tab of the Compare step (trades), a Compare chart (neighbor-tornado, cost-stress, without-best) or a study step (search, test, decision).",
+            "enum": [
+              "trades",
+              "search",
+              "test",
+              "decision",
+              "neighbor-tornado",
+              "cost-stress",
+              "without-best"
+            ],
             "title": "Target",
             "type": "string"
           }
@@ -28241,6 +28257,15 @@
         "description": "One kind of evidence for a candidate; a result the study did not record is ``missing``, never ``meets``.",
         "properties": {
           "key": {
+            "enum": [
+              "development_activity",
+              "recent_activity",
+              "test_over_time",
+              "neighbors",
+              "stress",
+              "concentration",
+              "final_exposure"
+            ],
             "title": "Key",
             "type": "string"
           },
@@ -29269,6 +29294,8 @@
       "GoldenValidationResponse": {
         "properties": {
           "designated_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
             "title": "Designated At Ms",
             "type": "integer"
           },
@@ -79792,6 +79819,8 @@
             "name": "qualification_id",
             "required": true,
             "schema": {
+              "maxLength": 64,
+              "minLength": 1,
               "title": "Qualification Id",
               "type": "string"
             }
@@ -79851,6 +79880,8 @@
             "name": "qualification_id",
             "required": true,
             "schema": {
+              "maxLength": 64,
+              "minLength": 1,
               "title": "Qualification Id",
               "type": "string"
             }
@@ -79909,6 +79940,8 @@
             "name": "qualification_id",
             "required": true,
             "schema": {
+              "maxLength": 64,
+              "minLength": 1,
               "title": "Qualification Id",
               "type": "string"
             }
@@ -79977,6 +80010,8 @@
             "name": "qualification_id",
             "required": true,
             "schema": {
+              "maxLength": 64,
+              "minLength": 1,
               "title": "Qualification Id",
               "type": "string"
             }
@@ -80480,6 +80515,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "summary": "List Studies",
@@ -81930,6 +81975,7 @@
             "name": "golden_run_id",
             "required": true,
             "schema": {
+              "maximum": 2147483647,
               "title": "Golden Run Id",
               "type": "integer"
             }
