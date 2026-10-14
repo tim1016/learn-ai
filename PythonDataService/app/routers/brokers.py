@@ -46,7 +46,6 @@ from app.broker.contract.errors import (
     BrokerAccountModeDisagreement,
     BrokerError,
     BrokerRateLimited,
-    BrokerSubmissionHeld,
 )
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
@@ -143,11 +142,6 @@ def _raise_http(error: BrokerError) -> NoReturn:
         "message": error.message,
         "why": error.detail,
     }
-    # A held submit (S6) carries a code-like ``reason_code`` the UI flags and
-    # renders through ``receiptLabel`` — surface it so the desk can offer the
-    # clear-hold exit rather than a generic 409.
-    if isinstance(error, BrokerSubmissionHeld):
-        detail["reason_code"] = error.reason_code
     # A mode disagreement carries its own code so the desk can name it (ADR 0059 D1).
     if isinstance(error, BrokerAccountModeDisagreement):
         detail["reason_code"] = error.reason_code

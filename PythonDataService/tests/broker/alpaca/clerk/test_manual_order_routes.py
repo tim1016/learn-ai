@@ -75,7 +75,6 @@ class FakeAlpacaPort:
         self.account_calls = 0
         self.asset_available = True
         self.asset_lookup_calls: list[str] = []
-        self.asset_list_calls = 0
         self.submit_calls: list[str] = []
         self.cancel_calls: list[str] = []
         self.orders: dict[str, BrokerOrder] = {}
@@ -85,18 +84,6 @@ class FakeAlpacaPort:
     async def get_account(self) -> BrokerAccountSnapshot:
         self.account_calls += 1
         return _account(account_mode=self.account_mode)
-
-    async def list_assets(
-        self,
-        *,
-        status: str | None = None,
-        limit: int | None = 100,
-    ) -> list[BrokerAsset]:
-        self.asset_list_calls += 1
-        if not self.asset_available:
-            return []
-        assert status == "active"
-        return [_asset()]
 
     async def get_asset(self, symbol: str) -> BrokerAsset | None:
         self.asset_lookup_calls.append(symbol)
@@ -267,7 +254,6 @@ async def test_disabled_manual_capability_refuses_without_contacting_alpaca(
     }
     assert port.account_calls == 0
     assert port.asset_lookup_calls == []
-    assert port.asset_list_calls == 0
 
 
 async def _get_manual_capability(app: FastAPI, route_account: str) -> httpx.Response:
@@ -648,7 +634,6 @@ async def test_manual_preview_refuses_an_unlisted_asset_before_durable_acceptanc
     assert repo.manual_order_ticket(TICKET_ID) is None
     assert port.submit_calls == []
     assert port.asset_lookup_calls == ["SPY"]
-    assert port.asset_list_calls == 0
 
 
 @pytest.mark.asyncio
@@ -682,7 +667,6 @@ async def test_invalid_configured_manual_operator_refuses_before_ticket_reservat
     assert preview.json()["capability"]["unavailable"]["code"] == "INVALID_MANUAL_OPERATOR"
     assert repo.manual_order_ticket(TICKET_ID) is None
     assert port.asset_lookup_calls == []
-    assert port.asset_list_calls == 0
 
 
 @pytest.mark.asyncio

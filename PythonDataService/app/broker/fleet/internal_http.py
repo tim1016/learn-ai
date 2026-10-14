@@ -207,7 +207,6 @@ class SseEvent:
 def build_internal_client(
     *,
     timeout_s: float = DEFAULT_INTERNAL_TIMEOUT_S,
-    limits: httpx.Limits | None = None,
     read_timeout_s: float | None = DEFAULT_INTERNAL_TIMEOUT_S,
 ) -> httpx.AsyncClient:
     """Build the only acceptable internal client.
@@ -220,16 +219,7 @@ def build_internal_client(
     socket timer.
     """
     timeout = httpx.Timeout(timeout_s, read=read_timeout_s)
-    if limits is None:
-        return httpx.AsyncClient(
-            timeout=timeout, follow_redirects=False, trust_env=False
-        )
-    return httpx.AsyncClient(
-        timeout=timeout,
-        follow_redirects=False,
-        trust_env=False,
-        limits=limits,
-    )
+    return httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False)
 
 
 def build_internal_sync_client(

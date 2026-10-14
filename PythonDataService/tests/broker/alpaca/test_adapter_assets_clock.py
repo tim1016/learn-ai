@@ -33,9 +33,6 @@ class _AssetsClockClient:
         self.assets = assets or []
         self.clock = clock
 
-    async def list_assets(self, *, status: str | None = None, limit: int | None) -> list[object]:
-        return self.assets
-
     async def get_asset(self, symbol: str) -> object:
         return self.assets[0] if self.assets else None
 
@@ -148,7 +145,6 @@ def test_from_alpaca_clock_accepts_a_closed_answer_without_a_close() -> None:
 
 
 _ASSET_READS = {
-    "list": lambda broker: broker.list_assets(status="active", limit=100),
     "lookup": lambda broker: broker.get_asset("NJDCY"),
 }
 

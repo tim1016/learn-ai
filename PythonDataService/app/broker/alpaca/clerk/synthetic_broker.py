@@ -282,15 +282,6 @@ class SyntheticBroker:
             source_bars=self._source_bars, clock=self._clock,
         ).settle_expired_options(after_ms=after_ms, at_the_owners_word=at_the_owners_word)
 
-    async def list_assets(
-        self,
-        *,
-        status: str | None = None,
-        limit: int | None = 100,
-    ) -> list[BrokerAsset]:
-        del status, limit
-        return []
-
     async def get_asset(self, symbol: str) -> BrokerAsset | None:
         del symbol
         return None

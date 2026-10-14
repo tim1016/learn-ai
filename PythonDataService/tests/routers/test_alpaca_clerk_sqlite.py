@@ -107,9 +107,6 @@ class FakeAlpacaPort:
     async def list_activities(self, *, after_ms=None, limit=100):
         return []
 
-    async def list_assets(self, *, status=None, limit=100):
-        return []
-
     async def get_asset(self, symbol: str):
         return None
 

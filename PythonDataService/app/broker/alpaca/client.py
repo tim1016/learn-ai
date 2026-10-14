@@ -436,9 +436,8 @@ class AlpacaTradingClient:
         payloads = await self._call(
             lambda c: c.get_all_assets(filter=request), describe="assets"
         )
-        # Alpaca's assets endpoint has no limit/pagination parameter. Most
-        # read screens request a bounded prefix, while eligibility checks pass
-        # ``None`` to inspect the complete authoritative asset set.
+        # Alpaca's assets endpoint has no limit/pagination parameter: a limit
+        # slices the answer, ``None`` returns the complete asset set.
         return payloads if limit is None else payloads[:limit]
 
     async def get_asset(self, symbol: str) -> dict[str, Any] | None:

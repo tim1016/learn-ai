@@ -821,14 +821,6 @@ class ShadowAccountReadPort:
         del after_ms, resume
         return BrokerOptionEventEvidence(events=(), share_trades=(), history_complete=True)
 
-    async def list_assets(
-        self,
-        *,
-        status: str | None = None,
-        limit: int | None = 100,
-    ) -> list[BrokerAsset]:
-        return await self._live.list_assets(status=status, limit=limit)
-
     async def get_asset(self, symbol: str) -> BrokerAsset | None:
         return await self._live.get_asset(symbol)
 

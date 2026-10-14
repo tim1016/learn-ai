@@ -820,17 +820,6 @@ class AlpacaBroker:
             resume=BrokerOptionEventResume(page_token=page_token, last_page_oldest_ms=previous_page_oldest_ms),
         )
 
-    async def list_assets(
-        self,
-        *,
-        status: str | None = None,
-        limit: int | None = 100,
-    ) -> list[BrokerAsset]:
-        payloads = await self._client.list_assets(status=status, limit=limit)
-        return _mapped_evidence(
-            "asset", lambda: [adapter.from_alpaca_asset(payload) for payload in payloads]
-        )
-
     async def get_asset(self, symbol: str) -> BrokerAsset | None:
         """Return one Alpaca asset, or ``None`` when the symbol is unlisted."""
         payload = await self._client.get_asset(symbol)
