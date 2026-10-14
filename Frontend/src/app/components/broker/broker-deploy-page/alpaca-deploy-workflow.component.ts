@@ -169,6 +169,14 @@ function settlesSubmission(error: unknown): boolean {
   return error instanceof HttpErrorResponse && error.error?.detail?.submission_settled === true;
 }
 
+/** The status read's own "never claimed" answer: a 404 the route marks as
+ * settling the key. The fleet's 404s (`clerk_not_found`, `clerk_lane_retired`,
+ * `broker_not_supported`), a route not found and a 404 with no body also
+ * answer 404, and none says what the key recorded: each leaves it held. */
+function neverClaimed(error: unknown): boolean {
+  return error instanceof HttpErrorResponse && error.status === 404 && settlesSubmission(error);
+}
+
 /** Deploy refusals the backend words as a 409 `conflict` that are no account
  * change, retyped by their reason code so Confirm titles them truthfully. */
 const REFUSAL_OUTCOMES: Readonly<Record<string, DeployError['outcome']>> = {
@@ -1435,9 +1443,7 @@ export class AlpacaDeployWorkflowComponent {
   /** The recovery read found no committed Deploy for the key. */
   protected readonly recoveryNotCommitted = computed(() => {
     const error = this.recoveredCommand.error();
-    return error instanceof HttpErrorResponse && error.status === 404
-      ? extractServerMessage(error, NOT_COMMITTED_MESSAGE)
-      : null;
+    return neverClaimed(error) ? extractServerMessage(error, NOT_COMMITTED_MESSAGE) : null;
   });
   /** The recovery read found the key claimed but not committed. */
   protected readonly recoveryClaim = computed(() =>
@@ -2204,8 +2210,9 @@ export class AlpacaDeployWorkflowComponent {
   /**
    * "Check deployment status" for a Deploy whose outcome is unknown: reads
    * what its key recorded and never sends it again. A receipt shows the bot;
-   * `in_flight` or an unreadable answer keeps the key; only `not_committed`
-   * or no record at all frees the form for a new key.
+   * `in_flight` or an unreadable answer (any 404 but the route's own typed
+   * "never claimed") keeps the key; only `not_committed` or that answer
+   * frees the form for a new key.
    */
   protected async checkSubmission(): Promise<void> {
     const key = this.submissionKey();
@@ -2224,11 +2231,12 @@ export class AlpacaDeployWorkflowComponent {
       if (answer.status === 'not_committed') this.settleNotCommitted();
     } catch (error) {
       if (key !== this.submissionKey()) return;
-      if (error instanceof HttpErrorResponse && error.status === 404) {
+      if (neverClaimed(error)) {
         this.submitError.set(deployNotice('blocked', 'Not deployed', extractServerMessage(error, NOT_COMMITTED_MESSAGE)));
         this.settleNotCommitted();
       } else {
-        // No runner, or no answer: still unknown, never "not deployed".
+        // No runner, no answer, or a 404 that is not the route's own: still
+        // unknown, never "not deployed".
         this.submitError.set(deployNotice(
           'unknown',
           'Outcome unknown',

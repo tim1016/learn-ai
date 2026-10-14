@@ -561,7 +561,9 @@ async def read_deploy_submission_scoped(
     submission_key: str = Path(pattern=SUBMISSION_KEY_PATTERN),
 ) -> BudgetDeployCommandReceipt | DeploySubmissionUncommitted:
     """Committed: its receipt. Claimed but not committed: the claimed name,
-    ``in_flight`` or ``not_committed``. Never claimed: 404."""
+    ``in_flight`` or ``not_committed``. Never claimed: a typed 404 that settles
+    the key -- the only 404 this read answers that does, so a client frees the
+    key on it alone (the fleet's 404s are flat and carry no such marker)."""
     if broker != "alpaca":
         raise HTTPException(status_code=404, detail="Budget deployment is available on Alpaca accounts.")
     try:
@@ -571,7 +573,11 @@ async def read_deploy_submission_scoped(
     if status is None:
         raise HTTPException(
             status_code=404,
-            detail="No Deploy was committed for this submission. Nothing was set aside and nothing started.",
+            detail={
+                "message": "No Deploy was committed for this submission. Nothing was set aside and nothing started.",
+                "reason_code": panel_deploy.SUBMISSION_NEVER_CLAIMED,
+                "submission_settled": True,
+            },
         )
     return status
 
