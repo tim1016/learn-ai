@@ -19,6 +19,7 @@ from httpx import ASGITransport
 
 from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
+from app.broker.contract.errors import BrokerError
 from app.broker.contract.registry import get_broker_registry
 from app.engine.live.identity import strategy_instance_artifact_dir
 from app.engine.strategy.registry import (
@@ -800,16 +801,30 @@ def _write_claim_from_before_claims_named_an_account(root: Path, key: str, sid: 
         path.write_text(record, encoding="utf-8")
 
 
-def test_a_claim_keeps_the_account_it_was_made_under_and_an_older_claim_file_still_loads_without_one(tmp_path: Path) -> None:
+def test_a_claim_keeps_its_account_canonical_however_it_was_built(tmp_path: Path) -> None:
     _claim(DeploySubmissionLedger(tmp_path), "submission-a", account_id="PA-ACCT-1")
-    _write_claim_from_before_claims_named_an_account(tmp_path, "submission-b", "legacy-bot")
 
-    fresh = DeploySubmissionLedger(tmp_path)
+    # Canonical, so every spelling of the route compares equal to it -- on a
+    # claim read back from disk and on one built anywhere else.
+    assert DeploySubmissionLedger(tmp_path).by_key("submission-a").account_id == "pa-acct-1"
+    built = DeploySubmission(
+        submission_key="submission-b", strategy_instance_id="spy-ema-20260925-0931", claimed_at_ms=_AT,
+        request_fingerprint="settings-a", account_id=" PA3 ",
+    )
+    assert built.account_id == "pa3"
 
-    # Canonical, so every spelling of the route compares equal to it.
-    assert fresh.by_key("submission-a").account_id == "pa-acct-1"
-    older = fresh.by_key("submission-b")
-    assert older is not None and older.account_id is None and older.strategy_instance_id == "legacy-bot"
+
+def test_the_hundredth_name_of_a_minute_is_refused_by_the_claim_itself(tmp_path: Path) -> None:
+    ledger = DeploySubmissionLedger(tmp_path)
+    claimed = [_claim(ledger, f"fill-{ordinal:03d}") for ordinal in range(99)]
+
+    with pytest.raises(BotNameUnavailable, match="More than 99 SPY bots"):
+        _claim(ledger, "one-too-many")
+
+    assert len({claim.strategy_instance_id for claim in claimed}) == 99
+    # Nothing was published for the refused key, and no name beyond the ninety-ninth exists.
+    assert ledger.by_key("one-too-many") is None
+    assert len(_names(tmp_path)) == 99
 
 
 @pytest.mark.parametrize("deploy_commits", [True, False])
@@ -871,15 +886,22 @@ async def test_a_deploy_being_sent_is_never_called_in_flight_through_another_acc
     assert sent.status_code == 201
 
 
-async def test_the_recovery_read_of_an_account_the_broker_does_not_serve_answers_nothing_about_the_key(budgeted) -> None:
-    async with _client(budgeted.app) as client:
-        await client.post(_BOTS, json=_BUDGETED)
-        # Nothing about a key is answered for an account the lane does not serve -- "never claimed" included.
-        refused = await client.get(f"/api/brokers/alpaca/accounts/not-this-account/deploy-submissions/{_BODY['submission_key']}")
-        never = await client.get("/api/brokers/alpaca/accounts/not-this-account/deploy-submissions/never-submitted")
+async def test_the_recovery_read_answers_a_committed_receipt_while_the_broker_account_read_is_down(
+    budgeted, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The owner lost the Deploy's response during an Alpaca account-read outage: the receipt is local custody's."""
+    async def account_read_fails() -> None:
+        raise BrokerError("The account could not be read.", broker="alpaca")
 
-    assert refused.status_code == never.status_code == 404
-    assert refused.json()["detail"]["reason_code"] is None and never.json()["detail"]["reason_code"] is None
+    async with _client(budgeted.app) as client:
+        deployed = await client.post(_BOTS, json=_BUDGETED)
+        monkeypatch.setattr(get_broker_registry().resolve("alpaca"), "get_account", account_read_fails)
+        clear_broker_account_snapshot_cache_for_testing()
+        recovered = await client.get(f"{_RECOVERY}/{_BODY['submission_key']}")
+
+    assert deployed.status_code == 201
+    assert recovered.status_code == 200
+    assert recovered.json() == deployed.json()
 
 
 async def test_the_recovery_read_takes_the_account_in_any_case(budgeted) -> None:

@@ -887,7 +887,6 @@ def _eligibility(
     if blocked is not None:
         reason_codes = {
             "strategy.validation_accepted": "STRATEGY_NOT_ACCEPTED_FOR_DEPLOY",
-            GOLDEN_EVIDENCE_UNREAD_GATE_ID: "STRATEGY_NOT_ACCEPTED_FOR_DEPLOY",
             "broker.account_posture": "ALPACA_ACCOUNT_NOT_TRADABLE",
             "clerk.custody_freeze": str(blocked.evidence.get("category") or "ACCOUNT_STATE_UNPROVABLE"),
             "clerk.exposure_hold": str(blocked.evidence.get("reason_code") or "CLERK_HOLD_ACTIVE"),
@@ -951,7 +950,11 @@ def _dry_run_eligibility(
             explanation=(
                 "Every visible strategy is either unvalidated, or validated with no registered "
                 "live-decision runtime yet."
-                + (f" {GOLDEN_EVIDENCE_UNREAD_HEADLINE} {GOLDEN_EVIDENCE_UNREAD_EXPLANATION}" if golden_validation_unread else "")
+                + (
+                    " Golden Validation evidence could not be read, which may be why a strategy is not listed."
+                    if golden_validation_unread
+                    else ""
+                )
             ),
             next_action=next_action,
         )

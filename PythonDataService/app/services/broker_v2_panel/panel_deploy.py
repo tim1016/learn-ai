@@ -671,22 +671,29 @@ def _require_claim_of_account(claim: DeploySubmission | None, account_id: str) -
 
 
 async def deploy_submission_status(
-    broker: str, account_id: str, submission_key: str,
+    account_id: str, submission_key: str,
 ) -> BudgetDeployCommandReceipt | DeploySubmissionUncommitted | None:
     """The recovery read: what one Deploy submission did, by its key.
 
-    The route's account is validated first, and a claim is answered only for
-    the account it was claimed under (#3217): no answer about another
-    account's key -- ``in_flight`` and "never claimed" included -- is given.
-    A key this process is sending is then ``in_flight`` before anything else
-    is read -- from the moment its Deploy arrives, named or not, so no read
-    ever tells a client that a Deploy still running started nothing.
-    Otherwise the committed Deploy's receipt, or the name the key still holds
-    after custody is read and never committed; ``None`` only for a key never
+    A key this process is sending is ``in_flight`` before anything else is
+    read -- from the moment its Deploy arrives, named or not, so no read ever
+    tells a client that a Deploy still running started nothing. Otherwise the
+    committed Deploy's receipt, or the name the key still holds after
+    custody is read and never committed; ``None`` only for a key never
     claimed and not being sent. With no bot runner there is no ledger to
     read, so the read is refused (503) rather than answered.
+
+    A claim is answered only for the account it was claimed under (#3217):
+    another account's claimed key -- recorded, or named and in flight -- is
+    a typed 404 that frees nothing. Three kinds of key carry no account to
+    compare: a claim recorded before claims named their account, which is
+    read under the route's account as it always was; a key still being sent
+    that has not named its bot yet, which reads ``in_flight``; and a key
+    never claimed. The route's account is checked against the custody
+    authority by the receipt read itself, and the broker is never asked, so
+    a Deploy whose response was lost can be recovered while Alpaca's
+    account read is down.
     """
-    await validate_account(broker, account_id)
     ledger = DeploySubmissionLedger(_runner().artifacts_root)
     while submission_key not in _SENDING:
         claim = ledger.by_key(submission_key)

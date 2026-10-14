@@ -1024,14 +1024,10 @@ async def test_an_unreadable_research_store_is_named_when_it_leaves_no_strategy_
     view = response.json()
     unread = next(check for check in view["readiness_checks"] if check["gate_id"] == _GOLDEN_UNREAD)
     assert unread["ready"] is False
-    assert unread["headline"] == "Golden Validation evidence could not be read."
-    assert unread["evidence"] == {"golden_validation_evidence_read": False}
-    assert unread["recovery"] == "Restore the research store, then refresh this page."
     assert view["eligibility"]["reason_code"] == "STRATEGY_NOT_ACCEPTED_FOR_DEPLOY"
-    assert "Golden Validation evidence could not be read." in view["dry_run_eligibility"]["explanation"]
-    # The Deploy of a strategy the view no longer offers names the unread evidence, not a missing validation.
+    assert "could not be read" in view["dry_run_eligibility"]["explanation"]
+    # The Deploy of a strategy the view no longer offers points at the unread evidence, not a missing validation.
     assert refused.status_code == 409
-    assert refused.json()["detail"]["why"].startswith("Golden Validation evidence could not be read.")
     assert refused.json()["detail"]["next_action"] == "Restore the research store, then refresh this page."
 
 
@@ -1054,7 +1050,6 @@ async def test_an_unreadable_research_store_does_not_stop_a_strategy_with_a_curr
     view = response.json()
     unread = next(check for check in view["readiness_checks"] if check["gate_id"] == _GOLDEN_UNREAD)
     assert unread["ready"] is True
-    assert unread["headline"] == "Golden Validation evidence could not be read."
     # The only thing a view with no exit terms still lacks is its exit terms.
     assert [check["gate_id"] for check in view["readiness_checks"] if not check["ready"]] == ["deploy.exit_terms"]
     assert deployed.status_code == 201

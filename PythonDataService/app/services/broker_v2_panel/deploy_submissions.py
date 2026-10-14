@@ -37,7 +37,7 @@ import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
@@ -100,6 +100,12 @@ class DeploySubmission(BaseModel):
     # claim written before this field existed has none, and is read under the
     # route's own account exactly as it always was.
     account_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @field_validator("account_id", mode="before")
+    @classmethod
+    def _canonical_account(cls, value: object) -> object:
+        # Whoever builds a claim, the account is stored and compared in one spelling.
+        return canonical_alpaca_account_id(value) if isinstance(value, str) else value
 
 
 def bot_name_prefix(symbol: str, strategy_key: str) -> str:
@@ -224,7 +230,7 @@ class DeploySubmissionLedger:
                     submission_key=submission_key, strategy_instance_id=name, claimed_at_ms=now_ms,
                     request_fingerprint=request_fingerprint,
                     replaces_strategy_instance_id=replaces_strategy_instance_id,
-                    account_id=canonical_alpaca_account_id(account_id),
+                    account_id=account_id,
                 )
                 try:
                     self._publish(self._name_path(name), record)
