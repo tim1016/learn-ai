@@ -123,9 +123,6 @@ button {
 .run-continuity__duration { color: var(--text-subtle); font-size: var(--fs-xxs); }
 
 @media (max-width: 700px) {
-  .run-history__heading,
-  .run-history__tabs { align-self: stretch; }
-  .run-history__tabs button { flex: 1; }
   .run-continuity__heading { display: grid; }
   .run-continuity__counts { grid-template-columns: 1fr; }
 }

@@ -67,7 +67,7 @@ describe('DeployPaperAccessComponent', () => {
   it('asks once, as one line, and records the permission only on a separate explicit confirmation', async () => {
     const service = panelServiceMock();
     const { fixture } = await render(DeployPaperAccessComponent, {
-      inputs: { target: TARGET, accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
+      inputs: { target: TARGET, strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
       providers: [
       provideFleetDirectory(),{ provide: BrokerV2PanelService, useValue: service }],
     });
@@ -110,7 +110,7 @@ describe('DeployPaperAccessComponent', () => {
 
   it('reads as one allowed line once the strategy already has the permission', async () => {
     await render(DeployPaperAccessComponent, {
-      inputs: { target: TARGET, accountId: 'paper-account-1',
+      inputs: { target: TARGET,
         strategy: { ...AVAILABLE_STRATEGY, paper_access_state: 'enabled' }, modeLabel: 'Paper' as const },
       providers: [{ provide: BrokerV2PanelService, useValue: panelServiceMock() }],
     });
@@ -123,7 +123,6 @@ describe('DeployPaperAccessComponent', () => {
     const service = panelServiceMock();
     await render(DeployPaperAccessComponent, {
       inputs: { target: TARGET,
-        accountId: 'paper-account-1',
         strategy: { ...AVAILABLE_STRATEGY, paper_access_state: 'not_required' },
         modeLabel: 'Paper' as const,
       },
@@ -137,7 +136,7 @@ describe('DeployPaperAccessComponent', () => {
   it('drops a presented review when the same account rebinds to another Clerk', async () => {
     const service = panelServiceMock();
     const { fixture } = await render(DeployPaperAccessComponent, {
-      inputs: { target: TARGET, accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
+      inputs: { target: TARGET, strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
@@ -158,7 +157,7 @@ describe('DeployPaperAccessComponent', () => {
   it('drops a presented review when the same lane advances its routing epoch', async () => {
     const service = panelServiceMock();
     const { fixture } = await render(DeployPaperAccessComponent, {
-      inputs: { target: TARGET, accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
+      inputs: { target: TARGET, strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
@@ -178,7 +177,6 @@ describe('DeployPaperAccessComponent', () => {
     const service = panelServiceMock();
     await render(DeployPaperAccessComponent, {
       inputs: { target: TARGET,
-        accountId: 'paper-account-1',
         strategy: { ...AVAILABLE_STRATEGY, paper_access_state: 'blocked' },
         modeLabel: 'Paper' as const,
       },
@@ -199,7 +197,7 @@ describe('DeployPaperAccessComponent', () => {
       },
     });
     const { fixture } = await render(DeployPaperAccessComponent, {
-      inputs: { target: TARGET, accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
+      inputs: { target: TARGET, strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
@@ -216,7 +214,7 @@ describe('DeployPaperAccessComponent', () => {
   it('omits the git lineage row when the receipt predates it', async () => {
     const service = panelServiceMock();
     const { fixture } = await render(DeployPaperAccessComponent, {
-      inputs: { target: TARGET, accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
+      inputs: { target: TARGET, strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
@@ -243,7 +241,7 @@ describe('DeployPaperAccessComponent', () => {
       }),
     );
     const { fixture } = await render(DeployPaperAccessComponent, {
-      inputs: { target: TARGET, accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
+      inputs: { target: TARGET, strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
@@ -263,7 +261,7 @@ describe('DeployPaperAccessComponent', () => {
       .mockRejectedValueOnce(new Error('connection lost after submit'))
       .mockResolvedValueOnce({ action: 'activated' });
     const { fixture } = await render(DeployPaperAccessComponent, {
-      inputs: { target: TARGET, accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
+      inputs: { target: TARGET, strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
@@ -290,7 +288,6 @@ describe('DeployPaperAccessComponent', () => {
       inputs: { target: resourceTarget('alpaca', 'clrk_spec', {
         accountId: '9LIVE0001', bindingGeneration: 3, routingEpoch: 7,
       }),
-        accountId: '9LIVE0001',
         strategy: AVAILABLE_STRATEGY,
         modeLabel: 'Shadow' as const,
       },
@@ -324,7 +321,7 @@ describe('DeployPaperAccessComponent', () => {
     });
     await render(DeployPaperAccessComponent, {
       inputs: {
-        target: coldTarget, accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper',
+        target: coldTarget, strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper',
       },
       providers: [provideFleetDirectory(), { provide: BrokerV2PanelService, useValue: service }],
     });

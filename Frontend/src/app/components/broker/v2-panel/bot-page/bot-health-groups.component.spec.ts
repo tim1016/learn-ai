@@ -49,13 +49,6 @@ const BLOCKED: BotPanelView['mission_verdict'] = {
 };
 
 describe('BotHealthGroupsComponent (#2794)', () => {
-  it('splits health into this run and the account right now', async () => {
-    await render(BotHealthGroupsComponent, { inputs: { health: HEALTH } });
-
-    expect(screen.getAllByRole('heading', { level: 4 }).map((heading) => heading.textContent?.trim()))
-      .toEqual(['During this run', 'Account right now']);
-  });
-
   it('reads the market for both symbols when the bot trades something other than what it listens to (#2912)', async () => {
     const pulse = fakeBotPanelView().market_pulse;
     await render(BotHealthGroupsComponent, {

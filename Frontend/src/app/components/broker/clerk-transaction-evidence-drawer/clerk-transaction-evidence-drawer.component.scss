@@ -28,12 +28,12 @@
 
 .receipt-facts, .custody-clocks-section { margin-bottom: 1rem; }
 .receipt-facts h3, .custody-clocks-section h3 { margin-bottom: .5rem; }
-.receipt-facts dl, .custody-clocks, .epoch-provenance, .raw-receipt, .event-receipt { display: grid; gap: .45rem; }
+.receipt-facts dl, .custody-clocks, .epoch-provenance { display: grid; gap: .45rem; }
 .receipt-facts dl { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem .75rem; }
-.receipt-facts dl div, .custody-clocks div, .epoch-provenance div, .raw-receipt div, .event-receipt div { display: grid; gap: .25rem; grid-template-columns: minmax(8rem, 1fr) 2fr; }
+.receipt-facts dl div, .custody-clocks div, .epoch-provenance div { display: grid; gap: .25rem; grid-template-columns: minmax(8rem, 1fr) 2fr; }
 .receipt-facts dl div { padding-bottom: .35rem; border-bottom: 1px solid var(--border-light); }
-.receipt-facts dt, .custody-clocks dt, .epoch-provenance dt, .raw-receipt dt, .event-receipt dt { color: var(--text-muted); }
-.receipt-facts dd, .custody-clocks dd, .epoch-provenance dd, .raw-receipt dd, .event-receipt dd { margin: 0; overflow-wrap: anywhere; }
+.receipt-facts dt, .custody-clocks dt, .epoch-provenance dt { color: var(--text-muted); }
+.receipt-facts dd, .custody-clocks dd, .epoch-provenance dd { margin: 0; overflow-wrap: anywhere; }
 .custody-clocks-section > p { margin-bottom: .6rem; color: var(--text-secondary); font-size: .8rem; }
 
 @media (max-width: 40rem) {
@@ -41,5 +41,5 @@
   .receipt-identity { align-items: start; flex-direction: column; }
   .receipt-identity__facts { justify-items: start; }
   .receipt-facts dl { grid-template-columns: 1fr; }
-  .receipt-facts dl div, .custody-clocks div, .epoch-provenance div, .raw-receipt div, .event-receipt div { grid-template-columns: 1fr; }
+  .receipt-facts dl div, .custody-clocks div, .epoch-provenance div { grid-template-columns: 1fr; }
 }

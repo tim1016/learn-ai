@@ -264,7 +264,7 @@ describe('BotPanelShellComponent #1413 correlation campaign', () => {
       campaign_id: UI_CORRELATION_CAMPAIGN.component_campaign_id,
       recreation_count: shellRecreations,
       interaction_count: evidenceInteractions,
-      // The Order records fold also reads its audit trail once opened; the
+      // The Order records section also reads its audit trail; the
       // campaign counts the station evidence each interaction asked for.
       evidence_request_count: stationEvidenceCalls().length,
       revision_sequence: [...REVISION_SEQUENCE],
