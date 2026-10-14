@@ -801,14 +801,24 @@ def _reset_authority_fenced(
         "preserved_path": relative_reference(artifacts_root, preserved),
     }
     try:
-        _initialize_reset_generation(
-            account_id=account_id,
-            account_dir=account_dir,
-            authority_generation=next_generation,
-            db_identity_token=db_identity_token,
-            reset_provenance=provenance,
-            now_ms=now,
-        )
+        try:
+            _initialize_reset_generation(
+                account_id=account_id,
+                account_dir=account_dir,
+                authority_generation=next_generation,
+                db_identity_token=db_identity_token,
+                reset_provenance=provenance,
+                now_ms=now,
+            )
+        except Exception:
+            # Nothing is established yet: the registry still names the generation just moved
+            # aside. Everything in the account directory now was made by this call, so it
+            # goes, and the old files go back rather than stay beside an empty clerk.db that
+            # ``open`` would read as corrupt.
+            for name in (*_sqlite_family(DB_FILENAME), MIRROR_FILENAME):
+                (account_dir / name).unlink(missing_ok=True)
+            _restore_preserved_database(account_dir=account_dir, preserved=preserved)
+            raise
         EstablishedAccountsRegistry(accounts_root).record(
             EstablishedGeneration(
                 account_id=account_id,

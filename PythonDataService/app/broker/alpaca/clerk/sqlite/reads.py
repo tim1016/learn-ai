@@ -11,6 +11,7 @@ happens to forward to this module for these queries.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from collections.abc import Collection, Sequence
 from typing import NamedTuple
@@ -44,6 +45,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_PRICE_CONFLICT_REASON_CODE,
     ExecutionPriceConflictCause,
 )
+
+logger = logging.getLogger(__name__)
 
 # The one terminal broker-state set, spelled for SQL (``order_projection``).
 _TERMINAL_BROKER_STATES_SQL = sql_string_list(ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES)
@@ -2124,9 +2127,11 @@ def active_execution_price_conflicts(
     the custody subject -- the episode's durable owner, which manual custody
     shares with bots (#2460 review) -- and the sweep's compare-and-clear
     binds the returned ``uncertainty_id`` and ``cause`` as the expected
-    episode identity. Rows whose cause cannot be decoded are skipped -- an
-    unreadable cause is not a reason to wedge every other episode's
-    re-derivation.
+    episode identity. Rows whose cause cannot be decoded, or that name no
+    custody subject, are skipped -- an unreadable cause is not a reason to
+    wedge every other episode's re-derivation -- and each is logged as
+    ``execution_price_conflict_skipped`` with its ``uncertainty_id``, since a
+    skipped episode is never cleared by the sweep.
     """
     rows = conn.execute(
         "SELECT uncertainty_id, subject_id, facts_json FROM uncertainties "
@@ -2138,10 +2143,31 @@ def active_execution_price_conflicts(
     for row in rows:
         try:
             raised = json.loads(row["facts_json"])
+            if not isinstance(raised, dict):
+                raise TypeError(f"facts_json holds {type(raised).__name__}, not an object")
             cause = ExecutionPriceConflictCause.from_mapping(raised.get("cause_facts"))
-        except (ValueError, TypeError, json.JSONDecodeError):
+        except (ValueError, TypeError):
+            logger.warning(
+                "an active execution price conflict has a cause that cannot be read; "
+                "the sweep skips it and never clears it",
+                extra={
+                    "action": "execution_price_conflict_skipped",
+                    "reason": "cause_unreadable",
+                    "uncertainty_id": row["uncertainty_id"],
+                },
+                exc_info=True,
+            )
             continue
         if row["subject_id"] is None:
+            logger.warning(
+                "an active execution price conflict names no custody subject; "
+                "the sweep skips it and never clears it",
+                extra={
+                    "action": "execution_price_conflict_skipped",
+                    "reason": "no_custody_subject",
+                    "uncertainty_id": row["uncertainty_id"],
+                },
+            )
             continue
         episodes.append((row["uncertainty_id"], row["subject_id"], cause))
     return tuple(episodes)

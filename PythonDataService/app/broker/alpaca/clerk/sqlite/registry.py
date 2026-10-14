@@ -22,6 +22,14 @@ from app.broker.alpaca.paths import fsync_directory
 REGISTRY_FILENAME = "_established_generations.jsonl"
 
 
+class EstablishedRegistryInvalid(ValueError):
+    """A line of the established-accounts registry cannot be read.
+
+    A ``ValueError``, as the ``JSONDecodeError`` it replaces was, so the
+    callers that already treat an unreadable registry as one keep doing so.
+    """
+
+
 @dataclass(frozen=True)
 class EstablishedGeneration:
     account_id: str
@@ -66,18 +74,29 @@ class EstablishedAccountsRegistry:
         return self.latest(account_id) is not None
 
     def latest(self, account_id: str) -> EstablishedGeneration | None:
-        """The highest-generation entry recorded for this account, if any."""
+        """The highest-generation entry recorded for this account, if any.
+
+        The file is shared by every account, so one unreadable line refuses
+        the read for all of them (:class:`EstablishedRegistryInvalid`): a
+        skipped line could be the one that proves a generation was established.
+        """
         if not self._path.is_file():
             return None
         latest: EstablishedGeneration | None = None
         with self._path.open(encoding="utf-8") as handle:
-            for raw in handle:
+            for line_number, raw in enumerate(handle, start=1):
                 stripped = raw.strip()
                 if not stripped:
                     continue
-                entry: dict[str, Any] = json.loads(stripped)
-                if entry["account_id"] != account_id:
-                    continue
-                if latest is None or entry["authority_generation"] > latest.authority_generation:
-                    latest = EstablishedGeneration(**entry)
+                try:
+                    entry: dict[str, Any] = json.loads(stripped)
+                    if entry["account_id"] != account_id:
+                        continue
+                    candidate = EstablishedGeneration(**entry)
+                    if latest is None or candidate.authority_generation > latest.authority_generation:
+                        latest = candidate
+                except (ValueError, KeyError, TypeError) as exc:
+                    raise EstablishedRegistryInvalid(
+                        f"{self._path} line {line_number} cannot be read: {exc!r}"
+                    ) from exc
         return latest

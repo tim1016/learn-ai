@@ -14,13 +14,15 @@ from __future__ import annotations
 import asyncio
 import gc
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 from app.broker.alpaca.clerk.models import EffectPurpose
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.run_ownership import NO_RUNNER_REASON, RUNNER_GONE_REASON
+from app.broker.alpaca.clerk.sqlite import run_ownership
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseLost
+from app.broker.alpaca.clerk.sqlite.run_ownership import NO_RUNNER_REASON, RUNNER_GONE_REASON, RunOwnership
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.utils.timestamps import now_ms_utc
 from tests.broker.alpaca.clerk.sqlite.test_runtime import _binding
@@ -160,6 +162,94 @@ async def test_an_unowned_run_is_retired_after_one_pass_of_grace(
     assert _retire_reasons(caplog) == [NO_RUNNER_REASON]
     assert broker.cancellations == [f"broker-{order_ref}"]
     repo.close()
+
+
+class _GoneOwner:
+    def done(self) -> bool:
+        return True
+
+
+_GONE_OWNER = _GoneOwner()
+
+
+@dataclass(frozen=True)
+class _ActiveRun:
+    strategy_instance_id: str
+    lifecycle_run_id: str
+
+
+class _TwoRunsRepo:
+    """Two ACTIVE runs, each held by an owner that is done."""
+
+    account_id = "PA-TEST"
+
+    def __init__(self) -> None:
+        self.runs = {sid: _ActiveRun(sid, f"run-{sid}") for sid in ("bot-a", "bot-b")}
+
+    def clock(self) -> int:
+        return 0
+
+    def strategy_instances(self) -> list[dict[str, str]]:
+        return [{"strategy_instance_id": sid} for sid in self.runs]
+
+    def active_run(self, strategy_instance_id: str) -> _ActiveRun:
+        return self.runs[strategy_instance_id]
+
+
+def _retire_with_stops_failing(
+    monkeypatch: pytest.MonkeyPatch, failing: dict[str, Exception], stopped: list[str]
+) -> None:
+    """Retire both runs; each id in ``failing`` raises its error from its STOP."""
+
+    def stop(repo: object, *, strategy_instance_id: str, **_: object) -> None:
+        if strategy_instance_id in failing:
+            raise failing[strategy_instance_id]
+        stopped.append(strategy_instance_id)
+
+    monkeypatch.setattr(run_ownership, "submit_stop_run", stop)
+    ownership = RunOwnership()
+    for sid, run in _TwoRunsRepo().runs.items():
+        ownership.hold(
+            strategy_instance_id=sid, lifecycle_run_id=run.lifecycle_run_id, owner=_GONE_OWNER
+        )
+    run_ownership.retire_runs_whose_runner_is_gone(_TwoRunsRepo(), ownership)  # type: ignore[arg-type]
+
+
+def test_one_runs_failing_stop_is_logged_and_the_pass_still_fails_after_the_rest_are_retired(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The failure is not swallowed: a runner-gone run left ACTIVE leaves the pass incomplete."""
+    stopped: list[str] = []
+    failing = {"bot-a": ValueError("corrupt budget row"), "bot-b": KeyError("second failure")}
+
+    with caplog.at_level(logging.ERROR), pytest.raises(ValueError, match="corrupt budget row"):
+        _retire_with_stops_failing(monkeypatch, failing, stopped)
+
+    failed = [r for r in caplog.records if getattr(r, "action", None) == "run_retire_runner_gone_failed"]
+    assert [r.strategy_instance_id for r in failed] == ["bot-a", "bot-b"]
+    assert stopped == []
+
+
+def test_one_runs_failing_stop_does_not_starve_the_next_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stopped: list[str] = []
+
+    with pytest.raises(ValueError, match="corrupt budget row"):
+        _retire_with_stops_failing(monkeypatch, {"bot-a": ValueError("corrupt budget row")}, stopped)
+
+    assert stopped == ["bot-b"]
+
+
+def test_a_lost_execution_lease_still_ends_the_retirement_pass_at_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stopped: list[str] = []
+
+    with pytest.raises(ExecutionLeaseLost):
+        _retire_with_stops_failing(monkeypatch, {"bot-a": ExecutionLeaseLost("lease lost")}, stopped)
+
+    assert stopped == []
 
 
 async def test_an_owner_registered_during_the_grace_pass_keeps_the_run(

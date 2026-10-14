@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.repository import (
+    ClaimLostAfterBrokerIO,
     ExecutionLeaseLost,
     ExecutionLeaseLostAfterBrokerIO,
     RepositoryPoisoned,
@@ -279,6 +280,35 @@ async def test_a_lease_lost_after_broker_io_is_outcome_unknown_with_a_burned_key
 
     assert store._records[(_SID, "archive", "lost-after-io")].state == "failed"
     assert "may have been placed or cancelled" in (unknown.value.detail or "")
+
+
+async def test_a_claim_lost_after_broker_io_is_outcome_unknown_with_a_burned_key() -> None:
+    """The operation claim, not the lease, was found lost after the broker was called.
+
+    It is an ``OperationClaimError`` so the reconciliation sweep defers the effect
+    instead of failing its pass, and the panel must still read it as a send that
+    happened: a plain claim error reaches the generic branch below it.
+    """
+
+    async def _perform(_operator: str, _reason: str | None) -> str:
+        raise ClaimLostAfterBrokerIO("claim lost after the broker acted")
+
+    store = IdempotencyStore()
+    with pytest.raises(ActionOutcomeUnknownError) as unknown:
+        await execute_action(
+            _request(action_id="archive", key="claim-lost-after-io"),
+            sid=_SID,
+            current_revision=42,
+            current_concurrency_token="token",
+            performers={"archive": _perform},
+            operator_identity="op",
+            store=store,
+        )
+
+    assert store._records[(_SID, "archive", "claim-lost-after-io")].state == "failed"
+    assert unknown.value.reason_code == "ClaimLostAfterBrokerIO"
+    assert "operation claim" in (unknown.value.detail or "")
+    assert "lease heartbeat" not in (unknown.value.detail or "")
 
 
 async def test_repository_poisoned_propagates_unwrapped_too() -> None:

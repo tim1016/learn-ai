@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from pathlib import Path
@@ -13,7 +14,7 @@ from typing import Any
 import pytest
 
 from app.broker.alpaca.clerk.sqlite import recovery as recovery_module
-from app.broker.alpaca.clerk.sqlite import repository_lifecycle
+from app.broker.alpaca.clerk.sqlite import repository_lifecycle, schema
 from app.broker.alpaca.clerk.sqlite.activation import (
     ActivationRecord,
     ActivationRecordInvalid,
@@ -127,6 +128,26 @@ def test_activation_requires_matching_database_and_referenced_artifacts(tmp_path
     (tmp_path / proof_path).write_text("{}", encoding="utf-8")
     with pytest.raises(ActivationRecordInvalid, match="SHA-256"):
         store.resolve(ACCOUNT_ID, 2, "db-token", artifacts_root=tmp_path)
+
+
+@pytest.mark.parametrize("reference", ["../outside.json", "a\0b.json"])
+def test_an_activation_artifact_reference_that_escapes_the_root_is_an_invalid_record(
+    tmp_path: Path, reference: str
+) -> None:
+    """The startup classifier keys on ``ActivationRecordInvalid``; a bare ``ValueError`` would not."""
+    record = ActivationRecord.create(
+        account_id=ACCOUNT_ID,
+        authority_generation=2,
+        db_identity_token="db-token",
+        broker_proof_reference=reference,
+        broker_proof_sha256="0" * 64,
+        legacy_quarantine_manifest="accounts/alpaca/PA-RECOVERY/cutover/manifest.json",
+        legacy_quarantine_manifest_sha256="0" * 64,
+        activated_at_ms=NOW_MS,
+    )
+
+    with pytest.raises(ActivationRecordInvalid, match="broker proof"):
+        ActivationStore.validate_artifacts(record, artifacts_root=tmp_path)
 
 
 def test_activation_ledger_rejects_symbolic_link_substitution(tmp_path: Path) -> None:
@@ -707,6 +728,48 @@ def test_reset_preflights_all_generation_files_before_moving_any(tmp_path: Path)
 
     assert db_path.is_file()
     assert (account_dir / "custody_transitions.mirror").is_file()
+
+
+def test_a_reset_whose_new_database_cannot_hold_wal_puts_the_old_generation_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The old files are moved aside before the new generation is made. A refusal while
+    making it must not leave an empty clerk.db that ``open`` reads as corrupt, with the real
+    generation sitting in the preserved directory and the registry still naming it."""
+    repo = _initialized(tmp_path)
+    repo.register_strategy_instance(strategy_instance_id="spy", symbol="SPY", config_hash="h1")
+    account_dir = repo.db_path.parent
+    repo.close()
+
+    def refuse(_conn: sqlite3.Connection) -> None:
+        raise UnsupportedWalFilesystem("retained 'delete'")
+
+    monkeypatch.setattr(schema, "configure_connection", refuse)
+    with pytest.raises(UnsupportedWalFilesystem):
+        reset_authority(
+            account_id=ACCOUNT_ID,
+            artifacts_root=tmp_path,
+            broker_proof=ResetBrokerProof(
+                account_id=ACCOUNT_ID,
+                observed_at_ms=NOW_MS,
+                proof_reference="fake-broker-proof",
+                positions={},
+                open_order_ids=(),
+            ),
+            stopped_strategy_instance_ids=("spy",),
+            expected_strategy_instance_ids=("spy",),
+            max_proof_age_ms=1_000,
+            clock=_clock,
+        )
+    monkeypatch.undo()
+
+    established = EstablishedAccountsRegistry(tmp_path / "accounts" / "alpaca").latest(ACCOUNT_ID)
+    assert established is not None and established.authority_generation == 1
+    reopened = ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock)
+    assert [row["strategy_instance_id"] for row in reopened.strategy_instances()] == ["spy"]
+    reopened.close()
+    assert sorted(path.name for path in account_dir.glob("clerk.db*")) == ["clerk.db"]
 
 
 def test_flat_reset_rotates_generation_and_preserves_old_authority(tmp_path: Path) -> None:
