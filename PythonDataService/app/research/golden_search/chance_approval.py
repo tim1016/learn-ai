@@ -38,9 +38,12 @@ inferred from dates on read.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, NamedTuple
 
 from app.research.golden_search.chance_compare import _at_least
+from app.research.golden_search.chance_final import FinalChanceScope, stored_final_chance
+from app.research.golden_search.guidance import research_weakness
+from app.research.golden_search.protocol import GoldenSearchProtocol
 
 #: What the enrollment marker (and the approval gate it names) call themselves.
 SCHEMA = "golden-search-chance-approval/v1"
@@ -102,8 +105,14 @@ def _reason_of(record: Mapping[str, Any]) -> str:
     return "no reason recorded"
 
 
-def _share_item(component: str, label: str, record: Mapping[str, Any], *, numerator: int, enrolled: bool) -> dict[str, str] | None:
+def _share_item(
+    component: str, label: str, against: str, record: Mapping[str, Any], *, numerator: int, adverse: int, enrolled: bool
+) -> dict[str, str] | None:
     """One measured share-bearing component's item: weak below its own stored threshold, nothing at-or-above it.
+
+    A weak share is worded two ways under the one code: ``adverse`` paths (strictly worse, or a loss) reaching the
+    clear threshold the other way say so in ``against``'s words; any other weak share is inside the model's noise.
+    The wording never changes what is asked: every weak share needs the same acknowledgement.
 
     A reading without its stored threshold is unavailable for enrolled studies — today's constants are never
     borrowed for a reading that lacks them, and a legacy study simply has nothing to read.
@@ -113,6 +122,11 @@ def _share_item(component: str, label: str, record: Mapping[str, Any], *, numera
     if threshold is None or replications is None:
         return _unavailable(component, "its stored interpretation basis holds no clear threshold to read") if enrolled else None
     if not _at_least(numerator, replications, threshold):  # the same exact comparison #3011 owns, inverted
+        if _at_least(adverse, replications, threshold):
+            return {
+                "code": CHANCE_WITHIN_NOISE,
+                "text": f"{against} in {adverse:,} of {replications:,} paths ({adverse / replications:.1%}), at or above the {threshold:.0%} clear threshold the reading stored",
+            }
         return {
             "code": CHANCE_WITHIN_NOISE,
             "text": f"{label} inside the resampling model's noise: {numerator:,} of {replications:,} paths ({numerator / replications:.1%}), below the {threshold:.0%} clear threshold the reading stored",
@@ -120,8 +134,10 @@ def _share_item(component: str, label: str, record: Mapping[str, Any], *, numera
     return None
 
 
-def _numerators(record: Mapping[str, Any], defined_keys: tuple[str, ...], numerator_keys: tuple[str, ...], fallback: Any) -> tuple[int, int]:
-    """One share-bearing component's numerator and defined-path count, derived from its raw counts (#3024).
+def _numerators(
+    record: Mapping[str, Any], defined_keys: tuple[str, ...], numerator_keys: tuple[str, ...], adverse_key: str, fallback: Any
+) -> tuple[int, int, int]:
+    """One share-bearing component's numerator, defined-path count and adverse-path count, derived from its raw counts (#3024).
 
     The stored label and the stored inclusive count are presentation of the counts, never authority: a forged
     clear label over all-undefined counts reads as what its counts say. Records reach here already validated
@@ -129,8 +145,8 @@ def _numerators(record: Mapping[str, Any], defined_keys: tuple[str, ...], numera
     """
     counts = record.get("counts")
     if isinstance(counts, Mapping) and all(isinstance(counts.get(key), int) and not isinstance(counts.get(key), bool) for key in (*defined_keys, "undefined")):
-        return sum(counts[key] for key in numerator_keys), sum(counts[key] for key in defined_keys)
-    return (fallback if isinstance(fallback, int) and not isinstance(fallback, bool) else 0), 1  # no readable counts: never read as no_defined_paths
+        return sum(counts[key] for key in numerator_keys), sum(counts[key] for key in defined_keys), counts[adverse_key]
+    return (fallback if isinstance(fallback, int) and not isinstance(fallback, bool) else 0), 1, 0  # no readable counts: never read as no_defined_paths
 
 
 def chance_weakness_items(
@@ -153,11 +169,21 @@ def chance_weakness_items(
     comparison = chance.get("comparison") or {}
     if comparison.get("status") == "measured":
         at_least = comparison.get("at_least_as_good")
-        as_good, defined = _numerators(comparison, ("better", "tied", "worse"), ("better", "tied"), at_least.get("count") if isinstance(at_least, Mapping) else 0)
+        as_good, defined, worse = _numerators(
+            comparison, ("better", "tied", "worse"), ("better", "tied"), "worse", at_least.get("count") if isinstance(at_least, Mapping) else 0
+        )
         if enrolled and defined == 0:
             items.append(_unavailable("comparison", "no resampled path produced a defined result to compare"))
         else:
-            item = _share_item("comparison", "support against the current settings", comparison, numerator=as_good, enrolled=enrolled)
+            item = _share_item(
+                "comparison",
+                "support against the current settings",
+                "resampling that runs clearly against this fit: strictly worse than the current settings",
+                comparison,
+                numerator=as_good,
+                adverse=worse,
+                enrolled=enrolled,
+            )
             if item is not None:
                 items.append(item)
     elif enrolled:
@@ -166,11 +192,19 @@ def chance_weakness_items(
     if positive_net_required:
         profitability = chance.get("profitability") or {}
         if profitability.get("status") == "measured":
-            positive, defined = _numerators(profitability, ("positive", "zero", "negative"), ("positive",), 0)
+            positive, defined, negative = _numerators(profitability, ("positive", "zero", "negative"), ("positive",), "negative", 0)
             if enrolled and defined == 0:
                 items.append(_unavailable("profitability", "no resampled path produced a defined return"))
             else:
-                item = _share_item("profitability", "resampled profit", profitability, numerator=positive, enrolled=enrolled)
+                item = _share_item(
+                    "profitability",
+                    "resampled profit",
+                    "resampled profit that is clearly a loss: a negative compounded net return",
+                    profitability,
+                    numerator=positive,
+                    adverse=negative,
+                    enrolled=enrolled,
+                )
                 if item is not None:
                     items.append(item)
         elif enrolled:
@@ -186,4 +220,37 @@ def chance_weakness_items(
         elif int(carry.get("finite") or 0) == 0:
             items.append(_unavailable("carry-over", "its reproduction produced no defined rehearsal path"))
 
-    return items
+    return _one_item_per_code(items)
+
+
+def _one_item_per_code(items: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Each code once, in first-seen order, with every item that shared it joined in the words the page shows.
+
+    The page reads item texts joined with "and" under one acknowledgement, so a merged item renders exactly as
+    the separate ones did; the code list an approval and its qualification record stops naming a code twice.
+    """
+    texts: dict[str, list[str]] = {}
+    for item in items:
+        texts.setdefault(item["code"], []).append(item["text"])
+    return [{"code": code, "text": " and ".join(parts)} for code, parts in texts.items()]
+
+
+class ApprovalWeakness(NamedTuple):
+    chance: dict[str, Any]
+    items: list[dict[str, str]]
+    codes: list[str]
+
+
+def approval_weakness(
+    protocol: GoldenSearchProtocol, exam: Mapping[str, Any], chosen: Mapping[str, Any], policy: Mapping[str, Any] | None
+) -> ApprovalWeakness:
+    """What approving ``chosen`` must acknowledge: its stored final components, the chance items and every weakness code.
+
+    The approval intent and the qualification payload both read this, so the record the acknowledgement was
+    given against is the record the qualification retains. The scope is the frozen protocol plus the fit's point
+    identity, so a stored record that belongs to another fit, window, capital or objective never counts (#3024).
+    """
+    chance = stored_final_chance(chosen, FinalChanceScope.for_protocol(protocol, point_hash=chosen["point_hash"]))
+    items = chance_weakness_items(policy, chance, positive_net_required=bool(protocol.policy.require_positive_net))
+    codes = research_weakness(chosen["outcome"], exam["claim"], exam["exposure_state"]) + [item["code"] for item in items]
+    return ApprovalWeakness(chance, items, codes)

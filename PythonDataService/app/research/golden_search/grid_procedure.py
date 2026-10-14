@@ -231,20 +231,17 @@ def pair_grid(
     a: str,
     b: str,
     *,
-    size: int = PAIR_GRID_SIZE,
     canonicalize: Canonicalize | None = None,
 ) -> PairGrid:
     """The landscape of searched knobs ``a`` (rows) and ``b`` (columns) over their planned ranges, through ``center``."""
-    if size < 2:
-        raise ValueError("a pair audit needs at least two values per axis")
     plans = {plan.name: plan for plan in protocol.knobs}
     for name in (a, b):
         if name not in plans or plans[name].mode != "search":
             raise ValueError(f"{name} is not a searched knob of this plan")
     build = canonicalize or canonicalizer(declaration.strategy_key, protocol.symbol)
     base = knob_values(declaration, center)
-    rows = _landscape_axis(declaration.knob(a), plans[a], base[a], size)
-    columns = _landscape_axis(declaration.knob(b), plans[b], base[b], size)
+    rows = _landscape_axis(declaration.knob(a), plans[a], base[a], PAIR_GRID_SIZE)
+    columns = _landscape_axis(declaration.knob(b), plans[b], base[b], PAIR_GRID_SIZE)
     cells = tuple(_audit_cell(declaration, base, {a: row, b: column}, build) for row in rows for column in columns)
     return PairGrid(
         x_knob=b,

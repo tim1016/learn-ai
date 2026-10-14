@@ -232,15 +232,13 @@ def test_two_lanes_overlap_independent_evaluations_within_the_window(monkeypatch
         evaluator = _seamed_evaluator(monkeypatch, engine, bridge)
         evaluator.dispatch = dispatch
 
-        started = time.monotonic()
         metrics = evaluator.evaluate([_point(gap / 10) for gap in range(1, 7)], window=JAN, stage="search")
-        elapsed = time.monotonic() - started
 
         assert [m.net_profit for m in metrics] == [gap / 10 for gap in range(1, 7)], "input order, whatever arrived"
         assert len(children) == 2, "two actual lanes served the batch"
+        # Overlap is read off the recorded intervals, not a wall-clock budget a loaded runner would break.
         assert intervals.pairs_overlapping() >= 1, "independent evaluations genuinely overlapped"
         assert intervals.max_in_flight() <= 2, "the window bounds begun-but-undelivered work"
-        assert elapsed < 6 * 0.05, f"overlap shortened the batch ({elapsed:.2f}s for six 50ms items)"
         assert evaluator.new_runs == 6 and bridge.consumed == 6
     finally:
         dispatch.close()
@@ -819,6 +817,7 @@ async def test_two_real_children_overlap_independent_evaluations(conn, tmp_path:
 
     overlaps = 0
     widths: dict[int, float] = {}
+    ran: dict[int, int] = {}
     try:
         for width in (1, 2, 4):
             runs.clear()
@@ -831,6 +830,7 @@ async def test_two_real_children_overlap_independent_evaluations(conn, tmp_path:
             finally:
                 dispatch.close()
             workers = {worker for worker, _, _ in runs}
+            ran[width] = len(runs)
             assert len(workers) == min(width, len(points)), f"width {width}: {len(workers)} actual children served the batch"
             for first in runs:
                 for second in runs:
@@ -844,7 +844,8 @@ async def test_two_real_children_overlap_independent_evaluations(conn, tmp_path:
             )
 
         assert overlaps >= 1, "two real children ran independent evaluations at the same time"
-        assert widths[4] < widths[1] * 1.5, "width never made the corpus dramatically slower (transport sanity)"
+        # Transport sanity is the work done, not a wall-clock ratio: no width ran a point twice.
+        assert ran == {width: len(points) for width in (1, 2, 4)}, "each width evaluated every point exactly once"
     finally:
         _close_writer_loop_catalog_pool()
 
@@ -1002,8 +1003,10 @@ def test_a_child_spawning_as_the_pool_closes_is_killed_not_published(monkeypatch
     assert dispatch._pool._lanes[0].worker is None, "the corpse was never published to the slot"
 
 
-def test_a_delivered_cancellation_reaps_the_children_before_release_reconciliation(monkeypatch: pytest.MonkeyPatch) -> None:
-    """#3065 review: a cancellation observed by the child stops every child before the release writes.
+def test_a_cancellation_from_the_owners_poll_reaps_the_children_before_release_reconciliation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#3065 review: a cancellation raised by the owner's poll stops every child before the release writes.
 
     Raising the cancellation in the evaluator's frame never runs the
     adapter's own handlers, so without the pre-reconciliation reap the
@@ -1013,22 +1016,16 @@ def test_a_delivered_cancellation_reaps_the_children_before_release_reconciliati
 
     events: list[str] = []
     release_blocking = threading.Event()
-    sibling_started = threading.Event()
+    mid_run = threading.Event()
 
     def spawn(context: WorkerDispatchContext) -> _FakeChild:
         child = _FakeChild(context)
 
         def execute(task: dict[str, Any]) -> dict[str, Any]:
-            if float(task["point"]["gap"]) == 0.1:
-                # The cancelling answer waits for its sibling to be provably
-                # mid-run: on a slower runner the reap may otherwise find no
-                # lane occupied yet (#3048 CI).
-                assert sibling_started.wait(timeout=5.0), "the sibling began before the cancellation landed"
-                return {"type": "failed", "key": task["key"], "error": "cancelled"}
-            # A sibling item stays mid-run so the reap has a live child to stop.
-            sibling_started.set()
+            # Items stay mid-run so the reap has live children to stop.
+            mid_run.set()
             assert release_blocking.wait(timeout=5.0), "the mid-run child outlived its owner's cancellation"
-            return {"type": "failed", "key": task["key"], "error": "cancelled"}
+            return _gap_message(task)
 
         child.execute = execute
 
@@ -1041,6 +1038,12 @@ def test_a_delivered_cancellation_reaps_the_children_before_release_reconciliati
 
     monkeypatch.setattr(shared_pool_module, "ResearchWorker", spawn)
     dispatch = pool_module.PooledWorkerDispatch(WorkerDispatchContext(**CONTEXT), workers=2, window=2)
+
+    def cancelled() -> None:
+        if mid_run.is_set():
+            raise JobCancelled("cancelled by the owner")
+
+    dispatch._context.cancel_check = cancelled
 
     class _SlowReleaseBridge(_ReservationBridge):
         async def release(self, conn, *args: Any, **kwargs: Any):

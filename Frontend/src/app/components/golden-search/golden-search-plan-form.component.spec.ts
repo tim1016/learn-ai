@@ -9,7 +9,7 @@ import { BackfillJobRunner, type BackfillJobRun, type BackfillRunHooks, type Bac
 import { fakePickerWorld, pickSymbol } from '../../shared/symbol-picker/testing/fake-picker-world';
 import { GoldenSearchPlanFormComponent } from './golden-search-plan-form.component';
 import { REFUSAL_INPUTS, refusalTarget } from './golden-search-plan-problems';
-import { GoldenSearchService, type CommandOutcome } from './golden-search.service';
+import { GoldenSearchRefusedError, GoldenSearchService, StudyConflictError, type CommandOutcome } from './golden-search.service';
 import { etMidnightMs } from '../../shared/date/et-midnight';
 import type { CreateStudyRequest, DefaultsLayout, GoldenSearchDefaults, GoldenSearchPreflight, ProtocolRequest, StrategyCapability, StudyCommandRequest, StudyDetail } from './golden-search.types';
 import { defaults, emaCapability, frequencyProtocol, INCUMBENT_PARAMS, preflight as preflightFixture, protocol as protocolFixture, STUDY_POOL, studyDetail, unavailableCapability } from './testing/fixtures';
@@ -281,6 +281,26 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(run).toMatchObject({ command: 'run_research', expected_revision: 0, idempotency_key: `${revise.idempotency_key}:run` });
   });
 
+  it.each([
+    ['refuses', () => new GoldenSearchRefusedError({ code: 'DATA_MISSING', message: 'missing data: SPY has no minute bars for 7 sessions' })],
+    ['finds the study has moved on', () => new StudyConflictError('STALE_REVISION', 'The study moved on.', null)],
+    ['does not answer', () => new Error('network down')],
+  ])('opens the revised study when the server %s its Run research, so Lock cannot revise twice', async (_case, failure) => {
+    const service = fakeService();
+    const revised = studyDetail('locked', { id: 'study-0002-bbbb', revision: 0, parent_study_id: 'study-0001-aaaa' });
+    service.command.mockResolvedValueOnce({ study: revised, jobId: null }).mockRejectedValueOnce(failure());
+    const { locked } = await renderForm(service, { reviseFrom: studyDetail('awaiting_validation') });
+    await waitFor(() => expect(runButton().disabled).toBe(false));
+
+    fireEvent.click(runButton());
+
+    await waitFor(() => expect(locked).toHaveBeenCalledWith('study-0002-bbbb'));
+    expect(service.command.mock.calls.map(([target, request]) => [target, request.command])).toEqual([
+      ['study-0001-aaaa', 'revise'],
+      ['study-0002-bbbb', 'run_research'],
+    ]);
+  });
+
   it('shows where the plan sits in the research process', async () => {
     await renderForm(fakeService());
 
@@ -462,7 +482,7 @@ describe('GoldenSearchPlanFormComponent', () => {
   it.each([
     { plan: 'a fixed-floor plan', policy: undefined, hidden: ['expected_trades_per_year'] },
     { plan: 'a frequency plan', policy: frequencyProtocol(), hidden: ['policy.min_trades', 'exam_min_trades'] },
-  ])('every field the server can refuse links to an input the form renders, for $plan', async ({ policy, hidden }) => {
+  ])('every input the form links a refusal to is rendered, for $plan', async ({ policy, hidden }) => {
     const service = fakeService();
     if (policy) service.defaults.mockResolvedValue(defaults({ policy: policy.policy, exam_min_trades: policy.exam_min_trades, expected_trades_per_year: policy.expected_trades_per_year }));
     const { view } = await renderForm(service);

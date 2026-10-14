@@ -1,7 +1,8 @@
-import { ChangeDetectionStrategy, Component, input } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, input } from "@angular/core";
 
 import { RouterLink } from "@angular/router";
 
+import { goldenStateLabel } from "../../services/golden-validation.service";
 import type { GoldenValidation } from "../../services/golden-validation.types";
 import { AssetIdentityComponent } from "../../shared/asset-identity/asset-identity.component";
 import { ReceiptLabelPipe } from "../../shared/pipes/receipt-label.pipe";
@@ -17,4 +18,5 @@ import { GoldenValidationScopeComponent } from "./golden-validation-scope.compon
 })
 export class GoldenValidationCaseComponent {
   readonly golden = input.required<GoldenValidation>();
+  protected readonly stateLabel = computed(() => goldenStateLabel(this.golden().state, this.golden().review_is_current));
 }

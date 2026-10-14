@@ -9,6 +9,7 @@ optionally, the stock's default pointer. Live Postgres only.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 import asyncpg
@@ -18,11 +19,31 @@ from app.research.backtest_runs import repository as backtest_repo
 from app.research.backtest_runs.records import record_from_payload
 from app.research.golden_search.qualifications import QualificationRow, insert_qualification, set_default_cas
 from app.research.golden_validation import service as golden_validation
+from app.services import signal_program_admission as admission_module
 from tests.research.backtest_runs.payloads import engine_payload
 
 PROGRAM = "ema_crossover_signal"
 CONTRACT = _STRATEGY_REGISTRY[PROGRAM].signal_program_contract
 assert CONTRACT is not None
+
+
+def copied_source_tree(tmp_path: Path, *, drift_artifact: bool = False) -> Path:
+    """A faithful copy of the proof's source files under ``tmp_path``.
+
+    With ``drift_artifact``, one artifact file is edited after the copy --
+    the bytes a ``git pull`` lands on the bind mount while the process keeps
+    running the code it imported.
+    """
+    root = tmp_path.resolve()
+    for relative in (*CONTRACT.artifact_paths, *CONTRACT.wiring_artifact_paths):
+        source = admission_module._SERVICE_ROOT / relative
+        destination = root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(source.read_bytes())
+    if drift_artifact:
+        drifted = root / "app/engine/strategy/algorithms/ema_crossover_signal.py"
+        drifted.write_text("# drifted after import\n" + drifted.read_text())
+    return root
 
 
 def canonical_point(symbol: str, **overrides: object) -> dict[str, Any]:

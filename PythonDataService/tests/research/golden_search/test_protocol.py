@@ -95,6 +95,9 @@ _MUTATIONS: list[tuple[str, Callable[[GoldenSearchProtocol], GoldenSearchProtoco
     ("INCUMBENT_INVALID", lambda p: dataclasses.replace(p, incumbent=IncumbentRef("qualification", None, dict(SEED)))),
     ("INCUMBENT_INVALID", lambda p: dataclasses.replace(p, incumbent=IncumbentRef("registry", "q-1", dict(SEED)))),
     ("INCUMBENT_INVALID", lambda p: dataclasses.replace(p, incumbent=IncumbentRef("registry", None, {**SEED, "symbol": "QQQ"}))),
+    ("INCUMBENT_INVALID", lambda p: dataclasses.replace(p, incumbent=IncumbentRef("registry", None, {**SEED, "x": "wide"}))),
+    ("INCUMBENT_INVALID", lambda p: dataclasses.replace(p, incumbent=IncumbentRef("registry", None, {**SEED, "g": float("nan")}))),
+    ("INCUMBENT_INVALID", lambda p: dataclasses.replace(p, incumbent=IncumbentRef("registry", None, {**SEED, "w": 1}))),
     ("ZOOM_SETTINGS_INVALID", lambda p: dataclasses.replace(p, zoom=ZoomSettings(points=2))),
     ("ZOOM_SETTINGS_INVALID", lambda p: dataclasses.replace(p, zoom=ZoomSettings(refinements=5))),
     ("ZOOM_SETTINGS_INVALID", lambda p: dataclasses.replace(p, zoom=ZoomSettings(passes=0))),
@@ -192,6 +195,13 @@ def test_validate_protocol_returns_every_refusal_not_only_the_first() -> None:
     codes = [refusal.code for refusal in validate_protocol(plan, DECL)]
 
     assert {"BUDGET_CAP_INVALID", "ZOOM_SETTINGS_INVALID", "SEED_OUTSIDE_DOMAIN"} <= set(codes)
+
+
+def test_validate_protocol_keeps_a_qualified_incumbent_outside_todays_domain() -> None:
+    # A qualification minted under an older declaration can sit outside today's domain; only its being a number is checked.
+    stale = IncumbentRef("qualification", "q-1", {**SEED, "x": 11, "g": 2.5})
+
+    assert validate_protocol(dataclasses.replace(_valid(), incumbent=stale), DECL) == []
 
 
 def test_validate_protocol_allows_a_seed_outside_the_search_range() -> None:

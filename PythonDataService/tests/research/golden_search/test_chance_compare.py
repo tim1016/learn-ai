@@ -21,12 +21,14 @@ from app.research.golden_search.chance import (
     seed_for,
 )
 from app.research.golden_search.chance_compare import (
+    DERIVED_RETURN_OVERFLOW,
     INCONSISTENT_CAPITAL,
     INCUMBENT_UNAVAILABLE,
     MISSING_SCHEDULED_SESSIONS,
     NON_CANONICAL_CLOSE,
     NOT_MEASURED,
     SCHEMA_PROFITABILITY,
+    TOO_FEW_SESSIONS,
     UNSCHEDULED_SESSION,
     _classify,
     _pair_chunk,
@@ -38,7 +40,10 @@ from app.research.golden_search.chance_compare import (
     series_digest,
     stored_chance,
 )
+from app.research.golden_search.chance_drawdown import stored_drawdown
+from app.research.golden_search.chance_rehearsal import stored_rehearsal
 from app.research.golden_search.selection import Metrics
+from app.schemas.golden_search import GoldenSearchChance
 from app.utils.session_anchors import et_midnight_ms
 
 CAPITAL = 100_000.0
@@ -390,6 +395,27 @@ def test_a_run_holding_an_unscheduled_session_is_refused() -> None:
     assert admitted["code"] == UNSCHEDULED_SESSION[0]
 
 
+def test_a_run_too_short_to_resample_reads_too_few_sessions_with_the_series_own_sentence() -> None:
+    # The code is read off the series refusal's wording, so a reworded refusal would silently become "unreadable_series".
+    admitted = admit_run(_completed(), _detail(_smooth(10, seed=18)), _window_for(10))
+
+    assert admitted["status"] == "missing" and admitted["code"] == TOO_FEW_SESSIONS[0]
+    assert admitted["reason"].startswith(TOO_FEW_SESSIONS[1]) and "10 sessions" in admitted["reason"]
+
+
+@pytest.mark.filterwarnings("ignore:overflow encountered in divide:RuntimeWarning")
+def test_equity_whose_session_return_overflows_is_refused_not_resampled() -> None:
+    # Every equity value is finite and positive, but one session's ratio to the last is beyond a float.
+    detail = _detail(_smooth(60, seed=19))
+    detail["daily_equity"][30][1] = 1e-300
+    detail["daily_equity"][31][1] = 1e300
+
+    admitted = admit_run(_completed(), detail, _window_for(60))
+
+    assert isinstance(admitted, dict), "an overflowing series was admitted for resampling"
+    assert admitted["status"] == "missing" and admitted["code"] == DERIVED_RETURN_OVERFLOW[0]
+
+
 def test_mismatched_sessions_or_capital_refuse_the_pairing_not_the_fit() -> None:
     # An incumbent that misses a scheduled session of the shared window fails its own admission first.
     uncovered = development_readings(
@@ -435,11 +461,15 @@ def test_a_legacy_record_reads_not_measured_per_component_without_backfill() -> 
     assert absent["profitability"]["code"] == NOT_MEASURED[0]
 
 
-def test_a_malformed_stored_component_says_why_it_is_unavailable() -> None:
+def test_a_malformed_stored_component_reads_unavailable_and_never_breaks_the_response() -> None:
     malformed = stored_chance({"chance": {"comparison": "garbage", "profitability": {"status": "measured", "label": "mixed"}}})
+    # Not a record at all reads as never measured; a record that fails the served contract says it failed it.
     assert malformed["comparison"]["status"] == "missing"
     assert malformed["comparison"]["code"] == NOT_MEASURED[0]
-    assert malformed["profitability"]["status"] == "measured"
+    assert malformed["profitability"]["status"] == "missing"
+    assert malformed["profitability"]["code"] == "invalid_record"
+    # What a study page is served satisfies its wire model: a malformed sibling never fails the whole response.
+    GoldenSearchChance.model_validate({**malformed, "rehearsal": stored_rehearsal({}), "drawdown": stored_drawdown({})})
 
 
 def test_series_digest_distinguishes_inputs_and_ignores_object_identity() -> None:

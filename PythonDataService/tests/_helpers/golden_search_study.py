@@ -305,7 +305,8 @@ class Driver:
             stage_token=token,
             job_id=job,
             execute=kwargs.pop("execute", self.engine),
-            approval=self.approval.binding(),
+            # ``approval=None`` runs the real approval workflow instead of the fake.
+            approval=kwargs.pop("approval", self.approval.binding()),
             roots=self.roots,
             **kwargs,
         )

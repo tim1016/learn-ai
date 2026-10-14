@@ -65,6 +65,7 @@ from app.research.golden_search.chance_compare import (
     admit_run,
     failed_component,
     series_digest,
+    served_record,
 )
 from app.research.golden_search.selection import Metrics
 from app.research.grid_search.service import window_dates
@@ -166,6 +167,14 @@ def _guidance(rungs: list[dict[str, Any]], target: float, active: tuple[str, ...
         "objective": "the objective comparison with the current settings",
     }.__getitem__
     worst_names = " and ".join(f"{limit_words(name)} ({share:.0%})" for share, name in worst) if worst else "no single rule"
+    # An undefined path counts as not passing, so a rule that could not be computed reads 0% beside a rule that
+    # was measured and failed; say which rules had paths with no defined result.
+    undefined = [
+        f"{limit_words(name)} ({first['undefined'][f'undefined_{name}']:,} of {first['denominator']:,})"
+        for name in active
+        if first.get("undefined", {}).get(f"undefined_{name}")
+    ]
+    undefined_words = f" Paths where a rule could not be computed count as not passing it; it was undefined for {' and '.join(undefined)}." if undefined else ""
     reaching = [rung for rung in rungs if Fraction(rung["passes"]["pass_joint"], rung["denominator"]) >= Fraction(str(target))]
     if reaching:
         best = reaching[0]
@@ -179,7 +188,7 @@ def _guidance(rungs: list[dict[str, Any]], target: float, active: tuple[str, ...
         else ""
     )
     return (
-        f"At the final test's own length, {first['shares']['joint']:.0%} of resamples meet every modeled rule; the limit is {worst_names}. "
+        f"At the final test's own length, {first['shares']['joint']:.0%} of resamples meet every modeled rule; the limit is {worst_names}.{undefined_words} "
         f"{reach_words}{' ' + trend if trend else ''} The {target:.0%} target is the owner's reading heuristic, not a power calculation."
     )
 
@@ -361,7 +370,7 @@ def stored_rehearsal(candidate: Mapping[str, Any]) -> dict[str, Any]:
     """The rehearsal component of one stored evidence candidate, normalized like every other chance component."""
     record = (candidate.get("chance") or {}).get("rehearsal")
     if isinstance(record, Mapping) and record.get("status") in {"measured", "missing", "failed"}:
-        return dict(record)
+        return served_record("rehearsal", record)
     if isinstance(record, Mapping):
         return _missing(
             ("unsupported", f"The stored rehearsal reading holds status {record.get('status')!r}, which this server cannot interpret; it is shown as unavailable rather than guessed at.")

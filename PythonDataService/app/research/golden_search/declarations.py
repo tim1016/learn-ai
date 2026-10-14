@@ -337,7 +337,9 @@ def snap(knob: SearchKnob, value: Decimal, rounding: str = ROUND_HALF_EVEN) -> D
     steps = (value / knob.quantum).to_integral_value(rounding=rounding)
     snapped = steps * knob.quantum
     # ``to_integral_value``, not ``quantize``: quantize raises past the context's 28 digits.
-    return snapped.to_integral_value() if knob.kind == "integer" else snapped
+    snapped = snapped.to_integral_value() if knob.kind == "integer" else snapped
+    # A tiny negative rounds to -0, whose float hashes apart from 0.0: one setting has one hash.
+    return abs(snapped) if snapped == 0 else snapped
 
 
 def quantize(knob: SearchKnob, value: Decimal, rounding: str = ROUND_HALF_EVEN) -> Decimal:
@@ -402,12 +404,11 @@ def canonical_point(strategy_key: str, symbol: str, values: Mapping[str, object]
         for knob in declaration.knobs:
             if knob.name not in prepared:
                 continue
-            snapped = snap(knob, to_decimal(prepared[knob.name]))
-            if not knob.domain_low <= snapped <= knob.domain_high:
-                raise ValueError(
-                    f"{knob.name}={snapped} is outside its domain {knob.domain_low}..{knob.domain_high}"
-                )
-            prepared[knob.name] = scalar(knob, snapped)
+            value = to_decimal(prepared[knob.name])
+            # Judged as given: rounding onto the boundary would move a value outside the domain, not refuse it.
+            if not knob.domain_low <= value <= knob.domain_high:
+                raise ValueError(f"{knob.name}={value} is outside its domain {knob.domain_low}..{knob.domain_high}")
+            prepared[knob.name] = scalar(knob, snap(knob, value))
     model = registration.param_schema.model_validate({**prepared, "symbol": symbol})
     return model.model_dump(mode="json")
 

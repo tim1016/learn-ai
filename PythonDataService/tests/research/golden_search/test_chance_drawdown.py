@@ -10,8 +10,10 @@ import numpy as np
 import pytest
 
 from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc
+from app.research.golden_search.chance import MEAN_BLOCK_SESSIONS, REPLICATIONS
 from app.research.golden_search.chance_drawdown import NOT_MEASURED, count_falls, drawdown_reading, stored_drawdown
 from app.research.golden_search.selection import Metrics
+from app.research.monte_carlo.stationary import stationary_index_chunks
 from app.utils.session_anchors import et_midnight_ms
 
 CAPITAL = 100_000.0
@@ -78,13 +80,6 @@ def test_a_positive_only_series_falls_not_at_all() -> None:
     assert reading["percentiles"]["p95"] == 0.0
 
 
-def test_quantiles_interpolate_linearly_and_carry_their_finite_count() -> None:
-    reading = _reading(_smooth(60, 1))
-    assert reading["percentiles"]["finite"] == 10_000
-    assert 0.0 <= reading["percentiles"]["p50"] <= reading["percentiles"]["p95"] < 1.0
-    assert reading["counts"]["beyond_ceiling"] + reading["counts"]["within_ceiling"] + reading["counts"]["undefined"] == 10_000
-
-
 def test_the_percentiles_interpolate_by_hand_computed_positions() -> None:
     from app.research.golden_search.chance_drawdown import _percentiles
 
@@ -113,14 +108,29 @@ def test_ceiling_equality_is_within_a_strict_breach_is_a_concern() -> None:
     assert "research concern" in breaching["sentence"]
 
 
+def test_the_sentence_names_the_ceiling_at_the_precision_the_exam_check_shows_it() -> None:
+    # The ceiling is free in (0, 1]: a 12.5% ceiling is never rounded to "12%" (exam_rules prints it with two decimals).
+    deeper = [0.0] * 59
+    deeper[30] = -0.25
+    beyond = _reading(deeper, ceiling=0.125)
+    assert beyond["concern"] is True and "beyond the 12.50% ceiling" in beyond["sentence"]
+    within = _reading([0.0] * 59, ceiling=0.10)
+    assert within["concern"] is False and "within the 10.00% ceiling" in within["sentence"]
+
+
 def test_a_deterministic_alternating_series_states_its_actual_outcomes_not_a_promise() -> None:
     # Exactly one losing session of -10% among flat ones: a path's fall is 0.1 iff it draws that session.
-    alternating = [0.0] * 59
-    alternating[30] = -0.10
-    reading = _reading(alternating, ceiling=0.05)
-    assert reading["counts"]["beyond_ceiling"] + reading["counts"]["within_ceiling"] == 10_000
-    drawn_beyond = reading["counts"]["beyond_ceiling"]
-    assert 0 < drawn_beyond < 10_000, "the share is whatever the deterministic fixture actually draws, never an assumed 1-in-20"
+    losing_session = 30
+    returns = [0.0] * 59
+    returns[losing_session] = -0.10
+    reading = _reading(returns, ceiling=0.05)
+    # The expected count is read off the reading's own stored seed: the paths that include the losing session.
+    rng = np.random.default_rng(reading["basis"]["seed"]["value"])
+    chunks = stationary_index_chunks(len(returns), size=len(returns), mean_block=MEAN_BLOCK_SESSIONS, replications=REPLICATIONS, rng=rng)
+    drawn = sum(int(np.count_nonzero((chunk == losing_session).any(axis=1))) for chunk in chunks)
+    # Never an assumed one-in-twenty: the share is whatever the stored draw actually reaches.
+    assert 0 < drawn < REPLICATIONS
+    assert reading["counts"] == {"beyond_ceiling": drawn, "within_ceiling": REPLICATIONS - drawn, "undefined": 0}
 
 
 def test_the_engine_figure_is_carried_verbatim_and_a_missing_one_is_named() -> None:
@@ -168,6 +178,10 @@ def test_stored_normalization_keeps_partial_records_partial() -> None:
     measured = _reading(_smooth(60, 8))
     partial = stored_drawdown({"chance": {"drawdown": copy.deepcopy(measured)}})
     assert partial == measured
+    # A measured record that fails the served contract reads unavailable instead of failing the study page.
+    torn = copy.deepcopy(measured)
+    del torn["percentiles"]
+    assert stored_drawdown({"chance": {"drawdown": torn}})["code"] == "invalid_record"
     legacy = stored_drawdown({"chance": {}})
     assert legacy["code"] == NOT_MEASURED[0]
     unsupported = stored_drawdown({"chance": {"drawdown": {"status": "from_the_future"}}})

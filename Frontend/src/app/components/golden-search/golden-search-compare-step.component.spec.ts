@@ -122,7 +122,7 @@ describe('GoldenSearchCompareStepComponent', () => {
   });
 
   it('a picked candidate shows its own summary', async () => {
-    const recentRows = [{ key: 'recent_activity', label: 'Recent activity', status: 'concern' as const, text: 'No setting met the recent window minimum.', link: { kind: 'step' as const, target: 'search' } }];
+    const recentRows = [{ key: 'recent_activity' as const, label: 'Recent activity', status: 'concern' as const, text: 'No setting met the recent window minimum.', link: { kind: 'step' as const, target: 'search' as const } }];
     const study = studyDetail('awaiting_candidate');
     await renderStep({ ...study, decision_summaries: [decisionSummary('all_period'), decisionSummary('recent', recentRows), decisionSummary('incumbent')] });
 

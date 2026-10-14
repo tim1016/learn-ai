@@ -13,6 +13,10 @@
   } @else if (catalog.error()) {
     <p class="golden-workbench__error" role="alert">Golden validation history could not be loaded.</p>
   } @else {
+    @if (catalogCapped()) {
+      <p class="golden-workbench__notice" role="status">Only the newest {{ catalogLimit }} Validation Golden Runs are listed; an older run may already be designated.</p>
+    }
+
     @if (canDesignate()) {
       <form class="golden-workbench__form" novalidate (submit)="$event.preventDefault(); designate()">
         <div>
@@ -32,7 +36,7 @@
           @for (entry of cases; track entry.id) {
             <button type="button" [class.selected]="selected()?.id === entry.id" (click)="selectCase(entry)">
               <span>{{ entry.label ?? entry.strategy_name }}</span>
-              <small><app-asset-identity [symbol]="entry.symbol" size="xs" [logo]="false" /> · {{ entry.state | receiptLabel }}</small>
+              <small><app-asset-identity [symbol]="entry.symbol" size="xs" [logo]="false" /> · {{ stateLabel(entry) }}</small>
             </button>
           }
         </nav>

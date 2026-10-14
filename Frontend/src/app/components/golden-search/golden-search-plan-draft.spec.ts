@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { etMidnightMs } from '../../shared/date/et-midnight';
 import { applyPlanEdit, byImportance, draftFromDefaults, draftFromProtocol, draftLayout, knobProblemKey, numberProblemKey, RANGE_PROBLEM_KEY, wireProtocol, withImportance, withServerDates, type PlanDraft } from './golden-search-plan-draft';
 import importanceOrder from '@repo-contracts/fixtures/golden-search-importance-order-v1.json';
+import { percentInputValue } from './golden-search-display';
 import { defaults, emaCapability, protocol } from './testing/fixtures';
 
 function draft(): PlanDraft {
@@ -71,6 +72,18 @@ describe('applyPlanEdit', () => {
 
     expect(next.protocol.policy.max_drawdown_ceiling).toBe(0.125);
     expect(applyPlanEdit(draft(), { kind: 'number', field: 'drawdown_percent', raw: 'abc' }, emaCapability()).problems.has(numberProblemKey('drawdown_percent'))).toBe(true);
+  });
+
+  it.each([
+    ['1.1', 0.011],
+    ['12.3', 0.123],
+    ['33.3', 0.333],
+    ['1e-7', 1e-9],
+  ])('freezes a typed drawdown of %s percent as exactly the fraction %s, with no binary noise for the protocol hash', (raw, fraction) => {
+    const next = applyPlanEdit(draft(), { kind: 'number', field: 'drawdown_percent', raw }, emaCapability());
+
+    expect(next.protocol.policy.max_drawdown_ceiling).toBe(fraction);
+    expect(percentInputValue(next.protocol.policy.max_drawdown_ceiling)).toBe(Number(raw));
   });
 
   it('gives a knob its declared default step when it becomes searched, under Zoom as under Grid', () => {

@@ -3,7 +3,7 @@ import axe from 'axe-core';
 import { describe, expect, it } from 'vitest';
 
 import { GoldenSearchChancePanelComponent } from './golden-search-chance-panel.component';
-import { chanceComparison, chanceReadings } from './testing/fixtures';
+import { chanceComparison, chanceProfitability, chanceReadings } from './testing/fixtures';
 import { fakeCharts } from './testing/fake-charts';
 import type { CandidateRef, ChanceReadings } from './golden-search.types';
 
@@ -30,7 +30,24 @@ describe('GoldenSearchChancePanelComponent', () => {
     expect(legend.textContent).toContain('Worse');
     expect(legend.textContent).toContain('Undefined');
     expect(screen.getByText(/selected on these same development sessions/i)).toBeTruthy();
-    expect(screen.getByText(/positive in 97\.4% of 10,000 paths/i)).toBeTruthy();
+    expect(screen.getByText(/compounded net return positive in 97\.4% of 10,000 resampled development paths/i)).toBeTruthy();
+  });
+
+  it('prints the stored sentence, not invented percentages, when no resample produced a defined return', async () => {
+    const sentence = 'No resample produced a defined compounded return, so no profitability reading is available from this model.';
+    await renderPanel(
+      chanceReadings({
+        profitability: chanceProfitability({
+          label: 'no_defined_paths',
+          sentence,
+          counts: { positive: 0, zero: 0, negative: 0, undefined: 10_000 },
+          shares: { positive: 0, zero: 0, negative: 0, undefined: 1 },
+          net_return_range: null,
+        }),
+      }),
+    );
+    expect(screen.getByText(sentence)).toBeTruthy();
+    expect(screen.queryByText(/0\.0%/)).toBeNull();
   });
 
   it('marks incomplete support when undefined paths exist', async () => {

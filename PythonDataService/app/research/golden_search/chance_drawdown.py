@@ -50,7 +50,13 @@ from app.research.golden_search.chance import (
     path_worst_fall,
     seed_for,
 )
-from app.research.golden_search.chance_compare import _missing, admit_run, failed_component, series_digest
+from app.research.golden_search.chance_compare import (
+    _missing,
+    admit_run,
+    failed_component,
+    series_digest,
+    served_record,
+)
 from app.research.golden_search.selection import Metrics
 from app.research.monte_carlo.stationary import CHUNK_REPLICATIONS, stationary_index_chunks
 
@@ -87,9 +93,9 @@ def _sentence(counts: Mapping[str, int], percentiles: Mapping[str, Any], ceiling
     beyond, undefined = counts["beyond_ceiling"], counts["undefined"]
     p95 = percentiles["p95"]
     headline = (
-        f"The 95th percentile of resampled session-close falls is {p95:.1%}, beyond the {ceiling:.0%} ceiling — a research concern under this model."
+        f"The 95th percentile of resampled session-close falls is {p95:.1%}, beyond the {ceiling:.2%} ceiling — a research concern under this model."
         if isinstance(p95, float) and p95 > ceiling
-        else f"The 95th percentile of resampled session-close falls is {p95:.1%}, within the {ceiling:.0%} ceiling." if p95 is not None else "No resample produced a defined fall, so no drawdown range exists under this model."
+        else f"The 95th percentile of resampled session-close falls is {p95:.1%}, within the {ceiling:.2%} ceiling." if p95 is not None else "No resample produced a defined fall, so no drawdown range exists under this model."
     )
     share = f" {beyond / REPLICATIONS:.1%} of resamples fall strictly beyond the ceiling and {undefined / REPLICATIONS:.1%} leave the fall undefined." if undefined or beyond else ""
     return headline + share + " This is the model's spread of the recorded development outcome, not a maximum future loss."
@@ -182,7 +188,7 @@ def stored_drawdown(candidate: Mapping[str, Any]) -> dict[str, Any]:
     """The drawdown component of one stored evidence candidate, normalized like every other chance component."""
     record = (candidate.get("chance") or {}).get("drawdown")
     if isinstance(record, Mapping) and record.get("status") in {"measured", "missing", "failed"}:
-        return dict(record)
+        return served_record("drawdown", record)
     if isinstance(record, Mapping):
         return _missing(
             ("unsupported", f"The stored drawdown reading holds status {record.get('status')!r}, which this server cannot interpret; it is shown as unavailable rather than guessed at.")

@@ -2,7 +2,7 @@ import type { ChartSpec } from './charts/golden-search-chart-spec';
 import { tooltipFrame, tooltipHtml, type ChartTheme, type TooltipRow } from './charts/golden-search-chart-theme';
 import type { ChartOption } from './charts/golden-search-echarts';
 import { ratioText, signedPercentText, signedUsdText } from './golden-search-display';
-import type { CandidateRef, MeasuredChanceComparison, MeasuredChanceProfitability } from './golden-search.types';
+import type { CandidateRef, MeasuredChanceComparison } from './golden-search.types';
 
 /**
  * The development chance charts (#3011): the paired difference interval and
@@ -215,12 +215,4 @@ export function shareStripText(comparison: MeasuredChanceComparison): string {
   return `Share of ${WHOLE.format(total)} paired resamples: better ${SHARE.format(comparison.shares['better'])}, tied ${SHARE.format(
     comparison.shares['tied'],
   )}, worse ${SHARE.format(comparison.shares['worse'])}, undefined ${SHARE.format(comparison.shares['undefined'])}.`;
-}
-
-/** The profitability line's short label for its measured state. */
-export function profitabilityText(profitability: MeasuredChanceProfitability): string {
-  const total = WHOLE.format(profitability.basis.replications);
-  return `Resampled development return: positive in ${SHARE.format(profitability.shares['positive'])} of ${total} paths, negative in ${SHARE.format(
-    profitability.shares['negative'],
-  )}, exactly flat in ${SHARE.format(profitability.shares['zero'])}.`;
 }

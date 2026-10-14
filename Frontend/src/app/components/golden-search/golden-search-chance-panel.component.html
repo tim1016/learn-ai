@@ -39,7 +39,7 @@
     <p caption class="caption">{{ m.bias_note }} Middle 90% of resampled differences — not a confidence interval.</p>
   }
   @if (profitability(); as p) {
-    <p class="money">{{ moneyText() }}</p>
+    <p class="money">{{ p.sentence }}</p>
   } @else if (moneyFailed(); as failed) {
     <p class="diagnostic" role="alert">{{ failed }}</p>
   } @else if (moneyMissing(); as missing) {

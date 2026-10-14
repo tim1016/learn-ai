@@ -4,12 +4,20 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
+from app.research.golden_search import service
 from app.research.golden_search.chance_approval import (
     CHANCE_UNAVAILABLE,
     CHANCE_WITHIN_NOISE,
+    approval_weakness,
     chance_weakness_items,
     enrollment_policy,
 )
+from app.research.golden_search.guidance import weakness_words
+from app.research.golden_search.models import GoldenSearchRefusal, StudyRow
+from app.research.golden_search.planning import protocol_from_request
+from tests._helpers.golden_search_study import plan_request
 
 
 def _measured_share(status_share: float, *, label: str = "clearly_as_good", replications: int = 10_000, thresholds: dict[str, float] | None = None) -> dict[str, Any]:
@@ -83,9 +91,10 @@ def test_a_weak_profitability_is_named_only_when_positive_net_is_required() -> N
 
 def test_an_enrolled_study_must_acknowledge_missing_or_failed_required_components_by_name() -> None:
     missing = chance_weakness_items(POLICY, {"comparison": _measured_share(1.0), "profitability": {"status": "missing", "code": "not_measured", "reason": "Not measured for this study."}, "carry_over": _carry("missing")}, positive_net_required=True)
-    assert _codes(missing) == [CHANCE_UNAVAILABLE, CHANCE_UNAVAILABLE]
+    # Two unavailable components are one acknowledgement that names both, never one code listed twice.
+    assert _codes(missing) == [CHANCE_UNAVAILABLE]
     assert "profitability" in missing[0]["text"] and "Not measured for this study" in missing[0]["text"]
-    assert "carry-over" in missing[1]["text"] and "No matching stored rehearsal" in missing[1]["text"]
+    assert "carry-over" in missing[0]["text"] and "No matching stored rehearsal" in missing[0]["text"]
 
     failed = chance_weakness_items(POLICY, {"comparison": _measured_share(1.0), "profitability": _measured_profitability(1.0), "carry_over": _carry("failed")}, positive_net_required=True)
     assert _codes(failed) == [CHANCE_UNAVAILABLE]
@@ -140,3 +149,129 @@ def test_one_weak_component_and_one_unavailable_both_show_without_duplicating_th
     assert _codes(items) == [CHANCE_WITHIN_NOISE, CHANCE_UNAVAILABLE]
     assert "support against the current settings" in items[0]["text"]
     assert "profitability" in items[1]["text"]
+
+
+def test_two_weak_shares_are_one_acknowledgement_that_names_both_and_gates_exactly_as_before() -> None:
+    chance = {"comparison": _measured_share(0.5), "profitability": _measured_profitability(0.5), "carry_over": _carry()}
+
+    items = chance_weakness_items(POLICY, chance, positive_net_required=True)
+
+    assert _codes(items) == [CHANCE_WITHIN_NOISE]
+    assert "support against the current settings" in items[0]["text"] and "resampled profit" in items[0]["text"]
+    # Whether an approval needs the acknowledgement is unchanged: one weak share asks, and a legacy study asks the same.
+    assert _codes(chance_weakness_items(None, chance, positive_net_required=True)) == [CHANCE_WITHIN_NOISE]
+    assert _codes(chance_weakness_items(POLICY, {**chance, "profitability": _measured_profitability(1.0)}, positive_net_required=True)) == [CHANCE_WITHIN_NOISE]
+    assert _codes(chance_weakness_items(POLICY, {**chance, "profitability": _measured_profitability(1.0), "comparison": _measured_share(1.0)}, positive_net_required=True)) == []
+
+
+def test_a_share_that_ran_clearly_the_other_way_says_so_and_a_mixed_one_stays_inside_the_noise() -> None:
+    # 100 of 10,000 paths as good, so 9,900 strictly worse: past the 95% threshold the other way.
+    against = chance_weakness_items(POLICY, {"comparison": _measured_share(0.01), "profitability": _measured_profitability(0.005), "carry_over": _carry()}, positive_net_required=True)
+
+    assert _codes(against) == [CHANCE_WITHIN_NOISE]
+    text = against[0]["text"]
+    assert "strictly worse than the current settings in 9,900 of 10,000 paths (99.0%)" in text
+    assert "negative compounded net return in 9,950 of 10,000 paths (99.5%)" in text
+    assert "inside the resampling model's noise" not in text
+
+    # 4,000 better and 6,000 worse: neither way reaches 95%, so it is genuinely inside the model's noise.
+    mixed = chance_weakness_items(POLICY, {"comparison": _measured_share(0.4), "profitability": _measured_profitability(0.4), "carry_over": _carry()}, positive_net_required=True)
+    assert _codes(mixed) == [CHANCE_WITHIN_NOISE]
+    assert mixed[0]["text"].count("inside the resampling model's noise") == 2
+
+    # Exactly 9,500 worse is at the threshold the other way: clear, by the same raw-count comparison the reading used.
+    boundary = chance_weakness_items(POLICY, {"comparison": _measured_share(0.05), "profitability": _measured_profitability(1.0), "carry_over": _carry()}, positive_net_required=True)
+    assert "strictly worse than the current settings in 9,500 of 10,000" in boundary[0]["text"]
+
+
+def test_the_words_an_approval_refusal_quotes_are_the_acknowledgements_own_and_name_each_weakness_once() -> None:
+    exam = {"claim": "exploratory", "exposure_state": "previously_used"}
+    fit = {"outcome": "not_enough_evidence", "checks": []}
+    items = chance_weakness_items(POLICY, {"comparison": _measured_share(0.5), "profitability": _measured_profitability(0.5), "carry_over": _carry()}, positive_net_required=True)
+
+    words = weakness_words(exam, fit, items)
+
+    assert words.startswith("not enough final-test evidence and the previously used test interval and support against the current settings")
+    assert "EXAM_" not in words and "EXPOSURE_" not in words and "CHANCE_" not in words
+    assert words.count("inside the resampling model's noise") == 2
+
+
+def test_the_approval_weakness_lists_the_research_codes_then_each_chance_code_once() -> None:
+    fit = {"key": "all_period", "point_hash": "h-all", "outcome": "does_not_meet_rules", "checks": []}
+    exam = {"claim": "exploratory", "exposure_state": "previously_used", "fits": [fit]}
+
+    weakness = approval_weakness(protocol_from_request(plan_request("SPY")), exam, fit, POLICY)
+
+    # An enrolled fit that stored no chance record leaves all three required readings unavailable: one code, three reasons.
+    assert weakness.codes == ["EXAM_DOES_NOT_MEET_RULES", "EXPOSURE_PREVIOUSLY_USED", CHANCE_UNAVAILABLE]
+    assert _codes(weakness.items) == [CHANCE_UNAVAILABLE]
+    assert {"comparison", "profitability", "carry_over"} <= set(weakness.chance)
+
+
+# ── The approval intent's refusal, without a database ───────────────────────────────────────────────────────
+
+
+def _intent_row(*, outcome: str, claim: str, exposure: str, enrolled: bool) -> StudyRow:
+    fit = {"key": "all_period", "same_as": [], "point": {"gap": 0.3}, "point_hash": "h-all", "outcome": outcome, "checks": [], "retention": None, "metrics": None}
+    exam = {"window": {"start_ms": 0, "end_ms": 1}, "claim": claim, "exposure_state": exposure, "fits": [fit], "incumbent_metrics": None}
+    return StudyRow(
+        id="s1", parent_study_id=None, strategy_key="ema_crossover_signal", symbol="SPY", state="awaiting_review", revision=1, status="idle",
+        attempt=1, job_id=None, pending_stage=None, stage_token=None, created_at_ms=0, updated_at_ms=0, finished_at_ms=None,
+        protocol=protocol_from_request(plan_request("SPY")).as_dict(), protocol_hash="h", receipt={},
+        results={"exam": exam, **({"chance_approval": enrollment_policy()} if enrolled else {})},
+        candidate_key=None, exam_locked=True, decision=None, budget_cap=5000, consumed_evaluations=0, cache_hits=0, invalid_points=0,
+        incomplete=False, failure_reason=None, hidden=False,
+    )
+
+
+_INTENT = {
+    "candidate_key": "all_period",
+    "note": "Reviewed.",
+    "acknowledge_missing_parity": True,
+    "acknowledge_research_weakness": False,
+    "expected_default_qualification_id": None,
+}
+
+
+async def test_an_unacknowledged_weak_approval_is_refused_in_words_with_no_code_listed_twice() -> None:
+    # An enrolled study whose fit stored no chance record: all three required readings are unavailable.
+    row = _intent_row(outcome="does_not_meet_rules", claim="exploratory", exposure="previously_used", enrolled=True)
+
+    with pytest.raises(GoldenSearchRefusal) as refused:
+        await service._approve(None, row, _INTENT)
+
+    assert (refused.value.code, refused.value.field) == ("WEAKNESS_ACKNOWLEDGEMENT_REQUIRED", "acknowledge_research_weakness")
+    message = str(refused.value)
+    assert "EXAM_" not in message and "EXPOSURE_" not in message and "CHANCE_" not in message
+    assert message.startswith("This evidence is weak: failing the stated rules and the previously used test interval and an unavailable required comparison reading")
+    assert message.count("an unavailable required profitability reading") == 1 and message.count("an unavailable required carry-over reading") == 1
+    assert message.endswith("; approving needs your explicit acceptance of it.")
+
+
+async def test_the_acknowledgement_gate_asks_exactly_when_the_evidence_is_weak(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorded: list[str] = []
+
+    async def insert_trial(conn: Any, study_id: str, *, stage: str, kind: str, payload: Any) -> None:
+        recorded.append(f"{stage}:{kind}")
+
+    async def update_study(conn: Any, study_id: str, *, changes: Any, decision: Any) -> StudyRow:
+        recorded.append("update")
+        return _intent_row(outcome="meets_rules", claim="confirmatory", exposure="not_opened", enrolled=False)
+
+    monkeypatch.setattr(service.repo, "insert_trial", insert_trial)
+    monkeypatch.setattr(service.repo, "update_study", update_study)
+
+    # Meets the rules on an unopened interval, and a study without the enrollment marker never gates on missing readings.
+    clear = _intent_row(outcome="meets_rules", claim="confirmatory", exposure="not_opened", enrolled=False)
+    outcome = await service._approve(None, clear, _INTENT)
+    assert outcome.dispatch["payload"]["study_id"] == "s1"
+    assert recorded == ["candidate:pick", "qualification:approval", "update"]
+
+    # The same evidence with one research weakness is refused until it is acknowledged, then goes through.
+    weak = _intent_row(outcome="meets_rules", claim="exploratory", exposure="previously_used", enrolled=False)
+    with pytest.raises(GoldenSearchRefusal) as refused:
+        await service._approve(None, weak, _INTENT)
+    assert refused.value.code == "WEAKNESS_ACKNOWLEDGEMENT_REQUIRED"
+    recorded.clear()
+    await service._approve(None, weak, {**_INTENT, "acknowledge_research_weakness": True})
+    assert recorded == ["candidate:pick", "qualification:approval", "update"]

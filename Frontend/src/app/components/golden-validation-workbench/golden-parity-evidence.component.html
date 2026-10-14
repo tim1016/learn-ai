@@ -9,7 +9,7 @@
     <div><dt>Parity verdict</dt><dd>{{ parityStatus() ? (parityStatus() | receiptLabel) : 'No paired verdict' }}</dd></div>
     <div><dt>Compared runs</dt><dd>{{ parityLeftRunId() ? '#' + parityLeftRunId() : '—' }} → {{ parityRightRunId() ? '#' + parityRightRunId() : '—' }}</dd></div>
     @if (parityReason(); as reason) { <div><dt>Reason</dt><dd>{{ reason | receiptLabel }}</dd></div> }
-    <div><dt>Trade deviations</dt><dd>{{ divergences().length }}</dd></div>
+    @if (verdictIsFinal()) { <div><dt>Trade deviations</dt><dd>{{ divergences().length }}</dd></div> }
   </dl>
   @if (parityChecks().length > 0) {
     <ul class="golden-evidence__checks">

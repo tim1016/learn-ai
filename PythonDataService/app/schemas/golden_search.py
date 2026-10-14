@@ -48,6 +48,9 @@ from app.utils.session_anchors import MAX_TIMESTAMP_MS
 InstantMs = Annotated[int, Field(ge=0, le=MAX_TIMESTAMP_MS)]
 PresentedStatus = Literal["idle", "queued", "running", "completed", "failed", "cancelled", "interrupted"]
 IDEMPOTENCY_KEY_MAX_LENGTH = 200
+# The longest training and test windows a plan lays out; ``/defaults`` and the plan itself refuse the same counts.
+MAX_TRAINING_MONTHS = 120
+MAX_TEST_MONTHS = 60
 
 _POLICY = SelectionPolicy()
 _ZOOM = ZoomSettings()
@@ -130,8 +133,8 @@ class GoldenSearchProtocolRequest(_CamelTolerantModel):
     final_end_ms: InstantMs
     policy: GoldenSearchSelectionPolicyRequest = Field(default_factory=GoldenSearchSelectionPolicyRequest)
     zoom: GoldenSearchZoomSettingsRequest = Field(default_factory=GoldenSearchZoomSettingsRequest)
-    training_months: int = 6
-    test_months: int = 2
+    training_months: int = Field(6, ge=1, le=MAX_TRAINING_MONTHS)
+    test_months: int = Field(2, ge=1, le=MAX_TEST_MONTHS)
     recent_window: bool = True
     pair_audits: list[tuple[str, str]] = Field(default_factory=list, max_length=64)
     neighbor_audit: bool = True
@@ -1518,15 +1521,17 @@ class GoldenSearchResults(_Wire):
 
 class GoldenSearchSummaryLink(_Wire):
     kind: Literal["tab", "chart", "step"]
-    target: str = Field(
-        description="An evidence tab of the Compare step (trades, months), a Compare chart (neighbor-tornado, cost-stress) or a study step (search, test, decision)."
+    target: Literal["trades", "search", "test", "decision", "neighbor-tornado", "cost-stress", "without-best"] = Field(
+        description="An evidence tab of the Compare step (trades), a Compare chart (neighbor-tornado, cost-stress, without-best) or a study step (search, test, decision)."
     )
 
 
 class GoldenSearchSummaryRow(_Wire):
     """One kind of evidence for a candidate; a result the study did not record is ``missing``, never ``meets``."""
 
-    key: str
+    key: Literal[
+        "development_activity", "recent_activity", "test_over_time", "neighbors", "stress", "concentration", "final_exposure"
+    ]
     label: str
     status: Literal["meets", "concern", "missing"]
     text: str

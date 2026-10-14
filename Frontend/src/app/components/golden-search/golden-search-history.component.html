@@ -18,6 +18,7 @@
   </header>
 
   @if (error(); as message) { <p class="refusal" role="alert">{{ message }}</p> }
+  @if (capped()) { <p class="muted" role="status">Showing the newest {{ limit }} studies. Older studies may not be listed; filter by strategy or instrument to reach them.</p> }
 
   @if (loading() && rows().length === 0) {
     <p class="muted" role="status">Loading…</p>

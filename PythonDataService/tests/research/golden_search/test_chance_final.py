@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc
-from app.research.golden_search.chance import SessionSeries, seed_for
+from app.research.golden_search.chance import CLEAR, CONVENTION, SessionSeries, seed_for
 from app.research.golden_search.chance_final import (
     CARRY_OVER_MISSING,
     SELECTION_NOTE,
@@ -421,6 +421,9 @@ def test_fit_to_fit_stores_both_directions_from_one_shared_draw() -> None:
     forward = _fit_to_fit(_smooth(25, 11), _smooth(25, 12))
     assert forward["status"] == "measured"
     assert forward["basis"]["schema_version"] == "golden-search-chance-fit-to-fit/v2"
+    # The basis names the shared draw convention and clear threshold, with the values every stored record already holds.
+    assert (CONVENTION, CLEAR) == ("stationary-bootstrap/v1", 0.95)
+    assert (forward["basis"]["convention"], forward["basis"]["thresholds"]) == (CONVENTION, {"clear": CLEAR})
     assert forward["pair"] == ["aaaa", "zzzz"]
     first, second = forward["directions"]
     # Each direction names its own fit and opponent explicitly; sorted pair order never implies the direction.
@@ -586,6 +589,8 @@ def test_a_failed_other_fit_leaves_a_named_missing_optional_comparison() -> None
     )
     assert reading["status"] == "missing"
     assert reading["code"] == "fit_unavailable"
+    # The refusal names the window it is about: these are final-interval runs, never development ones.
+    assert "The final run failed" in reading["reason"] and "development" not in reading["reason"]
 
 
 def test_stored_final_chance_normalizes_per_component() -> None:

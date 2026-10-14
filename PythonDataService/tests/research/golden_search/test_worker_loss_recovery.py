@@ -468,7 +468,6 @@ async def test_worker_replacement_renews_no_lease_and_only_durable_completions_d
         cancel_check=jobs_progress.CancellationCheck(job, renews_lease=False).raise_if_cancelled,
         on_phase=lambda phase: checkpoint(cursor=0, cursor_kind="processed_blocks", phase=phase),
         on_progress=lambda done, total: checkpoint(cursor=done, cursor_kind="durable_completions", phase="search"),
-        on_log=lambda message: None,
         execute=db_driver.engine,
         approval=db_driver.approval.binding(),
         roots=db_driver.roots,

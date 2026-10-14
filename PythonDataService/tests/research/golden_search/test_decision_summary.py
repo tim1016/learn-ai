@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 
@@ -11,6 +11,7 @@ from app.research.golden_search.decision_summary import decision_summaries
 from app.research.golden_search.exposure_rules import EXPOSURE_EXPLANATIONS
 from app.research.golden_search.planning import protocol_from_request
 from app.research.golden_search.protocol import recent_window_ms
+from app.schemas.golden_search import GoldenSearchDecisionSummary, GoldenSearchSummaryLink, GoldenSearchSummaryRow
 from tests._helpers.golden_search_study import frequency_plan_request
 
 PROTOCOL = protocol_from_request(frequency_plan_request("SPY"))
@@ -116,6 +117,20 @@ def test_neighbors_name_the_knob_that_loses_and_never_pass_an_unrecorded_run() -
     assert _rows(_results(_candidate("incumbent")), "incumbent")["neighbors"]["status"] == "missing"
 
 
+def test_neighbors_that_were_all_invalid_or_outside_the_domain_are_missing_not_a_pass() -> None:
+    center = {"value": 0.2, "status": "center", "metrics": _metrics(net=100.0), "reason": None}
+    invalid = {"value": 0.15, "status": "invalid", "metrics": None, "reason": "fast must stay below slow"}
+    outside = {"value": 0.25, "status": "outside_domain", "metrics": None, "reason": None}
+    tested = {"value": 6.0, "status": "tested", "metrics": _metrics(net=50.0), "reason": None}
+
+    nothing_tested = [{"knob": "gap", "rows": [invalid, center, outside], "one_sided": False}]
+    assert _rows(_results(_candidate(neighbors=nothing_tested)))["neighbors"]["status"] == "missing"
+
+    # One knob with no testable neighbor beside a knob whose neighbors were tested still reads from what was tested.
+    one_knob_tested = [*nothing_tested, {"knob": "hold_bars", "rows": [tested], "one_sided": False}]
+    assert _rows(_results(_candidate(neighbors=one_knob_tested)))["neighbors"]["status"] == "meets"
+
+
 def test_stress_names_the_scenario_that_turns_a_loss_and_never_passes_an_unrecorded_run() -> None:
     def stressed(*nets: float | None) -> list[dict[str, Any]]:
         return [{"scenario": f"s{i}", "label": f"Stress {i}", "metrics": None if net is None else _metrics(net=net)} for i, net in enumerate(nets)]
@@ -186,3 +201,23 @@ def test_every_row_links_to_its_evidence() -> None:
         "concentration": ("chart", "without-best"),
         "final_exposure": ("step", "decision"),
     }
+
+
+def test_the_wire_schema_names_exactly_the_rows_and_links_the_summary_builds() -> None:
+    recent = {
+        "window": {"start_ms": RECENT[0], "end_ms": RECENT[1]},
+        "procedure": {"stop_reason": "no_improvement", "winner_metrics": _metrics(trades=RECENT_FLOOR)},
+        "counts": {},
+        "incomplete": False,
+    }
+    [summary] = decision_summaries(
+        _results(_candidate("recent"), recent=recent),
+        floors=FLOORS,
+        development=DEVELOPMENT,
+        exposure={"state": "not_opened", "explanation": ""},
+    )
+
+    GoldenSearchDecisionSummary.model_validate(summary)
+    rows = summary["rows"]
+    assert {row["key"] for row in rows} == set(get_args(GoldenSearchSummaryRow.model_fields["key"].annotation))
+    assert {row["link"]["target"] for row in rows} == set(get_args(GoldenSearchSummaryLink.model_fields["target"].annotation))

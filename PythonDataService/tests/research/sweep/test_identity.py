@@ -217,7 +217,13 @@ def test_golden_search_copy_read_models_and_approval_are_not_part_of_the_source_
 
 @pytest.mark.parametrize(
     "module_name",
-    ["app.lean_sidecar.closing_bar", "app.lean_sidecar.trading_calendar", "app.research.golden_search.zoom", "app.research.golden_search.evaluator"],
+    [
+        "app.lean_sidecar.closing_bar",
+        "app.lean_sidecar.trading_calendar",
+        "app.research.golden_search.zoom",
+        "app.research.golden_search.evaluator",
+        "app.research.golden_search.activity",
+    ],
 )
 def test_the_closing_bar_rule_and_its_calendar_are_part_of_the_source_identity(module_name: str) -> None:
     """#2607: the engine sets a closing-bar decision aside by this predicate over the calendar.
@@ -226,6 +232,8 @@ def test_the_closing_bar_rule_and_its_calendar_are_part_of_the_source_identity(m
     before the change must not read as the same code. Golden Search's Zoom and
     evaluator (#2696) decide which points a resumed stage scores and how a run
     is recorded, so a Finish under a changed procedure must be refused too.
+    Its trade-floor policy (#2811) is what selection and the final test hold
+    every fit to, so it is part of the same identity.
     """
     module_file = Path(importlib.import_module(module_name).__file__ or "")
     relative = module_file.resolve().relative_to(identity_module.SERVICE_ROOT).as_posix()

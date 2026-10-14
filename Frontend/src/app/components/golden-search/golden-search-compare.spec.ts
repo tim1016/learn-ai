@@ -66,7 +66,7 @@ describe('selectedCaption', () => {
 });
 
 describe('rowSummary', () => {
-  const row = (key: string, status: DecisionSummaryRow['status'], text: string): DecisionSummaryRow => ({ key, label: key, status, text, link: { kind: 'tab', target: 'trades' } });
+  const row = (key: DecisionSummaryRow['key'], status: DecisionSummaryRow['status'], text: string): DecisionSummaryRow => ({ key, label: key, status, text, link: { kind: 'tab', target: 'trades' } });
 
   it('keeps a folded recent fit’s own activity row and the evidence the representative lacks', () => {
     const rows = candidateRows([evidenceCandidate('all_period', { same_as: ['incumbent', 'recent'] }), evidenceCandidate('recent', { same_as: ['all_period'] }), evidenceCandidate('incumbent')]);

@@ -12,10 +12,11 @@ import {
 import { HttpErrorResponse } from "@angular/common/http";
 import { firstValueFrom } from "rxjs";
 
-import { GoldenValidationService } from "../../services/golden-validation.service";
+import { GOLDEN_VALIDATION_LIST_LIMIT, goldenStateLabel, GoldenValidationService } from "../../services/golden-validation.service";
 import type { GoldenReviewDecision, GoldenValidation } from "../../services/golden-validation.types";
 import { AssetIdentityComponent } from "../../shared/asset-identity/asset-identity.component";
-import { formatReceiptLabel, ReceiptLabelPipe } from "../../shared/pipes/receipt-label.pipe";
+import { formatReceiptLabel } from "../../shared/pipes/receipt-label.pipe";
+import { extractServerMessage } from "../broker/operation-error";
 import { GoldenParityEvidenceComponent } from "./golden-parity-evidence.component";
 import { GoldenValidationCaseComponent } from "./golden-validation-case.component";
 import {
@@ -35,7 +36,6 @@ import {
     GoldenParityEvidenceComponent,
     GoldenValidationCaseComponent,
     GoldenValidationReviewComponent,
-    ReceiptLabelPipe,
   ],
   templateUrl: "./golden-validation-workbench.component.html",
   styleUrl: "./golden-validation-workbench.component.scss",
@@ -67,6 +67,13 @@ export class GoldenValidationWorkbenchComponent {
   protected readonly catalog = resource({
     loader: () => firstValueFrom(this.golden.list()),
   });
+
+  /** A catalog exactly as long as one read asked for may be cut short: older cases exist that it does not show. */
+  protected readonly catalogCapped = computed(
+    () => this.catalog.hasValue() && this.catalog.value().length >= GOLDEN_VALIDATION_LIST_LIMIT,
+  );
+  protected readonly catalogLimit = GOLDEN_VALIDATION_LIST_LIMIT;
+  protected readonly stateLabel = (entry: GoldenValidation): string => goldenStateLabel(entry.state, entry.review_is_current);
 
   protected readonly catalogCases = computed(() => {
     const catalog = this.catalog.hasValue() ? this.catalog.value() : [];
@@ -156,8 +163,8 @@ export class GoldenValidationWorkbenchComponent {
       this.designationCommandId.set(this.commandId("designate"));
       this.message.set("Validation Golden Run designated. Review the frozen case and current evidence below.");
       this.catalog.reload();
-    } catch {
-      this.error.set("This run could not be designated. Only completed Python baselines are eligible.");
+    } catch (caught: unknown) {
+      this.error.set(extractServerMessage(caught, "This run could not be designated."));
     } finally {
       this.busy.set(false);
     }
@@ -189,7 +196,7 @@ export class GoldenValidationWorkbenchComponent {
       this.error.set("Enter the exact Signal Program version this historical run is authorized to represent.");
       return;
     }
-    if (this.reviewDecision() === "accept" && selected.evidence_applicability?.requires_manual_override && !this.acknowledgeProvenanceRisk()) {
+    if (this.reviewDecision() === "accept" && selected.evidence_applicability.requires_manual_override && !this.acknowledgeProvenanceRisk()) {
       this.error.set("Acknowledge Manual override for the recorded affected or unknown conventions, or rerun and review new evidence.");
       return;
     }
@@ -224,7 +231,10 @@ export class GoldenValidationWorkbenchComponent {
         this.catalog.reload();
         this.error.set("The engine evidence changed. The latest dossier is loading; review it before submitting again.");
       } else {
-        this.error.set("The review could not be saved. Your note and command are preserved for a safe retry.");
+        this.error.set(extractServerMessage(
+          caught,
+          "The review could not be saved. Your note and command are preserved for a safe retry.",
+        ));
       }
     } finally {
       this.busy.set(false);
