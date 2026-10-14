@@ -1,4 +1,4 @@
-"""``ClaimedBrokerIO`` tells a lease lost before broker I/O from one lost after it."""
+"""``ClaimedBrokerIO`` tells a lease or a claim lost before broker I/O from one lost after it."""
 
 from __future__ import annotations
 
