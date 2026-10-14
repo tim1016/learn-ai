@@ -1,9 +1,12 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { describe, expect, it } from 'vitest';
+
+import { fleetRefusalCopyFor } from '../../../../fleet/fleet-refusal-copy';
 import {
   actionOutcomeToast,
   deriveActionRejection,
   extractActionErrorDetail,
+  sendMayHaveBeenApplied,
 } from './panel-action-outcome';
 
 function rejection(detail: Record<string, unknown>): HttpErrorResponse {
@@ -23,6 +26,40 @@ describe('extractActionErrorDetail', () => {
 
   it('returns null when the body has no detail object', () => {
     expect(extractActionErrorDetail(new HttpErrorResponse({ error: { detail: 'plain string' } }))).toBeNull();
+  });
+});
+
+describe('sendMayHaveBeenApplied', () => {
+  it('names the reason the fleet vocabulary pins for a command that may have been applied', () => {
+    expect(fleetRefusalCopyFor('clerk_routing_outcome_unknown')).not.toBeNull();
+  });
+
+  it.each([
+    ['a dropped connection', new HttpErrorResponse({ status: 0, error: new ProgressEvent('error') })],
+    ['a bare 5xx', new HttpErrorResponse({ status: 502, error: '<html>Bad Gateway</html>' })],
+    ['a timeout that is not an HTTP response', new Error('Timeout has occurred')],
+    ['a 2xx whose body would not parse', new HttpErrorResponse({ status: 200, error: 'not json' })],
+    ['an outcome the Clerk itself called unknown', rejection({ outcome: 'unknown', message: 'No receipt came back.' })],
+    ['the coordinator\'s flat outcome-unknown refusal', new HttpErrorResponse({
+      status: 503,
+      error: { reason: 'clerk_routing_outcome_unknown', message: 'Failed after the dispatch.', next_step: 'Reconcile.' },
+    })],
+  ])('is true for %s', (_name, error) => {
+    expect(sendMayHaveBeenApplied(error)).toBe(true);
+  });
+
+  it.each([
+    ['a typed conflict', rejection({ outcome: 'conflict', message: 'The flatten changed.' })],
+    ['a typed failure', rejection({ outcome: 'failure', message: 'The order was refused.' })],
+    // Derives `unknown` for display, but the Clerk answered: it refused the send.
+    ['a refusal with a reason and no outcome', rejection({ reason: 'stale_action_token', message: 'The flatten changed.' })],
+    ['a flat refusal from before the dispatch', new HttpErrorResponse({
+      status: 503,
+      error: { reason: 'clerk_unreachable', message: 'The clerk could not be reached.' },
+    })],
+    ['a 4xx with no refusal body', new HttpErrorResponse({ status: 422, error: { detail: [{ msg: 'field required' }] } })],
+  ])('is false for %s', (_name, error) => {
+    expect(sendMayHaveBeenApplied(error)).toBe(false);
   });
 });
 

@@ -1451,7 +1451,66 @@ describe('BotPanelShellComponent', () => {
 
       expect(progress()).toContain('Sell: Failed The flatten changed before it was sent.');
       expect(outcomeText('alert')).toContain('The flatten changed before it was sent.');
+      // A typed refusal says the order was not placed, so the plan still says none was submitted.
+      expect(screen.getByRole('region', { name: 'Prepared safe-flatten reduction plan' }).textContent)
+        .toContain('No order has been submitted.');
       await vi.waitFor(() => expect(flattenButton().disabled).toBe(false));
+    });
+
+    it.each([
+      ['a dropped connection', new HttpErrorResponse({ status: 0, error: new ProgressEvent('error') })],
+      // The coordinator's own word for a command it dispatched and could not settle.
+      ['a lane that failed after dispatch', new HttpErrorResponse({
+        status: 503,
+        error: {
+          reason: 'clerk_routing_outcome_unknown',
+          message: 'Clerk clrk_spec failed serving custody_bot_recovery_execute with 502 after the dispatch.',
+          next_step: 'The command may have been applied. Reconcile by the idempotency key.',
+        },
+      })],
+    ])('stops saying no order was submitted after %s (#3178)', async (_name, rejection) => {
+      const observedAtMs = Date.now();
+      mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
+      brokersMock.checkSqliteRecoveryActionInFull.mockImplementation(async () => EXTENDED_CHECK_WITH_READING(observedAtMs));
+      mockService.executeExtendedSafeFlatten.mockRejectedValueOnce(rejection);
+      const fixture = await prepareFlatten();
+      const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Review limit order' }));
+      await settle(fixture);
+
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Send limit order' }));
+      await settle(fixture);
+
+      const plan = screen.getByRole('region', { name: 'Prepared safe-flatten reduction plan' });
+      expect(plan.textContent).not.toContain('No order has been submitted');
+      expect(plan.textContent).toContain('is not known');
+    });
+
+    it('keeps saying no order was submitted when the request never went out (#3178)', async () => {
+      const observedAtMs = Date.now();
+      mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
+      brokersMock.checkSqliteRecoveryActionInFull.mockImplementation(async () => EXTENDED_CHECK_WITH_READING(observedAtMs));
+      const fixture = await prepareFlatten();
+      const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Review limit order' }));
+      await settle(fixture);
+      // A newer panel no longer presents the flatten, so the send throws before any request is built.
+      const live = extendedFlattenSnapshot();
+      mockService.getLiveSnapshot.mockResolvedValue({
+        ...live,
+        surface_version: live.surface_version + 1,
+        panel: {
+          ...live.panel,
+          actions: live.panel.actions.filter((action) => action.action_id !== 'execute_safe_flatten'),
+        },
+      });
+
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Send limit order' }));
+      await settle(fixture);
+
+      expect(mockService.executeExtendedSafeFlatten).not.toHaveBeenCalled();
+      expect(screen.getByRole('region', { name: 'Prepared safe-flatten reduction plan' }).textContent)
+        .toContain('No order has been submitted.');
     });
 
     it('closes the ticket and fails the Sell step when a refresh finds the plan gone', async () => {
