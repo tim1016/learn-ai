@@ -19,6 +19,7 @@ from app.broker.alpaca.clerk.sqlite.facts import ExitAcceptedFacts, ScheduledClo
 from app.broker.contract.models import OrderSide, OrderType, TimeInForce
 from app.options.deadlines import CloseKind
 from app.schemas.market_liveness import TopOfBookQuote
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 _HASH = "a" * 64
 _ENTRY = "learn-ai-bot-1-entry"
@@ -135,6 +136,10 @@ def test_a_scheduled_close_keeps_which_close_it_is_when_it_was_due_and_its_sessi
         pytest.param({"kind": "expiry_day_close", "due_ms": "1", "session_open_ms": 1}, id="a time that is text"),
         pytest.param({"kind": "expiry_day_close", "due_ms": True, "session_open_ms": 1}, id="a time that is a flag"),
         pytest.param({"kind": "expiry_day_close", "due_ms": -1, "session_open_ms": 1}, id="a time before the epoch"),
+        pytest.param(
+            {"kind": "expiry_day_close", "due_ms": 1, "session_open_ms": MAX_TIMESTAMP_MS + 1},
+            id="a time past the last admissible instant",
+        ),
         pytest.param(["expiry_day_close", 1, 1], id="not an object"),
     ],
 )
