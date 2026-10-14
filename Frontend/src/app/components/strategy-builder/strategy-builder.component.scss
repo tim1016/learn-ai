@@ -116,73 +116,6 @@
   }
 }
 
-// ── Preset card grid ────────────────────────────────────────
-// 4 cards per row at desktop, 3/2 at narrower viewports via the
-// auto-fill min track. Group dividers span the full grid row so
-// Bullish / Bearish / Neutral cohorts read as bands.
-
-.preset-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 8px;
-}
-
-.preset-group-divider {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 4px;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: #94a3b8;
-  font-weight: 600;
-
-  &::after {
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: rgba(148, 163, 184, 0.2);
-  }
-}
-
-.preset-card {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 10px 8px;
-  min-height: 38px;
-  font-size: 12px;
-  font-weight: 600;
-  text-align: center;
-  color: #cbd5e1;
-  background: rgba(15, 23, 42, 0.6);
-  border: 1px solid rgba(71, 85, 105, 0.5);
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
-
-  &:hover {
-    background: rgba(30, 41, 59, 0.95);
-    border-color: rgba(99, 102, 241, 0.5);
-    color: #e2e8f0;
-  }
-
-  &.active {
-    background: rgba(99, 102, 241, 0.25);
-    border-color: #818cf8;
-    color: #c7d2fe;
-  }
-
-  &.preset-custom {
-    grid-column: 1 / -1;
-    @media (min-width: 640px) {
-      grid-column: 1;
-    }
-  }
-}
-
 // ── Per-leg quantity stepper ────────────────────────────────
 
 .leg-qty-stepper {
@@ -416,7 +349,6 @@
   margin-bottom: 6px;
 }
 
-.template-select,
 .greek-select {
   width: 100%;
   background: #1e293b;
@@ -430,11 +362,6 @@
 
   &:focus {
     border-color: #6366f1;
-  }
-
-  optgroup {
-    color: #94a3b8;
-    font-weight: 600;
   }
 
   option {

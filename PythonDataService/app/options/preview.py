@@ -96,7 +96,6 @@ class PickedLeg:
     position: LegPosition
     ratio: int
     contract: OptionContract
-    multiplier: int
     quote: HeldQuote
     gap_percent_of_mid: Fraction
     # What the model was asked about the pick and what it answered. Its delta is None when it had no answer.
@@ -175,7 +174,6 @@ def _picked_legs(
                 position=leg.position,
                 ratio=leg.qty_ratio,
                 contract=resolution.picked[leg.leg_id],
-                multiplier=resolution.multipliers[leg.leg_id],
                 quote=quote,
                 gap_percent_of_mid=bid_ask_gap_percent_of_mid(quote.bid.price, quote.ask.price),
                 priced=pick.priced if model_is_known else None,

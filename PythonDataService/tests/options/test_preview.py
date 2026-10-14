@@ -125,7 +125,7 @@ def test_a_bought_spread_has_every_figure() -> None:
     assert shown.over_cost_limit is False
     assert (shown.at_expiry.gain_cents, shown.at_expiry.break_evens) == (30_600, (Fraction("586.94"),))
     bought, sold = shown.legs
-    assert (bought.leg_id, bought.position, bought.ratio, bought.multiplier) == ("long_call", "long", 1, 100)
+    assert (bought.leg_id, bought.position, bought.ratio) == ("long_call", "long", 1)
     assert (bought.contract, sold.contract) == (scenes._contract("call", 585), scenes._contract("call", 590))
     assert (bought.gap_percent_of_mid, sold.gap_percent_of_mid) == (Fraction(400, 410), Fraction(400, 220))
     assert all(leg.priced.status is AmericanIvStatus.SOLVED for leg in shown.legs)

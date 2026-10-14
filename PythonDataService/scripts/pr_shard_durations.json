@@ -7833,7 +7833,6 @@
 "tests/volatility/test_conventions.py::TestDayCountConversions::test_ttm_to_dte_rounding": 0.01,
 "tests/volatility/test_conventions.py::TestDayCountConversions::test_ttm_to_dte_roundtrip_actual360": 0.01,
 "tests/volatility/test_conventions.py::TestDayCountConversions::test_ttm_to_dte_roundtrip_actual365": 0.01,
-"tests/volatility/test_conventions.py::TestSurfaceConventionsDataclass::test_to_hash_dict_is_dict": 0.01,
 "tests/volatility/test_conventions.py::TestUnsupportedDayCount::test_discount_unsupported_model_raises": 0.01,
 "tests/volatility/test_conventions.py::TestUnsupportedDayCount::test_dte_to_ttm_unsupported_raises": 0.01,
 "tests/volatility/test_conventions.py::TestUnsupportedDayCount::test_forward_unsupported_model_raises": 0.01,

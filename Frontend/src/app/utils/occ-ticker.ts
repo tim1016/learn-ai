@@ -35,7 +35,6 @@ export interface OccTickerParts {
 export interface OccDisplayParts {
   underlying: string;
   expDate: string;        // e.g. "Feb 23, 2026"
-  expDateShort: string;   // e.g. "02/23/26"
   type: 'Call' | 'Put';
   strike: string;         // e.g. "$690.00"
 }
@@ -108,7 +107,6 @@ export function parseOccForDisplay(ticker: string): OccDisplayParts | null {
   return {
     underlying: parsed.underlying,
     expDate: `${MONTHS[month - 1]} ${day}, ${year}`,
-    expDateShort: `${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')}/${String(year).slice(2)}`,
     type: parsed.contractType === 'call' ? 'Call' : 'Put',
     strike: `$${parsed.strike.toFixed(2)}`,
   };

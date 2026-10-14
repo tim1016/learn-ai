@@ -51,7 +51,6 @@ _OK_STATUSES = {
     SolveStatus.NEWTON_OK,
     SolveStatus.QUANTLIB_OK,
     SolveStatus.BRENT_FALLBACK,
-    SolveStatus.OK,
 }
 
 # Deep-ITM contracts where ibkr_model_price < intrinsic value are a known

@@ -59,7 +59,6 @@ describe('parseOccForDisplay', () => {
     expect(parseOccForDisplay('O:SPY260220C00689000')).toEqual({
       underlying: 'SPY',
       expDate: 'Feb 20, 2026',
-      expDateShort: '02/20/26',
       type: 'Call',
       strike: '$689.00',
     });
@@ -69,7 +68,6 @@ describe('parseOccForDisplay', () => {
     expect(parseOccForDisplay('O:AAPL260117P00227500')).toEqual({
       underlying: 'AAPL',
       expDate: 'Jan 17, 2026',
-      expDateShort: '01/17/26',
       type: 'Put',
       strike: '$227.50',
     });

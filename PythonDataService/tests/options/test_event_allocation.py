@@ -20,7 +20,6 @@ import pytest
 
 from app.options.contract import OptionContract
 from app.options.event_allocation import (
-    EVENT_CLOSE_PRICE,
     HeldOptionLot,
     LotAllocation,
     OptionEventKind,
@@ -113,7 +112,6 @@ def test_an_assigned_call_takes_the_whole_sold_lot_and_sells_the_shares_at_the_s
         cash_change_cents=3_000_000,
     )
     assert allocation.share_price == Decimal("150")
-    assert Decimal(0) == EVENT_CLOSE_PRICE
 
 
 def test_an_assigned_put_buys_the_shares_and_pays_the_strike() -> None:
