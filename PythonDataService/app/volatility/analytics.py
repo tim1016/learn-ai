@@ -292,19 +292,17 @@ def compute_health_score(surface) -> HealthScore:
     total_butterfly_violations = 0
     total_calendar_violations = 0
 
-    reported_slices = 0
     checked_slices = 0
     for slice_diag in diag.slices:
         arb = slice_diag.arbitrage
         if arb is not None:
             total_butterfly_violations += arb.butterfly_violations
             total_calendar_violations += arb.calendar_violations
-            reported_slices += 1
             checked_slices += arb.unevaluable == 0 and arb.butterfly_triples_tested > 0
 
-    if reported_slices:
-        # A smile the check could not test is not arbitrage-free: score only the checked share.
-        arbitrage_score *= checked_slices / reported_slices
+    # A smile the check could not test (or never ran on) is not arbitrage-free:
+    # score only the checked share of slices.
+    arbitrage_score *= checked_slices / len(diag.slices)
     arbitrage_score -= 10 * total_butterfly_violations
     arbitrage_score -= 15 * total_calendar_violations
     arbitrage_score = max(0.0, arbitrage_score)

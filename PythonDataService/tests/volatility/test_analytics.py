@@ -91,7 +91,7 @@ class TestHealthScoreArbitrageCoverage:
     def _unchecked_report() -> ArbitrageReport:
         return ArbitrageReport(total_checks=5, unevaluable=5)
 
-    def _arbitrage_score(self, reports: list[ArbitrageReport]) -> float:
+    def _arbitrage_score(self, reports: list[ArbitrageReport | None]) -> float:
         slices = [
             SliceDiagnostics(
                 ttm=0.1 * (i + 1), n_contracts=5, n_solved=5, n_failed=0, fit_method="variance", fit_rmse=0.0, arbitrage=r
@@ -114,6 +114,10 @@ class TestHealthScoreArbitrageCoverage:
 
     def test_all_unchecked_slices_score_zero(self) -> None:
         assert self._arbitrage_score([self._unchecked_report()] * 2) == pytest.approx(0.0, abs=1e-9)
+
+    def test_a_slice_with_no_arbitrage_report_counts_as_unchecked(self) -> None:
+        assert self._arbitrage_score([self._checked_report(), None]) == pytest.approx(50.0, abs=1e-9)
+        assert self._arbitrage_score([None, None]) == pytest.approx(0.0, abs=1e-9)
 
 
 class TestSkewMetrics:
