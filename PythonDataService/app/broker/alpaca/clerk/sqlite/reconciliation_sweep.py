@@ -158,7 +158,7 @@ class ReconciliationSweep:
             try:
                 await task
             except asyncio.CancelledError:
-                pass
+                pass  # expected: the task was just cancelled above
             except Exception:
                 # Awaiting a task that ended on an error re-raises it, and that would abort
                 # the runtime's close before it stops its other taps and closes the
