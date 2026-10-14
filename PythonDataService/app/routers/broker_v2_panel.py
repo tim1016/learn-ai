@@ -569,9 +569,14 @@ async def read_deploy_submission_scoped(
     except panel_errors.PanelDataError as error:
         _raise_alpaca_deploy_error(error)
     if status is None:
+        # The one 404 here that proves nothing started under the key, so it
+        # carries a code: a client frees the key on that code alone (#3179).
         raise HTTPException(
             status_code=404,
-            detail="No Deploy was committed for this submission. Nothing was set aside and nothing started.",
+            detail={
+                "message": "No Deploy was committed for this submission. Nothing was set aside and nothing started.",
+                "reason_code": panel_deploy.SUBMISSION_NEVER_CLAIMED,
+            },
         )
     return status
 

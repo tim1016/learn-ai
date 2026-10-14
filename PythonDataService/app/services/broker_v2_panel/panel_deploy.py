@@ -364,6 +364,10 @@ _SENDING: dict[str, DeploySubmission | None] = {}
 #: leaves the key's first Deploy to its recovery read.
 SUBMISSION_IN_FLIGHT = "deploy_submission_in_flight"
 SUBMISSION_SETTINGS_CONFLICT = "deploy_submission_settings_conflict"
+#: The recovery read of a key no Deploy ever claimed: its 404 carries this
+#: code, and a client frees the key on that code alone. No other 404 a status
+#: read gets (the fleet's among them) names it.
+SUBMISSION_NEVER_CLAIMED = "deploy_submission_never_claimed"
 #: No valid name can be authored for the bot: a refusal, not an account change.
 BOT_NAME_UNAVAILABLE = "deploy_bot_name_unavailable"
 
