@@ -108,7 +108,7 @@ def test_ceiling_equality_is_within_a_strict_breach_is_a_concern() -> None:
     assert "research concern" in breaching["sentence"]
 
 
-def test_one_losing_session_puts_exactly_the_paths_that_draw_it_beyond_the_ceiling() -> None:
+def test_a_deterministic_alternating_series_states_its_actual_outcomes_not_a_promise() -> None:
     # Exactly one losing session of -10% among flat ones: a path's fall is 0.1 iff it draws that session.
     losing_session = 30
     returns = [0.0] * 59
