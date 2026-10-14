@@ -1,4 +1,5 @@
 import { TestBed } from '@angular/core/testing';
+import { render } from '@testing-library/angular';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { vi } from 'vitest';
@@ -367,5 +368,26 @@ describe('PricingLabComponent', () => {
         && (r.body as { query: string }).query.includes('pricingModelComparison'));
       expect(matches.length).toBe(0);
     });
+  });
+});
+
+describe('PricingLabComponent selected contract info', () => {
+  it.each([
+    [0.2, 'IV: 20.0%'],
+    [null, 'IV: —'],
+  ])('shows implied volatility %s as "%s"', async (impliedVolatility, expected) => {
+    const { fixture, container } = await render(PricingLabComponent, {
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        ...fakePickerWorld().providers,
+      ],
+    });
+
+    fixture.componentInstance.selectedContract.set(buildContract({ impliedVolatility }));
+    fixture.detectChanges();
+
+    const info = container.querySelector('.contract-info');
+    expect(info?.textContent?.replace(/\s+/g, ' ')).toContain(expected);
   });
 });

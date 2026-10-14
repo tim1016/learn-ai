@@ -20,9 +20,13 @@
         [class.pos]="spotChangeClass() === 'pos'"
         [class.neg]="spotChangeClass() === 'neg'"
       >
-        @if (spotChange() !== 0) {
-          {{ spotChange() > 0 ? '+' : '' }}{{ spotChange() | number: '1.2-2' }}
-          ({{ spotChangePct() > 0 ? '+' : '' }}{{ spotChangePct() | number: '1.2-2' }}%)
+        @let change = spotChange();
+        @let changePct = spotChangePct();
+        @if (change !== null && changePct !== null) {
+          {{ change > 0 ? '+' : '' }}{{ change | number: '1.2-2' }}
+          ({{ changePct > 0 ? '+' : '' }}{{ changePct | number: '1.2-2' }}%)
+        } @else {
+          —
         }
       </span>
     </div>
