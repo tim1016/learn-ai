@@ -29,6 +29,7 @@ from app.broker.alpaca.clerk.money import dollars
 from app.broker.alpaca.clerk.sqlite.economic_projection_models import RunActivity
 from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     SETTLE_UNKNOWN_EXIT_ORDER_LABEL,
+    SWEEP_LIVENESS_BOUND_MS,
     settle_unavailable_words,
 )
 from app.broker.alpaca.clerk.synthesized_orders import SynthesizedAnchor, SynthesizedOptionFill
@@ -607,7 +608,7 @@ def _channel_line(channel: ChannelHealthView, *, running: bool) -> HealthLineVie
     )
 
 
-def _account_lines(panel: BotPanelView) -> list[HealthLineView]:
+def _account_lines(panel: BotPanelView, *, now_ms: int) -> list[HealthLineView]:
     clerk = panel.clerk
     running = panel.health.running
     lines = [_channel_line(channel, running=running) for channel in clerk.channels]
@@ -638,21 +639,30 @@ def _account_lines(panel: BotPanelView) -> list[HealthLineView]:
     else:
         lines.append(HealthLineView(key="holds", label="Holds", state="ok", value="None"))
     verdict = clerk.reconciliation_verdict
+    state: HealthLineState = "idle" if verdict is None else ("ok" if verdict == "clean" else "attention")
+    value = clerk.reconciliation_verdict_label or "Not checked yet"
+    note: str | None = None
+    checked_at_ms = clerk.last_sweep_at_ms
+    # The verdict is read from durable rows, not from a live sweep, so a clean answer ages: past the bound
+    # custody proofs age at, the account has not been checked since (#3165).
+    if state == "ok" and checked_at_ms is not None and now_ms - checked_at_ms > SWEEP_LIVENESS_BOUND_MS:
+        state, note, value = "attention", f"Last answer was {value}, at", "Not re-checked"
     lines.append(
         HealthLineView(
             key="reconciliation",
             label="Last check against Alpaca",
-            state="idle" if verdict is None else ("ok" if verdict == "clean" else "attention"),
-            value=clerk.reconciliation_verdict_label or "Not checked yet",
-            at_ms=clerk.last_sweep_at_ms,
+            state=state,
+            value=value,
+            note=note,
+            at_ms=checked_at_ms,
         )
     )
     return lines
 
 
-def health_groups(panel: BotPanelView, run: RunFacts) -> BotHealthGroupsView:
+def health_groups(panel: BotPanelView, run: RunFacts, *, now_ms: int) -> BotHealthGroupsView:
     """Health split in two: this run's own facts, and the account's facts right now."""
-    return BotHealthGroupsView(run=_run_lines(panel, run), account=_account_lines(panel))
+    return BotHealthGroupsView(run=_run_lines(panel, run), account=_account_lines(panel, now_ms=now_ms))
 
 
 def bot_page_view(
@@ -674,7 +684,7 @@ def bot_page_view(
         status=status,
         summary=run_summary(panel, run, now_ms=now_ms),
         toolbar=toolbar_actions(panel, status=status),
-        health=health_groups(panel, run),
+        health=health_groups(panel, run, now_ms=now_ms),
     )
 
 

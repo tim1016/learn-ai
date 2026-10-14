@@ -114,7 +114,25 @@ class ReconciliationSweep:
             self._task = asyncio.create_task(
                 self.run(), name="alpaca-sqlite-reconciliation-sweep"
             )
+            self._task.add_done_callback(self._report_if_ended_on_an_error)
         self.start_lease_heartbeat()
+
+    def _report_if_ended_on_an_error(self, task: asyncio.Task[None]) -> None:
+        """Say so when the loop dies by itself (#3165).
+
+        Nothing else reads this task: its death silently takes the stuck-EXIT
+        watchdog, the EXIT drive and the scheduled-close retry with it, while
+        the lease heartbeat keeps the account looking healthy. A stop's
+        cancellation and a bounded test run's return are not a death.
+        """
+        if task.cancelled() or task.exception() is None:
+            return
+        logger.critical(
+            "alpaca sqlite reconciliation sweep ended on an error; "
+            "no periodic pass runs until the process restarts",
+            extra={"action": "reconcile_sweep_ended", "account_id": self._repo.account_id},
+            exc_info=task.exception(),
+        )
 
     def start_lease_heartbeat(self) -> None:
         """Begin (or ensure) only the execution-lease heartbeat.
@@ -139,7 +157,21 @@ class ReconciliationSweep:
             task.cancel()
         for task in tasks:
             with suppress(asyncio.CancelledError):
-                await task
+                try:
+                    await task
+                except Exception:
+                    # Awaiting a task that ended on an error re-raises it, and that would
+                    # abort the runtime's close before it stops its other taps and closes
+                    # the repository (#3165). It was reported where it died.
+                    logger.error(
+                        "alpaca sqlite reconciliation sweep task had ended on an error before stop",
+                        extra={
+                            "action": "reconcile_sweep_stop_found_error",
+                            "account_id": self._repo.account_id,
+                            "task": task.get_name(),
+                        },
+                        exc_info=True,
+                    )
         self._task = None
         self._lease_task = None
 
@@ -371,23 +403,18 @@ class ReconciliationSweep:
 
     async def run(self) -> None:
         passes = 0
-        consecutive_failures = 0
+        delay_s = self._interval_s
         while True:
             succeeded = await self._run_one_pass()
             await self._settle_duty()
-            consecutive_failures = 0 if succeeded else consecutive_failures + 1
+            # Doubles per consecutive failed pass up to the cap; a clean pass starts over.
+            # Doubling the capped delay, rather than powering the failure count, cannot
+            # overflow however long a broker stays down (``2**1024`` ended the sweep, #3165).
+            delay_s = self._interval_s if succeeded else min(delay_s * 2, self._max_backoff_s)
             passes += 1
             if self._max_passes is not None and passes >= self._max_passes:
                 return
-            delay = (
-                self._interval_s
-                if consecutive_failures == 0
-                else min(
-                    self._interval_s * (2**consecutive_failures),
-                    self._max_backoff_s,
-                )
-            )
-            await self._sleep(delay)
+            await self._sleep(delay_s)
 
     async def _run_one_pass(self) -> bool:
         try:
