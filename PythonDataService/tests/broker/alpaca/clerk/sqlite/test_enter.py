@@ -43,6 +43,7 @@ from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
+    ExecutionLeaseLostAfterBrokerIO,
     OperationClaimError,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
@@ -1515,7 +1516,8 @@ async def test_expired_submit_attempt_cannot_fold_its_late_broker_response(
         repo.clock.advance(2)  # type: ignore[attr-defined]
 
     trade = _FakeTrade(on_submit=expire_claim)
-    with pytest.raises(OperationClaimError):
+    # The broker had answered: the loss is the after-I/O one, never "another owner holds it".
+    with pytest.raises(ExecutionLeaseLostAfterBrokerIO):
         await submit_enter(
             repo,
             account_id=ACCOUNT_ID,
