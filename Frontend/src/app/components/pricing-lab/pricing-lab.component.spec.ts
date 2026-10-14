@@ -192,6 +192,116 @@ describe('PricingLabComponent', () => {
       await promise;
       expect(component.chainLoading()).toBe(false);
     });
+
+    // ── Failures and stale data are shown, not hidden (#3221) ──
+    function chainReply(price: number, contracts: SnapshotContractResult[]) {
+      return {
+        data: {
+          getOptionsChainSnapshot: {
+            success: true,
+            underlying: { ticker: 'SPY', price, change: 0, changePercent: 0 },
+            contracts, count: contracts.length,
+            riskFreeRate: null, dividendYield: null, rateSource: null, dividendSource: null, error: null,
+          },
+        },
+      };
+    }
+
+    function pendingFor(needle: string, key: 'underlyingTicker' | 'expirationMs', value: string | number) {
+      const found = httpMock.match(r => {
+        const b = r.body as { query?: string; variables?: Record<string, unknown> } | null;
+        return b?.query?.includes(needle) === true && b.variables?.[key] === value;
+      });
+      expect(found.length).toBe(1);
+      return found[0];
+    }
+
+    it('says why the expirations could not be loaded', async () => {
+      const promise = component.fetchExpirations();
+
+      expectGraphQL(httpMock, 'getOptionsExpirations').flush({
+        data: { getOptionsExpirations: { success: false, expirations: [], count: 0, error: 'Polygon rate limited' } },
+      });
+      await promise;
+
+      expect(component.statusMessage()?.type).toBe('error');
+      expect(component.statusMessage()?.text).toContain('Polygon rate limited');
+      expect(component.expirationsLoading()).toBe(false);
+    });
+
+    it('says why the chain could not be loaded', async () => {
+      const promise = component.fetchChain('SPY', 4_070_984_400_000);
+      expectGraphQL(httpMock, 'getOptionsChainSnapshot').flush({
+        data: {
+          getOptionsChainSnapshot: {
+            success: false, underlying: null, contracts: [], count: 0,
+            riskFreeRate: null, dividendYield: null, rateSource: null, dividendSource: null, error: 'Snapshot unavailable',
+          },
+        },
+      });
+      await promise;
+
+      expect(component.statusMessage()?.type).toBe('error');
+      expect(component.statusMessage()?.text).toContain('Snapshot unavailable');
+      expect(component.chainLoading()).toBe(false);
+    });
+
+    it('leaves no strikes from the previous expiry to pick when the chain request fails', async () => {
+      component.allContracts.set([buildContract()]);
+
+      const promise = component.fetchChain('SPY', 4_070_984_400_000);
+      expectGraphQL(httpMock, 'getOptionsChainSnapshot')
+        .error(new ProgressEvent('error'), { status: 500, statusText: 'Server Error' });
+      await promise;
+
+      expect(component.statusMessage()?.type).toBe('error');
+      expect(component.allContracts()).toEqual([]);
+    });
+
+    it('keeps the later expiry\'s chain when the earlier expiry\'s reply lands last', async () => {
+      const early = 4_070_984_400_000;
+      const late = 4_073_576_400_000;
+      const first = component.fetchChain('SPY', early);
+      const second = component.fetchChain('SPY', late);
+
+      pendingFor('getOptionsChainSnapshot', 'expirationMs', late)
+        .flush(chainReply(600, [buildContract({ strikePrice: 600 })]));
+      await second;
+      pendingFor('getOptionsChainSnapshot', 'expirationMs', early)
+        .flush(chainReply(500, [buildContract({ strikePrice: 500 })]));
+      await first;
+
+      expect(component.allContracts().map(c => c.strikePrice)).toEqual([600]);
+      expect(component.underlying()?.price).toBe(600);
+      expect(component.chainLoading()).toBe(false);
+    });
+
+    it('keeps the new ticker\'s expirations when the previous ticker\'s reply lands last', async () => {
+      const aaplExpiry = optionExpiryAnchorMs(etIsoDate(Date.now() + 10 * 86400000));
+      const msftExpiry = optionExpiryAnchorMs(etIsoDate(Date.now() + 20 * 86400000));
+      component.ticker.set('AAPL');
+      const first = component.fetchExpirations();
+      component.ticker.set('MSFT');
+      const second = component.fetchExpirations();
+
+      pendingFor('getOptionsExpirations', 'underlyingTicker', 'MSFT').flush({
+        data: { getOptionsExpirations: { success: true, expirations: [msftExpiry], count: 1, error: null } },
+      });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      pendingFor('getOptionsChainSnapshot', 'underlyingTicker', 'MSFT')
+        .flush(chainReply(400, [buildContract({ strikePrice: 400 })]));
+      await second;
+
+      pendingFor('getOptionsExpirations', 'underlyingTicker', 'AAPL').flush({
+        data: { getOptionsExpirations: { success: true, expirations: [aaplExpiry], count: 1, error: null } },
+      });
+      await first;
+
+      expect(component.availableExpirations()).toEqual([msftExpiry]);
+      expect(component.selectedExpiration()).toBe(msftExpiry);
+      expect(component.allContracts().map(c => c.strikePrice)).toEqual([400]);
+      expect(component.expirationsLoading()).toBe(false);
+    });
   });
 
   // ── PL-B: Compare workflow ─────────────────────────────────────

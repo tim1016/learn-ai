@@ -92,6 +92,14 @@
       <div class="expiration-summary mono">
         <span class="exp-date">{{ expirationLabel() }}</span>
         <span class="exp-dte">{{ daysToExpiry() }} DTE</span>
+        @if (chainAsOfMs() !== null) {
+          <span class="exp-asof" [class.stale]="refreshError() !== null">
+            Quotes as of <app-timestamp-display [value]="chainAsOfMs()" mode="local" granularity="time" />
+            @if (refreshError(); as why) {
+              · refresh failed: {{ why }}
+            }
+          </span>
+        }
       </div>
     }
   </section>
