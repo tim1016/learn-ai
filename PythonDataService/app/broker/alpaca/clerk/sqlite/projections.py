@@ -771,7 +771,13 @@ class SqliteClerkProjectionReader:
         )
 
     def operation_timeline(self, effect_operation_id: str) -> tuple[TimelineEntry, ...]:
-        """Return bounded immutable events for one exact Clerk operation."""
+        """Return every immutable event of one exact Clerk operation, oldest first.
+
+        Whole, never a page: the caller dates the operation's first and
+        terminal events from this list, and an unresolved order is
+        re-attempted by every reconciliation pass, so a long operation holds
+        more transitions than one page does (#3216).
+        """
         with self._read_transaction():
             self._verify_identity()
             rows = self._conn.execute(
@@ -779,8 +785,8 @@ class SqliteClerkProjectionReader:
                 "transition_kind, operation_state, broker_state, custody_owner, "
                 "execution_authority, summary_code, proof_reference, source_event_at_ms, "
                 "clerk_observed_at_ms, recorded_at_ms FROM custody_transitions "
-                "WHERE effect_operation_id = ? ORDER BY sequence ASC LIMIT ?",
-                (effect_operation_id, MAX_TIMELINE_PAGE_SIZE),
+                "WHERE effect_operation_id = ? ORDER BY sequence ASC",
+                (effect_operation_id,),
             ).fetchall()
         return tuple(projection_helpers.timeline_entry(row) for row in rows)
 
@@ -1281,7 +1287,7 @@ class SqliteClerkProjectionReader:
                 base64.urlsafe_b64decode(cursor + padding).decode("utf-8")
             )
             expected_scope = (
-                "operation_page",
+                payload["kind"],
                 payload["account_id"],
                 payload["authority_generation"],
                 payload["strategy_instance_id"],

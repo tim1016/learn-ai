@@ -1051,8 +1051,15 @@ def _custody_timeline(
         for entry in timeline
         if entry.source_event_at_ms is not None
     ]
+    # The transition that reached the terminal state, not the newest one: a
+    # failed order is looked up again by later reconciliation passes, and each
+    # lookup is a transition of the same operation. The newest is the fallback
+    # for a record whose transitions carry no terminal label.
     terminal = (
-        timeline[-1]
+        next(
+            (entry for entry in timeline if entry.operation_state == operation.state),
+            timeline[-1],
+        )
         if timeline and operation.state in {"failed", "succeeded"}
         else None
     )

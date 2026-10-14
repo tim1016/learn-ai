@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -17,10 +18,11 @@ from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.economic_projection import ExecutionRow
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
-from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
+from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts, ReconciliationAttemptedFacts
 from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import accept_manual_order_cancellation
 from app.broker.alpaca.clerk.sqlite.manual_orders import accept_manual_order
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
+from app.broker.alpaca.clerk.sqlite.order_evidence import fold_failed
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     OperationPage,
     ProjectedCommand,
@@ -384,6 +386,130 @@ def test_manual_cancellation_transaction_keeps_its_target_order_reference(tmp_pa
     assert detail.order_ref == manual.leg.order_ref
     assert detail.order_instruction.symbol == "SPY"
     assert detail.receipt["order_refs"] == [manual.leg.order_ref]
+
+
+def _a_failed_enter_with_reconciliation_attempts(
+    root: Path, *, before_terminal: int, after_terminal: int
+) -> tuple[ClerkSqliteRepository, str]:
+    """One ENTER that is retried by ``before_terminal`` reconciliation passes, fails, then is looked up ``after_terminal`` more times."""
+    ticks = iter(range(1_786_370_000_000, 1_786_370_900_000))
+    repo = ClerkSqliteRepository.initialize(
+        account_id="PA-LONG-TIMELINE", artifacts_root=root, clock=lambda: next(ticks)
+    )
+    repo.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="config-1")
+    submit_start_run(
+        repo, account_id="PA-LONG-TIMELINE", strategy_instance_id="spy-bot", lifecycle_run_id="run-1"
+    )
+    accepted = accept_enter(
+        repo,
+        account_id="PA-LONG-TIMELINE",
+        strategy_instance_id="spy-bot",
+        decision_id="decision-1",
+        lifecycle_run_id="run-1",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+    )
+    operation_id = accepted.effect_operation_id
+    effect = repo.effect_operation(operation_id)
+    assert effect is not None
+
+    def attempt() -> None:
+        current = repo.effect_operation(operation_id)
+        assert current is not None
+        repo.append_transition(
+            TransitionInput(
+                strategy_instance_id=effect.strategy_instance_id,
+                run_id=effect.run_id,
+                command_id=effect.command_id,
+                effect_operation_id=operation_id,
+                order_ref=accepted.order_ref,
+                transition_kind="RECONCILIATION_ATTEMPTED",
+                custody_owner="ACCOUNT_CLERK",
+                execution_authority="ACCOUNT_CLERK",
+                operation_state=current.state,
+                clerk_observed_at_ms=repo.clock(),
+                summary_code="RECONCILIATION_ATTEMPTED",
+                facts_json=ReconciliationAttemptedFacts(
+                    trigger="AUTOMATIC", outcome="STILL_UNKNOWN", why="the order is not at the broker yet"
+                ).to_facts_json(),
+            )
+        )
+
+    for _ in range(before_terminal):
+        attempt()
+    fold_failed(
+        repo,
+        effect_operation_id=operation_id,
+        order_ref=accepted.order_ref,
+        summary_code="ORDER_SUBMIT_FAILED",
+        reason="the broker refused the order",
+        why="the broker refused the order",
+    )
+    for _ in range(after_terminal):
+        attempt()
+    return repo, operation_id
+
+
+def _transaction_detail(repo: ClerkSqliteRepository, transaction_id: str) -> Any:
+    broker = _UnusedBroker()
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(
+            authority_kind="sqlite",
+            clerk=SqliteAlpacaClerkFacade(
+                account_mode="paper",
+                repo=repo,
+                read=broker,  # type: ignore[arg-type]
+                trade=broker,  # type: ignore[arg-type]
+            ),
+        )
+    )
+    try:
+        active, detail = sqlite_transaction_detail(account_id=repo.account_id, transaction_id=transaction_id)
+    finally:
+        set_active_clerk_runtime(None)
+    assert active is True
+    assert detail is not None
+    return detail
+
+
+def _journal(repo: ClerkSqliteRepository, operation_id: str) -> list[sqlite3.Row]:
+    return repo._conn.execute(
+        "SELECT sequence, transition_kind, recorded_at_ms FROM custody_transitions "
+        "WHERE effect_operation_id = ? ORDER BY sequence",
+        (operation_id,),
+    ).fetchall()
+
+
+def test_transaction_detail_lists_every_transition_of_a_long_operation(tmp_path: Path) -> None:
+    """An operation that outlives 100 reconciliation passes shows all of them, not the first hundred (#3216)."""
+    repo, operation_id = _a_failed_enter_with_reconciliation_attempts(
+        tmp_path, before_terminal=112, after_terminal=0
+    )
+    try:
+        detail = _transaction_detail(repo, operation_id)
+        journal = _journal(repo, operation_id)
+    finally:
+        repo.close()
+
+    assert len(journal) > 100
+    shown = [event for event in detail.events if event.event_id.startswith(f"{operation_id}:transition:")]
+    assert [event.journal_seq for event in shown] == [row["sequence"] for row in journal]
+
+
+def test_the_terminal_stage_is_dated_at_the_transition_that_reached_it(tmp_path: Path) -> None:
+    """Looking the failed order up again afterwards leaves its terminal time where the failure was recorded (#3216)."""
+    repo, operation_id = _a_failed_enter_with_reconciliation_attempts(
+        tmp_path, before_terminal=3, after_terminal=2
+    )
+    try:
+        detail = _transaction_detail(repo, operation_id)
+        journal = _journal(repo, operation_id)
+    finally:
+        repo.close()
+
+    failed = next(row for row in journal if row["transition_kind"] == "ORDER_SUBMIT_FAILED")
+    assert journal[-1]["recorded_at_ms"] > failed["recorded_at_ms"]
+    assert detail.custody_timeline is not None
+    assert detail.custody_timeline.economic_terminal_recorded_at_ms == failed["recorded_at_ms"]
 
 
 def test_transaction_response_accepts_the_longest_canonical_manual_subject_id() -> None:
