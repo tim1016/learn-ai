@@ -775,7 +775,7 @@ class TradeUpdatesConsumer:
         leg_orders = {
             str(leg.get("id")): leg for leg in (order.get("legs") or []) if isinstance(leg, dict) and leg.get("id")
         }
-        unreadable_leg = False
+        parse_errors_before = self._counters.parse_errors
         for execution in executions:
             leg_order = leg_orders.get(str(execution.get("order_id"))) if isinstance(execution, dict) else None
             if leg_order is None:
@@ -795,7 +795,6 @@ class TradeUpdatesConsumer:
                 # Read outside the order mapper's guard: a leg stated unreadably is one that would not map --
                 # counted, never a reconnect, whether the numeric reader returns a non-finite number or refuses it.
                 self._count_unmappable_event(from_gap_reconcile=False, order_id=str(leg_order.get("id")), error=exc)
-                unreadable_leg = True
                 continue
             filled_all = filled == ordered
             await self._handle_trade_update(
@@ -809,8 +808,8 @@ class TradeUpdatesConsumer:
                     "order": {**leg_order, "client_order_id": None},
                 }
             )
-        if unreadable_leg:
-            # Whatever order the legs came in, a leg that mapped after the unreadable one does not restore health.
+        if self._counters.parse_errors > parse_errors_before:
+            # A leg that failed to map, here or in the shared handler, is not undone by a later leg that did.
             self._mark_evidence_health(False)
 
     # ── Reconnect gap-reconcile ──────────────────────────────────────────────

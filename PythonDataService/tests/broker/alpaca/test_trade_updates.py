@@ -955,7 +955,7 @@ async def test_an_authorization_frame_whose_data_is_not_an_object_does_not_abort
     assert [r.status for r in caplog.records if getattr(r, "action", None) == "trade_updates_auth_denied"] == [""]
 
 
-def _parent_fill_naming_two_legs(first_leg_filled_qty: str) -> dict[str, Any]:
+def _parent_fill_naming_two_legs(first_leg_filled_qty: str = "1", *, unreadable_timestamp_on: int | None = None) -> dict[str, Any]:
     """A several-leg parent's fill frame: no execution of its own, one execution per leg (#3103)."""
     frame = _load_frames()[2]
     parent = frame["data"]["order"]
@@ -975,7 +975,28 @@ def _parent_fill_naming_two_legs(first_leg_filled_qty: str) -> dict[str, Any]:
         {"execution_id": "exec-sell-leg", "qty": "1", "price": "1.18", "order_id": "leg-order-2",
          "symbol": "SPY261016C00776000", "timestamp": "2026-10-14T15:59:03.721579799Z"},
     ]
+    if unreadable_timestamp_on is not None:
+        frame["data"]["legs"][unreadable_timestamp_on]["timestamp"] = "not-a-timestamp"
     return frame
+
+
+@pytest.mark.parametrize("bad_leg", [0, 1], ids=["first-leg", "last-leg"])
+async def test_a_leg_that_fails_to_map_leaves_health_degraded_whatever_its_place_in_the_frame(
+    tmp_path: Path, bad_leg: int
+) -> None:
+    # The leg's own frame is mapped by the shared handler, which counts the failure and degrades
+    # health -- and the next leg's mapping would restore it. A frame with an unusable leg is not
+    # a healthy frame whichever leg came first.
+    consumer, clerk, _ = await _consumer(tmp_path, [_parent_fill_naming_two_legs(unreadable_timestamp_on=bad_leg)])
+    await _warm(clerk)
+
+    await consumer.run()
+
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    exact = [e.event.execution_id for e in entries if getattr(e.event, "execution_id", None) is not None]
+    assert exact == ["exec-sell-leg" if bad_leg == 0 else "exec-buy-leg"]
+    assert consumer.counters.parse_errors == 1
+    assert consumer.evidence_health.healthy is False
 
 
 @pytest.mark.parametrize("raises_on_non_finite", [False, True], ids=["opt_float-reads-nan", "opt_float-refuses-nan"])
