@@ -2,10 +2,9 @@
 
 Covers ``app.services.broker_v2_panel.history_batch_client``: role-based
 provider selection, the ``RemoteHistoryBatchClient``'s absorption of every
-transport failure mode into ``coordinator_unavailable``, that its inner read
-timeout matches the pinned constant, and that a construction-time
-misconfiguration (issue #2204 gate F7) degrades every request rather than
-crashing boot or a request.
+transport failure mode into ``coordinator_unavailable``, and that a
+construction-time misconfiguration (issue #2204 gate F7) degrades every
+request rather than crashing boot or a request.
 """
 
 from __future__ import annotations

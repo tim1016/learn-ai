@@ -29,10 +29,7 @@ from app.broker.alpaca.clerk.active_authority import (
     primary_custody_world,
 )
 from app.broker.alpaca.clerk.fills import FillRecord
-from app.broker.alpaca.clerk.models import (
-    OrderJournalEntry,
-    ReconciliationCut,
-)
+from app.broker.alpaca.clerk.models import ReconciliationCut
 from app.broker.alpaca.clerk.money import dollars
 from app.broker.alpaca.clerk.sqlite.economic_projection_models import RunScope
 from app.broker.alpaca.clerk.sqlite.projections import read_pass_for_page
@@ -460,7 +457,7 @@ async def _get_panel_with_entries_from_authority(
     binding: object,
     facade: SqliteAlpacaClerkFacade | None,
     transaction_ref: str | None = None,
-) -> tuple[BotPanelView, list[OrderJournalEntry], tuple[FillRecord, ...] | None]:
+) -> tuple[BotPanelView, tuple[FillRecord, ...]]:
     """Build one panel from its binding-selected SQLite authority."""
     if facade is None:
         raise PanelUnavailableError(
@@ -500,7 +497,6 @@ async def _get_panel_with_entries_from_authority(
     status = _status_in_binding_mode(evidence.status, binding)
     projection = evidence.projection
     session_fills = evidence.economics.session_fills
-    entries: list[OrderJournalEntry] = []
     # The card names the authority the evidence came from: a Dry Run's own
     # simulated account, never the real account it is listed under (H33).
     # Its channels are the Clerk's own submission gate, which reads the feed
@@ -547,8 +543,6 @@ async def _get_panel_with_entries_from_authority(
         exact_open_pnl=economics.exact_open_pnl,
         latest_decision=decision,
         last_bar_at_ms=economics.last_activity_at_ms,
-        journal_tail_ref=f"/api/brokers/{broker}/accounts/{resolved}/bots/{sid}/decisions",
-        journal_tail_seq=(decision.seq if decision is not None else None),
         now_ms=captured_now_ms,
         selected_transaction_ref=transaction_ref,
         recent_decisions=decisions,
@@ -610,7 +604,7 @@ async def _get_panel_with_entries_from_authority(
         pass_proof=pass_proof,
     )
     panel = _with_bot_page(panel, evidence, run=run, facade=facade, now_ms=captured_now_ms)
-    return panel, entries, session_fills
+    return panel, session_fills
 
 
 def end_with_waiting_sale(end: BotEndView | None, repository: ClerkSqliteRepository, sid: str) -> BotEndView | None:
@@ -771,7 +765,7 @@ async def _get_panel_with_entries(
     *,
     transaction_ref: str | None = None,
     now_ms: int | None = None,
-) -> tuple[BotPanelView, list[OrderJournalEntry], tuple[FillRecord, ...] | None]:
+) -> tuple[BotPanelView, tuple[FillRecord, ...]]:
     """Build one SQLite-backed panel and return its exact chart fill set."""
     captured_now_ms = now_ms if now_ms is not None else now_ms_utc()
     async with selected_panel_authority(broker, account_id, sid) as (resolved, registry, binding, facade):
@@ -794,7 +788,7 @@ async def get_panel_with_chart_fills(
     sid: str,
     *,
     now_ms: int,
-) -> tuple[BotPanelView, list[OrderJournalEntry], tuple[FillRecord, ...] | None]:
+) -> tuple[BotPanelView, tuple[FillRecord, ...]]:
     return await _get_panel_with_entries(broker, account_id, sid, now_ms=now_ms)
 
 
@@ -806,7 +800,7 @@ async def get_panel(
     transaction_ref: str | None = None,
 ) -> BotPanelView:
     """Build the current panel projection for one bot."""
-    panel, _entries, _session_fills = await _get_panel_with_entries(
+    panel, _session_fills = await _get_panel_with_entries(
         broker,
         account_id,
         sid,
@@ -1237,7 +1231,7 @@ async def _run_action_under_live_authority(
             return await _run_sealed_account_action(
                 broker, sid, request, sealed_archive, registry=registry, operator_identity=operator_identity
             )
-        panel, _entries, _session_fills = await _get_panel_with_entries_from_authority(
+        panel, _session_fills = await _get_panel_with_entries_from_authority(
             broker, account_id, sid, resolved=resolved, captured_now_ms=now_ms_utc(),
             registry=registry, binding=binding, facade=facade,
         )

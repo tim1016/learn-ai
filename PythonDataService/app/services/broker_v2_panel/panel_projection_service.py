@@ -42,7 +42,6 @@ from app.schemas.broker_v2_panel import (
     MissionVerdictView,
     PanelAction,
     RecentDecisionView,
-    RecentFillView,
     TradedFeedLaneEvent,
     TradedFeedLaneView,
     TransactionRail,
@@ -68,10 +67,7 @@ from app.services.broker_v2_panel.feed_continuity_projection import (
     build_warmup_join,
 )
 from app.services.broker_v2_panel.outcome_copy import outcome_card_copy
-from app.services.broker_v2_panel.panel_authority_guard import (
-    default_authority_account_id,
-    reject_mixed_authority,
-)
+from app.services.broker_v2_panel.panel_authority_guard import default_authority_account_id
 from app.services.pricing_bar_stream import (
     PRICING_BAR_CONFLICT,
     PRICING_BAR_LATE,
@@ -312,27 +308,6 @@ def _dry_run_decision_views(
     ]
 
 
-def _dry_run_fill_views(
-    activity: list[DryRunActivity],
-    *,
-    limit: int = 8,
-) -> list[RecentFillView]:
-    return [
-        RecentFillView(
-            order_ref=row.order_ref,
-            symbol=row.symbol,
-            side=row.side,
-            quantity=row.quantity,
-            price=row.fill_price,
-            filled_at_ms=row.recorded_at_ms,
-            simulated=True,
-            authority_account_id=row.authority_account_id,
-            authority_kind=row.authority_kind,
-        )
-        for row in reversed(activity[-limit:])
-    ]
-
-
 def program_build_view_from_run_evidence(
     strategy_key: str,
     evidence: ProgramBuildRunEvidence,
@@ -407,7 +382,7 @@ def _execution_policy(mode: str) -> str:
     return policies[mode]
 
 
-def _recent_activity_views(
+def _mode_decision_views(
     status: BotStatusView,
     decision_receipts: list[DecisionReceipt],
     dry_run_activity: list[DryRunActivity],
@@ -415,8 +390,8 @@ def _recent_activity_views(
     authority_account_id: str,
     authority_kind: AuthorityKind,
     render_explanation: ExplanationRenderer | None = None,
-) -> tuple[list[RecentDecisionView], list[RecentFillView]]:
-    """Project real or simulated activity behind one explicit mode boundary.
+) -> list[RecentDecisionView]:
+    """Project real or simulated decisions behind one explicit mode boundary.
 
     Dry Run runs through its own isolated synthetic Clerk authority (PR
     #1722) and durably records every decision through the identical SQLite
@@ -433,9 +408,10 @@ def _recent_activity_views(
     causal-link fields still render the explicit absence (``None``), never a
     guess borrowed from the SQLite path.
 
-    Simulated fills always come from the WAL (#1728 Gap 1 is about decision
-    causal links, not fills — the WAL is Dry Run's genuine fill record; SQLite
-    decision receipts carry no fill quantity/price).
+    The panel's fills are not authored here: every fill row is
+    ``sqlite_panel_adapter.adapt_sqlite_panel``'s, which stamps and judges
+    them (``panel_authority_guard.reject_mixed_authority``) beside these
+    decisions.
 
     ``authority_account_id``/``authority_kind`` name the one Clerk account
     authority ``build_panel`` resolved this evidence cut from (issue #1729
@@ -443,49 +419,31 @@ def _recent_activity_views(
     except the legacy WAL fallback, whose rows carry authority metadata
     baked in at ``DryRunActivity`` construction time. Stamping uniformly
     rather than trusting each branch to agree by construction is exactly
-    what lets ``panel_authority_guard.reject_mixed_authority`` catch a real
-    divergence (e.g. a caller accidentally handing this projector another
-    bot's synthetic activity) instead of only what convention makes probable.
+    what lets the adapter's guard catch a real divergence (e.g. a caller
+    accidentally handing this projector another bot's synthetic activity)
+    instead of only what convention makes probable.
     """
     if status.mode == "dry_run":
         if decision_receipts:
-            decision_views, fill_views = (
-                _recent_decision_views(
-                    decision_receipts,
-                    simulated=True,
-                    authority_account_id=authority_account_id,
-                    authority_kind=authority_kind,
-                    render_explanation=render_explanation,
-                ),
-                _dry_run_fill_views(dry_run_activity),
+            return _recent_decision_views(
+                decision_receipts,
+                simulated=True,
+                authority_account_id=authority_account_id,
+                authority_kind=authority_kind,
+                render_explanation=render_explanation,
             )
-        else:
-            decision_views, fill_views = (
-                _dry_run_decision_views(dry_run_activity),
-                _dry_run_fill_views(dry_run_activity),
-            )
-    else:
-        # A shadow authority's fills are synthesized too (ADR 0059 D2), so
-        # "not Dry Run" no longer implies "real": the row's own authority
-        # kind decides, and the two worlds that synthesize are named once in
-        # ``SIMULATED_AUTHORITY_KINDS``.
-        simulated = authority_kind in SIMULATED_AUTHORITY_KINDS
-        decision_views = _recent_decision_views(
-            decision_receipts,
-            simulated=simulated,
-            authority_account_id=authority_account_id,
-            authority_kind=authority_kind,
-            render_explanation=render_explanation,
-        )
-        # Fills of a Clerk authority are the SQLite adapter's economics.
-        fill_views = []
-    reject_mixed_authority(
+        return _dry_run_decision_views(dry_run_activity)
+    # A shadow authority's fills are synthesized too (ADR 0059 D2), so
+    # "not Dry Run" no longer implies "real": the row's own authority
+    # kind decides, and the two worlds that synthesize are named once in
+    # ``SIMULATED_AUTHORITY_KINDS``.
+    return _recent_decision_views(
+        decision_receipts,
+        simulated=authority_kind in SIMULATED_AUTHORITY_KINDS,
         authority_account_id=authority_account_id,
         authority_kind=authority_kind,
-        decision_views=decision_views,
-        fill_views=fill_views,
+        render_explanation=render_explanation,
     )
-    return decision_views, fill_views
 
 
 def _dry_run_last_bar_at_ms(activity: list[DryRunActivity]) -> int | None:
@@ -631,8 +589,6 @@ def build_panel(
     exact_open_pnl: Decimal | None,
     latest_decision: DecisionReceipt | None,
     last_bar_at_ms: int | None,
-    journal_tail_ref: str,
-    journal_tail_seq: int | None,
     now_ms: int,
     selected_transaction_ref: str | None = None,
     recent_decisions: list[DecisionReceipt] | None = None,
@@ -657,8 +613,8 @@ def build_panel(
     adapter resolves it.
 
     ``authority_account_id`` names the exact Clerk account authority this
-    evidence cut (``recent_decisions`` and a Dry Run's simulated fills) was
-    actually read from. Callers with a selected SQLite facade (``panel_data_source.
+    evidence cut (``recent_decisions``) was actually read from. Callers with
+    a selected SQLite facade (``panel_data_source.
     _get_panel_with_entries_from_authority``) pass the facade's real
     ``account_id`` so the row-level authority label can never drift from
     which physically account-scoped repository the evidence came from — the
@@ -671,7 +627,7 @@ def build_panel(
 
     ``account_mode`` is the mode that authority learned from the broker (the
     facade's ``account_mode``). It decides ``real_paper`` against
-    ``real_live`` on every decision and fill row, and is required: a default
+    ``real_live`` on every decision row, and is required: a default
     would label a live account's rows paper (#2823).
 
     ``bot_status`` is where the bot is now by its custody's own facts
@@ -716,7 +672,7 @@ def build_panel(
     resolved_authority_account_id = authority_account_id or default_authority_account_id(
         status, account_id
     )
-    decision_views, fill_views = _recent_activity_views(
+    decision_views = _mode_decision_views(
         status,
         decision_receipts,
         activity,
@@ -774,11 +730,12 @@ def build_panel(
         execution_policy=_execution_policy(status.mode),
         health=health,
         clerk=clerk,
-        # The rail's stations, the revision and the working orders are the
-        # SQLite adapter's too (``adapt_sqlite_panel``).
+        # The rail's stations, the revision, the journal tail, the working
+        # orders and the fills are the SQLite adapter's too
+        # (``adapt_sqlite_panel``).
         rail=TransactionRail(transaction_ref=selected_transaction_ref or None, stations=[]),
-        journal_tail_ref=journal_tail_ref,
-        journal_tail_seq=journal_tail_seq,
+        journal_tail_ref="",
+        journal_tail_seq=None,
         # Commands are the SQLite adapter's (``adapt_sqlite_panel``), which
         # every served panel passes through: Clear's archive and the Clerk's
         # recovery catalog, with their readiness checks and primary command.
@@ -792,7 +749,7 @@ def build_panel(
         exposure=exposure,
         working_orders=[],
         recent_decisions=decision_views,
-        recent_fills=fill_views,
+        recent_fills=[],
         fills_today=fills_today,
         realized_pnl_today=realized_pnl_today,
         **open_pnl_fields(exact_open_pnl),

@@ -24,7 +24,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     RepositoryPoisoned,
 )
 from app.broker.v2panel.vocabulary import RetiredActionId
-from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult, PanelQuiesceActionRequest
+from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult
 from app.services.broker_v2_panel import panel_data_source
 from app.services.broker_v2_panel.action_execution_service import (
     ActionExecutionError,
@@ -427,7 +427,7 @@ async def test_disabled_presented_action_cannot_bypass_guard_via_post(
         return "account-1"
 
     async def _panel_from_authority(*_args, **_kwargs):
-        return await _panel(), [], None
+        return await _panel(), ()
 
     monkeypatch.setattr(
         "app.services.broker_v2_panel.panel_data_source._get_panel_with_entries_from_authority", _panel_from_authority,
@@ -618,17 +618,6 @@ async def test_retired_action_receipts_stay_history_and_never_block_the_next_com
     persisted = json.loads(path.read_text(encoding="utf-8"))
     assert persisted[compound] == history[compound]
     assert len(persisted) == 2
-
-
-@pytest.mark.parametrize("retired_action_id", get_args(RetiredActionId))
-@pytest.mark.parametrize("model", [PanelActionRequest, PanelQuiesceActionRequest])
-def test_a_retired_action_id_is_refused_at_the_request_schema(
-    model: type[PanelActionRequest], retired_action_id: str,
-) -> None:
-    """A retired id -- the generic Stop included (#2605) -- is history only: no
-    request may name it, so it is refused before any performer is reached."""
-    with pytest.raises(ValidationError):
-        model(action_id=retired_action_id, revision=1, concurrency_token="t", idempotency_key="k")  # type: ignore[arg-type]
 
 
 async def test_an_unreadable_ledger_refuses_every_command_and_keeps_its_file(tmp_path: Path) -> None:

@@ -1959,18 +1959,18 @@ async def test_option_bot_panel_reads_its_quote_fill_receipt_and_multiplier_mark
         # This panel boundary reads a retained whole quote, including a bid of zero.
         quote = stated.quote.model_copy(update={"bid": Decimal(bid)})
         kept.keep(CALL, quote.held, kept_at_ms=held.clock())
-        panel, _, _ = await panel_data_source._get_panel_with_entries_from_authority(
+        panel, _ = await panel_data_source._get_panel_with_entries_from_authority(
             "alpaca", ACCOUNT, SID, resolved=ACCOUNT, captured_now_ms=held.clock(),
             registry=registry, binding=held.binding, facade=held.clerk,
         )
         observed.append(panel)
         monkeypatch.setattr(held.clerk, "synthesized_option_fills", lambda: {})
-        unknown, _, _ = await panel_data_source._get_panel_with_entries_from_authority(
+        unknown, _ = await panel_data_source._get_panel_with_entries_from_authority(
             "alpaca", ACCOUNT, SID, resolved=ACCOUNT, captured_now_ms=held.clock(),
             registry=registry, binding=held.binding, facade=held.clerk,
         )
         observed.append(unknown)
-        stale, _, _ = await panel_data_source._get_panel_with_entries_from_authority(
+        stale, _ = await panel_data_source._get_panel_with_entries_from_authority(
             "alpaca", ACCOUNT, SID, resolved=ACCOUNT, captured_now_ms=held.clock() + 80_001,
             registry=registry, binding=held.binding, facade=held.clerk,
         )

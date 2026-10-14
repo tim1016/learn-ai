@@ -165,17 +165,12 @@ async def get_live_snapshot_parts(
 ) -> tuple[BotPanelView, ChartLiveResponse]:
     """Build panel and chart from the exact same authority-bound fill cut."""
     observed_at_ms = now_ms_utc()
-    panel, _entries, fills = await get_panel_with_chart_fills(
+    panel, fills = await get_panel_with_chart_fills(
         broker,
         account_id,
         sid,
         now_ms=observed_at_ms,
     )
-    if fills is None:
-        raise PanelUnavailableError(
-            "The panel chart fill evidence is unavailable.",
-            detail="The active SQLite authority did not return an attributed fill set.",
-        )
     chart = await _build_live_chart_from_fills(
         sid,
         panel.symbol,

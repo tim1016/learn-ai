@@ -233,17 +233,15 @@ def test_sqlite_roster_projects_the_durable_duty_outcome(
     assert statuses[1].duty_outcome is None
 
 
-@pytest.mark.parametrize("stale_active", [False, True])
-def test_sqlite_roster_falls_back_to_the_authoritative_terminal_receipt(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stale_active: bool,
-) -> None:
-    """A proven crash must surface even when its projection never landed.
+def _facade_whose_crash_has_only_its_terminal_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, stale_active: bool
+) -> SimpleNamespace:
+    """A bot whose proven crash left the create-once receipt and no outcome in its projection.
 
-    ``BotRunEvidenceService.record_terminal`` writes the create-once receipt
-    (``run_outcomes/{run_id}.json``) *before* the lifecycle projection. A
-    projection write that fails after the receipt commits leaves durable
-    proof of a crash with nothing to render it — the roster would show an
-    innocent "Off duty", which is the T6 failure class in a second guise.
+    ``BotRunEvidenceService.record_terminal`` writes the receipt
+    (``run_outcomes/{run_id}.json``) *before* the lifecycle projection, so a
+    projection write that fails after the receipt commits leaves exactly this.
+    ``stale_active`` is the Clerk still calling the run ACTIVE.
     """
 
     class _StoppedRepository(_Repository):
@@ -294,6 +292,22 @@ def test_sqlite_roster_falls_back_to_the_authoritative_terminal_receipt(
         ).model_dump_json(),
         encoding="utf-8",
     )
+    return facade
+
+
+@pytest.mark.parametrize("stale_active", [False, True])
+def test_sqlite_roster_falls_back_to_the_authoritative_terminal_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stale_active: bool,
+) -> None:
+    """A proven crash must surface even when its projection never landed.
+
+    A projection write that fails after the receipt commits leaves durable
+    proof of a crash with nothing to render it -- the roster would show an
+    innocent "Off duty", which is the T6 failure class in a second guise.
+    """
+    facade = _facade_whose_crash_has_only_its_terminal_receipt(
+        monkeypatch, tmp_path, stale_active=stale_active
+    )
 
     statuses = _roster_statuses(facade)
 
@@ -308,12 +322,21 @@ def test_sqlite_roster_falls_back_to_the_authoritative_terminal_receipt(
     assert statuses[1].duty_outcome is None
 
 
-    # Missing per-bot custody is an explicit warning, including a crash whose
-    # RUN_STOPPED fold failed. It must not disappear from the desk or bell.
+@pytest.mark.parametrize("stale_active", [False, True])
+def test_a_crashed_bot_whose_custody_cannot_be_read_still_raises_a_position_unverified_notice(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stale_active: bool,
+) -> None:
+    """Missing per-bot custody is an explicit warning, including a crash whose
+    RUN_STOPPED fold failed. It must not disappear from the desk or bell."""
+    facade = _facade_whose_crash_has_only_its_terminal_receipt(
+        monkeypatch, tmp_path, stale_active=stale_active
+    )
+
     ended, unreadable = sqlite_panel_source._uncleanly_ended(facade)
     ends, notices = sqlite_panel_source._unclean_ends(
         SimpleNamespace(bot_snapshot=lambda _sid, published_pass: None), ended, {}, account_id="paper-account"
     )
+
     assert (ends, unreadable) == ([], [])
     assert [(notice.strategy_instance_id, notice.kind) for notice in notices] == [
         ("active-spy", "position_unverified"),
