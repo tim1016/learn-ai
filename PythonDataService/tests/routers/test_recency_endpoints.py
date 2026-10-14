@@ -82,7 +82,7 @@ async def test_a_redelivered_job_id_is_acknowledged_only_while_its_worker_still_
     without a second thread; a closed job and a changed grid are refused; an unknown answer is a 503."""
     _requires_ephemeral_db()
     dispatched: list[str] = []
-    monkeypatch.setattr("app.routers.jobs.run_in_thread", lambda job_id, work, **kwargs: dispatched.append(job_id))
+    monkeypatch.setattr("app.routers.recency_jobs.run_in_thread", lambda job_id, work, **kwargs: dispatched.append(job_id))
     live: list[bool | None] = [True]
     monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: live[0])
     body = {
@@ -155,7 +155,7 @@ async def test_a_resume_binds_a_new_job_to_the_existing_launch(client, monkeypat
     unique = uuid.uuid4().hex[:10]
     launch_id = await _seed_launch(unique)
     dispatched: list[str] = []
-    monkeypatch.setattr("app.routers.jobs.run_in_thread", lambda job_id, work, **kwargs: dispatched.append(job_id))
+    monkeypatch.setattr("app.routers.recency_jobs.run_in_thread", lambda job_id, work, **kwargs: dispatched.append(job_id))
     monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: False)
     new_job = f"job-{unique}-resume"
 
@@ -174,7 +174,7 @@ async def test_a_resume_is_refused_for_an_unknown_completed_or_running_launch(cl
     unique = uuid.uuid4().hex[:10]
     completed = await _seed_launch(f"{unique}c", status="COMPLETED")
     running = await _seed_launch(f"{unique}r", status="RUNNING")
-    monkeypatch.setattr("app.routers.jobs.run_in_thread", lambda job_id, work, **kwargs: None)
+    monkeypatch.setattr("app.routers.recency_jobs.run_in_thread", lambda job_id, work, **kwargs: None)
     live: list[bool | None] = [True]
     monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: live[0])
 
@@ -183,7 +183,8 @@ async def test_a_resume_is_refused_for_an_unknown_completed_or_running_launch(cl
         assert missing.status_code == 404, missing.text
         assert missing.json()["detail"]["code"] == "RECENCY_LAUNCH_NOT_FOUND"
 
-        still_running = await c.post("/api/jobs-internal/recency-chart", json=_resume_body(f"job-{unique}r", running))
+        # A new job id: the running launch's own id would be a redelivery, acknowledged (#3051).
+        still_running = await c.post("/api/jobs-internal/recency-chart", json=_resume_body(f"job-{unique}r-resume", running))
         assert still_running.status_code == 409, still_running.text
         assert "still running" in still_running.json()["detail"]["message"]
 

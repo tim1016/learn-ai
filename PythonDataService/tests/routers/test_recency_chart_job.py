@@ -424,11 +424,16 @@ async def test_a_runtime_dispatch_runs_the_launch_through_the_gated_worker(monke
     built: dict[str, object] = {}
     fake_redis = _FakeRedis()
 
+    async def no_stamp(*, job_id, kind, record_id):
+        # The stamp needs a real authority connection; test_ownership owns it.
+        return None
+
     monkeypatch.setattr(progress_module, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(ownership, "process_authority", lambda: SimpleNamespace(boot_generation=1, connected=True))
+    monkeypatch.setattr("app.routers.research_records.stamp_research_dispatch", no_stamp)
     monkeypatch.setenv("RESEARCH_RUNTIME", "1")
 
-    def fake_runtime_run_dispatch(window, execution, *, attempt, job_id, on_checkpoint, cancel_check, on_log=None, pool=None):
+    def fake_runtime_run_dispatch(window, execution, *, attempt, job_id, on_checkpoint, cancel_check, on_log=None, on_waiting=None, pool=None):
         built["attempt"] = attempt
         built["window"] = dict(window)
 
@@ -480,7 +485,7 @@ async def test_a_runtime_dispatch_runs_the_launch_through_the_gated_worker(monke
             "/api/jobs-internal/recency-chart",
             json={
                 "jobId": job,
-                "strategies": [{"strategyKey": "ema_crossover_signal", "paramRanges": {"gapBps": {"type": "value_list", "values": [2.0]}}}],
+                "strategies": [{"strategyKey": "ema_crossover_signal", "paramRanges": {"gap_bps": {"type": "value_list", "values": [2.0]}}}],
                 "symbols": ["SPY"],
                 "windowStartMs": 1735689600000,
                 "windowEndMs": 1738368000000,

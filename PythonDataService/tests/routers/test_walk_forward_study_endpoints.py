@@ -311,7 +311,10 @@ async def test_a_live_redelivery_joins_the_first_worker_and_never_claims_twice(c
         study_id = first.json()["study_id"]
 
         redelivered = await c.post("/api/jobs-internal/walk-forward-study", json={**_body(), "jobId": job})
-        resume_redelivered = await c.post("/api/jobs-internal/walk-forward-study", json={"jobId": job, "resumeStudyId": study_id})
+        # A Finish carries the stored spec beside the id, as the Frontend sends it.
+        resume_redelivered = await c.post(
+            "/api/jobs-internal/walk-forward-study", json={**_body(), "jobId": job, "resumeStudyId": study_id}
+        )
 
     assert redelivered.status_code == 202 and redelivered.json()["study_id"] == study_id
     assert resume_redelivered.status_code == 202 and resume_redelivered.json()["study_id"] == study_id
@@ -333,30 +336,42 @@ async def test_a_runtime_dispatch_runs_the_folds_through_the_gated_worker(client
     built: dict[str, object] = {}
     fake_redis = _FakeRedis()
 
+    async def no_stamp(*, job_id, kind, record_id):
+        # The stamp needs a real authority connection; test_ownership owns it.
+        return None
+
     monkeypatch.setattr(progress_module, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(lifecycle, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(ownership, "process_authority", lambda: SimpleNamespace(boot_generation=1, connected=True))
+    monkeypatch.setattr(study_router.records, "stamp_research_dispatch", no_stamp)
     monkeypatch.setenv("RESEARCH_RUNTIME", "1")
 
-    def fake_runtime_cell_dispatch(row, spec, *, attempt, job_id, on_checkpoint, cancel_check, on_log=None, pool=None):
+    def fake_runtime_cell_dispatch(row, spec, *, attempt, job_id, on_checkpoint, cancel_check, on_log=None, on_waiting=None, pool=None):
         built.setdefault("sweeps", []).append((row.owner.fold_index, row.owner.phase))
 
-        def run(cells):
-            on_checkpoint({"phase": "search", "cursor_kind": "durable_completions", "cursor": 1})
-            favourite = 3.0 if row.owner.fold_index == 0 else 2.0
-            for candidate in cells:
-                sharpe = (2.0 if candidate.params["short_window"] == favourite else 0.5) * (0.8 if row.owner.phase == "test" else 1.0)
-                yield candidate, CellResult(
-                    params_hash=candidate.params_hash,
-                    params=dict(candidate.params),
-                    status="completed",
-                    total_trades=3,
-                    sharpe_ratio=sharpe,
-                    total_return_pct=1.0,
-                    net_profit=5.0,
-                )
+        class _Dispatch:
+            def __call__(self, cells):
+                on_checkpoint({"phase": "search", "cursor_kind": "durable_completions", "cursor": 1})
+                favourite = 3.0 if row.owner.fold_index == 0 else 2.0
+                for candidate in cells:
+                    sharpe = (2.0 if candidate.params["short_window"] == favourite else 0.5) * (0.8 if row.owner.phase == "test" else 1.0)
+                    yield candidate, CellResult(
+                        params_hash=candidate.params_hash,
+                        params=dict(candidate.params),
+                        status="completed",
+                        total_trades=3,
+                        sharpe_ratio=sharpe,
+                        total_return_pct=1.0,
+                        net_profit=5.0,
+                    )
 
-        return run
+            def cancel(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        return _Dispatch()
 
     monkeypatch.setattr(grid_dispatch_module, "runtime_cell_dispatch", fake_runtime_cell_dispatch)
 
