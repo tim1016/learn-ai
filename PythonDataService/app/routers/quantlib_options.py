@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
+import threading
+from collections.abc import Callable
 from datetime import date
 
 from fastapi import APIRouter
@@ -20,6 +23,16 @@ from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# A QuantLib call runs in a worker thread, so a long one does not hold the event loop (#3187). QuantLib keeps its
+# evaluation date in one process-wide setting that each call sets and then reads, which the loop used to keep to one
+# call at a time. The lock keeps that. A call holds it for one price, never a whole request.
+_QUANTLIB_CALL = threading.Lock()
+
+
+def _one_call_at_a_time[T](price: Callable[..., T], /, **inputs: object) -> T:
+    with _QUANTLIB_CALL:
+        return price(**inputs)
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +102,9 @@ async def quantlib_price(request: QuantLibPriceRequest):
         eval_d = date.fromisoformat(request.evaluation_date) if request.evaluation_date else None
         exp_d = option_expiry_date(request.expiration_ms)
 
-        result = price_option(
+        result = await asyncio.to_thread(
+            _one_call_at_a_time,
+            price_option,
             spot=request.spot,
             strike=request.strike,
             risk_free_rate=request.risk_free_rate,
@@ -510,7 +525,9 @@ async def pricing_compare(request: PricingCompareRequest):
                 engine_points: list[PricingPointResult] = []
                 try:
                     for s in spots:
-                        result = _price_option_for_compare(
+                        result = await asyncio.to_thread(
+                            _one_call_at_a_time,
+                            _price_option_for_compare,
                             spot=s,
                             strike=request.strike,
                             risk_free_rate=request.risk_free_rate,
