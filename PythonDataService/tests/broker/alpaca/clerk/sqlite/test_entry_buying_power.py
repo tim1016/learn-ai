@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import threading
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import replace
 from decimal import Decimal
@@ -37,6 +38,7 @@ from app.broker.alpaca.clerk.sqlite.entry_buying_power import (
     OUTCOME_PROOF_BOUND_MS,
     PASS_AFTER_SECOND_READING_BOUND_MS,
     REVIEWED_SUMMARY_CODE,
+    EntryBuyingPowerWatch,
     NotComparedReason,
     _another_order_moved,
     under_reserved_cause,
@@ -489,6 +491,51 @@ async def test_an_account_read_the_listing_outruns_is_still_the_first_reading_if
 
     order_ref = await paper.resting()
     assert paper.venue.option_submit_calls == [order_ref]
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+    paper.account.buying_power = Decimal("99806.00")
+    found = await paper.compared(order_ref)
+
+    assert (found.result, found.reason_code) == ("consistent", None)
+    assert found.first_buying_power == "100000" and found.fall_cents == SET_ASIDE - 6
+
+
+@pytest.mark.usefixtures("judged")
+async def test_an_account_read_that_finished_in_its_worker_thread_is_the_first_reading_though_the_entry_made_no_turn(
+    paper: Paper, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#3136, again: the first Paper run after #3137 still read "not ready" on an entry whose reads had finished.
+
+    The SDK answers from worker threads, and the loop notes an answer only on a turn.
+    The entry's own work between the listing and the hand-over made none (540 ms on Paper), so the
+    reads were noted only after the order was handed over, and read as ending after it.
+    """
+    answered_in_its_thread = threading.Event()
+    read = OptionAccount.get_option_account
+
+    async def answered_from_a_worker_thread() -> BrokerOptionAccountSnapshot:
+        snapshot = await read(paper.account)
+        await asyncio.to_thread(answered_in_its_thread.set)
+        return snapshot
+
+    monkeypatch.setattr(paper.account, "get_option_account", answered_from_a_worker_thread)
+    finish = EntryBuyingPowerWatch.finish_first
+
+    async def then_work_without_a_turn(self: EntryBuyingPowerWatch, key: tuple[str, str], begun: Any) -> None:
+        await finish(self, key, begun)
+        # A blocking wait: the loop makes no turn here, as the entry's synchronous work makes none.
+        assert answered_in_its_thread.wait(timeout=5)
+
+    monkeypatch.setattr(EntryBuyingPowerWatch, "finish_first", then_work_without_a_turn)
+    submit = paper.venue.submit_option_order
+
+    async def takes_milliseconds_before_its_first_turn(*args: Any, **kwargs: Any) -> Any:
+        paper.clock.advance(5)
+        await asyncio.sleep(0)
+        return await submit(*args, **kwargs)
+
+    monkeypatch.setattr(paper.venue, "submit_option_order", takes_milliseconds_before_its_first_turn)
+
+    order_ref = await paper.resting()
     await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
     paper.account.buying_power = Decimal("99806.00")
     found = await paper.compared(order_ref)

@@ -113,6 +113,10 @@ FIRST_READING_BOUND_MS = 1_500
 SECOND_READING_BOUND_MS = 5_000
 # How old the first reading may be when the order is sent: an account reading's own staleness.
 FIRST_READING_MAX_AGE_MS = OBSERVATION_MAX_AGE_MS
+# The turns of the loop a read that finished in its worker thread needs before it is noted: the thread's
+# answer reaches the awaiting task on one turn, the task ends on the next, its done-callback runs on the
+# third. Twice that, so a task that awaits once more still lands.
+_TURNS_TO_NOTE_A_FINISHED_READ = 6
 # How long a pair of readings waits for a pass of the account that reached its verdict after the
 # second one. The sweep publishes a pass about every fifteen seconds; one this late has stopped.
 PASS_AFTER_SECOND_READING_BOUND_MS = 60_000
@@ -280,8 +284,9 @@ class _Watched:
 class EntryBuyingPowerWatch:
     """The readings a real account's option entries are compared on, and the round that compares them.
 
-    One per Clerk facade. ``read_first`` and ``sent`` are called on the
-    entry's own path and never raise for a broker's sake. ``round`` is the
+    One per Clerk facade. ``begin_first``, ``finish_first``, ``land_finished_reads``
+    and ``sent`` are called on the entry's own path and never raise for a
+    broker's sake. ``round`` is the
     Clerk's own step, run after a pass of the account: it takes second
     readings, judges, records, and raises the notice.
 
@@ -292,7 +297,9 @@ class EntryBuyingPowerWatch:
     answers is not given up on there (#3136). It goes on while the entry
     goes on to its send, which waits for nothing, and is taken at the send:
     kept when both its reads finished before the order was handed to the
-    port, cancelled and recorded not ready when they did not.
+    port, cancelled and recorded not ready when they did not. A read that
+    finished in its worker thread is noted only on a turn of the loop, so
+    the entry gives it a few just before the hand-over (``land_finished_reads``).
     """
 
     def __init__(
@@ -334,6 +341,23 @@ class EntryBuyingPowerWatch:
             self._first[key] = (await self._finish_reading(begun), begun.transfers_from_ms)
         else:
             self._going_on[key] = begun
+
+    async def land_finished_reads(self, key: tuple[str, str]) -> None:
+        """Give the loop the turns a read that has finished needs to be noted, before the order is handed over.
+
+        The SDK answers from worker threads, and the loop notes an answer only on a turn.
+        The entry's own work between the listing and the hand-over makes none, so a
+        read that had finished would be noted after the order was handed over, and read as
+        ending after it (#3136). This never waits for a read that has not finished: it
+        spends at most a few turns and goes on.
+        """
+        going_on = self._going_on.get(key)
+        if going_on is None:
+            return
+        for _ in range(_TURNS_TO_NOTE_A_FINISHED_READ):
+            if going_on.completed.ended_ms is not None:
+                return
+            await asyncio.sleep(0)
 
     def sent(self, key: tuple[str, str], *, order_ref: str | None, sent_at_ms: int | None) -> None:
         """The entry ``key`` was accepted as ``order_ref`` and handed to the broker at ``sent_at_ms``: watch it.
