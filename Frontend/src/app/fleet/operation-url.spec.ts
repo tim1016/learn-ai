@@ -10,6 +10,12 @@ describe('operationUrl', () => {
     expect(operationUrl('account_read', TARGET)).toBe('/api/brokers/alpaca/clerks/clrk_1/account');
   });
 
+  it('builds a clerk-scoped IBKR market-data URL for the selected symbol', () => {
+    expect(operationUrl('ibkr_option_chain_stream', { ...TARGET, symbol: 'SPY' })).toBe(
+      '/api/brokers/alpaca/clerks/clrk_1/market-data/ibkr/option-chain/SPY',
+    );
+  });
+
   it('builds the declared path for an account-scoped read', () => {
     expect(operationUrl('bots_catalog_read', TARGET)).toBe(
       '/api/brokers/alpaca/clerks/clrk_1/accounts/PA9/bots/catalog',
@@ -86,6 +92,7 @@ describe('operationUrl', () => {
       commandId: 'cmd-1',
       programKey: 'program-1',
       submissionKey: 'submission-1',
+      symbol: 'SPY',
     };
     for (const operationId of Object.keys(catalog.operations) as OperationId[]) {
       expect(() => operationUrl(operationId, fullTarget)).not.toThrow();
