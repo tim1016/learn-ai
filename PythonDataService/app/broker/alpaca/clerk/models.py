@@ -44,13 +44,11 @@ class EffectOperationState(StrEnum):
     """Clerk-authored state of one durable strategy decision."""
 
     ACCEPTED = "accepted"
-    NOOP = "noop"
     SUBMITTED = "submitted"
     REJECTED = "rejected"
     UNCERTAIN = "uncertain"
     EXIT_PENDING = "exit_pending"
     FLAT = "flat"
-    UNPROVABLE = "unprovable"
 
 
 class AlpacaEffectOperation(BaseModel):

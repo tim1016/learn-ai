@@ -94,7 +94,6 @@ from app.broker.fleet import volume as volume_module
 from app.broker.fleet.confirmation import (
     ConfirmationEvidence,
     ConfirmationEvidenceError,
-    confirmation_evidence_path,
     evidence_vouches_for,
     mark_confirmation_evidence_draining,
     read_confirmation_evidence,
@@ -725,7 +724,6 @@ async def confirm_binding(
     binding_generation: int,
     effective_profile_id: str | None,
     effective_revision: int | None,
-    assignment_observed: Mapping[str, object] | None = None,
 ) -> AccountAssignmentRecord:
     """Confirm the binding observation and persist the clerk's evidence.
 
@@ -844,7 +842,6 @@ async def confirm_binding(
         effective_revision=effective_revision,
     )
     boot.confirmed_grant_session = session
-    del assignment_observed  # reserved for the delivery-B forwarding facts
     return confirmed
 
 
@@ -1745,7 +1742,6 @@ __all__ = [
     "close_fleet_lane",
     "confirm_and_report",
     "confirm_binding",
-    "confirmation_evidence_path",
     "heartbeat_facts",
     "lane_quiet_probe",
     "offline_boot_matches",

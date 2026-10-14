@@ -159,21 +159,7 @@ class SimulatedPriceUnavailableError(RuntimeError):
     """No retained bar exists from which a synthetic fill may be derived."""
 
 
-class UnsupportedOptionOrderRefusal:
-    """The shared refusal for an unsupported option order (ADR 0076)."""
-
-    broker_id: str
-    _named_in_option_refusals: str
-
-    def _option_orders_not_taken(self, what: str) -> BrokerOptionsNotSupported:
-        return BrokerOptionsNotSupported(
-            f"{self._named_in_option_refusals} {what}.",
-            broker=self.broker_id,
-            detail="Its capabilities say so; nothing was sent and no order exists.",
-        )
-
-
-class SyntheticBroker(UnsupportedOptionOrderRefusal):
+class SyntheticBroker:
     """Durable immediate-fill port that derives prices only from retained bars.
 
     A market leg, or a limit leg marketable against the decision bar's close,
@@ -189,7 +175,6 @@ class SyntheticBroker(UnsupportedOptionOrderRefusal):
     """
 
     broker_id = SYNTHETIC_BROKER_ID
-    _named_in_option_refusals = "The simulated broker"
 
     def __init__(
         self, *, account_id: str, source_bars: SourceBarLedger | None = None, clock: Clock = now_ms_utc,
@@ -288,11 +273,6 @@ class SyntheticBroker(UnsupportedOptionOrderRefusal):
         """
         del after_ms, resume
         return BrokerOptionEventEvidence(events=(), share_trades=(), history_complete=True)
-
-
-
-
-
 
     def settle_expired_options(
         self, *, after_ms: int, at_the_owners_word: Mapping[str, OwnersWord] | None = None
@@ -580,7 +560,6 @@ class SyntheticBroker(UnsupportedOptionOrderRefusal):
         leg: BrokerOrderLeg,
         *,
         client_order_id: str,
-        retained_bar: RetainedSourceBar | None = None,
     ) -> BrokerOrder:
         if self._ledger is None:
             raise SimulatedPriceUnavailableError(
@@ -594,7 +573,6 @@ class SyntheticBroker(UnsupportedOptionOrderRefusal):
             priced_by = self._submission_bar(
                 client_order_id=client_order_id,
                 symbol=leg.symbol,
-                retained_bar=retained_bar,
             )
             bar = priced_by.bar
             order = self._resolved_order(leg, client_order_id=client_order_id, priced_by=priced_by)
@@ -653,8 +631,7 @@ class SyntheticBroker(UnsupportedOptionOrderRefusal):
 
         The simulation takes one-leg orders and multi-leg opening orders,
         and answers both lookups itself. An order with no ledger to record a fill in
-        is refused in the words every simulated port refuses option orders
-        in (``UnsupportedOptionOrderRefusal``).
+        is refused.
 
         The order's record is one more in the same ledger. Its ``order`` is
         the fill as the Clerk folds every simulated fill, under the
@@ -662,7 +639,11 @@ class SyntheticBroker(UnsupportedOptionOrderRefusal):
         positions all show it.
         """
         if self._options is None:
-            raise self._option_orders_not_taken("takes no option orders without its order ledger")
+            raise BrokerOptionsNotSupported(
+                "The simulated broker takes no option orders without its order ledger.",
+                broker=self.broker_id,
+                detail="Its capabilities say so; nothing was sent and no order exists.",
+            )
         if isinstance(order, MultiLegOptionOrderRequest):
             return self._options.submit_multi(order, client_order_id=client_order_id)
         return self._options.submit(order, client_order_id=client_order_id)
@@ -690,7 +671,6 @@ class SyntheticBroker(UnsupportedOptionOrderRefusal):
         *,
         client_order_id: str,
         symbol: str,
-        retained_bar: RetainedSourceBar | None,
     ) -> BoundBar:
         """The bar this order fills at, with the fill instant and re-stated price's time it was bound with."""
         if self._ledger is None or self._source_bars is None:
@@ -698,8 +678,6 @@ class SyntheticBroker(UnsupportedOptionOrderRefusal):
                 "Synthetic execution requires an authority-scoped retained-bar ledger."
             )
         bound = self._ledger.consume_binding(client_order_id)
-        if retained_bar is not None:
-            bound = BoundBar(retained_bar, None, None)
         if bound is not None:
             return bound._replace(bar=self._ledger.verified_retained_bar(bound.bar, symbol=symbol))
         # The last price the market delivered: a no-submit world's own fill
@@ -726,23 +704,6 @@ class SyntheticBroker(UnsupportedOptionOrderRefusal):
             observed_at_ms=self._clock(),
             fill_at_ms=priced_by.older_fill_at_ms,
         )
-
-
-
-
-
-
-# What each outcome is handed over as, where a broker's activity carries the broker's own code.
-
-
-
-
-
-
-
-
-
-
 
 
 def shape_immediate_order(
