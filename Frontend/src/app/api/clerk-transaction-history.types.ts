@@ -1,3 +1,5 @@
+import type { components } from './broker.types';
+
 /** Backend-authored Clerk-native transaction history contract (#1219). */
 
 export type ClerkTransactionOrigin =
@@ -122,6 +124,9 @@ export interface ClerkTransactionSummary {
   readonly fee_fidelity?: ClerkFeeFidelity | null;
   /** Durable identifier for an externally observed Alpaca order. */
   readonly external_order_id?: string | null;
+  /** An option position that ended with no order of the bot's (assigned, exercised, expired...), in the
+   * backend's own words (ADR 0076 #22). */
+  readonly option_event?: components['schemas']['OptionEndingView'] | null;
   readonly event_count: number;
 }
 

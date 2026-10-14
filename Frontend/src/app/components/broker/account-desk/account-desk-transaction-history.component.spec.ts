@@ -337,6 +337,28 @@ describe('AccountDeskTransactionHistoryComponent', () => {
   /** #3180: after a recovery action the page re-reads the history. A failed
    * re-read left the last good rows under the old "History is current" banner
    * with no error — a stale read presented as current. */
+  it('says what an option ending was, in the backend’s own sentence, not "No request details recorded"', async () => {
+    await renderHistory({
+      rows: signal([transaction({
+        transaction_kind: 'option_ending',
+        order_ref: null,
+        option_event: {
+          contract: { expiry_ms: 1_789_000_000_000, occ_symbol: 'SPY260918C00585000', right: 'call', strike: '585', underlying: 'SPY' },
+          contracts: 1,
+          ended_on_ms: 1_789_000_000_000,
+          headline: 'SPY 585 call, 1 contract, expired worthless.',
+          held: 'bought',
+          kind: 'expired',
+          recorded_at_ms: 1_789_000_001_000,
+          simulated: false,
+        },
+      })]),
+    });
+
+    expect(screen.getByText('SPY 585 call, 1 contract, expired worthless.')).toBeTruthy();
+    expect(screen.queryByText('No request details recorded')).toBeNull();
+  });
+
   it('says a failed refresh failed and stops calling the kept rows current', async () => {
     let readFails = false;
     const accountTransactions = vi.fn(() => readFails
