@@ -10,6 +10,7 @@ fail, not skip, when it is missing.
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 import pytest
 
@@ -158,15 +159,37 @@ class TestLegacyAndNormalizedMidsDiffer:
             (1.20, 1.30, 1.25, 1.25),
             (0.0, 0.50, 0.25, 0.0),
             (0.60, 0.50, 0.55, 0.0),
+            (0.50, 0.0, 0.0, 0.0),
             (0.0, 0.0, 0.0, 0.0),
         ],
-        ids=["two_sided", "empty_bid", "crossed", "no_quote"],
+        ids=["two_sided", "empty_bid", "crossed", "no_ask", "no_quote"],
     )
     def test_mid(self, bid: float, ask: float, legacy_mid: float, normalized_mid: float) -> None:
         legacy = OptionQuote(strike=100.0, call_bid=bid, call_ask=ask, put_bid=bid, put_ask=ask)
 
         assert legacy.call_mid == pytest.approx(legacy_mid, abs=1e-12)
         assert from_snapshot_quote(bid, ask).mid == pytest.approx(normalized_mid, abs=1e-12)
+
+    def test_strike_with_a_bid_and_no_ask_is_kept_by_legacy_and_dropped_by_the_production_path(self) -> None:
+        """Both mids are 0.0 there, but legacy truncation only tests ``bid <= 0``:
+        the strike stays in the integral as a Q = 0 point and narrows its
+        neighbours' dK. The production path treats it as zero-bid."""
+        T, rate = 30 / 365.0, 0.05
+        chain = _bs_chain(spot=100.0, strikes=[80.0, 90.0, 95.0, 100.0, 105.0, 110.0, 120.0], T_years=T, rate=rate, sigma=0.20)
+        no_ask = [replace(q, call_bid=0.50, call_ask=0.0) if q.strike == 105.0 else q for q in chain]
+
+        def n_used(quotes: list[OptionQuote]) -> tuple[int, int]:
+            legacy = replicate_expiry_variance(quotes, rate=rate, T_years=T)
+            production, _ = replicate_expiry_variance_with_provenance(
+                [wrap_legacy_as_opra_mid(q) for q in quotes], rate=rate, T_years=T
+            )
+            return legacy.n_strikes_used, production.n_strikes_used
+
+        clean_legacy, clean_production = n_used(chain)
+        legacy_n, production_n = n_used(no_ask)
+
+        assert clean_legacy == clean_production
+        assert legacy_n == production_n + 1
 
     def test_strike_with_no_bid_is_not_an_atm_candidate_on_the_production_path(self) -> None:
         """A strike whose legs have asks but no bids ties at call_mid == put_mid

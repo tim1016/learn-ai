@@ -151,12 +151,18 @@ def from_snapshot_quote(bid: float, ask: float) -> NormalizedOptionPrice:
     with no bid is not a real quote, even if an ask exists.
 
     This is NOT the legacy ``OptionQuote`` behaviour. Legacy ``call_mid`` is
-    ``(bid + ask) / 2`` whenever ``ask > 0`` and legacy truncation fires only
-    on ``bid <= 0``: bid=0 / ask=0.5 gives mid 0.25 (truncating), a crossed
-    0.6 / 0.5 gives mid 0.55 (kept). This returns mid 0.0 for both, and a
-    crossed leg truncates. The two agree on any two-sided, uncrossed quote;
-    they differ in ATM-strike selection, in the K0 average, and in whether a
-    crossed strike enters the integral.
+    ``(bid + ask) / 2`` whenever ``ask > 0`` (else 0.0) and legacy truncation
+    fires only on ``bid <= 0``. Here every one-sided or crossed leg has mid
+    0.0 and truncates:
+
+    - bid=0 / ask=0.5: legacy mid 0.25, truncating.
+    - crossed 0.6 / 0.5: legacy mid 0.55, kept in the integral.
+    - bid=0.5 / ask=0: legacy mid 0.0 and NOT truncating, so it stays in as a
+      Q = 0 strike that still narrows its neighbours' dK.
+
+    The two agree on any two-sided, uncrossed quote. They differ in
+    ATM-strike selection, in the K0 average, and in which strikes enter the
+    integral.
     """
     if bid <= 0 or ask <= 0 or bid > ask:
         return NormalizedOptionPrice(
