@@ -1,4 +1,4 @@
-"""What a real Alpaca Paper account answered to one bought SPY call, read by this repo's own readers (#3103).
+"""What a real Alpaca Paper account answered to one bought SPY call and one bull call spread, read by this repo's own readers (#3103).
 
 The recordings (``tests/fixtures/alpaca/option_paper_recordings``) are the
 capture journal of the first option orders ever sent from this system, made on
@@ -37,7 +37,12 @@ from app.broker.alpaca.adapter import (
     to_alpaca_option_order_request,
 )
 from app.broker.contract.models import OrderSide, OrderType
-from app.broker.contract.options import OptionPositionIntent, SingleOptionOrderRequest
+from app.broker.contract.options import (
+    MultiLegOptionOrderRequest,
+    OptionLegRequest,
+    OptionPositionIntent,
+    SingleOptionOrderRequest,
+)
 from app.options.contract import OptionContract
 from app.options.expiry import option_expiry_anchor_ms
 
@@ -246,3 +251,87 @@ def test_the_morning_after_alpaca_paper_posts_the_options_fees_of_the_day_as_fee
     assert sum(Decimal(str(a.net_amount)) for a in read) == Decimal("-0.42")
     descriptions = sorted(row["description"].split(" fee")[0].split(" for ")[0] for row in fees.values())
     assert descriptions == sorted(["CAT"] + ["OCC Clearing Fee"] * 8 + ["OPT REG", "OPT TAF", "ORF"])
+
+
+# ── The first several-leg order: a bull call spread, 2026-10-14 ──────────────
+
+_SPREAD = "B1-bull-call-spread-flat"
+_LONG_LEG, _SHORT_LEG = "SPY261016C00771000", "SPY261016C00776000"
+
+
+def _leg_request(leg: dict[str, Any]) -> OptionLegRequest:
+    return OptionLegRequest(
+        contract=OptionContract.from_occ_symbol(leg["symbol"]),
+        side=OrderSide(leg["side"]),
+        intent=OptionPositionIntent.OPEN if leg["position_intent"].endswith("_to_open") else OptionPositionIntent.CLOSE,
+        ratio=int(leg["ratio_qty"]),
+    )
+
+
+def test_the_spread_sent_is_the_body_the_writer_produces_and_a_debit_is_a_positive_net_limit() -> None:
+    posts = [line for line in _lines(_SPREAD, "orders") if line["method"] == "POST"]
+    assert len(posts) == 1
+    sent = json.loads(posts[0]["request_body"])
+    request = MultiLegOptionOrderRequest(
+        legs=tuple(_leg_request(leg) for leg in sent["legs"]),
+        quantity=int(sent["qty"]),
+        order_type=OrderType(sent["type"]),
+        net_limit_price=Decimal(sent["limit_price"]),
+    )
+
+    assert to_alpaca_option_order_request(request, client_order_id=sent["client_order_id"]) == sent
+
+    answer = from_alpaca_option_order(_body(posts[0]))
+    assert (answer.status, answer.filled_quantity, answer.time_in_force) == ("pending_new", 0, "day")
+    assert [(leg.contract.occ_symbol, leg.side, leg.intent) for leg in answer.legs] == [
+        (_LONG_LEG, OrderSide.BUY, OptionPositionIntent.OPEN),
+        (_SHORT_LEG, OrderSide.SELL, OptionPositionIntent.OPEN),
+    ]
+    # Paying 3.31 for the lower strike and receiving 1.18 for the higher is a net debit, and a debit is positive.
+    assert request.net_limit_price == Decimal("2.14") > 0
+
+
+def test_the_parents_fill_frame_has_the_executions_of_its_legs_and_none_of_its_own() -> None:
+    frames = _frames(_SPREAD)
+    events = [from_alpaca_trade_update(data) for data in frames]
+
+    assert [event.event_type for event in events] == ["pending_new", "new", "fill"]
+    fill = frames[-1]
+    # Alpaca states the net at the top level and each leg's execution under ``legs``.
+    assert "execution_id" not in fill and fill["order"]["order_class"] == "mleg"
+    assert (events[-1].execution_id, events[-1].price, events[-1].quantity) == (None, None, None)
+    legs = {leg["symbol"]: leg for leg in fill["legs"]}
+    assert set(legs) == {_LONG_LEG, _SHORT_LEG}
+    assert Decimal(legs[_LONG_LEG]["price"]) - Decimal(legs[_SHORT_LEG]["price"]) == Decimal(fill["price"]) == Decimal("2.13")
+
+
+def test_each_leg_execution_on_the_parents_frame_is_in_the_activity_feed_as_that_legs_fill() -> None:
+    fill = _frames(_SPREAD)[-1]
+    on_the_frame = {(leg["execution_id"], leg["symbol"], Decimal(leg["price"])) for leg in fill["legs"]}
+    in_the_feed: set[tuple[str, str | None, Decimal]] = set()
+    for line in _lines(_SPREAD, "activities"):
+        for row in _body(line):
+            if row["activity_type"] == "FILL" and row.get("symbol") in {_LONG_LEG, _SHORT_LEG}:
+                activity = from_alpaca_activity(row)
+                in_the_feed.add(
+                    (execution_id_from_activity_id(activity.activity_id), activity.symbol, Decimal(str(activity.price)))
+                )
+
+    assert on_the_frame <= in_the_feed
+
+
+def test_a_spreads_debit_moves_cash_and_option_buying_power_together_and_the_account_holds_both_legs() -> None:
+    figures = _account_figures(_SPREAD)
+    cash, buying_power = figures[0]
+    # The state a sale had left it in: option buying power under cash until the next order states it again.
+    assert cash - buying_power == Decimal("5.88")
+    # $213.00 net premium and $0.05 of fees leave cash; option buying power ends level with cash.
+    settled = (cash - Decimal("213.05"), cash - Decimal("213.05"))
+    assert settled in figures
+
+    held = {
+        position.symbol: (position.side, position.quantity)
+        for line in _lines(_SPREAD, "positions")
+        for position in map(from_alpaca_position, _body(line))
+    }
+    assert held == {_LONG_LEG: ("long", 1.0), _SHORT_LEG: ("short", -1.0)}
