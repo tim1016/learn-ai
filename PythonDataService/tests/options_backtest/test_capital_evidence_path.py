@@ -57,10 +57,7 @@ def _is_the_same_path(steps: list[MoneyStep], other: list[MoneyStep], shift: Dec
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_replayed_from_the_cash_it_needed_a_path_repeats_and_from_a_cent_less_a_step_of_it_is_short(seed: int) -> None:
-    scene = _a_scene(seed)
-    if scene is None:
-        pytest.skip("the generated setup sells more of a kind than it buys")
-    _a_path_repeats_from_the_cash_it_needed(scene, seed)
+    _a_path_repeats_from_the_cash_it_needed(_a_scene(seed), seed)
 
 
 @pytest.mark.parametrize("seed", _the_sample_every_pr_and_the_rest_daily(RULE_SEEDS, RULE_SAMPLE))
