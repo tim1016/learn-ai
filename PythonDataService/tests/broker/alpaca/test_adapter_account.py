@@ -6,6 +6,8 @@ proven). Runs against the real sanitized paper-account capture (HITL #1178).
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from app.broker.alpaca.adapter import from_alpaca_account, rfc3339_to_ms
@@ -97,15 +99,14 @@ def test_missing_created_at_is_none(load_alpaca_fixture: AlpacaFixtureLoader) ->
         pytest.param("last_equity", True, TypeError, "not a boolean", id="boolean-last-equity"),
         pytest.param("cash", "not-a-number", ValueError, "'not-a-number'", id="unparseable-cash"),
         pytest.param("equity", None, TypeError, "NoneType", id="null-equity"),
-        # A number that is not finite is no figure at all (#3216): ``float("NaN")``
-        # parses, and nothing downstream of the adapter can tell it from a value.
+        # A required figure that is not finite is no figure at all (#3216): ``float("NaN")``
+        # parses, and nothing downstream of the adapter can tell it from a value. An
+        # optional one reads absent instead (test below).
         pytest.param("cash", "NaN", ValueError, "must be finite", id="nan-cash"),
         pytest.param("equity", "Infinity", ValueError, "must be finite", id="infinite-equity"),
         pytest.param("buying_power", "nan", ValueError, "must be finite", id="nan-buying-power"),
         pytest.param("portfolio_value", "-inf", ValueError, "must be finite", id="negative-infinite-portfolio-value"),
         pytest.param("long_market_value", float("inf"), ValueError, "must be finite", id="infinite-long-market-value"),
-        pytest.param("last_equity", "NaN", ValueError, "must be finite", id="nan-last-equity"),
-        pytest.param("maintenance_margin", "inf", ValueError, "must be finite", id="infinite-maintenance-margin"),
     ],
 )
 async def test_broker_names_a_malformed_account_response_as_unavailable_evidence(
@@ -128,6 +129,38 @@ async def test_broker_names_a_malformed_account_response_as_unavailable_evidence
     assert type(info.value.__cause__).__name__ not in info.value.detail
     assert isinstance(info.value.__cause__, cause_type)
     assert cause in str(info.value.__cause__)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["multiplier", "regt_buying_power", "maintenance_margin", "initial_margin", "sma", "last_equity"],
+)
+@pytest.mark.parametrize("figure", ["NaN", "Infinity", float("-inf")], ids=repr)
+async def test_a_non_finite_optional_account_figure_reads_absent_and_never_refuses_the_account(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    caplog: pytest.LogCaptureFixture,
+    field: str,
+    figure: object,
+) -> None:
+    """An optional figure that is not finite once refused the account, and with it the Clerk (#3216).
+
+    A refused account read leaves no Clerk to reduce with. The figure is
+    refused, never passed on as a number: it reads absent -- for
+    ``last_equity``, the account the Clerk cannot judge and holds entries
+    on -- and one structured warning names the field. The required figures
+    above stay refused.
+    """
+    payload = {**load_alpaca_fixture("account", "account.json"), field: figure}
+
+    with caplog.at_level(logging.WARNING, logger="app.broker.alpaca.adapter"):
+        snapshot = await _broker(payload).get_account()
+
+    assert getattr(snapshot, field) is None
+    assert snapshot.cash == 100000.0
+    assert snapshot.equity == 100000.0
+    (record,) = [r for r in caplog.records if r.name == "app.broker.alpaca.adapter"]
+    assert (record.action, record.field) == ("alpaca_optional_figure_not_finite", field)
+    assert record.levelno == logging.WARNING
 
 
 async def test_broker_names_a_missing_account_field_as_unavailable_evidence(

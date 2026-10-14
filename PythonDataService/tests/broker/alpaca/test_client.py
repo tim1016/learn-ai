@@ -38,6 +38,7 @@ from app.broker.alpaca.config import AlpacaSettings, reset_alpaca_settings_for_t
 from app.broker.capture.journal import CaptureJournal
 from app.broker.contract.errors import (
     BrokerAuthError,
+    BrokerOrderAnswerUnreadable,
     BrokerOrderNotPermitted,
     BrokerOrderRejected,
     BrokerRateLimited,
@@ -272,11 +273,63 @@ async def test_a_non_object_2xx_answer_to_an_order_submission_stays_unknown_insi
     client = AlpacaTradingClient(client_factory=lambda: sdk)
     responses.add(responses.POST, "https://paper-api.alpaca.markets/v2/orders", body=body, status=200)
 
-    with pytest.raises(BrokerUnavailable) as raised:
+    with pytest.raises(BrokerOrderAnswerUnreadable) as raised:
         await client.submit_order(_ORDER_BODY)
 
+    # The order is sent once, and the answer is the unreadable-answer kind the port's contract names:
+    # a ``BrokerUnavailable`` every catch arm already holds, with no broker order id to hand on.
+    assert len(responses.calls) == 1
+    assert isinstance(raised.value, BrokerUnavailable)
     assert not isinstance(raised.value, BrokerUnreachable)
+    assert raised.value.broker_order_id is None
     assert client._submission_may_become_visible(_ORDER_BODY["client_order_id"])
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [{}, {"client_order_id": "manual/inkant/v1:someone-else"}, {"client_order_id": None}],
+    ids=["empty-object", "another-client-order-id", "null-client-order-id"],
+)
+async def test_a_2xx_submission_answer_that_does_not_name_the_order_sent_keeps_the_window_open(
+    make_api_error: ApiErrorFactory, answer: dict[str, Any]
+) -> None:
+    """Only an answer that names the order closes the visibility window (#3216).
+
+    The Clerk folds such an answer as unknown and looks the order up at
+    once; a lookup index still catching up answers that with a 404, which
+    must not read as "absent".
+    """
+    fake = _FakeAlpaca()
+    fake.post = lambda path, data=None: answer  # type: ignore[method-assign]
+
+    def lookup(client_id: str) -> dict[str, Any]:
+        raise make_api_error(404, message="order not found")
+
+    fake.get_order_by_client_id = lookup  # type: ignore[method-assign]
+    client = _client(fake)
+
+    returned = await client.submit_order(_ORDER_BODY)
+
+    # Handed on for the caller to judge, as it was: the Clerk's own fold of another id's answer reads it.
+    assert returned == answer
+    assert client._submission_may_become_visible(_ORDER_BODY["client_order_id"])
+    with pytest.raises(BrokerUnavailable, match="still become visible"):
+        await client.get_order_by_client_order_id(_ORDER_BODY["client_order_id"])
+
+
+@pytest.mark.parametrize("names_the_order", [True, False], ids=["names-the-order", "carries-no-client-order-id"])
+async def test_a_2xx_submission_answer_that_names_the_order_or_carries_no_name_closes_the_window(
+    names_the_order: bool,
+) -> None:
+    answer = {"id": "broker-order-1", **({"client_order_id": _ORDER_BODY["client_order_id"]} if names_the_order else {})}
+    fake = _FakeAlpaca()
+    fake.post = lambda path, data=None: answer  # type: ignore[method-assign]
+    client = _client(fake)
+    client.hold_submission_uncertain(_ORDER_BODY["client_order_id"])
+
+    await client.submit_order(_ORDER_BODY)
+
+    assert not client._submission_may_become_visible(_ORDER_BODY["client_order_id"])
 
 
 @pytest.mark.parametrize("body", _NON_OBJECT_ANSWERS)
@@ -288,12 +341,14 @@ async def test_a_non_object_2xx_answer_to_an_order_lookup_is_unknown_not_absent(
     responses.add(responses.GET, f"{base}/orders:by_client_order_id", body=body, status=200)
     responses.add(responses.GET, f"{base}/orders/{_BROKER_ORDER_ID}", body=body, status=200)
 
-    with pytest.raises(BrokerUnavailable, match="could not be read"):
-        await client.get_order_by_client_order_id("manual/inkant/v1:abc")
-    with pytest.raises(BrokerUnavailable, match="could not be read"):
-        await client.get_order_by_broker_order_id(_BROKER_ORDER_ID)
-    with pytest.raises(BrokerUnavailable, match="could not be read"):
-        await client.get_nested_order_by_broker_order_id(_BROKER_ORDER_ID)
+    for lookup in (
+        client.get_order_by_client_order_id("manual/inkant/v1:abc"),
+        client.get_order_by_broker_order_id(_BROKER_ORDER_ID),
+        client.get_nested_order_by_broker_order_id(_BROKER_ORDER_ID),
+    ):
+        with pytest.raises(BrokerOrderAnswerUnreadable, match="could not be read") as unreadable:
+            await lookup
+        assert unreadable.value.broker_order_id is None
 
 
 async def test_a_not_found_after_a_non_object_lookup_answer_is_still_not_absent(

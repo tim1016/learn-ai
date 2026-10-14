@@ -138,6 +138,55 @@ def test_a_fill_state_order_that_states_no_fill_count_is_unreadable(
     assert order.events == []
 
 
+@pytest.mark.parametrize("status", ["canceled", "expired", "done_for_day", "replaced", "stopped"])
+@pytest.mark.parametrize(
+    "fill_evidence",
+    [{"filled_avg_price": "101.5"}, {"filled_at": "2026-07-24T14:42:50.129256359Z"}],
+    ids=["a-fill-price", "a-fill-time"],
+)
+def test_an_order_of_any_status_that_shows_a_fill_must_state_its_fill_count(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    status: str,
+    fill_evidence: dict[str, object],
+) -> None:
+    """``canceled`` after a partial fill is not a fill state, and shows its fill by its price or time (#3216)."""
+    open_order = {k: v for k, v in load_alpaca_fixture("orders", "orders.json")[1].items() if k != "filled_qty"}
+
+    order = from_alpaca_order({**open_order, "status": status, **fill_evidence}, observed_at_ms=_OBSERVED)
+
+    assert order.unreadable_fields == ("filled_qty",)
+    assert order.status == status
+    assert order.events == []
+
+
+@pytest.mark.parametrize("status", ["FILLED", " Partially_Filled ", "Filled"])
+def test_a_fill_state_is_read_whatever_the_case_or_padding_of_the_status(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    status: str,
+) -> None:
+    filled = load_alpaca_fixture("orders", "orders.json")[0]
+    payload = {**{k: v for k, v in filled.items() if k != "filled_qty"}, "status": status}
+
+    order = from_alpaca_order(payload, observed_at_ms=_OBSERVED)
+
+    assert order.unreadable_fields == ("filled_qty",)
+    # The broker's own spelling of its status is kept.
+    assert order.status == status
+
+
+@pytest.mark.parametrize("status", ["canceled", "expired", "new"])
+def test_an_order_that_shows_no_fill_and_states_no_fill_count_still_reads_zero(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    status: str,
+) -> None:
+    open_order = {k: v for k, v in load_alpaca_fixture("orders", "orders.json")[1].items() if k != "filled_qty"}
+
+    order = from_alpaca_order({**open_order, "status": status, "filled_avg_price": None, "filled_at": ""}, observed_at_ms=_OBSERVED)
+
+    assert order.unreadable_fields == ()
+    assert order.filled_quantity == 0.0
+
+
 @pytest.mark.parametrize("status", ["filled", "partially_filled"])
 def test_a_fill_state_order_that_states_its_fill_count_is_readable(
     load_alpaca_fixture: AlpacaFixtureLoader,

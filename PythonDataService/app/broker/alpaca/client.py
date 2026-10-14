@@ -69,6 +69,7 @@ from app.broker.alpaca.send_timing import (
 from app.broker.capture.journal import CaptureJournal, get_capture_journal
 from app.broker.contract.errors import (
     BrokerAuthError,
+    BrokerOrderAnswerUnreadable,
     BrokerRateLimited,
     BrokerRequestInvalid,
     BrokerUnavailable,
@@ -266,7 +267,7 @@ class AlpacaTradingClient:
         catching up (#2913). ``held_under`` is the key the lookup was asked by.
         """
         self._mark_submission_uncertain(held_under)
-        raise BrokerUnavailable(
+        raise BrokerOrderAnswerUnreadable(
             "Alpaca's order lookup answer could not be read.",
             broker=self.broker_id,
             detail=(
@@ -629,7 +630,10 @@ class AlpacaTradingClient:
         translation applies. Returns the raw Alpaca order payload; the adapter
         maps it to a ``BrokerOrder``. A 2xx whose body is not an order object
         (empty, ``null``, or other JSON) is an unknown outcome:
-        ``BrokerUnavailable``, with the visibility window held (#3216).
+        ``BrokerOrderAnswerUnreadable`` (a ``BrokerUnavailable``), with the
+        visibility window held (#3216). So is an answer that is empty or
+        states another client order id: it is returned for the caller to
+        judge, and the window it would have closed stays open.
         """
         client_order_id = str(order.get("client_order_id") or "")
         try:
@@ -645,16 +649,24 @@ class AlpacaTradingClient:
             # uncertainty through that explicit consistency window.
             self._mark_submission_uncertain(client_order_id)
             raise
-        self._clear_uncertain_submission(client_order_id)
+        if not result or ("client_order_id" in result and result["client_order_id"] != client_order_id):
+            # Alpaca answered, but not as the order that was sent (an empty answer, or another client
+            # order id): the caller folds that as unknown and looks the order up at once, and a lagging
+            # lookup index would read as "absent". Only an answer that names the order closes the window.
+            # An answer with no client order id key at all is taken as naming it: many fakes carry none
+            # (#3216).
+            self._mark_submission_uncertain(client_order_id)
+        else:
+            self._clear_uncertain_submission(client_order_id)
         return result
 
     def _submit_order_with_body(self, client: Any, order: dict[str, Any]) -> dict[str, Any]:
         result = client.post("/orders", order)
         if not isinstance(result, Mapping):
             # Not an order: empty, ``null``, or JSON of another shape. Raised here the answer takes the
-            # unknown-outcome path below; handed on, the adapter's ``TypeError`` came after the 200 had
+            # unknown-outcome path above; handed on, the adapter's ``TypeError`` came after the 200 had
             # closed the visibility window (#3216).
-            raise BrokerUnavailable(
+            raise BrokerOrderAnswerUnreadable(
                 "Alpaca's order submission answer could not be read.",
                 broker=self.broker_id,
                 detail="Alpaca answered 2xx with an empty, null or non-object body; the order may have landed.",

@@ -81,17 +81,20 @@ def _leg() -> BrokerOrderLeg:
     return BrokerOrderLeg(symbol="SPY", side="buy", quantity=1)
 
 
-_NON_OBJECT_ANSWERS = [
+_UNUSABLE_ANSWERS = [
     pytest.param([], id="empty-list"),
     pytest.param([{"id": _ALPACA_ORDER_ID}], id="list-of-an-order"),
     pytest.param("accepted", id="string"),
     pytest.param(7, id="number"),
     pytest.param(True, id="boolean"),
+    # An object, but not the order that was sent: the Clerk folds it unknown and looks the order up.
+    pytest.param({}, id="empty-object"),
+    pytest.param({"id": _ALPACA_ORDER_ID, "client_order_id": "another-bot:enter-9"}, id="another-order"),
 ]
 
 
-@pytest.mark.parametrize("answer", _NON_OBJECT_ANSWERS)
-async def test_a_non_object_answer_to_the_order_post_resolves_by_lookup_and_sends_no_second_order(
+@pytest.mark.parametrize("answer", _UNUSABLE_ANSWERS)
+async def test_an_unusable_answer_to_the_order_post_resolves_by_lookup_and_sends_no_second_order(
     repo: ClerkSqliteRepository, make_api_error: ApiErrorFactory, answer: object
 ) -> None:
     """The order was placed. The answer is an unknown outcome, never a raw ``TypeError``.
@@ -120,17 +123,18 @@ async def test_a_non_object_answer_to_the_order_post_resolves_by_lookup_and_send
     assert order is not None and order.broker_order_id == _ALPACA_ORDER_ID
 
 
-async def test_a_non_object_answer_whose_order_is_not_yet_visible_stays_unknown_until_the_sweep_finds_it(
-    repo: ClerkSqliteRepository, make_api_error: ApiErrorFactory
+@pytest.mark.parametrize("answer", [[], {}], ids=["non-object", "empty-object"])
+async def test_an_unusable_answer_whose_order_is_not_yet_visible_stays_unknown_until_the_sweep_finds_it(
+    repo: ClerkSqliteRepository, make_api_error: ApiErrorFactory, answer: object
 ) -> None:
     """Alpaca's lookup index can trail its own 200: that 404 is not "never placed".
 
     The visibility window the client keeps for an unknown submit stays open
-    over a non-object answer, so the lookup's 404 is unknown too and the
-    ENTER is not folded failed. The sweep later finds the order; still one
-    order sent.
+    over a non-object or empty answer, so the lookup's 404 is unknown too and
+    the ENTER is not folded failed. The sweep later finds the order; still
+    one order sent.
     """
-    sdk = _AlpacaThatPlacesTheOrderButAnswersBadly([], make_api_error)
+    sdk = _AlpacaThatPlacesTheOrderButAnswersBadly(answer, make_api_error)
     sdk.lookup_index_has_caught_up = False
     broker = AlpacaBroker(client=AlpacaTradingClient(client_factory=lambda: sdk))
 
