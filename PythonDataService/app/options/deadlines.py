@@ -142,10 +142,9 @@ def close_due_on(structure: ResolvedStructure, session: date, terms: CloseTerms)
     both apply, the earlier binds: a close takes every leg, so there is
     nothing left for the later one.
     """
-    expires_on_session = any(leg.contract.expiry_date == session for leg in structure.legs)
     owed = []
     try:
-        if expires_on_session:
+        if any(leg.contract.expiry_date == session for leg in structure.legs):
             owed.append(DueClose(CloseKind.EXPIRY_DAY, close_deadline_ms(session, terms)))
         if structure.has_sold_leg:
             owed.append(DueClose(CloseKind.SOLD_LEG, sold_leg_close_ms(session, terms)))
