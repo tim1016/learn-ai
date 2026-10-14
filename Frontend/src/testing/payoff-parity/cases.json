@@ -1,0 +1,493 @@
+{
+  "schema_version": 1,
+  "generated_by": "PythonDataService/scripts/regenerate_strategy_payoff_parity_fixture.py",
+  "source": "PythonDataService/app/services/strategy_engine.py (compute_max_profit_loss, find_breakevens)",
+  "unit": "per share, expiry payoff; max_profit/max_loss null means no limit",
+  "tolerance": {
+    "atol": 0.0001,
+    "rtol": 0.0,
+    "rationale": "strategy_engine.py rounds max profit, max loss and breakevens to 4 dp (error <= 5e-5); strategy-payoff.ts does not round. atol is one 4-dp step."
+  },
+  "cases": [
+    {
+      "name": "short_put_590_at_5",
+      "legs": [
+        {
+          "strike": 590,
+          "option_type": "put",
+          "position": "short",
+          "premium": 5.0,
+          "quantity": 1
+        }
+      ],
+      "expected": {
+        "max_profit": 5.0,
+        "max_loss": -585.0,
+        "breakevens": [
+          585.0
+        ]
+      }
+    },
+    {
+      "name": "short_put_590_at_5_times_3",
+      "legs": [
+        {
+          "strike": 590,
+          "option_type": "put",
+          "position": "short",
+          "premium": 5.0,
+          "quantity": 3
+        }
+      ],
+      "expected": {
+        "max_profit": 15.0,
+        "max_loss": -1755.0,
+        "breakevens": [
+          585.0
+        ]
+      }
+    },
+    {
+      "name": "long_call_100_at_5",
+      "legs": [
+        {
+          "strike": 100,
+          "option_type": "call",
+          "position": "long",
+          "premium": 5.0,
+          "quantity": 1
+        }
+      ],
+      "expected": {
+        "max_profit": null,
+        "max_loss": -5.0,
+        "breakevens": [
+          105.0
+        ]
+      }
+    },
+    {
+      "name": "short_call_100_at_5",
+      "legs": [
+        {
+          "strike": 100,
+          "option_type": "call",
+          "position": "short",
+          "premium": 5.0,
+          "quantity": 1
+        }
+      ],
+      "expected": {
+        "max_profit": 5.0,
+        "max_loss": null,
+        "breakevens": [
+          105.0
+        ]
+      }
+    },
+    {
+      "name": "bull_put_spread_590_580",
+      "legs": [
+        {
+          "strike": 590,
+          "option_type": "put",
+          "position": "short",
+          "premium": 5.0,
+          "quantity": 1
+        },
+        {
+          "strike": 580,
+          "option_type": "put",
+          "position": "long",
+          "premium": 2.0,
+          "quantity": 1
+        }
+      ],
+      "expected": {
+        "max_profit": 3.0,
+        "max_loss": -7.0,
+        "breakevens": [
+          587.0
+        ]
+      }
+    },
+    {
+      "name": "wide_bull_call_spread_400_600",
+      "legs": [
+        {
+          "strike": 400,
+          "option_type": "call",
+          "position": "long",
+          "premium": 110.0,
+          "quantity": 1
+        },
+        {
+          "strike": 600,
+          "option_type": "call",
+          "position": "short",
+          "premium": 10.0,
+          "quantity": 1
+        }
+      ],
+      "expected": {
+        "max_profit": 100.0,
+        "max_loss": -100.0,
+        "breakevens": [
+          500.0
+        ]
+      }
+    },
+    {
+      "name": "long_strangle_570_610_at_10",
+      "legs": [
+        {
+          "strike": 570,
+          "option_type": "put",
+          "position": "long",
+          "premium": 10.0,
+          "quantity": 1
+        },
+        {
+          "strike": 610,
+          "option_type": "call",
+          "position": "long",
+          "premium": 10.0,
+          "quantity": 1
+        }
+      ],
+      "expected": {
+        "max_profit": null,
+        "max_loss": -20.0,
+        "breakevens": [
+          550.0,
+          630.0
+        ]
+      }
+    },
+    {
+      "name": "long_straddle_100",
+      "legs": [
+        {
+          "strike": 100,
+          "option_type": "call",
+          "position": "long",
+          "premium": 5.0,
+          "quantity": 1
+        },
+        {
+          "strike": 100,
+          "option_type": "put",
+          "position": "long",
+          "premium": 4.0,
+          "quantity": 1
+        }
+      ],
+      "expected": {
+        "max_profit": null,
+        "max_loss": -9.0,
+        "breakevens": [
+          91.0,
+          109.0
+        ]
+      }
+    },
+    {
+      "name": "synthetic_long_100",
+      "legs": [
+        {
+          "strike": 100,
+          "option_type": "call",
+          "position": "long",
+          "premium": 5.0,
+          "quantity": 1
+        },
+        {
+          "strike": 100,
+          "option_type": "put",
+          "position": "short",
+          "premium": 4.0,
+          "quantity": 1
+        }
+      ],
+      "expected": {
+        "max_profit": null,
+        "max_loss": -101.0,
+        "breakevens": [
+          101.0
+        ]
+      }
+    },
+    {
+      "name": "ratio_call_spread_100_110x2",
+      "legs": [
+        {
+          "strike": 100,
+          "option_type": "call",
+          "position": "long",
+          "premium": 6.0,
+          "quantity": 1
+        },
+        {
+          "strike": 110,
+          "option_type": "call",
+          "position": "short",
+          "premium": 2.5,
+          "quantity": 2
+        }
+      ],
+      "expected": {
+        "max_profit": 9.0,
+        "max_loss": null,
+        "breakevens": [
+          101.0,
+          119.0
+        ]
+      }
+    },
+    {
+      "name": "iron_condor_wide_wings",
+      "legs": [
+        {
+          "strike": 480,
+          "option_type": "put",
+          "position": "long",
+          "premium": 1.0,
+          "quantity": 1
+        },
+        {
+          "strike": 500,
+          "option_type": "put",
+          "position": "short",
+          "premium": 3.0,
+          "quantity": 1
+        },
+        {
+          "strike": 520,
+          "option_type": "call",
+          "position": "short",
+          "premium": 3.0,
+          "quantity": 1
+        },
+        {
+          "strike": 540,
+          "option_type": "call",
+          "position": "long",
+          "premium": 1.0,
+          "quantity": 1
+        }
+      ],
+      "expected": {
+        "max_profit": 4.0,
+        "max_loss": -16.0,
+        "breakevens": [
+          496.0,
+          524.0
+        ]
+      }
+    },
+    {
+      "name": "touches_zero_at_a_strike",
+      "legs": [
+        {
+          "strike": 100,
+          "option_type": "call",
+          "position": "long",
+          "premium": 10.0,
+          "quantity": 1
+        },
+        {
+          "strike": 105,
+          "option_type": "call",
+          "position": "short",
+          "premium": 2.5,
+          "quantity": 2
+        }
+      ],
+      "expected": {
+        "max_profit": 0.0,
+        "max_loss": null,
+        "breakevens": []
+      }
+    },
+    {
+      "name": "crosses_zero_along_a_flat_stretch",
+      "legs": [
+        {
+          "strike": 100,
+          "option_type": "call",
+          "position": "long",
+          "premium": 5.0,
+          "quantity": 1
+        },
+        {
+          "strike": 105,
+          "option_type": "call",
+          "position": "short",
+          "premium": 0.0,
+          "quantity": 1
+        },
+        {
+          "strike": 110,
+          "option_type": "call",
+          "position": "long",
+          "premium": 0.0,
+          "quantity": 1
+        }
+      ],
+      "expected": {
+        "max_profit": null,
+        "max_loss": -5.0,
+        "breakevens": [
+          105.0
+        ]
+      }
+    },
+    {
+      "name": "crosses_zero_along_an_interior_flat_stretch",
+      "legs": [
+        {
+          "strike": 100,
+          "option_type": "call",
+          "position": "long",
+          "premium": 5.0,
+          "quantity": 1
+        },
+        {
+          "strike": 105,
+          "option_type": "call",
+          "position": "short",
+          "premium": 0.0,
+          "quantity": 1
+        },
+        {
+          "strike": 110,
+          "option_type": "call",
+          "position": "long",
+          "premium": 0.0,
+          "quantity": 1
+        },
+        {
+          "strike": 120,
+          "option_type": "call",
+          "position": "long",
+          "premium": 0.0,
+          "quantity": 1
+        }
+      ],
+      "expected": {
+        "max_profit": null,
+        "max_loss": -5.0,
+        "breakevens": [
+          105.0
+        ]
+      }
+    },
+    {
+      "name": "zero_from_s_zero",
+      "legs": [
+        {
+          "strike": 100,
+          "option_type": "call",
+          "position": "long",
+          "premium": 0.0,
+          "quantity": 1
+        }
+      ],
+      "expected": {
+        "max_profit": null,
+        "max_loss": 0.0,
+        "breakevens": []
+      }
+    },
+    {
+      "name": "debit_equals_width_call_spread_105_110",
+      "legs": [
+        {
+          "strike": 105,
+          "option_type": "call",
+          "position": "long",
+          "premium": 9.7,
+          "quantity": 1
+        },
+        {
+          "strike": 110,
+          "option_type": "call",
+          "position": "short",
+          "premium": 4.7,
+          "quantity": 1
+        }
+      ],
+      "expected": {
+        "max_profit": 0.0,
+        "max_loss": -5.0,
+        "breakevens": []
+      }
+    },
+    {
+      "name": "even_money_ratio_call_spread_100_105x3",
+      "legs": [
+        {
+          "strike": 100,
+          "option_type": "call",
+          "position": "long",
+          "premium": 2.1,
+          "quantity": 1
+        },
+        {
+          "strike": 105,
+          "option_type": "call",
+          "position": "short",
+          "premium": 0.7,
+          "quantity": 3
+        }
+      ],
+      "expected": {
+        "max_profit": 5.0,
+        "max_loss": null,
+        "breakevens": [
+          107.5
+        ]
+      }
+    },
+    {
+      "name": "zero_net_cost_touch_at_120",
+      "legs": [
+        {
+          "strike": 120,
+          "option_type": "put",
+          "position": "long",
+          "premium": 14.9,
+          "quantity": 1
+        },
+        {
+          "strike": 120,
+          "option_type": "call",
+          "position": "long",
+          "premium": 7.95,
+          "quantity": 1
+        },
+        {
+          "strike": 105,
+          "option_type": "put",
+          "position": "short",
+          "premium": 9.0,
+          "quantity": 2
+        },
+        {
+          "strike": 95,
+          "option_type": "put",
+          "position": "short",
+          "premium": 4.85,
+          "quantity": 1
+        }
+      ],
+      "expected": {
+        "max_profit": null,
+        "max_loss": -185.0,
+        "breakevens": [
+          92.5
+        ]
+      }
+    }
+  ]
+}
