@@ -64,6 +64,7 @@ import { chartIndicatorCatalog } from './chart-indicator-catalog';
 import { positionRuns, type PositionRun } from './dual-pane-chart-position';
 import {
   type SelectedChartIndicator,
+  indicatorFailureMessage,
   resultBelongsToIndicator,
   selectChartIndicator,
   toActiveIndicatorChips,
@@ -434,9 +435,9 @@ export class DualPaneChartComponent implements AfterViewInit {
           error: null,
           viewKey: params.viewKey,
         })),
-        catchError(() => of<IndicatorLoadState>({
+        catchError((error: unknown) => of<IndicatorLoadState>({
           indicators: [],
-          error: 'Indicators could not be calculated for this candle window.',
+          error: indicatorFailureMessage(error, 'for this candle window'),
           viewKey: params.viewKey,
         })),
       );
@@ -499,6 +500,10 @@ export class DualPaneChartComponent implements AfterViewInit {
       } else if (loaded?.error === null && loaded.viewKey === this.indicatorViewKey()) {
         this.loadedIndicatorResults.set(loaded.indicators);
         this.loadedIndicatorViewKey.set(loaded.viewKey);
+      } else if (loaded?.error != null && loaded.viewKey === this.indicatorViewKey()) {
+        // A failed calculation is said (below, beside the chart): lines from the last one are not left drawn.
+        this.loadedIndicatorResults.set([]);
+        this.loadedIndicatorViewKey.set(null);
       }
     });
     effect(() => this.renderIndicators(

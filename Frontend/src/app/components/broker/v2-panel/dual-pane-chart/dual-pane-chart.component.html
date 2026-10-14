@@ -242,6 +242,11 @@
 
       <app-chart-lanes [lanes]="placedLanes()" />
 
+      @if (!fullscreen() && indicatorError(); as problem) {
+        <!-- The rail that carries this is a fullscreen part: outside it the chart says so itself. -->
+        <p class="tape-indicator-error" role="status">{{ problem }}</p>
+      }
+
       <footer class="tape-legend">
         <span><i class="legend-swatch legend-swatch--up"></i> Up candle</span>
         <span><i class="legend-swatch legend-swatch--down"></i> Down candle</span>

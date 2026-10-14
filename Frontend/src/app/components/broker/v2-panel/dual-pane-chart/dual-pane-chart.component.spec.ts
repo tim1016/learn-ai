@@ -1,8 +1,9 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { render, screen, waitFor, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
-import { of, Subject } from 'rxjs';
+import { of, Subject, throwError } from 'rxjs';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
 import {
   DUAL_PANE_CHART_FACTORY,
@@ -29,6 +30,7 @@ const chartMocks = vi.hoisted(() => ({
   timeToCoordinate: vi.fn(),
   addSeries: vi.fn(),
   calculateIndicators: vi.fn(),
+  removeSeries: vi.fn(),
   supportedIndicators: vi.fn(),
 }));
 
@@ -67,7 +69,7 @@ function createMockChart(): object {
   chartMocks.addSeries.mockImplementation(() => createMockSeries());
   return {
     addSeries: chartMocks.addSeries,
-    removeSeries: vi.fn(),
+    removeSeries: chartMocks.removeSeries,
     timeScale: vi.fn().mockReturnValue(mockTimeScale),
     applyOptions: vi.fn(),
     remove: vi.fn(),
@@ -719,6 +721,50 @@ describe('DualPaneChartComponent', () => {
       expect.objectContaining({ color: '#2dd4bf' }),
       0,
     ));
+  });
+
+  it('says why the indicators could not be calculated beside the chart, and draws none from an earlier answer', async () => {
+    const user = userEvent.setup();
+    const firstResponse = new Subject<ChartIndicatorBatchResponse>();
+    chartMocks.calculateIndicators
+      .mockReturnValueOnce(firstResponse.asObservable())
+      .mockReturnValueOnce(throwError(() => new HttpErrorResponse({
+        status: 422, error: { detail: 'EMA needs at least 21 bars.' },
+      })));
+    const firstBars = [liveBar(1_700_000_000_000, 1_700_000_060_000)];
+    const { fixture } = await render(DualPaneChartComponent, {
+      inputs: { symbol: 'SPY', liveBars: firstBars, histBars: [] },
+    });
+    await user.click(screen.getByRole('button', { name: 'Expand market chart' }));
+    const rail = screen.getByRole('complementary', { name: 'Indicator picker rail' });
+    const trendButtons = within(rail).getAllByRole('button', { name: /trend/i });
+    await user.click(trendButtons[trendButtons.length - 1]);
+    await user.click(within(rail).getByRole('button', { name: 'Add', hidden: true }));
+    await user.click(within(rail).getByRole('button', { name: /add ema to chart/i }));
+    firstResponse.next({
+      symbol: 'SPY',
+      indicators: [{
+        id: 'ema_10', panel: 'main', type: 'line', color: '#FF9800',
+        data: [{ t: 1_700_000_060_000, value: 101 }], refs: [],
+      }],
+    });
+    firstResponse.complete();
+    fixture.detectChanges();
+    await waitFor(() => expect(chartMocks.addSeries).toHaveBeenCalledWith('LineSeries', expect.any(Object), 0));
+    const removedBefore = chartMocks.removeSeries.mock.calls.length;
+
+    // The candles refresh and the calculation for them fails.
+    fixture.componentRef.setInput('liveBars', [...firstBars, liveBar(1_700_000_060_000, 1_700_000_120_000)]);
+    fixture.detectChanges();
+    await waitFor(() => expect(chartMocks.calculateIndicators).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole('button', { name: 'Exit expanded market chart' }));
+    fixture.detectChanges();
+
+    // Outside the fullscreen rail the chart carries the sentence itself, with the data plane's reason.
+    const note = await screen.findByText(/Indicators could not be calculated for this candle window: EMA needs at least 21 bars\./);
+    expect(note.getAttribute('role')).toBe('status');
+    // The lines of the earlier answer are taken off the chart, not left standing beside the sentence.
+    await waitFor(() => expect(chartMocks.removeSeries.mock.calls.length).toBeGreaterThan(removedBefore));
   });
 
   it('keeps the last indicator series visible while refreshed candles are recalculated', async () => {

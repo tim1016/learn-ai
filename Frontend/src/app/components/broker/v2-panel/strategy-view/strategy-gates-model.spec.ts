@@ -70,6 +70,26 @@ describe('strategy gates model (#2639)', () => {
     expect(shown.notices).toEqual(['Saw it.', 'A notice of the page’s own.']);
   });
 
+  it('says a notice once when the saved gates and the draft preview both carry it', () => {
+    const view = fakeStrategyView();
+    const gate = fakeCustomGate();
+    const unjudgeable = 'A saved gate could not be judged: its indicator is not ready.';
+
+    const shown = withCustomGates(
+      view,
+      [gate],
+      [
+        { closes: view.candles.map((c) => c.bar_close_ms), response: { results: {}, chart_computed: [], notices: [unjudgeable] } },
+        // A draft preview re-judges the saved gates, so the same sentence comes back.
+        { closes: view.candles.map((c) => c.bar_close_ms), response: { results: {}, chart_computed: [], notices: [unjudgeable, 'The draft is open.'] } },
+      ],
+      null,
+      [unjudgeable],
+    );
+
+    expect(shown.notices).toEqual([unjudgeable, 'The draft is open.']);
+  });
+
   it('offers names in the order the data plane resolves them, the catalogue as the data plane offers it', () => {
     const groups = gateVariableGroups(fakeStrategyView(), FAKE_GATE_CATALOGUE);
 
