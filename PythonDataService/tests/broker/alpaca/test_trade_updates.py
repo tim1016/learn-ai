@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import logging
 import math
 import sys
 from collections.abc import AsyncIterator, Callable
@@ -24,6 +25,7 @@ from typing import Any
 import pytest
 import responses
 
+from app.broker.alpaca import adapter as adapter_module
 from app.broker.alpaca.adapter import from_alpaca_order
 from app.broker.alpaca.broker import AlpacaBroker
 from app.broker.alpaca.clerk.models import ClerkEntryKind
@@ -34,9 +36,8 @@ from app.broker.alpaca.trade_updates import (
     _MIN_HELD_CONNECTION_MS,
     TradeUpdatesConsumer,
     _broker_order_fingerprint_fields,
-    _from_gap_recovery_event,
     _inject_frame_faults,
-    _order_to_event_payload,
+    _recovery_event,
     _stream_url,
     alpaca_socket_frames,
     reset_trade_updates_consumer_for_testing,
@@ -161,64 +162,38 @@ def _filled_broker_order(order_id: str, client_order_id: str) -> BrokerOrder:
 
 
 def test_gap_reconciled_fill_carries_execution_qty_and_price() -> None:
-    # A gap-reconciled fill must thread its execution qty/price all the way to
-    # the BrokerOrderEvent. If the synthesized payload only nested them under
-    # ``order`` (never top-level), from_alpaca_trade_update would read
-    # quantity/price = None and the per-instance exposure/FIFO fold would
-    # silently drop the recovered fill while the account-level sweep stayed
-    # clean. Pin the two-function composition so that regression cannot return.
+    # A gap-reconciled fill must carry the order's cumulative qty/price on the
+    # BrokerOrderEvent. If it carried none, the per-instance exposure/FIFO fold
+    # would silently drop the recovered fill while the account-level sweep
+    # stayed clean.
     order = _filled_broker_order(
         order_id="61e69015-8549-4bfd-b9c3-01e75843f47d",
         client_order_id=_OWNED_COID,
     )
 
-    payload = _order_to_event_payload(order)
-    assert payload is not None
-    event = _from_gap_recovery_event(payload)
+    event = _recovery_event(order)
 
+    assert event is not None
     assert event.event_type == "fill"
+    assert event.execution_id is None  # a recovered aggregate never fabricates an execution
     assert event.quantity is not None
     assert math.isclose(event.quantity, 10.0, abs_tol=1e-9, rel_tol=0.0)
     assert event.price is not None
     assert math.isclose(event.price, 135.80, abs_tol=1e-9, rel_tol=0.0)
 
 
-def test_a_gap_reconciled_replacement_keeps_its_replacement_links() -> None:
-    """A ``replaced`` order recovered through the REST window still names its replacement (#2656).
-
-    Re-shaped without its links, the original would read as replaced by
-    nothing -- a replacement the Clerk cannot follow -- and the order that
-    took its place would lose the ``replaces`` that ties it to its leg.
-    """
-    replaced = _accepted_order(_OWNED_COID).model_copy(
-        update={
-            "order_id": "00000000-0000-0000-0000-00000000000a",
-            "status": "replaced",
-            "replaced_by": "00000000-0000-0000-0000-00000000000b",
-            "updated_at_ms": _FIXED_MS,
-        }
-    )
-
-    payload = _order_to_event_payload(replaced)
-
-    assert payload is not None and payload["event"] == "replaced"
-    mapped = from_alpaca_order(payload["order"], observed_at_ms=_FIXED_MS)
-    assert mapped.replaced_by == "00000000-0000-0000-0000-00000000000b"
-    assert mapped.replaces is None and mapped.unreadable_fields == ()
-
-
-def test_gap_reconcile_never_reshapes_an_order_with_unreadable_values() -> None:
+def test_gap_reconcile_never_feeds_an_order_with_unreadable_values() -> None:
     """A filled order whose fill count would not parse is not re-fed as a zero fill (#2648 review).
 
     The adapter keeps the broker's own status on such a row, so the status
-    alone no longer keeps it out of the REST recovery re-map, which would
+    alone no longer keeps it out of the REST recovery, which would
     turn its absent fill count into a readable ``qty: 0.0``.
     """
     order = _filled_broker_order("unreadable-fill", _OWNED_COID).model_copy(
         update={"filled_quantity": 0.0, "unreadable_fields": ("filled_qty",)}
     )
 
-    assert _order_to_event_payload(order) is None
+    assert _recovery_event(order) is None
 
 
 def test_an_unreadable_row_is_not_an_exact_redelivery_of_its_readable_twin() -> None:
@@ -903,6 +878,21 @@ async def test_a_boolean_numeric_is_a_parse_error_not_a_reconnect(
         await _wait_for_execution_health(healthy=True)
 
 
+@pytest.mark.parametrize("data", [[{"event": "fill"}], "fill", 7], ids=["list", "string", "number"])
+async def test_a_frame_whose_data_is_not_an_object_is_a_parse_error_not_a_reconnect(
+    tmp_path: Path, data: object
+) -> None:
+    async with _running_consumer(tmp_path) as (source, consumer):
+        await source.send({"stream": "trade_updates", "data": data})
+        await _wait_for_execution_health(healthy=False)
+        assert consumer.connected is True
+        assert consumer.counters.parse_errors == 1
+
+        await source.send(_load_frames()[0])
+        await _wait_for_execution_health(healthy=True)
+        assert consumer.connected is True
+
+
 # ── (d) attribution: owned vs unexplained (NO hold — that is S6) ─────────────
 
 
@@ -946,6 +936,98 @@ async def test_authorization_frame_is_captured_not_attributed(tmp_path: Path) ->
     assert clerk._journal is None or clerk._journal.read_entries() == []  # type: ignore[union-attr]
     assert consumer.counters.events_applied == 0
     assert consumer.counters.unexplained == 0
+
+
+@pytest.mark.parametrize("data", [["authorized"], "authorized", 7], ids=["list", "string", "number"])
+async def test_an_authorization_frame_whose_data_is_not_an_object_does_not_abort_the_cycle(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, data: object
+) -> None:
+    consumer, clerk, _ = await _consumer(
+        tmp_path, [{"stream": "authorization", "data": data}, _load_frames()[0]]
+    )
+    await _warm(clerk)
+
+    with caplog.at_level(logging.WARNING, logger="app.broker.alpaca.trade_updates"):
+        await consumer.run()
+
+    # The frame after it was still applied: the cycle was not torn down for a control frame.
+    assert consumer.counters.events_applied == 1
+    assert [r.status for r in caplog.records if getattr(r, "action", None) == "trade_updates_auth_denied"] == [""]
+
+
+def _parent_fill_naming_two_legs(first_leg_filled_qty: str = "1", *, unreadable_timestamp_on: int | None = None) -> dict[str, Any]:
+    """A several-leg parent's fill frame: no execution of its own, one execution per leg (#3103)."""
+    frame = _load_frames()[2]
+    parent = frame["data"]["order"]
+    parent["order_class"] = "mleg"
+    parent["symbol"] = ""
+    parent["legs"] = [
+        {**parent, "id": f"leg-order-{n}", "client_order_id": f"{_OWNED_COID}~{n}", "symbol": symbol, "side": side,
+         "order_class": "simple", "legs": None, "qty": "1", "filled_qty": filled_qty, "status": "filled"}
+        for n, (symbol, side, filled_qty) in enumerate(
+            (("SPY261016C00771000", "buy", first_leg_filled_qty), ("SPY261016C00776000", "sell", "1")), start=1
+        )
+    ]
+    frame["data"].pop("execution_id", None)
+    frame["data"]["legs"] = [
+        {"execution_id": "exec-buy-leg", "qty": "1", "price": "3.31", "order_id": "leg-order-1",
+         "symbol": "SPY261016C00771000", "timestamp": "2026-10-14T15:59:03.721579799Z"},
+        {"execution_id": "exec-sell-leg", "qty": "1", "price": "1.18", "order_id": "leg-order-2",
+         "symbol": "SPY261016C00776000", "timestamp": "2026-10-14T15:59:03.721579799Z"},
+    ]
+    if unreadable_timestamp_on is not None:
+        frame["data"]["legs"][unreadable_timestamp_on]["timestamp"] = "not-a-timestamp"
+    return frame
+
+
+@pytest.mark.parametrize("bad_leg", [0, 1], ids=["first-leg", "last-leg"])
+async def test_a_leg_that_fails_to_map_leaves_health_degraded_whatever_its_place_in_the_frame(
+    tmp_path: Path, bad_leg: int
+) -> None:
+    # The leg's own frame is mapped by the shared handler, which counts the failure and degrades
+    # health -- and the next leg's mapping would restore it. A frame with an unusable leg is not
+    # a healthy frame whichever leg came first.
+    consumer, clerk, _ = await _consumer(tmp_path, [_parent_fill_naming_two_legs(unreadable_timestamp_on=bad_leg)])
+    await _warm(clerk)
+
+    await consumer.run()
+
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    exact = [e.event.execution_id for e in entries if getattr(e.event, "execution_id", None) is not None]
+    assert exact == ["exec-sell-leg" if bad_leg == 0 else "exec-buy-leg"]
+    assert consumer.counters.parse_errors == 1
+    assert consumer.evidence_health.healthy is False
+
+
+@pytest.mark.parametrize("raises_on_non_finite", [False, True], ids=["opt_float-reads-nan", "opt_float-refuses-nan"])
+@pytest.mark.parametrize("filled_qty", ["nan", "inf", "five"])
+async def test_a_leg_with_an_unreadable_quantity_is_a_counted_parse_error_not_a_reconnect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filled_qty: str, raises_on_non_finite: bool
+) -> None:
+    # The leg's own quantities are read to say fill or partial fill, outside the
+    # order mapper's guard. A leg Alpaca states unreadably is one that would not
+    # map: counted, health degraded, the rest of the frame's legs still credited
+    # -- whether the numeric reader returns a non-finite number or refuses it.
+    if raises_on_non_finite:
+        read_float = adapter_module.opt_float
+
+        def _refusing(value: object) -> float | None:
+            parsed = read_float(value)
+            if parsed is not None and not math.isfinite(parsed):
+                raise ValueError("Alpaca numeric is not finite")
+            return parsed
+
+        monkeypatch.setattr(adapter_module, "opt_float", _refusing)
+    consumer, clerk, _ = await _consumer(tmp_path, [_parent_fill_naming_two_legs(filled_qty)])
+    await _warm(clerk)
+
+    await consumer.run()
+
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    exact = [e.event.execution_id for e in entries if getattr(e.event, "execution_id", None) is not None]
+    assert exact == ["exec-sell-leg"]
+    assert consumer.counters.parse_errors == 1
+    assert consumer.evidence_health.healthy is False
 
 
 # ── (e) reconnect → REST gap-reconcile pulls missed orders and dedups ────────
@@ -1029,71 +1111,6 @@ async def test_reconnect_gap_reconcile_pulls_missed_orders(tmp_path: Path) -> No
 
 
 @responses.activate
-async def test_gap_reconcile_dedups_already_seen_event(tmp_path: Path) -> None:
-    # If the socket already delivered the fill, the gap-reconcile's re-observed
-    # fill must dedup on the stable key — not journal a second fill.
-    # Load the fill first so we can derive the order_id for the REST mock.
-    fill = _load_frames()[2]
-    # The socket's fill has an execution_id key; the gap-reconcile synthesizes an
-    # order-derived event WITHOUT an execution_id, so their keys differ. To prove
-    # the reconcile is idempotent for the SAME event, feed a socket fill that
-    # keys the same way the reconcile will: strip its execution_id so both key on
-    # order_id|fill|timestamp.
-    fill["data"].pop("execution_id", None)
-    fill["data"]["timestamp"] = "2021-03-16T18:38:02.123456Z"
-    # Also align the embedded order's filled_at so the terminal fingerprint
-    # (_terminal_state_fingerprint uses filled_at_ms) matches the REST response.
-    fill["data"]["order"]["filled_at"] = "2021-03-16T18:38:02.123456Z"
-    order_id = fill["data"]["order"]["id"]  # must match REST response for dedup
-    filled_order = {
-        "id": order_id,
-        "client_order_id": _OWNED_COID,
-        "updated_at": "2021-03-16T18:38:02.123456Z",
-        "submitted_at": "2021-03-16T18:38:01.937734Z",
-        "filled_at": "2021-03-16T18:38:02.123456Z",
-        "symbol": "SPY",
-        "asset_class": "us_equity",
-        "qty": "1",
-        "filled_qty": "1",
-        "filled_avg_price": "737.91",
-        "order_type": "market",
-        "type": "market",
-        "side": "buy",
-        "time_in_force": "day",
-        "status": "filled",
-    }
-    responses.add(responses.GET, f"{_BASE}/v2/account", json=_ACCOUNT_JSON, status=200)
-    responses.add(responses.POST, f"{_BASE}/v2/orders", json=_ACCEPTED_ORDER_JSON, status=200)
-    responses.add(responses.GET, f"{_BASE}/v2/orders", json=[filled_order], status=200)
-
-    broker = _real_broker_with_responses([filled_order])
-    clerk = _EvidenceSink(read=broker, trade=broker)
-    await _warm(clerk)
-
-    journal = _capture_journal(tmp_path)
-    consumer = TradeUpdatesConsumer(
-        evidence_sink=clerk,
-        read=broker,
-        frame_source=_frame_source([fill]),
-        journal=journal,
-        clock=lambda: _FIXED_MS,
-        backoff=_no_backoff,
-        max_reconnects=1,
-    )
-
-    await consumer.run()
-
-    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
-    fills = [
-        e
-        for e in entries
-        if e.kind is ClerkEntryKind.ORDER_EVENT and e.event is not None and e.event.event_type == "fill"
-    ]
-    # Delivered once on the socket, re-observed once on reconcile → journaled once.
-    assert len(fills) == 1
-
-
-@responses.activate
 async def test_gap_reconcile_dedups_socket_fill_by_terminal_order(tmp_path: Path) -> None:
     # PRODUCTION shape: the socket delivered the fill WITH its execution_id (key
     # ``exec:...``); a reconnect re-pulls the now-terminal order via REST, which
@@ -1157,6 +1174,44 @@ async def test_gap_reconcile_dedups_socket_fill_by_terminal_order(tmp_path: Path
     assert consumer.counters.gap_reconciled >= 1
 
 
+async def test_gap_reconcile_dedups_a_socket_cancel_against_its_rest_repull(tmp_path: Path) -> None:
+    # A non-fill terminal event carries no execution id: the socket and the REST
+    # re-pull both key it on ``order_id|canceled|instant``. The socket delivered
+    # the cancel; the reconnect's REST pull returns the same closed order. The
+    # Clerk must see the cancel once, and the re-pull is counted as stale.
+    canceled = _load_frames()[3]
+    assert canceled["data"]["event"] == "canceled"
+    authorization = {"stream": "authorization", "data": {"status": "authorized"}}
+    connections = iter([[canceled], [authorization]])
+    broker = _FakeBroker()
+    broker.orders = [from_alpaca_order(canceled["data"]["order"], observed_at_ms=_FIXED_MS)]
+    clerk = _EvidenceSink(read=broker, trade=broker)
+    await _warm(clerk)
+    consumer = TradeUpdatesConsumer(
+        evidence_sink=clerk,
+        read=broker,
+        frame_source=lambda: _frame_source(next(connections))(),
+        journal=_capture_journal(tmp_path),
+        clock=lambda: _FIXED_MS,
+        backoff=_no_backoff,
+        max_reconnects=1,
+    )
+
+    await consumer.run()
+
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    cancels = [
+        e
+        for e in entries
+        if e.kind is ClerkEntryKind.ORDER_EVENT and e.event is not None and e.event.event_type == "canceled"
+    ]
+    assert len(cancels) == 1
+    assert consumer.counters.gap_reconciled == 1
+    assert consumer.counters.stale_terminal == 1
+    assert consumer.counters.events_applied == 1
+    assert consumer.counters.parse_errors == 0
+
+
 async def test_gap_reconcile_pulls_closed_orders_no_submission_time_filter(
     tmp_path: Path,
 ) -> None:
@@ -1204,6 +1259,69 @@ async def test_gap_reconcile_pulls_closed_orders_no_submission_time_filter(
     assert consumer.counters.gap_reconciled >= 1
 
 
+_AUTHORIZED = {"stream": "authorization", "data": {"status": "authorized"}}
+
+
+async def test_a_failed_closed_order_pull_is_counted_and_the_stream_goes_on(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The authoritative reconciliation held; only the re-feed of closed orders'
+    # events failed. Admission opens (the sweep covers the window), and the
+    # failure is counted and says so, not left to a reconnect that may be days off.
+    class _ClosedOrdersUnavailable(_FakeBroker):
+        async def list_orders(self, **_: Any) -> list[BrokerOrder]:
+            raise RuntimeError("alpaca closed orders unavailable")
+
+    broker = _ClosedOrdersUnavailable()
+    clerk = _EvidenceSink(read=broker, trade=broker)
+    consumer = TradeUpdatesConsumer(
+        evidence_sink=clerk,
+        read=broker,
+        frame_source=_frame_source([_AUTHORIZED]),
+        journal=_capture_journal(tmp_path),
+        clock=lambda: _FIXED_MS,
+        backoff=_no_backoff,
+        max_reconnects=1,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="app.broker.alpaca.trade_updates"):
+        await consumer.run()
+
+    assert consumer.counters.gap_reconcile_failures == 1
+    assert consumer.counters.connects == 2
+    assert consumer.counters.gap_reconciled == 0
+    [record] = [r for r in caplog.records if getattr(r, "action", None) == "trade_updates_gap_reconcile_error"]
+    assert record.failures == 1 and record.error == "alpaca closed orders unavailable"
+    assert record.exc_info is not None
+
+
+async def test_a_failed_authoritative_reconcile_keeps_the_connection_closed(tmp_path: Path) -> None:
+    # SQLite's own reconciliation is what closes the gap. When it fails the
+    # reconnect is not admitted, and no closed-order pull is made past it.
+    class _ReconcileRefused(_EvidenceSink):
+        async def reconcile_gap(self) -> None:
+            raise RuntimeError("the clerk could not reconcile the trade-update gap")
+
+    broker = _FakeBroker()
+    clerk = _ReconcileRefused(read=broker, trade=broker)
+    consumer = TradeUpdatesConsumer(
+        evidence_sink=clerk,
+        read=broker,
+        frame_source=_frame_source([_AUTHORIZED]),
+        journal=_capture_journal(tmp_path),
+        clock=lambda: _FIXED_MS,
+        backoff=_no_backoff,
+        max_reconnects=1,
+    )
+
+    await consumer.run()
+
+    assert consumer.counters.connects == 1  # the first connection has no gap to close
+    assert consumer.connected is False
+    assert consumer.counters.gap_reconcile_failures == 0
+    assert broker.list_orders_calls == []
+
+
 async def test_reconnect_opens_the_next_source_before_gap_reconcile(tmp_path: Path) -> None:
     order: list[str] = []
     authorization = {"stream": "authorization", "data": {"status": "authorized"}}
@@ -1239,12 +1357,65 @@ async def test_gap_reconcile_uses_the_lifecycle_timestamp_for_fills() -> None:
         update={"updated_at_ms": _FIXED_MS + 60_000, "filled_at_ms": filled_at_ms}
     )
 
-    payload = _order_to_event_payload(order)
+    event = _recovery_event(order)
 
-    assert payload is not None
-    assert payload["timestamp_ms"] == filled_at_ms
-    assert payload["price"] == 135.8
-    assert payload["qty"] == 10.0
+    assert event is not None
+    assert event.occurred_at_ms == filled_at_ms
+    assert event.price == 135.8
+    assert event.quantity == 10.0
+
+
+async def test_a_gap_reconciled_order_reaches_the_clerk_as_the_broker_returned_it(tmp_path: Path) -> None:
+    """The REST re-pull hands the Clerk the order it read: nothing is re-shaped on the way (#2656).
+
+    A ``replaced`` order keeps the link naming its replacement -- without it
+    the Clerk cannot follow the chain -- and the order keeps every other
+    value it was read with, ``extended_hours`` and the read instant included.
+    """
+    replaced = _accepted_order(_OWNED_COID).model_copy(
+        update={
+            "order_id": "00000000-0000-0000-0000-00000000000a",
+            "status": "replaced",
+            "replaced_by": "00000000-0000-0000-0000-00000000000b",
+            "extended_hours": True,
+            "updated_at_ms": _FIXED_MS,
+            "observed_at_ms": _FIXED_MS - 7_000,
+        }
+    )
+    broker = _FakeBroker()
+    broker.orders = [replaced]
+    consumer, clerk, _ = await _consumer(tmp_path, [_AUTHORIZED], broker=broker, max_reconnects=1)
+
+    await consumer.run()
+
+    [entry] = [e for e in clerk._journal.read_entries() if e.kind is ClerkEntryKind.ORDER_EVENT]  # type: ignore[union-attr]
+    assert entry.event.event_type == "replaced"
+    assert entry.event.execution_id is None
+    assert entry.broker_order == replaced
+    assert consumer.counters.gap_reconciled == 1
+
+
+async def test_a_gap_reconciled_order_with_a_negative_instant_is_counted_not_fed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Corruption is refused the way a frame with a negative ``timestamp_ms`` is:
+    # counted, logged with its order and why, the rest of the pull still fed, no reconnect.
+    corrupt = _filled_broker_order("corrupt-instant", _OWNED_COID).model_copy(update={"filled_at_ms": -5_000})
+    healthy = _filled_broker_order("healthy-fill", _OWNED_COID)
+    broker = _FakeBroker()
+    broker.orders = [corrupt, healthy]
+    consumer, clerk, _ = await _consumer(tmp_path, [_AUTHORIZED], broker=broker, max_reconnects=1)
+
+    with caplog.at_level(logging.WARNING, logger="app.broker.alpaca.trade_updates"):
+        await consumer.run()
+
+    fed = [e.broker_order.order_id for e in clerk._journal.read_entries()]  # type: ignore[union-attr]
+    assert fed == ["healthy-fill"]
+    assert consumer.counters.parse_errors == 1
+    assert consumer.counters.connects == 2
+    [record] = [r for r in caplog.records if getattr(r, "action", None) == "trade_updates_map_error"]
+    assert record.order_id == "corrupt-instant"
+    assert "negative lifecycle instant" in record.error
 
 
 async def test_backoff_caps_before_exponentiation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1292,7 +1463,7 @@ async def test_socket_authorizes_before_listening(monkeypatch: pytest.MonkeyPatc
             return None
 
     connection = _Connection()
-    monkeypatch.setitem(sys.modules, "websockets", SimpleNamespace(connect=lambda _: connection))
+    monkeypatch.setitem(sys.modules, "websockets", SimpleNamespace(connect=lambda _, **__: connection))
     source = alpaca_socket_frames(AlpacaSettings(api_key_id="key", api_secret_key="secret", mode="paper"))
 
     authorization = await anext(source)
@@ -1300,6 +1471,116 @@ async def test_socket_authorizes_before_listening(monkeypatch: pytest.MonkeyPatc
     assert json.loads(authorization)["data"]["status"] == "authorized"
     assert [message["action"] for message in sent] == ["authenticate", "listen"]
     await source.aclose()
+
+
+async def test_a_server_that_never_answers_authentication_ends_the_cycle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A server that completes the handshake and stays silent still answers the
+    # library's pings: without its own bound the cycle waits for ever, with
+    # ``connected`` False and nothing logged.
+    monkeypatch.setattr("app.broker.alpaca.trade_updates._AUTHORIZATION_TIMEOUT_S", 0.05)
+    closed: list[bool] = []
+
+    class _SilentSocket:
+        async def send(self, message: str) -> None:
+            del message
+
+        async def recv(self) -> str:
+            await asyncio.Event().wait()
+            raise AssertionError("a silent server never answers")  # pragma: no cover
+
+    class _Connection:
+        async def __aenter__(self) -> _SilentSocket:
+            return _SilentSocket()
+
+        async def __aexit__(self, *_: object) -> None:
+            closed.append(True)
+
+    monkeypatch.setitem(sys.modules, "websockets", SimpleNamespace(connect=lambda _, **__: _Connection()))
+    settings = AlpacaSettings(api_key_id="key", api_secret_key="secret", mode="paper")
+    broker = _FakeBroker()
+    consumer = TradeUpdatesConsumer(
+        evidence_sink=_EvidenceSink(read=broker, trade=broker),
+        read=broker,
+        frame_source=lambda: alpaca_socket_frames(settings),
+        journal=_capture_journal(tmp_path),
+        clock=lambda: _FIXED_MS,
+        backoff=_no_backoff,
+        max_reconnects=0,
+    )
+
+    await asyncio.wait_for(consumer.run(), timeout=3)
+
+    assert closed == [True]
+    assert consumer.counters.connects == 0
+    assert consumer.counters.reconnects == 1
+
+
+async def test_the_frame_source_is_closed_when_a_cycle_ends_on_an_error(tmp_path: Path) -> None:
+    # A cycle that ends on a raised error leaves its generator suspended inside
+    # the socket's ``async with``; the socket must be released with the cycle,
+    # not whenever the generator is collected, or the reconnect opens a second
+    # connection against the account's connection limit.
+    closed: list[bool] = []
+
+    async def source() -> AsyncIterator[bytes | str]:
+        try:
+            yield json.dumps(_load_frames()[0])
+            yield json.dumps(_load_frames()[0])
+        finally:
+            closed.append(True)
+
+    class _ClerkDown(_EvidenceSink):
+        async def record_lifecycle_event(self, **_: object) -> ClerkEntryKind:  # type: ignore[override]
+            raise RuntimeError("the clerk is down")
+
+    broker = _FakeBroker()
+    consumer = TradeUpdatesConsumer(
+        evidence_sink=_ClerkDown(read=broker, trade=broker),
+        read=broker,
+        frame_source=source,
+        journal=_capture_journal(tmp_path),
+        clock=lambda: _FIXED_MS,
+        backoff=_no_backoff,
+        max_reconnects=0,
+    )
+
+    await consumer.run()
+
+    assert closed == [True]
+
+
+async def test_the_authenticate_frame_never_reaches_a_debug_log(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ``websockets`` logs every frame it sends at DEBUG, and the authenticate
+    # frame carries the secret key. The library elides the middle of a long
+    # frame, so it is the key's tail that reaches the log, not the whole of it.
+    # Driven through a real loopback server with the root logger at DEBUG; the
+    # server's own logger is held quiet so the assertion reads the client alone.
+    import websockets
+
+    secret = "s" * 29 + "TAILMARKER7"
+    received: list[dict[str, Any]] = []
+
+    async def server(connection: Any) -> None:
+        received.append(json.loads(await connection.recv()))
+        await connection.send(json.dumps(_AUTHORIZED))
+        await connection.recv()
+
+    server_logger = logging.getLogger("tests.loopback.trade_updates_server")
+    server_logger.setLevel(logging.INFO)
+    async with websockets.serve(server, "127.0.0.1", 0, logger=server_logger) as listening:
+        port = listening.sockets[0].getsockname()[1]
+        monkeypatch.setattr("app.broker.alpaca.trade_updates._stream_url", lambda _: f"ws://127.0.0.1:{port}/stream")
+        caplog.set_level(logging.DEBUG)
+        source = alpaca_socket_frames(AlpacaSettings(api_key_id="key-id", api_secret_key=secret, mode="paper"))
+        await anext(source)
+        await source.aclose()
+
+    assert received[0]["data"]["secret_key"] == secret  # it did cross the wire
+    assert "TAILMARKER7" not in caplog.text
 
 
 def test_stream_url_is_paper_wss_stream() -> None:

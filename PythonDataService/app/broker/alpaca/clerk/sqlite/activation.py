@@ -20,6 +20,7 @@ from app.broker.alpaca.paths import (
     resolve_contained_path,
     safe_path_component,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 ACTIVATION_FILENAME = "_authority_activations.jsonl"
 _RECORD_FIELDS = frozenset(
@@ -116,7 +117,7 @@ class ActivationRecord:
         if (
             type(self.activated_at_ms) is not int
             or self.activated_at_ms < 0
-            or self.activated_at_ms > 2**63 - 1
+            or self.activated_at_ms > MAX_TIMESTAMP_MS
         ):
             raise ActivationRecordInvalid("activation timestamp must be int64 ms UTC")
         for name in (
@@ -352,7 +353,10 @@ def _verified_referenced_json(
         current /= part
         if current.is_symlink():
             raise ActivationRecordInvalid(f"activation {label} path contains a symbolic link")
-    candidate = resolve_contained_path(artifacts_root, *relative.parts)
+    try:
+        candidate = resolve_contained_path(artifacts_root, *relative.parts)
+    except ValueError as exc:
+        raise ActivationRecordInvalid(f"activation {label} path is not a contained path: {exc}") from exc
     try:
         encoded = candidate.read_bytes()
     except OSError as exc:

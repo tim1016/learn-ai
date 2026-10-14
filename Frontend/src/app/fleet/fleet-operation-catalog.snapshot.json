@@ -5,7 +5,7 @@
     "PythonDataService/app/broker/fleet_composition.py (production_provider_adapters)",
     "PythonDataService/app/broker/alpaca/clerk/fleet_adapter.py (ALPACA_OPERATIONS)"
   ],
-  "adapter_version": "alpaca-fleet.13",
+  "adapter_version": "alpaca-fleet.14",
   "operations": {
     "account_money_read": {
       "method": "GET",
@@ -371,6 +371,31 @@
       "method": "GET",
       "path_template": "/accounts/{account_id}/gallery/stream",
       "requires_account": true
+    },
+    "ibkr_expirations_read": {
+      "method": "GET",
+      "path_template": "/market-data/ibkr/expirations/{symbol}",
+      "requires_account": false
+    },
+    "ibkr_health_read": {
+      "method": "GET",
+      "path_template": "/market-data/ibkr/health",
+      "requires_account": false
+    },
+    "ibkr_option_chain_stream": {
+      "method": "GET",
+      "path_template": "/market-data/ibkr/option-chain/{symbol}",
+      "requires_account": false
+    },
+    "ibkr_option_surface_stream": {
+      "method": "GET",
+      "path_template": "/market-data/ibkr/option-surface/{symbol}",
+      "requires_account": false
+    },
+    "ibkr_strikes_read": {
+      "method": "GET",
+      "path_template": "/market-data/ibkr/strikes/{symbol}",
+      "requires_account": false
     },
     "lane_account_quiet_read": {
       "method": "GET",

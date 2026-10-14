@@ -24,7 +24,7 @@ broker at startup never needs keys and the service boots credential-free.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from threading import Lock
 from time import monotonic
@@ -69,6 +69,7 @@ from app.broker.alpaca.send_timing import (
 from app.broker.capture.journal import CaptureJournal, get_capture_journal
 from app.broker.contract.errors import (
     BrokerAuthError,
+    BrokerOrderAnswerUnreadable,
     BrokerRateLimited,
     BrokerRequestInvalid,
     BrokerUnavailable,
@@ -93,6 +94,23 @@ logger = logging.getLogger(__name__)
 
 def _ms_to_utc(after_ms: int) -> datetime:
     return datetime.fromtimestamp(after_ms / 1000, tz=UTC)
+
+
+def _answer_names_the_order_sent(answer: Mapping[str, Any], client_order_id: str) -> bool:
+    """Whether a 2xx order answer is plainly the order that was sent (#3216).
+
+    It states the client order id sent, or carries a non-blank order ``id``
+    and no other client order id. An empty object, an error-shaped body
+    (``{"code": ..., "message": ...}``) and an answer under another client
+    order id are not: they close no visibility window. An answer with an id
+    and no client order id passes because Alpaca's real answers carry both
+    and the fakes' carry an id.
+    """
+    stated = answer.get("client_order_id", client_order_id)
+    if stated != client_order_id:
+        return False
+    order_id = answer.get("id")
+    return "client_order_id" in answer or (isinstance(order_id, str) and bool(order_id.strip()))
 
 
 def _install_session_timeout(session: Session, *, timeout_s: float) -> None:
@@ -259,15 +277,38 @@ class AlpacaTradingClient:
         """
         self._clear_uncertain_submission(order_key)
 
-    def _order_answer_unreadable(self) -> NoReturn:
-        raise BrokerUnavailable(
+    def _order_answer_unreadable(self, held_under: str) -> NoReturn:
+        """Refuse a lookup answer that is no order: unknown, and a 404 that follows is not "absent" (#3216).
+
+        Alpaca answered for this order, so its lookup index may still be
+        catching up (#2913). ``held_under`` is the key the lookup was asked by.
+        """
+        self._mark_submission_uncertain(held_under)
+        raise BrokerOrderAnswerUnreadable(
             "Alpaca's order lookup answer could not be read.",
             broker=self.broker_id,
             detail=(
-                "Alpaca answered 2xx with an empty or null body; "
+                "Alpaca answered 2xx with an empty, null or non-object body; "
                 "whether the order exists is unknown, not absent."
             ),
         )
+
+    def _order_uuid(self, order_id: str) -> str:
+        """``order_id`` in its one canonical spelling; anything that is not a UUID is refused (#2854, #3216).
+
+        An Alpaca order id is a UUID. The refusal is the request Alpaca could
+        not take, raised before one is built: the SDK parses an id itself and
+        raises a bare ``ValueError``, and a cancel's id goes into the URL
+        path, where ``../positions`` names another resource.
+        """
+        try:
+            return str(UUID(order_id))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise BrokerRequestInvalid(
+                f"{order_id!r} is not an Alpaca order id.",
+                broker=self.broker_id,
+                detail="An Alpaca order id is a UUID; nothing was asked of Alpaca.",
+            ) from exc
 
     def _reference_answer_unreadable(self, kind: str) -> NoReturn:
         raise BrokerUnavailable(
@@ -604,7 +645,12 @@ class AlpacaTradingClient:
         ``requests.Session`` the read path uses, so the capture hook journals
         the raw response verbatim, and the same timeout + ``map_api_error``
         translation applies. Returns the raw Alpaca order payload; the adapter
-        maps it to a ``BrokerOrder``.
+        maps it to a ``BrokerOrder``. A 2xx whose body is not an order object
+        (empty, ``null``, or other JSON) is an unknown outcome:
+        ``BrokerOrderAnswerUnreadable`` (a ``BrokerUnavailable``), with the
+        visibility window held (#3216). So is an answer that is empty or
+        states another client order id: it is returned for the caller to
+        judge, and the window it would have closed stays open.
         """
         client_order_id = str(order.get("client_order_id") or "")
         try:
@@ -620,23 +666,35 @@ class AlpacaTradingClient:
             # uncertainty through that explicit consistency window.
             self._mark_submission_uncertain(client_order_id)
             raise
-        self._clear_uncertain_submission(client_order_id)
+        if _answer_names_the_order_sent(result, client_order_id):
+            self._clear_uncertain_submission(client_order_id)
+        else:
+            # Alpaca answered, but not as the order that was sent (empty, error-shaped, or another client
+            # order id): the caller folds that as unknown and looks the order up at once, and a lagging
+            # lookup index would read as "absent". Only an answer that names the order closes the window.
+            self._mark_submission_uncertain(client_order_id)
         return result
 
     def _submit_order_with_body(self, client: Any, order: dict[str, Any]) -> dict[str, Any]:
         result = client.post("/orders", order)
-        if result is None:
-            raise BrokerUnavailable(
+        if not isinstance(result, Mapping):
+            # Not an order: empty, ``null``, or JSON of another shape. Raised here the answer takes the
+            # unknown-outcome path above; handed on, the adapter's ``TypeError`` came after the 200 had
+            # closed the visibility window (#3216).
+            raise BrokerOrderAnswerUnreadable(
                 "Alpaca's order submission answer could not be read.",
                 broker=self.broker_id,
-                detail="Alpaca answered 2xx with an empty or null body; the order may have landed.",
+                detail="Alpaca answered 2xx with an empty, null or non-object body; the order may have landed.",
             )
         return result
 
     async def cancel_order(self, order_id: str) -> None:
         """DELETE ``/v2/orders/{order_id}`` over the owned capturing session.
 
-        ``order_id`` is Alpaca's broker-assigned UUID. The low-level ``delete``
+        ``order_id`` is Alpaca's broker-assigned UUID, held to the gate the
+        order reads are (:meth:`_order_uuid`): any other value is refused as
+        ``BrokerRequestInvalid`` before a request is built, and a UUID is sent
+        in its canonical spelling (#3216). The low-level ``delete``
         drives the same ``requests.Session`` the read path uses, so the capture
         hook journals the raw response verbatim, and the same timeout +
         ``map_api_error`` translation applies. Alpaca returns HTTP 204 (no body)
@@ -644,11 +702,12 @@ class AlpacaTradingClient:
         order, which ``map_api_error`` translates to a typed ``BrokerError``.
         Returns nothing; there is no order payload to map.
         """
+        canonical_id = self._order_uuid(order_id)
         await self._call_write(
-            lambda c: c.delete(f"/orders/{order_id}"),
+            lambda c: c.delete(f"/orders/{canonical_id}"),
             describe="order cancellation",
             throttle_context="cancel",
-            identifier=order_id,
+            identifier=canonical_id,
             request=AlpacaRequest.ORDER_CANCEL,
         )
 
@@ -675,7 +734,9 @@ class AlpacaTradingClient:
 
         A 2xx answered with an empty or ``null`` body never becomes ``None``
         either: alpaca-py hands that back as ``None`` with no 404, and an
-        answer which could not be read is unknown, not absent (#2954).
+        answer which could not be read is unknown, not absent (#2954). Nor
+        does one whose JSON is not an order object (#3216): both are unknown
+        and hold the visibility window, so a 404 that follows is unknown too.
 
         A found order closes the visibility window. A caller that judges the
         answer itself passes ``found_settles_submission=False``: the window
@@ -700,8 +761,8 @@ class AlpacaTradingClient:
                         ) from exc
                     return None
                 raise
-            if result is None:
-                self._order_answer_unreadable()
+            if not isinstance(result, Mapping):
+                self._order_answer_unreadable(client_order_id)
             return result
 
         result = await self._call(_get, describe="order lookup by client_order_id")
@@ -754,16 +815,10 @@ class AlpacaTradingClient:
 
         A 2xx answered with an empty or ``null`` body is never "absent"
         either: the SDK hands that back as ``None`` with no 404, and an
-        answer which could not be read is unknown (#2954).
+        answer which could not be read is unknown (#2954). Nor is one whose
+        JSON is not an order object (#3216).
         """
-        try:
-            held_under = str(UUID(order_id))
-        except ValueError as exc:
-            raise BrokerRequestInvalid(
-                f"{order_id!r} is not an Alpaca order id.",
-                broker=self.broker_id,
-                detail="An Alpaca order id is a UUID; nothing was asked of Alpaca.",
-            ) from exc
+        held_under = self._order_uuid(order_id)
 
         def _get(client: Any) -> dict[str, Any] | None:
             try:
@@ -784,8 +839,8 @@ class AlpacaTradingClient:
                         ) from exc
                     return None
                 raise
-            if result is None:
-                self._order_answer_unreadable()
+            if not isinstance(result, Mapping):
+                self._order_answer_unreadable(held_under)
             return result
 
         describe = "nested order lookup by broker order id" if nested else "order lookup by broker order id"

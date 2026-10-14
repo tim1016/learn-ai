@@ -126,6 +126,7 @@ from app.services.broker_v2_panel.paper_access_service import (
     prepare_paper_access,
 )
 from app.services.broker_v2_panel.strategy_view_source import get_strategy_view
+from app.services.broker_v2_panel.stream_frame_budget import frame_budget_bytes
 from app.services.canary_admission import CanaryActivationRefused, CanaryAdmissionLedgerError
 from app.services.surface_hub import (
     SnapshotStalledError,
@@ -832,6 +833,25 @@ async def stream_live_snapshot_scoped(
                     # the stall, so a cold client mounts the controls (#2353).
                     yield _live_stream_frame(None, snapshot)
                 yield _live_stream_frame(stall, snapshot)
+        except _LiveFrameTooLargeError as error:
+            # The same ``error`` event a failed refresh ends the stream with:
+            # the client reads the stream as failed and polls the REST
+            # snapshot, which is not framed by the coordinator's event cap.
+            logger.error(
+                "[PANEL] live frame exceeds the fleet event cap; ending the stream",
+                extra={
+                    "action": "live_stream_frame_over_cap",
+                    "strategy_instance_id": sid,
+                    "bytes": error.size,
+                    "max_bytes": error.budget,
+                },
+            )
+            message = (
+                f"The live panel update is {error.size:,} bytes, over the {error.budget:,}-byte "
+                "limit the fleet relay accepts, so the stream ended instead of being cut off "
+                "mid-frame."
+            )
+            yield f"event: error\ndata: {json.dumps({'error': message})}\n\n"
         finally:
             hub.unsubscribe(queue)
             release_live_projection_hub(
@@ -853,19 +873,38 @@ def _live_frame_id(snapshot: BotPanelLiveSnapshot) -> str:
     return f"{snapshot.stream_epoch}:{snapshot.surface_version}"
 
 
+class _LiveFrameTooLargeError(Exception):
+    """A snapshot frame is over what the fleet coordinator's parser accepts (#3217)."""
+
+    def __init__(self, size: int, budget: int) -> None:
+        super().__init__(f"live frame is {size} bytes; the budget is {budget}")
+        self.size = size
+        self.budget = budget
+
+
 def _live_stream_frame(
     stall: SurfaceHubStall | None,
     snapshot: BotPanelLiveSnapshot | None,
 ) -> str:
-    """The next live-stream frame; a stall outranks the snapshot and the keepalive."""
+    """The next live-stream frame; a stall outranks the snapshot and the keepalive.
+
+    A snapshot frame is sized against the coordinator's per-event cap before it
+    is sent, never cut off by the coordinator's parser after the 200. The stale
+    and keepalive frames are a few hundred bytes of fixed fields.
+    """
     if stall is not None:
         return f"event: stale\ndata: {_stall_detail(stall).model_dump_json()}\n\n"
     if snapshot is None:
         return ": keepalive\n\n"
-    return (
+    frame = (
         f"id: {_live_frame_id(snapshot)}\nevent: snapshot\n"
         f"data: {snapshot.model_dump_json()}\n\n"
     )
+    size = len(frame.encode())
+    budget = frame_budget_bytes()
+    if size > budget:
+        raise _LiveFrameTooLargeError(size, budget)
+    return frame
 
 
 # ── Presented-action execution (account-scoped + unscoped alias) ─────────────

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -16,11 +17,16 @@ from app.broker.alpaca.clerk.active_authority import (
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.economic_projection import ExecutionRow
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
+    WEBSOCKET_EXACT_CONFLICT_COPY,
+    exact_execution_coverage_conflict,
+)
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
-from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
+from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts, ReconciliationAttemptedFacts
 from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import accept_manual_order_cancellation
 from app.broker.alpaca.clerk.sqlite.manual_orders import accept_manual_order
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
+from app.broker.alpaca.clerk.sqlite.order_evidence import fold_failed
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     OperationPage,
     ProjectedCommand,
@@ -29,7 +35,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
+from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg, OrderSide
 from app.engine.live.order_identity import build_manual_order_namespace, build_order_ref
 from app.schemas.clerk_transaction_projection import (
     ClerkTransactionHistoryResponse,
@@ -384,6 +390,191 @@ def test_manual_cancellation_transaction_keeps_its_target_order_reference(tmp_pa
     assert detail.order_ref == manual.leg.order_ref
     assert detail.order_instruction.symbol == "SPY"
     assert detail.receipt["order_refs"] == [manual.leg.order_ref]
+
+
+def _an_accepted_enter(root: Path) -> tuple[ClerkSqliteRepository, Any]:
+    """A store whose clock never repeats an instant, holding one accepted ENTER."""
+    ticks = iter(range(1_786_370_000_000, 1_786_370_900_000))
+    repo = ClerkSqliteRepository.initialize(
+        account_id="PA-LONG-TIMELINE", artifacts_root=root, clock=lambda: next(ticks)
+    )
+    repo.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="config-1")
+    submit_start_run(
+        repo, account_id="PA-LONG-TIMELINE", strategy_instance_id="spy-bot", lifecycle_run_id="run-1"
+    )
+    accepted = accept_enter(
+        repo,
+        account_id="PA-LONG-TIMELINE",
+        strategy_instance_id="spy-bot",
+        decision_id="decision-1",
+        lifecycle_run_id="run-1",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+    )
+    return repo, accepted
+
+
+def _append_to_operation(repo: ClerkSqliteRepository, accepted: Any, **transition: Any) -> None:
+    effect = repo.effect_operation(accepted.effect_operation_id)
+    assert effect is not None
+    repo.append_transition(
+        TransitionInput(
+            strategy_instance_id=effect.strategy_instance_id,
+            run_id=effect.run_id,
+            command_id=effect.command_id,
+            effect_operation_id=effect.effect_operation_id,
+            order_ref=accepted.order_ref,
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            clerk_observed_at_ms=repo.clock(),
+            **transition,
+        )
+    )
+
+
+def _attempt_reconciliation(repo: ClerkSqliteRepository, accepted: Any) -> None:
+    effect = repo.effect_operation(accepted.effect_operation_id)
+    assert effect is not None
+    _append_to_operation(
+        repo,
+        accepted,
+        transition_kind="RECONCILIATION_ATTEMPTED",
+        operation_state=effect.state,
+        summary_code="RECONCILIATION_ATTEMPTED",
+        facts_json=ReconciliationAttemptedFacts(
+            trigger="AUTOMATIC", outcome="STILL_UNKNOWN", why="the order is not at the broker yet"
+        ).to_facts_json(),
+    )
+
+
+def _a_failed_enter_with_reconciliation_attempts(
+    root: Path, *, before_terminal: int, after_terminal: int
+) -> tuple[ClerkSqliteRepository, str]:
+    """One ENTER that is retried by ``before_terminal`` reconciliation passes, fails, then is looked up ``after_terminal`` more times."""
+    repo, accepted = _an_accepted_enter(root)
+    for _ in range(before_terminal):
+        _attempt_reconciliation(repo, accepted)
+    fold_failed(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        order_ref=accepted.order_ref,
+        summary_code="ORDER_SUBMIT_FAILED",
+        reason="the broker refused the order",
+        why="the broker refused the order",
+    )
+    for _ in range(after_terminal):
+        _attempt_reconciliation(repo, accepted)
+    return repo, accepted.effect_operation_id
+
+
+def _transaction_detail(repo: ClerkSqliteRepository, transaction_id: str) -> Any:
+    broker = _UnusedBroker()
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(
+            authority_kind="sqlite",
+            clerk=SqliteAlpacaClerkFacade(
+                account_mode="paper",
+                repo=repo,
+                read=broker,  # type: ignore[arg-type]
+                trade=broker,  # type: ignore[arg-type]
+            ),
+        )
+    )
+    try:
+        active, detail = sqlite_transaction_detail(account_id=repo.account_id, transaction_id=transaction_id)
+    finally:
+        set_active_clerk_runtime(None)
+    assert active is True
+    assert detail is not None
+    return detail
+
+
+def _journal(repo: ClerkSqliteRepository, operation_id: str) -> list[sqlite3.Row]:
+    return repo._conn.execute(
+        "SELECT sequence, transition_kind, operation_state, recorded_at_ms FROM custody_transitions "
+        "WHERE effect_operation_id = ? ORDER BY sequence",
+        (operation_id,),
+    ).fetchall()
+
+
+def test_transaction_detail_lists_every_transition_of_a_long_operation(tmp_path: Path) -> None:
+    """An operation that outlives 100 reconciliation passes shows all of them, not the first hundred (#3216)."""
+    repo, operation_id = _a_failed_enter_with_reconciliation_attempts(
+        tmp_path, before_terminal=112, after_terminal=0
+    )
+    try:
+        detail = _transaction_detail(repo, operation_id)
+        journal = _journal(repo, operation_id)
+    finally:
+        repo.close()
+
+    assert len(journal) > 100
+    shown = [event for event in detail.events if event.event_id.startswith(f"{operation_id}:transition:")]
+    assert [event.journal_seq for event in shown] == [row["sequence"] for row in journal]
+
+
+def test_the_terminal_stage_is_dated_at_the_transition_that_reached_it(tmp_path: Path) -> None:
+    """Looking the failed order up again afterwards leaves its terminal time where the failure was recorded (#3216)."""
+    repo, operation_id = _a_failed_enter_with_reconciliation_attempts(
+        tmp_path, before_terminal=3, after_terminal=2
+    )
+    try:
+        detail = _transaction_detail(repo, operation_id)
+        journal = _journal(repo, operation_id)
+    finally:
+        repo.close()
+
+    failed = next(row for row in journal if row["transition_kind"] == "ORDER_SUBMIT_FAILED")
+    assert journal[-1]["recorded_at_ms"] > failed["recorded_at_ms"]
+    assert detail.custody_timeline is not None
+    assert detail.custody_timeline.economic_terminal_recorded_at_ms == failed["recorded_at_ms"]
+
+
+def test_a_succeeded_operation_is_dated_where_its_state_last_changed_whatever_its_records_say(
+    tmp_path: Path,
+) -> None:
+    """A coverage conflict is written ``succeeded`` by its producer while the operation is still in flight.
+
+    The terminal stage is the operation's own record of when its state last
+    changed, not the first transition that happens to carry the label (#3216).
+    """
+    repo, accepted = _an_accepted_enter(tmp_path)
+    _attempt_reconciliation(repo, accepted)
+    owner = repo.effect_operation(accepted.effect_operation_id)
+    assert owner is not None
+    repo.append_transition(
+        exact_execution_coverage_conflict(
+            repo,
+            event=BrokerOrderEvent(
+                event_type="fill", occurred_at_ms=1_786_370_000_000, price=100.0, quantity=1.0, execution_id="exec-1"
+            ),
+            broker_order_id="broker-1",
+            order_ref=accepted.order_ref,
+            owner=owner,
+            conflict_copy=WEBSOCKET_EXACT_CONFLICT_COPY,
+            proof_reference="proof-1",
+        )
+    )
+    _attempt_reconciliation(repo, accepted)
+    _append_to_operation(
+        repo,
+        accepted,
+        transition_kind="EXIT_ATTRIBUTED_FLAT",
+        operation_state="succeeded",
+        summary_code="STOPPED_AND_ATTRIBUTED_FLAT",
+        facts_json="{}",
+    )
+    try:
+        detail = _transaction_detail(repo, accepted.effect_operation_id)
+        journal = _journal(repo, accepted.effect_operation_id)
+    finally:
+        repo.close()
+
+    raised = next(row for row in journal if row["transition_kind"] == "UNCERTAINTY_RAISED")
+    flat = next(row for row in journal if row["transition_kind"] == "EXIT_ATTRIBUTED_FLAT")
+    assert raised["operation_state"] == "succeeded" and raised["sequence"] < flat["sequence"]
+    assert detail.lifecycle_state == "succeeded"
+    assert detail.custody_timeline is not None
+    assert detail.custody_timeline.economic_terminal_recorded_at_ms == flat["recorded_at_ms"]
 
 
 def test_transaction_response_accepts_the_longest_canonical_manual_subject_id() -> None:

@@ -3,9 +3,10 @@
 Issue #1729 AC #8: "``authority_kind`` survives storage, generated contracts,
 and UI; mixed synthetic/real aggregate requests are rejected." A roster or
 panel aggregate accepts exactly one Clerk account authority — the real-paper
-account or one isolated ``sim:`` account — never a blend. This is the read
-boundary ``panel_projection_service.build_panel`` resolves an evidence cut's
-authority through, and refuses to serve an aggregate that would mix
+account or one isolated ``sim:`` account — never a blend.
+``panel_projection_service.build_panel`` resolves an evidence cut's authority
+and stamps its decisions with it; ``sqlite_panel_adapter.adapt_sqlite_panel``
+authors the fills and refuses to serve an aggregate that would mix
 authorities. It reuses the tested ``SingleAuthorityAggregate`` guard
 (``app.schemas.account_authority``) rather than re-deriving the check.
 """
@@ -69,9 +70,10 @@ def reject_mixed_authority(
     impossible to serve.
 
     Every row reaching this point must already carry its authority metadata
-    (``panel_projection_service._recent_activity_views`` stamps it on every
-    branch); a row that doesn't is itself a projection bug, so this fails
-    closed rather than silently skipping it.
+    (``panel_projection_service._mode_decision_views`` stamps the decisions on
+    every branch and ``sqlite_panel_adapter.recent_fill_view`` each fill); a
+    row that doesn't is itself a projection bug, so this fails closed rather
+    than silently skipping it.
 
     The aggregate's own id and kind are checked before the rows are, so a
     shadow authority paired with a bare route account id is refused even on

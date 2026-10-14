@@ -246,6 +246,13 @@ def test_a_wrong_worker_key_never_registers(control_dir: Path, fleet_service) ->
         fleet_service.register_agent_session(
             fleet_protocol_version=2,clerk_id=lane.clerk_id, worker_key="wkrk_00000000000000000000000000000000"
         )
+    # A key ``hmac.compare_digest`` cannot compare as ``str`` (non-ASCII, or a
+    # lone surrogate from a JSON body) is a mismatch, not a 500.
+    for unrepresentable in ("wkrk_caf\xe9", "wkrk_\ud800"):
+        with pytest.raises(ClerkIdentityMismatch):
+            fleet_service.register_agent_session(
+                fleet_protocol_version=2, clerk_id=lane.clerk_id, worker_key=unrepresentable
+            )
 
 
 async def test_local_presence_reverifies_the_volume_at_registration_and_reservation(

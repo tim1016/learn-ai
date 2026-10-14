@@ -110,10 +110,10 @@ class StopRunRequest(BaseModel):
     is no longer resolved from the currently active run, since that made a
     lost response unrecoverable — see ADR 0035's binding annex §3a."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    lifecycle_run_id: str = Field(min_length=1)
-    operator_reason: str | None = None
+    lifecycle_run_id: str = Field(min_length=1, max_length=512)
+    operator_reason: str | None = Field(default=None, max_length=512)
 
 
 class ReconciliationResponse(BaseModel):

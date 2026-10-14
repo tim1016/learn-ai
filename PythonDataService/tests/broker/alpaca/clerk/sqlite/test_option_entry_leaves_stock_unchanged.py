@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import _enter_identity, accept_enter
 from app.broker.alpaca.clerk.sqlite.exit import _exit_identity
@@ -73,6 +75,17 @@ def test_a_stock_enter_with_a_reservation_writes_the_facts_it_wrote_on_master() 
         '"order_type":"limit","quantity":3.0,"side":"buy","symbol":"QQQ","time_in_force":"day"},"payload_hash":"p"}'
     )
     assert EnterAcceptedFacts.from_facts_json(facts.to_facts_json()) == facts
+
+
+def test_a_fee_provision_with_no_cash_reference_is_refused_not_dropped() -> None:
+    facts = EnterAcceptedFacts(
+        idempotency_key="spy-bot:d-1", payload_hash="p", kind="strategy_decision", action="ENTER",
+        intended_end_state=None, effect_idempotency_key="enter:spy-bot:d-1", effect_kind="ENTER", decision_id="d-1",
+        leg=_LIMIT.model_dump(mode="json"), cash_reference_price=None, fee_provision_cents=3,
+    )
+
+    with pytest.raises(ValueError, match="fee provision"):
+        facts.to_facts_json()
 
 
 def test_a_stock_exit_hashes_and_is_written_as_it_was_on_master() -> None:

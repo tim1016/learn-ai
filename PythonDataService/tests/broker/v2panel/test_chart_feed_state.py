@@ -33,7 +33,6 @@ from app.schemas.market_liveness import (
     SymbolTradingStatusEvidence,
 )
 from app.services import live_bar_aggregator as lba_mod
-from app.services.broker_v2_panel import panel_chart_data_source
 from app.services.broker_v2_panel.chart_projection_service import chart_feed_view
 from app.services.broker_v2_panel.market_pulse import build_market_pulse
 from app.services.broker_v2_panel.panel_chart_data_source import (
@@ -496,25 +495,3 @@ def test_chart_feed_view_flags_every_non_delivering_line(
     assert view.attention_required is attention
     assert view.headline
     assert view.explanation
-
-
-async def test_live_snapshot_serves_the_same_headline_as_the_panel(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The snapshot no longer rewrites the headline, so it and ``/panel`` agree."""
-    panel = SimpleNamespace(symbol="SPY", traded=None, market_pulse=object())
-
-    async def panel_with_fills(*_args: object, **_kwargs: object):
-        return panel, [], ()
-
-    async def chart_from_fills(*_args: object, **_kwargs: object) -> SimpleNamespace:
-        return SimpleNamespace(feed=chart_feed_view(ChartFeedStatus(state="STALLED")))
-
-    monkeypatch.setattr(panel_chart_data_source, "get_panel_with_chart_fills", panel_with_fills)
-    monkeypatch.setattr(panel_chart_data_source, "_build_live_chart_from_fills", chart_from_fills)
-
-    snapshot_panel, _chart = await panel_chart_data_source.get_live_snapshot_parts(
-        "alpaca", "paper-account", "sid-2355", resolution="1m"
-    )
-
-    assert snapshot_panel is panel

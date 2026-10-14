@@ -7,6 +7,8 @@ Fixture layout (activities.json):
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from app.broker.alpaca.adapter import (
@@ -93,6 +95,35 @@ def test_non_trade_activity_maps_to_non_trade_category(
     assert activity.net_amount == 100000.0
     assert activity.side is None
     assert activity.occurred_at_ms == et_date_to_ms("2026-07-21")
+
+
+@pytest.mark.parametrize("field", ["qty", "price", "net_amount"])
+@pytest.mark.parametrize("figure", ["NaN", "-Infinity", float("inf")], ids=repr)
+async def test_an_activity_figure_that_is_not_finite_reads_absent_and_never_refuses_the_page(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    caplog: pytest.LogCaptureFixture,
+    field: str,
+    figure: object,
+) -> None:
+    """One row's figure once refused the whole page (#3216).
+
+    ``None`` is the unknown amount every consumer of an activity already
+    handles (an unusable cash flow, a fee of no known amount). A transfer's
+    own amount is held to a finite check before it is mapped
+    (``test_transfer_cursor_rejects_an_invalid_raw_net_amount``).
+    """
+    trade, non_trade = load_alpaca_fixture("activities", "activities.json")
+    client = _ActivitiesClient({None: [{**trade, field: figure}, non_trade]})
+    broker = AlpacaBroker(client=client)  # type: ignore[arg-type]
+
+    with caplog.at_level(logging.WARNING, logger="app.broker.alpaca.adapter"):
+        activities = await broker.list_activities(limit=25)
+
+    assert [activity.activity_id for activity in activities] == [trade["id"], non_trade["id"]]
+    attribute = {"qty": "quantity", "price": "price", "net_amount": "net_amount"}[field]
+    assert getattr(activities[0], attribute) is None
+    (record,) = [r for r in caplog.records if r.name == "app.broker.alpaca.adapter"]
+    assert (record.action, record.field) == ("alpaca_optional_figure_not_finite", field)
 
 
 async def test_activity_cursor_filters_the_contract_occurred_at_timestamp(

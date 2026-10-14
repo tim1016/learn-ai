@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -10,9 +11,11 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.broker.alpaca.adapter import (
+    _NON_FINITE_RENOTE_S,
     et_date_to_ms,
     occurred_at_ms,
     opt_bool,
+    opt_finite_or_none,
     opt_float,
     opt_rfc3339_to_ms,
     rfc3339_to_ms,
@@ -68,6 +71,86 @@ def test_numeric_helpers_refuse_a_number_too_large_for_a_float_as_unreadable(
     # is written to catch: it escaped as a raw error (#2627, #2648 review).
     with pytest.raises(ValueError, match="too large"):
         parser(10**400)
+
+
+@pytest.mark.parametrize("parser", [to_float, opt_float])
+@pytest.mark.parametrize(
+    "value", ["NaN", "nan", "Infinity", "-inf", "1e999", float("nan"), float("inf"), float("-inf")], ids=repr
+)
+def test_numeric_helpers_refuse_a_number_that_is_not_finite(
+    parser: Callable[[Any], float | None], value: object
+) -> None:
+    # ``float("NaN")`` parses, and every comparison made of a NaN is False (#3216).
+    with pytest.raises(ValueError, match="must be finite"):
+        parser(value)
+
+
+@pytest.mark.parametrize("parser", [to_float, opt_float])
+@pytest.mark.parametrize(("value", "expected"), [("0", 0.0), (-3, -3.0), ("1.25", 1.25), (1e300, 1e300)], ids=repr)
+def test_numeric_helpers_keep_every_finite_number_including_zero_and_negatives(
+    parser: Callable[[Any], float | None], value: object, expected: float
+) -> None:
+    assert parser(value) == expected
+
+
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "-inf", "1e999", float("nan"), float("inf")], ids=repr)
+def test_an_optional_informational_figure_that_is_not_finite_reads_absent_with_one_warning(
+    value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The lenient helper refuses the value without refusing the read it came in (#3216)."""
+    with caplog.at_level(logging.WARNING, logger="app.broker.alpaca.adapter"):
+        assert opt_finite_or_none(value, field="sma") is None
+
+    (record,) = caplog.records
+    assert (record.action, record.field, record.levelno) == (
+        "alpaca_optional_figure_not_finite",
+        "sma",
+        logging.WARNING,
+    )
+
+
+def test_a_persistently_non_finite_figure_is_logged_once_per_field_per_window(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The account is read every few seconds: one bad figure must not write four lines a minute (#3216)."""
+    now = [1_000.0]
+    monkeypatch.setattr("app.broker.alpaca.adapter.monotonic", lambda: now[0])
+
+    with caplog.at_level(logging.WARNING, logger="app.broker.alpaca.adapter"):
+        for _ in range(5):
+            assert opt_finite_or_none("NaN", field="sma") is None
+        assert [record.field for record in caplog.records] == ["sma"]
+
+        # Another field is its own fault; the figure's reads in between do not re-arm the first.
+        assert opt_finite_or_none("inf", field="last_equity") is None
+        assert opt_finite_or_none(1.0, field="sma") == 1.0
+        assert opt_finite_or_none("NaN", field="sma") is None
+        assert [record.field for record in caplog.records] == ["sma", "last_equity"]
+
+        # Still bad an hour on: said again, once.
+        now[0] += _NON_FINITE_RENOTE_S
+        assert opt_finite_or_none("NaN", field="sma") is None
+        assert opt_finite_or_none("NaN", field="sma") is None
+    assert [record.field for record in caplog.records] == ["sma", "last_equity", "sma"]
+
+
+@pytest.mark.parametrize(("value", "expected"), [(None, None), ("", None), ("0", 0.0), (-3, -3.0), ("1.25", 1.25)], ids=repr)
+def test_an_optional_informational_figure_that_is_finite_or_absent_is_read_as_it_is(
+    value: object, expected: float | None, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="app.broker.alpaca.adapter"):
+        assert opt_finite_or_none(value, field="sma") == expected
+
+    assert caplog.records == []
+
+
+@pytest.mark.parametrize(
+    ("value", "error"), [(True, TypeError), ("not-a-number", ValueError), (10**400, ValueError)], ids=repr
+)
+def test_the_lenient_helper_still_refuses_what_is_not_a_number_at_all(value: object, error: type[Exception]) -> None:
+    # Only a finite-ness failure reads absent: a boolean or text in a money field is a corrupt answer.
+    with pytest.raises(error):
+        opt_finite_or_none(value, field="sma")
 
 
 @pytest.mark.parametrize(

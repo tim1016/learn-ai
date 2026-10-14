@@ -18,7 +18,6 @@ process-wide settings lazily on first use, exactly as it always has.
 from __future__ import annotations
 
 import logging
-import math
 from collections.abc import Callable, Mapping
 from itertools import pairwise
 from typing import Any
@@ -170,10 +169,8 @@ def _validate_transfer_payload(payload: object) -> None:
             ),
         )
     try:
-        numeric_amount = adapter.to_float(payload.get("net_amount"))
-    except (TypeError, ValueError):
-        numeric_amount = math.nan
-    if not math.isfinite(numeric_amount):
+        adapter.to_float(payload.get("net_amount"))
+    except (TypeError, ValueError) as exc:
         raise BrokerEvidenceUnavailable(
             "An Alpaca transfer activity had no valid net amount.",
             broker=BROKER_ID,
@@ -181,7 +178,7 @@ def _validate_transfer_payload(payload: object) -> None:
                 "Transfer net_amount must be a finite non-boolean number before "
                 "it can adjust account day P&L."
             ),
-        )
+        ) from exc
 
 
 def _mapped_activities(payloads: list[Mapping[str, Any]]) -> list[BrokerActivity]:

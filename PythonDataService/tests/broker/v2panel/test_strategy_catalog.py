@@ -208,6 +208,24 @@ async def test_panel_golden_catalog_keeps_other_symbol_scopes_for_fail_closed_se
     }
 
 
+@pytest.mark.asyncio
+async def test_panel_golden_catalog_tells_a_failed_read_from_no_validations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def none_accepted(operation, **kwargs):
+        return []
+
+    async def unreachable(operation, **kwargs):
+        raise OSError("research store unreachable")
+
+    monkeypatch.setattr(panel_deploy, "with_connection", none_accepted)
+    assert await panel_deploy._current_golden_validation_scopes(None) == {}
+
+    monkeypatch.setattr(panel_deploy, "with_connection", unreachable)
+    with pytest.raises(panel_deploy.GoldenValidationEvidenceUnreadable):
+        await panel_deploy._current_golden_validation_scopes(None)
+
+
 def test_golden_validation_never_bypasses_program_account_access() -> None:
     rows = _strategy_views(
         [],
@@ -265,8 +283,46 @@ def test_other_symbol_golden_scope_blocks_legacy_strategy_wide_fallback() -> Non
     assert rows[0].selectable is False
     assert rows[0].golden_validation_scope is False
     assert rows[0].admissible_modes == ("dry_run",)
-    assert rows[0].blocked_explanation is not None
-    assert "Golden Validation" in rows[0].blocked_explanation
+    # Named for what it is: reviewed for another ticker, not unable to be represented.
+    assert rows[0].blocked_explanation == (
+        "This strategy's Golden Validation was reviewed for TSLA, not MSFT. Deploy it for a reviewed "
+        "ticker, or complete a Golden Validation for MSFT."
+    )
+
+
+def test_every_reviewed_ticker_is_named_when_none_is_the_requested_one() -> None:
+    rows = _strategy_views(
+        [],
+        account_id=ACCT,
+        custody_world="real_paper",
+        golden_validation_scopes={"ema_crossover_signal": (_golden_scope("TSLA"), _golden_scope("AAPL"))},
+        requested_symbol="msft",
+    )
+
+    assert rows[0].selectable is False
+    assert rows[0].blocked_explanation == (
+        "This strategy's Golden Validation was reviewed for AAPL, TSLA, not MSFT. Deploy it for a reviewed "
+        "ticker, or complete a Golden Validation for MSFT."
+    )
+
+
+def test_a_requested_ticker_whose_own_golden_scope_cannot_be_represented_says_so() -> None:
+    """The requested ticker WAS reviewed: the blocker is the scope, not the ticker."""
+    rows = _strategy_views(
+        [],
+        account_id=ACCT,
+        custody_world="real_paper",
+        golden_validation_scopes={
+            "ema_crossover_signal": (GoldenValidationScope(symbol="TSLA", parameters={"gap": 0.75}),)
+        },
+        requested_symbol="TSLA",
+    )
+
+    assert rows[0].selectable is False
+    assert rows[0].blocked_explanation == (
+        "The reviewed Golden Validation cannot be represented by this strategy's current deployment "
+        "parameter contract. Revalidate it against the current program before broker deployment."
+    )
 
 
 def test_incomplete_golden_scope_fails_closed_instead_of_using_current_defaults(

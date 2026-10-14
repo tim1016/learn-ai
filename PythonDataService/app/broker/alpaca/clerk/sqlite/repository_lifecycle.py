@@ -198,6 +198,23 @@ def wal_filesystem_type(path: Path) -> str | None:
     return _linux_filesystem_type(path)
 
 
+def create_database_file(db_path: Path) -> None:
+    """Create ``db_path`` empty, or raise ``FileExistsError``.
+
+    The one create that proves this call made the file: the ``is_file()``
+    checks that precede it run under a shared fence, so two initializers of a
+    new account can both pass them. Only a file made here may be removed by
+    :func:`remove_database_file_created_here`.
+    """
+    os.close(os.open(db_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
+
+
+def remove_database_file_created_here(db_path: Path) -> None:
+    """Remove a database file :func:`create_database_file` made, and SQLite's side files for it."""
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        Path(f"{db_path}{suffix}").unlink(missing_ok=True)
+
+
 def initialize_repository(
     *,
     repository_type: type[ClerkSqliteRepository],
@@ -268,10 +285,22 @@ def _initialize_repository_unfenced(
     assert_wal_filesystem_supported(account_dir)
     account_dir.mkdir(parents=True, exist_ok=True)
     fsync_directory_chain(account_dir, artifacts_root)
+    try:
+        create_database_file(db_path)
+    except FileExistsError as exc:
+        # Another initializer made it after the check above: its file is not ours to touch.
+        raise AlreadyInitialized(f"{db_path} already exists; use open()") from exc
     conn = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    schema.configure_connection(conn)
-    schema.apply_schema(conn)
+    try:
+        schema.configure_connection(conn)
+        schema.apply_schema(conn)
+    except BaseException:
+        # Ours, and the registry has no entry for it yet: left behind it would turn the
+        # next initialize() into AlreadyInitialized.
+        conn.close()
+        remove_database_file_created_here(db_path)
+        raise
 
     now = clock()
     db_identity_token = secrets.token_hex(16)
@@ -373,6 +402,9 @@ def _read_control_row(db_path: Path) -> tuple[sqlite3.Connection, sqlite3.Row]:
     except sqlite3.DatabaseError as exc:
         conn.close()
         raise IntegrityCheckFailed(f"{db_path} is corrupt: {exc}") from exc
+    except Exception:
+        conn.close()
+        raise
     if control_row is None:
         conn.close()
         raise ClerkSqliteError(f"{db_path} has no control_meta row — not a valid clerk.db")
@@ -397,13 +429,11 @@ def _validate_control_identity(
         latest.db_identity_token != control_row["db_identity_token"]
         or latest.authority_generation != control_row["authority_generation"]
     ):
-        conn.close()
         raise DatabaseIdentityMismatch(
             f"{db_path} identity/generation disagrees with the established-accounts "
             f"registry for {account_id!r} — possible file substitution or generation rollback"
         )
     if control_row["account_id"] != account_id:
-        conn.close()
         raise DatabaseIdentityMismatch(
             f"{db_path} embeds account_id {control_row['account_id']!r}, "
             f"requested {account_id!r}"
@@ -412,13 +442,11 @@ def _validate_control_identity(
         try:
             schema.migrate_schema(conn, from_version=control_row["schema_version"])
         except ValueError as exc:
-            conn.close()
             raise SchemaVersionMismatch(
                 f"{db_path} schema_version={control_row['schema_version']}, "
                 f"expected {schema.SCHEMA_VERSION}: {exc}"
             ) from exc
     elif control_row["schema_version"] > schema.SCHEMA_VERSION:
-        conn.close()
         raise SchemaVersionMismatch(
             f"{db_path} schema_version={control_row['schema_version']}, "
             f"expected {schema.SCHEMA_VERSION}"
@@ -442,15 +470,10 @@ def _verified_chain_payloads(
             "FROM custody_transitions ORDER BY sequence ASC"
         ).fetchall()
     except sqlite3.DatabaseError as exc:
-        conn.close()
         raise IntegrityCheckFailed(f"{db_path} is corrupt: {exc}") from exc
-    except IntegrityCheckFailed:
-        conn.close()
-        raise
     chain_payloads = [writes.row_to_payload(row) for row in transition_rows]
     bad_sequence = verify_chain(chain_payloads)
     if bad_sequence is not None:
-        conn.close()
         raise HashChainBroken(f"{db_path} hash-chain mismatch at sequence {bad_sequence}")
     return chain_payloads
 
@@ -495,7 +518,6 @@ def _acquire_execution_lease(
         (now, owner, now + lease_ttl_ms, owner, now),
     )
     if cursor.rowcount == 0:
-        conn.close()
         raise ExecutionLeaseHeld(
             f"account {account_id!r} execution lease is held by another live process"
         )
@@ -551,50 +573,51 @@ def _open_repository_unfenced(
     _require_existing_database(account_id=account_id, db_path=db_path, registry=registry)
     assert_wal_filesystem_supported(account_dir)
     conn, control_row = _read_control_row(db_path)
-    _validate_control_identity(
-        conn=conn,
-        control_row=control_row,
-        registry=registry,
-        account_id=account_id,
-        db_path=db_path,
-    )
-    chain_payloads = _verified_chain_payloads(conn, db_path)
-
-    mirror = MirrorFile(
-        mirror_path,
-        expected_identity=MirrorIdentity(
-            account_id=account_id,
-            authority_generation=control_row["authority_generation"],
-            db_identity_token=control_row["db_identity_token"],
-        ),
-    )
     try:
+        _validate_control_identity(
+            conn=conn,
+            control_row=control_row,
+            registry=registry,
+            account_id=account_id,
+            db_path=db_path,
+        )
+        chain_payloads = _verified_chain_payloads(conn, db_path)
+
+        mirror = MirrorFile(
+            mirror_path,
+            expected_identity=MirrorIdentity(
+                account_id=account_id,
+                authority_generation=control_row["authority_generation"],
+                db_identity_token=control_row["db_identity_token"],
+            ),
+        )
         finalized_sequences = mirror.reconcile(chain_payloads, clock=clock)
         _require_every_finalized_sequence_committed(conn, db_path, finalized_sequences)
-    except Exception:
+
+        owner = lease_owner or writes.default_lease_owner()
+        now = clock()
+        _acquire_execution_lease(
+            conn=conn,
+            account_id=account_id,
+            owner=owner,
+            now=now,
+            lease_ttl_ms=lease_ttl_ms,
+        )
+
+        return repository_type(
+            account_id=account_id,
+            account_dir=account_dir,
+            db_path=db_path,
+            mirror_path=mirror_path,
+            conn=conn,
+            mirror=mirror,
+            clock=clock,
+            fold_registry=fold_registry,
+            lease_owner=owner,
+            lease_ttl_ms=lease_ttl_ms,
+            authority_generation=control_row["authority_generation"],
+        )
+    except BaseException:
+        # A refusal at any startup check leaves no connection behind, whatever raised it.
         conn.close()
         raise
-
-    owner = lease_owner or writes.default_lease_owner()
-    now = clock()
-    _acquire_execution_lease(
-        conn=conn,
-        account_id=account_id,
-        owner=owner,
-        now=now,
-        lease_ttl_ms=lease_ttl_ms,
-    )
-
-    return repository_type(
-        account_id=account_id,
-        account_dir=account_dir,
-        db_path=db_path,
-        mirror_path=mirror_path,
-        conn=conn,
-        mirror=mirror,
-        clock=clock,
-        fold_registry=fold_registry,
-        lease_owner=owner,
-        lease_ttl_ms=lease_ttl_ms,
-        authority_generation=control_row["authority_generation"],
-    )

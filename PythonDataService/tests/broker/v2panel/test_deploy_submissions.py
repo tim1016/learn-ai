@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
@@ -18,6 +19,8 @@ from httpx import ASGITransport
 
 from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
+from app.broker.contract.errors import BrokerError
+from app.broker.contract.registry import get_broker_registry
 from app.engine.live.identity import strategy_instance_artifact_dir
 from app.engine.strategy.registry import (
     _STRATEGY_REGISTRY,
@@ -30,6 +33,7 @@ from app.schemas.exit_terms import ExitTermsInput
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_runner import AdmittedBotStart, set_bot_task_registry
 from app.services.bot_runner_errors import UnknownBotError
+from app.services.broker_account_snapshot import clear_broker_account_snapshot_cache_for_testing
 from app.services.broker_v2_panel import budget_deploy, deploy_submissions, panel_deploy
 from app.services.broker_v2_panel.deploy_submissions import (
     BotNameUnavailable,
@@ -40,7 +44,7 @@ from app.services.broker_v2_panel.deploy_submissions import (
 )
 from app.services.broker_v2_panel.paper_deploy_service import resolve_deploy_strategy_params
 from app.utils import timestamps
-from tests.broker.v2panel.conftest import _BODY, DEPLOYED_SID
+from tests.broker.v2panel.conftest import _BODY, _SETTINGS, DEPLOYED_SID, account_snapshot
 from tests.broker.v2panel.fixtures import ACCT
 
 _ALLOW_BODY_STRATEGY = frozenset({("ema_crossover_signal", ACCT)})
@@ -108,11 +112,11 @@ _DAY_MS = 86_400_000
 
 def _claim(
     ledger: DeploySubmissionLedger, key: str, *, fingerprint: str = "settings-a", replaces: str | None = None,
-    now_ms: int = _AT, renew: DeploySubmission | None = None,
+    now_ms: int = _AT, renew: DeploySubmission | None = None, account_id: str = ACCT,
 ) -> DeploySubmission:
     return ledger.claim(
-        submission_key=key, symbol="SPY", strategy_key="ema_crossover_signal", request_fingerprint=fingerprint,
-        replaces_strategy_instance_id=replaces, now_ms=now_ms, renew=renew,
+        submission_key=key, account_id=account_id, symbol="SPY", strategy_key="ema_crossover_signal",
+        request_fingerprint=fingerprint, replaces_strategy_instance_id=replaces, now_ms=now_ms, renew=renew,
     )
 
 
@@ -759,6 +763,193 @@ async def test_the_recovery_read_without_a_bot_runner_is_unavailable_not_a_denia
     assert response.status_code == 503
     assert response.json()["detail"]["message"] == "The bot runner is not available."
     assert "Nothing was set aside" not in response.text
+
+
+# ── The recovery read answers for the account the key was claimed under ─────
+
+_OTHER_ACCT = "other-acct"
+_OTHER_RECOVERY = f"/api/brokers/alpaca/accounts/{_OTHER_ACCT}/deploy-submissions"
+_NOT_THIS_ACCOUNT = "This Deploy was sent under another account."
+
+
+def _lane_now_serves(account_id: str) -> None:
+    """The broker now names ``account_id``, and no cached read still says otherwise."""
+    get_broker_registry().resolve("alpaca").account = account_snapshot(account_id=account_id)  # type: ignore[attr-defined]
+    clear_broker_account_snapshot_cache_for_testing()
+
+
+def _custody_holds_only(budgeted, monkeypatch: pytest.MonkeyPatch, account_id: str) -> None:
+    """Custody answers for the account whose authority committed the bot: another account's store has no row for it."""
+    committed_by = canonical_alpaca_account_id(account_id)
+
+    async def command_receipt(asked_account: str, submission: DeploySubmission) -> BudgetDeployCommandReceipt | None:
+        if canonical_alpaca_account_id(asked_account) != committed_by:
+            return None
+        return budgeted.committed.get(submission.strategy_instance_id)
+
+    monkeypatch.setattr(budget_deploy, "command_receipt", command_receipt)
+
+
+def _write_claim_from_before_claims_named_an_account(root: Path, key: str, sid: str) -> None:
+    """A claim as the ledger wrote it before a claim carried its account: no ``account_id`` field."""
+    record = json.dumps({
+        "claimed_at_ms": _AT, "replaces_strategy_instance_id": None, "request_fingerprint": "settings-a",
+        "strategy_instance_id": sid, "submission_key": key,
+    }, sort_keys=True, separators=(",", ":"))
+    for path in (root / "deploy_submissions" / "names" / f"{sid}.json", root / "deploy_submissions" / "keys" / key / "1.json"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(record, encoding="utf-8")
+
+
+def test_a_claim_keeps_its_account_canonical_however_it_was_built(tmp_path: Path) -> None:
+    _claim(DeploySubmissionLedger(tmp_path), "submission-a", account_id="PA-ACCT-1")
+
+    # Canonical, so every spelling of the route compares equal to it -- on a
+    # claim read back from disk and on one built anywhere else.
+    assert DeploySubmissionLedger(tmp_path).by_key("submission-a").account_id == "pa-acct-1"
+    built = DeploySubmission(
+        submission_key="submission-b", strategy_instance_id="spy-ema-20260925-0931", claimed_at_ms=_AT,
+        request_fingerprint="settings-a", account_id=" PA3 ",
+    )
+    assert built.account_id == "pa3"
+
+
+def test_the_hundredth_name_of_a_minute_is_refused_by_the_claim_itself(tmp_path: Path) -> None:
+    ledger = DeploySubmissionLedger(tmp_path)
+    claimed = [_claim(ledger, f"fill-{ordinal:03d}") for ordinal in range(99)]
+
+    with pytest.raises(BotNameUnavailable, match="More than 99 SPY bots"):
+        _claim(ledger, "one-too-many")
+
+    assert len({claim.strategy_instance_id for claim in claimed}) == 99
+    # Nothing was published for the refused key, and no name beyond the ninety-ninth exists.
+    assert ledger.by_key("one-too-many") is None
+    assert len(_names(tmp_path)) == 99
+
+
+@pytest.mark.parametrize("deploy_commits", [True, False])
+async def test_a_key_claimed_under_one_account_is_never_read_as_not_committed_through_another(
+    budgeted, monkeypatch: pytest.MonkeyPatch, deploy_commits: bool,
+) -> None:
+    """The key's bot committed under account A, and the lane now serves B.
+
+    B's custody holds no row for it, so reading it there answered
+    ``not_committed`` and the client freed a key whose bot is on duty. The
+    read is refused by name instead, and not with the 404 that frees a key.
+    """
+    if not deploy_commits:
+        budgeted.refuse.append(BudgetUnavailable("Wait for a fresh IBKR price, then review Deploy again."))
+
+    async with _client(budgeted.app) as client:
+        deployed = await client.post(_BOTS, json=_BUDGETED)
+        _custody_holds_only(budgeted, monkeypatch, ACCT)
+        _lane_now_serves(_OTHER_ACCT)
+        elsewhere = await client.get(f"{_OTHER_RECOVERY}/{_BODY['submission_key']}")
+        _lane_now_serves(ACCT)
+        at_home = await client.get(f"{_RECOVERY}/{_BODY['submission_key']}")
+
+    assert deployed.status_code == (201 if deploy_commits else 409)
+    assert elsewhere.status_code == 404
+    detail = elsewhere.json()["detail"]
+    assert detail["message"] == _NOT_THIS_ACCOUNT
+    assert detail["why"] == (
+        f"Its submission key was claimed under account {ACCT}; this is account {_OTHER_ACCT}. "
+        "Nothing about it is read or settled here."
+    )
+    # Only the route's typed "never claimed" 404 frees a client's key.
+    assert detail["reason_code"] is None
+    assert at_home.status_code == 200
+    assert at_home.json()["status"] == ("deployed" if deploy_commits else "not_committed")
+
+
+async def test_a_deploy_being_sent_is_never_called_in_flight_through_another_account(budgeted) -> None:
+    release, entered = asyncio.Event(), asyncio.Event()
+    deploy = budgeted.registry.deploy_with_admission
+
+    async def slow_deploy(**kwargs: object) -> AdmittedBotStart:
+        entered.set()
+        await release.wait()
+        return await deploy(**kwargs)
+
+    budgeted.registry.deploy_with_admission = slow_deploy
+
+    async with _client(budgeted.app) as client:
+        sending = asyncio.create_task(client.post(_BOTS, json=_BUDGETED))
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        _lane_now_serves(_OTHER_ACCT)
+        elsewhere = await client.get(f"{_OTHER_RECOVERY}/{_BODY['submission_key']}")
+        release.set()
+        sent = await sending
+
+    assert elsewhere.status_code == 404
+    assert elsewhere.json()["detail"]["message"] == _NOT_THIS_ACCOUNT
+    assert sent.status_code == 201
+
+
+async def test_the_recovery_read_answers_a_committed_receipt_while_the_broker_account_read_is_down(
+    budgeted, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The owner lost the Deploy's response during an Alpaca account-read outage: the receipt is local custody's."""
+    async def account_read_fails() -> None:
+        raise BrokerError("The account could not be read.", broker="alpaca")
+
+    async with _client(budgeted.app) as client:
+        deployed = await client.post(_BOTS, json=_BUDGETED)
+        monkeypatch.setattr(get_broker_registry().resolve("alpaca"), "get_account", account_read_fails)
+        clear_broker_account_snapshot_cache_for_testing()
+        recovered = await client.get(f"{_RECOVERY}/{_BODY['submission_key']}")
+
+    assert deployed.status_code == 201
+    assert recovered.status_code == 200
+    assert recovered.json() == deployed.json()
+
+
+async def test_the_recovery_read_takes_the_account_in_any_case(budgeted) -> None:
+    async with _client(budgeted.app) as client:
+        first = await client.post(_BOTS, json=_BUDGETED)
+        recovered = await client.get(f"/api/brokers/alpaca/accounts/{ACCT.upper()}/deploy-submissions/{_BODY['submission_key']}")
+
+    assert recovered.status_code == 200
+    assert recovered.json() == first.json()
+
+
+@pytest.mark.parametrize("committed", [True, False])
+async def test_a_claim_from_before_claims_named_their_account_is_read_as_it_always_was(
+    budgeted, committed: bool,
+) -> None:
+    """No account was recorded, so none can disagree: custody is read under the route's own account."""
+    _write_claim_from_before_claims_named_an_account(budgeted.registry.artifacts_root, _BODY["submission_key"], DEPLOYED_SID)
+    if committed:
+        budgeted.committed[DEPLOYED_SID] = _receipt(DEPLOYED_SID)
+
+    async with _client(budgeted.app) as client:
+        recovered = await client.get(f"{_RECOVERY}/{_BODY['submission_key']}")
+
+    assert recovered.status_code == 200
+    assert recovered.json()["strategy_instance_id"] == DEPLOYED_SID
+    assert recovered.json()["status"] == ("deployed" if committed else "not_committed")
+
+
+# ── A minute with every name taken ──────────────────────────────────────────
+
+
+async def test_the_admission_preview_of_a_minute_with_every_name_taken_is_refused_by_name(budgeted) -> None:
+    """The 100th same-minute bot has no name: a typed 409, not a StopIteration out of a coroutine."""
+    names = budgeted.registry.artifacts_root / "deploy_submissions" / "names"
+    names.mkdir(parents=True)
+    for ordinal in range(1, 100):
+        taken = bot_name("SPY", "ema_crossover_signal", at_ms=_AT, ordinal=ordinal)
+        (names / f"{taken}.json").write_text("{}", encoding="utf-8")
+
+    async with _client(budgeted.app) as client:
+        previewed = await client.post(f"{_BOTS}/admission", json=_SETTINGS)
+
+    assert previewed.status_code == 409, previewed.text
+    detail = previewed.json()["detail"]
+    assert detail["message"] == "This bot cannot be named."
+    assert detail["reason_code"] == "deploy_bot_name_unavailable"
+    assert detail["why"] == "More than 99 SPY bots of this strategy were deployed this minute."
+    assert detail["next_action"] == "Try again in a minute."
 
 
 # ── Deploy again ────────────────────────────────────────────────────────────

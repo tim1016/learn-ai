@@ -11,6 +11,7 @@ happens to forward to this module for these queries.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from collections.abc import Collection, Sequence
 from typing import NamedTuple
@@ -44,6 +45,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_PRICE_CONFLICT_REASON_CODE,
     ExecutionPriceConflictCause,
 )
+
+logger = logging.getLogger(__name__)
 
 # The one terminal broker-state set, spelled for SQL (``order_projection``).
 _TERMINAL_BROKER_STATES_SQL = sql_string_list(ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES)
@@ -92,26 +95,40 @@ _EXTERNAL_ORDER_COLUMNS: tuple[str, ...] = (
     "evidence_refs_json",
 )
 
+#: What the journal says of each outside order, from one walk of it (#3216): the
+#: sequence of its first observation, of its newest one, and of its latest
+#: review. The records' times and facts are read by those sequences below. No
+#: index serves ``broker_order_id``, so a read of one order walks the journal
+#: too; only the bulk read shares that one walk across every order.
+_EXTERNAL_ORDER_PROVENANCE_SQL = (
+    "SELECT broker_order_id, "
+    "MIN(CASE WHEN transition_kind = 'EXTERNAL_ORDER_OBSERVED' THEN sequence END) AS observation_sequence, "
+    "MAX(CASE WHEN transition_kind = 'EXTERNAL_ORDER_OBSERVED' THEN sequence END) AS latest_observation_sequence, "
+    "MAX(CASE WHEN transition_kind = 'EXTERNAL_ORDER_ACKNOWLEDGED' THEN sequence END) AS acknowledgement_sequence "
+    "FROM custody_transitions "
+    "WHERE transition_kind IN ('EXTERNAL_ORDER_OBSERVED', 'EXTERNAL_ORDER_ACKNOWLEDGED') "
+    "AND broker_order_id IS NOT NULL "
+    "GROUP BY broker_order_id"
+)
+
+# One statement states an order the same way for the bulk read and the single
+# ones: the reconciliation pass compares the two as whole records.
 _EXTERNAL_ORDER_SELECT = (
     ", ".join(f"eo.{column}" for column in _EXTERNAL_ORDER_COLUMNS)
-    + ", (SELECT MIN(ct.sequence) FROM custody_transitions ct "
-    "WHERE ct.broker_order_id = eo.broker_order_id "
-    "AND ct.transition_kind = 'EXTERNAL_ORDER_OBSERVED') AS observation_sequence"
-    + ", (SELECT MAX(ct.sequence) FROM custody_transitions ct "
-    "WHERE ct.broker_order_id = eo.broker_order_id "
-    "AND ct.transition_kind = 'EXTERNAL_ORDER_ACKNOWLEDGED') AS acknowledgement_sequence"
-    + ", (SELECT ct.recorded_at_ms FROM custody_transitions ct "
-    "WHERE ct.broker_order_id = eo.broker_order_id "
-    "AND ct.transition_kind = 'EXTERNAL_ORDER_OBSERVED' "
-    "ORDER BY ct.sequence ASC LIMIT 1) AS observation_recorded_at_ms"
-    + ", (SELECT ct.recorded_at_ms FROM custody_transitions ct "
-    "WHERE ct.broker_order_id = eo.broker_order_id "
-    "AND ct.transition_kind = 'EXTERNAL_ORDER_ACKNOWLEDGED' "
-    "ORDER BY ct.sequence DESC LIMIT 1) AS acknowledgement_recorded_at_ms"
-    + ", (SELECT ct.facts_json FROM custody_transitions ct "
-    "WHERE ct.broker_order_id = eo.broker_order_id "
-    "AND ct.transition_kind = 'EXTERNAL_ORDER_OBSERVED' "
-    "ORDER BY ct.sequence DESC LIMIT 1) AS latest_observation_facts"
+    + ", provenance.observation_sequence AS observation_sequence"
+    + ", provenance.acknowledgement_sequence AS acknowledgement_sequence"
+    + ", observed.recorded_at_ms AS observation_recorded_at_ms"
+    + ", acknowledged.recorded_at_ms AS acknowledgement_recorded_at_ms"
+    + ", newest.facts_json AS latest_observation_facts"
+)
+
+_EXTERNAL_ORDER_FROM = (
+    "external_orders eo "
+    f"LEFT JOIN ({_EXTERNAL_ORDER_PROVENANCE_SQL}) provenance "
+    "ON provenance.broker_order_id = eo.broker_order_id "
+    "LEFT JOIN custody_transitions observed ON observed.sequence = provenance.observation_sequence "
+    "LEFT JOIN custody_transitions acknowledged ON acknowledged.sequence = provenance.acknowledgement_sequence "
+    "LEFT JOIN custody_transitions newest ON newest.sequence = provenance.latest_observation_sequence"
 )
 
 
@@ -447,7 +464,7 @@ def external_order(
     external_order_id: str,
 ) -> ExternalOrderResource | None:
     row = conn.execute(
-        f"SELECT {_EXTERNAL_ORDER_SELECT} FROM external_orders eo WHERE external_order_id = ?",
+        f"SELECT {_EXTERNAL_ORDER_SELECT} FROM {_EXTERNAL_ORDER_FROM} WHERE eo.external_order_id = ?",
         (external_order_id,),
     ).fetchone()
     return _external_order_resource(row) if row is not None else None
@@ -458,7 +475,7 @@ def external_order_by_broker_order_id(
     broker_order_id: str,
 ) -> ExternalOrderResource | None:
     row = conn.execute(
-        f"SELECT {_EXTERNAL_ORDER_SELECT} FROM external_orders eo WHERE broker_order_id = ?",
+        f"SELECT {_EXTERNAL_ORDER_SELECT} FROM {_EXTERNAL_ORDER_FROM} WHERE eo.broker_order_id = ?",
         (broker_order_id,),
     ).fetchone()
     return _external_order_resource(row) if row is not None else None
@@ -473,7 +490,7 @@ def external_orders(conn: sqlite3.Connection) -> list[ExternalOrderResource]:
     of what was observed.
     """
     rows = conn.execute(
-        f"SELECT {_EXTERNAL_ORDER_SELECT} FROM external_orders eo "
+        f"SELECT {_EXTERNAL_ORDER_SELECT} FROM {_EXTERNAL_ORDER_FROM} "
         f"WHERE {_OUTSIDE_ORDER_SQL} "
         "ORDER BY eo.observed_at_ms DESC, eo.external_order_id DESC"
     ).fetchall()
@@ -1629,17 +1646,16 @@ def correction_uncertainty_exists(conn: sqlite3.Connection, execution_id: str) -
 
     Invalid corrections intentionally do not create a ``fills`` execution
     row, so their broker execution identity lives in the typed uncertainty
-    cause. Parsing the small closed transition subset avoids relying on an
-    optional SQLite JSON extension while preserving crash/restart dedup.
+    cause. The lookup stops at the first raised record that names it, which
+    keeps crash/restart dedup without parsing every raised uncertainty under
+    the write lock (#3216).
     """
-    rows = conn.execute(
-        "SELECT facts_json FROM custody_transitions WHERE transition_kind = 'UNCERTAINTY_RAISED'"
-    ).fetchall()
-    for row in rows:
-        facts = json.loads(row["facts_json"])
-        if facts.get("cause_facts", {}).get("execution_id") == execution_id:
-            return True
-    return False
+    row = conn.execute(
+        "SELECT 1 FROM custody_transitions WHERE transition_kind = 'UNCERTAINTY_RAISED' "
+        "AND json_extract(facts_json, '$.cause_facts.execution_id') = ? LIMIT 1",
+        (execution_id,),
+    ).fetchone()
+    return row is not None
 
 
 def effective_execution_slice(conn: sqlite3.Connection, execution_id: str) -> dict | None:
@@ -2111,9 +2127,11 @@ def active_execution_price_conflicts(
     the custody subject -- the episode's durable owner, which manual custody
     shares with bots (#2460 review) -- and the sweep's compare-and-clear
     binds the returned ``uncertainty_id`` and ``cause`` as the expected
-    episode identity. Rows whose cause cannot be decoded are skipped -- an
-    unreadable cause is not a reason to wedge every other episode's
-    re-derivation.
+    episode identity. Rows whose cause cannot be decoded, or that name no
+    custody subject, are skipped -- an unreadable cause is not a reason to
+    wedge every other episode's re-derivation -- and each is logged as
+    ``execution_price_conflict_skipped`` with its ``uncertainty_id``, since a
+    skipped episode is never cleared by the sweep.
     """
     rows = conn.execute(
         "SELECT uncertainty_id, subject_id, facts_json FROM uncertainties "
@@ -2125,10 +2143,31 @@ def active_execution_price_conflicts(
     for row in rows:
         try:
             raised = json.loads(row["facts_json"])
+            if not isinstance(raised, dict):
+                raise TypeError(f"facts_json holds {type(raised).__name__}, not an object")
             cause = ExecutionPriceConflictCause.from_mapping(raised.get("cause_facts"))
-        except (ValueError, TypeError, json.JSONDecodeError):
+        except (ValueError, TypeError):
+            logger.warning(
+                "an active execution price conflict has a cause that cannot be read; "
+                "the sweep skips it and never clears it",
+                extra={
+                    "action": "execution_price_conflict_skipped",
+                    "reason": "cause_unreadable",
+                    "uncertainty_id": row["uncertainty_id"],
+                },
+                exc_info=True,
+            )
             continue
         if row["subject_id"] is None:
+            logger.warning(
+                "an active execution price conflict names no custody subject; "
+                "the sweep skips it and never clears it",
+                extra={
+                    "action": "execution_price_conflict_skipped",
+                    "reason": "no_custody_subject",
+                    "uncertainty_id": row["uncertainty_id"],
+                },
+            )
             continue
         episodes.append((row["uncertainty_id"], row["subject_id"], cause))
     return tuple(episodes)

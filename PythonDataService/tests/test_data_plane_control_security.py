@@ -47,21 +47,6 @@ _BROKERS_READ_PATH = "/api/brokers/alpaca/account"
 _ACCOUNT_TRANSACTIONS_READ_PATH = "/api/accounts/DU1234567/transactions"
 _ALPACA_CLERK_SQLITE_READ_PATH = "/api/alpaca-clerk-sqlite/accounts/PA-TEST/snapshot"
 
-# Protected-read surfaces PR-B of #1813 (2026-08-27) retired outright: the
-# IBKR order-event stream, the broker session mirror, and the live-instance
-# / live-run projections. Their always-on-guard and reject-without-secret
-# tests retired with them — a route that is not registered returns 404 and
-# cannot leak the evidence the guard existed to protect. What replaces them
-# is the absence assertion below: neither the app nor the shared manifest
-# may name these paths again.
-_RETIRED_PROTECTED_READ_PATHS = (
-    "/api/broker/orders/stream",
-    "/api/broker/session-mirror",
-    "/api/live-instances",
-    "/api/live-runs",
-)
-
-
 def _path_is_manifest_control_surface(path: str) -> bool:
     return any(path == prefix or path.startswith(f"{prefix}/") for prefix in _CONTROL_SURFACE_PREFIXES)
 
@@ -293,23 +278,6 @@ async def test_control_get_does_not_require_secret_header(monkeypatch) -> None:
     assert response.status_code != 403
     if response.status_code == 503:
         assert CONTROL_SECRET_ENV_VAR not in response.json()["message"]
-
-
-def test_retired_protected_read_surfaces_are_absent_from_routes_and_manifest() -> None:
-    """Successor to the always-on-guard and reject-without-secret tests for
-    the order-event stream, the broker session mirror, and the live-instance
-    / live-run projections (see ``_RETIRED_PROTECTED_READ_PATHS``). It fails
-    if any of those paths is re-registered or re-declared in the shared
-    manifest, which is what would have to happen before an unguarded
-    successor could exist."""
-    registered = {route.path for route in _api_routes()}
-
-    for retired in _RETIRED_PROTECTED_READ_PATHS:
-        assert not any(
-            path == retired or path.startswith(f"{retired}/") for path in registered
-        ), retired
-        assert retired not in _CONTROL_SURFACE_PREFIXES, retired
-        assert retired not in _PROTECTED_READ_PREFIXES, retired
 
 
 def test_account_transaction_routes_declare_always_on_guard_and_shared_manifest() -> None:

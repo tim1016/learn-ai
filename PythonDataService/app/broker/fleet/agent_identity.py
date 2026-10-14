@@ -103,7 +103,7 @@ def _pin_mismatch(
             f"This runtime serves clerk {served_clerk!r}; the dispatch pinned "
             f"{pinned.get('x-fleet-clerk-id')!r}."
         )
-    if method.upper() in ("POST", "PUT", "PATCH", "DELETE"):
+    if method.upper() in _MUTATING_METHODS:
         served_epoch = identity.get("routing_epoch")
         pinned_epoch = pinned.get("x-fleet-routing-epoch")
         if pinned_epoch is not None and served_epoch is not None and str(
@@ -206,7 +206,7 @@ class _FrameInjector:
             return [drained]
         identity = self._provider()
         if not isinstance(identity, Mapping):
-            identity = {}
+            raise RuntimeError("the lane identity disappeared during an event stream")
         fields = _identity_field_lines(identity)
         frames: list[bytes] = []
         while "\n\n" in self._buffer:

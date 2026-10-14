@@ -226,6 +226,37 @@ async def test_a_lane_server_error_keeps_its_body_in_the_log_and_is_named_unreac
 
 
 @pytest.mark.asyncio
+async def test_a_lane_server_error_with_an_unreadable_stored_summary_is_still_named_unreachable(
+    fleet, secret
+) -> None:
+    """The 5xx wording reads the lane's last-beat summary; a stored value this
+    build refuses must fall back to the generic copy, not turn the named gap
+    into a 500 for the whole page."""
+    service, deliveries, _paper, live, _unbound = fleet
+    store = service._store
+    session = store.read_session(live.clerk_id)
+    with store.transaction() as conn:
+        store.touch_session(
+            conn,
+            clerk_id=live.clerk_id,
+            agent_instance_id=session.agent_instance_id,
+            last_seen_at_ms=session.last_seen_at_ms,
+            reported_binding_generation=None,
+            reported_account_id=None,
+            reported_state=None,
+            reported_summary_json="[]",
+        )
+    deliveries[live.clerk_id] = _ScriptedDelivery(answer={"detail": "boom"}, status_code=503)
+
+    async with AsyncClient(transport=ASGITransport(app=_app(service, deliveries)), base_url="http://test") as client:
+        response = await client.get(_ROUTE, headers=secret)
+
+    assert response.status_code == 200
+    (gap,) = (gap for gap in response.json()["gaps"] if gap["clerk_id"] == live.clerk_id)
+    assert gap["reason_code"] == "clerk_unreachable"
+
+
+@pytest.mark.asyncio
 async def test_a_lane_answering_something_that_is_not_a_bot_history_is_named_unreadable(fleet, secret) -> None:
     service, deliveries, _paper, live, _unbound = fleet
     deliveries[live.clerk_id] = _ScriptedDelivery(answer={"bots": "not a list"})
@@ -254,13 +285,30 @@ async def test_an_account_filter_naming_no_lane_is_a_named_gap_never_an_empty_li
     assert deliveries[paper.clerk_id].requests == [] and deliveries[live.clerk_id].requests == []
 
 
-def test_the_history_read_outlasts_the_fleet_default_and_the_fan_out_outlasts_it() -> None:
+@pytest.mark.asyncio
+async def test_the_history_read_outlasts_the_fleet_default_and_the_fan_out_outlasts_it(
+    fleet, secret, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """One account's history reads every Dry Run's own database; the
     coordinator waits a little longer than the lane read, so a slow lane's own
     named failure arrives before the fan-out gives up on it."""
     from app.broker.alpaca.clerk.fleet_adapter import ALPACA_OPERATIONS
     from app.broker.fleet.internal_http import BOT_HISTORY_READ_TIMEOUT_S, DEFAULT_INTERNAL_TIMEOUT_S
-
     (operation,) = (op for op in ALPACA_OPERATIONS if op.operation_id == "bot_history_read")
     assert operation.read_timeout_s == BOT_HISTORY_READ_TIMEOUT_S > DEFAULT_INTERNAL_TIMEOUT_S
     assert operation.requires_effective_account
+
+    service, deliveries, *_ = fleet
+    original = service.aggregate_lane_reads_async
+    lane_timeouts: list[float] = []
+
+    async def capture_bound(*args, lane_timeout_s: float):
+        lane_timeouts.append(lane_timeout_s)
+        return await original(*args, lane_timeout_s=lane_timeout_s)
+
+    monkeypatch.setattr(service, "aggregate_lane_reads_async", capture_bound)
+    async with AsyncClient(transport=ASGITransport(app=_app(service, deliveries)), base_url="http://test") as client:
+        response = await client.get(_ROUTE, headers=secret)
+
+    assert response.status_code == 200
+    assert lane_timeouts == [BOT_HISTORY_READ_TIMEOUT_S + 5.0]

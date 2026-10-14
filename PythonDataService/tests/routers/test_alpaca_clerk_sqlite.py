@@ -610,6 +610,33 @@ async def test_stop_without_active_run_returns_typed_404(api: FastAPI) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_body",
+    [
+        {"lifecycle_run_id": "run-1", "unknown": "ignored"},
+        {"lifecycle_run_id": "r" * 513},
+        {"lifecycle_run_id": "run-1", "operator_reason": "x" * 513},
+    ],
+)
+async def test_stop_rejects_unknown_or_unbounded_input_before_commit(
+    api: FastAPI, invalid_body: dict[str, str],
+) -> None:
+    _start_run()
+    async with _client(api) as client:
+        refused = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/stop",
+            json=invalid_body,
+        )
+        accepted = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/stop",
+            json={"lifecycle_run_id": "run-1", "operator_reason": "operator stop"},
+        )
+    assert refused.status_code == 422
+    assert accepted.status_code == 202
+    assert accepted.json()["state"] == "succeeded"
+
+
+@pytest.mark.asyncio
 async def test_stop_after_start_succeeds(api: FastAPI) -> None:
     _start_run()
     async with _client(api) as client:

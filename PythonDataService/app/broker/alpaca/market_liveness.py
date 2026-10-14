@@ -174,11 +174,12 @@ class AlpacaMarketLivenessConsumer:
             self._store.apply_status_snapshot(snapshot, now_ms=self._clock())
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             self._store.mark_stream_disconnected(observed_at_ms=self._clock())
             logger.warning(
                 "Shared market-status source unavailable; new exposure is blocked",
-                extra={"action": "market_liveness_shared_source_unavailable"},
+                extra={"action": "market_liveness_shared_source_unavailable", "error": str(exc)},
+                exc_info=True,
             )
 
     async def _consume_statuses(self) -> None:

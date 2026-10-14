@@ -72,6 +72,14 @@ class ExternalOrderAcknowledgementNotFound(ValueError):
     """The active SQLite authority has no requested external-order observation."""
 
 
+class ClerkTransactionAccountNotActive(ValueError):
+    """The requested account is outside this Clerk's active custody."""
+
+
+class InvalidTransactionHistoryCursor(ValueError):
+    """The supplied history cursor is malformed or belongs to another scope."""
+
+
 def sqlite_transaction_history(
     *,
     account_id: str,
@@ -129,7 +137,7 @@ def sqlite_transaction_history(
         feed_headline="SQLite custody projection live",
         feed_detail=(
             "This operation-first page comes directly from the active Account Clerk's "
-            "materialized folds; the retired Postgres projection was not consulted."
+            "materialized folds."
         ),
         high_water_journal_seq=page.high_water_sequence,
         lag_records=0,
@@ -336,7 +344,7 @@ def _active_clerk(account_id: str) -> SqliteAlpacaClerkFacade | None:
     if not account_route_matches_custody(
         account_id, clerk.account_id, shadow=runtime.authority_kind == "shadow",
     ):
-        raise ValueError("Requested account is not the active SQLite authority")
+        raise ClerkTransactionAccountNotActive("Requested account is not the active SQLite authority")
     return clerk
 
 
@@ -469,7 +477,7 @@ def _all_transaction_history(
         feed_headline="SQLite custody projection live",
         feed_detail=(
             "This page is a single SQLite keyset projection of bot operations and external "
-            "observations; retired Postgres and broker order-history reads were not consulted."
+            "observations."
         ),
         high_water_journal_seq=high_water_sequence,
         lag_records=0,
@@ -694,7 +702,7 @@ def _decode_all_history_cursor(
             raise ValueError("cursor scope or shape is invalid")
         return recorded_at_ms, source, identity
     except (KeyError, TypeError, ValueError, UnicodeDecodeError) as exc:
-        raise ValueError("transaction history cursor is invalid") from exc
+        raise InvalidTransactionHistoryCursor("transaction history cursor is invalid") from exc
 
 
 def _external_summary_row(
@@ -1051,10 +1059,15 @@ def _custody_timeline(
         for entry in timeline
         if entry.source_event_at_ms is not None
     ]
-    terminal = (
-        timeline[-1]
-        if timeline and operation.state in {"failed", "succeeded"}
-        else None
+    # The operation's own record of when its state last changed. Every fold
+    # that moves an effect's state stamps ``updated_at_ms`` with that
+    # transition's recorded time, and none touches a terminal effect again.
+    # Neither the newest transition (a failed order is looked up again by
+    # later reconciliation passes) nor the first one labelled with the
+    # terminal state will do: some producers write ``succeeded`` on a
+    # transition of an operation still in flight.
+    terminal_recorded_at_ms = (
+        operation.updated_at_ms if operation.state in {"failed", "succeeded"} else None
     )
     return ClerkCustodyTimeline(
         intent_created_at_ms=operation.created_at_ms,
@@ -1076,9 +1089,7 @@ def _custody_timeline(
         first_callback_recorded_at_ms=(
             first.recorded_at_ms if first is not None else None
         ),
-        economic_terminal_recorded_at_ms=(
-            terminal.recorded_at_ms if terminal is not None else None
-        ),
+        economic_terminal_recorded_at_ms=terminal_recorded_at_ms,
     )
 
 

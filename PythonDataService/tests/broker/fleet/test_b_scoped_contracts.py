@@ -162,9 +162,13 @@ def _build_agent_app(
         return JSONResponse({"cancelled": order_ref})
 
     @agent.get("/api/brokers/alpaca/accounts/{account_id}/gallery/stream")
-    async def gallery(account_id: str) -> StreamingResponse:
+    async def gallery(account_id: str, request: Request) -> StreamingResponse:
         async def events():
-            yield f'event: update\ndata: {{"i": 0, "account": "{account_id}"}}\n\n'.encode()
+            yield (
+                "event: update\ndata: "
+                + json.dumps({"i": 0, "account": account_id, "query": request.query_params.multi_items()})
+                + "\n\n"
+            ).encode()
             await asyncio.sleep(0.02)
             if flip_identity_after_first_event:
                 # The lane's session moved: the stream keeps sending bytes,
@@ -588,6 +592,17 @@ async def test_stream_events_carry_and_verify_provenance(fleet: _Fleet) -> None:
     assert f"x-fleet-clerk-id: {fleet.lane.clerk_id}" in text
     assert f"x-fleet-routing-epoch: {fleet.identity['routing_epoch']}" in text
     assert "x-fleet-binding-generation: 3" in text
+
+
+async def test_stream_forwards_repeated_option_filters_to_the_lane(fleet: _Fleet) -> None:
+    """A repeated strike or expiry filter survives public-to-agent routing."""
+    async with fleet.client() as client, client.stream(
+        "GET", f"{fleet.base}/accounts/{ACCOUNT}/gallery/stream",
+        params=[("strikes", "100"), ("strikes", "105"), ("expiry_ms", "1"), ("expiry_ms", "2")],
+    ) as response:
+        assert response.status_code == 200
+        stream = "".join([chunk async for chunk in response.aiter_text()])
+    assert '"query": [["strikes", "100"], ["strikes", "105"], ["expiry_ms", "1"], ["expiry_ms", "2"]]' in stream
 
 
 async def test_a_stale_identity_midstream_closes_the_stream(tmp_path: Path) -> None:

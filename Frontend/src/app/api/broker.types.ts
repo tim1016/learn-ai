@@ -393,7 +393,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Broker-neutral clerk fleet directory (§10.1)
+         * Broker-neutral clerk fleet directory
          * @description Every lane across production providers, from the registry projection.
          */
         get: operations["list_broker_clerks_api_broker_clerks_get"];
@@ -562,30 +562,6 @@ export interface paths {
          *     accept it as optional and 422 explicitly.
          */
         get: operations["option_chain_stream_api_broker_option_chain__symbol__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/broker/option-contracts/{symbol}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Option Contracts Endpoint
-         * @description Slice 1F — IBKR ``reqContractDetails`` qualification for the
-         *     cockpit's option leg picker. Returns the rich ``OptionContractMatch``
-         *     (with ``con_id``, ``local_symbol``, etc.) that the picker persists
-         *     alongside the declared leg. ``conId`` is the broker-canonical
-         *     identity the Slice 4 resolver will key against.
-         */
-        get: operations["option_contracts_endpoint_api_broker_option_contracts__symbol__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1875,7 +1851,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * One broker's clerk lanes (§10.2)
+         * One broker's clerk lanes
          * @description The same projection filtered to one provider.
          */
         get: operations["list_broker_clerks_for_broker_api_brokers__broker__clerks_get"];
@@ -3623,6 +3599,106 @@ export interface paths {
          * @description Fleet-routed GET /live-verdict (custody_read).
          */
         get: operations["fleet_live_verdict_api_brokers__broker__clerks__clerk_id__live_verdict_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/market-data/ibkr/expirations/{symbol}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Ibkr Expirations Read
+         * @description Fleet-routed GET /market-data/ibkr/expirations/{symbol} (market_status_read).
+         */
+        get: operations["fleet_ibkr_expirations_read_api_brokers__broker__clerks__clerk_id__market_data_ibkr_expirations__symbol__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/market-data/ibkr/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Ibkr Health Read
+         * @description Fleet-routed GET /market-data/ibkr/health (market_status_read).
+         */
+        get: operations["fleet_ibkr_health_read_api_brokers__broker__clerks__clerk_id__market_data_ibkr_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/market-data/ibkr/option-chain/{symbol}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Ibkr Option Chain Stream
+         * @description Fleet-routed GET /market-data/ibkr/option-chain/{symbol} (stream_subscribe).
+         */
+        get: operations["fleet_ibkr_option_chain_stream_api_brokers__broker__clerks__clerk_id__market_data_ibkr_option_chain__symbol__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/market-data/ibkr/option-surface/{symbol}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Ibkr Option Surface Stream
+         * @description Fleet-routed GET /market-data/ibkr/option-surface/{symbol} (stream_subscribe).
+         */
+        get: operations["fleet_ibkr_option_surface_stream_api_brokers__broker__clerks__clerk_id__market_data_ibkr_option_surface__symbol__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/market-data/ibkr/strikes/{symbol}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Ibkr Strikes Read
+         * @description Fleet-routed GET /market-data/ibkr/strikes/{symbol} (market_status_read).
+         */
+        get: operations["fleet_ibkr_strikes_read_api_brokers__broker__clerks__clerk_id__market_data_ibkr_strikes__symbol__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -19205,6 +19281,16 @@ export interface components {
             unreachable_since_ms?: number | null;
         };
         /**
+         * IbkrExpirationsResponse
+         * @description Listed option expiries for one equity symbol, anchored in UTC milliseconds.
+         */
+        IbkrExpirationsResponse: {
+            /** Expirations Ms */
+            expirations_ms: number[];
+            /** Symbol */
+            symbol: string;
+        };
+        /**
          * IbkrStrikeList
          * @description Strikes IBKR has actually instantiated for one (symbol, expiry).
          *
@@ -31556,7 +31642,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": components["schemas"]["IbkrExpirationsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -31627,46 +31713,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    option_contracts_endpoint_api_broker_option_contracts__symbol__get: {
-        parameters: {
-            query: {
-                /** @description An option expiry: 16:00 New York time on the expiry date, as int64 ms UTC. */
-                expiry_ms: number;
-                /** @description Option strike. */
-                strike: number;
-                /** @description C for call, P for put. */
-                right: string;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                symbol: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */
@@ -37751,6 +37797,180 @@ export interface operations {
             path: {
                 broker: string;
                 clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_ibkr_expirations_read_api_brokers__broker__clerks__clerk_id__market_data_ibkr_expirations__symbol__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                symbol: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_ibkr_health_read_api_brokers__broker__clerks__clerk_id__market_data_ibkr_health_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_ibkr_option_chain_stream_api_brokers__broker__clerks__clerk_id__market_data_ibkr_option_chain__symbol__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                symbol: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_ibkr_option_surface_stream_api_brokers__broker__clerks__clerk_id__market_data_ibkr_option_surface__symbol__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                symbol: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_ibkr_strikes_read_api_brokers__broker__clerks__clerk_id__market_data_ibkr_strikes__symbol__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                symbol: string;
             };
             cookie?: never;
         };

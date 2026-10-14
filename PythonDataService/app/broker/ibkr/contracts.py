@@ -21,10 +21,13 @@ from datetime import datetime
 from typing import Literal
 
 from app.broker.ibkr.client import IbkrClient
-from app.broker.ibkr.models import OptionRight
 from app.options.expiry import option_expiry_anchor_ms, option_expiry_date
 
 logger = logging.getLogger(__name__)
+
+
+class OptionQualificationError(ValueError):
+    """IBKR found no qualified underlying for a valid symbol request."""
 
 
 # IBKR names an option expiry by its date in the exchange's calendar, as a
@@ -55,7 +58,7 @@ async def qualify_underlying(client: IbkrClient, symbol: str):
     stock = Stock(symbol=symbol, exchange="SMART", currency="USD")
     qualified = await client.ib.qualifyContractsAsync(stock)
     if not qualified:
-        raise ValueError(f"IBKR could not qualify underlying {symbol!r} (SMART/USD).")
+        raise OptionQualificationError(f"IBKR could not qualify underlying {symbol!r} (SMART/USD).")
     return qualified[0]
 
 
@@ -107,60 +110,6 @@ async def list_strikes(
         if target in p.expirations:
             strikes.update(p.strikes)
     return sorted(float(k) for k in strikes)
-
-
-async def search_option_contracts(
-    client: IbkrClient,
-    *,
-    symbol: str,
-    expiry_ms: int,
-    strike: float,
-    right: OptionRight,
-) -> list:
-    """Qualify one (symbol, expiry, strike, right) option drill-down pick
-    and return the rich ``OptionContractMatch`` rows (Slice 1F, #605).
-
-    Returns repo-native DTOs carrying ``con_id`` + ``local_symbol`` + ``trading_class`` +
-    ``multiplier`` because the cockpit action-plan picker persists those
-    alongside the leg. Returns ``[]`` when IBKR cannot qualify the
-    contract — the picker shows the empty result inline rather than
-    raising, which is consistent with the broker's "no such contract"
-    response.
-    """
-    from ib_async import Option
-
-    from app.schemas.broker_search import OptionContractMatch
-
-    client.require_connected()
-    contract = Option(
-        symbol=symbol,
-        lastTradeDateOrContractMonth=expiry_ms_to_yyyymmdd(expiry_ms),
-        strike=float(strike),
-        right=right,
-        exchange="SMART",
-        currency="USD",
-        multiplier="100",
-    )
-    raw = await client.ib.qualifyContractsAsync(contract)
-    out: list[OptionContractMatch] = []
-    for c in raw:
-        if c is None:
-            continue
-        out.append(
-            OptionContractMatch(
-                con_id=int(c.conId),
-                symbol=c.symbol,
-                local_symbol=c.localSymbol,
-                trading_class=c.tradingClass,
-                exchange=c.exchange,
-                currency=c.currency,
-                expiry_ms=yyyymmdd_to_expiry_ms(c.lastTradeDateOrContractMonth),
-                strike=float(c.strike),
-                right=c.right,
-                multiplier=int(c.multiplier),
-            )
-        )
-    return out
 
 
 async def list_qualified_strikes(

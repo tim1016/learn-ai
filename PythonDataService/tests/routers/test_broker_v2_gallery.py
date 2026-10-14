@@ -17,6 +17,7 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
+from app.broker.contract.registry import get_broker_registry, reset_broker_registry_for_testing
 from app.broker.fleet.agent_identity import _FrameInjector
 from app.broker.fleet.internal_http import SseEvent, iter_sse_events
 from app.broker.ibkr.bar_models import IbkrMinuteBar
@@ -30,10 +31,12 @@ from app.schemas.broker_v2_gallery import (
     GalleryLiveSnapshot,
     GallerySymbolBars,
 )
+from app.services.broker_account_snapshot import clear_broker_account_snapshot_cache_for_testing
 from app.services.broker_v2_panel import panel_chart_data_source
 from app.services.broker_v2_panel.chart_projection_service import aggregator_bars_to_chart_bars
 from app.services.broker_v2_panel.gallery_hub import GalleryHub
 from app.services.broker_v2_panel.panel_data_source import PanelUnavailableError, UnknownBotError
+from app.services.broker_v2_panel.stream_frame_budget import FLEET_FRAMING_RESERVE_BYTES
 from app.services.live_bar_aggregator import _RING_BUFFER_SIZE_5S, LiveLineStatus
 
 _BROKER = "alpaca"
@@ -349,6 +352,64 @@ async def test_gallery_stream_matching_cursor_skips_reset() -> None:
     assert "event: snapshot" in frame
 
 
+class _ServedAccountPort:
+    """A broker port serving the one account ``_ACCOUNT_ID``."""
+
+    broker_id = _BROKER
+
+    async def get_account(self) -> object:
+        class _Account:
+            account_id = _ACCOUNT_ID
+
+        return _Account()
+
+
+@pytest.fixture
+def served_account(monkeypatch: pytest.MonkeyPatch):
+    """The real ``get_gallery_hub`` dependency's world: a registered broker
+    serving ``PA3`` and an empty hub cache, which is yielded."""
+    reset_broker_registry_for_testing()
+    clear_broker_account_snapshot_cache_for_testing()
+    get_broker_registry().register(_ServedAccountPort())  # type: ignore[arg-type]
+    cache: dict = {}
+    monkeypatch.setattr(broker_v2_gallery, "_HUB_CACHE", cache)
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "")
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", True)
+    try:
+        yield cache
+    finally:
+        clear_broker_account_snapshot_cache_for_testing()
+        reset_broker_registry_for_testing()
+
+
+async def test_every_spelling_of_the_account_is_one_gallery_hub(served_account) -> None:
+    """#3217: the cache was keyed on the raw path ``account_id``, so each
+    spelling account validation accepts built its own hub, with its own
+    ``surface_version`` and roster baseline."""
+    hubs = [
+        await broker_v2_gallery.get_gallery_hub(_BROKER, spelling)
+        for spelling in ("PA3", "pa3", "Pa3", " PA3")
+    ]
+
+    assert all(hub is hubs[0] for hub in hubs)
+    assert len(served_account) == 1
+
+
+@pytest.mark.parametrize(("broker", "account_id"), [("alpaca", "nosuch"), ("nosuch", "x")])
+async def test_a_gallery_request_for_an_unknown_account_is_refused_and_caches_no_hub(
+    served_account, broker: str, account_id: str
+) -> None:
+    """#3217: the dependency inserted a hub before validating anything, and a
+    hub is never evicted, so every made-up path grew the cache for good."""
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        snapshot = await client.get(f"/api/brokers/{broker}/accounts/{account_id}/gallery/snapshot")
+        stream = await client.get(f"/api/brokers/{broker}/accounts/{account_id}/gallery/stream")
+
+    assert snapshot.status_code == stream.status_code == 404
+    assert set(snapshot.json()["detail"]) == {"message", "why", "next_action"}
+    assert served_account == {}
+
+
 @pytest.mark.parametrize("error", [PanelUnavailableError("clerk unavailable"), UnknownBotError("no such bot")])
 async def test_panel_chart_fill_source_degrades_to_empty_on_panel_error(
     monkeypatch: pytest.MonkeyPatch, error: Exception
@@ -544,7 +605,7 @@ async def test_gallery_stream_refuses_loudly_when_a_frame_cannot_fit_the_cap(
     monkeypatch.setattr(
         broker_v2_gallery,
         "_MAX_EVENT_BYTES",
-        broker_v2_gallery._FLEET_FRAMING_RESERVE_BYTES + 2_000,
+        FLEET_FRAMING_RESERVE_BYTES + 2_000,
     )
     rows = [_Cat2(f"Aug11-{i:02d}", "SPY", True, 1.0, 0.0, 1) for i in range(20)]
     hub = _five_second_hub(rows)
@@ -641,3 +702,106 @@ async def test_gallery_frame_just_under_the_cap_still_fits_after_lane_framing() 
     events = await asyncio.wait_for(_relay_through_coordinator(_frames(), until="snapshot"), timeout=30.0)
 
     assert _assembled_bars(events, "snapshot") == {"SPY": 6_000}
+
+
+# ---- #3217: a read that never returns is named, bounded and never silent ----
+
+
+class _StallableCatalogSource(_FakeCatalogSource):
+    """Answers at once until ``stall_next_s`` is set; the next read then waits that long (once)."""
+
+    def __init__(self, rows: list[_Cat2]) -> None:
+        super().__init__(rows)
+        self.stall_next_s: float | None = None
+
+    async def get_catalog(self, broker: str, account_id: str) -> list[_Cat2]:
+        stall, self.stall_next_s = self.stall_next_s, None
+        if stall is not None:
+            await asyncio.sleep(stall)
+        return await super().get_catalog(broker, account_id)
+
+
+def _stallable_hub(source: _StallableCatalogSource, *, collect_timeout_s: float) -> GalleryHub:
+    return GalleryHub(
+        broker=_BROKER,
+        account_id=_ACCOUNT_ID,
+        catalog_source=source,
+        aggregator=_FakeAggregator(),
+        collect_timeout_s=collect_timeout_s,
+    )
+
+
+async def _stall_after_first_frame(frames, source: _StallableCatalogSource, *, seconds: float):
+    """Pass the stream's frames through, making the read after the first one stall."""
+    first = True
+    async for frame in frames:
+        yield frame
+        if first:
+            first = False
+            source.stall_next_s = seconds
+
+
+async def test_gallery_stream_names_a_read_that_never_returns_and_ends(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A read that never returned used to leave the stream with nothing to
+    send and nothing to say, its sparklines frozen with no word to the client.
+    It now ends the stream with a named ``error`` event, which the client's
+    SSE primitive reads as stale and reconnects from; nothing follows it."""
+    monkeypatch.setattr(broker_v2_gallery, "_POLL_INTERVAL_S", 0.0)
+    source = _StallableCatalogSource([_Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12)])
+    hub = _stallable_hub(source, collect_timeout_s=0.05)
+    response = await broker_v2_gallery.stream_gallery(cursor=None, hub=hub)
+    frames = _stall_after_first_frame(response.body_iterator, source, seconds=3_600.0)
+
+    with caplog.at_level(logging.WARNING, logger="app.services.broker_v2_panel.gallery_hub"):
+        # Every event, through the lane's framing and the coordinator's parser,
+        # until the stream ends: a stream that never ended would time out here.
+        events = await asyncio.wait_for(
+            _relay_through_coordinator(frames, until="never"), timeout=5.0
+        )
+
+    assert [event.event for event in events] == ["snapshot", "error"]
+    assert isinstance(json.loads(events[1].data)["error"], str)
+    assert any(
+        getattr(record, "action", None) == "gallery_collect_timed_out" for record in caplog.records
+    )
+
+
+async def test_gallery_stream_keeps_its_keepalive_flowing_while_a_read_is_in_flight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A read slower than the keepalive interval, but inside the bound, must
+    not turn the stream into silence while it is pending."""
+    monkeypatch.setattr(broker_v2_gallery, "_POLL_INTERVAL_S", 0.0)
+    monkeypatch.setattr(broker_v2_gallery, "_KEEPALIVE_INTERVAL_S", 0.05)
+    source = _StallableCatalogSource([_Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12)])
+    hub = _stallable_hub(source, collect_timeout_s=5.0)
+    response = await broker_v2_gallery.stream_gallery(cursor=None, hub=hub)
+    iterator = response.body_iterator
+    try:
+        snapshot = await asyncio.wait_for(iterator.__anext__(), timeout=5.0)
+        assert snapshot.startswith("id: ") and "event: snapshot" in snapshot
+        source.stall_next_s = 0.4  # the next read outlasts several keepalive intervals
+        following: list[str] = []
+        while not following or "event: update" not in following[-1]:
+            following.append(await asyncio.wait_for(iterator.__anext__(), timeout=5.0))
+    finally:
+        await iterator.aclose()
+
+    assert following[:-1] and set(following[:-1]) == {": keepalive\n\n"}
+
+
+async def test_gallery_snapshot_answers_instead_of_hanging_when_the_read_never_returns(
+    gallery_app,
+) -> None:
+    source = _StallableCatalogSource([_Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12)])
+    source.stall_next_s = 3_600.0
+    hub = _stallable_hub(source, collect_timeout_s=0.05)
+    gallery_app.dependency_overrides[broker_v2_gallery.get_gallery_hub] = lambda: hub
+    transport = ASGITransport(app=gallery_app, raise_app_exceptions=False)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await asyncio.wait_for(client.get(f"{_URL_PREFIX}/snapshot"), timeout=5.0)
+
+    assert response.status_code >= 500

@@ -466,6 +466,17 @@ def _evidence(
     )
 
 
+# A bot with no active run has nothing for the panel to stop. A Stop whose STOP committed before its
+# process stopped reads the same, and its retry is finished on the raw ``runs/stop`` route (#2664, #3217).
+_NO_ACTIVE_RUN_TO_STOP = (
+    "This bot has no active run, so the panel has no decision process to stop.",
+    "Nothing to do if the bot is already stopped. A Stop that recorded its STOP but did not stop the bot's "
+    "process is finished with "
+    "POST /api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/runs/stop, naming the "
+    "run; the panel has no control for it.",
+)
+
+
 def _scope(ctx: RecoveryPolicyContext) -> ClerkScope:
     return "CUSTODY_SUBJECT" if ctx.strategy_instance_id is not None else "ACCOUNT_CLERK"
 
@@ -681,21 +692,22 @@ def _decision(ctx: RecoveryPolicyContext, action_id: RecoveryActionId) -> _Decis
     if action_id == "stop_bot_decisions":
         active_runs = _relevant_runs(ctx)
         available = ctx.strategy_instance_id is not None and bool(active_runs)
+        reason: str | None
+        next_step: str
+        if available:
+            reason, next_step = None, "Stop the active run."
+        elif ctx.strategy_instance_id is None:
+            reason = "Select a bot with an active run; no decision process is currently stoppable."
+            next_step = "Choose an active bot or keep the current stopped state."
+        else:
+            reason, next_step = _NO_ACTIVE_RUN_TO_STOP
         return _Decision(
             available=available,
             reason_code=None if available else "NO_ACTIVE_BOT_RUN",
-            reason=(
-                None
-                if available
-                else "Select a bot with an active run; no decision process is currently stoppable."
-            ),
+            reason=reason,
             freshness="not_required",
             evidence=(),
-            next_step=(
-                "Stop the active run."
-                if available
-                else "Choose an active bot or keep the current stopped state."
-            ),
+            next_step=next_step,
             token_facts=[(run.run_id, run.lifecycle_run_id, run.state) for run in active_runs],
             execution_ref=(active_runs[0].lifecycle_run_id if available else None),
             needed=bool(active_runs),
@@ -1214,7 +1226,7 @@ def _end_expired_option_decision(ctx: RecoveryPolicyContext) -> _Decision:
     if ctx.strategy_instance_id is None:
         reason_code = "RECOVERY_SCOPE_UNSUPPORTED"
         reason = "An expired contract is ended for the one bot that holds it."
-        next_step = "Open the bot that holds the contract."
+        next_step = "End it for the one bot that holds the contract: that bot's notice names the route."
     elif not expired:
         reason_code = "NO_EXPIRED_OPTION_CONTRACT"
         reason = "This bot holds no option contract past its last session."

@@ -43,11 +43,11 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     UNFOLDABLE_BROKER_ORDER_REASON_CODE,
 )
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
-from app.broker.alpaca.trade_updates import _opt_ms_to_rfc3339
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.broker.contract.ports import BrokerTradePort
 from app.schemas.manual_orders import ManualOrderLegResponse
+from app.utils.timestamps import datetime_at_ms
 from tests.broker.alpaca.clerk.sqlite.test_manual_orders import LEG_ID, OPERATOR_ID, TICKET_ID
 from tests.broker.alpaca.clerk.sqlite.test_manual_orders import FakeTrade as _AlpacaWebsite
 from tests.broker.alpaca.clerk.sqlite.test_reconcile import (
@@ -887,6 +887,11 @@ async def test_a_replacement_named_by_nothing_is_contained_and_never_freezes_the
 
 
 # ── A row the adapter could not fully read never moves the chain (#2648) ──────
+
+
+def _opt_ms_to_rfc3339(ms: int | None) -> str | None:
+    """An instant as Alpaca's wire spells it, for the vendor payloads these tests build (test-only)."""
+    return None if ms is None else datetime_at_ms(ms).isoformat().replace("+00:00", "Z")
 
 
 def _from_alpaca(order: BrokerOrder, **wire: object) -> BrokerOrder:

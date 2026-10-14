@@ -31350,6 +31350,30 @@
         "title": "IbkrConnectionHealth",
         "type": "object"
       },
+      "IbkrExpirationsResponse": {
+        "description": "Listed option expiries for one equity symbol, anchored in UTC milliseconds.",
+        "properties": {
+          "expirations_ms": {
+            "items": {
+              "exclusiveMinimum": 0.0,
+              "maximum": 253402300799999.0,
+              "type": "integer"
+            },
+            "title": "Expirations Ms",
+            "type": "array"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "expirations_ms"
+        ],
+        "title": "IbkrExpirationsResponse",
+        "type": "object"
+      },
       "IbkrStrikeList": {
         "description": "Strikes IBKR has actually instantiated for one (symbol, expiry).\n\nDistinct from the union returned by ``reqSecDefOptParams``: that\npayload reports every strike listed on *any* expiry of the symbol,\nso a Monday weekly with $5 increments still surfaces every $1 strike\nthat exists on a quarterly expiry. This model carries only strikes\nthat ``qualifyContractsAsync`` could resolve into real contracts \u2014\nthe set the chain UI can safely subscribe to.",
         "properties": {
@@ -53687,9 +53711,11 @@
         "type": "object"
       },
       "StopRunRequest": {
+        "additionalProperties": false,
         "description": "``lifecycle_run_id`` is required (corrective foundation slice): Stop\nis no longer resolved from the currently active run, since that made a\nlost response unrecoverable \u2014 see ADR 0035's binding annex \u00a73a.",
         "properties": {
           "lifecycle_run_id": {
+            "maxLength": 512,
             "minLength": 1,
             "title": "Lifecycle Run Id",
             "type": "string"
@@ -53697,6 +53723,7 @@
           "operator_reason": {
             "anyOf": [
               {
+                "maxLength": 512,
                 "type": "string"
               },
               {
@@ -61921,7 +61948,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Broker-neutral clerk fleet directory (\u00a710.1)",
+        "summary": "Broker-neutral clerk fleet directory",
         "tags": [
           "broker-clerks"
         ]
@@ -62257,6 +62284,7 @@
             "name": "symbol",
             "required": true,
             "schema": {
+              "pattern": "^[A-Z]{1,5}(?:[.-][A-Z])?$",
               "title": "Symbol",
               "type": "string"
             }
@@ -62283,8 +62311,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Response List Expirations Endpoint Api Broker Expirations  Symbol  Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/IbkrExpirationsResponse"
                 }
               }
             },
@@ -62303,6 +62330,7 @@
         },
         "summary": "List Expirations Endpoint",
         "tags": [
+          "broker",
           "broker"
         ]
       }
@@ -62353,6 +62381,7 @@
         },
         "summary": "Broker Health",
         "tags": [
+          "broker",
           "broker"
         ]
       }
@@ -62367,6 +62396,7 @@
             "name": "symbol",
             "required": true,
             "schema": {
+              "pattern": "^[A-Z]{1,5}(?:[.-][A-Z])?$",
               "title": "Symbol",
               "type": "string"
             }
@@ -62395,6 +62425,7 @@
                   "items": {
                     "type": "number"
                   },
+                  "maxItems": 50,
                   "type": "array"
                 },
                 {
@@ -62456,103 +62487,7 @@
         },
         "summary": "Option Chain Stream",
         "tags": [
-          "broker"
-        ]
-      }
-    },
-    "/api/broker/option-contracts/{symbol}": {
-      "get": {
-        "description": "Slice 1F \u2014 IBKR ``reqContractDetails`` qualification for the\ncockpit's option leg picker. Returns the rich ``OptionContractMatch``\n(with ``con_id``, ``local_symbol``, etc.) that the picker persists\nalongside the declared leg. ``conId`` is the broker-canonical\nidentity the Slice 4 resolver will key against.",
-        "operationId": "option_contracts_endpoint_api_broker_option_contracts__symbol__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "symbol",
-            "required": true,
-            "schema": {
-              "title": "Symbol",
-              "type": "string"
-            }
-          },
-          {
-            "description": "An option expiry: 16:00 New York time on the expiry date, as int64 ms UTC.",
-            "in": "query",
-            "name": "expiry_ms",
-            "required": true,
-            "schema": {
-              "description": "An option expiry: 16:00 New York time on the expiry date, as int64 ms UTC.",
-              "exclusiveMinimum": 0,
-              "maximum": 253402300799999,
-              "title": "Expiry Ms",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Option strike.",
-            "in": "query",
-            "name": "strike",
-            "required": true,
-            "schema": {
-              "description": "Option strike.",
-              "exclusiveMinimum": 0.0,
-              "title": "Strike",
-              "type": "number"
-            }
-          },
-          {
-            "description": "C for call, P for put.",
-            "in": "query",
-            "name": "right",
-            "required": true,
-            "schema": {
-              "description": "C for call, P for put.",
-              "pattern": "^[CP]$",
-              "title": "Right",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "title": "Response Option Contracts Endpoint Api Broker Option Contracts  Symbol  Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Option Contracts Endpoint",
-        "tags": [
+          "broker",
           "broker"
         ]
       }
@@ -62567,6 +62502,7 @@
             "name": "symbol",
             "required": true,
             "schema": {
+              "pattern": "^[A-Z]{1,5}(?:[.-][A-Z])?$",
               "title": "Symbol",
               "type": "string"
             }
@@ -62680,6 +62616,7 @@
         },
         "summary": "Option Surface Stream",
         "tags": [
+          "broker",
           "broker"
         ]
       }
@@ -62744,6 +62681,7 @@
             "name": "symbol",
             "required": true,
             "schema": {
+              "pattern": "^[A-Z]{1,5}(?:[.-][A-Z])?$",
               "title": "Symbol",
               "type": "string"
             }
@@ -62802,6 +62740,7 @@
         },
         "summary": "List Strikes Endpoint",
         "tags": [
+          "broker",
           "broker"
         ]
       }
@@ -68065,7 +68004,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "One broker's clerk lanes (\u00a710.2)",
+        "summary": "One broker's clerk lanes",
         "tags": [
           "broker-clerks"
         ]
@@ -75791,6 +75730,372 @@
           }
         },
         "summary": "Fleet Live Verdict",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/market-data/ibkr/expirations/{symbol}": {
+      "get": {
+        "description": "Fleet-routed GET /market-data/ibkr/expirations/{symbol} (market_status_read).",
+        "operationId": "fleet_ibkr_expirations_read_api_brokers__broker__clerks__clerk_id__market_data_ibkr_expirations__symbol__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "title": "Symbol",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Ibkr Expirations Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/market-data/ibkr/health": {
+      "get": {
+        "description": "Fleet-routed GET /market-data/ibkr/health (market_status_read).",
+        "operationId": "fleet_ibkr_health_read_api_brokers__broker__clerks__clerk_id__market_data_ibkr_health_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Ibkr Health Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/market-data/ibkr/option-chain/{symbol}": {
+      "get": {
+        "description": "Fleet-routed GET /market-data/ibkr/option-chain/{symbol} (stream_subscribe).",
+        "operationId": "fleet_ibkr_option_chain_stream_api_brokers__broker__clerks__clerk_id__market_data_ibkr_option_chain__symbol__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "title": "Symbol",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Ibkr Option Chain Stream",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/market-data/ibkr/option-surface/{symbol}": {
+      "get": {
+        "description": "Fleet-routed GET /market-data/ibkr/option-surface/{symbol} (stream_subscribe).",
+        "operationId": "fleet_ibkr_option_surface_stream_api_brokers__broker__clerks__clerk_id__market_data_ibkr_option_surface__symbol__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "title": "Symbol",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Ibkr Option Surface Stream",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/market-data/ibkr/strikes/{symbol}": {
+      "get": {
+        "description": "Fleet-routed GET /market-data/ibkr/strikes/{symbol} (market_status_read).",
+        "operationId": "fleet_ibkr_strikes_read_api_brokers__broker__clerks__clerk_id__market_data_ibkr_strikes__symbol__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "title": "Symbol",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Ibkr Strikes Read",
         "tags": [
           "broker-clerks"
         ]

@@ -35,7 +35,11 @@ def verify_database(
     expected_db_identity: str | None = None,
     immutable: bool = False,
 ) -> DatabaseVerification:
-    """Verify identity, schema, integrity, sequence continuity, and hash chain.
+    """Verify identity, schema version, integrity, sequence continuity, and hash chain.
+
+    The schema check is the ``control_meta.schema_version`` integer alone: the
+    current version, or one a registered migration chain reaches. The tables
+    themselves are not inspected.
 
     The connection is URI read-only and ``query_only``.  This is safe for a
     cutover ``plan``: it neither acquires the execution lease nor updates
