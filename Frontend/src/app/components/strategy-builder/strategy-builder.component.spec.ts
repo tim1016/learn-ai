@@ -933,6 +933,73 @@ describe('StrategyBuilderComponent', () => {
     });
   });
 
+  // ── #3221: the clock, the expiry pick and the unit of the figures ──
+  describe('time left, the nearest expiry and the expected value', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('counts the time left down on a page left open, with no input touched', () => {
+      const openedAt = Date.UTC(2026, 9, 14, 15, 0);
+      vi.useFakeTimers();
+      vi.setSystemTime(openedAt);
+      const page = TestBed.createComponent(StrategyBuilderComponent).componentInstance;
+      page.selectedExpiration.set(openedAt + 10 * 86_400_000);
+      expect(page.daysToExpiry()).toBeCloseTo(10, 9);
+
+      vi.advanceTimersByTime(6 * 3_600_000);
+
+      expect(page.daysToExpiry()).toBeCloseTo(9.75, 6);
+    });
+
+    it('opens on the next expiry once today\'s has closed at 16:00 New York time', async () => {
+      // 16:30 EDT on Wed 2026-10-14: today's expiry anchor, 16:00 ET, is behind us.
+      const now = Date.UTC(2026, 9, 14, 20, 30);
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(now);
+      const todaysExpiry = optionExpiryAnchorMs(etIsoDate(now));
+      const nextExpiry = optionExpiryAnchorMs(etIsoDate(now + 2 * 86_400_000));
+      component.ticker.set('SPY');
+
+      const promise = component.fetchExpirations();
+      expectGraphQL(httpMock, 'getOptionsExpirations').flush({
+        data: {
+          getOptionsExpirations: { success: true, expirations: [todaysExpiry, nextExpiry], count: 2, error: null },
+        },
+      });
+      expectGraphQLOptional(httpMock, 'getStockSnapshot')?.flush({
+        data: { getStockSnapshot: { success: true, snapshot: null, error: null } },
+      });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expectGraphQL(httpMock, 'getOptionsChainSnapshot').flush({
+        data: {
+          getOptionsChainSnapshot: {
+            success: true,
+            underlying: { ticker: 'SPY', price: 590, change: 0, changePercent: 0 },
+            contracts: [],
+            count: 0,
+            riskFreeRate: 0.05,
+            dividendYield: 0,
+            rateSource: 'fred',
+            dividendSource: 'polygon',
+            error: null,
+          },
+        },
+      });
+      await promise;
+
+      expect(component.selectedExpiration()).toBe(nextExpiry);
+    });
+
+    it('shows the expected value per contract, as it shows max profit and max loss', () => {
+      // The server's figures are per share; the cards beside one another are per contract.
+      component.analysisResult.set({ ...buildAnalysisResult(), expectedValue: 0.5, maxProfit: 0.5 });
+
+      expect(component.analysisExpectedValueDisplay()).toBe('$50.00');
+      expect(component.analysisMaxProfitDisplay()).toBe('$50.00');
+    });
+  });
+
   // ── Auto-analyze edge cases (PR #86 review feedback) ────────────
   // The auto-analyze effect was shipped with two latent bugs that
   // Codex flagged on PR #86 after the merge. These regressions guard

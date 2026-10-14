@@ -2,9 +2,10 @@ import {
   Component, inject, signal, computed, effect, untracked,
   ChangeDetectionStrategy, OnDestroy,
 } from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
 import { DecimalPipe } from '@angular/common';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, interval, map } from 'rxjs';
 import { Drawer } from 'primeng/drawer';
 import { Button } from 'primeng/button';
 import { Tooltip } from 'primeng/tooltip';
@@ -28,8 +29,6 @@ import { VolumeChartComponent } from '../../shared/charts/volume-chart/volume-ch
 import { PayoffChartComponent } from '../../shared/payoff-chart/payoff-chart.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.component';
-import { etIsoDate } from '../../shared/date/et-midnight';
-import { optionExpiryAnchorMs } from '../../shared/option-contract/option-expiry-date';
 import { errorMessage } from '../../shared/errors/error-message';
 
 interface BuilderChainRow {
@@ -72,6 +71,9 @@ type ChainDensity = 'quick' | 'greeks';
 const CHAIN_DENSITY_STORAGE_KEY = 'sb.chainDensity';
 /** The strategy-analysis request takes at most this many legs. */
 const MAX_STRATEGY_LEGS = 8;
+
+/** How often the time left to expiry is re-read from the clock. */
+const CLOCK_TICK_MS = 60_000;
 
 interface LegConfig {
   strike: number;
@@ -606,12 +608,21 @@ export class StrategyBuilderComponent implements OnDestroy {
     }, 0);
   });
 
+  /**
+   * The clock the time left is read from. It ticks once a minute, so a page left
+   * open keeps pricing to the time left, as the server does on every analysis.
+   */
+  private readonly nowMs = toSignal(
+    interval(CLOCK_TICK_MS).pipe(map(() => Date.now())),
+    { initialValue: Date.now() },
+  );
+
   daysToExpiry = computed(() => {
     const exp = this.selectedExpiration();
     if (!exp) return 0;
     // Fractional days to the expiry anchor instant from the wire — never a
     // 16:00 built in the browser's own zone (#2934).
-    return Math.max((exp - Date.now()) / 86_400_000, 0);
+    return Math.max((exp - this.nowMs()) / 86_400_000, 0);
   });
 
   timeToExpiry = computed(() => this.daysToExpiry() / 365);
@@ -809,6 +820,12 @@ export class StrategyBuilderComponent implements OnDestroy {
     return formatPayoffExtremum(r.maxLoss * 100);
   });
 
+  /** The server's expected value is per share; shown per contract, beside Max Profit and Max Loss. */
+  analysisExpectedValueDisplay = computed<string>(() => {
+    const r = this.analysisResult();
+    return r ? formatPayoffExtremum(r.expectedValue * 100) : '—';
+  });
+
   liveGreeks = computed(() => {
     const params = this.enabledLegsParams();
     const t = this.timeToExpiry();
@@ -943,8 +960,9 @@ export class StrategyBuilderComponent implements OnDestroy {
       this.availableExpirations.set(expirations);
 
       if (expirations.length > 0) {
-        const todayAnchor = optionExpiryAnchorMs(etIsoDate(Date.now()));
-        const nearest = expirations.find(e => e >= todayAnchor) ?? expirations[0];
+        // An expiry anchor is 16:00 ET on its date: the nearest one still ahead, not today's.
+        const now = Date.now();
+        const nearest = expirations.find(e => e > now) ?? expirations[0];
         this.selectedExpiration.set(nearest);
         await this.fetchChainSnapshot(t, nearest);
       }
