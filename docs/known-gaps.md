@@ -68,8 +68,7 @@ previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
 ## 5. Numerical-rigor & frontend debt (deferred, P2)
 
 - **Golden-fixture coverage gap** — most canonical math still lacks a registered
-  golden fixture; the `iv30/` snapshot sits outside manifest governance.
-  *(was F-0026)*
+  golden fixture. *(was F-0026)*
 - **Temporal wire/storage contracts outside Alpaca V2 remain non-numeric
   (medium).** The 2026-08-18 census confirmed 4 Pydantic, 29 C#, and 22 real
   TypeScript temporal field declarations using strings or native date types

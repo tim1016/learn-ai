@@ -2,15 +2,14 @@
 
 Strategy: synthesize an option chain from a known constant Black-Scholes σ,
 then verify VIX replication recovers σ within tolerance. A real Polygon-snapshot
-golden fixture for SPY 2024-12-20 lives at
-``tests/fixtures/golden/iv30/spy-2024-12-20-chain.parquet`` once populated;
-the integration test below is skip-marked when the fixture is absent.
+fixture for SPY 2024-12-20 is registered in the golden manifest as IV-005
+(an internal regression pin, not an independent oracle); the tests that read it
+fail, not skip, when it is missing.
 """
 
 from __future__ import annotations
 
 import math
-from pathlib import Path
 
 import pytest
 
@@ -28,6 +27,7 @@ from app.volatility.vix_replication import (
     vix_style_iv30,
     vix_style_iv30_with_provenance,
 )
+from tests.fixtures.golden_support.registry import default as registry
 
 
 def _bs_normalized_chain(
@@ -179,29 +179,26 @@ class TestVixStyleIv30:
             )
 
 
-_FIXTURE_CANDIDATES = [
-    Path("/app/tests/fixtures/golden/iv30/spy-2024-12-20-chain.parquet"),
-    Path(__file__).parent.parent / "fixtures" / "golden" / "iv30" / "spy-2024-12-20-chain.parquet",
-]
-GOLDEN_FIXTURE = next((p for p in _FIXTURE_CANDIDATES if p.exists()), _FIXTURE_CANDIDATES[0])
+# Manifest-governed snapshot (IV-005). ``resolve`` raises if either file is
+# missing, so a deleted fixture is a collection error, never a silent skip.
+GOLDEN_FIXTURE = registry.resolve("IV-005", "input")
+GOLDEN_META = registry.resolve("IV-005", "output")
 
 
-@pytest.mark.skipif(
-    not GOLDEN_FIXTURE.exists(),
-    reason=f"golden fixture {GOLDEN_FIXTURE} not populated — run scripts/build_iv30_golden.py",
-)
 class TestSpyGoldenFixture:
     """Anchor regression test against a real SPY 2024-12-20 Polygon snapshot.
 
-    Populated by ``scripts/build_iv30_golden.py``. The test asserts that our
-    VIX-replication code, run against the frozen chain, produces the value
-    recorded in the meta sidecar (deterministic recomputation), and that
+    Built by ``scripts/build_iv30_golden.py`` and registered as IV-005 with
+    ``reference_kind: internal_regression``: the sidecar value was written by
+    the same function under test, so the deterministic test below pins drift,
+    not correctness. It asserts that our VIX-replication code, run against the
+    frozen chain, reproduces the value recorded in the meta sidecar, and that
     sanity checks on the absolute number hold for that date.
 
-    On 2024-12-20 the published VIX index closed at ~17.5%. Our replication
-    on the SPY chain should land within a few vol points of that — confirming
-    we are computing the same construct CBOE publishes, just from a single
-    underlying instead of the SPX chain.
+    On 2024-12-20 the published VIX index closed at ~17.5% (figure not
+    re-verified here). Our replication on the SPY chain should land within a
+    few vol points of that, which is a sanity band on the construct, not an
+    equivalence check: IV-003 and RV-004 are the independent CBOE oracles.
 
     The ATM-parametric IV30 (15.58%) lands ~170 bps below VIX-style (17.31%)
     because of SPY skew — VIX integrates OTM puts that trade higher than
@@ -218,7 +215,7 @@ class TestSpyGoldenFixture:
         for col in ("expiry_days", "strike", "contract_type", "close"):
             assert col in df.columns
 
-        meta = json.loads(GOLDEN_FIXTURE.with_suffix(".meta.json").read_text())
+        meta = json.loads(GOLDEN_META.read_text())
         below = int(meta["straddle"]["below_30d"])
         above = int(meta["straddle"]["above_30d"])
 
@@ -241,7 +238,7 @@ class TestSpyGoldenFixture:
         """
         import json
 
-        meta = json.loads(GOLDEN_FIXTURE.with_suffix(".meta.json").read_text())
+        meta = json.loads(GOLDEN_META.read_text())
         sigma_vix = float(meta["vix_style_iv30_act365"])
         assert 0.13 < sigma_vix < 0.22, f"σ_VIX={sigma_vix:.4f} outside reasonable band"
 
@@ -253,7 +250,7 @@ class TestSpyGoldenFixture:
         """
         import json
 
-        meta = json.loads(GOLDEN_FIXTURE.with_suffix(".meta.json").read_text())
+        meta = json.loads(GOLDEN_META.read_text())
         gap_bps = float(meta["iv30_diff_bps"])
         assert gap_bps < 300.0, f"VIX–ATM gap {gap_bps:.0f} bps unusually wide"
 
@@ -837,10 +834,6 @@ class TestVixStyleIv30WithProvenance:
         assert combined_prov.strike_coverage_score == pytest.approx(prov_narrow.strike_coverage_score)
 
 
-@pytest.mark.skipif(
-    not GOLDEN_FIXTURE.exists(),
-    reason=f"golden fixture {GOLDEN_FIXTURE} not populated",
-)
 class TestSpyGoldenFixtureWithProvenance:
     """The SPY 2024-12-20 fixture is built end-to-end from EOD close prices,
     so every leg is ``synthetic_close_proxy`` and the variance-contribution-
@@ -853,7 +846,7 @@ class TestSpyGoldenFixtureWithProvenance:
         import pandas as pd
 
         df = pd.read_parquet(GOLDEN_FIXTURE)
-        meta = json.loads(GOLDEN_FIXTURE.with_suffix(".meta.json").read_text())
+        meta = json.loads(GOLDEN_META.read_text())
         below = int(meta["straddle"]["below_30d"])
         above = int(meta["straddle"]["above_30d"])
 
