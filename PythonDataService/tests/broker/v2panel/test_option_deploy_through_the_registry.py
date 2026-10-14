@@ -34,6 +34,7 @@ from app.services.bot_runner_errors import (
 )
 from tests._helpers.bot_runner.custody import _registry
 from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed
+from tests.broker.v2panel.conftest import _BODY
 from tests.broker.v2panel.test_deploy_option_structure import (
     _ONE_CALL,
     _deploy,
@@ -55,8 +56,10 @@ def own_synthetic_authority() -> Iterator[None]:
 
 async def _what_the_click_handed_over(app, fake, floor: _Floor) -> dict[str, Any]:  # noqa: F811
     await _the_quotes_are_up(floor)
+    # The review was made at the simulator's own risk revision, as the real store judges the consent against.
     response = await _deploy(
-        app, execution_mode="dry_run", trades={**_ONE_CALL, "order_terms": _TERMS}, sizing={"preset": "custom", "quantity": 3}
+        app, execution_mode="dry_run", trades={**_ONE_CALL, "order_terms": _TERMS}, sizing={"preset": "custom", "quantity": 3},
+        budget={**_BODY["budget"], "risk_revision": 0},
     )
     assert response.status_code == 201, response.text
     [call] = fake.deploy_calls
@@ -88,6 +91,8 @@ async def test_what_the_click_hands_over_is_taken_by_the_real_registry_and_store
     inspect.signature(BotTaskRegistry.preview_start_admission).bind(None, **without_its_end)
 
     real = _the_real_registry(tmp_path, monkeypatch)
+    # The run the start commits to is on the market the review priced the structure on.
+    monkeypatch.setattr(bot_option_run, "this_process_option_market", floor.market)
     previewed = await real.preview_start_admission(**without_its_end)
     started = await real.deploy_with_admission(**call)
 

@@ -59,6 +59,8 @@ from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeFeed, _SqliteR
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
+pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+
 _SID = "alpaca-drill-bot"
 _T0 = 1_700_000_000_000
 

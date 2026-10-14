@@ -46,6 +46,8 @@ from tests._helpers.bot_runner.ema_parity import EMA_LAST_BAR_ENTER_DAY, ema_bar
 from tests._helpers.bot_runner.market import clock_read_before_the_close, patch_wall_clock_to_the_fed_bar
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
+pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+
 _ACCOUNT_ID = "PA-TEST"
 # A live decision lands this long after its bar closes (the issue's estimate).
 _DECISION_DELAY_MS = 600

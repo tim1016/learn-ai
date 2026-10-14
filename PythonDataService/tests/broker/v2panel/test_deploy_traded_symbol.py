@@ -133,7 +133,6 @@ async def test_a_dry_run_that_names_another_asset_trades_it(deploy_app, alpaca: 
     assert response.status_code == 201, response.text
     [call] = registry.deploy_calls
     assert (call["symbol"], call["traded_symbol"]) == ("SPY", "QQQ")
-    assert response.json()["action_plan"]["on_enter"][0]["instrument"]["underlying"] == "QQQ"
     assert alpaca.asked == ["QQQ"]
 
 
@@ -416,7 +415,7 @@ async def test_a_deploy_that_names_no_traded_asset_is_sent_as_it_always_was(depl
 
     assert response.status_code == 201, response.text
     assert registry.deploy_calls[0]["traded_symbol"] is None
-    assert response.json()["action_plan"]["on_enter"][0]["instrument"]["underlying"] == "SPY"
+    assert registry.deploy_calls[0]["action_plan"] is None, "the runner makes the plan of a bot in shares"
     assert alpaca.asked == [], "Alpaca is asked about an asset only when the bot trades another one"
 
 

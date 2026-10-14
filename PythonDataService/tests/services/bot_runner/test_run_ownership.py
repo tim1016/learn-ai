@@ -31,6 +31,8 @@ from tests.services.test_bot_runner_ema_resume import (
     _wait_for,
 )
 
+pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+
 
 def _compose(
     tmp_path: Path, feed: _ResumeFeed

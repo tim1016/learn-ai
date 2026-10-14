@@ -3,8 +3,9 @@
 Every registered tunable is editable at deploy time, validated by the
 strategy's own registered `param_schema` — the same schema Engine Lab and
 Strategy Lab already validate against. `symbol` is always deploy-authoritative
-and is never a submittable tunable. The deploy receipt states which resolved
-fields diverge from the strategy's registered defaults (informational only).
+and is never a submittable tunable. The runner is handed the full resolved set
+and each field's origin: the fields that diverge from the strategy's registered
+defaults are the ``deploy_override`` ones.
 
 The ``deploy_app`` HTTP harness and its fakes live in ``conftest.py``, shared
 with ``test_deploy_scoped_route.py`` / ``test_deploy_stale_proof_demotion.py``.
@@ -50,10 +51,9 @@ async def test_deploy_with_no_parameters_resolves_registered_defaults(
         response = await client.post(f"/api/brokers/alpaca/accounts/{ACCT}/bots", json=_BODY)
 
     assert response.status_code == 201
-    body = response.json()
-    assert body["parameters"] == {"gap": 0.20, "gap_bps": 0.0, "rsi_min": 50.0, "rsi_max": 70.0}
-    assert body["parameters_diverge_from_defaults"] == []
-    assert registry.deploy_calls[0]["strategy_params"] == {"gap": 0.20, "gap_bps": 0.0, "rsi_min": 50.0, "rsi_max": 70.0}
+    call = registry.deploy_calls[0]
+    assert call["strategy_params"] == {"gap": 0.20, "gap_bps": 0.0, "rsi_min": 50.0, "rsi_max": 70.0}
+    assert set(call["strategy_param_origins"].values()) == {"registered_default"}
 
 
 @pytest.mark.asyncio
@@ -74,13 +74,12 @@ async def test_deploy_with_an_override_resolves_full_set_and_flags_divergence(
         )
 
     assert response.status_code == 201
-    body = response.json()
+    call = registry.deploy_calls[0]
     # The full resolved set, not a sparse diff: unset fields still carry
     # their registered defaults, so a later default change can never
     # silently alter this already-deployed instance's behavior.
-    assert body["parameters"] == {"gap": 5.0, "gap_bps": 0.0, "rsi_min": 50.0, "rsi_max": 70.0}
-    assert body["parameters_diverge_from_defaults"] == ["gap"]
-    assert registry.deploy_calls[0]["strategy_params"]["gap"] == 5.0
+    assert call["strategy_params"] == {"gap": 5.0, "gap_bps": 0.0, "rsi_min": 50.0, "rsi_max": 70.0}
+    assert {name for name, origin in call["strategy_param_origins"].items() if origin == "deploy_override"} == {"gap"}
 
 
 @pytest.mark.asyncio

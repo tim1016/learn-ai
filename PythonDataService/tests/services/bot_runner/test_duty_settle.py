@@ -68,6 +68,8 @@ from tests.services.test_bot_runner_ema_resume import (
     _wait_for,
 )
 
+pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+
 _SID = _STRATEGY_INSTANCE_ID
 _LIVE_ACCOUNT_ID = "9LIVE0001"
 _SEALED_ACCOUNT_ID = f"shadow:{_LIVE_ACCOUNT_ID}"

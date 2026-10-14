@@ -41,6 +41,8 @@ from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 from ._support import _current_run_json, _OrderingClerk
 
+pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+
 
 @asynccontextmanager
 async def _fixed_start_guard(sid: str):

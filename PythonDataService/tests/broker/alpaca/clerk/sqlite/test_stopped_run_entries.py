@@ -37,9 +37,7 @@ from app.services.bot_carryover import prove_stop_outcome, read_checkpoint
 from tests.broker.alpaca.clerk.sqlite.test_runtime import _binding, _Broker, _order
 
 # #2596: these ENTERs run on the default clock; keep it inside a session.
-pytestmark = pytest.mark.usefixtures("wall_clock_in_session")
-
-
+pytestmark = pytest.mark.usefixtures("wall_clock_in_session", "legacy_run_registration")
 class _OpenOrdersBroker(_Broker):
     """Alpaca's view of submitted orders: listed while open, looked up exactly.
 

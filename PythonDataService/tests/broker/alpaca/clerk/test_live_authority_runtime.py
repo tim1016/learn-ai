@@ -65,6 +65,8 @@ from tests.broker.alpaca.clerk.sqlite.test_runtime_program_leg import RUN_ID, _b
 from tests.broker.alpaca.clerk.test_shadow_broker import _retain
 from tests.broker.alpaca.clerk.test_shadow_envelope_runtime import BAR_CLOSE, DECISION_MINUTE, NOW_MS
 
+pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+
 
 @pytest.fixture(autouse=True)
 def _no_primary() -> Iterator[None]:

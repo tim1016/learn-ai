@@ -59,6 +59,8 @@ from tests.services.bot_runner._support import (
     _wait_for,
 )
 
+pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+
 
 class _QueueFeed(_FakeFeed):
     def __init__(self) -> None:

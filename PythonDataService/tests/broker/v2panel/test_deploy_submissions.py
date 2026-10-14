@@ -310,53 +310,20 @@ class _NullFence:
 
 # ── The route ───────────────────────────────────────────────────────────────
 
-_BUDGETED = {**_BODY, "budget": {"amount_usd": "1000.00", "risk_revision": 1, "review_token": "reviewed"}}
 _BOTS = f"/api/brokers/alpaca/accounts/{ACCT}/bots"
 _RECOVERY = f"/api/brokers/alpaca/accounts/{ACCT}/deploy-submissions"
 
 
-def _receipt(sid: str, replaces: str | None = None) -> BudgetDeployCommandReceipt:
-    return BudgetDeployCommandReceipt(
-        status="deployed", outcome="success", receipt_id="cmd", recorded_at_ms=_AT, command_id="cmd",
-        strategy_instance_id=sid, run_id=f"{sid}:run", account_id=ACCT, world="real_paper", committed_usd="1000.00",
-        message=f"{sid} is deployed", explanation="$1000.00 is set aside for it.", next_action="Open the bot's page.",
-        first_deployed_at_ms=_AT + 7, replaces_strategy_instance_id=replaces,
-    )
-
-
 @pytest.fixture
 def budgeted(deploy_app, monkeypatch: pytest.MonkeyPatch):
-    """The deploy harness with consent granted and custody commits recorded per name.
+    """The deploy harness, which grants consent and records custody's commits, with the pairing admitted.
 
     ``refuse`` makes the next Deploy's commit refuse after the name is
     claimed; ``committed`` is custody's view, keyed by bot name.
     """
     fast_app, registry = deploy_app
     monkeypatch.setattr("app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS", _ALLOW_BODY_STRATEGY)
-    committed: dict[str, BudgetDeployCommandReceipt] = {}
-    refuse: list[BaseException] = []
-
-    async def command_receipt(account_id: str, submission: DeploySubmission) -> BudgetDeployCommandReceipt | None:
-        return committed.get(submission.strategy_instance_id)
-
-    def resolve_consent(account_id: str, request: object, *, resolved_parameters: dict) -> DeployBudgetConsent:
-        return DeployBudgetConsent(committed_cents=100_000, risk_revision=1, actor="owner", request_fingerprint="f", world="real_paper")
-
-    original_deploy = registry.deploy_with_admission
-
-    async def deploy(**kwargs: object) -> AdmittedBotStart:
-        if refuse:
-            registry.deploy_calls.append(kwargs)
-            raise refuse.pop()
-        started = await original_deploy(**kwargs)
-        sid = str(kwargs["strategy_instance_id"])
-        committed[sid] = _receipt(sid)
-        return started
-
-    monkeypatch.setattr(budget_deploy, "command_receipt", command_receipt)
-    monkeypatch.setattr(budget_deploy, "resolve_consent", resolve_consent)
-    monkeypatch.setattr(registry, "deploy_with_admission", deploy)
-    return SimpleNamespace(app=fast_app, registry=registry, committed=committed, refuse=refuse)
+    return SimpleNamespace(app=fast_app, registry=registry, committed=registry.committed, refuse=registry.refuse)
 
 
 def _client(fast_app) -> httpx.AsyncClient:
@@ -387,9 +354,9 @@ async def test_a_submission_key_outside_the_path_safe_shape_is_refused_by_the_sc
 async def test_a_budgeted_deploy_resent_with_its_key_returns_the_recorded_bot_without_a_second_start(budgeted) -> None:
     """A double-click, a reload or a lost response resends the key: one bot, one budget."""
     async with _client(budgeted.app) as client:
-        first = await client.post(_BOTS, json=_BUDGETED)
-        retry = await client.post(_BOTS, json=_BUDGETED)
-        second_bot = await client.post(_BOTS, json={**_BUDGETED, "submission_key": "submission-0002"})
+        first = await client.post(_BOTS, json=_BODY)
+        retry = await client.post(_BOTS, json=_BODY)
+        second_bot = await client.post(_BOTS, json={**_BODY, "submission_key": "submission-0002"})
         recovered = await client.get(f"{_RECOVERY}/{_BODY['submission_key']}")
         unknown = await client.get(f"{_RECOVERY}/never-submitted")
 
@@ -398,7 +365,7 @@ async def test_a_budgeted_deploy_resent_with_its_key_returns_the_recorded_bot_wi
     assert second_bot.json()["strategy_instance_id"] == f"{DEPLOYED_SID}-2"
     assert [call["strategy_instance_id"] for call in budgeted.registry.deploy_calls] == [DEPLOYED_SID, f"{DEPLOYED_SID}-2"]
     assert recovered.status_code == 200 and recovered.json() == first.json()
-    assert recovered.json()["first_deployed_at_ms"] == _AT + 7
+    assert recovered.json()["first_deployed_at_ms"] == budgeted.committed[DEPLOYED_SID].first_deployed_at_ms
     # A client frees the key on this 404 alone (#3179): it names the typed code.
     assert unknown.status_code == 404
     assert unknown.json()["detail"] == {
@@ -409,8 +376,8 @@ async def test_a_budgeted_deploy_resent_with_its_key_returns_the_recorded_bot_wi
 
 async def test_the_same_key_with_other_settings_is_refused_with_409_and_nothing_starts(budgeted) -> None:
     async with _client(budgeted.app) as client:
-        first = await client.post(_BOTS, json=_BUDGETED)
-        changed = await client.post(_BOTS, json={**_BUDGETED, "budget": {**_BUDGETED["budget"], "amount_usd": "800.00"}})
+        first = await client.post(_BOTS, json=_BODY)
+        changed = await client.post(_BOTS, json={**_BODY, "budget": {**_BODY["budget"], "amount_usd": "800.00"}})
 
     assert first.status_code == 201
     assert changed.status_code == 409
@@ -430,11 +397,11 @@ async def test_the_same_key_with_another_end_is_refused_with_409_and_nothing_sta
     """#2607 review: the end stays out of consent, which the owner may outlive by
     changing it; but a submission key binds the end its request named, so the same
     key resent with another end is another Deploy."""
-    no_end = {**_BUDGETED, "end": {"end_at_ms": None, "end_action": "SELL"}}
+    no_end = {**_BODY, "end": {"end_at_ms": None, "end_action": "SELL"}}
 
     async with _client(budgeted.app) as client:
         first = await client.post(_BOTS, json=no_end)
-        default_end = await client.post(_BOTS, json=_BUDGETED)
+        default_end = await client.post(_BOTS, json=_BODY)
 
     assert first.status_code == 201
     assert default_end.status_code == 409
@@ -443,7 +410,7 @@ async def test_the_same_key_with_another_end_is_refused_with_409_and_nothing_sta
 
 
 async def test_the_same_key_with_the_same_end_is_the_same_deploy(budgeted) -> None:
-    no_end = {**_BUDGETED, "end": {"end_at_ms": None, "end_action": "SELL"}}
+    no_end = {**_BODY, "end": {"end_at_ms": None, "end_action": "SELL"}}
 
     async with _client(budgeted.app) as client:
         first = await client.post(_BOTS, json=no_end)
@@ -457,7 +424,7 @@ async def test_the_same_key_with_the_same_end_is_the_same_deploy(budgeted) -> No
 def test_a_key_sent_with_no_end_binds_exactly_what_it_bound_before_ends_existed() -> None:
     """Every key recorded before #2607 still matches its resend: a request with no end
     binds the settings and the account alone, byte for byte."""
-    request = AlpacaDeploySubmission.model_validate(_BUDGETED)
+    request = AlpacaDeploySubmission.model_validate(_BODY)
 
     assert panel_deploy._submission_fingerprint(ACCT, request) == request.fingerprint(
         account=canonical_alpaca_account_id(ACCT),
@@ -470,7 +437,7 @@ async def test_a_deploy_refused_before_the_commit_checks_claims_no_name(budgeted
     monkeypatch.setattr(budget_deploy, "resolve_consent", refuse_consent)
 
     async with _client(budgeted.app) as client:
-        refused = await client.post(_BOTS, json=_BUDGETED)
+        refused = await client.post(_BOTS, json=_BODY)
         recovered = await client.get(f"{_RECOVERY}/{_BODY['submission_key']}")
 
     assert refused.status_code == 409
@@ -486,12 +453,12 @@ async def test_a_deploy_refused_at_commit_and_retried_later_with_its_key_is_name
     budgeted.refuse.append(BudgetUnavailable("Wait for a fresh IBKR price, then review Deploy again."))
 
     async with _client(budgeted.app) as client:
-        refused = await client.post(_BOTS, json=_BUDGETED)
+        refused = await client.post(_BOTS, json=_BODY)
         not_committed = await client.get(f"{_RECOVERY}/{_BODY['submission_key']}")
         # The owner fixes the cause and presses Deploy again on the next session day at 09:25 ET.
         next_day = _ms(2026, 9, 28, 13, 25)
         monkeypatch.setattr(timestamps, "time", SimpleNamespace(time=lambda: next_day / 1000))
-        retried = await client.post(_BOTS, json=_BUDGETED)
+        retried = await client.post(_BOTS, json=_BODY)
         committed = await client.get(f"{_RECOVERY}/{_BODY['submission_key']}")
 
     assert refused.status_code == 409
@@ -524,11 +491,11 @@ async def test_the_recovery_read_says_a_deploy_being_sent_is_in_flight_and_a_res
     budgeted.registry.deploy_with_admission = slow_deploy
 
     async with _client(budgeted.app) as client:
-        sending = asyncio.create_task(client.post(_BOTS, json=_BUDGETED))
+        sending = asyncio.create_task(client.post(_BOTS, json=_BODY))
         await asyncio.wait_for(entered.wait(), timeout=5)
         in_flight = await client.get(f"{_RECOVERY}/{_BODY['submission_key']}")
         # Bounded: a resend that started a second Deploy would wait on the first forever.
-        resent = await asyncio.wait_for(client.post(_BOTS, json=_BUDGETED), timeout=5)
+        resent = await asyncio.wait_for(client.post(_BOTS, json=_BODY), timeout=5)
         release.set()
         sent = await sending
 
@@ -562,7 +529,7 @@ async def test_the_recovery_read_says_a_deploy_being_sent_is_in_flight_before_it
     monkeypatch.setattr(panel_deploy, "get_alpaca_paper_deploy_view", slow_view)
 
     async with _client(budgeted.app) as client:
-        sending = asyncio.create_task(client.post(_BOTS, json=_BUDGETED))
+        sending = asyncio.create_task(client.post(_BOTS, json=_BODY))
         await asyncio.wait_for(entered.wait(), timeout=5)
         in_flight = await client.get(f"{_RECOVERY}/{_BODY['submission_key']}")
         release.set()
@@ -606,11 +573,11 @@ async def test_the_recovery_read_never_settles_a_claim_a_resend_renewed_and_comm
         return receipt
 
     async with _client(budgeted.app) as client:
-        await client.post(_BOTS, json=_BUDGETED)
+        await client.post(_BOTS, json=_BODY)
         monkeypatch.setattr(budget_deploy, "command_receipt", read_paused_once)
         read = asyncio.create_task(client.get(f"{_RECOVERY}/{_BODY['submission_key']}"))
         await asyncio.wait_for(reading.wait(), timeout=5)
-        resent = await asyncio.wait_for(client.post(_BOTS, json=_BUDGETED), timeout=5)
+        resent = await asyncio.wait_for(client.post(_BOTS, json=_BODY), timeout=5)
         release.set()
         recovered = await read
 
@@ -648,10 +615,10 @@ def _cannot_name(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize(
     ("case", "refuse", "body", "status"),
     [
-        ("consent refused", _refuse_consent, _BUDGETED, 409),
-        ("world not offered", lambda _mp: None, {**_BUDGETED, "execution_mode": "live"}, 409),
-        ("invalid settings", lambda _mp: None, {**_BUDGETED, "parameters": {"no_such_setting": 1}}, 400),
-        ("no name to give", _cannot_name, _BUDGETED, 409),
+        ("consent refused", _refuse_consent, _BODY, 409),
+        ("world not offered", lambda _mp: None, {**_BODY, "execution_mode": "live"}, 409),
+        ("invalid settings", lambda _mp: None, {**_BODY, "parameters": {"no_such_setting": 1}}, 400),
+        ("no name to give", _cannot_name, _BODY, 409),
     ],
 )
 async def test_a_refusal_before_the_key_names_a_bot_settles_the_key(
@@ -675,7 +642,7 @@ async def test_the_bot_that_cannot_be_named_carries_its_own_reason_code(budgeted
     _cannot_name(monkeypatch)
 
     async with _client(budgeted.app) as client:
-        refused = await client.post(_BOTS, json=_BUDGETED)
+        refused = await client.post(_BOTS, json=_BODY)
 
     assert refused.json()["detail"]["message"] == "This bot cannot be named."
     assert refused.json()["detail"]["reason_code"] == "deploy_bot_name_unavailable"
@@ -687,9 +654,9 @@ async def test_a_refusal_before_renaming_a_key_whose_bot_never_committed_settles
     budgeted.refuse.append(BudgetUnavailable("Wait for a fresh IBKR price, then review Deploy again."))
 
     async with _client(budgeted.app) as client:
-        await client.post(_BOTS, json=_BUDGETED)
+        await client.post(_BOTS, json=_BODY)
         _refuse_consent(monkeypatch)
-        refused = await client.post(_BOTS, json=_BUDGETED)
+        refused = await client.post(_BOTS, json=_BODY)
         recovered = await client.get(f"{_RECOVERY}/{_BODY['submission_key']}")
 
     assert refused.status_code == 409
@@ -707,7 +674,7 @@ async def test_a_deploy_that_started_but_cannot_read_its_outcome_leaves_the_key_
     monkeypatch.setattr(budget_deploy, "command_receipt", unreadable)
 
     async with _client(budgeted.app) as client:
-        refused = await client.post(_BOTS, json=_BUDGETED)
+        refused = await client.post(_BOTS, json=_BODY)
 
     assert refused.status_code == 409
     assert refused.json()["detail"]["why"] == "Deployment outcome is not yet readable. Recover this command before trying again."
@@ -724,9 +691,9 @@ async def test_a_resend_whose_earlier_bot_cannot_be_read_leaves_the_key_unsettle
         raise BudgetUnavailable("Deployment command evidence is unavailable. Resolve custody recovery before continuing.")
 
     async with _client(budgeted.app) as client:
-        await client.post(_BOTS, json=_BUDGETED)
+        await client.post(_BOTS, json=_BODY)
         monkeypatch.setattr(budget_deploy, "command_receipt", custody_unreadable)
-        refused = await client.post(_BOTS, json=_BUDGETED)
+        refused = await client.post(_BOTS, json=_BODY)
 
     assert refused.status_code == 409
     assert refused.json()["detail"]["submission_settled"] is False
@@ -737,7 +704,7 @@ async def test_a_deploy_refused_after_its_bot_is_named_leaves_the_key_unsettled(
     budgeted.refuse.append(BudgetUnavailable("Wait for a fresh IBKR price, then review Deploy again."))
 
     async with _client(budgeted.app) as client:
-        refused = await client.post(_BOTS, json=_BUDGETED)
+        refused = await client.post(_BOTS, json=_BODY)
 
     assert refused.status_code == 409
     assert refused.json()["detail"]["submission_settled"] is False
@@ -747,7 +714,7 @@ async def test_a_deploy_with_no_bot_runner_leaves_the_key_unsettled(budgeted) ->
     set_bot_task_registry(None)
 
     async with _client(budgeted.app) as client:
-        refused = await client.post(_BOTS, json=_BUDGETED)
+        refused = await client.post(_BOTS, json=_BODY)
 
     assert refused.status_code == 503
     assert refused.json()["detail"]["message"] == "The bot runner is not available."
@@ -756,7 +723,7 @@ async def test_a_deploy_with_no_bot_runner_leaves_the_key_unsettled(budgeted) ->
 
 async def test_the_recovery_read_without_a_bot_runner_is_unavailable_not_a_denial(budgeted) -> None:
     async with _client(budgeted.app) as client:
-        await client.post(_BOTS, json=_BUDGETED)
+        await client.post(_BOTS, json=_BODY)
         set_bot_task_registry(None)
         response = await client.get(f"{_RECOVERY}/{_BODY['submission_key']}")
 
@@ -1089,7 +1056,8 @@ async def test_deploy_again_prefill_is_accepted_by_preview_and_deploy_with_the_s
         }
         previewed = await client.post(f"{_BOTS}/admission", json=settings)
         deployed = await client.post(_BOTS, json={
-            **settings, "submission_key": "deploy-again-0001", "replaces_strategy_instance_id": source.strategy_instance_id,
+            **settings, "budget": _BODY["budget"], "submission_key": "deploy-again-0001",
+            "replaces_strategy_instance_id": source.strategy_instance_id,
         })
 
     assert previewed.status_code == 200 and deployed.status_code == 201

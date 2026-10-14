@@ -35,6 +35,8 @@ from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_acti
 from tests._helpers.bot_runner.doubles import _SqliteRuntimeBroker
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
+pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+
 
 @pytest.fixture()
 def repository(tmp_path: Path) -> ClerkSqliteRepository:

@@ -27,7 +27,7 @@ from app.broker.alpaca.clerk.active_authority import (
 )
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
-from app.broker.alpaca.clerk.sqlite.runtime import StrategyRegistrationConflictError
+from app.broker.alpaca.clerk.sqlite.runtime import DeployBudgetRequiredError, StrategyRegistrationConflictError
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import is_active_tradable_us_equity
@@ -48,7 +48,6 @@ from app.schemas.action_plan import (
 )
 from app.schemas.broker_bots import (
     AlpacaDeploySubmission,
-    AlpacaPaperDeployReceipt,
     AlpacaPaperDeployRequest,
     AlpacaPaperDeployStrategy,
     AlpacaPaperDeployView,
@@ -108,7 +107,6 @@ from app.services.broker_v2_panel.paper_deploy_service import (
     GoldenDefaults,
     ResolvedDeployParams,
     broker_mode_for,
-    build_alpaca_paper_deploy_receipt,
     build_alpaca_paper_deploy_view,
     resolve_deploy_strategy_params,
     strategy_gate_recovery,
@@ -513,15 +511,16 @@ async def deploy_alpaca_paper_bot(
     broker: str,
     account_id: str,
     request: AlpacaDeploySubmission,
-) -> AlpacaPaperDeployReceipt | BudgetDeployCommandReceipt:
+) -> BudgetDeployCommandReceipt:
     """Execute or recover one durable deployment through the runner seam.
 
-    A key whose Deploy already committed returns that receipt exactly as
-    recorded, and the same key with other settings is refused, before any
-    check runs. The bot is named only after every check that can refuse the
-    Deploy has passed, immediately before the commit: a Deploy refused and
-    retried later is named from the retry's minute (the refused attempt's
-    name stays burned).
+    A Deploy carries its budget (#3216); one without is refused as the last
+    check before its bot is named, with nothing claimed or registered. A key
+    whose Deploy already committed returns that receipt exactly as recorded,
+    and the same key with other settings is refused, before any check runs.
+    The bot is named only after every check that can refuse the Deploy has
+    passed, immediately before the commit: a Deploy refused and retried later
+    is named from the retry's minute (the refused attempt's name stays burned).
 
     Only a refusal raised before the claim, while nothing under the key can
     have started, is marked ``submission_settled``: before that, the key's
@@ -536,11 +535,11 @@ async def deploy_alpaca_paper_bot(
             existing = await _committed_receipt(account_id, earlier)
             if existing is not None:
                 return existing
-        # The key named no bot yet, or its bot was just read as never
-        # committed. A budget-less Deploy has no commit to read, so its
-        # earlier bot may have started.
+        # The key named no bot yet, or its bot was just read as never committed.
+        # A request with no budget can only be a key's first send or a resend of
+        # one recorded before budgets were required: no commit exists to read.
         with _refusals_settle_the_key(earlier is None or request.budget is not None):
-            view, resolved_params = await _deploy_preflight(broker, account_id, request)
+            _view, resolved_params = await _deploy_preflight(broker, account_id, request)
             if request.options is not None:
                 # A mode that takes no option bot is refused by name before the owner is asked to
                 # accept anything for it (ADR 0076 decision 24).
@@ -548,22 +547,22 @@ async def deploy_alpaca_paper_bot(
             _require_traded_asset_acknowledgement(request)
             end = resolve_deploy_end(request.end, dry_run=request.execution_mode == "dry_run").end
             traded = await _what_it_trades(broker, account_id, request, at_the_click=True)
+            if request.budget is None:
+                raise budget_deploy.budget_error(DeployBudgetRequiredError(
+                    "A Deploy needs a budget. Review one for this bot, then deploy again."
+                ))
             try:
-                consent = None if request.budget is None else _priced(
+                consent = _priced(
                     budget_deploy.resolve_consent, account_id, request, resolved_params.effective, traded.price,
                 )
             except BudgetUnavailable as exc:
                 raise budget_deploy.budget_error(exc) from exc
-        # A budget-less (pre-budget) Deploy has no commit to read, so its
-        # key keeps the name it was first given and the runner's own
-        # identity fences judge a resend.
-        claim = _claim_bot_name(ledger, account_id, request, renew=earlier if consent is not None else None)
+        claim = _claim_bot_name(ledger, account_id, request, renew=earlier)
         _SENDING[request.submission_key] = claim
-        sid = claim.strategy_instance_id
         try:
-            started = await registry.deploy_with_admission(
+            await registry.deploy_with_admission(
                 broker=broker,
-                strategy_instance_id=sid,
+                strategy_instance_id=claim.strategy_instance_id,
                 strategy_key=request.strategy_key,
                 symbol=request.symbol,
                 traded_symbol=request.traded_symbol,
@@ -579,13 +578,12 @@ async def deploy_alpaca_paper_bot(
                 end=end,
                 action_plan=traded.plan,
                 option_order_terms=traded.terms,
-                **({"budget_consent": consent} if consent is not None else {}),
+                budget_consent=consent,
             )
         except (BotRunnerError, BudgetUnavailable, DurableConflictError, StrategyRegistrationConflictError, AdmissionBlockedError) as exc:
-            if consent is not None:
-                existing = await _committed_receipt(account_id, claim)
-                if existing is not None:
-                    return existing
+            existing = await _committed_receipt(account_id, claim)
+            if existing is not None:
+                return existing
             if not isinstance(exc, BotRunnerError):
                 detail = exc.decision.why if isinstance(exc, AdmissionBlockedError) else str(exc)
                 raise budget_deploy.budget_error(BudgetUnavailable(detail)) from exc
@@ -598,21 +596,10 @@ async def deploy_alpaca_paper_bot(
                 admission_decision=exc.admission_decision,
                 reason_code=exc.reason_code,
             ) from exc
-        if consent is not None:
-            receipt = await _committed_receipt(account_id, claim)
-            if receipt is None:
-                raise budget_deploy.budget_error(BudgetUnavailable("Deployment outcome is not yet readable. Recover this command before trying again."))
-            return receipt
-    return build_alpaca_paper_deploy_receipt(
-        broker=broker,
-        view=view,
-        request=request,
-        strategy_instance_id=sid,
-        bot=started.bot,
-        admission=started.admission,
-        resolved_params=resolved_params,
-        action_plan=traded.plan,
-    )
+        receipt = await _committed_receipt(account_id, claim)
+        if receipt is None:
+            raise budget_deploy.budget_error(BudgetUnavailable("Deployment outcome is not yet readable. Recover this command before trying again."))
+        return receipt
 
 
 #: The recovery read's words for a key whose Deploy has not committed, and

@@ -86,10 +86,9 @@ from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     GuardedBrokerTradePort,
     guard_broker_ports,
 )
-from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
+from app.broker.alpaca.clerk.sqlite.budget_commands import require_deploy_admissible, submit_budgeted_deploy
 from app.broker.alpaca.clerk.sqlite.commands import (
     CommandSubmission,
-    submit_start_run,
     submit_stop_run,
 )
 from app.broker.alpaca.clerk.sqlite.contract_terms import (
@@ -508,6 +507,12 @@ class _OptionQuoteBoundTradePort:
 
 class StrategyRegistrationConflictError(RuntimeError):
     """One strategy identity was reused with different immutable semantics."""
+
+
+class DeployBudgetRequiredError(BudgetUnavailable):
+    """A run was registered with no budget: a Deploy sets one aside or it does not start (#3216)."""
+
+    reason_code = "deploy_budget_required"
 
 
 class SealedAccountMismatchError(RuntimeError):
@@ -986,6 +991,14 @@ class SqliteAlpacaClerkFacade:
     ) -> None:
         """Durably register immutable strategy + run before order capability.
 
+        A Deploy names its budget (``binding.budget_consent``); a binding with
+        none is refused as ``DeployBudgetRequiredError`` before anything is
+        written (#3216). Registering a bot is append-only, so every refusal
+        that can be judged from what is already stored -- the sealed terms,
+        the world, the entry price and the account's cash and risk rules --
+        is judged before the bot is registered: a refused Deploy leaves no
+        registered, never-started bot behind.
+
         ``run_owner`` is what holds the run in this process -- its ``done()``
         turns true once the runner has ended (#2369). It is recorded in the
         same intake critical section that admits the run, so the sweep can
@@ -1017,15 +1030,6 @@ class SqliteAlpacaClerkFacade:
             if existing is None:
                 if binding.exit_terms is None or binding.exit_terms.provenance != "deployed":
                     raise StrategyRegistrationConflictError("Explicit exit terms are required for a new Start.")
-                self._repo.register_strategy_instance(
-                    strategy_instance_id=binding.strategy_instance_id,
-                    symbol=traded_symbol,
-                    config_hash=config_hash,
-                    strategy_key=binding.strategy_key,
-                    display_name=display_name,
-                    config_json=config_json,
-                    exit_terms=binding.exit_terms,
-                )
             elif existing["symbol"].upper() != traded_symbol.upper() or existing["config_hash"] != config_hash:
                 raise StrategyRegistrationConflictError(
                     f"strategy instance {binding.strategy_instance_id!r} conflicts with "
@@ -1044,57 +1048,61 @@ class SqliteAlpacaClerkFacade:
                         f"strategy instance {binding.strategy_instance_id!r} conflicts with "
                         "its SQLite authority configuration"
                     )
+                self._sealed_exit_terms(binding)
 
-            terms = self._repo.exit_terms(binding.strategy_instance_id)
-            if terms is None or (binding.exit_terms is not None and binding.exit_terms != terms):
-                raise StrategyRegistrationConflictError("The bot must use its immutable custody-sealed exit terms.")
-            self._exit_terms[binding.strategy_instance_id] = terms
-            if binding.budget_consent is not None:
-                consent = binding.budget_consent
-                world = authority_kind_for_account(self.account_id, account_mode=self._account_mode)
-                if consent.world != world or self._live_envelope is None:
-                    raise BudgetUnavailable("The reviewed deployment world or cash authority changed. Review Deploy again.")
-                if is_option_plan(binding.action_plan):
-                    # One option position's cost is known only from its
-                    # contract's quotes. No minimum is asked of the budget
-                    # here; each entry is admitted on its own commitment.
-                    required = Decimal(0)
-                else:
-                    # One estimated position is priced from the asset the bot
-                    # buys, as the Deploy review priced it (#2912).
-                    quote = self._quote_source(traded_symbol, self._repo.clock())
-                    if quote is None:
-                        raise BudgetUnavailable("Wait for a fresh IBKR price, then review Deploy again.")
-                    required, _ = entry_requirement(quantity=binding.quantity, price=quote.ask, at_ms=self._repo.clock())
-                submission = submit_budgeted_deploy(
-                    self._repo, strategy_instance_id=binding.strategy_instance_id, lifecycle_run_id=binding.run_id,
-                    world=world, committed_cents=consent.committed_cents, configuration_hash=config_hash,
-                    exit_terms_hash=canonical_sha256(terms.model_dump(mode="json")),
-                    risk_revision=consent.risk_revision, actor=consent.actor, request_fingerprint=consent.request_fingerprint,
+            consent = binding.budget_consent
+            if consent is None:
+                raise DeployBudgetRequiredError("A Deploy needs a budget. Review one for this bot, then deploy again.")
+            world = authority_kind_for_account(self.account_id, account_mode=self._account_mode)
+            if consent.world != world or self._live_envelope is None:
+                raise BudgetUnavailable("The reviewed deployment world or cash authority changed. Review Deploy again.")
+            if is_option_plan(binding.action_plan):
+                # One option position's cost is known only from its
+                # contract's quotes. No minimum is asked of the budget
+                # here; each entry is admitted on its own commitment.
+                required = Decimal(0)
+            else:
+                # One estimated position is priced from the asset the bot
+                # buys, as the Deploy review priced it (#2912).
+                quote = self._quote_source(traded_symbol, self._repo.clock())
+                if quote is None:
+                    raise BudgetUnavailable("Wait for a fresh IBKR price, then review Deploy again.")
+                required, _ = entry_requirement(quantity=binding.quantity, price=quote.ask, at_ms=self._repo.clock())
+            if existing is None:
+                # Registering is append-only: judge the budget before it, so a
+                # Deploy the commit would refuse leaves no bot behind.
+                require_deploy_admissible(
+                    self._repo, strategy_instance_id=binding.strategy_instance_id, world=world,
+                    committed_cents=consent.committed_cents, risk_revision=consent.risk_revision,
                     envelope=self._live_envelope, minimum_position_cost=required,
                 )
-                if not submission.created:
-                    raise BudgetUnavailable("This Deploy command already exists. Recover its stored result; it cannot launch again.")
-                self._hold_run(binding, run_owner)
-                return
-            active = self._repo.active_run(binding.strategy_instance_id)
-            if active is not None:
-                if active.lifecycle_run_id == binding.run_id:
-                    self._hold_run(binding, run_owner)
-                    return
-                raise StrategyRegistrationConflictError(
-                    f"strategy instance {binding.strategy_instance_id!r} already has "
-                    f"active lifecycle run {active.lifecycle_run_id!r}"
+                self._repo.register_strategy_instance(
+                    strategy_instance_id=binding.strategy_instance_id,
+                    symbol=traded_symbol,
+                    config_hash=config_hash,
+                    strategy_key=binding.strategy_key,
+                    display_name=display_name,
+                    config_json=config_json,
+                    exit_terms=binding.exit_terms,
                 )
-            submission = submit_start_run(
-                self._repo,
-                account_id=self.account_id,
-                strategy_instance_id=binding.strategy_instance_id,
-                lifecycle_run_id=binding.run_id,
+            terms = self._sealed_exit_terms(binding)
+            self._exit_terms[binding.strategy_instance_id] = terms
+            submission = submit_budgeted_deploy(
+                self._repo, strategy_instance_id=binding.strategy_instance_id, lifecycle_run_id=binding.run_id,
+                world=world, committed_cents=consent.committed_cents, configuration_hash=config_hash,
+                exit_terms_hash=canonical_sha256(terms.model_dump(mode="json")),
+                risk_revision=consent.risk_revision, actor=consent.actor, request_fingerprint=consent.request_fingerprint,
+                envelope=self._live_envelope, minimum_position_cost=required,
             )
-            if submission.command.state != "succeeded":
-                raise StrategyRegistrationConflictError(f"SQLite authority rejected lifecycle run {binding.run_id!r}")
+            if not submission.created:
+                raise BudgetUnavailable("This Deploy command already exists. Recover its stored result; it cannot launch again.")
             self._hold_run(binding, run_owner)
+
+    def _sealed_exit_terms(self, binding: BrokerBotBinding) -> ExitTerms:
+        terms = self._repo.exit_terms(binding.strategy_instance_id)
+        if terms is None or (binding.exit_terms is not None and binding.exit_terms != terms):
+            raise StrategyRegistrationConflictError("The bot must use its immutable custody-sealed exit terms.")
+        return terms
 
     def _symbol_to_register(self, action_plan: ActionPlan) -> str:
         """The symbol a bot is registered under, or a typed refusal of a plan this account cannot take.

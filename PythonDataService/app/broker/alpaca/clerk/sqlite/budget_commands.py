@@ -32,6 +32,66 @@ def deployment_command_id(account_id: str, strategy_instance_id: str) -> str:
     return f"cmd:{account_id}:{strategy_instance_id}:DEPLOY"
 
 
+def _require_budget_authority(repo: ClerkSqliteRepository) -> None:
+    if repo.budget_authority_version() != 2:
+        raise BudgetUnavailable("Switch this account to budgets in Settings before Deploy.")
+
+
+def _require_funded(
+    repo: ClerkSqliteRepository, *, strategy_instance_id: str, world: AuthorityKind, committed_cents: int,
+    risk_revision: int, envelope: LiveEnvelopeGate, minimum_position_cost: Decimal,
+) -> None:
+    """The account's admission, risk and funding rules for one budget; none needs the bot registered."""
+    require_admission(repo, strategy_instance_id=strategy_instance_id)
+    # One instant judges the reading's freshness and the budget by it, so a reading admitted here is
+    # never called stale a moment later.
+    admitted_at_ms = repo.clock()
+    observation = require_current_risk_admission(repo, envelope=envelope, now_ms=admitted_at_ms)
+    if observation is None:
+        raise BudgetUnavailable("Wait for a fresh cash observation, then review Deploy again.")
+    policy = repo.account_risk_policy()
+    effective_revision = 0 if policy is None else policy.revision
+    if effective_revision != risk_revision:
+        raise BudgetUnavailable("Account risk limits changed; review Deploy again.")
+    if world != "synthetic" and (policy is None or observation.risk_revision != policy.revision):
+        raise BudgetUnavailable("Set a daily loss limit in Settings and wait for current risk evidence.")
+    try:
+        projection = repo.account_budget(
+            cash=observation.cash_available_usd, seen_before_ms=observation.fills_seen_before_ms,
+            modelled_fees_seen_before_ms=observation.modelled_fees_seen_before_ms,
+        )
+        need = None if minimum_position_cost <= 0 else EntryNeed.for_shares(
+            requirement=minimum_position_cost, fee_provision_cents=0,
+        )
+        answer = deploy_funding_answer(
+            projection, amount_cents=committed_cents, need=need, broker_buying_power=None,
+            observed_at_ms=observation.observed_at_ms, now_ms=admitted_at_ms,
+        )
+        # A priced need passes only on a verdict; with none, only a refusal the account itself makes stops it.
+        if answer.admits is False or (need is not None and answer.admits is None):
+            raise BudgetUnavailable(answer.sentence)
+    except MoneyInputError as exc:
+        raise BudgetUnavailable(str(exc)) from exc
+
+
+def require_deploy_admissible(
+    repo: ClerkSqliteRepository, *, strategy_instance_id: str, world: AuthorityKind, committed_cents: int,
+    risk_revision: int, envelope: LiveEnvelopeGate, minimum_position_cost: Decimal,
+) -> None:
+    """Refuse, as the commit would, a Deploy that can be judged before its bot is registered.
+
+    Registering a bot is a durable, append-only write. Read before it, this
+    leaves no registered, never-started bot behind a Deploy the commit would
+    have refused. The commit judges the same rules again under the write
+    lock (``submit_budgeted_deploy``); this only moves the refusal ahead.
+    """
+    _require_budget_authority(repo)
+    _require_funded(
+        repo, strategy_instance_id=strategy_instance_id, world=world, committed_cents=committed_cents,
+        risk_revision=risk_revision, envelope=envelope, minimum_position_cost=minimum_position_cost,
+    )
+
+
 def submit_budgeted_deploy(
     repo: ClerkSqliteRepository, *, strategy_instance_id: str, lifecycle_run_id: str,
     world: AuthorityKind, committed_cents: int, configuration_hash: str, exit_terms_hash: str,
@@ -69,8 +129,7 @@ def submit_budgeted_deploy(
     command_id = deployment_command_id(repo.account_id, strategy_instance_id)
 
     def build_transition() -> TransitionInput:
-        if repo.budget_authority_version() != 2:
-            raise BudgetUnavailable("Switch this account to budgets in Settings before Deploy.")
+        _require_budget_authority(repo)
         require_strategy_instance(repo, strategy_instance_id)
         instance = repo.strategy_instance(strategy_instance_id)
         assert instance is not None
@@ -81,36 +140,10 @@ def submit_budgeted_deploy(
             raise BudgetUnavailable("The reviewed exit terms do not match this deployment.")
         if repo.latest_run(strategy_instance_id) is not None:
             raise BudgetUnavailable("Trading again requires a fresh deployment identity.")
-        require_admission(repo, strategy_instance_id=strategy_instance_id)
-        # One instant judges the reading's freshness and the budget by it, so a reading admitted here is
-        # never called stale a moment later.
-        admitted_at_ms = repo.clock()
-        observation = require_current_risk_admission(repo, envelope=envelope, now_ms=admitted_at_ms)
-        if observation is None:
-            raise BudgetUnavailable("Wait for a fresh cash observation, then review Deploy again.")
-        policy = repo.account_risk_policy()
-        effective_revision = 0 if policy is None else policy.revision
-        if effective_revision != risk_revision:
-            raise BudgetUnavailable("Account risk limits changed; review Deploy again.")
-        if world != "synthetic" and (policy is None or observation.risk_revision != policy.revision):
-            raise BudgetUnavailable("Set a daily loss limit in Settings and wait for current risk evidence.")
-        try:
-            projection = repo.account_budget(
-                cash=observation.cash_available_usd, seen_before_ms=observation.fills_seen_before_ms,
-                modelled_fees_seen_before_ms=observation.modelled_fees_seen_before_ms,
-            )
-            need = None if minimum_position_cost <= 0 else EntryNeed.for_shares(
-                requirement=minimum_position_cost, fee_provision_cents=0,
-            )
-            answer = deploy_funding_answer(
-                projection, amount_cents=committed_cents, need=need, broker_buying_power=None,
-                observed_at_ms=observation.observed_at_ms, now_ms=admitted_at_ms,
-            )
-            # A priced need passes only on a verdict; with none, only a refusal the account itself makes stops it.
-            if answer.admits is False or (need is not None and answer.admits is None):
-                raise BudgetUnavailable(answer.sentence)
-        except MoneyInputError as exc:
-            raise BudgetUnavailable(str(exc)) from exc
+        _require_funded(
+            repo, strategy_instance_id=strategy_instance_id, world=world, committed_cents=committed_cents,
+            risk_revision=risk_revision, envelope=envelope, minimum_position_cost=minimum_position_cost,
+        )
         return TransitionInput(
             strategy_instance_id=strategy_instance_id,
             run_id=f"{strategy_instance_id}:{lifecycle_run_id}", command_id=command_id,

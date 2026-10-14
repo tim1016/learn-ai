@@ -333,7 +333,6 @@ async def test_deploy_admits_blocked_strategy_for_dry_run_but_refuses_paper(
         )
 
     assert dry_run_response.status_code == 201
-    assert dry_run_response.json()["execution_mode"] == "dry_run"
     assert registry.deploy_calls[0]["strategy_key"] == "deployment_validation"
     assert registry.deploy_calls[0]["mode"] == "dry_run"
 

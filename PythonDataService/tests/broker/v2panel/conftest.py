@@ -16,20 +16,23 @@ import pytest
 from fastapi import FastAPI
 
 from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus, HoldState
+from app.broker.alpaca.clerk.money import consent_cents
 from app.broker.contract.models import BrokerAccountSnapshot
 from app.broker.contract.registry import (
     get_broker_registry,
     reset_broker_registry_for_testing,
 )
 from app.routers.broker_v2_panel import router
-from app.schemas.broker_bots import BotStatusView
+from app.schemas.broker_bots import AlpacaPaperDeployRequest, BotStatusView
+from app.schemas.deployment_budget import BudgetDeployCommandReceipt, DeployBudgetConsent
 from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.strategy_validation import StrategyValidationEntry, StrategyValidationFlagRequest
 from app.services.bot_runner import AdmittedBotStart, set_bot_task_registry
 from app.services.broker_account_snapshot import (
     clear_broker_account_snapshot_cache_for_testing,
 )
-from app.services.broker_v2_panel import panel_data_source, panel_deploy
+from app.services.broker_v2_panel import budget_deploy, panel_data_source, panel_deploy
+from app.services.broker_v2_panel.deploy_submissions import DeploySubmission
 from app.services.strategy_validation_manifest import (
     append_strategy_validation_flag_event,
     load_strategy_validation_entries,
@@ -85,9 +88,23 @@ class _FakeReadPort:
         raise NotImplementedError
 
 
+def committed_receipt(sid: str, replaces: str | None = None) -> BudgetDeployCommandReceipt:
+    """What custody records for a Deploy of ``sid`` that committed its budget."""
+    return BudgetDeployCommandReceipt(
+        status="deployed", outcome="success", receipt_id="cmd", recorded_at_ms=_T0, command_id="cmd",
+        strategy_instance_id=sid, run_id=f"{sid}:run", account_id=ACCT, world="real_paper", committed_usd="1000.00",
+        message=f"{sid} is deployed", explanation="$1000.00 is set aside for it.", next_action="Open the bot's page.",
+        first_deployed_at_ms=_T0 + 7, replaces_strategy_instance_id=replaces,
+    )
+
+
 class _FakeDeployRegistry:
     def __init__(self, artifacts_root: Path) -> None:
         self.deploy_calls: list[dict] = []
+        # Custody's view of the Deploys that committed, by bot name; and the
+        # refusals the next Deploys' commits raise after their name is claimed.
+        self.committed: dict[str, BudgetDeployCommandReceipt] = {}
+        self.refuse: list[BaseException] = []
         # The Deploy submission ledger lives beside the lane's bindings.
         self.artifacts_root = artifacts_root
 
@@ -124,6 +141,9 @@ class _FakeDeployRegistry:
 
     async def deploy_with_admission(self, **kwargs: object) -> AdmittedBotStart:
         self.deploy_calls.append(kwargs)
+        if self.refuse:
+            raise self.refuse.pop()
+        self.committed[str(kwargs["strategy_instance_id"])] = committed_receipt(str(kwargs["strategy_instance_id"]))
         bot = BotStatusView(
             strategy_instance_id=kwargs["strategy_instance_id"],
             strategy_key=kwargs["strategy_key"],
@@ -207,6 +227,22 @@ def deploy_app(
     monkeypatch.setattr(panel_deploy, "clerk_status", clerk_status)
     monkeypatch.setattr(panel_data_source, "clerk_status", clerk_status)
 
+    # A Deploy needs a budget (#3216): consent is granted and the commit is read from what the registry recorded.
+    async def command_receipt(account_id: str, submission: DeploySubmission) -> BudgetDeployCommandReceipt | None:
+        return registry.committed.get(submission.strategy_instance_id)
+
+    def resolve_consent(account_id: str, request: AlpacaPaperDeployRequest, *, resolved_parameters: dict, **_option: object) -> DeployBudgetConsent:
+        # What the owner reviewed is what is consented to, in the world the review is made in: a Dry Run's is the simulator's.
+        assert request.budget is not None
+        return DeployBudgetConsent(
+            committed_cents=consent_cents(request.budget.amount_usd), risk_revision=request.budget.risk_revision,
+            actor="owner", request_fingerprint="f",
+            world="synthetic" if request.execution_mode == "dry_run" else "real_paper",
+        )
+
+    monkeypatch.setattr(budget_deploy, "command_receipt", command_receipt)
+    monkeypatch.setattr(budget_deploy, "resolve_consent", resolve_consent)
+
     fast_app = FastAPI()
     fast_app.include_router(router)
 
@@ -231,6 +267,7 @@ DEPLOYED_SID = "spy-ema-20260925-0931"
 
 _BODY = {
     "exit_terms": {"exit_allowance_bps": 20, "band_multiple": 2, "spread_cap_bps": 50},
+    "budget": {"amount_usd": "1000.00", "risk_revision": 1, "review_token": "reviewed"},
     "submission_key": "submission-0001",
     # ema_crossover_signal, not deployment_validation: #1672 deliberately
     # changed deployment_validation's session-boundary literals, which
@@ -245,8 +282,9 @@ _BODY = {
 }
 
 #: The same settings as a preview or admission read takes them: previews judge
-#: a Deploy before it is sent, so they carry no submission key.
-_SETTINGS = {key: value for key, value in _BODY.items() if key != "submission_key"}
+#: a Deploy before it is sent, so they carry no submission key and no budget
+#: (the review is what offers one).
+_SETTINGS = {key: value for key, value in _BODY.items() if key not in ("submission_key", "budget")}
 
 
 def _accepted_deploy_entry() -> StrategyValidationEntry:

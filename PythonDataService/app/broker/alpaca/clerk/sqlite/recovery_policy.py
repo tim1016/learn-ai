@@ -94,9 +94,12 @@ FRESH_EVIDENCE_MAX_AGE_MS = 30_000
 #: The sweep publishes a pass about every 15 s, so one older than this means
 #: it has stopped: its verdict proves nothing about the account now.
 SWEEP_LIVENESS_BOUND_MS = 60_000
-# Imported rather than restated: the catalog's inert-terminal test asks the
-# same question of the same column (`reads.WORKING_BROKER_STATES`), and two
-# copies would let "working order" drift between the two answers.
+# The orders a verified cancel lists and a flatten waits on: imported rather
+# than restated. Not the orders that count as live custody
+# (`reads.LIVE_CUSTODY_BROKER_STATES`): one held for an auction, suspended,
+# pending a replace, calculated or stopped can still fill, so the catalog
+# keeps its bot live and `needed` below reads `may_fill`, but this policy does
+# not offer to cancel it (#3216).
 _WORKING_BROKER_STATES = WORKING_BROKER_STATES
 
 

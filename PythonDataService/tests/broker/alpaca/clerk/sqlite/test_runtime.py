@@ -55,9 +55,7 @@ from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite.conftest import _TestClock
 
 # #2596: these ENTERs run on the default clock; keep it inside a session.
-pytestmark = pytest.mark.usefixtures("wall_clock_in_session")
-
-
+pytestmark = pytest.mark.usefixtures("wall_clock_in_session", "legacy_run_registration")
 class _Broker:
     broker_id = "alpaca"
 

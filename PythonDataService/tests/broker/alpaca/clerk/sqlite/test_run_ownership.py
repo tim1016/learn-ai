@@ -32,8 +32,7 @@ from tests.broker.alpaca.clerk.sqlite.test_stopped_run_entries import (
 )
 
 # #2596: these ENTERs run on the default clock; keep it inside a session.
-pytestmark = pytest.mark.usefixtures("wall_clock_in_session")
-
+pytestmark = pytest.mark.usefixtures("wall_clock_in_session", "legacy_run_registration")
 # The execution lease is a different fence; keep it out of the way while the
 # Clerk clock jumps.
 _EXECUTION_LEASE_TTL_MS = 10**12

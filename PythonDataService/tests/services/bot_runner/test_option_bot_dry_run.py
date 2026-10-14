@@ -86,6 +86,8 @@ from ._option_floor import (
 )
 from ._support import _bar, _wait_for
 
+pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+
 CALL = CALL_585.occ_symbol
 
 

@@ -32,6 +32,8 @@ from tests.broker.alpaca.clerk.sqlite.test_option_entry_and_exit import (
     one_account,  # noqa: F401 -- pytest fixture, used by name
 )
 
+pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+
 _SETTING = "ALPACA_LIVE_OPTION_BOTS_ENABLED"
 _SEALED = SealedOptionOrderTerms(
     gap_limit_percent=EIGHT, entry_wait_seconds=20, cost_limit_percent=TEN, expiry_close_lead_minutes=45

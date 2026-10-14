@@ -26,6 +26,8 @@ from app.utils.timestamps import now_ms_utc
 from tests._helpers.bot_runner.custody import admission_guard_for
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
+pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+
 _STRATEGY_INSTANCE_ID = "alpaca-skeleton-1"
 
 
