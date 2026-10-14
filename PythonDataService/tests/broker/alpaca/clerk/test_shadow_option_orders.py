@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from app.broker.alpaca.broker import ALPACA_LIVE_CAPABILITIES
+from app.broker.alpaca.clerk.account_authority import shadow_evidence_account_id_for_strategy
 from app.broker.alpaca.clerk.kept_option_quotes import KEPT_OPTION_QUOTES_FILENAME, KeptOptionQuotes
 from app.broker.alpaca.clerk.shadow_broker import ShadowPorts, compose_shadow_ports
 from app.broker.alpaca.clerk.simulated_option_settlement import OwnersWord
@@ -32,6 +33,7 @@ from app.options.contract import OptionContract
 from app.options.deadlines import last_session_close_ms
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
 from app.options.simulated_fill import SimulatedFillModel
+from app.services.source_bar_ledger import SourceBarLedger
 
 LIVE_ACCOUNT = "9LIVE0001"
 SHADOW_ACCOUNT = f"shadow:{LIVE_ACCOUNT}"
@@ -130,6 +132,30 @@ async def test_a_missing_shadow_market_ledger_reports_no_price_and_the_owner_can
     )
     assert len(ended.settled) == 1 and await shadow.read.list_positions() == []
     assert live.read == []
+
+
+async def test_a_corrupt_shadow_market_ledger_reports_no_price_as_a_missing_one_does(
+    tmp_path: Path, live: _LiveRead,
+) -> None:
+    """One instance's damaged ledger must not raise out of the expiry settlement of the whole shared book."""
+    clock = [NOW]
+    shadow = compose_shadow_ports(
+        live_read=live, live_account_id=LIVE_ACCOUNT, artifacts_root=tmp_path, clock=lambda: clock[0],
+    )
+    await _holds_two(shadow)
+    instance = SourceBarLedger(
+        artifacts_root=tmp_path, account_id=shadow_evidence_account_id_for_strategy("buys-a-call")
+    )
+    instance.close()
+    instance.path.write_bytes(b"this is not a sqlite database " * 64)
+    for sidecar in ("-wal", "-shm"):
+        instance.path.with_name(instance.path.name + sidecar).unlink(missing_ok=True)
+    clock[0] = last_session_close_ms(CALL.expiry_date) + 180_000
+
+    without_a_price = shadow.trade.settle_expired_options(after_ms=0)
+
+    assert not without_a_price.settled and SYMBOL in without_a_price.not_settled
+    assert [(p.symbol, p.quantity) for p in await shadow.read.list_positions()] == [(SYMBOL, 2)]
 
 
 async def test_an_opening_order_is_filled_in_full_at_the_ask_of_the_quote_bound_to_it(shadow: ShadowPorts) -> None:

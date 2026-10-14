@@ -277,6 +277,38 @@ class ShadowOrderBook:
         self._clock = clock
         # The book's option orders of one leg: filled from a quote into this same ledger (ADR 0076).
         self.option_orders = option_orders
+        # Failed reads of an instance's evidence ledger since it last read well, by (instance, error type).
+        self._unreadable_ledgers: dict[tuple[str, str], int] = {}
+
+    def ledger_unreadable(
+        self, account_id: str, error: BaseException, *, action: str, message: str, **context: object
+    ) -> None:
+        """Say an instance's evidence ledger could not be read: the traceback once, then a counted line.
+
+        Every read of the book settles, so one damaged ledger fails on each of
+        them. The traceback is said once per instance and error type until the
+        ledger reads well again.
+        """
+        key = (account_id, type(error).__name__)
+        failed_reads = self._unreadable_ledgers[key] = self._unreadable_ledgers.get(key, 0) + 1
+        logger.warning(
+            message,
+            extra={"action": action, "account_id": account_id, "error": str(error), "failed_reads": failed_reads, **context},
+            exc_info=error if failed_reads == 1 else None,
+        )
+
+    def ledger_readable(self, account_id: str) -> None:
+        """An instance's evidence ledger read well: one line for what it had failed, then it is traced afresh."""
+        for key in [key for key in self._unreadable_ledgers if key[0] == account_id]:
+            logger.info(
+                "shadow evidence ledger is readable again",
+                extra={
+                    "action": "shadow_evidence_ledger_readable",
+                    "account_id": account_id,
+                    "error_type": key[1],
+                    "failed_reads": self._unreadable_ledgers.pop(key),
+                },
+            )
 
     def bind_evaluated_bar(
         self, client_order_id: str, retained_bar: RetainedSourceBar, *, fill_at_ms: int | None = None
@@ -324,13 +356,13 @@ class ShadowOrderBook:
         account_id = self._evidence_namespace_for(client_order_id)
         try:
             retained_bar = self._evidence.latest_for_symbol(account_id, symbol=symbol)
-        except _EVIDENCE_LEDGER_UNREADABLE:
-            logger.warning(
-                "shadow recovery cannot read its instance's evidence ledger; the EXIT is left unpriced",
-                extra={"action": "shadow_recovery_ledger_unreadable", "account_id": account_id, "symbol": symbol},
-                exc_info=True,
+        except _EVIDENCE_LEDGER_UNREADABLE as error:
+            self.ledger_unreadable(
+                account_id, error, action="shadow_recovery_ledger_unreadable", symbol=symbol,
+                message="shadow recovery cannot read its instance's evidence ledger; the EXIT is left unpriced",
             )
             return False
+        self.ledger_readable(account_id)
         sent_at_ms = self._clock()
         if not recovery_bar_in_send_session(retained_bar, now_ms=sent_at_ms, extended_window=self._window):
             return False
@@ -403,6 +435,8 @@ class ShadowOrderBook:
         anchor = record.anchor
         if anchor is None or anchor.fill_model != "limit_touch":
             return anchor
+        # Deliberately uncontained, unlike settlement: an unreadable ledger cannot say the order never
+        # filled, and a possibly filled order must not be stamped canceled with ``no_evidence``.
         bars = self._evidence.bars_after(
             anchor.evidence_account_id, provider=anchor.provider, symbol=record.order.symbol,
             start_ms=anchor.decision_bar_end_ms,
@@ -593,19 +627,16 @@ class ShadowOrderBook:
                     symbol=record.order.symbol,
                     start_ms=anchor.decision_bar_end_ms,
                 )
-            except _EVIDENCE_LEDGER_UNREADABLE:
+            except _EVIDENCE_LEDGER_UNREADABLE as error:
                 # One book serves every instance on this authority: an instance that lost its ledger
                 # leaves its own order resting, undecided, and stops no other bot's read, submit or cancel.
-                logger.warning(
-                    "shadow settlement cannot read an instance's evidence ledger; its order is left resting",
-                    extra={
-                        "action": "shadow_settlement_ledger_unreadable",
-                        "account_id": anchor.evidence_account_id,
-                        "client_order_id": client_order_id,
-                    },
-                    exc_info=True,
+                self.ledger_unreadable(
+                    anchor.evidence_account_id, error, action="shadow_settlement_ledger_unreadable",
+                    client_order_id=client_order_id,
+                    message="shadow settlement cannot read an instance's evidence ledger; its order is left resting",
                 )
                 continue
+            self.ledger_readable(anchor.evidence_account_id)
             fill = limit_touch_fill(
                 leg,
                 decision_bar_end_ms=anchor.decision_bar_end_ms,
@@ -689,12 +720,13 @@ class _ShadowSettlementBars:
             try:
                 with self._book._evidence.open(account_id) as ledger:
                     bar = ledger.latest_for_symbol(symbol, market_only=market_only, at_or_before_ms=at_or_before_ms)
-            except (FileNotFoundError, SourceBarLedgerMissingError):
-                logging.getLogger(__name__).warning(
-                    "shadow settlement has no retained market ledger",
-                    extra={"action": "shadow_settlement_ledger_missing", "account_id": account_id, "symbol": symbol},
+            except _EVIDENCE_LEDGER_UNREADABLE as error:
+                self._book.ledger_unreadable(
+                    account_id, error, action="shadow_settlement_ledger_unreadable", symbol=symbol,
+                    message="shadow settlement cannot read a retained market ledger",
                 )
                 continue
+            self._book.ledger_readable(account_id)
             if bar is not None:
                 bars.append(bar)
         if not bars:

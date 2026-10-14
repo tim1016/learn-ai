@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
+import sqlite3
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -642,6 +644,48 @@ async def test_one_instances_unreadable_evidence_ledger_does_not_stop_the_shared
     await ports.trade.cancel(resting.order_id)
     canceled = await ports.trade.get_order_by_client_order_id(f"{NAMESPACE}:next")
     assert canceled is not None and canceled.status == "canceled"
+
+    # The damaged instance's own order is not cancelled on evidence nobody can read: it may have filled,
+    # and a cancel stamped ``no_evidence`` would say it never did.
+    with pytest.raises((SourceBarLedgerMissingError, sqlite3.DatabaseError)):
+        await ports.trade.cancel(f"shadow-order:{OTHER_NAMESPACE}:rest")
+    still_resting = await ports.trade.get_order_by_client_order_id(f"{OTHER_NAMESPACE}:rest")
+    assert still_resting is not None and still_resting.status == "new"
+
+
+async def test_an_unreadable_evidence_ledger_is_traced_once_until_it_reads_well_again(
+    world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock], tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Every read of the book settles, so one damaged ledger fails on each of them: the
+    traceback is said once per instance and error type, a short counted line after it,
+    and a line when it reads well again -- after which a new failure is traced afresh."""
+    ports, _bars, _live, clock = world
+    other_id = shadow_evidence_account_id_for_strategy(OTHER_SID)
+    other = SourceBarLedger(artifacts_root=tmp_path, account_id=other_id)
+    decision = _retain(other, minute=1020, close="100.00", phase="POST")
+    ports.trade.bind_evaluated_bar(f"{OTHER_NAMESPACE}:rest", decision)
+    await ports.trade.submit(_extended_leg(99.00), client_order_id=f"{OTHER_NAMESPACE}:rest")
+    clock.now_ms = decision.end_ms + 1
+    _damage_evidence_ledger(other, "corrupt")
+
+    def unreadable() -> list[logging.LogRecord]:
+        return [r for r in caplog.records if getattr(r, "action", None) == "shadow_settlement_ledger_unreadable"]
+
+    with caplog.at_level(logging.INFO, logger="app.broker.alpaca.clerk.shadow_broker"):
+        await ports.read.list_orders()
+        await ports.read.list_positions()
+        await ports.read.list_orders()
+        assert [(r.failed_reads, r.exc_info is not None) for r in unreadable()] == [(1, True), (2, False), (3, False)]
+
+        other.path.unlink()
+        SourceBarLedger(artifacts_root=tmp_path, account_id=other_id).close()
+        await ports.read.list_orders()
+        [recovered] = [r for r in caplog.records if getattr(r, "action", None) == "shadow_evidence_ledger_readable"]
+        assert (recovered.account_id, recovered.failed_reads) == (other_id, 3)
+
+        _damage_evidence_ledger(SourceBarLedger(artifacts_root=tmp_path, account_id=other_id), "corrupt")
+        await ports.read.list_orders()
+        assert [(r.failed_reads, r.exc_info is not None) for r in unreadable()][-1] == (1, True)
 
 
 @pytest.mark.parametrize("damage", ["missing", "corrupt"])
