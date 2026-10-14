@@ -322,16 +322,21 @@ class ClerkSqliteRepository(
         process that now owns the account. A leaseless handle (no
         ``lease_owner``) owns nothing, and SQL ``= NULL`` matches no row, so
         the guarded update is a no-op for it.
+
+        The connection is closed even when the release fails (a write lock
+        held past the busy timeout); the lease then lapses on its own TTL.
         """
         with self._write_lock:
-            self._conn.execute(
-                "UPDATE control_meta SET execution_lease_owner = NULL, "
-                "execution_lease_expires_at_ms = NULL "
-                "WHERE id = 1 AND execution_lease_owner = ?",
-                (self._lease_owner,),
-            )
-            self._conn.commit()
-            self._conn.close()
+            try:
+                self._conn.execute(
+                    "UPDATE control_meta SET execution_lease_owner = NULL, "
+                    "execution_lease_expires_at_ms = NULL "
+                    "WHERE id = 1 AND execution_lease_owner = ?",
+                    (self._lease_owner,),
+                )
+                self._conn.commit()
+            finally:
+                self._conn.close()
 
     # ------------------------------------------------------------------
     # Construction

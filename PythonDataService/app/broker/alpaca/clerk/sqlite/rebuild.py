@@ -73,7 +73,13 @@ def rebuild_repository_from_mirror(
     account_dir.mkdir(parents=True, exist_ok=True)
     fsync_directory_chain(account_dir, artifacts_root)
     conn = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
-    schema.configure_connection(conn)
+    try:
+        schema.configure_connection(conn)
+    except Exception:
+        # Nothing was written: an empty file left here would block the next rebuild.
+        conn.close()
+        db_path.unlink(missing_ok=True)
+        raise
     schema.apply_schema(conn)
     conn.row_factory = sqlite3.Row
 
