@@ -78,7 +78,7 @@
       </p-tabpanel>
       <p-tabpanel value="history" lazy>
         <ng-template #content>
-          <app-options-backtest-history [active]="activeTab() === 'history'" (useSetup)="useRunSetup($event)" (deleted)="launch.forget($event)" />
+          <app-options-backtest-history [active]="activeTab() === 'history'" [setupBlockedWhy]="setupBlockedWhy()" (useSetup)="useRunSetup($event)" (deleted)="launch.forget($event)" />
         </ng-template>
       </p-tabpanel>
       <p-tabpanel value="chain" lazy>

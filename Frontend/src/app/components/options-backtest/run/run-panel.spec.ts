@@ -363,6 +363,20 @@ describe('a run that is going', () => {
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
   });
 
+  it('says nothing of a run that could not be read once the panel is given another run, while that one is still being read', async () => {
+    const service = fakeService(vi);
+    service.run.mockImplementation((id: number) => (id === 7 ? Promise.reject(new Error('offline')) : new Promise<RunDetail>(() => undefined)));
+    const { view } = await renderRun(runItem({ id: 7, status: 'complete' }), { service });
+    expect(await screen.findByText(/could not be read/)).toBeTruthy();
+
+    view.fixture.componentRef.setInput('run', runItem({ id: 8, job_id: 'job-8', status: 'running' }));
+    await lettingGo();
+
+    await waitFor(() => expect(service.run).toHaveBeenCalledWith(8));
+    expect(screen.queryByText(/could not be read/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+
   it('reads a run that is over once, even when its job is still known to this tab and ended', async () => {
     const service = fakeService(vi);
     readsAs(service, runDetail());
