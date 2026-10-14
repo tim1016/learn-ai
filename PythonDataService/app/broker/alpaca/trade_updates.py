@@ -146,6 +146,9 @@ class TradeUpdateCounters:
       id, status, symbol or side, or naming values the adapter could not
       read; withheld like a lost response (#2643, #2648).
     - ``parse_errors`` — frames that captured but would not parse.
+    - ``leg_executions_unmapped`` — a several-leg parent's fill named a leg
+      execution whose leg order it did not carry; the next lookup credits the
+      leg cumulatively (#3103).
     - ``capture_failures`` — frames refused because verbatim capture failed.
     - ``event_key_collisions`` — changed payloads that reused an event key.
     - ``reconnects`` — reconnect cycles performed.
@@ -160,6 +163,7 @@ class TradeUpdateCounters:
     unfoldable_orders: int = 0
     withheld_orders: int = 0
     parse_errors: int = 0
+    leg_executions_unmapped: int = 0
     reconnects: int = 0
     connects: int = 0
     gap_reconciled: int = 0
@@ -709,6 +713,50 @@ class TradeUpdatesConsumer:
         # this terminal order is recognized as stale regardless of its key.
         if order_id and _is_terminal(order) and terminal_state is not None:
             self._terminal_orders.setdefault(order_id, set()).add(terminal_state)
+        if (
+            not from_gap_reconcile
+            and event.event_type in {"fill", "partial_fill"}
+            and adapter.is_a_multi_leg_parents_fill(data)
+        ):
+            await self._credit_the_legs_of_a_parents_fill(data)
+
+    async def _credit_the_legs_of_a_parents_fill(self, data: dict[str, Any]) -> None:
+        """A several-leg parent's fill frame names each leg's execution; each is that leg's own exact fill (#3103).
+
+        Alpaca sends no frame of its own for a leg, so without this the legs hold only the cumulative
+        the REST lookup credits: it names no execution, the account's fee population stays incomplete
+        and every entry on the account is refused. Each leg's execution goes through the one handler
+        a single-leg order's frame does (its own dedup key is the execution id).
+        """
+        executions = data.get("legs")
+        order = data.get("order")
+        if not isinstance(executions, list) or not isinstance(order, dict):
+            return
+        leg_orders = {
+            str(leg.get("id")): leg for leg in (order.get("legs") or []) if isinstance(leg, dict) and leg.get("id")
+        }
+        for execution in executions:
+            leg_order = leg_orders.get(str(execution.get("order_id"))) if isinstance(execution, dict) else None
+            if leg_order is None:
+                # Not a parse error: the parent was applied and the next lookup credits the leg cumulatively.
+                self._counters.leg_executions_unmapped += 1
+                logger.warning(
+                    "alpaca trade_updates parent fill names a leg execution with no leg order",
+                    extra={"action": "trade_updates_leg_execution_unmapped"},
+                )
+                continue
+            filled_all = adapter.opt_float(leg_order.get("filled_qty")) == adapter.opt_float(leg_order.get("qty"))
+            await self._handle_trade_update(
+                {
+                    "event": "fill" if filled_all else "partial_fill",
+                    "timestamp": execution.get("timestamp") or data.get("timestamp"),
+                    "execution_id": execution.get("execution_id"),
+                    "price": execution.get("price"),
+                    "qty": execution.get("qty"),
+                    # A leg's client order id holds no Clerk identity: it resolves by its broker order id.
+                    "order": {**leg_order, "client_order_id": None},
+                }
+            )
 
     # ── Reconnect gap-reconcile ──────────────────────────────────────────────
 

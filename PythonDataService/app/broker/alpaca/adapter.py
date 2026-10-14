@@ -627,7 +627,7 @@ def from_alpaca_trade_update(payload: Mapping[str, Any]) -> BrokerOrderEvent:
     if execution_id is not None:
         execution_id = execution_id.strip() or None
     if event in {"fill", "partial_fill"} and execution_id is None:
-        if _is_a_multi_leg_parents_fill(payload):
+        if is_a_multi_leg_parents_fill(payload):
             # A multi-leg parent has no execution of its own: its top-level price and quantity are the
             # order's net, and each leg's execution is in ``legs``. The Clerk's exact option lookup
             # supplies the legs; this frame says only that the parent moved (#3103).
@@ -644,7 +644,7 @@ def from_alpaca_trade_update(payload: Mapping[str, Any]) -> BrokerOrderEvent:
     )
 
 
-def _is_a_multi_leg_parents_fill(payload: Mapping[str, Any]) -> bool:
+def is_a_multi_leg_parents_fill(payload: Mapping[str, Any]) -> bool:
     """Whether a trade update is a multi-leg parent's fill: an ``mleg`` order whose frame lists its legs' executions."""
     order = payload.get("order")
     legs = payload.get("legs")
