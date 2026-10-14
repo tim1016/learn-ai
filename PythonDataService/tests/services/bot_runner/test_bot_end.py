@@ -892,7 +892,7 @@ async def test_a_stop_at_its_end_whose_registration_is_gone_says_its_outcome_sta
 async def test_the_end_watch_loop_carries_a_due_end_forward_and_survives_a_look_that_raised(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """F-A-18: the loop itself, not one look. A look that raised outside the per-bot guard is logged and the next look fences the bot."""
+    """F-A-18: the loop itself, not one look. A look that raised outside the per-bot guard is logged and the watch keeps running (and the bot is fenced)."""
     from app.services import bot_runner
 
     monkeypatch.setattr(bot_runner, "_END_WATCH_INTERVAL_S", 0.01)
