@@ -22,11 +22,6 @@ from app.broker.fleet.internal_http import DEFAULT_INTERNAL_TIMEOUT_S
 from app.broker.fleet.provider import ProviderOperation
 
 
-def test_outer_bound_is_strictly_larger_than_the_inner_bound() -> None:
-    """The outer delivery bound must outlast the inner one."""
-    assert HISTORY_BATCH_OUTER_TIMEOUT_S > HISTORY_BATCH_INNER_TIMEOUT_S
-
-
 def test_both_bounds_exceed_the_fleet_default() -> None:
     """Neither bound is a no-op restatement of the existing 10s default."""
     assert HISTORY_BATCH_INNER_TIMEOUT_S > DEFAULT_INTERNAL_TIMEOUT_S

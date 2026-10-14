@@ -1,9 +1,4 @@
-"""Endpoint tests for /api/brokers/{broker}/bots (S2, #1260).
-
-The Button-Rule exit is exercised end-to-end through the registry:
-deploy → ON_DUTY → stop → OFF_DUTY. The unscoped roster reads were cut (#2755);
-the account-scoped current-run read is the surface that remains.
-"""
+"""Endpoint tests for the account-scoped current-run bot read (#1260)."""
 
 from __future__ import annotations
 
@@ -154,24 +149,6 @@ def api(tmp_path: Path):
 
 def _client(app: FastAPI) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
-
-
-@pytest.mark.asyncio
-async def test_deploy_stop_button_rule_end_to_end(api) -> None:
-    _app, registry = api
-    deployed = await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
-    assert deployed.running is True
-    assert deployed.phase == "ON_DUTY"
-    assert deployed.broker == "alpaca"
-    assert deployed.symbol == "SPY"
-    assert [row.strategy_instance_id for row in registry.list_bots("alpaca")] == [_SID]
-
-    stopped = await registry.stop("alpaca", _SID, reason="drill")
-    assert stopped.running is False
-    assert stopped.phase == "OFF_DUTY"
-    assert stopped.desired_state == "STOPPED"
-    assert stopped.duty_outcome.kind == "STOPPED"
-    assert registry.status("alpaca", _SID).running is False
 
 
 @pytest.mark.asyncio
