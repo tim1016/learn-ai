@@ -323,15 +323,23 @@ the hold as a verdict field, never as a third custody state.
 
 ## Clearing it
 
+The Settings page's daily loss limit section has a **Clear hold** button. The
+same release by hand is two calls: read the two revisions the clear is fenced
+on, then post them back.
+
 ```
-curl -X POST -H "X-Data-Plane-Control-Secret: $DATA_PLANE_CONTROL_SECRET" http://localhost:8000/api/brokers/alpaca/live-envelope/loss-hold/clear
+curl -H "X-Data-Plane-Control-Secret: $DATA_PLANE_CONTROL_SECRET" http://localhost:8000/api/brokers/alpaca/configuration/risk-limits
+curl -X POST -H "X-Data-Plane-Control-Secret: $DATA_PLANE_CONTROL_SECRET" -H "Content-Type: application/json" \
+  -d '{"expected_risk_revision": <risk_revision>, "expected_selection_generation": <selection_generation>}' \
+  http://localhost:8000/api/brokers/alpaca/configuration/risk-limits/clear-hold
 ```
 
 `PythonDataService/app/services/alpaca_live_envelope.py::clear_loss_hold`,
-routed at `PythonDataService/app/routers/brokers.py`
-(`POST /{broker}/live-envelope/loss-hold/clear`), is the ADR 0011 §6 shape:
-it re-observes the account and refuses while the breach still stands, rather
-than trusting the caller.
+reached through `PythonDataService/app/routers/broker_configuration.py`
+(`POST /risk-limits/clear-hold`) and
+`app/broker_configuration/account_risk.py::clear_account_risk_hold`, is the
+ADR 0011 §6 shape: it re-observes the account and refuses while the breach
+still stands, rather than trusting the caller.
 
 The clear judges both the current limit and the one the hold was raised on
 (#2543): raising the configured loss limit and restarting releases nothing
@@ -349,10 +357,14 @@ Three outcomes:
   below the limit) or `LIVE_ENVELOPE_UNOBSERVED` (the account could not be
   re-observed, or the fact is unjudgeable); the hold stands.
 
-`broker != "alpaca"` is a 404. No live envelope installed on the active
-authority (paper, synthetic, or no runtime at all) is a 503. The route
-requires the `X-Data-Plane-Control-Secret` header, like every other
-data-plane control mutation.
+A `cleared` or `no_hold` outcome answers 200 with the account's risk state; a
+`refused` outcome answers 409 and its `detail.message` carries the sentence
+above. A stale `expected_risk_revision` or `expected_selection_generation`, or
+a reviewed account that is no longer the active custody account, is a 409
+`revision_conflict`: read the state again and retry. No risk authority on the
+active runtime is also a 409. The route requires the
+`X-Data-Plane-Control-Secret` header, like every other data-plane control
+mutation.
 
 ## In the live verdict
 
