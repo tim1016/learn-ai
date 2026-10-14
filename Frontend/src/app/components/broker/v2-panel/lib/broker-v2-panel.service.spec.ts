@@ -605,6 +605,21 @@ describe('BrokerV2PanelService polled reads', () => {
     http = TestBed.inject(HttpTestingController);
   });
 
+  it('rejects a live snapshot read that never responds, so a poll is not stacked behind it', async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = service.getLiveSnapshot(resourceTarget('alpaca', CLERK, { accountId: 'acct-1' }), 'sid-1', '5s');
+      const rejection = expect(pending).rejects.toThrow('did not answer in time');
+      http.expectOne((request) => request.url.includes('/live'));
+
+      await vi.advanceTimersByTimeAsync(POLL_REQUEST_TIMEOUT_MS + 1);
+
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('rejects a catalog read that never responds, so the poll can recover', async () => {
     // S7: the roster poll skips every tick while the previous request is
     // still in flight. HttpClient never times out on its own, so one hung

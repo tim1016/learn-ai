@@ -31,12 +31,13 @@ class StubEventSource {
   close(): void {}
 }
 
-function snapshot(version: number, epoch = 'epoch-a'): BotPanelLiveSnapshot {
+function snapshot(version: number, epoch = 'epoch-a', journalTailSeq: number | null = null): BotPanelLiveSnapshot {
   return {
     stream_epoch: epoch,
     surface_version: version,
     panel: {
       revision: version,
+      journal_tail_seq: journalTailSeq,
       rail: { transaction_ref: null, stations: [] },
     } as unknown as BotPanelLiveSnapshot['panel'],
     live_chart: { resolution: '5s' } as BotPanelLiveSnapshot['live_chart'],
@@ -308,6 +309,75 @@ describe('BotPanelLiveStore', () => {
 
     StubEventSource.instances.at(-1)?.emit('open');
     await vi.advanceTimersByTimeAsync(10_000);
+    expect(service.getLiveSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows nothing of the previous bot when a stopped store starts for another one (D-F5)', async () => {
+    const store = TestBed.inject(BotPanelLiveStore);
+    await store.start({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA-1', sid: 'sid-1', resolution: '5s' });
+    expect(store.snapshot()?.stream_epoch).toBe('epoch-a');
+    store.stop();
+    const replacement = deferred<BotPanelLiveSnapshot>();
+    service.getLiveSnapshot.mockReturnValueOnce(replacement.promise);
+
+    const switching = store.start({
+      broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA-2', sid: 'sid-2', resolution: '5s',
+    });
+    expect(store.snapshot()).toBeNull();
+
+    replacement.resolve(snapshot(1, 'epoch-b'));
+    await switching;
+    expect(store.snapshot()?.stream_epoch).toBe('epoch-b');
+  });
+
+  it('keeps what is shown when a stopped store starts again for the same bot (D-F5)', async () => {
+    const store = TestBed.inject(BotPanelLiveStore);
+    const request = { broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA-1', sid: 'sid-1', resolution: '5s' } as const;
+    await store.start(request);
+    store.stop();
+    service.getLiveSnapshot.mockReturnValueOnce(deferred<BotPanelLiveSnapshot>().promise);
+
+    void store.start(request);
+
+    expect(store.snapshot()?.stream_epoch).toBe('epoch-a');
+  });
+
+  it('reads a selected order’s path again when the journal moves on, and not before (D-F1)', async () => {
+    service.getLiveSnapshot.mockResolvedValue(snapshot(2, 'epoch-a', 5));
+    const railAt = (ref: string, station: string): BotPanelLiveSnapshot['panel'] => ({
+      rail: { transaction_ref: ref, stations: [{ label: station }] },
+    }) as unknown as BotPanelLiveSnapshot['panel'];
+    service.getPanel
+      .mockResolvedValueOnce({ ...railAt('tx-1', 'Submitted'), journal_tail_seq: 5 })
+      .mockResolvedValueOnce({ ...railAt('tx-1', 'Filled'), journal_tail_seq: 6 });
+    const store = TestBed.inject(BotPanelLiveStore);
+    await store.start({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA-1', sid: 'sid-1', resolution: '5s' });
+    await store.selectTransaction('tx-1');
+    const stations = () => (store.snapshot()?.panel.rail.stations as unknown as { label: string }[]).map((s) => s.label);
+    expect(stations()).toEqual(['Submitted']);
+
+    const source = StubEventSource.instances[0];
+    // The same journal position: the rail read at selection still describes the order.
+    source.emit('snapshot', JSON.stringify(snapshot(3, 'epoch-a', 5)));
+    expect(service.getPanel).toHaveBeenCalledTimes(1);
+
+    // The journal moved: the path is read again for the same order.
+    source.emit('snapshot', JSON.stringify(snapshot(4, 'epoch-a', 6)));
+    await vi.waitFor(() => expect(service.getPanel).toHaveBeenCalledTimes(2));
+    expect(service.getPanel).toHaveBeenLastCalledWith(expect.anything(), 'sid-1', 'tx-1');
+    await vi.waitFor(() => expect(stations()).toEqual(['Filled']));
+  });
+
+  it('does not ask again while a poll read has not answered (D-F6)', async () => {
+    vi.useFakeTimers();
+    const store = TestBed.inject(BotPanelLiveStore);
+    await store.start({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA-1', sid: 'sid-1', resolution: '5s' });
+    service.getLiveSnapshot.mockReturnValue(deferred<BotPanelLiveSnapshot>().promise);
+
+    StubEventSource.instances[0].emit('error');
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    // Initial bootstrap + one poll read that never answered: the timer does not stack six more.
     expect(service.getLiveSnapshot).toHaveBeenCalledTimes(2);
   });
 

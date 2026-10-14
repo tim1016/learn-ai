@@ -82,6 +82,10 @@ export class BotPanelLiveStore {
   private stream: SnapshotStream | null = null;
   private fallbackTimer: ReturnType<typeof setInterval> | null = null;
   private request: LivePanelRequest | null = null;
+  /** Who the snapshot on screen belongs to. `stop()` clears `request`, never this: a restart for another bot or
+   * account must not show the previous one's panel until its own read lands. */
+  private shownFor: LivePanelRequest | null = null;
+  private pollInFlight = false;
   private generation = 0;
   private transactionRequest = 0;
   /** Orders liveness (stall / recovered) facts. The stream delivers in order;
@@ -89,6 +93,9 @@ export class BotPanelLiveStore {
    * liveness fact and must not overwrite it (#2353 review). */
   private livenessSequence = 0;
   private selectedRail: BotPanelLiveSnapshot['panel']['rail'] | null = null;
+  /** The selected transaction and the journal position its rail was read at (D-F1). */
+  private selectedRef: string | null = null;
+  private selectedTailSeq: number | null = null;
 
   readonly snapshot = this.currentSnapshot.asReadonly();
   readonly status = this.currentStatus.asReadonly();
@@ -99,17 +106,20 @@ export class BotPanelLiveStore {
 
   async start(request: LivePanelRequest): Promise<void> {
     const generation = ++this.generation;
-    const identityChanged = this.request !== null && (
-      this.request.broker !== request.broker
-      || this.request.clerkId !== request.clerkId
-      || this.request.accountId !== request.accountId
-      || this.request.sid !== request.sid
-      || this.request.bindingGeneration !== request.bindingGeneration
-      || this.request.routingEpoch !== request.routingEpoch
+    const shown = this.shownFor;
+    const identityChanged = shown !== null && (
+      shown.broker !== request.broker
+      || shown.clerkId !== request.clerkId
+      || shown.accountId !== request.accountId
+      || shown.sid !== request.sid
+      || shown.bindingGeneration !== request.bindingGeneration
+      || shown.routingEpoch !== request.routingEpoch
     );
     if (identityChanged) {
       this.transactionRequest += 1;
       this.selectedRail = null;
+      this.selectedRef = null;
+      this.selectedTailSeq = null;
       this.currentSnapshot.set(null);
       this.currentError.set(null);
       this.currentStall.set(null);
@@ -117,6 +127,7 @@ export class BotPanelLiveStore {
     }
     this.stopTransport();
     this.request = request;
+    this.shownFor = request;
     this.currentStatus.set('connecting');
     await this.fetchAndAdopt(request, generation, 'Live snapshot is unavailable.');
     if (!this.isCurrent(generation)) return;
@@ -146,6 +157,8 @@ export class BotPanelLiveStore {
       );
       if (!this.isCurrentTransaction(generation, transactionRequest)) return;
       this.selectedRail = panel.rail;
+      this.selectedRef = transactionRef;
+      this.selectedTailSeq = panel.journal_tail_seq ?? null;
       this.currentSnapshot.update((current) => current === null
         ? current
         : { ...current, panel: { ...current.panel, rail: panel.rail } });
@@ -256,6 +269,13 @@ export class BotPanelLiveStore {
     if (this.selectedRail !== null) {
       candidate = { ...candidate, panel: { ...candidate.panel, rail: this.selectedRail } };
     }
+    const tailSeq = candidate.panel.journal_tail_seq ?? null;
+    if (this.selectedRef !== null && tailSeq !== this.selectedTailSeq) {
+      // The journal moved on: the path read at selection no longer describes the order. Keep showing it while it
+      // is read again, and ask once per move.
+      this.selectedTailSeq = tailSeq;
+      void this.selectTransaction(this.selectedRef);
+    }
     const current = this.currentSnapshot();
     const adopted = adoptVersionedSnapshot(current, candidate);
     if (adopted !== current) this.currentSnapshot.set(adopted);
@@ -317,7 +337,11 @@ export class BotPanelLiveStore {
 
   private startFallback(): void {
     if (this.fallbackTimer !== null) return;
-    this.fallbackTimer = setInterval(() => void this.refresh(), FALLBACK_POLL_MS);
+    this.fallbackTimer = setInterval(() => {
+      if (this.pollInFlight) return;
+      this.pollInFlight = true;
+      void this.refresh().finally(() => { this.pollInFlight = false; });
+    }, FALLBACK_POLL_MS);
   }
 
   private stopFallback(): void {

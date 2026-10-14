@@ -1,7 +1,8 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, throwError, timeout } from 'rxjs';
 
+import { POLL_REQUEST_TIMEOUT_MS } from '../../../../services/poll-timeout';
 import { PolledReadScheduler } from '../../../../services/polled-read-scheduler';
 import type { components } from '../../../../api/broker.types';
 import type {
@@ -579,7 +580,11 @@ export class BrokerV2PanelService {
       this.http.get<BotPanelLiveSnapshot>(
         operationUrl('bot_live_snapshot', { ...target, sid }),
         { params },
-      ),
+      ).pipe(timeout({
+        first: POLL_REQUEST_TIMEOUT_MS,
+        // The request is abandoned with the subscription: a hung read neither piles up nor strands the page.
+        with: () => throwError(() => new Error('The live snapshot did not answer in time.')),
+      })),
     );
   }
 

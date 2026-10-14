@@ -1,12 +1,13 @@
 import { HttpClient } from '@angular/common/http';
 import { DestroyRef, Injectable, inject, signal } from '@angular/core';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, timeout } from 'rxjs';
 
 import {
   openAuthenticatedSseConnection,
   type AuthenticatedSseConnection,
   type AuthenticatedSseStatus,
 } from '../../../../../services/authenticated-sse-connection';
+import { POLL_REQUEST_TIMEOUT_MS } from '../../../../../services/poll-timeout';
 import { operationUrl } from '../../../../../fleet/operation-url';
 import type { ChartBar, ChartFillMarker } from '../../lib/broker-v2-panel.types';
 import type {
@@ -193,6 +194,10 @@ export class GalleryLiveStore {
   readonly refusalReason = this.refusalReasonState.asReadonly();
 
   private request: GalleryRequest | null = null;
+  /** Whose tiles are on screen. `stop()` clears `request`, never this: a restart for another account must not
+   * show the previous one's candles until its own bootstrap lands. */
+  private shownFor: GalleryRequest | null = null;
+  private pollInFlight = false;
   private connection: AuthenticatedSseConnection | null = null;
   private fallbackTimer: ReturnType<typeof setInterval> | null = null;
   private resyncTimer: ReturnType<typeof setTimeout> | null = null;
@@ -214,11 +219,12 @@ export class GalleryLiveStore {
     bindingGeneration: number | null = null,
     routingEpoch: number | null = null,
   ): Promise<void> {
-    const identityChanged = this.request !== null
-      && (this.request.broker !== broker || this.request.clerkId !== clerkId
-        || this.request.accountId !== accountId
-        || this.request.bindingGeneration !== bindingGeneration
-        || this.request.routingEpoch !== routingEpoch);
+    const shown = this.shownFor;
+    const identityChanged = shown !== null
+      && (shown.broker !== broker || shown.clerkId !== clerkId
+        || shown.accountId !== accountId
+        || shown.bindingGeneration !== bindingGeneration
+        || shown.routingEpoch !== routingEpoch);
     this.closeTransport();
     const request: GalleryRequest = {
       broker,
@@ -228,6 +234,7 @@ export class GalleryLiveStore {
       routingEpoch,
     };
     this.request = request;
+    this.shownFor = request;
     const generation = ++this.generation;
     if (identityChanged) {
       // A different account's tiles must never linger under the new
@@ -307,7 +314,7 @@ export class GalleryLiveStore {
   private async bootstrap(generation: number, request: GalleryRequest): Promise<void> {
     try {
       const snapshot = await firstValueFrom(
-        this.http.get<GalleryLiveSnapshot>(this.snapshotUrl(request)),
+        this.http.get<GalleryLiveSnapshot>(this.snapshotUrl(request)).pipe(timeout(POLL_REQUEST_TIMEOUT_MS)),
       );
       if (generation !== this.generation) return;
       this.ingestSnapshot(snapshot);
@@ -502,7 +509,11 @@ export class GalleryLiveStore {
 
   private startFallback(generation: number, request: GalleryRequest): void {
     if (this.fallbackTimer !== null) return;
-    this.fallbackTimer = setInterval(() => void this.bootstrap(generation, request), FALLBACK_POLL_MS);
+    this.fallbackTimer = setInterval(() => {
+      if (this.pollInFlight) return;
+      this.pollInFlight = true;
+      void this.bootstrap(generation, request).finally(() => { this.pollInFlight = false; });
+    }, FALLBACK_POLL_MS);
   }
 
   private stopFallback(): void {

@@ -555,6 +555,44 @@ describe('GalleryLiveStore', () => {
       expect(store.bots().map((b) => b.sid)).toEqual(['sid-only']);
     });
 
+    it('shows nothing of the previous account when a stopped store starts for another (D-F5)', async () => {
+      const store = TestBed.inject(GalleryLiveStore);
+      const http = TestBed.inject(HttpTestingController);
+
+      const first = store.start('alpaca', 'clrk_spec', 'PA-1');
+      http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot').flush(snapshot());
+      await first;
+      expect(store.bots().length).toBe(2);
+      store.stop();
+
+      const second = store.start('alpaca', 'clrk_spec', 'PA-2');
+      expect(store.bots()).toEqual([]);
+      expect(store.barsBySymbol().size).toBe(0);
+      http
+        .expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-2/gallery/snapshot')
+        .flush(snapshot({ stream_epoch: 'epoch-b', bots: [bot('sid-only')] }));
+      await second;
+      expect(store.bots().map((b) => b.sid)).toEqual(['sid-only']);
+    });
+
+    it('does not stack poll reads behind one that has not answered (D-F6)', async () => {
+      vi.useFakeTimers();
+      const store = TestBed.inject(GalleryLiveStore);
+      const http = TestBed.inject(HttpTestingController);
+      const starting = store.start('alpaca', 'clrk_spec', 'PA-1');
+      http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot').flush(snapshot());
+      await starting;
+
+      StubEventSource.instances[0].emit('error');
+      await vi.advanceTimersByTimeAsync(5_000);
+      const pending = http.match('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot');
+      expect(pending).toHaveLength(1);
+
+      // Four more poll ticks pass with that read still unanswered: none is sent beside it.
+      await vi.advanceTimersByTimeAsync(10_000);
+      http.expectNone('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot');
+    });
+
     it('isolates same-account Clerks and ignores a queued frame from the prior lane', async () => {
       const store = TestBed.inject(GalleryLiveStore);
       const http = TestBed.inject(HttpTestingController);
