@@ -56,8 +56,15 @@
   </button>
 </div>
 
+@if (goldenCatalogFailed()) {
+  <p class="golden-note" role="alert">The Golden catalog could not be read, so Golden badges and Mark golden are unavailable.</p>
+} @else if (goldenCatalogCapped()) {
+  <p class="golden-note" role="status">Golden badges cover only the newest {{ goldenLimit }} Validation Golden Runs; an older golden run may show no badge.</p>
+}
+
 <app-run-history
   [rows]="rows()"
+  [goldenCatalogReadable]="goldenCatalogReadable()"
   (runSelected)="onRowSelected($event)"
   (goldenRequested)="onGoldenRequested($event)"
   (notesEdited)="onNotesEdited($event)" />

@@ -44,6 +44,11 @@ export class GoldenParityEvidenceComponent {
   protected readonly parityEnvelope = computed(() => record(this.golden().parity_evidence["parity_verdict"]));
   protected readonly parityPayload = computed(() => record(this.parityEnvelope()?.["payload"]) ?? this.parityEnvelope());
   protected readonly parityStatus = computed(() => stringValue(this.parityEnvelope()?.["status"]) ?? stringValue(this.parityPayload()?.["status"]));
+  /** Only a finished comparison has a deviation count; before one, zero would read as "no deviations". */
+  protected readonly verdictIsFinal = computed(() => {
+    const status = this.parityStatus();
+    return status === "agree" || status === "diverged";
+  });
   protected readonly parityReason = computed(() => stringValue(this.parityPayload()?.["reason"]));
   protected readonly parityLeftRunId = computed(() => numberValue(this.parityEnvelope()?.["left_run_id"]));
   protected readonly parityRightRunId = computed(() => numberValue(this.parityEnvelope()?.["right_run_id"]));

@@ -10,7 +10,7 @@ import { CurrencyPipe } from "@angular/common";
 import { EngineSourceLiteral, RunHistoryRow } from "./run-history.types";
 import type { DataPolicy } from "../../../models/data-policy";
 import { TimestampDisplayPipe } from "../../../shared/timestamp";
-import { ReceiptLabelPipe } from "../../../shared/pipes/receipt-label.pipe";
+import { goldenStateLabel } from "../../../services/golden-validation.service";
 import { AssetIdentityComponent } from "../../../shared/asset-identity/asset-identity.component";
 
 const ENGINE_LABELS: Record<EngineSourceLiteral, string> = {
@@ -22,7 +22,7 @@ const ENGINE_LABELS: Record<EngineSourceLiteral, string> = {
 @Component({
   selector: "app-run-history",
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AssetIdentityComponent, CurrencyPipe, ReceiptLabelPipe, TimestampDisplayPipe],
+  imports: [AssetIdentityComponent, CurrencyPipe, TimestampDisplayPipe],
   templateUrl: "./run-history.component.html",
   styleUrl: "./run-history.component.scss",
 })
@@ -31,6 +31,11 @@ export class RunHistoryComponent {
   readonly runSelected = output<string>();
   /** Requests designation of a completed Python run as a Validation Golden Run. */
   readonly goldenRequested = output<string>();
+  /**
+   * False when the Golden catalog could not be read. A run with no badge is
+   * then unknown, not undesignated, so "Mark golden" is not offered for it.
+   */
+  readonly goldenCatalogReadable = input(true);
   /** PR B.3 (2026-05-19) — emitted when the user saves a notes edit on a row.
    *  The host component owns the persistence side (GraphQL mutation). */
   readonly notesEdited = output<{ id: string; notes: string }>();
@@ -44,6 +49,10 @@ export class RunHistoryComponent {
 
   badge(source: EngineSourceLiteral): string {
     return ENGINE_LABELS[source];
+  }
+
+  goldenLabel(row: RunHistoryRow): string {
+    return goldenStateLabel(row.goldenValidationState ?? "", row.goldenReviewIsCurrent);
   }
 
   strategyLabel(row: RunHistoryRow): string {

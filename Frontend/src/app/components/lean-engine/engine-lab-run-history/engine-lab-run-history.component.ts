@@ -15,7 +15,7 @@ import { RunHistoryComponent } from "../../shared/run-history/run-history.compon
 import { BacktestRunsService, HISTORY_PAGE_SIZE } from "../../../services/backtest-runs.service";
 import { toRunHistoryRow, type BacktestRunSummary, type Engine, runWindowDate } from "../../../services/backtest-runs.types";
 import { JobsService } from "../../../services/jobs.service";
-import { GoldenValidationService } from "../../../services/golden-validation.service";
+import { GOLDEN_VALIDATION_LIST_LIMIT, GoldenValidationService } from "../../../services/golden-validation.service";
 
 /** Persisted filter selection. ``ALL`` asks for every engine. */
 type EngineFilter = "ALL" | Engine;
@@ -80,14 +80,27 @@ export class EngineLabRunHistoryComponent {
     loader: () => firstValueFrom(this.goldenValidation.list()),
   });
 
+  /** Until the catalog is read, a run with no badge is unknown rather than undesignated. */
+  readonly goldenCatalogReadable = computed(() => this.goldenCatalog.hasValue());
+  readonly goldenCatalogFailed = computed(() => this.goldenCatalog.error() !== undefined);
+  readonly goldenLimit = GOLDEN_VALIDATION_LIST_LIMIT;
+  /** A catalog exactly as long as one read asked for may be cut short, leaving an older golden run unbadged. */
+  readonly goldenCatalogCapped = computed(
+    () => this.goldenCatalog.hasValue() && this.goldenCatalog.value().length >= GOLDEN_VALIDATION_LIST_LIMIT,
+  );
+
   readonly rows = computed(() => {
     const goldenByRunId = new Map(
-      (this.goldenCatalog.hasValue() ? this.goldenCatalog.value() : []).map((entry) => [entry.source_run_id, entry.state]),
+      (this.goldenCatalog.hasValue() ? this.goldenCatalog.value() : []).map((entry) => [entry.source_run_id, entry]),
     );
-    return (this.history.hasValue() ? this.history.value() : []).map((run) => ({
-      ...toRunHistoryRow(run),
-      goldenValidationState: goldenByRunId.get(run.id) ?? null,
-    }));
+    return (this.history.hasValue() ? this.history.value() : []).map((run) => {
+      const golden = goldenByRunId.get(run.id);
+      return {
+        ...toRunHistoryRow(run),
+        goldenValidationState: golden?.state ?? null,
+        goldenReviewIsCurrent: golden?.review_is_current ?? null,
+      };
+    });
   });
 
   /** All known toggleable columns. Order is the rendering order. */

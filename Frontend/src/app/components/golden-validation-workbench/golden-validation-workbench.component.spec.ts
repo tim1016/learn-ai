@@ -1,7 +1,7 @@
 import { provideZonelessChangeDetection } from "@angular/core";
 import { provideRouter } from "@angular/router";
 import { HttpErrorResponse } from "@angular/common/http";
-import { render, screen, waitFor } from "@testing-library/angular";
+import { render, screen, waitFor, within } from "@testing-library/angular";
 import userEvent from "@testing-library/user-event";
 import { of, throwError } from "rxjs";
 import { describe, expect, it, vi } from "vitest";
@@ -50,6 +50,12 @@ const CASE: GoldenValidation = {
   },
   evidence_state: "deviations",
   evidence_revision: "a".repeat(64),
+  evidence_applicability: {
+    status: "current",
+    affected_issues: [],
+    explanation: "The recorded data, headline metric and closing-bar conventions use the corrected producer paths.",
+    requires_manual_override: false,
+  },
   parity_evidence: {
     computed_state: "deviations",
     qualification_warnings: [],
@@ -117,8 +123,6 @@ describe("GoldenValidationWorkbenchComponent", () => {
 
     await waitFor(() => expect(service.designate).toHaveBeenCalled());
     expect(service.designate).toHaveBeenCalledWith(expect.objectContaining({ source_run_id: 44 }));
-    // #2184: "Frozen validation case" / "Computed engine evidence" eyebrows
-    // retired -- each card's own heading carries the eyebrow look now.
     expect(await screen.findByRole("heading", { name: "SPY September baseline" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Deviations" })).toBeTruthy();
   });
@@ -133,9 +137,7 @@ describe("GoldenValidationWorkbenchComponent", () => {
     });
     const user = userEvent.setup();
 
-    // #2184: the evidence card's heading is now the state text itself.
     expect(await screen.findByRole("heading", { name: "Deviations" })).toBeTruthy();
-    expect(screen.getByText("Deviations")).toBeTruthy();
     expect(screen.getByText(/minute/i)).toBeTruthy();
     await user.click(screen.getByText("Exact parameters, data, and execution scope"));
     expect(screen.getAllByText("SPY").length).toBeGreaterThan(1);
@@ -296,5 +298,135 @@ describe("GoldenValidationWorkbenchComponent", () => {
     await user.click(screen.getByRole("checkbox", { name: /Manual override:/ }));
     await user.click(screen.getByRole("button", { name: "Save review" }));
     await waitFor(() => expect(service.review).toHaveBeenCalledWith(7, expect.objectContaining({ acknowledge_provenance_risk: true })));
+  });
+  it("does not send a current case back to rerun its saved configuration", async () => {
+    const service = fakeService({ list: vi.fn(() => of([CASE])) });
+    await render(GoldenValidationWorkbenchComponent, {
+      providers: [provideZonelessChangeDetection(), provideRouter([]), { provide: GoldenValidationService, useValue: service }],
+    });
+
+    expect(await screen.findByText(/use the corrected producer paths/i)).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Open saved configuration to rerun" })).toBeNull();
+    expect(screen.queryByText(/Keep this baseline, inspect the new run/i)).toBeNull();
+  });
+
+  it("says what the server said when a designation is refused, not a guessed cause", async () => {
+    const designate = vi.fn(() => throwError(() => new HttpErrorResponse({
+      status: 409,
+      error: { detail: { code: "GOLDEN_VALIDATION_COMMAND_CONFLICT", message: "Run 44 already has a designation under another command." } },
+    })));
+    await render(GoldenValidationWorkbenchComponent, {
+      inputs: { sourceRunId: 44 },
+      providers: [provideZonelessChangeDetection(), { provide: GoldenValidationService, useValue: fakeService({ designate }) }],
+    });
+    const user = userEvent.setup();
+
+    await user.type(await screen.findByRole("textbox", { name: /Why is this/i }), "Selected after parameter exploration.");
+    await user.click(screen.getByRole("button", { name: "Designate golden run" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("Run 44 already has a designation under another command.");
+  });
+
+  it("does not invent a cause when a designation fails with no server answer", async () => {
+    const designate = vi.fn(() => throwError(() => new HttpErrorResponse({ status: 0 })));
+    await render(GoldenValidationWorkbenchComponent, {
+      inputs: { sourceRunId: 44 },
+      providers: [provideZonelessChangeDetection(), { provide: GoldenValidationService, useValue: fakeService({ designate }) }],
+    });
+    const user = userEvent.setup();
+
+    await user.type(await screen.findByRole("textbox", { name: /Why is this/i }), "Selected after parameter exploration.");
+    await user.click(screen.getByRole("button", { name: "Designate golden run" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("could not be designated");
+    expect(alert.textContent).not.toContain("Only completed Python baselines");
+  });
+
+  it("shows the server's refusal when a review is not saved", async () => {
+    const review = vi.fn(() => throwError(() => new HttpErrorResponse({
+      status: 409,
+      error: { detail: { code: "GOLDEN_VALIDATION_INELIGIBLE", message: "Retry after the paired history update has landed." } },
+    })));
+    const service = fakeService({ list: vi.fn(() => of([CASE])), review });
+    await render(GoldenValidationWorkbenchComponent, {
+      providers: [provideZonelessChangeDetection(), { provide: GoldenValidationService, useValue: service }],
+    });
+    const user = userEvent.setup();
+
+    await user.type(await screen.findByRole("textbox", { name: "Review note" }), "Reviewed the evidence.");
+    await user.click(screen.getByRole("button", { name: "Save review" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("Retry after the paired history update has landed.");
+  });
+
+  it("says the catalog stops at its newest 100 cases when the answer is exactly that long", async () => {
+    const cases = Array.from({ length: 100 }, (_, index) => ({ ...CASE, id: index + 1, source_run_id: 1000 + index }));
+    const service = fakeService({ list: vi.fn(() => of(cases)) });
+    await render(GoldenValidationWorkbenchComponent, {
+      providers: [provideZonelessChangeDetection(), { provide: GoldenValidationService, useValue: service }],
+    });
+
+    expect(await screen.findByText(/newest 100 Validation Golden Runs/i)).toBeTruthy();
+  });
+
+  it("stays quiet about a cap when the catalog is shorter than one page", async () => {
+    const service = fakeService({ list: vi.fn(() => of([CASE])) });
+    await render(GoldenValidationWorkbenchComponent, {
+      providers: [provideZonelessChangeDetection(), { provide: GoldenValidationService, useValue: service }],
+    });
+
+    await screen.findByRole("heading", { name: "SPY September baseline" });
+    expect(screen.queryByText(/newest 100/i)).toBeNull();
+  });
+
+  it("marks an accepted state whose review no longer applies, on the catalog button and the case", async () => {
+    const stale = { ...CASE, state: "accepted_reviewed_deviations", latest_review: REVIEW, review_is_current: false, reviews: [REVIEW] } satisfies GoldenValidation;
+    const current = { ...stale, id: 8, source_run_id: 45, review_is_current: true };
+    const service = fakeService({ list: vi.fn(() => of([stale, current])) });
+    await render(GoldenValidationWorkbenchComponent, {
+      providers: [provideZonelessChangeDetection(), { provide: GoldenValidationService, useValue: service }],
+    });
+
+    const catalog = await screen.findByRole("navigation", { name: "Validation Golden Run catalog" });
+    const buttons = within(catalog).getAllByRole("button");
+    expect(buttons[0]?.textContent).toContain("Accepted Reviewed Deviations · review no longer applies");
+    expect(buttons[1]?.textContent).toContain("Accepted Reviewed Deviations");
+    expect(buttons[1]?.textContent).not.toContain("no longer applies");
+    // The first case is the selected one: its own chip carries the same marker.
+    expect(screen.getAllByText(/review no longer applies/i)).toHaveLength(2);
+  });
+
+  it("shows no trade-deviation count before the paired verdict exists", async () => {
+    const pending = {
+      ...CASE,
+      evidence_state: "pending",
+      parity_evidence: { computed_state: "pending", qualification_warnings: [] },
+    } satisfies GoldenValidation;
+    const unavailable = {
+      ...pending,
+      id: 9,
+      source_run_id: 46,
+      parity_evidence: { computed_state: "pending", qualification_warnings: [], parity_verdict: { status: "unavailable", left_run_id: 46 } },
+    } satisfies GoldenValidation;
+    const diverged = { ...CASE, id: 8, source_run_id: 45 };
+    const service = fakeService({ list: vi.fn(() => of([pending, unavailable, diverged])) });
+    await render(GoldenValidationWorkbenchComponent, {
+      providers: [provideZonelessChangeDetection(), { provide: GoldenValidationService, useValue: service }],
+    });
+    const user = userEvent.setup();
+    const catalog = await screen.findByRole("navigation", { name: "Validation Golden Run catalog" });
+
+    expect(screen.getByText("No paired verdict")).toBeTruthy();
+    expect(screen.queryByText("Trade deviations")).toBeNull();
+
+    await user.click(within(catalog).getAllByRole("button")[1] as HTMLElement);
+    expect(screen.queryByText("No paired verdict")).toBeNull();
+    expect(screen.queryByText("Trade deviations")).toBeNull();
+
+    await user.click(within(catalog).getAllByRole("button")[2] as HTMLElement);
+    expect(screen.getByText("Trade deviations")).toBeTruthy();
   });
 });
