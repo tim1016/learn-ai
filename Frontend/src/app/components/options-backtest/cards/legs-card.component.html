@@ -1,11 +1,19 @@
-<section class="legs" aria-labelledby="ob-legs-title">
+<section class="card" aria-labelledby="ob-legs-title">
   <div class="card__head">
     <h2 id="ob-legs-title">Legs</h2>
     <span class="hint">{{ legs().length }}@if (maxLegs() !== null) { of {{ maxLegs() }}}</span>
+    <div class="square-off">
+      <span class="hint" aria-hidden="true">Square off</span>
+      <app-options-backtest-pill-choice [formField]="squareOff()" [options]="squareOffChoices" label="Square off" [describedBy]="squareOffProblem() === null ? null : 'ob-square-off-note'" />
+    </div>
   </div>
+  @if (squareOffProblem(); as message) { <p id="ob-square-off-note" class="problem" role="alert">{{ message }}</p> }
+  <app-options-backtest-leg-builder-card [form]="builderForm()" [legCount]="legs().length" [limits]="limits()" (add)="add.emit()" />
   @if (legs().length === 0) { <p class="hint" role="status">No legs yet. Choose a contract in the leg builder and press Add leg.</p> }
   @if (legsProblem(); as message) { <p class="problem" role="alert">{{ message }}</p> }
-  @for (leg of legs(); track leg.id; let index = $index) {
-    <app-options-backtest-leg-card [legForm]="form().legs[index]" [position]="index" [problems]="problems()" [canCopy]="!full()" (copied)="legCopied.emit(leg.id)" (removed)="legRemoved.emit(leg.id)" />
-  }
+  <div class="leg-grid">
+    @for (leg of legs(); track leg.id; let index = $index) {
+      <app-options-backtest-leg-card [legForm]="form().legs[index]" [position]="index" [problems]="problems()" [canCopy]="!full()" (copied)="legCopied.emit(leg.id)" (removed)="legRemoved.emit(leg.id)" />
+    }
+  </div>
 </section>

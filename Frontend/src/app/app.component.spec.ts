@@ -51,6 +51,7 @@ describe('AppComponent', () => {
           { path: '', pathMatch: 'full', component: ShellSmokeRouteComponent, data: { chromeless: true } },
           { path: 'data-lab', component: ShellSmokeRouteComponent },
           { path: 'options-lab', component: ShellSmokeRouteComponent, data: { fullBleed: true } },
+          { path: 'options-backtest', component: ShellSmokeRouteComponent, data: { stickyContent: true } },
           { path: 'research-lab/strategy-runs/:id', component: ShellSmokeRouteComponent },
           { path: 'research-lab/walk-forward/:id', component: ShellSmokeRouteComponent },
           { path: 'research-lab/monte-carlo/:id', component: ShellSmokeRouteComponent },
@@ -265,6 +266,19 @@ describe('AppComponent', () => {
     await router.navigateByUrl('/options-lab');
     fixture.detectChanges();
     expect(pageBody().classList.contains('page-body--full-bleed')).toBe(true);
+  });
+
+  it('frees <main> of its horizontal scroller only for a page that declares sticky content', async () => {
+    const router = TestBed.inject(Router);
+    const main = () => fixture.nativeElement.querySelector('main') as HTMLElement;
+
+    await router.navigateByUrl('/data-lab');
+    fixture.detectChanges();
+    expect(main().classList.contains('main--sticky-content')).toBe(false);
+
+    await router.navigateByUrl('/options-backtest');
+    fixture.detectChanges();
+    expect(main().classList.contains('main--sticky-content')).toBe(true);
   });
 
   it('keeps the shell visible for standard and research-detail routes', async () => {

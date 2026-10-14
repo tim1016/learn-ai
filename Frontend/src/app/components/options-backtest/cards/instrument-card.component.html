@@ -1,8 +1,8 @@
 <section class="card" aria-labelledby="ob-instrument-title">
   <div class="card__head">
     <h2 id="ob-instrument-title">Instrument</h2>
-    <p class="hint">The symbol of the underlying the options are on. Strikes are picked against its raw, unadjusted price. A symbol the lake does not hold is downloaded first. Whether its options can be tested is checked when a backtest is run.</p>
   </div>
   <app-symbol-picker appearance="field" label="Underlying" adjustmentMode="raw" [symbol]="symbol()" (symbolChange)="pick($event)" />
   @if (problem(); as message) { <p class="problem" role="alert">{{ message }}</p> }
+  <p class="hint">The symbol of the underlying the options are on. Strikes are picked against its raw, unadjusted price. A symbol the lake does not hold is downloaded first. Whether its options can be tested is checked when a backtest is run.</p>
 </section>

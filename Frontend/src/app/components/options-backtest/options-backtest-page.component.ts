@@ -13,11 +13,9 @@ import { DataCheckPanelComponent } from './cards/data-check-panel.component';
 import { DurationCardComponent } from './cards/duration-card.component';
 import { EntryCardComponent } from './cards/entry-card.component';
 import { InstrumentCardComponent } from './cards/instrument-card.component';
-import { LegBuilderCardComponent } from './cards/leg-builder-card.component';
 import { LegsCardComponent } from './cards/legs-card.component';
 import { LaunchNoticeComponent } from './cards/launch-notice.component';
-import { LegwiseCardComponent } from './cards/legwise-card.component';
-import { SideListComponent, type LibraryStatus } from './cards/side-list.component';
+import { SavedSetupsMenuComponent, type LibraryStatus } from './cards/saved-setups-menu.component';
 import { SummaryComponent } from './cards/summary.component';
 import { HistoryTabComponent } from './history/history-tab.component';
 import { PastChainTabComponent } from './past-chain/past-chain-tab.component';
@@ -64,11 +62,9 @@ interface ImportNotice {
     TabPanels,
     TabPanel,
     PageHeaderComponent,
-    SideListComponent,
+    SavedSetupsMenuComponent,
     InstrumentCardComponent,
     EntryCardComponent,
-    LegwiseCardComponent,
-    LegBuilderCardComponent,
     LegsCardComponent,
     CostsCardComponent,
     DurationCardComponent,
@@ -136,7 +132,6 @@ export class OptionsBacktestPageComponent {
     });
   });
   private readonly legsCard = viewChild(LegsCardComponent);
-  private readonly legBuilderCard = viewChild(LegBuilderCardComponent);
   protected readonly builder = signal(newLegBuilder());
   protected readonly builderForm = form(this.builder);
 
@@ -223,6 +218,8 @@ export class OptionsBacktestPageComponent {
   protected readonly saveModel = signal({ name: '' });
   protected readonly saveForm = form(this.saveModel);
   protected readonly saving = signal(false);
+  /** How tall the bar of actions is, which the end of the page leaves clear when the bar is fixed to the window. */
+  protected readonly barHeight = signal(0);
   private readonly lastSave = signal<{ readonly name: string; readonly stamp: string; readonly status: SaveStatus } | null>(null);
   private readonly stamp = computed(() => `${this.saveModel().name}\n${JSON.stringify(this.body())}`);
   protected readonly nameProblem = computed(() => nameProblem(this.saveModel().name, this.limits()));
@@ -397,7 +394,7 @@ export class OptionsBacktestPageComponent {
     this.draft.update((draft) => withLegRemoved(draft, legId));
     const left = this.draft().legs.length;
     if (at < 0) return;
-    this.afterRender(() => (left === 0 ? this.legBuilderCard()?.focusAdd() : this.legsCard()?.focusDelete(Math.min(at, left - 1))));
+    this.afterRender(() => (left === 0 ? this.legsCard()?.focusAdd() : this.legsCard()?.focusDelete(Math.min(at, left - 1))));
   }
 
   private afterRender(move: () => void): void {

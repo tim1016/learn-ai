@@ -26,14 +26,6 @@ beforeAll(() => {
 const download = (): FakeDownload => ({ save: vi.fn() });
 
 describe('the Duration card', () => {
-  it('sits between Costs and the plain-words summary', async () => {
-    await renderPage(fakeService(vi));
-
-    const headings = screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent);
-
-    expect(headings.slice(headings.indexOf('Costs'), headings.indexOf('In plain words') + 1)).toEqual(['Costs', 'Duration', 'In plain words']);
-  });
-
   it('takes its dates from the shared picker, and has no plain date input anywhere', async () => {
     await renderPage(fakeService(vi));
 

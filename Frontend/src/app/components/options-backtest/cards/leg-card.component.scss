@@ -10,3 +10,9 @@
 .rule--off .muted { opacity: 0.5; }
 .rule .hint, .rule .problem { flex-basis: 100%; }
 .muted { color: var(--text-secondary); font-size: var(--fs-sm); }
+// Two legs across: each card is narrower, so a rule packs tighter and shares a row between its controls where they fit.
+@container page-grid (min-width: 1240px) {
+  .rule { gap: var(--space-2) var(--space-3); }
+  .rule app-options-backtest-switch { min-width: 0; }
+  .rule input[type='text'] { width: 4.5rem; }
+}

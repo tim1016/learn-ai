@@ -1,4 +1,4 @@
-import { afterNextRender, ChangeDetectionStrategy, Component, DestroyRef, ElementRef, inject, input, output, signal, viewChild } from '@angular/core';
+import { afterNextRender, ChangeDetectionStrategy, Component, DestroyRef, ElementRef, inject, input, output, viewChild } from '@angular/core';
 import { FormField, type FieldTree } from '@angular/forms/signals';
 import { ButtonModule } from 'primeng/button';
 import { InputText } from 'primeng/inputtext';
@@ -10,10 +10,13 @@ export interface SaveStatus {
 }
 
 /**
- * The bar kept in view at the bottom of the page: the setup's name and Save
- * setup, Check data, and Start backtest with its shortcut. It is fixed to the window rather than sticky, because the shell's
- * `main` scrolls horizontally and so would hold a sticky bar in place; a
- * spacer of the bar's measured height keeps the end of the page clear of it.
+ * The setup's name and Save setup, Check data, and Start backtest with its
+ * shortcut. Beside the form it is the top card of the page's run rail. Where
+ * the rail is stacked under the form it is a bar kept in view at the bottom of
+ * the page instead, fixed to the window rather than sticky, because the
+ * shell's `main` scrolls horizontally there and so would hold a sticky bar in
+ * place; the bar says its measured height so that the page can keep its end
+ * clear of it.
  */
 @Component({
   selector: 'app-options-backtest-bottom-bar',
@@ -40,16 +43,15 @@ export class BottomBarComponent {
   readonly save = output();
   readonly check = output();
   readonly start = output();
-
-  /** The fixed bar's height, reserved at the end of the page. */
-  protected readonly reserved = signal(0);
+  /** The bar's height, to keep the end of the page clear of it while it is fixed to the window. */
+  readonly height = output<number>();
   private readonly panel = viewChild.required<ElementRef<HTMLElement>>('panel');
 
   constructor() {
     const destroyRef = inject(DestroyRef);
     afterNextRender(() => {
       if (typeof ResizeObserver === 'undefined') return;
-      const observer = new ResizeObserver(() => this.reserved.set(Math.ceil(this.panel().nativeElement.getBoundingClientRect().height)));
+      const observer = new ResizeObserver(() => this.height.emit(Math.ceil(this.panel().nativeElement.getBoundingClientRect().height)));
       observer.observe(this.panel().nativeElement);
       destroyRef.onDestroy(() => observer.disconnect());
     });

@@ -147,6 +147,7 @@ describe('routes', () => {
     if (route?.loadComponent === undefined) throw new Error('Options Backtest route is missing.');
 
     expect(await route.loadComponent()).toBe(OptionsBacktestPageComponent);
+    expect(route.data).toMatchObject({ stickyContent: true });
   });
 
   it('lazily loads the Data Lake Observatory and keeps it distinct from Data Lab', async () => {

@@ -97,6 +97,15 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
       container: ide / inline-size;
     }
 
+    /* A page that keeps a column in view while the page scrolls (route data
+       'stickyContent') has no horizontal scroller on <main>. The document is
+       what scrolls, but a scroll container, even one that never scrolls
+       vertically, is where position: sticky looks for its scrollport, so
+       inside <main> as it is above nothing sticks. */
+    .main--sticky-content {
+      overflow-x: visible;
+    }
+
     .main-content {
       flex: 1;
       min-width: 0;
@@ -125,7 +134,7 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
           </nav>
         </app-top-bar>
       }
-      <main class="main">
+      <main class="main" [class.main--sticky-content]="hasStickyContent()">
         <div class="main-content">
           <app-page-body [fullBleed]="isFullBleedRoute()">
             <router-outlet />
@@ -194,6 +203,9 @@ export class AppComponent {
   });
   protected readonly isFullBleedRoute = computed(() =>
     activeRouteHasData(this.activeRoute(), 'fullBleed'),
+  );
+  protected readonly hasStickyContent = computed(() =>
+    activeRouteHasData(this.activeRoute(), 'stickyContent'),
   );
   /** The entry page stands alone: no top bar, so no account-mode badges. It
    * is the one page allowed to drop them (ADR 0059 Decision 8, amended

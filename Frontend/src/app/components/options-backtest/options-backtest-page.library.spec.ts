@@ -15,7 +15,7 @@ const sideList = () => screen.getByRole('complementary', { name: 'Saved setups' 
 const bar = () => screen.getByRole('region', { name: 'Setup actions' });
 const openButton = (name: string) => within(sideList()).getByRole('button', { name: new RegExp(`^${name}`) });
 
-describe('the side list', () => {
+describe('the saved setups list', () => {
   it('lists the examples first, marked as examples, then the saved setups as the server ordered them', async () => {
     const service = fakeService(vi, { list: vi.fn(async () => [...servedExamples(), saved('Newer one', 2_000), saved('Older one', 1_000)]) });
     await renderPage(service);
@@ -48,15 +48,14 @@ describe('the side list', () => {
     expect(within(row as HTMLElement).getByRole('button', { name: 'Delete setup Old rules' })).toBeTruthy();
   });
 
-  it('collapses out of the way and opens again', async () => {
+  it('names the setup the form holds on the button that opens the list', async () => {
     await renderPage(fakeService(vi));
-    await within(sideList()).findByText(EXAMPLE_NO_REENTRY);
+    const menuButton = () => screen.getByRole('button', { name: /^Saved setups/ });
+    expect(menuButton().textContent).not.toContain(EXAMPLE_NO_REENTRY);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Hide saved setups' }));
-    expect(screen.queryByRole('button', { name: new RegExp(`^${EXAMPLE_NO_REENTRY}`) })).toBeNull();
+    fireEvent.click(await within(sideList()).findByRole('button', { name: new RegExp(`^${EXAMPLE_NO_REENTRY}`) }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show saved setups' }));
-    expect(openButton(EXAMPLE_NO_REENTRY)).toBeTruthy();
+    await waitFor(() => expect(menuButton().textContent).toContain(EXAMPLE_NO_REENTRY));
   });
 
   it('says why when the list could not be read, and reads it again on request', async () => {

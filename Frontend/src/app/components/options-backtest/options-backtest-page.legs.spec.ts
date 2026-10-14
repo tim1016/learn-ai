@@ -28,7 +28,7 @@ describe('building a setup', () => {
 
     const headings = screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent);
 
-    expect(headings).toEqual(['Instrument', 'Entry settings', 'Legwise settings', 'Leg builder', 'Legs', 'Costs', 'Duration', 'In plain words']);
+    expect(headings).toEqual(['Instrument', 'Duration', 'Entry settings', 'Legs', 'Costs', 'In plain words']);
   });
 
   it('sends exactly the shipped example when the owner builds it by hand', async () => {

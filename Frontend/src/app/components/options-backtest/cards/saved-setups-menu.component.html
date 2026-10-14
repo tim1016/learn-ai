@@ -1,9 +1,11 @@
-<aside class="side" [class.side--collapsed]="collapsed()" aria-label="Saved setups">
-  <button type="button" class="toggle" [attr.aria-expanded]="!collapsed()" aria-controls="ob-side-body" [attr.aria-label]="collapsed() ? 'Show saved setups' : 'Hide saved setups'" (click)="toggle()">
-    <i class="pi" [class.pi-angle-double-left]="!collapsed()" [class.pi-angle-double-right]="collapsed()" aria-hidden="true"></i>
-    @if (!collapsed()) { <span>Saved setups</span> }
-  </button>
-  <div id="ob-side-body" [hidden]="collapsed()">
+<button #trigger type="button" class="trigger" [attr.popovertarget]="popoverId" aria-haspopup="dialog">
+  <span class="trigger__label">Saved setups</span>
+  @if (selected(); as name) { <span class="trigger__name">{{ name }}</span> }
+  <i class="pi pi-angle-down" aria-hidden="true"></i>
+</button>
+
+<div #panel [id]="popoverId" class="menu" popover role="dialog" aria-label="Saved setups list" (beforetoggle)="placeUnderButton($event)">
+  <aside class="side" aria-label="Saved setups">
     @if (status() === 'loading') { <p class="note" role="status">Loading…</p> }
     @if (status() === 'error') {
       <p class="note problem" role="alert">{{ error() }}</p>
@@ -14,7 +16,7 @@
       @for (item of setups(); track item.name) {
         <li class="row" [class.row--current]="item.name === selected()">
           @if (item.setup; as setup) {
-            <button type="button" class="open" [disabled]="!canOpen()" [attr.aria-current]="item.name === selected() ? 'true' : null" (click)="opened.emit(item)">
+            <button type="button" class="open" [disabled]="!canOpen()" [attr.aria-current]="item.name === selected() ? 'true' : null" (click)="choose(item)">
               <span class="name">{{ item.name }}</span>
               <span class="meta">
                 <app-asset-identity [symbol]="setup.underlying" size="xs" [logo]="false" />
@@ -33,5 +35,5 @@
         </li>
       }
     </ul>
-  </div>
-</aside>
+  </aside>
+</div>
