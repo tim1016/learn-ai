@@ -290,13 +290,6 @@ def _acknowledgement(
     )
 
 
-def unfoldable_broker_orders_active_since(repo: ClerkSqliteRepository, *, since_ms: int) -> int:
-    """Distinct unfoldable orders first seen or active at or after ``since_ms``, released or not."""
-    return repo.unfoldable_broker_orders_active_since(
-        reason_code=UNFOLDABLE_BROKER_ORDER_REASON_CODE, since_ms=since_ms
-    )
-
-
 def _active_unfoldable_orders(repo: ClerkSqliteRepository) -> dict[str, UnfoldableBrokerOrder]:
     active = repo.active_uncertainty(
         scope="ACCOUNT_CLERK",
@@ -457,5 +450,4 @@ __all__ = [
     "observe_or_record_unfoldable",
     "record_unfoldable_broker_order",
     "unfoldable_broker_order_is_unreviewed",
-    "unfoldable_broker_orders_active_since",
 ]

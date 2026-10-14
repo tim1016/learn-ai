@@ -789,11 +789,6 @@ def day_pnl_repo(
 
 
 
-@pytest.fixture
-def day_pnl_fees(day_pnl_repo: ClerkSqliteRepository) -> None:
-    complete_fee_evidence(day_pnl_repo)
-
-
 def _accept_day_pnl_enter(
     repo: ClerkSqliteRepository, *, decision_id: str
 ) -> EnterSubmission:
@@ -892,23 +887,6 @@ def _observe_foreign_order(repo: ClerkSqliteRepository, *, observed_at_ms: int) 
             events=[],
             observed_at_ms=observed_at_ms,
         ),
-    )
-
-
-@pytest.fixture
-def seeded_open_buy(day_pnl_repo: ClerkSqliteRepository) -> None:
-    """BUY 10 @ 100 at today's open, still held — nothing realized yet."""
-    accepted = _accept_day_pnl_enter(day_pnl_repo, decision_id="d-open-buy")
-    _append_day_pnl_slice(
-        day_pnl_repo,
-        accepted,
-        execution_id="exec-buy-today",
-        side="BUY",
-        quantity=10.0,
-        price=100.0,
-        occurred_at_ms=TODAY_OPEN,
-        fee=0.0,
-        fee_fidelity="reported",
     )
 
 

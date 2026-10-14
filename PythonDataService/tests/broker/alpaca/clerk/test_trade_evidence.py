@@ -20,7 +20,6 @@ from app.broker.alpaca.clerk.sqlite.external_orders import (
     acknowledge_unfoldable_broker_order,
     observe_or_record_unfoldable,
     record_unfoldable_broker_order,
-    unfoldable_broker_orders_active_since,
 )
 from app.broker.alpaca.clerk.sqlite.facts import UncertaintyRaisedFacts
 from app.broker.alpaca.clerk.sqlite.manual_orders import accept_manual_order
@@ -1529,8 +1528,7 @@ def test_an_acknowledged_unidentified_order_never_whitelists_the_next_one(
 
     Before the fix, reviewing the first anonymous order recorded the sentinel
     as reviewed, so every later id-less order -- a different order the
-    operator never saw -- appended nothing, left entries open, and dropped
-    out of the day-P&L unknown count.
+    operator never saw -- appended nothing and left entries open.
     """
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
     try:
@@ -1555,7 +1553,6 @@ def test_an_acknowledged_unidentified_order_never_whitelists_the_next_one(
         assert _unfoldable_evidence_refs(repo) == [UNIDENTIFIED_BROKER_ORDER_ID]
         entry = decide_capability(repo, capability=Capability.NEW_EXPOSURE, subject_id="s")
         assert entry.allowed is False and entry.reason_code == "UNFOLDABLE_BROKER_ORDER"
-        assert unfoldable_broker_orders_active_since(repo, since_ms=2_000) == 1
     finally:
         repo.close()
 
@@ -1740,22 +1737,14 @@ def test_unfoldable_order_reads_probe_their_indexes_never_scan(tmp_path: Path) -
     conn.set_trace_callback(statements.append)
     try:
         reads.unfoldable_broker_order_acknowledgements(conn)
-        reads.unfoldable_broker_orders_active_since(
-            conn, reason_code="UNFOLDABLE_BROKER_ORDER", since_ms=0
-        )
     finally:
         conn.set_trace_callback(None)
     try:
         (review_read,) = [sql for sql in statements if "FROM custody_transitions t" in sql]
-        (activity_read,) = [sql for sql in statements if "FROM uncertainties WHERE" in sql]
-        for statement, index in (
-            (review_read, "ix_custody_transitions_resolution_summary"),
-            (activity_read, "ix_uncertainties_reason_code"),
-        ):
-            plan = " | ".join(
-                row["detail"] for row in conn.execute("EXPLAIN QUERY PLAN " + statement)
-            )
-            assert index in plan, plan
-            assert "SCAN t" not in plan and "SCAN uncertainties" not in plan, plan
+        plan = " | ".join(
+            row["detail"] for row in conn.execute("EXPLAIN QUERY PLAN " + review_read)
+        )
+        assert "ix_custody_transitions_resolution_summary" in plan, plan
+        assert "SCAN t" not in plan, plan
     finally:
         repo.close()

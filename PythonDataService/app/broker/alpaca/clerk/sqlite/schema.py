@@ -680,9 +680,9 @@ SCHEMA_V15_STATEMENTS: tuple[str, ...] = (
 SCHEMA_V15_DDL = "\n".join(f"{statement};" for statement in SCHEMA_V15_STATEMENTS)
 # v16 is index-only too (#2363): the unfoldable-broker-order fence reads its
 # operator reviews on every observation of a resting order (every 15 s sweep)
-# while holding the write coordinator, and the day-P&L fact reads every
-# episode of that cause. Without these both scanned the append-only journal
-# / the whole ``uncertainties`` table. Same statements as
+# while holding the write coordinator, and a read of every episode of that
+# cause went through ``uncertainties``. Without these both scanned the
+# append-only journal / the whole table. Same statements as
 # ``SCHEMA_MIGRATIONS[15]``.
 SCHEMA_V16_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_custody_transitions_resolution_summary "

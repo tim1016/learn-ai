@@ -36,10 +36,6 @@ class EstablishedAccountsRegistry:
     def __init__(self, alpaca_accounts_root: Path) -> None:
         self._path = alpaca_accounts_root / REGISTRY_FILENAME
 
-    @property
-    def path(self) -> Path:
-        return self._path
-
     def record(self, generation: EstablishedGeneration) -> None:
         """Append one line, fsync'd, for a newly-initialized authority generation."""
         existed = self._path.is_file()
