@@ -113,6 +113,16 @@ def test_ceiling_equality_is_within_a_strict_breach_is_a_concern() -> None:
     assert "research concern" in breaching["sentence"]
 
 
+def test_the_sentence_names_the_ceiling_at_the_precision_the_exam_check_shows_it() -> None:
+    # The ceiling is free in (0, 1]: a 12.5% ceiling is never rounded to "12%" (exam_rules prints it with two decimals).
+    deeper = [0.0] * 59
+    deeper[30] = -0.25
+    beyond = _reading(deeper, ceiling=0.125)
+    assert beyond["concern"] is True and "beyond the 12.50% ceiling" in beyond["sentence"]
+    within = _reading([0.0] * 59, ceiling=0.10)
+    assert within["concern"] is False and "within the 10.00% ceiling" in within["sentence"]
+
+
 def test_a_deterministic_alternating_series_states_its_actual_outcomes_not_a_promise() -> None:
     # Exactly one losing session of -10% among flat ones: a path's fall is 0.1 iff it draws that session.
     alternating = [0.0] * 59
@@ -168,6 +178,10 @@ def test_stored_normalization_keeps_partial_records_partial() -> None:
     measured = _reading(_smooth(60, 8))
     partial = stored_drawdown({"chance": {"drawdown": copy.deepcopy(measured)}})
     assert partial == measured
+    # A measured record that fails the served contract reads unavailable instead of failing the study page.
+    torn = copy.deepcopy(measured)
+    del torn["percentiles"]
+    assert stored_drawdown({"chance": {"drawdown": torn}})["code"] == "invalid_record"
     legacy = stored_drawdown({"chance": {}})
     assert legacy["code"] == NOT_MEASURED[0]
     unsupported = stored_drawdown({"chance": {"drawdown": {"status": "from_the_future"}}})
