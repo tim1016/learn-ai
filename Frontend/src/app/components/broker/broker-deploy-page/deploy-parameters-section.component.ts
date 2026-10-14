@@ -9,6 +9,7 @@ import type {
 
 import { InstrumentCardComponent } from '../../../shared/ticker-range-picker/parts/instrument-card.component';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
+import { canonicalJson } from './deploy-draft.store';
 import type { TickerRange } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
 
 export interface DeployParameterEntry {
@@ -115,7 +116,15 @@ export class DeployParametersSectionComponent {
     return new Set([...this.invalidFieldsRaw()].filter((field) => schemaFields.has(field)));
   });
 
+  /** The schema's content: a reload that returns the same schema keeps what the owner typed; another
+   * strategy's schema starts clean, even where it names a field of the same name. */
+  protected readonly schemaKey = computed(() => canonicalJson(this.paramsSchema()));
+
   constructor() {
+    effect(() => {
+      this.schemaKey();
+      untracked(() => this.invalidFieldsRaw.set(new Set()));
+    });
     effect(() => {
       this.qualifiedConfiguration();
       this.values();

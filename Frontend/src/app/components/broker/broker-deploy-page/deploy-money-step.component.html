@@ -35,7 +35,12 @@
     </dl>
   } @else if (factsView(); as view) {
     @if (view.state === 'awaiting_price') {
-      <p class="money-step__note" role="status">{{ view.detail }}</p>
+      <p class="money-step__note" role="status">
+        {{ view.detail }}
+        @if (priceChecksSpent() && !view.option_review) {
+          Checking again by itself has stopped; use Refresh money to ask again.
+        }
+      </p>
     } @else {
       <p class="money-step__refusal" role="alert">{{ view.detail }}</p>
     }

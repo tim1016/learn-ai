@@ -103,6 +103,36 @@ describe('DeployParametersSectionComponent', () => {
     fireEvent.change(input, { target: { value: '25' } });
     expect(invalidFieldsChange).toHaveBeenLastCalledWith(new Set());
   });
+
+  it('starts clean on another strategy’s schema that names a field of the same name', async () => {
+    const invalidFieldsChange = vi.fn();
+    const { fixture } = await render(DeployParametersSectionComponent, {
+      inputs: { paramsSchema: SCHEMA, values: {} },
+      on: { parameterChange: vi.fn(), invalidFieldsChange },
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Short window' }), { target: { value: 'abc' } });
+    expect(invalidFieldsChange).toHaveBeenLastCalledWith(new Set(['short_window']));
+
+    // The same schema read again changes nothing the owner typed.
+    fixture.componentRef.setInput('paramsSchema', structuredClone(SCHEMA));
+    fixture.detectChanges();
+    expect(invalidFieldsChange).toHaveBeenLastCalledWith(new Set(['short_window']));
+    expect(screen.getByRole('textbox', { name: 'Short window' }).getAttribute('aria-invalid')).toBe('true');
+
+    const other: DeployStrategyParamsSchema = {
+      ...SCHEMA,
+      title: 'EmaParams',
+      properties: { short_window: { type: 'integer', default: 12, minimum: 2, maximum: 500, title: 'Short window' } },
+    };
+    fixture.componentRef.setInput('paramsSchema', other);
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    const input = screen.getByRole('textbox', { name: 'Short window' }) as HTMLInputElement;
+    expect(invalidFieldsChange).toHaveBeenLastCalledWith(new Set());
+    expect(input.getAttribute('aria-invalid')).toBeNull();
+    expect(input.value).toBe('12');
+  });
 });
 
 describe('qualified configuration action', () => {

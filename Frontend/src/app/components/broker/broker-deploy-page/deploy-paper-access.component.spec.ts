@@ -255,6 +255,34 @@ describe('DeployPaperAccessComponent', () => {
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 
+  it('words a fleet refusal in its own sentences, not as a lost connection', async () => {
+    const service = panelServiceMock();
+    // The fleet coordinator's refusals are flat `{reason, message, next_step}`, not nested under `detail`.
+    service.preparePaperAccess.mockRejectedValueOnce(
+      new HttpErrorResponse({
+        status: 503,
+        error: {
+          reason: 'clerk_unreachable',
+          message: 'The Clerk for this account did not answer.',
+          next_step: 'Wait for the lane to recover, then prepare a fresh review.',
+        },
+      }),
+    );
+    const { fixture } = await render(DeployPaperAccessComponent, {
+      inputs: { target: TARGET, strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
+      providers: [{ provide: BrokerV2PanelService, useValue: service }],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Allow on Paper' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const alert = screen.getByRole('alert');
+    expect(within(alert).getByText('The Clerk for this account did not answer.')).toBeTruthy();
+    expect(within(alert).getByText(/Wait for the lane to recover/)).toBeTruthy();
+    expect(within(alert).queryByText(/No answer came back/)).toBeNull();
+  });
+
   it('retries a failed confirm with the exact reviewed target and durable key', async () => {
     const service = panelServiceMock();
     service.confirmPaperAccess

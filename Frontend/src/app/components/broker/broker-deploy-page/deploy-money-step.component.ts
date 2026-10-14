@@ -207,6 +207,8 @@ export class DeployMoneyStepComponent {
   protected readonly barShowsNew = computed(() => this.ready() !== null);
 
   private readonly priceRechecks = linkedSignal({ source: this.context, computation: () => 0 });
+  /** The step has used its automatic re-checks of a price wait: Refresh money is the only ask left. */
+  protected readonly priceChecksSpent = computed(() => this.priceRechecks() >= PRICE_RECHECK_LIMIT);
 
   /** The latest answer for the settings on screen: the amount's once it has answered for the amount typed, else the facts'. */
   private readonly answer = computed<BudgetAnswer | null>(() => {

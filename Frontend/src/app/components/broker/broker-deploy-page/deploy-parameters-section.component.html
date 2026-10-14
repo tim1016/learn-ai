@@ -36,7 +36,7 @@
     }
   } @else {
     <div class="parameters-card__fields">
-      @for (entry of entries(); track entry.field) {
+      @for (entry of entries(); track schemaKey() + entry.field) {
         <label class="parameter">
           <span class="parameter__label">
             <span>{{ entry.property.title ?? entry.field }}</span>

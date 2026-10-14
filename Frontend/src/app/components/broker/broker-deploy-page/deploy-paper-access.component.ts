@@ -1,4 +1,3 @@
-import { HttpErrorResponse } from "@angular/common/http";
 import {
   ChangeDetectionStrategy,
   Component,
@@ -18,6 +17,7 @@ import {
 } from "../v2-panel/lib/broker-v2-panel.service";
 import { type ResourceTarget, withCommand } from '../../../fleet/resource-target';
 import { laneFenceIsEnforceable, LANE_FENCE_UNENFORCEABLE_MESSAGE } from '../../../fleet/lane-fence';
+import { refusalBody } from '../../../shared/errors/refusal-body';
 
 const UI_ACTIVATION_ACTION = "from the Alpaca Deploy page.";
 
@@ -193,21 +193,16 @@ export class DeployPaperAccessComponent {
   }
 
   private toFailure(error: unknown): PaperAccessFailure {
-    if (error instanceof HttpErrorResponse) {
-      const detail = error.error?.detail as
-        | {
-            message?: string;
-            why?: string | null;
-            next_action?: string | null;
-          }
-        | undefined;
-      if (detail?.message) {
-        return {
-          message: detail.message,
-          explanation: detail.why ?? null,
-          nextAction: detail.next_action ?? null,
-        };
-      }
+    // The fleet's refusals are flat and a route's nest under `detail`: `refusalBody` reads both.
+    const detail = refusalBody(error);
+    if (detail !== null && typeof detail['message'] === 'string' && detail['message'] !== '') {
+      return {
+        message: detail['message'],
+        explanation: typeof detail['why'] === 'string' ? detail['why'] : null,
+        nextAction: typeof detail['next_action'] === 'string'
+          ? detail['next_action']
+          : typeof detail['next_step'] === 'string' ? detail['next_step'] : null,
+      };
     }
     return {
       message: `The ${this.modeLabel()} permission could not be checked.`,
