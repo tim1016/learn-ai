@@ -442,6 +442,11 @@ podman cp "$LANE:$OUT" "$EVIDENCE/$STEP"
 cat "$EVIDENCE/$STEP/summary.md"
 ```
 
+**Run it in the one-off container below, not in the lane, when the lane carries
+its memory cap** (768 MiB under both fleet compose files): on 2026-10-14 the
+command run in the lane was killed (exit 137), took the lane's main process with
+it (`OOMKilled`), and the restart ended both bots' runs.
+
 The window is `[from, to)`. The command only reads the Clerk's store (read-only
 and query-only: it takes no lease) and the journal, and writes the one new
 folder. It exits `0` when everything was read, `3` when it wrote the folder
@@ -665,6 +670,8 @@ shown.
 | After a Clerk restart every bot is *Needs attention - ended without a clean exit* and a held position shows *No bot is managing* | A restart ends every bot run; nothing resumes the strategy. The position and its holding are found unchanged; only the end time's sale is still owed | Reload the bot page (a command opened before the restart is refused with *lane was rebound*), then **Flatten**: one closing order. Deploy again for a new bot. |
 | `reduce blocked: STREAM_HEALTH_HOLD` with a several-leg position held | A several-leg parent's `fill` frame could not be mapped (fixed in #3173) and marked the stream's evidence unhealthy | Pull the fix and restart the lane; the hold is re-sampled. |
 | Fees unresolved after a spread: *Account fill coverage is incomplete*, every fee *account-unattributed*, and the spread's legs held only from the order lookup (no execution named) | A spread filled before #3177 was deployed: its legs' executions came only in the parent's `fill` frame, which was not credited | Pull the fix and restart: spreads after it are credited when the frame arrives. For legs already booked: stop the lane, copy its account store, boot the lane's own image with a wrapper that hands the parent's recorded `fill` frame (the capture journal's `stream` file) to the consumer, then start the lane again. Each leg's execution is credited and the population is explained (done once on 2026-10-14; `test_a_parents_fill_frame_that_arrives_after_the_legs_were_read_by_lookup_explains_their_cumulative`). Check the account's Home no longer lists the fee evidence. |
+| A bot's entry is refused `RECONCILIATION_IN_PROGRESS` ("Account reconciliation is proving fresh broker truth") two seconds after another bot's entry on the same bar | Two bots decided on the same signal in the same second; the second's decision reached the lane while the first's order was being proven. Under a lagging lane (event loop unserved 1 to 4 s) it happened 2 of 2 times on 2026-10-14 | Nothing was sent; the bot decides again on the next bar. For an overlapping pass, wait for a bar where one bot holds and the other enters (it came a minute later). Close the bot pages first. |
+| An entry's comparison reads *unknown, FIRST_READING_FAILED* (or *CASH_MOVEMENT_UNREAD*) although Alpaca answered in under 100 ms | The first reading's 1.5 s bound ran out while the lane's event loop was stalled: the account call began late and its answer was discarded | Not a discrepancy and never promoted. Close the bot pages and repeat the step; the lane's log has "the account's option buying power could not be read" at the same second. |
 
 ## Repair record: 2026-10-13
 
@@ -735,6 +742,13 @@ The second day, on the same flat Paper account (option level 3), after #3137 and
   the position and ends the run (see Troubleshooting). One closing order closed a one-leg structure
   by Flatten. A bull call spread was sent as one `mleg` order with a **positive** net limit (a
   debit), filled as one order, and the account fell by the debit alone with a requirement of $0.
+  The same spread was closed as **one `mleg` market order**, filled, and Alpaca stated the credit
+  as a **negative** net price on the order and on the fill (`B2-bull-call-spread-clean-pass`).
+  Two bots held the same two contracts at once for two minutes (`B3-overlap-spread`): the account
+  showed one position of two of each leg, each parent frame carried its own legs' executions, and
+  all eight leg fills were credited from the stream (exact, none from the order lookup, no
+  stream-health hold, no uncertainty left open). Offline both complete pairs judge *over-reserved*
+  by exactly the limit less the fill ($1.00) and the unspent half of the fee provision ($0.05).
 - **Not observable here.** An entry that rests until the deadline's cancel: Paper filled a limit at
   the ask 0.5 s after accepting it, even with the shortest 1 s wait (and its stream answer reached
   the Clerk 1.7 s later). A cancel that races a fill, a part fill, a restart with an entry resting.
@@ -756,6 +770,13 @@ The second day, on the same flat Paper account (option level 3), after #3137 and
   and refused every entry (#3177 credits each leg from the frame). The four already booked were
   repaired once by handing the two recorded parent frames to the lane's own consumer with the
   account's store copied first (see Troubleshooting); the account then showed free to deploy.
+- **Found, not fixed.** With two bots on one signal the second was refused
+  `RECONCILIATION_IN_PROGRESS` twice in two tries, and two entries read *unknown*, one
+  `FIRST_READING_FAILED` and one `CASH_MOVEMENT_UNREAD` (a 1.5 s bound that ran out in a stalled
+  loop; Alpaca's own fall was premium plus $0.05 for the second). The lane's event
+  loop was unserved 1 to 4 s about 150 times in 30 minutes, with a browser window polling a bot
+  page every few seconds; the refusals sent nothing and moved no money. Running the bundle in the
+  lane killed the lane (section 7).
 - **Procedure facts.** Bot pages poll heavily and slow the lane (see Troubleshooting); watch a step
   from the capture journal's `orders` file instead (`option_orders` in the bundle) with the pages
   closed. Each deploy needs a fresh money review inside about a minute and the acknowledgement ticked
