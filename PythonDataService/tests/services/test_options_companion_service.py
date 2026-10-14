@@ -314,7 +314,7 @@ class TestResolveTargetExpiry:
         result = _resolve_target_expiry(_FakePolygon(), "SPY", date(2025, 6, 10), cfg)
         assert result == date(2025, 6, 10)
 
-    def test_lookup_failure_returns_none_and_does_not_propagate(self):
+    def test_lookup_failure_propagates_instead_of_reading_as_no_chain(self):
         from datetime import date
 
         from app.services.options_companion_service import _resolve_target_expiry
@@ -324,7 +324,8 @@ class TestResolveTargetExpiry:
                 raise RuntimeError("polygon timeout")
 
         cfg = OptionsCompanionConfig(enabled=True, dte_distance=0)
-        assert _resolve_target_expiry(_FakePolygon(), "SPY", date(2025, 6, 10), cfg) is None
+        with pytest.raises(RuntimeError, match="polygon timeout"):
+            _resolve_target_expiry(_FakePolygon(), "SPY", date(2025, 6, 10), cfg)
 
 
 class _FakePolygon:
@@ -500,6 +501,73 @@ class TestBuildOptionsCompanionTimestampAlignment:
             "expected fail-loud warning for 100%-empty Greek columns"
         )
         assert report["totals"]["iv_status"].get("no_price", 0) == 2
+
+
+class TestPolygonOutageIsNotNoChain:
+    """A Polygon call that failed is reported as a failed fetch, never as an empty chain (#3221)."""
+
+    _TS_0930 = 1_749_562_200_000  # 2025-06-10 09:30 ET
+
+    def _build(self, polygon):
+        from app.services.options_companion_service import build_options_companion_csvs
+
+        underlying_df = pd.DataFrame({"timestamp": [self._TS_0930], "close": [710.0]})
+        config = OptionsCompanionConfig(
+            enabled=True, include_calls=True, include_puts=True, strikes_each_side=1, dte_distance=0
+        )
+        return build_options_companion_csvs(
+            underlying_bars_df=underlying_df,
+            ticker="SPY",
+            from_date="2025-06-10",
+            to_date="2025-06-10",
+            config=config,
+            polygon=polygon,
+            timespan="minute",
+            multiplier=1,
+        )
+
+    def test_an_expiration_lookup_outage_names_itself_in_the_skipped_day(self):
+        class _Down(_FakePolygon):
+            def list_options_expirations(self, **kwargs):
+                raise RuntimeError("Polygon did not answer expirations window 2025-06-10..2025-06-10")
+
+        _files, report = self._build(_Down([], {}))
+
+        (skipped,) = report["days_skipped"]
+        assert "lookup failed" in skipped["reason"]
+        assert "no listed expiry" not in skipped["reason"]
+        assert report["totals"]["fetch_failures"] == {"expirations": 1}
+
+    def test_a_day_with_no_listed_chain_still_says_so_and_counts_no_failure(self):
+        class _NoChain(_FakePolygon):
+            def list_options_expirations(self, **kwargs):
+                return []
+
+        _files, report = self._build(_NoChain([], {}))
+
+        (skipped,) = report["days_skipped"]
+        assert "no listed expiry" in skipped["reason"]
+        assert report["totals"]["fetch_failures"] == {}
+
+    def test_failed_contract_lists_and_bar_fetches_are_counted_not_silently_empty(self):
+        contracts = [_c("O:T709", 709.0), _c("O:T710", 710.0), _c("O:T711", 711.0)]
+
+        class _Flaky(_FakePolygon):
+            def list_options_contracts(self, **kwargs):
+                if kwargs["contract_type"] == "call":
+                    raise RuntimeError("polygon 503")
+                return self._contracts
+
+            def fetch_aggregates(self, ticker, **kwargs):
+                raise RuntimeError("polygon timeout")
+
+        _files, report = self._build(_Flaky(contracts, {}))
+
+        # Calls: the list failed (one failure). Puts: three slots chosen, three bar fetches failed.
+        assert report["totals"]["fetch_failures"] == {"contracts": 1, "bars": 3}
+        (day,) = report["per_day"]
+        assert (day["calls_selected"], day["puts_selected"]) == (0, 3)
+        assert day["fetch_failures"] == {"contracts": 1, "bars": 3}
 
 
 class TestComputeRowGreeksStatusLabels:

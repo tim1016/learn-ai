@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.options.expiry import OptionExpiryMs
+from app.services.polygon_client import expirations_range
 from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -67,6 +68,13 @@ class OptionsExpirationsRequest(BaseModel):
         if v is not None and v not in ["call", "put"]:
             raise ValueError('contract_type must be "call" or "put"')
         return v
+
+    @model_validator(mode="after")
+    def validate_range_is_walkable(self) -> "OptionsExpirationsRequest":
+        # One vendor call per 30-day window: a reversed or very wide range is a 422 here,
+        # not a worker pool sized from it (#3221).
+        expirations_range(self.expiration_ms_gte, self.expiration_ms_lte)
+        return self
 
 
 class OptionsChainSnapshotRequest(BaseModel):

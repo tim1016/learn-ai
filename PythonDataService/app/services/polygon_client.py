@@ -22,7 +22,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from polygon import RESTClient
@@ -33,6 +33,49 @@ from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import now_ms_utc, timestamp_like_to_ms_utc
 
 logger = logging.getLogger(__name__)
+
+_POLYGON_API_ORIGIN = "https://api.polygon.io"
+_CONTRACTS_URL = f"{_POLYGON_API_ORIGIN}/v3/reference/options/contracts"
+
+# An expirations request costs one vendor call per 30-day window, fired through a pool,
+# so the range it may cover and the pool that walks it are bounded.
+EXPIRATIONS_WINDOW_DAYS = 30
+#: Calendar days from the first to the last expiry a request may name: about three
+#: years, past the furthest listed LEAP.
+MAX_EXPIRATIONS_SPAN_DAYS = 1100
+MAX_EXPIRATIONS_WORKERS = 12
+#: An omitted upper bound reaches this far past today, or past the start when that is later.
+EXPIRATIONS_DEFAULT_HORIZON_DAYS = 180
+# One vendor page is at most 1000 contracts; a window longer than this is refused, not cut.
+_EXPIRATIONS_MAX_PAGES = 50
+
+
+def expirations_range(expiration_ms_gte: int | None, expiration_ms_lte: int | None) -> tuple[date, date]:
+    """The inclusive ET date range an expirations request walks, defaults applied.
+
+    The route's request model and ``list_options_expirations`` both resolve a request
+    here, so a range the pool cannot walk is a 422 at the boundary, not a 500 inside it.
+
+    Raises:
+        ValueError: the range is reversed, or wider than ``MAX_EXPIRATIONS_SPAN_DAYS``.
+    """
+    today = et_date_at_ms(now_ms_utc())
+    start = option_expiry_date(expiration_ms_gte) if expiration_ms_gte is not None else today
+    if expiration_ms_lte is not None:
+        end = option_expiry_date(expiration_ms_lte)
+    else:
+        try:
+            end = max(start, today) + timedelta(days=EXPIRATIONS_DEFAULT_HORIZON_DAYS)
+        except OverflowError as exc:
+            raise ValueError("an expiration range with no upper bound runs past year 9999") from exc
+    if end < start:
+        raise ValueError(f"the expiration range is reversed: it starts {start.isoformat()} and ends {end.isoformat()}")
+    if (end - start).days > MAX_EXPIRATIONS_SPAN_DAYS:
+        raise ValueError(
+            f"the expiration range {start.isoformat()}..{end.isoformat()} is wider than "
+            f"{MAX_EXPIRATIONS_SPAN_DAYS} days"
+        )
+    return start, end
 
 
 # A progress callback the throttle invokes when it has to sleep — lets the
@@ -629,111 +672,114 @@ class PolygonClientService:
         Bounds arrive as anchor instants too and are converted to the vendor's
         ``YYYY-MM-DD`` form here.
 
-        Breaks the date range into ~30-day windows and fires all window
-        requests **concurrently** via ThreadPoolExecutor (bypassing the
-        auto-paginating client).  Each window retries up to 3 times with
+        Breaks the date range into ~30-day windows and fires the window
+        requests **concurrently** via a bounded ThreadPoolExecutor (bypassing
+        the auto-paginating client), following each window's ``next_url`` until
+        the vendor has no more pages.  Each page retries up to 3 times with
         exponential backoff on transient errors (502/503/504, timeouts).
-        A permanently-failing window is skipped so the remaining windows
-        still return data.
+
+        The list is complete or the call raises: a page the vendor never
+        answers, or a window past the page cap, fails the whole request
+        rather than returning the expirations that did arrive (#3221).
         """
-        import time
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        from datetime import timedelta
 
         import requests as _requests
 
         MAX_RETRIES = 3
         BASE_DELAY = 2.0  # seconds
 
-        def _fetch_window(w_start_str: str, w_end_str: str, effective_type: str) -> set[str]:
-            """Fetch expiration dates for a single 30-day window with retries."""
-            window_dates: set[str] = set()
+        def _get_page(url: str, params: dict[str, Any], label: str) -> dict[str, Any]:
+            """One vendor page, retried on a transient error; raises when the retries run out."""
+            last_failure = ""
             for attempt in range(MAX_RETRIES):
                 try:
-                    params: dict[str, Any] = {
-                        "underlying_ticker": underlying_ticker,
-                        "contract_type": effective_type,
-                        "expiration_date.gte": w_start_str,
-                        "expiration_date.lte": w_end_str,
-                        "limit": 1000,
-                        "apiKey": settings.POLYGON_API_KEY,
-                    }
-                    if expired is not None:
-                        params["expired"] = "true" if expired else "false"
-                    resp = _requests.get(
-                        "https://api.polygon.io/v3/reference/options/contracts",
-                        params=params,
-                        timeout=30,
-                    )
+                    resp = _requests.get(url, params=params, timeout=30)
                     if resp.status_code in (502, 503, 504):
-                        delay = BASE_DELAY * (2**attempt)
-                        logger.warning(
-                            f"[Expirations] Window {w_start_str}..{w_end_str}: "
-                            f"HTTP {resp.status_code}, retry {attempt + 1}/{MAX_RETRIES} "
-                            f"in {delay:.1f}s"
-                        )
-                        time.sleep(delay)
-                        continue
-
-                    if not resp.ok:
+                        last_failure = f"HTTP {resp.status_code}"
+                    elif resp.ok:
+                        return resp.json()
+                    else:
                         # ``raise_for_status`` words its message with the full request URL,
                         # ``apiKey`` included, and every caller logs or returns it (#3188).
                         raise _requests.exceptions.HTTPError(
-                            f"Polygon answered HTTP {resp.status_code} {resp.reason} "
-                            f"for expirations window {w_start_str}..{w_end_str}"
+                            f"Polygon answered HTTP {resp.status_code} {resp.reason} for {label}"
                         )
-                    data = resp.json()
-                    for r in data.get("results", []):
-                        exp = r.get("expiration_date")
-                        if exp:
-                            window_dates.add(exp)
-                    return window_dates
-
                 except (_requests.exceptions.ReadTimeout, _requests.exceptions.ConnectionError) as exc:
-                    delay = BASE_DELAY * (2**attempt)
-                    logger.warning(
-                        f"[Expirations] Window {w_start_str}..{w_end_str}: "
-                        f"{type(exc).__name__}, retry {attempt + 1}/{MAX_RETRIES} in {delay:.1f}s"
-                    )
-                    time.sleep(delay)
+                    last_failure = type(exc).__name__
+                if attempt + 1 == MAX_RETRIES:
+                    break
+                delay = BASE_DELAY * (2**attempt)
+                logger.warning(
+                    f"[Expirations] {label}: {last_failure}, retry {attempt + 1}/{MAX_RETRIES} in {delay:.1f}s"
+                )
+                time.sleep(delay)
 
-            logger.error(
-                f"[Expirations] Window {w_start_str}..{w_end_str}: failed after {MAX_RETRIES} retries, skipping"
-            )
-            return window_dates
+            # A skipped window would read as a complete list. The transport error's own
+            # text names the request URL, ``apiKey`` included, so it is not forwarded (#3188).
+            raise RuntimeError(f"Polygon did not answer {label} after {MAX_RETRIES} attempts ({last_failure})")
+
+        def _fetch_window(w_start: date, w_end: date, effective_type: str) -> set[str]:
+            """Fetch the expiration dates of one window, following the vendor's pages."""
+            label = f"expirations window {w_start.isoformat()}..{w_end.isoformat()}"
+            url = _CONTRACTS_URL
+            params: dict[str, Any] = {
+                "underlying_ticker": underlying_ticker,
+                "contract_type": effective_type,
+                "expiration_date.gte": w_start.isoformat(),
+                "expiration_date.lte": w_end.isoformat(),
+                "limit": 1000,
+                "apiKey": settings.POLYGON_API_KEY,
+            }
+            if expired is not None:
+                params["expired"] = "true" if expired else "false"
+
+            window_dates: set[str] = set()
+            for _ in range(_EXPIRATIONS_MAX_PAGES):
+                data = _get_page(url, params, label)
+                for r in data.get("results", []):
+                    exp = r.get("expiration_date")
+                    if exp:
+                        window_dates.add(exp)
+                next_url = data.get("next_url")
+                if not next_url:
+                    return window_dates
+                # ``next_url`` carries the vendor's cursor and the original filters, not the
+                # key. The key goes only to the vendor's own host, whatever a response says.
+                if not next_url.startswith(f"{_POLYGON_API_ORIGIN}/"):
+                    raise RuntimeError(f"Polygon sent {label} on to a URL outside {_POLYGON_API_ORIGIN}")
+                url, params = next_url, {"apiKey": settings.POLYGON_API_KEY}
+            raise RuntimeError(f"{label} runs past {_EXPIRATIONS_MAX_PAGES} pages; a cut list would read as complete")
 
         try:
             logger.info(
                 f"Listing expirations for {underlying_ticker}, range=[{expiration_ms_gte}, {expiration_ms_lte}]"
             )
 
-            today = et_date_at_ms(now_ms_utc())
-            start = option_expiry_date(expiration_ms_gte) if expiration_ms_gte is not None else today
-            end = (
-                option_expiry_date(expiration_ms_lte)
-                if expiration_ms_lte is not None
-                else today + timedelta(days=180)
-            )
-
+            start, end = expirations_range(expiration_ms_gte, expiration_ms_lte)
             effective_type = contract_type or "call"
 
-            # Build list of (window_start, window_end) pairs
-            windows: list[tuple[str, str]] = []
-            window_days = 30
-            window_start = start
-            while window_start <= end:
-                window_end = min(window_start + timedelta(days=window_days - 1), end)
-                windows.append((window_start.strftime("%Y-%m-%d"), window_end.strftime("%Y-%m-%d")))
-                window_start = window_end + timedelta(days=1)
+            # (window_start, window_end) pairs on ordinals, so a range ending at
+            # date.max has no "day after" to overflow on.
+            last_ordinal = end.toordinal()
+            windows = [
+                (date.fromordinal(o), date.fromordinal(min(o + EXPIRATIONS_WINDOW_DAYS - 1, last_ordinal)))
+                for o in range(start.toordinal(), last_ordinal + 1, EXPIRATIONS_WINDOW_DAYS)
+            ]
 
             logger.info(f"[Expirations] Firing {len(windows)} window requests concurrently")
 
-            # Fire all windows in parallel
             dates: set[str] = set()
-            with ThreadPoolExecutor(max_workers=len(windows)) as pool:
-                futures = {pool.submit(_fetch_window, ws, we, effective_type): (ws, we) for ws, we in windows}
-                for future in as_completed(futures):
-                    dates.update(future.result())
+            with ThreadPoolExecutor(max_workers=min(len(windows), MAX_EXPIRATIONS_WORKERS)) as pool:
+                futures = [pool.submit(_fetch_window, ws, we, effective_type) for ws, we in windows]
+                try:
+                    for future in as_completed(futures):
+                        dates.update(future.result())
+                except Exception:
+                    # One window failing fails the call: do not start the ones still queued.
+                    for pending in futures:
+                        pending.cancel()
+                    raise
 
             result = sorted(option_expiry_anchor_ms(date.fromisoformat(d)) for d in dates)
             logger.info(f"Found {len(result)} unique expirations for {underlying_ticker} ({len(windows)} windows)")
@@ -742,6 +788,9 @@ class PolygonClientService:
         except Exception as e:
             err_msg = str(e).replace(settings.POLYGON_API_KEY, "***")
             logger.error(f"Error listing expirations for {underlying_ticker}: {err_msg}")
+            if err_msg != str(e):
+                # The caller returns or logs this message; whatever carried the key is not passed on (#3188).
+                raise RuntimeError(err_msg) from None
             raise
 
     def list_snapshot_options_chain(
