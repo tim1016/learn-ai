@@ -113,6 +113,7 @@ class SynthesizedAnchor(BaseModel):
     decision_bar_end_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     cancel_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     fill_bar_ref: str | None = None
+    # No longer written or read; kept so a WAL row that carries it still parses (``extra="forbid"``).
     unfilled_reason: Literal["untouched", "no_evidence"] | None = None
     restated_bar_end_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
 
