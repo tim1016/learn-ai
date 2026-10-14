@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
 from collections.abc import AsyncIterator, Callable
 from decimal import Decimal
 from pathlib import Path
@@ -174,12 +173,6 @@ def _first_resumed_bar() -> MarketDataBar:
         feed_id="ibkr",
         session_phase="RTH",
     )
-
-
-def _clerk_run_count(db_path: Path) -> int:
-    """Count Clerk-registered runs, proving/disproving a phantom registration."""
-    with sqlite3.connect(db_path) as connection:
-        return connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
 
 
 def _registry_with_sqlite_clerk(

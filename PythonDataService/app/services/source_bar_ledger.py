@@ -1011,15 +1011,6 @@ class SourceBarLedger:
             ).fetchone()
         return None if row is None else _retained_row(row)
 
-    def providers_for(self, symbol: str) -> list[str]:
-        """Return the distinct providers with retained evidence for one symbol."""
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT DISTINCT provider FROM source_bars WHERE symbol = ? ORDER BY provider",
-                (symbol,),
-            ).fetchall()
-        return [str(row["provider"]) for row in rows]
-
     def checkpoint_wal(self) -> None:
         """Checkpoint and truncate durable evidence after controlled shutdown or backup.
 

@@ -28,14 +28,10 @@ from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 # Reuse the atomic-write primitives instead of duplicating them. The
 # reviewer-flagged extraction of these into a shared util is the
 # follow-up; importing keeps a single source of truth in the meantime.
-from app.engine.live.identity import (
-    strategy_instance_artifact_dir,
-    validate_strategy_instance_id,
-)
+from app.engine.live.identity import strategy_instance_artifact_dir
 from app.engine.live.live_state_sidecar import _file_lock, fsync_parent_dir
 from app.schemas.bot_end import BotEnd, RecordedEnd
 
-# Re-exported so existing callers can keep importing it from here.
 __all__ = [
     "END_UNCHANGED",
     "DesiredState",
@@ -44,7 +40,6 @@ __all__ = [
     "DesiredStateRepo",
     "instances_with_recorded_desired_state",
     "stable_desired_state_path",
-    "validate_strategy_instance_id",
 ]
 
 
@@ -209,16 +204,6 @@ class DesiredStateRepo:
         path.parent.mkdir(parents=True, exist_ok=True)
         with _file_lock(path, trusted_root=self._trusted_root):
             self._write_locked(path, record)
-
-    def delete(self) -> None:
-        """Remove the sidecar when restoring an absent pre-mutation state."""
-
-        path = self._confined_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with _file_lock(path, trusted_root=self._trusted_root):
-            with contextlib.suppress(FileNotFoundError):
-                path.unlink()
-            fsync_parent_dir(path)
 
     def set(
         self,
