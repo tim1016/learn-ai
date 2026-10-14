@@ -45154,6 +45154,7 @@
             "items": {
               "type": "string"
             },
+            "maxItems": 60,
             "title": "Contracts",
             "type": "array"
           },
@@ -83126,6 +83127,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "summary": "Get The Run",
