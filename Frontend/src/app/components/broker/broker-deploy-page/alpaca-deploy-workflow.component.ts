@@ -457,6 +457,8 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly admissionDecision = signal<RunAdmissionDecision | null>(null);
   /** Retained only while the exact deploy intent has no terminal receipt. */
   private readonly frozenCommand = signal<FrozenDeployCommand | null>(null);
+  /** The lane changed under a Deploy that had been sent, so the guidance does not say nothing was. */
+  private readonly changedAfterSend = signal(false);
   /** Submission stays blocked until the changed account has been refreshed. */
   protected readonly laneConflict = signal(false);
   /** A cold directory has no generation the coordinator can enforce.
@@ -1199,7 +1201,7 @@ export class AlpacaDeployWorkflowComponent {
     if (this.laneConflict() || this.laneReviewRequired()) {
       return {
         canSubmit: false,
-        guidance: this.outcomeUnknown()
+        guidance: this.outcomeUnknown() || this.changedAfterSend()
           ? 'The account changed after a Deploy was sent. Check its deployment status before deploying again.'
           : 'The account changed. Nothing was sent. Review the refreshed account before deploying.',
       };
@@ -1753,6 +1755,7 @@ export class AlpacaDeployWorkflowComponent {
         this.frozenCommand.set(null);
         this.admissionDecision.set(null);
         this.laneConflict.set(false);
+        this.changedAfterSend.set(false);
         this.submitError.set(null);
       });
     });
@@ -1890,14 +1893,15 @@ export class AlpacaDeployWorkflowComponent {
     if (frozen.routeKey !== routeKey || !sameAlpacaAccount(frozen.target.accountId ?? '', this.accountId())) {
       this.frozenCommand.set(null);
       this.laneConflict.set(true);
-      void this.refreshAfterRebind();
+      this.changedAfterSend.set(frozen.sent === true);
+      void this.refreshAfterRebind(frozen.sent === true);
       // A Deploy that was sent may have started; only one that never left is "nothing was sent".
       const outcome = frozen.sent === true ? 'unknown' : 'conflict';
       this.submitError.set({
         outcome,
         title: this.errorTitle(outcome),
         message: frozen.sent === true
-          ? 'The account changed after a Deploy was sent. Whether it started is not known yet; check its deployment status before deploying again.'
+          ? `The account changed after a Deploy was sent${frozen.target.accountId ? ` for ${frozen.target.accountId}` : ''}. Whether it started is not known yet; check its deployment status there before deploying again.`
           : 'The account changed. Nothing was sent; the page refreshed. Review the current account before deploying.',
         explanation: null,
         nextAction: null,
@@ -1909,7 +1913,7 @@ export class AlpacaDeployWorkflowComponent {
     }
   }
 
-  private async refreshAfterRebind(): Promise<void> {
+  private async refreshAfterRebind(sent: boolean = this.outcomeUnknown()): Promise<void> {
     try {
       await this.fleetDirectory.refresh();
       this.frozenCommand.set(null);
@@ -1917,7 +1921,7 @@ export class AlpacaDeployWorkflowComponent {
       this.reloadView();
     } catch {
       this.submitError.set({ outcome: 'blocked', title: 'Account refresh failed',
-        message: this.outcomeUnknown()
+        message: sent
           ? 'A Deploy was sent and its outcome is not known yet. Refresh the account, then check its deployment status.'
           : 'Nothing was sent. Refresh the account before trying again.',
         explanation: null,
@@ -2480,6 +2484,8 @@ export class AlpacaDeployWorkflowComponent {
       target,
       ticketKey: this.ticketKey(this.ticket()),
       routeKey: this.commandRouteKey(lane),
+      // A key already sent under this form (a retry under another amount) has an outcome nobody has read.
+      sent: this.outcomeUnknown(),
     });
     return target;
   }
