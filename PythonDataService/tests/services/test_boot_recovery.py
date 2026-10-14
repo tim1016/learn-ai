@@ -892,6 +892,7 @@ async def test_one_bots_corrupt_desired_state_is_left_as_it_is_and_the_lane_stil
         report = await rebooted.run_boot_recovery()
 
     assert report.interrupted_instances == (healthy,)
+    assert report.unreadable_instances == (corrupt,)
     assert _lifecycle_json(_artifacts_root(tmp_path), healthy)["phase"] == "OFF_DUTY"
     assert _lifecycle_json(_artifacts_root(tmp_path), corrupt)["phase"] == "ON_DUTY"
     assert [r.strategy_instance_id for r in caplog.records if getattr(r, "action", "") == "boot_sweep_corrupt_desired_state"] == [corrupt]
