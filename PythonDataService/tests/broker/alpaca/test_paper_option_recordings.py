@@ -343,6 +343,7 @@ def test_a_spreads_debit_moves_cash_and_option_buying_power_together_and_the_acc
 
 _CLEAN_PASS = "B2-bull-call-spread-clean-pass"
 _OVERLAP = "B3-overlap-spread"
+_RESTARTED = "B4-spread-restart-scheduled-close"
 # step -> (long leg, short leg, the net limit each order was sent at (None: a market order), the net price each
 # order filled at as Alpaca states it). Entries and exits are in the order they were sent.
 _SPREAD_PASSES: dict[str, tuple[str, str, tuple[str | None, ...], tuple[str, ...]]] = {
@@ -351,8 +352,13 @@ _SPREAD_PASSES: dict[str, tuple[str, str, tuple[str | None, ...], tuple[str, ...
     _OVERLAP: (
         "SPY261016C00768000", "SPY261016C00773000", ("2.20", "2.24", None, None), ("2.19", "2.23", "-2.26", "-2.28"),
     ),
+    # Bought at 12:29 CDT, the Clerk restarted with it held, and its own scheduled close sent the exit at 15:50 ET.
+    _RESTARTED: ("SPY261016C00768000", "SPY261016C00773000", ("2.31", None), ("2.31", "-2.43")),
 }
 _SPREAD_PASS = pytest.mark.parametrize("step", sorted(_SPREAD_PASSES))
+_SPREAD_PASS_WITH_FEED = pytest.mark.parametrize(
+    "step", sorted(step for step in _SPREAD_PASSES if (_RECORDINGS / step / "activities.jsonl").exists())
+)
 
 
 def _fill_frames(step: str) -> list[dict[str, Any]]:
@@ -406,7 +412,7 @@ def test_a_spread_fill_states_what_it_paid_as_positive_and_what_it_received_as_n
         assert data["order"]["order_class"] == "mleg" and "execution_id" not in data
 
 
-@_SPREAD_PASS
+@_SPREAD_PASS_WITH_FEED
 def test_each_leg_execution_names_its_own_leg_order_and_is_in_the_activity_feed_as_that_legs_fill(step: str) -> None:
     long_leg, short_leg, _, _ = _SPREAD_PASSES[step]
     fills = _fill_frames(step)
@@ -469,3 +475,14 @@ def test_two_bots_spreads_held_at_once_are_one_account_position_of_two_of_each_l
         (1.0, -1.0),
         (2.0, -2.0),
     }
+
+
+def test_the_clerks_own_scheduled_close_sends_a_spread_held_through_a_restart_out_at_ten_to_four_as_one_order() -> None:
+    """2026-10-14: the run had ended at the restart; the close owed by what is held was sent on time anyway."""
+    frames = _frames(_RESTARTED)
+    close = [data for data in frames if data["order"]["type"] == "market"]
+
+    assert [data["event"] for data in close] == ["pending_new", "new", "fill"]
+    # 15:50:00 ET, ten minutes before the session's close: the frame stamps the close within its first second.
+    assert close[0]["timestamp"].startswith("2026-10-14T19:50:00.")
+    assert Decimal(close[-1]["price"]) == Decimal("-2.43")

@@ -42,8 +42,9 @@ recordings`, run on a bundle the qualification runbook
 (`docs/runbooks/qualify-option-orders-on-paper.md`) tells how to make. They sit
 here beside `tests/fixtures/alpaca_documented/`, whose examples stay. The first
 set, `option_paper_recordings/` (runs of one bought SPY call: two on 2026-10-13
-and two on 2026-10-14, and three of a bull call spread on 2026-10-14: one bought,
-one bought and closed, and two bots' spreads held at once, #3103), is read by
+and two on 2026-10-14, and four of a bull call spread on 2026-10-14: one bought, one
+bought and closed, two bots' spreads held at once, and one held through a Clerk
+restart and closed by its schedule, #3103), is read by
 `tests/broker/alpaca/test_paper_option_recordings.py`; its `attribution.md`
 files say which polls and which families were left out.
 
