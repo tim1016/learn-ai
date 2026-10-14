@@ -4,22 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 import threading
 from collections.abc import Callable
 from datetime import date
 
 from fastapi import APIRouter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.options.expiry import OptionExpiryMs, option_expiry_date
-from app.services.bs_greeks import bs_european_price
+from app.services.bs_greeks import black_scholes_greeks, bs_european_price
 from app.services.quantlib_pricer import (
     _QL_AVAILABLE,
     PricingEngine,
     price_option,
 )
 from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
+from app.utils.session_anchors import et_date_at_ms
+from app.utils.timestamps import now_ms_utc
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -33,6 +34,23 @@ _QUANTLIB_CALL = threading.Lock()
 def _one_call_at_a_time[T](price: Callable[..., T], /, **inputs: object) -> T:
     with _QUANTLIB_CALL:
         return price(**inputs)
+
+
+# The bound the strategy and portfolio requests declare on their rate (`ge=0, le=0.5`). It is checked in a validator,
+# not a `Field` constraint, so the published OpenAPI schema keeps its shape.
+_RATE_MIN = 0.0
+_RATE_MAX = 0.5
+
+# /compare quotes each spot of its curve to 4 decimals (`round(spot, 4)`).
+_SPOT_QUOTE_STEP = 0.0001
+
+
+def _require_rate_in_bounds(rate: float) -> float:
+    if not _RATE_MIN <= rate <= _RATE_MAX:
+        raise ValueError(
+            f"risk_free_rate must be between {_RATE_MIN} and {_RATE_MAX} (a decimal, 0.05 = 5%); got {rate}"
+        )
+    return rate
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +77,11 @@ class QuantLibPriceRequest(BaseModel):
         "analytic_bs",
         description="Pricing engine: analytic_bs, binomial_crr, binomial_jr, binomial_lr, finite_diff, monte_carlo",
     )
+
+    @field_validator("risk_free_rate")
+    @classmethod
+    def _rate_in_bounds(cls, rate: float) -> float:
+        return _require_rate_in_bounds(rate)
 
 
 class QuantLibGreeksResponse(BaseModel):
@@ -168,6 +191,28 @@ class PricingCompareRequest(BaseModel):
     spot_max: float | None = Field(None, description="Range end (default: spot * 1.20)")
     num_points: int = Field(100, ge=10, le=500, description="Number of data points")
 
+    @field_validator("risk_free_rate")
+    @classmethod
+    def _rate_in_bounds(cls, rate: float) -> float:
+        return _require_rate_in_bounds(rate)
+
+    def spot_bounds(self) -> tuple[float, float]:
+        """The spot range the curves span: the request's bounds, else spot x 0.80 to spot x 1.20."""
+        low = self.spot * 0.80 if self.spot_min is None else self.spot_min
+        high = self.spot * 1.20 if self.spot_max is None else self.spot_max
+        return low, high
+
+    @model_validator(mode="after")
+    def _spot_range_is_a_range(self) -> PricingCompareRequest:
+        low, high = self.spot_bounds()
+        # The curve is quoted to 4 decimals, so a start under one step would round to a spot of 0.
+        if not _SPOT_QUOTE_STEP <= low < high:
+            raise ValueError(
+                f"the spot range must run upward from at least {_SPOT_QUOTE_STEP} (spot_min < spot_max); "
+                f"got {low} to {high}"
+            )
+        return self
+
 
 class PricingPointResult(BaseModel):
     """Single data point for one model at one spot price."""
@@ -201,45 +246,6 @@ class PricingCompareResponse(BaseModel):
     )
     models: list[PricingModelCurve]
     error: str | None = None
-
-
-def _scipy_bs_greeks(
-    S: float,
-    K: float,
-    T: float,
-    r: float,
-    sigma: float,
-    option_type: str,
-) -> dict:
-    """Compute price + Greeks using the scipy-based BS solver (Python analytical)."""
-    from scipy.stats import norm as sp_norm
-
-    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
-        intrinsic = max(S - K, 0) if option_type == "call" else max(K - S, 0)
-        d_val = 1.0 if (option_type == "call" and S > K) else (-1.0 if option_type == "put" and S < K else 0.0)
-        return {"price": intrinsic, "delta": d_val, "gamma": 0.0, "theta": 0.0, "vega": 0.0, "rho": 0.0}
-
-    d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
-    d2 = d1 - sigma * math.sqrt(T)
-    discount = math.exp(-r * T)
-    sqrt_t = math.sqrt(T)
-    npd1 = sp_norm.pdf(d1)
-
-    price = bs_european_price(S, K, T, r, sigma, is_call=(option_type == "call"))
-
-    if option_type == "call":
-        delta = sp_norm.cdf(d1)
-        theta = (-(S * npd1 * sigma) / (2 * sqrt_t) - r * K * discount * sp_norm.cdf(d2)) / 365.0
-        rho = (K * T * discount * sp_norm.cdf(d2)) / 100.0
-    else:
-        delta = sp_norm.cdf(d1) - 1.0
-        theta = (-(S * npd1 * sigma) / (2 * sqrt_t) + r * K * discount * sp_norm.cdf(-d2)) / 365.0
-        rho = (-K * T * discount * sp_norm.cdf(-d2)) / 100.0
-
-    gamma = npd1 / (S * sigma * sqrt_t)
-    vega = (S * npd1 * sqrt_t) / 100.0
-
-    return {"price": price, "delta": delta, "gamma": gamma, "theta": theta, "vega": vega, "rho": rho}
 
 
 def _price_option_for_compare(
@@ -278,8 +284,7 @@ def _price_option_for_compare(
 
     _ensure_ql()
 
-    eval_d = evaluation_date or date.today()
-    ql_eval = _ql_date(eval_d)
+    ql_eval = _ql_date(evaluation_date)
     ql.Settings.instance().evaluationDate = ql_eval
 
     ql_expiry = _ql_date(expiration_date)
@@ -365,23 +370,59 @@ def _price_option_for_compare(
             ql_eval,
         )
 
+    # Monte Carlo has no analytic theta/vega/rho, and a numeric one is a further MC reprice per Greek (seconds at index
+    # scale). The response cannot mark a Greek as not provided, so those three stay 0.0 for it (#3221).
+    is_monte_carlo = engine == PricingEngine.MONTE_CARLO
+
     try:
         theta_annual = option.theta()
         theta_v = theta_annual / 365.0
     except RuntimeError:
-        theta_v = 0.0  # Skip numeric theta for speed in compare mode
+        theta_v = 0.0
 
     try:
         vega_raw = option.vega()
         vega_v = vega_raw / 100.0
     except RuntimeError:
-        vega_v = 0.0  # Skip numeric vega for speed in compare mode
+        vega_v = (
+            0.0
+            if is_monte_carlo
+            else _quick_numeric_greek(
+                process,
+                payoff,
+                exercise,
+                engine,
+                spot,
+                bump,
+                "vega",
+                risk_free_rate,
+                dividend_yield,
+                volatility,
+                ql_eval,
+            )
+        )
 
     try:
         rho_raw = option.rho()
         rho_v = rho_raw / 100.0
     except RuntimeError:
-        rho_v = 0.0  # Skip numeric rho for speed in compare mode
+        rho_v = (
+            0.0
+            if is_monte_carlo
+            else _quick_numeric_greek(
+                process,
+                payoff,
+                exercise,
+                engine,
+                spot,
+                bump,
+                "rho",
+                risk_free_rate,
+                dividend_yield,
+                volatility,
+                ql_eval,
+            )
+        )
 
     return GreeksResult(
         engine=engine.value,
@@ -407,22 +448,31 @@ def _quick_numeric_greek(
     volatility,
     ql_eval,
 ):
-    """Fast numeric delta/gamma via bump-and-revalue without full option rebuild."""
+    """Fast numeric Greek via bump-and-revalue without full option rebuild.
+
+    Formula: central differences of the engine's own price P — delta (P(S+h) - P(S-h)) / 2h; gamma
+      (P(S+h) - 2P(S) + P(S-h)) / h²; vega (P(σ+k) - P(σ-k)) / (2k·100); rho (P(r+b) - P(r-b)) / (2b·100).
+    Reference: first-order central finite differences of the Black-Scholes sensitivities, Hull §19; no external port.
+    Canonical implementation: this function (the /compare bump; quantlib_pricer._numeric_* is the /price one).
+    Validated against: tests/routers/test_quantlib_compare.py::test_lattice_engines_report_vega_and_rho_near_closed_form
+
+    delta and gamma bump the spot, vega the volatility and rho the rate, each on the same tree/grid /compare prices at.
+    """
     import QuantLib as ql
 
     from app.services.quantlib_pricer import _build_process
 
-    def _reprice(s):
-        p = _build_process(s, risk_free_rate, dividend_yield, volatility, ql_eval)
+    def _reprice(s, vol=volatility, rate=risk_free_rate):
+        p = _build_process(s, rate, dividend_yield, vol, ql_eval)
         opt = ql.VanillaOption(payoff, exercise)
         # Use analytic engine for numeric Greeks (fast, good enough for bump)
         if engine == PricingEngine.ANALYTIC_BS:
             opt.setPricingEngine(ql.AnalyticEuropeanEngine(p))
         elif engine in (PricingEngine.BINOMIAL_CRR, PricingEngine.BINOMIAL_JR, PricingEngine.BINOMIAL_LR):
             name = {"binomial_crr": "CRR", "binomial_jr": "JR", "binomial_lr": "LR"}[engine.value]
-            opt.setPricingEngine(ql.BinomialVanillaEngine(p, name, 101))
+            opt.setPricingEngine(ql.BinomialVanillaEngine(p, name, 201))
         elif engine == PricingEngine.FINITE_DIFF:
-            opt.setPricingEngine(ql.FdBlackScholesVanillaEngine(p, 101, 100))
+            opt.setPricingEngine(ql.FdBlackScholesVanillaEngine(p, 201, 200))
         elif engine == PricingEngine.MONTE_CARLO:
             opt.setPricingEngine(
                 ql.MCEuropeanEngine(
@@ -434,6 +484,18 @@ def _quick_numeric_greek(
                 )
             )
         return opt.NPV()
+
+    if greek_type == "vega":
+        # Central difference over one vol point either side (narrower when the vol is under two points), per 1% IV move.
+        vol_bump = min(0.01, volatility / 2)
+        return (_reprice(spot, vol=volatility + vol_bump) - _reprice(spot, vol=volatility - vol_bump)) / (
+            2 * vol_bump * 100.0
+        )
+    if greek_type == "rho":
+        rate_bump = 0.0001  # 1 bp either side, per 1% rate move
+        return (_reprice(spot, rate=risk_free_rate + rate_bump) - _reprice(spot, rate=risk_free_rate - rate_bump)) / (
+            2 * rate_bump * 100.0
+        )
 
     p_up = _reprice(spot + bump)
     p_dn = _reprice(spot - bump)
@@ -451,7 +513,7 @@ async def pricing_compare(request: PricingCompareRequest):
     """Compare ALL pricing models across a spot price range.
 
     Returns curves for:
-      1. python_bs         — Python analytical BS (scipy.stats.norm CDF)
+      1. python_bs         — Python analytical BS (canonical bs_greeks.py, at the request's dividend yield)
       2. quantlib_bs       — QuantLib Analytic European Engine (C++ via SWIG)
       3. quantlib_crr      — QuantLib Binomial Cox-Ross-Rubinstein (801 steps)
       4. quantlib_jr       — QuantLib Binomial Jarrow-Rudd (801 steps)
@@ -464,7 +526,7 @@ async def pricing_compare(request: PricingCompareRequest):
     """
     try:
         exp_d = option_expiry_date(request.expiration_ms)
-        eval_d = date.fromisoformat(request.evaluation_date) if request.evaluation_date else date.today()
+        eval_d = date.fromisoformat(request.evaluation_date) if request.evaluation_date else et_date_at_ms(now_ms_utc())
 
         # Time to expiry in years, on QuantLib's own day-count convention
         delta_days = (exp_d - eval_d).days
@@ -481,27 +543,44 @@ async def pricing_compare(request: PricingCompareRequest):
                 error="Option has expired",
             )
 
-        spot_min = request.spot_min or request.spot * 0.80
-        spot_max = request.spot_max or request.spot * 1.20
+        spot_min, spot_max = request.spot_bounds()
         step = (spot_max - spot_min) / (request.num_points - 1)
 
         spots = [round(spot_min + i * step, 4) for i in range(request.num_points)]
 
         models: list[PricingModelCurve] = []
 
-        # ── Model 1: Python analytical BS (scipy.stats.norm) ──
+        # ── Model 1: Python analytical BS (the canonical closed form, bs_greeks.py) ──
+        is_call = request.option_type == "call"
         python_bs_points: list[PricingPointResult] = []
         for s in spots:
-            g = _scipy_bs_greeks(s, request.strike, T, request.risk_free_rate, request.volatility, request.option_type)
+            g = black_scholes_greeks(
+                spot=s,
+                strike=request.strike,
+                ttm_years=T,
+                volatility=request.volatility,
+                rate=request.risk_free_rate,
+                dividend=request.dividend_yield,
+                is_call=is_call,
+            )
+            price = bs_european_price(
+                s,
+                request.strike,
+                T,
+                request.risk_free_rate,
+                request.volatility,
+                is_call=is_call,
+                dividend=request.dividend_yield,
+            )
             python_bs_points.append(
                 PricingPointResult(
                     spot=s,
-                    price=round(g["price"], 6),
-                    delta=round(g["delta"], 6),
-                    gamma=round(g["gamma"], 6),
-                    theta=round(g["theta"], 6),
-                    vega=round(g["vega"], 6),
-                    rho=round(g["rho"], 6),
+                    price=round(price, 6),
+                    delta=round(g.delta, 6),
+                    gamma=round(g.gamma, 6),
+                    theta=round(g.theta, 6),
+                    vega=round(g.vega, 6),
+                    rho=round(g.rho, 6),
                 )
             )
         models.append(PricingModelCurve(model="python_bs", points=python_bs_points))
