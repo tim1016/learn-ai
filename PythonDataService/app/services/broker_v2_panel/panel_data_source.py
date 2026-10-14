@@ -743,6 +743,7 @@ def _with_bot_page(
                 facts,
                 bot_owns_custody_problem=has_bot_scoped_custody_problem(projection),
                 execution_coverage_complete=evidence.economics.snapshot.execution_coverage == "complete",
+                sweep_pass_at_ms=facade.recovery_evaluation_observation().last_pass_completed_at_ms,
                 now_ms=now_ms,
             ),
             "run_fills": run_fill_views(run_fills, _simulated_fill_anchors(facade, sid), _simulated_option_fills(facade, sid)),
