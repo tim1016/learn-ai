@@ -254,8 +254,8 @@ export class PricingLabComponent implements OnDestroy {
     const r = result.riskFreeRate;
     if (iv && strike && optType && r != null) {
       const T = result.timeToExpiryYears;
-      if (T > 0) {
-        const rangePct = this.spotRangePct() / 100;
+      const rangePct = this.spotRangeFraction();
+      if (T > 0 && rangePct !== null) {
         const spotMin = spot * (1 - rangePct);
         const spotMax = spot * (1 + rangePct);
         const numPoints = 100;
@@ -311,6 +311,12 @@ export class PricingLabComponent implements OnDestroy {
     }
     return stats;
   });
+
+  /** Range % as a fraction of spot; null when it is empty, 0 or past 100, which no curve spans. */
+  private spotRangeFraction(): number | null {
+    const pct = this.spotRangePct();
+    return Number.isFinite(pct) && pct > 0 && pct < 100 ? pct / 100 : null;
+  }
 
   // ── Chart refs ───────────────────────────────────────────────
   private chartEl = viewChild<ElementRef<HTMLDivElement>>('chartContainer');
@@ -426,10 +432,15 @@ export class PricingLabComponent implements OnDestroy {
       return;
     }
 
+    const rangePct = this.spotRangeFraction();
+    if (rangePct === null) {
+      this.statusMessage.set({ type: 'warn', text: 'Range % must be above 0 and below 100.' });
+      return;
+    }
+
     this.statusMessage.set({ type: 'info', text: 'Computing pricing curves across all models...' });
     this.compareLoading.set(true);
     try {
-      const rangePct = this.spotRangePct() / 100;
       const result = await firstValueFrom(
         this.marketData.comparePricingModels({
           spot,
@@ -447,7 +458,7 @@ export class PricingLabComponent implements OnDestroy {
       if (!result.success) {
         this.statusMessage.set({
           type: 'error',
-          text: `Server error: ${result.error || 'Unknown error'}. The computation may have timed out — try again.`,
+          text: `Could not compare: ${result.error || 'Unknown error'}.`,
         });
         this.serverResult.set(null);
         return;

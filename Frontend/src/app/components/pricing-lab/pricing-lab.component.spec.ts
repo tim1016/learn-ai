@@ -307,6 +307,58 @@ describe('PricingLabComponent', () => {
       expect(component.compareLoading()).toBe(false);
     });
 
+    it('shows the server reason for an expired option, not a timeout guess', async () => {
+      seedReadyState();
+
+      const promise = component.runComparison();
+      const req = expectGraphQL(httpMock, 'pricingModelComparison');
+      req.flush({
+        data: {
+          pricingModelComparison: {
+            success: false,
+            strike: 590, optionType: 'call', expirationMs: 4_070_984_400_000,
+            timeToExpiryYears: 0,
+            models: [],
+            error: 'Option has expired',
+          },
+        },
+      });
+      await promise;
+
+      expect(component.statusMessage()?.type).toBe('error');
+      expect(component.statusMessage()?.text).toContain('Option has expired');
+      expect(component.statusMessage()?.text).not.toContain('timed out');
+    });
+
+    it.each([null, 0, -5, 100])('sends nothing and says why when the range is %s percent', async (rangePct) => {
+      seedReadyState();
+      component.spotRangePct.set(rangePct as number);
+
+      await component.runComparison();
+
+      expect(component.statusMessage()?.type).toBe('warn');
+      expect(component.statusMessage()?.text).toContain('Range %');
+      const matches = httpMock.match(r =>
+        typeof (r.body as { query?: string } | null)?.query === 'string'
+        && (r.body as { query: string }).query.includes('pricingModelComparison'));
+      expect(matches.length).toBe(0);
+    });
+
+    it('draws no Legacy BS overlay while Range % is empty', () => {
+      seedReadyState();
+      component.spotRangePct.set(null as unknown as number);
+      component.serverResult.set({
+        success: true, strike: 590, optionType: 'call', expirationMs: 4_070_984_400_000,
+        timeToExpiryYears: 0.25, riskFreeRate: 0.043, error: null,
+        models: [{
+          model: 'python_bs',
+          points: [{ spot: 590, price: 20, delta: 0.5, gamma: 0.01, theta: -0.1, vega: 0.2, rho: 0.1 }],
+        }],
+      });
+
+      expect(component.summaryStats()).toEqual([]);
+    });
+
     it('catches network errors and surfaces them in statusMessage', async () => {
       seedReadyState();
 
