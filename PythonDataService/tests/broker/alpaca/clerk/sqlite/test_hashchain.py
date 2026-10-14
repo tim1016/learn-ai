@@ -95,8 +95,9 @@ def test_every_stored_column_but_the_chain_keys_is_hashed() -> None:
     finally:
         conn.close()
 
-    assert tuple(c for c in stored if c not in ("sequence", "prev_hash", "row_hash")) == PAYLOAD_COLUMNS
-    assert PAYLOAD_COLUMNS == _NON_KEY_TRANSITION_COLUMNS
+    # Sets: the payload is serialized with sorted keys, so column order never reaches a digest.
+    assert {c for c in stored if c not in ("sequence", "prev_hash", "row_hash")} == set(PAYLOAD_COLUMNS)
+    assert set(PAYLOAD_COLUMNS) == set(_NON_KEY_TRANSITION_COLUMNS)
 
 
 def test_a_row_with_non_ascii_text_hashes_to_the_digest_it_always_did() -> None:

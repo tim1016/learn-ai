@@ -99,9 +99,13 @@ class ExitRecoveryEvaluatedFacts:
         facts = cls(**json.loads(facts_json))
         if facts.outcome not in {"failure", "hold", "accepted"}:
             raise ValueError("Unknown exit recovery outcome")
-        for value in (facts.last_checked_at_ms, facts.failure_elapsed_ms, facts.first_failure_at_ms, facts.allowed_from_ms):
+        for value in (facts.last_checked_at_ms, facts.first_failure_at_ms, facts.allowed_from_ms):
             if value is not None and not _is_instant_ms(value):
                 raise ValueError("Exit recovery times must be integer milliseconds within the admissible instant range")
+        # A duration is not an instant (ADR 0022 (g)): it keeps the bound a stored row was written under.
+        elapsed = facts.failure_elapsed_ms
+        if elapsed is not None and (type(elapsed) is not int or elapsed < 0):
+            raise ValueError("Exit recovery times must be non-negative integer milliseconds")
         return facts
 
 

@@ -50,7 +50,7 @@ _SLICE: dict[str, Any] = {
 }
 
 
-@pytest.mark.parametrize("name", ["last_checked_at_ms", "first_failure_at_ms", "failure_elapsed_ms", "allowed_from_ms"])
+@pytest.mark.parametrize("name", ["last_checked_at_ms", "first_failure_at_ms", "allowed_from_ms"])
 def test_an_exit_recovery_time_past_the_last_instant_is_refused_when_read_back(name: str) -> None:
     at_the_ceiling = ExitRecoveryEvaluatedFacts(**{**_RECOVERY, name: MAX_TIMESTAMP_MS}).to_facts_json()
     assert getattr(ExitRecoveryEvaluatedFacts.from_facts_json(at_the_ceiling), name) == MAX_TIMESTAMP_MS
@@ -58,6 +58,16 @@ def test_an_exit_recovery_time_past_the_last_instant_is_refused_when_read_back(n
     past = ExitRecoveryEvaluatedFacts(**{**_RECOVERY, name: _PAST}).to_facts_json()
     with pytest.raises(ValueError, match="Exit recovery times"):
         ExitRecoveryEvaluatedFacts.from_facts_json(past)
+
+
+def test_a_failure_duration_is_not_held_to_the_instant_ceiling() -> None:
+    """ADR 0022 (g) exempts a duration: what a stored row held before, it still reads back."""
+    long = ExitRecoveryEvaluatedFacts(**{**_RECOVERY, "failure_elapsed_ms": _PAST}).to_facts_json()
+    assert ExitRecoveryEvaluatedFacts.from_facts_json(long).failure_elapsed_ms == _PAST
+
+    negative = ExitRecoveryEvaluatedFacts(**{**_RECOVERY, "failure_elapsed_ms": -1}).to_facts_json()
+    with pytest.raises(ValueError, match="Exit recovery times"):
+        ExitRecoveryEvaluatedFacts.from_facts_json(negative)
 
 
 @pytest.mark.parametrize("name", ["until_ms", "settled_at_ms"])

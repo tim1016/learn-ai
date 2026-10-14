@@ -14,6 +14,7 @@ from decimal import Decimal as D
 import pytest
 
 from app.broker.alpaca.clerk.account_money import (
+    _SHARE_STEP,
     FULL_BAR_BPS,
     AccountMoney,
     Holding,
@@ -35,6 +36,7 @@ from app.broker.alpaca.clerk.budgets import (
     account_budget,
     deployment_budget,
 )
+from app.broker.alpaca.clerk.sqlite.folds import POSITION_QTY_EPSILON
 
 
 def _bot(sid: str, *, cents: int, position: str = "0", pending: str = "0", fees: str = "0",
@@ -370,3 +372,7 @@ def test_a_share_count_prints_exactly_to_the_brokers_finest_step(quantity: float
 
 def test_the_holdings_note_prints_each_count_exactly() -> None:
     assert holdings_text({"SPY": 1234567, "QQQ": D("0.5")}) == "0.5 QQQ, 1234567 SPY"
+
+
+def test_the_share_step_is_the_smallest_quantity_custody_reads_as_exposure() -> None:
+    assert D(str(POSITION_QTY_EPSILON)) == _SHARE_STEP
