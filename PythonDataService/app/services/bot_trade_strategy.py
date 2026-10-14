@@ -88,7 +88,6 @@ if TYPE_CHECKING:
     from app.services.bot_runner import BrokerBotBinding
 
 logger = logging.getLogger(__name__)
-_MINUTE_MS = 60_000
 
 BeforeStartSink = Callable[[Sequence[DecisionExplanationRecord]], None]
 

@@ -291,14 +291,11 @@ class BacktestEngine:
         # ------------------------------------------------------------------
         start_date: date = strategy.start_date.date()
         end_date: date = strategy.end_date.date()
-        assert strategy.end_date is not None
 
         # For each symbol, iterate its minute bars in order. For a single-
         # symbol strategy (SPY), this is the natural order. Multi-symbol
         # support would require merging streams by time — out of scope for
         # Phase 1.
-        if len(ctx.symbols) != 1:
-            raise NotImplementedError("Phase 1 engine supports a single symbol only")
         symbol = ctx.symbols[0]
 
         # Cash dividends settle exactly once each, in session-close order.
@@ -375,9 +372,7 @@ class BacktestEngine:
             #       handlers; we drain those immediately below.
             consolidators = ctx.get_consolidators(symbol)
             for consolidator in consolidators:
-                fired = consolidator.update(minute_bar)
-                if fired is not None:
-                    pass
+                consolidator.update(minute_bar)
 
             # A registered Signal Program stages its semantic decision while
             # the consolidator callback runs. Backtest is the compatibility

@@ -56,7 +56,6 @@ def test_a_validation_analytics_failure_is_reported_and_absent_not_raised(
         result = _validation_analytics(
             result=_Result(),
             request=object(),  # type: ignore[arg-type] - rejected before it is read
-            strategy=object(),  # type: ignore[arg-type]
             formatted_trades=[object()],  # type: ignore[list-item] - not a trade; the builder refuses it
             equity_curve=[],
             on_log=logs.append,

@@ -81,9 +81,6 @@ def _make_status(sid: str) -> BotStatusView:
 
 
 class _FakeRegistry:
-    def list_bots(self, broker: str) -> list[BotStatusView]:
-        return [_make_status(SID)]
-
     def status(self, broker: str, sid: str) -> BotStatusView:
         from app.services.bot_runner import BotRunnerError
 
