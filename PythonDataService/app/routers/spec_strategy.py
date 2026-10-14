@@ -252,6 +252,7 @@ def run_spec_backtest(
         )
         return _failed_response(request, str(exc))
     except Exception as exc:
+        logger.exception("[SPEC] data source unavailable for %s", spec.name)
         return _failed_response(request, f"data source unavailable: {exc}")
 
     try:
@@ -260,6 +261,14 @@ def run_spec_backtest(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"spec uses unsupported feature: {exc}",
+        ) from exc
+    except ValueError as exc:
+        # The spec declares something this route cannot supply -- a
+        # ``predictions`` block with no prediction set, which only the
+        # research-run path loads. The caller's spec, not a server fault.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"spec cannot run on this route: {exc}",
         ) from exc
 
     # Override the strategy's default date window with the request.
