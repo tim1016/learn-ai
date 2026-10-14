@@ -163,7 +163,7 @@ describe('PricingLabComponent', () => {
       component.selectedContract.set(buildContract());
       component.serverResult.set({
         success: true, strike: 0, optionType: 'call', expirationMs: 0,
-        timeToExpiryYears: 0, riskFreeRate: null, models: [], error: null,
+        timeToExpiryYears: 0, riskFreeRate: null, models: [], unavailableModels: [], error: null,
       } satisfies PricingCompareResult);
 
       const promise = component.fetchChain('AAPL', 4_070_984_400_000);
@@ -345,6 +345,7 @@ describe('PricingLabComponent', () => {
               { model: 'python_bs', points: [{ spot: 590, price: 5.5, delta: 0.5, gamma: 0.02, theta: -0.05, vega: 0.15, rho: 0.05 }] },
               { model: 'quantlib_bs', points: [{ spot: 590, price: 5.499, delta: 0.5, gamma: 0.02, theta: -0.05, vega: 0.15, rho: 0.05 }] },
             ],
+            unavailableModels: [],
             error: null,
           },
         },
@@ -381,7 +382,7 @@ describe('PricingLabComponent', () => {
       const spotMin = 590 * 0.8;
       component.serverResult.set({
         success: true, strike: 590, optionType: 'call', expirationMs: 4_070_984_400_000,
-        timeToExpiryYears: ttm, riskFreeRate: serverRate, error: null,
+        timeToExpiryYears: ttm, riskFreeRate: serverRate, unavailableModels: [], error: null,
         models: [{
           model: 'python_bs',
           points: [{ spot: spotMin, price: bsPrice(spotMin, 590, serverRate, 0.20, ttm, 'call'), delta: 0, gamma: 0, theta: 0, vega: 0, rho: 0 }],
@@ -395,7 +396,7 @@ describe('PricingLabComponent', () => {
     it('records server-level errors in statusMessage and clears serverResult', async () => {
       seedReadyState();
       // Pre-seed a result so we can assert it gets cleared
-      component.serverResult.set({ success: true, strike: 0, optionType: 'call', expirationMs: 0, timeToExpiryYears: 0, riskFreeRate: null, models: [], error: null });
+      component.serverResult.set({ success: true, strike: 0, optionType: 'call', expirationMs: 0, timeToExpiryYears: 0, riskFreeRate: null, models: [], unavailableModels: [], error: null });
 
       const promise = component.runComparison();
       const req = expectGraphQL(httpMock, 'pricingModelComparison');
@@ -460,7 +461,7 @@ describe('PricingLabComponent', () => {
       component.spotRangePct.set(null as unknown as number);
       component.serverResult.set({
         success: true, strike: 590, optionType: 'call', expirationMs: 4_070_984_400_000,
-        timeToExpiryYears: 0.25, riskFreeRate: 0.043, error: null,
+        timeToExpiryYears: 0.25, riskFreeRate: 0.043, unavailableModels: [], error: null,
         models: [{
           model: 'python_bs',
           points: [{ spot: 590, price: 20, delta: 0.5, gamma: 0.01, theta: -0.1, vega: 0.2, rho: 0.1 }],
@@ -468,6 +469,138 @@ describe('PricingLabComponent', () => {
       });
 
       expect(component.summaryStats()).toEqual([]);
+    });
+
+    it('says how many engines ran and why each other did not', async () => {
+      seedReadyState();
+
+      const promise = component.runComparison();
+      expectGraphQL(httpMock, 'pricingModelComparison').flush({
+        data: {
+          pricingModelComparison: {
+            success: true,
+            strike: 590, optionType: 'call', expirationMs: 4_070_984_400_000,
+            timeToExpiryYears: 0.0822, riskFreeRate: 0.043,
+            models: [
+              { model: 'python_bs', points: [{ spot: 590, price: 5.5, delta: 0.5, gamma: 0.02, theta: -0.05, vega: 0.15, rho: 0.05 }] },
+              { model: 'quantlib_bs', points: [{ spot: 590, price: 5.5, delta: 0.5, gamma: 0.02, theta: -0.05, vega: 0.15, rho: 0.05 }] },
+            ],
+            unavailableModels: [
+              { model: 'quantlib_crr', reason: 'the engine raised RuntimeError while pricing this contract' },
+              { model: 'quantlib_jr', reason: 'the engine raised RuntimeError while pricing this contract' },
+              { model: 'quantlib_mc', reason: 'the engine raised ValueError while pricing this contract' },
+            ],
+            error: null,
+          },
+        },
+      });
+      await promise;
+
+      const status = component.statusMessage();
+      expect(status?.type).toBe('warn');
+      expect(status?.text).toContain('2 of 5 server engines');
+      expect(status?.text).toContain('CRR, JR: the engine raised RuntimeError');
+      expect(status?.text).toContain('MC: the engine raised ValueError');
+      expect(component.serverResult()?.models.length).toBe(2);
+    });
+
+    it('with QuantLib absent names every QuantLib engine once, under the one reason', async () => {
+      seedReadyState();
+
+      const promise = component.runComparison();
+      expectGraphQL(httpMock, 'pricingModelComparison').flush({
+        data: {
+          pricingModelComparison: {
+            success: true,
+            strike: 590, optionType: 'call', expirationMs: 4_070_984_400_000,
+            timeToExpiryYears: 0.0822, riskFreeRate: 0.043,
+            models: [
+              { model: 'python_bs', points: [{ spot: 590, price: 5.5, delta: 0.5, gamma: 0.02, theta: -0.05, vega: 0.15, rho: 0.05 }] },
+            ],
+            unavailableModels: ['quantlib_bs', 'quantlib_crr', 'quantlib_jr', 'quantlib_lr', 'quantlib_fd', 'quantlib_mc']
+              .map(model => ({ model, reason: 'QuantLib is not installed on the data service' })),
+            error: null,
+          },
+        },
+      });
+      await promise;
+
+      const text = component.statusMessage()?.text ?? '';
+      expect(text).toContain('1 of 7 server engines');
+      expect(text.match(/QuantLib is not installed on the data service/g)?.length).toBe(1);
+      expect(text).toContain('QL-A, CRR, JR, LR, FD, MC');
+    });
+
+    it('reports every engine as loaded, without a warning, when none is unavailable', async () => {
+      seedReadyState();
+
+      const promise = component.runComparison();
+      expectGraphQL(httpMock, 'pricingModelComparison').flush({
+        data: {
+          pricingModelComparison: {
+            success: true,
+            strike: 590, optionType: 'call', expirationMs: 4_070_984_400_000,
+            timeToExpiryYears: 0.0822, riskFreeRate: 0.043,
+            models: [
+              { model: 'python_bs', points: [{ spot: 590, price: 5.5, delta: 0.5, gamma: 0.02, theta: -0.05, vega: 0.15, rho: 0.05 }] },
+            ],
+            unavailableModels: [],
+            error: null,
+          },
+        },
+      });
+      await promise;
+
+      expect(component.statusMessage()?.type).toBe('success');
+      expect(component.statusMessage()?.text).toContain('1 of 1 server engines');
+    });
+
+    describe('a Greek the engine does not provide', () => {
+      const SPOT = 590;
+      const BS_PRICE = 5.5;
+
+      function seedMonteCarloWithoutTheta(): void {
+        seedReadyState();
+        component.riskFreeRate.set(0.043);
+        component.serverResult.set({
+          success: true, strike: 590, optionType: 'call', expirationMs: 4_070_984_400_000,
+          timeToExpiryYears: 0.25, riskFreeRate: 0.043, unavailableModels: [], error: null,
+          models: [
+            { model: 'python_bs', points: [{ spot: SPOT, price: BS_PRICE, delta: 0.5, gamma: 0.02, theta: -0.05, vega: 0.15, rho: 0.05 }] },
+            { model: 'quantlib_mc', points: [{ spot: SPOT, price: BS_PRICE + 0.1, delta: 0.52, gamma: 0.021, theta: null, vega: null, rho: null }] },
+          ],
+        });
+        component.diffReference.set('python_bs');
+      }
+
+      it('is left out of the difference table, not compared as zero', () => {
+        seedMonteCarloWithoutTheta();
+        component.selectedMetric.set('theta');
+
+        const rows = component.summaryStats().map(row => row.key);
+
+        expect(rows).not.toContain('quantlib_mc');
+        expect(rows).toContain('legacy_bs');
+      });
+
+      it('is compared where the engine does provide the Greek', () => {
+        seedMonteCarloWithoutTheta();
+        component.selectedMetric.set('delta');
+
+        const mc = component.summaryStats().find(row => row.key === 'quantlib_mc');
+
+        expect(mc?.maxDiff).toBeCloseTo(0.02, 12);
+      });
+
+      it('names the engine that has none for the selected Greek, and none for price or delta', () => {
+        seedMonteCarloWithoutTheta();
+
+        component.selectedMetric.set('vega');
+        expect(component.metricNotProvidedBy()).toEqual(['MC']);
+
+        component.selectedMetric.set('delta');
+        expect(component.metricNotProvidedBy()).toEqual([]);
+      });
     });
 
     it('catches network errors and surfaces them in statusMessage', async () => {

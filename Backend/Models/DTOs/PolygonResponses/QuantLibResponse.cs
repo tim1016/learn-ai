@@ -28,15 +28,21 @@ public class PricingPointDto
     public decimal Price { get; set; }
     public decimal Delta { get; set; }
     public decimal Gamma { get; set; }
-    public decimal Theta { get; set; }
-    public decimal Vega { get; set; }
-    public decimal Rho { get; set; }
+    public decimal? Theta { get; set; }
+    public decimal? Vega { get; set; }
+    public decimal? Rho { get; set; }
 }
 
 public class PricingModelCurveDto
 {
     public string Model { get; set; } = "";
     public List<PricingPointDto> Points { get; set; } = [];
+}
+
+public class PricingModelUnavailableDto
+{
+    public string Model { get; set; } = "";
+    public string Reason { get; set; } = "";
 }
 
 public class PricingCompareResponse
@@ -48,5 +54,6 @@ public class PricingCompareResponse
     public decimal TimeToExpiryYears { get; set; }
     public decimal? RiskFreeRate { get; set; }
     public List<PricingModelCurveDto> Models { get; set; } = [];
+    public List<PricingModelUnavailableDto> UnavailableModels { get; set; } = [];
     public string? Error { get; set; }
 }

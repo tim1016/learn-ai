@@ -5134,6 +5134,9 @@ export interface paths {
          *       6. quantlib_fd       — QuantLib Finite Differences (801×800 grid)
          *       7. quantlib_mc       — QuantLib Monte Carlo (tol=0.001, seed=42)
          *
+         *     A model with no curve in `models` is named in `unavailable_models` with why (QuantLib not installed, or the
+         *     engine raised). A Greek an engine does not provide (Monte Carlo theta, vega, rho) is null, never 0.0.
+         *
          *     The frontend additionally computes "Legacy BS" (Abramowitz & Stegun normCdf
          *     approximation, |error| < 1.5e-7) client-side and overlays it.
          */
@@ -25038,6 +25041,11 @@ export interface components {
             success: boolean;
             /** Time To Expiry Years */
             time_to_expiry_years: number;
+            /**
+             * Unavailable Models
+             * @description Each requested model that has no curve in `models`, with why; empty when every model ran
+             */
+            unavailable_models?: components["schemas"]["PricingModelUnavailable"][];
         };
         /**
          * PricingModelCurve
@@ -25050,6 +25058,19 @@ export interface components {
             points: components["schemas"]["PricingPointResult"][];
         };
         /**
+         * PricingModelUnavailable
+         * @description A model the comparison asked for and has no curve for.
+         */
+        PricingModelUnavailable: {
+            /** Model */
+            model: string;
+            /**
+             * Reason
+             * @description Why in the service's own words; never the engine's error text
+             */
+            reason: string;
+        };
+        /**
          * PricingPointResult
          * @description Single data point for one model at one spot price.
          */
@@ -25060,14 +25081,23 @@ export interface components {
             gamma: number;
             /** Price */
             price: number;
-            /** Rho */
-            rho: number;
+            /**
+             * Rho
+             * @description Per 1% rate move; null when the engine does not provide it (Monte Carlo has no rho)
+             */
+            rho: number | null;
             /** Spot */
             spot: number;
-            /** Theta */
-            theta: number;
-            /** Vega */
-            vega: number;
+            /**
+             * Theta
+             * @description Per calendar day; null when the engine does not provide it (Monte Carlo has no theta)
+             */
+            theta: number | null;
+            /**
+             * Vega
+             * @description Per 1% IV move; null when the engine does not provide it (Monte Carlo has no vega)
+             */
+            vega: number | null;
         };
         /** ProfileCloneRequest */
         ProfileCloneRequest: {
