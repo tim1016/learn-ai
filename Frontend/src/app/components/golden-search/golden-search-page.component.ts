@@ -14,9 +14,10 @@ export type GoldenSearchTab = 'new' | 'history';
 
 /**
  * Golden Search (#2696). `/golden-search` plans a new study and lists the
- * history; `?revise=<id>` starts the plan from that study's frozen protocol
- * (locking it creates a new linked study); `/golden-search/<id>` opens one
- * study's workbench. A locked plan navigates straight to its study.
+ * history; `?tab=history` opens the History tab (hiding a study lands there);
+ * `?revise=<id>` starts the plan from that study's frozen protocol (locking it
+ * creates a new linked study); `/golden-search/<id>` opens one study's
+ * workbench. A locked plan navigates straight to its study.
  */
 @Component({
   selector: 'app-golden-search-page',
@@ -35,6 +36,8 @@ export class GoldenSearchPageComponent {
   readonly view = input<string | undefined>(undefined);
   /** Query parameter: the study whose frozen plan a new study revises. */
   readonly revise = input<string | undefined>(undefined);
+  /** Query parameter: `history` opens the History tab. The study and the list are two routes, so the page is built anew between them. */
+  readonly tab = input<string | undefined>(undefined);
 
   readonly activeTab = signal<GoldenSearchTab>('new');
   /** Null until the declarations have loaded; the plan form waits for them rather than claim there are none. */
@@ -45,6 +48,9 @@ export class GoldenSearchPageComponent {
 
   constructor() {
     void this.loadCapabilities();
+    effect(() => {
+      if (this.tab() === 'history') untracked(() => this.activeTab.set('history'));
+    });
     effect(() => {
       const id = this.revise();
       untracked(() => void this.loadRevision(id));
@@ -60,8 +66,7 @@ export class GoldenSearchPageComponent {
   }
 
   onHidden(): void {
-    this.activeTab.set('history');
-    void this.router.navigate(['/golden-search']);
+    void this.router.navigate(['/golden-search'], { queryParams: { tab: 'history' } });
   }
 
   private async loadCapabilities(): Promise<void> {

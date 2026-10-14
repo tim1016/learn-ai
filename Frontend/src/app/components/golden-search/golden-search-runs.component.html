@@ -75,7 +75,7 @@
             <tbody>
               @for (row of rows(); track row.run.evaluation_key) {
                 <tr [class.ticked]="row.ticked">
-                  <td><input type="checkbox" [checked]="row.ticked" [disabled]="!row.run.has_curve || (full() && !row.ticked)" [attr.aria-label]="'Draw ' + row.run.label + ', ' + row.run.params_sentence" (change)="toggle(row.run)" /></td>
+                  <td><input type="checkbox" [checked]="row.ticked" [disabled]="!row.canDraw || (full() && !row.ticked)" [attr.aria-label]="'Draw ' + row.run.label + ', ' + row.run.params_sentence" (change)="toggle(row.run)" /></td>
                   <th scope="row">{{ row.run.label }}@if (row.note; as note) { <small [class.bad]="row.run.status === 'failed'">{{ note }}</small> }</th>
                   <td class="settings">{{ row.run.params_sentence }}</td>
                   <td class="window"><app-timestamp-display [value]="row.run.window_start_ms" mode="date-et" /> – <app-timestamp-display [value]="row.run.window_end_ms - 1" mode="date-et" /></td>

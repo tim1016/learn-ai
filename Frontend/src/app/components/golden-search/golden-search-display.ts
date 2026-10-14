@@ -121,6 +121,18 @@ export function percentInputValue(fraction: number): number {
 }
 
 /**
+ * A percent as the fraction a plan freezes (`7` → `0.07`), the inverse of
+ * `percentInputValue`. The decimal point is shifted in the number's own digits:
+ * dividing by 100 leaves binary noise (`1.1 / 100` is `0.011000000000000001`)
+ * that the frozen protocol and its hash would carry.
+ */
+export function fractionFromPercent(percent: number): number {
+  if (!Number.isFinite(percent)) return percent / 100;
+  const [mantissa, exponent = '0'] = String(percent).split('e');
+  return Number(`${mantissa}e${Number(exponent) - 2}`);
+}
+
+/**
  * Every declared knob of `point` in the declaration's order, then any other
  * parameter by name, without `symbol`. A canonical point omits a knob at its
  * identity-neutral default, so an absent declared knob reads as that default
