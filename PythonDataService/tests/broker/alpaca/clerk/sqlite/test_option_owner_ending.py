@@ -157,6 +157,8 @@ async def test_the_notice_of_a_contract_a_dry_run_cannot_settle_promises_no_pric
     # No end is promised that cannot come: no price will be kept by itself.
     assert "until one is kept" not in said and "is kept" not in said
     assert "no price will come by itself" in said and "end the contract at your word" in said
+    # No page ends it: the notice names the bot's recovery-actions route instead.
+    assert "/bots/{strategy_instance_id}/recovery-actions/execute" in notice.next_step
 
 
 async def test_a_dry_run_contract_with_no_price_is_ended_at_the_owners_word_and_what_it_cost_is_the_loss(
@@ -1190,6 +1192,7 @@ async def test_two_calls_held_and_an_expiry_booked_for_one_the_owner_ends_the_ot
     said = json.loads(notice["facts_json"])["explanation"]
     assert "exp-1" in said and "is booked" in said and "no activity read" not in said
     assert END_EXPIRED_OPTION_LABEL in notice["next_step"]
+    assert "/bots/{strategy_instance_id}/recovery-actions/execute" in notice["next_step"]
     shown = await _offered(paper.clerk, "a")
     assert shown.available and not (await _offered(paper.clerk, "a", "discharge_attributed_residue")).available
 
@@ -1643,6 +1646,7 @@ async def test_the_owner_ends_a_contract_an_outside_order_sold_and_the_books_cou
     assert bookings(paper.repo) == []
     once_it_filled = option_holds(paper.repo)[("a", "OPTION_ORDER_NOT_OURS")]["next_step"]
     assert END_EXPIRED_OPTION_LABEL in once_it_filled and END_EXPIRED_OPTION_LABEL not in while_it_worked
+    assert "/bots/{strategy_instance_id}/recovery-actions/execute" in once_it_filled
     assert "Nothing will book this fill" in once_it_filled
 
     _at(paper, max(paper.clock(), SATURDAY_NOON))
