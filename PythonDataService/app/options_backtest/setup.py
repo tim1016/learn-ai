@@ -45,8 +45,9 @@ _LEG_ID_PATTERN = r"^[a-z0-9_]{1,32}$"
 LEG_ID_PATTERN = _LEG_ID_PATTERN
 # An OCC root: the letters a contract symbol writes for its underlying. One to five, not the six an OCC root can have:
 # US stock and ETF tickers are at most five letters, and a six-letter root makes a contract symbol of 21 characters,
-# one more than the lake's catalog stores, so every contract of such an underlying would be refused.
-_UNDERLYING_PATTERN = r"^[A-Z]{1,5}$"
+# one more than the lake's catalog stores, so every contract of such an underlying would be refused. Public: the
+# past-chain routes take an underlying of the same shape.
+UNDERLYING_PATTERN = r"^[A-Z]{1,5}$"
 
 _Model = ConfigDict(frozen=True, extra="forbid")
 
@@ -235,7 +236,7 @@ class OptionsBacktestSetup(BaseModel):
     model_config = _Model
 
     version: Literal[1] = SETUP_VERSION
-    underlying: Annotated[str, Field(pattern=_UNDERLYING_PATTERN)]
+    underlying: Annotated[str, Field(pattern=UNDERLYING_PATTERN)]
     entry: SessionTime
     exit: SessionTime
     # A stop hit after this instant earns no re-entry. First entries are not affected.

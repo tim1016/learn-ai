@@ -111,6 +111,10 @@ export class OptionsBacktestPageComponent {
     const error: unknown = this.clockRead.error();
     return error === undefined ? null : extractServerMessage(error, 'The session times could not be read.');
   });
+  /** Why History cannot put a run's setup into the form yet: its times need the clock. Null once the clock is read. */
+  protected readonly setupBlockedWhy = computed(() =>
+    this.clock() === null ? 'The form cannot take a setup until the session times have been read. The Backtest tab says where that stands.' : null,
+  );
 
   /** The setup being edited. The times fill in from the clock the moment it is read, and only once. */
   protected readonly draft = linkedSignal<SessionClock | null, SetupDraft>({

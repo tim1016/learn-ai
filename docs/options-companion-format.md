@@ -112,6 +112,8 @@ target_expiry(D) = the listed expiry equal to D + dte_distance
 
 Skipped days appear in `dataset_metadata.json → options_companion.days_skipped`.
 
+**A Polygon failure is not "no listed expiry".** A day whose expiration lookup failed is skipped with a reason that says the lookup failed (whether a chain is listed is unknown). Failed contract-list and bar fetches are counted too: `totals.fetch_failures` is `{}` on a clean run and otherwise counts failures by stage (`expirations`, `contracts`, `bars`); a day's own entry carries its share. Re-run an export whose `fetch_failures` is not empty.
+
 ---
 
 ## 5. Discontinuity column

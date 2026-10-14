@@ -2,9 +2,10 @@ import {
   Component, inject, signal, computed, effect, untracked,
   ChangeDetectionStrategy, OnDestroy,
 } from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
 import { DecimalPipe } from '@angular/common';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, interval, map } from 'rxjs';
 import { Drawer } from 'primeng/drawer';
 import { Button } from 'primeng/button';
 import { Tooltip } from 'primeng/tooltip';
@@ -28,8 +29,7 @@ import { VolumeChartComponent } from '../../shared/charts/volume-chart/volume-ch
 import { PayoffChartComponent } from '../../shared/payoff-chart/payoff-chart.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.component';
-import { etIsoDate } from '../../shared/date/et-midnight';
-import { optionExpiryAnchorMs } from '../../shared/option-contract/option-expiry-date';
+import { errorMessage } from '../../shared/errors/error-message';
 
 interface BuilderChainRow {
   strike: number;
@@ -69,6 +69,11 @@ interface BuilderChainRow {
  */
 type ChainDensity = 'quick' | 'greeks';
 const CHAIN_DENSITY_STORAGE_KEY = 'sb.chainDensity';
+/** The strategy-analysis request takes at most this many legs. */
+const MAX_STRATEGY_LEGS = 8;
+
+/** How often the time left to expiry is re-read from the clock. */
+const CLOCK_TICK_MS = 60_000;
 
 interface LegConfig {
   strike: number;
@@ -167,16 +172,22 @@ export class StrategyBuilderComponent implements OnDestroy {
   chainDensity = signal<ChainDensity>(this.readChainDensityFromStorage());
 
   private readChainDensityFromStorage(): ChainDensity {
-    if (typeof localStorage === 'undefined') return 'quick';
-    const v = localStorage.getItem(CHAIN_DENSITY_STORAGE_KEY);
-    return v === 'greeks' ? 'greeks' : 'quick';
+    try {
+      const v = localStorage.getItem(CHAIN_DENSITY_STORAGE_KEY);
+      return v === 'greeks' ? 'greeks' : 'quick';
+    } catch {
+      // Storage blocked (private window, denied site data): open on the default.
+      return 'quick';
+    }
   }
 
   toggleChainDensity(): void {
     const next: ChainDensity = this.chainDensity() === 'quick' ? 'greeks' : 'quick';
     this.chainDensity.set(next);
-    if (typeof localStorage !== 'undefined') {
+    try {
       localStorage.setItem(CHAIN_DENSITY_STORAGE_KEY, next);
+    } catch {
+      // Storage blocked or full: the choice applies for this visit only.
     }
   }
 
@@ -302,6 +313,8 @@ export class StrategyBuilderComponent implements OnDestroy {
   riskFreeRate = signal<number | null>(null);
   /** Counts chain-snapshot fetches; only the latest may write the page (#2789). */
   private chainRequest = 0;
+  /** Counts expiration fetches; only the latest may write the page (#3221). */
+  private expirationsRequest = 0;
   priceRangePct = signal(0.05);
   selectedGreek = signal<GreekType>('delta');
 
@@ -595,12 +608,21 @@ export class StrategyBuilderComponent implements OnDestroy {
     }, 0);
   });
 
+  /**
+   * The clock the time left is read from. It ticks once a minute, so a page left
+   * open keeps pricing to the time left, as the server does on every analysis.
+   */
+  private readonly nowMs = toSignal(
+    interval(CLOCK_TICK_MS).pipe(map(() => Date.now())),
+    { initialValue: Date.now() },
+  );
+
   daysToExpiry = computed(() => {
     const exp = this.selectedExpiration();
     if (!exp) return 0;
     // Fractional days to the expiry anchor instant from the wire — never a
     // 16:00 built in the browser's own zone (#2934).
-    return Math.max((exp - Date.now()) / 86_400_000, 0);
+    return Math.max((exp - this.nowMs()) / 86_400_000, 0);
   });
 
   timeToExpiry = computed(() => this.daysToExpiry() / 365);
@@ -717,13 +739,10 @@ export class StrategyBuilderComponent implements OnDestroy {
       .map(scenario => {
         const newDte = Math.max(dte - scenario.timeDeltaDays, 0);
         const newT = newDte / 365;
-        const shiftedParams = scenario.ivShift !== 0
-          ? params.map(l => ({ ...l, iv: Math.max(l.iv + scenario.ivShift, 0.01) }))
-          : params;
 
         const points: PayoffPoint[] = grid.map(price => ({
           price,
-          pnl: strategyPnlAtPrice(shiftedParams, price, newT, r),
+          pnl: strategyPnlAtPrice(params, price, newT, r, scenario.ivShift),
         }));
 
         return { label: scenario.label, points, color: scenario.color, borderDash: [6, 3] };
@@ -799,6 +818,12 @@ export class StrategyBuilderComponent implements OnDestroy {
     if (!r) return '—';
     if (this.liveExtremes()?.maxLoss === Number.NEGATIVE_INFINITY) return '−∞';
     return formatPayoffExtremum(r.maxLoss * 100);
+  });
+
+  /** The server's expected value is per share; shown per contract, beside Max Profit and Max Loss. */
+  analysisExpectedValueDisplay = computed<string>(() => {
+    const r = this.analysisResult();
+    return r ? formatPayoffExtremum(r.expectedValue * 100) : '—';
   });
 
   liveGreeks = computed(() => {
@@ -907,6 +932,8 @@ export class StrategyBuilderComponent implements OnDestroy {
     const t = this.ticker().trim().toUpperCase();
     if (!t) return;
 
+    // A late reply for a ticker the user has since left must not write this one's page.
+    const request = ++this.expirationsRequest;
     this.expirationsLoading.set(true);
     this.error.set(null);
     this.availableExpirations.set([]);
@@ -924,6 +951,8 @@ export class StrategyBuilderComponent implements OnDestroy {
           .catch(() => null),
       ]);
 
+      if (request !== this.expirationsRequest) return;
+
       if (snapshotResult?.success && snapshotResult.snapshot) {
         this.stockSnapshot.set(snapshotResult.snapshot);
       }
@@ -931,21 +960,26 @@ export class StrategyBuilderComponent implements OnDestroy {
       this.availableExpirations.set(expirations);
 
       if (expirations.length > 0) {
-        const todayAnchor = optionExpiryAnchorMs(etIsoDate(Date.now()));
-        const nearest = expirations.find(e => e >= todayAnchor) ?? expirations[0];
+        // An expiry anchor is 16:00 ET on its date: the nearest one still ahead, not today's.
+        const now = Date.now();
+        const nearest = expirations.find(e => e > now) ?? expirations[0];
         this.selectedExpiration.set(nearest);
         await this.fetchChainSnapshot(t, nearest);
       }
     } catch (err) {
-      this.error.set(err instanceof Error ? err.message : String(err));
+      if (request === this.expirationsRequest) this.error.set(errorMessage(err));
     } finally {
-      this.expirationsLoading.set(false);
+      // Only the latest fetch ends the loading state it started.
+      if (request === this.expirationsRequest) this.expirationsLoading.set(false);
     }
   }
 
   async onExpirationSelected(expirationMs: number): Promise<void> {
     this.selectedExpiration.set(expirationMs);
     this.legs.set([]);
+    // The previous expiry's chain must not stay under the new selection if
+    // this fetch fails, where legs could be added from it.
+    this.allContracts.set([]);
     this.analysisResult.set(null);
     const t = this.ticker().trim().toUpperCase();
     if (t) {
@@ -1003,7 +1037,6 @@ export class StrategyBuilderComponent implements OnDestroy {
   ): void {
     const strike = contract?.strikePrice;
     if (!contract || strike == null) return;
-    if (this.legs().length >= 8) return;
 
     const premium = this.resolvePremiumNum(contract);
     const iv = contract.impliedVolatility ?? 0;
@@ -1019,6 +1052,11 @@ export class StrategyBuilderComponent implements OnDestroy {
         i === existing ? { ...l, quantity: l.quantity + 1 } : l
       ));
     } else {
+      // The server takes at most 8 legs; a quantity bump above adds none.
+      if (this.legs().length >= MAX_STRATEGY_LEGS) {
+        this.error.set(`A strategy holds at most ${MAX_STRATEGY_LEGS} legs. Remove one to add another.`);
+        return;
+      }
       this.legs.update(legs => [...legs, {
         strike,
         optionType: side,

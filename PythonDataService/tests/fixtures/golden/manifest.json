@@ -868,6 +868,53 @@
       ]
     },
     {
+      "id": "IV-005",
+      "name": "SPY 2024-12-20 Options Chain Snapshot — VIX-Style IV30 Regression Anchor",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/volatility/vix_replication.py",
+      "canonical_callable": "vix_style_iv30",
+      "reference": {
+        "kind": "internal_regression",
+        "oracle": "self (no independent oracle)",
+        "citation": "Frozen Polygon SPY chain; the reference IV30 in the sidecar was written by vix_style_iv30 itself (scripts/build_iv30_golden.py), so this pins drift, not equivalence to CBOE. Independent CBOE-formula oracles: IV-003, RV-004. See attribution.md."
+      },
+      "market_input": {
+        "source": "polygon",
+        "vendor": "Polygon.io",
+        "generated_by": "PythonDataService/scripts/build_iv30_golden.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-09,
+        "rtol": 0.0,
+        "note": "Deterministic recomputation of vix_style_iv30 on the frozen chain against the value the build script wrote with the same function; the strict-float default applies and nothing looser is needed."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "spy-2024-12-20-chain.parquet",
+          "output": "spy-2024-12-20-chain.meta.json",
+          "attribution": "attribution.md",
+          "generated": "2026-04-26",
+          "justification": "Registered the existing snapshot bytes (commit a32836a6) under manifest governance; the data was not regenerated (#3221).",
+          "content_sha256": {
+            "spy-2024-12-20-chain.parquet": "acde1ce43782fefd03f1a0a12d34ab9f888b26e28452d2a810231c0bbea1db52",
+            "spy-2024-12-20-chain.meta.json": "fd897178529d62a46b286aa321044777d44350dcca1e89f90c9b472a98e93699"
+          },
+          "file_sha256": {
+            "spy-2024-12-20-chain.parquet": "acde1ce43782fefd03f1a0a12d34ab9f888b26e28452d2a810231c0bbea1db52",
+            "spy-2024-12-20-chain.meta.json": "e622ecabaa2b2f14a5e64ae41db0f217b9d15d3bb065789699e147cde088ac08",
+            "attribution.md": "620187926f4b904f0a66bf76cb40a038d241132485512d66c1e7dbc84dccf196"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/volatility/test_vix_replication.py::TestSpyGoldenFixture",
+        "tests/volatility/test_vix_replication.py::TestSpyGoldenFixtureWithProvenance"
+      ]
+    },
+    {
       "id": "RV-002",
       "name": "HF Two-Component Realized Volatility — ABDL (window=3 days, ETH)",
       "category": "realized-volatility",
@@ -2526,6 +2573,56 @@
       "status": "active",
       "validated_by": [
         "tests/options_backtest/test_golden_spy_2026_10_09_sold_spread.py"
+      ]
+    },
+    {
+      "id": "BS-008",
+      "name": "Strategy Builder browser Black-Scholes parity",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/services/bs_greeks.py",
+      "canonical_callable": "black_scholes_greeks",
+      "reference": {
+        "kind": "cross_engine",
+        "oracle": "the Python canonical (bs_greeks.py, strategy_engine.py) evaluated at generation time, against the browser copy Frontend/src/app/utils/black-scholes.ts",
+        "citation": "ADR 0068 exception 1; Hull, Options Futures and Other Derivatives (10e), §15.8 and §19. The canonical itself is pinned by BS-001..BS-007 and test_bs_cross_engine_parity.py."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "PythonDataService/scripts/fixture_generators/bs_browser_parity.py"
+      },
+      "units": {
+        "theta": "per_day",
+        "vega": "per_vol_point",
+        "rho": "per_rate_point"
+      },
+      "tolerance": {
+        "atol": 1e-09,
+        "rtol": 0.0,
+        "note": "The canonical re-evaluated against the stored values: strict float, 1e-9. The browser copy is held looser, per quantity, to its Abramowitz & Stegun CDF (|error| < 7.5e-8) and to the canonical's own 4 dp / 6 dp rounding of strategy figures: price 2e-5, delta and rho 1e-7, theta 2e-9, gamma and vega 1e-12, strategy P&L 1e-4. Each is in output.json with its reason."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "generated": "2026-10-14",
+          "justification": "Initial fixture. Replaces Frontend/scripts/generate-bs-parity-fixture.py, which carried its own inline Black-Scholes copy; this one imports bs_greeks.py and strategy_engine.py, and adds Greeks, strategy P&L, what-if shifts and the expiry payoff to the 360-case price grid (#3221).",
+          "content_sha256": {
+            "input.json": "2e472a5aa8509305bfa1bedc5319c219742850be89dbcb220bd5dc51fd60292a",
+            "output.json": "f7a0681f9889f992d381a0b43e7a5f4cc91b7fbe5085f04b5d609483e6d20a53"
+          },
+          "file_sha256": {
+            "input.json": "a4ecd0d329d19c00457e051d55f8ef1160e58480021495d3c5da688ea7a1714d",
+            "output.json": "c94e50c6564e6d183f5277a21d91c988b396e401f26a15bbad6fa41b68db38be",
+            "attribution.md": "8f73ab301007730f427085384dde9ab54e23811da648b9a16fc82c635c29979e"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_bs_browser_parity_fixture.py"
       ]
     }
   ]

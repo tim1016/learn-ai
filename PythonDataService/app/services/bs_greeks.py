@@ -2,8 +2,8 @@
 
 Formula: C = S·e^(-qT)·N(d1) - K·e^(-rT)·N(d2); P = K·e^(-rT)·N(-d2) - S·e^(-qT)·N(-d1); d1 = [ln(S/K) + (r-q+σ²/2)T] / (σ√T); d2 = d1 - σ√T. Greeks per Hull §19.
 Reference: Hull, Options Futures and Other Derivatives (10e), §15.8 (price, eqs 15.20/15.21) and §19 (Greeks).
-Canonical implementation: this file (closed-form variant). Companion canonical: app/services/quantlib_pricer.py (QuantLib analytic_bs engine, parity-pinned at atol=1e-10 since Phase 1.4 / commit 451394d).
-Validated against: PythonDataService/tests/services/test_bs_cross_engine_parity.py — 360-case grid at atol=1e-10 between this file and quantlib_pricer.py.
+Canonical implementation: this file (closed-form variant). Companion canonical: app/services/quantlib_pricer.py (QuantLib analytic_bs engine, price parity-pinned at atol=1e-10 since Phase 1.4 / commit 451394d).
+Validated against: PythonDataService/tests/services/test_bs_cross_engine_parity.py — 360-case grid between this file and quantlib_pricer.py: price at atol=1e-10 and delta/gamma/theta/vega/rho at atol=1e-8 (quantlib_pricer rounds its Greeks to 8 decimals).
 
 Single source of truth for the analytical Black-Scholes calculations:
 price, vega, and the full Greek vector. Computed in continuous-time

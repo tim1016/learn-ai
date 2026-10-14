@@ -198,6 +198,134 @@ describe('StrategyBuilderComponent', () => {
     });
   });
 
+  // ── Failures and stale data are shown, not hidden (#3221) ──────
+  describe('failed and superseded fetches', () => {
+    function expirationsReply(expirations: number[]) {
+      return { data: { getOptionsExpirations: { success: true, expirations, count: expirations.length, error: null } } };
+    }
+
+    function snapshotReply(price: number, contracts: SnapshotContractResult[]) {
+      return {
+        data: {
+          getOptionsChainSnapshot: {
+            success: true,
+            underlying: { ticker: 'SPY', price, change: 0, changePercent: 0 },
+            contracts, count: contracts.length,
+            riskFreeRate: 0.04, dividendYield: null, rateSource: 'FRED', dividendSource: null, error: null,
+          },
+        },
+      };
+    }
+
+    function contract(strike: number): SnapshotContractResult {
+      return {
+        ticker: `O:SPY${strike}C`, contractType: 'call', strikePrice: strike, expirationMs: 4_070_984_400_000,
+        breakEvenPrice: null, impliedVolatility: 0.2, openInterest: 10, greeks: null, day: null,
+        lastTrade: null, lastQuote: { bid: 4.9, ask: 5.1, bidSize: 1, askSize: 1, midpoint: 5, timeframe: null },
+      };
+    }
+
+    function flushByTicker(needle: string, ticker: string, body: object): void {
+      const req = httpMock.match(r => {
+        const b = r.body as { query?: string; variables?: { underlyingTicker?: string; ticker?: string } } | null;
+        return b?.query?.includes(needle) === true
+          && (b.variables?.underlyingTicker ?? b.variables?.ticker) === ticker;
+      });
+      expect(req.length).toBe(1);
+      req[0].flush(body);
+    }
+
+    it('shows the vendor failure when expirations cannot be loaded', async () => {
+      component.ticker.set('SPY');
+      const promise = component.fetchExpirations();
+
+      expectGraphQL(httpMock, 'getOptionsExpirations').flush({
+        data: { getOptionsExpirations: { success: false, expirations: [], count: 0, error: 'Polygon rate limited' } },
+      });
+      expectGraphQLOptional(httpMock, 'getStockSnapshot')?.flush({ data: { getStockSnapshot: { success: false, snapshot: null, error: 'x' } } });
+      await promise;
+
+      expect(component.error()).toContain('Polygon rate limited');
+      expect(component.availableExpirations()).toEqual([]);
+      expect(component.expirationsLoading()).toBe(false);
+    });
+
+    it('keeps the new ticker\'s expirations when the previous ticker\'s reply lands last', async () => {
+      const aaplExpiry = optionExpiryAnchorMs(etIsoDate(Date.now() + 10 * 86400000));
+      const msftExpiry = optionExpiryAnchorMs(etIsoDate(Date.now() + 20 * 86400000));
+      component.ticker.set('AAPL');
+      const first = component.fetchExpirations();
+      component.ticker.set('MSFT');
+      const second = component.fetchExpirations();
+
+      flushByTicker('getOptionsExpirations', 'MSFT', expirationsReply([msftExpiry]));
+      flushByTicker('getStockSnapshot', 'MSFT', { data: { getStockSnapshot: { success: false, snapshot: null, error: null } } });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      flushByTicker('getOptionsChainSnapshot', 'MSFT', snapshotReply(400, [contract(400)]));
+      await second;
+
+      flushByTicker('getOptionsExpirations', 'AAPL', expirationsReply([aaplExpiry]));
+      flushByTicker('getStockSnapshot', 'AAPL', { data: { getStockSnapshot: { success: false, snapshot: null, error: null } } });
+      await first;
+
+      expect(component.availableExpirations()).toEqual([msftExpiry]);
+      expect(component.selectedExpiration()).toBe(msftExpiry);
+      expect(component.allContracts().map(c => c.strikePrice)).toEqual([400]);
+      expect(component.expirationsLoading()).toBe(false);
+    });
+
+    it('drops the previous expiry\'s chain on selection, so a failed fetch leaves nothing to build legs from', async () => {
+      component.ticker.set('SPY');
+      component.allContracts.set([contract(100)]);
+      component.legs.set([{ strike: 100, optionType: 'call', position: 'long', premium: 5, iv: 0.2, quantity: 1, enabled: true }]);
+
+      const selecting = component.onExpirationSelected(4_078_000_000_000);
+
+      expect(component.allContracts()).toEqual([]);
+      expect(component.legs()).toEqual([]);
+      expectGraphQL(httpMock, 'getOptionsChainSnapshot').flush({
+        data: {
+          getOptionsChainSnapshot: {
+            success: false, underlying: null, contracts: [], count: 0,
+            riskFreeRate: null, dividendYield: null, rateSource: null, dividendSource: null, error: 'Snapshot unavailable',
+          },
+        },
+      });
+      await selecting;
+
+      expect(component.error()).toBe('Snapshot unavailable');
+      expect(component.allContracts()).toEqual([]);
+    });
+
+    describe('the 8-leg cap', () => {
+      function fullStrategy(): void {
+        component.legs.set(Array.from({ length: 8 }, (_, i) => ({
+          strike: 90 + i, optionType: 'call' as const, position: 'long' as const,
+          premium: 5, iv: 0.2, quantity: 1, enabled: true,
+        })));
+      }
+
+      it('says so when a ninth leg is refused', () => {
+        fullStrategy();
+
+        component.addLegFromChain(contract(200), 'call', 'long');
+
+        expect(component.legs().length).toBe(8);
+        expect(component.error()).toContain('at most 8 legs');
+      });
+
+      it('still adds a lot to a leg that is already in the strategy', () => {
+        fullStrategy();
+
+        component.addLegFromChain(contract(90), 'call', 'long');
+
+        expect(component.legs().length).toBe(8);
+        expect(component.legs()[0].quantity).toBe(2);
+        expect(component.error()).toBeNull();
+      });
+    });
+  });
+
   // ── SB-C: Analyze workflow ─────────────────────────────────────
   describe('SB-C: analyzeStrategy → resolver call → result rendering', () => {
     function seedReadyState(): void {
@@ -457,6 +585,20 @@ describe('StrategyBuilderComponent', () => {
       expect(component.chainDensity()).toBe('quick');
       expect(localStorage.getItem('sb.chainDensity')).toBe('quick');
     });
+
+    it('opens on the default and still toggles when the browser blocks storage', () => {
+      const blocked = () => { throw new DOMException('Storage is blocked.', 'SecurityError'); };
+      vi.stubGlobal('localStorage', { getItem: blocked, setItem: blocked });
+      try {
+        const page = TestBed.createComponent(StrategyBuilderComponent).componentInstance;
+        expect(page.chainDensity()).toBe('quick');
+
+        page.toggleChainDensity();
+        expect(page.chainDensity()).toBe('greeks');
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
   });
 
   // ── UX-Q1 / R0b: drill-down icon-per-side trigger ────────────────
@@ -540,20 +682,6 @@ describe('StrategyBuilderComponent', () => {
       expect(component.selectedHistoryContract()).toBeNull();
       expect(component.historyAggregates()).toEqual([]);
       expect(component.historyError()).toBeNull();
-    });
-
-    it('parsedHistoryTicker returns the expected display fields for a SPY call', () => {
-      component.selectedHistoryContract.set({
-        ticker: 'O:SPY260220C00590000',
-        contractType: 'call', strikePrice: 590, expirationMs: 1_771_621_200_000,
-        snapshot: buildContract('call'),
-      });
-
-      const parsed = component.parsedHistoryTicker();
-      expect(parsed?.underlying).toBe('SPY');
-      expect(parsed?.expDate).toBe('Feb 20, 2026');
-      expect(parsed?.type).toBe('Call');
-      expect(parsed?.strike).toBe('$590.00');
     });
   });
 
@@ -750,19 +878,14 @@ describe('StrategyBuilderComponent', () => {
       ]);
     }
 
-    it('is true when legs exist and selectedExpiration evaluates to T <= 0', () => {
+    it('is true when legs exist and the selected expiration has already passed', () => {
       withEnabledLeg();
-      const todayAnchor = optionExpiryAnchorMs(etIsoDate(Date.now()));
-      component.selectedExpiration.set(todayAnchor);
+      // Yesterday's 16:00 ET anchor is behind us at any hour of today.
+      const yesterdayAnchor = optionExpiryAnchorMs(etIsoDate(Date.now() - 86400000));
+      component.selectedExpiration.set(yesterdayAnchor);
 
-      // timeToExpiry clamps to 0 once the 16:00 ET deadline passes;
-      // for any same-day exp the value is at most a few hours, but
-      // the banner should fire when the live computation returns 0
-      // OR a negligibly small T. Verify by checking the computed
-      // signal directly: if the legs exist and timeToExpiry() <= 0
-      // we want the banner.
-      const expectedBanner = component.timeToExpiry() <= 0;
-      expect(component.noForwardCurves()).toBe(expectedBanner);
+      expect(component.timeToExpiry()).toBe(0);
+      expect(component.noForwardCurves()).toBe(true);
     });
 
     it('is false when no legs are enabled (banner only fires once a leg exists)', () => {
@@ -788,6 +911,73 @@ describe('StrategyBuilderComponent', () => {
         { strike: 100, optionType: 'call', position: 'long', premium: 5, iv: 0.3, quantity: 1, enabled: false },
       ]);
       expect(component.noForwardCurves()).toBe(false);
+    });
+  });
+
+  // ── #3221: the clock, the expiry pick and the unit of the figures ──
+  describe('time left, the nearest expiry and the expected value', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('counts the time left down on a page left open, with no input touched', () => {
+      const openedAt = Date.UTC(2026, 9, 14, 15, 0);
+      vi.useFakeTimers();
+      vi.setSystemTime(openedAt);
+      const page = TestBed.createComponent(StrategyBuilderComponent).componentInstance;
+      page.selectedExpiration.set(openedAt + 10 * 86_400_000);
+      expect(page.daysToExpiry()).toBeCloseTo(10, 9);
+
+      vi.advanceTimersByTime(6 * 3_600_000);
+
+      expect(page.daysToExpiry()).toBeCloseTo(9.75, 6);
+    });
+
+    it('opens on the next expiry once today\'s has closed at 16:00 New York time', async () => {
+      // 16:30 EDT on Wed 2026-10-14: today's expiry anchor, 16:00 ET, is behind us.
+      const now = Date.UTC(2026, 9, 14, 20, 30);
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(now);
+      const todaysExpiry = optionExpiryAnchorMs(etIsoDate(now));
+      const nextExpiry = optionExpiryAnchorMs(etIsoDate(now + 2 * 86_400_000));
+      component.ticker.set('SPY');
+
+      const promise = component.fetchExpirations();
+      expectGraphQL(httpMock, 'getOptionsExpirations').flush({
+        data: {
+          getOptionsExpirations: { success: true, expirations: [todaysExpiry, nextExpiry], count: 2, error: null },
+        },
+      });
+      expectGraphQLOptional(httpMock, 'getStockSnapshot')?.flush({
+        data: { getStockSnapshot: { success: true, snapshot: null, error: null } },
+      });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expectGraphQL(httpMock, 'getOptionsChainSnapshot').flush({
+        data: {
+          getOptionsChainSnapshot: {
+            success: true,
+            underlying: { ticker: 'SPY', price: 590, change: 0, changePercent: 0 },
+            contracts: [],
+            count: 0,
+            riskFreeRate: 0.05,
+            dividendYield: 0,
+            rateSource: 'fred',
+            dividendSource: 'polygon',
+            error: null,
+          },
+        },
+      });
+      await promise;
+
+      expect(component.selectedExpiration()).toBe(nextExpiry);
+    });
+
+    it('shows the expected value per contract, as it shows max profit and max loss', () => {
+      // The server's figures are per share; the cards beside one another are per contract.
+      component.analysisResult.set({ ...buildAnalysisResult(), expectedValue: 0.5, maxProfit: 0.5 });
+
+      expect(component.analysisExpectedValueDisplay()).toBe('$50.00');
+      expect(component.analysisMaxProfitDisplay()).toBe('$50.00');
     });
   });
 

@@ -43,6 +43,8 @@ export class HistoryTabComponent {
 
   /** Whether the tab is the one on show; the list is read again each time it becomes so. */
   readonly active = input(true);
+  /** Why the form cannot take a setup just now, in words; null when it can. A run's Use this setup says so rather than doing nothing. */
+  readonly setupBlockedWhy = input<string | null>(null);
   /** The owner asked for the setup of a run to be put into the Backtest tab's form. */
   readonly useSetup = output<ServedSetup>();
   /** A run was deleted: the Backtest tab must not go on showing it. */

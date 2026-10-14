@@ -1,0 +1,198 @@
+{
+  "grid": {
+    "spot": [
+      80.0,
+      100.0,
+      120.0
+    ],
+    "strike": [
+      100.0
+    ],
+    "ttm_days": [
+      7,
+      30,
+      90,
+      180,
+      365
+    ],
+    "volatility": [
+      0.1,
+      0.2,
+      0.4
+    ],
+    "rate": [
+      0.0,
+      0.05
+    ],
+    "dividend": [
+      0.0,
+      0.02
+    ],
+    "option_type": [
+      "call",
+      "put"
+    ]
+  },
+  "scenarios": [
+    {
+      "name": "now",
+      "iv_shift": 0.0,
+      "time_shift_days": 0.0
+    },
+    {
+      "name": "time_plus_5",
+      "iv_shift": 0.0,
+      "time_shift_days": 5.0
+    },
+    {
+      "name": "iv_up_10",
+      "iv_shift": 0.1,
+      "time_shift_days": 0.0
+    },
+    {
+      "name": "iv_down_10",
+      "iv_shift": -0.1,
+      "time_shift_days": 0.0
+    }
+  ],
+  "strategies": [
+    {
+      "name": "bull_call_spread_95_105",
+      "spot": 100.0,
+      "rate": 0.05,
+      "ttm_days": 30,
+      "price_range_pct": 0.1,
+      "curve_points": 5,
+      "legs": [
+        {
+          "strike": 95.0,
+          "option_type": "call",
+          "position": "long",
+          "premium": 7.2,
+          "iv": 0.26,
+          "quantity": 1
+        },
+        {
+          "strike": 105.0,
+          "option_type": "call",
+          "position": "short",
+          "premium": 2.6,
+          "iv": 0.23,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "name": "long_call_95_without_iv",
+      "spot": 100.0,
+      "rate": 0.05,
+      "ttm_days": 30,
+      "price_range_pct": 0.1,
+      "curve_points": 5,
+      "legs": [
+        {
+          "strike": 95.0,
+          "option_type": "call",
+          "position": "long",
+          "premium": 6.0,
+          "iv": 0.0,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "name": "iron_condor_two_contracts",
+      "spot": 100.0,
+      "rate": 0.043,
+      "ttm_days": 45,
+      "price_range_pct": 0.2,
+      "curve_points": 9,
+      "legs": [
+        {
+          "strike": 90.0,
+          "option_type": "put",
+          "position": "long",
+          "premium": 0.45,
+          "iv": 0.31,
+          "quantity": 2
+        },
+        {
+          "strike": 95.0,
+          "option_type": "put",
+          "position": "short",
+          "premium": 1.3,
+          "iv": 0.28,
+          "quantity": 2
+        },
+        {
+          "strike": 105.0,
+          "option_type": "call",
+          "position": "short",
+          "premium": 1.15,
+          "iv": 0.2,
+          "quantity": 2
+        },
+        {
+          "strike": 110.0,
+          "option_type": "call",
+          "position": "long",
+          "premium": 0.4,
+          "iv": 0.22,
+          "quantity": 2
+        }
+      ]
+    },
+    {
+      "name": "ratio_call_spread_short_leg_without_iv",
+      "spot": 100.0,
+      "rate": 0.05,
+      "ttm_days": 30,
+      "price_range_pct": 0.1,
+      "curve_points": 5,
+      "legs": [
+        {
+          "strike": 100.0,
+          "option_type": "call",
+          "position": "long",
+          "premium": 5.1,
+          "iv": 0.24,
+          "quantity": 1
+        },
+        {
+          "strike": 105.0,
+          "option_type": "call",
+          "position": "short",
+          "premium": 2.4,
+          "iv": 0.0,
+          "quantity": 2
+        }
+      ]
+    },
+    {
+      "name": "long_straddle_100_low_iv",
+      "spot": 100.0,
+      "rate": 0.05,
+      "ttm_days": 30,
+      "price_range_pct": 0.1,
+      "curve_points": 5,
+      "legs": [
+        {
+          "strike": 100.0,
+          "option_type": "call",
+          "position": "long",
+          "premium": 1.0,
+          "iv": 0.05,
+          "quantity": 1
+        },
+        {
+          "strike": 100.0,
+          "option_type": "put",
+          "position": "long",
+          "premium": 0.9,
+          "iv": 0.04,
+          "quantity": 1
+        }
+      ]
+    }
+  ]
+}

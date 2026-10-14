@@ -210,6 +210,7 @@ const PRICING_MODEL_COMPARISON_QUERY = `
         model
         points { spot price delta gamma theta vega rho }
       }
+      unavailableModels { model reason }
       error
     }
   }
@@ -279,7 +280,12 @@ export class MarketDataService {
         }),
         map(response => {
           const result = response.data.getOptionsExpirations;
-          return result.success ? result.expirations : [];
+          // A vendor failure is not a ticker with no listed options: throw, so
+          // every caller shows the reason instead of an empty ribbon.
+          if (!result.success) {
+            throw new Error(`Option expirations unavailable: ${result.error ?? 'no reason given'}`);
+          }
+          return result.expirations;
         })
       );
   }

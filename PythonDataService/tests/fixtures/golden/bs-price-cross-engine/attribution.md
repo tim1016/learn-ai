@@ -2,8 +2,10 @@
 
 **Constructed:** 2026-04-26 (Phase 1.4 of the numerical-authority migration; decision in `docs/architecture/adrs/0068-python-owns-the-canonical-math.md`)
 **Purpose:** pin equivalence between the two in-repo Black-Scholes implementations:
-- closed-form, continuous-time → `app/services/bs_greeks.py::bs_european_price`
+- closed-form, continuous-time → `app/services/bs_greeks.py::bs_european_price` and `black_scholes_greeks`
 - QuantLib analytic engine → `app/services/quantlib_pricer.py::price_option` with `engine=PricingEngine.ANALYTIC_BS`
+
+The grid pins the price and, since #3221, the five Greeks (delta, gamma, theta, vega, rho).
 
 **Why a fixture and not just a parametrized test:** the input cases are pinned here so that both engines must produce a price on the same input grid. If either drifts (a refactor changes a sign convention, a rounding-mode change in QuantLib, etc.), the test detects it via the parity assertion against the *other* engine, not against the fixture's stored output (there is no stored output — both engines compute live).
 
@@ -19,6 +21,8 @@ Per `.claude/rules/numerical-rigor.md` § Tolerance rules:
 - The two BSM implementations both use the same closed-form analytical formula. They must agree to numerical roundoff. Test asserts `atol=1e-10, rtol=0`.
 
 Why this is tighter than the `1e-9` indicator default: there is no recursive accumulation in either path. Single-evaluation closed-form math should be agreement to within last-bit machine precision; if it isn't, something is wrong.
+
+Greeks: `atol=1e-8, rtol=0`. `price_option` rounds delta, gamma, theta, vega and rho to 8 decimals, so a rounding of up to 5e-9 separates the engines by itself; the measured worst case over the 360 cases is 5.0e-9 for each Greek. 1e-8 is that bound with a 2x margin. The price is not rounded there and keeps `1e-10`.
 
 ## Input grid
 

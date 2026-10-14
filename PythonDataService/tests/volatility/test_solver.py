@@ -7,32 +7,13 @@ from __future__ import annotations
 import math
 
 import pytest
-from scipy.stats import norm
 
 from app.volatility.solver import (
     SolveStatus,
     implied_volatility,
     solve_iv_chain,
 )
-
-
-def bs_price(
-    spot: float,
-    strike: float,
-    ttm: float,
-    rate: float,
-    vol: float,
-    is_call: bool,
-) -> float:
-    """Reference Black-Scholes price for test data generation."""
-    import math
-
-    d1 = (math.log(spot / strike) + (rate + 0.5 * vol**2) * ttm) / (vol * math.sqrt(ttm))
-    d2 = d1 - vol * math.sqrt(ttm)
-    df = math.exp(-rate * ttm)
-    if is_call:
-        return spot * norm.cdf(d1) - strike * df * norm.cdf(d2)
-    return strike * df * norm.cdf(-d2) - spot * norm.cdf(-d1)
+from tests.volatility.conftest import bs_price
 
 
 class TestImpliedVolatility:
@@ -116,6 +97,19 @@ class TestImpliedVolatility:
         """Negative spot should return INPUT_ERROR."""
         result = implied_volatility(5.0, -100, 100, ttm=0.5, rate=0.05)
         assert result.status == SolveStatus.INPUT_ERROR
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf")], ids=["nan", "inf"])
+    @pytest.mark.parametrize("field", ["option_price", "spot", "strike", "ttm", "rate", "dividend"])
+    def test_non_finite_input_returns_input_error(self, field: str, value: float) -> None:
+        """Every `<` guard below is False for NaN, so a non-finite input used
+        to fall through to the solvers and read as CONVERGENCE_FAILURE."""
+        inputs = {"option_price": 5.0, "spot": 100.0, "strike": 100.0, "ttm": 0.5, "rate": 0.05, "dividend": 0.0}
+        inputs[field] = value
+
+        result = implied_volatility(**inputs)
+
+        assert result.status == SolveStatus.INPUT_ERROR
+        assert result.iv is None
 
     def test_intrinsic_violation(self, spot: float, rate: float) -> None:
         """Price below intrinsic should return INTRINSIC_VIOLATION."""

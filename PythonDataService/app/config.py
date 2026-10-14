@@ -416,6 +416,10 @@ class Settings(BaseSettings):
     # restore them after the lake moves on. Durable like the other artifact
     # stores; losing it leaves every qualification un-re-provable.
     GOLDEN_SEARCH_PROOF_ROOT: Path = _SERVICE_ARTIFACTS_ROOT / "golden_search" / "blobs"
+    # IV recorder JSONL store (ADR 0071 decision 8). The default is inside the
+    # container layer, so a recreate loses the history: point this at a mounted
+    # volume wherever the recorder is enabled.
+    IV_RECORDER_STORE_PATH: str = "/var/lib/iv-recorder"
 
 settings = Settings()
 fleet_settings = FleetSettings()

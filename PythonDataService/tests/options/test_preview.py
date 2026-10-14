@@ -25,7 +25,6 @@ from app.options.preview import (
     StructureFigures,
     TooLateToEnter,
     bid_ask_gap_percent_of_mid,
-    percent_of,
     structure_figures,
 )
 from app.options.requirement import StructureMoneyRefusal, StructureMoneyRefused
@@ -105,12 +104,6 @@ def test_a_gap_is_a_percent_of_the_mid_and_exact() -> None:
 def test_a_gap_is_not_read_from_a_market_that_cannot_be_crossed(bid: str, ask: str) -> None:
     with pytest.raises(ValueError, match="market that can be crossed"):
         bid_ask_gap_percent_of_mid(Decimal(bid), Decimal(ask))
-
-
-def test_a_cost_is_a_percent_of_what_is_set_aside_and_exact() -> None:
-    assert percent_of(800, 1_400) == Fraction(400, 7)
-    with pytest.raises(ValueError):
-        percent_of(800, 0)
 
 
 def test_a_bought_spread_has_every_figure() -> None:

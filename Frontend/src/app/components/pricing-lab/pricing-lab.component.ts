@@ -15,8 +15,10 @@ import {
   CrosshairMode,
   LineSeries, LineStyle,
   type IChartApi, type ISeriesApi,
+  type LineData,
   type MouseEventParams,
   type UTCTimestamp,
+  type WhitespaceData,
 } from 'lightweight-charts';
 import { Button } from 'primeng/button';
 import { InputText } from 'primeng/inputtext';
@@ -33,6 +35,7 @@ import { MarketDataService } from '../../services/market-data.service';
 import { etIsoDate } from '../../shared/date/et-midnight';
 import { optionExpiryAnchorMs } from '../../shared/option-contract/option-expiry-date';
 import { formatTimestampDisplay } from '../../shared/timestamp/timestamp-display';
+import { errorMessage } from '../../shared/errors/error-message';
 import { createAppChart } from '../../shared/charts/chart-utils';
 import {
   bsDelta, bsGamma,
@@ -48,6 +51,17 @@ type ChartMetric = 'price' | GreekType;
 interface ContractOption {
   label: string;
   value: SnapshotContractResult;
+}
+
+/** One chart point. A value the engine does not provide has none, which the chart draws as a gap, never as zero. */
+function linePoint(spot: number, value: number | null): LineData | WhitespaceData {
+  const time = spot as UTCTimestamp;
+  return value === null ? { time } : { time, value };
+}
+
+/** a - b, or null when either side is a Greek its engine does not provide. */
+function valueDiff(a: number | null, b: number | null): number | null {
+  return a === null || b === null ? null : a - b;
 }
 
 // ── Model registry ─────────────────────────────────────────────
@@ -118,7 +132,7 @@ export const MODEL_REGISTRY: ModelDef[] = [
     key: 'quantlib_mc', label: 'QuantLib Monte Carlo', shortLabel: 'MC',
     color: 'rgba(163, 163, 163, 0.95)', lineStyle: LineStyle.LargeDashed, lineWidth: 1,
     source: 'server',
-    description: 'Monte Carlo simulation with pseudorandom paths (seed=42, tolerance=0.001). Stochastic price paths sampled under risk-neutral measure. Greeks computed numerically.',
+    description: 'Monte Carlo simulation with pseudorandom paths (seed=42, tolerance=0.001). Stochastic price paths sampled under risk-neutral measure. Delta and gamma are computed numerically; the engine provides no theta, vega or rho.',
     library: 'C++ QuantLib MCEuropeanEngine(pseudorandom, tol=0.001)',
   },
 ];
@@ -169,6 +183,9 @@ export class PricingLabComponent implements OnDestroy {
   );
   readonly underlying = signal<{ ticker: string; price: number } | null>(null);
   readonly allContracts = signal<SnapshotContractResult[]>([]);
+  /** Count expiration / chain fetches; only the latest may write the page. */
+  private expirationsRequest = 0;
+  private chainRequest = 0;
 
   // ── Selected contract ────────────────────────────────────────
   readonly selectedContract = signal<SnapshotContractResult | null>(null);
@@ -254,8 +271,8 @@ export class PricingLabComponent implements OnDestroy {
     const r = result.riskFreeRate;
     if (iv && strike && optType && r != null) {
       const T = result.timeToExpiryYears;
-      if (T > 0) {
-        const rangePct = this.spotRangePct() / 100;
+      const rangePct = this.spotRangeFraction();
+      if (T > 0 && rangePct !== null) {
         const spotMin = spot * (1 - rangePct);
         const spotMax = spot * (1 + rangePct);
         const numPoints = 100;
@@ -301,16 +318,39 @@ export class PricingLabComponent implements OnDestroy {
       const curve = curves.get(def.key);
       if (!curve?.length) continue;
       const len = Math.min(refCurve.length, curve.length);
-      let maxDiff = 0, sumDiff = 0;
+      let maxDiff = 0, sumDiff = 0, compared = 0;
       for (let i = 0; i < len; i++) {
-        const d = Math.abs(getVal(refCurve[i]) - getVal(curve[i]));
+        const diff = valueDiff(getVal(refCurve[i]), getVal(curve[i]));
+        if (diff === null) continue;
+        const d = Math.abs(diff);
         maxDiff = Math.max(maxDiff, d);
         sumDiff += d;
+        compared++;
       }
-      stats.push({ key: def.key, label: def.label, maxDiff, avgDiff: len > 0 ? sumDiff / len : 0 });
+      if (compared === 0) continue;
+      stats.push({ key: def.key, label: def.label, maxDiff, avgDiff: sumDiff / compared });
     }
     return stats;
   });
+
+  /** The models with no value of the selected Greek: an engine does not provide every one (Monte Carlo has no theta). */
+  readonly metricNotProvidedBy = computed(() => {
+    const metric = this.selectedMetric();
+    if (metric === 'price') return [];
+    const curves = this.allCurves();
+    return MODEL_REGISTRY
+      .filter(def => {
+        const pts = curves.get(def.key);
+        return !!pts?.length && pts.every(p => p[metric] === null);
+      })
+      .map(def => def.shortLabel);
+  });
+
+  /** Range % as a fraction of spot; null when it is empty, 0 or past 100, which no curve spans. */
+  private spotRangeFraction(): number | null {
+    const pct = this.spotRangePct();
+    return Number.isFinite(pct) && pct > 0 && pct < 100 ? pct / 100 : null;
+  }
 
   // ── Chart refs ───────────────────────────────────────────────
   private chartEl = viewChild<ElementRef<HTMLDivElement>>('chartContainer');
@@ -337,12 +377,23 @@ export class PricingLabComponent implements OnDestroy {
     const t = this.ticker().trim().toUpperCase();
     if (!t) return;
     this.ticker.set(t);
+    // A late reply for a ticker the user has since left must not write this one's selectors.
+    const request = ++this.expirationsRequest;
+    // Abandon the old ticker's chain fetch too: its loading state ends here.
+    this.chainRequest++;
+    this.chainLoading.set(false);
     this.expirationsLoading.set(true);
+    this.statusMessage.set(null);
+    this.availableExpirations.set([]);
+    this.selectedExpiration.set(null);
+    this.allContracts.set([]);
+    this.underlying.set(null);
     this.selectedContract.set(null);
     this.serverResult.set(null);
 
     try {
       const exps = await firstValueFrom(this.marketData.getOptionsExpirations(t));
+      if (request !== this.expirationsRequest) return;
       this.availableExpirations.set(exps);
 
       const todayAnchor = optionExpiryAnchorMs(etIsoDate(Date.now()));
@@ -352,21 +403,36 @@ export class PricingLabComponent implements OnDestroy {
         await this.fetchChain(t, nearest);
       }
     } catch (err) {
-      console.error('[PricingLab] Error fetching expirations:', err);
+      if (request === this.expirationsRequest) {
+        this.statusMessage.set({ type: 'error', text: `Could not load expirations for ${t}: ${errorMessage(err)}` });
+      }
     } finally {
-      this.expirationsLoading.set(false);
+      // Only the latest fetch ends the loading state it started.
+      if (request === this.expirationsRequest) this.expirationsLoading.set(false);
     }
   }
 
   async fetchChain(ticker: string, expirationMs: number): Promise<void> {
+    const request = ++this.chainRequest;
     this.chainLoading.set(true);
+    this.statusMessage.set(null);
     this.selectedContract.set(null);
     this.serverResult.set(null);
+    // The old expiry's strikes must not stay in the selectors if this fetch fails.
+    this.allContracts.set([]);
 
     try {
       const snap = await firstValueFrom(
         this.marketData.getOptionsChainSnapshot(ticker, expirationMs),
       );
+      if (request !== this.chainRequest) return;
+      if (!snap.success) {
+        this.statusMessage.set({
+          type: 'error',
+          text: `Could not load the ${ticker} chain: ${snap.error ?? 'no reason given'}`,
+        });
+        return;
+      }
       if (snap.underlying) {
         this.underlying.set({
           ticker: snap.underlying.ticker ?? ticker,
@@ -381,9 +447,11 @@ export class PricingLabComponent implements OnDestroy {
       }
       this.allContracts.set(snap.contracts ?? []);
     } catch (err) {
-      console.error('[PricingLab] Error fetching chain:', err);
+      if (request === this.chainRequest) {
+        this.statusMessage.set({ type: 'error', text: `Could not load the ${ticker} chain: ${errorMessage(err)}` });
+      }
     } finally {
-      this.chainLoading.set(false);
+      if (request === this.chainRequest) this.chainLoading.set(false);
     }
   }
 
@@ -426,10 +494,15 @@ export class PricingLabComponent implements OnDestroy {
       return;
     }
 
+    const rangePct = this.spotRangeFraction();
+    if (rangePct === null) {
+      this.statusMessage.set({ type: 'warn', text: 'Range % must be above 0 and below 100.' });
+      return;
+    }
+
     this.statusMessage.set({ type: 'info', text: 'Computing pricing curves across all models...' });
     this.compareLoading.set(true);
     try {
-      const rangePct = this.spotRangePct() / 100;
       const result = await firstValueFrom(
         this.marketData.comparePricingModels({
           spot,
@@ -447,18 +520,14 @@ export class PricingLabComponent implements OnDestroy {
       if (!result.success) {
         this.statusMessage.set({
           type: 'error',
-          text: `Server error: ${result.error || 'Unknown error'}. The computation may have timed out — try again.`,
+          text: `Could not compare: ${result.error || 'Unknown error'}.`,
         });
         this.serverResult.set(null);
         return;
       }
 
-      const modelCount = result.models?.length ?? 0;
       this.serverResult.set(result);
-      this.statusMessage.set({
-        type: 'success',
-        text: `Loaded ${modelCount} server model${modelCount !== 1 ? 's' : ''} + Legacy BS (client). Hover chart for values.`,
-      });
+      this.statusMessage.set(this.comparisonStatus(result));
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Network error';
       this.statusMessage.set({
@@ -469,6 +538,23 @@ export class PricingLabComponent implements OnDestroy {
     } finally {
       this.compareLoading.set(false);
     }
+  }
+
+  /** How many of the engines asked for drew a curve, and why each of the others did not. */
+  private comparisonStatus(result: PricingCompareResult): { type: 'success' | 'warn'; text: string } {
+    const ran = result.models.length;
+    const skipped = result.unavailableModels;
+    const loaded = `Loaded ${ran} of ${ran + skipped.length} server engines + Legacy BS (client).`;
+    if (skipped.length === 0) {
+      return { type: 'success', text: `${loaded} Hover chart for values.` };
+    }
+    const modelsByReason = new Map<string, string[]>();
+    for (const { model, reason } of skipped) {
+      const label = MODEL_REGISTRY.find(def => def.key === model)?.shortLabel ?? model;
+      modelsByReason.set(reason, [...(modelsByReason.get(reason) ?? []), label]);
+    }
+    const why = [...modelsByReason].map(([reason, labels]) => `${labels.join(', ')}: ${reason}`).join('; ');
+    return { type: 'warn', text: `${loaded} Not run — ${why}.` };
   }
 
   // ── Model visibility toggle ──────────────────────────────────
@@ -585,10 +671,8 @@ export class PricingLabComponent implements OnDestroy {
       const pts = curves.get(def.key);
       const isVisible = visible.has(def.key);
 
-      if (pts?.length && isVisible) {
-        series.setData(
-          pts.map(p => ({ time: p.spot as UTCTimestamp, value: getVal(p) })),
-        );
+      if (pts?.length && isVisible && pts.some(p => getVal(p) !== null)) {
+        series.setData(pts.map(p => linePoint(p.spot, getVal(p))));
         series.applyOptions({ visible: true });
       } else {
         series.setData([]);
@@ -612,7 +696,8 @@ export class PricingLabComponent implements OnDestroy {
       if (!visible.has(def.key)) continue;
       const len = Math.min(refCurve.length, pts.length);
       for (let i = 0; i < len; i++) {
-        allDiffs.push(getVal(refCurve[i]) - getVal(pts[i]));
+        const diff = valueDiff(getVal(refCurve[i]), getVal(pts[i]));
+        if (diff !== null) allDiffs.push(diff);
       }
     }
 
@@ -641,15 +726,14 @@ export class PricingLabComponent implements OnDestroy {
       }
 
       const len = Math.min(refCurve.length, pts.length);
-      const data: { time: UTCTimestamp; value: number }[] = [];
+      const data: (LineData | WhitespaceData)[] = [];
       for (let i = 0; i < len; i++) {
-        data.push({
-          time: refCurve[i].spot as UTCTimestamp,
-          value: (getVal(refCurve[i]) - getVal(pts[i])) * scale,
-        });
+        const diff = valueDiff(getVal(refCurve[i]), getVal(pts[i]));
+        data.push(linePoint(refCurve[i].spot, diff === null ? null : diff * scale));
       }
-      series.setData(data);
-      series.applyOptions({ visible: true });
+      const plotted = data.some(d => 'value' in d);
+      series.setData(plotted ? data : []);
+      series.applyOptions({ visible: plotted });
     }
     this.diffChart.timeScale().fitContent();
   }

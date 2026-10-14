@@ -35,9 +35,9 @@ from app.options_backtest.past_chain import (
     describe_expiry,
     expiry_date_of,
 )
+from app.options_backtest.setup import UNDERLYING_PATTERN
 from app.schemas.options_backtest import OptionsBacktestRefusalBody
 from app.schemas.options_backtest_chain import (
-    UNDERLYING_PATTERN,
     PastChainDayResponse,
     PastChainDownloadRequest,
     PastChainDownloadResponse,

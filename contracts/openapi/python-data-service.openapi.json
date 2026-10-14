@@ -45178,6 +45178,7 @@
             "items": {
               "type": "string"
             },
+            "maxItems": 60,
             "title": "Contracts",
             "type": "array"
           },
@@ -46084,6 +46085,14 @@
           "time_to_expiry_years": {
             "title": "Time To Expiry Years",
             "type": "number"
+          },
+          "unavailable_models": {
+            "description": "Each requested model that has no curve in `models`, with why; empty when every model ran",
+            "items": {
+              "$ref": "#/components/schemas/PricingModelUnavailable"
+            },
+            "title": "Unavailable Models",
+            "type": "array"
           }
         },
         "required": [
@@ -46120,6 +46129,26 @@
         "title": "PricingModelCurve",
         "type": "object"
       },
+      "PricingModelUnavailable": {
+        "description": "A model the comparison asked for and has no curve for.",
+        "properties": {
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why in the service's own words; never the engine's error text",
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "reason"
+        ],
+        "title": "PricingModelUnavailable",
+        "type": "object"
+      },
       "PricingPointResult": {
         "description": "Single data point for one model at one spot price.",
         "properties": {
@@ -46136,20 +46165,44 @@
             "type": "number"
           },
           "rho": {
-            "title": "Rho",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Per 1% rate move; null when the engine does not provide it (Monte Carlo has no rho)",
+            "title": "Rho"
           },
           "spot": {
             "title": "Spot",
             "type": "number"
           },
           "theta": {
-            "title": "Theta",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Per calendar day; null when the engine does not provide it (Monte Carlo has no theta)",
+            "title": "Theta"
           },
           "vega": {
-            "title": "Vega",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Per 1% IV move; null when the engine does not provide it (Monte Carlo has no vega)",
+            "title": "Vega"
           }
         },
         "required": [
@@ -79598,7 +79651,7 @@
     },
     "/api/quantlib/compare": {
       "post": {
-        "description": "Compare ALL pricing models across a spot price range.\n\nReturns curves for:\n  1. python_bs         \u2014 Python analytical BS (scipy.stats.norm CDF)\n  2. quantlib_bs       \u2014 QuantLib Analytic European Engine (C++ via SWIG)\n  3. quantlib_crr      \u2014 QuantLib Binomial Cox-Ross-Rubinstein (801 steps)\n  4. quantlib_jr       \u2014 QuantLib Binomial Jarrow-Rudd (801 steps)\n  5. quantlib_lr       \u2014 QuantLib Binomial Leisen-Reimer (801 steps)\n  6. quantlib_fd       \u2014 QuantLib Finite Differences (801\u00d7800 grid)\n  7. quantlib_mc       \u2014 QuantLib Monte Carlo (tol=0.001, seed=42)\n\nThe frontend additionally computes \"Legacy BS\" (Abramowitz & Stegun normCdf\napproximation, |error| < 1.5e-7) client-side and overlays it.",
+        "description": "Compare ALL pricing models across a spot price range.\n\nReturns curves for:\n  1. python_bs         \u2014 Python analytical BS (canonical bs_greeks.py, at the request's dividend yield)\n  2. quantlib_bs       \u2014 QuantLib Analytic European Engine (C++ via SWIG)\n  3. quantlib_crr      \u2014 QuantLib Binomial Cox-Ross-Rubinstein (801 steps)\n  4. quantlib_jr       \u2014 QuantLib Binomial Jarrow-Rudd (801 steps)\n  5. quantlib_lr       \u2014 QuantLib Binomial Leisen-Reimer (801 steps)\n  6. quantlib_fd       \u2014 QuantLib Finite Differences (801\u00d7800 grid)\n  7. quantlib_mc       \u2014 QuantLib Monte Carlo (tol=0.001, seed=42)\n\nA model with no curve in `models` is named in `unavailable_models` with why (QuantLib not installed, or the\nengine raised). A Greek an engine does not provide (Monte Carlo theta, vega, rho) is null, never 0.0.\n\nThe frontend additionally computes \"Legacy BS\" (Abramowitz & Stegun normCdf\napproximation, |error| < 1.5e-7) client-side and overlays it.",
         "operationId": "pricing_compare_api_quantlib_compare_post",
         "requestBody": {
           "content": {
@@ -83431,6 +83484,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "summary": "Get The Run",

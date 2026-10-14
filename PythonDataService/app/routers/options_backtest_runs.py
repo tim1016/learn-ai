@@ -134,10 +134,25 @@ async def list_the_runs(
     return [OptionsBacktestRunListItemResponse.from_record(record) for record in records]
 
 
-@router.get("/runs/{run_id}", response_model=OptionsBacktestRunDetailResponse, responses=_NOT_FOUND)
+@router.get(
+    "/runs/{run_id}",
+    response_model=OptionsBacktestRunDetailResponse,
+    responses={**_NOT_FOUND, status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": OptionsBacktestRefusalBody}},
+)
 async def get_the_run(run_id: RunId) -> OptionsBacktestRunDetailResponse:
     """One run: its status, the setup it ran, the banner facts, and when it is complete every figure. Not its trades."""
-    stored = await with_connection(saved_runs.get_run, run_id, is_live=saved_runs.not_asked)
+    try:
+        stored = await with_connection(saved_runs.get_run, run_id, is_live=saved_runs.not_asked)
+    except saved_runs.RunFiguresCannotBeRead as exc:
+        # A coded 500, as a stored session that does not agree with itself is: the run's trades and sessions still open.
+        logger.error("a stored run's figures cannot be read", extra={"run_id": run_id, "reason": exc.reason})
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            {
+                "code": "OPTIONS_BACKTEST_STORED_RUN_FIGURES_UNREADABLE",
+                "message": f"The figures stored with run {run_id} cannot be read, so it cannot be opened: {exc.reason}.",
+            },
+        ) from exc
     if stored is None:
         raise _no_such_run(run_id)
     stored = await saved_runs.present_run(stored, is_live=lifecycle.job_is_live)

@@ -15,7 +15,7 @@ Formula: with each leg's contracts cᵢ counted in the leg's own direction and
   A leg counted in its own direction is its signed holding for a bought leg
   and the negative of it for a sold one, so a leg held the wrong way round
   counts below zero and the structure holds no whole unit.
-Reference: ADR 0076 decision 10 (units filled is the smallest whole number
+Reference: ADR 0076 decision 27 (units filled is the smallest whole number
   across legs; legs that come to different numbers are out of step). The
   PRD of #2913, "Partial fill" and "out of step".
 Canonical implementation: this file.

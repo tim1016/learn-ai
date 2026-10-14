@@ -7920,7 +7920,6 @@
 "tests/volatility/test_vix_replication.py::TestReplicateExpiry::test_zero_bid_walk_truncates_wings": 0.01,
 "tests/volatility/test_vix_replication.py::TestReplicateExpiryWithProvenance::test_debug_default_off_gives_none": 0.01,
 "tests/volatility/test_vix_replication.py::TestReplicateExpiryWithProvenance::test_debug_payload_lists_per_strike_contributions": 0.01,
-"tests/volatility/test_vix_replication.py::TestReplicateExpiryWithProvenance::test_max_single_strike_share_in_unit_interval": 0.01,
 "tests/volatility/test_vix_replication.py::TestReplicateExpiryWithProvenance::test_max_single_strike_share_uplifted_by_inflated_strike": 0.01,
 "tests/volatility/test_vix_replication.py::TestReplicateExpiryWithProvenance::test_mixed_atm_opra_wings_synthetic_yields_intermediate_share": 0.01,
 "tests/volatility/test_vix_replication.py::TestSingleStrikeDominanceGate::test_gate_disabled_returns_original_share": 0.01,
