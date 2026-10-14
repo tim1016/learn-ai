@@ -42,7 +42,7 @@ class SkewMetrics:
     atm_iv: float
     rr_25d: float | None
     bf_25d: float | None
-    skew_slope: float
+    skew_slope: float | None
     call_25d: DeltaStrikeResult | None
     put_25d: DeltaStrikeResult | None
 
@@ -185,6 +185,8 @@ def compute_skew_metrics(
 
     Returns:
         SkewMetrics dataclass with ATM IV, 25D RR, 25D BF, and skew slope.
+        ``skew_slope`` is None when the surface cannot be queried at
+        forward ± 1%; 0.0 means a measured flat skew.
     """
     dte_days = round(ttm * 365)
     forward = surface.spot * math.exp((surface.rate - surface.dividend) * ttm)
@@ -205,12 +207,14 @@ def compute_skew_metrics(
     dk = 0.01 * forward
     k_lo = forward - dk
     k_hi = forward + dk
+    skew_slope: float | None
     try:
         vol_lo = surface.volatility(k_lo, ttm)
         vol_hi = surface.volatility(k_hi, ttm)
         skew_slope = (vol_hi - vol_lo) / (2.0 * dk)
     except (ValueError, RuntimeError):
-        skew_slope = 0.0
+        # A failed query is "unknown", not a flat skew (0.0).
+        skew_slope = None
 
     return SkewMetrics(
         ttm=ttm,

@@ -7,6 +7,7 @@ Tests health scores, skew metrics, delta strikes, and put-call parity.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 
 import pytest
 
@@ -16,6 +17,7 @@ from app.volatility.analytics import (
     compute_skew_metrics,
     find_delta_strike,
 )
+from app.volatility.fitting import FitMethod, FitResult
 from app.volatility.surface import SurfaceMethod, VolSurface, VolSurfaceBuilder
 from tests.volatility.conftest import bs_price
 
@@ -110,6 +112,31 @@ class TestSkewMetrics:
                 metrics = compute_skew_metrics(built_surface, fit.ttm)
 
                 assert metrics.call_25d is not None
+
+
+class TestSkewSlope:
+    """``skew_slope`` separates a measured flat skew from an unmeasurable one."""
+
+    @staticmethod
+    def _surface(vol_fn: Callable[[float], float]) -> VolSurface:
+        fit = FitResult(method=FitMethod.VARIANCE, ttm=0.25, _vol_fn=vol_fn)
+        return VolSurface(method=SurfaceMethod.VARIANCE, spot=100.0, rate=0.0, dividend=0.0, fits=[fit])
+
+    def test_flat_surface_has_zero_slope(self) -> None:
+        metrics = compute_skew_metrics(self._surface(lambda strike: 0.20), 0.25)
+
+        assert metrics.skew_slope == pytest.approx(0.0, abs=1e-12)
+
+    def test_slope_is_unknown_when_the_surface_fails_off_the_forward(self) -> None:
+        def vol_only_at_the_forward(strike: float) -> float:
+            if strike != 100.0:
+                raise ValueError(f"no vol at {strike}")
+            return 0.20
+
+        metrics = compute_skew_metrics(self._surface(vol_only_at_the_forward), 0.25)
+
+        assert metrics.atm_iv == pytest.approx(0.20, abs=1e-12)
+        assert metrics.skew_slope is None
 
 
 class TestFindDeltaStrike:

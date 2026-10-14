@@ -68,6 +68,24 @@ class TestSurfaceBuilder:
         surface = builder.build(records, method=SurfaceMethod.VARIANCE)
         assert not surface.diagnostics.valid
 
+    def test_slice_diagnostics_count_the_contracts_that_failed_to_solve(
+        self, flat_vol_chain: list[dict], spot: float, rate: float
+    ) -> None:
+        """A zero-priced contract is refused by the solver and must show up as
+        a failure on its own expiry's slice, not as ``n_failed == 0``."""
+        first_ttm = flat_vol_chain[0]["ttm"]
+        refused = {"strike": 100.0, "ttm": first_ttm, "option_price": 0.0, "is_call": True}
+        builder = VolSurfaceBuilder(spot=spot, rate=rate)
+
+        surface = builder.build([*flat_vol_chain, refused], method=SurfaceMethod.VARIANCE)
+
+        slices = surface.diagnostics.slices
+        assert slices[0].ttm == pytest.approx(first_ttm, abs=1e-6)
+        assert slices[0].n_failed == 1
+        assert all(s.n_failed == 0 for s in slices[1:])
+        assert all(s.n_contracts == s.n_solved + s.n_failed for s in slices)
+        assert sum(s.n_failed for s in slices) == surface.diagnostics.n_total_failed
+
     def test_diagnostics_populated(self, flat_vol_chain: list[dict], spot: float, rate: float) -> None:
         """Diagnostics should be fully populated."""
         builder = VolSurfaceBuilder(spot=spot, rate=rate)
