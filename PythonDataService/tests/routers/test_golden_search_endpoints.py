@@ -652,6 +652,69 @@ async def test_the_jobs_entry_runs_only_the_stage_a_command_authorized(
     assert closed_job.status_code == 409  # a closed job is never replayed under its old id
 
 
+async def test_a_dispatch_the_stamp_refuses_is_released_so_its_retry_binds_instead_of_reading_as_a_dead_redelivery(
+    client: httpx.AsyncClient, harness: Harness, symbol: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fastapi import HTTPException
+
+    study = await _lock(client, symbol)
+    queued = (await _command(client, study, "continue")).json()
+    payload = {**queued["dispatch"]["payload"], "job_id": "job-stamped"}
+    stamps: list[str] = []
+
+    async def refuse_the_first_stamp(*, job_id: str, kind: str, record_id: str) -> None:
+        stamps.append(job_id)
+        if len(stamps) == 1:
+            raise HTTPException(status_code=503, detail="a live coordinator elsewhere outranks this dispatch")
+
+    monkeypatch.setattr(golden_search_router.records, "stamp_research_dispatch", refuse_the_first_stamp)
+
+    refused = await client.post(JOBS, json=payload)
+    # The binding the refused dispatch wrote is gone: nothing will ever serve that job id.
+    assert refused.status_code == 503 and harness.workers == {}
+    assert await golden_search_router.service.study_job_binding(study["id"]) is None
+    retried = await client.post(JOBS, json=payload)
+
+    # Left bound, the same id would read as a redelivery of a job that is not live and be refused (409) forever.
+    assert retried.status_code == 202, retried.text
+    assert list(harness.workers) == ["job-stamped"]
+    assert await golden_search_router.service.study_job_binding(study["id"]) == "job-stamped"
+
+
+async def test_a_writer_loop_stalled_past_the_bind_is_released_behind_the_stall_and_answers_a_retryable_503(
+    client: httpx.AsyncClient, harness: Harness, symbol: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.research.persistence import db
+    from app.utils.background_loop import CallerStoppedWaitingError
+
+    study = await _lock(client, symbol)
+    queued = (await _command(client, study, "continue")).json()
+    payload = {**queued["dispatch"]["payload"], "job_id": "job-stalled"}
+    real = db.writer_loop_call
+    waits = 0
+
+    async def stall_on_the_bind(coroutine: Any, **kwargs: Any) -> Any:
+        nonlocal waits
+        waits += 1
+        if waits == 1:
+            # The bind commits on the writer loop while the caller has stopped waiting for it.
+            await real(coroutine, **kwargs)
+            raise CallerStoppedWaitingError("the writer loop did not answer in time")
+        return await real(coroutine, **kwargs)
+
+    monkeypatch.setattr(db, "writer_loop_call", stall_on_the_bind)
+
+    stalled = await client.post(JOBS, json=payload)
+
+    assert stalled.status_code == 503 and "stalled while binding" in stalled.json()["detail"]
+    assert harness.workers == {}
+    assert await golden_search_router.service.study_job_binding(study["id"]) is None
+    monkeypatch.setattr(db, "writer_loop_call", real)
+    retried = await client.post(JOBS, json=payload)
+    assert retried.status_code == 202, retried.text
+    assert list(harness.workers) == ["job-stalled"]
+
+
 async def _lock_guarded(client: httpx.AsyncClient, symbol: str, headers: dict[str, str]) -> dict[str, Any]:
     response = await client.post(f"{BASE}/studies", json={"protocol": plan_request(symbol), "idempotency_key": _key()}, headers=headers)
     assert response.status_code == 201, response.text

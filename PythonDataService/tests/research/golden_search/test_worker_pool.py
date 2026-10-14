@@ -232,15 +232,13 @@ def test_two_lanes_overlap_independent_evaluations_within_the_window(monkeypatch
         evaluator = _seamed_evaluator(monkeypatch, engine, bridge)
         evaluator.dispatch = dispatch
 
-        started = time.monotonic()
         metrics = evaluator.evaluate([_point(gap / 10) for gap in range(1, 7)], window=JAN, stage="search")
-        elapsed = time.monotonic() - started
 
         assert [m.net_profit for m in metrics] == [gap / 10 for gap in range(1, 7)], "input order, whatever arrived"
         assert len(children) == 2, "two actual lanes served the batch"
+        # Overlap is read off the recorded intervals, not a wall-clock budget a loaded runner would break.
         assert intervals.pairs_overlapping() >= 1, "independent evaluations genuinely overlapped"
         assert intervals.max_in_flight() <= 2, "the window bounds begun-but-undelivered work"
-        assert elapsed < 6 * 0.05, f"overlap shortened the batch ({elapsed:.2f}s for six 50ms items)"
         assert evaluator.new_runs == 6 and bridge.consumed == 6
     finally:
         dispatch.close()
@@ -819,6 +817,7 @@ async def test_two_real_children_overlap_independent_evaluations(conn, tmp_path:
 
     overlaps = 0
     widths: dict[int, float] = {}
+    ran: dict[int, int] = {}
     try:
         for width in (1, 2, 4):
             runs.clear()
@@ -831,6 +830,7 @@ async def test_two_real_children_overlap_independent_evaluations(conn, tmp_path:
             finally:
                 dispatch.close()
             workers = {worker for worker, _, _ in runs}
+            ran[width] = len(runs)
             assert len(workers) == min(width, len(points)), f"width {width}: {len(workers)} actual children served the batch"
             for first in runs:
                 for second in runs:
@@ -844,7 +844,8 @@ async def test_two_real_children_overlap_independent_evaluations(conn, tmp_path:
             )
 
         assert overlaps >= 1, "two real children ran independent evaluations at the same time"
-        assert widths[4] < widths[1] * 1.5, "width never made the corpus dramatically slower (transport sanity)"
+        # Transport sanity is the work done, not a wall-clock ratio: no width ran a point twice.
+        assert ran == {width: len(points) for width in (1, 2, 4)}, "each width evaluated every point exactly once"
     finally:
         _close_writer_loop_catalog_pool()
 

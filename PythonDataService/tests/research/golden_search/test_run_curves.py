@@ -11,6 +11,7 @@ from app.research.golden_search.models import EvaluationRecord, StudyRow
 from app.research.golden_search.procedure_history import FoldWindow
 from app.research.golden_search.run_curves import (
     MAX_OTHER_LINES,
+    CurveSet,
     curve_set_lines,
     group_of,
     named_points,
@@ -185,11 +186,11 @@ def _set_study(**results: Any) -> StudyRow:
     return StudyRow(**{**{field: getattr(study, field) for field in study.__dataclass_fields__}, "protocol": protocol})
 
 
-def _chosen(records: list[EvaluationRecord], curve_set: str, candidate: str | None = None, **results: Any) -> Any:
-    return curve_set_lines(_set_study(**results), records, folds=FOLDS, declaration=EMA, curve_set=curve_set, candidate_key=candidate)  # type: ignore[arg-type]
+def _chosen(records: list[EvaluationRecord], curve_set: CurveSet, candidate: str | None = None, **results: Any) -> Any:
+    return curve_set_lines(_set_study(**results), records, folds=FOLDS, declaration=EMA, curve_set=curve_set, candidate_key=candidate)
 
 
-def _drawn(records: list[EvaluationRecord], curve_set: str, candidate: str | None = None, **results: Any) -> list[tuple[str, str, str]]:
+def _drawn(records: list[EvaluationRecord], curve_set: CurveSet, candidate: str | None = None, **results: Any) -> list[tuple[str, str, str]]:
     return [(line.record.evaluation_key, line.role, line.label) for line in _chosen(records, curve_set, candidate, **results).lines]
 
 

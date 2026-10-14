@@ -20,11 +20,13 @@ from app.data_lake.path_policy import lake_subpath
 from app.engine.engine import EvaluationBoundaryError
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.lean_sidecar.trading_calendar import expected_sessions
+from app.research.golden_search import proof as proof_module
 from app.research.golden_search.proof import (
     BlobStore,
     ProofMismatchError,
     ProofRecord,
     ProofWindow,
+    TraceProof,
     build_proof,
     decision_trace,
     materialize,
@@ -398,6 +400,19 @@ def test_build_proof_refuses_a_lake_that_moved_after_the_receipt(
         _build(snapshot, lake, blobs)
 
     assert excinfo.value.code == "RECEIPT_MISMATCH"
+
+
+def test_build_proof_refuses_a_restored_replay_that_does_not_reach_the_lake_root(
+    snapshot: DataSnapshot, lake: Path, blobs: BlobStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The staged blobs are what a later re-proof replays: a restored tree that decides differently from the lake
+    # must stop the proof, never be recorded beside the lake's root.
+    monkeypatch.setattr(proof_module, "_restored_trace", lambda *args, **kwargs: TraceProof(trace_root="0" * 64, trace_count=1))
+
+    with pytest.raises(ProofMismatchError) as excinfo:
+        _build(snapshot, lake, blobs)
+
+    assert excinfo.value.code == "TRACE_MISMATCH"
 
 
 def test_reprove_reproduces_the_recorded_root_from_blobs_alone(

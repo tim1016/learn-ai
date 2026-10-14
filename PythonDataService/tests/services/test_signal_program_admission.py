@@ -39,6 +39,7 @@ from app.services.signal_program_admission import (
     record_imported_program_sources,
     running_wiring_digest,
 )
+from tests._helpers.golden_qualification import copied_source_tree
 from tests._helpers.signal_program import LONG_PERIODS, OFF_VALIDATED_PERIODS
 
 _SID = "sealed-ema-1"
@@ -994,26 +995,6 @@ def _ema_contract():
     return contract
 
 
-def _copied_source_tree(tmp_path: Path, *, drift_artifact: bool = False) -> Path:
-    """A faithful copy of the proof's source files under ``tmp_path``.
-
-    With ``drift_artifact``, one artifact file is edited after the copy --
-    the bytes a ``git pull`` lands on the bind mount while the process keeps
-    running the code it imported.
-    """
-    contract = _ema_contract()
-    root = tmp_path.resolve()
-    for relative in (*contract.artifact_paths, *contract.wiring_artifact_paths):
-        source = admission_module._SERVICE_ROOT / relative
-        destination = root / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(source.read_bytes())
-    if drift_artifact:
-        drifted = root / "app/engine/strategy/algorithms/ema_crossover_signal.py"
-        drifted.write_text("# drifted after import\n" + drifted.read_text())
-    return root
-
-
 def test_code_changed_on_disk_after_import_refuses_the_proof(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1025,7 +1006,7 @@ def test_code_changed_on_disk_after_import_refuses_the_proof(
     refuses until the restart makes memory and disk one again."""
     record_imported_program_sources()  # the startup anchor, against the real tree
     binding = _sealed_binding()  # sealed and proven against the real tree, before the pull lands
-    drifted_root = _copied_source_tree(tmp_path, drift_artifact=True)
+    drifted_root = copied_source_tree(tmp_path, drift_artifact=True)
     monkeypatch.setattr(admission_module, "_SERVICE_ROOT", drifted_root)
     # The pulled tree ships its own receipt for its own bytes.
     receipt = qualification_receipt_payload(
@@ -1054,7 +1035,7 @@ def test_a_unchanged_disk_after_import_still_proves(
     disk, the digests match, and admission proceeds exactly as before."""
     record_imported_program_sources()
     binding = _sealed_binding()
-    fresh_root = _copied_source_tree(tmp_path)
+    fresh_root = copied_source_tree(tmp_path)
     monkeypatch.setattr(admission_module, "_SERVICE_ROOT", fresh_root)
 
     proof = prove_running_program_build(binding, verified_at_ms=_NOW)
@@ -1088,7 +1069,7 @@ def test_a_cached_program_module_and_newer_disk_bytes_refuse_the_proof(
     holds."""
     binding = _sealed_binding()  # sealed and proven against the real tree, before the pull lands
     admission_module._IMPORTED_SOURCE_DIGESTS.clear()  # a process whose anchor has not run yet
-    root = _copied_source_tree(tmp_path)
+    root = copied_source_tree(tmp_path)
     # Scope the anchor's work to exactly the two modules under control by
     # standing in a one-program registry whose contract declares only them;
     # both are pure leaves (standard-library imports only), so each can be

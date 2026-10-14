@@ -403,6 +403,26 @@ def test_a_strategy_without_a_declaration_is_named_unavailable() -> None:
     assert preflight_view(plan, None)["estimate"] is None
 
 
+def test_a_seed_equal_to_the_qualified_tuple_is_refused_and_the_registry_point_is_not(tmp_path: Path) -> None:
+    # The qualified tuple was chosen on data the folds test, so it may be the benchmark but never where they start (ADR 0074).
+    symbol = unique_symbol()
+    seed_lake(tmp_path, symbol)
+    registry = registry_incumbent(EMA, symbol).params
+    qualified = {**registry, "gap": 0.35}
+    request = plan_request(symbol, incumbent={"source": "qualification", "qualification_id": "gq-1", "params": qualified})
+
+    leaked = review_plan(protocol_from_request({**request, "seed": qualified}), roots=[tmp_path])
+    assert [(refusal.code, refusal.field) for refusal in leaked.refusals] == [("SEED_IS_QUALIFIED", "seed")]
+
+    assert review_plan(protocol_from_request({**request, "seed": registry}), roots=[tmp_path]).refusals == ()
+    # A plan that omits its seed starts at the registry point, never at the qualified tuple.
+    omitted = protocol_from_request({**request, "seed": None})
+    assert omitted.seed == registry and review_plan(omitted, roots=[tmp_path]).refusals == ()
+    # A qualified tuple that is the registry point itself leaks nothing the registry did not already fix.
+    same_point = plan_request(symbol, incumbent={"source": "qualification", "qualification_id": "gq-2", "params": registry})
+    assert review_plan(protocol_from_request(same_point), roots=[tmp_path]).refusals == ()
+
+
 # ── Default intervals ────────────────────────────────────────────────────
 
 

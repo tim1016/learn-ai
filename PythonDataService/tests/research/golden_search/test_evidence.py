@@ -24,8 +24,6 @@ from app.research.walk_forward_study.verdict import Verdict
 from app.utils.session_anchors import et_midnight_ms
 from tests._helpers.golden_search import declaration, knob, metrics, protocol, synthetic_point
 
-_MINUTE_MS = 60_000
-
 
 def _utc_ms(*parts: int) -> int:
     return int(datetime(*parts, tzinfo=UTC).timestamp() * 1000)
