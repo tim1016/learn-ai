@@ -12,7 +12,7 @@
 
 - **#3160 (F1).** The intake fence's poison gate is checked once, before the wait for the lock. A task already queued when the fence is poisoned is admitted afterwards, while the abandoned fold's worker may still be writing. Only later arrivals are refused. Reproduced.
 - **#3161 (F2).** `open()` accepts a `clerk.db` that is behind its mirror (rows the mirror finalized are missing from the database). The next append reuses a sequence the mirror already finalized; only the following open fails. The supported restore path refuses this; the boot path does not. Reproduced three times, by two readers and the driver. The trigger is an out-of-band file rollback, so the owner may rate it P2.
-- **Thirty-odd P2, robustness and test-gap findings** (F3–F41), nine of them reproduced by the driver. The most consequential: a manual-custody operation in the newest 50 makes the account snapshot return 500 (F3), an operation detail silently loses every event after the 100th (F4), and a cancelled send whose claim is gone surfaces as a claim error instead of a cancellation (F5).
+- **Thirty-odd P2, robustness and test-gap findings** (F3–F41, 39 rows), seven of them reproduced by the driver. The most consequential: a manual-custody operation in the newest 50 makes the account snapshot return 500 (F3), an operation detail silently loses every event after the 100th (F4), and a cancelled send whose claim is gone surfaces as a claim error instead of a cancellation (F5).
 - **The cut** removes the package-level export surface nothing imports, one dead read chain (`unfoldable_broker_orders_active_since`), two dead methods and two unused test fixtures, with the tests that existed only for them. About 200 lines deleted, no behavior change.
 - **Everything the earlier kill list ([#2701](https://github.com/tim1016/learn-ai/issues/2701)) named in this scope is gone from master.** No symbol in the 34 files is unreachable by name except eight test seams (five already ruled "kept"; the other three are in the candidates table).
 
@@ -65,7 +65,7 @@
 | Activation ledger and established-accounts registry | ADR 0035 §1a, ADR 0059 D1 | startup, cutover, recovery, `open` | yes | ✓ / ✓ / tamper arms untested (F26); torn line raises raw (F11); escape raises the wrong type (F12) | **implemented** / **partial** | `test_recovery_tooling.py::test_activation_requires_matching_database_and_referenced_artifacts`, `::test_activation_ledger_rejects_symbolic_link_substitution`, `test_repository.py::test_remove_db_after_established_is_not_silently_recreated` (ran) |
 | Contract terms (option multiplier per contract) and recorded custody | ADR 0076 d13, #2913, #2694 | fold helpers; `bot_binding_authority.py:647`, `bot_runner.py:1166` | yes | ✓ / ✓ / refusals | **implemented** | `test_contract_terms.py`, `test_recorded_custody.py` (ran) |
 
-Three features are *partial* because of a reproduced defect (open-time reconciliation, fence, snapshot/timeline); one is *unverified*. None is *missing*.
+26 rows: 16 *implemented*, 2 *mixed* (option ENTER/EXIT: single contract implemented, N legs unverified; activation ledger: implemented, with F11 and F12), 7 *partial* and 1 *unverified* (historical execution recovery). None is *missing*. Five of the partials rest on a reproduced defect (open-time reconciliation F2, the fence F1, claim handling F5/F6, the snapshot F3, the operation detail F4); `verify_database` is partial by design; budget-less Start is an owner ruling (F17).
 
 ## Findings
 
