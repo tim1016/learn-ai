@@ -2,7 +2,6 @@
 
 .uncertainty-grid { @include page-grid.layout; }
 .uncertainty-grid > * { grid-column: span 6; }
-.uncertainty-grid--single > * { grid-column: span 12; }
 @container page-grid (max-width: 1100px) { .uncertainty-grid > * { grid-column: span 12; } }
 
 .sentence {

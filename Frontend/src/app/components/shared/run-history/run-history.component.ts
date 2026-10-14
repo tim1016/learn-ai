@@ -32,10 +32,11 @@ export class RunHistoryComponent {
   /** Requests designation of a completed Python run as a Validation Golden Run. */
   readonly goldenRequested = output<string>();
   /**
-   * False when the Golden catalog could not be read. A run with no badge is
-   * then unknown, not undesignated, so "Mark golden" is not offered for it.
+   * True only once the host has read the Golden catalog. Before that, or when
+   * the read failed, a run with no badge is unknown, not undesignated, so
+   * "Mark golden" is not offered for it.
    */
-  readonly goldenCatalogReadable = input(true);
+  readonly goldenCatalogReadable = input(false);
   /** PR B.3 (2026-05-19) — emitted when the user saves a notes edit on a row.
    *  The host component owns the persistence side (GraphQL mutation). */
   readonly notesEdited = output<{ id: string; notes: string }>();
