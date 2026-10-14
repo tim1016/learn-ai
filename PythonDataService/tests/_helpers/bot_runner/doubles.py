@@ -206,6 +206,7 @@ class _TestDecisionReceiptRepository:
 class _CustodyClerk:
     authority_kind = "sqlite"
     broker_id = "alpaca"
+    supports_revision_bound_admission = True
     # A regular-hours authority: it declares no extended session (ADR 0059 D5.2).
     program_leg_policy: ProgramLegPolicy = ProgramLegPolicy.regular_only()
 
@@ -237,9 +238,9 @@ class _CustodyClerk:
         self.stop_reasons: dict[tuple[str, str], str | None] = {}
 
     async def register_strategy_run(
-        self, binding: BrokerBotBinding, *, run_owner: object = None
+        self, binding: BrokerBotBinding, *, admission_snapshot: object = None, run_owner: object = None
     ) -> None:
-        del run_owner
+        del admission_snapshot, run_owner
         self.registered_runs.append(binding.run_id)
         self.active_runs[binding.strategy_instance_id] = binding.run_id
         self.known_runs.add((binding.strategy_instance_id, binding.run_id))
@@ -482,6 +483,7 @@ class _FakeClerk:
 
     authority_kind = "sqlite"
     account_id = "PA-TEST"
+    supports_revision_bound_admission = True
     # A broker-backed authority: it fills nothing itself.
     simulates_fills = False
     # A regular-hours authority: it declares no extended session (ADR 0059 D5.2).
@@ -509,9 +511,9 @@ class _FakeClerk:
         self.known_runs: set[tuple[str, str]] = set()
 
     async def register_strategy_run(
-        self, binding: BrokerBotBinding, *, run_owner: object = None
+        self, binding: BrokerBotBinding, *, admission_snapshot: object = None, run_owner: object = None
     ) -> None:
-        del run_owner
+        del admission_snapshot, run_owner
         self.registered_runs.append(binding.run_id)
         self.active_runs[binding.strategy_instance_id] = binding.run_id
         self.known_runs.add((binding.strategy_instance_id, binding.run_id))

@@ -17,6 +17,7 @@ from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_carryover import StopCustodyOutcome, prove_stop_outcome, record_stop_outcome
 from app.services.bot_clerk_lifecycle import commit_stop_before_task_cancel
 from app.services.bot_crash_diagnostic import capture_bot_crash_diagnostic
+from app.services.bot_lifecycle_projection import AlpacaLifecycleProjectionResult, ProjectionStatus
 from app.services.bot_run_evidence import (
     ACTIVATION_FAILED_STOP_REASON_CODE,
     PROVISIONAL_STOP_REASON_CODE,
@@ -55,6 +56,38 @@ OPERATOR_STOP = StopCause("STOPPED", "OPERATOR_STOP")
 #: The compensation for a launch that failed after its Clerk STOP (#2559):
 #: it runs through the normal Stop, but nobody stopped the run.
 FAILED_LAUNCH_STOP = StopCause("FAILED_LAUNCH", ACTIVATION_FAILED_STOP_REASON_CODE)
+
+#: Statuses that are the projection's own answer, not a refusal: a run a later
+#: run of the bot replaced is not projected over it (#2607).
+_PROJECTION_SETTLED = frozenset({ProjectionStatus.RECORDED, ProjectionStatus.AUTHORITY_EXPECTATION_SUPERSEDED})
+
+
+def _say_projection_not_recorded(
+    binding: BrokerBotBinding,
+    projected: AlpacaLifecycleProjectionResult,
+    *,
+    kind: str,
+    reason_code: str,
+) -> None:
+    """Say that a terminal outcome could not be projected onto the bot's lifecycle file.
+
+    The authority's own record of the run stands; the next projection that
+    reaches the bot (boot recovery's refresh) derives the file from it again.
+    """
+    if projected.status in _PROJECTION_SETTLED:
+        return
+    logger.warning(
+        "A run's terminal outcome was written but not projected onto the bot's lifecycle state",
+        extra={
+            "action": "bot_terminal_projection_not_recorded",
+            "strategy_instance_id": binding.strategy_instance_id,
+            "run_id": binding.run_id,
+            "kind": kind,
+            "reason_code": reason_code,
+            "projection_status": projected.status.value,
+            "refusal_reason": projected.refusal_reason,
+        },
+    )
 
 
 class BotRunTerminalRecorder:
@@ -116,7 +149,7 @@ class BotRunTerminalRecorder:
             recorded_at_ms=recorded_at_ms,
             run_id=binding.run_id,
         )
-        self._run_evidence.record_terminal(
+        projected = self._run_evidence.record_terminal(
             binding.strategy_instance_id,
             outcome,
             updated_by=_UPDATED_BY,
@@ -125,6 +158,7 @@ class BotRunTerminalRecorder:
             persist_receipt=reason_code != PROVISIONAL_STOP_REASON_CODE,
             crash_diagnostic=crash_diagnostic,
         )
+        _say_projection_not_recorded(binding, projected, kind=kind, reason_code=reason_code)
 
     async def finalize_after_authority_stop(
         self,
@@ -216,12 +250,13 @@ class BotRunTerminalRecorder:
         canary_rollback: CanaryRollbackDecision | None = None,
     ) -> None:
         """Replace provisional stop evidence with the Clerk-proven outcome."""
-        self._run_evidence.record_terminal(
+        projected = self._run_evidence.record_terminal(
             binding.strategy_instance_id,
             self._proven_stop(binding, kind=kind, reason_code=reason_code, canary_rollback=canary_rollback),
             updated_by=_UPDATED_BY,
             reason=reason_code,
         )
+        _say_projection_not_recorded(binding, projected, kind=kind, reason_code=reason_code)
 
     def record_replaced_run_stop(
         self,
