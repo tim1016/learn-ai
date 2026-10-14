@@ -873,7 +873,7 @@ async def test_boot_sweep_refuses_corrupt_binding_for_sqlite_active_run(
 async def test_one_bots_corrupt_desired_state_is_left_as_it_is_and_the_lane_still_boots(
     tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """B-1 (ruling 7): the corrupt file refuses that bot only; the bot sorted after it is still repaired."""
+    """Owner ruling 7 of #3159: the corrupt file refuses that bot only; the bot sorted after it is still repaired."""
     from app.engine.live.desired_state import stable_desired_state_path
 
     feed = _FakeFeed([], mode="hold")

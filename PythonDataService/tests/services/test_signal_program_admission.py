@@ -1165,7 +1165,7 @@ def test_a_source_read_that_fails_during_the_drift_comparison_refuses_with_a_res
 
 
 def test_parameters_the_strategy_rejects_are_a_typed_seal_refusal_not_a_raw_validation_error() -> None:
-    """D-4: Start catches ``SignalProgramSealError`` only; a raw pydantic error escaped its decision."""
+    """Start catches ``SignalProgramSealError`` only; a raw pydantic error escaped its decision."""
     binding = _binding(strategy_params={"gap": "not-a-number"}, strategy_param_origins={"gap": "deploy_override"})
 
     with pytest.raises(SignalProgramSealError, match=r"not valid for ema_crossover_signal: gap"):

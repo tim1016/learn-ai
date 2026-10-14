@@ -172,7 +172,7 @@ async def test_the_account_boots_at_once_while_a_dry_run_s_account_is_still_held
 async def test_a_dry_run_with_a_corrupt_desired_state_is_not_restored_and_does_not_fail_the_boot(
     restarted_lane: _Lane,
 ) -> None:
-    """B-1 (ruling 7): the corrupt file is that bot's own failure, said as such, and the lane boots."""
+    """Owner ruling 7 of #3159: the corrupt file is that bot's own failure, said as such, and the lane boots."""
     from app.engine.live.desired_state import stable_desired_state_path
 
     path = stable_desired_state_path(restarted_lane.artifacts_root, SID)
