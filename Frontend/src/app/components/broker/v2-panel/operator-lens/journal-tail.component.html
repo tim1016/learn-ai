@@ -1,7 +1,9 @@
 <!-- Journal tail. Newest-first, filterable by kind. -->
 <section class="journal-tail" aria-label="Order journal tail">
   <header class="journal-tail__header">
-    <span class="journal-tail__count">{{ entries().length }} of {{ filteredEntries().length }} events</span>
+    @if (evidencePage() !== null) {
+      <span class="journal-tail__count">{{ entries().length }} of {{ filteredEntries().length }} events</span>
+    }
 
     @if (availableKinds().length > 0) {
       <div class="journal-tail__filters" role="group" aria-label="Filter by kind">
@@ -33,7 +35,7 @@
     <p class="journal-tail__loading" role="status" aria-live="polite">Loading journal…</p>
   }
 
-  @if (!loading() && entries().length === 0) {
+  @if (!loading() && evidencePage() !== null && entries().length === 0) {
     <p class="journal-tail__empty" role="status">No journal entries.</p>
   }
 

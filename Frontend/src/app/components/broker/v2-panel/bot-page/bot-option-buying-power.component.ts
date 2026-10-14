@@ -105,9 +105,8 @@ export class BotOptionBuyingPowerComponent {
   constructor() {
     effect(() => {
       this.journalTailSeq();
-      untracked(() => {
-        if (this.checks.hasValue()) this.checks.reload();
-      });
+      // Also after a failed read: a new custody record is a reason to ask again, not only to refresh.
+      untracked(() => void this.checks.reload());
     });
   }
 

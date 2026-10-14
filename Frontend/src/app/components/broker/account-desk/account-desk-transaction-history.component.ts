@@ -41,6 +41,7 @@ import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { formatReceiptLabel, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import { ClerkTransactionEvidenceDrawerComponent } from '../clerk-transaction-evidence-drawer/clerk-transaction-evidence-drawer.component';
+import { extractServerMessage } from '../operation-error';
 import { AccountDeskTransactionHistoryStore } from './account-desk-transaction-history-store.service';
 
 type HistoryScope = 'today' | '30d' | '60d';
@@ -314,10 +315,12 @@ export class AccountDeskTransactionHistoryComponent {
       this.onReceiptClosed();
     } catch (error: unknown) {
       if (this.isCurrent(target, accountId)) {
-        // The evidence drawer deliberately presents one safe retry message;
-        // backend-authored detail remains available in the durable receipt.
-        void error;
-        this.acknowledgementError.set('Could not acknowledge this external order. Retry after reviewing the evidence.');
+        // The Clerk's own sentence when it gave one (a refused review reads differently from a lost
+        // connection); the generic retry line only when nothing answered.
+        this.acknowledgementError.set(extractServerMessage(
+          error,
+          'Could not acknowledge this external order. Retry after reviewing the evidence.',
+        ));
       }
     } finally {
       if (

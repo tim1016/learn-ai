@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { EvidenceEntry, EvidencePage } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { TransactionEvidenceTimelineComponent } from './transaction-evidence-timeline.component';
-import { provideFleetDirectory } from '../../../../fleet/fleet-directory-testing';
+import { provideFleetDirectory, testLane } from '../../../../fleet/fleet-directory-testing';
 
 interface Deferred<T> {
   readonly promise: Promise<T>;
@@ -112,6 +112,31 @@ describe('TransactionEvidenceTimelineComponent', () => {
     fixture.detectChanges();
     expect(screen.queryByText('Stale transaction event')).toBeNull();
     expect(screen.getByText('Current transaction event')).toBeTruthy();
+  });
+
+  it('reads the page again when the lane’s fence moves, not when the directory re-reads the same lane', async () => {
+    const getEvidence = vi.fn().mockResolvedValue(page('tx-1', [entry(1, 'Only event')]));
+    const lane = testLane({ clerk_id: 'clrk_spec', effective_binding_generation: 3, routing_epoch: 7 });
+    const directory = provideFleetDirectory({ observed_at_ms: 1, clerks: [lane] });
+    const { fixture } = await render(TransactionEvidenceTimelineComponent, {
+      inputs: inputs(),
+      providers: [directory, { provide: BrokerV2PanelService, useValue: { getEvidence } }],
+    });
+    expect(await screen.findByText('Only event')).toBeTruthy();
+    expect(getEvidence).toHaveBeenCalledTimes(1);
+
+    // The same lane, read again: a new object, the same fence.
+    directory.rebind({ observed_at_ms: 2, clerks: [{ ...lane }] });
+    await directory.useValue.refresh?.();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(getEvidence).toHaveBeenCalledTimes(1);
+
+    directory.rebind({ observed_at_ms: 3, clerks: [{ ...lane, effective_binding_generation: 4 }] });
+    await directory.useValue.refresh?.();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(getEvidence).toHaveBeenCalledTimes(2);
   });
 
   it('recovers from an initial failure when the operator retries', async () => {

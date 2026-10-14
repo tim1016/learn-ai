@@ -9,7 +9,7 @@
     </tr>
   </thead>
   <tbody>
-    @for (fill of fills(); track fill.order_ref) {
+    @for (fill of fills(); track fill.event_key) {
       <tr
         class="fill-table__row"
         [class.fill-table__row--buy]="fill.side === 'buy'"

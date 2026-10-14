@@ -18,6 +18,7 @@ import type {
   ClerkTransactionSummary,
 } from '../../../api/clerk-transaction-history.types';
 import { BrokersService } from '../../../services/brokers.service';
+import { extractServerMessage } from '../operation-error';
 import type { ResourceTarget } from '../../../fleet/resource-target';
 import { laneKey } from '../../../fleet/resource-target';
 import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
@@ -134,11 +135,14 @@ export class ClerkTransactionEvidenceDrawerComponent {
         && targetIdentity(this.target()) === targetIdentity(target)) {
         this.detail.set(detail);
       }
-    } catch {
+    } catch (error: unknown) {
       if (this.requestGeneration() === generation
         && this.transaction()?.transaction_id === transaction.transaction_id
         && targetIdentity(this.target()) === targetIdentity(target)) {
-        this.error.set('The selected receipt is unavailable. Close the drawer and try again.');
+        this.error.set(extractServerMessage(
+          error,
+          'The selected receipt is unavailable. Close the drawer and try again.',
+        ));
       }
     } finally {
       if (this.requestGeneration() === generation) this.loading.set(false);
