@@ -835,6 +835,16 @@ def _execute_engine_backtest_core(
             },
         )
 
+    # A rule between parameters that per-field bounds cannot state (MACD fast
+    # below slow): Deploy checks it before sealing, and so does the backtest,
+    # which otherwise built the strategy and failed inside ``initialize``.
+    refusal = None if registration.params_refusal is None else registration.params_refusal(validated_params)
+    if refusal is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"strategy": request.strategy_name, "params_refusal": refusal},
+        )
+
     _resolve_legacy_data_policy(request, validated_params)
 
     fill_mode = _parse_fill_mode(request.fill_mode)

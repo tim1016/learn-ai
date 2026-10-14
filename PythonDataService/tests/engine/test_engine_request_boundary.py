@@ -53,3 +53,23 @@ def test_a_money_field_that_is_not_finite_is_refused(field: str, value: float) -
 def test_starting_cash_must_be_greater_than_zero(value: float) -> None:
     with pytest.raises(ValidationError):
         _request(initial_cash=value)
+
+
+def test_a_params_rule_the_deploy_path_enforces_refuses_the_backtest_too() -> None:
+    """F1-7: MACD fast >= slow was refused at Deploy only; Engine Lab built the strategy and failed in initialize."""
+    from fastapi import HTTPException
+
+    from app.engine.strategy.registry import _STRATEGY_REGISTRY
+    from app.services.engine_backtest_service import execute_engine_backtest
+
+    key = "spy_strategy_a"
+    assert _STRATEGY_REGISTRY[key].params_refusal is not None
+    request = EngineBacktestRequest.model_validate(
+        {"strategy_name": key, "params": {"symbol": "SPY", "macd_fast": 30, "macd_slow": 26}}
+    )
+
+    with pytest.raises(HTTPException) as refused:
+        execute_engine_backtest(request=request, on_phase=lambda _phase: None, on_log=lambda _line: None)
+
+    assert refused.value.status_code == 400
+    assert "macd_fast (30) must be less than macd_slow (26)" in str(refused.value.detail["params_refusal"])
