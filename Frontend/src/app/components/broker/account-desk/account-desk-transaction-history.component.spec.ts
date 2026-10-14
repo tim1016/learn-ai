@@ -295,6 +295,36 @@ describe('AccountDeskTransactionHistoryComponent', () => {
     expect(screen.queryByText(/Retry after reviewing the evidence/)).toBeNull();
   });
 
+  it('says the generic retry line when nothing answered the acknowledgement', async () => {
+    const acknowledgeExternalOrder = vi.fn().mockRejectedValue(new Error('network down'));
+    await renderHistory({
+      load: vi.fn().mockResolvedValue(undefined),
+      rows: signal([transaction({
+        transaction_origin: 'external',
+        order_ref: null,
+        external_order_id: 'alpaca-external-1',
+        lifecycle_state: 'review_required',
+      })]),
+    }, {
+      accountTransaction: vi.fn().mockResolvedValue({
+        ...transaction({
+          transaction_origin: 'external',
+          external_order_id: 'alpaca-external-1',
+          lifecycle_state: 'review_required',
+        }),
+        receipt: {},
+        events: [],
+        custody_timeline: null,
+      }),
+      acknowledgeExternalOrder,
+    });
+    fireEvent.click(screen.getByRole('button', { name: /view evidence for alpaca-external-1/i }));
+    fireEvent.input(screen.getByRole('textbox', { name: 'Operator' }), { target: { value: 'operator@example.test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Acknowledge external order' }));
+
+    expect(await screen.findByText(/Could not acknowledge this external order\. Retry after reviewing the evidence\./)).toBeTruthy();
+  });
+
   it('does not refresh a new lane when an old acknowledgement finishes late', async () => {
     let release = (): void => undefined;
     const pending = new Promise<void>((resolve) => {

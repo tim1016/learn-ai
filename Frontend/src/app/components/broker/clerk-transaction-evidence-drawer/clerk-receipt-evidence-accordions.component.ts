@@ -1,3 +1,4 @@
+import { CurrencyPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import {
   Accordion,
@@ -27,6 +28,7 @@ interface ReceiptEntry {
     AccordionHeader,
     AccordionPanel,
     AssetIdentityComponent,
+    CurrencyPipe,
     ReceiptLabelPipe,
     TimestampDisplayComponent,
   ],
@@ -43,10 +45,16 @@ export class ClerkReceiptEvidenceAccordionsComponent {
       .map((part) => formatReceiptLabel(part));
     return parts.length === 0 ? 'Not recorded' : parts.join(' · ');
   });
-  /** A recorded price at Alpaca's precision, so a float's tail is not shown as if it were fact. */
-  protected price(value: number | null | undefined): string | null {
-    return value === null || value === undefined ? null : `$${value.toFixed(value >= 1 ? 2 : 4)}`;
-  }
+  /** The instrument an execution event recorded, when exactly one did: the instruction's symbol is no observed one. */
+  protected readonly executionSymbol = computed(() => {
+    const symbols = new Set(
+      this.detail().events
+        .filter((event) => event.event_kind.startsWith('execution_'))
+        .map((event) => event.receipt['symbol'])
+        .filter((symbol): symbol is string => typeof symbol === 'string' && symbol !== ''),
+    );
+    return symbols.size === 1 ? [...symbols][0] : null;
+  });
   protected readonly receiptEntries = computed(() => receiptEntries(this.detail().receipt));
   protected readonly trackEvent = (_: number, event: ClerkTransactionDetail['events'][number]): string => event.event_id;
   protected readonly trackReceipt = (_: number, entry: ReceiptEntry): string => entry.key;

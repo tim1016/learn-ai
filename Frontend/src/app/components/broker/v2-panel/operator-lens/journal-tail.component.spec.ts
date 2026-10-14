@@ -39,8 +39,9 @@ describe('JournalTailComponent', () => {
     expect(screen.getByText('0 of 0 events')).toBeTruthy();
   });
 
-  it('says neither "0 of 0 events" nor "No journal entries" when the read failed', async () => {
-    await render(JournalTailComponent, { inputs: { evidencePage: null, failed: true } });
+  it('says neither "0 of 0 events" nor "No journal entries" when there is no page to count', async () => {
+    // A failed read leaves no page: the host's own alert says so, and this tail claims nothing beside it.
+    await render(JournalTailComponent, { inputs: { evidencePage: null } });
 
     expect(screen.queryByText('No journal entries.')).toBeNull();
     expect(screen.queryByText(/of 0 events/)).toBeNull();

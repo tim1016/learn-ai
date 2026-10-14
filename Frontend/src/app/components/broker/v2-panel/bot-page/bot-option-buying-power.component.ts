@@ -97,10 +97,6 @@ export class BotOptionBuyingPowerComponent {
     () => (this.checks.hasValue() ? this.checks.value() : null),
   );
 
-  protected retryRead(): void {
-    this.checks.reload();
-  }
-
   protected readonly confirming = signal(false);
   protected readonly reviewing = signal(false);
   protected readonly busy = computed(() => this.reviewing() || this.locked());

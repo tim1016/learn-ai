@@ -3,14 +3,11 @@ import { ChangeDetectionStrategy, Component, computed, input } from '@angular/co
 import type { ClerkCustodyTimeline } from '../../../api/clerk-transaction-history.types';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 
-type CustodyStageState = 'recorded' | 'not_recorded';
-
 interface CustodyStage {
   readonly code: 'A0' | 'A1' | 'A2' | 'A3';
   readonly label: string;
   readonly explanation: string;
   readonly timestamp: number | null;
-  readonly state: CustodyStageState;
 }
 
 /** Visual, fact-only rendering of the four durable Clerk custody checkpoints. */
@@ -60,8 +57,5 @@ function buildCustodyStages(timeline: ClerkCustodyTimeline | null, external: boo
   ];
   // A marker with no timestamp is not recorded. Which one comes next is not inferred: no producer
   // promises the stages in order, and an order whose outcome is unknown has none after A0.
-  return stages.map((stage) => ({
-    ...stage,
-    state: stage.timestamp !== null ? 'recorded' : 'not_recorded',
-  }));
+  return stages;
 }

@@ -9,12 +9,12 @@
           <tr>
             <th scope="row">Instrument</th>
             <td>@if (detail().order_instruction?.symbol; as symbol) { <app-asset-identity [symbol]="symbol" size="sm" /> } @else { Not recorded }</td>
-            <!-- No execution fact names an instrument: the instruction's symbol is not an observed one. -->
-            <td>Not recorded</td>
+            <!-- Only an execution event's own receipt names the instrument it observed. -->
+            <td>@if (executionSymbol(); as symbol) { <app-asset-identity [symbol]="symbol" size="sm" /> } @else { Not recorded }</td>
           </tr>
           <tr><th scope="row">Side and type</th><td>{{ sideAndType() }}</td><td>{{ detail().lifecycle_state | receiptLabel }}</td></tr>
           <tr><th scope="row">Quantity</th><td>{{ detail().order_instruction?.quantity ?? 'Not recorded' }}</td><td>{{ detail().execution_quantity ?? 'Not recorded' }}</td></tr>
-          <tr><th scope="row">Price</th><td>{{ price(detail().order_instruction?.limit_price) ?? 'Market / not recorded' }}</td><td>{{ price(detail().execution_price) ?? 'Not recorded' }}</td></tr>
+          <tr><th scope="row">Price</th><td>@if (detail().order_instruction?.limit_price; as limit) { {{ limit | currency: 'USD' : 'symbol' : '1.2-6' }} } @else { Market / not recorded }</td><td>@if (detail().execution_price; as price) { {{ price | currency: 'USD' : 'symbol' : '1.2-6' }} } @else { Not recorded }</td></tr>
           <tr><th scope="row">Broker identifiers</th><td><code>{{ detail().order_ref ?? detail().external_order_id ?? 'Not recorded' }}</code></td><td><code>{{ detail().exec_id ?? detail().native_execution_id ?? 'Not recorded' }}</code></td></tr>
         </tbody>
       </table>
