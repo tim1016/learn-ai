@@ -1,8 +1,12 @@
 """Populate the SPY IV30 golden fixture for VIX-replication parity test.
 
 Output:
-    PythonDataService/tests/fixtures/golden/iv30/spy-2024-12-20-chain.parquet
-    PythonDataService/tests/fixtures/golden/iv30/spy-2024-12-20-chain.meta.json
+    PythonDataService/tests/fixtures/golden/options-pricing/IV-005/v1/spy-2024-12-20-chain.parquet
+    PythonDataService/tests/fixtures/golden/options-pricing/IV-005/v1/spy-2024-12-20-chain.meta.json
+
+These two files are the manifest-governed fixture IV-005 (see its
+attribution.md): a re-run changes their hashes, so register the result as a
+new version in manifest.json with a justification.
 
 Method:
     1. Fetch SPY underlying close on 2024-12-20 (spot proxy).
@@ -40,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 GOLDEN_DATE = "2024-12-20"
 SYMBOL = "SPY"
-OUT_DIR = Path("/app/tests/fixtures/golden/iv30")
+OUT_DIR = Path("/app/tests/fixtures/golden/options-pricing/IV-005/v1")
 OUT_PARQUET = OUT_DIR / "spy-2024-12-20-chain.parquet"
 OUT_META = OUT_DIR / "spy-2024-12-20-chain.meta.json"
 

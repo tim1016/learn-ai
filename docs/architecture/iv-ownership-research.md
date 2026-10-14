@@ -103,7 +103,7 @@ options on those names by the size of the adjacent dividend.
 
 ### 6.3 Golden fixture
 
-`tests/fixtures/golden/iv30/spy-2024-12-20-chain.{parquet,meta.json}` — 881
+`tests/fixtures/golden/options-pricing/IV-005/v1/spy-2024-12-20-chain.{parquet,meta.json}` — 881
 SPY option contracts. Built once by `scripts/build_iv30_golden.py` from real
 Polygon data.
 

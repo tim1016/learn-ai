@@ -868,6 +868,53 @@
       ]
     },
     {
+      "id": "IV-005",
+      "name": "SPY 2024-12-20 Options Chain Snapshot — VIX-Style IV30 Regression Anchor",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/volatility/vix_replication.py",
+      "canonical_callable": "vix_style_iv30",
+      "reference": {
+        "kind": "internal_regression",
+        "oracle": "self (no independent oracle)",
+        "citation": "Frozen Polygon SPY chain; the reference IV30 in the sidecar was written by vix_style_iv30 itself (scripts/build_iv30_golden.py), so this pins drift, not equivalence to CBOE. Independent CBOE-formula oracles: IV-003, RV-004. See attribution.md."
+      },
+      "market_input": {
+        "source": "polygon",
+        "vendor": "Polygon.io",
+        "generated_by": "PythonDataService/scripts/build_iv30_golden.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-09,
+        "rtol": 0.0,
+        "note": "Deterministic recomputation of vix_style_iv30 on the frozen chain against the value the build script wrote with the same function; the strict-float default applies and nothing looser is needed."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "spy-2024-12-20-chain.parquet",
+          "output": "spy-2024-12-20-chain.meta.json",
+          "attribution": "attribution.md",
+          "generated": "2026-04-26",
+          "justification": "Registered the existing snapshot bytes (commit a32836a6) under manifest governance; the data was not regenerated (#3221).",
+          "content_sha256": {
+            "spy-2024-12-20-chain.parquet": "acde1ce43782fefd03f1a0a12d34ab9f888b26e28452d2a810231c0bbea1db52",
+            "spy-2024-12-20-chain.meta.json": "fd897178529d62a46b286aa321044777d44350dcca1e89f90c9b472a98e93699"
+          },
+          "file_sha256": {
+            "spy-2024-12-20-chain.parquet": "acde1ce43782fefd03f1a0a12d34ab9f888b26e28452d2a810231c0bbea1db52",
+            "spy-2024-12-20-chain.meta.json": "e622ecabaa2b2f14a5e64ae41db0f217b9d15d3bb065789699e147cde088ac08",
+            "attribution.md": "96ddd610c0a2b414b2980fc6b1902a08cc36367eb555f9997a61be3190381a5b"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/volatility/test_vix_replication.py::TestSpyGoldenFixture",
+        "tests/volatility/test_vix_replication.py::TestSpyGoldenFixtureWithProvenance"
+      ]
+    },
+    {
       "id": "RV-002",
       "name": "HF Two-Component Realized Volatility — ABDL (window=3 days, ETH)",
       "category": "realized-volatility",
