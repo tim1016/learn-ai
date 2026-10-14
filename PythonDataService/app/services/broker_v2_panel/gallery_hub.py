@@ -33,12 +33,14 @@ empty, matching this module's prior hard-coded behavior.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from typing import Protocol
 from uuid import uuid4
 
 from app.broker.alpaca.clerk.fills import FillRecord
+from app.broker.fleet.internal_http import DEFAULT_INTERNAL_TIMEOUT_S
 from app.schemas.broker_v2_gallery import (
     GalleryBotDelta,
     GalleryBotView,
@@ -55,6 +57,7 @@ from app.services.broker_v2_panel.chart_projection_service import (
     live_window,
     markers_in_window,
 )
+from app.services.broker_v2_panel.panel_errors import PanelUnavailableError
 from app.services.live_bar_aggregator import LiveLineStatus
 from app.services.live_chart_window import ChartFeedState, ChartFeedStatus, classify_live_line
 from app.utils.timestamps import now_ms_utc
@@ -70,6 +73,18 @@ logger = logging.getLogger(__name__)
 # post-restart frame until the counter climbs back. Mirrors the reference
 # `SurfaceHub`'s per-process nonce.
 _PROCESS_NONCE = uuid4().hex
+
+# The most one call (its wait for ``_publish_lock`` included) may take to
+# collect a snapshot or an update. A healthy collect is the 800 ms-cached
+# catalog, in-memory ring-buffer reads and one fill-source fan-out: tens of
+# milliseconds against a 1 s poll, seconds at worst on a cold first read.
+# Eight seconds is eight polls, so a slow read is not taken for a stuck one.
+# It sits two seconds inside the coordinator's lane read timeout, so the
+# snapshot route's typed answer is the one that reaches the caller, not the
+# coordinator giving up on a silent lane; and inside the stream's 15 s
+# keepalive interval, so a read that never returns is named before the stream
+# has gone a whole keepalive without a frame (#3217).
+GALLERY_COLLECT_TIMEOUT_S = DEFAULT_INTERNAL_TIMEOUT_S - 2.0
 
 
 def _is_retired(row: BotCatalogView) -> bool:
@@ -160,6 +175,15 @@ def _markers_delta(
         if newer:
             delta[sid] = newer
     return delta
+
+
+class GalleryCollectTimeoutError(PanelUnavailableError):
+    """A gallery read did not finish within its bound (#3217).
+
+    A typed 503, never a hang: the snapshot route is answered, and the stream
+    ends with a named ``error`` event the client reads as stale, while the
+    wedged read is abandoned and ``_publish_lock`` is free again.
+    """
 
 
 class GalleryCatalogSource(Protocol):
@@ -268,9 +292,11 @@ class GalleryHub:
         resolution: GalleryResolution = "1m",
         fill_source: GalleryFillSource | None = None,
         io_cache_ttl_ms: int = 0,
+        collect_timeout_s: float = GALLERY_COLLECT_TIMEOUT_S,
     ) -> None:
         self._broker = broker
         self._account_id = account_id
+        self._collect_timeout_s = collect_timeout_s
         self._catalog_source = catalog_source
         self._aggregator = aggregator
         self._resolution = resolution
@@ -313,6 +339,39 @@ class GalleryHub:
         self._catalog_cache_at_ms = -1
         self._markers_cache: dict[str, list[ChartFillMarker]] | None = None
         self._markers_cache_at_ms = -1
+
+    @contextlib.asynccontextmanager
+    async def _bounded(self, phase: str) -> AsyncIterator[None]:
+        """Bound one call, its wait for the lock included, to ``collect_timeout_s``.
+
+        The lock only orders collection and publication. Held across a read
+        that never returns it answers nobody: the snapshot route and every
+        stream behind it wait on it alike. At the bound the wedged read is
+        cancelled (releasing the lock), nothing is published, and the call
+        raises ``GalleryCollectTimeoutError``.
+        """
+        bound = asyncio.timeout(self._collect_timeout_s)
+        try:
+            async with bound:
+                yield
+        except TimeoutError as exc:
+            if not bound.expired():
+                raise
+            logger.warning(
+                "[GALLERY] collect did not finish within its bound; abandoning it",
+                extra={
+                    "action": "gallery_collect_timed_out",
+                    "phase": phase,
+                    "broker": self._broker,
+                    "account_id": self._account_id,
+                    "timeout_s": self._collect_timeout_s,
+                },
+            )
+            raise GalleryCollectTimeoutError(
+                "The bot gallery could not be read in time.",
+                detail=f"A gallery {phase} did not finish within {self._collect_timeout_s:g} s.",
+                next_action="Reload the wall; if it persists, check the data plane.",
+            ) from exc
 
     async def _ensure_chart_subscription(self, symbol: str) -> None:
         if self._resolution == "5s":
@@ -543,9 +602,10 @@ class GalleryHub:
 
         Collection and publication are serialized by ``_publish_lock``. The
         version is incremented only after every awaited input is complete, so
-        response versions are unique and ordered by coherent publication.
+        response versions are unique and ordered by coherent publication. The
+        whole call, lock wait included, is bounded (``_bounded``).
         """
-        async with self._publish_lock:
+        async with self._bounded("snapshot"), self._publish_lock:
             shown, symbol_bars = await self._fetch_shown_and_bars(since_bar_ms=None)
             as_of_ms = now_ms_utc()
             markers = await self._fetch_markers(shown, now_ms=as_of_ms)
@@ -608,10 +668,10 @@ class GalleryHub:
         resent — see ``_markers_delta`` for why this is keyed on
         ``event_key``, not ``filled_at_ms``.
 
-        Collection and publication use the same lock and post-collection
-        version assignment as ``build_snapshot``.
+        Collection and publication use the same lock, bound and
+        post-collection version assignment as ``build_snapshot``.
         """
-        async with self._publish_lock:
+        async with self._bounded("update"), self._publish_lock:
             shown, symbol_bars = await self._fetch_shown_and_bars(since_bar_ms=since_bar_ms)
             current_sids = {row.strategy_instance_id for row in shown}
             removed_sids = sorted(known_sids - current_sids)
