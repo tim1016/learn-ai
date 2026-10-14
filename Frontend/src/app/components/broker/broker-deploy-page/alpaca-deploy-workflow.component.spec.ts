@@ -190,28 +190,23 @@ function previewFor(view: DeployBotView, body: DeployBotBody): DeploymentBudgetP
 
 const NEVER_CLAIMED_MESSAGE = 'No Deploy was committed for this submission. Nothing was set aside and nothing started.';
 
-/** The status route's own answer for a key it never claimed: the one 404 it
- * marks as settling the key (`submission_settled`, as a settled Deploy refusal is). */
+/** The status route's own answer for a key it never claimed: the one 404 that
+ * names `deploy_submission_never_claimed`. */
 function neverClaimed(): HttpErrorResponse {
   return new HttpErrorResponse({
     status: 404,
-    error: {
-      detail: {
-        message: NEVER_CLAIMED_MESSAGE,
-        reason_code: 'deploy_submission_never_claimed',
-        submission_settled: true,
-      },
-    },
+    error: { detail: { message: NEVER_CLAIMED_MESSAGE, reason_code: 'deploy_submission_never_claimed' } },
   });
 }
 
 /**
- * Every other 404 a status read can answer. The fleet's refusals for an
+ * Every other answer a status read can fail with. The fleet's refusals for an
  * address (flat `{reason, message, next_step}`, `PythonDataService/app/broker/
- * fleet/errors.py`), a route that was not found, and a 404 with no body say
- * nothing about what the key recorded, so none of them frees it.
+ * fleet/errors.py`), a route that was not found, a 404 with no body, and a
+ * typed 404 without the never-claimed code say nothing about what the key
+ * recorded, so none of them frees it (#3179). `status` is 404 unless stated.
  */
-const UNREADABLE_404S: readonly { kind: string; error: unknown; message: string }[] = [
+const UNREADABLE_READS: readonly { kind: string; status?: number; error: unknown; message: string }[] = [
   {
     kind: 'the fleet’s clerk_not_found',
     error: { reason: 'clerk_not_found', message: 'No clerk carries this identity.', next_step: 'Pick the account again.' },
@@ -235,6 +230,19 @@ const UNREADABLE_404S: readonly { kind: string; error: unknown; message: string 
   // The same words the route's own answer uses: no code, so no proof.
   { kind: 'the old never-claimed string with no code', error: { detail: NEVER_CLAIMED_MESSAGE }, message: NEVER_CLAIMED_MESSAGE },
   { kind: 'no body', error: null, message: 'The deployment result could not be read.' },
+  // The shape a typed panel refusal (`_raise_alpaca_deploy_error`) has: a code of its own, not this one.
+  {
+    kind: 'a typed refusal that does not name the never-claimed code',
+    error: { detail: { outcome: 'blocked', message: 'No bot with this sid.', reason_code: null, submission_settled: false } },
+    message: 'No bot with this sid.',
+  },
+  // Only a 404 is the never-claimed answer: the code on any other status settles nothing.
+  {
+    kind: 'the never-claimed code on another status',
+    status: 409,
+    error: { detail: { message: NEVER_CLAIMED_MESSAGE, reason_code: 'deploy_submission_never_claimed' } },
+    message: NEVER_CLAIMED_MESSAGE,
+  },
 ];
 
 function mockService(view: DeployBotView = DEPLOY_VIEW, result: BudgetDeployReceipt | HttpErrorResponse = RECEIPT) {
@@ -1041,10 +1049,10 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
       shows: ['The bot runner is not available.', 'Whether the bot started is still not known; checking never starts a second bot.'],
       keepsKey: true,
     },
-    // A 404 that is not the route's own answer is an unreadable read, never "not deployed" (#3179).
-    ...UNREADABLE_404S.map(({ kind, error, message }) => ({
-      kind: `${kind} (404)`,
-      read: (service: ServiceDouble) => service.getDeploySubmission.mockRejectedValue(new HttpErrorResponse({ status: 404, error })),
+    // Any failure that is not the route's own answer is an unreadable read, never "not deployed" (#3179).
+    ...UNREADABLE_READS.map(({ kind, status = 404, error, message }) => ({
+      kind: `${kind} (${status})`,
+      read: (service: ServiceDouble) => service.getDeploySubmission.mockRejectedValue(new HttpErrorResponse({ status, error })),
       title: 'Outcome unknown',
       shows: [message, 'Whether the bot started is still not known; checking never starts a second bot.'],
       keepsKey: true,
@@ -1283,10 +1291,10 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
       read: (service: ServiceDouble) => service.getDeploySubmission.mockReturnValue(new Promise(() => undefined)),
       shows: 'Checking never starts a second bot. The recorded result shows whether money was set aside and the bot started.',
     },
-    // A 404 that is not the route's own answer settles nothing about the key (#3179).
-    ...UNREADABLE_404S.map(({ kind, error }) => ({
-      kind: `unreadable (${kind}, 404)`,
-      read: (service: ServiceDouble) => service.getDeploySubmission.mockRejectedValue(new HttpErrorResponse({ status: 404, error })),
+    // A failure that is not the route's own answer settles nothing about the key (#3179).
+    ...UNREADABLE_READS.map(({ kind, status = 404, error }) => ({
+      kind: `unreadable (${kind}, ${status})`,
+      read: (service: ServiceDouble) => service.getDeploySubmission.mockRejectedValue(new HttpErrorResponse({ status, error })),
       shows: 'The deployment result could not be read. Check again before preparing a fresh deployment.',
     })),
   ])('prepares a new deployment on the reloaded key, kept in the address, while its read is $kind', async ({ read, shows }) => {

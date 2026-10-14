@@ -169,12 +169,17 @@ function settlesSubmission(error: unknown): boolean {
   return error instanceof HttpErrorResponse && error.error?.detail?.submission_settled === true;
 }
 
-/** The status read's own "never claimed" answer: a 404 the route marks as
- * settling the key. The fleet's 404s (`clerk_not_found`, `clerk_lane_retired`,
+/** The code on the status read's own "never claimed" 404
+ * (`panel_deploy.SUBMISSION_NEVER_CLAIMED`). */
+const NEVER_CLAIMED_CODE = 'deploy_submission_never_claimed';
+
+/** The status read's own "never claimed" answer: a 404 that names its code.
+ * The fleet's 404s (`clerk_not_found`, `clerk_lane_retired`,
  * `broker_not_supported`), a route not found and a 404 with no body also
  * answer 404, and none says what the key recorded: each leaves it held. */
 function neverClaimed(error: unknown): boolean {
-  return error instanceof HttpErrorResponse && error.status === 404 && settlesSubmission(error);
+  return error instanceof HttpErrorResponse && error.status === 404
+    && error.error?.detail?.reason_code === NEVER_CLAIMED_CODE;
 }
 
 /** Deploy refusals the backend words as a 409 `conflict` that are no account

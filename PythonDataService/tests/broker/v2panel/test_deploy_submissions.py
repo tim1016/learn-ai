@@ -395,13 +395,11 @@ async def test_a_budgeted_deploy_resent_with_its_key_returns_the_recorded_bot_wi
     assert [call["strategy_instance_id"] for call in budgeted.registry.deploy_calls] == [DEPLOYED_SID, f"{DEPLOYED_SID}-2"]
     assert recovered.status_code == 200 and recovered.json() == first.json()
     assert recovered.json()["first_deployed_at_ms"] == _AT + 7
-    # A client frees the key on this 404 alone (#3179): it carries the typed
-    # code and the settling marker no other 404 on this read does.
+    # A client frees the key on this 404 alone (#3179): it names the typed code.
     assert unknown.status_code == 404
     assert unknown.json()["detail"] == {
         "message": "No Deploy was committed for this submission. Nothing was set aside and nothing started.",
         "reason_code": "deploy_submission_never_claimed",
-        "submission_settled": True,
     }
 
 
