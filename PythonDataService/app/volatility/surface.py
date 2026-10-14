@@ -323,8 +323,9 @@ class VolSurfaceBuilder:
 
             if not arb.passed:
                 diag.warnings.append(
-                    f"Expiry T={ttm:.4f}: arbitrage check failed — {arb.butterfly_violations} butterfly violations, "
-                    f"{arb.negative_variance} negative variance, {arb.unevaluable} unevaluable strikes"
+                    f"Expiry T={ttm:.4f}: arbitrage check failed — {arb.butterfly_violations} butterfly violations "
+                    f"in {arb.butterfly_triples_tested} triples tested, {arb.negative_variance} negative variance, "
+                    f"{arb.unevaluable} unevaluable strikes"
                 )
 
         logger.info(

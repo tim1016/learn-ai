@@ -348,8 +348,18 @@ class ArbitrageReport:
     negative_variance: int = 0
     total_checks: int = 0
     unevaluable: int = 0
-    passed: bool = True
+    butterfly_triples_tested: int = 0
     details: list[str] = field(default_factory=list)
+
+    @property
+    def passed(self) -> bool:
+        """True only if at least one butterfly triple was tested and nothing failed or went unchecked."""
+        return (
+            self.butterfly_triples_tested > 0
+            and self.unevaluable == 0
+            and self.negative_variance == 0
+            and self.butterfly_violations == 0
+        )
 
 
 def check_smile_arbitrage(
@@ -364,13 +374,16 @@ def check_smile_arbitrage(
     - No negative total variance
     - Butterfly arbitrage: d^2 w / dk^2 >= 0 (convexity of total variance in log-moneyness)
 
-    Strikes are sorted first (the convexity test needs ascending log-moneyness).
-    A strike where the fit cannot produce a vol is counted in ``unevaluable``;
-    any such strike leaves part of the smile unchecked, so ``passed`` is False.
+    Strikes are de-duplicated and sorted first: the convexity test needs
+    strictly ascending log-moneyness, and a chain carries a call and a put at
+    every strike. A strike where the fit cannot produce a vol is counted in
+    ``unevaluable``; any such strike leaves part of the smile unchecked. A
+    report that tested no butterfly triple (fewer than three distinct
+    strikes) does not pass either.
     """
     report = ArbitrageReport()
     ttm = fit.ttm
-    strikes = np.sort(np.asarray(strikes, dtype=float))
+    strikes = np.unique(np.asarray(strikes, dtype=float))
     log_k = np.log(strikes / forward)
 
     # Compute total variance at each strike
@@ -401,14 +414,15 @@ def check_smile_arbitrage(
             if dk1 <= 0 or dk2 <= 0:
                 continue
             d2w = ((w_arr[i + 1] - w_arr[i]) / dk2 - (w_arr[i] - w_arr[i - 1]) / dk1) / (0.5 * (dk1 + dk2))
+            if not math.isfinite(d2w):
+                continue  # a neighbour has no vol; already counted in ``unevaluable``
+            report.butterfly_triples_tested += 1
             if d2w < -1e-6:
                 report.butterfly_violations += 1
                 report.details.append(f"Butterfly violation at K={strikes[i]:.2f}: d2w/dk2={d2w:.6f}")
 
-    report.passed = (
-        report.total_checks > 0
-        and report.unevaluable == 0
-        and report.negative_variance == 0
-        and report.butterfly_violations == 0
-    )
+    if report.butterfly_triples_tested == 0:
+        report.details.append(
+            f"no butterfly triple could be tested ({len(strikes)} distinct strikes, {report.unevaluable} unevaluable)"
+        )
     return report

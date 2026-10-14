@@ -236,7 +236,8 @@ def compute_health_score(surface) -> HealthScore:
     - Solver convergence rate (25%): 100 if >95%, linear to 0 at <70%
     - Fit RMSE avg (25%): 100 if <0.005, 0 if >0.05, linear between
     - Rejection rate (25%): 100 if <10%, 0 if >50%, linear between
-    - Arbitrage violations (25%): 100 if 0, -10 per butterfly, -15 per calendar
+    - Arbitrage violations (25%): 100 if 0, -10 per butterfly, -15 per calendar,
+      scaled by the share of slices the arbitrage check could actually test
 
     Returns:
         HealthScore dataclass with component scores and total.
@@ -291,11 +292,19 @@ def compute_health_score(surface) -> HealthScore:
     total_butterfly_violations = 0
     total_calendar_violations = 0
 
+    reported_slices = 0
+    checked_slices = 0
     for slice_diag in diag.slices:
-        if slice_diag.arbitrage is not None:
-            total_butterfly_violations += slice_diag.arbitrage.butterfly_violations
-            total_calendar_violations += slice_diag.arbitrage.calendar_violations
+        arb = slice_diag.arbitrage
+        if arb is not None:
+            total_butterfly_violations += arb.butterfly_violations
+            total_calendar_violations += arb.calendar_violations
+            reported_slices += 1
+            checked_slices += arb.unevaluable == 0 and arb.butterfly_triples_tested > 0
 
+    if reported_slices:
+        # A smile the check could not test is not arbitrage-free: score only the checked share.
+        arbitrage_score *= checked_slices / reported_slices
     arbitrage_score -= 10 * total_butterfly_violations
     arbitrage_score -= 15 * total_calendar_violations
     arbitrage_score = max(0.0, arbitrage_score)

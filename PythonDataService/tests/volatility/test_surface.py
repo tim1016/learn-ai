@@ -86,6 +86,28 @@ class TestSurfaceBuilder:
         assert all(s.n_contracts == s.n_solved + s.n_failed for s in slices)
         assert sum(s.n_failed for s in slices) == surface.diagnostics.n_total_failed
 
+    def test_butterfly_violation_is_found_when_a_call_and_a_put_share_each_strike(
+        self, spot: float, rate: float
+    ) -> None:
+        """The builder appends one strike per solved record, so a chain with a
+        call and a put at every strike hands the arbitrage check each strike
+        twice. A W-shaped smile must still fail it."""
+        ttm = 90 / 365
+        w_shape = {90.0: 0.30, 95.0: 0.20, 100.0: 0.35, 105.0: 0.20, 110.0: 0.30}
+        records = [
+            {"strike": k, "ttm": ttm, "option_price": _bs_price(spot, k, ttm, rate, vol, is_call), "is_call": is_call}
+            for k, vol in w_shape.items()
+            for is_call in (True, False)
+        ]
+        builder = VolSurfaceBuilder(spot=spot, rate=rate, min_contracts_per_slice=5)
+
+        surface = builder.build(records, method=SurfaceMethod.VARIANCE)
+
+        arbitrage = surface.diagnostics.slices[0].arbitrage
+        assert arbitrage is not None
+        assert not arbitrage.passed
+        assert arbitrage.butterfly_violations == 1
+
     def test_diagnostics_populated(self, flat_vol_chain: list[dict], spot: float, rate: float) -> None:
         """Diagnostics should be fully populated."""
         builder = VolSurfaceBuilder(spot=spot, rate=rate)

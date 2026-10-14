@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from app.volatility.fitting import (
+    ArbitrageReport,
     FitMethod,
     FitResult,
     SmileSlice,
@@ -261,3 +262,33 @@ class TestArbitrageCheck:
 
         assert report.total_checks == 0
         assert not report.passed
+
+    def test_a_call_and_a_put_at_every_strike_are_checked_once_each(self) -> None:
+        """A chain carries one record per call and put, so each strike arrives
+        twice. The repeats collapse; they must not skip every triple."""
+        ordered = np.array([90.0, 95.0, 100.0, 105.0, 110.0])
+        ivs = np.array([0.30, 0.20, 0.35, 0.20, 0.30])  # W-shaped smile
+        fit = fit_variance_interp(SmileSlice(strikes=ordered, ivs=ivs, ttm=0.25, forward=100.0))
+
+        report = check_smile_arbitrage(fit, np.repeat(ordered, 2), 100.0)
+
+        assert not report.passed
+        assert report.butterfly_violations == 1
+        assert report.total_checks == len(ordered)
+
+    @pytest.mark.parametrize(
+        "strikes",
+        [[100.0], [95.0, 105.0], [100.0, 100.0], [95.0, 95.0, 105.0, 105.0]],
+        ids=["one_strike", "two_strikes", "one_strike_twice", "two_strikes_twice"],
+    )
+    def test_fewer_than_three_distinct_strikes_cannot_pass(self, strikes: list[float], flat_smile: SmileSlice) -> None:
+        """No butterfly triple exists, so nothing was tested: not 'passed'."""
+        report = check_smile_arbitrage(fit_variance_interp(flat_smile), np.array(strikes), flat_smile.forward)
+
+        assert not report.passed
+        assert report.unevaluable == 0
+        assert report.butterfly_triples_tested == 0
+        assert any("no butterfly triple" in detail for detail in report.details)
+
+    def test_a_report_that_checked_nothing_does_not_read_passed(self) -> None:
+        assert not ArbitrageReport().passed
