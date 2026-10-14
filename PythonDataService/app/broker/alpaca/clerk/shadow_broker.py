@@ -376,9 +376,21 @@ class ShadowOrderBook:
                     update={"status": "canceled", "canceled_at_ms": now, "updated_at_ms": now}
                 ),
                 leg=record.leg,
-                anchor=record.anchor,
+                anchor=self._canceled_anchor(record, now),
                 option=record.option,
             )
+
+    def _canceled_anchor(self, record: SynthesizedOrderRecord, at_ms: int) -> SynthesizedAnchor | None:
+        anchor = record.anchor
+        if anchor is None or anchor.fill_model != "limit_touch":
+            return anchor
+        bars = self._evidence.bars_after(
+            anchor.evidence_account_id, provider=anchor.provider, symbol=record.order.symbol,
+            start_ms=anchor.decision_bar_end_ms,
+        )
+        end_ms = min(at_ms, anchor.cancel_at_ms) if anchor.cancel_at_ms is not None else at_ms
+        witnessed = _execution_window_witnessed(bars, start_ms=anchor.decision_bar_end_ms, end_ms=end_ms)
+        return anchor.model_copy(update={"unfilled_reason": "untouched" if witnessed else "no_evidence"})
 
     def orders(self) -> list[BrokerOrder]:
         return [record.order for record in self._settled_records().values()]
@@ -605,8 +617,24 @@ class ShadowOrderBook:
                         }
                     ),
                     leg=leg,
-                    anchor=anchor,
+                    anchor=anchor.model_copy(update={"unfilled_reason": (
+                        "untouched" if _execution_window_witnessed(
+                            bars, start_ms=anchor.decision_bar_end_ms, end_ms=cancel_at_ms,
+                        ) else "no_evidence"
+                    )}),
                 )
+
+
+def _execution_window_witnessed(bars: list[RetainedSourceBar], *, start_ms: int, end_ms: int) -> bool:
+    """Untouched is proven only by continuous retained bars through cancellation."""
+    covered_until = start_ms
+    for bar in sorted(bars, key=lambda item: item.start_ms):
+        if bar.end_ms <= covered_until:
+            continue
+        if bar.start_ms > covered_until or bar.end_ms > end_ms:
+            break
+        covered_until = bar.end_ms
+    return covered_until >= end_ms and end_ms > start_ms
 
 
 class _ShadowSettlementBars:

@@ -524,6 +524,23 @@ def test_the_trade_port_holds_no_vendor_client() -> None:
     assert list(inspect.signature(NoSubmitAlpacaTradePort.__init__).parameters) == ["self", "book"]
 
 
+@pytest.mark.parametrize("kept_bar", ["none", "gap", "complete"])
+async def test_canceled_shadow_exit_distinguishes_missing_execution_evidence(world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock], kept_bar: str) -> None:
+    ports, bars, _live, clock = world
+    decision = _retain(bars, minute=959, close="100")
+    ref = f"{NAMESPACE}:exit-no-evidence"
+    ports.trade.bind_evaluated_bar(ref, decision)
+    await ports.trade.submit(_extended_leg(99), client_order_id=ref)
+    if kept_bar != "none":
+        for minute in range(960, 1200 if kept_bar == "complete" else 961):
+            _retain(bars, minute=minute, close="101", low="100", phase="POST")
+    bounds = declared_session_bounds(DAY, ALPACA_EXTENDED_HOURS_WINDOW)
+    clock.now_ms = bounds.close_ms + MINUTE_MS
+    record = ports.book.record(ref)
+    assert record.order.status == "canceled"
+    assert record.anchor.unfilled_reason == ("untouched" if kept_bar == "complete" else "no_evidence")
+
+
 async def test_shadow_recovery_does_not_bind_yesterdays_decision_bar(world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock]) -> None:
     ports, bars, _live, clock = world
     _retain(bars, minute=959, close="100")
