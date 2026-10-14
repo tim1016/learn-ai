@@ -84,10 +84,13 @@ class BrokerOrderLeg(_ContractModel):
         pattern=US_EQUITY_SYMBOL_PATTERN,
     )
     side: OrderSide
-    quantity: float = Field(gt=0)
+    # ``allow_inf_nan=False``: the JSON parser takes a bare ``Infinity`` and
+    # ``Infinity > 0`` holds, so ``gt=0`` alone let an infinite quantity through
+    # to the port and into a stored row the account projection cannot read (#3169).
+    quantity: float = Field(gt=0, allow_inf_nan=False)
     order_type: Literal[OrderType.MARKET, OrderType.LIMIT] = OrderType.MARKET
     # Required for a limit order, forbidden for a market order — enforced below.
-    limit_price: float | None = Field(default=None, gt=0)
+    limit_price: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     time_in_force: TimeInForce = TimeInForce.DAY
     # ADR 0059 D5.1: the leg carries the session. True only for a LIMIT leg
     # with DAY or GTC — enforced below so the vendor's 422 is unreachable.
