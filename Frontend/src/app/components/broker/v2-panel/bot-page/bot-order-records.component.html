@@ -40,11 +40,9 @@
 <div class="records-block">
   <h4>Audit trail</h4>
   @if (journalPage.error()) { <p role="alert">Could not load the audit trail.</p> }
-  @if (activated()) {
-    <app-journal-tail
-      [evidencePage]="journalPage.hasValue() ? journalPage.value() : null"
-      [loading]="journalPage.isLoading()"
-      (transactionSelected)="transactionSelected.emit($event)"
-    />
-  }
+  <app-journal-tail
+    [evidencePage]="journalPage.hasValue() ? journalPage.value() : null"
+    [loading]="journalPage.isLoading()"
+    (transactionSelected)="transactionSelected.emit($event)"
+  />
 </div>

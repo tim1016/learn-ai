@@ -17,11 +17,11 @@
       @if (expired()) {
         <p-message severity="warn" class="w-full">
           This plan has expired. Prepare safe flatten again to refresh custody evidence.
-          No order has been submitted.
+          {{ submission() }}
         </p-message>
       } @else {
-        <p-message severity="info" class="w-full">
-          No order has been submitted. The Account Clerk must recheck this plan before any later
+        <p-message [severity]="sendOutcomeUnknown() ? 'warn' : 'info'" class="w-full">
+          {{ submission() }} The Account Clerk must recheck this plan before any later
           reduction action.
         </p-message>
       }

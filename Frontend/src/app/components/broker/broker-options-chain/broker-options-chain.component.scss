@@ -75,12 +75,6 @@
   }
 }
 
-.error {
-  color: var(--recon-tolerance-red, #ef4444);
-  margin: 0.5rem 0;
-  font-size: 0.9rem;
-}
-
 .strike-picker {
   margin: 0.75rem 0 0.5rem;
   padding: 0.5rem 0.75rem;
@@ -248,10 +242,4 @@
   color: var(--info-banner-fg, #1e40af);
   border-radius: 6px;
   font-size: 0.9rem;
-
-  a {
-    color: inherit;
-    font-weight: 600;
-    text-decoration: underline;
-  }
 }

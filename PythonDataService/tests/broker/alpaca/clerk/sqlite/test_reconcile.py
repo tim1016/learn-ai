@@ -15,6 +15,7 @@ import dataclasses
 import hashlib
 import json
 import logging
+import sqlite3
 import threading
 from collections.abc import Iterator
 from datetime import date
@@ -25,6 +26,7 @@ from typing import Any, Literal
 import pytest
 
 import app.broker.alpaca.clerk.sqlite.uncertainty_policies as uncertainty_policies_module
+from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.recovery_reduction import (
     UNPRICEABLE_RECOVERY,
@@ -2307,6 +2309,94 @@ async def test_sweep_backoff_is_capped_and_resets_after_success(
     await sweep.run()
 
     assert sleep_calls == [20.0, 25.0, 10.0]
+
+
+async def test_sweep_keeps_backing_off_past_a_thousand_consecutive_failed_passes(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """``2**1024`` does not convert to a float: an uncapped exponent ended the sweep on pass 1,024 (#3165)."""
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    class AlwaysFailingSweep(ReconciliationSweep):
+        async def _run_one_pass(self) -> bool:
+            return False
+
+    sweep = AlwaysFailingSweep(
+        repo=repo,
+        read=_FakeRead(),
+        trade=_FakeTrade(),
+        interval_s=15.0,
+        max_backoff_s=300.0,
+        sleep=fake_sleep,
+        max_passes=1_100,
+        pricing=UNPRICEABLE_RECOVERY,
+    )
+
+    await sweep.run()
+
+    assert len(sleep_calls) == 1_099
+    assert sleep_calls[:5] == [30.0, 60.0, 120.0, 240.0, 300.0]
+    assert set(sleep_calls[4:]) == {300.0}
+
+
+class _SweepThatEndsOnAnError(ReconciliationSweep):
+    """A sweep whose loop dies with a stored exception, whatever the cause."""
+
+    async def run(self) -> None:
+        raise RuntimeError("sweep loop ended")
+
+
+async def _parked_lease_sleep(_seconds: float) -> None:
+    await asyncio.Event().wait()
+
+
+async def test_sweep_task_that_ends_on_an_error_is_logged_and_stop_does_not_raise(
+    repo: ClerkSqliteRepository,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sweep = _SweepThatEndsOnAnError(
+        repo=repo,
+        read=_FakeRead(),
+        trade=_FakeTrade(),
+        lease_sleep=_parked_lease_sleep,
+        pricing=UNPRICEABLE_RECOVERY,
+    )
+    sweep.start()
+    sweep_task, lease_task = sweep._task, sweep._lease_task
+    assert sweep_task is not None and lease_task is not None
+    await asyncio.wait({sweep_task}, timeout=1.0)
+
+    ended = [record for record in caplog.records if getattr(record, "action", None) == "reconcile_sweep_ended"]
+    assert [record.levelno for record in ended] == [logging.CRITICAL]
+    assert getattr(ended[0], "account_id", None) == repo.account_id
+
+    await sweep.stop()  # must not re-raise the task's stored RuntimeError
+
+    assert lease_task.cancelled()
+
+
+async def test_closing_the_runtime_with_a_dead_sweep_still_closes_the_repository(tmp_path: Path) -> None:
+    clerk_repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    sweep = _SweepThatEndsOnAnError(
+        repo=clerk_repo,
+        read=_FakeRead(),
+        trade=_FakeTrade(),
+        lease_sleep=_parked_lease_sleep,
+        pricing=UNPRICEABLE_RECOVERY,
+    )
+    runtime = ActiveClerkRuntime(authority_kind="sqlite", sweep=sweep, _sqlite_repository=clerk_repo)
+    sweep.start()
+    assert sweep._task is not None
+    await asyncio.wait({sweep._task}, timeout=1.0)
+
+    await runtime.close()
+
+    assert runtime.sqlite_repository is None
+    with pytest.raises(sqlite3.ProgrammingError):
+        clerk_repo._conn.execute("SELECT 1")
 
 
 async def test_started_sweep_renews_the_execution_lease_while_idle(tmp_path: Path) -> None:

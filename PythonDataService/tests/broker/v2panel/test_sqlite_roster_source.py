@@ -180,6 +180,14 @@ class _Repository:
         )
 
 
+def _roster_statuses(facade: SimpleNamespace) -> list[BotStatusView]:
+    """One status per registration, as the catalog's roster read builds them."""
+    return [
+        sqlite_roster_status.build_roster_status("alpaca", registration, facade.repository)
+        for registration in facade.repository.strategy_instances()
+    ]
+
+
 def test_sqlite_roster_projects_the_durable_duty_outcome(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -193,7 +201,6 @@ def test_sqlite_roster_projects_the_durable_duty_outcome(
             return None
 
     facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=_StoppedRepository())
-    monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
     monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
 
     record_path = stable_bot_lifecycle_state_path(tmp_path, "active-spy")
@@ -213,9 +220,8 @@ def test_sqlite_roster_projects_the_durable_duty_outcome(
         encoding="utf-8",
     )
 
-    statuses = sqlite_panel_source.read_sqlite_roster_statuses("alpaca")
+    statuses = _roster_statuses(facade)
 
-    assert statuses is not None
     crashed = statuses[0]
     assert crashed.strategy_instance_id == "active-spy"
     assert crashed.duty_outcome is not None
@@ -257,7 +263,6 @@ def test_sqlite_roster_falls_back_to_the_authoritative_terminal_receipt(
             )
 
     facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=_StoppedRepository())
-    monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
     monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
 
     # The lifecycle projection exists but carries no duty outcome: exactly
@@ -290,9 +295,8 @@ def test_sqlite_roster_falls_back_to_the_authoritative_terminal_receipt(
         encoding="utf-8",
     )
 
-    statuses = sqlite_panel_source.read_sqlite_roster_statuses("alpaca")
+    statuses = _roster_statuses(facade)
 
-    assert statuses is not None
     crashed = statuses[0]
     assert crashed.running is False
     assert crashed.duty_outcome is not None
@@ -344,7 +348,6 @@ def test_sqlite_roster_prefers_the_projection_where_no_receipt_exists(
             )
 
     facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=_StoppedRepository())
-    monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
     monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
 
     record_path = stable_bot_lifecycle_state_path(tmp_path, "active-spy")
@@ -365,9 +368,8 @@ def test_sqlite_roster_prefers_the_projection_where_no_receipt_exists(
     )
     # Deliberately no run_outcomes/ receipt on disk.
 
-    statuses = sqlite_panel_source.read_sqlite_roster_statuses("alpaca")
+    statuses = _roster_statuses(facade)
 
-    assert statuses is not None
     assert statuses[0].duty_outcome is not None
     assert statuses[0].duty_outcome.kind == "EXITED_UNVERIFIED"
     assert status_label_for(statuses[0]) == "Ended without a clean exit"
@@ -393,7 +395,6 @@ def test_sqlite_roster_refuses_an_unreadable_terminal_receipt(
             )
 
     facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=_StoppedRepository())
-    monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
     monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
 
     outcomes_dir = (
@@ -404,16 +405,14 @@ def test_sqlite_roster_refuses_an_unreadable_terminal_receipt(
     (outcomes_dir / "run-crashed.json").write_text("{not json", encoding="utf-8")
 
     with pytest.raises(SqliteCatalogProjectionUnavailable):
-        sqlite_panel_source.read_sqlite_roster_statuses("alpaca")
+        _roster_statuses(facade)
 
 
-def test_sqlite_roster_uses_only_activated_repository(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sqlite_roster_uses_only_activated_repository() -> None:
     facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=_Repository())
-    monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
 
-    statuses = sqlite_panel_source.read_sqlite_roster_statuses("alpaca")
+    statuses = _roster_statuses(facade)
 
-    assert statuses is not None
     assert [status.strategy_instance_id for status in statuses] == ["active-spy", "retired-qqq"]
     assert statuses[0].running is True
     assert statuses[0].active_run_id == "run-active"
@@ -435,8 +434,9 @@ def test_sqlite_roster_uses_only_activated_repository(monkeypatch: pytest.Monkey
     assert statuses[1].quantity == 3
     assert statuses[1].carryover_policy == "ALLOW"
 
-    status = sqlite_panel_source.read_sqlite_bot_status("alpaca", "active-spy")
-    assert status is not None
+    status = sqlite_roster_status.build_roster_status(
+        "alpaca", facade.repository.strategy_instance("active-spy"), facade.repository
+    )
     assert status.strategy_label == "Opening Range Breakout"
 
 
@@ -760,14 +760,10 @@ def test_sqlite_roster_refuses_unknown_identity_after_activation(
 ) -> None:
     repository = _Repository()
     monkeypatch.setattr(repository, "bot_config", lambda _sid: None)
-    monkeypatch.setattr(
-        sqlite_panel_source,
-        "active_sqlite_facade",
-        lambda _broker: SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository),
-    )
+    facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository)
 
     with pytest.raises(SqliteCatalogProjectionUnavailable, match="immutable SQLite configuration"):
-        sqlite_panel_source.read_sqlite_roster_statuses("alpaca")
+        _roster_statuses(facade)
 
 
 @pytest.mark.asyncio

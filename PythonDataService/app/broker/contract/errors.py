@@ -179,30 +179,6 @@ class BrokerOrderAnswerUnreadable(BrokerEvidenceUnavailable):
         self.broker_order_id = broker_order_id
 
 
-class BrokerSubmissionHeld(BrokerError):
-    """New submission is refused by the account-level exposure hold (phase-2 S6).
-
-    Raised by the Clerk when a submit is attempted while an unexplained-order
-    hold is active — a safety posture, not a vendor rejection. Surfaced as
-    ``409`` with the ``reason_code`` the router echoes so the UI can flag it and
-    offer the operator the clear-hold exit. Cancels are never held (reducing
-    exposure is always allowed), so this only guards ``submit``.
-    """
-
-    http_status: ClassVar[int] = 409
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        reason_code: str,
-        broker: str | None = None,
-        detail: str | None = None,
-    ) -> None:
-        super().__init__(message, broker=broker, detail=detail)
-        self.reason_code = reason_code
-
-
 class BrokerAccountModeDisagreement(BrokerError):
     """The configured mode and the broker-observed account disagree (ADR 0059 D1).
 

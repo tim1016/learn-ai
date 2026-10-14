@@ -729,6 +729,51 @@ async def test_a_running_dry_run_is_stopped_at_its_end_and_sold_at_the_last_pric
 
 
 @pytest.mark.parametrize("run_ending", ["running"])
+async def test_a_running_dry_runs_clean_check_never_goes_overdue_for_want_of_a_sweep(
+    crashed_dry_run: _World, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Dry Run's own Clerk has no periodic sweep, so its check cannot be overdue (#3165)."""
+    monkeypatch.setattr(panel_data_source, "now_ms_utc", crashed_dry_run.clock)
+    runtime = get_clerk_runtime(SIM_ACCOUNT)
+    assert runtime is not None and runtime.sqlite_repository is not None
+    await runtime.clerk.reconcile_once()  # type: ignore[union-attr]
+    _walk_clock_to(runtime.sqlite_repository, crashed_dry_run.clock() + 5 * 60_000)
+
+    panel = await _panel()
+
+    assert panel.bot_page is not None
+    [line] = [line for line in panel.bot_page.health.account if line.key == "reconciliation"]
+    assert (line.state, line.value) == ("ok", "Clean")
+    assert line.at_ms is not None and crashed_dry_run.clock() - line.at_ms > 60_000
+
+
+@pytest.mark.parametrize("run_ending", ["running"])
+async def test_a_lane_whose_periodic_pass_has_gone_quiet_reads_overdue_on_its_panel(
+    crashed_dry_run: _World, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The panel carries the facade's own sweep stamp to the line: a swept lane that goes quiet is overdue (#3165)."""
+    monkeypatch.setattr(panel_data_source, "now_ms_utc", crashed_dry_run.clock)
+    runtime = get_clerk_runtime(SIM_ACCOUNT)
+    assert runtime is not None and runtime.sqlite_repository is not None
+    facade = runtime.clerk
+    assert isinstance(facade, SqliteAlpacaClerkFacade)
+    # What the periodic sweep's ``on_result`` does on each pass; a Dry Run only has no sweep to call it.
+    facade.publish_sweep_reconciliation(await facade.reconcile_account(trigger="AUTOMATIC"))
+
+    def reconciliation_line(panel: BotPanelView):
+        assert panel.bot_page is not None
+        [line] = [line for line in panel.bot_page.health.account if line.key == "reconciliation"]
+        return line
+
+    assert reconciliation_line(await _panel()).state == "ok"
+
+    _walk_clock_to(runtime.sqlite_repository, crashed_dry_run.clock() + 60_001)
+
+    line = reconciliation_line(await _panel())
+    assert (line.state, line.value) == ("attention", "Overdue")
+
+
+@pytest.mark.parametrize("run_ending", ["running"])
 async def test_running_dry_run_panel_uses_fresh_equity_marks_and_withdraws_stale_prices(crashed_dry_run: _World, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(panel_data_source, "now_ms_utc", crashed_dry_run.clock)
     runtime = get_clerk_runtime(SIM_ACCOUNT)

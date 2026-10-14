@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Final
+from typing import Final
 
 TRADING_DAYS_PER_YEAR: Final[int] = 252
 CALENDAR_DAYS_PER_YEAR: Final[int] = 365
@@ -56,21 +56,6 @@ class SurfaceConventions:
         if self.discount_model != "continuous":
             raise NotImplementedError(f"discount_model={self.discount_model}")
         return math.exp(-self.rate * ttm)
-
-    def to_hash_dict(self) -> dict[str, Any]:
-        """
-        Convert to dict for surface_id hash computation.
-
-        Returns immutable dict representation of all conventions.
-        """
-        return {
-            "day_count": self.day_count,
-            "forward_model": self.forward_model,
-            "discount_model": self.discount_model,
-            "rate": self.rate,
-            "dividend_yield": self.dividend_yield,
-            "calendar": self.calendar,
-        }
 
 
 def dte_to_ttm(dte_days: int, day_count: str = "Actual365Fixed") -> float:

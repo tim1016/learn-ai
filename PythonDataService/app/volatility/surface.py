@@ -87,7 +87,6 @@ class VolSurface:
     spot: float
     rate: float
     dividend: float
-    eval_date: str
     fits: list[FitResult] = field(default_factory=list)
     diagnostics: SurfaceDiagnostics = field(default_factory=SurfaceDiagnostics)
 
@@ -193,14 +192,12 @@ class VolSurfaceBuilder:
         spot: float,
         rate: float,
         dividend: float = 0.0,
-        eval_date: str = "",
         min_contracts_per_slice: int = 5,
         sabr_beta: float = 0.5,
     ) -> None:
         self.spot = spot
         self.rate = rate
         self.dividend = dividend
-        self.eval_date = eval_date
         self.min_contracts_per_slice = min_contracts_per_slice
         self.sabr_beta = sabr_beta
 
@@ -299,7 +296,6 @@ class VolSurfaceBuilder:
                 spot=self.spot,
                 rate=self.rate,
                 dividend=self.dividend,
-                eval_date=self.eval_date,
                 diagnostics=diag,
             )
 
@@ -338,27 +334,9 @@ class VolSurfaceBuilder:
             spot=self.spot,
             rate=self.rate,
             dividend=self.dividend,
-            eval_date=self.eval_date,
             fits=fits,
             diagnostics=diag,
         )
-
-    def build_bid_ask(
-        self,
-        records: list[dict],
-        method: SurfaceMethod = SurfaceMethod.VARIANCE,
-    ) -> tuple[VolSurface, VolSurface]:
-        """
-        Build separate bid and ask vol surfaces.
-
-        Records must contain ``bid`` and ``ask`` fields.
-        Returns (bid_surface, ask_surface).
-        """
-        bid_records = [{**r, "option_price": r["bid"]} for r in records if r.get("bid", 0) > 0]
-        ask_records = [{**r, "option_price": r["ask"]} for r in records if r.get("ask", 0) > 0]
-        bid_surface = self.build(bid_records, method)
-        ask_surface = self.build(ask_records, method)
-        return bid_surface, ask_surface
 
     # ── Private helpers ──────────────────────────────────────────────────
 

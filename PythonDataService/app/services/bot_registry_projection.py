@@ -24,7 +24,7 @@ def project_process_fact(
 ) -> BotProcessFact:
     """Project process-owner evidence without inferring broker custody."""
     process_identity: str | None = None
-    state: Literal["STARTING", "RUNNING", "STOPPING", "EXITED", "UNKNOWN"] = "UNKNOWN"
+    state: Literal["RUNNING", "STOPPING", "EXITED", "UNKNOWN"] = "UNKNOWN"
     if managed is not None and managed.binding.run_id == binding.run_id:
         process_identity = f"in-process-task:{binding.run_id}"
         lifecycle_matches = (

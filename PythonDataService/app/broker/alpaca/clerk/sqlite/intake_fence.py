@@ -107,6 +107,12 @@ class ReentrantAsyncLock:
             raise IntakeFencePoisonedError(self._poisoned_reason)
 
         await self._lock.acquire()
+        if self._poisoned_reason is not None:
+            # A waiter parked before the poison was set is admitted by the very
+            # release that poisoned the fence — while the abandoned worker may
+            # still be writing — so the flag is read again here (#3160).
+            self._lock.release()
+            raise IntakeFencePoisonedError(self._poisoned_reason)
         self._owner = current
         self._depth = 1
         self._scope_tokens.append(self._enter_dynamic_scope())

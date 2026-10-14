@@ -141,10 +141,6 @@ class _LiveRead:
         del after_ms, limit
         return []
 
-    async def list_assets(self, *, status: str | None = None, limit: int | None = 100) -> list:
-        del status, limit
-        return []
-
     async def get_asset(self, symbol: str) -> None:
         del symbol
         return None

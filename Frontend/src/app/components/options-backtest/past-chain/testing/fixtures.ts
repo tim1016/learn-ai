@@ -16,8 +16,6 @@ export const SESSION_CLOSE_MS = 1_791_576_000_000;
 /** 15:59 ET and 15:45 ET of it (19:59 and 19:45 UTC). */
 export const MINUTE_1559_MS = 1_791_575_940_000;
 export const MINUTE_1545_MS = 1_791_575_100_000;
-/** 12:00 ET of it. */
-export const NOON_MS = 1_791_561_600_000;
 
 /** The day after Thanksgiving, an early close at 13:00 ET: midnight 05:00 UTC, open 09:30, close 13:00. */
 export const HALF_DAY = '2026-11-27';
@@ -71,8 +69,8 @@ export function dollarsOf(thousandths: number): string {
 }
 
 /** An OCC symbol, written here only so that a spec can say which contracts it expects on the wire. */
-export function occSymbol(expiryDate: string, right: 'call' | 'put', thousandths: number, root = UNDERLYING): string {
-  return `${root}${expiryDate.slice(2, 4)}${expiryDate.slice(5, 7)}${expiryDate.slice(8, 10)}${right === 'call' ? 'C' : 'P'}${String(thousandths).padStart(8, '0')}`;
+export function occSymbol(expiryDate: string, right: 'call' | 'put', thousandths: number): string {
+  return `${UNDERLYING}${expiryDate.slice(2, 4)}${expiryDate.slice(5, 7)}${expiryDate.slice(8, 10)}${right === 'call' ? 'C' : 'P'}${String(thousandths).padStart(8, '0')}`;
 }
 
 export interface ContractWanted {
@@ -83,13 +81,12 @@ export interface ContractWanted {
   readonly timeMs?: number;
   readonly standard?: boolean;
   readonly problem?: string;
-  readonly expiry?: string;
 }
 
 export function contract(wanted: ContractWanted): ChainContract {
   const traded = wanted.state === 'traded';
   return {
-    symbol: occSymbol(wanted.expiry ?? '2026-10-16', wanted.right, wanted.thousandths),
+    symbol: occSymbol('2026-10-16', wanted.right, wanted.thousandths),
     strike: dollarsOf(wanted.thousandths),
     strike_thousandths: wanted.thousandths,
     standard: wanted.standard ?? true,

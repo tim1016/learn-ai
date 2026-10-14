@@ -6,8 +6,6 @@ type Schemas = components['schemas'];
 export type TradesPage = Schemas['OptionsBacktestTradesResponse'];
 export type LegTrade = Schemas['OptionsBacktestTradeResponse'];
 export type TradeContract = Schemas['OptionsBacktestContractResponse'];
-export type TradeFill = Schemas['OptionsBacktestTradeFillResponse'];
-export type TradeMark = Schemas['OptionsBacktestTradeMarkResponse'];
 
 /** One session of a run for the one-day timeline, and what it holds. */
 export type SessionDetail = Schemas['OptionsBacktestSessionResponse'];
@@ -23,10 +21,6 @@ export type LevelKind = SessionLevel['kind'];
 /** Two runs side by side. */
 export type RunComparison = Schemas['OptionsBacktestComparisonResponse'];
 export type ComparedRun = Schemas['OptionsBacktestComparedRunResponse'];
-export type SettingDifference = Schemas['OptionsBacktestSettingDifferenceResponse'];
-export type RangeDifference = Schemas['OptionsBacktestRangeDifferenceResponse'];
-export type SharedSession = Schemas['OptionsBacktestSharedSessionResponse'];
-export type RunTotals = Schemas['OptionsBacktestRunTotalsResponse'];
 
 /** Which trades to read: only one session's, only one leg's, and which page. */
 export interface TradeQuery {

@@ -7,7 +7,7 @@ import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { BotInstrumentComponent } from '../../../../shared/bot-instrument/bot-instrument.component';
 import { AuthoredUsdPipe } from '../../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
-import type { BotPanelView } from '../lib/broker-v2-panel.types';
+import type { BotPanelView, MarketPulseView } from '../lib/broker-v2-panel.types';
 import { keepInsideViewport } from '../strategy-view/popover-placement';
 
 /** One holding as the header names it: "1 SPY". */
@@ -15,6 +15,19 @@ interface HeldFigure {
   readonly symbol: string;
   readonly quantity: number;
 }
+
+type FeedState = MarketPulseView['feed_state'];
+
+/** The feed line's word for each state the panel reports: only `LIVE` may read "live" (#3164). */
+const FEED_WORDING: Readonly<Record<FeedState, string>> = {
+  LIVE: 'live',
+  IDLE: 'idle',
+  STALE: 'stale',
+  MISSING: 'missing',
+};
+
+/** Worst first: the line follows whichever of the bot's feeds is doing worst. */
+const FEED_WORST_FIRST: readonly FeedState[] = ['MISSING', 'STALE', 'IDLE', 'LIVE'];
 
 let nextSummaryId = 0;
 
@@ -27,7 +40,7 @@ let nextSummaryId = 0;
  * as simulated cash: its money is not the account's (H23).
  *
  * The status opens the backend's one-line summary of the run and, while it
- * runs, when the market data feed last updated it.
+ * runs, the state of the market data feed and when its last bar arrived.
  */
 @Component({
   selector: 'app-bot-page-header',
@@ -54,6 +67,15 @@ export class BotPageHeaderComponent {
       .map(([symbol, quantity]) => ({ symbol, quantity }))
       .sort((left, right) => left.symbol.localeCompare(right.symbol)),
   );
+  /** Of the feed the bot listens to and the one of the asset it trades (#2912), the one doing worst. */
+  protected readonly feed = computed((): MarketPulseView => {
+    const { market_pulse, traded_market_pulse } = this.panel();
+    const pulses = traded_market_pulse ? [market_pulse, traded_market_pulse] : [market_pulse];
+    return pulses.reduce((worst, next) =>
+      FEED_WORST_FIRST.indexOf(next.feed_state) < FEED_WORST_FIRST.indexOf(worst.feed_state) ? next : worst,
+    );
+  });
+  protected readonly feedWord = computed(() => FEED_WORDING[this.feed().feed_state]);
   protected readonly dryRunChip = { tone: 'dry_run', mode: LANE_MODE_WORDING.dry_run } as const;
   /** Screen-reader word of each new panel revision, with no visual time ticking. */
   protected readonly snapshotStatus = computed(

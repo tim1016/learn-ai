@@ -60,8 +60,8 @@ coordinator.
   (slot `default`). Both `chmod 600`.
 - `PythonDataService/.env` — the four `ALPACA_*` credential lines were
   **removed** when this posture was installed; the coordinator must hold no
-  Alpaca execution credential. `ALPACA_MARKET_ENDPOINT` /
-  `ALPACA_FAULT_INJECTION_ENABLED` remain (coordinator-inert).
+  Alpaca execution credential. `ALPACA_FAULT_INJECTION_ENABLED` remains
+  (coordinator-inert).
 
 If a token is lost, `rotate-credentials --clerk-id <id> --slot agent|coordinator`
 mints a fresh one; update compose.override.yaml and restart both sides.

@@ -29,8 +29,6 @@ interface ChainRow {
   isAtm: boolean;
   itmCall: boolean;
   itmPut: boolean;
-  distance: string;
-  distancePct: string;
   centerIv: string;
 
   callLast: string;
@@ -183,8 +181,6 @@ export class OptionsLabChainComponent implements OnInit {
       const call = callMap.get(strike) ?? null;
       const put = putMap.get(strike) ?? null;
       const isAtm = strike === atmStrike;
-      const distanceRaw = price > 0 ? strike - price : 0;
-      const distancePct = price > 0 ? (distanceRaw / price) * 100 : 0;
       const callIv = call?.impliedVolatility ?? 0;
       const putIv = put?.impliedVolatility ?? 0;
       const centerIvVal = callIv > 0 && putIv > 0 ? (callIv + putIv) / 2 : (callIv || putIv);
@@ -195,8 +191,6 @@ export class OptionsLabChainComponent implements OnInit {
         isAtm,
         itmCall: price > 0 && strike < price && !isAtm,
         itmPut: price > 0 && strike > price && !isAtm,
-        distance: price > 0 ? this.formatSigned(distanceRaw, 2) : EM_DASH,
-        distancePct: price > 0 ? this.formatSigned(distancePct, 2) + '%' : EM_DASH,
         centerIv: centerIvVal > 0 ? (centerIvVal * 100).toFixed(2) + '%' : EM_DASH,
 
         callLast: this.resolveLast(call),
@@ -387,11 +381,6 @@ export class OptionsLabChainComponent implements OnInit {
     if (v >= 1_000_000) return (v / 1_000_000).toFixed(1) + 'M';
     if (v >= 1_000) return (v / 1_000).toFixed(1) + 'K';
     return v.toLocaleString();
-  }
-
-  private formatSigned(v: number, dp: number): string {
-    const sign = v >= 0 ? '+' : '';
-    return sign + v.toFixed(dp);
   }
 
   private barWidth(volume: number | null | undefined, max: number): number {

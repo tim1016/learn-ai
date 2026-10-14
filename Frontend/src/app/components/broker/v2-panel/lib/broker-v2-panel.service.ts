@@ -202,9 +202,11 @@ export class BrokerV2PanelService {
     return this.polls.get<AccountMoneyView>(operationUrl('account_money_read', target));
   }
 
-  /** The recovery read: what one Deploy submission did, by its key. A 404
-   * means the key was never claimed — nothing set aside, nothing started;
-   * a 503 means the clerk cannot read its ledger right now. */
+  /** The recovery read: what one Deploy submission did, by its key. Only a
+   * 404 naming `deploy_submission_never_claimed` means the key was never
+   * claimed — nothing set aside, nothing started; any other 404 (the fleet's,
+   * a route not found) settles nothing, and a 503 means the clerk cannot
+   * read its ledger right now. */
   getDeploySubmission(target: ResourceTarget, submissionKey: string): Promise<DeploySubmissionStatus> {
     return firstValueFrom(this.http.get<DeploySubmissionStatus>(
       operationUrl('bot_deploy_submission_read', { ...target, submissionKey }),

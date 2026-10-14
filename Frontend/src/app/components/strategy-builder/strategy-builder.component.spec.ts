@@ -381,6 +381,47 @@ describe('StrategyBuilderComponent', () => {
     });
   });
 
+  // ── #3186: extremes and breakevens come from the whole payoff ──
+  describe('payoff extremes and breakevens are read off the whole payoff', () => {
+    it('shows a short put its whole loss, at S = 0, not the loss inside the chart window', () => {
+      component.legs.set([
+        { strike: 590, optionType: 'put', position: 'short', premium: 5, iv: 0.3, quantity: 1, enabled: true },
+      ]);
+
+      // (5 − 590) × 100; the ±5 % window shows only −$2,450.
+      expect(component.liveMaxLossDisplay()).toBe('−$58,500.00');
+      expect(component.liveMaxProfitDisplay()).toBe('$500.00');
+      expect(component.liveBreakevens()).toEqual([585]);
+    });
+
+    it('shows a long call unlimited profit and a loss of its premium', () => {
+      component.legs.set([
+        { strike: 100, optionType: 'call', position: 'long', premium: 5, iv: 0.3, quantity: 1, enabled: true },
+      ]);
+
+      expect(component.liveMaxProfitDisplay()).toBe('∞');
+      expect(component.liveMaxLossDisplay()).toBe('−$500.00');
+    });
+
+    it('shows a long strangle its breakevens outside the chart window', () => {
+      component.legs.set([
+        { strike: 570, optionType: 'put', position: 'long', premium: 10, iv: 0.3, quantity: 1, enabled: true },
+        { strike: 610, optionType: 'call', position: 'long', premium: 10, iv: 0.3, quantity: 1, enabled: true },
+      ]);
+
+      expect(component.liveBreakevens()).toEqual([550, 630]);
+    });
+
+    it('shows nothing while no leg is enabled', () => {
+      component.legs.set([
+        { strike: 590, optionType: 'put', position: 'short', premium: 5, iv: 0.3, quantity: 1, enabled: false },
+      ]);
+
+      expect(component.liveMaxLoss()).toBeNull();
+      expect(component.liveBreakevens()).toEqual([]);
+    });
+  });
+
   // ── UX-Q2: chain density toggle ────────────────────────────────
   describe('UX-Q2: chain density toggle', () => {
     beforeEach(() => {

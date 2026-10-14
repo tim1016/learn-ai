@@ -12,6 +12,7 @@ from app.broker.fleet import recovery as recovery_module
 from app.broker.fleet.confirmation import (
     ConfirmationEvidence,
     ConfirmationEvidenceError,
+    mark_confirmation_evidence_draining,
     write_confirmation_evidence,
 )
 from app.broker.fleet.errors import (
@@ -19,10 +20,12 @@ from app.broker.fleet.errors import (
     ClerkIdentityMismatch,
     ClerkLaneQuietUnproven,
     ClerkUnreachable,
+    FleetRegistryBackupPredatesDrain,
     FleetRegistryRecoveryPending,
     FleetRegistryUnavailable,
 )
 from app.broker.fleet.provider import OperationReadiness
+from app.broker.fleet.records import AssignmentState
 from app.broker.fleet.recovery import (
     BACKUP_MANIFEST_FILENAME,
     D_COMPATIBLE_SCHEMA_VERSION,
@@ -43,6 +46,7 @@ from tests.broker.fleet.conftest import (
     bind_lane,
     downgrade_backup_to_v2,
     provision_lane,
+    release_after_drain,
 )
 
 
@@ -664,3 +668,81 @@ def test_a_current_build_backup_is_not_d_compatible_rollback_evidence(
             backup_dir=backup,
             max_schema_version=D_COMPATIBLE_SCHEMA_VERSION,
         )
+
+
+def test_backup_manifest_names_the_lanes_of_its_snapshot_when_a_lane_is_released_after_it(
+    control_dir: Path,
+    fleet_service: FleetControlService,
+    clock: FrozenClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The manifest lists the lanes of the bytes it hashes, not the live registry's (#3168).
+
+    A drain-and-release that commits after the snapshot is written must not
+    drop its lane from the manifest: the restore gate would never ask that
+    lane to reconcile, so the drained-lane check (#2350) would never run for
+    it and the hold would clear without it.
+    """
+    paper = provision_lane(fleet_service, broker="fake_alpha", label="paper", tmp_path=control_dir.parent)
+    live = provision_lane(fleet_service, broker="fake_alpha", label="live", tmp_path=control_dir.parent)
+    paper_session, paper_assignment = bind_lane(fleet_service, paper, account="PAPER", binding_generation=2)
+    live_session, live_assignment = bind_lane(fleet_service, live, account="LIVE", binding_generation=3)
+    for lane, session, assignment, account, generation in (
+        (paper, paper_session, paper_assignment, "PAPER", 2),
+        (live, live_session, live_assignment, "LIVE", 3),
+    ):
+        _write_lane_evidence(
+            fleet_service,
+            lane_root=lane.volume_root,
+            clerk_id=lane.clerk_id,
+            session_id=session.agent_instance_id,
+            routing_epoch=session.routing_epoch,
+            account=account,
+            assignment_generation=assignment.assignment_generation,
+            binding_generation=generation,
+        )
+
+    # Deterministic interleaving: the release lands exactly between the
+    # snapshot being written and anything the manifest reads afterwards.
+    store = fleet_service._store
+    snapshot_to = store.backup_to
+
+    def snapshot_then_release_paper(database: Path) -> None:
+        snapshot_to(database)
+        release_after_drain(
+            fleet_service,
+            clock,
+            paper,
+            account="PAPER",
+            expected_assignment_generation=paper_assignment.assignment_generation,
+        )
+        assert mark_confirmation_evidence_draining(paper.volume_root)
+
+    monkeypatch.setattr(store, "backup_to", snapshot_then_release_paper)
+    backup = control_dir.parent / "registry-backup"
+    manifest = create_registry_backup(store, backup_dir=backup)
+
+    released = store.read_assignment(broker="fake_alpha", canonical_account_id="PAPER")
+    assert released is not None and released.state is AssignmentState.RELEASED
+    assert manifest.active_clerk_ids == tuple(sorted((paper.clerk_id, live.clerk_id)))
+
+    adapters = dict(fleet_service._provider_adapters)
+    fleet_service.close()
+    restore_registry_backup(control_dir=control_dir, backup_dir=backup, max_schema_version=SCHEMA_VERSION)
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir), provider_adapters=adapters, clock=clock
+    )
+    try:
+        summary = {"endpoint_mode": "paper", "authority_state": "ready"}
+        state = reconcile_restored_lane(
+            service, clerk_id=live.clerk_id, volume_root=live.volume_root, provider_summary=summary
+        )
+        assert state.mutations_closed is True
+        with pytest.raises(FleetRegistryBackupPredatesDrain):
+            reconcile_restored_lane(
+                service, clerk_id=paper.clerk_id, volume_root=paper.volume_root, provider_summary=summary
+            )
+        held = read_recovery_state(control_dir)
+        assert held is not None and held.mutations_closed is True
+    finally:
+        service.close()

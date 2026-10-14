@@ -16,7 +16,6 @@ export const FIELD = {
   cash: 'cash',
   fees: 'fees',
   perContractFee: 'perContractFee',
-  name: 'name',
 } as const;
 
 export type LegField =
@@ -71,7 +70,6 @@ export function cleanMessage(message: string): string {
 }
 
 function keyOf(loc: readonly (string | number)[], legIds: readonly string[]): string | null {
-  if (loc[0] === 'path' && loc[1] === 'name') return FIELD.name;
   const [head, ...rest] = loc[0] === 'body' ? loc.slice(1) : loc;
   switch (head) {
     case 'underlying':

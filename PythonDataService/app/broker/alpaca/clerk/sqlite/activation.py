@@ -177,10 +177,6 @@ class ActivationStore:
             latest = record
         return latest
 
-    def account_ids(self) -> tuple[str, ...]:
-        """Every activated account, in first-appearance order."""
-        return tuple(dict.fromkeys(record.account_id for record in self._read_all()))
-
     def resolve(
         self,
         account_id: str,

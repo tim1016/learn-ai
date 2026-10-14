@@ -66,8 +66,6 @@ export class GoldenSearchChanceFinalPanelComponent {
     const measured = this.profitabilityMeasured();
     return measured !== null && measured.net_return_range != null ? (measured as ProfitabilityWithRange) : null;
   });
-  /** A measured reading from before #3026: counts readable, the range simply not recorded — never fabricated. */
-  protected readonly rangeNotRecorded = computed(() => this.profitabilityMeasured() !== null && this.profitabilityWithRange() === null);
 
   protected readonly carryMeasured = computed<MeasuredChanceCarryOver | null>(() => {
     const carry = this.chance().carry_over;

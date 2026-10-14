@@ -1,8 +1,8 @@
 """Panel data-source facade.
 
 Resolves the live dependencies the account-scoped panel endpoints need — the
-account id, the order journal, the decision journals, the bot roster, the clerk
-status, and the live chart aggregator — and delegates every computation to the
+account id, the decision receipts, the bot roster, the clerk status, and the
+live chart aggregator — and delegates every computation to the
 pure projection functions. The router stays transport-only; this facade is the
 single seam that touches process singletons.
 Account scope: every method validates ``account_id`` against the broker's
@@ -537,7 +537,6 @@ async def _get_panel_with_entries_from_authority(
     panel = build_panel(
         status,
         clerk,
-        entries,
         bot_status=custody_bot_status(facade.repository, sid, running=status.running),
         account_id=resolved,
         authority_account_id=authority_account_id,
@@ -744,6 +743,7 @@ def _with_bot_page(
                 facts,
                 bot_owns_custody_problem=has_bot_scoped_custody_problem(projection),
                 execution_coverage_complete=evidence.economics.snapshot.execution_coverage == "complete",
+                sweep_pass_at_ms=facade.recovery_evaluation_observation().last_pass_completed_at_ms,
                 now_ms=now_ms,
             ),
             "run_fills": run_fill_views(run_fills, _simulated_fill_anchors(facade, sid), _simulated_option_fills(facade, sid)),

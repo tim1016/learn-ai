@@ -14,7 +14,6 @@ p { margin: 0; }
 .rules div:last-child { border-bottom: 0; }
 .rules dt { color: var(--text-secondary); }
 .rules dd { margin: 0; text-align: right; }
-.caption { color: var(--text-secondary); font-size: var(--fs-xs); }
 .failed { display: grid; gap: var(--space-1); color: var(--bear); font-size: var(--fs-sm); }
 .link { all: unset; justify-self: start; color: var(--accent-text); font-size: var(--fs-xs); cursor: pointer; }
 .link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

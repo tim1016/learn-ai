@@ -209,7 +209,6 @@ def ensure_run_data(
     on_progress: Callable[[int, int], None] = _ignore_progress,
     should_stop: Callable[[], bool],
     on_log: Callable[[str], None] = _ignore_log,
-    data: LakeRunData | None = None,
     pace: Pace = REAL_PACE,
 ) -> DownloadReport:
     """Bring into the lake what a run of ``setup`` over ``sessions`` (in date order) can read.
@@ -223,7 +222,7 @@ def ensure_run_data(
     return _Download(
         setup,
         now_ms=now_ms,
-        reader=data or LakeRunData(setup.underlying),
+        reader=LakeRunData(setup.underlying),
         on_log=on_log,
         should_stop=should_stop,
         pace=pace,

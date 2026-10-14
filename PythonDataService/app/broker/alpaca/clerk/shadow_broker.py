@@ -90,7 +90,6 @@ from app.broker.alpaca.clerk.synthesized_orders import (
     recovery_bar_in_send_session,
 )
 from app.broker.alpaca.clerk.synthetic_broker import (
-    UnsupportedOptionOrderRefusal,
     filter_synthesized_orders,
     shape_immediate_order,
     synthesized_positions,
@@ -674,7 +673,7 @@ class _ShadowSettlementBars:
         return min(latest, key=lambda bar: bar.bar_ref)
 
 
-class NoSubmitAlpacaTradePort(UnsupportedOptionOrderRefusal):
+class NoSubmitAlpacaTradePort:
     """``BrokerTradePort`` that synthesizes every order and never reaches Alpaca (ADR 0059 D2).
 
     It fills option entries and closes, including multi-leg orders, from
@@ -682,7 +681,6 @@ class NoSubmitAlpacaTradePort(UnsupportedOptionOrderRefusal):
     """
 
     broker_id = SHADOW_BROKER_ID
-    _named_in_option_refusals = "The shadow order book"
 
     def __init__(self, book: ShadowOrderBook) -> None:
         self._book = book
@@ -850,14 +848,6 @@ class ShadowAccountReadPort:
         """
         del after_ms, resume
         return BrokerOptionEventEvidence(events=(), share_trades=(), history_complete=True)
-
-    async def list_assets(
-        self,
-        *,
-        status: str | None = None,
-        limit: int | None = 100,
-    ) -> list[BrokerAsset]:
-        return await self._live.list_assets(status=status, limit=limit)
 
     async def get_asset(self, symbol: str) -> BrokerAsset | None:
         return await self._live.get_asset(symbol)

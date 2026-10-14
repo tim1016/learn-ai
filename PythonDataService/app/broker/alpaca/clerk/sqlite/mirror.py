@@ -196,7 +196,7 @@ class MirrorFile:
                 raise MirrorChainBroken(f"unknown mirror record phase: {record['phase']!r}")
         return prepares_by_sequence, finalize_by_sequence
 
-    def reconcile(self, committed_rows: list[dict[str, Any]], *, clock: Clock) -> None:
+    def reconcile(self, committed_rows: list[dict[str, Any]], *, clock: Clock) -> frozenset[int]:
         """Startup check 9, corrected: every committed row, not only the
         tail (a tail-only check leaves an earlier unrecoverable gap
         invisible).
@@ -214,6 +214,12 @@ class MirrorFile:
         A row whose existing FINALIZE disagrees with the
         committed row (different hash or generation) is genuine corruption
         and fails closed.
+
+        Returns the sequences the mirror had finalized when it was parsed. A
+        FINALIZE follows its SQLite commit, so the caller can check them
+        against a database read taken *after* this call: a live writer that
+        appended meanwhile cannot make a finalized sequence look missing
+        (#3161).
         """
         prepares_by_sequence, finalize_by_sequence = self._parsed_records()
         for row in committed_rows:
@@ -243,6 +249,7 @@ class MirrorFile:
                     f"sequence {row['sequence']} has a FINALIZE record disagreeing "
                     "with the committed row"
                 )
+        return frozenset(finalize_by_sequence)
 
     def rebuild(self) -> list[RebuiltRow]:
         """Replay finalized PREPARE/FINALIZE pairs into rows, verifying the chain.

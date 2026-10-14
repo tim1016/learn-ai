@@ -192,11 +192,6 @@ class SessionCheck:
     notes: tuple[str, ...]
 
     @property
-    def trading_date(self) -> date:
-        """The New York date of the session's open. Derived, never stored or sent."""
-        return et_date_at_ms(self.session_open_ms)
-
-    @property
     def testable(self) -> bool:
         return self.verdict is not SessionVerdict.CANNOT_BE_TESTED
 

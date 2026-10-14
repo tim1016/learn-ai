@@ -21,15 +21,12 @@ import { createAppChart } from '../charts/chart-utils';
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class PayoffChartComponent implements OnDestroy {
-  // ── Inputs (same public API — unused inputs kept for future phases) ─
+  // ── Inputs ──────────────────────────────────────────────────────────
   expirationCurve = input<PayoffPoint[]>([]);
   currentPnlCurve = input<PayoffPoint[]>([]);
   whatIfCurves = input<ChartCurveData[]>([]);
   greekCurve = input<GreekCurvePoint[]>([]);
   selectedGreek = input<GreekType>('delta');
-  breakevens = input<number[]>([]);
-  spotPrice = input(0);
-  timeToExpiry = input(0);
   height = input(450);
 
   // ── Template refs ──────────────────────────────────────────────────

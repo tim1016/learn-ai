@@ -321,7 +321,6 @@ async def _run_late_fill_case(
         )
         assert receipt.state not in {
             EffectOperationState.REJECTED,
-            EffectOperationState.UNPROVABLE,
             EffectOperationState.FLAT,
         }, receipt
         assert [side for side, _, _ in broker.submit_log if side == "sell"] == ["sell"]

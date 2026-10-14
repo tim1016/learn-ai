@@ -62,9 +62,8 @@ compose `env_file`; copy from its `.env.example`):
 - Alpaca credential slots (optional, for broker features):
   `ALPACA_API_KEY_ID`/`ALPACA_API_SECRET_KEY` (paper, "default" slot) and
   `ALPACA_CREDENTIAL_LIVE_KEY_ID`/`ALPACA_CREDENTIAL_LIVE_SECRET_KEY` ("live"
-  slot). One `ALPACA_MARKET_ENDPOINT` serves both — with paper creds in the
-  default slot it must stay `https://paper-api.alpaca.markets/v2`. Per ADR
-  0060 the effective endpoint mode is a broker profile saved in the UI.
+  slot). Per ADR 0060 the effective endpoint mode is a broker profile saved
+  in the UI.
 - `DATA_LAKE_ROOT_ID` — the UUID from §5; losing this makes the service
   refuse to start (falls back to the legacy all-zeros id and aborts)
 - Do NOT re-add the RETIRED `ALPACA_MODE` / `ALPACA_LIVE_*` variables (see

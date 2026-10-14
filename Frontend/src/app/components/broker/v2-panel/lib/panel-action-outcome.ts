@@ -1,3 +1,5 @@
+import { HttpErrorResponse } from '@angular/common/http';
+
 import type { PanelActionErrorResponse } from '../../../../api/broker-models';
 import { fleetRefusalCopyFor } from '../../../../fleet/fleet-refusal-copy';
 import { refusalBody } from '../../../../shared/errors/refusal-body';
@@ -41,6 +43,27 @@ export interface ActionRejection {
    * a surface that says "why" and "next" apart (#2607, a bot's end). Set by
    * `deriveActionRejection`; `why` keeps its own precedence. */
   readonly nextAction: string | null;
+}
+
+/** The coordinator's refusal for a command it dispatched and could not settle: the lane
+ * dropped, timed out, or answered 5xx after the send, so "the command may have been applied". */
+const ROUTING_OUTCOME_UNKNOWN = 'clerk_routing_outcome_unknown';
+
+/**
+ * Whether a rejected send may nonetheless have been applied (#3178): the
+ * request got no answer (a dropped connection, a timeout, a bare 5xx), or the
+ * Clerk's own answer says the outcome is unknown. A refusal that names a
+ * reason and no outcome derives `unknown` in `deriveActionRejection` for
+ * display, but it is the Clerk's answer that the send was refused.
+ */
+export function sendMayHaveBeenApplied(error: unknown): boolean {
+  const detail = extractActionErrorDetail(error);
+  if (detail === null) {
+    // A 4xx with no refusal body is still the server saying it did not run it;
+    // a 2xx whose body would not parse is an answer that may have placed the order.
+    return !(error instanceof HttpErrorResponse) || error.status < 400 || error.status >= 500;
+  }
+  return detail['outcome'] === 'unknown' || detail['reason'] === ROUTING_OUTCOME_UNKNOWN;
 }
 
 /** Parses a rejected `runBotAction` call's outcome, message, and remediation. */

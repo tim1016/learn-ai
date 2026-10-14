@@ -530,7 +530,6 @@ class BotTaskRegistry:
         boot_recovery_required: bool = True,
         supported_broker_ids: frozenset[str] | None = None,
         start_custody_guard: Callable[[str], AbstractAsyncContextManager[AdmissionCustodyCut]] | None = None,
-        lifecycle_projector: AlpacaLifecycleProjector | None = None,
         market_liveness: MarketLivenessFactResolver | None = None,
         validation_fact: ValidationFactResolver | None = None,
         lane_start_gates: tuple[LaneStartGate, ...] = (),
@@ -572,7 +571,7 @@ class BotTaskRegistry:
         )
         self._alpaca_identity = AlpacaBotIdentityGuard(self._artifacts_root)
         self._lifecycle_authority = ActiveSqliteAlpacaLifecycleAuthority()
-        self._lifecycle_projector = lifecycle_projector or AlpacaLifecycleProjector(
+        self._lifecycle_projector = AlpacaLifecycleProjector(
             authority=self._lifecycle_authority,
             lifecycle_repo_for=self._lifecycle_repo,
             require_alpaca_identity=self._require_alpaca_identity,

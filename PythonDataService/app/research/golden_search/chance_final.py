@@ -47,7 +47,6 @@ correction.
 
 from __future__ import annotations
 
-import logging
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -83,8 +82,6 @@ from app.research.golden_search.protocol import GoldenSearchProtocol
 from app.research.golden_search.selection import Metrics
 from app.research.monte_carlo.stationary import CHUNK_REPLICATIONS, stationary_index_chunks
 from app.schemas.golden_search import GoldenSearchChanceFitToFit
-
-logger = logging.getLogger(__name__)
 
 #: What the stored per-fit final readings call themselves; a change to their interpretation needs a new one.
 SCHEMA_CARRY_OVER = "golden-search-chance-carry-over/v1"

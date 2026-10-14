@@ -24,7 +24,7 @@ from app.broker.fleet.provider import (
     ProviderOperation,
     ServedContext,
 )
-from app.broker.fleet.records import AccountAssignmentRecord, StoredLifecycleState
+from app.broker.fleet.records import AccountAssignmentRecord
 from app.broker.fleet.recovery import (
     BACKUP_DATABASE_FILENAME,
     BACKUP_MANIFEST_FILENAME,
@@ -252,10 +252,6 @@ class Lane:
     volume_root: Path
     worker_key: str
     attestation_id: str
-
-    @property
-    def lifecycle_state(self) -> str:
-        return str(StoredLifecycleState.PROVISIONED)
 
 
 def provision_lane(

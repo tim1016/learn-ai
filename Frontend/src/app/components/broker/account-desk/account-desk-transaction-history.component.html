@@ -39,7 +39,13 @@
       <button pButton type="button" severity="secondary" (click)="store.retry()">Retry</button>
     </div>
   } @else if (store.feed(); as feed) {
-    @if (feedPresentation(); as presentation) {
+    @if (store.errorMessage(); as refreshError) {
+      <div class="state state--error" role="alert">
+        <p>{{ refreshError }}</p>
+        <p>These are the transactions from the last successful read. Orders placed or changed since may not appear.</p>
+        <button pButton type="button" severity="secondary" (click)="store.retry()">Retry</button>
+      </div>
+    } @else if (feedPresentation(); as presentation) {
       <div class="feed-status" [class.feed-status--attention]="presentation.attention" role="status">
         <i [class]="presentation.attention ? 'pi pi-exclamation-circle' : 'pi pi-check-circle'" aria-hidden="true"></i>
         <span><strong>{{ presentation.headline }}</strong>{{ presentation.detail }}</span>

@@ -107,4 +107,15 @@ describe('SafeFlattenPlanComponent', () => {
     expect(screen.getByText(/Prepare safe flatten again/)).toBeTruthy();
     expect(screen.getByText(/No order has been submitted/)).toBeTruthy();
   });
+
+  it.each([
+    ['an unexpired', { ...PLAN, expires_at_ms: Date.now() + 30_000 }],
+    ['an expired', PLAN],
+  ])('does not say no order was submitted on %s plan whose send got no answer (#3178)', async (_name, plan) => {
+    await render(SafeFlattenPlanComponent, { inputs: { plan, sendOutcomeUnknown: true } });
+
+    expect(screen.queryByText(/No order has been submitted/)).toBeNull();
+    expect(screen.getByText(/whether an order was submitted is not known/)).toBeTruthy();
+    expect(screen.getByText(/Check the position with Alpaca before another order/)).toBeTruthy();
+  });
 });

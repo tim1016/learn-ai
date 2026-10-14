@@ -195,41 +195,6 @@ class SqliteChartEvidence:
     fills: FillWindowProjection
 
 
-def read_sqlite_roster_statuses(broker: str) -> list[BotStatusView] | None:
-    """Read the activated bot roster without consulting runner artifacts.
-
-    SQLite activation makes ``strategy_instances`` and ``runs`` the durable
-    roster/lifecycle authority.  The legacy binding tree is disposable process
-    evidence and must not be walked by routine catalog refreshes.
-
-    Immutable strategy identity comes from the S1 ``bot_config`` fold.  A
-    missing config is an unavailable authority projection, never an
-    ``unknown`` identity reconstructed from disposable runner artifacts.
-    """
-    facade = active_sqlite_facade(broker)
-    if facade is None:
-        return None
-    return [
-        build_roster_status(broker, registration, facade.repository)
-        for registration in facade.repository.strategy_instances()
-    ]
-
-
-def read_sqlite_bot_status(
-    broker: str,
-    strategy_instance_id: str,
-) -> BotStatusView | None:
-    """Read one activated bot's immutable identity and lifecycle from SQLite."""
-    facade = active_sqlite_facade(broker)
-    if facade is None:
-        return None
-    registration = facade.repository.strategy_instance(strategy_instance_id)
-    if registration is None:
-        return None
-    return build_roster_status(broker, registration, facade.repository)
-
-
-
 def _meta_matches(
     meta: ControlMetaSnapshot,
     *,
@@ -487,42 +452,6 @@ async def read_sqlite_panel_evidence(
 
     try:
         return await asyncio.to_thread(read_once)
-    except (EconomicProjectionError, SqliteCatalogProjectionUnavailable) as exc:
-        raise SqlitePanelEconomicUnavailable(str(exc)) from exc
-
-
-async def read_sqlite_chart_fills(
-    broker: str,
-    account_id: str,
-    strategy_instance_id: str,
-    *,
-    from_ms: int,
-    to_ms: int,
-) -> FillWindowProjection | None:
-    """Read every effective SQLite fill for one bounded HISTORY chart window.
-
-    The S2 reader returns all-or-unavailable, rather than a truncated tail, so
-    chart markers remain a complete execution account for their window.
-    """
-    facade = active_sqlite_facade(broker)
-    if facade is None:
-        return None
-    if facade.account_id != account_id:
-        raise ValueError("Requested account is not the active SQLite authority")
-
-    def read_window() -> FillWindowProjection | None:
-        reader = SqliteEconomicProjectionReader.from_repository(facade.repository)
-        try:
-            return reader.bot_fill_window(
-                strategy_instance_id,
-                from_ms=from_ms,
-                to_ms=to_ms,
-            )
-        finally:
-            reader.close()
-
-    try:
-        return await asyncio.to_thread(read_window)
     except (EconomicProjectionError, SqliteCatalogProjectionUnavailable) as exc:
         raise SqlitePanelEconomicUnavailable(str(exc)) from exc
 
@@ -1249,17 +1178,14 @@ __all__ = [
     "SqlitePanelDecisionUnavailable",
     "SqlitePanelEconomicUnavailable",
     "execute_sqlite_panel_action",
-    "read_sqlite_bot_status",
     "read_sqlite_catalog",
     "read_sqlite_catalog_economic_rollups",
     "read_sqlite_catalog_from_facade",
     "read_sqlite_catalog_projections",
     "read_sqlite_chart_evidence",
-    "read_sqlite_chart_fills",
     "read_sqlite_clerk_status",
     "read_sqlite_decision_receipts",
     "read_sqlite_panel_evidence",
-    "read_sqlite_roster_statuses",
 ]
 
 

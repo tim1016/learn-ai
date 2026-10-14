@@ -9,7 +9,7 @@ import {
 } from '../../v2-panel/lib/broker-v2-panel.service';
 import { canonicalJson } from '../deploy-draft.store';
 import { DEPLOY_TYPING_SETTLE_MS } from '../deploy-money-step.component';
-import { ASK_AGAIN_FLOOR_MS, ASK_AGAIN_LIMIT, askAgainWhileShown } from './ask-again';
+import { ASK_AGAIN_LIMIT, askAgainWhileShown } from './ask-again';
 
 /** One question for the preview: the structure on screen, on one account. */
 export interface OptionPreviewAsk {
@@ -40,7 +40,6 @@ export const PREVIEW_FAILED_TEXT = 'The preview could not be read.';
 
 /** The page's own bound on asking again, under the names its specs know it by. */
 export const PREVIEW_ASK_AGAIN_LIMIT = ASK_AGAIN_LIMIT;
-export const PREVIEW_ASK_AGAIN_FLOOR_MS = ASK_AGAIN_FLOOR_MS;
 
 /** A stable name for one page's request for quotes, as the route takes one. */
 export function newPreviewKey(): string {

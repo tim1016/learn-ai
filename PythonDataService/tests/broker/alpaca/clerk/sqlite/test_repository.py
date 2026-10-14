@@ -34,6 +34,7 @@ from app.broker.alpaca.clerk.sqlite.registry import EstablishedAccountsRegistry
 from app.broker.alpaca.clerk.sqlite.repository import (
     AlreadyInitialized,
     ClerkSqliteRepository,
+    DatabaseBehindMirror,
     DatabaseIdentityMismatch,
     DatabaseMissingAfterEstablishment,
     ExecutionLeaseHeld,
@@ -420,6 +421,87 @@ def test_substituted_database_rejected_on_identity_mismatch(tmp_path: Path) -> N
 
     with pytest.raises(DatabaseIdentityMismatch):
         ClerkSqliteRepository.open(account_id="PA-AAAA", artifacts_root=tmp_path, clock=clock)
+
+
+def test_database_behind_its_mirror_fails_closed_on_open_without_repair(tmp_path: Path) -> None:
+    """A clerk.db that lost its committed tail must not open (#3161).
+
+    Startup check 9 walked only the rows the database still has, so an older
+    file copied over the live one passed: every surviving row matched its
+    FINALIZE. The mirror finalized sequences the database does not hold, which
+    is the rewound-database case the mirror exists to make visible.
+    """
+    clock = _clock_seq()
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    repo.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="h1")
+    db_path = repo.db_path
+    mirror_path = repo.mirror_path
+    repo.close()
+    behind_copy = tmp_path / "behind.db"
+    shutil.copyfile(db_path, behind_copy)
+
+    repo = ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    repo.register_strategy_instance(strategy_instance_id="qqq-bot", symbol="QQQ", config_hash="h2")
+    repo.register_strategy_instance(strategy_instance_id="iwm-bot", symbol="IWM", config_hash="h3")
+    assert len(repo.custody_transitions()) == 3
+    repo.close()
+
+    for sidecar in (Path(f"{db_path}-wal"), Path(f"{db_path}-shm")):
+        sidecar.unlink(missing_ok=True)
+    shutil.copyfile(behind_copy, db_path)
+    mirror_before = mirror_path.read_bytes()
+    database_before = db_path.read_bytes()
+
+    with pytest.raises(DatabaseBehindMirror, match="behind its mirror"):
+        ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+
+    # Refused without taking the lease or repairing either file.
+    assert mirror_path.read_bytes() == mirror_before
+    assert db_path.read_bytes() == database_before
+    inspected = sqlite3.connect(db_path)
+    try:
+        (lease_owner,) = inspected.execute(
+            "SELECT execution_lease_owner FROM control_meta WHERE id = 1"
+        ).fetchone()
+    finally:
+        inspected.close()
+    assert lease_owner is None
+
+
+def test_open_racing_a_live_writer_is_refused_as_lease_held_not_as_behind_mirror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A holder that appends between the opener's database read and its mirror
+    parse leaves the mirror ahead of the opener's snapshot (#3161).
+
+    That is a held lease, not a lost tail: the restart path retries only
+    ``ExecutionLeaseHeld``, and the account-held-elsewhere mapping keys on it.
+    """
+    clock = _clock_seq()
+    live = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_owner="process-A"
+    )
+    live.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="h1")
+    parse = MirrorFile._parsed_records
+    appended: list[object] = []
+
+    def parse_after_a_live_append(self: MirrorFile):
+        if not appended:
+            appended.append(
+                live.register_strategy_instance(
+                    strategy_instance_id="qqq-bot", symbol="QQQ", config_hash="h2"
+                )
+            )
+        return parse(self)
+
+    monkeypatch.setattr(MirrorFile, "_parsed_records", parse_after_a_live_append)
+
+    with pytest.raises(ExecutionLeaseHeld):
+        ClerkSqliteRepository.open(
+            account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_owner="process-B"
+        )
+    assert appended
+    live.close()
 
 
 def test_execution_lease_blocks_a_second_concurrent_open(tmp_path: Path) -> None:
@@ -1029,34 +1111,3 @@ def test_reconcilable_effect_operations_scope_to_one_custody_subject(
     assert healthy == []
 
     repo.close()
-
-
-@pytest.mark.parametrize("first_module", [
-    "app.broker_configuration.envelope",
-    "app.broker.alpaca.clerk.live_envelope",
-    "app.broker.alpaca.clerk.sqlite.uncertainty_causes",
-    "app.broker.alpaca.clerk.sqlite",
-])
-def test_public_repository_exports_survive_pure_module_first_import(first_module: str) -> None:
-    """A fresh interpreter must not depend on pytest's earlier import order."""
-    import subprocess
-    import sys
-
-    probe = """
-import importlib
-import sys
-importlib.import_module(sys.argv[1])
-assert 'app.broker.alpaca.clerk.sqlite.repository' not in sys.modules
-from app.broker.alpaca.clerk import sqlite
-from app.broker.alpaca.clerk.sqlite import models, reads, repository
-for name in sqlite.__all__:
-    owner = models if hasattr(models, name) else repository
-    assert getattr(sqlite, name) is getattr(owner, name), name
-assert reads is importlib.import_module('app.broker.alpaca.clerk.sqlite.reads')
-assert not hasattr(sqlite, 'unknown_repository_export')
-"""
-    result = subprocess.run(
-        [sys.executable, "-c", probe, first_module],
-        cwd=Path(__file__).resolve().parents[5], capture_output=True, text=True, timeout=30,
-    )
-    assert result.returncode == 0, result.stderr

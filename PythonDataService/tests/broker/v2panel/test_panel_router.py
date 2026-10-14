@@ -204,9 +204,6 @@ class _FakeRegistry:
             last_transition_at_ms=_T0,
         )
 
-    def list_bots(self, broker: str) -> list[BotStatusView]:
-        return [self.status(broker, sid) for sid in self._sids]
-
     def binding_for_control(self, broker: str, sid: str) -> SimpleNamespace:
         self.status(broker, sid)
         return SimpleNamespace(

@@ -205,8 +205,6 @@ export class BotToolbarComponent {
   protected readonly moreOpen = signal(false);
   protected readonly allActionsOpen = signal(false);
   protected readonly icons = ICONS;
-  /** A blocker's cure is a toolbar button of its own (Check against Alpaca, Sell), never a second one beside it. */
-  protected readonly noMoves = (): boolean => false;
   protected readonly availabilityWords = AVAILABILITY_WORDS;
 
   protected readonly entries = computed(() => this.panel().bot_page?.toolbar ?? legacyToolbar(this.panel()));

@@ -27,7 +27,6 @@ export const METHOD_HINTS: Readonly<Record<GoldenSearchMethod, string>> = {
 })
 export class GoldenSearchMethodChoiceComponent {
   readonly method = input.required<GoldenSearchMethod>();
-  readonly readonly = input(false);
   readonly methodChange = output<GoldenSearchMethod>();
 
   protected readonly methods = METHODS;

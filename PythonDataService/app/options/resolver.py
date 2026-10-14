@@ -472,7 +472,6 @@ class _Market:
     limits: ResolverLimits
     model: ModelInputs
     selection_ms: int
-    decision_date: date
     money: Fraction
     spot: float
     priced: dict[str, Priced]
@@ -1005,7 +1004,6 @@ def resolve_contracts(
             limits=limits,
             model=model,
             selection_ms=selection_ms,
-            decision_date=today,
             money=_thousandths(bar_close),
             spot=float(_mid(underlying_quote)),
             priced={},

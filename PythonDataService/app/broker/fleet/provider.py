@@ -146,8 +146,6 @@ class ProviderOperation:
     requires_effective_account: bool
     idempotency: OperationIdempotency
     stream: OperationStream = OperationStream.NONE
-    request_schema: str | None = None
-    response_schema: str | None = None
     #: This operation's own outer coordinator -> agent delivery read-timeout
     #: bound. Defaults to the fleet default
     #: (``app.broker.fleet.internal_http.DEFAULT_INTERNAL_TIMEOUT_S``) rather

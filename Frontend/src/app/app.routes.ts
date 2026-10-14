@@ -114,13 +114,6 @@ export const routes: Routes = [
             "./components/options-lab/strategy-finder-stub/strategy-finder-stub.component"
           ).then((m) => m.StrategyFinderStubComponent),
       },
-      {
-        path: "volatility",
-        loadComponent: () =>
-          import(
-            "./components/options-lab/volatility-stub/volatility-stub.component"
-          ).then((m) => m.VolatilityStubComponent),
-      },
     ],
   },
   {

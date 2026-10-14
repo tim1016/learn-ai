@@ -246,11 +246,9 @@ class SharedWorkerPool:
         submission_bound: int,
         payload_bound_bytes: int,
         result_bound_bytes: int,
-        spawn: Callable[[WorkerDispatchContext], ResearchWorker] | None = None,
     ) -> None:
         if workers < 1:
             raise ValueError("a shared worker pool has at least one lane")
-        self._spawn = spawn or ResearchWorker
         self._worker_count = workers
         self._submission_bound = submission_bound
         self._payload_bound_bytes = payload_bound_bytes
@@ -517,7 +515,7 @@ class SharedWorkerPool:
                 self._cancel_entry_home(entry)
                 return
             try:
-                worker = self._spawn(owner.context)
+                worker = ResearchWorker(owner.context)
             except WorkerLost as exc:
                 self._deliver(lane, entry, WorkerLost(f"the research worker failed to start: {exc}"))
                 return

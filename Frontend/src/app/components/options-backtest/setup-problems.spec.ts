@@ -16,7 +16,6 @@ describe('the server field errors', () => {
     [['body', 'fees'], FIELD.fees],
     [['body', 'fees', 'per_contract_usd'], FIELD.perContractFee],
     [['body', 'legs'], FIELD.legs],
-    [['path', 'name'], FIELD.name],
   ])('land at the field %j names', (loc, key) => {
     expect([...problemsFromDetails([at(loc)], ['call']).fields.keys()]).toEqual([key]);
   });

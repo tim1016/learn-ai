@@ -84,37 +84,6 @@ class TestDiscountFactor:
         assert df_1 > df_2
 
 
-class TestSurfaceConventionsDataclass:
-    """Frozen dataclass tests."""
-
-    def test_to_hash_dict_complete(self) -> None:
-        """to_hash_dict returns all fields."""
-        conventions = SurfaceConventions(
-            day_count="Actual365Fixed",
-            forward_model="bsm",
-            discount_model="continuous",
-            rate=0.05,
-            dividend_yield=0.02,
-            calendar="NullCalendar",
-        )
-
-        hash_dict = conventions.to_hash_dict()
-
-        assert hash_dict["day_count"] == "Actual365Fixed"
-        assert hash_dict["forward_model"] == "bsm"
-        assert hash_dict["discount_model"] == "continuous"
-        assert hash_dict["rate"] == 0.05
-        assert hash_dict["dividend_yield"] == 0.02
-        assert hash_dict["calendar"] == "NullCalendar"
-
-    def test_to_hash_dict_is_dict(self, rate: float) -> None:
-        """to_hash_dict returns a dict (not frozen)."""
-        conventions = SurfaceConventions(rate=rate)
-        hash_dict = conventions.to_hash_dict()
-
-        assert isinstance(hash_dict, dict)
-
-
 class TestDayCountConversions:
     """Day count convention conversion tests."""
 

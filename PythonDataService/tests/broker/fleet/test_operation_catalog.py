@@ -107,31 +107,6 @@ def test_catalog_validation_refuses_malformed_operation_shapes() -> None:
         validate_operation_catalog(frozenset({_operation(operation_id="Account Read")}))
 
 
-def test_alpaca_declares_the_six_desk_reads_at_their_pinned_routes() -> None:
-    """C's desk has no operational fallback to a broker-global route."""
-    from app.broker.alpaca.clerk.fleet_adapter import AlpacaProviderAdapter
-
-    operations = {
-        operation.operation_id: operation
-        for operation in AlpacaProviderAdapter().operations()
-    }
-    expected = {
-        "portfolio_history_read": ("GET", "/portfolio-history"),
-        "portfolio_history_proof_read": ("GET", "/portfolio-history-proof"),
-        "clerk_status_read": ("GET", "/clerk/status"),
-        "custody_diagnosis_read": ("GET", "/clerk/custody-diagnosis"),
-        "bot_run_current_read": (
-            "GET",
-            "/accounts/{account_id}/bots/{sid}/runs/current",
-        ),
-        "bot_history_read": ("GET", "/accounts/{account_id}/bot-history"),
-    }
-    assert {
-        operation_id: (operations[operation_id].method, operations[operation_id].path_template)
-        for operation_id in expected
-    } == expected
-
-
 def test_protocol_compatibility_refuses_mismatched_builds() -> None:
     """An agent's protocol version must equal the coordinator's, exactly —
     and an unversioned caller is exactly the older build the fence exists for."""

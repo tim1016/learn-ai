@@ -161,15 +161,13 @@ class ResolvedRunConfiguration(BaseModel):
     """The concrete configuration the initialized strategy actually executed.
 
     ``start_date`` is the evaluation start — the date the persisted study's
-    figures begin — and ``warmup_start_date`` the earlier boundary the run
-    read from when it was primed (``None`` for an ordinary run).
+    figures begin.
     """
 
     start_date: str
     end_date: str
     resolution: Literal["minute", "daily"]
     parameters: dict[str, Any]
-    warmup_start_date: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -284,7 +282,6 @@ def _resolved_run_configuration(
         end_date=window.evaluation_end.isoformat(),
         resolution=request.resolution,
         parameters=parameters,
-        warmup_start_date=window.data_start.isoformat() if window.primed else None,
     )
 
 
@@ -567,8 +564,6 @@ def replay_engine_run(
     _resolve_legacy_data_policy(request, validated_params)
     request.fill_mode = fill_mode.value
     data_roots = _resolve_lean_data_roots(adjusted=_policy_adjusted(request.data_policy))
-    if not data_roots:
-        raise SavedRunNotReplayable("No LEAN data roots are configured, so this run's bars cannot be read.")
     try:
         data_manifest = _pin_compatibility_fixture(request, data_roots)
     except (FileNotFoundError, OSError, ValueError) as exc:
@@ -664,7 +659,6 @@ def _materialize_missing_bars(
     symbol: str,
     start: date,
     end: date,
-    data_roots: list[Path],
     on_log: LogCallback,
 ) -> str | None:
     """Put the run's bars on disk before the reader looks for them.
@@ -843,11 +837,6 @@ def _execute_engine_backtest_core(
     request.fill_mode = fill_mode.value
 
     data_roots = _resolve_lean_data_roots(adjusted=_policy_adjusted(request.data_policy))
-    if not data_roots:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="No LEAN data roots configured (set LEAN_DATA_ROOT or LEAN_DATA_CACHE)",
-        )
 
     strategy = registration.build(validated_params)
 
@@ -879,7 +868,6 @@ def _execute_engine_backtest_core(
                     symbol=symbol,
                     start=_parse_iso_date(start_override, "start_date"),
                     end=_parse_iso_date(end_override, "end_date"),
-                    data_roots=data_roots,
                     on_log=on_log,
                 )
             except HTTPException:
@@ -1032,7 +1020,6 @@ def _validation_analytics(
     *,
     result: BacktestResult,
     request: EngineBacktestRequest,
-    strategy: Strategy,
     formatted_trades: list[EngineTradeResponse],
     equity_curve: list[dict[str, Any]],
     on_log: LogCallback,
@@ -1178,7 +1165,6 @@ class _PerBarArtifacts:
             validation_analytics=_validation_analytics(
                 result=result,
                 request=request,
-                strategy=strategy,
                 formatted_trades=formatted_trades,
                 equity_curve=equity_curve_dicts,
                 on_log=on_log,
@@ -1248,11 +1234,7 @@ def _aggregate_backtest_response(
 
     from app.engine.results.statistics import EquityPoint
 
-    equity_points = (
-        [EquityPoint(timestamp_ms=s.timestamp_ms, equity=float(s.equity)) for s in result.equity_curve]
-        if result.equity_curve
-        else None
-    )
+    equity_points = [EquityPoint(timestamp_ms=s.timestamp_ms, equity=float(s.equity)) for s in result.equity_curve]
 
     # Owner decision #2424 (issue #2447): the headline Sharpe, Sortino, max
     # drawdown and the run verdict grade the marked equity curve in every

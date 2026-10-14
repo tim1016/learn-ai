@@ -23,10 +23,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from app.broker.fleet.confirmation import (
-    ConfirmationEvidenceError,
-    read_confirmation_evidence,
-)
+from app.broker.fleet.confirmation import read_confirmation_evidence
 from app.broker.fleet.errors import (
     ClerkAssignmentConflict,
     ClerkIdentityMismatch,
@@ -178,6 +175,30 @@ def read_backup_manifest(backup_dir: Path) -> RegistryBackupManifest:
     return _manifest_from_json(raw)
 
 
+def _effective_clerk_ids(database: Path) -> tuple[str, ...]:
+    """The clerks holding an effective assignment in one snapshot file.
+
+    Read from the snapshot bytes, never from the live registry: a lane that
+    transitions after the snapshot was written must not change which lanes the
+    manifest asks the restore gate to reconcile (#3168).
+    """
+    try:
+        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+        try:
+            rows = connection.execute(
+                "SELECT DISTINCT clerk_id FROM account_assignments "
+                "WHERE state = 'effective' ORDER BY clerk_id"
+            ).fetchall()
+        finally:
+            connection.close()
+    except sqlite3.DatabaseError as exc:
+        raise FleetRegistryUnavailable(
+            f"The registry snapshot {database} cannot be read: {exc}",
+            next_step="Choose a fresh backup directory and repeat the backup.",
+        ) from exc
+    return tuple(row[0] for row in rows)
+
+
 def create_registry_backup(store: FleetRegistryStore, *, backup_dir: Path) -> RegistryBackupManifest:
     """Snapshot the open registry and write its independently verifiable manifest."""
     database = backup_dir / BACKUP_DATABASE_FILENAME
@@ -199,15 +220,7 @@ def create_registry_backup(store: FleetRegistryStore, *, backup_dir: Path) -> Re
         # A provisioned, reserved, draining or retired row has no confirmed
         # account/binding grant to reconcile, so making it a recovery gate
         # would deadlock a safe restore for an inactive lane.
-        active_clerk_ids=tuple(
-            sorted(
-                {
-                    assignment.clerk_id
-                    for assignment in store.list_active_assignments()
-                    if assignment.state.value == "effective"
-                }
-            )
-        ),
+        active_clerk_ids=_effective_clerk_ids(database),
     )
     _atomic_json(manifest_path, asdict(manifest))
     return manifest
@@ -509,10 +522,7 @@ def reconcile_restored_lane(
         )
     clerk = service._require_clerk(clerk_id)
     service.verify_clerk_volume(clerk_id=clerk_id, volume_root=volume_root)
-    try:
-        evidence = read_confirmation_evidence(volume_root)
-    except ConfirmationEvidenceError:
-        raise
+    evidence = read_confirmation_evidence(volume_root)
     if evidence is None:
         raise ClerkIdentityMismatch(
             f"Clerk {clerk_id} has no durable confirmation evidence on its own volume.",

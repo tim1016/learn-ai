@@ -26,7 +26,6 @@ token (ADR 0062 addendum, item 5).
 from __future__ import annotations
 
 import hmac
-import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -49,8 +48,6 @@ from app.broker.fleet.internal_http import (
 )
 from app.broker.fleet.records import AccountAssignmentRecord
 from app.broker.fleet.service import FleetControlService
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
