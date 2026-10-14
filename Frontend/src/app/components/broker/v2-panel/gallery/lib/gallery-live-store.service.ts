@@ -193,8 +193,8 @@ export class GalleryLiveStore {
   /** The lane's reason code when it refused the stream (#2328); `null` otherwise. */
   readonly refusalReason = this.refusalReasonState.asReadonly();
 
-  /** Whose tiles are on screen. `stop()` clears `request`, never this: a restart for another account must not
-   * show the previous one's candles until its own bootstrap lands. */
+  /** Whose tiles are on screen. `stop()` leaves it: a restart for another account must not show the previous
+   * one's candles until its own bootstrap lands. */
   private shownFor: GalleryRequest | null = null;
   private connection: AuthenticatedSseConnection | null = null;
   private fallbackTimer: ReturnType<typeof setInterval> | null = null;

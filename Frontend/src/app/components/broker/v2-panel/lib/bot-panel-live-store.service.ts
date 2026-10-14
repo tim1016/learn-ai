@@ -82,8 +82,8 @@ export class BotPanelLiveStore {
   private stream: SnapshotStream | null = null;
   private fallbackTimer: ReturnType<typeof setInterval> | null = null;
   private request: LivePanelRequest | null = null;
-  /** Who the snapshot on screen belongs to. `stop()` clears `request`, never this: a restart for another bot or
-   * account must not show the previous one's panel until its own read lands. */
+  /** Who the snapshot on screen belongs to. `stop()` leaves it: a restart for another bot or account must not
+   * show the previous one's panel until its own read lands. */
   private shownFor: LivePanelRequest | null = null;
   private generation = 0;
   private transactionRequest = 0;
