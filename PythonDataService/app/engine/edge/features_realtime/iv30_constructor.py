@@ -46,7 +46,8 @@ def iv30_atm_50d(iv_by_expiry: pd.Series, target_days: int = 30) -> float | None
 
     iv_by_expiry: Series indexed by expiry-in-days, values = ATM IV (50Δ).
     Returns None unless one expiry sits below ``target_days`` and one at or
-    above it: an IV read off a single side is not a constant-maturity number,
+    above it (or one sits exactly on it, which is the answer): an IV read off
+    a single side is not a constant-maturity number,
     and labelling the nearest expiry's IV as one would be a silent
     extrapolation (#3219).
 

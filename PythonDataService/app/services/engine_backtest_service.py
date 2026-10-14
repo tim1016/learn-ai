@@ -1083,7 +1083,7 @@ def _validation_analytics(
             # UTC midnight on purpose: the LEAN twin anchors the same window at
             # UTC midnight (``lean_sidecar_persistence``), and a pair's
             # horizons must share their endpoints. Both move together or not
-            # at all (#3219 E-8 is left for that reason).
+            # at all (left for that reason, #3219).
             validation_equity = build_compatibility_equity_curve(
                 validation_trades,
                 start_ms_utc=int(datetime.combine(start_day, datetime.min.time(), tzinfo=UTC).timestamp() * 1000),
