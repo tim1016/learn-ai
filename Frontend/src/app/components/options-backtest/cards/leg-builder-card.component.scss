@@ -1,2 +1,5 @@
+.band { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-3) var(--space-4); background: var(--bg-elevated); border: 1px solid var(--border-light); border-radius: var(--radius); }
+.band h3 { margin: 0; font-size: var(--fs-sm); font-weight: var(--fw-semi); }
+.band h3:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-3) var(--space-5); }
 .add { margin-inline-start: auto; }

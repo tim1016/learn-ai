@@ -241,6 +241,8 @@ export const routes: Routes = [
       import("./components/options-backtest/options-backtest-page.component").then(
         (m) => m.OptionsBacktestPageComponent
       ),
+    // The run rail stays in view beside the form while the page scrolls.
+    data: { stickyContent: true },
   },
   {
     path: "strategy-validation",

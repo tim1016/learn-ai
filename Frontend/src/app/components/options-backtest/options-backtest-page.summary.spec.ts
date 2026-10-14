@@ -249,11 +249,11 @@ describe('a problem lands at its field', () => {
     expect(service.describe.mock.calls.map(([body]) => (body as SetupRequest).underlying)).toContain('ABCDEF');
   });
 
-  it('on the square-off setting, at the Legwise settings card, tied to the choice', async () => {
+  it('on the square-off setting, in the Legs panel, tied to the choice', async () => {
     await renderPage(rejecting({ loc: ['body', 'square_off'], msg: "Input should be 'partial' or 'complete'" }));
     addLeg();
 
-    const card = within(await screen.findByRole('region', { name: 'Legwise settings' }));
+    const card = within(await screen.findByRole('region', { name: 'Legs' }));
     const reason = await card.findByText("Input should be 'partial' or 'complete'");
     expect(reason.getAttribute('role')).toBe('alert');
     expect(card.getByRole('group', { name: 'Square off' }).getAttribute('aria-describedby')).toBe(reason.id);

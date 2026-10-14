@@ -1,18 +1,35 @@
+@use '../../styles/page-grid';
+
 :host { display: block; min-width: 0; }
 p { margin: 0; }
 .export-why { max-width: 18rem; color: var(--text-secondary); font-size: var(--fs-xs); }
 :host ::ng-deep .p-tabpanels { padding: 0; background: transparent; }
 :host ::ng-deep .p-tabpanel { display: block; padding: var(--page-pad-y) 0; background: transparent; }
-.layout { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: var(--space-4); }
-.column { display: grid; gap: var(--space-4); min-width: 0; max-width: 72rem; }
+
+// The shared 12-column grid: the form on eight, the run rail on four, and what a run says under both. The rail follows the page
+// while the form scrolls; the shell frees <main> of its scroller for this route so that sticky has a page to follow.
+.workbench { @include page-grid.layout; max-width: 96rem; }
+.form { display: grid; gap: var(--space-4); min-width: 0; }
+.pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); align-items: start; min-width: 0; }
+.rail { position: sticky; top: calc(var(--topbar-h) + var(--space-4)); display: grid; gap: var(--space-3); grid-template-rows: auto minmax(0, 1fr); max-height: calc(100dvh - var(--topbar-h) - var(--space-6)); min-width: 0; }
+// Read-back longer than the screen scrolls inside the rail, so Save and Start never leave it.
+.rail__read { min-height: 0; overflow: auto; }
+.results { display: grid; gap: var(--space-4); min-width: 0; }
+.results:empty { display: none; }
+// The end of the page stays clear of the bar fixed to the window, where the rail is stacked under the form.
+.bar-spacer { display: none; }
 .notice { border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--bg-surface); color: var(--text-secondary); padding: var(--space-3); font-size: var(--fs-sm); display: grid; gap: var(--space-2); }
 .notice ul { margin: 0; padding-left: var(--space-5); }
 .notice--error { border-color: var(--bear); color: var(--bear); }
 .again { justify-self: start; background: none; border: 1px solid var(--border-strong); color: var(--text-secondary); border-radius: var(--radius); padding: var(--space-1) var(--space-3); font: inherit; font-size: var(--fs-sm); cursor: pointer; }
 .again:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-@media (max-width: 768px) {
-  :host ::ng-deep .p-tabpanels { padding: 0; background: transparent; }
-:host ::ng-deep .p-tabpanel { display: block; padding: var(--page-pad-y) 0; background: transparent; }
-.layout { grid-template-columns: minmax(0, 1fr); }
+// Under 1100px the mixin gives a four-column item half the row. The rail takes the whole row under the form instead, and the
+// actions in it become the bar kept in view.
+@container page-grid (max-width: 1100px) {
+  .workbench > .rail[data-span] { grid-column: span 12; position: static; max-height: none; }
+  .bar-spacer { display: block; }
+}
+@container page-grid (max-width: 720px) {
+  .pair { grid-template-columns: minmax(0, 1fr); }
 }

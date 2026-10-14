@@ -1,6 +1,6 @@
-<section class="card" aria-labelledby="ob-builder-title">
+<div class="band" role="group" aria-labelledby="ob-builder-title">
   <div class="card__head">
-    <h2 id="ob-builder-title">Leg builder</h2>
+    <h3 id="ob-builder-title">Leg builder</h3>
     <p class="hint">Choose buy or sell and a contract, then press Add leg.</p>
   </div>
   <div class="row">
@@ -36,4 +36,4 @@
   <p id="ob-expiry-hint" class="hint">{{ expiryHint() }}</p>
   @for (problem of problems(); track problem[0]) { <p class="problem" role="alert" [id]="problemId(problem[0])">{{ problem[1] }}</p> }
   @if (full()) { <p class="hint" role="status">The most legs a setup holds: {{ maxLegs() }}. Delete one to add another.</p> }
-</section>
+</div>
