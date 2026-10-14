@@ -122,7 +122,8 @@ describe('DeployParametersSectionComponent', () => {
     const other: DeployStrategyParamsSchema = {
       ...SCHEMA,
       title: 'EmaParams',
-      properties: { short_window: { type: 'integer', default: 12, minimum: 2, maximum: 500, title: 'Short window' } },
+      // The same default as before: the input's bound value would not change, so only a fresh row clears "abc".
+      properties: { short_window: { type: 'integer', default: 10, minimum: 2, maximum: 500, title: 'Short window' } },
     };
     fixture.componentRef.setInput('paramsSchema', other);
     fixture.detectChanges();
@@ -131,7 +132,7 @@ describe('DeployParametersSectionComponent', () => {
     const input = screen.getByRole('textbox', { name: 'Short window' }) as HTMLInputElement;
     expect(invalidFieldsChange).toHaveBeenLastCalledWith(new Set());
     expect(input.getAttribute('aria-invalid')).toBeNull();
-    expect(input.value).toBe('12');
+    expect(input.value).toBe('10');
   });
 });
 

@@ -62,7 +62,7 @@ import {
   type AccountWorkspaceLink,
 } from '../../../fleet/account-workspace';
 import { extractServerMessage } from '../operation-error';
-import { refusalBody } from '../../../shared/errors/refusal-body';
+import { refusalBody, refusalProse } from '../../../shared/errors/refusal-body';
 import { botEndFields, botEndInput, type BotEndFields } from '../bot-end/bot-end-fields';
 import { deriveActionRejection, type ActionRejection } from '../v2-panel/lib/panel-action-outcome';
 import { DeployBindingStripComponent } from './deploy-binding-strip.component';
@@ -167,7 +167,7 @@ const SUBMISSION_PARAM = 'submission';
  * started nothing under the key, so the form may move to a new one. Every
  * other failure of a sent Deploy leaves its outcome to be read. */
 function settlesSubmission(error: unknown): boolean {
-  return refusalBody(error)?.['submission_settled'] === true;
+  return error instanceof HttpErrorResponse && error.error?.detail?.submission_settled === true;
 }
 
 /** The code on the status read's own "never claimed" 404
@@ -201,6 +201,9 @@ function refusalOutcome(reasonCode: string | null | undefined): DeployError['out
   return REFUSAL_OUTCOMES[code] ?? (code.startsWith(OPTION_GATE_PREFIX) ? 'blocked' : undefined);
 }
 const OPTION_GATE_PREFIX = 'OPTION_';
+
+/** The fleet's refusal for a command sent against a lane whose binding moved on. */
+const LANE_FENCE_CONFLICT = 'clerk_binding_generation_conflict';
 
 /** The code the backend refuses a bot's end with (`bot_end_panel.BOT_END_REFUSED`), at its check or at Deploy. */
 const BOT_END_REFUSED = 'BOT_END_REFUSED';
@@ -355,6 +358,8 @@ interface DeploySubmissionReadiness {
 }
 
 interface FrozenDeployCommand {
+  /** The Deploy under this command was sent: a change of account no longer means "nothing was sent". */
+  readonly sent?: boolean;
   readonly context: string;
   readonly ticketKey: string;
   readonly routeKey: string;
@@ -1194,7 +1199,9 @@ export class AlpacaDeployWorkflowComponent {
     if (this.laneConflict() || this.laneReviewRequired()) {
       return {
         canSubmit: false,
-        guidance: 'The account changed. Nothing was sent. Review the refreshed account before deploying.',
+        guidance: this.outcomeUnknown()
+          ? 'The account changed after a Deploy was sent. Check its deployment status before deploying again.'
+          : 'The account changed. Nothing was sent. Review the refreshed account before deploying.',
       };
     }
     const pending = this.handoffPending();
@@ -1884,13 +1891,13 @@ export class AlpacaDeployWorkflowComponent {
       this.frozenCommand.set(null);
       this.laneConflict.set(true);
       void this.refreshAfterRebind();
-      // A Deploy still in flight was sent: whether it started is not known yet.
-      const inFlight = untracked(this.submitting);
+      // A Deploy that was sent may have started; only one that never left is "nothing was sent".
+      const outcome = frozen.sent === true ? 'unknown' : 'conflict';
       this.submitError.set({
-        outcome: 'conflict',
-        title: this.errorTitle('conflict'),
-        message: inFlight
-          ? 'The account changed while a Deploy was in flight. Whether it started is not known yet; check its deployment status before deploying again.'
+        outcome,
+        title: this.errorTitle(outcome),
+        message: frozen.sent === true
+          ? 'The account changed after a Deploy was sent. Whether it started is not known yet; check its deployment status before deploying again.'
           : 'The account changed. Nothing was sent; the page refreshed. Review the current account before deploying.',
         explanation: null,
         nextAction: null,
@@ -1910,7 +1917,10 @@ export class AlpacaDeployWorkflowComponent {
       this.reloadView();
     } catch {
       this.submitError.set({ outcome: 'blocked', title: 'Account refresh failed',
-        message: 'Nothing was sent. Refresh the account before trying again.', explanation: null,
+        message: this.outcomeUnknown()
+          ? 'A Deploy was sent and its outcome is not known yet. Refresh the account, then check its deployment status.'
+          : 'Nothing was sent. Refresh the account before trying again.',
+        explanation: null,
         nextAction: 'Refresh the page.', receiptId: null, recordedAtMs: null });
     }
   }
@@ -2091,10 +2101,10 @@ export class AlpacaDeployWorkflowComponent {
       // scope be retried (the requested scope alone cannot tell them apart).
       if (this.lastLoadedView()?.symbol === symbol) return;
       this.scopedSymbol.set(symbol);
-      // A resource mid-load refuses `reload()`. Re-arm instead of dropping
-      // the newer scope on the floor: dropped, it strands the page on checks
-      // for a symbol the owner has already left, with no way back.
-      if (!this.deployView.reload()) this.scheduleSymbolScope(symbol);
+      // A resource mid-load refuses `reload()`. `reloadView` holds the ask for the end of that load instead
+      // of dropping the newer scope: dropped, it strands the page on checks for a symbol the owner has
+      // already left, with no way back.
+      this.reloadView();
     }, this.symbolScopeSettleMs);
   }
 
@@ -2174,7 +2184,7 @@ export class AlpacaDeployWorkflowComponent {
     try {
       // The Start plan judges the settings alone: no submission key, no lineage.
       const decision = await this.panelService.previewStartAdmission(commandTarget, settings);
-      if (!this.submissionStillCurrent(settings)) return;
+      if (!this.submissionStillCurrent(settings) || !this.holdsSubmission(sentFrom)) return;
       this.admissionDecision.set(decision);
       if (!decision.allowed) {
         refused = true;
@@ -2183,9 +2193,11 @@ export class AlpacaDeployWorkflowComponent {
       // A read-only recovery hint survives a reload; the server's recorded
       // outcome for this key stays the authority on what was committed.
       await this.writeSubmissionParam(submission.submission_key);
-      if (!this.submissionStillCurrent(settings)) return;
+      // Still this account's form, under this key and these settings: nothing leaves otherwise.
+      if (!this.submissionStillCurrent(settings) || !this.holdsSubmission(sentFrom)) return;
       // Pinned from the moment it is sent, so leaving mid-send keeps it too.
       this.outcomeUnknown.set(true);
+      this.frozenCommand.update((frozen) => frozen && { ...frozen, sent: true });
       sent = true;
       const receipt = await this.panelService.deployBudgetBot(commandTarget, submission);
       // An account switch reuses this instance for another account's form: the
@@ -2211,7 +2223,7 @@ export class AlpacaDeployWorkflowComponent {
       // Money reads its review again, so the list and the rows on screen are
       // the ones that stopped it.
       if (refusedFor?.startsWith(OPTION_GATE_PREFIX)) this.moneyStep()?.refresh();
-      if (error instanceof HttpErrorResponse && error.status === 409 && refusedFor === 'clerk_binding_generation_conflict') {
+      if (error instanceof HttpErrorResponse && error.status === 409 && refusedFor === LANE_FENCE_CONFLICT) {
         this.frozenCommand.set(null);
         this.laneConflict.set(true);
         await this.refreshAfterRebind();
@@ -2543,27 +2555,28 @@ export class AlpacaDeployWorkflowComponent {
    * answer did not settle — is an unknown outcome whatever the refusal says. */
   private toDeployError(error: unknown, unsettled: boolean): DeployError {
     // A route refusal nests under `detail`; the fleet's own refusals are flat
-    // `{reason, message, next_step}`. `refusalBody` reads either.
-    const detail = refusalBody(error);
-    const message = detail?.['message'];
-    if (error instanceof HttpErrorResponse && detail !== null && typeof message === 'string' && message !== '') {
-      const reason = detail['reason_code'] ?? detail['reason'];
-      const stated = detail['outcome'];
+    // `{reason, message, next_step}`. `refusalProse` and `refusalBody` read either.
+    const prose = refusalProse(error);
+    if (error instanceof HttpErrorResponse && prose !== null) {
+      const detail = refusalBody(error);
+      const reason = deriveActionRejection(error, '').reasonCode;
+      const stated = detail?.['outcome'];
+      // A flat 409 is the fleet's: only its binding-generation fence is an account change.
+      const nested = typeof error.error?.detail === 'object';
       const outcome: DeployError['outcome'] = unsettled
         ? 'unknown'
-        : refusalOutcome(typeof reason === 'string' ? reason : null)
+        : refusalOutcome(reason)
           ?? (stated === 'conflict' || stated === 'blocked' || stated === 'unknown' ? stated : null)
-          ?? (error.status === 409 ? 'conflict' : 'blocked');
+          ?? (error.status === 409 && (nested || reason === LANE_FENCE_CONFLICT) ? 'conflict' : 'blocked');
       return {
         outcome,
         title: this.errorTitle(outcome),
-        message,
-        explanation: typeof detail['why'] === 'string' ? detail['why'] : null,
-        nextAction: typeof detail['next_action'] === 'string'
-          ? detail['next_action']
-          : typeof detail['next_step'] === 'string' ? detail['next_step'] : null,
-        receiptId: typeof detail['receipt_id'] === 'string' ? detail['receipt_id'] : null,
-        recordedAtMs: typeof detail['recorded_at_ms'] === 'number' ? detail['recorded_at_ms'] : null,
+        message: prose.message,
+        // A sent Deploy the answer did not settle keeps the sentence that says asking again is safe.
+        explanation: prose.why ?? (unsettled ? UNKNOWN_OUTCOME.explanation : null),
+        nextAction: prose.nextAction ?? (unsettled ? UNKNOWN_OUTCOME.nextAction : null),
+        receiptId: typeof detail?.['receipt_id'] === 'string' ? detail['receipt_id'] : null,
+        recordedAtMs: typeof detail?.['recorded_at_ms'] === 'number' ? detail['recorded_at_ms'] : null,
       };
     }
     return UNKNOWN_OUTCOME;

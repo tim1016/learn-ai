@@ -14,6 +14,8 @@ import type { TickerRange } from '../../../shared/ticker-range-picker/ticker-ran
 
 export interface DeployParameterEntry {
   field: string;
+  /** The field under this schema: a row is a new row when the schema is another one, even of the same name. */
+  key: string;
   property: DeployStrategyParamProperty;
   isNumeric: boolean;
   currentValue: unknown;
@@ -139,11 +141,13 @@ export class DeployParametersSectionComponent {
     const properties = this.paramsSchema().properties ?? {};
     const values = this.values();
     const invalid = this.currentInvalidFields();
+    const schemaKey = this.schemaKey();
     return Object.entries(properties).map(([field, property]) => {
       const isNumeric = property.type === 'integer' || property.type === 'number';
       const currentValue = values[field] ?? property.default;
       return {
         field,
+        key: `${schemaKey}\u0000${field}`,
         property,
         isNumeric,
         currentValue,

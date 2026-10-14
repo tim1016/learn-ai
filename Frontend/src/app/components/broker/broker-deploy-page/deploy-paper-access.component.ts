@@ -17,7 +17,7 @@ import {
 } from "../v2-panel/lib/broker-v2-panel.service";
 import { type ResourceTarget, withCommand } from '../../../fleet/resource-target';
 import { laneFenceIsEnforceable, LANE_FENCE_UNENFORCEABLE_MESSAGE } from '../../../fleet/lane-fence';
-import { refusalBody } from '../../../shared/errors/refusal-body';
+import { refusalProse } from '../../../shared/errors/refusal-body';
 
 const UI_ACTIVATION_ACTION = "from the Alpaca Deploy page.";
 
@@ -193,17 +193,9 @@ export class DeployPaperAccessComponent {
   }
 
   private toFailure(error: unknown): PaperAccessFailure {
-    // The fleet's refusals are flat and a route's nest under `detail`: `refusalBody` reads both.
-    const detail = refusalBody(error);
-    if (detail !== null && typeof detail['message'] === 'string' && detail['message'] !== '') {
-      return {
-        message: detail['message'],
-        explanation: typeof detail['why'] === 'string' ? detail['why'] : null,
-        nextAction: typeof detail['next_action'] === 'string'
-          ? detail['next_action']
-          : typeof detail['next_step'] === 'string' ? detail['next_step'] : null,
-      };
-    }
+    // The fleet's refusals are flat and a route's nest under `detail`: `refusalProse` reads both.
+    const prose = refusalProse(error);
+    if (prose !== null) return { message: prose.message, explanation: prose.why, nextAction: prose.nextAction };
     return {
       message: `The ${this.modeLabel()} permission could not be checked.`,
       explanation: "No answer came back, so nothing was allowed.",

@@ -34,6 +34,24 @@ export function refusalBody(error: unknown): Record<string, unknown> | null {
   return typeof body['reason'] === 'string' || typeof body['message'] === 'string' ? body : null;
 }
 
+/**
+ * The sentences a refusal carries: its `message`, why, and what to do next
+ * (a route's `next_action`, else the fleet's `next_step`). `null` when the
+ * body names no message, so a caller falls back to its own copy.
+ */
+export function refusalProse(
+  error: unknown,
+): { readonly message: string; readonly why: string | null; readonly nextAction: string | null } | null {
+  const body = refusalBody(error);
+  const message = body?.['message'];
+  if (body === null || typeof message !== 'string' || message === '') return null;
+  const sentence = (key: string): string | null => {
+    const value = body[key];
+    return typeof value === 'string' && value !== '' ? value : null;
+  };
+  return { message, why: sentence('why'), nextAction: sentence('next_action') ?? sentence('next_step') };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

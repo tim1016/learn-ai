@@ -70,7 +70,8 @@ describe('DeployLaunchReceiptComponent', () => {
     expect(screen.getByText('Failed')).toBeTruthy();
     expect(screen.queryByText('Set aside')).toBeNull();
     expect(screen.queryByText('First deployed')).toBeNull();
-    expect(screen.getByRole('status').classList.contains('launch-receipt--failed')).toBe(true);
+    expect(screen.getByText('×')).toBeTruthy();
+    expect(screen.queryByText('✓')).toBeNull();
     expect(screen.getByText('Deploy again when the cause is fixed.')).toBeTruthy();
   });
 

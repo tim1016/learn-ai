@@ -2563,16 +2563,14 @@ describe('AlpacaDeployWorkflowComponent — Start checks and the lane fence', ()
     fireEvent.click(deployButton());
     await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
     const sentKey = submittedBody(service).submission_key;
-    const page = fixture.componentInstance as unknown as {
-      submissionKey(): string; outcomeUnknown(): boolean; receipt(): BudgetDeployReceipt | null;
-    };
+    const page = fixture.componentInstance as unknown as { submissionKey(): string };
 
     fixture.componentRef.setInput('accountId', 'PA10');
     await fixture.whenStable();
     const keyOnB = page.submissionKey();
     expect(keyOnB).not.toBe(sentKey);
-    // A Deploy is still in flight: the notice must not claim nothing was sent.
-    expect((await screen.findAllByText(/The account changed while a Deploy was in flight/)).length).toBeGreaterThan(0);
+    // A Deploy was sent: the notice must not claim nothing was sent.
+    expect((await screen.findAllByText(/The account changed after a Deploy was sent/)).length).toBeGreaterThan(0);
     expect(screen.queryByText(/Nothing was sent/)).toBeNull();
 
     answer({ ...RECEIPT, account_id: 'PA9' });
@@ -2580,14 +2578,59 @@ describe('AlpacaDeployWorkflowComponent — Start checks and the lane fence', ()
 
     // B's form holds its own key and no receipt of A's Deploy.
     expect(page.submissionKey()).toBe(keyOnB);
-    expect(page.receipt()).toBeNull();
     expect(screen.queryByRole('heading', { name: RECEIPT.message })).toBeNull();
 
-    // Back on A, the Deploy's key is still held with its outcome unknown, so a status read finds it.
+    // Back on A, the Deploy is still unknown, and its status read asks for the key it was sent under.
     fixture.componentRef.setInput('accountId', service.accountId);
     await fixture.whenStable();
-    expect(page.submissionKey()).toBe(sentKey);
-    expect(page.outcomeUnknown()).toBe(true);
+    fireEvent.click(await screen.findByRole('button', { name: 'Check deployment status' }));
+    await vi.waitFor(() => expect(service.getDeploySubmission).toHaveBeenCalledWith(expect.anything(), sentKey));
+  });
+
+  it('keeps a sent Deploy unknown, with its own sentence, when a flat fleet refusal answers it', async () => {
+    const service = mockService();
+    service.deployBudgetBot.mockRejectedValue(new HttpErrorResponse({
+      status: 503,
+      error: {
+        reason: 'clerk_unreachable',
+        message: 'The Clerk for this account did not answer.',
+        next_step: 'Wait for the lane to recover, then check the deployment status.',
+      },
+    }));
+    await renderWorkflow(service);
+    await chooseMoney();
+    fireEvent.click(deployButton());
+
+    const refusal = await screen.findByRole('alert', { name: 'Outcome unknown' });
+    expect(within(refusal).getByText('The Clerk for this account did not answer.')).toBeTruthy();
+    expect(within(refusal).getByText(/Wait for the lane to recover/)).toBeTruthy();
+    // A flat refusal settles nothing: the key is held, and asking again is the safe move.
+    expect(within(refusal).getByRole('button', { name: 'Check deployment status' })).toBeTruthy();
+    expect(within(refusal).getByText(/never starts a second bot/)).toBeTruthy();
+    expect(service.getDeploySubmission).not.toHaveBeenCalled();
+    const sentKey = submittedBody(service).submission_key;
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(2));
+    expect(submittedBody(service, 1).submission_key).toBe(sentKey);
+  });
+
+  it('titles a flat fleet 409 that is no account change as a refusal, not as a changed account', async () => {
+    const service = mockService();
+    service.previewStartAdmission.mockRejectedValue(new HttpErrorResponse({
+      status: 409,
+      error: {
+        reason: 'clerk_lane_draining',
+        message: 'This lane is draining and takes no new Deploy.',
+        next_step: 'Deploy on the lane that replaced it.',
+      },
+    }));
+    await renderWorkflow(service);
+    await chooseMoney();
+    fireEvent.click(deployButton());
+
+    const refusal = await screen.findByRole('alert', { name: 'Deploy refused' });
+    expect(within(refusal).getByText('This lane is draining and takes no new Deploy.')).toBeTruthy();
+    expect(screen.queryByRole('alert', { name: 'The account changed before Deploy' })).toBeNull();
   });
 
   it('words a flat fleet refusal in its own sentences, not as an unknown outcome', async () => {
