@@ -216,7 +216,7 @@ async def test_one_sweep_pass_settles_a_dead_bot_so_clear_needs_no_restart(
 async def test_a_run_another_reconcile_closed_is_settled_by_the_next_pass(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Clear first (P1-1): Clear's own batch pass -- like Start's admission and
+    """Clear first: Clear's own batch pass -- like Start's admission and
     Reconcile now -- also retires a run whose runner is gone, before any sweep
     pass sees it. The bot is refused as not yet settled, the next pass settles
     it anyway, and Clear then takes it with no restart."""
@@ -244,7 +244,7 @@ async def test_a_run_another_reconcile_closed_is_settled_by_the_next_pass(
 async def test_a_settle_that_failed_is_tried_again_on_the_next_pass(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P1-2: the first settle's write fails; nothing remembers that, and nothing
+    """The first settle's write fails; nothing remembers that, and nothing
     has to -- the next pass reads the same on-duty record and settles it."""
     repo, clerk, broker, registry = _dead_bot(tmp_path)
     real_project_terminal = AlpacaLifecycleProjector.project_terminal
@@ -275,7 +275,7 @@ async def test_a_settle_that_failed_is_tried_again_on_the_next_pass(
 async def test_a_running_bot_is_never_settled_even_when_its_clerk_closed_the_run(
     tmp_path: Path,
 ) -> None:
-    """P1-4: the one thing standing between this bot and a settle is its live
+    """The one thing standing between this bot and a settle is its live
     task. Its Clerk already retired the run (``NO_RUNNER``), so nothing in the
     Clerk would refuse a terminal projection; the runner's own liveness must.
     The duty record stays ON_DUTY with no outcome."""
@@ -480,7 +480,7 @@ async def _graduated(
 async def test_a_shadow_sealed_dead_bot_is_settled_through_its_own_store_by_the_sweep(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P1-3: a rehearsal bot sealed on ``shadow:<live_account>`` after
+    """A rehearsal bot sealed on ``shadow:<live_account>`` after
     graduation. Its run lives in that store, which the installed live
     authority never reads -- and must never write duty state for (ADR 0050).
     The live account's own sweep passes settle it anyway: through the sealed

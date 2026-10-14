@@ -2,7 +2,7 @@
 
 ``migrate-installation import`` writes a hold marker at each clerk volume's
 root; the runner's start seam — beside the drained-lane gate — refuses every
-Start and Resume while it exists, before any admission work runs, and fails
+Start while it exists, before any admission work runs, and fails
 closed when it cannot tell. Releasing the hold lands on the next start with
 no restart.
 """

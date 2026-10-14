@@ -199,18 +199,18 @@ def test_launch_keeps_instance_immutable_and_appends_run_records(
     instance_path = tmp_path / "live_state" / _SID / "strategy_instance.json"
     original_instance_bytes = instance_path.read_bytes()
 
-    repository.record_launch(second, launch_reason="resume")
+    repository.record_launch(second, launch_reason="deploy")
 
     assert instance_path.read_bytes() == original_instance_bytes
     run_paths = sorted((tmp_path / "live_state" / _SID / "runs").glob("*.json"))
     assert [path.stem for path in run_paths] == ["run-001", "run-002"]
     assert json.loads(run_paths[0].read_text())["launch_reason"] == "deploy"
-    assert json.loads(run_paths[1].read_text())["launch_reason"] == "resume"
+    assert json.loads(run_paths[1].read_text())["launch_reason"] == "deploy"
     assert repository.read(_SID) == second
     assert repository.read_run(_SID, "run-002") is not None
     assert repository.read_run(_SID, "missing") is None
     assert repository.read_run(_SID, "run-001").launch_reason == "deploy"
-    assert repository.read_run(_SID, "run-002").launch_reason == "resume"
+    assert repository.read_run(_SID, "run-002").launch_reason == "deploy"
 
 
 def test_changed_configuration_cannot_reuse_strategy_instance_identity(
@@ -223,7 +223,7 @@ def test_changed_configuration_cannot_reuse_strategy_instance_identity(
     with pytest.raises(StrategyInstanceConfigurationConflictError):
         repository.record_launch(
             _binding(run_id="run-002", created_at_ms=2_000, symbol="QQQ"),
-            launch_reason="resume",
+            launch_reason="deploy",
         )
 
     assert repository.read(_SID) == first
@@ -247,13 +247,13 @@ def test_strategy_params_round_trip_and_are_immutable_configuration(
     assert repository.read(_SID).strategy_params == {"gap": 5.0, "rsi_min": 40.0}
 
     resumed = _binding(run_id="run-002", created_at_ms=2_000, strategy_params={"gap": 5.0, "rsi_min": 40.0})
-    repository.record_launch(resumed, launch_reason="resume")
+    repository.record_launch(resumed, launch_reason="deploy")
     assert repository.read(_SID) == resumed
 
     with pytest.raises(StrategyInstanceConfigurationConflictError):
         repository.record_launch(
             _binding(run_id="run-003", created_at_ms=3_000, strategy_params={"gap": 9.0, "rsi_min": 40.0}),
-            launch_reason="resume",
+            launch_reason="deploy",
         )
     assert repository.read(_SID) == resumed
     assert not (tmp_path / "live_state" / _SID / "runs" / "run-003.json").exists()
@@ -280,7 +280,7 @@ def test_evidence_override_is_durable_immutable_configuration(tmp_path: Path) ->
                 created_at_ms=2_000,
                 evidence_override=override.model_copy(update={"reason": "A different human risk decision."}),
             ),
-            launch_reason="resume",
+            launch_reason="deploy",
         )
 
 
@@ -322,7 +322,7 @@ def test_an_untested_asset_acceptance_is_kept_with_the_bot_for_good(tmp_path: Pa
             _listens_to_spy_trades_qqq(run_id="run-002", created_at_ms=2_000).model_copy(
                 update={"traded_asset_acknowledgement": another_reason}
             ),
-            launch_reason="resume",
+            launch_reason="deploy",
         )
 
 
@@ -591,7 +591,7 @@ def test_legacy_binding_is_lifted_without_rewrite_then_migrated_on_resume(
         encoding="utf-8",
     )
     resumed = _binding(run_id="run-002", created_at_ms=2_000)
-    repository.record_launch(resumed, launch_reason="resume")
+    repository.record_launch(resumed, launch_reason="deploy")
 
     assert legacy_path.read_text(encoding="utf-8") == legacy_bytes
     assert sorted(path.stem for path in (instance_dir / "runs").glob("*.json")) == [

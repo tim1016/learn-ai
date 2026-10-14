@@ -2,7 +2,7 @@
 
 One :class:`BotTaskRegistry` lives in the polygon-data-service process and
 owns spawn, liveness, and reap for every strategy-instance bot task. This path
-has no host daemon or subprocess; a guard test enforces that boundary.
+has no host daemon or subprocess.
 
 The registry keeps desired intent, lifecycle, immutable configuration,
 append-only launch/terminal evidence, and the replaceable current-run pointer
@@ -11,7 +11,10 @@ in the existing ``live_state/<sid>/`` operator-plane artifact tree.
 Exit taxonomy (typed, durable, artifact-derived — never liveness-inferred):
 
 - operator stop / service shutdown → ``duty_outcome.kind = "STOPPED"``
-  (``reason_code`` ``OPERATOR_STOP`` / ``SERVICE_SHUTDOWN``).
+  (``reason_code`` ``SERVICE_SHUTDOWN``, or the Clerk's custody proof for a
+  trade-mode operator stop; ``OPERATOR_STOP`` for a Dry Run's).
+- the owner-set end → ``"STOPPED"`` with ``SCHEDULED_END`` (#2607); a launch
+  that failed after its Clerk STOP → ``"FAILED_LAUNCH"`` (#2559).
 - unhandled exception in the bot → ``"CRASHED"`` with the exception class as
   ``reason_code`` (``FEED_DEATH`` for a dead market-data feed).
 - task cancelled without stop intent (a kill) → ``"EXITED_UNVERIFIED"``
@@ -561,9 +564,9 @@ class BotTaskRegistry:
         self._unresolved_intents_probe: UnresolvedIntentsProbe | None = None
         self._recovery_evaluation: RecoveryEvaluationProbe | None = None
         # When set, the boot sweep skips bots whose binding carries a broker
-        # tag that is not in this set (e.g. IBKR bots share the same
-        # artifacts_root but are managed by the host daemon, not the
-        # in-container runner).
+        # tag that is not in this set (a legacy IBKR binding on disk shares the
+        # artifacts_root but is not this runner's). Production passes
+        # ``{"alpaca"}``; ``None`` (tests) manages every binding.
         self._supported_broker_ids = supported_broker_ids
         self._bindings = BotBindingRepository(
             self._artifacts_root,
@@ -867,7 +870,7 @@ class BotTaskRegistry:
         if binding.broker != "alpaca":
             raise RunAdmissionRefusedError(
                 "The in-container runner accepts only Alpaca bot bindings.",
-                detail="Use the legacy host boundary only for an existing IBKR run.",
+                detail="Only Alpaca bots run in this service; an IBKR binding on disk is not managed here.",
             )
         lifecycle_repo = self._lifecycle_repo(binding.strategy_instance_id)
         # Preserve the prior run's terminal evidence before registering the
