@@ -1364,12 +1364,3 @@ def test_every_timestamp_field_is_bounded_by_the_domains_last_instant_and_not_th
         options = definition.get("anyOf", [definition])
         integer = next(option for option in options if option.get("type") == "integer")
         assert integer["maximum"] == MAX_TIMESTAMP_MS, (name, field)
-
-
-def test_the_underlying_pattern_is_the_setups_own() -> None:
-    from app.options_backtest.setup import OptionsBacktestSetup
-    from app.schemas.options_backtest_chain import UNDERLYING_PATTERN
-
-    pattern = next(m.pattern for m in OptionsBacktestSetup.model_fields["underlying"].metadata if hasattr(m, "pattern"))
-
-    assert pattern == UNDERLYING_PATTERN

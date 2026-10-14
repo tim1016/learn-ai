@@ -20,11 +20,9 @@ from app.options.contract import MAX_STRIKE_THOUSANDTHS, OptionContract
 from app.options_backtest.chain_download import DownloadItem, DownloadReason, FetchRefusal
 from app.options_backtest.classification import ExpiryTag
 from app.options_backtest.past_chain import ChainContract, ChainDay, ChainExpiry, ChainSession, ChainSide
+from app.options_backtest.setup import UNDERLYING_PATTERN
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
-# The same shape the setup's underlying has: one to five letters, since a six-letter root makes a contract symbol the
-# lake's catalog cannot store.
-UNDERLYING_PATTERN = r"^[A-Z]{1,5}$"
 DOLLARS_PATTERN = r"^[0-9]+(\.[0-9]+)?$"
 
 TimestampMs = Annotated[int, Field(ge=0, le=MAX_TIMESTAMP_MS)]
