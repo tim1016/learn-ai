@@ -39,6 +39,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.models import EpochMs
 from app.engine.live.durable_append_log import create_atomic_exclusive_durable_file
@@ -93,6 +94,12 @@ class DeploySubmission(BaseModel):
     request_fingerprint: str = Field(min_length=1)
     # Display-only lineage from Deploy again. It grants nothing.
     replaces_strategy_instance_id: str | None = Field(default=None, max_length=128)
+    # The account the key was claimed under, canonical. The recovery read
+    # answers a claim only for this account: another account's custody holds
+    # no row for the bot, and would read it as never committed (#3217). A
+    # claim written before this field existed has none, and is read under the
+    # route's own account exactly as it always was.
+    account_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 def bot_name_prefix(symbol: str, strategy_key: str) -> str:
@@ -177,12 +184,16 @@ class DeploySubmissionLedger:
         Admission previews run the exact Start checks against it, so they
         describe the bot the Deploy would create.
         """
-        return next(self._free_names(symbol=symbol, strategy_key=strategy_key, now_ms=now_ms))
+        name = next(self._free_names(symbol=symbol, strategy_key=strategy_key, now_ms=now_ms), None)
+        if name is None:
+            raise _minute_is_full(symbol)
+        return name
 
     def claim(
         self,
         *,
         submission_key: str,
+        account_id: str,
         symbol: str,
         strategy_key: str,
         request_fingerprint: str,
@@ -213,6 +224,7 @@ class DeploySubmissionLedger:
                     submission_key=submission_key, strategy_instance_id=name, claimed_at_ms=now_ms,
                     request_fingerprint=request_fingerprint,
                     replaces_strategy_instance_id=replaces_strategy_instance_id,
+                    account_id=canonical_alpaca_account_id(account_id),
                 )
                 try:
                     self._publish(self._name_path(name), record)
@@ -230,10 +242,7 @@ class DeploySubmissionLedger:
                     assert winner is not None
                     return _same_settings(winner, request_fingerprint)
                 return record
-        raise BotNameUnavailable(
-            f"More than {_MAX_ORDINAL} {symbol} bots of this strategy were deployed this minute.",
-            next_action="Try again in a minute.",
-        )
+        raise _minute_is_full(symbol)
 
     def _free_names(self, *, symbol: str, strategy_key: str, now_ms: int) -> Iterator[str]:
         for ordinal in range(1, _MAX_ORDINAL + 1):
@@ -275,6 +284,13 @@ class DeploySubmissionLedger:
         except FileNotFoundError:
             return None
         return DeploySubmission.model_validate_json(raw)
+
+
+def _minute_is_full(symbol: str) -> BotNameUnavailable:
+    return BotNameUnavailable(
+        f"More than {_MAX_ORDINAL} {symbol} bots of this strategy were deployed this minute.",
+        next_action="Try again in a minute.",
+    )
 
 
 def _same_settings(existing: DeploySubmission, request_fingerprint: str) -> DeploySubmission:

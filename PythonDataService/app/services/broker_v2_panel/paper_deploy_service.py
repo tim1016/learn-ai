@@ -63,6 +63,18 @@ class PaperDeployInvariantError(RuntimeError):
     """A deploy-view computation reached a state its own gate should prevent."""
 
 
+#: The readiness line that exists only while the research store could not be
+#: read for Golden Validation scopes, so the view never reads that failure as
+#: an account with no validations (#3217).
+GOLDEN_EVIDENCE_UNREAD_GATE_ID = "strategy.golden_validation_evidence"
+
+GOLDEN_EVIDENCE_UNREAD_HEADLINE = "Golden Validation evidence could not be read."
+GOLDEN_EVIDENCE_UNREAD_EXPLANATION = (
+    "The research store did not answer, so a strategy validated only by a Golden Validation is not "
+    "offered. A strategy with a current validation event is judged as usual."
+)
+
+
 @dataclass(frozen=True)
 class ResolvedDeployParams:
     """One strategy's fully-resolved deploy-time parameter set.
@@ -633,6 +645,33 @@ def _hold_recovery(
     return _HOLD_RECOVERY.get(hold.reason_code or "", _UNNAMED_HOLD_RECOVERY)
 
 
+def _golden_evidence_unread_checks(
+    unread: bool, *, selectable: bool,
+) -> tuple[AlpacaPaperDeployReadinessCheck, ...]:
+    """The line naming Golden Validation evidence that could not be read, or nothing.
+
+    It blocks only when it leaves nothing deployable: a strategy with a
+    current validation event is offered without the Golden evidence, exactly
+    as when none exists.
+    """
+    if not unread:
+        return ()
+    return (
+        AlpacaPaperDeployReadinessCheck(
+            gate_id=GOLDEN_EVIDENCE_UNREAD_GATE_ID,
+            label="Golden Validation evidence",
+            ready=selectable,
+            scope="strategy",
+            authority="Golden Validation research store",
+            headline=GOLDEN_EVIDENCE_UNREAD_HEADLINE,
+            explanation=GOLDEN_EVIDENCE_UNREAD_EXPLANATION,
+            evidence_summary="The research store could not be read for Golden Validation scopes.",
+            evidence={"golden_validation_evidence_read": False},
+            recovery="Restore the research store, then refresh this page.",
+        ),
+    )
+
+
 def _readiness_checks(
     account: BrokerAccountSnapshot,
     clerk_status: ClerkStatus,
@@ -642,6 +681,7 @@ def _readiness_checks(
     symbol: str | None,
     copy: _DeployViewCopy,
     custody_world: CustodyWorld,
+    golden_validation_unread: bool,
 ) -> tuple[AlpacaPaperDeployReadinessCheck, ...]:
     accepted_strategies = tuple(strategy for strategy in strategies if strategy.evidence_status == "accepted")
     override_strategies = tuple(
@@ -712,6 +752,7 @@ def _readiness_checks(
             },
             recovery=strategy_gate_recovery(strategies),
         ),
+        *_golden_evidence_unread_checks(golden_validation_unread, selectable=bool(selectable_strategies)),
         AlpacaPaperDeployReadinessCheck(
             gate_id="broker.account_posture",
             label=copy.posture_label,
@@ -734,6 +775,9 @@ def _readiness_checks(
                 "status": account.account_status,
                 "trading_blocked": account.trading_blocked,
                 "account_blocked": account.account_blocked,
+                # The snapshot is a cached read (up to a minute old); this
+                # is the instant the broker was asked, not the view's own.
+                "observed_at_ms": account.observed_at_ms,
             },
             recovery=None if account_ready else copy.posture_recovery,
         ),
@@ -843,6 +887,7 @@ def _eligibility(
     if blocked is not None:
         reason_codes = {
             "strategy.validation_accepted": "STRATEGY_NOT_ACCEPTED_FOR_DEPLOY",
+            GOLDEN_EVIDENCE_UNREAD_GATE_ID: "STRATEGY_NOT_ACCEPTED_FOR_DEPLOY",
             "broker.account_posture": "ALPACA_ACCOUNT_NOT_TRADABLE",
             "clerk.custody_freeze": str(blocked.evidence.get("category") or "ACCOUNT_STATE_UNPROVABLE"),
             "clerk.exposure_hold": str(blocked.evidence.get("reason_code") or "CLERK_HOLD_ACTIVE"),
@@ -873,6 +918,7 @@ def _dry_run_eligibility(
     *,
     now_ms: int,
     symbol: str | None,
+    golden_validation_unread: bool = False,
 ) -> AlpacaPaperDeployEligibility:
     """Author the Dry Run launch verdict — deliberately narrower than Paper's.
 
@@ -905,6 +951,7 @@ def _dry_run_eligibility(
             explanation=(
                 "Every visible strategy is either unvalidated, or validated with no registered "
                 "live-decision runtime yet."
+                + (f" {GOLDEN_EVIDENCE_UNREAD_HEADLINE} {GOLDEN_EVIDENCE_UNREAD_EXPLANATION}" if golden_validation_unread else "")
             ),
             next_action=next_action,
         )
@@ -935,6 +982,7 @@ def build_alpaca_paper_deploy_view(
     golden_validation_scopes: Mapping[str, tuple[GoldenValidationScope, ...]] | None = None,
     default_exit_terms: ExitTermsInput | None = None,
     golden_defaults: GoldenDefaults | None = None,
+    golden_validation_unread: bool = False,
 ) -> AlpacaPaperDeployView:
     """Author the closed form choices and current launch verdict.
 
@@ -963,6 +1011,7 @@ def build_alpaca_paper_deploy_view(
         symbol=symbol,
         copy=copy,
         custody_world=custody_world,
+        golden_validation_unread=golden_validation_unread,
     )
     window = deploy_window(evaluated_at_ms)
     readiness_checks += (
@@ -985,7 +1034,8 @@ def build_alpaca_paper_deploy_view(
     )
     eligibility = _eligibility(readiness_checks, copy=copy)
     dry_run_eligibility = _dry_run_eligibility(
-        strategies, clerk_status, now_ms=evaluated_at_ms, symbol=symbol
+        strategies, clerk_status, now_ms=evaluated_at_ms, symbol=symbol,
+        golden_validation_unread=golden_validation_unread,
     )
     broker_mode = broker_mode_for(custody_world)
     # The end a Deploy that names none gets, at the instant this form is

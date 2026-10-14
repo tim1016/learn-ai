@@ -565,7 +565,7 @@ async def read_deploy_submission_scoped(
     if broker != "alpaca":
         raise HTTPException(status_code=404, detail="Budget deployment is available on Alpaca accounts.")
     try:
-        status = await panel_deploy.deploy_submission_status(account_id, submission_key)
+        status = await panel_deploy.deploy_submission_status(broker, account_id, submission_key)
     except panel_errors.PanelDataError as error:
         _raise_alpaca_deploy_error(error)
     if status is None:

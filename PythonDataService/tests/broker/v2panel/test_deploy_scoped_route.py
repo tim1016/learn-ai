@@ -971,6 +971,107 @@ async def test_account_trading_block_authors_ineligible_deploy_view(
 
 
 @pytest.mark.asyncio
+async def test_the_account_posture_check_carries_the_instant_the_broker_was_asked(
+    deploy_app,
+    monkeypatch,
+) -> None:
+    """The posture is a cached read, up to a minute old, and the view is stamped now:
+    the check says how old the facts it judged are."""
+    fast_app, _registry = deploy_app
+    observed_at_ms = _T0 - 45_000
+    monkeypatch.setattr(
+        get_broker_registry().resolve("alpaca"),
+        "account",
+        account_snapshot(observed_at_ms=observed_at_ms),
+    )
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy")
+
+    view = response.json()
+    posture = next(check for check in view["readiness_checks"] if check["gate_id"] == "broker.account_posture")
+    assert posture["evidence"]["observed_at_ms"] == observed_at_ms
+    assert view["evaluated_at_ms"] > observed_at_ms
+
+
+#: The harness patches the module attribute for every test: this is the real read.
+_REAL_CURRENT_GOLDEN_SCOPES = panel_deploy._current_golden_validation_scopes
+_GOLDEN_UNREAD = "strategy.golden_validation_evidence"
+
+
+def _research_store_is_down(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def unreachable(_operation: object, **_kwargs: object) -> None:
+        raise OSError("research store unreachable")
+
+    monkeypatch.setattr(panel_deploy, "_current_golden_validation_scopes", _REAL_CURRENT_GOLDEN_SCOPES)
+    monkeypatch.setattr(panel_deploy, "with_connection", unreachable)
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_research_store_is_named_when_it_leaves_no_strategy_to_deploy(
+    deploy_app,
+    monkeypatch,
+) -> None:
+    """A failed Golden Validation read is not an account with no validations."""
+    fast_app, _registry = deploy_app
+    _research_store_is_down(monkeypatch)
+    monkeypatch.setattr(panel_deploy, "load_strategy_validation_entries", lambda _registry: [])
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy")
+        refused = await client.post(f"/api/brokers/alpaca/accounts/{ACCT}/bots", json=_BODY)
+
+    view = response.json()
+    unread = next(check for check in view["readiness_checks"] if check["gate_id"] == _GOLDEN_UNREAD)
+    assert unread["ready"] is False
+    assert unread["headline"] == "Golden Validation evidence could not be read."
+    assert unread["evidence"] == {"golden_validation_evidence_read": False}
+    assert unread["recovery"] == "Restore the research store, then refresh this page."
+    assert view["eligibility"]["reason_code"] == "STRATEGY_NOT_ACCEPTED_FOR_DEPLOY"
+    assert "Golden Validation evidence could not be read." in view["dry_run_eligibility"]["explanation"]
+    # The Deploy of a strategy the view no longer offers names the unread evidence, not a missing validation.
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["why"].startswith("Golden Validation evidence could not be read.")
+    assert refused.json()["detail"]["next_action"] == "Restore the research store, then refresh this page."
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_research_store_does_not_stop_a_strategy_with_a_current_validation_event(
+    deploy_app,
+    monkeypatch,
+) -> None:
+    fast_app, registry = deploy_app
+    _research_store_is_down(monkeypatch)
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        _ALLOW_BODY_STRATEGY,
+    )
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy")
+        deployed = await client.post(f"/api/brokers/alpaca/accounts/{ACCT}/bots", json=_BODY)
+
+    view = response.json()
+    unread = next(check for check in view["readiness_checks"] if check["gate_id"] == _GOLDEN_UNREAD)
+    assert unread["ready"] is True
+    assert unread["headline"] == "Golden Validation evidence could not be read."
+    # The only thing a view with no exit terms still lacks is its exit terms.
+    assert [check["gate_id"] for check in view["readiness_checks"] if not check["ready"]] == ["deploy.exit_terms"]
+    assert deployed.status_code == 201
+    assert len(registry.deploy_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_readable_research_store_adds_no_golden_validation_line(deploy_app) -> None:
+    fast_app, _registry = deploy_app
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy")
+
+    assert _GOLDEN_UNREAD not in {check["gate_id"] for check in response.json()["readiness_checks"]}
+
+
+@pytest.mark.asyncio
 async def test_dry_run_admits_despite_clerk_hold_and_freeze_while_paper_stays_refused(
     deploy_app,
     monkeypatch,

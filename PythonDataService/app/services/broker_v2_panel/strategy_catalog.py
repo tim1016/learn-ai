@@ -336,6 +336,27 @@ def _unrepresentable_golden_scope_disposition(*, has_runtime: bool) -> _Disposit
     )
 
 
+def _other_symbol_golden_scope_disposition(
+    *,
+    has_runtime: bool,
+    reviewed_symbols: tuple[str, ...],
+    requested_symbol: str,
+) -> _Disposition:
+    """Fail closed, by name, for a strategy whose Golden Validation is for other tickers only."""
+    return _Disposition(
+        has_runtime=has_runtime,
+        evidence_status="blocked",
+        paper_access_state="blocked",
+        selectable=False,
+        override_explanation=None,
+        blocked_explanation=(
+            f"This strategy's Golden Validation was reviewed for {', '.join(reviewed_symbols)}, not "
+            f"{requested_symbol}. Deploy it for a reviewed ticker, or complete a Golden Validation "
+            f"for {requested_symbol}."
+        ),
+    )
+
+
 def _has_exact_parameter_types_and_values(
     expected: Mapping[str, object],
     recorded: Mapping[str, object],
@@ -440,10 +461,8 @@ def compose_strategy_catalog(
         event = entry.current_flag_event if entry is not None else None
         reviewed_scopes = golden_scopes.get(strategy_key, ())
         has_golden_validation = bool(reviewed_scopes)
-        golden_scope = _representable_golden_scope(
-            strategy_key,
-            _golden_scopes_for_requested_symbol(reviewed_scopes, requested_symbol),
-        )
+        scopes_for_requested_symbol = _golden_scopes_for_requested_symbol(reviewed_scopes, requested_symbol)
+        golden_scope = _representable_golden_scope(strategy_key, scopes_for_requested_symbol)
         has_current_event = (
             entry is not None
             and entry.validation_state == "validated"
@@ -464,6 +483,12 @@ def compose_strategy_catalog(
             disposition = _golden_disposition(
                 has_runtime=strategy_key in runtime_keys,
                 paper_access_state=paper_access_state,
+            )
+        elif has_golden_validation and requested_symbol is not None and not scopes_for_requested_symbol:
+            disposition = _other_symbol_golden_scope_disposition(
+                has_runtime=strategy_key in runtime_keys,
+                reviewed_symbols=tuple(sorted({scope.symbol.strip().upper() for scope in reviewed_scopes})),
+                requested_symbol=requested_symbol.strip().upper(),
             )
         elif has_golden_validation:
             disposition = _unrepresentable_golden_scope_disposition(
