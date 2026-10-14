@@ -252,15 +252,22 @@ def vendor_bars(answer: Callable[[str], httpx.Response]) -> respx.Route:
 class StockFetchDouble:
     """The stock engine's fetch of the underlying's day, as a double: it writes the file and its receipt, and counts."""
 
-    def __init__(self, fake_catalog: FakeCatalog, tmp_lake: Path, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        fake_catalog: FakeCatalog,
+        tmp_lake: Path,
+        error: Exception | None = None,
+        *,
+        bars: Sequence[TradeBar] | None = None,
+    ) -> None:
         self.calls: list[dict[str, Any]] = []
-        self._fake_catalog, self._tmp_lake, self._error = fake_catalog, tmp_lake, error
+        self._fake_catalog, self._tmp_lake, self._error, self._bars = fake_catalog, tmp_lake, error, bars
 
     def __call__(self, **arguments: Any) -> EngineRunMaterialization:
         self.calls.append(arguments)
         if self._error is not None:
             raise self._error
-        bars = [stock_bar(FRIDAY_OPEN_MS, "600.00", "600.50", "599.75", "600.25")]
+        bars = self._bars or [stock_bar(FRIDAY_OPEN_MS, "600.00", "600.50", "599.75", "600.25")]
         # Called from a worker thread, which has no loop of its own.
         asyncio.run(
             store_underlying_day(

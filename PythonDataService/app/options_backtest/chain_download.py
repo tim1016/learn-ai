@@ -172,9 +172,7 @@ async def _capture_underlying(underlying: str, trading_date: date, now_ms: int |
     try:
         held = await asyncio.to_thread(held_by.underlying_day, trading_date)
     except (LakeAdmissionError, UnderlyingDayUnreadable) as exc:
-        # Repairing a damaged stock file is the stock side's job; nothing here knows the pipeline would heal it.
-        detail = unreadable_problem(f"the {underlying} minute bars for {trading_date.isoformat()}", exc)
-        return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.FAILED, "underlying_unreadable", detail)
+        return _unreadable_underlying(underlying, trading_date, exc)
     if held is not None:
         return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.ALREADY_STORED, None, None)
     refusal = option_lake.session_refusal(
@@ -193,7 +191,25 @@ async def _capture_underlying(underlying: str, trading_date: date, now_ms: int |
         )
     except (LakeMaterializationError, CallerStoppedWaitingError) as exc:
         return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.FAILED, "underlying_not_fetched", str(exc))
+    # Read back through the reader a run uses, as a run's download does: a file the stock pipeline stored with no bar
+    # inside the regular session is not held by the lake's coverage rule, so the chain would read it as not stored.
+    try:
+        stored = await asyncio.to_thread(held_by.underlying_day, trading_date)
+    except (LakeAdmissionError, UnderlyingDayUnreadable) as exc:
+        return _unreadable_underlying(underlying, trading_date, exc)
+    if stored is None:
+        detail = (
+            f"the {underlying} minute bars for {trading_date.isoformat()} are still not in the lake after they were "
+            "fetched"
+        )
+        return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.FAILED, "underlying_not_fetched", detail)
     return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.FETCHED, None, None)
+
+
+def _unreadable_underlying(underlying: str, trading_date: date, exc: Exception) -> DownloadItem:
+    """The underlying's stored file cannot be read. Repairing a damaged stock file is the stock side's job."""
+    detail = unreadable_problem(f"the {underlying} minute bars for {trading_date.isoformat()}", exc)
+    return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.FAILED, "underlying_unreadable", detail)
 
 
 async def _capture_contract(
