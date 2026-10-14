@@ -382,7 +382,7 @@ def test_v2_seal_appends_without_rewriting_v1_identity_bytes(tmp_path: Path) -> 
             "program_build": binding.program_build,
         }
     )
-    repository.record_launch(resumed, launch_reason="resume")
+    repository.record_launch(resumed, launch_reason="deploy")
 
     assert instance_path.read_bytes() == original_v1_bytes
     assert configuration_hash(restored) == configuration_hash(binding)
