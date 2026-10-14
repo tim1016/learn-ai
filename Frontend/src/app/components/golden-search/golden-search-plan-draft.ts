@@ -7,7 +7,7 @@
 
 import { etDayEndMs, etMidnightMs } from '../../shared/date/et-midnight';
 import type { FillModeName } from '../../models/fill-mode';
-import { usesTradeFrequency } from './golden-search-display';
+import { fractionFromPercent, usesTradeFrequency } from './golden-search-display';
 import type { DefaultsLayout, GoldenSearchDefaults, GoldenSearchMethod, KnobMode, KnobPair, KnobPlan, ProtocolRequest, RankingMeasure, StrategyCapability } from './golden-search.types';
 
 const KNOB_NUMBER_FIELDS = ['low', 'high', 'fixed_value', 'step'] as const;
@@ -285,7 +285,7 @@ function setNumber(protocol: ProtocolRequest, field: Exclude<ProtocolNumberField
     case 'min_trades':
       return { ...protocol, policy: { ...protocol.policy, min_trades: value } };
     case 'drawdown_percent':
-      return { ...protocol, policy: { ...protocol.policy, max_drawdown_ceiling: value / 100 } };
+      return { ...protocol, policy: { ...protocol.policy, max_drawdown_ceiling: fractionFromPercent(value) } };
     case 'commission_per_order':
     case 'slippage_per_share':
     case 'initial_cash':

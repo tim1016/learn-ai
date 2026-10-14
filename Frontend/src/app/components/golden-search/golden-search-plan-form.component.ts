@@ -23,6 +23,16 @@ import { IdempotencyKeys } from './idempotency-keys';
 
 const RANGE_NOT_LAID_OUT = 'The data plane did not lay the dates out inside this range: it is older than this page. Restart the data plane, then pick the range again.';
 
+/** A revision the server created whose Run research did not start; the revised study stands, so Lock must not revise again. */
+class RevisionRunError extends Error {
+  constructor(
+    readonly study: StudyDetail,
+    cause: unknown,
+  ) {
+    super('The revision was locked but its research did not start.', { cause });
+  }
+}
+
 /**
  * The Plan step (#2696): choose a strategy with a Golden Search declaration
  * and an instrument, start from the server's defaults, edit the method,
@@ -241,16 +251,22 @@ export class GoldenSearchPlanFormComponent {
 
   /**
    * A revision is a new study; Run research then starts it under a key derived
-   * from the revision's, so a retry after a lost answer replays both halves.
+   * from the revision's. A revise moves no revision on its source, so once the
+   * revision exists a second Lock would create another linked study: a run
+   * that fails after it opens the revised study, whose page answers the run.
    */
   private async revise(source: StudyDetail, protocol: ProtocolRequest, key: string, run: boolean): Promise<CommandOutcome> {
     const revised = await this.service.command(source.id, { command: 'revise', expected_revision: source.revision, idempotency_key: key, payload: { protocol } });
     if (!run) return revised;
-    return this.service.command(revised.study.id, { command: 'run_research', expected_revision: revised.study.revision, idempotency_key: `${key}:run`, payload: {} });
+    try {
+      return await this.service.command(revised.study.id, { command: 'run_research', expected_revision: revised.study.revision, idempotency_key: `${key}:run`, payload: {} });
+    } catch (error) {
+      throw error instanceof StageDispatchError ? error : new RevisionRunError(revised.study, error);
+    }
   }
 
   private onLockFailure(error: unknown): void {
-    if (error instanceof StageDispatchError) {
+    if (error instanceof StageDispatchError || error instanceof RevisionRunError) {
       // The study exists; its page explains the stage that did not start.
       this.keys.settle();
       this.locked.emit(error.study.id);

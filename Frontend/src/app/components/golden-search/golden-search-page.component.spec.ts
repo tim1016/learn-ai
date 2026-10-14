@@ -1,5 +1,7 @@
-import { provideRouter, Router } from '@angular/router';
-import { render, screen, waitFor } from '@testing-library/angular';
+import { TestBed } from '@angular/core/testing';
+import { provideRouter, Router, withComponentInputBinding } from '@angular/router';
+import { RouterTestingHarness } from '@angular/router/testing';
+import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
@@ -14,6 +16,7 @@ function fakeService() {
     preflight: vi.fn(async () => preflight()),
     list: vi.fn(async () => []),
     get: vi.fn(async (_id: string) => studyDetail('awaiting_validation')),
+    hide: vi.fn(async (_id: string) => undefined),
   };
 }
 
@@ -41,6 +44,33 @@ describe('GoldenSearchPageComponent', () => {
     expect(screen.getByRole('button', { name: /lock as a new study/i })).not.toBeNull();
     expect(service.get).toHaveBeenCalledWith('study-0001-aaaa');
     expect(service.defaults).not.toHaveBeenCalled();
+  });
+
+  it('lands on History when a study is hidden: the study and the list are two routes, so the tab travels in the URL', async () => {
+    const service = fakeService();
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter(
+          [
+            { path: 'golden-search', component: GoldenSearchPageComponent },
+            { path: 'golden-search/:studyId', component: GoldenSearchPageComponent },
+          ],
+          withComponentInputBinding(),
+        ),
+        ...fakePickerWorld().providers,
+        { provide: GoldenSearchService, useValue: service },
+      ],
+    });
+    const harness = await RouterTestingHarness.create();
+    await harness.navigateByUrl('/golden-search/study-0001-aaaa');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Hide' }));
+    harness.detectChanges();
+    fireEvent.click(screen.getByRole('button', { name: /confirm hide/i }));
+
+    await waitFor(() => expect(screen.getByRole('tab', { name: /history/i }).getAttribute('aria-selected')).toBe('true'));
+    expect(service.hide).toHaveBeenCalledWith('study-0001-aaaa');
+    expect(screen.getByRole('tab', { name: /new study/i }).getAttribute('aria-selected')).toBe('false');
   });
 
   it('goes to the new study once a plan is locked', async () => {

@@ -13,7 +13,7 @@
 .golden-review form > label:last-of-type, .golden-review form > button, .golden-review__notice { grid-column: 1 / -1; }
 .golden-review label { display: grid; gap: var(--space-1); color: var(--text-secondary); font-size: var(--fs-sm); }
 .golden-review em { color: var(--text-subtle); font-style: normal; }
-.golden-review input, .golden-review textarea { width: 100%; box-sizing: border-box; padding: var(--space-2); border: 1px solid var(--border-light); border-radius: var(--radius-sm); background: var(--bg-surface); color: var(--text); font: inherit; }
+.golden-review input, .golden-review textarea { width: 100%; box-sizing: border-box; padding: var(--space-2); border: 1px solid var(--border-light); border-radius: var(--radius-sm); background: var(--bg-surface); color: var(--text-primary); font: inherit; }
 .golden-review button { width: fit-content; padding: var(--space-2) var(--space-3); border: 1px solid var(--accent); border-radius: var(--radius-sm); background: var(--accent); color: var(--text-on-accent); font: inherit; font-weight: var(--fw-bold); cursor: pointer; }
 .golden-review button:disabled { opacity: .6; cursor: not-allowed; }
 .golden-review fieldset { display: flex; gap: var(--space-3); align-items: center; border: 0; padding: 0; margin: 0; }
