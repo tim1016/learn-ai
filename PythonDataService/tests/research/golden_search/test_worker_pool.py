@@ -1002,8 +1002,10 @@ def test_a_child_spawning_as_the_pool_closes_is_killed_not_published(monkeypatch
     assert dispatch._pool._lanes[0].worker is None, "the corpse was never published to the slot"
 
 
-def test_a_delivered_cancellation_reaps_the_children_before_release_reconciliation(monkeypatch: pytest.MonkeyPatch) -> None:
-    """#3065 review: a cancellation observed by the child stops every child before the release writes.
+def test_a_cancellation_from_the_owners_poll_reaps_the_children_before_release_reconciliation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#3065 review: a cancellation raised by the owner's poll stops every child before the release writes.
 
     Raising the cancellation in the evaluator's frame never runs the
     adapter's own handlers, so without the pre-reconciliation reap the
@@ -1013,22 +1015,16 @@ def test_a_delivered_cancellation_reaps_the_children_before_release_reconciliati
 
     events: list[str] = []
     release_blocking = threading.Event()
-    sibling_started = threading.Event()
+    mid_run = threading.Event()
 
     def spawn(context: WorkerDispatchContext) -> _FakeChild:
         child = _FakeChild(context)
 
         def execute(task: dict[str, Any]) -> dict[str, Any]:
-            if float(task["point"]["gap"]) == 0.1:
-                # The cancelling answer waits for its sibling to be provably
-                # mid-run: on a slower runner the reap may otherwise find no
-                # lane occupied yet (#3048 CI).
-                assert sibling_started.wait(timeout=5.0), "the sibling began before the cancellation landed"
-                return {"type": "failed", "key": task["key"], "error": "cancelled"}
-            # A sibling item stays mid-run so the reap has a live child to stop.
-            sibling_started.set()
+            # Items stay mid-run so the reap has live children to stop.
+            mid_run.set()
             assert release_blocking.wait(timeout=5.0), "the mid-run child outlived its owner's cancellation"
-            return {"type": "failed", "key": task["key"], "error": "cancelled"}
+            return _gap_message(task)
 
         child.execute = execute
 
@@ -1041,6 +1037,12 @@ def test_a_delivered_cancellation_reaps_the_children_before_release_reconciliati
 
     monkeypatch.setattr(shared_pool_module, "ResearchWorker", spawn)
     dispatch = pool_module.PooledWorkerDispatch(WorkerDispatchContext(**CONTEXT), workers=2, window=2)
+
+    def cancelled() -> None:
+        if mid_run.is_set():
+            raise JobCancelled("cancelled by the owner")
+
+    dispatch._context.cancel_check = cancelled
 
     class _SlowReleaseBridge(_ReservationBridge):
         async def release(self, conn, *args: Any, **kwargs: Any):

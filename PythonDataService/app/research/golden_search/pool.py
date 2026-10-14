@@ -52,6 +52,7 @@ from app.research.golden_search.selection import Metrics
 from app.research.golden_search.shared_pool import (
     PooledOwnerDispatch,
     SharedWorkerPool,
+    waiting_state_of,
 )
 from app.research.golden_search.worker import WorkerDispatchContext
 
@@ -175,22 +176,16 @@ def worker_pool_factory(
     the process's one set of lanes instead of a private one.
     """
 
+    def facts_with_waiting(facts: DispatchFacts) -> None:
+        on_facts(facts)
+        on_waiting(waiting_state_of(facts.as_dict()), facts.as_dict())
+
     def build(context: WorkerDispatchContext) -> PooledWorkerDispatch:
         context.cancel_check = cancel_check
         context.on_checkpoint = on_checkpoint
-        dispatch = PooledWorkerDispatch(
-            context, workers=workers, window=window, on_facts=on_facts,
+        return PooledWorkerDispatch(
+            context, workers=workers, window=window, on_facts=facts_with_waiting,
             pool=pool, on_capacity_handoff=on_capacity_handoff,
         )
-        inner_facts = on_facts
-
-        def facts_with_waiting(facts: DispatchFacts) -> None:
-            from app.research.golden_search.shared_pool import waiting_state_of
-
-            inner_facts(facts)
-            on_waiting(waiting_state_of(facts.as_dict()), facts.as_dict())
-
-        dispatch._on_facts_callback = facts_with_waiting
-        return dispatch
 
     return build
