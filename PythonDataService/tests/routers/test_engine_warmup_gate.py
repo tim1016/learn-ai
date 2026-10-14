@@ -132,7 +132,7 @@ def test_a_primed_run_scopes_every_reported_figure_to_the_evaluation_window(seed
     assert any("EVALUATION START" in line for line in primed.log_lines)
     # The curve is rebased at the evaluation start and spans the same bars a
     # cold run of the same window does.
-    assert primed.equity_curve[0]["equity"] == pytest.approx(primed.initial_cash)
+    assert primed.equity_curve[0]["equity"] == pytest.approx(primed.initial_cash, abs=1e-6)
     assert len(primed.equity_curve) == len(cold.equity_curve)
     assert len(primed.chart_bars) == len(cold.chart_bars)
     # The persisted study describes the scored window, not the bars read.

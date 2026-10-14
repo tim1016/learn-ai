@@ -171,10 +171,11 @@ class TestENG004CAGR:
             days = int(inp["trading_days"][i].as_py())
             oracle_cagr = float(out["oracle_cagr"][i].as_py())
 
-            # canonical only computes cagr when max_dd > 0, so use a 3-point
-            # curve with a dip: initial → 80% of initial → final.
+            # A 3-point curve with a dip: initial → 80% of initial → final.
             # The cagr formula uses the `final_equity` parameter, not the
             # last equity curve point, so this correctly exercises the formula.
+            # ``test_cagr_exists_for_a_run_with_no_drawdown`` is the same rows
+            # without the dip.
             dip = initial * 0.8
             curve = _build_equity_curve([initial, dip, final])
             stats = compute_portfolio_statistics(
@@ -188,6 +189,31 @@ class TestENG004CAGR:
             assert abs(stats.cagr - oracle_cagr) <= atol, (
                 f"Row {i}: canonical CAGR={stats.cagr} oracle={oracle_cagr}"
             )
+
+
+    def test_cagr_exists_for_a_run_with_no_drawdown(self) -> None:
+        """E-2: a monotonic win has no drawdown; its CAGR is still the oracle's and its Calmar is absent."""
+        inp, out, atol, _rtol = _load("ENG-004")
+        for i in range(len(inp)):
+            initial = float(inp["initial_cash"][i].as_py())
+            final = float(inp["final_equity"][i].as_py())
+            days = int(inp["trading_days"][i].as_py())
+            oracle_cagr = float(out["oracle_cagr"][i].as_py())
+            if final < initial:
+                continue  # a loser always has a drawdown; the monotonic path needs a non-falling curve
+
+            stats = compute_portfolio_statistics(
+                initial_cash=initial,
+                final_equity=final,
+                trades=[],
+                trading_days=days,
+                equity_curve=_build_equity_curve([initial, (initial + final) / 2, final]),
+            )
+
+            assert stats.max_drawdown_pct == 0.0
+            assert stats.cagr is not None, f"Row {i}: cagr unexpectedly None"
+            assert abs(stats.cagr - oracle_cagr) <= atol, f"Row {i}: CAGR={stats.cagr} oracle={oracle_cagr}"
+            assert stats.calmar_ratio is None, f"Row {i}: a zero drawdown has no Calmar"
 
 
 # ---------------------------------------------------------------------------

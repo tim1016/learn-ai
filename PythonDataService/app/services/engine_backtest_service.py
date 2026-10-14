@@ -353,7 +353,8 @@ def _format_trade_record(index: int, trade: Any, cumulative_pnl_pct: float) -> T
         exit_timestamp=trade.exit_time_ms,
         entry_price=float(trade.entry_price),
         exit_price=float(trade.exit_price),
-        pnl=float(trade.pnl_pts),
+        # Dollars, as LEAN's trade ledger is: ``pnl_pts`` is per share.
+        pnl=float(trade.pnl_pts) * trade.quantity,
         pnl_pct=float(trade.pnl_pct),
         cumulative_pnl_pct=cumulative_pnl_pct,
         signal_reason=getattr(trade, "signal_reason", "") or "",
@@ -995,6 +996,8 @@ def _lean_parity_statistics(*, result: BacktestResult, trades: list[LoggedTrade]
                 start_capital=float(result.initial_cash),
                 risk_free_rate=0.0,
                 benchmark_returns=None,
+                total_fees=float(result.total_fees),
+                total_orders=len(result.order_events),
             )
 
             from dataclasses import asdict as _dc_asdict
