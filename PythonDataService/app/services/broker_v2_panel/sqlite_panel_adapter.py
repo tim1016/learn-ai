@@ -84,10 +84,9 @@ logger = logging.getLogger(__name__)
 _WORKING_BROKER_STATES = frozenset(
     {"new", "accepted", "pending_new", "partially_filled", "pending_cancel"}
 )
-# Matches the established station-derivation semantic (`station_derivation.py`
-# `_fill_station`): FILL is satisfied only by actual fill evidence, never by
-# any terminal outcome — a canceled/expired/rejected order definitively
-# received zero fill and must not render as satisfied.
+# FILL is satisfied only by actual fill evidence, never by any terminal
+# outcome — a canceled/expired/rejected order definitively received zero fill
+# and must not render as satisfied.
 _FILLED_BROKER_STATES = frozenset({"filled", "partially_filled"})
 
 # SQLite owns broker-recovery actions after activation, but the bot-lifecycle
@@ -107,7 +106,7 @@ def adapt_sqlite_panel(
     flatten_verdict: SessionAuthorityState | LegRefusal | None = None,
     pass_proof: InstanceCustodyProof | None = None,
 ) -> BotPanelView:
-    """Replace JSONL-derived custody fields with one SQLite fold snapshot.
+    """Replace the panel's custody, rail and economics fields with one SQLite fold snapshot.
 
     ``account_mode`` is the mode the projection's authority learned from the
     broker (the facade's ``account_mode``); it labels each fill ``real_paper``
@@ -215,9 +214,8 @@ def _lifecycle_actions(panel: BotPanelView, projection: ClerkProjection) -> list
     liveness and phase, the Clerk card's freeze and the SQLite exposure it was
     built from. The working-order count is the Clerk's own
     (``projection.working_order_refs``), the set the commit-time check reads.
-    The pre-adaptation projection's list comes from the legacy order journal,
-    which nothing writes any more, so a working order never disabled the
-    button (#2635).
+    The pre-adaptation projection carries no working orders, so only that
+    count can disable the button (#2635).
     """
     if panel.health.running:
         return []
@@ -1222,8 +1220,7 @@ def _resolve_operation_outside_window(
     same two identities ``_operation_matches_ref`` checks in-window. Resolved
     evidence is discarded (treated as not found) unless it belongs to the
     bot this projection is scoped to; a real ref from a *different* bot must
-    not leak into this bot's rail (mirrors
-    ``station_derivation._validate_transaction_ownership``).
+    not leak into this bot's rail.
     """
     order = repository.order(ref)
     effect_operation_id = order.effect_operation_id if order is not None else ref

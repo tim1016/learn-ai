@@ -42,7 +42,6 @@ from app.config import settings
 from app.routers.broker_v2_panel import router as panel_router
 from app.routers.brokers import router as brokers_router
 from app.schemas.broker_v2_panel import PanelActionRequest
-from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_lifecycle_projection import (
     ActiveSqliteAlpacaLifecycleAuthority,
@@ -58,9 +57,7 @@ from app.services.broker_v2_panel.action_execution_service import (
     ExecutionAuthorityRevivedError,
 )
 from app.services.broker_v2_panel.panel_data_source import _panel_authority_for_binding
-from app.services.broker_v2_panel.panel_projection_service import build_panel
 from app.services.broker_v2_panel.sqlite_panel_source import (
-    read_sqlite_clerk_status,
     read_sqlite_panel_evidence,
 )
 from app.services.session_authority import et_minute_of_day_ms
@@ -82,8 +79,6 @@ from tests.broker.alpaca.clerk.live_envelope_fixtures import (
     _LiveBroker,
 )
 from tests.broker.v2panel.conftest import _FakeDeployRegistry
-from tests.broker.v2panel.fixtures import fill_entry
-from tests.broker.v2panel.test_panel_projection import _MARKET_PULSE
 
 SID = "ema-shadow-1"
 # A calendar-derived instant, never a wall-clock read: 10:00 ET on a known
@@ -426,16 +421,14 @@ async def test_clerk_status_is_reachable_and_reads_the_shadow_custody_identity(
     assert [item for item in attention.json()["items"] if item["kind"] == "account"] == []
 
 
-async def test_a_shadow_binding_reads_its_own_authority_and_renders_simulated_fills(
+async def test_a_shadow_binding_reads_its_own_authority(
     shadow_app: tuple[FastAPI, ActiveClerkRuntime],
     tmp_path: Path,
 ) -> None:
-    """(c) The panel's authority id is the facade's, and its fills say simulated.
+    """(c) The panel's authority id is the facade's.
 
     Left as the route account id, the evidence read raises a bare ValueError
-    (500); passed through naively, `authority_kind_for_account` answers
-    ``real_paper`` and every synthesized shadow fill renders as a real fill on
-    a real-money account -- R8's exact prohibition.
+    (500).
     """
     _app, runtime = shadow_app
     facade = active_sqlite_facade("alpaca")
@@ -450,38 +443,7 @@ async def test_a_shadow_binding_reads_its_own_authority_and_renders_simulated_fi
             "alpaca", selected.account_id, SID, now_ms=NOW_MS, facade=selected
         )
         assert evidence is not None
-        clerk = await read_sqlite_clerk_status("alpaca")
-        assert clerk is not None
-        panel = build_panel(
-            evidence.status,
-            clerk,
-            [fill_entry(sid=SID, intent="a", ts_ms=NOW_MS, account_id=SHADOW_ACCT)],
-            account_id=LIVE_ACCT,
-            authority_account_id=selected.account_id,
-            account_mode=selected.account_mode,
-            exposure={},
-            fills_today=1,
-            realized_pnl_today=0.0,
-            exact_open_pnl=None,
-            latest_decision=None,
-            last_bar_at_ms=None,
-            journal_tail_ref=f"/api/brokers/alpaca/accounts/{LIVE_ACCT}/bots/{SID}/decisions",
-            journal_tail_seq=None,
-            now_ms=NOW_MS,
-            program_build=ProgramBuildAdmissionFact(
-                state="UNPROVEN",
-                program_key="ema_crossover_signal",
-                verified_at_ms=NOW_MS,
-                explanation="This instance has no complete Signal Program seal.",
-            ),
-            market_pulse=_MARKET_PULSE,
-            bot_status="finished",
-        )
 
-    [fill] = panel.recent_fills
-    assert fill.simulated is True
-    assert fill.authority_account_id == SHADOW_ACCT
-    assert fill.authority_kind == "shadow"
     assert runtime.authority_kind == "shadow"
 
 

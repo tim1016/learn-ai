@@ -184,8 +184,8 @@ def test_the_bot_page_shows_deploys_warning_and_what_the_owner_accepted() -> Non
     """One wording on Deploy and on the bot page; nothing left to accept, so no sentence to tick."""
     status = _status(mode="trade").model_copy(update={"traded": _QQQ, "traded_asset_acknowledgement": _ACCEPTANCE})
 
-    page = _panel_view(status, _clerk_status(), [])
-    own_symbol = _panel_view(_status(mode="trade"), _clerk_status(), [])
+    page = _panel_view(status, _clerk_status())
+    own_symbol = _panel_view(_status(mode="trade"), _clerk_status())
 
     assert page.traded_asset_warning == UntestedTradedAssetWarning.for_symbols(
         "SPY", "QQQ", acceptance_required=False
@@ -224,7 +224,7 @@ def test_an_unclean_end_is_reported_under_the_asset_the_bot_may_still_hold(
 
 def _bot_page() -> BotPanelView:
     """The page of a running Paper bot that listens to SPY and trades QQQ."""
-    return _panel_view(_status(mode="trade").model_copy(update={"traded": _QQQ}), _clerk_status(), [])
+    return _panel_view(_status(mode="trade").model_copy(update={"traded": _QQQ}), _clerk_status())
 
 
 def test_a_working_order_with_no_recorded_symbol_is_in_the_asset_the_bot_trades() -> None:
