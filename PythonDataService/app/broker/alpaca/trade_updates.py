@@ -577,7 +577,9 @@ class TradeUpdatesConsumer:
         await self._handle_trade_update(message.get("data") or {})
 
     def _log_authorization(self, message: dict[str, Any]) -> None:
-        status = str((message.get("data") or {}).get("status") or "")
+        data = message.get("data")
+        # A body that is not an object states no status: not granted, never a torn-down cycle.
+        status = str(data.get("status") or "") if isinstance(data, dict) else ""
         if status == "authorized":
             logger.info(
                 "alpaca trade_updates authorized",
@@ -591,14 +593,20 @@ class TradeUpdatesConsumer:
                 extra={"action": "trade_updates_auth_denied", "status": status},
             )
 
-    def _count_unmappable_event(self, *, from_gap_reconcile: bool) -> None:
+    def _count_unmappable_event(
+        self, *, from_gap_reconcile: bool, order_id: str | None = None, error: object = None
+    ) -> None:
         """A frame, or a recovered order, that would not map: counted and logged, never a reconnect."""
         self._counters.parse_errors += 1
         if not from_gap_reconcile:
             self._mark_evidence_health(False)
         logger.warning(
             "alpaca trade_updates event would not map",
-            extra={"action": "trade_updates_map_error"},
+            extra={
+                "action": "trade_updates_map_error",
+                "order_id": order_id,
+                "error": None if error is None else str(error),
+            },
         )
 
     async def _handle_trade_update(self, data: object) -> None:
@@ -617,8 +625,8 @@ class TradeUpdatesConsumer:
             # ``_seen`` and abort the drain. A bad order is a parse error: the frame
             # is already captured, the counter is incremented, the stream continues.
             broker_order = adapter.from_alpaca_order(order) if order else None
-        except (KeyError, TypeError, ValueError):
-            self._count_unmappable_event(from_gap_reconcile=False)
+        except (KeyError, TypeError, ValueError) as exc:
+            self._count_unmappable_event(from_gap_reconcile=False, error=repr(exc))
             return
 
         applied = await self._apply_event(
@@ -767,6 +775,7 @@ class TradeUpdatesConsumer:
         leg_orders = {
             str(leg.get("id")): leg for leg in (order.get("legs") or []) if isinstance(leg, dict) and leg.get("id")
         }
+        unreadable_leg = False
         for execution in executions:
             leg_order = leg_orders.get(str(execution.get("order_id"))) if isinstance(execution, dict) else None
             if leg_order is None:
@@ -777,7 +786,18 @@ class TradeUpdatesConsumer:
                     extra={"action": "trade_updates_leg_execution_unmapped"},
                 )
                 continue
-            filled_all = adapter.opt_float(leg_order.get("filled_qty")) == adapter.opt_float(leg_order.get("qty"))
+            try:
+                filled = adapter.opt_float(leg_order.get("filled_qty"))
+                ordered = adapter.opt_float(leg_order.get("qty"))
+                if any(value is not None and not math.isfinite(value) for value in (filled, ordered)):
+                    raise ValueError("a leg quantity is not a finite number")
+            except (TypeError, ValueError) as exc:
+                # Read outside the order mapper's guard: a leg stated unreadably is one that would not map --
+                # counted, never a reconnect, whether the numeric reader returns a non-finite number or refuses it.
+                self._count_unmappable_event(from_gap_reconcile=False, order_id=str(leg_order.get("id")), error=exc)
+                unreadable_leg = True
+                continue
+            filled_all = filled == ordered
             await self._handle_trade_update(
                 {
                     "event": "fill" if filled_all else "partial_fill",
@@ -789,6 +809,9 @@ class TradeUpdatesConsumer:
                     "order": {**leg_order, "client_order_id": None},
                 }
             )
+        if unreadable_leg:
+            # Whatever order the legs came in, a leg that mapped after the unreadable one does not restore health.
+            self._mark_evidence_health(False)
 
     # ── Reconnect gap-reconcile ──────────────────────────────────────────────
 
@@ -837,8 +860,8 @@ class TradeUpdatesConsumer:
         for broker_order in orders:
             try:
                 event = _recovery_event(broker_order)
-            except ValueError:
-                self._count_unmappable_event(from_gap_reconcile=True)
+            except ValueError as exc:
+                self._count_unmappable_event(from_gap_reconcile=True, order_id=broker_order.order_id, error=exc)
                 continue
             if event is None:
                 continue

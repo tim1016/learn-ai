@@ -25,6 +25,7 @@ from typing import Any
 import pytest
 import responses
 
+from app.broker.alpaca import adapter as adapter_module
 from app.broker.alpaca.adapter import from_alpaca_order
 from app.broker.alpaca.broker import AlpacaBroker
 from app.broker.alpaca.clerk.models import ClerkEntryKind
@@ -937,6 +938,77 @@ async def test_authorization_frame_is_captured_not_attributed(tmp_path: Path) ->
     assert consumer.counters.unexplained == 0
 
 
+@pytest.mark.parametrize("data", [["authorized"], "authorized", 7], ids=["list", "string", "number"])
+async def test_an_authorization_frame_whose_data_is_not_an_object_does_not_abort_the_cycle(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, data: object
+) -> None:
+    consumer, clerk, _ = await _consumer(
+        tmp_path, [{"stream": "authorization", "data": data}, _load_frames()[0]]
+    )
+    await _warm(clerk)
+
+    with caplog.at_level(logging.WARNING, logger="app.broker.alpaca.trade_updates"):
+        await consumer.run()
+
+    # The frame after it was still applied: the cycle was not torn down for a control frame.
+    assert consumer.counters.events_applied == 1
+    assert [r.status for r in caplog.records if getattr(r, "action", None) == "trade_updates_auth_denied"] == [""]
+
+
+def _parent_fill_naming_two_legs(first_leg_filled_qty: str) -> dict[str, Any]:
+    """A several-leg parent's fill frame: no execution of its own, one execution per leg (#3103)."""
+    frame = _load_frames()[2]
+    parent = frame["data"]["order"]
+    parent["order_class"] = "mleg"
+    parent["symbol"] = ""
+    parent["legs"] = [
+        {**parent, "id": f"leg-order-{n}", "client_order_id": f"{_OWNED_COID}~{n}", "symbol": symbol, "side": side,
+         "order_class": "simple", "legs": None, "qty": "1", "filled_qty": filled_qty, "status": "filled"}
+        for n, (symbol, side, filled_qty) in enumerate(
+            (("SPY261016C00771000", "buy", first_leg_filled_qty), ("SPY261016C00776000", "sell", "1")), start=1
+        )
+    ]
+    frame["data"].pop("execution_id", None)
+    frame["data"]["legs"] = [
+        {"execution_id": "exec-buy-leg", "qty": "1", "price": "3.31", "order_id": "leg-order-1",
+         "symbol": "SPY261016C00771000", "timestamp": "2026-10-14T15:59:03.721579799Z"},
+        {"execution_id": "exec-sell-leg", "qty": "1", "price": "1.18", "order_id": "leg-order-2",
+         "symbol": "SPY261016C00776000", "timestamp": "2026-10-14T15:59:03.721579799Z"},
+    ]
+    return frame
+
+
+@pytest.mark.parametrize("raises_on_non_finite", [False, True], ids=["opt_float-reads-nan", "opt_float-refuses-nan"])
+@pytest.mark.parametrize("filled_qty", ["nan", "inf", "five"])
+async def test_a_leg_with_an_unreadable_quantity_is_a_counted_parse_error_not_a_reconnect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filled_qty: str, raises_on_non_finite: bool
+) -> None:
+    # The leg's own quantities are read to say fill or partial fill, outside the
+    # order mapper's guard. A leg Alpaca states unreadably is one that would not
+    # map: counted, health degraded, the rest of the frame's legs still credited
+    # -- whether the numeric reader returns a non-finite number or refuses it.
+    if raises_on_non_finite:
+        read_float = adapter_module.opt_float
+
+        def _refusing(value: object) -> float | None:
+            parsed = read_float(value)
+            if parsed is not None and not math.isfinite(parsed):
+                raise ValueError("Alpaca numeric is not finite")
+            return parsed
+
+        monkeypatch.setattr(adapter_module, "opt_float", _refusing)
+    consumer, clerk, _ = await _consumer(tmp_path, [_parent_fill_naming_two_legs(filled_qty)])
+    await _warm(clerk)
+
+    await consumer.run()
+
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    exact = [e.event.execution_id for e in entries if getattr(e.event, "execution_id", None) is not None]
+    assert exact == ["exec-sell-leg"]
+    assert consumer.counters.parse_errors == 1
+    assert consumer.evidence_health.healthy is False
+
+
 # ── (e) reconnect → REST gap-reconcile pulls missed orders and dedups ────────
 
 
@@ -1302,21 +1374,27 @@ async def test_a_gap_reconciled_order_reaches_the_clerk_as_the_broker_returned_i
     assert consumer.counters.gap_reconciled == 1
 
 
-async def test_a_gap_reconciled_order_with_a_negative_instant_is_counted_not_fed(tmp_path: Path) -> None:
+async def test_a_gap_reconciled_order_with_a_negative_instant_is_counted_not_fed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     # Corruption is refused the way a frame with a negative ``timestamp_ms`` is:
-    # counted, logged, the rest of the pull still fed, no reconnect.
+    # counted, logged with its order and why, the rest of the pull still fed, no reconnect.
     corrupt = _filled_broker_order("corrupt-instant", _OWNED_COID).model_copy(update={"filled_at_ms": -5_000})
     healthy = _filled_broker_order("healthy-fill", _OWNED_COID)
     broker = _FakeBroker()
     broker.orders = [corrupt, healthy]
     consumer, clerk, _ = await _consumer(tmp_path, [_AUTHORIZED], broker=broker, max_reconnects=1)
 
-    await consumer.run()
+    with caplog.at_level(logging.WARNING, logger="app.broker.alpaca.trade_updates"):
+        await consumer.run()
 
     fed = [e.broker_order.order_id for e in clerk._journal.read_entries()]  # type: ignore[union-attr]
     assert fed == ["healthy-fill"]
     assert consumer.counters.parse_errors == 1
     assert consumer.counters.connects == 2
+    [record] = [r for r in caplog.records if getattr(r, "action", None) == "trade_updates_map_error"]
+    assert record.order_id == "corrupt-instant"
+    assert "negative lifecycle instant" in record.error
 
 
 async def test_backoff_caps_before_exponentiation(monkeypatch: pytest.MonkeyPatch) -> None:
