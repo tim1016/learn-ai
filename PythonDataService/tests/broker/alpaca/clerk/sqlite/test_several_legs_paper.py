@@ -320,3 +320,52 @@ async def test_a_parents_fill_frame_credits_each_leg_exactly_through_the_real_co
     assert explained is True
     assert multi_paper.repo.active_uncertainties() == []
 
+
+async def test_a_parents_fill_frame_that_arrives_after_the_legs_were_read_by_lookup_explains_their_cumulative(
+    multi_paper: SeveralLegsPaper,
+) -> None:
+    """#3103: the legs were booked from the order lookup (no execution named); the frame comes late.
+
+    The state a Paper lane was left in by the first spread run, before the frame was mapped.
+    """
+    from copy import deepcopy
+
+    from app.broker.alpaca.clerk.sqlite import fee_evidence
+    from app.broker.alpaca.trade_updates import TradeUpdatesConsumer
+
+    parent = await multi_paper.resting(units=1)
+    multi_paper.venue.legs_fill(parent, (1, 1), state="filled")
+    await multi_paper.pass_()
+    _, before_explained = fee_evidence._witnessed_executions(multi_paper.repo._conn)
+    assert before_explained is False
+    sink = SqliteTradeUpdateEvidenceSink(repo=multi_paper.repo, intake=multi_paper.clerk.intake, reconciler=multi_paper.clerk)
+
+    def _no_frames() -> None:
+        raise AssertionError("the frame is handed in, not read from a socket")
+
+    consumer = TradeUpdatesConsumer(
+        read=multi_paper.account, frame_source=_no_frames, evidence_sink=sink, clock=multi_paper.clock
+    )
+    order = deepcopy(multi_paper.venue.option_orders[parent])
+    timestamp = "2026-09-18T16:00:00.500Z"
+    frame = {
+        "event": "fill",
+        "timestamp": timestamp,
+        "price": "6.28",
+        "qty": order["filled_qty"],
+        "legs": [
+            {"execution_id": f"leg-{number}-execution", "qty": "1", "price": leg["filled_avg_price"],
+             "order_id": leg["id"], "symbol": leg["symbol"], "timestamp": timestamp}
+            for number, leg in enumerate(order["legs"], start=1)
+        ],
+        "order": order,
+    }
+
+    await consumer._handle_trade_update(frame)
+    await multi_paper.pass_()
+
+    ids, explained = fee_evidence._witnessed_executions(multi_paper.repo._conn)
+    assert {"leg-1-execution", "leg-2-execution"} <= ids
+    assert explained is True
+    assert sorted(multi_paper.held().values()) == [1.0, 1.0]
+    assert multi_paper.repo.active_uncertainties() == []
