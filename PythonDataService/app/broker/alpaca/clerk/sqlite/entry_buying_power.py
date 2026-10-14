@@ -284,8 +284,9 @@ class _Watched:
 class EntryBuyingPowerWatch:
     """The readings a real account's option entries are compared on, and the round that compares them.
 
-    One per Clerk facade. ``read_first`` and ``sent`` are called on the
-    entry's own path and never raise for a broker's sake. ``round`` is the
+    One per Clerk facade. ``begin_first``, ``finish_first``, ``land_finished_reads``
+    and ``sent`` are called on the entry's own path and never raise for a
+    broker's sake. ``round`` is the
     Clerk's own step, run after a pass of the account: it takes second
     readings, judges, records, and raises the notice.
 
@@ -296,7 +297,9 @@ class EntryBuyingPowerWatch:
     answers is not given up on there (#3136). It goes on while the entry
     goes on to its send, which waits for nothing, and is taken at the send:
     kept when both its reads finished before the order was handed to the
-    port, cancelled and recorded not ready when they did not.
+    port, cancelled and recorded not ready when they did not. A read that
+    finished in its worker thread is noted only on a turn of the loop, so
+    the entry gives it a few just before the hand-over (``land_finished_reads``).
     """
 
     def __init__(

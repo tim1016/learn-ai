@@ -2264,8 +2264,9 @@ class SqliteAlpacaClerkFacade:
                 # The entry's cancel time is on the books: the keeper sleeps no longer than to it.
                 self._entry_deadline_nudge()
             if self._buying_power is not None:
-                # The reads of the first reading finished in worker threads; the work above made no
-                # turn of the loop to note them. Without one they read as ending after the send (#3136).
+                # The reads of the first reading may have finished in worker threads, and the work
+                # above made no turn of the loop to note them. Without one a finished read is noted
+                # after the send and reads as ending after it (#3136).
                 await self._buying_power.land_finished_reads((strategy_instance_id, durable_decision_id))
             submitted_enter = await submit_accepted_enter(
                 self._repo,
