@@ -55,7 +55,6 @@ from app.broker.contract.options import (
     MultiLegOptionOrderRequest,
     OptionPositionIntent,
     SingleOptionOrderRequest,
-    closing_order,
 )
 from app.options.contract import OptionContract
 from app.options.deadlines import CloseTerms
@@ -304,20 +303,6 @@ class OptionEntryFacts(BaseModel):
             "time_in_force": "day",
             "extended_hours": False,
         }
-
-    def close_request(self, *, contracts: float) -> SingleOptionOrderRequest:
-        """The one market order that closes ``contracts`` of what this entry opened.
-
-        ``contracts`` is the position confirmed when the close was made. It
-        is a whole number of contracts or the books are wrong, and the close
-        is refused rather than rounded.
-        """
-        units, remainder = divmod(contracts, self.the_leg.ratio)
-        if remainder or units < 1:
-            raise ValueError(f"a close is for a whole number of structures, one or more; the books hold {contracts}")
-        order = closing_order(self.structure, units=int(units))
-        assert isinstance(order, SingleOptionOrderRequest) and order.order_type is OrderType.MARKET
-        return order
 
 
 class MultiLegOptionEntryFacts(BaseModel):

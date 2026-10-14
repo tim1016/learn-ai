@@ -2,13 +2,8 @@
 
 from __future__ import annotations
 
-from app.broker.alpaca.clerk.sqlite.option_order_evidence import (
-    MultiLegOrderEvidence,
-    asked_option_order,
-    evidence_of_the_order_asked,
-)
+from app.broker.alpaca.clerk.sqlite.option_order_evidence import MultiLegOrderEvidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.contract.options import BrokerOptionOrder
 
 
 def fold_multi_leg_order_evidence(
@@ -100,24 +95,3 @@ def fold_multi_leg_order_evidence(
 
             fence_fills_on_terminal_enters(repo, order_ref=parent_ref)
             note_legs_out_of_step(repo, parent_ref)
-
-
-def fold_multi_leg_answer(
-    repo: ClerkSqliteRepository,
-    *,
-    effect_operation_id: str,
-    parent_order_ref: str,
-    answer: BrokerOptionOrder,
-    simulated_authority: bool = False,
-) -> None:
-    """Hold a raw option answer to the captured order, then fold its legs."""
-    asked = asked_option_order(repo, parent_order_ref)
-    if asked is None:
-        raise ValueError(f"{parent_order_ref!r} is not a captured option order")
-    evidence = evidence_of_the_order_asked(answer, asked=asked)
-    if not isinstance(evidence, MultiLegOrderEvidence):
-        raise ValueError(f"{parent_order_ref!r} is not a multi-leg parent")
-    fold_multi_leg_order_evidence(
-        repo, effect_operation_id=effect_operation_id, evidence=evidence,
-        order_ref=parent_order_ref, simulated_authority=simulated_authority,
-    )
